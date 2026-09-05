@@ -38,7 +38,7 @@ use hauksbee_extract::{ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity}
 use hauksbee_models::ModelLibrary;
 
 use super::converter::{detect_converters_with_abstentions, ConverterStage, Topology};
-use crate::binder::resolve;
+use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
 
 /// Worst-case input-cap RMS ripple current of a buck (A): `I_out*sqrt(D - D^2)`.

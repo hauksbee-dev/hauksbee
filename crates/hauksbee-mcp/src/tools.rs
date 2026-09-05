@@ -33,6 +33,11 @@ impl ToolResult {
             is_error: true,
         }
     }
+    /// A tool body's `Result`: `Ok` is the structured result (a refusal
+    /// included), `Err` the input/execution error message.
+    fn from_body(body: Result<Value, String>) -> Self {
+        body.map_or_else(ToolResult::err, ToolResult::ok)
+    }
 }
 
 /// The refusal status token. One spelling, shared by every tool and the
@@ -150,11 +155,11 @@ pub fn definitions() -> Value {
 /// wants tool-level failures inside the result, not a protocol error).
 pub fn call(name: &str, args: &Value) -> ToolResult {
     match name {
-        "analyze_board" => analyze_board(args),
-        "run_checks" => run_checks(args),
-        "list_capabilities" => list_capabilities(),
-        "model_coverage" => model_coverage(args),
-        "board_to_code" => board_to_code(args),
+        "analyze_board" => ToolResult::from_body(analyze_board(args)),
+        "run_checks" => ToolResult::from_body(run_checks(args)),
+        "list_capabilities" => ToolResult::ok(list_capabilities()),
+        "model_coverage" => ToolResult::from_body(model_coverage(args)),
+        "board_to_code" => ToolResult::from_body(board_to_code(args)),
         "run_script" => run_script(args),
         other => ToolResult::err(format!(
             "unknown tool '{other}'; call tools/list for the available tools"
@@ -188,32 +193,34 @@ fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
+/// Read a file the caller named, with the caller's own path in the error.
+fn read_named(what: &str, path: &str) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|e| format!("could not read {what} file '{path}': {e}"))
+}
+
+/// Canonicalize a path the caller named, with the caller's own path in the
+/// error.
+fn canonical(what: &str, path: &str) -> Result<std::path::PathBuf, String> {
+    std::fs::canonicalize(path).map_err(|e| format!("{what} file '{path}': {e}"))
+}
+
 /// `model_coverage`: the same deterministic coverage inventory as the CLI and
 /// browser, without the CLI renderer and without any authoring side effect.
-fn model_coverage(args: &Value) -> ToolResult {
-    let board_path = match req_str(args, "board_path") {
-        Ok(path) => path,
-        Err(error) => return ToolResult::err(error),
-    };
+fn model_coverage(args: &Value) -> Result<Value, String> {
+    let board_path = req_str(args, "board_path")?;
     let models_dir = opt_str(args, "models_dir").map(std::path::Path::new);
-    let coverage = match hauksbee_engine::commands::models::coverage_snapshot_for_path(
+    let coverage = hauksbee_engine::commands::models::coverage_snapshot_for_path(
         std::path::Path::new(board_path),
         models_dir,
-    ) {
-        Ok(coverage) => coverage,
-        Err(error) => return ToolResult::err(format!("could not inspect model coverage: {error}")),
-    };
-    let coverage = match serde_json::to_value(coverage) {
-        Ok(value) => value,
-        Err(error) => {
-            return ToolResult::err(format!("could not serialize model coverage: {error}"))
-        }
-    };
+    )
+    .map_err(|error| format!("could not inspect model coverage: {error}"))?;
+    let coverage = serde_json::to_value(coverage)
+        .map_err(|error| format!("could not serialize model coverage: {error}"))?;
     let prepare_command = format!(
         "hauksbee models prepare {} --pack-dir <DIR>",
         shell_display_path(board_path)
     );
-    ToolResult::ok(json!({
+    Ok(json!({
         "board_path": board_path,
         "coverage": coverage,
         "read_only": true,
@@ -274,61 +281,39 @@ fn display_name(path: &str) -> String {
 /// The refusal logic lives here and nowhere else: a firmware run whose co-sim
 /// could not run or whose analog solve failed is unanswerable, and comes back
 /// as a structured refusal with the static report attached as data.
-fn analyze_board(args: &Value) -> ToolResult {
-    let board_path = match req_str(args, "board_path") {
-        Ok(p) => p,
-        Err(e) => return ToolResult::err(e),
-    };
-    let bytes = match std::fs::read(board_path) {
-        Ok(b) => b,
-        Err(e) => return ToolResult::err(format!("could not read board file '{board_path}': {e}")),
-    };
+fn analyze_board(args: &Value) -> Result<Value, String> {
+    let board_path = req_str(args, "board_path")?;
+    let bytes = read_named("board", board_path)?;
     let name = display_name(board_path);
-    let normalized = match hauksbee_engine::board_input::from_bytes(&name, &bytes) {
-        Ok(normalized) => normalized,
-        Err(error) => return ToolResult::err(format!("input error: {}", error.web_message())),
-    };
+    let normalized = hauksbee_engine::board_input::from_bytes(&name, &bytes)
+        .map_err(|error| format!("input error: {}", error.web_message()))?;
     let board_is_eagle = String::from_utf8_lossy(&bytes)
         .chars()
         .take(512)
         .collect::<String>()
         .contains("<eagle");
-    let schematic = match hauksbee_engine::schematic_ties::resolve(
+    let schematic = hauksbee_engine::schematic_ties::resolve(
         std::path::Path::new(board_path),
         &normalized.board,
         opt_str(args, "schematic_path").map(std::path::Path::new),
         board_is_eagle,
-    ) {
-        Ok(schematic) => schematic,
-        Err(error) => return ToolResult::err(error.to_string()),
-    };
+    )
+    .map_err(|error| error.to_string())?;
     let fw = opt_str(args, "firmware_path");
     let report_json = match fw {
-        Some(fw_path) => {
-            let fw_bytes = match std::fs::read(fw_path) {
-                Ok(b) => b,
-                Err(e) => {
-                    return ToolResult::err(format!(
-                        "could not read firmware file '{fw_path}': {e}"
-                    ))
-                }
-            };
-            hauksbee_engine::frontdoor::analyze_with_firmware_json_with_ties(
-                &name,
-                &bytes,
-                &display_name(fw_path),
-                &fw_bytes,
-                schematic.as_ref(),
-            )
-        }
+        Some(fw_path) => hauksbee_engine::frontdoor::analyze_with_firmware_json_with_ties(
+            &name,
+            &bytes,
+            &display_name(fw_path),
+            &read_named("firmware", fw_path)?,
+            schematic.as_ref(),
+        ),
         None => {
             hauksbee_engine::frontdoor::analyze_json_with_ties(&name, &bytes, schematic.as_ref())
         }
     };
-    let report: Value = match serde_json::from_str(&report_json) {
-        Ok(v) => v,
-        Err(e) => return ToolResult::err(format!("engine returned unparseable JSON: {e}")),
-    };
+    let report: Value = serde_json::from_str(&report_json)
+        .map_err(|e| format!("engine returned unparseable JSON: {e}"))?;
     // An unreadable/unparseable board is an INPUT error (the CLI's exit-2
     // class), not a refusal: the caller sent something that is not a board.
     if report.get("ok").and_then(Value::as_bool) == Some(false) {
@@ -336,14 +321,12 @@ fn analyze_board(args: &Value) -> ToolResult {
             .get("error")
             .and_then(Value::as_str)
             .unwrap_or("the board file could not be read as any supported format");
-        return ToolResult::err(format!("input error: {msg}"));
+        return Err(format!("input error: {msg}"));
     }
-    if fw.is_some() {
-        if let Some(refusal) = firmware_refusal(&report) {
-            return ToolResult::ok(refusal);
-        }
+    match fw.and_then(|_| firmware_refusal(&report)) {
+        Some(refusal) => Ok(refusal),
+        None => Ok(report),
     }
-    ToolResult::ok(report)
 }
 
 /// Decide whether a firmware-carrying analysis is answerable. Two unanswerable
@@ -373,112 +356,74 @@ fn firmware_refusal(report: &Value) -> Option<Value> {
 /// `hauksbee_ci::run`, the same library entry the `hauksbee-ci` binary uses.
 /// Exit 3 becomes the structured refusal; 0/1 return the full verdict JSON
 /// with per-assertion results and the exit-code semantics as data.
-fn run_checks(args: &Value) -> ToolResult {
-    let board_path = match req_str(args, "board_path") {
-        Ok(p) => p,
-        Err(e) => return ToolResult::err(e),
-    };
-    let spec_body = match req_str(args, "spec_toml") {
-        Ok(s) => s,
-        Err(e) => return ToolResult::err(e),
-    };
+fn run_checks(args: &Value) -> Result<Value, String> {
+    let spec_body = req_str(args, "spec_toml")?;
     // Canonicalize now: the staged spec lives in a temp dir, so a relative
     // board path would resolve against the wrong base. This also front-loads
     // the missing-file error with the caller's own path in it.
-    let board_abs = match std::fs::canonicalize(board_path) {
-        Ok(p) => p,
-        Err(e) => return ToolResult::err(format!("board file '{board_path}': {e}")),
-    };
-    let firmware_abs = match opt_str(args, "firmware_path") {
-        Some(f) => match std::fs::canonicalize(f) {
-            Ok(p) => Some(p),
-            Err(e) => return ToolResult::err(format!("firmware file '{f}': {e}")),
-        },
-        None => None,
-    };
-    let schematic_abs = match opt_str(args, "schematic_path") {
-        Some(path) => match std::fs::canonicalize(path) {
-            Ok(path) => Some(path),
-            Err(error) => return ToolResult::err(format!("schematic file '{path}': {error}")),
-        },
-        None => None,
-    };
+    let mut injected = vec![("board", canonical("board", req_str(args, "board_path")?)?)];
+    for key in ["firmware", "schematic"] {
+        if let Some(path) = opt_str(args, &format!("{key}_path")) {
+            injected.push((key, canonical(key, path)?));
+        }
+    }
     // Parse the body first: a TOML syntax error should name the caller's spec,
     // not the temp file; and a `board`/`firmware` key in the body would fight
     // the injected one, so reject it with instructions instead of letting a
     // duplicate-key parse error confuse the caller.
-    let parsed: toml::Value = match spec_body.parse() {
-        Ok(v) => v,
-        Err(e) => return ToolResult::err(format!("spec_toml is not valid TOML: {e}")),
-    };
+    let parsed: toml::Value = spec_body
+        .parse()
+        .map_err(|e| format!("spec_toml is not valid TOML: {e}"))?;
     if let Some(table) = parsed.as_table() {
-        for key in ["board", "firmware", "schematic"] {
-            if table.contains_key(key) {
-                return ToolResult::err(format!(
-                    "spec_toml must not contain a '{key}' key; it is injected from the \
-                     '{key}_path' argument"
-                ));
-            }
+        if let Some(key) = ["board", "firmware", "schematic"]
+            .into_iter()
+            .find(|key| table.contains_key(*key))
+        {
+            return Err(format!(
+                "spec_toml must not contain a '{key}' key; it is injected from the \
+                 '{key}_path' argument"
+            ));
         }
     }
     // Serialize the injected paths as real TOML (quoting and escaping handled
     // by the toml crate), then append the caller's body verbatim.
-    let mut header = toml::value::Table::new();
-    header.insert(
-        "board".to_string(),
-        toml::Value::String(board_abs.display().to_string()),
-    );
-    if let Some(fw) = &firmware_abs {
-        header.insert(
-            "firmware".to_string(),
-            toml::Value::String(fw.display().to_string()),
-        );
-    }
-    if let Some(schematic) = &schematic_abs {
-        header.insert(
-            "schematic".to_string(),
-            toml::Value::String(schematic.display().to_string()),
-        );
-    }
-    let header_text = match toml::to_string(&toml::Value::Table(header)) {
-        Ok(t) => t,
-        Err(e) => return ToolResult::err(format!("could not serialize injected paths: {e}")),
-    };
-    let dir = match tempfile::tempdir() {
-        Ok(d) => d,
-        Err(e) => return ToolResult::err(format!("could not create a temp dir: {e}")),
-    };
+    let header: toml::value::Table = injected
+        .into_iter()
+        .map(|(key, path)| {
+            (
+                key.to_string(),
+                toml::Value::String(path.display().to_string()),
+            )
+        })
+        .collect();
+    let header_text = toml::to_string(&toml::Value::Table(header))
+        .map_err(|e| format!("could not serialize injected paths: {e}"))?;
+    let dir = tempfile::tempdir().map_err(|e| format!("could not create a temp dir: {e}"))?;
     let spec_path = dir.path().join("spec.toml");
-    if let Err(e) = std::fs::write(&spec_path, format!("{header_text}\n{spec_body}")) {
-        return ToolResult::err(format!("could not stage the spec: {e}"));
-    }
+    std::fs::write(&spec_path, format!("{header_text}\n{spec_body}"))
+        .map_err(|e| format!("could not stage the spec: {e}"))?;
     let cfg = hauksbee_ci::RunConfig {
         spec: spec_path,
         seed: None,
         models_dir: None,
     };
-    let result = match hauksbee_ci::run(&cfg) {
-        Ok(r) => r,
-        Err(e) => return ToolResult::err(format!("spec error: {e}")),
-    };
+    let result = hauksbee_ci::run(&cfg).map_err(|e| format!("spec error: {e}"))?;
     // render_json is the canonical machine shape ({passed, assertions_passed,
     // run_valid, exit_code, results[], substitutions, coverage_warnings});
     // reusing it means the MCP surface can never tell a cleaner story than the
     // CLI --json surface does for the same run.
-    let value: Value = match serde_json::from_str(&result.render_json()) {
-        Ok(v) => v,
-        Err(e) => return ToolResult::err(format!("could not parse the run result: {e}")),
-    };
+    let value: Value = serde_json::from_str(&result.render_json())
+        .map_err(|e| format!("could not parse the run result: {e}"))?;
     if result.exit_code() == hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS {
         let refusal = result.refusal().expect("exit 3 has a structured refusal");
-        return ToolResult::ok(json!({
+        return Ok(json!({
             "status": INVALID_FOR_ANALYSIS,
             "reason": refusal.missing_prerequisite.clone(),
             "refusal": refusal,
             "result": value,
         }));
     }
-    ToolResult::ok(value)
+    Ok(value)
 }
 
 /// `list_capabilities`: the scope table as data. Backend availability uses the
@@ -486,8 +431,8 @@ fn run_checks(args: &Value) -> ToolResult {
 /// the `hauksbee doctor` subcommand; the check/assertion/format lists are the
 /// contract stated in agents/AGENTS.md, kept here as data an agent can branch
 /// on instead of parsing prose.
-fn list_capabilities() -> ToolResult {
-    ToolResult::ok(json!({
+fn list_capabilities() -> Value {
+    json!({
         "reports": [
             {"name": "drc", "what": "copper clearance/short detection from the layout geometry"},
             {"name": "lint", "what": "connectivity, strap, and MCU resource-conflict checks"},
@@ -510,7 +455,7 @@ fn list_capabilities() -> ToolResult {
                        ".d356 (IPC-D-356)", "gerber folder or zip", ".board (Board-as-Code, bare or zipped)"],
             "firmware": [".elf", ".hex", "PlatformIO project directory", "zip of either"],
         },
-    }))
+    })
 }
 
 /// Probe each MCU backend with the engine's own discovery, exactly like
@@ -518,87 +463,92 @@ fn list_capabilities() -> ToolResult {
 /// `builtin` (linked into this binary), `ok` (external tool resolved),
 /// `absent` (feature compiled in, tool not found), `disabled` (compiled out).
 fn backend_probes() -> Vec<Value> {
+    /// One row of the capability table; `available` follows from the status.
+    fn probe(name: &str, status: &str, detail: String, summary: &str) -> Value {
+        json!({
+            "name": name, "status": status,
+            "available": matches!(status, "builtin" | "ok"),
+            "detail": detail, "summary": summary,
+        })
+    }
+    /// A row for an external tool the engine's resolver looked for. A
+    /// possibly multi-line resolver error collapses to its first line,
+    /// keeping the table one row per backend (same rationale as doctor's).
+    #[cfg(any(feature = "qemu", feature = "renode"))]
+    fn resolved(
+        name: &str,
+        found: Result<std::path::PathBuf, impl std::fmt::Display>,
+        summary: &str,
+    ) -> Value {
+        match found {
+            Ok(p) => probe(name, "ok", p.display().to_string(), summary),
+            Err(e) => {
+                let first = e.to_string().lines().next().unwrap_or("").to_string();
+                probe(name, "absent", first, summary)
+            }
+        }
+    }
+    const AVR: &str = "ATmega / ATtiny firmware co-sim";
+    const RENODE: &str = "STM32 / nRF52 / RISC-V firmware co-sim";
     let mut out = Vec::new();
 
     #[cfg(feature = "avr")]
-    out.push(json!({
-        "name": "avr", "status": "builtin", "available": true,
-        "detail": hauksbee_mcu::simavr_build_detail(),
-        "summary": "ATmega / ATtiny firmware co-sim",
-    }));
+    out.push(probe(
+        "avr",
+        "builtin",
+        hauksbee_mcu::simavr_build_detail(),
+        AVR,
+    ));
     #[cfg(not(feature = "avr"))]
-    out.push(json!({
-        "name": "avr", "status": "disabled", "available": false,
-        "detail": "compiled out; rebuild with the avr feature (GPL-3.0 libsimavr)",
-        "summary": "ATmega / ATtiny firmware co-sim",
-    }));
+    out.push(probe(
+        "avr",
+        "disabled",
+        "compiled out; rebuild with the avr feature (GPL-3.0 libsimavr)".into(),
+        AVR,
+    ));
 
     #[cfg(feature = "qemu")]
     {
         use hauksbee_mcu::qemu::{find_qemu, QemuArch};
-        for (name, arch, summary) in [
-            (
-                "qemu-xtensa",
-                QemuArch::Xtensa,
-                "ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)",
-            ),
-            (
-                "qemu-riscv32",
-                QemuArch::Riscv32,
-                "ESP32-C3 firmware co-sim (Espressif QEMU fork)",
-            ),
-        ] {
-            match find_qemu(arch) {
-                Ok(p) => out.push(json!({
-                    "name": name, "status": "ok", "available": true,
-                    "detail": p.display().to_string(), "summary": summary,
-                })),
-                Err(e) => out.push(json!({
-                    "name": name, "status": "absent", "available": false,
-                    "detail": first_line(&e.to_string()), "summary": summary,
-                })),
-            }
-        }
+        out.push(resolved(
+            "qemu-xtensa",
+            find_qemu(QemuArch::Xtensa),
+            "ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)",
+        ));
+        out.push(resolved(
+            "qemu-riscv32",
+            find_qemu(QemuArch::Riscv32),
+            "ESP32-C3 firmware co-sim (Espressif QEMU fork)",
+        ));
     }
     #[cfg(not(feature = "qemu"))]
     for (name, summary) in [
         ("qemu-xtensa", "ESP32 / ESP32-S3 firmware co-sim"),
         ("qemu-riscv32", "ESP32-C3 firmware co-sim"),
     ] {
-        out.push(json!({
-            "name": name, "status": "disabled", "available": false,
-            "detail": "built without the `qemu` feature", "summary": summary,
-        }));
+        out.push(probe(
+            name,
+            "disabled",
+            "built without the `qemu` feature".into(),
+            summary,
+        ));
     }
 
     #[cfg(feature = "renode")]
-    match hauksbee_mcu::renode::find_renode() {
-        Ok(p) => out.push(json!({
-            "name": "renode", "status": "ok", "available": true,
-            "detail": p.display().to_string(),
-            "summary": "STM32 / nRF52 / RISC-V firmware co-sim",
-        })),
-        Err(e) => out.push(json!({
-            "name": "renode", "status": "absent", "available": false,
-            "detail": first_line(&e.to_string()),
-            "summary": "STM32 / nRF52 / RISC-V firmware co-sim",
-        })),
-    }
+    out.push(resolved(
+        "renode",
+        hauksbee_mcu::renode::find_renode(),
+        RENODE,
+    ));
     #[cfg(not(feature = "renode"))]
-    out.push(json!({
-        "name": "renode", "status": "disabled", "available": false,
-        "detail": "built without the `renode` feature",
-        "summary": "STM32 / nRF52 / RISC-V firmware co-sim",
-    }));
+    out.push(probe(
+        "renode",
+        "disabled",
+        "built without the `renode` feature".into(),
+        RENODE,
+    ));
 
     out
-}
-
-/// Collapse a possibly multi-line resolver error to its first line, keeping
-/// the capability table one row per backend (same rationale as doctor's).
-#[cfg(any(feature = "qemu", feature = "renode"))]
-fn first_line(msg: &str) -> String {
-    msg.lines().next().unwrap_or("").to_string()
 }
 
 #[cfg(test)]
@@ -628,15 +578,9 @@ mod coverage_contract_tests {
 /// `board_to_code`: the editable Board-as-Code text form, via the engine's
 /// decompiler. Text formats only; a binary board has no text to decompile and
 /// gets a plain error saying so instead of a mangled lossy rendering.
-fn board_to_code(args: &Value) -> ToolResult {
-    let board_path = match req_str(args, "board_path") {
-        Ok(p) => p,
-        Err(e) => return ToolResult::err(e),
-    };
-    let bytes = match std::fs::read(board_path) {
-        Ok(b) => b,
-        Err(e) => return ToolResult::err(format!("could not read board file '{board_path}': {e}")),
-    };
+fn board_to_code(args: &Value) -> Result<Value, String> {
+    let board_path = req_str(args, "board_path")?;
+    let bytes = read_named("board", board_path)?;
     // A format hauksbee recognises and deliberately does not read gets named,
     // with the action that unlocks it. The catch-all below cannot do that: it
     // guessed "e.g. Altium .PcbDoc" at every binary file, which is the wrong
@@ -644,24 +588,16 @@ fn board_to_code(args: &Value) -> ToolResult {
     if let Some(message) =
         hauksbee_engine::board_input::unsupported_format_refusal(&display_name(board_path), &bytes)
     {
-        return ToolResult::err(message);
+        return Err(message);
     }
-    let text = match String::from_utf8(bytes) {
-        Ok(t) => t,
-        Err(_) => {
-            return ToolResult::err(
-                "this board file is binary (e.g. Altium .PcbDoc); board_to_code needs a \
-                 text format (.kicad_pcb or Eagle .brd XML)",
-            )
-        }
-    };
-    match hauksbee_engine::decompile_any_to_code(&text) {
-        Ok(code) => ToolResult::ok(json!({
-            "board": display_name(board_path),
-            "code": code,
-        })),
-        Err(e) => ToolResult::err(format!("could not decompile the board: {e}")),
-    }
+    let text = String::from_utf8(bytes).map_err(|_| {
+        "this board file is binary (e.g. Altium .PcbDoc); board_to_code needs a \
+         text format (.kicad_pcb or Eagle .brd XML)"
+            .to_string()
+    })?;
+    let code = hauksbee_engine::decompile_any_to_code(&text)
+        .map_err(|e| format!("could not decompile the board: {e}"))?;
+    Ok(json!({ "board": display_name(board_path), "code": code }))
 }
 
 /// `run_script`: hand the source to the QuickJS sandbox. Failures come back
@@ -673,9 +609,9 @@ fn run_script(args: &Value) -> ToolResult {
         Err(e) => return ToolResult::err(e),
     };
     match crate::script::run(source, std::time::Duration::from_secs(120)) {
-        Ok(v) => ToolResult::ok(v),
-        Err(v) => ToolResult {
-            value: v,
+        Ok(value) => ToolResult::ok(value),
+        Err(value) => ToolResult {
+            value,
             is_error: true,
         },
     }

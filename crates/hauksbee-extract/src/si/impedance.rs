@@ -101,6 +101,7 @@ use super::{
     elem_net_id, is_unconnected_net, local_to_board, net_name_index, norm, routed_length_mm,
     track_width_range, usb_pairs, SiCheck, SiFinding, SiReport, SiSeverity,
 };
+use crate::gerber::geo::{point_in_polygon, seg_seg_dist};
 use crate::ExtractedBoard;
 
 // ===========================================================================
@@ -971,10 +972,7 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
                         continue;
                     }
                     leg_total += 1;
-                    if !fills
-                        .iter()
-                        .any(|poly| crate::gerber::geo::point_in_polygon(x, y, poly))
-                    {
+                    if !fills.iter().any(|poly| point_in_polygon(x, y, poly)) {
                         uncovered.push((x, y));
                     }
                 }
@@ -1527,33 +1525,6 @@ fn net_segments(root: &List, net_id: i64) -> Vec<Seg> {
         });
     }
     out
-}
-
-/// Approximate minimum distance between two segments (centrelines) as the
-/// smallest of the four endpoint-to-segment distances. This does NOT return 0
-/// for two segments that cross in their interiors (an X) - that case is
-/// irrelevant here, since the legs of a routed differential pair run parallel,
-/// never crossing, over the coupled section we measure.
-fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f64)) -> f64 {
-    let d = point_seg_dist2(a1.0, a1.1, b1.0, b1.1, b2.0, b2.1)
-        .min(point_seg_dist2(a2.0, a2.1, b1.0, b1.1, b2.0, b2.1))
-        .min(point_seg_dist2(b1.0, b1.1, a1.0, a1.1, a2.0, a2.1))
-        .min(point_seg_dist2(b2.0, b2.1, a1.0, a1.1, a2.0, a2.1));
-    d.sqrt()
-}
-
-fn point_seg_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
-    let dx = bx - ax;
-    let dy = by - ay;
-    let len2 = dx * dx + dy * dy;
-    if len2 <= f64::EPSILON {
-        let (ex, ey) = (px - ax, py - ay);
-        return ex * ex + ey * ey;
-    }
-    let t = (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0);
-    let (cx, cy) = (ax + t * dx, ay + t * dy);
-    let (ex, ey) = (px - cx, py - cy);
-    ex * ex + ey * ey
 }
 
 #[cfg(test)]

@@ -77,6 +77,29 @@ impl std::error::Error for SpecError {
 }
 
 impl SpecError {
+    /// Fold independently collected errors into one result: none is `Ok`, one
+    /// comes back as itself, several as [`SpecError::Many`].
+    pub fn from_many(mut errs: Vec<SpecError>) -> Result<(), SpecError> {
+        match errs.len() {
+            0 => Ok(()),
+            1 => Err(errs.remove(0)),
+            _ => Err(SpecError::Many(errs)),
+        }
+    }
+
+    /// A `map_err` adapter: `.map_err(SpecError::invalid("reading BOM"))`
+    /// yields `Invalid("reading BOM: <cause>")`.
+    pub fn invalid<E: fmt::Display>(context: impl Into<String>) -> impl Fn(E) -> SpecError {
+        let context = context.into();
+        move |e| SpecError::Invalid(format!("{context}: {e}"))
+    }
+
+    /// The [`SpecError::Io`] twin of [`SpecError::invalid`].
+    pub fn io<E: fmt::Display>(context: impl Into<String>) -> impl Fn(E) -> SpecError {
+        let context = context.into();
+        move |e| SpecError::Io(format!("{context}: {e}"))
+    }
+
     /// CLI exit code for this pre-verdict error. A typed solver refusal means
     /// the requested analysis is invalid (3); other setup/spec errors remain 2.
     pub fn exit_code(&self) -> i32 {

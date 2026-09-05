@@ -10,19 +10,21 @@
 //! (`/api/analyze`, `/api/analyze-with-firmware`).
 //!
 //! This module is the thin HTTP layer only. The actual analysis is injected as a
-//! callback (`Analyzer` / `FirmwareAnalyzer`) so the server crate stays free of
-//! any dependency on the engine/extract crates (which depend on *this* crate);
-//! the `hauksbee` binary wires the engine's `analyze_json` in. The routes are
-//! merged into the unified server router (see [`crate::Server`]) so `serve` and
-//! `run --serve` both expose them alongside the WebSocket sim and the static
-//! React bundle.
+//! callback (`Analyzer` / `FirmwareAnalyzer` / `SchematicAnalyzer`) so the server
+//! crate stays free of any dependency on the engine/extract crates (which depend
+//! on *this* crate); the `hauksbee` binary wires the engine's `analyze_json` in.
+//! Every route has ONE handler, the schematic-aware one; the narrower legacy
+//! callback shapes are adapted onto it at mount time so the two can never drift.
+//! The routes are merged into the unified server router (see [`crate::Server`])
+//! so `serve` and `run --serve` both expose them alongside the WebSocket sim and
+//! the static React bundle.
 
 use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Multipart, Path as UrlPath, State};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 
@@ -32,6 +34,10 @@ pub use hauksbee_frontdoor_api::frontdoor::{
     LiveLauncher, ModelDrafter, SchematicAnalyzer, SchematicCheckRunner, SchematicLiveLauncher,
     ToolHooks,
 };
+
+/// A JSON (or plain-text) body with its content-type header: the shape every
+/// non-streaming handler answers with.
+type JsonResponse = (StatusCode, [(header::HeaderName, &'static str); 1], String);
 
 /// Reject a request that a *website* in the user's browser made cross-origin to
 /// our loopback server. The analysis/check endpoints can run an uploaded
@@ -44,23 +50,19 @@ pub use hauksbee_frontdoor_api::frontdoor::{
 /// standard private-network-access defense for a localhost server.
 ///
 /// Returns `Some(response)` when the request must be refused, `None` to proceed.
-fn reject_cross_site(
-    headers: &HeaderMap,
-) -> Option<(StatusCode, [(header::HeaderName, &'static str); 1], String)> {
-    if let Some(site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
-        // Browser-origin request: only our own page (same-origin) or a
-        // direct address-bar navigation (none) may reach these endpoints.
-        if site != "same-origin" && site != "none" {
-            return Some((
-                StatusCode::FORBIDDEN,
-                [(header::CONTENT_TYPE, "application/json")],
-                "{\"ok\":false,\"error\":\"cross-site request refused: the hauksbee analysis \
-                 endpoints accept requests only from the hauksbee page itself\"}"
-                    .to_string(),
-            ));
-        }
-    }
-    None
+fn reject_cross_site(headers: &HeaderMap) -> Option<JsonResponse> {
+    let site = headers.get("sec-fetch-site")?.to_str().ok()?;
+    // Browser-origin request: only our own page (same-origin) or a direct
+    // address-bar navigation (none) may reach these endpoints.
+    (site != "same-origin" && site != "none").then(|| {
+        (
+            StatusCode::FORBIDDEN,
+            [(header::CONTENT_TYPE, "application/json")],
+            "{\"ok\":false,\"error\":\"cross-site request refused: the hauksbee analysis \
+             endpoints accept requests only from the hauksbee page itself\"}"
+                .to_string(),
+        )
+    })
 }
 
 /// Largest board upload accepted (256 MiB). Real flagship layouts blow past a
@@ -74,7 +76,7 @@ const MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 /// Rewrite axum's stock 413 ("length limit exceeded") so the body NAMES the
 /// limit; the frontend shows error bodies verbatim, and a message that says
 /// what the cap is lets it tell the user something actionable.
-async fn name_upload_limit_413(resp: axum::response::Response) -> axum::response::Response {
+async fn name_upload_limit_413(resp: Response) -> Response {
     if resp.status() == StatusCode::PAYLOAD_TOO_LARGE {
         return (
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -88,37 +90,21 @@ async fn name_upload_limit_413(resp: axum::response::Response) -> axum::response
     resp
 }
 
-struct FrontDoorState {
-    analyze: Analyzer,
-}
-
 /// Bind a multipart router's state behind the shared upload guard: one body
 /// size limit and one 413 namer, so every upload endpoint answers an over-size
 /// request the same way.
-fn with_upload_guard<S: Send + Sync + 'static>(router: Router<Arc<S>>, state: Arc<S>) -> Router {
+fn with_upload_guard<S: Send + Sync + 'static>(router: Router<Arc<S>>, state: S) -> Router {
     router
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(axum::middleware::map_response(name_upload_limit_413))
-        .with_state(state)
+        .with_state(Arc::new(state))
 }
 
 /// Build the board-only analysis routes (`/api/analyze`). No server-rendered
 /// page: the React bundle owns `/`. Kept for tests and any board-only caller;
 /// production wires the firmware-aware [`api_routes`] into the unified server.
 pub fn router(analyze: Analyzer) -> Router {
-    let state = Arc::new(FrontDoorState { analyze });
-    with_upload_guard(
-        Router::new().route("/api/analyze", post(analyze_handler)),
-        state,
-    )
-}
-
-struct FirmwareState {
-    analyze: FirmwareAnalyzer,
-}
-
-struct SchematicState {
-    analyze: SchematicAnalyzer,
+    api_routes_with_schematic(Arc::new(move |name, board, _, _| analyze(name, board)))
 }
 
 /// Build the analysis API routes the React landing page calls: board-only
@@ -130,28 +116,7 @@ struct SchematicState {
 /// into the unified server router alongside the WebSocket sim and the static
 /// React bundle, keeping the whole web experience on one server path.
 pub fn api_routes(analyze: FirmwareAnalyzer) -> Router {
-    let state = Arc::new(FirmwareState { analyze });
-    with_upload_guard(
-        Router::new()
-            .route("/api/analyze", post(analyze_handler_fw))
-            .route("/api/analyze-with-firmware", post(analyze_firmware_handler)),
-        state,
-    )
-}
-
-/// Analysis routes which additionally accept a `schematic` multipart part.
-/// The raw board endpoint remains available and supplies no companions.
-pub fn api_routes_with_schematic(analyze: SchematicAnalyzer) -> Router {
-    let state = Arc::new(SchematicState { analyze });
-    Router::new()
-        .route("/api/analyze", post(analyze_handler_schematic))
-        .route(
-            "/api/analyze-with-firmware",
-            post(analyze_schematic_handler),
-        )
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .layer(axum::middleware::map_response(name_upload_limit_413))
-        .with_state(state)
+    api_routes_with_schematic(with_schematic_analyzer(analyze))
 }
 
 /// Back-compat alias for [`api_routes`] (the firmware-aware analysis routes).
@@ -160,13 +125,30 @@ pub fn router_with_firmware(analyze: FirmwareAnalyzer) -> Router {
     api_routes(analyze)
 }
 
-enum CheckCallback {
-    Legacy(CheckRunner),
-    Schematic(SchematicCheckRunner),
+/// A [`FirmwareAnalyzer`] as the schematic-aware shape, ignoring the schematic.
+pub(crate) fn with_schematic_analyzer(analyze: FirmwareAnalyzer) -> SchematicAnalyzer {
+    Arc::new(move |name, board, firmware, _| analyze(name, board, firmware))
 }
 
-struct CheckState {
-    check: CheckCallback,
+/// A [`CheckRunner`] as the schematic-aware shape, ignoring the schematic.
+pub(crate) fn with_schematic_check(check: CheckRunner) -> SchematicCheckRunner {
+    Arc::new(move |name, board, firmware, _, spec| check(name, board, firmware, spec))
+}
+
+/// A [`LiveLauncher`] as the schematic-aware shape, ignoring the schematic.
+pub(crate) fn with_schematic_launcher(launch: LiveLauncher) -> SchematicLiveLauncher {
+    Arc::new(move |name, board, firmware, _| launch(name, board, firmware))
+}
+
+/// Analysis routes which additionally accept a `schematic` multipart part.
+/// The raw board endpoint remains available and supplies no companions.
+pub fn api_routes_with_schematic(analyze: SchematicAnalyzer) -> Router {
+    with_upload_guard(
+        Router::new()
+            .route("/api/analyze", post(analyze_handler))
+            .route("/api/analyze-with-firmware", post(analyze_upload_handler)),
+        analyze,
+    )
 }
 
 /// The web checks route (`POST /api/check`, multipart: `board` + optional
@@ -175,32 +157,18 @@ struct CheckState {
 /// the uploaded parts. Merged into the unified router next to the analysis
 /// routes.
 pub fn check_route(check: CheckRunner) -> Router {
-    let state = Arc::new(CheckState {
-        check: CheckCallback::Legacy(check),
-    });
-    with_upload_guard(
-        Router::new().route("/api/check", post(check_handler)),
-        state,
-    )
+    check_route_with_schematic(with_schematic_check(check))
 }
 
 /// Schematic-aware checks route used by the shipped standalone app.
 pub fn check_route_with_schematic(check: SchematicCheckRunner) -> Router {
-    let state = Arc::new(CheckState {
-        check: CheckCallback::Schematic(check),
-    });
     with_upload_guard(
         Router::new().route("/api/check", post(check_handler)),
-        state,
+        check,
     )
 }
 
 struct LiveState {
-    hub: Arc<crate::LiveHub>,
-    launch: LiveLauncher,
-}
-
-struct SchematicLiveState {
     hub: Arc<crate::LiveHub>,
     launch: SchematicLiveLauncher,
 }
@@ -213,13 +181,7 @@ struct SchematicLiveState {
 /// (and firmware) through the engine, so it carries the same
 /// `reject_cross_site` guard as the other mutating endpoints.
 pub fn live_routes(hub: Arc<crate::LiveHub>, launch: LiveLauncher) -> Router {
-    let state = Arc::new(LiveState { hub, launch });
-    with_upload_guard(
-        Router::new()
-            .route("/api/live/launch", post(live_launch_handler))
-            .route("/api/live/status", get(live_status_handler)),
-        state,
-    )
+    live_routes_with_schematic(hub, with_schematic_launcher(launch))
 }
 
 /// Live-launch routes which additionally accept a `schematic` multipart part.
@@ -227,66 +189,24 @@ pub fn live_routes_with_schematic(
     hub: Arc<crate::LiveHub>,
     launch: SchematicLiveLauncher,
 ) -> Router {
-    let state = Arc::new(SchematicLiveState { hub, launch });
     with_upload_guard(
         Router::new()
-            .route("/api/live/launch", post(live_launch_schematic_handler))
-            .route("/api/live/status", get(live_status_schematic_handler)),
-        state,
+            .route("/api/live/launch", post(live_launch_handler))
+            .route("/api/live/status", get(live_status_handler)),
+        LiveState { hub, launch },
     )
 }
 
 /// `GET /api/live/status`: whether a live session is running, and on which
 /// board, so the UI can confirm before replacing it.
-fn live_status(hub: &crate::LiveHub) -> impl IntoResponse {
+async fn live_status_handler(State(state): State<Arc<LiveState>>) -> JsonResponse {
     json_body(
         StatusCode::OK,
-        match hub.active_board() {
+        match state.hub.active_board() {
             Some(name) => serde_json::json!({ "active": true, "board_name": name }),
             None => serde_json::json!({ "active": false }),
         },
     )
-}
-
-async fn live_status_schematic_handler(
-    State(state): State<Arc<SchematicLiveState>>,
-) -> impl IntoResponse {
-    live_status(&state.hub)
-}
-
-async fn live_launch_schematic_handler(
-    State(state): State<Arc<SchematicLiveState>>,
-    headers: HeaderMap,
-    mut multipart: Multipart,
-) -> impl IntoResponse {
-    if let Some(response) = reject_cross_site(&headers) {
-        return response;
-    }
-    let parts = match parse_upload(&mut multipart).await {
-        Ok(parts) => parts,
-        Err(message) => return json_error(&message),
-    };
-    let Some(board_bytes) = parts.board_bytes else {
-        return json_error("no board file in the upload (expected a 'board' or 'file' part)");
-    };
-    let launch = state.launch.clone();
-    let built = tokio::task::spawn_blocking(move || {
-        let firmware = parts
-            .fw_bytes
-            .as_deref()
-            .map(|bytes| (parts.fw_name.as_str(), bytes));
-        let schematic = parts
-            .schematic_bytes
-            .as_deref()
-            .map(|bytes| (parts.schematic_name.as_str(), bytes));
-        (launch)(&parts.board_name, &board_bytes, firmware, schematic)
-    })
-    .await;
-    install_launched(&state.hub, built)
-}
-
-async fn live_status_handler(State(state): State<Arc<LiveState>>) -> impl IntoResponse {
-    live_status(&state.hub)
 }
 
 /// POST `/api/live/launch`: build the engine for the uploaded board (blocking
@@ -299,39 +219,28 @@ async fn live_launch_handler(
     State(state): State<Arc<LiveState>>,
     headers: HeaderMap,
     mut multipart: Multipart,
-) -> impl IntoResponse {
-    if let Some(resp) = reject_cross_site(&headers) {
-        return resp;
-    }
-    let parts = match parse_upload(&mut multipart).await {
-        Ok(p) => p,
-        Err(msg) => return json_error(&msg),
+) -> JsonResponse {
+    let mut parts = match guarded_upload(&headers, &mut multipart).await {
+        Ok(parts) => parts,
+        Err(response) => return response,
     };
-    let Some(board_bytes) = parts.board_bytes else {
-        return json_error("no board file in the upload (expected a 'board' or 'file' part)");
+    let Some(board_bytes) = parts.board_bytes.take() else {
+        return json_error(NO_BOARD_PART);
     };
-    let (board_name, fw_name, fw_bytes) = (parts.board_name, parts.fw_name, parts.fw_bytes);
     let launch = state.launch.clone();
-    let built = tokio::task::spawn_blocking(move || match &fw_bytes {
-        Some(bytes) => (launch)(&board_name, &board_bytes, Some((&fw_name, bytes))),
-        None => (launch)(&board_name, &board_bytes, None),
+    let built = run_blocking("the live launch task", move || {
+        (launch)(
+            &parts.board_name,
+            &board_bytes,
+            parts.firmware(),
+            parts.schematic(),
+        )
     })
     .await;
-    install_launched(&state.hub, built)
-}
-
-/// Install a freshly built session as THE live one and answer the launch POST.
-/// A refusal (no processor for the firmware, unloadable firmware, unreadable
-/// board) comes back as `{ok:false, error}` with the engine's own message, so
-/// the report stays up and the UI shows a reason instead of a dead spinner.
-fn install_launched(
-    hub: &crate::LiveHub,
-    built: Result<Result<LiveLaunch, String>, tokio::task::JoinError>,
-) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
     match built {
-        Ok(Ok(live)) => {
+        Ok(live) => {
             let board_name = live.board_name.clone();
-            let replaced = hub.launch(
+            let replaced = state.hub.launch(
                 live.engine,
                 live.board_name,
                 live.board_file,
@@ -342,8 +251,7 @@ fn install_launched(
                 serde_json::json!({ "ok": true, "board_name": board_name, "replaced": replaced }),
             )
         }
-        Ok(Err(message)) => json_error(&message),
-        Err(_) => json_error("the live launch task panicked; see the server log"),
+        Err(response) => response,
     }
 }
 
@@ -359,17 +267,16 @@ struct DepsState {
 /// same `reject_cross_site` guard as every other mutating endpoint: a hostile
 /// page in another tab must not be able to trigger a download.
 pub fn deps_routes(status: DepsStatus, install: DepInstaller) -> Router {
-    let state = Arc::new(DepsState { status, install });
     Router::new()
         .route("/api/deps", get(deps_status_handler))
         .route("/api/deps/install/{id}", post(deps_install_handler))
-        .with_state(state)
+        .with_state(Arc::new(DepsState { status, install }))
 }
 
 /// GET `/api/deps`: relay the engine's dependency JSON. The probe shells a few
 /// `--version` checks, so it runs on the blocking pool rather than stalling the
 /// async runtime.
-async fn deps_status_handler(State(state): State<Arc<DepsState>>) -> impl IntoResponse {
+async fn deps_status_handler(State(state): State<Arc<DepsState>>) -> JsonResponse {
     let status = state.status.clone();
     json_ok(
         tokio::task::spawn_blocking(move || (status)())
@@ -381,15 +288,12 @@ async fn deps_status_handler(State(state): State<Arc<DepsState>>) -> impl IntoRe
 /// One SSE frame: `event: <kind>` with the text as (possibly multi-line) data.
 fn sse_event(kind: &str, text: &str) -> String {
     let mut s = format!("event: {kind}\n");
-    let mut any = false;
-    for line in text.lines() {
-        s.push_str("data: ");
-        s.push_str(line);
-        s.push('\n');
-        any = true;
-    }
-    if !any {
+    let mut lines = text.lines().peekable();
+    if lines.peek().is_none() {
         s.push_str("data:\n");
+    }
+    for line in lines {
+        s.push_str(&format!("data: {line}\n"));
     }
     s.push('\n');
     s
@@ -410,35 +314,14 @@ async fn deps_install_handler(
     State(state): State<Arc<DepsState>>,
     UrlPath(id): UrlPath<String>,
     headers: HeaderMap,
-) -> axum::response::Response {
+) -> Response {
     if let Some(resp) = reject_cross_site(&headers) {
         return resp.into_response();
     }
-    let (tx, rx) = tokio::sync::mpsc::channel::<String>(256);
     let install = state.install.clone();
-    tokio::task::spawn_blocking(move || {
-        let result = {
-            let tx = tx.clone();
-            let mut sink = move |line: &str| {
-                // A send failure means the browser went away; the install
-                // continues (see the handler doc), we just stop relaying.
-                // try_send, NOT blocking_send. A client that opens this POST
-                // and then stops reading applies TCP backpressure, the channel
-                // fills, and a blocking send parks this thread inside the very
-                // loop that enforces the timeout: the child is never killed,
-                // the RAII slot is never released, and every later install is
-                // refused for the life of the process. Dropping a progress line
-                // for a peer that is not listening costs nothing worth having.
-                let _ = tx.try_send(sse_event("log", line));
-            };
-            (install)(&id, &mut sink)
-        };
-        let _ = match result {
-            Ok(()) => tx.blocking_send(sse_event("done", "ok")),
-            Err(e) => tx.blocking_send(sse_event("error", &e)),
-        };
-    });
-    sse_response(rx)
+    stream_job("done", move |sink| {
+        (install)(&id, sink).map(|()| "ok".to_string())
+    })
 }
 
 /// Largest datasheet accepted (32 MiB). A datasheet is tens of pages of vector
@@ -447,10 +330,6 @@ async fn deps_install_handler(
 /// renders its pages, so an enormous upload costs disk and CPU before anything
 /// has been checked.
 const MAX_DATASHEET_BYTES: usize = 32 * 1024 * 1024;
-
-struct DatasheetState {
-    hooks: DatasheetHooks,
-}
 
 /// The datasheet-extraction API:
 /// `GET /api/models/extract/ready` (can an extraction run on this machine, and
@@ -466,7 +345,6 @@ struct DatasheetState {
 /// spends the user's LLM credit and the save route writes to their model
 /// library, so neither may be triggered by a page in another tab.
 pub fn datasheet_routes(hooks: DatasheetHooks) -> Router {
-    let state = Arc::new(DatasheetState { hooks });
     Router::new()
         .route("/api/models/extract/ready", get(datasheet_ready_handler))
         .route("/api/models/extract", post(datasheet_extract_handler))
@@ -475,7 +353,7 @@ pub fn datasheet_routes(hooks: DatasheetHooks) -> Router {
         .route("/api/models/draft", post(model_draft_handler))
         .route("/api/sensor-specs", get(sensor_catalog_handler))
         .layer(DefaultBodyLimit::max(MAX_DATASHEET_BYTES))
-        .with_state(state)
+        .with_state(Arc::new(hooks))
 }
 
 /// Checked-in, product-bundled register behavior for the no-LLM browser path.
@@ -509,46 +387,51 @@ async fn sensor_catalog_handler() -> Json<serde_json::Value> {
     Json(sensor_catalog_json())
 }
 
+/// The string under `key` in a JSON request body, empty when absent.
+fn json_str_field(value: &serde_json::Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
 /// POST `/api/models/draft`: prepare the selected component for local editing.
 /// An executable partial model is copied into a board-narrowed extension;
 /// an unresolved component gets the same conservative evidence-first scaffold
 /// as `models prepare`. It is a local deterministic preview: no files are
 /// written and no network or LLM is used.
 async fn model_draft_handler(
-    State(state): State<Arc<DatasheetState>>,
+    State(hooks): State<Arc<DatasheetHooks>>,
     headers: HeaderMap,
     body: Bytes,
-) -> impl IntoResponse {
+) -> JsonResponse {
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
     let request = String::from_utf8_lossy(&body).into_owned();
-    let draft = state.hooks.draft.clone();
-    match tokio::task::spawn_blocking(move || (draft)(&request)).await {
-        Ok(Ok(toml)) => json_body(
+    let draft = hooks.draft.clone();
+    match run_blocking("the model draft task", move || (draft)(&request)).await {
+        Ok(toml) => json_body(
             StatusCode::OK,
             serde_json::json!({ "ok": true, "toml": toml, "read_only": true }),
         ),
-        Ok(Err(message)) => json_error(&message),
-        Err(_) => json_error("the model draft task panicked; see the server log"),
+        Err(response) => response,
     }
 }
 
 /// GET `/api/models/extract/ready`: relay the engine's readiness JSON. The
 /// probe asks codex for its own login state (a subprocess), so it runs on the
 /// blocking pool.
-async fn datasheet_ready_handler(State(state): State<Arc<DatasheetState>>) -> impl IntoResponse {
-    let ready = state.hooks.ready.clone();
-    let json = tokio::task::spawn_blocking(move || (ready)())
-        .await
-        .unwrap_or_else(|_| {
-            "{\"ready\":false,\"reason\":\"the readiness probe panicked; see the server log\"}"
-                .to_string()
-        });
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
+async fn datasheet_ready_handler(State(hooks): State<Arc<DatasheetHooks>>) -> JsonResponse {
+    let ready = hooks.ready.clone();
+    json_ok(
+        tokio::task::spawn_blocking(move || (ready)())
+            .await
+            .unwrap_or_else(|_| {
+                "{\"ready\":false,\"reason\":\"the readiness probe panicked; see the server log\"}"
+                    .to_string()
+            }),
     )
 }
 
@@ -559,12 +442,15 @@ async fn datasheet_ready_handler(State(state): State<Arc<DatasheetState>>) -> im
 /// hang, and this one is spending the user's money while it looks dead.
 ///
 /// The `card` payload is the model for review. Nothing has been written at that
-/// point; `POST /api/models/save` is what keeps it.
+/// point; `POST /api/models/save` is what keeps it. Unlike an install, there is
+/// nothing worth finishing for a browser that went away (the card would have
+/// nobody to review it), but the extraction still runs to the end because it
+/// has already been paid for and cannot be recalled.
 async fn datasheet_extract_handler(
-    State(state): State<Arc<DatasheetState>>,
+    State(hooks): State<Arc<DatasheetHooks>>,
     headers: HeaderMap,
     mut multipart: Multipart,
-) -> axum::response::Response {
+) -> Response {
     if let Some(resp) = reject_cross_site(&headers) {
         return resp.into_response();
     }
@@ -578,77 +464,31 @@ async fn datasheet_extract_handler(
             "no datasheet in the upload (expected a 'datasheet' part)",
         );
     };
-    let (part, kind) = match extraction_identity(parts.part, parts.kind) {
-        Ok(identity) => identity,
-        Err(message) => return sse_once("error", message),
+    // An absent or blank kind is intentional: the shared datasheet extractor
+    // identifies it from the first pages. The browser labels the picker
+    // optional, so rejecting its default value here made the primary path fail.
+    let Some(part) = parts.part.filter(|value| !value.trim().is_empty()) else {
+        return sse_once(
+            "error",
+            "the extraction request needs a 'part' (the manufacturer part number)",
+        );
     };
     let job = DatasheetJob {
         pdf_name: parts.datasheet_name,
         pdf,
         reference: parts.reference.unwrap_or_default(),
         part,
-        kind,
+        kind: parts.kind.unwrap_or_default(),
         model: parts.model.unwrap_or_default(),
     };
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<String>(256);
-    let extract = state.hooks.extract.clone();
-    tokio::task::spawn_blocking(move || {
-        let result = {
-            let tx = tx.clone();
-            let mut sink = move |line: &str| {
-                // A send failure means the browser went away. Unlike an
-                // install, there is nothing worth finishing for: the card would
-                // have nobody to review it. The extraction still runs to the
-                // end because it has already been paid for and cannot be
-                // recalled, we just stop relaying.
-                // try_send, NOT blocking_send. A client that opens this POST
-                // and then stops reading applies TCP backpressure, the channel
-                // fills, and a blocking send parks this thread inside the very
-                // loop that enforces the timeout: the child is never killed,
-                // the RAII slot is never released, and every later install is
-                // refused for the life of the process. Dropping a progress line
-                // for a peer that is not listening costs nothing worth having.
-                let _ = tx.try_send(sse_event("log", line));
-            };
-            (extract)(job, &mut sink)
-        };
-        let _ = match result {
-            Ok(card_json) => tx.blocking_send(sse_event("card", &card_json)),
-            Err(e) => tx.blocking_send(sse_event("error", &e)),
-        };
-    });
-    sse_response(rx)
-}
-
-fn extraction_identity(
-    part: Option<String>,
-    kind: Option<String>,
-) -> Result<(String, String), &'static str> {
-    let part = part
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("the extraction request needs a 'part' (the manufacturer part number)")?;
-    // An absent or blank kind is intentional: the shared datasheet extractor
-    // identifies it from the first pages. The browser labels the picker
-    // optional, so rejecting its default value here made the primary path fail.
-    Ok((part, kind.unwrap_or_default()))
+    let extract = hooks.extract.clone();
+    stream_job("card", move |sink| (extract)(job, sink))
 }
 
 #[cfg(test)]
 mod datasheet_input_tests {
-    use super::{
-        extraction_identity, name_upload_limit_413, sensor_catalog_json, MAX_UPLOAD_BYTES,
-    };
+    use super::{name_upload_limit_413, sensor_catalog_json, sse_event, MAX_UPLOAD_BYTES};
     use axum::{body::Body, http::StatusCode, response::Response};
-
-    #[test]
-    fn extraction_needs_a_part_but_accepts_a_blank_kind() {
-        assert_eq!(
-            extraction_identity(Some("TP4054".into()), Some(String::new())).unwrap(),
-            ("TP4054".to_string(), String::new())
-        );
-        assert!(extraction_identity(None, Some("vreg".into())).is_err());
-    }
 
     #[test]
     fn bundled_sensor_catalog_is_local_exact_and_contains_valid_toml() {
@@ -665,6 +505,12 @@ mod datasheet_input_tests {
                 entry["id"]
             );
         }
+    }
+
+    #[test]
+    fn sse_frames_carry_every_line_and_an_empty_data_field_for_no_text() {
+        assert_eq!(sse_event("log", "a\nb"), "event: log\ndata: a\ndata: b\n\n");
+        assert_eq!(sse_event("done", ""), "event: done\ndata:\n\n");
     }
 
     #[tokio::test]
@@ -688,36 +534,28 @@ mod datasheet_input_tests {
 /// and accepted (they may have edited it), so the engine re-validates it before
 /// writing rather than assuming it is still the extractor's own output.
 async fn datasheet_save_handler(
-    State(state): State<Arc<DatasheetState>>,
+    State(hooks): State<Arc<DatasheetHooks>>,
     headers: HeaderMap,
     body: Bytes,
-) -> impl IntoResponse {
+) -> JsonResponse {
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) else {
         return json_error("the save request body is not JSON");
     };
-    let field = |k: &str| {
-        value
-            .get(k)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    };
-    let (part, kind, toml) = (field("part"), field("kind"), field("toml"));
+    let (part, kind, toml) = (
+        json_str_field(&value, "part"),
+        json_str_field(&value, "kind"),
+        json_str_field(&value, "toml"),
+    );
     if part.trim().is_empty() || toml.trim().is_empty() {
         return json_error("the save request needs a non-empty 'part' and 'toml'");
     }
-    let save = state.hooks.save.clone();
-    match tokio::task::spawn_blocking(move || (save)(&part, &kind, &toml)).await {
-        Ok(Ok(json)) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json")],
-            json,
-        ),
-        Ok(Err(msg)) => json_error(&msg),
-        Err(_) => json_error("the save task panicked; see the server log"),
+    let save = hooks.save.clone();
+    match run_blocking("the save task", move || (save)(&part, &kind, &toml)).await {
+        Ok(json) => json_ok(json),
+        Err(response) => response,
     }
 }
 
@@ -725,64 +563,93 @@ async fn datasheet_save_handler(
 ///
 /// The editor calls this while someone types. It runs the SAME checks the save
 /// path runs, so a model cannot validate here and be refused there, which
-/// would be worse than offering no editor at all.
+/// would be worse than offering no editor at all. Two formats go through one
+/// endpoint, because the editor is one box with a toggle and a second route
+/// would only duplicate the cross-site guard and the blocking-pool handoff.
 async fn datasheet_check_handler(
-    State(state): State<Arc<DatasheetState>>,
+    State(hooks): State<Arc<DatasheetHooks>>,
     headers: HeaderMap,
     body: Bytes,
-) -> impl IntoResponse {
+) -> JsonResponse {
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) else {
         return json_error("the check request body is not JSON");
     };
-    let toml = value
-        .get("toml")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    // Two formats through one endpoint, because the editor is one box with a
-    // toggle and a second route would only duplicate the cross-site guard and
-    // the blocking-pool handoff.
-    let spice = value
-        .get("format")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|f| f.eq_ignore_ascii_case("spice"));
+    let toml = json_str_field(&value, "toml");
+    let spice = json_str_field(&value, "format").eq_ignore_ascii_case("spice");
     let check = if spice {
-        state.hooks.spice_check.clone()
+        hooks.spice_check.clone()
     } else {
-        state.hooks.check.clone()
+        hooks.check.clone()
     };
     match tokio::task::spawn_blocking(move || (check)(&toml)).await {
-        Ok(Ok(summary)) => (
+        Ok(Ok(summary)) => json_body(
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json")],
-            serde_json::json!({ "ok": true, "summary": summary }).to_string(),
+            serde_json::json!({ "ok": true, "summary": summary }),
         ),
-        Ok(Err(msg)) => (
-            // 200 with ok:false, not a 4xx. A model in progress is not a failed
-            // request, and an editor that logs a console error on every
-            // keystroke while someone types is unusable.
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json")],
-            serde_json::json!({ "ok": false, "error": msg }).to_string(),
-        ),
+        // 200 with ok:false, not a 4xx. A model in progress is not a failed
+        // request, and an editor that logs a console error on every
+        // keystroke while someone types is unusable.
+        Ok(Err(msg)) => json_error(&msg),
         Err(_) => json_error("the check task panicked; see the server log"),
     }
+}
+
+/// Run a blocking engine callback on the blocking pool (extract + bind, a
+/// child co-sim, a subprocess probe: none of it may sit on an async worker).
+/// The callback's own refusal and a panic both come back as the `{ok:false,
+/// error}` answer, so the UI shows a reason instead of a dead spinner.
+async fn run_blocking<T: Send + 'static>(
+    what: &'static str,
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, JsonResponse> {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(message)) => Err(json_error(&message)),
+        Err(_) => Err(json_error(&format!("{what} panicked; see the server log"))),
+    }
+}
+
+/// Run a long job on the blocking pool and stream its progress lines as SSE
+/// `log` events, ending with exactly one `<done_kind>` frame carrying the
+/// job's result, or one `error` frame carrying its message.
+///
+/// Progress goes through `try_send`, NOT `blocking_send`. A client that opens
+/// the POST and then stops reading applies TCP backpressure, the channel fills,
+/// and a blocking send would park this thread inside the very loop that
+/// enforces the job's timeout: the child is never killed, the RAII slot is
+/// never released, and every later job is refused for the life of the process.
+/// Dropping a progress line for a peer that is not listening costs nothing
+/// worth having; the job itself runs to completion regardless.
+fn stream_job(
+    done_kind: &'static str,
+    job: impl FnOnce(&mut dyn FnMut(&str)) -> Result<String, String> + Send + 'static,
+) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(256);
+    tokio::task::spawn_blocking(move || {
+        let result = {
+            let tx = tx.clone();
+            let mut sink = move |line: &str| {
+                let _ = tx.try_send(sse_event("log", line));
+            };
+            job(&mut sink)
+        };
+        let _ = match result {
+            Ok(text) => tx.blocking_send(sse_event(done_kind, &text)),
+            Err(e) => tx.blocking_send(sse_event("error", &e)),
+        };
+    });
+    sse_response(rx)
 }
 
 /// An SSE response carrying exactly one frame, for a request rejected before
 /// any work started. The client reads this endpoint as a stream, so a refusal
 /// has to arrive in the stream's own language or it shows up as a parse failure
 /// instead of the reason.
-fn sse_once(kind: &str, text: &str) -> axum::response::Response {
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .body(axum::body::Body::from(sse_event(kind, text)))
-        .expect("static headers build")
+fn sse_once(kind: &str, text: &str) -> Response {
+    sse_body(axum::body::Body::from(sse_event(kind, text)))
 }
 
 /// Wrap a worker's line channel as a `text/event-stream` body. Shared by the
@@ -790,20 +657,24 @@ fn sse_once(kind: &str, text: &str) -> axum::response::Response {
 /// in framing or headers (the compression layer exempts `text/event-stream`,
 /// which is why lines reach the browser as they happen rather than sitting in a
 /// gzip buffer).
-fn sse_response(rx: tokio::sync::mpsc::Receiver<String>) -> axum::response::Response {
+fn sse_response(rx: tokio::sync::mpsc::Receiver<String>) -> Response {
     use tokio_stream::StreamExt as _;
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
         .map(|s| Ok::<Bytes, std::convert::Infallible>(Bytes::from(s)));
-    axum::response::Response::builder()
+    sse_body(axum::body::Body::from_stream(stream))
+}
+
+fn sse_body(body: axum::body::Body) -> Response {
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
-        .body(axum::body::Body::from_stream(stream))
+        .body(body)
         .expect("static headers build")
 }
 
 /// A `200 OK` carrying an already-serialized JSON document.
-fn json_ok(json: String) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
+fn json_ok(json: String) -> JsonResponse {
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
@@ -824,10 +695,7 @@ fn board_filename(headers: &HeaderMap) -> &str {
 /// A JSON body response with the standard content-type header. Every error is
 /// built through `serde_json` so backslashes / control chars in a message can
 /// never produce invalid JSON (B9).
-fn json_body(
-    status: StatusCode,
-    value: serde_json::Value,
-) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
+fn json_body(status: StatusCode, value: serde_json::Value) -> JsonResponse {
     (
         status,
         [(header::CONTENT_TYPE, "application/json")],
@@ -835,19 +703,21 @@ fn json_body(
     )
 }
 
-fn json_error(msg: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
+fn json_error(msg: &str) -> JsonResponse {
     json_body(
         StatusCode::OK,
         serde_json::json!({ "ok": false, "error": msg }),
     )
 }
 
+const NO_BOARD_PART: &str = "no board file in the upload (expected a 'board' or 'file' part)";
+
 /// The parts every upload endpoint accepts. `board`/`file` name the PCB (a
 /// caller reaching for either should just work, since the browser form uses a
 /// `file` input id while the raw path is conceptually "the board"), `firmware`
-/// is optional and an empty part means "none selected", and `spec` carries the
-/// checks TOML. Unknown parts are ignored so a future field cannot break an
-/// older server.
+/// and `schematic` are optional and an empty part means "none selected", and
+/// `spec` carries the checks TOML. Unknown parts are ignored so a future field
+/// cannot break an older server.
 #[derive(Default)]
 struct UploadedParts {
     board_name: String,
@@ -864,6 +734,36 @@ struct UploadedParts {
     kind: Option<String>,
     reference: Option<String>,
     model: Option<String>,
+}
+
+impl UploadedParts {
+    /// The optional firmware part as the `(name, bytes)` the callbacks take.
+    fn firmware(&self) -> Option<(&str, &[u8])> {
+        self.fw_bytes
+            .as_deref()
+            .map(|bytes| (self.fw_name.as_str(), bytes))
+    }
+
+    /// The optional schematic part as the `(name, bytes)` the callbacks take.
+    fn schematic(&self) -> Option<(&str, &[u8])> {
+        self.schematic_bytes
+            .as_deref()
+            .map(|bytes| (self.schematic_name.as_str(), bytes))
+    }
+}
+
+/// The cross-site guard and the multipart parse every JSON upload endpoint
+/// starts with, with the refusal already in response form.
+async fn guarded_upload(
+    headers: &HeaderMap,
+    multipart: &mut Multipart,
+) -> Result<UploadedParts, JsonResponse> {
+    if let Some(resp) = reject_cross_site(headers) {
+        return Err(resp);
+    }
+    parse_upload(multipart)
+        .await
+        .map_err(|msg| json_error(&msg))
 }
 
 /// Drain a multipart body into [`UploadedParts`], or return the user-facing
@@ -894,212 +794,115 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
             Ok(b) => b,
             Err(e) => return Err(format!("failed to read upload part: {e}")),
         };
-        match name.as_str() {
-            "board" | "file" => {
-                if let Some(f) = filename {
-                    parts.board_name = f;
-                }
-                parts.board_bytes = Some(data.to_vec());
+        // A file part: its name overrides the default, and an EMPTY body is
+        // "none selected" for the optional ones.
+        let (slot_name, slot_bytes, required) = match name.as_str() {
+            "board" | "file" => (&mut parts.board_name, &mut parts.board_bytes, true),
+            "firmware" => (&mut parts.fw_name, &mut parts.fw_bytes, false),
+            "schematic" => (&mut parts.schematic_name, &mut parts.schematic_bytes, false),
+            "datasheet" => (&mut parts.datasheet_name, &mut parts.datasheet_bytes, false),
+            // The text fields. Trimmed because a browser form happily posts a
+            // trailing newline and a part number with one on the end matches
+            // nothing; the spec TOML keeps its bytes.
+            "spec" => {
+                parts.spec = Some(String::from_utf8_lossy(&data).into_owned());
+                continue;
             }
-            "firmware" => {
-                if let Some(f) = filename {
-                    parts.fw_name = f;
+            "part" | "kind" | "model" | "reference" => {
+                let text = Some(String::from_utf8_lossy(&data).trim().to_string());
+                match name.as_str() {
+                    "part" => parts.part = text,
+                    "kind" => parts.kind = text,
+                    "model" => parts.model = text,
+                    _ => parts.reference = text,
                 }
-                if !data.is_empty() {
-                    parts.fw_bytes = Some(data.to_vec());
-                }
+                continue;
             }
-            "schematic" => {
-                if let Some(f) = filename {
-                    parts.schematic_name = f;
-                }
-                if !data.is_empty() {
-                    parts.schematic_bytes = Some(data.to_vec());
-                }
-            }
-            "spec" => parts.spec = Some(String::from_utf8_lossy(&data).into_owned()),
-            "datasheet" => {
-                if let Some(f) = filename {
-                    parts.datasheet_name = f;
-                }
-                if !data.is_empty() {
-                    parts.datasheet_bytes = Some(data.to_vec());
-                }
-            }
-            // The extraction's three text fields. Trimmed here because a
-            // browser form happily posts a trailing newline and a part number
-            // with one on the end matches nothing.
-            "part" => parts.part = Some(String::from_utf8_lossy(&data).trim().to_string()),
-            "kind" => parts.kind = Some(String::from_utf8_lossy(&data).trim().to_string()),
-            "model" => parts.model = Some(String::from_utf8_lossy(&data).trim().to_string()),
-            "reference" => {
-                parts.reference = Some(String::from_utf8_lossy(&data).trim().to_string())
-            }
-            _ => {}
+            _ => continue,
+        };
+        if let Some(f) = filename {
+            *slot_name = f;
+        }
+        if required || !data.is_empty() {
+            *slot_bytes = Some(data.to_vec());
         }
     }
     Ok(parts)
 }
 
+/// POST `/api/check`: relay the runner's ready JSON string (its own `{ok:...}`
+/// shape) verbatim. It BLOCKS for the whole child co-sim (up to the runner's
+/// own multi-minute timeout), so it runs on the blocking pool: called inline
+/// it would pin an async worker thread per active check, and a handful of
+/// concurrent checks could pin every worker and stall all the other routes.
 async fn check_handler(
-    State(state): State<Arc<CheckState>>,
+    State(check): State<Arc<SchematicCheckRunner>>,
     headers: HeaderMap,
     mut multipart: Multipart,
-) -> impl IntoResponse {
-    if let Some(resp) = reject_cross_site(&headers) {
-        return resp;
-    }
-    let parts = match parse_upload(&mut multipart).await {
-        Ok(p) => p,
-        Err(msg) => return json_error(&msg),
+) -> JsonResponse {
+    let mut parts = match guarded_upload(&headers, &mut multipart).await {
+        Ok(parts) => parts,
+        Err(response) => return response,
     };
-    let (Some(board_bytes), Some(spec)) = (parts.board_bytes, parts.spec) else {
+    let (Some(board_bytes), Some(spec)) = (parts.board_bytes.take(), parts.spec.take()) else {
         return json_error("the check request needs a 'board' part and a 'spec' part");
     };
-    let (board_name, fw_name, fw_bytes) = (parts.board_name, parts.fw_name, parts.fw_bytes);
-    let (schematic_name, schematic_bytes) = (parts.schematic_name, parts.schematic_bytes);
-
-    // The runner returns a ready JSON string (its own {ok:...} shape); relay
-    // it verbatim with the content-type header. It BLOCKS for the whole child
-    // co-sim (up to the runner's own multi-minute timeout), so it must run on
-    // the blocking pool: called inline it would pin an async worker thread per
-    // active check, and a handful of concurrent checks could pin every worker
-    // and stall all the other routes (the same reason datasheet_check_handler
-    // uses spawn_blocking).
-    let check = match &state.check {
-        CheckCallback::Legacy(check) => CheckCallback::Legacy(check.clone()),
-        CheckCallback::Schematic(check) => CheckCallback::Schematic(check.clone()),
-    };
-    let json = match tokio::task::spawn_blocking(move || {
-        let firmware = fw_bytes.as_deref().map(|bytes| (fw_name.as_str(), bytes));
-        let schematic = schematic_bytes
-            .as_deref()
-            .map(|bytes| (schematic_name.as_str(), bytes));
-        match check {
-            CheckCallback::Legacy(check) => check(&board_name, &board_bytes, firmware, &spec),
-            CheckCallback::Schematic(check) => {
-                check(&board_name, &board_bytes, firmware, schematic, &spec)
-            }
-        }
+    let check = check.clone();
+    match run_blocking("the check task", move || {
+        Ok(check(
+            &parts.board_name,
+            &board_bytes,
+            parts.firmware(),
+            parts.schematic(),
+            &spec,
+        ))
     })
     .await
     {
-        Ok(json) => json,
-        Err(_) => return json_error("the check task panicked; see the server log"),
-    };
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
-    )
+        Ok(json) => json_ok(json),
+        Err(response) => response,
+    }
 }
 
-/// Accept the raw board file as the request body, with the original filename in
-/// the `X-Board-Filename` header (the page sets it). Returns the analysis JSON.
+/// POST `/api/analyze`: the raw board file as the request body, with the
+/// original filename in the `X-Board-Filename` header (the page sets it).
+/// Board files may be text (KiCad/Eagle/IPC), a zip (gerbers) or a binary
+/// container (Altium .PcbDoc). The analyzer's extractor sniffs the format from
+/// the RAW bytes; decoding here to a lossy-UTF8 string would corrupt the binary
+/// formats before they are ever parsed. Returns the analysis JSON.
 async fn analyze_handler(
-    State(state): State<Arc<FrontDoorState>>,
+    State(analyze): State<Arc<SchematicAnalyzer>>,
     headers: HeaderMap,
     body: Bytes,
-) -> impl IntoResponse {
+) -> JsonResponse {
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
-    // Board files may be text (KiCad/Eagle/IPC), a zip (gerbers) or a binary
-    // container (Altium .PcbDoc). The analyzer's extractor sniffs the format
-    // from the RAW bytes; decoding here to a lossy-UTF8 string would corrupt the
-    // binary formats before they are ever parsed.
-    json_ok((state.analyze)(board_filename(&headers), &body))
+    json_ok((analyze)(board_filename(&headers), &body, None, None))
 }
 
-/// Board-only analysis for the firmware-aware router: same contract as
-/// [`analyze_handler`] (raw body + `X-Board-Filename`) but routed through the
-/// [`FirmwareAnalyzer`] with `None` firmware, so the single-file drop path is
-/// unchanged when the firmware-aware router is mounted.
-async fn analyze_handler_fw(
-    State(state): State<Arc<FirmwareState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> impl IntoResponse {
-    if let Some(resp) = reject_cross_site(&headers) {
-        return resp;
-    }
-    // Raw bytes, same as [`analyze_handler`]: a binary board must not be
-    // lossy-decoded on its way to the analyzer.
-    json_ok((state.analyze)(board_filename(&headers), &body, None))
-}
-
-/// Accept a `multipart/form-data` upload with a `board` part (required) and a
-/// `firmware` part (optional). Both parts are passed as raw `&[u8]`, NEVER
-/// lossy-decoded, which would corrupt an ELF or a binary board (Altium
-/// .PcbDoc); the analyzer's extractor sniffs binary-vs-text itself. Falls back
-/// to a board-only analysis when no firmware part is present.
-async fn analyze_firmware_handler(
-    State(state): State<Arc<FirmwareState>>,
+/// POST `/api/analyze-with-firmware`: a `multipart/form-data` upload with a
+/// `board` part (required) and optional `firmware` / `schematic` parts. Every
+/// part is passed as raw `&[u8]`, NEVER lossy-decoded, which would corrupt an
+/// ELF or a binary board; the analyzer's extractor sniffs binary-vs-text
+/// itself. An absent (or empty) firmware part falls back to a board-only
+/// analysis, the same contract `/api/analyze` offers.
+async fn analyze_upload_handler(
+    State(analyze): State<Arc<SchematicAnalyzer>>,
     headers: HeaderMap,
     mut multipart: Multipart,
-) -> impl IntoResponse {
-    if let Some(resp) = reject_cross_site(&headers) {
-        return resp;
-    }
-    let parts = match parse_upload(&mut multipart).await {
-        Ok(p) => p,
-        Err(msg) => return json_error(&msg),
-    };
-    let (board_name, fw_name, fw_bytes) = (parts.board_name, parts.fw_name, parts.fw_bytes);
-    let board_bytes = match parts.board_bytes {
-        Some(b) => b,
-        None => {
-            return json_error("no board file in the upload (expected a 'board' or 'file' part)")
-        }
-    };
-
-    // Firmware is optional: an absent (or empty) part falls back to a
-    // board-only analysis, which is the same contract /api/analyze offers.
-    json_ok((state.analyze)(
-        &board_name,
-        &board_bytes,
-        fw_bytes.as_deref().map(|bytes| (fw_name.as_str(), bytes)),
-    ))
-}
-
-async fn analyze_handler_schematic(
-    State(state): State<Arc<SchematicState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> impl IntoResponse {
-    if let Some(resp) = reject_cross_site(&headers) {
-        return resp;
-    }
-    json_ok((state.analyze)(board_filename(&headers), &body, None, None))
-}
-
-async fn analyze_schematic_handler(
-    State(state): State<Arc<SchematicState>>,
-    headers: HeaderMap,
-    mut multipart: Multipart,
-) -> impl IntoResponse {
-    if let Some(resp) = reject_cross_site(&headers) {
-        return resp;
-    }
-    let parts = match parse_upload(&mut multipart).await {
+) -> JsonResponse {
+    let parts = match guarded_upload(&headers, &mut multipart).await {
         Ok(parts) => parts,
-        Err(message) => return json_error(&message),
+        Err(response) => return response,
     };
-    let Some(board_bytes) = parts.board_bytes else {
-        return json_error("no board file in the upload (expected a 'board' or 'file' part)");
+    let Some(board_bytes) = &parts.board_bytes else {
+        return json_error(NO_BOARD_PART);
     };
-    let firmware = parts
-        .fw_bytes
-        .as_deref()
-        .map(|bytes| (parts.fw_name.as_str(), bytes));
-    let schematic = parts
-        .schematic_bytes
-        .as_deref()
-        .map(|bytes| (parts.schematic_name.as_str(), bytes));
-    json_ok((state.analyze)(
+    json_ok((analyze)(
         &parts.board_name,
-        &board_bytes,
-        firmware,
-        schematic,
+        board_bytes,
+        parts.firmware(),
+        parts.schematic(),
     ))
 }

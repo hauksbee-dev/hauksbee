@@ -935,7 +935,7 @@ mod tests {
             device_meta: Vec::new(),
             dacs: Vec::new(),
             peripherals: Vec::new(),
-            report: crate::reports::bind::BindReport::default(),
+            report: crate::bind_report::BindReport::default(),
         }
     }
 
@@ -1049,9 +1049,9 @@ mod tests {
     /// stale they point at the orphaned node.
     #[test]
     fn jumper_remaps_cached_mcu_and_dac_node_ids() {
+        use crate::bind_report::BindReport;
         use crate::binder::{BoundBoard, DacBinding, McuBinding};
         use crate::drivers::PinDriver;
-        use crate::reports::bind::BindReport;
         use hauksbee_ir::{Circuit, DeviceId, NodeId};
         use std::collections::HashMap;
 

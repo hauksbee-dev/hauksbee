@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use hauksbee_engine::power_supply::{Chemistry, PowerSupply, SupplyLeg, UsbSpec};
-use hauksbee_engine::{bind_board, BoundBoard, HauksbeeEngine};
+use hauksbee_engine::power_supply::{PowerSupply, SupplyLeg};
+use hauksbee_engine::{bind_board, BoundBoard, CsProvenance, HauksbeeEngine, ResolvedCs};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_ir::evidence::{
@@ -54,94 +54,47 @@ struct RunInputEvidence<'a> {
     variant: Option<&'a VariantEvidence>,
 }
 
-fn identity_contributions(report: &hauksbee_engine::binder::IdentityReport) -> Vec<Contribution> {
-    report
-        .lines()
-        .into_iter()
-        .map(|detail| Contribution {
+/// The evidence-spine record for one assembly input (BOM or placement): the
+/// reader's own provenance (path, dialect, hash, what it contributed and
+/// dropped) plus every line of the binder's identity reconciliation.
+#[allow(clippy::too_many_arguments)]
+fn artifact_provenance(
+    what: &str,
+    kind: ArtifactKind,
+    role: ArtifactRole,
+    path: &str,
+    format: &str,
+    sha256: &str,
+    contributed: &[hauksbee_extract::bom::Contribution],
+    ignored: &[hauksbee_extract::bom::IgnoredInput],
+    report: &hauksbee_engine::binder::IdentityReport,
+) -> Result<ArtifactProvenance, SpecError> {
+    let contributed = contributed
+        .iter()
+        .map(|item| Contribution {
+            what: item.what.clone(),
+            detail: item.detail.clone(),
+        })
+        .chain(report.lines().into_iter().map(|detail| Contribution {
             what: "identity_reconciliation".into(),
             detail: detail.trim().to_string(),
-        })
-        .collect()
-}
-
-fn bom_provenance(
-    bom: &hauksbee_extract::bom::Bom,
-    report: &hauksbee_engine::binder::IdentityReport,
-) -> Result<ArtifactProvenance, SpecError> {
-    let mut contributed: Vec<Contribution> = bom
-        .provenance
-        .contributed
+        }))
+        .collect();
+    let ignored = ignored
         .iter()
-        .map(|item| Contribution {
+        .map(|item| IgnoredInput {
             what: item.what.clone(),
-            detail: item.detail.clone(),
+            why: item.why.clone(),
         })
         .collect();
-    contributed.extend(identity_contributions(report));
-    ArtifactProvenance::new(
-        bom.provenance.path.clone(),
-        ArtifactKind::Bom,
-        ArtifactRole::Bom,
-        bom.provenance.sha256.clone(),
-        Vec::new(),
-    )
-    .map(|artifact| {
-        artifact
-            .with_format(bom.provenance.kind.clone())
-            .with_contributions(contributed)
-            .with_ignored(
-                bom.provenance
-                    .ignored
-                    .iter()
-                    .map(|item| IgnoredInput {
-                        what: item.what.clone(),
-                        why: item.why.clone(),
-                    })
-                    .collect(),
-            )
-    })
-    .map_err(|error| SpecError::Invalid(format!("building BOM evidence: {error}")))
-}
-
-fn placement_provenance(
-    placement: &hauksbee_extract::placement::PlacementFile,
-    report: &hauksbee_engine::binder::IdentityReport,
-) -> Result<ArtifactProvenance, SpecError> {
-    let mut contributed: Vec<Contribution> = placement
-        .provenance
-        .contributed
-        .iter()
-        .map(|item| Contribution {
-            what: item.what.clone(),
-            detail: item.detail.clone(),
+    ArtifactProvenance::new(path.to_string(), kind, role, sha256.to_string(), Vec::new())
+        .map(|artifact| {
+            artifact
+                .with_format(format.to_string())
+                .with_contributions(contributed)
+                .with_ignored(ignored)
         })
-        .collect();
-    contributed.extend(identity_contributions(report));
-    ArtifactProvenance::new(
-        placement.provenance.path.clone(),
-        ArtifactKind::Placement,
-        ArtifactRole::Placement,
-        placement.provenance.sha256.clone(),
-        Vec::new(),
-    )
-    .map(|artifact| {
-        artifact
-            .with_format(placement.provenance.kind.clone())
-            .with_contributions(contributed)
-            .with_ignored(
-                placement
-                    .provenance
-                    .ignored
-                    .iter()
-                    .map(|item| IgnoredInput {
-                        what: item.what.clone(),
-                        why: item.why.clone(),
-                    })
-                    .collect(),
-            )
-    })
-    .map_err(|error| SpecError::Invalid(format!("building placement evidence: {error}")))
+        .map_err(SpecError::invalid(format!("building {what} evidence")))
 }
 
 /// Apply BOM, placement and assembly-variant inputs through the production
@@ -152,6 +105,7 @@ pub(crate) fn prepare_assembly_inputs(
     mut board: ExtractedBoard,
     lib: &ModelLibrary,
 ) -> Result<PreparedAssembly, SpecError> {
+    use hauksbee_engine::binder::{apply_bom_identity, apply_placement_identity};
     let mut effective_spec = spec.clone();
     let mut supporting_artifacts = Vec::new();
 
@@ -159,24 +113,46 @@ pub(crate) fn prepare_assembly_inputs(
         let mut overrides = hauksbee_extract::bom::ColumnOverrides::new();
         for mapping in &spec.bom_columns {
             let (role, header) = hauksbee_extract::bom::ColumnOverrides::parse_pair(mapping)
-                .map_err(|error| {
-                    SpecError::Invalid(format!("invalid `bom_columns` entry {mapping:?}: {error}"))
-                })?;
+                .map_err(SpecError::invalid(format!(
+                    "invalid `bom_columns` entry {mapping:?}"
+                )))?;
             overrides.set(role, header);
         }
         let bom = hauksbee_extract::bom::Bom::read_with(&path, &overrides)
-            .map_err(|error| SpecError::Invalid(format!("reading BOM: {error}")))?;
-        let report = hauksbee_engine::binder::apply_bom_identity(&mut board, &bom, lib)
-            .map_err(|error| SpecError::Invalid(format!("reconciling BOM: {error}")))?;
-        supporting_artifacts.push(bom_provenance(&bom, &report)?);
+            .map_err(SpecError::invalid("reading BOM"))?;
+        let report = apply_bom_identity(&mut board, &bom, lib)
+            .map_err(SpecError::invalid("reconciling BOM"))?;
+        let p = &bom.provenance;
+        supporting_artifacts.push(artifact_provenance(
+            "BOM",
+            ArtifactKind::Bom,
+            ArtifactRole::Bom,
+            &p.path,
+            &p.kind,
+            &p.sha256,
+            &p.contributed,
+            &p.ignored,
+            &report,
+        )?);
     }
 
     if let Some(path) = spec.placement_path() {
         let placement = hauksbee_extract::placement::PlacementFile::read(&path)
-            .map_err(|error| SpecError::Invalid(format!("reading placement: {error}")))?;
-        let report = hauksbee_engine::binder::apply_placement_identity(&mut board, &placement, lib)
-            .map_err(|error| SpecError::Invalid(format!("reconciling placement: {error}")))?;
-        supporting_artifacts.push(placement_provenance(&placement, &report)?);
+            .map_err(SpecError::invalid("reading placement"))?;
+        let report = apply_placement_identity(&mut board, &placement, lib)
+            .map_err(SpecError::invalid("reconciling placement"))?;
+        let p = &placement.provenance;
+        supporting_artifacts.push(artifact_provenance(
+            "placement",
+            ArtifactKind::Placement,
+            ArtifactRole::Placement,
+            &p.path,
+            &p.kind,
+            &p.sha256,
+            &p.contributed,
+            &p.ignored,
+            &report,
+        )?);
     }
 
     let variant = if let Some(path) = spec.variant_path() {
@@ -581,8 +557,6 @@ pub fn unpowered_supply_nets(
     out
 }
 
-/// [`unpowered_supply_nets`] for a run: anything the spec powers or drives has
-/// had its question answered, whatever the name says.
 /// Classify every net a `voltage` assertion names: does the modeled circuit
 /// define its DC level, and who sits on it (for the human message). Computed
 /// after supplies and drives are attached, so a supplied or driven net counts
@@ -666,6 +640,8 @@ fn dc_definitions_for_spec(
     out
 }
 
+/// [`unpowered_supply_nets`] for a run: anything the spec powers or drives has
+/// had its question answered, whatever the name says.
 fn dead_rails(board: &ExtractedBoard, bound: &BoundBoard, spec: &Spec) -> Vec<String> {
     let answered: Vec<&str> = spec
         .supplies
@@ -811,29 +787,15 @@ pub fn run_spec_with_lib(
     thresholds.dedup();
 
     // Resolve the tolerance ensemble (if any) and lay out one plan per member.
-    // With no tolerances this degenerates to the plain fuzz seed list.
+    // With no tolerances this degenerates to the plain fuzz seed list (a
+    // Monte-Carlo plan over zero components samples nothing).
     let tols = crate::tolerance::resolve(spec, &base)?;
-    let plans: Vec<crate::tolerance::SeedPlan> = if tols.is_empty() {
-        let seeds = spec.fuzz.as_ref().map(|f| f.seeds).unwrap_or(1).max(1);
-        (0..seeds)
-            .map(|seed| crate::tolerance::SeedPlan {
-                seed,
-                values: Vec::new(),
-                interior: false,
-            })
-            .collect()
+    let mode = if tols.is_empty() {
+        crate::tolerance::Mode::MonteCarlo
     } else {
-        match spec.ensemble_mode()? {
-            crate::tolerance::Mode::MonteCarlo => crate::tolerance::build_plans(
-                crate::tolerance::Mode::MonteCarlo,
-                spec.ensemble_seed_count(),
-                &tols,
-            )?,
-            crate::tolerance::Mode::Corners => {
-                crate::tolerance::build_plans(crate::tolerance::Mode::Corners, 0, &tols)?
-            }
-        }
+        spec.ensemble_mode()?
     };
+    let plans = crate::tolerance::build_plans(mode, spec.ensemble_seed_count(), &tols)?;
 
     // Failing-seed isolation: keep only the requested member.
     let total = plans.len();
@@ -914,39 +876,23 @@ fn compute_ac(
     use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
 
     let cfg = spec.ac.as_ref().expect("compute_ac called without [ac]");
-    let mut board = apply_overrides(spec, base)?;
+    let mut board = apply_overrides(spec, base);
     apply_sampled_values(&mut board, sampled);
     let mut bound = bind_board(&board, lib);
 
     // Bias the operating point exactly as the transient run would: rail
-    // suppression, supplies, and net drives all shift the DC bias the
-    // small-signal model linearises about.
-    for net in &spec.suppress_rail {
-        suppress_rail(&mut bound, net);
-    }
-    for s in &spec.supplies {
-        attach_supply(&mut bound, s)?;
-    }
-    for d in &spec.net_drives {
-        drive_net(&mut bound, &d.net, d.volts);
-    }
-    // Per-seed fuzz straps also move the DC bias the small-signal model
-    // linearises about, so they must be applied here too, otherwise every fuzz
-    // seed's AC would linearise about the unstrapped nominal point. Applied after
-    // the spec net-drives (fuzz wins on an overlapping net), matching run_one.
-    for (net, volts) in fuzz_drives {
-        drive_net(&mut bound, net, *volts);
-    }
+    // suppression, supplies, and net drives (the per-seed fuzz straps
+    // included) all shift the DC bias the small-signal model linearises about.
+    bias_bound(&mut bound, &board, spec, fuzz_drives)?;
 
-    let sweep = match cfg.sweep.as_str() {
-        "lin" => Sweep::Linear,
-        _ => Sweep::Decade,
-    };
     let ac_spec = AcSpec {
         fstart: cfg.fstart,
         fstop: cfg.fstop,
         points: cfg.points,
-        sweep,
+        sweep: match cfg.sweep.as_str() {
+            "lin" => Sweep::Linear,
+            _ => Sweep::Decade,
+        },
     };
     let resp = AcAnalysis::new(SolverOptions::default())
         .run(&bound.circuit, &ac_spec)
@@ -999,17 +945,19 @@ pub(crate) fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError>
     load_normalized_board(board_path).map(|normalized| normalized.board)
 }
 
+/// Is this path a KiCad schematic, by extension (any case)?
+fn is_kicad_sch(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("kicad_sch"))
+}
+
 fn load_normalized_board(
     board_path: &Path,
 ) -> Result<hauksbee_engine::board_input::NormalizedBoard, SpecError> {
     // CI-specific guard the normalizer does not carry: a spec pointing at a
     // sub-sheet rather than the hierarchy root is an incomplete board.
-    let is_sch = board_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("kicad_sch"))
-        .unwrap_or(false);
-    if is_sch {
+    if is_kicad_sch(board_path) {
         if let Some(root) = parent_schematic_of(board_path) {
             return Err(SpecError::Invalid(format!(
                 "board {} is a sub-sheet of {}. Point the spec at the hierarchy \
@@ -1057,40 +1005,16 @@ fn parent_schematic_of(sch: &Path) -> Option<PathBuf> {
     let file_name = sch.file_name()?.to_str()?.to_string();
     // Normalize so the self-skip below is robust to `./` and similar.
     let sch_norm = normalize_path(sch);
-
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(d) = sch.parent() {
-        dirs.push(d.to_path_buf());
-        if let Some(up) = d.parent() {
-            dirs.push(up.to_path_buf());
-        }
-    }
-
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if normalize_path(&p) == sch_norm {
-                continue;
-            }
-            let is_sch = p
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("kicad_sch"))
-                .unwrap_or(false);
-            if !is_sch {
-                continue;
-            }
-            if let Ok(text) = std::fs::read_to_string(&p) {
-                if references_sheetfile(&text, &file_name) {
-                    return Some(p);
-                }
-            }
-        }
-    }
-    None
+    let dirs = sch
+        .parent()
+        .into_iter()
+        .chain(sch.parent().and_then(Path::parent));
+    dirs.filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flat_map(|entries| entries.flatten().map(|e| e.path()))
+        .filter(|p| is_kicad_sch(p) && normalize_path(p) != sch_norm)
+        .find(|p| {
+            std::fs::read_to_string(p).is_ok_and(|text| references_sheetfile(&text, &file_name))
+        })
 }
 
 /// Does `text` contain a `(property "Sheetfile" "...")` whose value's file name
@@ -1179,77 +1103,72 @@ pub(crate) fn firmware_format_mismatch(path: &Path) -> Option<String> {
 /// here means a typo'd `max_current` ref fails loudly instead of passing as an
 /// untracked component).
 fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecError> {
-    let mut errs = component_ref_errors(spec, known_refs);
-    match errs.len() {
-        0 => Ok(()),
-        1 => Err(errs.remove(0)),
-        _ => Err(SpecError::Many(errs)),
-    }
+    SpecError::from_many(component_ref_errors(spec, known_refs))
 }
 
 /// The collecting core of [`check_component_refs`]: EVERY unknown reference is
 /// reported (one error per bad ref), not just the first, so one invocation
 /// surfaces one invocation's worth of typos. Also feeds `hauksbee-ci check`'s
 /// per-diagnostic output.
+///
+/// Two of the references are easy to overlook. A `[[decoupling.override]]`
+/// keyed by a ref that names no board capacitor is silently dropped in
+/// apply_decoupling (the per-cap lookup never matches), so the parasitics the
+/// user opted into are never applied and a rail_window check sees a
+/// cleaner-than-real rail, a false GREEN. A SPI slave's `ref` names the board
+/// component the peripheral IS, and the chip-select route reads that
+/// component's model `cs` pin role when the spec declares no `cs_net`; a typo
+/// there resolves no component, so no model, so no CS net, and the bus silently
+/// drops to the chunk-boundary framing heuristic with no error (the same
+/// silent-degradation hole `cs_net` itself had, see `Spec::referenced_nets`).
 pub(crate) fn component_ref_errors(spec: &Spec, known_refs: &[String]) -> Vec<SpecError> {
     let set: std::collections::HashSet<&str> = known_refs.iter().map(String::as_str).collect();
-    let mut named: Vec<(&str, &str)> = Vec::new();
-    for reference in &spec.fit {
-        named.push((reference.as_str(), "fit decision"));
+    fn tag<'a>(ctx: &'static str) -> impl Fn(&'a String) -> (&'a str, &'static str) {
+        move |r| (r.as_str(), ctx)
     }
-    for reference in &spec.no_fit {
-        named.push((reference.as_str(), "no_fit decision"));
-    }
-    for ov in &spec.overrides {
-        named.push((ov.reference.as_str(), "override"));
-    }
-    for a in &spec.asserts {
-        if a.kind == "max_current" {
-            if let Some(r) = &a.reference {
-                named.push((r.as_str(), "max_current assert"));
-            }
-        }
-        if a.kind == "max_temp" {
-            if let Some(r) = &a.reference {
-                named.push((r.as_str(), "max_temp assert"));
-            }
-        }
-    }
-    // A `[[decoupling.override]]` keyed by a ref that names no board capacitor is
-    // silently dropped in apply_decoupling (the per-cap lookup never matches), so
-    // the parasitics the user opted into are never applied and a rail_window
-    // check sees a cleaner-than-real rail, a false GREEN. Validate the ref like
-    // every other, so a typo fails loud.
-    if let Some(dec) = &spec.decoupling {
-        for ov in &dec.overrides {
-            named.push((ov.reference.as_str(), "decoupling override"));
-        }
-    }
-    // A SPI slave's `ref` names the board component the peripheral IS, and the
-    // chip-select route reads that component's model `cs` pin role when the spec
-    // declares no `cs_net`. A typo there resolves no component, so no model, so no
-    // CS net, and the bus silently drops to the chunk-boundary framing heuristic
-    // with no error: the same silent-degradation hole that `cs_net` itself had
-    // (see the cs_net note in `Spec::referenced_nets`). Validate it like every
-    // other reference so the typo fails at load.
-    for p in &spec.peripherals {
-        if crate::spec::is_spi_slave_kind(&p.kind) {
-            if let Some(r) = &p.reference {
-                named.push((r.as_str(), "SPI peripheral `ref`"));
-            }
-        }
-    }
-    let mut errs = Vec::new();
-    for (reference, ctx) in named {
-        if !set.contains(reference) {
-            let near = crate::error::near_refs(reference, known_refs, 3);
-            let hint = crate::error::suggestion_clause(&near);
-            errs.push(SpecError::Invalid(format!(
+    let asserts = spec.asserts.iter().filter_map(|a| match a.kind.as_str() {
+        "max_current" => a
+            .reference
+            .as_ref()
+            .map(|r| (r.as_str(), "max_current assert")),
+        "max_temp" => a
+            .reference
+            .as_ref()
+            .map(|r| (r.as_str(), "max_temp assert")),
+        _ => None,
+    });
+    let spi_refs = spec
+        .peripherals
+        .iter()
+        .filter(|p| crate::spec::is_spi_slave_kind(&p.kind))
+        .filter_map(|p| p.reference.as_ref());
+    (spec.fit.iter().map(tag("fit decision")))
+        .chain(spec.no_fit.iter().map(tag("no_fit decision")))
+        .chain(
+            spec.overrides
+                .iter()
+                .map(|o| &o.reference)
+                .map(tag("override")),
+        )
+        .chain(asserts)
+        .chain(
+            (spec
+                .decoupling
+                .iter()
+                .flat_map(|d| &d.overrides)
+                .map(|o| &o.reference))
+            .map(tag("decoupling override")),
+        )
+        .chain(spi_refs.map(tag("SPI peripheral `ref`")))
+        .filter(|(reference, _)| !set.contains(reference))
+        .map(|(reference, ctx)| {
+            let hint =
+                crate::error::suggestion_clause(&crate::error::near_refs(reference, known_refs, 3));
+            SpecError::Invalid(format!(
                 "{ctx} references unknown component '{reference}'{hint}"
-            )));
-        }
-    }
-    errs
+            ))
+        })
+        .collect()
 }
 
 /// Fail loud when a `max_current` / `max_temp` assertion names a component the
@@ -1289,54 +1208,31 @@ fn merge_protection_trip_nets(windows: &mut [ScenarioWindow], asserts: &[crate::
     }
 }
 
-/// A bound device `name` belongs to the bare spec ref `r`: an exact match, or a
-/// multi-unit array unit `r_q<n>` / `r_s<n>` / `r_e<n>` (transistor / switch /
-/// passive arrays). Mirrors `thermally_tracked` so `max_current` and `max_temp`
-/// accept the same refs.
-fn ref_or_unit_matches(r: &str, device_name: &str) -> bool {
-    device_name == r
-        || device_name
-            .strip_prefix(r)
-            .is_some_and(|s| s.starts_with("_q") || s.starts_with("_s") || s.starts_with("_e"))
-}
-
 /// Runs post-bind (the bound circuit is what decides trackability), before the
 /// engine is built, so the spec is rejected up front rather than reported green.
+///
+/// A multi-unit package (a resistor array RN1, a transistor array IC3906)
+/// stamps per-unit devices and metas (`RN1_e1`, `IC3906_q0`), never the bare
+/// ref, so both gates accept a bare ref whose units are tracked, through the
+/// same unit-key test the assertion consumers use ([`key_belongs_to_ref`]).
 fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), SpecError> {
+    use crate::assertions::key_belongs_to_ref;
     // Current tracking covers exactly what `accumulate_frame_peaks` records:
     // resistors and diodes, keyed by device name.
-    let current_tracked: std::collections::HashSet<&str> = bound
-        .circuit
-        .devices
-        .iter()
-        .filter_map(|d| match d {
-            Device::Resistor { name, .. } | Device::Diode { name, .. } => Some(name.as_str()),
-            _ => None,
-        })
-        .collect();
-    // A multi-unit resistor/passive array (ref RN1) stamps per-unit devices
-    // RN1_e1..RN1_e4, so `current_tracked` holds the unit names but NOT the bare
-    // "RN1". Accept a bare ref whose units are tracked, matching
-    // `thermally_tracked` below.
     let is_current_tracked = |r: &str| {
-        current_tracked
-            .iter()
-            .any(|name| ref_or_unit_matches(r, name))
-    };
-    // Thermal tracking covers every stress-monitored device. Multi-unit
-    // packages stamp per-unit metas ("IC3906_q0"), so accept a ref whose units
-    // are monitored too.
-    let thermally_tracked = |r: &str| {
-        bound.device_meta.iter().any(|m| {
-            m.reference == r
-                || m.reference.strip_prefix(r).is_some_and(|s| {
-                    // The binder stamps multi-unit packages with `_q`/`_s`/`_e`
-                    // suffixes (transistor arrays, switch banks, resistor and
-                    // other passive arrays respectively); all three must match
-                    // or a package-level assert on an array reads as untracked.
-                    s.starts_with("_q") || s.starts_with("_s") || s.starts_with("_e")
-                })
+        bound.circuit.devices.iter().any(|d| match d {
+            Device::Resistor { name, .. } | Device::Diode { name, .. } => {
+                key_belongs_to_ref(r, name)
+            }
+            _ => false,
         })
+    };
+    // Thermal tracking covers every stress-monitored device.
+    let thermally_tracked = |r: &str| {
+        bound
+            .device_meta
+            .iter()
+            .any(|m| key_belongs_to_ref(r, &m.reference))
     };
     for a in &spec.asserts {
         let Some(reference) = &a.reference else {
@@ -1369,7 +1265,7 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
             // refusals above.
             "max_temp" if a.celsius.is_none() => {
                 let has_real_tj = bound.device_meta.iter().any(|m| {
-                    ref_or_unit_matches(reference, &m.reference)
+                    key_belongs_to_ref(reference, &m.reference)
                         && m.ratings.max_junction_temp_c.is_some()
                 });
                 if !has_real_tj {
@@ -1428,33 +1324,23 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
     Ok(())
 }
 
-/// Apply overrides for this run to a fresh copy of the extracted board.
-fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> Result<ExtractedBoard, SpecError> {
+/// Apply overrides for this run to a fresh copy of the extracted board. DNP /
+/// variant population was already applied by `prepare_assembly_inputs`, before
+/// `check` and `run` diverge; reapplying it per seed would make this path a
+/// second authority for assembly state. Unknown references were refused by
+/// `check_component_refs` before any seed ran, so the lookup cannot miss.
+fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> ExtractedBoard {
     let mut board = base.clone();
     for ov in &spec.overrides {
-        let comp = board
+        if let Some(comp) = board
             .components
             .iter_mut()
             .find(|c| c.reference == ov.reference)
-            .ok_or_else(|| {
-                let refs: Vec<String> = base
-                    .components
-                    .iter()
-                    .map(|c| c.reference.clone())
-                    .collect();
-                let near = crate::error::near_refs(&ov.reference, &refs, 3);
-                let hint = crate::error::suggestion_clause(&near);
-                SpecError::Invalid(format!(
-                    "override references unknown component '{}'{hint}",
-                    ov.reference
-                ))
-            })?;
-        comp.value = ov.value.clone();
+        {
+            comp.value = ov.value.clone();
+        }
     }
-    // DNP / variant population was already applied by
-    // `prepare_assembly_inputs`, before `check` and `run` diverge. Reapplying it
-    // per seed would make this path a second authority for assembly state.
-    Ok(board)
+    board
 }
 
 /// Write one ensemble member's sampled tolerance values onto the board (the
@@ -1791,7 +1677,7 @@ fn run_one(
     run_inputs: &RunInputEvidence<'_>,
 ) -> Result<RunOutcome, SpecError> {
     let seed = plan.seed;
-    let mut board = apply_overrides(spec, base)?;
+    let mut board = apply_overrides(spec, base);
     apply_sampled_values(&mut board, &plan.values);
     let mut bound = bind_board(&board, lib);
 
@@ -1824,39 +1710,16 @@ fn run_one(
     // unevaluated guard must be a loud error, never a green pass.
     check_trackable_assert_refs(spec, &bound)?;
 
-    // 0. Apply opt-in capacitor parasitics (ESR/ESL) before anything else, so the
-    //    decoupling is honest for the whole run. Off by default.
-    apply_decoupling(spec, &board, &mut bound)?;
+    // Apply opt-in capacitor parasitics (ESR/ESL) before anything else, so the
+    // decoupling is honest for the whole run. Off by default.
+    apply_decoupling(spec, &board, &mut bound);
 
-    // 1. Suppress auto-rails on requested nets: drop the supply leg and turn its
-    //    internal Vsource into an open so the net is fed only via board parts.
-    for net in &spec.suppress_rail {
-        suppress_rail(&mut bound, net);
-    }
-
-    // 2. Attach / reconfigure power supplies.
-    for s in &spec.supplies {
-        attach_supply(&mut bound, s)?;
-    }
-
-    // Everything that can power a rail has now been applied, so anything still
-    // unpowered is unpowered for the whole run. Any analog number below has to
-    // be read knowing it.
-    let dead_rails = dead_rails(&board, &bound, spec);
-
-    // 3. Fuzz the per-seed initial states by choosing which fuzzed nets are
-    //    strapped high vs low. We then express these as net drives.
-    let fuzz_drives = fuzz_net_drives(spec, seed);
-
-    // 4. Drive nets (explicit + fuzzed) to fixed voltages via ideal sources.
-    for (net, volts) in spec
-        .net_drives
-        .iter()
-        .map(|d| (d.net.clone(), d.volts))
-        .chain(fuzz_drives)
-    {
-        drive_net(&mut bound, &net, volts);
-    }
+    // Rail suppression, supplies, then explicit + per-seed fuzzed net drives.
+    // The dead-rail census sits between supplies and drives: everything that
+    // can POWER a rail has been applied by then, so anything still unpowered
+    // is unpowered for the whole run, and any analog number below has to be
+    // read knowing it.
+    let dead_rails = bias_bound(&mut bound, &board, spec, &fuzz_net_drives(spec, seed))?;
 
     // How the modeled circuit defines each voltage-asserted net's DC level,
     // captured now that every supply and drive is attached, so a supplied or
@@ -1871,8 +1734,23 @@ fn run_one(
     // source holds the net at its programmed voltage regardless of what the
     // board does. Behavioral legs (bench/wall/usb/battery) are exempt: their
     // current limits and droop are exactly what such an assertion tests.
-    let hollow_warnings = hollow_gate_warnings(spec, &bound);
-    let hollow_assumptions = hollow_gate_assumptions(spec, &bound);
+    let hollow = hollow_gates(spec, &bound);
+    let hollow_warnings: Vec<String> = hollow
+        .iter()
+        .map(|(a, net)| {
+            format!(
+                "assertion '{}' reads net '{net}', which your own ideal source feeds \
+                 directly; it cannot fail for a board reason (the source holds the net at \
+                 its programmed voltage). Assert on a net the board derives from it, or \
+                 model the real supply (bench/usb/battery) so droop is possible",
+                a.label()
+            )
+        })
+        .collect();
+    let hollow_assumptions = hollow
+        .iter()
+        .map(|(_, net)| hauksbee_ir::evidence::Assumption::held_by_ideal_source(net))
+        .collect();
 
     // Map net name -> node for fast sampling, and remember which components are
     // monitorable for peak-current (resistors/diodes by name).
@@ -2067,25 +1945,22 @@ fn run_one(
             // frame's final-chunk voltage is one sample; fold in the scheduler's
             // per-frame min/max too, so an intra-frame excursion that has subsided
             // by the last chunk still widens the window (the final-chunk value is
-            // itself within [min,max], so observing both extremes subsumes it).
+            // itself within [min,max], so observing both extremes subsumes it)
+            // while `last_v` stays the settled final-chunk value.
             let vext = engine.scheduler().frame_v_extremes();
-            for &thr in thresholds {
-                if t_ms + 1e-9 >= thr {
-                    for (name, &v) in &frame.net_voltages {
-                        let key = (name.clone(), thr.to_bits());
-                        let w = windows.entry(key).or_insert_with(NetWindow::new);
-                        w.observe(v);
-                        if let Some(&(mn, mx)) = vext.get(name) {
-                            // Widen the window with the extremes but keep last_v
-                            // as the settled final-chunk value (`observe` above).
-                            if mn.is_finite() {
-                                w.fold(mn);
-                            }
-                            if mx.is_finite() {
-                                w.fold(mx);
-                            }
-                        }
-                    }
+            let extremes = |name: &str| {
+                vext.get(name)
+                    .into_iter()
+                    .flat_map(|&(mn, mx)| [mn, mx])
+                    .filter(|v| v.is_finite())
+            };
+            for &thr in thresholds.iter().filter(|&&thr| t_ms + 1e-9 >= thr) {
+                for (name, &v) in &frame.net_voltages {
+                    let w = windows
+                        .entry((name.clone(), thr.to_bits()))
+                        .or_insert_with(NetWindow::new);
+                    w.observe(v);
+                    extremes(name).for_each(|x| w.fold(x));
                 }
             }
             // Hardware-trace waveforms: record the probed nets' voltages at the
@@ -2103,20 +1978,13 @@ fn run_one(
             // per-frame peak (accumulated across every sub-chunk of this frame),
             // not just the frame's final-chunk operating point, an inrush surge
             // that peaks mid-frame and settles by the last chunk would otherwise
-            // be invisible to the over-current check.
+            // be invisible to the over-current check. Same for the peak
+            // steady-state junction temperature of dissipating components.
             for (name, &i) in engine.scheduler().frame_peak_current() {
-                let e = peak_current.entry(name.clone()).or_insert(0.0);
-                if i.is_finite() && i > *e {
-                    *e = i;
-                }
+                fold_peak(&mut peak_current, name, i, 0.0);
             }
-
-            // Peak steady-state junction temperature for dissipating components.
             for (reference, tj) in engine.scheduler().temp_states() {
-                let e = peak_temp_c.entry(reference).or_insert(f64::NEG_INFINITY);
-                if tj.is_finite() && tj > *e {
-                    *e = tj;
-                }
+                fold_peak(&mut peak_temp_c, &reference, tj, f64::NEG_INFINITY);
             }
 
             // Scenario rail windows: for each scenario window active at this time,
@@ -2127,30 +1995,21 @@ fn run_one(
             // into this window's min/max/dip/recovery aggregates and produces a
             // false verdict (the same later-scenario bleed the scoped
             // protection_trip windows guard against). The run-wide window keeps
-            // end_s = +∞.
-            for sw in &scenario_windows {
-                if time_in_window(frame.t, sw.start_s, sw.end_s) {
-                    for net in &sw.nets {
-                        if let Some(&v) = frame.net_voltages.get(net) {
-                            let w = rail_windows
-                                .entry((sw.id.clone(), net.clone()))
-                                .or_default();
-                            w.observe(frame.t, v);
-                            // Fold the scheduler's per-frame intra-frame extremes
-                            // into the min/max envelope, exactly as the plain
-                            // `voltage` assertion path above does, otherwise a sag
-                            // that recovers by the frame's last chunk is invisible
-                            // and a brownout-floor rail_window assertion false-
-                            // passes the fault it exists to catch.
-                            if let Some(&(mn, mx)) = vext.get(net) {
-                                if mn.is_finite() {
-                                    w.fold(mn);
-                                }
-                                if mx.is_finite() {
-                                    w.fold(mx);
-                                }
-                            }
-                        }
+            // end_s = +∞. The intra-frame extremes are folded into the envelope
+            // exactly as the plain `voltage` path above does, otherwise a sag
+            // that recovers by the frame's last chunk is invisible and a
+            // brownout-floor rail_window false-passes the fault it exists to catch.
+            for sw in scenario_windows
+                .iter()
+                .filter(|sw| time_in_window(frame.t, sw.start_s, sw.end_s))
+            {
+                for net in &sw.nets {
+                    if let Some(&v) = frame.net_voltages.get(net) {
+                        let w = rail_windows
+                            .entry((sw.id.clone(), net.clone()))
+                            .or_default();
+                        w.observe(frame.t, v);
+                        extremes(net).for_each(|x| w.fold(x));
                     }
                 }
             }
@@ -2373,6 +2232,15 @@ fn scope_protection_trips(
 /// exactly which phase owns a given instant.
 fn time_in_window(t: f64, start_s: f64, end_s: f64) -> bool {
     t + 1e-12 >= start_s && t < end_s - 1e-12
+}
+
+/// Raise `map[key]` to `v` when `v` is a finite new peak; a key first seen
+/// starts at `floor`.
+fn fold_peak(map: &mut HashMap<String, f64>, key: &str, v: f64, floor: f64) {
+    let e = map.entry(key.to_string()).or_insert(floor);
+    if v.is_finite() && v > *e {
+        *e = v;
+    }
 }
 
 /// Does `[start_s, end_s)` overlap any failed-analog window in `windows`? Used to
@@ -2601,32 +2469,25 @@ fn infer_supply_net(board: &ExtractedBoard, part_ref: &str) -> Option<String> {
 /// (no `[decoupling]` block, or `parasitics = false`) leaves caps ideal. With
 /// `parasitics = true`, every bound capacitor gets package/dielectric-default
 /// ESR/ESL inferred from its footprint and value; per-ref overrides win.
-fn apply_decoupling(
-    spec: &Spec,
-    board: &ExtractedBoard,
-    bound: &mut BoundBoard,
-) -> Result<(), SpecError> {
+fn apply_decoupling(spec: &Spec, board: &ExtractedBoard, bound: &mut BoundBoard) {
     use hauksbee_engine::{apply_parasitics, EsrEsl};
-    use hauksbee_ir::Device;
 
-    let Some(dec) = &spec.decoupling else {
-        return Ok(());
+    let Some(dec) = &spec.decoupling else { return };
+
+    // Every bound capacitor's package/dielectric default, inferred from its
+    // footprint and value (parsed to farads best-effort, 0 if unparseable).
+    let default_for = |name: &str| {
+        let (footprint, farads) = board
+            .components
+            .iter()
+            .find(|c| c.reference == name)
+            .map(|c| {
+                let f = hauksbee_models::value::parse_value(&c.value).map_or(0.0, |p| p.si);
+                (c.footprint.as_str(), f)
+            })
+            .unwrap_or(("", 0.0));
+        EsrEsl::from_footprint(footprint, farads)
     };
-
-    // Footprint/value lookup by capacitor reference, for default inference.
-    let cap_meta: HashMap<String, (String, f64)> = board
-        .components
-        .iter()
-        .map(|c| {
-            // Parse the value to farads best-effort (0 if unparseable).
-            let f = hauksbee_models::value::parse_value(&c.value)
-                .map(|p| p.si)
-                .unwrap_or(0.0);
-            (c.reference.clone(), (c.footprint.clone(), f))
-        })
-        .collect();
-
-    // Collect the capacitor names actually in the bound circuit.
     let cap_names: Vec<String> = bound
         .circuit
         .devices
@@ -2636,86 +2497,47 @@ fn apply_decoupling(
             _ => None,
         })
         .collect();
-
-    // Per-ref override table.
-    let overrides: HashMap<&str, &crate::scenarios::CapOverride> = dec
-        .overrides
-        .iter()
-        .map(|o| (o.reference.as_str(), o))
-        .collect();
-
     for name in cap_names {
-        let p = if let Some(ov) = overrides.get(name.as_str()) {
-            // Start from the footprint default, then apply whichever fields the
-            // override specifies.
-            let (fp, val) = cap_meta
-                .get(&name)
-                .cloned()
-                .unwrap_or_else(|| (String::new(), 0.0));
-            let mut base = EsrEsl::from_footprint(&fp, val);
-            if let Some(r) = ov.esr_ohms {
-                base.esr_ohms = r;
-            }
-            if let Some(l) = ov.esl_henries {
-                base.esl_henries = l;
-            }
-            base
-        } else if dec.parasitics {
-            let (fp, val) = cap_meta
-                .get(&name)
-                .cloned()
-                .unwrap_or_else(|| (String::new(), 0.0));
-            EsrEsl::from_footprint(&fp, val)
-        } else {
-            // Parasitics off and no override for this cap: leave it ideal.
+        let ov = dec.overrides.iter().find(|o| o.reference == name);
+        // Parasitics off and no override for this cap: leave it ideal.
+        if ov.is_none() && !dec.parasitics {
             continue;
-        };
+        }
+        // Start from the footprint default, then apply whichever fields the
+        // override specifies.
+        let mut p = default_for(&name);
+        if let Some(ov) = ov {
+            p.esr_ohms = ov.esr_ohms.unwrap_or(p.esr_ohms);
+            p.esl_henries = ov.esl_henries.unwrap_or(p.esl_henries);
+        }
         apply_parasitics(&mut bound.circuit, &name, p);
     }
-    Ok(())
 }
 
-/// Resolve a peripheral's attachment net by net name or connector ref+pin.
+/// Resolve a peripheral's attachment net: the explicitly named terminal
+/// (`which`) when given, else the spec's `net`, else the net on connector
+/// `ref` pin `pin`.
 fn resolve_net(
     spec: &crate::spec::PeripheralSpec,
     board: &ExtractedBoard,
     net_node: &HashMap<String, NodeId>,
     which: Option<&str>,
 ) -> Option<NodeId> {
-    // Explicit net name (or named alternate terminal) wins.
     if let Some(name) = which {
-        if let Some(&n) = net_node.get(name) {
-            return Some(n);
-        }
+        return net_node.get(name).copied();
     }
-    if which.is_none() {
-        if let Some(name) = &spec.net {
-            if let Some(&n) = net_node.get(name) {
-                return Some(n);
-            }
-        }
-        // Connector ref+pin: find the component, then the pin's net name.
-        if let (Some(reference), Some(pin)) = (&spec.reference, &spec.pin) {
-            if let Some(comp) = board.components.iter().find(|c| &c.reference == reference) {
-                if let Some(p) = comp.pins.iter().find(|p| &p.number == pin) {
-                    if let Some(net_id) = p.net {
-                        if let Some(net) = board
-                            .nets
-                            .iter()
-                            .find(|n| n.id == net_id)
-                            .map(|n| n.name.clone())
-                        {
-                            return net_node.get(&net).copied();
-                        }
-                    }
-                }
-            }
-        }
+    if let Some(&n) = spec.net.as_ref().and_then(|name| net_node.get(name)) {
+        return Some(n);
     }
-    None
+    let (reference, pin) = (spec.reference.as_ref()?, spec.pin.as_ref()?);
+    let comp = board
+        .components
+        .iter()
+        .find(|c| &c.reference == reference)?;
+    let net_id = comp.pins.iter().find(|p| &p.number == pin)?.net?;
+    let net = board.nets.iter().find(|n| n.id == net_id)?;
+    net_node.get(&net.name).copied()
 }
-
-use hauksbee_engine::{CsProvenance, ResolvedCs};
 
 /// Which CS net a SPI peripheral gets, and who supplied it.
 ///
@@ -2844,11 +2666,15 @@ fn attach_peripherals(
     let mut vcd_targets = Vec::new();
 
     for p in &spec.peripherals {
-        let err = |m: String| SpecError::Invalid(format!("peripheral '{}': {m}", p.id));
+        let err = |m: &str| SpecError::Invalid(format!("peripheral '{}': {m}", p.id));
+        // The named terminal (or, with `None`, the spec's `net` / `ref`+`pin`
+        // attachment), as a loud error when it resolves to nothing.
+        let net_of = |which: Option<&str>, what: &str| {
+            resolve_net(p, board, net_node, which).ok_or_else(|| err(&format!("{what} not found")))
+        };
         match p.kind.as_str() {
             "pushbutton" => {
-                let net = resolve_net(p, board, net_node, None)
-                    .ok_or_else(|| err("net not found".into()))?;
+                let net = net_of(None, "net")?;
                 let to = node_or_ground(p.to.as_ref(), net_node);
                 let b = Pushbutton::new(
                     sched.circuit_mut(),
@@ -2860,26 +2686,25 @@ fn attach_peripherals(
                 sched.attach_peripheral(Box::new(b));
             }
             "toggle" => {
-                let net = resolve_net(p, board, net_node, None)
-                    .ok_or_else(|| err("net not found".into()))?;
+                let net = net_of(None, "net")?;
                 let to = node_or_ground(p.to.as_ref(), net_node);
                 let t = ToggleSwitch::new(
                     sched.circuit_mut(),
                     &p.id,
                     net,
                     to,
-                    p.initial.map(|v| v >= 0.5).unwrap_or(false),
+                    p.initial.is_some_and(|v| v >= 0.5),
                 );
                 sched.attach_peripheral(Box::new(t));
             }
             "potentiometer" => {
                 let w = resolve_net(p, board, net_node, p.wiper.as_deref())
                     .or_else(|| resolve_net(p, board, net_node, None))
-                    .ok_or_else(|| err("wiper net not found".into()))?;
+                    .ok_or_else(|| err("wiper net not found"))?;
                 let a =
                     p.a.as_ref()
                         .and_then(|n| net_node.get(n).copied())
-                        .ok_or_else(|| err("pot terminal `a` net not found".into()))?;
+                        .ok_or_else(|| err("pot terminal `a` net not found"))?;
                 let b = node_or_ground(p.b.as_ref(), net_node);
                 let pot = Potentiometer::new(
                     sched.circuit_mut(),
@@ -2893,16 +2718,13 @@ fn attach_peripherals(
                 sched.attach_peripheral(Box::new(pot));
             }
             "encoder" => {
-                let a = resolve_net(p, board, net_node, p.net_a.as_deref())
-                    .ok_or_else(|| err("encoder net_a not found".into()))?;
-                let b = resolve_net(p, board, net_node, p.net_b.as_deref())
-                    .ok_or_else(|| err("encoder net_b not found".into()))?;
+                let a = net_of(p.net_a.as_deref(), "encoder net_a")?;
+                let b = net_of(p.net_b.as_deref(), "encoder net_b")?;
                 let enc = Encoder::new(sched.circuit_mut(), &p.id, a, b, p.vhigh.unwrap_or(5.0));
                 sched.attach_peripheral(Box::new(enc));
             }
             "stimulus" => {
-                let net = resolve_net(p, board, net_node, None)
-                    .ok_or_else(|| err("net not found".into()))?;
+                let net = net_of(None, "net")?;
                 let kind = match p.waveform.as_deref().unwrap_or("dc") {
                     "dc" => StimulusKind::Wave(SourceKind::Dc(p.offset.unwrap_or(0.0))),
                     "sine" => StimulusKind::Wave(SourceKind::Sin {
@@ -2926,7 +2748,7 @@ fn attach_peripherals(
                         amplitude: p.amplitude.unwrap_or(0.1),
                         seed: 0xC0FFEE,
                     },
-                    other => return Err(err(format!("unknown waveform '{other}'"))),
+                    other => return Err(err(&format!("unknown waveform '{other}'"))),
                 };
                 let s = Stimulus::voltage(sched.circuit_mut(), &p.id, net, kind);
                 sched.attach_peripheral(Box::new(s));
@@ -2956,15 +2778,18 @@ fn attach_peripherals(
                 sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs);
             }
             "vcd_sink" => {
-                let names = p.nets.clone().unwrap_or_default();
-                let mut logged = Vec::new();
-                for name in &names {
-                    if let Some(&n) = net_node.get(name) {
-                        logged.push((name.clone(), n));
-                    } else {
-                        return Err(err(format!("vcd net '{name}' not found")));
-                    }
-                }
+                let logged = p
+                    .nets
+                    .iter()
+                    .flatten()
+                    .map(|name| {
+                        let node = net_node
+                            .get(name)
+                            .copied()
+                            .ok_or_else(|| err(&format!("vcd net '{name}' not found")))?;
+                        Ok((name.clone(), node))
+                    })
+                    .collect::<Result<Vec<_>, SpecError>>()?;
                 let path = p.vcd_path.as_ref().map(|s| {
                     let base = spec.base_dir.join(s);
                     // Per-seed path in an ensemble ("wave.vcd" -> "wave.seed3.vcd")
@@ -2984,21 +2809,21 @@ fn attach_peripherals(
                 let sink = VcdSink::new(&p.id, logged, path);
                 sched.attach_peripheral(Box::new(sink));
             }
-            other => return Err(err(format!("unknown type '{other}'"))),
+            other => return Err(err(&format!("unknown type '{other}'"))),
         }
 
         // Register the peripheral's timeline events.
         if !p.events.is_empty() {
-            let events = p
-                .events
-                .iter()
-                .map(|e| hauksbee_engine::TimelineEvent {
-                    target: p.id.clone(),
-                    t_s: e.t_ms / 1000.0,
-                    value: e.value,
-                })
-                .collect();
-            sched.add_timeline(events);
+            sched.add_timeline(
+                p.events
+                    .iter()
+                    .map(|e| hauksbee_engine::TimelineEvent {
+                        target: p.id.clone(),
+                        t_s: e.t_ms / 1000.0,
+                        value: e.value,
+                    })
+                    .collect(),
+            );
         }
     }
 
@@ -3034,18 +2859,15 @@ fn attach_sensors(
             ))
         })?;
 
+        let err = |m: String| SpecError::Invalid(format!("sensor '{}': {m}", sa.id));
         // Apply per-run input overrides.
         for (name, &value) in &sa.inputs {
             if !value.is_finite() {
-                return Err(SpecError::Invalid(format!(
-                    "sensor '{}': input '{name}' must be finite",
-                    sa.id
-                )));
+                return Err(err(format!("input '{name}' must be finite")));
             }
             if sensor.input(name).is_none() {
-                return Err(SpecError::Invalid(format!(
-                    "sensor '{}': input '{name}' is not declared by the exact register-map spec",
-                    sa.id
+                return Err(err(format!(
+                    "input '{name}' is not declared by the exact register-map spec"
                 )));
             }
             sensor.set_input(name, value);
@@ -3056,36 +2878,30 @@ fn attach_sensors(
         match sensor.bus() {
             Bus::I2c => {
                 if sa.controller.is_some() || sa.cs_net.is_some() {
-                    return Err(SpecError::Invalid(format!(
-                        "sensor '{}': controller/cs_net are SPI-only",
-                        sa.id
-                    )));
+                    return Err(err("controller/cs_net are SPI-only".into()));
                 }
                 let bus = I2cBus::new(&sa.id).with_slave(Box::new(sensor));
                 sched.attach_i2c_bus(Arc::new(Mutex::new(bus)));
             }
             Bus::Spi => {
                 let arc = Arc::new(Mutex::new(SpiBus::new(&sa.id, Box::new(sensor))));
-                let cs = if let Some(net_name) = sa.cs_net.as_deref() {
-                    let node = sched.net_nodes.get(net_name).copied().ok_or_else(|| {
-                        SpecError::Invalid(format!(
-                            "sensor '{}': cs_net '{}' does not exist on the board",
-                            sa.id, net_name
-                        ))
-                    })?;
-                    let pin = sched.pin_driving_node(node).ok_or_else(|| {
-                        SpecError::Invalid(format!(
-                            "sensor '{}': cs_net '{}' is not driven by a modeled MCU pin",
-                            sa.id, net_name
-                        ))
-                    })?;
-                    Some(hauksbee_engine::ResolvedCs {
-                        pin,
-                        net: Some(node),
-                        provenance: hauksbee_engine::CsProvenance::SpecDeclared,
-                    })
-                } else {
-                    None
+                let cs = match sa.cs_net.as_deref() {
+                    Some(net_name) => {
+                        let node = sched.net_nodes.get(net_name).copied().ok_or_else(|| {
+                            err(format!("cs_net '{net_name}' does not exist on the board"))
+                        })?;
+                        let pin = sched.pin_driving_node(node).ok_or_else(|| {
+                            err(format!(
+                                "cs_net '{net_name}' is not driven by a modeled MCU pin"
+                            ))
+                        })?;
+                        Some(ResolvedCs {
+                            pin,
+                            net: Some(node),
+                            provenance: CsProvenance::SpecDeclared,
+                        })
+                    }
+                    None => None,
                 };
                 if let Some(controller) = &sa.controller {
                     sched.attach_spi_bus_on(controller, arc, cs);
@@ -3115,36 +2931,33 @@ pub(crate) fn qemu_bus_slave_warnings(spec: &Spec, qemu_backends: &[String]) -> 
 
     const BUS_SLAVE_KINDS: &[&str] = &["i2c_eeprom", "i2c_lm75", "spi_eeprom", "spi_mcp3008"];
     let backend_str = qemu_backends.join(", ");
-    let mut warnings = Vec::new();
-
-    for p in &spec.peripherals {
-        if BUS_SLAVE_KINDS.contains(&p.kind.as_str()) {
-            let bus_kind = if p.kind.starts_with("i2c") {
+    let slaves = spec
+        .peripherals
+        .iter()
+        .filter(|p| BUS_SLAVE_KINDS.contains(&p.kind.as_str()))
+        .map(|p| {
+            let bus = if p.kind.starts_with("i2c") {
                 "I2C"
             } else {
                 "SPI"
             };
-            warnings.push(format!(
-                "WARNING: peripheral '{}' ({} {}) is a NO-OP on backend {}; \
+            ("peripheral", &p.id, format!("{bus} {}", p.kind))
+        });
+    let sensors = spec
+        .sensors
+        .iter()
+        .map(|sa| ("sensor", &sa.id, "declarative bus sensor".to_string()));
+    slaves
+        .chain(sensors)
+        .map(|(noun, id, what)| {
+            format!(
+                "WARNING: {noun} '{id}' ({what}) is a NO-OP on backend {backend_str}; \
                  I2C/SPI bus-slave co-sim is supported on AVR (simavr) and \
-                 Renode backends only. The peripheral will not respond; firmware \
-                 that depends on it may fail for that reason.",
-                p.id, bus_kind, p.kind, backend_str
-            ));
-        }
-    }
-
-    for sa in &spec.sensors {
-        warnings.push(format!(
-            "WARNING: sensor '{}' (declarative bus sensor) is a NO-OP on backend {}; \
-             I2C/SPI bus-slave co-sim is supported on AVR (simavr) and \
-             Renode backends only. The sensor will not respond; firmware \
-             that depends on it may fail for that reason.",
-            sa.id, backend_str
-        ));
-    }
-
-    warnings
+                 Renode backends only. The {noun} will not respond; firmware \
+                 that depends on it may fail for that reason."
+            )
+        })
+        .collect()
 }
 
 /// Snapshot every peripheral's end-of-run state and dump VCD files.
@@ -3165,44 +2978,36 @@ fn snapshot_peripherals(
 
     // EEPROM bytes (I2C 24Cxx and SPI 25xx), and VCD dumps.
     for p in &spec.peripherals {
-        match p.kind.as_str() {
-            "i2c_eeprom" => {
-                for bus in sched.i2c_buses() {
-                    let b = bus.lock().unwrap_or_else(|e| e.into_inner());
-                    if hauksbee_engine::Peripheral::id(&*b) == p.id {
-                        if let Some(ee) = b.slave::<Eeprom24c>(p.address.unwrap_or(0x50)) {
-                            out.entry(p.id.clone()).or_default().bytes = ee.contents().to_vec();
-                        }
-                    }
-                }
+        let bytes = match p.kind.as_str() {
+            "i2c_eeprom" => sched.i2c_buses().iter().find_map(|bus| {
+                let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+                (hauksbee_engine::Peripheral::id(&*b) == p.id)
+                    .then(|| b.slave::<Eeprom24c>(p.address.unwrap_or(0x50)))?
+                    .map(|ee| ee.contents().to_vec())
+            }),
+            "spi_eeprom" => sched.spi_buses().iter().find_map(|bus| {
+                let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+                (hauksbee_engine::Peripheral::id(&*b) == p.id)
+                    .then(|| b.slave::<Spi25Eeprom>())?
+                    .map(|ee| ee.contents().to_vec())
+            }),
+            _ => None,
+        };
+        if let Some(bytes) = bytes {
+            out.entry(p.id.clone()).or_default().bytes = bytes;
+        }
+        // Surface a VCD write failure (e.g. the output dir doesn't exist):
+        // silently dropping it left the user with no VCD artifact and no
+        // diagnostic on a green run.
+        let target = vcd_targets.iter().find(|(id, _)| id == &p.id);
+        if let (Some((_, path)), Some(sink)) = (target, sched.peripherals.get::<VcdSink>(&p.id)) {
+            if let Err(e) = sink.write_to(path) {
+                eprintln!(
+                    "hauksbee: VCD sink '{}' failed to write {}: {e}",
+                    p.id,
+                    path.display()
+                );
             }
-            "spi_eeprom" => {
-                for bus in sched.spi_buses() {
-                    let b = bus.lock().unwrap_or_else(|e| e.into_inner());
-                    if hauksbee_engine::Peripheral::id(&*b) == p.id {
-                        if let Some(ee) = b.slave::<Spi25Eeprom>() {
-                            out.entry(p.id.clone()).or_default().bytes = ee.contents().to_vec();
-                        }
-                    }
-                }
-            }
-            "vcd_sink" => {
-                if let Some((_, path)) = vcd_targets.iter().find(|(id, _)| id == &p.id) {
-                    if let Some(sink) = sched.peripherals.get::<VcdSink>(&p.id) {
-                        // Surface a write failure (e.g. the output dir doesn't
-                        // exist), silently dropping it left the user with no
-                        // VCD artifact and no diagnostic on a green run.
-                        if let Err(e) = sink.write_to(path) {
-                            eprintln!(
-                                "hauksbee: VCD sink '{}' failed to write {}: {e}",
-                                p.id,
-                                path.display()
-                            );
-                        }
-                    }
-                }
-            }
-            _ => {}
         }
     }
 
@@ -3252,15 +3057,51 @@ fn suppress_rail(bound: &mut BoundBoard, net: &str) {
     }
 }
 
-/// One warning per voltage/rail_window assertion whose net is fed DIRECTLY by
-/// an ideal source: a declared `kind = "ideal"` supply leg, a binder
+/// Bias the bound board the way every run does: suppress the requested
+/// auto-rails (drop the supply leg and open its internal source so the net is
+/// fed only via board parts), attach or reconfigure the declared supplies,
+/// then drive the explicit `[[net_drive]]` nets and the per-seed fuzz straps
+/// to fixed voltages (fuzz wins on an overlapping net). Returns the dead-rail
+/// census taken once every source of power was applied.
+///
+/// One function for the transient run and the AC sweep, so the operating
+/// point the small-signal model linearises about is exactly the transient's.
+fn bias_bound(
+    bound: &mut BoundBoard,
+    board: &ExtractedBoard,
+    spec: &Spec,
+    fuzz_drives: &[(String, f64)],
+) -> Result<Vec<String>, SpecError> {
+    for net in &spec.suppress_rail {
+        suppress_rail(bound, net);
+    }
+    for s in &spec.supplies {
+        attach_supply(bound, s)?;
+    }
+    let dead = dead_rails(board, bound, spec);
+    for (net, volts) in spec
+        .net_drives
+        .iter()
+        .map(|d| (d.net.as_str(), d.volts))
+        .chain(fuzz_drives.iter().map(|(n, v)| (n.as_str(), *v)))
+    {
+        drive_net(bound, net, volts);
+    }
+    Ok(dead)
+}
+
+/// Every voltage/rail_window assertion whose net is fed DIRECTLY by an ideal
+/// source, with that net: a declared `kind = "ideal"` supply leg, a binder
 /// auto-rail (also stamped as an ideal leg), or a `[[net_drive]]`. Such an
 /// assertion is a hollow gate: the source holds the net at its programmed
 /// voltage, so the check cannot fail for a board reason and its green vouches
 /// for nothing. Behavioral legs (bench / wall / usb / battery) are exempt on
 /// purpose, their droop and current limits are exactly what a rail assertion
 /// tests, and so is a net an ideal source feeds only *through* board parts.
-fn hollow_gate_warnings(spec: &Spec, bound: &BoundBoard) -> Vec<String> {
+fn hollow_gates<'a>(
+    spec: &'a Spec,
+    bound: &BoundBoard,
+) -> Vec<(&'a crate::spec::Assertion, &'a str)> {
     use hauksbee_engine::power_supply::PowerSupply;
     let ideal_fed: std::collections::HashSet<&str> = bound
         .supplies
@@ -3269,45 +3110,11 @@ fn hollow_gate_warnings(spec: &Spec, bound: &BoundBoard) -> Vec<String> {
         .map(|leg| leg.net_name.as_str())
         .chain(spec.net_drives.iter().map(|d| d.net.as_str()))
         .collect();
-    let mut out = Vec::new();
-    for a in &spec.asserts {
-        if !matches!(a.kind.as_str(), "voltage" | "rail_window") {
-            continue;
-        }
-        let Some(net) = a.net.as_deref() else {
-            continue;
-        };
-        if ideal_fed.contains(net) {
-            out.push(format!(
-                "assertion '{}' reads net '{net}', which your own ideal source feeds \
-                 directly; it cannot fail for a board reason (the source holds the net at \
-                 its programmed voltage). Assert on a net the board derives from it, or \
-                 model the real supply (bench/usb/battery) so droop is possible",
-                a.label()
-            ));
-        }
-    }
-    out
-}
-
-fn hollow_gate_assumptions(
-    spec: &Spec,
-    bound: &BoundBoard,
-) -> Vec<hauksbee_ir::evidence::Assumption> {
-    use hauksbee_engine::power_supply::PowerSupply;
-    let ideal_fed: std::collections::HashSet<&str> = bound
-        .supplies
-        .iter()
-        .filter(|leg| matches!(leg.supply, PowerSupply::Ideal { .. }))
-        .map(|leg| leg.net_name.as_str())
-        .chain(spec.net_drives.iter().map(|drive| drive.net.as_str()))
-        .collect();
     spec.asserts
         .iter()
-        .filter(|assertion| matches!(assertion.kind.as_str(), "voltage" | "rail_window"))
-        .filter_map(|assertion| assertion.net.as_deref())
-        .filter(|net| ideal_fed.contains(net))
-        .map(hauksbee_ir::evidence::Assumption::held_by_ideal_source)
+        .filter(|a| matches!(a.kind.as_str(), "voltage" | "rail_window"))
+        .filter_map(|a| Some((a, a.net.as_deref()?)))
+        .filter(|(_, net)| ideal_fed.contains(net))
         .collect()
 }
 
@@ -3363,91 +3170,70 @@ fn attach_supply(bound: &mut BoundBoard, s: &SupplySpec) -> Result<(), SpecError
 
 /// Map a [`SupplySpec`] to the engine's behavioral [`PowerSupply`].
 fn build_supply(s: &SupplySpec) -> Result<PowerSupply, SpecError> {
+    use crate::spec::{chemistry, unknown_supply_token, usb_profile, CHEMISTRIES, USB_PROFILES};
     // SupplySpec::validate already rejected a missing volts / usb / chemistry
     // at load; the error paths here are defense in depth for callers that
     // construct a SupplySpec without going through Spec::load. No silent
     // default: a guessed 5.0 V on a 3.3 V board fabricates faults.
-    let volts_required = || {
-        SpecError::Invalid(format!(
-            "supply on '{}': `{}` needs an explicit `volts`",
-            s.net, s.kind
+    let invalid = |m: String| SpecError::Invalid(format!("supply on '{}': {m}", s.net));
+    let volts = || {
+        s.volts
+            .ok_or_else(|| invalid(format!("`{}` needs an explicit `volts`", s.kind)))
+    };
+    let missing = |what: &str, options: &[&str]| {
+        invalid(format!(
+            "`{}` needs an explicit {what} ({})",
+            s.kind,
+            options.join("|")
         ))
     };
     let supply = match s.kind.as_str() {
-        "ideal" => PowerSupply::Ideal {
-            volts: s.volts.ok_or_else(volts_required)?,
-        },
+        "ideal" => PowerSupply::Ideal { volts: volts()? },
         "bench" => PowerSupply::Bench {
-            volts: s.volts.ok_or_else(volts_required)?,
+            volts: volts()?,
             current_limit_a: s.current_limit_a.unwrap_or(1.0),
         },
         "wall" => PowerSupply::Wall {
-            volts: s.volts.ok_or_else(volts_required)?,
+            volts: volts()?,
             r_out_ohms: s.r_out_ohms.unwrap_or(0.5),
             ripple_vpp: s.ripple_vpp.unwrap_or(0.1),
             ripple_hz: s.ripple_hz.unwrap_or(100.0),
         },
-        "usb" => PowerSupply::Usb {
-            spec: match s.usb.as_deref().ok_or_else(|| {
-                SpecError::Invalid(format!(
-                    "supply on '{}': `usb` needs an explicit profile (5v0.5a|5v1.5a|5v3a)",
-                    s.net
-                ))
-            })? {
-                "5v0.5a" | "5v_0.5a" => UsbSpec::V5_0_5A,
-                "5v1.5a" | "5v_1.5a" => UsbSpec::V5_1_5A,
-                "5v3a" | "5v_3a" => UsbSpec::V5_3A,
-                other => {
-                    return Err(SpecError::Invalid(format!(
-                        "supply on '{}': unknown usb profile '{}' (expected 5v0.5a|5v1.5a|5v3a)",
-                        s.net, other
-                    )))
-                }
-            },
-        },
-        "battery" => PowerSupply::Battery {
-            chemistry: match s.chemistry.as_deref().ok_or_else(|| {
-                SpecError::Invalid(format!(
-                    "supply on '{}': `battery` needs an explicit `chemistry` \
-                     (liion|alkaline|nimh|lifepo4)",
-                    s.net
-                ))
-            })? {
-                "liion" | "lipo" => Chemistry::LiIon,
-                "alkaline" => Chemistry::Alkaline,
-                "nimh" => Chemistry::NiMh,
-                "lifepo4" | "lfp" => Chemistry::LiFePO4,
-                other => {
-                    return Err(SpecError::Invalid(format!(
-                    "supply on '{}': unknown chemistry '{}' (expected liion|alkaline|nimh|lifepo4)",
-                    s.net, other
-                )))
-                }
-            },
-            cells: s.cells.unwrap_or(1),
-            capacity_mah: s.capacity_mah.unwrap_or(1000.0),
-            soc: s.soc.unwrap_or(1.0),
-            r_internal_ohms: s.r_internal_ohms.unwrap_or(0.1),
-            protection: match (s.protection_trip_a, s.protection_delay_ms) {
-                (Some(trip_a), delay_ms) => {
+        "usb" => {
+            let t = s
+                .usb
+                .as_deref()
+                .ok_or_else(|| missing("profile", USB_PROFILES))?;
+            PowerSupply::Usb {
+                spec: usb_profile(t).ok_or_else(|| {
+                    SpecError::Invalid(unknown_supply_token(&s.net, "usb profile", t, USB_PROFILES))
+                })?,
+            }
+        }
+        "battery" => {
+            let t = s
+                .chemistry
+                .as_deref()
+                .ok_or_else(|| missing("`chemistry`", CHEMISTRIES))?;
+            PowerSupply::Battery {
+                chemistry: chemistry(t).ok_or_else(|| {
+                    SpecError::Invalid(unknown_supply_token(&s.net, "chemistry", t, CHEMISTRIES))
+                })?,
+                cells: s.cells.unwrap_or(1),
+                capacity_mah: s.capacity_mah.unwrap_or(1000.0),
+                soc: s.soc.unwrap_or(1.0),
+                r_internal_ohms: s.r_internal_ohms.unwrap_or(0.1),
+                protection: s.protection_trip_a.map(|trip_a| {
                     let mut p = hauksbee_engine::power_supply::BatteryProtection::new(
                         trip_a,
-                        delay_ms.unwrap_or(0.0) / 1000.0,
+                        s.protection_delay_ms.unwrap_or(0.0) / 1000.0,
                     );
-                    if let Some(reset) = s.protection_reset_a {
-                        p.reset_a = reset;
-                    }
-                    Some(p)
-                }
-                (None, _) => None,
-            },
-        },
-        other => {
-            return Err(SpecError::Invalid(format!(
-                "supply on '{}': unknown kind '{other}'",
-                s.net
-            )))
+                    p.reset_a = s.protection_reset_a.unwrap_or(p.reset_a);
+                    p
+                }),
+            }
         }
+        other => return Err(invalid(format!("unknown kind '{other}'"))),
     };
     Ok(supply)
 }
@@ -3630,15 +3416,6 @@ fn main {
         .unwrap();
         merge_protection_trip_nets(&mut windows, std::slice::from_ref(&unscoped));
         assert!(!windows[0].nets.contains(&"OTHER".to_string()));
-    }
-
-    #[test]
-    fn a_bare_ref_matches_its_own_units_only() {
-        assert!(ref_or_unit_matches("RN1", "RN1"));
-        assert!(ref_or_unit_matches("RN1", "RN1_e1"));
-        assert!(ref_or_unit_matches("Q3", "Q3_q2"));
-        assert!(!ref_or_unit_matches("RN1", "RN10_e1"));
-        assert!(!ref_or_unit_matches("RN1", "RN1_heater"));
     }
 
     #[test]

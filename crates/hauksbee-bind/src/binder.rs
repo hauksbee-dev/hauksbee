@@ -30,10 +30,10 @@ use hauksbee_models::{
     PeripheralSpec, SensorSpec,
 };
 
+use crate::bind_report::{BindOutcome, BindReport, BindRow};
 use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
 use crate::drivers::{PinDriver, DEFAULT_RO};
 use crate::power_supply::{PowerSupply, SupplyLeg};
-use crate::reports::bind::{BindOutcome, BindReport, BindRow};
 use crate::stress::DeviceMeta;
 use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 
@@ -85,7 +85,7 @@ pub struct McuBinding {
 /// I2C address, the board reference/value config (VREF, gain), and the four
 /// VOUT-channel [`PinDriver`]s already stamped into the circuit. The scheduler
 /// realizes each binding as a spec-driven
-/// [`RegisterMapSensor`](crate::RegisterMapSensor) instance of
+/// `RegisterMapSensor` (in `hauksbee_cosim::peripherals`) instance of
 /// `testdata/sensor-specs/mcp4728.toml` on a shared bus, binding these drivers to
 /// the spec's per-channel outputs; the slave then drives the VOUT nets itself
 /// at each transaction end (the ctx-bearing `on_stop`), so the analog
@@ -267,7 +267,7 @@ pub enum FitRemedy {
 /// Firmware on a board with zero processors is unanswerable rather than
 /// merely suspicious: nothing executes, so every firmware assertion passes
 /// without being tested. Callers pair this with
-/// [`EXIT_INVALID_FOR_ANALYSIS`](crate::result::EXIT_INVALID_FOR_ANALYSIS)
+/// [`EXIT_INVALID_FOR_ANALYSIS`](crate::EXIT_INVALID_FOR_ANALYSIS)
 /// (or their spec-error equivalent) so a vacuous green is impossible.
 pub fn no_processor_message(dnp_mcus: &[(String, String)], remedy: FitRemedy) -> String {
     if dnp_mcus.is_empty() {
@@ -960,10 +960,7 @@ fn gather_device_meta(
 /// a caller cannot reach a model without having answered the three-state
 /// assembled-component question. DNP-absent and identity-unknown parts have no
 /// witness and therefore no model.
-pub(crate) fn resolve(
-    lib: &ModelLibrary,
-    part: FittedComponent<'_>,
-) -> hauksbee_models::Resolution {
+pub fn resolve(lib: &ModelLibrary, part: FittedComponent<'_>) -> hauksbee_models::Resolution {
     library_resolution(lib, part.component())
 }
 
@@ -1075,10 +1072,7 @@ fn model_cs_net(
 /// WOULD resolve to. None of them may stamp a device from the answer.
 /// Everything that models an assembled part goes through [`resolve`] and its
 /// [`FittedComponent`] witness.
-pub(crate) fn library_resolution(
-    lib: &ModelLibrary,
-    comp: &Component,
-) -> hauksbee_models::Resolution {
+pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
     let mut q = ComponentQuery::new(
         non_empty(&comp.lib_id),
         non_empty(&comp.value),
@@ -4735,7 +4729,7 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
 }
 
 /// Map an ATmega328P / Arduino-Nano role string to a `(port, bit)` GPIO id.
-pub(crate) fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
+pub fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     if module {
         // Arduino Nano header: d0..d13 map to Arduino digital pins.
@@ -4830,7 +4824,7 @@ fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
 /// with no port pin and return `None`, so they stay pure ADC probes. Handles
 /// both the Nano module role ("a2", "a3_...") and the bare role carrying an
 /// adc index ("pc2_adc2").
-pub(crate) fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
+pub fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     // As in `gpio_of_role`, the bare `a<n>` table is the NANO's. A module whose
     // header analog pins are not the ATmega328P's port C names its pins by port
@@ -5535,7 +5529,7 @@ fn confidence_word(c: Confidence) -> &'static str {
 ///
 /// Both variants mean the same thing in different words: the two files describe
 /// different boards, so anything computed from the pair would be a fact about a
-/// board that does not exist. That is [`crate::result::EXIT_INVALID_FOR_ANALYSIS`],
+/// board that does not exist. That is [`crate::EXIT_INVALID_FOR_ANALYSIS`],
 /// the same treatment a board still carrying Git merge-conflict markers gets.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum IdentityRefusal {
@@ -5567,9 +5561,9 @@ pub enum IdentityRefusal {
 }
 
 impl IdentityRefusal {
-    /// Always [`crate::result::EXIT_INVALID_FOR_ANALYSIS`].
+    /// Always [`crate::EXIT_INVALID_FOR_ANALYSIS`].
     pub fn exit_code(&self) -> i32 {
-        crate::result::EXIT_INVALID_FOR_ANALYSIS
+        crate::EXIT_INVALID_FOR_ANALYSIS
     }
 }
 
@@ -6705,7 +6699,7 @@ mod tests {
             warning: Some("identity only; remains OPEN".into()),
             guesses: Vec::new(),
         });
-        let summary = crate::result::BindSummary::from_report(&report);
+        let summary = crate::bind_report::BindSummary::from_report(&report);
         assert_eq!(summary.critical_parts_bound, "0/1");
         assert_eq!(summary.active_path_unresolved.len(), 1);
     }

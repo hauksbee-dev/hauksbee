@@ -19,7 +19,7 @@
 //! This check answers the same question from the other side: not "what did the
 //! symbol author type" but "what did hauksbee BIND". A part that resolves to a
 //! digital model has a pad->role map and a declared output set; the binder
-//! stamps a Thevenin [`PinDriver`](crate::drivers::PinDriver) on every connected
+//! stamps a Thevenin [`PinDriver`](hauksbee_bind::drivers::PinDriver) on every connected
 //! output role, which is precisely a push-pull driver. If two DIFFERENT parts
 //! stamp a driver onto the same net, the co-simulation itself is about to solve
 //! two voltage sources fighting through their output resistances, and the answer
@@ -86,7 +86,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
-use crate::digital::output_roles;
+use hauksbee_bind::digital::output_roles;
 
 /// One modelled push-pull output pin found on a net.
 struct Driver {

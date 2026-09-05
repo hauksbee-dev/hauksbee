@@ -33,6 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::check::{is_identifier, Problems};
 use crate::profile::Segment;
 
 /// The optional behavioural block of a model entry.
@@ -135,15 +136,12 @@ pub struct BehavioralPin {
 
     /// Enable polarity: `true` = active-high (asserted above threshold),
     /// `false` = active-low (asserted below threshold).
-    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    #[serde(default = "default_true", skip_serializing_if = "Clone::clone")]
     pub enable_active_high: bool,
 }
 
 fn default_true() -> bool {
     true
-}
-fn is_true(b: &bool) -> bool {
-    *b
 }
 
 // ── Finite-state machine ────────────────────────────────────────────────────
@@ -261,18 +259,13 @@ pub struct StatePinBehaviour {
 // ── Averaged converter ──────────────────────────────────────────────────────
 
 /// Switching topology of an averaged converter block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Topology {
+    #[default]
     Buck,
     Boost,
     BuckBoost,
-}
-
-impl Default for Topology {
-    fn default() -> Self {
-        Topology::Buck
-    }
 }
 
 /// An averaged (cycle-averaged) switching-converter block. The runtime realises
@@ -465,419 +458,238 @@ pub struct Law {
 /// human-readable problems (empty = valid). Cheap structural checks only; the
 /// expression syntax is checked separately by the engine when it compiles the
 /// laws against a real pin set.
+///
+/// Every float here is stamped verbatim into the solve (pull / open-drain /
+/// drive targets as DC sources, resistances unfloored, dwells as
+/// `t_in_state < min` compares, converter limits as fold-back thresholds), so
+/// each gate refuses NaN and the infinities as well as the wrong sign: a `nan`
+/// that "validated OK" poisons the whole MNA solve or panics a `clamp`, and a
+/// negative limit silently folds a regulated rail to 0 V for the whole run.
 pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
-    let mut errs = Vec::new();
+    let mut p = Problems::default();
 
     for (role, pin) in &b.pins {
         let has_pull = pin.pull_to.is_some() || pin.pull_to_volts.is_some();
-        if has_pull && pin.pull_ohms.is_none() {
-            errs.push(format!(
-                "pin '{role}': pull target set but pull_ohms missing"
-            ));
-        }
+        p.require(!has_pull || pin.pull_ohms.is_some(), || {
+            format!("pin '{role}': pull target set but pull_ohms missing")
+        });
         if let Some(r) = pin.pull_ohms {
-            // A non-finite value (NaN/±inf) is false for every `<= 0.0` compare, so
-            // it must be rejected explicitly or a `nan` TOML literal slips the gate
-            // and reaches the solver (the R37 validation.rs hole, here too).
-            if !r.is_finite() || r <= 0.0 {
-                errs.push(format!("pin '{role}': pull_ohms must be positive, got {r}"));
-            }
+            p.positive(format!("pin '{role}': pull_ohms"), r);
         }
-        // The pull/open-drain TARGET voltages are stamped verbatim as DC sources
-        // (engine behavioral.rs Dc(pull_to_volts) / Dc(od_to_volts)); a `nan`/`inf`
-        // literal poisons the whole MNA solve with no fault. A negative rail is
-        // legal, so only finiteness is checked (the sibling of the pull_ohms gate).
         if let Some(v) = pin.pull_to_volts {
-            if !v.is_finite() {
-                errs.push(format!(
-                    "pin '{role}': pull_to_volts must be finite, got {v}"
-                ));
-            }
+            p.finite(format!("pin '{role}': pull_to_volts"), v);
         }
-        // The pull/open-drain TARGET voltages are stamped verbatim as DC sources
-        // (engine behavioral.rs Dc(pull_to_volts) / Dc(od_to_volts)); a `nan`/`inf`
-        // literal poisons the whole MNA solve with no fault. A negative rail is
-        // legal, so only finiteness is checked (the sibling of the pull_ohms gate).
         if pin.open_drain {
             if let Some(r) = pin.od_ohms {
-                if !r.is_finite() || r <= 0.0 {
-                    errs.push(format!("pin '{role}': od_ohms must be positive, got {r}"));
-                }
+                p.positive(format!("pin '{role}': od_ohms"), r);
             }
             if let Some(v) = pin.od_to_volts {
-                if !v.is_finite() {
-                    errs.push(format!("pin '{role}': od_to_volts must be finite, got {v}"));
-                }
+                p.finite(format!("pin '{role}': od_to_volts"), v);
             }
         }
     }
 
-    if let Some(fsm) = &b.fsm {
-        if fsm.states.is_empty() {
-            errs.push("fsm: no states declared".to_string());
-        }
-        let known: std::collections::HashSet<&str> =
-            fsm.states.iter().map(String::as_str).collect();
-        if let Some(init) = &fsm.initial {
-            if !known.contains(init.as_str()) {
-                errs.push(format!("fsm: initial state '{init}' is not in states"));
-            }
-        }
-        for (i, tr) in fsm.transitions.iter().enumerate() {
-            if !known.contains(tr.from.as_str()) {
-                errs.push(format!(
-                    "fsm transition {i}: unknown from-state '{}'",
-                    tr.from
-                ));
-            }
-            if !known.contains(tr.to.as_str()) {
-                errs.push(format!("fsm transition {i}: unknown to-state '{}'", tr.to));
-            }
-            if tr.guard.trim().is_empty() {
-                errs.push(format!("fsm transition {i}: empty guard"));
-            }
-            // The engine applies min_dwell_s as `if t_in_state < min { continue }`;
-            // a NaN makes that comparison false, silently skipping the dwell gate
-            // so the transition fires immediately instead of waiting the intended
-            // debounce/soft-start delay. Reject non-finite (and negative) like
-            // every other solver-facing float in this function.
-            if let Some(d) = tr.min_dwell_s {
-                if !d.is_finite() || d < 0.0 {
-                    errs.push(format!(
-                        "fsm transition {i}: min_dwell_s must be a non-negative finite number, got {d}"
-                    ));
-                }
-            }
-            if let Some(d) = tr.guard_dwell_s {
-                if !d.is_finite() || d < 0.0 {
-                    errs.push(format!(
-                        "fsm transition {i}: guard_dwell_s must be a non-negative finite number, got {d}"
-                    ));
-                }
-            }
-        }
-        for (st, pins) in &fsm.state_pins {
-            if !known.contains(st.as_str()) {
-                errs.push(format!("fsm state_pins: unknown state '{st}'"));
-            }
-            // The per-state override's drive fields are stamped verbatim (engine
-            // behavioral.rs set_source_dc(drive_volts) / set_resistor_ohms(
-            // drive_ohms)) with no flooring: a non-finite drive_volts injects a
-            // NaN DC source, and a zero/negative drive_ohms stamps a non-physical
-            // (negative) source resistance that destabilises the solve. Guard both
-            // like the pull/od siblings above.
-            for (role, ov) in pins {
-                if let Some(v) = ov.drive_volts {
-                    if !v.is_finite() {
-                        errs.push(format!(
-                            "fsm state_pins '{st}.{role}': drive_volts must be finite, got {v}"
-                        ));
-                    }
-                }
-                if let Some(r) = ov.drive_ohms {
-                    if !r.is_finite() || r <= 0.0 {
-                        errs.push(format!(
-                            "fsm state_pins '{st}.{role}': drive_ohms must be positive, got {r}"
-                        ));
-                    }
-                }
-            }
-            // The per-state override's drive fields are stamped verbatim (engine
-            // behavioral.rs set_source_dc(drive_volts) / set_resistor_ohms(
-            // drive_ohms)) with no flooring: a non-finite drive_volts injects a
-            // NaN DC source, and a zero/negative drive_ohms stamps a non-physical
-            // (negative) source resistance that destabilises the solve. Guard both
-            // like the pull/od siblings above.
-        }
-    }
-
-    let known_states: BTreeSet<&str> = b
+    let states: BTreeSet<&str> = b
         .fsm
         .as_ref()
         .map(|fsm| fsm.states.iter().map(String::as_str).collect())
         .unwrap_or_default();
+    if let Some(fsm) = &b.fsm {
+        p.require(!fsm.states.is_empty(), || "fsm: no states declared".into());
+        if let Some(init) = &fsm.initial {
+            p.require(states.contains(init.as_str()), || {
+                format!("fsm: initial state '{init}' is not in states")
+            });
+        }
+        for (i, tr) in fsm.transitions.iter().enumerate() {
+            p.require(states.contains(tr.from.as_str()), || {
+                format!("fsm transition {i}: unknown from-state '{}'", tr.from)
+            });
+            p.require(states.contains(tr.to.as_str()), || {
+                format!("fsm transition {i}: unknown to-state '{}'", tr.to)
+            });
+            p.require(!tr.guard.trim().is_empty(), || {
+                format!("fsm transition {i}: empty guard")
+            });
+            for (name, dwell) in [
+                ("min_dwell_s", tr.min_dwell_s),
+                ("guard_dwell_s", tr.guard_dwell_s),
+            ] {
+                if let Some(d) = dwell {
+                    p.nonneg(format!("fsm transition {i}: {name}"), d);
+                }
+            }
+        }
+        for (st, pins) in &fsm.state_pins {
+            p.require(states.contains(st.as_str()), || {
+                format!("fsm state_pins: unknown state '{st}'")
+            });
+            for (role, ov) in pins {
+                if let Some(v) = ov.drive_volts {
+                    p.finite(format!("fsm state_pins '{st}.{role}': drive_volts"), v);
+                }
+                if let Some(r) = ov.drive_ohms {
+                    p.positive(format!("fsm state_pins '{st}.{role}': drive_ohms"), r);
+                }
+            }
+        }
+    }
+
     let mut path_names = BTreeSet::new();
     for (i, path) in b.series_paths.iter().enumerate() {
-        let valid_name = !path.name.is_empty()
-            && path.name.chars().enumerate().all(|(index, c)| {
-                c == '_' || c.is_ascii_alphabetic() || (index > 0 && c.is_ascii_digit())
-            });
-        if !valid_name {
-            errs.push(format!(
-                "series_path {i}: name '{}' must be a non-empty expression identifier",
+        let what = format!("series_path {i}");
+        if !is_identifier(&path.name) {
+            p.push(format!(
+                "{what}: name '{}' must be a non-empty expression identifier",
                 path.name
             ));
         } else if !path_names.insert(path.name.as_str()) {
-            errs.push(format!("series_path {i}: duplicate name '{}'", path.name));
+            p.push(format!("{what}: duplicate name '{}'", path.name));
         }
-        if path.a.trim().is_empty() || path.b.trim().is_empty() || path.a == path.b {
-            errs.push(format!(
-                "series_path {i}: a and b must be distinct non-empty pin roles"
-            ));
-        }
-        if !path.default_ohms.is_finite() || path.default_ohms <= 0.0 {
-            errs.push(format!(
-                "series_path {i}: default_ohms must be a positive finite number, got {}",
-                path.default_ohms
-            ));
-        }
+        p.require(
+            !path.a.trim().is_empty() && !path.b.trim().is_empty() && path.a != path.b,
+            || format!("{what}: a and b must be distinct non-empty pin roles"),
+        );
+        p.positive(format!("{what}: default_ohms"), path.default_ohms);
         for (state, ohms) in &path.state_ohms {
             if b.fsm.is_none() {
-                errs.push(format!(
-                    "series_path {i}: state_ohms names '{state}' but no fsm is declared"
+                p.push(format!(
+                    "{what}: state_ohms names '{state}' but no fsm is declared"
                 ));
-            } else if !known_states.contains(state.as_str()) {
-                errs.push(format!(
-                    "series_path {i}: state_ohms names unknown state '{state}'"
-                ));
+            } else {
+                p.require(states.contains(state.as_str()), || {
+                    format!("{what}: state_ohms names unknown state '{state}'")
+                });
             }
-            if !ohms.is_finite() || *ohms <= 0.0 {
-                errs.push(format!(
-                    "series_path {i}: resistance for state '{state}' must be a positive finite number, got {ohms}"
-                ));
-            }
+            p.positive(format!("{what}: resistance for state '{state}'"), *ohms);
         }
     }
 
     let mut load_names = BTreeSet::new();
     for (i, load) in b.profiled_loads.iter().enumerate() {
-        let valid_name = !load.name.is_empty()
-            && load.name.chars().enumerate().all(|(index, c)| {
-                c == '_' || c.is_ascii_alphabetic() || (index > 0 && c.is_ascii_digit())
-            });
-        if !valid_name {
-            errs.push(format!(
-                "profiled_load {i}: name '{}' must be a non-empty expression identifier",
+        let what = format!("profiled_load {i}");
+        if !is_identifier(&load.name) {
+            p.push(format!(
+                "{what}: name '{}' must be a non-empty expression identifier",
                 load.name
             ));
         } else if !load_names.insert(load.name.as_str()) {
-            errs.push(format!("profiled_load {i}: duplicate name '{}'", load.name));
+            p.push(format!("{what}: duplicate name '{}'", load.name));
         }
-        if load.supply_pin.trim().is_empty() {
-            errs.push(format!("profiled_load {i}: supply_pin is empty"));
-        }
-        if load
+        p.non_empty(format!("{what}: supply_pin"), &load.supply_pin);
+        let bad_return = load
             .return_pin
             .as_ref()
-            .is_some_and(|role| role.trim().is_empty() || role == &load.supply_pin)
-        {
-            errs.push(format!(
-                "profiled_load {i}: return_pin must be non-empty and different from supply_pin"
-            ));
-        }
-        if !load.start_s.is_finite() || load.start_s < 0.0 {
-            errs.push(format!(
-                "profiled_load {i}: start_s must be a non-negative finite number, got {}",
-                load.start_s
-            ));
-        }
-        if load.segments.is_empty() {
-            errs.push(format!("profiled_load {i}: no segments declared"));
-        }
-        for (j, segment) in load.segments.iter().enumerate() {
-            if !segment.level_a.is_finite() || segment.level_a < 0.0 {
-                errs.push(format!(
-                    "profiled_load {i} segment {j}: level_a must be a non-negative finite number, got {}",
-                    segment.level_a
-                ));
+            .is_some_and(|role| role.trim().is_empty() || role == &load.supply_pin);
+        p.require(!bad_return, || {
+            format!("{what}: return_pin must be non-empty and different from supply_pin")
+        });
+        p.nonneg(format!("{what}: start_s"), load.start_s);
+        p.require(!load.segments.is_empty(), || {
+            format!("{what}: no segments declared")
+        });
+        for (j, s) in load.segments.iter().enumerate() {
+            let seg = format!("{what} segment {j}");
+            p.nonneg(format!("{seg}: level_a"), s.level_a);
+            if let Some(idle) = s.idle_a {
+                p.nonneg(format!("{seg}: idle_a"), idle);
             }
-            if segment
-                .idle_a
-                .is_some_and(|value| !value.is_finite() || value < 0.0)
-            {
-                errs.push(format!(
-                    "profiled_load {i} segment {j}: idle_a must be a non-negative finite number"
-                ));
-            }
-            for (name, value) in [
-                ("rise_s", segment.rise_s),
-                ("duration_s", segment.duration_s),
-                ("period_s", segment.period_s),
-                ("jitter_s", segment.jitter_s),
+            for (name, v) in [
+                ("rise_s", s.rise_s),
+                ("duration_s", s.duration_s),
+                ("period_s", s.period_s),
+                ("jitter_s", s.jitter_s),
             ] {
-                if !value.is_finite() || value < 0.0 {
-                    errs.push(format!(
-                        "profiled_load {i} segment {j}: {name} must be a non-negative finite number, got {value}"
-                    ));
-                }
+                p.nonneg(format!("{seg}: {name}"), v);
             }
-            if segment.period_s > 0.0 && segment.rise_s + segment.duration_s > segment.period_s {
-                errs.push(format!(
-                    "profiled_load {i} segment {j}: rise_s + duration_s exceeds period_s"
-                ));
-            }
-            if segment.period_s > 0.0 && segment.jitter_s >= segment.period_s {
-                errs.push(format!(
-                    "profiled_load {i} segment {j}: jitter_s must be smaller than period_s"
-                ));
+            if s.period_s > 0.0 {
+                p.require(s.rise_s + s.duration_s <= s.period_s, || {
+                    format!("{seg}: rise_s + duration_s exceeds period_s")
+                });
+                p.require(s.jitter_s < s.period_s, || {
+                    format!("{seg}: jitter_s must be smaller than period_s")
+                });
             }
         }
     }
 
     if let Some(c) = &b.converter {
-        if c.out_pin.trim().is_empty() {
-            errs.push("converter: out_pin is empty".to_string());
+        p.non_empty("converter: out_pin", &c.out_pin);
+        p.non_empty("converter: in_pin", &c.in_pin);
+        p.positive("converter: vout_setpoint", c.vout_setpoint);
+        if let Some(fb) = &c.feedback {
+            p.non_empty("converter.feedback: pin", &fb.pin);
+            p.positive("converter.feedback: vref_v", fb.vref_v);
+            p.positive("converter.feedback: relaxation_gain", fb.relaxation_gain);
         }
-        if c.in_pin.trim().is_empty() {
-            errs.push("converter: in_pin is empty".to_string());
-        }
-        // Reject non-finite up front: `nan`/`inf` pass every comparison below
-        // (NaN <= 0.0 is false), then a NaN vout_setpoint reaches the engine's
-        // `v_cmd.clamp(0.0, vout_setpoint)` where a NaN max PANICS the solver on a
-        // model that "validated OK", and a NaN efficiency propagates a NaN input
-        // current into the network (R37 finiteness hardening, extended here).
-        if !c.vout_setpoint.is_finite() || c.vout_setpoint <= 0.0 {
-            errs.push(format!(
-                "converter: vout_setpoint must be a positive finite number, got {}",
-                c.vout_setpoint
-            ));
-        }
-        if let Some(feedback) = &c.feedback {
-            if feedback.pin.trim().is_empty() {
-                errs.push("converter.feedback: pin is empty".to_string());
-            }
-            if !feedback.vref_v.is_finite() || feedback.vref_v <= 0.0 {
-                errs.push(format!(
-                    "converter.feedback: vref_v must be a positive finite number, got {}",
-                    feedback.vref_v
-                ));
-            }
-            if !feedback.relaxation_gain.is_finite() || feedback.relaxation_gain <= 0.0 {
-                errs.push(format!(
-                    "converter.feedback: relaxation_gain must be a positive finite number, got {}",
-                    feedback.relaxation_gain
-                ));
-            }
-        }
-        if let Some(enable) = &c.enable {
-            if enable.pin.trim().is_empty() {
-                errs.push("converter.enable: pin is empty".to_string());
-            }
-            if !enable.high_threshold_v.is_finite() || enable.high_threshold_v < 0.0 {
-                errs.push(format!(
-                    "converter.enable: high_threshold_v must be a non-negative finite number, got {}",
-                    enable.high_threshold_v
-                ));
-            }
+        if let Some(en) = &c.enable {
+            p.non_empty("converter.enable: pin", &en.pin);
+            p.nonneg("converter.enable: high_threshold_v", en.high_threshold_v);
         }
         if let Some(e) = c.efficiency {
-            if !e.is_finite() || e <= 0.0 || e > 1.0 {
-                errs.push(format!("converter: efficiency must be in (0,1], got {e}"));
-            }
+            p.require(e.is_finite() && e > 0.0 && e <= 1.0, || {
+                format!("converter: efficiency must be in (0,1], got {e}")
+            });
         }
-        // A current limit must be a positive finite number. A NEGATIVE iout_limit_a
-        // (a sign typo) is treated as a real CC threshold the output current always
-        // exceeds (iout is `.abs()`), so the loop folds v_cmd negative and clamps it
-        // to 0 V; the regulated rail silently reads 0 V for the whole run. A NaN
-        // limit silently disables the CC loop. Reject both up front, like
-        // vout_setpoint / efficiency above.
         for (name, lim) in [
             ("iout_limit_a", c.iout_limit_a),
             ("iin_limit_a", c.iin_limit_a),
         ] {
             if let Some(v) = lim {
-                if !v.is_finite() || v <= 0.0 {
-                    errs.push(format!(
-                        "converter: {name} must be a positive finite number, got {v}"
-                    ));
-                }
+                p.positive(format!("converter: {name}"), v);
             }
         }
         if let Some(sp) = &c.iin_program {
-            if sp.rsense_ohms.is_some() != sp.rsense_refs.is_empty() {
-                errs.push(
+            p.require(
+                sp.rsense_ohms.is_some() == sp.rsense_refs.is_empty(),
+                || {
                     "converter.iin_program: specify exactly one of rsense_ohms or rsense_refs"
-                        .to_string(),
-                );
-            }
-            if sp.prog_ohms.is_some() == sp.prog_ref.is_some() {
-                errs.push(
-                    "converter.iin_program: specify exactly one of prog_ohms or prog_ref"
-                        .to_string(),
-                );
-            }
-            let mut seen_shunts = BTreeSet::new();
-            for reference in &sp.rsense_refs {
-                if reference.trim().is_empty() {
-                    errs.push(
-                        "converter.iin_program: rsense_refs entries must be non-empty".to_string(),
-                    );
-                } else if !seen_shunts.insert(reference) {
-                    errs.push(format!(
-                        "converter.iin_program: rsense_refs repeats '{reference}'"
-                    ));
+                        .into()
+                },
+            );
+            p.require(sp.prog_ohms.is_some() != sp.prog_ref.is_some(), || {
+                "converter.iin_program: specify exactly one of prog_ohms or prog_ref".into()
+            });
+            let mut shunts = BTreeSet::new();
+            for r in &sp.rsense_refs {
+                if r.trim().is_empty() {
+                    p.push("converter.iin_program: rsense_refs entries must be non-empty");
+                } else if !shunts.insert(r) {
+                    p.push(format!("converter.iin_program: rsense_refs repeats '{r}'"));
                 }
             }
-            // The literal shunt / program resistances are the missing siblings of
-            // the gates below: the engine floors them (`rsense.max(1e-6)`), so a
-            // sign-typo `rsense_ohms = -0.005` becomes 1e-6 and the input-current
-            // limit balloons to ~50 kA; the over-current fold-back can never
-            // engage and the converter is silently unprotected. Reject non-positive.
+            // The literal resistances are floored by the engine (`rsense.max(1e-6)`),
+            // so a sign typo balloons the limit to ~50 kA; the reference constants
+            // are divisors, so a zero/inf collapses it to 0 A. Both silently.
             for (name, v) in [("rsense_ohms", sp.rsense_ohms), ("prog_ohms", sp.prog_ohms)] {
                 if let Some(v) = v {
-                    if !v.is_finite() || v <= 0.0 {
-                        errs.push(format!(
-                            "converter.iin_program: {name} must be a positive finite number, got {v}"
-                        ));
-                    }
+                    p.positive(format!("converter.iin_program: {name}"), v);
                 }
             }
-            // The literal shunt / program resistances are the missing siblings of
-            // the gates below: the engine floors them (`rsense.max(1e-6)`), so a
-            // sign-typo `rsense_ohms = -0.005` becomes 1e-6 and the input-current
-            // limit balloons to ~50 kA; the over-current fold-back can never
-            // engage and the converter is silently unprotected. Reject non-positive.
-            if !sp.prog_ref_ohms.is_finite() || sp.prog_ref_ohms <= 0.0 {
-                // A non-finite prog_ref_ohms (an `inf` overflow typo) passes a bare
-                // `<= 0.0` test but the engine's `prog_ref.max(1.0)` yields inf, so
-                // `v_sense = vprog_ref*prog/inf = 0` zeroes the input-current limit
-                // and folds the regulated rail to 0 V for the whole run; the same
-                // silent-zero the sibling gates below prevent. Reject non-finite too.
-                errs.push(format!(
-                    "converter.iin_program: prog_ref_ohms must be a positive finite number, got {}",
-                    sp.prog_ref_ohms
-                ));
-            }
-            // `vprog_ref` and `v_sense_full` gate the programmed input-current
-            // limit the same way iout_limit_a/iin_limit_a gate the literal one:
-            // the engine computes `v_sense = (vprog_ref*prog/prog_ref).min(
-            // v_sense_full).max(0.0)` and `i_limit = v_sense/rsense`. A negative
-            // or zero value for either (a sign typo) drives v_sense, and hence
-            // the limit, to 0, so update_converter folds v_cmd to 0 and the
-            // regulated rail silently reads 0 V for the whole run with no fault.
-            // Reject both up front, like the literal limits above.
             for (name, v) in [
+                ("prog_ref_ohms", sp.prog_ref_ohms),
                 ("vprog_ref", sp.vprog_ref),
                 ("v_sense_full", sp.v_sense_full),
             ] {
-                if !v.is_finite() || v <= 0.0 {
-                    errs.push(format!(
-                        "converter.iin_program: {name} must be a positive finite number, got {v}"
-                    ));
-                }
+                p.positive(format!("converter.iin_program: {name}"), v);
             }
         }
     }
 
     for law in &b.laws {
-        if law.name.trim().is_empty() {
-            errs.push("law: empty name".to_string());
-        }
-        if law.expr.trim().is_empty() {
-            errs.push(format!("law '{}': empty expr", law.name));
-        }
-        if law.a.trim().is_empty() {
-            errs.push(format!("law '{}': empty 'a' pin", law.name));
-        }
-        if matches!(law.kind, LawKind::Current) && law.b.is_none() {
-            errs.push(format!(
-                "law '{}': current law needs a 'b' sink pin",
-                law.name
-            ));
-        }
+        p.require(!law.name.trim().is_empty(), || "law: empty name".into());
+        p.require(!law.expr.trim().is_empty(), || {
+            format!("law '{}': empty expr", law.name)
+        });
+        p.require(!law.a.trim().is_empty(), || {
+            format!("law '{}': empty 'a' pin", law.name)
+        });
+        p.require(law.kind != LawKind::Current || law.b.is_some(), || {
+            format!("law '{}': current law needs a 'b' sink pin", law.name)
+        });
     }
 
-    errs
+    p.0
 }
 
 #[cfg(test)]

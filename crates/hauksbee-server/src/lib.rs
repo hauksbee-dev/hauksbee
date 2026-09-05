@@ -20,6 +20,7 @@ use frontdoor::{
     CheckRunner, FirmwareAnalyzer, LiveLauncher, SchematicAnalyzer, SchematicCheckRunner,
     SchematicLiveLauncher, ToolHooks,
 };
+use protocol::BoardInfo;
 use protocol::{ClientMessage, ServerMessage, SessionBacklog, SimFrame, Status};
 use std::path::Path;
 use std::sync::Arc;
@@ -122,24 +123,13 @@ impl LiveHub {
         // (the wrong-board banner, the "another session is live" chip), and an
         // empty identity reads as no identity at all. Fall back to the launch
         // file name, which is always known.
-        let wire_name = {
-            let engine_name = engine.board_info().name;
-            if engine_name.trim().is_empty() {
-                board_name.clone()
-            } else {
-                engine_name
-            }
-        };
-        let board_info = serde_json::to_string(&ServerMessage::BoardInfo(named_board_info(
-            &*engine, &wire_name,
-        )))
-        .expect("board info serializes");
-        let (replaced_tx, _) = tokio::sync::watch::channel(false);
+        let info = named_board_info(&*engine, &board_name);
+        let wire_name = info.name.clone();
         let shared = Arc::new(Shared {
             tx: tx.clone(),
             cmd: cmd_tx,
-            board_info_json: Mutex::new(board_info),
-            replaced: replaced_tx,
+            board_info_json: Mutex::new(wire_json(&ServerMessage::BoardInfo(info))),
+            replaced: tokio::sync::watch::channel(false).0,
             backlog: std::sync::Mutex::new(SessionBacklog::default()),
         });
         let task = tokio::spawn(sim_loop(engine, wire_name, tx, cmd_rx, shared.clone()));
@@ -163,10 +153,7 @@ impl LiveHub {
                 let bye = ServerMessage::Error {
                     message: "live session replaced: a new board was launched".to_string(),
                 };
-                let _ = old
-                    .shared
-                    .tx
-                    .send(serde_json::to_string(&bye).expect("error serializes"));
+                let _ = old.shared.tx.send(wire_json(&bye));
                 // Close every socket still attached to the old session: the
                 // frontends reconnect and land on the NEW session's stream.
                 let _ = old.shared.replaced.send(true);
@@ -235,196 +222,41 @@ impl Server {
         self.hub.clone()
     }
 
-    pub fn router(&self, static_dir: Option<&std::path::Path>) -> Router {
-        self.router_with_board(static_dir, None)
+    /// The WebSocket-sim router alone: `/ws`, the board-file probe, and the
+    /// static bundle when `static_dir` is given. What the demo binary serves.
+    pub fn router(&self, static_dir: Option<&Path>) -> Router {
+        unified_router(RouterParts {
+            hub: Some(self.hub.clone()),
+            static_dir: static_dir.map(Path::to_path_buf),
+            ..RouterParts::default()
+        })
     }
 
-    /// Build the router, optionally serving the loaded board's own file at a
-    /// fixed URL path so the frontend's geometry renderer can fetch it. The
-    /// static `dist/` only carries the demo boards, so without this any user
-    /// board would 404 in the 2D/3D view; serving the actual file here makes
-    /// `hauksbee run <any board>` show its real geometry.
-    pub fn router_with_board(
-        &self,
-        static_dir: Option<&std::path::Path>,
-        board_file: Option<(String, String)>,
-    ) -> Router {
-        let mut router = Router::new()
-            .route("/ws", get(ws_handler))
-            .with_state(self.hub.clone());
-        if let Some((url_path, contents)) = board_file {
-            router = router.route(
-                &url_path,
-                get(move || async move {
-                    (
-                        [(
-                            axum::http::header::CONTENT_TYPE,
-                            "text/plain; charset=utf-8",
-                        )],
-                        contents,
-                    )
-                }),
-            );
-        }
-        // The resume probe, answered here too. The frontend asks
-        // `/boards/{name}` on every session resume whether the server still
-        // holds the uploaded bytes; this router had no such route, so the answer
-        // came from the static fallback as a 404, which is the browser console
-        // error on every resume that the contract exists to avoid. An exact
-        // `board_file` route registered above still wins for the board that is
-        // actually loaded. See `live_board_handler` for the contract.
-        router = router.route("/boards/{name}", get(no_board_handler));
-        if let Some(dir) = static_dir {
-            router = router.fallback_service(tower_http::services::ServeDir::new(dir));
-        }
-        // Gzip responses on the fly. The frontend's .glb board models are ~14 MB
-        // uncompressed but ~1.9 MB gzipped, and every browser sends
-        // `Accept-Encoding: gzip`; the WebSocket upgrade (a bodyless 101) passes
-        // through untouched.
-        router
-            .layer(axum::middleware::map_response(no_cache_html))
-            .layer(CompressionLayer::new())
-    }
-
-    pub async fn serve(
-        &self,
-        addr: &str,
-        static_dir: Option<&std::path::Path>,
-    ) -> anyhow::Result<()> {
-        self.serve_with_board(addr, static_dir, None).await
-    }
-
-    pub async fn serve_with_board(
-        &self,
-        addr: &str,
-        static_dir: Option<&std::path::Path>,
-        board_file: Option<(String, String)>,
-    ) -> anyhow::Result<()> {
-        // Fall back to a nearby / OS-assigned port if the requested one is busy,
-        // rather than dying with a bare "Address already in use (os error 48)".
-        let listener = match tokio::net::TcpListener::bind(addr).await {
-            Ok(l) => l,
-            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                let mut chosen = None;
-                if let Ok(mut sa) = addr.parse::<std::net::SocketAddr>() {
-                    let base = sa.port();
-                    for p in (base + 1)..=(base + 20) {
-                        sa.set_port(p);
-                        if let Ok(l) = tokio::net::TcpListener::bind(sa).await {
-                            eprintln!("  (port {base} was busy; using {p} instead)");
-                            chosen = Some(l);
-                            break;
-                        }
-                    }
-                    if chosen.is_none() {
-                        sa.set_port(0);
-                        chosen = tokio::net::TcpListener::bind(sa).await.ok();
-                    }
-                }
-                chosen.ok_or(e)?
-            }
-            Err(e) => return Err(e.into()),
-        };
-        let bound = listener.local_addr()?;
+    /// Serve [`Self::router`] on `addr`, falling back to a nearby / OS-assigned
+    /// port if the requested one is busy rather than dying with a bare
+    /// "Address already in use (os error 48)".
+    pub async fn serve(&self, addr: &str, static_dir: Option<&Path>) -> anyhow::Result<()> {
+        let (listener, bound) = bind_frontdoor(addr).await?;
         eprintln!("hauksbee-server listening on http://{bound}");
-        axum::serve(listener, self.router_with_board(static_dir, board_file)).await?;
+        axum::serve(listener, self.router(static_dir)).await?;
         Ok(())
     }
 
-    /// The unified web app router: one server path, and so one web experience,
-    /// serving the static React bundle (`static_dir`) with no server-rendered
-    /// HTML alternative, the analysis API the React landing calls
-    /// (`analyze` -> `/api/analyze` + `/api/analyze-with-firmware`), the
-    /// `/api/startup` hint the app reads to choose its landing state, the live
-    /// WebSocket sim (`/ws`), and, when a board was preloaded (`run --serve`),
-    /// that board's own file so the viewer renders its real geometry.
-    ///
-    /// `startup_json` is the JSON the frontend fetches from `/api/startup`:
-    /// `{"preloaded":false}` for `serve` (lands on the drop zone) or
-    /// `{"preloaded":true,"board_name":...,"report":<WebReport>}` for
-    /// `run --serve` (lands on that board's report, "run it" expands to the sim).
-    pub fn app_router(
-        &self,
-        static_dir: Option<&Path>,
-        board_file: Option<(String, String)>,
-        analyze: FirmwareAnalyzer,
-        check: Option<CheckRunner>,
-        tools: Option<ToolHooks>,
-        launch: Option<LiveLauncher>,
-        startup_json: String,
-    ) -> Router {
-        unified_router(
-            Some(self.hub.clone()),
-            static_dir,
-            board_file,
-            Some(analyze),
-            None,
-            check,
-            None,
-            tools,
-            launch,
-            None,
-            startup_json,
-        )
-    }
-
-    /// Serve the unified app router (WebSocket sim included). Used by
-    /// `hauksbee run --serve`, where a board is preloaded.
-    pub async fn serve_app(
-        &self,
-        addr: &str,
-        static_dir: Option<&Path>,
-        board_file: Option<(String, String)>,
-        analyze: FirmwareAnalyzer,
-        check: Option<CheckRunner>,
-        tools: Option<ToolHooks>,
-        launch: Option<LiveLauncher>,
-        startup_json: String,
-    ) -> anyhow::Result<()> {
-        let listener = bind_with_fallback(addr).await?;
-        let router = self.app_router(
-            static_dir,
-            board_file,
-            analyze,
-            check,
-            tools,
-            launch,
-            startup_json,
-        );
-        axum::serve(listener, router).await?;
-        Ok(())
-    }
-
-    /// Serve the unified app router on a listener already produced by
+    /// Serve the unified web app router on a listener already produced by
     /// [`bind_frontdoor`], so the caller can print the *actually bound* URL
     /// before the server takes over the thread (the requested port may have
-    /// been busy and replaced by a fallback).
-    pub async fn serve_app_on(
-        &self,
-        listener: tokio::net::TcpListener,
-        static_dir: Option<&Path>,
-        board_file: Option<(String, String)>,
-        analyze: FirmwareAnalyzer,
-        check: Option<CheckRunner>,
-        tools: Option<ToolHooks>,
-        launch: Option<LiveLauncher>,
-        startup_json: String,
-    ) -> anyhow::Result<()> {
-        let router = self.app_router(
-            static_dir,
-            board_file,
-            analyze,
-            check,
-            tools,
-            launch,
-            startup_json,
-        );
-        axum::serve(listener, router).await?;
-        Ok(())
-    }
-
-    /// Schematic-aware counterpart to [`Self::serve_app_on`]. Kept separate so
-    /// existing embedders retain their public callback signatures.
+    /// been busy and replaced by a fallback). Used by `hauksbee run --serve`,
+    /// where a board is preloaded: one server path, and so one web experience,
+    /// serving the static React bundle (`static_dir`) with no server-rendered
+    /// HTML alternative, the analysis API the React landing calls, the
+    /// `/api/startup` hint the app reads to choose its landing state, the live
+    /// WebSocket sim (`/ws`), and the preloaded board's own file so the viewer
+    /// renders its real geometry.
+    ///
+    /// `startup_json` is the JSON the frontend fetches from `/api/startup`:
+    /// `{"preloaded":true,"board_name":...,"report":<WebReport>}` here (lands
+    /// on that board's report, "run it" expands to the sim).
+    #[allow(clippy::too_many_arguments)]
     pub async fn serve_app_on_with_schematic(
         &self,
         listener: tokio::net::TcpListener,
@@ -436,82 +268,74 @@ impl Server {
         launch: Option<SchematicLiveLauncher>,
         startup_json: String,
     ) -> anyhow::Result<()> {
-        let router = unified_router(
-            Some(self.hub.clone()),
-            static_dir,
+        let router = unified_router(RouterParts {
+            hub: Some(self.hub.clone()),
+            static_dir: static_dir.map(Path::to_path_buf),
             board_file,
-            None,
-            Some(analyze),
-            None,
+            analyze: Some(analyze),
             check,
             tools,
-            None,
             launch,
             startup_json,
-        );
+        });
         axum::serve(listener, router).await?;
         Ok(())
     }
 }
 
-/// Assemble the unified router from its optional parts. `hub` is the live-sim
-/// slot behind `/ws`: preloaded for `run --serve`, empty for `serve` until the
-/// user launches an uploaded board. `launch` mounts the `/api/live/*` routes
-/// that fill (or replace) the hub's session server-side; a deployment without
-/// the callback keeps the CLI-hint fallback in the frontend.
-fn unified_router(
+/// The optional parts of the unified router. `hub` is the live-sim slot
+/// behind `/ws`: preloaded for `run --serve`, empty for `serve` until the user
+/// launches an uploaded board. `launch` mounts the `/api/live/*` routes that
+/// fill (or replace) the hub's session server-side; a deployment without the
+/// callback keeps the CLI-hint fallback in the frontend. `startup_json` is
+/// what the frontend fetches from `/api/startup` to choose its landing state.
+#[derive(Default)]
+struct RouterParts {
     hub: Option<Arc<LiveHub>>,
-    static_dir: Option<&Path>,
+    static_dir: Option<std::path::PathBuf>,
     board_file: Option<(String, String)>,
-    analyze: Option<FirmwareAnalyzer>,
-    schematic_analyze: Option<SchematicAnalyzer>,
-    check: Option<CheckRunner>,
-    schematic_check: Option<SchematicCheckRunner>,
+    analyze: Option<SchematicAnalyzer>,
+    check: Option<SchematicCheckRunner>,
     tools: Option<ToolHooks>,
-    launch: Option<LiveLauncher>,
-    schematic_launch: Option<SchematicLiveLauncher>,
+    launch: Option<SchematicLiveLauncher>,
     startup_json: String,
-) -> Router {
-    let mut router = Router::new();
-    if let Some(hub) = &hub {
-        router = router.merge(
-            Router::new()
-                .route("/ws", get(ws_handler))
-                // The launched board's own file, so the geometry viewer can
-                // fetch what was just uploaded (the static dist/ only carries
-                // demo boards). A `run --serve` preloaded board's static route
-                // (exact path, below) takes priority over this parameterised
-                // one, keeping its historical behaviour byte-identical.
-                .route("/boards/{name}", get(live_board_handler))
-                .with_state(hub.clone()),
-        );
-    } else {
-        // No live hub, and the probe still has to be answered. The frontend asks
-        // this route on every session resume whether the server still holds the
-        // uploaded bytes, and with no hub there was no route at all, so the
-        // static fallback answered 404: the exact browser console error the
-        // contract above exists to avoid, on the most ordinary configuration
-        // there is. "No board here" is an answer, not an error.
-        router = router.merge(Router::new().route("/boards/{name}", get(no_board_handler)));
-    }
+}
+
+/// Assemble the unified router from its optional parts (see [`RouterParts`]).
+fn unified_router(parts: RouterParts) -> Router {
+    let RouterParts {
+        hub,
+        static_dir,
+        board_file,
+        analyze,
+        check,
+        tools,
+        launch,
+        startup_json,
+    } = parts;
+    // The board-file probe is answered whether or not a hub exists: the
+    // frontend asks `/boards/{name}` on every session resume whether the
+    // server still holds the uploaded bytes, and with no route the static
+    // fallback answered 404, the exact browser console error the contract
+    // (see `live_board_handler`) exists to avoid. "No board here" is an
+    // answer, not an error. A `run --serve` preloaded board's static route
+    // (exact path, below) takes priority over the parameterised one.
+    let mut router = match &hub {
+        Some(hub) => Router::new()
+            .route("/ws", get(ws_handler))
+            .route("/boards/{name}", get(live_board_handler))
+            .with_state(hub.clone()),
+        None => Router::new().route("/boards/{name}", get(no_board_handler)),
+    };
     if let (Some(hub), Some(launch)) = (&hub, launch) {
-        router = router.merge(frontdoor::live_routes(hub.clone(), launch));
-    }
-    if let (Some(hub), Some(launch)) = (&hub, schematic_launch) {
         router = router.merge(frontdoor::live_routes_with_schematic(hub.clone(), launch));
     }
     if let Some(analyze) = analyze {
-        router = router.merge(frontdoor::api_routes(analyze));
-    }
-    if let Some(analyze) = schematic_analyze {
         router = router.merge(frontdoor::api_routes_with_schematic(analyze));
     }
     // The web checks panel's backend (`POST /api/check`): present whenever the
     // embedding binary supplied a runner (the hauksbee-ci shell-out).
     if let Some(check) = check {
-        router = router.merge(frontdoor::check_route(check));
-    }
-    if let Some(check) = schematic_check {
         router = router.merge(frontdoor::check_route_with_schematic(check));
     }
     // The dependency panel's backend (`GET /api/deps`, `POST
@@ -521,8 +345,9 @@ fn unified_router(
     // capability, and because a UI that can see codex in the dependency list
     // but cannot reach the extract route would offer a button that 404s.
     if let Some(tools) = tools {
-        router = router.merge(frontdoor::deps_routes(tools.deps_status, tools.install));
-        router = router.merge(frontdoor::datasheet_routes(tools.datasheet));
+        router = router
+            .merge(frontdoor::deps_routes(tools.deps_status, tools.install))
+            .merge(frontdoor::datasheet_routes(tools.datasheet));
     }
     // `/api/startup`: the frontend reads this once on load to decide whether to
     // show the drop zone (serve) or a preloaded board's report (run --serve).
@@ -533,6 +358,9 @@ fn unified_router(
             async move { ([(header::CONTENT_TYPE, "application/json")], body) }
         }),
     );
+    // The preloaded board's own file at a fixed URL path, so the frontend's
+    // geometry renderer can fetch it: the static `dist/` only carries the demo
+    // boards, so without this any user board would 404 in the 2D/3D view.
     if let Some((url_path, contents)) = board_file {
         router = router.route(
             &url_path,
@@ -576,32 +404,6 @@ async fn no_cache_html(mut res: axum::response::Response) -> axum::response::Res
     res
 }
 
-/// Serve the drop-zone-only front door (no preloaded board, no live engine):
-/// the static React bundle, the analysis API, and `/api/startup` reporting
-/// `preloaded:false`. Used by `hauksbee serve`. The React landing lands on the
-/// drop zone; the WebSocket sim is not mounted here (there is no board to run
-/// until the user brings one via `run --serve`).
-pub async fn serve_frontdoor(
-    addr: &str,
-    static_dir: Option<&Path>,
-    analyze: FirmwareAnalyzer,
-    check: Option<CheckRunner>,
-    tools: Option<ToolHooks>,
-    startup_json: String,
-) -> anyhow::Result<()> {
-    let (listener, _bound) = bind_frontdoor(addr).await?;
-    serve_frontdoor_on(
-        listener,
-        static_dir,
-        analyze,
-        check,
-        tools,
-        None,
-        startup_json,
-    )
-    .await
-}
-
 /// Bind the front-door address (applying the busy-port fallback) and return the
 /// listener together with the address that was *actually* bound. The requested
 /// port and the bound port differ whenever the requested one was in use, so a
@@ -615,9 +417,13 @@ pub async fn bind_frontdoor(
     Ok((listener, bound))
 }
 
-/// Serve the drop-zone front door on a listener already produced by
-/// [`bind_frontdoor`], so the caller can print the real bound URL before the
-/// server takes over the thread.
+/// Serve the drop-zone front door (no preloaded board: the React landing
+/// lands on the drop zone and `/api/startup` reports `preloaded:false`) on a
+/// listener already produced by [`bind_frontdoor`], so the caller can print
+/// the real bound URL before the server takes over the thread. Used by
+/// `hauksbee serve`. The hub starts empty: `/ws` answers 409 until a board is
+/// launched through `/api/live/launch`; it is mounted even without a launcher
+/// so the route surface stays stable.
 pub async fn serve_frontdoor_on(
     listener: tokio::net::TcpListener,
     static_dir: Option<&Path>,
@@ -627,24 +433,16 @@ pub async fn serve_frontdoor_on(
     launch: Option<LiveLauncher>,
     startup_json: String,
 ) -> anyhow::Result<()> {
-    // The hub starts empty: `/ws` answers 409 until a board is launched. It is
-    // mounted even without a launcher so the route surface stays stable.
-    let hub = LiveHub::new();
-    let router = unified_router(
-        Some(hub),
+    serve_frontdoor_on_with_schematic(
+        listener,
         static_dir,
-        None,
-        Some(analyze),
-        None,
-        check,
-        None,
+        frontdoor::with_schematic_analyzer(analyze),
+        check.map(frontdoor::with_schematic_check),
         tools,
-        launch,
-        None,
+        launch.map(frontdoor::with_schematic_launcher),
         startup_json,
-    );
-    axum::serve(listener, router).await?;
-    Ok(())
+    )
+    .await
 }
 
 /// Schematic-aware standalone front door. Existing callers keep using
@@ -659,20 +457,16 @@ pub async fn serve_frontdoor_on_with_schematic(
     launch: Option<SchematicLiveLauncher>,
     startup_json: String,
 ) -> anyhow::Result<()> {
-    let hub = LiveHub::new();
-    let router = unified_router(
-        Some(hub),
-        static_dir,
-        None,
-        None,
-        Some(analyze),
-        None,
+    let router = unified_router(RouterParts {
+        hub: Some(LiveHub::new()),
+        static_dir: static_dir.map(Path::to_path_buf),
+        board_file: None,
+        analyze: Some(analyze),
         check,
         tools,
-        None,
         launch,
         startup_json,
-    );
+    });
     axum::serve(listener, router).await?;
     Ok(())
 }
@@ -849,10 +643,10 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
     // this a client that reloads mid-session would show an empty fault log
     // over a sim that kept running (and faulting) the whole time.
     let backlog = shared.backlog.lock().expect("backlog lock").clone();
-    let backlog_json =
-        serde_json::to_string(&ServerMessage::Backlog(backlog)).expect("backlog serializes");
     if socket
-        .send(Message::Text(backlog_json.into()))
+        .send(Message::Text(
+            wire_json(&ServerMessage::Backlog(backlog)).into(),
+        ))
         .await
         .is_err()
     {
@@ -893,11 +687,7 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
                         }
                         Err(e) => {
                             let err = ServerMessage::Error { message: e.to_string() };
-                            let _ = socket
-                                .send(Message::Text(
-                                    serde_json::to_string(&err).unwrap().into(),
-                                ))
-                                .await;
+                            let _ = socket.send(Message::Text(wire_json(&err).into())).await;
                         }
                     }
                 }
@@ -1202,12 +992,18 @@ mod rate_honesty_tests {
 
 /// The engine's BoardInfo with the session's wire name applied (see the
 /// fallback rationale in [`LiveHub::launch`]).
-fn named_board_info(engine: &dyn Engine, wire_name: &str) -> protocol::BoardInfo {
+fn named_board_info(engine: &dyn Engine, wire_name: &str) -> BoardInfo {
     let mut info = engine.board_info();
     if info.name.trim().is_empty() {
         info.name = wire_name.to_string();
     }
     info
+}
+
+/// A server message as the one JSON line the socket carries. The protocol
+/// types are plain data, so serialization cannot fail.
+fn wire_json(msg: &ServerMessage) -> String {
+    serde_json::to_string(msg).expect("protocol messages serialize")
 }
 
 /// One engine step, run on the blocking pool.
@@ -1287,8 +1083,54 @@ async fn sim_loop(
 
     let broadcast_msg = |msg: &ServerMessage| {
         if tx.receiver_count() > 0 {
-            let _ = tx.send(serde_json::to_string(msg).unwrap());
+            let _ = tx.send(wire_json(msg));
         }
+    };
+    // An irrecoverably failing analog solve must STOP this session with the
+    // reason on the wire. Left running, it grinds the dead solve at 100% CPU
+    // forever while the client watches a clock that never advances; that is
+    // the dishonest outcome. Pause (Reset clears the streak, a relaunch
+    // replaces the session), and say why. Shared by the ticker step and a
+    // manual step of a dead solve.
+    let dead_solve = |engine: &dyn Engine,
+                      running: &mut bool,
+                      meter: &mut crate::rate::RateMeter,
+                      fatal: &mut Option<String>| {
+        if let Some(reason) = engine.analog_failure() {
+            *running = false;
+            meter.clear();
+            let message = format!(
+                "live simulation stopped: {reason}. Press reset to \
+                 retry, or fix the board/model and relaunch."
+            );
+            end_session_fatally(&shared, &broadcast_msg, &message);
+            *fatal = Some(message);
+        }
+    };
+    // Correlated receipt for an explicit live-session mutation. A refused
+    // attachment is a local action result, not evidence that the simulation
+    // itself died; a success also refreshes the control list, which is part
+    // of the live session contract, so the newly attached device appears in
+    // the rail and can be manipulated without a reconnect.
+    let action_result = |engine: &dyn Engine,
+                         action: &str,
+                         id: String,
+                         request_id: Option<u64>,
+                         outcome: Result<String, String>| {
+        if outcome.is_ok() {
+            broadcast_msg(&ServerMessage::BoardInfo(engine.board_info()));
+        }
+        let (ok, message) = match outcome {
+            Ok(m) => (true, m),
+            Err(m) => (false, m),
+        };
+        broadcast_msg(&ServerMessage::ActionResult {
+            action: action.into(),
+            id,
+            request_id,
+            ok,
+            message,
+        });
     };
 
     loop {
@@ -1348,22 +1190,7 @@ async fn sim_loop(
                     // still be in the backlog a later subscriber replays.
                     shared.record_faults(&frame);
                     broadcast_msg(&ServerMessage::SimFrame(frame));
-                    // An irrecoverably failing analog solve must STOP this
-                    // session with the reason on the wire. Left running, it
-                    // grinds the dead solve at 100% CPU forever while the
-                    // client watches a clock that never advances; that is the
-                    // dishonest outcome. Pause (Reset clears the streak, a
-                    // relaunch replaces the session), and say why.
-                    if let Some(reason) = engine.analog_failure() {
-                        running = false;
-                        meter.clear();
-                        let message = format!(
-                            "live simulation stopped: {reason}. Press reset to \
-                             retry, or fix the board/model and relaunch."
-                        );
-                        fatal = Some(message.clone());
-                        end_session_fatally(&shared, &broadcast_msg, &message);
-                    }
+                    dead_solve(&*engine, &mut running, &mut meter, &mut fatal);
                     broadcast_msg(&ServerMessage::Status(Status {
                         running, sim_time, requested_factor: speed,
                         options: engine.controls(),
@@ -1426,22 +1253,11 @@ async fn sim_loop(
                         sim_time = frame.t;
                         shared.record_faults(&frame);
                         broadcast_msg(&ServerMessage::SimFrame(frame));
-                        // Same honesty as the ticker path: a manual step of a
-                        // dead solve reports why nothing will ever advance.
-                        if let Some(reason) = engine.analog_failure() {
-                            running = false;
-                            meter.clear();
-                            let message = format!(
-                                "live simulation stopped: {reason}. Press reset to \
-                                 retry, or fix the board/model and relaunch."
-                            );
-                            fatal = Some(message.clone());
-                            end_session_fatally(&shared, &broadcast_msg, &message);
-                        }
+                        dead_solve(&*engine, &mut running, &mut meter, &mut fatal);
                     }
+                    // Fatal latch: stepping a solve already declared dead just
+                    // re-grinds it; repeat the reason instead.
                     ClientMessage::Step { .. } => {
-                        // Fatal latch: stepping a solve already declared dead
-                        // just re-grinds it; repeat the reason instead.
                         if let Some(reason) = &fatal {
                             broadcast_msg(&ServerMessage::Error {
                                 message: reason.clone(),
@@ -1493,54 +1309,19 @@ async fn sim_loop(
                     }
                     ClientMessage::AttachPeripheral(spec) => {
                         let id = spec.id.clone();
-                        match engine.attach_peripheral(spec) {
-                        Ok(()) => {
-                            // The control list is part of the live session
-                            // contract. Refresh it immediately so the newly
-                            // attached button/stimulus appears in the rail and
-                            // can be manipulated without a reconnect.
-                            broadcast_msg(&ServerMessage::BoardInfo(engine.board_info()));
-                            broadcast_msg(&ServerMessage::ActionResult {
-                                action: "attach_peripheral".into(),
-                                id: id.clone(),
-                                request_id: None,
-                                ok: true,
-                                message: format!("Attached {id} to the live circuit."),
-                            });
-                        }
-                        Err(message) => broadcast_msg(&ServerMessage::ActionResult {
-                            action: "attach_peripheral".into(),
-                            id,
-                            request_id: None,
-                            ok: false,
-                            message,
-                        }),
-                    }
+                        let outcome = engine
+                            .attach_peripheral(spec)
+                            .map(|()| format!("Attached {id} to the live circuit."));
+                        action_result(&*engine, "attach_peripheral", id, None, outcome);
                     }
                     ClientMessage::AttachRegisterMap(spec) => {
-                        let id = spec.id.clone();
-                        let request_id = spec.request_id;
-                        match engine.attach_register_map(spec) {
-                            Ok(()) => {
-                                broadcast_msg(&ServerMessage::BoardInfo(engine.board_info()));
-                                broadcast_msg(&ServerMessage::ActionResult {
-                                    action: "attach_register_map".into(),
-                                    id: id.clone(),
-                                    request_id,
-                                    ok: true,
-                                    message: format!(
-                                        "Attached exact register-map bytes for {id} to the live co-simulation."
-                                    ),
-                                });
-                            }
-                            Err(message) => broadcast_msg(&ServerMessage::ActionResult {
-                                action: "attach_register_map".into(),
-                                id,
-                                request_id,
-                                ok: false,
-                                message,
-                            }),
-                        }
+                        let (id, request_id) = (spec.id.clone(), spec.request_id);
+                        let outcome = engine.attach_register_map(spec).map(|()| {
+                            format!(
+                                "Attached exact register-map bytes for {id} to the live co-simulation."
+                            )
+                        });
+                        action_result(&*engine, "attach_register_map", id, request_id, outcome);
                     }
                     // Probe DATA is client-derived from the frame stream, but
                     // the active probe SET is session state: holding it here
@@ -1577,10 +1358,8 @@ async fn sim_loop(
                         // Wired up with the full engine integration.
                     }
                 }
-                let info = serde_json::to_string(
-                    &ServerMessage::BoardInfo(named_board_info(&*engine, &wire_name)),
-                ).unwrap();
-                *shared.board_info_json.lock().await = info;
+                *shared.board_info_json.lock().await =
+                    wire_json(&ServerMessage::BoardInfo(named_board_info(&*engine, &wire_name)));
                 broadcast_msg(&ServerMessage::Status(Status {
                     running,
                     sim_time,

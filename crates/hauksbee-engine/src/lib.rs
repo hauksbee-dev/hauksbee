@@ -19,40 +19,43 @@
 //! The [`scheduler::Scheduler`] steps all three in lockstep chunks
 //! (generalizing the Tarski-Emulator pattern), and [`engine::HauksbeeEngine`]
 //! exposes the whole thing behind `hauksbee-server`'s `Engine` trait.
+//!
+//! The implementation is layered across four crates so an edit rebuilds one
+//! layer and the layers compile in parallel; this crate is the top:
+//!
+//! * `hauksbee-bind`: the binder, the device models it instantiates
+//!   (digital, logic, behavioral, drivers, power supply), stress/thermal
+//!   envelopes and the board / firmware / schematic inputs.
+//! * `hauksbee-cosim`: the scheduler, peripherals, responders and
+//!   `HauksbeeEngine`.
+//! * `hauksbee-checks`: the static check family, decoupling and DC-path.
+//! * `hauksbee-engine` (this crate): results, reports, the web front door,
+//!   the CLI commands and the binary.
+//!
+//! Every module of the lower layers is re-exported below under the path it
+//! had before the split, so `hauksbee_engine::binder::bind_board` and friends
+//! are unchanged for downstream crates.
 
-pub mod asbuilt;
-pub mod behavioral;
-pub mod binder;
-pub mod board_input;
 pub mod boardcode;
-pub mod checks;
 pub mod commands;
-mod component_evidence;
-pub mod dcpath;
-pub mod decoupling;
 pub mod deps;
-pub mod digital;
-pub mod drivers;
-pub mod engine;
 pub mod evidence;
-pub mod firmware_input;
 pub mod frontdoor;
-pub mod logic;
-pub mod peripherals;
 pub mod plain;
-pub mod power_supply;
 pub mod reports;
-pub mod responders;
 pub mod result;
-pub mod scheduler;
-pub mod schematic_ties;
-pub mod shorts;
-pub mod stress;
-pub mod thermal;
-pub mod waiver;
 pub mod web_dist;
 pub mod webcheck;
 pub mod webextract;
+
+// Lower layers, under their pre-split paths.
+pub use hauksbee_bind::{
+    asbuilt, behavioral, bind_report, binder, board_input, component_evidence, digital, drivers,
+    firmware_input, logic, occurrence, power_supply, schematic_ties, shorts, stress, thermal,
+    waiver,
+};
+pub use hauksbee_checks::{checks, dcpath, decoupling};
+pub use hauksbee_cosim::{engine, error_budget, peripherals, responders, scheduler};
 
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
 pub use binder::{

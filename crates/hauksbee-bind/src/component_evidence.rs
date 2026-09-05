@@ -16,7 +16,7 @@ use hauksbee_extract::Component;
 use hauksbee_models::ModelEntry;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PinEvidenceError {
+pub enum PinEvidenceError {
     ConflictingNets {
         pad: String,
         first: i64,
@@ -25,7 +25,7 @@ pub(crate) enum PinEvidenceError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RoleEvidenceError {
+pub enum RoleEvidenceError {
     Pins(PinEvidenceError),
     MissingRole(String),
     UnconnectedRole(String),
@@ -72,7 +72,7 @@ pub(crate) fn logical_pin_nets(
 /// answered the three-state assembled-component question: taking the
 /// [`FittedComponent`] witness (the only source of a bindable model) means an
 /// identity-refused or DNP-absent record cannot reach this at all.
-pub(crate) fn role_net(
+pub fn role_net(
     part: FittedComponent<'_>,
     model: &ModelEntry,
     role: &str,

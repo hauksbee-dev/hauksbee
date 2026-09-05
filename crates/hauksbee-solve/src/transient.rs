@@ -44,6 +44,52 @@ impl Waveforms {
     pub fn final_node(&self, circuit: &Circuit, name: &str) -> Option<f64> {
         self.node(circuit, name).and_then(|w| w.last().copied())
     }
+
+    /// Empty table for `n_nodes` nodes (ground at index 0), no branch currents.
+    pub(crate) fn nodes_only(n_nodes: usize) -> Waveforms {
+        Waveforms {
+            time: Vec::new(),
+            node_voltages: vec![Vec::new(); n_nodes],
+            branch_currents: Vec::new(),
+        }
+    }
+
+    /// Zero-filled node table on a fixed sample `grid` (the torn executors'
+    /// assembly surface), no branch currents.
+    pub(crate) fn on_grid(n_nodes: usize, grid: &[f64]) -> Waveforms {
+        Waveforms {
+            time: grid.to_vec(),
+            node_voltages: vec![vec![0.0; grid.len()]; n_nodes],
+            branch_currents: Vec::new(),
+        }
+    }
+
+    /// Append one accepted step's node block (`x[k-1]` is node `k`; a
+    /// partitioned engine's `x` may stop short of unmapped nodes, which read 0).
+    pub(crate) fn push_nodes(&mut self, s: &StepSample) {
+        self.time.push(s.time);
+        for (node, series) in self.node_voltages.iter_mut().enumerate() {
+            let v = if node == 0 {
+                0.0
+            } else {
+                s.x.get(node - 1).copied().unwrap_or(0.0)
+            };
+            series.push(v);
+        }
+    }
+
+    /// Node-voltage table for `n_nodes` filled by `run`, which streams every
+    /// accepted step into the sink it is handed. Shared by every executor that
+    /// marches an engine that only streams samples (the partitioned engine,
+    /// the capture solves): none of them assembles a table of its own.
+    pub(crate) fn collect_nodes(
+        n_nodes: usize,
+        run: impl FnOnce(&mut dyn FnMut(StepSample)) -> SolveResult<()>,
+    ) -> SolveResult<Waveforms> {
+        let mut wf = Waveforms::nodes_only(n_nodes);
+        run(&mut |s| wf.push_nodes(&s))?;
+        Ok(wf)
+    }
 }
 
 /// A single accepted step, handed to streaming consumers.
@@ -85,12 +131,7 @@ impl Transient {
         circuit: &Circuit,
         tstop: f64,
     ) -> SolveResult<(Waveforms, TransientDiagnostics)> {
-        let n_nodes = circuit.node_count();
-        let mut wf = Waveforms {
-            time: Vec::new(),
-            node_voltages: vec![Vec::new(); n_nodes],
-            branch_currents: Vec::new(),
-        };
+        let mut wf = Waveforms::nodes_only(circuit.node_count());
         // Pre-name branch current outputs, pairing each Vsource/Inductor with the
         // ABSOLUTE index of its branch-current unknown in `x`. Branch unknowns are
         // NOT contiguous per device kind: `Layout` assigns one to every
@@ -114,11 +155,7 @@ impl Transient {
         }
 
         let diagnostics = self.run_streaming_with_diagnostics(circuit, tstop, |s| {
-            wf.time.push(s.time);
-            for node in 0..n_nodes {
-                let v = if node == 0 { 0.0 } else { s.x[node - 1] };
-                wf.node_voltages[node].push(v);
-            }
+            wf.push_nodes(&s);
             for (slot, &idx) in wf.branch_currents.iter_mut().zip(branch_outputs.iter()) {
                 slot.1.push(s.x.get(idx).copied().unwrap_or(0.0));
             }
@@ -236,7 +273,6 @@ impl Transient {
         // `.ic V(node)=val` under `uic`: the named node voltages are the given
         // initial conditions, everything else powers on from rest. (SPICE-compat
         // With `uic`, `.ic` values seed the start directly, no DC solve.)
-        let has_ic = !circuit.initial_conditions.is_empty();
         if from_zero {
             // Power-on: the unknown vector rests at zero. No DC solve to fail;
             // the ramp (paired Ramped sources) integrates the state up from here.
@@ -362,7 +398,6 @@ impl Transient {
         // value, so a genuine power-on-from-rest march (`FromZero` + `Ramped`
         // sources, no IC anywhere) is unchanged.
         seed_reactive_state(&mut state, circuit, &ws, opts);
-        let _ = has_ic;
 
         let mut t = 0.0;
         let mut dt = match opts.step {
@@ -574,49 +609,17 @@ impl Transient {
             if !converged {
                 // Cut the step hard and retry.
                 if h <= dt_min * 1.0001 {
-                    // A behavioral-expression fault on the final attempt names
-                    // the device: refuse loudly with the cause, never emit a
-                    // truncated waveform (exit-3 discipline at the CLI).
-                    let fault = ws.behavioral_fault().map(str::to_string);
-                    let fault_suffix = fault
-                        .as_ref()
-                        .map(|fault| format!("; {fault}"))
-                        .unwrap_or_default();
-                    // Name the smallest identifiable thing: the unknown that
-                    // refused to settle, the devices on it, and any
-                    // near-zero-ohm link poisoning the matrix (E29). A bare
-                    // "Newton failed" leaves the user bisecting a 259-part
-                    // board by model class.
-                    let blame = ws.stall_blame(circuit);
-                    let blame_suffix = blame
-                        .as_ref()
-                        .map(|blame| format!(" [{blame}]"))
-                        .unwrap_or_default();
-                    let message = format!(
-                        "Newton failed at t={t} even at dt_min={dt_min}{fault_suffix}{blame_suffix}"
-                    );
-                    return Err(if let Some(fault) = fault {
-                        SolveError::behavioral(
-                            message,
-                            crate::error::behavioral_device(&fault),
-                            SolvePhase::Transient,
-                        )
-                    } else if ws.last_solve_was_singular() {
-                        SolveError::Singular {
-                            message,
-                            unknown: None,
-                            net: None,
-                        }
-                    } else {
-                        SolveError::NonConvergence {
-                            message,
-                            phase: SolvePhase::Transient,
-                            time: Some(t),
-                            dt: Some(dt_min),
-                            iterations: None,
-                            blame,
-                        }
-                    });
+                    // Refuse loudly with the cause (a behavioral fault names
+                    // its device), never emit a truncated waveform (exit-3
+                    // discipline at the CLI).
+                    return Err(ws.failure(
+                        circuit,
+                        format!("Newton failed at t={t} even at dt_min={dt_min}"),
+                        SolvePhase::Transient,
+                        Some(t),
+                        Some(dt_min),
+                        None,
+                    ));
                 }
                 dt = (h * 0.25).max(dt_min);
                 continue;
@@ -756,93 +759,159 @@ impl Transient {
 
 // --- reactive state bookkeeping ---------------------------------------------
 
-/// At the operating point, capacitor voltage = node-voltage difference and
-/// inductor current = its branch current; derivatives are zero (DC). A
-/// charge-storing diode seeds its CHARGE `Q(vd)` at the
-/// operating-point junction voltage; its `ReactiveState` slots hold charge,
-/// not voltage, so the companion stamp's history terms integrate `i = dQ/dt`
-/// on the same machinery the linear capacitor uses.
+/// One reactive state a device carries at the solution in `ws`.
+struct Reactive {
+    /// `DeviceId.0`.
+    dev: usize,
+    /// History bank: 0 is the primary, 1..=3 the secondary banks (the
+    /// [`ReactiveState`] packing table).
+    bank: usize,
+    /// The state's value at the solution: capacitor voltage, inductor current,
+    /// or a junction charge.
+    value: f64,
+    /// The device's declared initial condition, which the seed prefers.
+    ic: Option<f64>,
+    /// Absolute floor of the state's LTE tolerance.
+    atol: f64,
+}
+
+/// Visit every reactive state of every device at the solution in `ws`, in
+/// device order, through the same model code and junction-voltage rules the
+/// stamp uses. A charge-storing diode / BJT / MOSFET participates through its
+/// CHARGES (the state its companion integrates, `chgtol` as the floor: SPICE's
+/// classic charge-based LTE); a charge-free one carries no state and is
+/// skipped, so charge-free decks' step sequences are untouched.
+fn for_each_reactive(
+    circuit: &Circuit,
+    ws: &Workspace,
+    opts: &SolverOptions,
+    mut f: impl FnMut(Reactive),
+) {
+    let effects = &opts.effects;
+    for (id, dev) in circuit.iter() {
+        let dev_i = id.0 as usize;
+        let mut push = |bank: usize, value: f64, ic: Option<f64>, atol: f64| {
+            f(Reactive {
+                dev: dev_i,
+                bank,
+                value,
+                ic,
+                atol,
+            })
+        };
+        match dev {
+            Device::Capacitor { a, b, ic, .. } => push(
+                0,
+                node_v(ws, *a) - node_v(ws, *b),
+                *ic,
+                opts.chgtol.max(opts.vntol),
+            ),
+            Device::Inductor { ic, .. } => push(0, branch_i(ws, id), *ic, opts.abstol.max(1e-9)),
+            Device::Diode { a, k, model, .. } if crate::stamp::diode_has_charge(model, effects) => {
+                push(
+                    0,
+                    diode_q(model, diode_vj(ws, id, *a, *k), opts),
+                    None,
+                    opts.chgtol,
+                )
+            }
+            // Bank A = Q_be, xb[0] = Q_bc.
+            Device::Bjt { c, b, e, model, .. } if crate::stamp::bjt_has_charge(model, effects) => {
+                let (q_be, q_bc) = bjt_q(ws, id, *c, *b, *e, model, opts);
+                push(0, q_be, None, opts.chgtol);
+                push(1, q_bc, None, opts.chgtol);
+            }
+            // Bank A = Q_gs, xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs.
+            Device::Mosfet {
+                d, g, s, b, model, ..
+            } if crate::stamp::mos_has_charge(model, effects) => {
+                let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
+                for (bank, q) in [q_gs, q_gd, q_bd, q_bs].into_iter().enumerate() {
+                    push(bank, q, None, opts.chgtol);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// An op-amp's clipped ideal output target at the solution in `ws`; `None`
+/// for any other device. Op-amps with output dynamics (pole_hz/slew) keep the
+/// internal drive EMF as their state; ideal ones never read the slot.
+fn opamp_target(ws: &Workspace, dev: &Device) -> Option<f64> {
+    let Device::OpAmp {
+        inp,
+        inn,
+        reference,
+        gain,
+        rail_lo,
+        rail_hi,
+        ..
+    } = dev
+    else {
+        return None;
+    };
+    let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
+    Some((vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi))
+}
+
+/// At the operating point every state is flat: capacitor voltage = node
+/// difference, inductor current = its branch current, junction charge
+/// `Q(v)` at the operating-point junction voltage, derivatives zero. This is
+/// the single place a device's own `ic` is read and preferred over the
+/// node-derived value, which is exactly what makes `uic` honour `IC=`; with
+/// `ws.x` at rest and no `ic` anywhere it reproduces the all-zero
+/// construction value. The op-amp EMF seeds at the DC point's clipped target:
+/// a single pole passes DC unattenuated, so the filtered EMF IS the target.
 pub(crate) fn seed_reactive_state(
     state: &mut ReactiveState,
     circuit: &Circuit,
     ws: &Workspace,
     opts: &SolverOptions,
 ) {
+    for_each_reactive(circuit, ws, opts, |r| {
+        state.seed(r.bank, r.dev, r.ic.unwrap_or(r.value))
+    });
     for (id, dev) in circuit.iter() {
+        if let Some(target) = opamp_target(ws, dev) {
+            state.seed(0, id.0 as usize, target);
+        }
+    }
+}
+
+/// After an accepted step, roll every history forward (see
+/// [`ReactiveState::roll`]). The op-amp EMF rolls through the SAME single-pole
+/// + slew update the stamp used this step (`opamp_transient_output` is shared
+/// code), from the frozen previous EMF and the ACCEPTED inputs, so at
+/// convergence it reproduces exactly the EMF the final Newton iteration
+/// stamped; updated on acceptance only, never mid-Newton.
+pub(crate) fn advance_reactive_state(
+    state: &mut ReactiveState,
+    circuit: &Circuit,
+    ws: &Workspace,
+    h: f64,
+    opts: &SolverOptions,
+    first: bool,
+) {
+    // The derivative must be backed out with whatever rule actually ran this
+    // step. A multi-step rule (trapezoidal) falls back to backward Euler on the
+    // very first step, so the derivative there is the BE one.
+    let trapz = opts.integration == Integration::Trapezoidal && !first;
+    for_each_reactive(circuit, ws, opts, |r| {
+        state.roll(r.bank, r.dev, r.value, h, trapz)
+    });
+    for (id, dev) in circuit.iter() {
+        let Device::OpAmp { pole_hz, slew, .. } = dev else {
+            continue;
+        };
         let i = id.0 as usize;
-        match dev {
-            Device::Capacitor { a, b, ic, .. } => {
-                state.x1[i] = ic.unwrap_or_else(|| node_v(ws, *a) - node_v(ws, *b));
-                state.x2[i] = state.x1[i];
-                state.dx1[i] = 0.0;
-            }
-            Device::Inductor { ic, .. } => {
-                let cur = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
-                state.x1[i] = ic.unwrap_or(cur);
-                state.x2[i] = state.x1[i];
-                state.dx1[i] = 0.0;
-            }
-            Device::Diode { a, k, model, .. }
-                if crate::stamp::diode_has_charge(model, &opts.effects) =>
-            {
-                state.x1[i] = diode_q(model, diode_vj(ws, id, *a, *k), opts);
-                state.x2[i] = state.x1[i];
-                state.dx1[i] = 0.0;
-            }
-            // Charge-storing BJT: both junction charges,
-            // seeded at the operating-point INTRINSIC junction voltages
-            // (internal nodes when series resistance is stamped). Bank A is
-            // Q_be, bank B is Q_bc; the packing `ReactiveState` documents.
-            Device::Bjt { c, b, e, model, .. }
-                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
-            {
-                let (q_be, q_bc) = bjt_q(ws, id, *c, *b, *e, model, opts);
-                state.x1[i] = q_be;
-                state.x2[i] = q_be;
-                state.dx1[i] = 0.0;
-                state.xb[0].x1[i] = q_bc;
-                state.xb[0].x2[i] = q_bc;
-                state.xb[0].dx1[i] = 0.0;
-            }
-            // Charge-storing MOSFET: all four charges at
-            // the operating-point junction voltages, bank A = Q_gs,
-            // xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs (the `ReactiveState`
-            // packing table).
-            Device::Mosfet {
-                d, g, s, b, model, ..
-            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
-                let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
-                state.x1[i] = q_gs;
-                state.x2[i] = q_gs;
-                state.dx1[i] = 0.0;
-                for (bank, q) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
-                    state.xb[bank].x1[i] = q;
-                    state.xb[bank].x2[i] = q;
-                    state.xb[bank].dx1[i] = 0.0;
-                }
-            }
-            // Op-amp with output dynamics (pole_hz/slew): its state is the
-            // internal drive EMF, seeded at the DC point's clipped ideal
-            // target, a single pole passes DC unattenuated, so the filtered
-            // EMF at the operating point IS the target. Ideal op-amps
-            // (neither field set) never read the slot; the seed is harmless.
-            Device::OpAmp {
-                inp,
-                inn,
-                reference,
-                gain,
-                rail_lo,
-                rail_hi,
-                ..
-            } => {
-                let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
-                let target =
-                    (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi);
-                state.x1[i] = target;
-                state.x2[i] = target;
-                state.dx1[i] = 0.0;
-            }
-            _ => {}
+        let target = opamp_target(ws, dev).expect("an op-amp has a target");
+        if let Some((v_out, _)) =
+            crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, h)
+        {
+            state.x2[i] = state.x1[i];
+            state.x1[i] = v_out;
+            state.dx1[i] = 0.0;
         }
     }
 }
@@ -896,164 +965,12 @@ fn bjt_q(
     crate::stamp::bjt_charges_at(model, vbe, vbc, opts.model_temp(), opts.effects.temperature)
 }
 
-/// After an accepted step, roll history forward: x2 <- x1, x1 <- new value,
-/// dx1 <- new derivative (for the trapezoidal predictor).
-pub(crate) fn advance_reactive_state(
-    state: &mut ReactiveState,
-    circuit: &Circuit,
-    ws: &Workspace,
-    h: f64,
-    opts: &SolverOptions,
-    first: bool,
-) {
-    // The derivative must be backed out with whatever rule actually ran this
-    // step. A multi-step rule (trapezoidal) falls back to backward Euler on the
-    // very first step, so the derivative there is the BE one.
-    let trapz = opts.integration == Integration::Trapezoidal && !first;
-    for (id, dev) in circuit.iter() {
-        let i = id.0 as usize;
-        match dev {
-            Device::Capacitor { a, b, .. } => {
-                let v_new = node_v(ws, *a) - node_v(ws, *b);
-                let v_old = state.x1[i];
-                // dv/dt consistent with the integration rule used this step.
-                let dv = if trapz {
-                    2.0 * (v_new - v_old) / h - state.dx1[i]
-                } else {
-                    (v_new - v_old) / h
-                };
-                state.x2[i] = v_old;
-                state.x1[i] = v_new;
-                state.dx1[i] = dv;
-            }
-            Device::Inductor { .. } => {
-                let i_new = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
-                let i_old = state.x1[i];
-                let di = if trapz {
-                    2.0 * (i_new - i_old) / h - state.dx1[i]
-                } else {
-                    (i_new - i_old) / h
-                };
-                state.x2[i] = i_old;
-                state.x1[i] = i_new;
-                state.dx1[i] = di;
-            }
-            // Charge-storing diode: the same roll as a capacitor, in CHARGE.
-            // dx1 is dQ/dt, i.e. the capacitive branch current the next step's
-            // trapezoidal history term needs.
-            Device::Diode { a, k, model, .. }
-                if crate::stamp::diode_has_charge(model, &opts.effects) =>
-            {
-                let q_new = diode_q(model, diode_vj(ws, id, *a, *k), opts);
-                let q_old = state.x1[i];
-                let dq = if trapz {
-                    2.0 * (q_new - q_old) / h - state.dx1[i]
-                } else {
-                    (q_new - q_old) / h
-                };
-                state.x2[i] = q_old;
-                state.x1[i] = q_new;
-                state.dx1[i] = dq;
-            }
-            // Charge-storing BJT: the diode's roll applied to both banks
-            // (bank A = Q_be, bank B = Q_bc); each dx is that junction's
-            // dQ/dt, the capacitive current its trapezoidal history needs.
-            Device::Bjt { c, b, e, model, .. }
-                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
-            {
-                let (q_be, q_bc) = bjt_q(ws, id, *c, *b, *e, model, opts);
-                let q_old = state.x1[i];
-                let dq = if trapz {
-                    2.0 * (q_be - q_old) / h - state.dx1[i]
-                } else {
-                    (q_be - q_old) / h
-                };
-                state.x2[i] = q_old;
-                state.x1[i] = q_be;
-                state.dx1[i] = dq;
-                let qb_old = state.xb[0].x1[i];
-                let dqb = if trapz {
-                    2.0 * (q_bc - qb_old) / h - state.xb[0].dx1[i]
-                } else {
-                    (q_bc - qb_old) / h
-                };
-                state.xb[0].x2[i] = qb_old;
-                state.xb[0].x1[i] = q_bc;
-                state.xb[0].dx1[i] = dqb;
-            }
-            // Charge-storing MOSFET: the same roll applied to all four banks
-            // (A = Q_gs, xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs); each dx
-            // is that junction's dQ/dt, the capacitive current its
-            // trapezoidal history needs.
-            Device::Mosfet {
-                d, g, s, b, model, ..
-            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
-                let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
-                let q_old = state.x1[i];
-                let dq = if trapz {
-                    2.0 * (q_gs - q_old) / h - state.dx1[i]
-                } else {
-                    (q_gs - q_old) / h
-                };
-                state.x2[i] = q_old;
-                state.x1[i] = q_gs;
-                state.dx1[i] = dq;
-                for (bank, q_new) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
-                    let q_old = state.xb[bank].x1[i];
-                    let dq = if trapz {
-                        2.0 * (q_new - q_old) / h - state.xb[bank].dx1[i]
-                    } else {
-                        (q_new - q_old) / h
-                    };
-                    state.xb[bank].x2[i] = q_old;
-                    state.xb[bank].x1[i] = q_new;
-                    state.xb[bank].dx1[i] = dq;
-                }
-            }
-            // Op-amp with output dynamics: roll the internal drive EMF
-            // forward through the SAME single-pole + slew update the stamp
-            // used this step (`opamp_transient_output` is shared code), from
-            // the same frozen previous EMF and the ACCEPTED input voltages.
-            // At convergence this reproduces exactly the EMF the final
-            // Newton iteration stamped. Updated here, on step acceptance
-            // only, never mid-Newton, matching the capacitor's lifecycle.
-            // Ideal op-amps (no pole, no slew) return None and leave the
-            // slot untouched.
-            Device::OpAmp {
-                inp,
-                inn,
-                reference,
-                gain,
-                pole_hz,
-                slew,
-                rail_lo,
-                rail_hi,
-                ..
-            } => {
-                let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
-                let target =
-                    (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi);
-                if let Some((v_out, _)) =
-                    crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, h)
-                {
-                    state.x2[i] = state.x1[i];
-                    state.x1[i] = v_out;
-                    state.dx1[i] = 0.0;
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-#[inline]
 /// A diode's JUNCTION voltage, which is not its terminal voltage when the model
 /// carries a series resistance: the junction sits on the intrinsic anode and
-/// `rs` bridges it out.
-///
-/// The charge state has to be integrated against the same voltage the stamp
-/// linearised. Reading the terminals here instead makes the two disagree, and
-/// the co-simulation stops converging rather than merely drifting.
+/// `rs` bridges it out. The charge state has to be integrated against the same
+/// voltage the stamp linearised, or the co-simulation stops converging rather
+/// than merely drifting.
+#[inline]
 fn diode_vj(ws: &Workspace, id: hauksbee_ir::DeviceId, a: NodeId, k: NodeId) -> f64 {
     let anode = match ws.layout.diode_internal(id) {
         Some(i) => ws.x[i],
@@ -1067,6 +984,11 @@ pub(crate) fn node_v(ws: &Workspace, node: NodeId) -> f64 {
         Some(i) => ws.x[i],
         None => 0.0,
     }
+}
+
+/// A device's branch current at the solution in `ws` (0 when it owns none).
+pub(crate) fn branch_i(ws: &Workspace, id: hauksbee_ir::DeviceId) -> f64 {
+    ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0)
 }
 
 // --- LTE estimate -----------------------------------------------------------
@@ -1099,85 +1021,16 @@ fn lte_estimate(
     h_prev: f64,
     opts: &SolverOptions,
 ) -> f64 {
+    let hp = if h_prev > 0.0 { h_prev } else { h };
     let mut worst = 0.0f64;
-    // Non-uniform divided-difference curvature of one state history (see the
-    // doc comment above): shared by the single-state tail below and the BJT's
-    // two charge banks, so the arithmetic exists once.
-    let err_of = |x_new: f64, x1: f64, x2: f64, atol: f64| {
-        let hp = if h_prev > 0.0 { h_prev } else { h };
+    for_each_reactive(circuit, ws, opts, |r| {
+        let (x1, x2) = state.bank(r.bank);
+        let (x_new, x1, x2) = (r.value, x1[r.dev], x2[r.dev]);
         let dd2 = 2.0 * ((x_new - x1) / h - (x1 - x2) / hp) / (h + hp);
         let curv = (h * h * dd2).abs();
-        let tol = opts.reltol * x_new.abs().max(x1.abs()) + atol;
-        (curv / 12.0) / tol.max(1e-30)
-    };
-    for (id, dev) in circuit.iter() {
-        let i = id.0 as usize;
-        let (x_new, atol) = match dev {
-            Device::Capacitor { a, b, .. } => {
-                (node_v(ws, *a) - node_v(ws, *b), opts.chgtol.max(opts.vntol))
-            }
-            Device::Inductor { .. } => {
-                let cur = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
-                (cur, opts.abstol.max(1e-9))
-            }
-            // A charge-storing diode is a reactive element: it participates in
-            // truncation-error control through its CHARGE (the state its
-            // companion integrates), with `chgtol` as the absolute floor,
-            // SPICE's classic charge-based LTE. Charge-free diodes (`cjo == 0`,
-            // `tt == 0`, or the toggle off) hit the `continue` below exactly as
-            // before, so existing decks' step sequences are untouched.
-            Device::Diode { a, k, model, .. }
-                if crate::stamp::diode_has_charge(model, &opts.effects) =>
-            {
-                let q = diode_q(model, diode_vj(ws, id, *a, *k), opts);
-                (q, opts.chgtol)
-            }
-            // A charge-storing BJT participates through BOTH junction
-            // charges (chgtol floor each), two states, two curvature
-            // checks, same divided-difference estimator. Charge-free BJTs
-            // hit the `continue` exactly as before.
-            Device::Bjt { c, b, e, model, .. }
-                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
-            {
-                let (q_be, q_bc) = bjt_q(ws, id, *c, *b, *e, model, opts);
-                worst = worst.max(err_of(q_be, state.x1[i], state.x2[i], opts.chgtol));
-                worst = worst.max(err_of(
-                    q_bc,
-                    state.xb[0].x1[i],
-                    state.xb[0].x2[i],
-                    opts.chgtol,
-                ));
-                continue;
-            }
-            // A charge-storing MOSFET participates through all four charges
-            // (chgtol floor each), gate charge is what shapes its switching
-            // edges, so it must gate the step size exactly as a capacitor
-            // would. Charge-free MOSFETs hit the `continue` exactly as before.
-            Device::Mosfet {
-                d, g, s, b, model, ..
-            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
-                let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
-                worst = worst.max(err_of(q_gs, state.x1[i], state.x2[i], opts.chgtol));
-                for (bank, q) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
-                    worst = worst.max(err_of(
-                        q,
-                        state.xb[bank].x1[i],
-                        state.xb[bank].x2[i],
-                        opts.chgtol,
-                    ));
-                }
-                continue;
-            }
-            _ => continue,
-        };
-        // Non-uniform second derivative from the three newest samples, scaled
-        // by h^2 into the uniform-grid curvature the 1/12 coefficient expects.
-        // On h == h_prev this equals x_new - 2*x1 + x2 (up to rounding); on a
-        // linear trajectory it is zero regardless of the step-size history.
-        // Trapezoidal error coefficient ~ 1/12, scaled into a [0,1]-ish norm
-        // (the shared `err_of` above).
-        worst = worst.max(err_of(x_new, state.x1[i], state.x2[i], atol));
-    }
+        let tol = opts.reltol * x_new.abs().max(x1.abs()) + r.atol;
+        worst = worst.max((curv / 12.0) / tol.max(1e-30));
+    });
     worst
 }
 

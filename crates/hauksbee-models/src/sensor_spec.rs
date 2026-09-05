@@ -92,7 +92,11 @@
 //! direction bit, so its `addr` values are used raw (unmasked).
 //!
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
+
+use crate::check::expr_identifiers;
 
 /// Which physical bus the sensor lives on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -554,6 +558,51 @@ pub enum SensorSpecError {
     Invalid(String),
 }
 
+/// `return Err(SensorSpecError::Invalid(format!(..)))`.
+macro_rules! invalid {
+    ($($arg:tt)*) => {
+        return Err(SensorSpecError::Invalid(format!($($arg)*)))
+    };
+}
+
+/// Refuse the spec unless `cond` holds, naming the offending field.
+macro_rules! check {
+    ($cond:expr, $($arg:tt)*) => {
+        if !$cond {
+            invalid!($($arg)*);
+        }
+    };
+}
+
+/// Refuse a `[high, low]` bit range that does not fit a `width_bits` value.
+fn check_bits(what: &str, bits: [u8; 2], width_bits: usize) -> Result<(), SensorSpecError> {
+    let [high, low] = bits;
+    check!(
+        high >= low,
+        "{what}: bits = [{high}, {low}] must be [high, low] with high >= low"
+    );
+    check!(
+        (high as usize) < width_bits,
+        "{what}: bit {high} is out of range for a {width_bits}-bit value"
+    );
+    Ok(())
+}
+
+/// Every identifier `expr` references must be in `known`.
+fn check_refs(
+    what: impl std::fmt::Display,
+    expr: &str,
+    known: &HashSet<&str>,
+) -> Result<(), SensorSpecError> {
+    for tok in expr_identifiers(expr) {
+        check!(
+            known.contains(tok),
+            "{what} references unknown variable '{tok}'"
+        );
+    }
+    Ok(())
+}
+
 impl SensorSpec {
     /// Parse a `[sensor]` spec from TOML and validate it.
     pub fn from_toml(src: &str) -> Result<Self, SensorSpecError> {
@@ -573,523 +622,347 @@ impl SensorSpec {
     }
 
     /// Structural validation: bus/address coherence, register encodings,
-    /// expr/const exclusivity, protocol/bus agreement, byte widths.
+    /// expr/const exclusivity, protocol/bus agreement, byte widths, and the
+    /// write side (framing coherence, bit ranges, namespace uniqueness,
+    /// expression references).
     pub fn validate(&self) -> Result<(), SensorSpecError> {
         let s = &self.sensor;
-        let err = |m: String| SensorSpecError::Invalid(m);
-
-        if s.name.trim().is_empty() {
-            return Err(err("sensor.name must not be empty".into()));
-        }
+        check!(!s.name.trim().is_empty(), "sensor.name must not be empty");
 
         // SPI mode is 0..=3 always (CPOL/CPHA are one bit each); a larger value
-        // is a spec typo, not a wire mode, and must fail loud rather than be
-        // silently truncated when the responder derives CPOL/CPHA from it.
-        if s.protocol.spi_mode > 3 {
-            return Err(err(format!(
-                "protocol.spi_mode {} is out of range; SPI modes are 0..=3 \
-                 (0=CPOL0/CPHA0, 1=CPOL0/CPHA1, 2=CPOL1/CPHA0, 3=CPOL1/CPHA1)",
-                s.protocol.spi_mode
-            )));
-        }
-        // The clock mode only means something on SPI; a nonzero mode on an I2C
-        // sensor is a mistake worth refusing (mirrors the SPI-only i2c_address
-        // exclusivity below), while an omitted/zero mode stays back-compatible.
-        if s.bus != Bus::Spi && s.protocol.spi_mode != 0 {
-            return Err(err(format!(
-                "protocol.spi_mode = {} is SPI-only, but bus = \"{}\"",
-                s.protocol.spi_mode,
-                match s.bus {
-                    Bus::I2c => "i2c",
-                    Bus::Spi => "spi",
-                }
-            )));
-        }
-
+        // is a spec typo that must fail loud rather than be silently truncated
+        // when the responder derives CPOL/CPHA from it, and a nonzero mode on
+        // an I2C sensor is the same class of mistake.
+        check!(
+            s.protocol.spi_mode <= 3,
+            "protocol.spi_mode {} is out of range; SPI modes are 0..=3 \
+             (0=CPOL0/CPHA0, 1=CPOL0/CPHA1, 2=CPOL1/CPHA0, 3=CPOL1/CPHA1)",
+            s.protocol.spi_mode
+        );
+        check!(
+            s.bus == Bus::Spi || s.protocol.spi_mode == 0,
+            "protocol.spi_mode = {} is SPI-only, but bus = \"i2c\"",
+            s.protocol.spi_mode
+        );
         match s.bus {
             Bus::I2c => {
-                let a = s
-                    .i2c_address
-                    .ok_or_else(|| err("bus = \"i2c\" requires i2c_address".into()))?;
-                if a > 0x7f {
-                    return Err(err(format!("i2c_address 0x{a:02x} is not a 7-bit address")));
-                }
-                if s.protocol.style != ProtocolStyle::I2cPointer {
-                    return Err(err(
-                        "bus = \"i2c\" requires protocol.style = \"i2c_pointer\"".into(),
-                    ));
-                }
+                let Some(a) = s.i2c_address else {
+                    invalid!("bus = \"i2c\" requires i2c_address");
+                };
+                check!(a <= 0x7f, "i2c_address 0x{a:02x} is not a 7-bit address");
+                check!(
+                    s.protocol.style == ProtocolStyle::I2cPointer,
+                    "bus = \"i2c\" requires protocol.style = \"i2c_pointer\""
+                );
             }
             Bus::Spi => {
-                if s.i2c_address.is_some() {
-                    return Err(err("bus = \"spi\" must not set i2c_address".into()));
-                }
-                if s.protocol.style != ProtocolStyle::SpiReg {
-                    return Err(err(
-                        "bus = \"spi\" requires protocol.style = \"spi_reg\"".into()
-                    ));
-                }
-                // addr_mask must not include bit 7 (the R/W bit in the command byte).
-                // A mask with bit 7 set would silently fold the direction bit into the
-                // register address, producing reads from unexpected register slots.
-                if s.protocol.addr_mask & 0x80 != 0 {
-                    return Err(err(format!(
-                        "protocol.addr_mask 0x{:02x} includes bit 7 (the R/W bit); \
-                         masks must cover only the address bits (e.g. 0x7f)",
-                        s.protocol.addr_mask
-                    )));
-                }
+                check!(
+                    s.i2c_address.is_none(),
+                    "bus = \"spi\" must not set i2c_address"
+                );
+                check!(
+                    s.protocol.style == ProtocolStyle::SpiReg,
+                    "bus = \"spi\" requires protocol.style = \"spi_reg\""
+                );
+                // A mask with bit 7 set would fold the R/W bit into the register
+                // address, producing reads from unexpected register slots.
+                check!(
+                    s.protocol.addr_mask & 0x80 == 0,
+                    "protocol.addr_mask 0x{:02x} includes bit 7 (the R/W bit); \
+                     masks must cover only the address bits (e.g. 0x7f)",
+                    s.protocol.addr_mask
+                );
             }
         }
-
-        if s.registers.is_empty()
-            && s.write_registers.is_empty()
-            && s.write_commands.is_empty()
-            && s.read_frame.is_none()
-        {
-            return Err(err("a sensor needs at least one [[sensor.register]], \
-                 [[sensor.write_register]], [[sensor.write_command]], or a \
-                 [sensor.read_frame]"
-                .into()));
-        }
+        check!(
+            !(s.registers.is_empty()
+                && s.write_registers.is_empty()
+                && s.write_commands.is_empty()
+                && s.read_frame.is_none()),
+            "a sensor needs at least one [[sensor.register]], [[sensor.write_register]], \
+             [[sensor.write_command]], or a [sensor.read_frame]"
+        );
 
         self.validate_write_side()?;
+        // Names a read expression may reference: every variable is bound as a
+        // float at evaluation time, and `i2c_address` is a builtin the
+        // interpreter injects. Per-channel state is NOT visible here.
+        let names: HashSet<&str> = s
+            .inputs
+            .iter()
+            .map(|i| i.name.as_str())
+            .chain(s.write_registers.iter().flat_map(|w| {
+                std::iter::once(w.store.as_str()).chain(w.fields.iter().map(|f| f.name.as_str()))
+            }))
+            .chain(std::iter::once("i2c_address"))
+            .collect();
 
-        // Names an expression may reference. Every variable is bound as a
-        // float at evaluation time (see the write-side boundary note), and
-        // `i2c_address` is a builtin the interpreter injects.
-        let mut expr_names: std::collections::HashSet<&str> =
-            s.inputs.iter().map(|i| i.name.as_str()).collect();
-        for w in &s.write_registers {
-            expr_names.insert(w.store.as_str());
-            for f in &w.fields {
-                expr_names.insert(f.name.as_str());
-            }
-        }
-        expr_names.insert("i2c_address");
-        let input_names = expr_names;
-
-        // Register-address dedup uses the SAME key mapping the interpreter will:
-        // `Sensor::register_key` (post-mask for SPI, raw for I2C). For SPI this
-        // lets a spec author write the raw datasheet address (e.g. 0xD0 instead
-        // of the pre-masked 0x50); two registers that collide to the same
-        // post-mask key are genuinely indistinguishable on the wire, so that must
-        // fail loud here rather than silently overwrite in the engine map.
-        let mut seen_addrs = std::collections::HashSet::new();
+        // Register-address dedup uses the SAME key mapping the interpreter will
+        // (`Sensor::register_key`: post-mask for SPI, raw for I2C), so a spec
+        // author may write the raw datasheet address and two registers that
+        // collide post-mask fail loud here rather than silently overwrite.
+        let mut seen_addrs = HashSet::new();
         for r in &s.registers {
             let key = s.register_key(r.addr);
-            if !seen_addrs.insert(key) {
-                return Err(err(format!(
-                    "duplicate register addr 0x{:02x}{}",
-                    r.addr,
-                    if key != r.addr {
-                        format!(" (post-mask 0x{:02x})", key)
-                    } else {
-                        String::new()
-                    }
-                )));
-            }
-
-            let has_expr = r.expr.is_some();
-            let has_const = r.r#const.is_some();
-
-            match (&r.encoding, has_const, has_expr) {
-                // Raw / const-only register.
-                (None, true, false) | (Some(Encoding::Raw), true, false) => {
-                    if r.r#const.as_ref().map(|c| c.is_empty()).unwrap_or(true) {
-                        return Err(err(format!(
-                            "register 0x{:02x} is const but has no bytes",
-                            r.addr
-                        )));
-                    }
+            check!(
+                seen_addrs.insert(key),
+                "duplicate register addr 0x{:02x}{}",
+                r.addr,
+                if key != r.addr {
+                    format!(" (post-mask 0x{key:02x})")
+                } else {
+                    String::new()
                 }
-                // Encoded register driven by an expr.
-                (Some(enc), false, true) => {
-                    if *enc == Encoding::Raw {
-                        return Err(err(format!(
-                            "register 0x{:02x} uses encoding \"raw\" but also an expr",
-                            r.addr
-                        )));
-                    }
-                    if r.read_len() == 0 {
-                        return Err(err(format!(
-                            "register 0x{:02x} has zero read length",
-                            r.addr
-                        )));
-                    }
-                    // Reject `bytes` that disagrees with the encoding's natural width.
-                    // Allowing a mismatch silently would make the interpreter return a
-                    // different number of bytes than the declared `bytes` field, either
-                    // truncating data or padding with unrelated bytes. Validation must
-                    // catch this so LLM-extracted specs fail loudly instead of emitting
-                    // plausible-but-wrong bus traffic.
-                    if let Some(declared_bytes) = r.bytes {
-                        let natural = enc.natural_width();
-                        if natural > 0 && declared_bytes != natural {
-                            return Err(err(format!(
-                                "register 0x{:02x} declares bytes={declared_bytes} but \
-                                 encoding {:?} produces {natural} bytes; \
-                                 bytes must equal the encoding's natural width or be omitted",
-                                r.addr, enc
-                            )));
-                        }
-                    }
-                    // Cheap reference check: every bare identifier in the expr
-                    // that isn't a number/operator should be a declared input.
-                    for tok in expr_identifiers(r.expr.as_deref().unwrap_or("")) {
-                        if !input_names.contains(tok.as_str()) {
-                            return Err(err(format!(
-                                "register 0x{:02x} expr references unknown input '{tok}'",
-                                r.addr
-                            )));
-                        }
-                    }
-                }
-                (None, false, true) => {
-                    return Err(err(format!(
-                        "register 0x{:02x} has an expr but no encoding",
+            );
+            match (r.encoding, &r.r#const, &r.expr) {
+                (None | Some(Encoding::Raw), Some(bytes), None) => {
+                    check!(
+                        !bytes.is_empty(),
+                        "register 0x{:02x} is const but has no bytes",
                         r.addr
-                    )));
+                    );
                 }
-                _ => {
-                    return Err(err(format!(
-                        "register 0x{:02x} must be either a const register or an \
-                         (encoding + expr) register, not both/neither",
+                (Some(Encoding::Raw), None, Some(_)) => {
+                    invalid!(
+                        "register 0x{:02x} uses encoding \"raw\" but also an expr",
                         r.addr
-                    )));
+                    );
                 }
+                (Some(enc), None, Some(expr)) => {
+                    check!(
+                        r.read_len() != 0,
+                        "register 0x{:02x} has zero read length",
+                        r.addr
+                    );
+                    // A `bytes` that disagrees with the encoding's natural width
+                    // would make the interpreter truncate or pad the reply; an
+                    // LLM-extracted spec must fail loudly instead.
+                    let natural = enc.natural_width();
+                    if let Some(declared) = r.bytes.filter(|_| natural > 0) {
+                        check!(
+                            declared == natural,
+                            "register 0x{:02x} declares bytes={declared} but encoding {enc:?} \
+                             produces {natural} bytes; bytes must equal the encoding's natural \
+                             width or be omitted",
+                            r.addr
+                        );
+                    }
+                    for tok in expr_identifiers(expr) {
+                        check!(
+                            names.contains(tok),
+                            "register 0x{:02x} expr references unknown input '{tok}'",
+                            r.addr
+                        );
+                    }
+                }
+                (None, None, Some(_)) => {
+                    invalid!("register 0x{:02x} has an expr but no encoding", r.addr);
+                }
+                _ => invalid!(
+                    "register 0x{:02x} must be either a const register or an \
+                     (encoding + expr) register, not both/neither",
+                    r.addr
+                ),
             }
         }
-
         Ok(())
     }
 
-    /// Structural validation of the write side: framing coherence,
-    /// bit ranges, namespace uniqueness, expression references. Split out of
-    /// [`SensorSpec::validate`] (which calls it) purely for readability.
+    /// The write side: framing coherence, bit ranges, namespace uniqueness,
+    /// expression references.
     fn validate_write_side(&self) -> Result<(), SensorSpecError> {
         let s = &self.sensor;
-        let err = |m: String| SensorSpecError::Invalid(m);
-
         let has_write_side = !s.write_registers.is_empty()
             || !s.write_commands.is_empty()
             || !s.outputs.is_empty()
             || s.read_frame.is_some();
-        if has_write_side && s.bus != Bus::I2c {
-            // The SPI write phase stays accept-and-ignore: no current device
-            // needs it, and an untested SPI write decode would be fake
-            // coverage. Stated here rather than silently mis-parsing.
-            return Err(err(
-                "the write side (write_register/write_command/output/read_frame) \
-                 is modeled for bus = \"i2c\" only; the SPI write phase is \
-                 accept-and-ignore (a stated limitation, not a capability)"
-                    .into(),
-            ));
-        }
-        if !s.write_registers.is_empty() && !s.write_commands.is_empty() {
-            return Err(err(
-                "write_register (pointer framing) and write_command (command \
-                 framing) are mutually exclusive: the first write byte cannot \
-                 be both a register pointer and a command byte"
-                    .into(),
-            ));
-        }
-        if s.read_frame.is_some() && !s.registers.is_empty() {
-            return Err(err(
-                "read_frame and [[sensor.register]] are mutually exclusive: a \
-                 device either streams a fixed frame on reads or answers the \
-                 register pointer, not both"
-                    .into(),
-            ));
-        }
-        if s.channels == 0 {
-            return Err(err("sensor.channels must be >= 1".into()));
-        }
+        // The SPI write phase stays accept-and-ignore: no current device needs
+        // it, and an untested SPI write decode would be fake coverage.
+        check!(
+            !has_write_side || s.bus == Bus::I2c,
+            "the write side (write_register/write_command/output/read_frame) is modeled for \
+             bus = \"i2c\" only; the SPI write phase is accept-and-ignore (a stated \
+             limitation, not a capability)"
+        );
+        check!(
+            s.write_registers.is_empty() || s.write_commands.is_empty(),
+            "write_register (pointer framing) and write_command (command framing) are \
+             mutually exclusive: the first write byte cannot be both a register pointer and \
+             a command byte"
+        );
+        check!(
+            s.read_frame.is_none() || s.registers.is_empty(),
+            "read_frame and [[sensor.register]] are mutually exclusive: a device either \
+             streams a fixed frame on reads or answers the register pointer, not both"
+        );
+        check!(s.channels != 0, "sensor.channels must be >= 1");
 
-        // One flat namespace: inputs, stores, write-register fields, states,
-        // and each command's fields all coexist in the evaluation context, so
-        // every name must be globally unique (command field names may repeat
-        // ACROSS commands, only one command is active per transaction).
-        let mut names: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let declare = |name: &'static str, n: &str| -> Result<(), SensorSpecError> {
-            if n == "i2c_address" {
-                return Err(SensorSpecError::Invalid(format!(
-                    "{name} 'i2c_address' shadows the builtin variable"
-                )));
-            }
-            Ok(())
-        };
-        // Work around borrow rules: collect (kind, name) pairs, then dedup.
-        let mut declared: Vec<(&'static str, &str)> = Vec::new();
-        for i in &s.inputs {
-            declared.push(("input", i.name.as_str()));
-        }
-        for w in &s.write_registers {
-            declared.push(("write_register store", w.store.as_str()));
-            for f in &w.fields {
-                declared.push(("write_register field", f.name.as_str()));
-            }
-        }
-        for st in &s.states {
-            declared.push(("state", st.name.as_str()));
-        }
-        for (kind, n) in &declared {
-            declare(kind, n)?;
-            if n.trim().is_empty() {
-                return Err(err(format!("{kind} has an empty name")));
-            }
-            if !names.insert(n) {
-                return Err(err(format!(
-                    "duplicate variable name '{n}' ({kind}); inputs, stores, \
-                     fields, and states share one expression namespace"
-                )));
-            }
+        // One flat namespace: inputs, stores, write-register fields and states
+        // all coexist in the evaluation context, so every name is globally
+        // unique. A command's fields may repeat ACROSS commands (only one
+        // command is active per transaction) but not against the globals.
+        let declared = s
+            .inputs
+            .iter()
+            .map(|i| ("input", i.name.as_str()))
+            .chain(s.write_registers.iter().flat_map(|w| {
+                std::iter::once(("write_register store", w.store.as_str())).chain(
+                    w.fields
+                        .iter()
+                        .map(|f| ("write_register field", f.name.as_str())),
+                )
+            }))
+            .chain(s.states.iter().map(|st| ("state", st.name.as_str())));
+        let mut names: HashSet<&str> = HashSet::new();
+        for (kind, n) in declared {
+            check!(
+                n != "i2c_address",
+                "{kind} 'i2c_address' shadows the builtin variable"
+            );
+            check!(!n.trim().is_empty(), "{kind} has an empty name");
+            check!(
+                names.insert(n),
+                "duplicate variable name '{n}' ({kind}); inputs, stores, fields, and states \
+                 share one expression namespace"
+            );
         }
         for c in &s.write_commands {
             let mut per_cmd = names.clone();
             for f in &c.fields {
-                declare("write_command field", f.name.as_str())?;
-                if !per_cmd.insert(f.name.as_str()) {
-                    return Err(err(format!(
-                        "write_command '{}' field '{}' collides with another \
-                         variable in the expression namespace",
-                        c.name, f.name
-                    )));
-                }
+                check!(
+                    f.name != "i2c_address",
+                    "write_command field 'i2c_address' shadows the builtin variable"
+                );
+                check!(
+                    per_cmd.insert(f.name.as_str()),
+                    "write_command '{}' field '{}' collides with another variable in the \
+                     expression namespace",
+                    c.name,
+                    f.name
+                );
             }
         }
 
-        // Bit-range helper: [high, low] inclusive within `width_bits`.
-        let check_bits =
-            |what: &str, bits: [u8; 2], width_bits: usize| -> Result<(), SensorSpecError> {
-                let [high, low] = bits;
-                if high < low {
-                    return Err(SensorSpecError::Invalid(format!(
-                        "{what}: bits = [{high}, {low}] must be [high, low] with high >= low"
-                    )));
-                }
-                if (high as usize) >= width_bits {
-                    return Err(SensorSpecError::Invalid(format!(
-                        "{what}: bit {high} is out of range for a {width_bits}-bit value"
-                    )));
-                }
-                Ok(())
-            };
-
-        // Pointer-framed write registers.
-        let mut seen_wr = std::collections::HashSet::new();
+        let mut seen_wr = HashSet::new();
         for w in &s.write_registers {
-            if !seen_wr.insert(w.addr) {
-                return Err(err(format!(
-                    "duplicate write_register addr 0x{:02x}",
-                    w.addr
-                )));
-            }
-            let width = w.encoding.natural_width();
-            match w.encoding {
-                Encoding::U8
-                | Encoding::U16Be
-                | Encoding::U16Le
-                | Encoding::I16Be
-                | Encoding::I16Le => {}
-                other => {
-                    // q7.1_be / u20_be_xlsb are READ packings; giving them a
-                    // write decode nothing exercises would be fake coverage.
-                    return Err(err(format!(
-                        "write_register 0x{:02x}: encoding {other:?} has no \
-                         defined write decode (fixed-width integer encodings only)",
-                        w.addr
-                    )));
-                }
-            }
+            check!(
+                seen_wr.insert(w.addr),
+                "duplicate write_register addr 0x{:02x}",
+                w.addr
+            );
+            // q7.1_be / u20_be_xlsb are READ packings; a write decode nothing
+            // exercises would be fake coverage.
+            check!(
+                matches!(
+                    w.encoding,
+                    Encoding::U8
+                        | Encoding::U16Be
+                        | Encoding::U16Le
+                        | Encoding::I16Be
+                        | Encoding::I16Le
+                ),
+                "write_register 0x{:02x}: encoding {:?} has no defined write decode \
+                 (fixed-width integer encodings only)",
+                w.addr,
+                w.encoding
+            );
             for f in &w.fields {
                 check_bits(
                     &format!("write_register 0x{:02x} field '{}'", w.addr, f.name),
                     f.bits,
-                    width * 8,
+                    w.encoding.natural_width() * 8,
                 )?;
             }
         }
 
-        // Command-framed writes.
+        let state_names: HashSet<&str> = s.states.iter().map(|st| st.name.as_str()).collect();
         for c in &s.write_commands {
-            if c.match_value & !c.match_mask != 0 {
-                return Err(err(format!(
-                    "write_command '{}': match_value 0x{:02x} has bits outside \
-                     match_mask 0x{:02x}, so it can never match",
-                    c.name, c.match_value, c.match_mask
-                )));
-            }
-            if c.group_bytes == 0 || c.group_bytes > 4 {
-                return Err(err(format!(
-                    "write_command '{}': group_bytes must be 1..=4",
-                    c.name
-                )));
-            }
+            let cmd = format!("write_command '{}'", c.name);
+            check!(
+                c.match_value & !c.match_mask == 0,
+                "{cmd}: match_value 0x{:02x} has bits outside match_mask 0x{:02x}, so it can \
+                 never match",
+                c.match_value,
+                c.match_mask
+            );
+            check!(
+                (1..=4).contains(&c.group_bytes),
+                "{cmd}: group_bytes must be 1..=4"
+            );
             let group_bits = c.group_bytes * 8;
             for f in &c.fields {
-                check_bits(
-                    &format!("write_command '{}' field '{}'", c.name, f.name),
-                    f.bits,
-                    group_bits,
-                )?;
+                check_bits(&format!("{cmd} field '{}'", f.name), f.bits, group_bits)?;
             }
-            match c.channel.source {
+            let channel_width = match c.channel.source {
                 ChannelSource::Auto => {
-                    if c.channel.bits.is_some() {
-                        return Err(err(format!(
-                            "write_command '{}': channel source \"auto\" takes no bits",
-                            c.name
-                        )));
-                    }
+                    check!(
+                        c.channel.bits.is_none(),
+                        "{cmd}: channel source \"auto\" takes no bits"
+                    );
+                    None
                 }
                 ChannelSource::PrefixBits => {
-                    if !c.prefix {
-                        return Err(err(format!(
-                            "write_command '{}': channel source \"prefix_bits\" \
-                             requires prefix = true",
-                            c.name
-                        )));
-                    }
-                    let bits = c.channel.bits.ok_or_else(|| {
-                        SensorSpecError::Invalid(format!(
-                            "write_command '{}': channel source \"prefix_bits\" needs bits",
-                            c.name
-                        ))
-                    })?;
-                    check_bits(&format!("write_command '{}' channel", c.name), bits, 8)?;
+                    check!(
+                        c.prefix,
+                        "{cmd}: channel source \"prefix_bits\" requires prefix = true"
+                    );
+                    Some(("prefix_bits", 8))
                 }
-                ChannelSource::GroupBits => {
-                    let bits = c.channel.bits.ok_or_else(|| {
-                        SensorSpecError::Invalid(format!(
-                            "write_command '{}': channel source \"group_bits\" needs bits",
-                            c.name
-                        ))
-                    })?;
-                    check_bits(
-                        &format!("write_command '{}' channel", c.name),
-                        bits,
-                        group_bits,
-                    )?;
-                }
+                ChannelSource::GroupBits => Some(("group_bits", group_bits)),
+            };
+            if let Some((source, width)) = channel_width {
+                let Some(bits) = c.channel.bits else {
+                    invalid!("{cmd}: channel source \"{source}\" needs bits");
+                };
+                check_bits(&format!("{cmd} channel"), bits, width)?;
             }
-            if c.update.is_empty() {
-                return Err(err(format!(
-                    "write_command '{}' has no update entries; a command that \
-                     decodes to nothing is a spec bug (unmodeled commands are \
-                     simply not declared)",
-                    c.name
-                )));
-            }
-            let state_names: std::collections::HashSet<&str> =
-                s.states.iter().map(|st| st.name.as_str()).collect();
-            let mut update_names: std::collections::HashSet<&str> = names.clone();
+            check!(
+                !c.update.is_empty(),
+                "{cmd} has no update entries; a command that decodes to nothing is a spec bug \
+                 (unmodeled commands are simply not declared)"
+            );
+            let mut update_names = names.clone();
             update_names.insert("i2c_address");
-            for f in &c.fields {
-                update_names.insert(f.name.as_str());
-            }
+            update_names.extend(c.fields.iter().map(|f| f.name.as_str()));
             for (target, expr) in &c.update {
-                if !state_names.contains(target.as_str()) {
-                    return Err(err(format!(
-                        "write_command '{}' updates unknown state '{}'",
-                        c.name, target
-                    )));
-                }
-                for tok in expr_identifiers(expr) {
-                    if !update_names.contains(tok.as_str()) {
-                        return Err(err(format!(
-                            "write_command '{}' update '{}' references unknown \
-                             variable '{tok}'",
-                            c.name, target
-                        )));
-                    }
-                }
+                check!(
+                    state_names.contains(target.as_str()),
+                    "{cmd} updates unknown state '{target}'"
+                );
+                check_refs(format!("{cmd} update '{target}'"), expr, &update_names)?;
             }
         }
 
         // Outputs and the read frame see the states too (a channel context is
-        // supplied at evaluation: the output's `channel`, or the frame's
-        // current channel, channel 0 for a non-per_channel frame).
-        let mut with_states: std::collections::HashSet<&str> = names.clone();
-        with_states.insert("i2c_address");
-        let mut seen_outputs = std::collections::HashSet::new();
+        // supplied at evaluation).
+        names.insert("i2c_address");
+        let mut seen_outputs = HashSet::new();
         for o in &s.outputs {
-            if !seen_outputs.insert(o.name.as_str()) {
-                return Err(err(format!("duplicate output name '{}'", o.name)));
-            }
-            if o.channel >= s.channels {
-                return Err(err(format!(
-                    "output '{}' channel {} is out of range (channels = {})",
-                    o.name, o.channel, s.channels
-                )));
-            }
-            for tok in expr_identifiers(&o.expr) {
-                if !with_states.contains(tok.as_str()) {
-                    return Err(err(format!(
-                        "output '{}' expr references unknown variable '{tok}'",
-                        o.name
-                    )));
-                }
-            }
+            check!(
+                seen_outputs.insert(o.name.as_str()),
+                "duplicate output name '{}'",
+                o.name
+            );
+            check!(
+                o.channel < s.channels,
+                "output '{}' channel {} is out of range (channels = {})",
+                o.name,
+                o.channel,
+                s.channels
+            );
+            check_refs(format!("output '{}' expr", o.name), &o.expr, &names)?;
         }
         if let Some(frame) = &s.read_frame {
-            if frame.bytes.is_empty() {
-                return Err(err("read_frame.bytes must not be empty".into()));
-            }
+            check!(
+                !frame.bytes.is_empty(),
+                "read_frame.bytes must not be empty"
+            );
             for (i, b) in frame.bytes.iter().enumerate() {
-                for tok in expr_identifiers(b) {
-                    if !with_states.contains(tok.as_str()) {
-                        return Err(err(format!(
-                            "read_frame byte {i} references unknown variable '{tok}'"
-                        )));
-                    }
-                }
+                check_refs(format!("read_frame byte {i}"), b, &names)?;
             }
         }
-
         Ok(())
     }
-}
-
-/// Extract the bare identifiers from an expression (anything that starts with a
-/// letter or `_`), so the validator can check they are declared inputs. This is
-/// deliberately conservative: it tolerates numbers and operators and only flags
-/// undeclared *names*.
-fn expr_identifiers(expr: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    fn flush(cur: &mut String, out: &mut Vec<String>) {
-        if !cur.is_empty() {
-            // Keep tokens that start with a letter or underscore (skip numbers).
-            if cur
-                .chars()
-                .next()
-                .map(|c| c.is_alphabetic() || c == '_')
-                .unwrap_or(false)
-            {
-                out.push(cur.clone());
-            }
-            cur.clear();
-        }
-    }
-    for c in expr.chars() {
-        if c.is_alphanumeric() || c == '_' {
-            cur.push(c);
-        } else {
-            flush(&mut cur, &mut out);
-        }
-    }
-    flush(&mut cur, &mut out);
-    // evalexpr's built-in function namespaces show up as bare identifiers here;
-    // drop a small allowlist so they aren't mistaken for inputs. `if` is the
-    // evalexpr builtin `if(condition, then, else)` the write-side laws use.
-    out.retain(|t| {
-        !matches!(
-            t.as_str(),
-            "math" | "min" | "max" | "abs" | "round" | "floor" | "ceil" | "if"
-        )
-    });
-    out
 }
 
 #[cfg(test)]

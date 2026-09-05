@@ -11,12 +11,13 @@ board / schematic / fab files / BOM / placement
         |  hauksbee-extract      (readers, DRC geometry, lint, SI)
         v
    ExtractedBoard
-        |  hauksbee-models + hauksbee-engine binder   (device models)
+        |  hauksbee-models + hauksbee-bind binder     (device models)
         v
    Circuit IR (hauksbee-ir)
         |  hauksbee-solve        (DC, transient, AC)   <->   hauksbee-mcu (AVR / Renode / QEMU)
         v
-   scheduler, stress monitor, checks, reports         (hauksbee-engine)
+   scheduler + peripherals (hauksbee-cosim), static checks (hauksbee-checks),
+   stress monitor (hauksbee-bind), reports + front door   (hauksbee-engine)
         |
         +-- hauksbee (CLI + web front door, hauksbee-server + frontend/)
         +-- hauksbee-ci (specs, assertions, JUnit)

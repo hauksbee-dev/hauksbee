@@ -10,7 +10,7 @@
 //!    captured; the latest ADC voltages (from the *previous* chunk's solve) are
 //!    injected continuously before the run.
 //! 2. **Drivers**: apply captured GPIO edges to their Thevenin
-//!    [`crate::drivers::PinDriver`]s,
+//!    [`hauksbee_bind::drivers::PinDriver`]s,
 //!    so the analog circuit sees the new pin states this chunk.
 //! 3. **Analog**: solve a transient over the chunk and read the final node
 //!    voltages for every net.
@@ -33,15 +33,15 @@ use hauksbee_mcu::{Mcu, PinId};
 use hauksbee_models::{Bus, PeripheralSpec};
 use hauksbee_solve::{Layout, SolverOptions, Transient, TransientDiagnostics};
 
-use crate::behavioral::BehavioralDevice;
-use crate::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
-use crate::digital::{DigitalComponent, PinEdge};
 use crate::peripherals::{
     CsProvenance, Eeprom24c, I2cBus, PeripheralSet, RegisterMapSensor, ResolvedCs, SpiBus,
     SpiFramingMode, SpiNorFlash, TickCtx, TimelineEvent,
 };
-use crate::power_supply::{PowerSupply, SupplyLeg};
-use crate::stress::{FaultEvent, StressMonitor};
+use hauksbee_bind::behavioral::BehavioralDevice;
+use hauksbee_bind::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
+use hauksbee_bind::digital::{DigitalComponent, PinEdge};
+use hauksbee_bind::power_supply::{PowerSupply, SupplyLeg};
+use hauksbee_bind::stress::{FaultEvent, StressMonitor};
 
 /// Default co-sim chunk size (seconds).
 pub const DEFAULT_CHUNK_S: f64 = 100e-6;
@@ -102,7 +102,7 @@ pub const STRICT_CONSECUTIVE_FAILED_ABORT: u32 = 3;
 /// device's dissipated energy (J, index-aligned with the stress monitor's
 /// metas) plus the simulated time it covers. Filled by `march_chunk`'s
 /// streaming sink (trapezoid between accepted steps), deposited into
-/// [`crate::stress::StressMonitor::deposit_chunk_energy`] only for the march
+/// [`hauksbee_bind::stress::StressMonitor::deposit_chunk_energy`] only for the march
 /// the chunk actually adopts. This is what makes the junction-temperature
 /// check duty-cycle-exact for waveforms that switch inside a chunk: the
 /// endpoint sample reads peak or zero depending on PWM phase, the integral
@@ -401,7 +401,7 @@ pub struct Scheduler {
     /// chains are not merged). The chips these drive are listed in `chain_chips`
     /// and are skipped by the once-per-chunk `digital` tick so they are not
     /// driven twice.
-    chains: Vec<crate::digital::Hc595Chain>,
+    chains: Vec<hauksbee_bind::digital::Hc595Chain>,
     /// Index into `mcus` of the MCU that clocks each chain (parallel to
     /// `chains`), so a chain only consumes its own MCU's edge log.
     chain_mcu: Vec<usize>,
@@ -489,7 +489,7 @@ pub struct Scheduler {
     /// Arc<Mutex<>> because the responder closure owns a clone. Each shares the
     /// `input_volts` snapshot the scheduler refreshes from the last solve so the
     /// 165 captures the latest spike-latch states on its PL load.
-    hc165_chains: Vec<Arc<Mutex<crate::digital::Hc165Chain>>>,
+    hc165_chains: Vec<Arc<Mutex<hauksbee_bind::digital::Hc165Chain>>>,
     /// Per-MCU synchronous input-responder registries: the
     /// multiplexer that shares each MCU's single `on_input_responder` slot
     /// across every registered bit-banged input protocol (165 chains,
@@ -640,7 +640,7 @@ pub struct Scheduler {
     frame_v_extremes: HashMap<String, (f64, f64)>,
     /// Net node -> references of TICK-evaluated sequential parts whose
     /// sequential inputs (register clocks / resets / loads / serial data, per
-    /// the spec's own [`crate::logic::LogicComponent::sequential_pins`]) the
+    /// the spec's own [`hauksbee_bind::logic::LogicComponent::sequential_pins`]) the
     /// net feeds. "Tick-evaluated" excludes every edge-exact path: 595 chain
     /// chips (`chain_chips`), generalized replay chips (`replay_chips`), and
     /// 165 read-chain chips (responder-owned). Built once at construction;
@@ -694,7 +694,7 @@ pub struct ScopedMcuSubstitution {
 }
 
 impl ScopedMcuSubstitution {
-    pub(crate) fn new(event: McuSubstitution, subject: String) -> Self {
+    pub fn new(event: McuSubstitution, subject: String) -> Self {
         let assumption = Assumption::substitute_model_for_component(
             AssumptionSource::Scheduler,
             &subject,
@@ -924,7 +924,7 @@ impl ShortPulse {
 /// OUTPUT on a net where an ENABLED modelled push-pull output was already
 /// driving. This is the model-vs-MCU half of the field failure whose
 /// model-vs-model half the static lint catches
-/// ([`crate::checks::contention`]): at lint time every MCU GPIO driver is
+/// (`hauksbee_checks::checks::contention`): at lint time every MCU GPIO driver is
 /// stamped high-impedance and only firmware sets direction, so "modelled output
 /// shares a net with an MCU pad" is the most common HEALTHY topology there is,
 /// and the static check documents this case as out of reach. The scheduler
@@ -934,8 +934,8 @@ impl ShortPulse {
 ///
 /// What counts as a modelled push-pull output is shared with the static check
 /// by construction, not by parallel reimplementation: the binder stamps a
-/// [`crate::drivers::PinDriver`] on every connected output role from
-/// [`crate::digital::output_roles`] (the same single source the static check's
+/// [`hauksbee_bind::drivers::PinDriver`] on every connected output role from
+/// [`hauksbee_bind::digital::output_roles`] (the same single source the static check's
 /// `scan()` consults), and the spec's `[models.logic.tristate]` groups drive
 /// the driver's live `enabled` flag (the same groups the static check expands
 /// to exclude tri-stateable roles). A tri-stated (released) model output or a
@@ -1052,9 +1052,10 @@ impl NetStat {
     /// Test constructor: a net stat carrying a given toggle count (min/max at
     /// their empty sentinels). `last_logic` is private to this module, so a
     /// cross-module test (e.g. the web-report activity ranking) cannot build a
-    /// `NetStat` literal directly; this exposes just enough for those tests.
-    #[cfg(test)]
-    pub(crate) fn with_toggles(toggles: u64) -> Self {
+    /// `NetStat` literal directly; this exposes just enough for those tests
+    /// (they live in `hauksbee-engine`, so it cannot be `cfg(test)`).
+    #[doc(hidden)]
+    pub fn with_toggles(toggles: u64) -> Self {
         NetStat {
             toggles,
             ..Default::default()
@@ -1063,8 +1064,8 @@ impl NetStat {
 
     /// Test constructor with an explicit voltage range, for the activity-ranking
     /// tie-break (equal toggles, differing swing) the web/CLI/JSON tables share.
-    #[cfg(test)]
-    pub(crate) fn with_toggles_and_range(toggles: u64, min_v: f64, max_v: f64) -> Self {
+    #[doc(hidden)]
+    pub fn with_toggles_and_range(toggles: u64, min_v: f64, max_v: f64) -> Self {
         NetStat {
             toggles,
             min_v,
@@ -1074,25 +1075,30 @@ impl NetStat {
     }
 }
 
-fn mcu_occurrence_subjects(report: &crate::reports::bind::BindReport) -> Vec<String> {
+fn mcu_occurrence_subjects(report: &hauksbee_bind::bind_report::BindReport) -> Vec<String> {
     let component_rows: Vec<_> = report
         .rows
         .iter()
         .filter(|row| {
             !matches!(
                 &row.outcome,
-                crate::reports::bind::BindOutcome::PowerRail { .. }
+                hauksbee_bind::bind_report::BindOutcome::PowerRail { .. }
             )
         })
         .collect();
-    let component_subjects = crate::evidence::component_occurrence_subjects_for_references(
-        component_rows.iter().map(|row| row.reference.as_str()),
-    );
+    let component_subjects =
+        hauksbee_bind::occurrence::component_occurrence_subjects_for_references(
+            component_rows.iter().map(|row| row.reference.as_str()),
+        );
     component_rows
         .iter()
         .zip(component_subjects)
         .filter_map(|(row, subject)| {
-            matches!(&row.outcome, crate::reports::bind::BindOutcome::Mcu { .. }).then_some(subject)
+            matches!(
+                &row.outcome,
+                hauksbee_bind::bind_report::BindOutcome::Mcu { .. }
+            )
+            .then_some(subject)
         })
         .collect()
 }
@@ -1151,7 +1157,7 @@ impl Scheduler {
                     };
                     let direct_supply = is_direct_supply_role(domain);
                     if direct_supply && !node.is_ground() && seen_nodes.insert(node) {
-                        supply_watches.push(crate::stress::SupplyWatch {
+                        supply_watches.push(hauksbee_bind::stress::SupplyWatch {
                             reference: binding.reference.clone(),
                             node,
                             max_v,
@@ -1408,10 +1414,10 @@ impl Scheduler {
     /// Each slave is a [`RegisterMapSensor`] instance of the shipped MCP4728
     /// spec (the DAC is data, not Rust), with the binder-resolved per-instance
     /// address / VREF / gain over the spec defaults and each connected VOUT
-    /// channel's [`crate::drivers::PinDriver`] bound to the matching spec
+    /// channel's [`hauksbee_bind::drivers::PinDriver`] bound to the matching spec
     /// output. Net driving happens in the slave's own `on_stop(ctx)`, delivered
     /// by the chunk loop's `flush_stops`: no scheduler-side polling.
-    fn attach_mcp4728_dacs(&mut self, dacs: Vec<crate::binder::DacBinding>) {
+    fn attach_mcp4728_dacs(&mut self, dacs: Vec<hauksbee_bind::binder::DacBinding>) {
         /// The shipped declarative MCP4728 spec. Embedded (rather than loaded
         /// from disk at runtime) so an engine binary is self-contained.
         /// Embedded from THIS crate's assets/ mirror because `cargo package`
@@ -1454,7 +1460,10 @@ impl Scheduler {
     }
 
     /// Instantiate I2C/SPI slaves declared by exact resolved model cards.
-    fn attach_model_peripherals(&mut self, peripherals: Vec<crate::binder::PeripheralBinding>) {
+    fn attach_model_peripherals(
+        &mut self,
+        peripherals: Vec<hauksbee_bind::binder::PeripheralBinding>,
+    ) {
         for peripheral in peripherals {
             let reference = peripheral.reference;
             let power = peripheral.power;
@@ -1528,7 +1537,7 @@ impl Scheduler {
     fn attach_powered_i2c(
         &mut self,
         reference: &str,
-        power: Option<crate::binder::BoundPeripheralPower>,
+        power: Option<hauksbee_bind::binder::BoundPeripheralPower>,
         bus: I2cBus,
     ) {
         let bus = Arc::new(Mutex::new(bus));
@@ -1549,7 +1558,7 @@ impl Scheduler {
     fn attach_powered_spi(
         &mut self,
         reference: &str,
-        power: Option<crate::binder::BoundPeripheralPower>,
+        power: Option<hauksbee_bind::binder::BoundPeripheralPower>,
         bus: SpiBus,
         cs_net: Option<NodeId>,
         controller: Option<&str>,
@@ -1579,7 +1588,7 @@ impl Scheduler {
     fn attach_model_peripheral_power(
         &mut self,
         reference: &str,
-        power: crate::binder::BoundPeripheralPower,
+        power: hauksbee_bind::binder::BoundPeripheralPower,
         bus: ModelPeripheralBus,
     ) {
         let isource = self.circuit.add(Device::Isource {
@@ -1749,8 +1758,8 @@ impl Scheduler {
     /// pin, level) to drive immediately. This closes the readback inside the
     /// firmware's own bit-bang loop.
     fn build_and_install_165_chains(&mut self) {
-        use crate::digital::{order_165_chains, Hc165Chain, LogicLevels};
         use crate::responders::Hc165Responder;
+        use hauksbee_bind::digital::{order_165_chains, Hc165Chain, LogicLevels};
 
         // Per MCU: net-node -> (port,bit). Every wired digital-capable pin gets a
         // (possibly tri-stated) gpio driver, so this map covers both the control
@@ -1853,7 +1862,7 @@ impl Scheduler {
     fn bind_parallel_memory(
         &self,
         component: usize,
-        port: &crate::logic::ParallelMemoryPort,
+        port: &hauksbee_bind::logic::ParallelMemoryPort,
         mcu: usize,
     ) -> Option<PendingParallelMemory> {
         use crate::responders::{
@@ -1871,7 +1880,7 @@ impl Scheduler {
             .iter()
             .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
             .collect();
-        let chains: Vec<crate::digital::Hc595Chain> = self
+        let chains: Vec<hauksbee_bind::digital::Hc595Chain> = self
             .chains
             .iter()
             .zip(&self.chain_mcu)
@@ -3189,7 +3198,7 @@ impl Scheduler {
             // Expose this MCU's cycle-stamped edges (per pin) for the analog side.
             self.last_chunk_edges.push(ChunkPinEdges {
                 mcu_reference: mcu_ref,
-                edges: crate::digital::pin_edges_by_pin(&edge_log),
+                edges: hauksbee_bind::digital::pin_edges_by_pin(&edge_log),
                 cycle_span: (cyc_start, cyc_end),
                 chunk_s: chunk,
                 cycle_exact,
@@ -4534,7 +4543,7 @@ impl Scheduler {
             .iter()
             .map(|w| (w.start_s, w.end_s, w.method.as_str()))
             .collect();
-        let mut budget = crate::evidence::BoardEvidence::transient_error_budget(
+        let mut budget = crate::error_budget::transient_error_budget(
             &self.opts,
             0.0,
             self.sim_time,
@@ -5044,9 +5053,9 @@ impl Scheduler {
     /// Fires once per net per run.
     ///
     /// Classification is shared with the static lint
-    /// ([`crate::checks::contention`]) by construction: the model drivers
-    /// scanned here are exactly the [`crate::drivers::PinDriver`]s the binder
-    /// stamped from [`crate::digital::output_roles`] (the static check's own
+    /// (`hauksbee_checks::checks::contention`) by construction: the model drivers
+    /// scanned here are exactly the [`hauksbee_bind::drivers::PinDriver`]s the binder
+    /// stamped from [`hauksbee_bind::digital::output_roles`] (the static check's own
     /// single source of what counts as an output), and a driver's live
     /// `enabled` flag is set by the same `[models.logic.tristate]` groups the
     /// static check expands for its tri-state exclusion. So a tri-stated
@@ -5332,7 +5341,7 @@ impl Scheduler {
             if let Some(pin_nets) = self.replay_pin_nets.get(mi).cloned() {
                 let high_v = self.mcus[mi].logic_high_v;
                 let base = self.node_volts.clone();
-                crate::digital::replay_components_on_edges(
+                hauksbee_bind::digital::replay_components_on_edges(
                     &mut self.digital,
                     &self.replay_chips,
                     &pin_nets,
@@ -5687,15 +5696,20 @@ impl Scheduler {
         let (Some(a), Some(b)) = (node_a, node_b) else {
             return false;
         };
-        let Some(_name) = crate::shorts::stamp_bridge(&mut self.circuit, a, b, net_a, net_b) else {
+        let Some(_name) =
+            hauksbee_bind::shorts::stamp_bridge(&mut self.circuit, a, b, net_a, net_b)
+        else {
             return false;
         };
         // The new device may add a branch unknown; rebuild the MNA layout and
         // resize the branch-current buffer so subsequent solves are consistent.
         self.relayout();
         if defect {
-            self.faults_pending
-                .push(crate::shorts::short_fault(net_a, net_b, self.sim_time));
+            self.faults_pending.push(hauksbee_bind::shorts::short_fault(
+                net_a,
+                net_b,
+                self.sim_time,
+            ));
         }
         true
     }
@@ -5717,7 +5731,7 @@ impl Scheduler {
         report: &hauksbee_extract::DrcReport,
         qualification: Option<&hauksbee_extract::DrcTieQualification>,
     ) -> usize {
-        let pairs = crate::shorts::shorted_name_pairs(report);
+        let pairs = hauksbee_bind::shorts::shorted_name_pairs(report);
         let mut applied = 0;
         for (a, b) in pairs {
             let defect = report.shorts().any(|finding| {
@@ -6237,11 +6251,11 @@ fn build_595_chains(
     digital: &[DigitalComponent],
     mcus: &[LiveMcu],
 ) -> (
-    Vec<crate::digital::Hc595Chain>,
+    Vec<hauksbee_bind::digital::Hc595Chain>,
     Vec<usize>,
     std::collections::HashSet<usize>,
 ) {
-    use crate::digital::{order_595_chains, Hc595Chain};
+    use hauksbee_bind::digital::{order_595_chains, Hc595Chain};
 
     let mut chains = Vec::new();
     let mut chain_mcu = Vec::new();
@@ -6310,7 +6324,7 @@ fn build_generic_replay_chips(
     chain_chips: &std::collections::HashSet<usize>,
     mcus: &[LiveMcu],
 ) -> (Vec<usize>, Vec<HashMap<(char, u8), NodeId>>) {
-    use crate::digital::order_165_chains;
+    use hauksbee_bind::digital::order_165_chains;
 
     let pin_nets: Vec<HashMap<(char, u8), NodeId>> = mcus
         .iter()
@@ -6879,7 +6893,7 @@ missing = ["measurement_registers"]
     fn binding(
         reference: &str,
         backend: &str,
-        gpio_drivers: HashMap<(char, u8), crate::drivers::PinDriver>,
+        gpio_drivers: HashMap<(char, u8), hauksbee_bind::drivers::PinDriver>,
     ) -> McuBinding {
         McuBinding {
             reference: reference.into(),
@@ -6898,7 +6912,8 @@ missing = ["measurement_registers"]
 
     fn board_scheduler(text: &str) -> Scheduler {
         let board = hauksbee_extract::ExtractedBoard::from_auto(text).expect("board");
-        let bound = crate::binder::bind_board(&board, &hauksbee_models::ModelLibrary::builtin());
+        let bound =
+            hauksbee_bind::binder::bind_board(&board, &hauksbee_models::ModelLibrary::builtin());
         Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler")
     }
 
@@ -6906,10 +6921,10 @@ missing = ["measurement_registers"]
         name: &str,
         circuit: Circuit,
         net_nodes: HashMap<String, NodeId>,
-        digital: Vec<crate::digital::DigitalComponent>,
-        device_meta: Vec<crate::stress::DeviceMeta>,
-    ) -> crate::binder::BoundBoard {
-        crate::binder::BoundBoard {
+        digital: Vec<hauksbee_bind::digital::DigitalComponent>,
+        device_meta: Vec<hauksbee_bind::stress::DeviceMeta>,
+    ) -> hauksbee_bind::binder::BoundBoard {
+        hauksbee_bind::binder::BoundBoard {
             name: name.into(),
             circuit,
             net_names: net_nodes.keys().cloned().collect(),
@@ -6924,7 +6939,7 @@ missing = ["measurement_registers"]
             device_meta,
             dacs: Vec::new(),
             peripherals: Vec::new(),
-            report: crate::reports::bind::BindReport::default(),
+            report: hauksbee_bind::bind_report::BindReport::default(),
         }
     }
 
@@ -6933,16 +6948,16 @@ missing = ["measurement_registers"]
     fn tristated_drivers(
         sched: &mut Scheduler,
         pins: &[((char, u8), NodeId)],
-    ) -> HashMap<(char, u8), crate::drivers::PinDriver> {
+    ) -> HashMap<(char, u8), hauksbee_bind::drivers::PinDriver> {
         let mut drivers = HashMap::new();
         for &(pin, node) in pins {
             let name = sched.circuit.node_name(node).to_string();
-            let mut drv = crate::drivers::PinDriver::stamp(
+            let mut drv = hauksbee_bind::drivers::PinDriver::stamp(
                 &mut sched.circuit,
                 node,
                 &name,
                 &format!("t_{}{}", pin.0, pin.1),
-                crate::drivers::DEFAULT_RO,
+                hauksbee_bind::drivers::DEFAULT_RO,
             );
             drv.set_enabled(&mut sched.circuit, false);
             drivers.insert(pin, drv);
@@ -7056,11 +7071,11 @@ missing = ["measurement_registers"]
             .with_user_dir(dir.path())
             .expect("load validated register-map model");
         let board = hauksbee_extract::ExtractedBoard::from_auto(REGISTER_MAP_BOARD).unwrap();
-        let bound = crate::binder::bind_board(&board, &library);
+        let bound = hauksbee_bind::binder::bind_board(&board, &library);
         assert_eq!(bound.peripherals.len(), 1, "exact model attaches itself");
         assert!(matches!(
             bound.report.rows[0].outcome,
-            crate::reports::bind::BindOutcome::Behavioral { .. }
+            hauksbee_bind::bind_report::BindOutcome::Behavioral { .. }
         ));
 
         let sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
@@ -7259,28 +7274,29 @@ missing = ["measurement_registers"]
 
     #[test]
     fn scheduler_occurrence_identity_ignores_synthetic_rail_rows() {
-        let mut report = crate::reports::bind::BindReport::default();
-        let row = |value: &str, model_id: Option<&str>, outcome| crate::reports::bind::BindRow {
-            reference: "RAIL:+5V".into(),
-            value: value.into(),
-            model_id: model_id.map(str::to_string),
-            confidence: hauksbee_models::Confidence::Exact,
-            source: None,
-            outcome,
-            warning: None,
-            guesses: Vec::new(),
-        };
+        let mut report = hauksbee_bind::bind_report::BindReport::default();
+        let row =
+            |value: &str, model_id: Option<&str>, outcome| hauksbee_bind::bind_report::BindRow {
+                reference: "RAIL:+5V".into(),
+                value: value.into(),
+                model_id: model_id.map(str::to_string),
+                confidence: hauksbee_models::Confidence::Exact,
+                source: None,
+                outcome,
+                warning: None,
+                guesses: Vec::new(),
+            };
         report.push(row(
             "STM32F411",
             Some("stm32f4"),
-            crate::reports::bind::BindOutcome::Mcu {
+            hauksbee_bind::bind_report::BindOutcome::Mcu {
                 backend: "renode:stm32f4".into(),
             },
         ));
         report.push(row(
             "5 V ideal rail",
             None,
-            crate::reports::bind::BindOutcome::PowerRail { volts: 5.0 },
+            hauksbee_bind::bind_report::BindOutcome::PowerRail { volts: 5.0 },
         ));
         assert_eq!(mcu_occurrence_subjects(&report), ["RAIL:+5V"]);
     }
@@ -7306,7 +7322,7 @@ missing = ["measurement_registers"]
 
     #[test]
     fn adc_promotion_keys_on_the_channels_own_pin_not_the_net() {
-        use crate::drivers::PinDriver;
+        use hauksbee_bind::drivers::PinDriver;
         use hauksbee_ir::DeviceId;
         let drv = |net: u32, enabled: bool| PinDriver {
             vsource: DeviceId(0),
@@ -7472,7 +7488,7 @@ missing = ["measurement_registers"]
     fn nano_scheduler(board: &str, promote: &[(char, u8)]) -> Scheduler {
         let board = hauksbee_extract::ExtractedBoard::from_auto(board).expect("board");
         let mut bound =
-            crate::binder::bind_board(&board, &hauksbee_models::ModelLibrary::builtin());
+            hauksbee_bind::binder::bind_board(&board, &hauksbee_models::ModelLibrary::builtin());
         for pin in promote {
             let drv = bound.mcus[0]
                 .gpio_drivers
@@ -7498,7 +7514,7 @@ missing = ["measurement_registers"]
         let mut cyc = 100u64;
         let mut ser_level = false;
         let mut edge = |cycle: u64, bit: u8, level: bool| {
-            log.push(crate::digital::PinEdge {
+            log.push(hauksbee_bind::digital::PinEdge {
                 cycle,
                 port: 'B',
                 bit,
@@ -7657,7 +7673,13 @@ missing = ["measurement_registers"]
             if let Some(index) = gpio_roles.iter().position(|candidate| *candidate == role) {
                 gpio_drivers.insert(
                     ('B', index as u8),
-                    crate::drivers::PinDriver::stamp(&mut circuit, node, role, "legacy", 50.0),
+                    hauksbee_bind::drivers::PinDriver::stamp(
+                        &mut circuit,
+                        node,
+                        role,
+                        "legacy",
+                        50.0,
+                    ),
                 );
             }
         }
@@ -7671,11 +7693,11 @@ missing = ["measurement_registers"]
         }
         let parsed: hauksbee_models::logic_spec::Logic =
             toml::from_str(spec).expect("parse memory");
-        let logic = crate::logic::LogicComponent::compile("legacy-memory", &parsed)
+        let logic = hauksbee_bind::logic::LogicComponent::compile("legacy-memory", &parsed)
             .expect("compile memory");
-        let digital = crate::digital::DigitalComponent {
+        let digital = hauksbee_bind::digital::DigitalComponent {
             reference: "U1".into(),
-            levels: crate::digital::LogicLevels {
+            levels: hauksbee_bind::digital::LogicLevels {
                 voh: 4.4,
                 vol: 0.1,
                 vih: 2.0,
@@ -7843,16 +7865,23 @@ data_out = ["io0"]
         let mut m =
             scheduler_with_legacy_memory(ONE_PIN_MEMORY, &["gnd", "we_n", "io0"], &["we_n", "io0"]);
         let we_node = m.sched.net_nodes["we_n"];
-        let output =
-            crate::drivers::PinDriver::stamp(&mut m.sched.circuit, we_node, "qa", "U595", 50.0);
-        m.sched.digital.push(crate::digital::DigitalComponent {
-            reference: "U595".into(),
-            levels: m.sched.digital[0].levels,
-            roles: HashMap::from([("qa".to_string(), we_node)]),
-            drivers: HashMap::from([("qa".to_string(), output)]),
-            logic: None,
-            supply: None,
-        });
+        let output = hauksbee_bind::drivers::PinDriver::stamp(
+            &mut m.sched.circuit,
+            we_node,
+            "qa",
+            "U595",
+            50.0,
+        );
+        m.sched
+            .digital
+            .push(hauksbee_bind::digital::DigitalComponent {
+                reference: "U595".into(),
+                levels: m.sched.digital[0].levels,
+                roles: HashMap::from([("qa".to_string(), we_node)]),
+                drivers: HashMap::from([("qa".to_string(), output)]),
+                logic: None,
+                supply: None,
+            });
         m.sched.build_and_install_parallel_memories();
         assert!(m.sched.parallel_memory_chips.is_empty());
     }
@@ -7865,8 +7894,13 @@ data_out = ["io0"]
             &["we_n", "io0"],
         );
         let we_n = m.sched.net_nodes["we_n"];
-        let status =
-            crate::drivers::PinDriver::stamp(&mut m.sched.circuit, we_n, "we_n", "U1_status", 50.0);
+        let status = hauksbee_bind::drivers::PinDriver::stamp(
+            &mut m.sched.circuit,
+            we_n,
+            "we_n",
+            "U1_status",
+            50.0,
+        );
         m.sched.digital[0].roles.insert("status".into(), we_n);
         m.sched.digital[0].drivers.insert("status".into(), status);
         m.sched.build_and_install_parallel_memories();
@@ -8678,7 +8712,7 @@ data_out = ["io0"]
     /// pulse phase adversarial against the chunk endpoint in both directions.
     #[test]
     fn production_thermal_path_integrates_sub_chunk_pwm() {
-        use crate::stress::DeviceMeta;
+        use hauksbee_bind::stress::DeviceMeta;
         use hauksbee_models::schema::{ComponentKind, Ratings};
 
         // One 1 Ω load across a chunk-local PULSE source: 1 V on ⇒ 1 W.
@@ -8737,7 +8771,7 @@ data_out = ["io0"]
             sched
                 .drain_faults()
                 .into_iter()
-                .filter(|f| f.kind == crate::stress::FaultKind::Overtemperature)
+                .filter(|f| f.kind == hauksbee_bind::stress::FaultKind::Overtemperature)
                 .collect::<Vec<_>>()
         };
 

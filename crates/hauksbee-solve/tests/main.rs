@@ -1,6 +1,13 @@
 //! One integration-test binary for the crate; each module was a
 //! separate test file (and separate link step) before.
 
+// Shared across the modules below: the graded-board builders (single source of
+// truth in benches/) and the common test helpers.
+#[path = "../benches/fixtures.rs"]
+mod fixtures;
+#[path = "support/shared.rs"]
+mod shared;
+
 #[path = "ac_validation.rs"]
 mod ac_validation;
 #[path = "analytic.rs"]

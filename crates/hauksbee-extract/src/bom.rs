@@ -2011,11 +2011,12 @@ fn parse_quantity(s: &str) -> Option<usize> {
 /// whatever the header names, inverted when the header is a do-not-populate
 /// header. A cell nobody can read either way returns `None`, which means "this
 /// file says nothing", not "populate".
-fn parse_populate(cell: &str, header_key: &str) -> Option<bool> {
+pub(crate) fn parse_populate(cell: &str, header_key: &str) -> Option<bool> {
     let c = cell.trim().to_ascii_lowercase();
     if let Some(explicit) = match c.as_str() {
-        "dnp" | "dni" | "do not populate" | "do not place" | "no fit" | "nofit" | "nf"
-        | "not populated" | "unpopulated" | "exclude" | "excluded" => Some(false),
+        "dnp" | "dni" | "dnf" | "do not populate" | "donotpopulate" | "do not place" | "no fit"
+        | "nofit" | "nf" | "not populated" | "unpopulated" | "notfitted" | "not fitted"
+        | "noload" | "no-load" | "exclude" | "excluded" => Some(false),
         "populate" | "fit" | "fitted" | "populated" | "place" | "include" | "included"
         | "assemble" => Some(true),
         _ => None,

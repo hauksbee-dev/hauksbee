@@ -21,10 +21,7 @@ use hauksbee_solve::{
     RobustnessLadder, SolverOptions, StepControl, Strategy, Transient, Waveforms,
 };
 
-#[path = "../benches/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
-use fixtures::{build_rc_ladder, build_shunt_array};
+use crate::fixtures::{build_rc_ladder, build_shunt_array};
 
 /// Worst disagreement between two waveform sets on the SAME accepted grid:
 /// returns `(max_abs_err, max_normalized_err)` where the normalization is the

@@ -205,7 +205,7 @@ same evaluator as scenario profiles); the current is exposed to FSM guards as
 `i_load_<name>`.
 
 Custom Rust behaviour: implement `CustomBehavior` (`stamp`, `update`, `state`)
-from `crates/hauksbee-engine/src/behavioral.rs`, register it in a
+from `crates/hauksbee-bind/src/behavioral.rs`, register it in a
 `CustomRegistry` by model id, value or MPN, and bind with `bind_board_with`.
 
 ### Board-programmed currents

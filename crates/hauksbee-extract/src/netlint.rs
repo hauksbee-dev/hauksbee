@@ -837,6 +837,69 @@ pub(crate) fn i2c_role(name: &str) -> Option<&'static str> {
     }
 }
 
+/// What a scan of one net's assembled members found by way of a pull-up: a
+/// resistor (or array element) with one pad on the net and another on a
+/// rail-like, non-ground net.
+#[derive(Default)]
+struct PullupScan {
+    /// A fitted pull-up exists.
+    fitted: bool,
+    /// A pull-up exists in the layout but is DNP, present only because the
+    /// default fit policy assumes DNP parts get placed: as assembled the line
+    /// still floats, so the finding names the part instead of clearing.
+    dnp_ref: Option<String>,
+    /// A resistor sits where a pull-up would but its VALUE cannot be parsed (an
+    /// MPN or blank field, routine in Altium/EAGLE extraction): the net can be
+    /// judged in neither direction.
+    unjudgeable: bool,
+}
+
+/// Scan `net_id` for a pull-up. `min_ohms` excludes series dampers (22-100 R is
+/// routine on SDIO) when the check cares; ground is excluded so a card-detect
+/// pull-down or a split-ground stitching cap is never credited. A resistor
+/// ARRAY is credited if ANY element reaches a rail, without pairing the element
+/// to this net's pad: a stated over-credit kept for consistency.
+fn pullup_scan(board: &ExtractedBoard, net_id: i64, min_ohms: Option<f64>) -> PullupScan {
+    let mut scan = PullupScan::default();
+    for (c, _) in members(board, net_id) {
+        if !AssemblyState::of(c).is_present() || !(is_resistor(c) || is_resistor_array(c)) {
+            continue;
+        }
+        let parsed = parse_ohms(&c.value);
+        if let Some(min) = min_ohms {
+            if parsed.is_some_and(|ohms| ohms < min) {
+                continue;
+            }
+        }
+        for oid in c.pins.iter().filter_map(|p| p.net).filter(|&o| o != net_id) {
+            let far_is_ground = board.net(oid).is_some_and(|n| is_ground(&n.name));
+            if far_is_ground || !net_is_raillike(board, oid) {
+                continue;
+            }
+            if min_ohms.is_some() && parsed.is_none() {
+                scan.unjudgeable = true;
+            } else if crate::dnp::fitted_from_dnp_policy(c) {
+                scan.dnp_ref.get_or_insert_with(|| c.reference.clone());
+            } else {
+                scan.fitted = true;
+            }
+        }
+    }
+    scan
+}
+
+/// Deduped, present-parts-only references of a net's members: a double-listed
+/// pad must not repeat a reference, and a skipped DNP part is not implicated.
+fn present_refs(mem: &[(&Component, &Pin)]) -> Vec<String> {
+    let mut refs: Vec<String> = Vec::new();
+    for (c, _) in mem {
+        if AssemblyState::of(c).is_present() && !refs.contains(&c.reference) {
+            refs.push(c.reference.clone());
+        }
+    }
+    refs
+}
+
 fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
     for net in &board.nets {
         if net.id == 0 || is_unconnected_net(&net.name) {
@@ -852,14 +915,8 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             continue;
         }
 
-        // A pull-up is a resistor with one pad on this net and the other pad on
-        // a power rail (not ground). Look for it.
-        let mut has_pullup = false;
-        // A pull-up that exists in the layout but is DNP, present only
-        // because the default fit policy assumes DNP parts get placed: the
-        // assembled board still floats, so this downgrades the finding to a
-        // note naming the part rather than silently clearing it.
-        let mut dnp_pullup_ref: Option<String> = None;
+        let scan = pullup_scan(board, net.id, None);
+        let mut has_pullup = scan.fitted;
         // Dedup active devices by reference: an IPC-356 both-sided through-hole
         // access record lists a device's bus pad twice, so a raw per-entry count
         // turned a single-device (ambiguous → skip) bus into `active_devices == 2`
@@ -868,10 +925,8 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         let mut exits_to_connector = false;
 
         for (c, _p) in &mem {
-            // Only assembled, identity-trusted parts count: an honoured-DNP
-            // pull-up (or translator) must not clear a genuinely missing
-            // pull-up, and an absent device must not inflate the bus. A
-            // policy-FITTED source-DNP pull-up is handled separately below.
+            // Only assembled, identity-trusted parts count: an absent device
+            // must not inflate the bus.
             if !AssemblyState::of(c).is_present() {
                 continue;
             }
@@ -894,29 +949,6 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             if r.starts_with('U') || (c.pins.len() > 2 && !is_resistor(c) && !is_resistor_array(c))
             {
                 active_refs.insert(c.reference.as_str());
-            }
-            if is_resistor(c) || is_resistor_array(c) {
-                // Does another pad land on a rail (named, or a structural local
-                // rail with a bypass cap to ground)? A resistor array whose element
-                // pulls the bus to a rail terminates it just like a discrete R.
-                // Ground is refused even when a split-ground stitching cap makes
-                // it structurally rail-like: a pull-DOWN is not a pull-up.
-                for op in &c.pins {
-                    if op.net == Some(net.id) {
-                        continue;
-                    }
-                    if let Some(oid) = op.net {
-                        let far_is_ground =
-                            board.net(oid).map(|n| is_ground(&n.name)).unwrap_or(false);
-                        if !far_is_ground && net_is_raillike(board, oid) {
-                            if crate::dnp::fitted_from_dnp_policy(c) {
-                                dnp_pullup_ref.get_or_insert_with(|| c.reference.clone());
-                            } else {
-                                has_pullup = true;
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -953,14 +985,7 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             continue;
         };
 
-        if let Some(dnp_ref) = dnp_pullup_ref {
-            // Same deduped, present-parts-only refs convention as the SD arm.
-            let mut refs: Vec<String> = Vec::new();
-            for (c, _p) in &mem {
-                if AssemblyState::of(c).is_present() && !refs.contains(&c.reference) {
-                    refs.push(c.reference.clone());
-                }
-            }
+        if let Some(dnp_ref) = scan.dnp_ref {
             report.findings.push(LintFinding {
                 check: LintCheck::MissingI2cPullup,
                 severity: sev,
@@ -970,7 +995,7 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                      (simulation fits DNP parts by default, so other results may look fine)",
                     net.name
                 ),
-                refs,
+                refs: present_refs(&mem),
                 nets: vec![net.name.clone()],
             });
             continue;
@@ -1281,55 +1306,13 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             continue;
         }
 
-        // Scan one net's assembled members for a credible pull-up: a resistor
-        // (or array element) of at least 1 kΩ reaching a rail-like, non-ground
-        // net. Sub-1 kΩ values are series dampers (22-100 Ω is routine on SDIO),
-        // not pull-ups; ground is excluded so a DAT3 card-detect pull-down or a
-        // split-ground stitching cap cannot be credited. Like the I2C check, a
-        // resistor ARRAY is credited if ANY element reaches a rail, without
-        // pairing the element to this net's pad: a stated over-credit kept for
-        // consistency. Returns (fitted, dnp_policy_ref, unjudgeable). A pull-up
-        // present only because the default fit policy assumed a DNP part will be
-        // placed is reported separately, the assembled board not carrying it; a
-        // resistor whose VALUE cannot be parsed (an MPN or blank field, routine
-        // in Altium/EAGLE extraction) but which sits where a pull-up would makes
-        // the net unjudgeable, neither credited nor silently ignored.
-        let scan_for_pullup = |net_id: i64| -> (bool, Option<String>, bool) {
-            let mut fitted = false;
-            let mut dnp_ref = None;
-            let mut unjudgeable = false;
-            for (c, _p) in members(board, net_id) {
-                if !AssemblyState::of(c).is_present() {
-                    continue;
-                }
-                if !(is_resistor(c) || is_resistor_array(c)) {
-                    continue;
-                }
-                let parsed = parse_ohms(&c.value);
-                if parsed.is_some_and(|ohms| ohms < 1_000.0) {
-                    continue;
-                }
-                for op in &c.pins {
-                    if op.net == Some(net_id) {
-                        continue;
-                    }
-                    let Some(oid) = op.net else { continue };
-                    let far_is_ground = board.net(oid).map(|n| is_ground(&n.name)).unwrap_or(false);
-                    if !far_is_ground && net_is_raillike(board, oid) {
-                        if parsed.is_none() {
-                            unjudgeable = true;
-                        } else if crate::dnp::fitted_from_dnp_policy(c) {
-                            dnp_ref.get_or_insert_with(|| c.reference.clone());
-                        } else {
-                            fitted = true;
-                        }
-                    }
-                }
-            }
-            (fitted, dnp_ref, unjudgeable)
-        };
-
-        let (mut has_pullup, mut dnp_pullup_ref, mut unjudgeable) = scan_for_pullup(net.id);
+        // Sub-1 kΩ values are series dampers, not pull-ups.
+        let scan_for_pullup = |net_id: i64| pullup_scan(board, net_id, Some(1_000.0));
+        let PullupScan {
+            fitted: mut has_pullup,
+            dnp_ref: mut dnp_pullup_ref,
+            mut unjudgeable,
+        } = scan_for_pullup(net.id);
         let mut has_socket = false;
         let mut socket_parts: Vec<&Component> = Vec::new();
         let mut has_emmc = false;
@@ -1403,11 +1386,11 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                             if far_named_ground_or_rail {
                                 continue;
                             }
-                            let (far_fitted, far_dnp, far_unjudgeable) = scan_for_pullup(oid);
-                            has_pullup |= far_fitted;
-                            unjudgeable |= far_unjudgeable;
+                            let far = scan_for_pullup(oid);
+                            has_pullup |= far.fitted;
+                            unjudgeable |= far.unjudgeable;
                             if dnp_pullup_ref.is_none() {
-                                dnp_pullup_ref = far_dnp;
+                                dnp_pullup_ref = far.dnp_ref;
                             }
                             for (fc, _fp) in members(board, oid) {
                                 if !AssemblyState::of(fc).is_present() || is_test_point_or_hole(fc)
@@ -1474,14 +1457,7 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             continue;
         }
 
-        // Deduped, present-parts-only: a double-listed pad must not repeat a
-        // reference, and a skipped DNP part is not implicated.
-        let mut refs: Vec<String> = Vec::new();
-        for (c, _p) in &mem {
-            if AssemblyState::of(c).is_present() && !refs.contains(&c.reference) {
-                refs.push(c.reference.clone());
-            }
-        }
+        let refs = present_refs(&mem);
 
         // SPI-mode heuristic: a socket wired for SPI leaves DAT1/DAT2 out of
         // the host's hands, and in SPI mode the CMD pin is the host's
@@ -2020,16 +1996,13 @@ mod pin_array_tests {
 
 #[cfg(test)]
 mod i2c_pullup_dedup_tests {
-    use crate::{Component, ExtractedBoard, LintCheck, Net, Pin};
+    use crate::testutil::{board, part, pin};
+    use crate::{LintCheck, Pin};
 
     fn sda_pin() -> Pin {
-        Pin {
-            number: "5".into(),
-            net: Some(1),
-            function: "SDA".into(),
-            kind: String::new(),
-            position: None,
-        }
+        let mut p = pin("5", Some(1));
+        p.function = "SDA".into();
+        p
     }
 
     #[test]
@@ -2039,24 +2012,11 @@ mod i2c_pullup_dedup_tests {
         // active devices, escalating the skip into a false "on-board master and
         // peripheral, no pull-up" MissingI2cPullup finding. Deduping by reference,
         // one device stays one and the check must stay silent.
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![Net {
-                id: 1,
-                name: "SDA".into(),
-            }],
-            components: vec![Component {
-                reference: "U1".into(),
-                value: "SENSOR".into(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
-                layer: String::new(),
-                properties: Vec::new(),
-                dnp: false,
-                pins: vec![sda_pin(), sda_pin()], // same pad listed twice
-            }],
-        };
+        // The same pad listed twice.
+        let board = board(
+            &[(1, "SDA")],
+            vec![part("U1", "SENSOR", "", "", vec![sda_pin(), sda_pin()])],
+        );
         let report = board.net_lint();
         assert_eq!(
             report.of_check(LintCheck::MissingI2cPullup).count(),
@@ -2068,48 +2028,19 @@ mod i2c_pullup_dedup_tests {
 
 #[cfg(test)]
 mod sd_pullup_tests {
-    use crate::{Component, ExtractedBoard, LintCheck, Net, Pin, Severity};
-
-    fn pin(number: &str, net: Option<i64>) -> Pin {
-        Pin {
-            number: number.into(),
-            net,
-            function: String::new(),
-            kind: String::new(),
-            position: None,
-        }
-    }
+    use crate::testutil::{board, pin};
+    use crate::{Component, ExtractedBoard, LintCheck, Pin, Severity};
 
     fn part(reference: &str, value: &str, footprint: &str, pins: Vec<Pin>) -> Component {
-        Component {
-            reference: reference.into(),
-            value: value.into(),
-            lib_id: String::new(),
-            footprint: footprint.into(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
-            pins,
-        }
+        crate::testutil::part(reference, value, "", footprint, pins)
     }
 
     /// Host MCU + card socket, no pull-up: CMD fires Medium, DAT1 fires Low.
     #[test]
     fn host_and_socket_without_pullup_fires() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "sd_cmd".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "sd_data_1".into(),
-                },
-            ],
-            components: vec![
+        let board = board(
+            &[(1, "sd_cmd"), (2, "sd_data_1")],
+            vec![
                 part(
                     "U1",
                     "STM32H533VET6",
@@ -2123,7 +2054,7 @@ mod sd_pullup_tests {
                     vec![pin("3", Some(1)), pin("5", Some(2))],
                 ),
             ],
-        };
+        );
         let report = board.net_lint();
         let f: Vec<_> = report.of_check(LintCheck::MissingSdPullup).collect();
         assert_eq!(f.len(), 2, "CMD and DAT1 both lack pull-ups: {f:?}");
@@ -2143,19 +2074,9 @@ mod sd_pullup_tests {
     /// goes quiet (per-net check).
     #[test]
     fn pullup_to_rail_clears_the_net() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "sd_cmd".into(),
-                },
-                Net {
-                    id: 3,
-                    name: "+3V3".into(),
-                },
-            ],
-            components: vec![
+        let board = board(
+            &[(1, "sd_cmd"), (3, "+3V3")],
+            vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
                 part(
@@ -2165,7 +2086,7 @@ mod sd_pullup_tests {
                     vec![pin("1", Some(1)), pin("2", Some(3))],
                 ),
             ],
-        };
+        );
         let report = board.net_lint();
         assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 0);
     }
@@ -2174,17 +2095,13 @@ mod sd_pullup_tests {
     /// board, where the pull-ups live on the host. Must stay silent.
     #[test]
     fn breakout_without_host_is_silent() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![Net {
-                id: 1,
-                name: "sd_cmd".into(),
-            }],
-            components: vec![
+        let board = board(
+            &[(1, "sd_cmd")],
+            vec![
                 part("J1", "HEADER", "PinHeader_1x08", vec![pin("1", Some(1))]),
                 part("J2", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
             ],
-        };
+        );
         let report = board.net_lint();
         assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 0);
     }
@@ -2194,19 +2111,9 @@ mod sd_pullup_tests {
     /// the net NAME is not evidence a card exists.
     #[test]
     fn sdram_bus_named_sd_d0_is_silent() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "SD_D0".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "SD_D3".into(),
-                },
-            ],
-            components: vec![
+        let board = board(
+            &[(1, "SD_D0"), (2, "SD_D3")],
+            vec![
                 part(
                     "U1",
                     "STM32F429ZIT6",
@@ -2220,7 +2127,7 @@ mod sd_pullup_tests {
                     vec![pin("3", Some(1)), pin("4", Some(2))],
                 ),
             ],
-        };
+        );
         let report = board.net_lint();
         assert_eq!(
             report.of_check(LintCheck::MissingSdPullup).count(),
@@ -2233,17 +2140,13 @@ mod sd_pullup_tests {
     /// only the role in the leaf; the check must still see the bus.
     #[test]
     fn hierarchical_sheet_name_still_fires() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![Net {
-                id: 1,
-                name: "/uSD Connector/CMD".into(),
-            }],
-            components: vec![
+        let board = board(
+            &[(1, "/uSD Connector/CMD")],
+            vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
             ],
-        };
+        );
         let report = board.net_lint();
         assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 1);
     }
@@ -2265,23 +2168,9 @@ mod sd_pullup_tests {
                 vec![pin("1", Some(1)), pin("2", Some(3))],
             );
             r.dnp = true;
-            ExtractedBoard {
-                name: "b".into(),
-                nets: vec![
-                    Net {
-                        id: 1,
-                        name: "sd_cmd".into(),
-                    },
-                    Net {
-                        id: 3,
-                        name: "+3V3".into(),
-                    },
-                    Net {
-                        id: 4,
-                        name: "sd_data_1".into(),
-                    },
-                ],
-                components: vec![
+            board(
+                &[(1, "sd_cmd"), (3, "+3V3"), (4, "sd_data_1")],
+                vec![
                     // The host reaches DAT1 too, so the socket reads as
                     // SD-mode wiring (the SPI heuristic would otherwise
                     // soften the severity).
@@ -2299,7 +2188,7 @@ mod sd_pullup_tests {
                     ),
                     r,
                 ],
-            }
+            )
         };
 
         let cmd_findings = |board: &ExtractedBoard| -> Vec<(Severity, String)> {
@@ -2350,23 +2239,9 @@ mod sd_pullup_tests {
     /// socket; a pull-up on the far side of it is a real pull-up.
     #[test]
     fn pullup_across_series_damper_clears() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "sd_cmd".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "sd_cmd_mcu".into(),
-                },
-                Net {
-                    id: 3,
-                    name: "+3V3".into(),
-                },
-            ],
-            components: vec![
+        let board = board(
+            &[(1, "sd_cmd"), (2, "sd_cmd_mcu"), (3, "+3V3")],
+            vec![
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
                 part(
                     "R5",
@@ -2395,7 +2270,7 @@ mod sd_pullup_tests {
                     ],
                 ),
             ],
-        };
+        );
         assert_eq!(
             board
                 .net_lint()
@@ -2410,13 +2285,9 @@ mod sd_pullup_tests {
     /// topology beyond one-net reasoning: abstain.
     #[test]
     fn bus_switch_on_the_net_abstains() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![Net {
-                id: 1,
-                name: "sd_cmd".into(),
-            }],
-            components: vec![
+        let board = board(
+            &[(1, "sd_cmd")],
+            vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part(
                     "U7",
@@ -2426,7 +2297,7 @@ mod sd_pullup_tests {
                 ),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
             ],
-        };
+        );
         assert_eq!(
             board
                 .net_lint()
@@ -2440,17 +2311,13 @@ mod sd_pullup_tests {
     /// same, socket or no socket.
     #[test]
     fn down_emmc_without_pullup_fires() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![Net {
-                id: 1,
-                name: "EMMC_CMD".into(),
-            }],
-            components: vec![
+        let board = board(
+            &[(1, "EMMC_CMD")],
+            vec![
                 part("U1", "iMX6ULL", "BGA-289", vec![pin("A1", Some(1))]),
                 part("U8", "KLM8G1GETF-B041", "BGA-153", vec![pin("M5", Some(1))]),
             ],
-        };
+        );
         let f: Vec<_> = {
             let r = board.net_lint();
             r.of_check(LintCheck::MissingSdPullup)
@@ -2464,13 +2331,9 @@ mod sd_pullup_tests {
     /// discrete resistor is not the whole story: abstain.
     #[test]
     fn integrated_pullup_translator_abstains() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![Net {
-                id: 1,
-                name: "sd_cmd".into(),
-            }],
-            components: vec![
+        let board = board(
+            &[(1, "sd_cmd")],
+            vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part(
                     "U9",
@@ -2480,7 +2343,7 @@ mod sd_pullup_tests {
                 ),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
             ],
-        };
+        );
         assert_eq!(
             board
                 .net_lint()
@@ -2495,19 +2358,9 @@ mod sd_pullup_tests {
     /// rationale, which would be false for that board.
     #[test]
     fn spi_wired_socket_downgrades_to_note() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "/uSD/CMD".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "/uSD/DAT0".into(),
-                },
-            ],
-            components: vec![
+        let board = board(
+            &[(1, "/uSD/CMD"), (2, "/uSD/DAT0")],
+            vec![
                 part(
                     "U1",
                     "SAMD21",
@@ -2521,7 +2374,7 @@ mod sd_pullup_tests {
                     vec![pin("3", Some(1)), pin("7", Some(2))],
                 ),
             ],
-        };
+        );
         let report = board.net_lint();
         let f: Vec<_> = report.of_check(LintCheck::MissingSdPullup).collect();
         assert_eq!(f.len(), 2);
@@ -2538,23 +2391,9 @@ mod sd_pullup_tests {
     /// ground look rail-like.
     #[test]
     fn ground_pulldown_is_not_credited() {
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "sd_cmd".into(),
-                },
-                Net {
-                    id: 8,
-                    name: "GND".into(),
-                },
-                Net {
-                    id: 9,
-                    name: "AGND".into(),
-                },
-            ],
-            components: vec![
+        let board = board(
+            &[(1, "sd_cmd"), (8, "GND"), (9, "AGND")],
+            vec![
                 part("U1", "MCU", "LQFP-100", vec![pin("1", Some(1))]),
                 part("J3", "SOCKET", "microSD_socket", vec![pin("3", Some(1))]),
                 part(
@@ -2570,7 +2409,7 @@ mod sd_pullup_tests {
                     vec![pin("1", Some(8)), pin("2", Some(9))],
                 ),
             ],
-        };
+        );
         assert_eq!(
             board
                 .net_lint()
@@ -2629,29 +2468,12 @@ mod parse_ohms_tests {
 #[cfg(test)]
 mod mirror_and_pad_tests {
     use super::{connected_pads, is_capacitor, passive_prefix, ref_designator};
-    use crate::{Component, Pin};
+    use crate::testutil::{part, pin};
+    use crate::Component;
 
     fn comp(reference: &str, footprint: &str, pads: &[(&str, Option<i64>)]) -> Component {
-        Component {
-            reference: reference.to_string(),
-            value: String::new(),
-            lib_id: String::new(),
-            footprint: footprint.to_string(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: pads
-                .iter()
-                .map(|(num, net)| Pin {
-                    number: num.to_string(),
-                    net: *net,
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                })
-                .collect(),
-        }
+        let pins = pads.iter().map(|(num, net)| pin(num, *net)).collect();
+        part(reference, "", "", footprint, pins)
     }
 
     #[test]
@@ -2880,29 +2702,15 @@ mod rail_and_cap_tests {
 
 #[cfg(test)]
 mod placeholder_jumper_exemption_tests {
-    use crate::{Component, ExtractedBoard, LintCheck};
+    use crate::testutil::board;
+    use crate::{Component, LintCheck};
 
     fn comp(reference: &str, value: &str, lib_id: &str, footprint: &str) -> Component {
-        Component {
-            reference: reference.into(),
-            value: value.into(),
-            lib_id: lib_id.into(),
-            footprint: footprint.into(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: Vec::new(),
-        }
+        crate::testutil::part(reference, value, lib_id, footprint, Vec::new())
     }
 
     fn placeholder_count(components: Vec<Component>) -> usize {
-        let board = ExtractedBoard {
-            name: "test".into(),
-            nets: Vec::new(),
-            components,
-        };
-        board
+        board(&[], components)
             .net_lint()
             .of_check(LintCheck::PlaceholderValue)
             .count()

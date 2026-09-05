@@ -219,45 +219,55 @@ fn download_url(tag: &str, asset: &str) -> String {
     format!("https://github.com/{ESP_QEMU_REPO}/releases/download/{tag}/{asset}")
 }
 
-/// Run `curl` for a URL, returning stdout as bytes. `--fail` turns HTTP
-/// errors into a nonzero exit so a 404 can never masquerade as an archive.
-fn curl_bytes(url: &str) -> Result<Vec<u8>> {
-    let out = Command::new("curl")
-        .args(["--silent", "--show-error", "--fail", "--location", url])
+/// Run `curl` for a URL with the given extra `-H` headers, returning the
+/// body. `--fail` turns HTTP errors into a nonzero exit so a 404 can never
+/// masquerade as an archive; `what` names the request in the error.
+fn curl(url: &str, headers: &[&str], what: &str) -> Result<Vec<u8>> {
+    let mut cmd = Command::new("curl");
+    cmd.args(["--silent", "--show-error", "--fail", "--location"]);
+    for header in headers {
+        cmd.args(["-H", header]);
+    }
+    let out = cmd
+        .arg(url)
         .output()
         .context("running curl (is curl installed?)")?;
     if !out.status.success() {
         bail!(
-            "curl failed for {url}: {}",
+            "{what} failed for {url}: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
     Ok(out.stdout)
 }
 
+fn curl_bytes(url: &str) -> Result<Vec<u8>> {
+    curl(url, &[], "curl")
+}
+
 /// GET a GitHub API URL as text.
 fn github_api(url: &str) -> Result<String> {
-    let out = Command::new("curl")
-        .args([
-            "--silent",
-            "--show-error",
-            "--fail",
-            "--location",
-            "-H",
-            "Accept: application/vnd.github+json",
-            "-H",
-            "X-GitHub-Api-Version: 2022-11-28",
-            url,
-        ])
+    let headers = [
+        "Accept: application/vnd.github+json",
+        "X-GitHub-Api-Version: 2022-11-28",
+    ];
+    curl(url, &headers, "GitHub API request").map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// Run the system `tar` with `args`, returning its stdout; `what` names the
+/// step (and the archive) in the error.
+fn tar(what: &str, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>> {
+    let out = Command::new("tar")
+        .args(args)
         .output()
-        .context("running curl (is curl installed?)")?;
+        .context("running tar (is tar installed?)")?;
     if !out.status.success() {
         bail!(
-            "GitHub API request failed for {url}: {}",
+            "tar failed {what}: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(out.stdout)
 }
 
 /// Resolve the release tag and per-arch asset names/URLs/checksums for this
@@ -330,14 +340,16 @@ pub fn plan(arches: &[QemuArch], progress: &mut dyn FnMut(&str)) -> Result<Insta
 
 /// sha256 of a file via the system tool (`sha256sum`, else `shasum -a 256`).
 fn sha256_file(path: &Path) -> Result<String> {
-    for (bin, args) in [("sha256sum", vec![]), ("shasum", vec!["-a", "256"])] {
-        let out = Command::new(bin).args(&args).arg(path).output();
-        if let Ok(o) = out {
-            if o.status.success() {
-                let text = String::from_utf8_lossy(&o.stdout);
-                if let Some(hash) = text.split_whitespace().next() {
-                    return Ok(hash.to_ascii_lowercase());
-                }
+    for (bin, args) in [("sha256sum", &[][..]), ("shasum", &["-a", "256"][..])] {
+        let Ok(out) = Command::new(bin).args(args).arg(path).output() else {
+            continue;
+        };
+        if out.status.success() {
+            if let Some(hash) = String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .next()
+            {
+                return Ok(hash.to_ascii_lowercase());
             }
         }
     }
@@ -350,20 +362,11 @@ fn sha256_file(path: &Path) -> Result<String> {
 pub fn unpack_archive(archive: &Path, root: &Path) -> Result<()> {
     validate_archive_members(archive)?;
     std::fs::create_dir_all(root).with_context(|| format!("creating {}", root.display()))?;
-    let out = Command::new("tar")
-        .arg("xf")
-        .arg(archive)
-        .arg("-C")
-        .arg(root)
-        .output()
-        .context("running tar (is tar installed?)")?;
-    if !out.status.success() {
-        bail!(
-            "tar failed unpacking {}: {}",
-            archive.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
+    let os = std::ffi::OsStr::new;
+    tar(
+        &format!("unpacking {}", archive.display()),
+        &[os("xf"), archive.as_os_str(), os("-C"), root.as_os_str()],
+    )?;
     Ok(())
 }
 
@@ -371,23 +374,14 @@ pub fn unpack_archive(archive: &Path, root: &Path) -> Result<()> {
 /// The release archive is checksum-verified when upstream publishes a digest,
 /// but a reviewed malformed archive must still not write outside staging.
 fn validate_archive_members(archive: &Path) -> Result<()> {
-    let names = Command::new("tar")
-        .args(["tf"])
-        .arg(archive)
-        .output()
-        .context("listing archive members with tar")?;
-    if !names.status.success() {
-        bail!(
-            "tar could not list {}: {}",
-            archive.display(),
-            String::from_utf8_lossy(&names.stderr).trim()
-        );
-    }
-    for raw in String::from_utf8_lossy(&names.stdout).lines() {
-        let normalized = raw.trim_start_matches("./");
-        let path = Path::new(normalized);
-        if raw.starts_with('/')
-            || raw.starts_with('\\')
+    let os = std::ffi::OsStr::new;
+    let names = tar(
+        &format!("listing {}", archive.display()),
+        &[os("tf"), archive.as_os_str()],
+    )?;
+    for raw in String::from_utf8_lossy(&names).lines() {
+        let path = Path::new(raw.trim_start_matches("./"));
+        if raw.starts_with(['/', '\\'])
             || path
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -396,26 +390,18 @@ fn validate_archive_members(archive: &Path) -> Result<()> {
         }
     }
 
-    let verbose = Command::new("tar")
-        .args(["tvf"])
-        .arg(archive)
-        .output()
-        .context("inspecting archive member types with tar")?;
-    if !verbose.status.success() {
-        bail!(
-            "tar could not inspect member types in {}",
-            archive.display()
-        );
-    }
-    for line in String::from_utf8_lossy(&verbose.stdout).lines() {
+    let verbose = tar(
+        &format!("inspecting member types in {}", archive.display()),
+        &[os("tvf"), archive.as_os_str()],
+    )?;
+    for line in String::from_utf8_lossy(&verbose).lines() {
         match line.as_bytes().first().copied() {
-            Some(b'-' | b'd') => {}
+            Some(b'-' | b'd') | None => {}
             Some(kind) => bail!(
                 "unsafe archive member type '{}' in {} (links and special files are refused)",
                 kind as char,
                 archive.display()
             ),
-            None => {}
         }
     }
     Ok(())
@@ -589,15 +575,19 @@ fn transaction_nonce() -> String {
 }
 
 fn transaction_dirs(parent: &Path, prefix: &str) -> Result<Vec<PathBuf>> {
-    let mut found = Vec::new();
-    for entry in std::fs::read_dir(parent)
-        .with_context(|| format!("reading install parent {}", parent.display()))?
-    {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with(prefix) {
-            found.push(entry.path());
-        }
-    }
+    let entries = std::fs::read_dir(parent)
+        .with_context(|| format!("reading install parent {}", parent.display()))?;
+    let mut found: Vec<PathBuf> = entries
+        .map(|entry| entry.map(|e| e.path()))
+        .filter(|p| {
+            p.as_ref().is_ok_and(|p| {
+                p.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .starts_with(prefix)
+            })
+        })
+        .collect::<std::io::Result<_>>()?;
     found.sort();
     Ok(found)
 }

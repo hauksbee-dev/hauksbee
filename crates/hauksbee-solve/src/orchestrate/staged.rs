@@ -68,8 +68,10 @@ use crate::options::{DcInit, Partitioning, SolverOptions, StepControl, Strategy}
 use crate::orchestrate::capture::{
     execute_composed_group, execute_stiff_group, BoundaryKind, ComposedPolicy, StiffOutcome,
 };
+use crate::orchestrate::{resample, uniform_grid};
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
+use crate::subcircuit::SubCircuit;
 use crate::transient::{Transient, Waveforms};
 use crate::{SolveError, SolveResult};
 
@@ -367,33 +369,40 @@ pub fn run_staged(
             // supply-integrity refusal: a pinned node cannot sag, so questions
             // about its loading have had their physics removed.
             // (Built lazily: most groups have no stiff nominations at all.)
-            let l2g: HashMap<u32, u32> =
-                if imposed.is_empty() && (!composed_rails.is_empty() || !signal_local.is_empty()) {
-                    g2l.iter().map(|(&gn, &ln)| (ln, gn)).collect()
+            let has_stiff =
+                imposed.is_empty() && (!composed_rails.is_empty() || !signal_local.is_empty());
+            let l2g: HashMap<u32, u32> = if has_stiff {
+                g2l.iter().map(|(&gn, &ln)| (ln, gn)).collect()
+            } else {
+                HashMap::new()
+            };
+            if has_stiff {
+                let mut refusals = Vec::new();
+                let exec = if composed_rails.is_empty() {
+                    execute_stiff_group(&sub, &signal_local, &group_opts, tstop, &mut refusals)?
                 } else {
-                    HashMap::new()
+                    execute_composed_group(
+                        &sub,
+                        &signal_local,
+                        &composed_rails,
+                        &ComposedPolicy::default(),
+                        &group_opts,
+                        tstop,
+                        &mut refusals,
+                    )?
                 };
-            if !composed_rails.is_empty() && imposed.is_empty() {
-                let mut refusals = Vec::new();
-                match execute_composed_group(
-                    &sub,
-                    &signal_local,
-                    &composed_rails,
-                    &ComposedPolicy::default(),
-                    &group_opts,
-                    tstop,
-                    &mut refusals,
-                )? {
+                match exec {
                     Some(exec) => {
-                        // Every composed boundary joins the supply-integrity
-                        // refusal (balanced, held, and signal alike: all are
-                        // pinned or re-grouped nodes whose loading questions
-                        // beyond the record's claim must be refused).
-                        let mut refused_nodes = Vec::new();
+                        // Certificate: one record per boundary, and every one
+                        // joins the supply-integrity refusal (balanced, held,
+                        // and signal alike: all are pinned or re-grouped nodes
+                        // whose loading questions beyond the record's claim
+                        // must be refused; pinning removed the sag they ask
+                        // about).
                         for o in &exec.outcomes {
                             let gnode = NodeId(l2g[&o.node.0]);
-                            certificate_stiff.push(composed_tear_record(o, gnode));
-                            refused_nodes.push(gnode);
+                            certificate_stiff.push(boundary_tear_record(o, gnode));
+                            certificate_refused_nodes.push(gnode);
                             stiff_outcomes.push((
                                 g,
                                 StiffOutcome {
@@ -402,50 +411,6 @@ pub fn run_staged(
                                 },
                             ));
                         }
-                        certificate_refused_nodes.extend(refused_nodes);
-                        stiff_run = Some(exec.waveforms);
-                        torn_groups.push(g);
-                    }
-                    None => {
-                        stiff_refusal_note = summarize_stiff_refusal(circuit, &l2g, &refusals);
-                        for o in refusals {
-                            let gnode = NodeId(l2g[&o.node.0]);
-                            stiff_outcomes.push((g, StiffOutcome { node: gnode, ..o }));
-                        }
-                    }
-                }
-            } else if !signal_local.is_empty() && imposed.is_empty() {
-                let mut refusals = Vec::new();
-                match execute_stiff_group(&sub, &signal_local, &group_opts, tstop, &mut refusals)? {
-                    Some(exec) => {
-                        // Certificate: one measured record per boundary, and
-                        // the pinned nodes join the supply-integrity refusal
-                        // (questions about their loading beyond sag_v must be
-                        // refused: pinning removed the sag they ask about).
-                        let mut refused_nodes = Vec::new();
-                        for o in &exec.outcomes {
-                            let gnode = NodeId(l2g[&o.node.0]);
-                            certificate_stiff.push(TearRecord {
-                                node: gnode,
-                                kind: TearKind::Stiff,
-                                evidence: Evidence::MeasuredStiffness {
-                                    sag_v: o.sag_v,
-                                    tol_v: o.tol_v,
-                                },
-                                tolerance: ToleranceClaim::Stiffness { sag_v: o.sag_v },
-                                upstream: None,
-                                downstream: None,
-                            });
-                            refused_nodes.push(gnode);
-                            stiff_outcomes.push((
-                                g,
-                                StiffOutcome {
-                                    node: gnode,
-                                    ..o.clone()
-                                },
-                            ));
-                        }
-                        certificate_refused_nodes.extend(refused_nodes);
                         stiff_run = Some(exec.waveforms);
                         torn_groups.push(g);
                     }
@@ -455,10 +420,10 @@ pub fn run_staged(
                         // mega group fell through, because the fused DC error
                         // masked the stiff refusal that caused it.
                         stiff_refusal_note = summarize_stiff_refusal(circuit, &l2g, &refusals);
-                        for o in refusals {
+                        stiff_outcomes.extend(refusals.into_iter().map(|o| {
                             let gnode = NodeId(l2g[&o.node.0]);
-                            stiff_outcomes.push((g, StiffOutcome { node: gnode, ..o }));
-                        }
+                            (g, StiffOutcome { node: gnode, ..o })
+                        }));
                     }
                 }
             }
@@ -525,11 +490,7 @@ pub fn run_staged(
     // Assemble the global result on the uniform fixed grid.
     let grid = uniform_grid(dt, tstop);
     let n_nodes = circuit.node_count();
-    let mut waveforms = Waveforms {
-        time: grid.clone(),
-        node_voltages: vec![vec![0.0; grid.len()]; n_nodes],
-        branch_currents: Vec::new(),
-    };
+    let mut waveforms = Waveforms::on_grid(n_nodes, &grid);
 
     for node in 1..n_nodes {
         let Some(isl) = decomp.graph.node_island.get(node).copied().flatten() else {
@@ -546,10 +507,7 @@ pub fn run_staged(
         let Some(&ln) = g2l.get(&(node as u32)) else {
             continue;
         };
-        let series = &wf.node_voltages[ln as usize];
-        for (k, &t) in grid.iter().enumerate() {
-            waveforms.node_voltages[node][k] = lerp_at(&wf.time, series, t);
-        }
+        waveforms.node_voltages[node] = resample(wf, ln as usize, &grid);
     }
 
     // Complete the certificate: every replayed free tear now has its grid,
@@ -613,7 +571,10 @@ fn solve_group(
     if !imposed.is_empty() {
         let part = Partition::analyze_imposing_tears(sub, imposed);
         if let Some(mut engine) = PartitionedTransient::try_build_from_partition(sub, opts, part) {
-            if let Ok(wf) = super::collect_waveforms(&mut engine, sub, tstop) {
+            let torn = Waveforms::collect_nodes(sub.node_count(), |sink| {
+                engine.run_streaming(sub, tstop, sink)
+            });
+            if let Ok(wf) = torn {
                 return Ok((wf, true, false));
             }
             // A run-time death (per-block Newton failure the build could not
@@ -720,7 +681,7 @@ pub(crate) fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
     c
 }
 
-/// The durable certificate record for one composed outcome, keyed on the
+/// The durable certificate record for one stiff-executor outcome, keyed on the
 /// STRUCTURED [`BoundaryKind`], never on the prose note (the note once
 /// mislabeled a feed-held rail balance-exact; review finding):
 ///
@@ -730,7 +691,7 @@ pub(crate) fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
 ///   nothing was measured, so the record says `Stiff`/`AssumedFeedHold`/
 ///   `Unmeasured`, an assumption on the supply leg's stiffness, not a proof.
 /// * `Signal`: the relaxation's measured sag, as the stiff executor records.
-fn composed_tear_record(o: &StiffOutcome, node: NodeId) -> TearRecord {
+fn boundary_tear_record(o: &StiffOutcome, node: NodeId) -> TearRecord {
     match o.kind {
         BoundaryKind::BalancedRail => TearRecord {
             node,
@@ -817,74 +778,20 @@ fn extract_subcircuit(
     devices: &[DeviceId],
     replay: &[(NodeId, Vec<PwlPoint>)],
 ) -> (Circuit, HashMap<u32, u32>) {
-    let mut sub = Circuit::new();
-    sub.temp_c = circuit.temp_c;
-    let mut g2l: HashMap<u32, u32> = HashMap::new();
-
-    fn map_node(
-        sub: &mut Circuit,
-        g2l: &mut HashMap<u32, u32>,
-        circuit: &Circuit,
-        gn: NodeId,
-    ) -> NodeId {
-        if gn.is_ground() {
-            return NodeId::GROUND;
-        }
-        if let Some(&ln) = g2l.get(&gn.0) {
-            return NodeId(ln);
-        }
-        let ln = sub.node(circuit.node_name(gn));
-        g2l.insert(gn.0, ln.0);
-        ln
-    }
-
+    let mut sub = SubCircuit::new(circuit);
     for &id in devices {
-        let mut d = circuit.devices[id.0 as usize].clone();
-        d.map_nodes(&mut |gn| map_node(&mut sub, &mut g2l, circuit, gn));
-        sub.add(d);
+        sub.copy(circuit, id);
     }
     for (gn, points) in replay {
-        let ln = map_node(&mut sub, &mut g2l, circuit, *gn);
+        let p = sub.map(circuit, *gn);
         sub.add(Device::Vsource {
             name: format!("VREPLAY_{}", circuit.node_name(*gn)),
-            p: ln,
+            p,
             n: NodeId::GROUND,
             kind: SourceKind::Pwl(points.clone()),
         });
     }
-    (sub, g2l)
-}
-
-/// The uniform accepted-step grid a fixed-dt run marches (mirrors the run
-/// loop: last step shortens to land exactly on tstop).
-fn uniform_grid(dt: f64, tstop: f64) -> Vec<f64> {
-    let mut grid = vec![0.0];
-    let mut t = 0.0;
-    let eps = dt * 1e-9;
-    while t < tstop - eps {
-        let h = dt.min(tstop - t);
-        t += h;
-        grid.push(t);
-    }
-    grid
-}
-
-/// First-order-hold sample of a captured series at time `t` (clamped at the
-/// ends, exactly like PWL replay).
-fn lerp_at(times: &[f64], vals: &[f64], t: f64) -> f64 {
-    if times.is_empty() {
-        return 0.0;
-    }
-    match times.binary_search_by(|x| x.partial_cmp(&t).expect("non-finite sample time")) {
-        Ok(i) => vals[i],
-        Err(0) => vals[0],
-        Err(i) if i >= times.len() => *vals.last().unwrap(),
-        Err(i) => {
-            let (t0, t1) = (times[i - 1], times[i]);
-            let w = (t - t0) / (t1 - t0);
-            vals[i - 1] + w * (vals[i] - vals[i - 1])
-        }
-    }
+    sub.into_parts()
 }
 
 /// One group's DC health, from [`probe_groups_dc`].
@@ -971,6 +878,7 @@ mod tests {
     use super::*;
     use crate::decompose::rails::TearMotive;
     use crate::options::RobustnessLadder;
+    use crate::orchestrate::lerp_at;
     use crate::test_fixtures::{
         assert_matches_within_grid, cap, comparator, diode, fixed_opts, max_error, monolith,
         pnp_blocks, res, shunt_array, sw, swing, vdc, vpulse, GND,
@@ -1386,7 +1294,7 @@ mod tests {
             note,
         };
         let n = NodeId(42);
-        let balanced = composed_tear_record(
+        let balanced = boundary_tear_record(
             &outcome(BoundaryKind::BalancedRail, 0.0, "balanced rail"),
             n,
         );
@@ -1396,13 +1304,13 @@ mod tests {
         assert_eq!(balanced.node, n);
 
         for note in ["held rail (stiff-supply feed)", "balanced rail"] {
-            let held = composed_tear_record(&outcome(BoundaryKind::HeldRail, 0.0, note), n);
+            let held = boundary_tear_record(&outcome(BoundaryKind::HeldRail, 0.0, note), n);
             assert_eq!(held.kind, TearKind::Stiff, "{note}");
             assert_eq!(held.evidence, Evidence::AssumedFeedHold);
             assert_eq!(held.tolerance, ToleranceClaim::Unmeasured);
         }
 
-        let signal = composed_tear_record(&outcome(BoundaryKind::Signal, 3.5e-7, ""), n);
+        let signal = boundary_tear_record(&outcome(BoundaryKind::Signal, 3.5e-7, ""), n);
         assert_eq!(signal.kind, TearKind::Stiff);
         assert_eq!(
             signal.evidence,

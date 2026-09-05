@@ -1212,6 +1212,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "hauksbee-bind"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "evalexpr",
+ "forge-model",
+ "hauksbee-extract",
+ "hauksbee-forge-codegen",
+ "hauksbee-ir",
+ "hauksbee-models",
+ "hauksbee-testkit",
+ "same-file",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "toml",
+ "zip",
+]
+
+[[package]]
+name = "hauksbee-checks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hauksbee-bind",
+ "hauksbee-extract",
+ "hauksbee-ir",
+ "hauksbee-models",
+ "hauksbee-solve",
+ "hauksbee-testkit",
+ "serde",
+ "serde_json",
+ "toml",
+ "zip",
+]
+
+[[package]]
 name = "hauksbee-ci"
 version = "0.1.0"
 dependencies = [
@@ -1238,6 +1277,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "hauksbee-cosim"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "evalexpr",
+ "hauksbee-bind",
+ "hauksbee-extract",
+ "hauksbee-frontdoor-api",
+ "hauksbee-ir",
+ "hauksbee-mcu",
+ "hauksbee-models",
+ "hauksbee-solve",
+ "hauksbee-testkit",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+ "zip",
+]
+
+[[package]]
 name = "hauksbee-engine"
 version = "0.1.0"
 dependencies = [
@@ -1246,6 +1308,9 @@ dependencies = [
  "evalexpr",
  "forge-model",
  "forge-sexpr",
+ "hauksbee-bind",
+ "hauksbee-checks",
+ "hauksbee-cosim",
  "hauksbee-extract",
  "hauksbee-forge-codegen",
  "hauksbee-frontdoor-api",

@@ -4,6 +4,9 @@
 //! hallucinated part value cannot silently enter the model library. [`validate`]
 //! collects every violation at once rather than stopping at the first.
 
+use std::collections::HashSet;
+
+use crate::check::{nonneg_finite, positive_finite, Problems};
 use crate::schema::{
     AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics,
     ModelEntry, OperatingEnvelope, PeripheralSpec,
@@ -19,47 +22,137 @@ pub struct ValidationError {
     pub message: String,
 }
 
-/// Validate a [`ModelEntry`], checking that required params are present and
-/// within physical bounds.
-///
 /// Does `entry` declare `role` in `[models.pins]`? Exact match, as the
 /// register-map and SPI-NOR rules spell their roles verbatim.
-fn declares_role(entry: &ModelEntry, role: &str) -> bool {
+fn has_role(entry: &ModelEntry, role: &str) -> bool {
     entry.pins.values().any(|known| known == role)
 }
 
-/// [`declares_role`], case-insensitively. The rules that read author-written
-/// role lists (`must_not_float_roles`, the current-program role sets) accept
-/// any casing, so they compare this way.
-fn declares_role_ci(entry: &ModelEntry, role: &str) -> bool {
+/// [`has_role`], case-insensitively: the rules that read author-written role
+/// lists (`must_not_float_roles`, the current-program role sets) accept any
+/// casing.
+fn has_role_ci(entry: &ModelEntry, role: &str) -> bool {
     entry
         .pins
         .values()
         .any(|known| known.eq_ignore_ascii_case(role))
 }
 
-/// Record one violation against `entry`. Every rule in this module reports the
-/// same way: the entry's id plus a sentence naming the field and what is wrong.
-fn push_err(errors: &mut Vec<ValidationError>, entry: &ModelEntry, message: impl Into<String>) {
-    errors.push(ValidationError {
-        id: entry.id.clone(),
-        message: message.into(),
-    });
+/// The per-kind parameter contract the solver reads: which params must be
+/// present, the physical bounds on the ones that are (by value, or by
+/// magnitude for a quantity whose sign carries meaning), and which pairs must
+/// be strictly ordered so the solver never sees an inverted band.
+struct KindRules {
+    required: &'static [&'static str],
+    ranges: &'static [(&'static str, f64, f64)],
+    magnitude: &'static [(&'static str, f64, f64)],
+    ordered: &'static [(&'static str, &'static str)],
 }
 
-/// Returns `Ok(())` on success, or a list of violations.
-pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
-    let mut errors = Vec::new();
+const NO_RULES: KindRules = KindRules {
+    required: &[],
+    ranges: &[],
+    magnitude: &[],
+    ordered: &[],
+};
 
-    let role_exists = |role: &str| declares_role_ci(entry, role);
+fn kind_rules(entry: &ModelEntry) -> KindRules {
+    use ComponentKind::*;
+    match entry.kind {
+        Diode => KindRules {
+            required: &["is", "n", "rs"],
+            ranges: &[
+                ("is", 1e-20, 1e-3),
+                ("n", 0.5, 3.0),
+                ("rs", 0.0, 1000.0),
+                ("cjo", 0.0, 1e-6),
+            ],
+            ..NO_RULES
+        },
+        BjtNpn | BjtPnp => KindRules {
+            required: &["is", "bf", "nf", "vaf"],
+            ranges: &[
+                ("is", 1e-20, 1e-3),
+                ("bf", 1.0, 2000.0),
+                ("nf", 0.5, 3.0),
+                ("vaf", 1.0, 500.0),
+                ("rb", 0.0, 1e6),
+                ("rc", 0.0, 1e6),
+                ("re", 0.0, 1e6),
+            ],
+            ..NO_RULES
+        },
+        // kp = k'·(W/L) for the level-1 SPICE model. A discrete POWER MOSFET's
+        // effective W/L is enormous, so kp legitimately runs into the hundreds
+        // (db/mosfet.toml carries 200 for ipa045n10n3g); bound generously,
+        // still catching a nonsense hallucination.
+        Nmos | Pmos => KindRules {
+            required: &["vto", "kp"],
+            ranges: &[
+                ("vto", -10.0, 10.0),
+                ("kp", 1e-6, 1000.0),
+                ("lambda", 0.0, 1.0),
+            ],
+            ..NO_RULES
+        },
+        // A declarative converter owns its output, input draw and regulation
+        // semantics; `bind_vreg` never reads the simple-LDO tuple on that path,
+        // so requiring invented `vout/dropout_v/iq_a` there would be false facts.
+        // `vout` is judged by MAGNITUDE: the 79xx family regulates BELOW ground
+        // and is stamped as a DC source against ground, so the sign is the
+        // whole meaning.
+        Vreg if entry.behavioral.converter.is_none() => KindRules {
+            required: &["vout", "dropout_v", "iq_a"],
+            ranges: &[("dropout_v", 0.0, 10.0), ("iq_a", 0.0, 1.0)],
+            magnitude: &[("vout", 0.5, 30.0)],
+            ordered: &[],
+        },
+        Opamp => KindRules {
+            required: &["gain", "rail_lo", "rail_hi"],
+            ranges: &[
+                ("gain", 1.0, 1e9),
+                ("rail_lo", -60.0, 60.0),
+                ("rail_hi", -60.0, 60.0),
+            ],
+            ordered: &[("rail_lo", "rail_hi")],
+            ..NO_RULES
+        },
+        Comparator => KindRules {
+            required: &["out_lo", "out_hi", "hysteresis"],
+            ranges: &[
+                ("hysteresis", 0.0, 5.0),
+                ("out_lo", -60.0, 60.0),
+                ("out_hi", -60.0, 60.0),
+            ],
+            ordered: &[("out_lo", "out_hi")],
+            ..NO_RULES
+        },
+        // ron/roff ranges overlap, so a swapped pair (ron=5000, roff=2000)
+        // would model a switch that conducts MORE when open; the order rule
+        // closes that the way the opamp/comparator rails are ordered.
+        AnalogSwitch => KindRules {
+            required: &["ron", "roff"],
+            ranges: &[("ron", 0.01, 10_000.0), ("roff", 1e3, 1e12)],
+            ordered: &[("ron", "roff")],
+            ..NO_RULES
+        },
+        // Digital / MCU / connector / ignore / behavioural vreg: no mandatory
+        // numeric params.
+        _ => NO_RULES,
+    }
+}
+
+/// Validate a [`ModelEntry`], checking that required params are present and
+/// within physical bounds. Returns `Ok(())` on success, or a list of violations.
+pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
+    let mut p = Problems::default();
+    let params = &entry.params;
+
     for envelope in &entry.envelope {
-        if envelope.basis().trim().is_empty() {
-            push_err(
-                &mut errors,
-                entry,
-                "operating envelope requires a non-empty basis naming the datasheet table and row",
-            );
-        }
+        p.require(!envelope.basis().trim().is_empty(), || {
+            "operating envelope requires a non-empty basis naming the datasheet table and row"
+                .into()
+        });
         match envelope {
             OperatingEnvelope::SupplyRange {
                 pin,
@@ -68,47 +161,33 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 abs_max_v,
                 ..
             } => {
-                if !role_exists(pin) {
-                    push_err(
-                        &mut errors,
-                        entry,
-                        format!("operating envelope pin '{pin}' is not a role in [models.pins]"),
-                    );
-                }
-                if !min_v.is_finite() || !max_v.is_finite() || min_v >= max_v {
-                    push_err(
-                        &mut errors,
-                        entry,
+                p.require(has_role_ci(entry, pin), || {
+                    format!("operating envelope pin '{pin}' is not a role in [models.pins]")
+                });
+                p.require(
+                    min_v.is_finite() && max_v.is_finite() && min_v < max_v,
+                    || {
                         format!(
                         "operating envelope requires finite min_v < max_v, got {min_v} and {max_v}"
-                    ),
-                    );
-                }
-                if abs_max_v.is_some_and(|value| !value.is_finite() || value < *max_v) {
-                    push_err(
-                        &mut errors,
-                        entry,
-                        format!(
-                        "operating envelope abs_max_v must be finite and at least max_v {max_v}"
-                    ),
-                    );
-                }
+                    )
+                    },
+                );
+                p.require(
+                    !abs_max_v.is_some_and(|v| !v.is_finite() || v < *max_v),
+                    || format!("operating envelope abs_max_v must be finite and at least max_v {max_v}"),
+                );
             }
             OperatingEnvelope::RailOrder { lower, upper, .. } => {
                 for (field, role) in [("lower", lower), ("upper", upper)] {
-                    if !role_exists(role) {
-                        push_err(&mut errors, entry, format!(
+                    p.require(has_role_ci(entry, role), || {
+                        format!(
                             "operating envelope {field} role '{role}' is not a role in [models.pins]"
-                        ));
-                    }
+                        )
+                    });
                 }
-                if lower.eq_ignore_ascii_case(upper) {
-                    push_err(
-                        &mut errors,
-                        entry,
-                        "operating envelope rail_order lower and upper roles must differ",
-                    );
-                }
+                p.require(!lower.eq_ignore_ascii_case(upper), || {
+                    "operating envelope rail_order lower and upper roles must differ".into()
+                });
             }
         }
     }
@@ -117,813 +196,525 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // simulation model. Keep that state explicit and machine-checkable instead
     // of letting an empty `digital` card count as bound coverage. The engine
     // leaves these parts OPEN while retaining the winning model id/source.
-    let identity_only = entry.params.get_bool("identity_only").unwrap_or(false);
-    if entry.params.0.contains_key("identity_only")
-        && entry.params.get_bool("identity_only").is_none()
-    {
-        push_err(&mut errors, entry, "params.identity_only must be a boolean");
-    }
+    let identity_only = params.get_bool("identity_only").unwrap_or(false);
+    p.require(
+        !params.0.contains_key("identity_only") || params.get_bool("identity_only").is_some(),
+        || "params.identity_only must be a boolean".into(),
+    );
     if identity_only {
         for key in ["warning", "unlocked_by"] {
-            if entry
-                .params
-                .get_str(key)
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                push_err(&mut errors, entry, format!(
-                    "identity-only model requires non-empty params.{key} so reports state both the limitation and what would unlock behavior"
-                ));
-            }
+            p.require(
+                params.get_str(key).is_some_and(|v| !v.trim().is_empty()),
+                || format!("identity-only model requires non-empty params.{key} so reports state both the limitation and what would unlock behavior"),
+            );
         }
-        if !entry.logic.is_empty()
+        let behaves = !entry.logic.is_empty()
             || !entry.behavioral.is_empty()
             || entry.current_program.is_some()
             || entry.peripheral.is_some()
-            || entry.peripheral_power.is_some()
-        {
-            push_err(&mut errors, entry, "identity-only model cannot also declare logic, behavioral physics, current_program, a firmware peripheral, or peripheral power; remove identity_only only after that behavior is validated");
-        }
-        if !entry.coverage.implements.is_empty() {
-            push_err(&mut errors, entry, "identity-only model cannot declare coverage.implements; it has no executable behavior");
-        }
+            || entry.peripheral_power.is_some();
+        p.require(!behaves, || "identity-only model cannot also declare logic, behavioral physics, current_program, a firmware peripheral, or peripheral power; remove identity_only only after that behavior is validated".into());
+        p.require(entry.coverage.implements.is_empty(), || {
+            "identity-only model cannot declare coverage.implements; it has no executable behavior"
+                .into()
+        });
     }
 
     if let Some(peripheral) = &entry.peripheral {
-        match peripheral {
-            PeripheralSpec::I2cEeprom {
-                address,
-                size_bytes,
-                page_size,
-                word_address_bytes,
-            } => {
-                if *address > 0x7f {
-                    push_err(&mut errors, entry, format!(
-                        "peripheral I2C address 0x{address:02x} is not a 7-bit address"
-                    ));
-                }
-                if *size_bytes == 0 {
-                    push_err(&mut errors, entry, "peripheral I2C EEPROM size_bytes must be positive");
-                }
-                if !page_size.is_power_of_two() || *page_size > *size_bytes {
-                    push_err(&mut errors, entry, format!(
-                        "peripheral I2C EEPROM page_size {page_size} must be a power of two no larger than size_bytes {size_bytes}"
-                    ));
-                }
-                if !matches!(word_address_bytes, 1 | 2) {
-                    push_err(&mut errors, entry, format!(
-                        "peripheral I2C EEPROM word_address_bytes must be 1 or 2, got {word_address_bytes}"
-                    ));
-                }
-            }
-            PeripheralSpec::SpiNorFlash {
-                size_bytes,
-                page_size,
-                sector_size,
-                jedec_id,
-                spi_mode,
-                cs_role,
-                clk_role,
-                mosi_role,
-                miso_role,
-            } => {
-                for (name, value) in [
-                    ("size_bytes", *size_bytes),
-                    ("page_size", *page_size),
-                    ("sector_size", *sector_size),
-                ] {
-                    if value == 0 {
-                        push_err(&mut errors, entry, format!("peripheral SPI NOR {name} must be positive"));
-                    }
-                }
-                if !page_size.is_power_of_two()
-                    || !sector_size.is_power_of_two()
-                    || (*size_bytes > 0 && (*page_size > *size_bytes || *sector_size > *size_bytes))
-                {
-                    push_err(&mut errors, entry, "peripheral SPI NOR page_size and sector_size must be power-of-two regions no larger than the array");
-                }
-                if jedec_id.len() != 3 {
-                    push_err(&mut errors, entry, format!(
-                        "peripheral SPI NOR jedec_id must contain exactly 3 bytes, got {}",
-                        jedec_id.len()
-                    ));
-                }
-                if *spi_mode > 3 {
-                    push_err(&mut errors, entry, format!(
-                        "peripheral SPI NOR spi_mode must be 0..3, got {spi_mode}"
-                    ));
-                }
-                for (name, role) in [
-                    ("cs_role", cs_role),
-                    ("clk_role", clk_role),
-                    ("mosi_role", mosi_role),
-                    ("miso_role", miso_role),
-                ] {
-                    if !declares_role(entry, role) {
-                        push_err(&mut errors, entry, format!(
-                            "peripheral SPI NOR {name} '{role}' is not a role in [models.pins]"
-                        ));
-                    }
-                }
-            }
-            PeripheralSpec::RegisterMap {
-                spec_toml,
-                controller,
-                scl_role,
-                sda_role,
-                cs_role,
-                clk_role,
-                mosi_role,
-                miso_role,
-                required_high_roles,
-                required_low_roles,
-                address_select_role,
-                address_when_low,
-                address_when_high,
-            } => match SensorSpec::from_toml(spec_toml) {
-                Err(error) => errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!(
-                        "peripheral register-map spec_toml must be a valid [sensor] document: {error}"
-                    ),
-                }),
-                Ok(sensor) => {
-                    if controller.as_ref().is_some_and(|name| name.trim().is_empty()) {
-                        push_err(&mut errors, entry, "peripheral register-map controller must not be empty");
-                    }
-                    let roles: &[(&str, &String)] = match sensor.sensor.bus {
-                        Bus::I2c => &[("scl_role", scl_role), ("sda_role", sda_role)],
-                        Bus::Spi => &[
-                            ("cs_role", cs_role),
-                            ("clk_role", clk_role),
-                            ("mosi_role", mosi_role),
-                            ("miso_role", miso_role),
-                        ],
-                    };
-                    for (name, role) in roles {
-                        if role.trim().is_empty() || !declares_role(entry, role) {
-                            push_err(&mut errors, entry, format!(
-                                "peripheral register-map {name} '{role}' is not a role in [models.pins]"
-                            ));
-                        }
-                    }
-                    for (level, role) in required_high_roles
-                        .iter()
-                        .map(|role| ("high", role))
-                        .chain(required_low_roles.iter().map(|role| ("low", role)))
-                    {
-                        if role.trim().is_empty() || !declares_role(entry, role) {
-                            push_err(&mut errors, entry, format!(
-                                "peripheral register-map required-{level} role '{role}' is not a role in [models.pins]"
-                            ));
-                        }
-                    }
-                    for role in required_high_roles {
-                        if required_low_roles.contains(role) {
-                            push_err(&mut errors, entry, format!(
-                                "peripheral register-map role '{role}' cannot be required both high and low"
-                            ));
-                        }
-                    }
-
-                    let address_fields = [
-                        address_select_role.is_some(),
-                        address_when_low.is_some(),
-                        address_when_high.is_some(),
-                    ];
-                    if address_fields.iter().any(|present| *present)
-                        && !address_fields.iter().all(|present| *present)
-                    {
-                        push_err(&mut errors, entry, "peripheral register-map address selection requires address_select_role, address_when_low, and address_when_high together");
-                    } else if let (Some(role), Some(low), Some(high)) =
-                        (address_select_role, address_when_low, address_when_high)
-                    {
-                        if sensor.sensor.bus != Bus::I2c {
-                            push_err(&mut errors, entry, "peripheral register-map address selection is only valid for I2C");
-                        }
-                        if role.trim().is_empty() || !declares_role(entry, role) {
-                            push_err(&mut errors, entry, format!(
-                                "peripheral register-map address-select role '{role}' is not a role in [models.pins]"
-                            ));
-                        }
-                        if *low > 0x7f || *high > 0x7f || low == high {
-                            push_err(&mut errors, entry, format!(
-                                "peripheral register-map address strap must select two distinct 7-bit I2C addresses, got 0x{low:02x}/0x{high:02x}"
-                            ));
-                        }
-                    }
-                }
-            },
-        }
+        check_peripheral(entry, peripheral, &mut p);
     }
 
     if let Some(power) = &entry.peripheral_power {
-        if entry.peripheral.is_none() {
-            push_err(
-                &mut errors,
-                entry,
-                "peripheral_power requires a [models.peripheral] protocol model",
-            );
-        }
+        p.require(entry.peripheral.is_some(), || {
+            "peripheral_power requires a [models.peripheral] protocol model".into()
+        });
         for (field, role) in [
-            ("supply_role", power.supply_role.as_str()),
-            ("return_role", power.return_role.as_str()),
+            ("supply_role", &power.supply_role),
+            ("return_role", &power.return_role),
         ] {
             if role.trim().is_empty() {
-                push_err(
-                    &mut errors,
-                    entry,
-                    format!("peripheral_power {field} must not be empty"),
-                );
-            } else if !declares_role(entry, role) {
-                push_err(
-                    &mut errors,
-                    entry,
-                    format!("peripheral_power {field} '{role}' is not a role in [models.pins]"),
-                );
+                p.push(format!("peripheral_power {field} must not be empty"));
+            } else {
+                p.require(has_role(entry, role), || {
+                    format!("peripheral_power {field} '{role}' is not a role in [models.pins]")
+                });
             }
         }
-        if !power.power_on_threshold_v.is_finite() || power.power_on_threshold_v <= 0.0 {
-            push_err(
-                &mut errors,
-                entry,
-                "peripheral_power power_on_threshold_v must be finite and positive",
-            );
-        }
+        p.require(positive_finite(power.power_on_threshold_v), || {
+            "peripheral_power power_on_threshold_v must be finite and positive".into()
+        });
         for (field, value) in [
-            ("idle_a", power.idle_a),
-            ("read_a", power.read_a),
-            ("write_a", power.write_a),
+            ("idle_a", Some(power.idle_a)),
+            ("read_a", Some(power.read_a)),
+            ("write_a", Some(power.write_a)),
+            ("low_power_a", power.low_power_a),
         ] {
-            if !value.is_finite() || value < 0.0 {
-                push_err(
-                    &mut errors,
-                    entry,
-                    format!("peripheral_power {field} must be finite and non-negative"),
-                );
+            if let Some(v) = value {
+                p.require(nonneg_finite(v), || {
+                    format!("peripheral_power {field} must be finite and non-negative")
+                });
             }
-        }
-        if power
-            .low_power_a
-            .is_some_and(|value| !value.is_finite() || value < 0.0)
-        {
-            push_err(
-                &mut errors,
-                entry,
-                "peripheral_power low_power_a must be finite and non-negative",
-            );
         }
     }
 
     // A behavior capability is an API key consumed by coverage requirements,
-    // not a marketing sentence. Keep the vocabulary stable enough for exact
-    // matching, reject duplicates, and prevent the same capability being both
+    // not a marketing sentence: stable vocabulary, no duplicates, never both
     // implemented and missing.
-    let valid_capability = |value: &str| {
-        !value.is_empty()
-            && value
-                .chars()
-                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+    let capability_ok = |v: &str| {
+        !v.is_empty()
+            && v.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     };
-    let mut implemented = std::collections::HashSet::new();
-    for capability in &entry.coverage.implements {
-        if !valid_capability(capability) {
-            push_err(&mut errors, entry, format!(
-                "coverage capability '{capability}' must use lowercase ASCII letters, digits, and underscores"
-            ));
-        } else if !implemented.insert(capability.as_str()) {
-            push_err(
-                &mut errors,
-                entry,
-                format!("coverage.implements repeats '{capability}'"),
-            );
-        }
-    }
-    let mut missing = std::collections::HashSet::new();
-    for capability in &entry.coverage.missing {
-        if !valid_capability(capability) {
-            push_err(&mut errors, entry, format!(
-                "coverage capability '{capability}' must use lowercase ASCII letters, digits, and underscores"
-            ));
-        } else if !missing.insert(capability.as_str()) {
-            push_err(
-                &mut errors,
-                entry,
-                format!("coverage.missing repeats '{capability}'"),
-            );
-        } else if implemented.contains(capability.as_str()) {
-            push_err(
-                &mut errors,
-                entry,
-                format!(
+    for (list, capabilities) in [
+        ("implements", &entry.coverage.implements),
+        ("missing", &entry.coverage.missing),
+    ] {
+        let mut seen = HashSet::new();
+        for capability in capabilities {
+            if !capability_ok(capability) {
+                p.push(format!(
+                    "coverage capability '{capability}' must use lowercase ASCII letters, digits, and underscores"
+                ));
+            } else if !seen.insert(capability.as_str()) {
+                p.push(format!("coverage.{list} repeats '{capability}'"));
+            } else if list == "missing" && entry.coverage.implements.contains(capability) {
+                p.push(format!(
                     "coverage capability '{capability}' cannot be both implemented and missing"
-                ),
-            );
+                ));
+            }
         }
     }
 
-    if entry.params.0.contains_key("must_not_float_roles") {
-        match entry.params.get_str("must_not_float_roles") {
-            None => errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: "params.must_not_float_roles must be a comma-separated string of [models.pins] roles"
-                    .to_string(),
-            }),
+    if params.0.contains_key("must_not_float_roles") {
+        match params.get_str("must_not_float_roles") {
+            None => p.push(
+                "params.must_not_float_roles must be a comma-separated string of [models.pins] roles",
+            ),
             Some(raw) => {
-                let roles: Vec<&str> = raw
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|role| !role.is_empty())
-                    .collect();
-                if roles.is_empty() {
-                    push_err(&mut errors, entry, "params.must_not_float_roles names no roles");
-                }
-                let mut seen = std::collections::HashSet::new();
-                for role in roles {
-                    let normalized = role.to_ascii_lowercase();
-                    if !seen.insert(normalized) {
-                        push_err(&mut errors, entry, format!(
-                            "params.must_not_float_roles repeats role '{role}'"
-                        ));
-                    } else if !declares_role_ci(entry, role) {
-                        push_err(&mut errors, entry, format!(
-                            "params.must_not_float_roles entry '{role}' is not a role in [models.pins]"
-                        ));
+                let mut seen = HashSet::new();
+                let mut any = false;
+                for role in raw.split(',').map(str::trim).filter(|r| !r.is_empty()) {
+                    any = true;
+                    if !seen.insert(role.to_ascii_lowercase()) {
+                        p.push(format!("params.must_not_float_roles repeats role '{role}'"));
+                    } else {
+                        p.require(has_role_ci(entry, role), || {
+                            format!("params.must_not_float_roles entry '{role}' is not a role in [models.pins]")
+                        });
                     }
                 }
+                p.require(any, || "params.must_not_float_roles names no roles".into());
             }
         }
     }
 
-    macro_rules! require_f64 {
-        ($key:expr) => {
-            if entry.params.get_f64($key).is_none() {
-                push_err(
-                    &mut errors,
-                    entry,
-                    format!("missing required param '{}'", $key),
-                );
-            }
-        };
-    }
-
-    macro_rules! check_range {
-        ($key:expr, $min:expr, $max:expr) => {
-            if let Some(v) = entry.params.get_f64($key) {
-                // A non-finite value (NaN / ±inf) slips through `v < min || v > max`
-                // because every IEEE comparison against NaN is false, NaN is
-                // neither below-min nor above-max, so it must be rejected up front
-                // or a `nan`/`inf` TOML literal defeats the whole physical-bounds
-                // gate and propagates into the solver.
-                if !v.is_finite() || v < $min || v > $max {
-                    push_err(
-                        &mut errors,
-                        entry,
-                        format!(
-                            "param '{}' = {} is outside physical range [{}, {}]",
-                            $key, v, $min, $max
-                        ),
-                    );
-                }
-            }
-        };
-    }
-
-    /// Like [`check_range`], but on the MAGNITUDE, so a rail below ground is
-    /// judged by how big it is rather than rejected for its sign. NaN and the
-    /// infinities are still refused, for the same reason as above.
-    macro_rules! check_signed_range {
-        ($key:expr, $min:expr, $max:expr) => {
-            if let Some(v) = entry.params.get_f64($key) {
-                if !v.is_finite() || v.abs() < $min || v.abs() > $max {
-                    push_err(
-                        &mut errors,
-                        entry,
-                        format!(
-                            "param '{}' = {} is outside physical range (magnitude {} to {}, \
-                         either sign)",
-                            $key, v, $min, $max
-                        ),
-                    );
-                }
-            }
-        };
-    }
-
-    // Require `$lo` < `$hi` when both are present. A swapped/degenerate pair
-    // (e.g. an opamp with rail_lo=5, rail_hi=0) is otherwise accepted as valid
-    // and gives the solver an empty/inverted saturation band, silently pinning
-    // the output. Only checked when both parse; the require_f64! calls report a
-    // missing member on their own.
-    macro_rules! check_order {
-        ($lo:expr, $hi:expr) => {
-            if let (Some(lo), Some(hi)) = (entry.params.get_f64($lo), entry.params.get_f64($hi)) {
-                if lo >= hi {
-                    push_err(
-                        &mut errors,
-                        entry,
-                        format!(
-                            "param '{}' = {} must be strictly less than '{}' = {}",
-                            $lo, lo, $hi, hi
-                        ),
-                    );
-                }
-            }
-        };
-    }
-
-    // Identity-only entries name the intended part class, but intentionally do
-    // not satisfy that class's solver requirements. Requiring fake vout/gain/
-    // diode constants merely to pass lint would recreate the false coverage
-    // this state exists to prevent.
+    // Identity-only entries name the intended part class but intentionally do
+    // not satisfy its solver requirements or carry a complete pin map: fake
+    // constants merely to pass lint would recreate the false coverage the
+    // state exists to prevent.
     if !identity_only {
-        match entry.kind {
-            ComponentKind::Diode => {
-                require_f64!("is");
-                require_f64!("n");
-                require_f64!("rs");
-                check_range!("is", 1e-20, 1e-3);
-                check_range!("n", 0.5, 3.0);
-                check_range!("rs", 0.0, 1000.0);
-                check_range!("cjo", 0.0, 1e-6);
-            }
-            ComponentKind::BjtNpn | ComponentKind::BjtPnp => {
-                require_f64!("is");
-                require_f64!("bf");
-                require_f64!("nf");
-                require_f64!("vaf");
-                check_range!("is", 1e-20, 1e-3);
-                check_range!("bf", 1.0, 2000.0);
-                check_range!("nf", 0.5, 3.0);
-                check_range!("vaf", 1.0, 500.0);
-                check_range!("rb", 0.0, 1e6);
-                check_range!("rc", 0.0, 1e6);
-                check_range!("re", 0.0, 1e6);
-            }
-            ComponentKind::Nmos | ComponentKind::Pmos => {
-                require_f64!("vto");
-                require_f64!("kp");
-                check_range!("vto", -10.0, 10.0);
-                // kp = k'·(W/L) for the level-1 SPICE model. For a discrete POWER
-                // MOSFET the effective W/L is enormous, so kp legitimately runs into
-                // the tens or hundreds (the repo's own datasheet-cited db/mosfet.toml
-                // has kp up to 200 for ipa045n10n3g). A 1.0 A/V² ceiling false-flagged
-                // 6 of 8 shipped models and rejected any correctly-extracted power
-                // FET. Bound generously, still catches a nonsense hallucination.
-                check_range!("kp", 1e-6, 1000.0);
-                check_range!("lambda", 0.0, 1.0);
-            }
-            ComponentKind::Vreg => {
-                // A declarative converter owns its output, input draw and
-                // regulation semantics; `bind_vreg` deliberately does not read
-                // the simple-LDO `vout/dropout_v/iq_a` tuple in that path.
-                // Requiring authors to invent those unused numbers made a valid
-                // adjustable buck impossible to lint without false facts.
-                if entry.behavioral.converter.is_none() {
-                    require_f64!("vout");
-                    require_f64!("dropout_v");
-                    require_f64!("iq_a");
-                    // Magnitude, not value: a negative rail is a real regulator.
-                    // The 79xx family and every dual-supply analog board regulate
-                    // BELOW ground, and `vout` is stamped as a DC source against
-                    // ground, so the sign carries the whole meaning.
-                    check_signed_range!("vout", 0.5, 30.0);
-                    check_range!("dropout_v", 0.0, 10.0);
-                    check_range!("iq_a", 0.0, 1.0);
-                }
-            }
-            ComponentKind::Opamp => {
-                require_f64!("gain");
-                require_f64!("rail_lo");
-                require_f64!("rail_hi");
-                check_range!("gain", 1.0, 1e9);
-                check_range!("rail_lo", -60.0, 60.0);
-                check_range!("rail_hi", -60.0, 60.0);
-                check_order!("rail_lo", "rail_hi");
-            }
-            ComponentKind::Comparator => {
-                require_f64!("out_lo");
-                require_f64!("out_hi");
-                require_f64!("hysteresis");
-                check_range!("hysteresis", 0.0, 5.0);
-                check_range!("out_lo", -60.0, 60.0);
-                check_range!("out_hi", -60.0, 60.0);
-                check_order!("out_lo", "out_hi");
-            }
-            ComponentKind::AnalogSwitch => {
-                require_f64!("ron");
-                require_f64!("roff");
-                check_range!("ron", 0.01, 10_000.0);
-                check_range!("roff", 1e3, 1e12);
-                // On-resistance must be far below off-resistance; the two ranges
-                // overlap ([0.01,1e4] vs [1e3,1e12]), so a swapped/degenerate pair
-                // (ron=5000, roff=2000) is representable and would model a switch that
-                // conducts MORE when open, an inverted transmission gate the solver
-                // routes the wrong way. Same hazard the R35 opamp/comparator order
-                // checks close.
-                check_order!("ron", "roff");
-            }
-            // Digital / MCU / connector / ignore: no mandatory numeric params
-            _ => {}
+        let rules = kind_rules(entry);
+        for key in rules.required {
+            p.require(params.get_f64(key).is_some(), || {
+                format!("missing required param '{key}'")
+            });
         }
+        for (key, lo, hi) in rules.ranges {
+            if let Some(v) = params.get_f64(key) {
+                p.require(v.is_finite() && v >= *lo && v <= *hi, || {
+                    format!("param '{key}' = {v} is outside physical range [{lo}, {hi}]")
+                });
+            }
+        }
+        for (key, lo, hi) in rules.magnitude {
+            if let Some(v) = params.get_f64(key) {
+                p.require(v.is_finite() && v.abs() >= *lo && v.abs() <= *hi, || {
+                    format!(
+                        "param '{key}' = {v} is outside physical range (magnitude {lo} to {hi}, either sign)"
+                    )
+                });
+            }
+        }
+        for (lo, hi) in rules.ordered {
+            if let (Some(a), Some(b)) = (params.get_f64(lo), params.get_f64(hi)) {
+                p.require(a < b, || {
+                    format!("param '{lo}' = {a} must be strictly less than '{hi}' = {b}")
+                });
+            }
+        }
+        check_required_pins(entry, &mut p);
+        check_behavioral_roles(entry, &mut p);
     }
 
-    // Identity-only cards deliberately stamp no circuit or firmware behavior,
-    // so requiring a complete pin map here pressures authors to fabricate one
-    // merely to record an exact identity. The board-observed pins remain in
-    // `models coverage` / `models prepare` inventory.json, and the engine keeps
-    // the part OPEN until an executable card supplies the roles it needs.
-    if !identity_only {
-        check_required_pins(entry, &mut errors);
-        check_behavioral_series_path_roles(entry, &mut errors);
-    }
-
-    // Absolute-maximum ratings gate the engine's stress/destruction faults. A
-    // NaN, negative, or zero rating passes every kind-specific check above (which
-    // only look at `params`, never `ratings`), then silently disables the fault:
-    // the stress monitor computes `if limit > 0.0 { value/limit } else { 0.0 }`,
-    // so a NaN (NaN>0 is false) or non-positive limit yields frac 0 and the
-    // Overcurrent/Overvoltage/Overpower check never trips, an unprotected part
-    // that validated clean. Reject any present rating that is not positive-finite.
+    // Absolute-maximum ratings gate the stress/destruction faults, and the
+    // monitor computes `if limit > 0.0 { value/limit } else { 0.0 }`: a NaN
+    // or non-positive rating silently disables the fault (thermal.rs leaves
+    // the thermal resistances unfloored the same way).
+    let r = &entry.ratings;
     for (name, rating) in [
-        ("max_current_a", entry.ratings.max_current_a),
-        ("max_surge_current_a", entry.ratings.max_surge_current_a),
-        ("max_power_w", entry.ratings.max_power_w),
-        ("max_voltage_v", entry.ratings.max_voltage_v),
-        ("max_pin_current_a", entry.ratings.max_pin_current_a),
-        ("max_ripple_current_a", entry.ratings.max_ripple_current_a),
-        ("max_junction_temp_c", entry.ratings.max_junction_temp_c),
-        // The thermal resistances are solver-facing and UNFLOORED: thermal.rs
-        // computes `Tj = ambient + power.max(0)*theta_ja`, so a negative/NaN
-        // theta drives Tj at or below ambient and the Overtemperature fault never
-        // trips (frac.max(0) = 0). Gate them like the other ratings (R52 missed
-        // these two).
-        ("theta_ja_c_per_w", entry.ratings.theta_ja_c_per_w),
-        ("theta_jc_c_per_w", entry.ratings.theta_jc_c_per_w),
+        ("max_current_a", r.max_current_a),
+        ("max_surge_current_a", r.max_surge_current_a),
+        ("max_power_w", r.max_power_w),
+        ("max_voltage_v", r.max_voltage_v),
+        ("max_pin_current_a", r.max_pin_current_a),
+        ("max_ripple_current_a", r.max_ripple_current_a),
+        ("max_junction_temp_c", r.max_junction_temp_c),
+        ("theta_ja_c_per_w", r.theta_ja_c_per_w),
+        ("theta_jc_c_per_w", r.theta_jc_c_per_w),
     ] {
         if let Some(v) = rating {
-            if !v.is_finite() || v <= 0.0 {
-                push_err(
-                    &mut errors,
-                    entry,
-                    format!("rating '{name}' = {v} must be a positive finite number"),
-                );
-            }
+            p.require(positive_finite(v), || {
+                format!("rating '{name}' = {v} must be a positive finite number")
+            });
         }
     }
 
-    // Board-programmed current is solver-facing physics just like `params`:
-    // malformed constants can silently turn a real rail current into zero/NaN,
-    // while confusing a normal-operating ceiling with a device-level safety
-    // threshold makes the part promise operation in a region the datasheet does
-    // not specify as normal.
     if let Some(program) = &entry.current_program {
-        let role_exists =
-            !program.pin.trim().is_empty() && declares_role_ci(entry, program.pin.trim());
-        if !role_exists {
-            push_err(
-                &mut errors,
-                entry,
-                format!(
-                    "current_program.pin '{}' is not a role in [models.pins]",
-                    program.pin
-                ),
-            );
-        }
-
-        for (field, roles) in [
-            ("current_in_roles", &program.current_in_roles),
-            ("current_out_roles", &program.current_out_roles),
-        ] {
-            if program.semantics == CurrentProgramSemantics::RegulatedCurrent && roles.is_empty() {
-                push_err(
-                    &mut errors,
-                    entry,
-                    format!("current_program regulated_current requires non-empty {field}"),
-                );
-            }
-            let mut seen = std::collections::HashSet::new();
-            for role in roles {
-                let normalized = role.trim().to_ascii_lowercase();
-                if normalized.is_empty() || !declares_role_ci(entry, role.trim()) {
-                    push_err(
-                        &mut errors,
-                        entry,
-                        format!(
-                            "current_program.{field} entry '{role}' is not a role in [models.pins]"
-                        ),
-                    );
-                } else if !seen.insert(normalized) {
-                    push_err(
-                        &mut errors,
-                        entry,
-                        format!("current_program.{field} repeats role '{role}'"),
-                    );
-                }
-            }
-        }
-        for input in &program.current_in_roles {
-            if program
-                .current_out_roles
-                .iter()
-                .any(|output| output.eq_ignore_ascii_case(input))
-            {
-                push_err(&mut errors, entry, format!(
-                    "current_program role '{input}' appears in both current_in_roles and current_out_roles"
-                ));
-            }
-        }
-
-        if program.semantics == CurrentProgramSemantics::RegulatedCurrent
-            && program.max_operating_current_a.is_none()
-        {
-            push_err(&mut errors, entry, "current_program regulated_current requires max_operating_current_a so an undersized programming resistor cannot imply operation beyond the sourced domain");
-        }
-        if program.above_domain == AboveDomainBehavior::Saturate
-            && program.max_operating_current_a.is_none()
-        {
-            push_err(&mut errors, entry, "current_program above_domain = saturate requires max_operating_current_a as the sourced saturation value");
-        }
-
-        if let Some(limit) = program.max_operating_current_a {
-            if !limit.is_finite() || limit <= 0.0 {
-                push_err(&mut errors, entry, format!(
-                    "current_program.max_operating_current_a = {limit} must be a positive finite number"
-                ));
-            }
-            // The programmed quantity is the part's rail/load current. A
-            // generic per-pin source/sink limit applies to the PROG/control pin
-            // itself and is not a bound on that independently controlled rail.
-            if let Some(device_limit) = entry
-                .ratings
-                .max_current_a
-                .filter(|value| value.is_finite() && *value > 0.0)
-            {
-                if limit.is_finite() && limit > device_limit {
-                    push_err(&mut errors, entry, format!(
-                        "current_program.max_operating_current_a = {limit} A exceeds ratings.max_current_a = {device_limit} A"
-                    ));
-                }
-            }
-        }
-
-        let mut check_positive = |name: &str, value: f64| {
-            if !value.is_finite() || value <= 0.0 {
-                push_err(
-                    &mut errors,
-                    entry,
-                    format!("current_program.{name} = {value} must be a positive finite number"),
-                );
-                false
-            } else {
-                true
-            }
-        };
-
-        match &program.equation {
-            CurrentProgramEquation::InverseResistance { k_volts } => {
-                check_positive("k_volts", *k_volts);
-            }
-            CurrentProgramEquation::PowerLawResistance {
-                coefficient_a,
-                resistance_scale_ohms,
-                exponent,
-            } => {
-                for (name, value) in [
-                    ("coefficient_a", *coefficient_a),
-                    ("resistance_scale_ohms", *resistance_scale_ohms),
-                    ("exponent", *exponent),
-                ] {
-                    check_positive(name, value);
-                }
-            }
-            CurrentProgramEquation::PiecewiseInverseResistance {
-                low_k_volts,
-                transition_current_a,
-                high_numerator_a,
-                resistance_scale_ohms,
-                high_offset,
-            } => {
-                let constants_valid = [
-                    ("low_k_volts", *low_k_volts),
-                    ("transition_current_a", *transition_current_a),
-                    ("high_numerator_a", *high_numerator_a),
-                    ("resistance_scale_ohms", *resistance_scale_ohms),
-                    ("high_offset", *high_offset),
-                ]
-                .into_iter()
-                .all(|(name, value)| check_positive(name, value));
-
-                if constants_valid {
-                    let transition_resistance_ohms = *low_k_volts / *transition_current_a;
-                    let high_at_transition = *high_numerator_a
-                        / (transition_resistance_ohms / *resistance_scale_ohms + *high_offset);
-                    let relative_gap =
-                        (high_at_transition - *transition_current_a).abs() / *transition_current_a;
-                    if relative_gap > 0.01 {
-                        push_err(&mut errors, entry, format!(
-                            "current_program piecewise branches are not continuous at {transition_current_a} A (high branch gives {high_at_transition} A)"
-                        ));
-                    }
-                }
-            }
-            CurrentProgramEquation::SenseScaledResistance {
-                sense_roles,
-                sense_far_roles,
-                program_bias_a,
-                program_full_scale_v,
-                sense_full_scale_v,
-            } => {
-                for (name, value) in [
-                    ("program_bias_a", *program_bias_a),
-                    ("program_full_scale_v", *program_full_scale_v),
-                    ("sense_full_scale_v", *sense_full_scale_v),
-                ] {
-                    check_positive(name, value);
-                }
-                if sense_roles.is_empty() {
-                    push_err(
-                        &mut errors,
-                        entry,
-                        "current_program.sense_roles must name at least one role",
-                    );
-                }
-                let mut normalized_roles = std::collections::HashSet::new();
-                for role in sense_roles {
-                    if role.trim().is_empty() || !declares_role_ci(entry, role.trim()) {
-                        push_err(&mut errors, entry, format!(
-                            "current_program.sense_roles entry '{role}' is not a role in [models.pins]"
-                        ));
-                    }
-                    if !normalized_roles.insert(role.trim().to_ascii_lowercase()) {
-                        push_err(
-                            &mut errors,
-                            entry,
-                            format!("current_program.sense_roles repeats role '{role}'"),
-                        );
-                    }
-                }
-                if sense_far_roles.len() != sense_roles.len() {
-                    push_err(
-                        &mut errors,
-                        entry,
-                        format!(
-                            "current_program.sense_far_roles has {} entries but sense_roles has {}",
-                            sense_far_roles.len(),
-                            sense_roles.len()
-                        ),
-                    );
-                }
-                for role in sense_far_roles {
-                    if !role.eq_ignore_ascii_case("ground") && !declares_role_ci(entry, role.trim())
-                    {
-                        push_err(&mut errors, entry, format!(
-                            "current_program.sense_far_roles entry '{role}' is neither 'ground' nor a role in [models.pins]"
-                        ));
-                    }
-                }
-            }
-        }
+        check_current_program(entry, program, &mut p);
     }
 
-    if errors.is_empty() {
+    if p.0.is_empty() {
         Ok(())
     } else {
-        Err(errors)
+        Err(p
+            .0
+            .into_iter()
+            .map(|message| ValidationError {
+                id: entry.id.clone(),
+                message,
+            })
+            .collect())
     }
 }
 
-/// A state-controlled series path is solver-facing connectivity: both ends
-/// must name roles the entry actually maps from physical pins. A typo here
-/// otherwise validates, then the runtime silently skips the path and the part
-/// that was supposed to close a rail remains open.
-fn check_behavioral_series_path_roles(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
-    let declared = entry
-        .pins
-        .values()
-        .map(|role| role.to_ascii_lowercase())
-        .collect::<std::collections::HashSet<_>>();
-    for (index, path) in entry.behavioral.series_paths.iter().enumerate() {
-        for (end, role) in [("a", &path.a), ("b", &path.b)] {
-            if !declared.contains(&role.to_ascii_lowercase()) {
-                push_err(errors, entry, format!(
-                    "behavioral.series_paths[{index}].{end} role '{role}' is not present in [models.pins]"
-                ));
+fn check_peripheral(entry: &ModelEntry, peripheral: &PeripheralSpec, p: &mut Problems) {
+    match peripheral {
+        PeripheralSpec::I2cEeprom {
+            address,
+            size_bytes,
+            page_size,
+            word_address_bytes,
+        } => {
+            p.require(*address <= 0x7f, || {
+                format!("peripheral I2C address 0x{address:02x} is not a 7-bit address")
+            });
+            p.require(*size_bytes > 0, || {
+                "peripheral I2C EEPROM size_bytes must be positive".into()
+            });
+            p.require(page_size.is_power_of_two() && page_size <= size_bytes, || {
+                format!("peripheral I2C EEPROM page_size {page_size} must be a power of two no larger than size_bytes {size_bytes}")
+            });
+            p.require(matches!(word_address_bytes, 1 | 2), || {
+                format!(
+                    "peripheral I2C EEPROM word_address_bytes must be 1 or 2, got {word_address_bytes}"
+                )
+            });
+        }
+        PeripheralSpec::SpiNorFlash {
+            size_bytes,
+            page_size,
+            sector_size,
+            jedec_id,
+            spi_mode,
+            cs_role,
+            clk_role,
+            mosi_role,
+            miso_role,
+        } => {
+            for (name, value) in [
+                ("size_bytes", *size_bytes),
+                ("page_size", *page_size),
+                ("sector_size", *sector_size),
+            ] {
+                p.require(value > 0, || {
+                    format!("peripheral SPI NOR {name} must be positive")
+                });
+            }
+            let regions_ok = page_size.is_power_of_two()
+                && sector_size.is_power_of_two()
+                && (*size_bytes == 0 || (page_size <= size_bytes && sector_size <= size_bytes));
+            p.require(regions_ok, || "peripheral SPI NOR page_size and sector_size must be power-of-two regions no larger than the array".into());
+            p.require(jedec_id.len() == 3, || {
+                format!(
+                    "peripheral SPI NOR jedec_id must contain exactly 3 bytes, got {}",
+                    jedec_id.len()
+                )
+            });
+            p.require(*spi_mode <= 3, || {
+                format!("peripheral SPI NOR spi_mode must be 0..3, got {spi_mode}")
+            });
+            for (name, role) in [
+                ("cs_role", cs_role),
+                ("clk_role", clk_role),
+                ("mosi_role", mosi_role),
+                ("miso_role", miso_role),
+            ] {
+                p.require(has_role(entry, role), || {
+                    format!("peripheral SPI NOR {name} '{role}' is not a role in [models.pins]")
+                });
+            }
+        }
+        PeripheralSpec::RegisterMap {
+            spec_toml,
+            controller,
+            scl_role,
+            sda_role,
+            cs_role,
+            clk_role,
+            mosi_role,
+            miso_role,
+            required_high_roles,
+            required_low_roles,
+            address_select_role,
+            address_when_low,
+            address_when_high,
+        } => {
+            let sensor = match SensorSpec::from_toml(spec_toml) {
+                Ok(spec) => spec,
+                Err(error) => {
+                    p.push(format!(
+                        "peripheral register-map spec_toml must be a valid [sensor] document: {error}"
+                    ));
+                    return;
+                }
+            };
+            p.require(
+                !controller
+                    .as_ref()
+                    .is_some_and(|name| name.trim().is_empty()),
+                || "peripheral register-map controller must not be empty".into(),
+            );
+            let roles: &[(&str, &String)] = match sensor.sensor.bus {
+                Bus::I2c => &[("scl_role", scl_role), ("sda_role", sda_role)],
+                Bus::Spi => &[
+                    ("cs_role", cs_role),
+                    ("clk_role", clk_role),
+                    ("mosi_role", mosi_role),
+                    ("miso_role", miso_role),
+                ],
+            };
+            for (name, role) in roles {
+                p.require(!role.trim().is_empty() && has_role(entry, role), || {
+                    format!(
+                        "peripheral register-map {name} '{role}' is not a role in [models.pins]"
+                    )
+                });
+            }
+            for (level, role) in required_high_roles
+                .iter()
+                .map(|role| ("high", role))
+                .chain(required_low_roles.iter().map(|role| ("low", role)))
+            {
+                p.require(!role.trim().is_empty() && has_role(entry, role), || {
+                    format!("peripheral register-map required-{level} role '{role}' is not a role in [models.pins]")
+                });
+            }
+            for role in required_high_roles {
+                p.require(!required_low_roles.contains(role), || {
+                    format!("peripheral register-map role '{role}' cannot be required both high and low")
+                });
+            }
+
+            // The address strap is an all-or-none contract: the binder refuses
+            // a floating strap instead of choosing a plausible address.
+            match (address_select_role, address_when_low, address_when_high) {
+                (None, None, None) => {}
+                (Some(role), Some(low), Some(high)) => {
+                    p.require(sensor.sensor.bus == Bus::I2c, || {
+                        "peripheral register-map address selection is only valid for I2C".into()
+                    });
+                    p.require(!role.trim().is_empty() && has_role(entry, role), || {
+                        format!("peripheral register-map address-select role '{role}' is not a role in [models.pins]")
+                    });
+                    p.require(*low <= 0x7f && *high <= 0x7f && low != high, || {
+                        format!("peripheral register-map address strap must select two distinct 7-bit I2C addresses, got 0x{low:02x}/0x{high:02x}")
+                    });
+                }
+                _ => p.push("peripheral register-map address selection requires address_select_role, address_when_low, and address_when_high together"),
             }
         }
     }
-    for (index, load) in entry.behavioral.profiled_loads.iter().enumerate() {
-        if !declared.contains(&load.supply_pin.to_ascii_lowercase()) {
-            push_err(errors, entry, format!(
-                "behavioral.profiled_loads[{index}].supply_pin role '{}' is not present in [models.pins]",
-                load.supply_pin
-            ));
-        }
-        if let Some(role) = &load.return_pin {
-            if !declared.contains(&role.to_ascii_lowercase()) {
-                push_err(errors, entry, format!(
-                    "behavioral.profiled_loads[{index}].return_pin role '{role}' is not present in [models.pins]"
+}
+
+/// Board-programmed current is solver-facing physics just like `params`:
+/// malformed constants silently turn a real rail current into zero/NaN, and
+/// confusing a normal-operating ceiling with a device-level safety threshold
+/// makes the part promise operation in a region the datasheet never specified.
+fn check_current_program(
+    entry: &ModelEntry,
+    program: &crate::schema::CurrentProgram,
+    p: &mut Problems,
+) {
+    let role_ok = |role: &str| !role.trim().is_empty() && has_role_ci(entry, role.trim());
+    p.require(role_ok(&program.pin), || {
+        format!(
+            "current_program.pin '{}' is not a role in [models.pins]",
+            program.pin
+        )
+    });
+
+    let regulated = program.semantics == CurrentProgramSemantics::RegulatedCurrent;
+    for (field, roles) in [
+        ("current_in_roles", &program.current_in_roles),
+        ("current_out_roles", &program.current_out_roles),
+    ] {
+        p.require(!regulated || !roles.is_empty(), || {
+            format!("current_program regulated_current requires non-empty {field}")
+        });
+        let mut seen = HashSet::new();
+        for role in roles {
+            if !role_ok(role) {
+                p.push(format!(
+                    "current_program.{field} entry '{role}' is not a role in [models.pins]"
                 ));
+            } else if !seen.insert(role.trim().to_ascii_lowercase()) {
+                p.push(format!("current_program.{field} repeats role '{role}'"));
             }
+        }
+    }
+    for input in &program.current_in_roles {
+        let both = program
+            .current_out_roles
+            .iter()
+            .any(|output| output.eq_ignore_ascii_case(input));
+        p.require(!both, || {
+            format!("current_program role '{input}' appears in both current_in_roles and current_out_roles")
+        });
+    }
+
+    let limit = program.max_operating_current_a;
+    p.require(!regulated || limit.is_some(), || "current_program regulated_current requires max_operating_current_a so an undersized programming resistor cannot imply operation beyond the sourced domain".into());
+    p.require(program.above_domain != AboveDomainBehavior::Saturate || limit.is_some(), || "current_program above_domain = saturate requires max_operating_current_a as the sourced saturation value".into());
+    if let Some(limit) = limit {
+        p.positive("current_program.max_operating_current_a", limit);
+        // The programmed quantity is the part's rail/load current; a generic
+        // per-pin source/sink limit bounds the PROG pin itself, not that rail.
+        if let Some(device_limit) = entry.ratings.max_current_a.filter(|v| positive_finite(*v)) {
+            p.require(!(limit.is_finite() && limit > device_limit), || {
+                format!("current_program.max_operating_current_a = {limit} A exceeds ratings.max_current_a = {device_limit} A")
+            });
+        }
+    }
+
+    let positive = |p: &mut Problems, name: &str, v: f64| {
+        p.positive(format!("current_program.{name}"), v);
+        positive_finite(v)
+    };
+    match &program.equation {
+        CurrentProgramEquation::InverseResistance { k_volts } => {
+            positive(p, "k_volts", *k_volts);
+        }
+        CurrentProgramEquation::PowerLawResistance {
+            coefficient_a,
+            resistance_scale_ohms,
+            exponent,
+        } => {
+            for (name, v) in [
+                ("coefficient_a", *coefficient_a),
+                ("resistance_scale_ohms", *resistance_scale_ohms),
+                ("exponent", *exponent),
+            ] {
+                positive(p, name, v);
+            }
+        }
+        CurrentProgramEquation::PiecewiseInverseResistance {
+            low_k_volts,
+            transition_current_a,
+            high_numerator_a,
+            resistance_scale_ohms,
+            high_offset,
+        } => {
+            let mut valid = true;
+            for (name, v) in [
+                ("low_k_volts", *low_k_volts),
+                ("transition_current_a", *transition_current_a),
+                ("high_numerator_a", *high_numerator_a),
+                ("resistance_scale_ohms", *resistance_scale_ohms),
+                ("high_offset", *high_offset),
+            ] {
+                valid &= positive(p, name, v);
+            }
+            if valid {
+                let transition_ohms = low_k_volts / transition_current_a;
+                let high_at_transition =
+                    high_numerator_a / (transition_ohms / resistance_scale_ohms + high_offset);
+                let gap = (high_at_transition - transition_current_a).abs() / transition_current_a;
+                p.require(gap <= 0.01, || {
+                    format!("current_program piecewise branches are not continuous at {transition_current_a} A (high branch gives {high_at_transition} A)")
+                });
+            }
+        }
+        CurrentProgramEquation::SenseScaledResistance {
+            sense_roles,
+            sense_far_roles,
+            program_bias_a,
+            program_full_scale_v,
+            sense_full_scale_v,
+        } => {
+            for (name, v) in [
+                ("program_bias_a", *program_bias_a),
+                ("program_full_scale_v", *program_full_scale_v),
+                ("sense_full_scale_v", *sense_full_scale_v),
+            ] {
+                positive(p, name, v);
+            }
+            p.require(!sense_roles.is_empty(), || {
+                "current_program.sense_roles must name at least one role".into()
+            });
+            let mut seen = HashSet::new();
+            for role in sense_roles {
+                p.require(role_ok(role), || {
+                    format!(
+                        "current_program.sense_roles entry '{role}' is not a role in [models.pins]"
+                    )
+                });
+                p.require(seen.insert(role.trim().to_ascii_lowercase()), || {
+                    format!("current_program.sense_roles repeats role '{role}'")
+                });
+            }
+            p.require(sense_far_roles.len() == sense_roles.len(), || {
+                format!(
+                    "current_program.sense_far_roles has {} entries but sense_roles has {}",
+                    sense_far_roles.len(),
+                    sense_roles.len()
+                )
+            });
+            for role in sense_far_roles {
+                p.require(
+                    role.eq_ignore_ascii_case("ground") || has_role_ci(entry, role.trim()),
+                    || format!("current_program.sense_far_roles entry '{role}' is neither 'ground' nor a role in [models.pins]"),
+                );
+            }
+        }
+    }
+}
+
+/// A state-controlled series path or a profiled load is solver-facing
+/// connectivity: both ends must name roles the entry actually maps from
+/// physical pins. A typo here otherwise validates, then the runtime silently
+/// skips the path and the part that was supposed to close a rail stays open.
+fn check_behavioral_roles(entry: &ModelEntry, p: &mut Problems) {
+    let declared: HashSet<String> = entry
+        .pins
+        .values()
+        .map(|role| role.to_ascii_lowercase())
+        .collect();
+    let mut check = |field: String, role: &str| {
+        p.require(declared.contains(&role.to_ascii_lowercase()), || {
+            format!("behavioral.{field} role '{role}' is not present in [models.pins]")
+        });
+    };
+    for (index, path) in entry.behavioral.series_paths.iter().enumerate() {
+        check(format!("series_paths[{index}].a"), &path.a);
+        check(format!("series_paths[{index}].b"), &path.b);
+    }
+    for (index, load) in entry.behavioral.profiled_loads.iter().enumerate() {
+        check(
+            format!("profiled_loads[{index}].supply_pin"),
+            &load.supply_pin,
+        );
+        if let Some(role) = &load.return_pin {
+            check(format!("profiled_loads[{index}].return_pin"), role);
         }
     }
 }
@@ -936,27 +727,22 @@ fn check_behavioral_series_path_roles(entry: &ModelEntry, errors: &mut Vec<Valid
 /// binder-accepted alias / channel suffix); it never flags EXTRA pins, so a
 /// legitimately-declared power/NC pin (an op-amp's `vcc`/`vee`) is fine. An
 /// empty pins map is the footprint/pin-rules inference path and is left alone.
-fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
+fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
     if entry.kind == ComponentKind::Digital && entry.pins.is_empty() {
-        push_err(errors, entry, "digital model has no [models.pins]; without declared roles it can bind cleanly while driving and observing nothing");
+        p.push("digital model has no [models.pins]; without declared roles it can bind cleanly while driving and observing nothing");
         return;
     }
-    if entry.pins.is_empty() {
-        return;
-    }
-    // A behavioral part (converter/FSM/DAC power IC) references its pins from the
-    // [models.behavioral] block by arbitrary datasheet names (e.g. an LTC4020's
-    // `bat`/`pvin`), NOT through the simple analog binder, so the canonical
-    // anchor roles do not apply. Leave it alone.
-    if !entry.behavioral.is_empty() {
+    // A behavioral part (converter/FSM/DAC power IC) references its pins from
+    // the [models.behavioral] block by arbitrary datasheet names, NOT through
+    // the simple analog binder, so the canonical anchor roles do not apply.
+    if entry.pins.is_empty() || !entry.behavioral.is_empty() {
         return;
     }
     // Each inner slice is one required role; the model satisfies it by mapping
     // some pin to ANY name in the slice, after normalization. Names are the
-    // binder's accepted aliases (see bind_diode/bjt/mosfet/vreg/opamp/comparator
-    // in hauksbee-engine). analog_switch is deliberately EXCLUDED: it binds
-    // SPST (`in_out_a`/`in_out_b`) and SPDT (`com`/`s0`/`s1`) forms with too
-    // varied a vocabulary to anchor-check without false positives.
+    // binder's accepted aliases. analog_switch is deliberately EXCLUDED: it
+    // binds SPST (`in_out_a`/`in_out_b`) and SPDT (`com`/`s0`/`s1`) forms with
+    // too varied a vocabulary to anchor-check without false positives.
     let required: &[&[&str]] = match entry.kind {
         ComponentKind::Diode => &[&["anode", "a", "p"], &["cathode", "k", "n"]],
         ComponentKind::BjtNpn | ComponentKind::BjtPnp => {
@@ -971,8 +757,6 @@ fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
             &["in_plus", "inp", "in+"],
             &["in_minus", "inn", "in-"],
         ],
-        // Kinds whose pin vocabulary is open or handled elsewhere (analog_switch,
-        // digital, mcu, dac, adc, shift_register, connector, passive, ignore).
         _ => return,
     };
 
@@ -982,37 +766,32 @@ fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
     // `d1`/`d2`->`d` (dual MOSFET), `collector_q2`->`collector`.
     let normalize = |role: &str| -> String {
         let mut r = role.to_ascii_lowercase();
-        for sfx in ["_a", "_b", "_c", "_d"] {
-            if let Some(base) = r.strip_suffix(sfx) {
-                r = base.to_string();
-                break;
-            }
+        if let Some(base) = ["_a", "_b", "_c", "_d"]
+            .iter()
+            .find_map(|sfx| r.strip_suffix(sfx))
+        {
+            r = base.to_string();
         }
         if let Some(idx) = r.rfind("_q") {
-            if idx + 2 < r.len() && r[idx + 2..].chars().all(|c| c.is_ascii_digit()) {
-                r = r[..idx].to_string();
+            if idx + 2 < r.len() && r[idx + 2..].bytes().all(|c| c.is_ascii_digit()) {
+                r.truncate(idx);
             }
         }
-        r = r.trim_end_matches(|c: char| c.is_ascii_digit()).to_string();
-        r.trim_end_matches('_').to_string()
+        r.trim_end_matches(|c: char| c.is_ascii_digit())
+            .trim_end_matches('_')
+            .to_string()
     };
-    let declared: std::collections::HashSet<String> =
-        entry.pins.values().map(|role| normalize(role)).collect();
+    let declared: HashSet<String> = entry.pins.values().map(|role| normalize(role)).collect();
 
-    for role_family in required {
-        if !role_family.iter().any(|name| declared.contains(*name)) {
-            push_err(
-                errors,
-                entry,
-                format!(
-                    "[models.pins] declares no '{}' pin (a {:?} needs it); \
-                 the part would bind OPEN. Accepted role names: {}",
-                    role_family[0],
-                    entry.kind,
-                    role_family.join(" / ")
-                ),
-            );
-        }
+    for family in required {
+        p.require(family.iter().any(|name| declared.contains(*name)), || {
+            format!(
+                "[models.pins] declares no '{}' pin (a {:?} needs it); the part would bind OPEN. Accepted role names: {}",
+                family[0],
+                entry.kind,
+                family.join(" / ")
+            )
+        });
     }
 }
 
@@ -1050,29 +829,30 @@ pub fn kind_suggestion(unknown: &str) -> Option<&'static str> {
         // Regulators and power ICs of every flavour model as `vreg` (the
         // behavioural block carries what the base kind cannot).
         "ldo" | "regulator" | "buck" | "boost" | "buck_boost" | "smps" | "dcdc" | "dc_dc"
-        | "pmic" | "charger" => "vreg",
-        "npn" | "bjt" | "transistor" => "bjt_npn",
-        "pnp" => "bjt_pnp",
-        "mosfet" | "fet" | "nfet" | "n_mosfet" | "nmosfet" => "nmos",
-        "pfet" | "p_mosfet" | "pmosfet" => "pmos",
-        "op_amp" | "operational_amplifier" | "amplifier" => "opamp",
-        "resistor" | "capacitor" | "inductor" | "res" | "cap" | "ferrite" | "crystal" => "passive",
-        "led" | "zener" | "schottky" | "rectifier" | "tvs" => "diode",
-        "switch" | "mux" | "multiplexer" => "analog_switch",
-        "microcontroller" | "micro" | "soc" => "mcu",
-        "header" | "jack" | "socket" | "plug" => "connector",
-        "logic" | "gate" | "flip_flop" | "latch" => "digital",
-        _ => "",
+        | "pmic" | "charger" => Some("vreg"),
+        "npn" | "bjt" | "transistor" => Some("bjt_npn"),
+        "pnp" => Some("bjt_pnp"),
+        "mosfet" | "fet" | "nfet" | "n_mosfet" | "nmosfet" => Some("nmos"),
+        "pfet" | "p_mosfet" | "pmosfet" => Some("pmos"),
+        "op_amp" | "operational_amplifier" | "amplifier" => Some("opamp"),
+        "resistor" | "capacitor" | "inductor" | "res" | "cap" | "ferrite" | "crystal" => {
+            Some("passive")
+        }
+        "led" | "zener" | "schottky" | "rectifier" | "tvs" => Some("diode"),
+        "switch" | "mux" | "multiplexer" => Some("analog_switch"),
+        "microcontroller" | "micro" | "soc" => Some("mcu"),
+        "header" | "jack" | "socket" | "plug" => Some("connector"),
+        "logic" | "gate" | "flip_flop" | "latch" => Some("digital"),
+        _ => None,
     };
-    if !alias.is_empty() {
-        return Some(alias);
-    }
-    KIND_NAMES
-        .iter()
-        .map(|k| (levenshtein(&lower, k), *k))
-        .filter(|(d, _)| *d <= 2)
-        .min_by_key(|(d, _)| *d)
-        .map(|(_, k)| k)
+    alias.or_else(|| {
+        KIND_NAMES
+            .iter()
+            .map(|k| (hauksbee_ir::levenshtein(&lower, k), *k))
+            .filter(|(d, _)| *d <= 2)
+            .min_by_key(|(d, _)| *d)
+            .map(|(_, k)| k)
+    })
 }
 
 /// If a TOML deserialization error is an unknown [`ComponentKind`] variant,
@@ -1084,30 +864,13 @@ pub fn kind_error_note(err_text: &str) -> Option<String> {
         return None;
     }
     let unknown = err_text.split('`').nth(1)?;
-    match kind_suggestion(unknown) {
-        Some(s) => Some(format!("unknown kind '{unknown}': did you mean '{s}'?")),
-        None => Some(format!(
+    Some(match kind_suggestion(unknown) {
+        Some(s) => format!("unknown kind '{unknown}': did you mean '{s}'?"),
+        None => format!(
             "unknown kind '{unknown}'; valid kinds: {}",
             KIND_NAMES.join(", ")
-        )),
-    }
-}
-
-/// Iterative Levenshtein edit distance (short vocabulary strings).
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0usize; b.len() + 1];
-    for (i, ca) in a.iter().enumerate() {
-        cur[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let sub = prev[j] + usize::from(ca != cb);
-            cur[j + 1] = sub.min(prev[j + 1] + 1).min(cur[j] + 1);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[b.len()]
+        ),
+    })
 }
 
 #[cfg(test)]

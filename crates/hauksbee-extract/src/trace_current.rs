@@ -296,35 +296,19 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
     let mut tally = WidthTally::default();
     let mut zone_count: HashMap<i64, usize> = HashMap::new();
 
-    // Track segments (straight).
-    for seg in root.find_all("segment") {
-        let layer = seg.find_value("layer").unwrap_or_default();
+    // Straight and arc tracks both carry a width.
+    for track in root.find_all("segment").chain(root.find_all("arc")) {
+        let layer = track.find_value("layer").unwrap_or_default();
         if !layer.ends_with(".Cu") {
             continue;
         }
-        let Some(id) = net_id_of(seg, &by_name) else {
+        let Some(id) = net_id_of(track, &by_name) else {
             continue;
         };
-        let w = seg.find_f64("width").unwrap_or(0.0);
-        if w <= 0.0 {
-            continue;
+        let w = track.find_f64("width").unwrap_or(0.0);
+        if w > 0.0 {
+            tally.accumulate(id, w, &layer);
         }
-        tally.accumulate(id, w, &layer);
-    }
-    // Arc tracks carry a width too.
-    for arc in root.find_all("arc") {
-        let layer = arc.find_value("layer").unwrap_or_default();
-        if !layer.ends_with(".Cu") {
-            continue;
-        }
-        let Some(id) = net_id_of(arc, &by_name) else {
-            continue;
-        };
-        let w = arc.find_f64("width").unwrap_or(0.0);
-        if w <= 0.0 {
-            continue;
-        }
-        tally.accumulate(id, w, &layer);
     }
     // Zones: a net that carries a filled pour has its real cross-section in the
     // pour, not the segments. Record the zone count so the net is marked Poured.

@@ -17,6 +17,8 @@ use std::collections::BTreeMap;
 
 use hauksbee_ir::evidence::{ModelSourceTier, ModelUncertainty, ModelValidation};
 
+use crate::check::positive_finite;
+
 // ── Top-level file container ──────────────────────────────────────────────────
 
 /// Contents of one `.toml` database file (the `[[models]]` array).
@@ -246,37 +248,21 @@ pub struct PeripheralPower {
     pub low_power_a: Option<f64>,
 }
 
-fn default_supply_role() -> String {
-    "vcc".to_string()
+macro_rules! default_roles {
+    ($($f:ident = $role:literal),* $(,)?) => {
+        $(fn $f() -> String { $role.to_string() })*
+    };
 }
-
-fn default_return_role() -> String {
-    "gnd".to_string()
-}
-
-fn default_cs_role() -> String {
-    "cs".to_string()
-}
-
-fn default_scl_role() -> String {
-    "scl".to_string()
-}
-
-fn default_sda_role() -> String {
-    "sda".to_string()
-}
-
-fn default_clk_role() -> String {
-    "sck".to_string()
-}
-
-fn default_mosi_role() -> String {
-    "mosi".to_string()
-}
-
-fn default_miso_role() -> String {
-    "miso".to_string()
-}
+default_roles!(
+    default_supply_role = "vcc",
+    default_return_role = "gnd",
+    default_cs_role = "cs",
+    default_scl_role = "scl",
+    default_sda_role = "sda",
+    default_clk_role = "sck",
+    default_mosi_role = "mosi",
+    default_miso_role = "miso",
+);
 
 impl ModelCoverage {
     pub fn is_empty(&self) -> bool {
@@ -308,6 +294,25 @@ pub struct ModelSourceReference {
     pub locator: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+}
+
+impl ModelSourceReference {
+    /// A citation must be fetchable over TLS, name what it cites, and carry a
+    /// well-formed digest when it carries one.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.url.starts_with("https://") {
+            return Err(format!("url must use https://, got '{}'", self.url));
+        }
+        if self.title.trim().is_empty() || self.locator.trim().is_empty() {
+            return Err("requires non-empty title and locator".to_string());
+        }
+        if let Some(hash) = &self.sha256 {
+            if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err("sha256 must be 64 hexadecimal characters".to_string());
+            }
+        }
+        Ok(())
+    }
 }
 
 fn unvalidated() -> ModelValidation {
@@ -473,18 +478,13 @@ pub enum CurrentProgramEquation {
 
 impl CurrentProgram {
     fn apply_operating_domain(&self, equation_current_a: f64) -> Option<f64> {
-        let Some(limit) = self
+        match self
             .max_operating_current_a
-            .filter(|limit| limit.is_finite() && *limit > 0.0)
-        else {
-            return Some(equation_current_a);
-        };
-        if equation_current_a <= limit {
-            return Some(equation_current_a);
-        }
-        match self.above_domain {
-            AboveDomainBehavior::Abstain => None,
-            AboveDomainBehavior::Saturate => Some(limit),
+            .filter(|limit| limit.is_finite() && *limit > 0.0 && equation_current_a > *limit)
+        {
+            None => Some(equation_current_a),
+            Some(_) if self.above_domain == AboveDomainBehavior::Abstain => None,
+            Some(limit) => Some(limit),
         }
     }
 
@@ -492,7 +492,7 @@ impl CurrentProgram {
     /// normal-operating ceiling. Returns `None` for a non-positive/non-finite
     /// resistance or if malformed data would produce a non-physical result.
     pub fn equation_current_a(&self, resistance_ohms: f64) -> Option<f64> {
-        if !resistance_ohms.is_finite() || resistance_ohms <= 0.0 {
+        if !positive_finite(resistance_ohms) {
             return None;
         }
 
@@ -524,7 +524,7 @@ impl CurrentProgram {
             }
         };
 
-        (current_a.is_finite() && current_a > 0.0).then_some(current_a)
+        positive_finite(current_a).then_some(current_a)
     }
 
     /// Evaluate either a one-resistor law or a two-resistor sense-scaled law.
@@ -545,11 +545,7 @@ impl CurrentProgram {
         else {
             return self.equation_current_a(program_resistance_ohms);
         };
-        if !program_resistance_ohms.is_finite()
-            || program_resistance_ohms <= 0.0
-            || !sense_resistance_ohms.is_finite()
-            || sense_resistance_ohms <= 0.0
-        {
+        if !positive_finite(program_resistance_ohms) || !positive_finite(sense_resistance_ohms) {
             return None;
         }
         let program_v = (*program_bias_a * program_resistance_ohms)
@@ -557,15 +553,14 @@ impl CurrentProgram {
             .max(0.0);
         let current_a =
             (program_v / *program_full_scale_v) * *sense_full_scale_v / sense_resistance_ohms;
-        (current_a.is_finite() && current_a > 0.0).then_some(current_a)
+        positive_finite(current_a).then_some(current_a)
     }
 
     /// Evaluate the board's nominal programmed current, applying only the
     /// explicit normal-operating ceiling from this block—not a device rating.
     /// Datasheet/resistor tolerances are not implied by a point equation.
     pub fn operating_current_a(&self, resistance_ohms: f64) -> Option<f64> {
-        let equation_current_a = self.equation_current_a(resistance_ohms)?;
-        self.apply_operating_domain(equation_current_a)
+        self.apply_operating_domain(self.equation_current_a(resistance_ohms)?)
     }
 
     /// Sense-aware counterpart to [`Self::operating_current_a`].
@@ -574,9 +569,9 @@ impl CurrentProgram {
         program_resistance_ohms: f64,
         sense_resistance_ohms: f64,
     ) -> Option<f64> {
-        let equation_current_a =
-            self.equation_current_with_sense_a(program_resistance_ohms, sense_resistance_ohms)?;
-        self.apply_operating_domain(equation_current_a)
+        self.apply_operating_domain(
+            self.equation_current_with_sense_a(program_resistance_ohms, sense_resistance_ohms)?,
+        )
     }
 }
 
@@ -947,24 +942,29 @@ impl Params {
         self.0.get(key)?.as_bool()
     }
 
+    /// Insert a param of any value type.
+    pub fn set(&mut self, key: impl Into<String>, v: impl Into<ParamValue>) {
+        self.0.insert(key.into(), v.into());
+    }
+
     /// Insert a float param.
     pub fn set_f64(&mut self, key: impl Into<String>, v: f64) {
-        self.0.insert(key.into(), ParamValue::Float(v));
+        self.set(key, v);
     }
 
     /// Insert a string param.
     pub fn set_str(&mut self, key: impl Into<String>, v: impl Into<String>) {
-        self.0.insert(key.into(), ParamValue::String(v.into()));
+        self.set(key, v.into());
     }
 
     /// Insert an integer param.
     pub fn set_int(&mut self, key: impl Into<String>, v: i64) {
-        self.0.insert(key.into(), ParamValue::Int(v));
+        self.set(key, v);
     }
 
     /// Insert a boolean param.
     pub fn set_bool(&mut self, key: impl Into<String>, v: bool) {
-        self.0.insert(key.into(), ParamValue::Bool(v));
+        self.set(key, v);
     }
 
     /// True when no params are present.
@@ -982,6 +982,17 @@ pub enum ParamValue {
     Bool(bool),
     String(String),
 }
+
+macro_rules! param_from {
+    ($($t:ty => $variant:ident),* $(,)?) => {
+        $(impl From<$t> for ParamValue {
+            fn from(v: $t) -> Self {
+                ParamValue::$variant(v)
+            }
+        })*
+    };
+}
+param_from!(f64 => Float, i64 => Int, bool => Bool, String => String);
 
 impl ParamValue {
     /// Return as `f64`, converting integers.

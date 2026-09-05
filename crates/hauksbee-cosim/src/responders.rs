@@ -36,10 +36,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::digital::{Hc165Chain, Hc595Chain, LogicLevels};
-use crate::logic::ParallelMemoryPort;
 use crate::peripherals::i2c::I2cBus;
 use crate::peripherals::spi::SpiBus;
+use hauksbee_bind::digital::{Hc165Chain, Hc595Chain, LogicLevels};
+use hauksbee_bind::logic::ParallelMemoryPort;
 use hauksbee_mcu::I2cEvent;
 use hauksbee_models::logic_spec::{Edge, Level};
 
@@ -1597,11 +1597,11 @@ mod tests {
         data_out: Vec<(char, u8)>,
     ) -> (
         ParallelMemoryResponder,
-        crate::logic::ParallelMemoryPort,
+        hauksbee_bind::logic::ParallelMemoryPort,
         Arc<Mutex<ParallelMemoryRuntime>>,
     ) {
         let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(spec).unwrap();
-        let logic = crate::logic::LogicComponent::compile("memory", &parsed).unwrap();
+        let logic = hauksbee_bind::logic::LogicComponent::compile("memory", &parsed).unwrap();
         let port = logic.memory_ports().pop().expect("one memory");
         let inspect = port.clone();
         let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
@@ -2546,8 +2546,8 @@ style = "i2c_pointer"
     /// net at the chunk-boundary flush.
     #[test]
     fn soft_i2c_stop_reaches_first_leg_after_address_change() {
-        use crate::drivers::PinDriver;
         use crate::peripherals::TickCtx;
+        use hauksbee_bind::drivers::PinDriver;
         use hauksbee_ir::{Circuit, Device, SourceKind};
 
         let mut circuit = Circuit::default();

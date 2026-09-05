@@ -16,34 +16,24 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 
 use crate::children::{home_dir, which};
-use anyhow::{bail, Context, Result};
+use crate::external::{env_override, first_accepted, EmulatorProcess};
+use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
 /// Locate the Renode executable, or return an error describing what to install.
 pub fn find_renode() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("HAUKSBEE_RENODE") {
-        let p = PathBuf::from(p);
-        if p.exists() {
-            return Ok(p);
-        }
-        bail!(
-            "HAUKSBEE_RENODE is set to '{}' but it does not exist",
-            p.display()
-        );
+    if let Some(p) = env_override("HAUKSBEE_RENODE")? {
+        return Ok(p);
     }
-
     // `renode` on PATH (`renode.exe` on Windows; `which` tries the extension).
     if let Ok(path) = which("renode") {
         return Ok(path);
     }
-
-    // Conventional install locations.
-    if let Some(found) = first_existing(&conventional_candidates()) {
+    if let Some(found) = first_accepted(conventional_candidates(), |_| true) {
         return Ok(found);
     }
-
     bail!(
         "Renode not found. One-click installs exist: run `hauksbee install \
          renode`, or in the app use Install on the Environment page. Manual \
@@ -82,7 +72,9 @@ fn conventional_candidates() -> Vec<PathBuf> {
 }
 
 /// Candidate Renode binaries under one home directory: the `~/renode-portable`
-/// layouts our docs and installer produce on each OS.
+/// layouts our docs and installer produce on each OS. NTFS is case-insensitive,
+/// so the one capitalised `Renode.exe` spelling matches however the file is
+/// cased on disk.
 fn home_candidates(home: &Path) -> Vec<PathBuf> {
     [
         // macOS: the app bundle copied out of the portable .dmg.
@@ -93,8 +85,6 @@ fn home_candidates(home: &Path) -> Vec<PathBuf> {
         "renode_portable/renode",
         // Windows: the portable zip extracted into ~\renode-portable puts
         // Renode.exe at the top; a copied installer tree carries bin\.
-        // NTFS is case-insensitive, so the one capitalised spelling matches
-        // however the file is cased on disk.
         "renode-portable/Renode.exe",
         "renode-portable/bin/Renode.exe",
         "renode_portable/Renode.exe",
@@ -107,8 +97,7 @@ fn home_candidates(home: &Path) -> Vec<PathBuf> {
 
 /// Candidate Renode binaries under one Windows install root (`%ProgramFiles%`,
 /// `%LOCALAPPDATA%\Programs`): the .msi tree (`Renode\bin\Renode.exe`) and a
-/// zip extracted straight into the root (`Renode\Renode.exe`).
-/// Only Windows discovery calls this at runtime, but it is compiled (and
+/// zip extracted straight into the root (`Renode\Renode.exe`). Compiled (and
 /// unit-tested) on every OS so a layout regression shows up in the native
 /// suite, not just on a Windows machine.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -119,11 +108,6 @@ fn windows_install_candidates(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// First candidate that exists as a file, in priority order.
-fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
-    candidates.iter().find(|c| c.is_file()).cloned()
-}
-
 /// True if a usable Renode install can be located. Used to skip tests cleanly.
 pub fn is_available() -> bool {
     find_renode().is_ok()
@@ -131,8 +115,7 @@ pub fn is_available() -> bool {
 
 /// A spawned, headless Renode instance with a Monitor TCP port.
 pub struct RenodeProcess {
-    child: Child,
-    _tree_guard: crate::children::ProcessTreeGuard,
+    inner: EmulatorProcess,
     pub monitor_port: u16,
 }
 
@@ -146,63 +129,36 @@ impl RenodeProcess {
         let bin = find_renode()?;
         let workdir = bin
             .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         let mut cmd = Command::new(&bin);
         cmd.current_dir(&workdir)
-            .arg("--disable-xwt")
-            .arg("--hide-log")
-            .arg("-p") // plain output: strip ANSI colour codes
-            .arg("-P")
-            .arg(monitor_port.to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let (child, tree_guard) = crate::children::spawn_emulator(&mut cmd)
-            .with_context(|| format!("spawning owned Renode from {}", bin.display()))?;
-
+            // `-p`: plain output, no ANSI colour codes.
+            .args(["--disable-xwt", "--hide-log", "-p", "-P"])
+            .arg(monitor_port.to_string());
         Ok(RenodeProcess {
-            child,
-            _tree_guard: tree_guard,
+            inner: EmulatorProcess::spawn("Renode", &mut cmd, false)?,
             monitor_port,
         })
     }
 
-    /// How long to wait for the Monitor port to come up after spawn.
+    /// How long to wait for the Monitor port to come up after spawn. The
+    /// first launch on macOS can spend more than 30 seconds in code-signing
+    /// and .NET cold start even though Renode is healthy, so this is bounded
+    /// but leaves room for that rather than exhausting the port retries.
     pub fn startup_timeout() -> Duration {
-        // The first launch on macOS can spend more than 30 seconds in the
-        // platform's code-signing and .NET cold-start path even though Renode
-        // is healthy. Keep this bounded, but leave enough room for that real
-        // startup rather than exhausting all three port retries prematurely.
         Duration::from_secs(60)
     }
 
     /// The spawned Renode's OS process id (diagnostics and the reaping tests).
     pub fn pid(&self) -> u32 {
-        self.child.id()
+        self.inner.pid()
     }
 
     /// `Some(reason)` once the process has exited, `None` while it still runs.
-    ///
     /// The startup wait polls this so a Renode that failed to bind its monitor
     /// port reports that fact immediately instead of after the full timeout.
     pub fn exit_reason(&mut self) -> Option<String> {
-        match self.child.try_wait() {
-            Ok(Some(status)) => Some(format!("exit status {status}")),
-            Ok(None) => None,
-            // A child we can no longer wait on is gone as far as we are
-            // concerned; treating it as alive would hang the caller.
-            Err(e) => Some(format!("wait failed: {e}")),
-        }
-    }
-}
-
-impl Drop for RenodeProcess {
-    fn drop(&mut self) {
-        // Renode has no clean SIGTERM handler worth waiting on, so kill and
-        // reap rather than leaving a zombie.
-        crate::children::terminate_emulator(&mut self.child, &self._tree_guard);
+        self.inner.exit_reason()
     }
 }
 
@@ -233,7 +189,7 @@ mod discovery_tests {
             let home = tempfile::tempdir().unwrap();
             let bin = home.path().join(layout);
             touch(&bin);
-            let found = first_existing(&home_candidates(home.path()));
+            let found = first_accepted(home_candidates(home.path()), |_| true);
             assert_eq!(found.as_deref(), Some(bin.as_path()), "layout {layout}");
         }
     }
@@ -245,7 +201,7 @@ mod discovery_tests {
             let root = tempfile::tempdir().unwrap();
             let bin = root.path().join(layout);
             touch(&bin);
-            let found = first_existing(&windows_install_candidates(root.path()));
+            let found = first_accepted(windows_install_candidates(root.path()), |_| true);
             assert_eq!(found.as_deref(), Some(bin.as_path()), "layout {layout}");
         }
     }
@@ -255,10 +211,10 @@ mod discovery_tests {
     #[test]
     fn misses_and_directories_are_rejected() {
         let home = tempfile::tempdir().unwrap();
-        assert_eq!(first_existing(&home_candidates(home.path())), None);
+        assert_eq!(first_accepted(home_candidates(home.path()), |_| true), None);
         std::fs::create_dir_all(home.path().join("renode-portable/renode")).unwrap();
         assert_eq!(
-            first_existing(&home_candidates(home.path())),
+            first_accepted(home_candidates(home.path()), |_| true),
             None,
             "a directory named like the binary must not be picked up"
         );

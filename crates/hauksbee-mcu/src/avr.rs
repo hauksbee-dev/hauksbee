@@ -11,10 +11,12 @@
 use crate::ffi;
 use crate::traits::{I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent};
 use anyhow::{bail, Result};
+use std::collections::HashMap;
 use std::ffi::CString;
+use std::os::raw::c_void;
 use std::path::Path;
 use std::ptr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 // ---------------------------------------------------------------------------
 // simavr IOCTL helpers (re-implemented from C macros)
@@ -124,7 +126,7 @@ const IOPORT_IRQ_DIRECTION_ALL: i32 = ffi::IOPORT_IRQ_DIRECTION_ALL as i32;
 /// `avr` must be the live core pointer (taken from `SharedState`).
 unsafe fn drive_ioport_input(
     avr: *mut ffi::avr_t,
-    ext_drive: &mut std::collections::HashMap<char, (u8, u8)>,
+    ext_drive: &mut ExtDrive,
     pin: PinId,
     high: bool,
 ) {
@@ -138,46 +140,109 @@ unsafe fn drive_ioport_input(
     } else {
         *value &= !(1 << pin.bit);
     }
-    // avr_ioport_external_t is a bitfield struct over one unsigned long:
-    // name:7 | mask:8 | value:8, LSB-first on every LP64 target we build for.
-    let mut ext: u64 =
-        ((pin.port as u8 as u64) & 0x7f) | ((*mask as u64) << 7) | ((*value as u64) << 15);
     unsafe {
-        ffi::avr_ioctl(
+        set_external(avr, pin.port, *mask, *value);
+        raise_irq(
             avr,
-            ioport_set_external(pin.port as u8),
-            &mut ext as *mut u64 as *mut std::os::raw::c_void,
+            ioport_getirq(pin.port as u8),
+            pin.bit as i32,
+            high as u32,
         );
-        let irq = ffi::avr_io_getirq(avr, ioport_getirq(pin.port as u8), pin.bit as i32);
-        if !irq.is_null() {
-            ffi::avr_raise_irq(irq, high as u32);
-        }
     }
 }
 
 /// Relinquish one persistent external input drive. Clearing the bit from
 /// simavr's external pull mask restores the port's own DDR/PORT/internal-pull
 /// semantics; no replacement logic level is invented.
-unsafe fn release_ioport_input(
-    avr: *mut ffi::avr_t,
-    ext_drive: &mut std::collections::HashMap<char, (u8, u8)>,
-    pin: PinId,
-) {
+unsafe fn release_ioport_input(avr: *mut ffi::avr_t, ext_drive: &mut ExtDrive, pin: PinId) {
     if avr.is_null() {
         return;
     }
     let (mask, value) = ext_drive.entry(pin.port).or_insert((0, 0));
     *mask &= !(1 << pin.bit);
     *value &= !(1 << pin.bit);
-    let mut ext: u64 =
-        ((pin.port as u8 as u64) & 0x7f) | ((*mask as u64) << 7) | ((*value as u64) << 15);
+    unsafe { set_external(avr, pin.port, *mask, *value) };
+}
+
+/// Per-port `(mask, value)` shadow of simavr's external input-drive state.
+type ExtDrive = HashMap<char, (u8, u8)>;
+
+/// Send one port's merged external `(mask, value)` through the `SET_EXTERNAL`
+/// ioctl. `avr_ioport_external_t` is a bitfield struct over one unsigned long:
+/// name:7 | mask:8 | value:8, LSB-first on every LP64 target we build for.
+unsafe fn set_external(avr: *mut ffi::avr_t, port: char, mask: u8, value: u8) {
+    let mut ext: u64 = ((port as u8 as u64) & 0x7f) | ((mask as u64) << 7) | ((value as u64) << 15);
     unsafe {
         ffi::avr_ioctl(
             avr,
-            ioport_set_external(pin.port as u8),
-            &mut ext as *mut u64 as *mut std::os::raw::c_void,
+            ioport_set_external(port as u8),
+            &mut ext as *mut u64 as *mut c_void,
         );
     }
+}
+
+/// Apply a responder's drive/release decisions to the ioport inputs.
+unsafe fn apply_drives(avr: *mut ffi::avr_t, ext_drive: &mut ExtDrive, updates: Vec<PinDrive>) {
+    for update in updates {
+        unsafe {
+            match update {
+                PinDrive::Drive { pin, high } => drive_ioport_input(avr, ext_drive, pin, high),
+                PinDrive::Release { pin } => release_ioport_input(avr, ext_drive, pin),
+            }
+        }
+    }
+}
+
+/// Raise `value` on IRQ `index` of the `ioctl`-named module, if the core and
+/// the IRQ exist.
+unsafe fn raise_irq(avr: *mut ffi::avr_t, ioctl: u32, index: i32, value: u32) {
+    if avr.is_null() {
+        return;
+    }
+    unsafe {
+        let irq = ffi::avr_io_getirq(avr, ioctl, index);
+        if !irq.is_null() {
+            ffi::avr_raise_irq(irq, value);
+        }
+    }
+}
+
+/// Subscribe `hook` to IRQ `index` of the `ioctl`-named module; false when
+/// the part has no such IRQ.
+unsafe fn register_hook(
+    avr: *mut ffi::avr_t,
+    ioctl: u32,
+    index: i32,
+    hook: IrqHook,
+    param: *mut c_void,
+) -> bool {
+    unsafe {
+        let irq = ffi::avr_io_getirq(avr, ioctl, index);
+        if irq.is_null() {
+            return false;
+        }
+        ffi::avr_irq_register_notify(irq, Some(hook), param);
+    }
+    true
+}
+
+/// The current `avr->cycle`, 0 for a missing core. Read inside a hook, which
+/// fires synchronously within `avr_run`, this is the EXACT cycle of the event.
+unsafe fn cycle_of(avr: *mut ffi::avr_t) -> u64 {
+    if avr.is_null() {
+        0
+    } else {
+        unsafe { (*avr).cycle }
+    }
+}
+
+/// The IRQ notification signature simavr calls hooks with.
+type IrqHook = unsafe extern "C" fn(*mut ffi::avr_irq_t, u32, *mut c_void);
+
+/// The shared state a hook was registered with (`param` is the leaked
+/// `Box<Arc<Mutex<SharedState>>>` from [`AvrMcu::new`]).
+unsafe fn hook_state<'a>(param: *mut c_void) -> &'a Arc<Mutex<SharedState>> {
+    unsafe { &*(param as *const Arc<Mutex<SharedState>>) }
 }
 
 // TWI message condition flags (from avr_twi.h)
@@ -211,6 +276,7 @@ type InputResponderBatchCb = Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDriv
 type InputResponderDirectionCb =
     Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<PinDrive> + Send>;
 
+#[derive(Default)]
 struct Callbacks {
     on_pin_change: Option<PinChangeCb>,
     on_uart: Option<UartCb>,
@@ -225,6 +291,7 @@ struct Callbacks {
 }
 
 /// Per-port state tracked for edge detection.
+#[derive(Default)]
 struct PortState {
     /// Current port byte value.
     current: u8,
@@ -247,12 +314,12 @@ struct SharedState {
 
     /// Port register values indexed by port letter.
     /// We only track ports that have registered hooks.
-    port_state: std::collections::HashMap<char, PortState>,
+    port_state: HashMap<char, PortState>,
 
     /// Per-port (mask, value) shadow of simavr's external input-drive state
     /// (`external.pull_mask/pull_value`), maintained by [`drive_ioport_input`]
     /// so each SET_EXTERNAL ioctl can resend the port's full merged state.
-    ext_drive: std::collections::HashMap<char, (u8, u8)>,
+    ext_drive: ExtDrive,
 
     /// Active I2C transaction accumulator.
     twi_addr: u8,
@@ -301,6 +368,14 @@ struct SharedState {
     callbacks: Callbacks,
 }
 
+impl SharedState {
+    /// Dispatch one I2C event to the installed handler; `None` with no handler
+    /// (which a Read caller treats as the floating-bus 0xFF).
+    fn i2c_event(&mut self, event: I2cEvent) -> Option<u8> {
+        self.callbacks.on_i2c.as_mut().and_then(|cb| cb(event))
+    }
+}
+
 /// Drain queued host bytes into the UART while the emulator signals room.
 ///
 /// The lock is RELEASED around each `avr_raise_irq`: raising `UART_IRQ_INPUT`
@@ -324,12 +399,7 @@ fn drain_uart_pending(state: &Arc<Mutex<SharedState>>) {
                 None => return,
             }
         };
-        unsafe {
-            let irq = ffi::avr_io_getirq(avr, uart_getirq(b'0'), UART_IRQ_INPUT);
-            if !irq.is_null() {
-                ffi::avr_raise_irq(irq, byte as u32);
-            }
-        }
+        unsafe { raise_irq(avr, uart_getirq(b'0'), UART_IRQ_INPUT, byte as u32) };
     }
 }
 
@@ -338,12 +408,8 @@ fn drain_uart_pending(state: &Arc<Mutex<SharedState>>) {
 /// up from the pending queue immediately, mid-`avr_run`, so a firmware
 /// blocking on `Serial.available()` inside a long chunk is fed without waiting
 /// for the next chunk boundary.
-unsafe extern "C" fn uart_xon_hook(
-    _irq: *mut ffi::avr_irq_t,
-    _value: u32,
-    param: *mut std::os::raw::c_void,
-) {
-    let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
+unsafe extern "C" fn uart_xon_hook(_irq: *mut ffi::avr_irq_t, _value: u32, param: *mut c_void) {
+    let state = unsafe { hook_state(param) };
     if let Ok(mut s) = state.lock() {
         s.uart_clear_to_send = true;
     }
@@ -353,13 +419,8 @@ unsafe extern "C" fn uart_xon_hook(
 /// XOFF: value 1 means the input fifo is FULL (stop sending; further raises
 /// would be discarded), value 0 means it has room again. Fired synchronously
 /// from inside `drain_uart_pending`'s own raise when a byte fills the fifo.
-unsafe extern "C" fn uart_xoff_hook(
-    _irq: *mut ffi::avr_irq_t,
-    value: u32,
-    param: *mut std::os::raw::c_void,
-) {
-    let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
-    if let Ok(mut s) = state.lock() {
+unsafe extern "C" fn uart_xoff_hook(_irq: *mut ffi::avr_irq_t, value: u32, param: *mut c_void) {
+    if let Ok(mut s) = unsafe { hook_state(param) }.lock() {
         s.uart_clear_to_send = value == 0;
     }
 }
@@ -382,13 +443,8 @@ unsafe impl Send for SharedState {}
 /// QEMU backend guards the same liveness hazard with `BOOT_WINDOW_CAP_S`.)
 unsafe extern "C" fn noop_sleep(_avr: *mut ffi::avr_t, _how_long: ffi::avr_cycle_count_t) {}
 
-unsafe extern "C" fn uart_output_hook(
-    _irq: *mut ffi::avr_irq_t,
-    value: u32,
-    param: *mut std::os::raw::c_void,
-) {
-    let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
-    if let Ok(mut s) = state.lock() {
+unsafe extern "C" fn uart_output_hook(_irq: *mut ffi::avr_irq_t, value: u32, param: *mut c_void) {
+    if let Ok(mut s) = unsafe { hook_state(param) }.lock() {
         if let Some(cb) = &mut s.callbacks.on_uart {
             cb(value as u8);
         }
@@ -397,394 +453,235 @@ unsafe extern "C" fn uart_output_hook(
 
 /// Per-port hook: detects bit-level edges and calls the pin-change callback.
 ///
-/// We can't have closures as C function pointers, so we use a macro to
-/// generate one hook per port letter.
-macro_rules! make_port_hook {
-    ($fn_name:ident, $port_char:literal) => {
-        unsafe extern "C" fn $fn_name(
-            _irq: *mut ffi::avr_irq_t,
-            value: u32,
-            param: *mut std::os::raw::c_void,
-        ) {
-            let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
-            if let Ok(mut s) = state.lock() {
-                let new_val = value as u8;
-                let prev_val = s
-                    .port_state
-                    .get(&$port_char)
-                    .map(|ps| ps.current)
-                    .unwrap_or(0);
-
-                if new_val != prev_val {
-                    let changed = new_val ^ prev_val;
-                    // Snapshot the avr pointer so the synchronous input
-                    // responder can raise an ioport input IRQ while we still
-                    // hold the `s` borrow (avr_ptr is Copy).
-                    let avr = s.avr_ptr;
-                    // The IRQ fires synchronously inside `avr_run`, so `avr->cycle`
-                    // here is the EXACT cycle of this edge. Stamping it lets the
-                    // scheduler replay a sub-µs SCLK burst in true order rather
-                    // than collapsing it to a level: a pulse train reduced to a
-                    // single resting level loses the energy carried by its
-                    // edges, so the edges must survive and be integrated.
-                    let cycle = if avr.is_null() {
-                        0
-                    } else {
-                        unsafe { (*avr).cycle }
-                    };
-                    let mut edges = Vec::new();
-                    // Fire the observation callback for each bit that changed,
-                    // while retaining one batch for synchronous device logic.
-                    for bit in 0u8..8 {
-                        if (changed >> bit) & 1 == 0 {
-                            continue;
-                        }
-                        let high = (new_val >> bit) & 1 != 0;
-                        let pin = PinId {
-                            port: $port_char,
-                            bit,
-                        };
-                        if let Some(cb) = &mut s.callbacks.on_pin_change {
-                            cb(pin, high, cycle);
-                        }
-                        edges.push((pin, high));
-                    }
-
-                    // Synchronous input drive: evaluate every bit changed by
-                    // this port write against the same final GPIO state, then
-                    // apply the response before the firmware's next
-                    // instruction. Legacy single-edge callbacks still receive
-                    // every edge in bit order.
-                    let st = &mut *s;
-                    let updates = if let Some(resp) = &mut st.callbacks.input_responder_batch {
-                        resp(&edges, cycle)
-                    } else if let Some(resp) = &mut st.callbacks.input_responder {
-                        edges
-                            .iter()
-                            .flat_map(|&(pin, high)| resp(pin, high, cycle))
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    for update in updates {
-                        unsafe {
-                            match update {
-                                PinDrive::Drive { pin, high } => {
-                                    drive_ioport_input(avr, &mut st.ext_drive, pin, high)
-                                }
-                                PinDrive::Release { pin } => {
-                                    release_ioport_input(avr, &mut st.ext_drive, pin)
-                                }
-                            }
-                        }
-                    }
-                    s.port_state
-                        .entry($port_char)
-                        .or_insert(PortState {
-                            current: 0,
-                            output_dir: 0,
-                        })
-                        .current = new_val;
-                }
-            }
-        }
+/// C function pointers cannot close over the port letter, so the hook is
+/// instantiated once per letter as a const generic.
+unsafe extern "C" fn port_hook<const P: char>(
+    _irq: *mut ffi::avr_irq_t,
+    value: u32,
+    param: *mut c_void,
+) {
+    let Ok(mut s) = unsafe { hook_state(param) }.lock() else {
+        return;
     };
+    let new_val = value as u8;
+    let prev_val = s.port_state.get(&P).map_or(0, |ps| ps.current);
+    if new_val == prev_val {
+        return;
+    }
+    let changed = new_val ^ prev_val;
+    // The IRQ fires synchronously inside `avr_run`, so `avr->cycle` here is
+    // the EXACT cycle of this edge. Stamping it lets the scheduler replay a
+    // sub-µs SCLK burst in true order rather than collapsing it to a level: a
+    // pulse train reduced to a single resting level loses the energy carried
+    // by its edges, so the edges must survive and be integrated.
+    let avr = s.avr_ptr;
+    let cycle = unsafe { cycle_of(avr) };
+    let edges: Vec<(PinId, bool)> = (0u8..8)
+        .filter(|bit| (changed >> bit) & 1 != 0)
+        .map(|bit| (PinId { port: P, bit }, (new_val >> bit) & 1 != 0))
+        .collect();
+    // Fire the observation callback for each bit that changed, while
+    // retaining one batch for synchronous device logic.
+    if let Some(cb) = &mut s.callbacks.on_pin_change {
+        for &(pin, high) in &edges {
+            cb(pin, high, cycle);
+        }
+    }
+    // Synchronous input drive: evaluate every bit changed by this port write
+    // against the same final GPIO state, then apply the response before the
+    // firmware's next instruction. Legacy single-edge callbacks still receive
+    // every edge in bit order.
+    let st = &mut *s;
+    let updates = if let Some(resp) = &mut st.callbacks.input_responder_batch {
+        resp(&edges, cycle)
+    } else if let Some(resp) = &mut st.callbacks.input_responder {
+        edges
+            .iter()
+            .flat_map(|&(pin, high)| resp(pin, high, cycle))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    unsafe { apply_drives(avr, &mut st.ext_drive, updates) };
+    st.port_state.entry(P).or_default().current = new_val;
 }
 
 /// Per-port DDR (direction) hook: records the current output mask and notifies
 /// the optional synchronous device responder of effective-level changes. It
 /// does NOT fire `on_pin_change` or touch the analogue circuit, so it cannot
-/// latch open-drain pins or clamp bus nets. The
-/// boot-state panel uses it to distinguish a `pinMode(OUTPUT)` pin held LOW from
-/// a pin the firmware never configured (genuinely floating).
-macro_rules! make_ddr_hook {
-    ($fn_name:ident, $port_char:literal) => {
-        unsafe extern "C" fn $fn_name(
-            _irq: *mut ffi::avr_irq_t,
-            value: u32,
-            param: *mut std::os::raw::c_void,
-        ) {
-            let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
-            if let Ok(mut s) = state.lock() {
-                let new_ddr = value as u8;
-                let previous = s
-                    .port_state
-                    .get(&$port_char)
-                    .map(|state| state.output_dir)
-                    .unwrap_or(0);
-                let changed = previous ^ new_ddr;
-                let port_value = s
-                    .port_state
-                    .get(&$port_char)
-                    .map(|state| state.current)
-                    .unwrap_or(0);
-                let avr = s.avr_ptr;
-                let cycle = if avr.is_null() {
-                    0
-                } else {
-                    unsafe { (*avr).cycle }
-                };
-                let mut direction_changes = Vec::new();
-                if let Some(responder) = &mut s.callbacks.input_responder_direction {
-                    for bit in 0u8..8 {
-                        if changed & (1 << bit) == 0 {
-                            continue;
-                        }
-                        direction_changes.push((
-                            PinId::new($port_char, bit),
-                            new_ddr & (1 << bit) != 0,
-                            port_value & (1 << bit) != 0,
-                        ));
-                    }
-                    let updates = responder(&direction_changes, cycle);
-                    for update in updates {
-                        unsafe {
-                            match update {
-                                PinDrive::Drive { pin, high } => {
-                                    drive_ioport_input(avr, &mut s.ext_drive, pin, high)
-                                }
-                                PinDrive::Release { pin } => {
-                                    release_ioport_input(avr, &mut s.ext_drive, pin)
-                                }
-                            }
-                        }
-                    }
-                }
-                // Latest direction wins (not accumulated): a pin released back to
-                // input clears its bit, so an open-drain / handed-off bus pin
-                // does not read as a permanent output.
-                s.port_state
-                    .entry($port_char)
-                    .or_insert(PortState {
-                        current: 0,
-                        output_dir: 0,
-                    })
-                    .output_dir = new_ddr;
-            }
-        }
+/// latch open-drain pins or clamp bus nets. The boot-state panel uses it to
+/// distinguish a `pinMode(OUTPUT)` pin held LOW from a pin the firmware never
+/// configured (genuinely floating).
+unsafe extern "C" fn ddr_hook<const P: char>(
+    _irq: *mut ffi::avr_irq_t,
+    value: u32,
+    param: *mut c_void,
+) {
+    let Ok(mut s) = unsafe { hook_state(param) }.lock() else {
+        return;
     };
+    let new_ddr = value as u8;
+    let (previous, port_value) = s
+        .port_state
+        .get(&P)
+        .map_or((0, 0), |ps| (ps.output_dir, ps.current));
+    let changed = previous ^ new_ddr;
+    let avr = s.avr_ptr;
+    let cycle = unsafe { cycle_of(avr) };
+    let st = &mut *s;
+    if let Some(responder) = &mut st.callbacks.input_responder_direction {
+        let direction_changes: Vec<(PinId, bool, bool)> = (0u8..8)
+            .filter(|bit| changed & (1 << bit) != 0)
+            .map(|bit| {
+                (
+                    PinId::new(P, bit),
+                    new_ddr & (1 << bit) != 0,
+                    port_value & (1 << bit) != 0,
+                )
+            })
+            .collect();
+        let updates = responder(&direction_changes, cycle);
+        unsafe { apply_drives(avr, &mut st.ext_drive, updates) };
+    }
+    // Latest direction wins (not accumulated): a pin released back to input
+    // clears its bit, so an open-drain / handed-off bus pin does not read as a
+    // permanent output.
+    st.port_state.entry(P).or_default().output_dir = new_ddr;
 }
 
-make_port_hook!(port_hook_a, 'A');
-make_port_hook!(port_hook_b, 'B');
-make_port_hook!(port_hook_c, 'C');
-make_port_hook!(port_hook_d, 'D');
-make_port_hook!(port_hook_e, 'E');
-make_port_hook!(port_hook_f, 'F');
-make_port_hook!(port_hook_g, 'G');
-make_port_hook!(port_hook_h, 'H');
-
-make_ddr_hook!(ddr_hook_a, 'A');
-make_ddr_hook!(ddr_hook_b, 'B');
-make_ddr_hook!(ddr_hook_c, 'C');
-make_ddr_hook!(ddr_hook_d, 'D');
-make_ddr_hook!(ddr_hook_e, 'E');
-make_ddr_hook!(ddr_hook_f, 'F');
-make_ddr_hook!(ddr_hook_g, 'G');
-make_ddr_hook!(ddr_hook_h, 'H');
-
-/// Map a port letter to its pre-generated hook function pointer.
-fn port_hook_fn(
-    port: char,
-) -> Option<unsafe extern "C" fn(*mut ffi::avr_irq_t, u32, *mut std::os::raw::c_void)> {
+/// The pre-instantiated (PORT, DDR) hooks for a port letter, or `None` for a
+/// letter no shipped part has (the mega1280/2560 stop at H).
+fn port_hooks(port: char) -> Option<(IrqHook, IrqHook)> {
+    macro_rules! pair {
+        ($p:literal) => {
+            Some((port_hook::<$p>, ddr_hook::<$p>))
+        };
+    }
     match port {
-        'A' => Some(port_hook_a),
-        'B' => Some(port_hook_b),
-        'C' => Some(port_hook_c),
-        'D' => Some(port_hook_d),
-        'E' => Some(port_hook_e),
-        'F' => Some(port_hook_f),
-        'G' => Some(port_hook_g),
-        'H' => Some(port_hook_h),
+        'A' => pair!('A'),
+        'B' => pair!('B'),
+        'C' => pair!('C'),
+        'D' => pair!('D'),
+        'E' => pair!('E'),
+        'F' => pair!('F'),
+        'G' => pair!('G'),
+        'H' => pair!('H'),
         _ => None,
     }
 }
 
-/// Map a port letter to its pre-generated DDR (direction) hook function pointer.
-fn ddr_hook_fn(
-    port: char,
-) -> Option<unsafe extern "C" fn(*mut ffi::avr_irq_t, u32, *mut std::os::raw::c_void)> {
-    match port {
-        'A' => Some(ddr_hook_a),
-        'B' => Some(ddr_hook_b),
-        'C' => Some(ddr_hook_c),
-        'D' => Some(ddr_hook_d),
-        'E' => Some(ddr_hook_e),
-        'F' => Some(ddr_hook_f),
-        'G' => Some(ddr_hook_g),
-        'H' => Some(ddr_hook_h),
-        _ => None,
+/// Answer the TWI master with a `cond` message for `addr` carrying `data`.
+unsafe fn raise_twi(avr: *mut ffi::avr_t, cond: u32, addr: u8, data: u8) {
+    unsafe {
+        let msg = ffi::avr_twi_irq_msg(cond as u8, addr, data);
+        raise_irq(avr, TWI_GETIRQ, TWI_IRQ_INPUT, msg);
     }
 }
 
 /// TWI (I2C) hook: intercepts Wire/TWI transactions from the firmware.
 ///
 /// On each event:
-///  - START+ADDR: record address, send ACK, fire I2cEvent::Start.
-///  - WRITE byte: accumulate, send ACK, fire I2cEvent::Write.
+///  - START+ADDR: record address, ACK (or NACK) it, fire I2cEvent::Start.
+///  - READ clock: ask the handler for a byte and inject it, fire I2cEvent::Read.
+///  - WRITE byte: fire I2cEvent::Write, ACK (or NACK) it.
 ///  - STOP: close transaction, fire I2cEvent::Stop.
-unsafe extern "C" fn twi_hook(
-    _irq: *mut ffi::avr_irq_t,
-    value: u32,
-    param: *mut std::os::raw::c_void,
-) {
-    let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
-    if let Ok(mut s) = state.lock() {
-        // avr_twi_msg_t bitfield (from avr_twi.h):
-        //   bits [7:0]   = unused
-        //   bits [15:8]  = msg  (condition flags)
-        //   bits [23:16] = addr (address byte, including R/W bit)
-        //   bits [31:24] = data
-        let msg_flags = (value >> 8) & 0xFF;
-        let addr_byte = ((value >> 16) & 0xFF) as u8;
-        let data_byte = ((value >> 24) & 0xFF) as u8;
+unsafe extern "C" fn twi_hook(_irq: *mut ffi::avr_irq_t, value: u32, param: *mut c_void) {
+    let Ok(mut s) = unsafe { hook_state(param) }.lock() else {
+        return;
+    };
+    // avr_twi_msg_t bitfield (from avr_twi.h):
+    //   bits [7:0]   = unused
+    //   bits [15:8]  = msg  (condition flags)
+    //   bits [23:16] = addr (address byte, including R/W bit)
+    //   bits [31:24] = data
+    let msg_flags = (value >> 8) & 0xFF;
+    let addr_byte = ((value >> 16) & 0xFF) as u8;
+    let data_byte = ((value >> 24) & 0xFF) as u8;
+    let avr = s.avr_ptr;
 
-        let avr = s.avr_ptr;
-
-        if msg_flags & (TWI_COND_START | TWI_COND_ADDR) != 0 {
-            // New transaction.
-            let addr7 = addr_byte >> 1;
-            let read_flag = (addr_byte & 1) != 0;
-            // Gate the address ACK on the modeled-slave set (mirrors the
-            // SoftI2cResponder: only an address a slave models gets the ACK;
-            // an unknown address is NACKed honestly, so a firmware bus
-            // scanner finds exactly the modeled devices and NACK-handling
-            // firmware paths are actually exercised). With no set installed
-            // (standalone `on_i2c` users modelling the whole bus) every
-            // address is ACKed, as before.
-            let known = s
-                .twi_known_addrs
-                .as_ref()
-                .is_none_or(|set| set.contains(&addr7));
-            s.twi_addr = addr7;
-            s.twi_active = true;
-            s.twi_read = read_flag;
-            s.twi_acked = known;
-
-            // Fire user callback and use its return value (if any); for START
-            // events the return value is meaningless, but we keep the API uniform.
-            if let Some(cb) = &mut s.callbacks.on_i2c {
-                let _ = cb(I2cEvent::Start {
-                    addr: addr7,
-                    read: read_flag,
-                });
-            }
-
-            // Answer the address: ACK (data=1) for a modeled slave so the
-            // firmware's Wire library proceeds, NACK (data=0) otherwise,
-            // simavr's TWI master decodes the ACK-condition message's data
-            // bit into TW_M{T,R}_SLA_ACK / _NACK status.
-            if !avr.is_null() {
-                let twi_in = ffi::avr_io_getirq(avr, TWI_GETIRQ, TWI_IRQ_INPUT);
-                if !twi_in.is_null() {
-                    let ack = ffi::avr_twi_irq_msg(TWI_COND_ACK as u8, addr7, known as u8);
-                    ffi::avr_raise_irq(twi_in, ack);
-                }
-            }
-        } else if msg_flags & TWI_COND_READ != 0 && s.twi_active {
-            // Master-read clock: the firmware wants a byte from the slave. Ask
-            // the handler for the reply and inject it back into the TWI receiver
-            // with READ|ACK so the firmware's Wire library completes the read.
-            //
-            // A NACKed (unmodeled) address gets NOTHING injected: no slave
-            // drives SDA, so fabricating an ACKed 0xFF here would invent a
-            // device the bus does not have. A compliant master saw the
-            // address NACK and never clocks a read; one that reads anyway
-            // sees the dead bus (TWINT stays low for the rest of its chunk),
-            // which is what real hardware does.
-            let addr7 = s.twi_addr;
-            if s.twi_acked {
-                let reply_byte = if let Some(cb) = &mut s.callbacks.on_i2c {
-                    cb(I2cEvent::Read { addr: addr7 }).unwrap_or(0xFF)
-                } else {
-                    0xFF
-                };
-                if !avr.is_null() {
-                    let twi_in = ffi::avr_io_getirq(avr, TWI_GETIRQ, TWI_IRQ_INPUT);
-                    if !twi_in.is_null() {
-                        let reply = ffi::avr_twi_irq_msg(
-                            (TWI_COND_READ | TWI_COND_ACK) as u8,
-                            addr7,
-                            reply_byte,
-                        );
-                        ffi::avr_raise_irq(twi_in, reply);
-                    }
-                }
-            }
-        } else if msg_flags & TWI_COND_WRITE != 0 && s.twi_active {
-            // Data byte written by firmware. Dispatched (and ACKed) only for
-            // a modeled slave; a NACKed address's data bytes go nowhere and
-            // are NACKed, exactly like a wire with no slave on it.
-            let addr7 = s.twi_addr;
-            let acked = s.twi_acked;
-            if acked {
-                if let Some(cb) = &mut s.callbacks.on_i2c {
-                    let _ = cb(I2cEvent::Write {
-                        addr: addr7,
-                        data: data_byte,
-                    });
-                }
-            }
-
-            // ACK the byte for a modeled slave, NACK it otherwise.
-            if !avr.is_null() {
-                let twi_in = ffi::avr_io_getirq(avr, TWI_GETIRQ, TWI_IRQ_INPUT);
-                if !twi_in.is_null() {
-                    let ack = ffi::avr_twi_irq_msg(TWI_COND_ACK as u8, addr7, acked as u8);
-                    ffi::avr_raise_irq(twi_in, ack);
-                }
-            }
-        } else if msg_flags & TWI_COND_STOP != 0 && s.twi_active {
-            s.twi_active = false;
-            s.twi_read = false;
-            s.twi_acked = false;
-            let addr7 = s.twi_addr;
-            if let Some(cb) = &mut s.callbacks.on_i2c {
-                let _ = cb(I2cEvent::Stop { addr: addr7 });
-            }
+    if msg_flags & (TWI_COND_START | TWI_COND_ADDR) != 0 {
+        // New transaction. Gate the address ACK on the modeled-slave set
+        // (mirrors the SoftI2cResponder: only an address a slave models gets
+        // the ACK; an unknown address is NACKed honestly, so a firmware bus
+        // scanner finds exactly the modeled devices and NACK-handling
+        // firmware paths are actually exercised). With no set installed
+        // (standalone `on_i2c` users modelling the whole bus) every address
+        // is ACKed, as before.
+        let addr7 = addr_byte >> 1;
+        let read = addr_byte & 1 != 0;
+        let known = s
+            .twi_known_addrs
+            .as_ref()
+            .is_none_or(|set| set.contains(&addr7));
+        s.twi_addr = addr7;
+        s.twi_active = true;
+        s.twi_read = read;
+        s.twi_acked = known;
+        s.i2c_event(I2cEvent::Start { addr: addr7, read });
+        // Answer the address: ACK (data=1) for a modeled slave so the
+        // firmware's Wire library proceeds, NACK (data=0) otherwise; simavr's
+        // TWI master decodes the ACK-condition message's data bit into
+        // TW_M{T,R}_SLA_ACK / _NACK status.
+        unsafe { raise_twi(avr, TWI_COND_ACK, addr7, known as u8) };
+        return;
+    }
+    if !s.twi_active {
+        return;
+    }
+    let addr7 = s.twi_addr;
+    if msg_flags & TWI_COND_READ != 0 {
+        // Master-read clock: the firmware wants a byte from the slave. Ask the
+        // handler for the reply and inject it back into the TWI receiver with
+        // READ|ACK so the firmware's Wire library completes the read.
+        //
+        // A NACKed (unmodeled) address gets NOTHING injected: no slave drives
+        // SDA, so fabricating an ACKed 0xFF here would invent a device the bus
+        // does not have. A compliant master saw the address NACK and never
+        // clocks a read; one that reads anyway sees the dead bus (TWINT stays
+        // low for the rest of its chunk), which is what real hardware does.
+        if s.twi_acked {
+            let reply = s.i2c_event(I2cEvent::Read { addr: addr7 }).unwrap_or(0xFF);
+            unsafe { raise_twi(avr, TWI_COND_READ | TWI_COND_ACK, addr7, reply) };
         }
+    } else if msg_flags & TWI_COND_WRITE != 0 {
+        // Data byte written by firmware. Dispatched (and ACKed) only for a
+        // modeled slave; a NACKed address's data bytes go nowhere and are
+        // NACKed, exactly like a wire with no slave on it.
+        let acked = s.twi_acked;
+        if acked {
+            s.i2c_event(I2cEvent::Write {
+                addr: addr7,
+                data: data_byte,
+            });
+        }
+        unsafe { raise_twi(avr, TWI_COND_ACK, addr7, acked as u8) };
+    } else if msg_flags & TWI_COND_STOP != 0 {
+        s.twi_active = false;
+        s.twi_read = false;
+        s.twi_acked = false;
+        s.i2c_event(I2cEvent::Stop { addr: addr7 });
     }
 }
 
 /// SPI hook: fires on each byte clocked out of the MCU's SPI peripheral.
-unsafe extern "C" fn spi_output_hook(
-    _irq: *mut ffi::avr_irq_t,
-    value: u32,
-    param: *mut std::os::raw::c_void,
-) {
-    let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
-    if let Ok(mut s) = state.lock() {
-        let mosi = value as u8;
-        let avr = s.avr_ptr;
-
-        // The SPI IRQ fires synchronously inside `avr_run`, so `avr->cycle` here
-        // is the EXACT cycle of this byte transfer, the same clock the pin-edge
-        // hook stamps. Carrying it lets the scheduler interleave the byte stream
-        // with the CS-pin edge stream in true order for real CS framing.
-        let cycle = if avr.is_null() {
-            0
-        } else {
-            unsafe { (*avr).cycle }
-        };
-
-        let miso = if let Some(cb) = &mut s.callbacks.on_spi {
-            cb(SpiEvent {
-                mosi,
-                deselect: false,
-                cycle,
-            })
-        } else {
-            0xFF
-        };
-
-        // Inject MISO byte back into the SPI peripheral.
-        if !avr.is_null() {
-            let spi_in = ffi::avr_io_getirq(avr, SPI_GETIRQ, SPI_IRQ_INPUT);
-            if !spi_in.is_null() {
-                ffi::avr_raise_irq(spi_in, miso as u32);
-            }
-        }
-    }
+unsafe extern "C" fn spi_output_hook(_irq: *mut ffi::avr_irq_t, value: u32, param: *mut c_void) {
+    let Ok(mut s) = unsafe { hook_state(param) }.lock() else {
+        return;
+    };
+    let avr = s.avr_ptr;
+    // The SPI IRQ fires synchronously inside `avr_run`, so `avr->cycle` here
+    // is the EXACT cycle of this byte transfer, the same clock the pin-edge
+    // hook stamps. Carrying it lets the scheduler interleave the byte stream
+    // with the CS-pin edge stream in true order for real CS framing.
+    let cycle = unsafe { cycle_of(avr) };
+    let event = SpiEvent {
+        mosi: value as u8,
+        deselect: false,
+        cycle,
+    };
+    let miso = s.callbacks.on_spi.as_mut().map_or(0xFF, |cb| cb(event));
+    // Inject the MISO byte back into the SPI peripheral.
+    unsafe { raise_irq(avr, SPI_GETIRQ, SPI_IRQ_INPUT, miso as u32) };
 }
 
 // ---------------------------------------------------------------------------
@@ -844,6 +741,14 @@ pub struct AvrMcu {
 // because SharedState is Send and avr_ptr is only touched from the owning thread.
 unsafe impl Send for AvrMcu {}
 
+/// A firmware path as the C string simavr's loaders take.
+fn path_cstr(path: &Path) -> Result<CString> {
+    let s = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 firmware path"))?;
+    Ok(CString::new(s)?)
+}
+
 /// Cycles to run for `us` microseconds at `freq` Hz, carrying the sub-cycle
 /// remainder so repeated calls don't drift. `carry` is the leftover from the
 /// previous call in units of (cycles × 1e6); returns `(cycles_this_call,
@@ -901,8 +806,8 @@ impl AvrMcu {
 
         let state = Arc::new(Mutex::new(SharedState {
             avr_ptr: avr,
-            port_state: std::collections::HashMap::new(),
-            ext_drive: std::collections::HashMap::new(),
+            port_state: HashMap::new(),
+            ext_drive: HashMap::new(),
             twi_addr: 0,
             twi_active: false,
             twi_read: false,
@@ -912,19 +817,10 @@ impl AvrMcu {
             uart_clear_to_send: false,
             uart_rx_overflow: 0,
             watchdog_resets: 0,
-            callbacks: Callbacks {
-                on_pin_change: None,
-                on_uart: None,
-                on_i2c: None,
-                on_spi: None,
-                input_responder: None,
-                input_responder_batch: None,
-                input_responder_direction: None,
-            },
+            callbacks: Callbacks::default(),
         }));
 
-        let leaked = Box::into_raw(Box::new(state.clone()));
-        let callback_ptr = leaked as *mut std::os::raw::c_void;
+        let callback_ptr = Box::into_raw(Box::new(state.clone())) as *mut c_void;
 
         // Disable simavr's UART "stdio echo" (on by default). It is redundant
         // here (every TX byte reaches the engine through `on_uart`) and v1.8's
@@ -943,18 +839,10 @@ impl AvrMcu {
         for uart in [b'0', b'1', b'2', b'3'] {
             unsafe {
                 let mut flags: u32 = 0;
-                if ffi::avr_ioctl(
-                    avr,
-                    uart_get_flags(uart),
-                    &mut flags as *mut u32 as *mut std::os::raw::c_void,
-                ) == 0
-                {
+                if ffi::avr_ioctl(avr, uart_get_flags(uart), ptr::addr_of_mut!(flags).cast()) == 0 {
                     flags &= !AVR_UART_FLAG_STDIO;
-                    let _ = ffi::avr_ioctl(
-                        avr,
-                        uart_set_flags(uart),
-                        &mut flags as *mut u32 as *mut std::os::raw::c_void,
-                    );
+                    let _ =
+                        ffi::avr_ioctl(avr, uart_set_flags(uart), ptr::addr_of_mut!(flags).cast());
                 }
             }
         }
@@ -962,19 +850,12 @@ impl AvrMcu {
         // Register UART output hook immediately (it's always wanted), plus the
         // XON/XOFF flow-control hooks that meter host RX bytes into the 64-byte
         // input fifo (see `drain_uart_pending`).
-        unsafe {
-            let uart_irq = ffi::avr_io_getirq(avr, uart_getirq(b'0'), UART_IRQ_OUTPUT);
-            if !uart_irq.is_null() {
-                ffi::avr_irq_register_notify(uart_irq, Some(uart_output_hook), callback_ptr);
-            }
-            let xon = ffi::avr_io_getirq(avr, uart_getirq(b'0'), UART_IRQ_OUT_XON);
-            if !xon.is_null() {
-                ffi::avr_irq_register_notify(xon, Some(uart_xon_hook), callback_ptr);
-            }
-            let xoff = ffi::avr_io_getirq(avr, uart_getirq(b'0'), UART_IRQ_OUT_XOFF);
-            if !xoff.is_null() {
-                ffi::avr_irq_register_notify(xoff, Some(uart_xoff_hook), callback_ptr);
-            }
+        for (index, hook) in [
+            (UART_IRQ_OUTPUT, uart_output_hook as IrqHook),
+            (UART_IRQ_OUT_XON, uart_xon_hook),
+            (UART_IRQ_OUT_XOFF, uart_xoff_hook),
+        ] {
+            unsafe { register_hook(avr, uart_getirq(b'0'), index, hook, callback_ptr) };
         }
 
         Ok(Self {
@@ -1013,33 +894,31 @@ impl AvrMcu {
             if self.hooked_ports.contains(&port) {
                 continue;
             }
-            if let Some(hook_fn) = port_hook_fn(port) {
-                unsafe {
-                    let irq = ffi::avr_io_getirq(
-                        self.avr,
-                        ioport_getirq(port as u8),
-                        IOPORT_IRQ_REG_PORT,
-                    );
-                    if !irq.is_null() {
-                        ffi::avr_irq_register_notify(irq, Some(hook_fn), self.callback_ptr);
-                        self.hooked_ports.push(port);
-                    }
+            let Some((port_fn, ddr_fn)) = port_hooks(port) else {
+                continue;
+            };
+            let ioctl = ioport_getirq(port as u8);
+            unsafe {
+                if register_hook(
+                    self.avr,
+                    ioctl,
+                    IOPORT_IRQ_REG_PORT,
+                    port_fn,
+                    self.callback_ptr,
+                ) {
+                    self.hooked_ports.push(port);
                 }
-            }
-            // Observation-only DDR hook: records "ever configured as output" so a
-            // pin held output-LOW is distinguishable from a never-configured
-            // (floating) one. It never drives the circuit (see make_ddr_hook).
-            if let Some(ddr_fn) = ddr_hook_fn(port) {
-                unsafe {
-                    let irq = ffi::avr_io_getirq(
-                        self.avr,
-                        ioport_getirq(port as u8),
-                        IOPORT_IRQ_DIRECTION_ALL,
-                    );
-                    if !irq.is_null() {
-                        ffi::avr_irq_register_notify(irq, Some(ddr_fn), self.callback_ptr);
-                    }
-                }
+                // Observation-only DDR hook: records "ever configured as
+                // output" so a pin held output-LOW is distinguishable from a
+                // never-configured (floating) one. It never drives the circuit
+                // (see `ddr_hook`).
+                register_hook(
+                    self.avr,
+                    ioctl,
+                    IOPORT_IRQ_DIRECTION_ALL,
+                    ddr_fn,
+                    self.callback_ptr,
+                );
             }
         }
     }
@@ -1049,11 +928,14 @@ impl AvrMcu {
     /// Called automatically when [`Mcu::on_i2c`] is first set.
     pub fn register_twi_hook(&mut self) {
         unsafe {
-            let twi_out = ffi::avr_io_getirq(self.avr, TWI_GETIRQ, TWI_IRQ_OUTPUT);
-            if !twi_out.is_null() {
-                ffi::avr_irq_register_notify(twi_out, Some(twi_hook), self.callback_ptr);
-            }
-        }
+            register_hook(
+                self.avr,
+                TWI_GETIRQ,
+                TWI_IRQ_OUTPUT,
+                twi_hook,
+                self.callback_ptr,
+            )
+        };
     }
 
     /// Register the SPI hook.
@@ -1061,19 +943,33 @@ impl AvrMcu {
     /// Called automatically when [`Mcu::on_spi`] is first set.
     pub fn register_spi_hook(&mut self) {
         unsafe {
-            let spi_out = ffi::avr_io_getirq(self.avr, SPI_GETIRQ, SPI_IRQ_OUTPUT);
-            if !spi_out.is_null() {
-                ffi::avr_irq_register_notify(spi_out, Some(spi_output_hook), self.callback_ptr);
-            }
-        }
+            register_hook(
+                self.avr,
+                SPI_GETIRQ,
+                SPI_IRQ_OUTPUT,
+                spi_output_hook,
+                self.callback_ptr,
+            )
+        };
+    }
+
+    /// The shared hook state, poison-tolerant: a panic inside a C hook must
+    /// not turn every later query into a second panic.
+    fn shared(&self) -> MutexGuard<'_, SharedState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Hook the standard ATmega328P ports (callers working with other MCUs
+    /// can call [`Self::register_port_hooks`] directly) after installing a
+    /// callback the port hooks feed.
+    fn hook_standard_ports(&mut self, install: impl FnOnce(&mut Callbacks)) {
+        install(&mut self.shared().callbacks);
+        self.register_port_hooks(&['A', 'B', 'C', 'D']);
     }
 
     /// Load a `.hex` file by parsing it and flashing the MCU.
     fn load_hex(&mut self, path: &Path) -> Result<()> {
-        let hex_cstr = CString::new(
-            path.to_str()
-                .ok_or_else(|| anyhow::anyhow!("non-UTF-8 firmware path"))?,
-        )?;
+        let hex_cstr = path_cstr(path)?;
 
         unsafe {
             let mut boot_base: u32 = 0;
@@ -1124,10 +1020,7 @@ impl AvrMcu {
         // silently runs garbage. Raw images without an ELF header are skipped.
         crate::elf::validate_arch(path, crate::elf::EM_AVR, "atmega (AVR)")?;
 
-        let elf_cstr = CString::new(
-            path.to_str()
-                .ok_or_else(|| anyhow::anyhow!("non-UTF-8 firmware path"))?,
-        )?;
+        let elf_cstr = path_cstr(path)?;
 
         unsafe {
             let mut fp = std::mem::zeroed::<ffi::elf_firmware_t>();
@@ -1152,11 +1045,9 @@ impl AvrMcu {
     /// PORT/DDR writes the same way, and the two writers share one external
     /// state (last writer owns the line).
     fn set_pin_raw(&mut self, port: char, bit: u8, high: bool) {
-        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let ext = &mut s.ext_drive;
-        unsafe {
-            drive_ioport_input(self.avr, ext, PinId { port, bit }, high);
-        }
+        let avr = self.avr;
+        let mut s = self.shared();
+        unsafe { drive_ioport_input(avr, &mut s.ext_drive, PinId { port, bit }, high) };
     }
 
     /// Read the current cycle counter directly from the avr_t struct.
@@ -1172,7 +1063,7 @@ impl AvrMcu {
     /// whose firmware is silently rebooting is not a healthy run and must not
     /// read as one.
     fn note_watchdog_reset(&mut self) {
-        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.shared();
         if s.watchdog_resets == 0 {
             eprintln!(
                 "hauksbee: AVR watchdog timed out unserviced; the core rebooted \
@@ -1221,7 +1112,7 @@ impl Mcu for AvrMcu {
         // The cycle counter restarted, so the timing anchors must too.
         self.run_target = 0;
         self.cycle_carry = 0;
-        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.shared();
         // The reset restarts the serial story: queued host bytes belonged to
         // the wedged conversation, and RXEN is cleared until the rebooted
         // firmware re-enables it (which re-raises XON).
@@ -1330,16 +1221,15 @@ impl Mcu for AvrMcu {
     }
 
     fn pins_configured_output(&self) -> Vec<PinId> {
-        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let mut out = Vec::new();
-        for (&port, ps) in &s.port_state {
-            for bit in 0u8..8 {
-                if (ps.output_dir >> bit) & 1 != 0 {
-                    out.push(PinId { port, bit });
-                }
-            }
-        }
-        out
+        self.shared()
+            .port_state
+            .iter()
+            .flat_map(|(&port, ps)| {
+                (0u8..8)
+                    .filter(move |bit| (ps.output_dir >> bit) & 1 != 0)
+                    .map(move |bit| PinId { port, bit })
+            })
+            .collect()
     }
 
     fn drive_direction_observable(&self) -> bool {
@@ -1351,38 +1241,23 @@ impl Mcu for AvrMcu {
 
     fn set_analog_in(&mut self, channel: u8, volts: f64) {
         let millivolts = (volts * 1000.0).round() as u32;
-        unsafe {
-            let irq = ffi::avr_io_getirq(self.avr, ADC_GETIRQ, channel as i32);
-            if !irq.is_null() {
-                ffi::avr_raise_irq(irq, millivolts);
-            }
-        }
+        unsafe { raise_irq(self.avr, ADC_GETIRQ, channel as i32, millivolts) };
     }
 
     fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
-        {
-            let mut s = self.state.lock().unwrap();
-            s.callbacks.on_pin_change = Some(cb);
-        }
-        // Auto-register hooks for the standard ATmega328P ports.
-        // Callers working with other MCUs can call register_port_hooks directly.
-        let ports: Vec<char> = ['A', 'B', 'C', 'D'].to_vec();
-        self.register_port_hooks(&ports);
+        self.hook_standard_ports(|c| c.on_pin_change = Some(cb));
     }
 
+    /// The responder fires from the per-port output hook, so the standard
+    /// ports must be hooked even if `on_pin_change` was never set.
     fn on_input_responder(
         &mut self,
         responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>,
     ) {
-        {
-            let mut s = self.state.lock().unwrap();
-            s.callbacks.input_responder = Some(responder);
-            s.callbacks.input_responder_batch = None;
-        }
-        // The responder fires from the per-port output hook, so the standard
-        // ATmega328P ports must be hooked even if `on_pin_change` was never set.
-        let ports: Vec<char> = ['A', 'B', 'C', 'D'].to_vec();
-        self.register_port_hooks(&ports);
+        self.hook_standard_ports(|c| {
+            c.input_responder = Some(responder);
+            c.input_responder_batch = None;
+        });
     }
 
     fn input_responder_batches_atomic(&self) -> bool {
@@ -1397,30 +1272,22 @@ impl Mcu for AvrMcu {
         &mut self,
         responder: Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>,
     ) {
-        {
-            let mut s = self.state.lock().unwrap();
-            s.callbacks.input_responder = None;
-            s.callbacks.input_responder_batch = Some(responder);
-        }
-        let ports: Vec<char> = ['A', 'B', 'C', 'D'].to_vec();
-        self.register_port_hooks(&ports);
+        self.hook_standard_ports(|c| {
+            c.input_responder = None;
+            c.input_responder_batch = Some(responder);
+        });
     }
 
     fn on_input_responder_direction(
         &mut self,
         responder: Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<PinDrive> + Send>,
     ) {
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .callbacks
-            .input_responder_direction = Some(responder);
-        self.register_port_hooks(&['A', 'B', 'C', 'D']);
+        self.hook_standard_ports(|c| c.input_responder_direction = Some(responder));
     }
 
     fn uart_write(&mut self, bytes: &[u8]) {
         {
-            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut s = self.shared();
             let room = UART_PENDING_CAP.saturating_sub(s.uart_pending.len());
             let accepted = bytes.len().min(room);
             s.uart_pending.extend(&bytes[..accepted]);
@@ -1445,18 +1312,15 @@ impl Mcu for AvrMcu {
     }
 
     fn uart_rx_overflow(&self) -> u64 {
-        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        s.uart_rx_overflow
+        self.shared().uart_rx_overflow
     }
 
     fn uart_rx_pending(&self) -> usize {
-        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        s.uart_pending.len()
+        self.shared().uart_pending.len()
     }
 
     fn watchdog_resets(&self) -> u64 {
-        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        s.watchdog_resets
+        self.shared().watchdog_resets
     }
 
     /// simavr's watchdog is the one that behaves: it times out at the right
@@ -1469,28 +1333,20 @@ impl Mcu for AvrMcu {
     }
 
     fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>) {
-        let mut s = self.state.lock().unwrap();
-        s.callbacks.on_uart = Some(cb);
+        self.shared().callbacks.on_uart = Some(cb);
     }
 
     fn on_i2c(&mut self, cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>) {
-        {
-            let mut s = self.state.lock().unwrap();
-            s.callbacks.on_i2c = Some(cb);
-        }
+        self.shared().callbacks.on_i2c = Some(cb);
         self.register_twi_hook();
     }
 
     fn set_i2c_slave_addresses(&mut self, addresses: &[u8]) {
-        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        s.twi_known_addrs = Some(addresses.iter().copied().collect());
+        self.shared().twi_known_addrs = Some(addresses.iter().copied().collect());
     }
 
     fn on_spi(&mut self, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
-        {
-            let mut s = self.state.lock().unwrap();
-            s.callbacks.on_spi = Some(cb);
-        }
+        self.shared().callbacks.on_spi = Some(cb);
         self.register_spi_hook();
     }
 
@@ -1530,7 +1386,7 @@ impl Drop for AvrMcu {
 #[cfg(test)]
 mod cycle_budget_tests {
     use super::{
-        cycle_budget, ddr_hook_d, drive_ioport_input, port_hook_d, release_ioport_input, AvrMcu,
+        cycle_budget, ddr_hook, drive_ioport_input, port_hook, release_ioport_input, AvrMcu,
     };
     use crate::traits::{Mcu, PinId};
     use std::sync::{Arc, Mutex};
@@ -1603,7 +1459,7 @@ mod cycle_budget_tests {
             })
             .current = 0;
 
-        unsafe { port_hook_d(std::ptr::null_mut(), 0b0000_0110, mcu.callback_ptr) };
+        unsafe { port_hook::<'D'>(std::ptr::null_mut(), 0b0000_0110, mcu.callback_ptr) };
 
         assert_eq!(
             *batches.lock().unwrap(),
@@ -1644,8 +1500,8 @@ mod cycle_budget_tests {
                 output_dir: 0,
             });
 
-        unsafe { ddr_hook_d(std::ptr::null_mut(), 1 << 2, mcu.callback_ptr) };
-        unsafe { ddr_hook_d(std::ptr::null_mut(), 0, mcu.callback_ptr) };
+        unsafe { ddr_hook::<'D'>(std::ptr::null_mut(), 1 << 2, mcu.callback_ptr) };
+        unsafe { ddr_hook::<'D'>(std::ptr::null_mut(), 0, mcu.callback_ptr) };
 
         assert_eq!(
             *observed.lock().unwrap(),
@@ -1674,7 +1530,7 @@ mod cycle_budget_tests {
             },
         );
 
-        unsafe { ddr_hook_d(std::ptr::null_mut(), 0b0000_1100, mcu.callback_ptr) };
+        unsafe { ddr_hook::<'D'>(std::ptr::null_mut(), 0b0000_1100, mcu.callback_ptr) };
 
         assert_eq!(
             *batches.lock().unwrap(),

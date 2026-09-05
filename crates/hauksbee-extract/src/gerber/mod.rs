@@ -38,12 +38,14 @@ pub mod macros;
 pub mod placement;
 pub mod rs274x;
 
-use std::path::Path;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use crate::{ExtractError, ExtractedBoard};
 
 use connect::{LayerSpan, PlatedHole, ReconStats};
-use layers::LayerRole;
+use excellon::{DeclaredSpan, Hole, LayerPair};
+use layers::{ExtRepRole, GbrJobRole, GbrJobSide, LayerRole};
 
 /// A reverse extraction, plus the honest accounting that lets callers report
 /// how much was recovered.
@@ -63,42 +65,41 @@ fn film(path: &Path) -> std::borrow::Cow<'_, str> {
         .to_string_lossy()
 }
 
-fn extrep_layer_role(role: &layers::ExtRepRole, path: &Path) -> LayerRole {
-    match role {
-        layers::ExtRepRole::Copper { index } => LayerRole::Copper {
-            index: *index,
-            name: path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string(),
-        },
-        layers::ExtRepRole::Drill => LayerRole::Drill,
-        layers::ExtRepRole::Outline => LayerRole::Outline,
-        layers::ExtRepRole::Ignored => LayerRole::Ignored,
+/// Whether `path` carries extension `ext`, case-insensitively.
+fn ext_is(path: &Path, ext: &str) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.eq_ignore_ascii_case(ext))
+}
+
+fn read_text(path: &Path, what: &str) -> Result<String, ExtractError> {
+    std::fs::read_to_string(path)
+        .map_err(|e| ExtractError::Xml(format!("{what} {}: {e}", film(path))))
+}
+
+/// A copper role at provisional stack `index`, named after the film's stem.
+fn copper_role(index: usize, path: &Path) -> LayerRole {
+    LayerRole::Copper {
+        index,
+        name: path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string(),
     }
 }
 
 fn same_layer_role(left: &LayerRole, right: &LayerRole) -> bool {
     match (left, right) {
-        (LayerRole::Copper { index: left, .. }, LayerRole::Copper { index: right, .. }) => {
-            left == right
-        }
-        (LayerRole::Drill, LayerRole::Drill)
-        | (LayerRole::Outline, LayerRole::Outline)
-        | (LayerRole::Ignored, LayerRole::Ignored)
-        | (LayerRole::Unknown, LayerRole::Unknown) => true,
-        _ => false,
+        (LayerRole::Copper { index: l, .. }, LayerRole::Copper { index: r, .. }) => l == r,
+        _ => std::mem::discriminant(left) == std::mem::discriminant(right),
     }
 }
 
 /// Resolve one Altium `.LDP` layer walk into the physical pair used by the
 /// drill stitcher. `g1` is physical L2, and a terminal `gbl` sits one layer
 /// below the deepest named inner layer (or at L2 on a two-layer job).
-fn ldp_declared_span(
-    role: &layers::LdpDrillRole,
-    classified_copper_layers: usize,
-) -> excellon::DeclaredSpan {
+fn ldp_declared_span(role: &layers::LdpDrillRole, classified_copper_layers: usize) -> DeclaredSpan {
     let bottom = role
         .layers
         .iter()
@@ -118,42 +119,32 @@ fn ldp_declared_span(
             layers::LdpLayer::Bottom => bottom,
         })
         .collect();
-    if physical.len() < 2 || physical.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return excellon::DeclaredSpan::Unreadable;
+    match (physical.first(), physical.last()) {
+        (Some(&from), Some(&to)) if physical.windows(2).all(|pair| pair[0] < pair[1]) => {
+            DeclaredSpan::Pair(LayerPair { from, to })
+        }
+        _ => DeclaredSpan::Unreadable,
     }
-    excellon::DeclaredSpan::Pair(excellon::LayerPair {
-        from: physical[0],
-        to: *physical.last().unwrap_or(&physical[0]),
-    })
 }
 
 /// The file body is closest to the holes and therefore never gets silently
 /// overwritten. A package-level `.LDP` fills silence; disagreement between two
-/// explicit spans becomes unreadable rather than choosing either one.
-fn merge_declared_span(
-    file_span: excellon::DeclaredSpan,
-    ldp_span: Option<excellon::DeclaredSpan>,
-) -> (excellon::DeclaredSpan, bool) {
-    let Some(ldp_span) = ldp_span else {
-        return (file_span, false);
-    };
-    match (file_span, ldp_span) {
-        (excellon::DeclaredSpan::Absent, from_ldp) => (from_ldp, false),
-        (from_file, from_ldp) if from_file == from_ldp => (from_file, false),
-        (excellon::DeclaredSpan::Unreadable, _) | (_, excellon::DeclaredSpan::Unreadable) => {
-            (excellon::DeclaredSpan::Unreadable, true)
-        }
-        _ => (excellon::DeclaredSpan::Unreadable, true),
+/// explicit spans becomes unreadable rather than choosing either one. The flag
+/// says whether that happened.
+fn merge_declared_span(file: DeclaredSpan, ldp: Option<DeclaredSpan>) -> (DeclaredSpan, bool) {
+    match ldp {
+        None => (file, false),
+        Some(ldp) if file == DeclaredSpan::Absent => (ldp, false),
+        Some(ldp) if file == ldp => (file, false),
+        Some(_) => (DeclaredSpan::Unreadable, true),
     }
 }
 
-fn declared_span_phrase(span: excellon::DeclaredSpan) -> String {
+fn declared_span_phrase(span: DeclaredSpan) -> String {
     match span {
-        excellon::DeclaredSpan::Pair(pair) => {
-            format!("physical copper span L{}-L{}", pair.from, pair.to)
-        }
-        excellon::DeclaredSpan::Unreadable => "an unreadable copper span".to_string(),
-        excellon::DeclaredSpan::Absent => "no copper span".to_string(),
+        DeclaredSpan::Pair(pair) => format!("physical copper span L{}-L{}", pair.from, pair.to),
+        DeclaredSpan::Unreadable => "an unreadable copper span".to_string(),
+        DeclaredSpan::Absent => "no copper span".to_string(),
     }
 }
 
@@ -166,11 +157,11 @@ fn declared_span_phrase(span: excellon::DeclaredSpan) -> String {
 /// Downstream this list decides which copper film gets which provisional stack
 /// index when a job's names tie, so readdir order would otherwise leak into the
 /// reconstruction and two extractions of one archive could disagree.
-fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let mut here: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    let mut here: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
     here.sort();
     for p in here {
         if p.is_dir() {
@@ -244,10 +235,10 @@ fn name_says_non_plated(fname: &str) -> bool {
 
 /// One drill file read into hits, with what its own body said about them.
 struct DrillRead {
-    hits: Vec<excellon::Hole>,
+    hits: Vec<Hole>,
     /// Plated, non-plated, or unstated, from the body alone.
     plated: Option<bool>,
-    declared: excellon::DeclaredSpan,
+    declared: DeclaredSpan,
     /// A gerber-format film whose drill apertures mix plated and mechanical
     /// functions; plating is assigned per file here, so the film settles nothing.
     mixed_functions: bool,
@@ -277,23 +268,21 @@ fn read_excellon(text: &str, fname: &str, notes: &mut Vec<String>) -> DrillRead 
 fn read_drill_film(text: &str, fname: &str, notes: &mut Vec<String>) -> DrillRead {
     let functions = film_drill_functions(text);
     let function = film_file_function(text).unwrap_or_default();
-    let plated =
-        if film_is_non_plated(text) || matches!(functions, FilmDrillFunctions::AllMechanical) {
-            Some(false)
-        } else if function.contains("PLATED")
-            || function.contains("PTH")
-            || matches!(functions, FilmDrillFunctions::AllPlated)
-        {
-            Some(true)
-        } else {
-            None
-        };
-    let declares_rout =
-        function.contains("ROUT") || function.contains("SLOT") || function.contains("MILL");
-    let lower = fname.to_ascii_lowercase();
-    if !declares_rout
-        && (lower.contains("rout") || lower.contains("slot") || lower.contains("mill"))
+    let plated = if film_is_non_plated(text) || functions == FilmDrillFunctions::AllMechanical {
+        Some(false)
+    } else if function.contains("PLATED")
+        || function.contains("PTH")
+        || functions == FilmDrillFunctions::AllPlated
     {
+        Some(true)
+    } else {
+        None
+    };
+    let declares_rout = ["ROUT", "SLOT", "MILL"]
+        .iter()
+        .any(|w| function.contains(w));
+    let lower = fname.to_ascii_lowercase();
+    if !declares_rout && ["rout", "slot", "mill"].iter().any(|w| lower.contains(w)) {
         notes.push(format!(
             "{fname}: this gerber-format drill film is named as a rout or slot layer but does \
              not declare itself one, so the paths drawn on it are left as artwork rather \
@@ -305,30 +294,28 @@ fn read_drill_film(text: &str, fname: &str, notes: &mut Vec<String>) -> DrillRea
     }
     let mut hits = Vec::new();
     for pr in rs274x::parse_layer(text).unwrap_or_default() {
-        match pr.kind {
-            rs274x::PrimKind::Flash => {
+        match (pr.kind, &pr.shape) {
+            (rs274x::PrimKind::Flash, shape) => {
                 // A drill film draws the finished CUTOUT, so an oblong flash is
                 // a slot: its narrow side is the tool and its long axis the path
                 // that tool swept. A round flash comes back with its two
                 // centres coincident, which is a round hole.
-                let (dia, from, to) = drill_flash_extent(&pr.shape);
+                let (dia, from, to) = drill_flash_extent(shape);
                 let is_slot = (to.0 - from.0).hypot(to.1 - from.1) > 1e-9;
-                hits.push(excellon::Hole {
+                hits.push(Hole {
                     x: from.0,
                     y: from.1,
                     diameter: dia,
                     to: is_slot.then_some(to),
                 });
             }
-            rs274x::PrimKind::Track if declares_rout => {
-                if let geo::Shape::Capsule(c) = &pr.shape {
-                    hits.push(excellon::Hole {
-                        x: c.ax,
-                        y: c.ay,
-                        diameter: c.r * 2.0,
-                        to: Some((c.bx, c.by)),
-                    });
-                }
+            (rs274x::PrimKind::Track, geo::Shape::Capsule(c)) if declares_rout => {
+                hits.push(Hole {
+                    x: c.ax,
+                    y: c.ay,
+                    diameter: c.r * 2.0,
+                    to: Some((c.bx, c.by)),
+                });
             }
             _ => {}
         }
@@ -337,7 +324,7 @@ fn read_drill_film(text: &str, fname: &str, notes: &mut Vec<String>) -> DrillRea
         hits,
         plated,
         declared: film_declared_span(text),
-        mixed_functions: matches!(functions, FilmDrillFunctions::Mixed),
+        mixed_functions: functions == FilmDrillFunctions::Mixed,
     }
 }
 
@@ -345,10 +332,7 @@ fn read_drill_film(text: &str, fname: &str, notes: &mut Vec<String>) -> DrillRea
 /// draws around a via or a plated pad, and never around a mounting hole.
 /// Pours and tracks do not count; a mechanical hole through two planes is
 /// exactly the phantom short this rule must not create.
-fn hits_under_pad_rings(
-    hits: Vec<excellon::Hole>,
-    layers: &[Vec<rs274x::CopperPrim>],
-) -> Vec<excellon::Hole> {
+fn hits_under_pad_rings(hits: Vec<Hole>, layers: &[Vec<rs274x::CopperPrim>]) -> Vec<Hole> {
     let ringed = |x: f64, y: f64| {
         layers
             .iter()
@@ -369,6 +353,349 @@ fn hits_under_pad_rings(
     hits.into_iter().filter(|h| ringed(h.x, h.y)).collect()
 }
 
+/// The package-level authorities a job may ship, read before any film is
+/// classified. In order of rank: the user's explicit mapping file, the
+/// exporter's `.gbrjob` manifest, Altium's `.LDP` drill-pair manifest, and
+/// Altium's `.EXTREP` extension report. The file's own attribute, name and
+/// body are the fallback.
+#[derive(Default)]
+struct PackageMetadata {
+    /// `layer_map.txt` / `*.map`: one `filename = role` per line.
+    mapping: HashMap<String, LayerRole>,
+    /// `.LDP` rows by lower-cased basename (manifest and ZIP member routinely
+    /// disagree only in case). Names the drill file, whether the set is plated,
+    /// and the exact ordered copper layers it reaches.
+    ldp_drills: HashMap<String, layers::LdpDrillRole>,
+    /// `.EXTREP` extension -> role, with any extension the report assigns
+    /// several roles removed (named-output reports reuse `.gbr` for everything).
+    extrep_roles: HashMap<String, ExtRepRole>,
+    /// `.gbrjob` basename -> role, naming each copper film's declared layer.
+    gbrjob: HashMap<String, GbrJobRole>,
+    /// Provisional stack index per manifest copper film: its RANK among the
+    /// manifest's copper entries (top first, bottom `usize::MAX`), never the
+    /// raw declared number. The numbers ORDER the stack even on exporters
+    /// whose numbers are not physical positions (KiCad 9 writes internal layer
+    /// IDs, so a four-layer manifest can read L1, L5, L7, L4).
+    gbrjob_index: HashMap<String, usize>,
+    /// Whether the manifest's copper numbers are exactly `1..=n` in rank order,
+    /// the only case they are believed as PHYSICAL positions: any other scheme
+    /// handed to the drill layer-pair resolver would invent layers the board
+    /// does not have.
+    gbrjob_numbers_physical: bool,
+}
+
+impl PackageMetadata {
+    fn read(dir: &Path, files: &[PathBuf], notes: &mut Vec<String>) -> Result<Self, ExtractError> {
+        let mut meta = PackageMetadata::default();
+        let mut ldp_sources: HashMap<String, String> = HashMap::new();
+        let mut extrep_contested: BTreeSet<String> = BTreeSet::new();
+        for p in files {
+            let name = film(p);
+            if name.eq_ignore_ascii_case("layer_map.txt") || ext_is(p, "map") {
+                if let Ok(text) = std::fs::read_to_string(p) {
+                    meta.mapping.extend(layers::parse_mapping(&text));
+                }
+            } else if ext_is(p, "gbrjob") {
+                if let Ok(text) = std::fs::read_to_string(p) {
+                    meta.gbrjob.extend(layers::parse_gbrjob(&text));
+                }
+            } else if ext_is(p, "ldp") {
+                // Conflicting declarations refuse: picking one would fabricate
+                // or erase a barrel connection.
+                let Ok(text) = std::fs::read_to_string(p) else {
+                    notes.push(format!(
+                        "{name} could not be read, so its drill-layer metadata was not used."
+                    ));
+                    continue;
+                };
+                let rows = layers::parse_ldp(&text);
+                if rows.is_empty() {
+                    notes.push(format!(
+                        "{name} contains no complete DrillFile/DrillLayers declaration, so filename and file-body inference remain the fallback."
+                    ));
+                }
+                for (drill, role) in rows {
+                    match meta.ldp_drills.get(&drill) {
+                        Some(existing) if *existing != role => {
+                            return Err(ExtractError::Gerber(format!(
+                                "conflicting .LDP declarations for drill file {drill}: {} and {name}. Resolve the package metadata; choosing either span could merge nets the stack keeps apart",
+                                ldp_sources
+                                    .get(&drill)
+                                    .map(String::as_str)
+                                    .unwrap_or("an earlier .LDP file"),
+                            )));
+                        }
+                        Some(_) => {}
+                        None => {
+                            ldp_sources.insert(drill.clone(), name.to_string());
+                            meta.ldp_drills.insert(drill, role);
+                        }
+                    }
+                }
+            } else if ext_is(p, "extrep") {
+                let Ok(text) = std::fs::read_to_string(p) else {
+                    notes.push(format!(
+                        "{name} could not be read, so its extension-role metadata was not used."
+                    ));
+                    continue;
+                };
+                let parsed = layers::parse_extrep(&text);
+                for extension in parsed.contested {
+                    meta.extrep_roles.remove(&extension);
+                    extrep_contested.insert(extension);
+                }
+                for (extension, role) in parsed.roles {
+                    if extrep_contested.contains(&extension) {
+                        continue;
+                    }
+                    match meta.extrep_roles.get(&extension) {
+                        Some(existing) if *existing != role => {
+                            meta.extrep_roles.remove(&extension);
+                            extrep_contested.insert(extension);
+                        }
+                        _ => {
+                            meta.extrep_roles.insert(extension, role);
+                        }
+                    }
+                }
+            }
+        }
+        for name in meta.ldp_drills.keys() {
+            let claimants: Vec<String> = files
+                .iter()
+                .filter(|p| film(p).eq_ignore_ascii_case(name))
+                .map(|p| {
+                    p.strip_prefix(dir)
+                        .unwrap_or(p)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            match claimants.len() {
+                0 => notes.push(format!(
+                    ".LDP names drill file {name}, but no package member has that basename; the declaration was not applied."
+                )),
+                1 => {}
+                _ => {
+                    return Err(ExtractError::Gerber(format!(
+                        ".LDP names drill file {name}, but more than one package member has that basename ({}); preserve unique names or paths before using the declared span",
+                        claimants.join(", ")
+                    )))
+                }
+            }
+        }
+        for extension in &extrep_contested {
+            notes.push(format!(
+                ".EXTREP assigns more than one layer role to .{extension}; that extension is ambiguous, so each file falls back to its own declaration and filename instead of an arbitrary report row."
+            ));
+        }
+
+        // Rank the manifest's copper films: side tags first, then the number,
+        // then the file name. `gbrjob` is a HashMap, so a tie on (side, number)
+        // would otherwise carry hash order into the provisional stack index and
+        // change which layers a blind via stitches between two runs.
+        let present: HashSet<&str> = files
+            .iter()
+            .filter_map(|p| p.file_name()?.to_str())
+            .collect();
+        let mut job_copper: Vec<(&String, u32, GbrJobSide)> = meta
+            .gbrjob
+            .iter()
+            .filter_map(|(f, r)| match r {
+                GbrJobRole::Copper { layer, side } if present.contains(f.as_str()) => {
+                    Some((f, *layer, *side))
+                }
+                _ => None,
+            })
+            .collect();
+        job_copper.sort_by(|a, b| (a.2, a.1, a.0).cmp(&(b.2, b.1, b.0)));
+        meta.gbrjob_numbers_physical = job_copper
+            .iter()
+            .map(|(_, n, _)| *n)
+            .eq(1..=job_copper.len() as u32);
+        meta.gbrjob_index = job_copper
+            .iter()
+            .enumerate()
+            .map(|(i, (f, _, side))| {
+                let idx = if *side == GbrJobSide::Bottom {
+                    usize::MAX
+                } else {
+                    i
+                };
+                ((*f).clone(), idx)
+            })
+            .collect();
+        Ok(meta)
+    }
+
+    /// The role of one file: the explicit mapping, then `.gbrjob`, then `.LDP`
+    /// drill identity, then a usable unique `.EXTREP` extension. The file's own
+    /// attribute, its name and its body (in that order, see `classify_file`)
+    /// are the fallback.
+    fn role_of(&self, path: &Path, notes: &mut Vec<String>) -> Result<LayerRole, ExtractError> {
+        let fname = film(path);
+        if let Some(mapped) = self.mapping.get(&*fname) {
+            return Ok(mapped.clone());
+        }
+        let inferred = || layers::classify_file(path, &read_head(path));
+        let extrep = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .and_then(|e| self.extrep_roles.get(&e.to_ascii_lowercase()))
+            .map(|role| match role {
+                ExtRepRole::Copper { index } => copper_role(*index, path),
+                ExtRepRole::Drill => LayerRole::Drill,
+                ExtRepRole::Outline => LayerRole::Outline,
+                ExtRepRole::Ignored => LayerRole::Ignored,
+            });
+        let in_ldp = self.ldp_drills.contains_key(&fname.to_ascii_lowercase());
+        if let Some(job_role) = self.gbrjob.get(&*fname) {
+            let declared = match job_role {
+                GbrJobRole::Drill { .. } => LayerRole::Drill,
+                _ if in_ldp => {
+                    return Err(ExtractError::Gerber(format!(
+                        ".gbrjob and .LDP disagree about the role of {fname}; one names it as {} and the other as drilling. Resolve the package metadata before reconstructing connectivity",
+                        match job_role {
+                            GbrJobRole::Copper { .. } => "copper",
+                            GbrJobRole::Outline => "the board outline",
+                            _ => "electrically irrelevant artwork",
+                        }
+                    )));
+                }
+                GbrJobRole::Copper { layer, .. } => copper_role(
+                    self.gbrjob_index
+                        .get(&*fname)
+                        .copied()
+                        .unwrap_or(layer.saturating_sub(1) as usize),
+                    path,
+                ),
+                GbrJobRole::Outline => LayerRole::Outline,
+                GbrJobRole::Ignored => LayerRole::Ignored,
+            };
+            if let Some(extrep) = extrep.filter(|e| !same_layer_role(&declared, e)) {
+                notes.push(format!(
+                    ".gbrjob declares {fname} as {}, while .EXTREP says {}; the exact-file .gbrjob entry was used instead of the extension-wide report.",
+                    layers::role_phrase(&declared),
+                    layers::role_phrase(&extrep)
+                ));
+            }
+            return Ok(declared);
+        }
+        if in_ldp {
+            return Ok(LayerRole::Drill);
+        }
+        match extrep {
+            Some(declared) => {
+                let inferred = inferred();
+                if !same_layer_role(&declared, &inferred) {
+                    notes.push(format!(
+                        ".EXTREP declares {fname} as {}, while filename inference says {}; exporter metadata was used.",
+                        layers::role_phrase(&declared),
+                        layers::role_phrase(&inferred)
+                    ));
+                }
+                Ok(declared)
+            }
+            None => Ok(inferred()),
+        }
+    }
+
+    /// What the manifests say about a drill file's plating: `.gbrjob` and
+    /// `.LDP` must agree where both speak, since silently choosing one can turn
+    /// a mechanical hole into a conductor or erase a real barrel.
+    fn manifest_plated(&self, fname: &str) -> Result<Option<bool>, ExtractError> {
+        let from_job = match self.gbrjob.get(fname) {
+            Some(GbrJobRole::Drill { plated }) => Some(*plated),
+            _ => None,
+        };
+        let from_ldp = self
+            .ldp_drills
+            .get(&fname.to_ascii_lowercase())
+            .and_then(|role| role.plated);
+        if matches!((from_job, from_ldp), (Some(a), Some(b)) if a != b) {
+            return Err(ExtractError::Gerber(format!(
+                ".gbrjob and .LDP disagree about whether {fname} is plated; resolve the package metadata before reconstructing connectivity"
+            )));
+        }
+        Ok(from_job.or(from_ldp))
+    }
+}
+
+/// Every file of a job sorted into what the reconstruction reads it as.
+#[derive(Default)]
+struct Classified {
+    copper: Vec<(LayerRole, PathBuf)>,
+    drills: Vec<PathBuf>,
+    outlines: Vec<PathBuf>,
+    csvs: Vec<PathBuf>,
+    /// Allegro `smt_loc.txt` and similar component-location files.
+    loc_files: Vec<PathBuf>,
+    /// Every file and how it was read, for a refusal that can say what it saw.
+    inventory: Vec<(String, LayerRole)>,
+}
+
+fn classify_files(
+    files: Vec<PathBuf>,
+    meta: &PackageMetadata,
+    notes: &mut Vec<String>,
+) -> Result<Classified, ExtractError> {
+    let mut out = Classified::default();
+    for path in files {
+        let role = meta.role_of(&path, notes)?;
+        out.inventory.push((film(&path).into_owned(), role.clone()));
+        match role {
+            r @ LayerRole::Copper { .. } => out.copper.push((r, path)),
+            LayerRole::Drill => out.drills.push(path),
+            LayerRole::Outline => out.outlines.push(path),
+            _ => {
+                let lname = film(&path).to_ascii_lowercase();
+                if ext_is(&path, "csv") || ext_is(&path, "pos") {
+                    out.csvs.push(path);
+                } else if ["loc", "place", "pos", "pnp", "xy"]
+                    .iter()
+                    .any(|w| lname.contains(w))
+                {
+                    out.loc_files.push(path);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Placements and BOM enrichment from a job's assembly files. Any CSV that
+/// yields placements is a P&P file; a job with separate top and bottom
+/// placement CSVs contributes both, so placements EXTEND. A CSV that yields
+/// none (no X/Y columns) is tried as a BOM. Allegro-style location files
+/// (`smt_loc.txt`) are the fallback when no CSV placed anything.
+fn read_placements(
+    csvs: &[PathBuf],
+    loc_files: &[PathBuf],
+) -> (
+    Vec<placement::Placement>,
+    HashMap<String, placement::BomEntry>,
+) {
+    let mut placements = Vec::new();
+    let mut bom = HashMap::new();
+    for text in csvs.iter().filter_map(|c| std::fs::read_to_string(c).ok()) {
+        let pnp = placement::parse_pnp(&text);
+        if pnp.is_empty() {
+            bom.extend(placement::parse_bom(&text));
+        } else {
+            placements.extend(pnp);
+        }
+    }
+    if placements.is_empty() {
+        placements = loc_files
+            .iter()
+            .filter_map(|l| std::fs::read_to_string(l).ok())
+            .map(|text| placement::parse_allegro_loc(&text))
+            .find(|pnp| !pnp.is_empty())
+            .unwrap_or_default();
+    }
+    (placements, bom)
+}
+
 /// Reverse-extract from a directory of gerber/drill/P&P files.
 ///
 /// Detection consults `.gbrjob`, Altium `.LDP`/`.EXTREP`, then the file name
@@ -386,6 +713,17 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     from_gerber_dir_named(dir, &name)
 }
 
+/// One drill file read and resolved as far as the whole set allows.
+struct ParsedDrill {
+    /// The file name as shipped, for notes.
+    file: String,
+    /// The same lower-cased, for the layer-name tokens.
+    name: String,
+    hits: Vec<Hole>,
+    declared: DeclaredSpan,
+    claim: SpanClaim,
+}
+
 /// [`from_gerber_dir`] with the board name supplied rather than taken from the
 /// directory. The zip path needs it: extraction goes to a throwaway directory
 /// whose name exists only to be unique, so naming the board after it would put a
@@ -397,360 +735,45 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     // parsed. They are carried into ReconStats at the end so a metadata
     // conflict or fallback is visible in every report surface.
     let mut notes: Vec<String> = Vec::new();
-
-    // Optional mapping-file escape hatch: `layer_map.txt` or any `*.map`.
-    let mut mapping: std::collections::HashMap<String, LayerRole> =
-        std::collections::HashMap::new();
-    for p in &all_files {
-        let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        let is_map = n.eq_ignore_ascii_case("layer_map.txt")
-            || p.extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.eq_ignore_ascii_case("map"))
-                .unwrap_or(false);
-        if is_map {
-            if let Ok(text) = std::fs::read_to_string(p) {
-                mapping.extend(layers::parse_mapping(&text));
-            }
-        }
-    }
-
-    // Altium's `.LDP` is the package's own drill-to-layer-pair manifest. It
-    // names the drill file, whether the set is plated, and the exact ordered
-    // copper layers it reaches. Keys are lower-cased because the manifest and
-    // ZIP member routinely disagree only in case. Conflicting declarations
-    // refuse: picking one would fabricate or erase a barrel connection.
-    let mut ldp_drills: std::collections::HashMap<String, layers::LdpDrillRole> =
-        std::collections::HashMap::new();
-    let mut ldp_sources: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    for p in &all_files {
-        let is_ldp = p
-            .extension()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| s.eq_ignore_ascii_case("ldp"));
-        if !is_ldp {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(p) else {
-            notes.push(format!(
-                "{} could not be read, so its drill-layer metadata was not used.",
-                film(p)
-            ));
-            continue;
-        };
-        let rows = layers::parse_ldp(&text);
-        if rows.is_empty() {
-            notes.push(format!(
-                "{} contains no complete DrillFile/DrillLayers declaration, so filename and file-body inference remain the fallback.",
-                film(p)
-            ));
-        }
-        for (name, role) in rows {
-            if let Some(existing) = ldp_drills.get(&name) {
-                if *existing != role {
-                    return Err(ExtractError::Gerber(format!(
-                        "conflicting .LDP declarations for drill file {name}: {} and {}. Resolve the package metadata; choosing either span could merge nets the stack keeps apart",
-                        ldp_sources
-                            .get(&name)
-                            .map(String::as_str)
-                            .unwrap_or("an earlier .LDP file"),
-                        film(p)
-                    )));
-                }
-                continue;
-            }
-            ldp_sources.insert(name.clone(), film(p).to_string());
-            ldp_drills.insert(name, role);
-        }
-    }
-    for name in ldp_drills.keys() {
-        let claimants: Vec<String> = all_files
-            .iter()
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|file| file.eq_ignore_ascii_case(name))
-            })
-            .map(|path| {
-                path.strip_prefix(dir)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect();
-        if claimants.is_empty() {
-            notes.push(format!(
-                ".LDP names drill file {name}, but no package member has that basename; the declaration was not applied."
-            ));
-        } else if claimants.len() > 1 {
-            return Err(ExtractError::Gerber(format!(
-                ".LDP names drill file {name}, but more than one package member has that basename ({}); preserve unique names or paths before using the declared span",
-                claimants.join(", ")
-            )));
-        }
-    }
-
-    // Altium's `.EXTREP` maps extensions to exporter layer descriptions. A
-    // unique mapping outranks filename inference. Named-output reports often
-    // reuse `.gbr` for every role; that is not a mapping we can apply to an
-    // individual film, so it is recorded as contested and the filename path
-    // stays in force instead of assigning whichever row appeared last.
-    let mut extrep_roles: std::collections::HashMap<String, layers::ExtRepRole> =
-        std::collections::HashMap::new();
-    let mut extrep_contested: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
-    for p in &all_files {
-        let is_extrep = p
-            .extension()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| s.eq_ignore_ascii_case("extrep"));
-        if !is_extrep {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(p) else {
-            notes.push(format!(
-                "{} could not be read, so its extension-role metadata was not used.",
-                film(p)
-            ));
-            continue;
-        };
-        let parsed = layers::parse_extrep(&text);
-        for extension in parsed.contested {
-            extrep_roles.remove(&extension);
-            extrep_contested.insert(extension);
-        }
-        for (extension, role) in parsed.roles {
-            if extrep_contested.contains(&extension) {
-                continue;
-            }
-            match extrep_roles.get(&extension) {
-                Some(existing) if *existing != role => {
-                    extrep_roles.remove(&extension);
-                    extrep_contested.insert(extension);
-                }
-                _ => {
-                    extrep_roles.insert(extension, role);
-                }
-            }
-        }
-    }
-    for extension in &extrep_contested {
-        notes.push(format!(
-            ".EXTREP assigns more than one layer role to .{extension}; that extension is ambiguous, so each file falls back to its own declaration and filename instead of an arbitrary report row."
-        ));
-    }
-
-    // The exporter's own manifest, when the job ships one: a `.gbrjob` names
-    // every file's role and each copper film's PHYSICAL layer number
-    // (`Copper,L3,Inr`). That answers exactly what filename inference guesses
-    // at: which files are copper and in what stack order, including
-    // Allegro-style planes named without a stack digit and KiCad inner films
-    // exported under the user's own label (`-GND_Cu.gbr`). The explicit
-    // mapping file still outranks it; filename inference is the fallback when
-    // no job file exists.
-    let mut gbrjob: std::collections::HashMap<String, layers::GbrJobRole> =
-        std::collections::HashMap::new();
-    for p in &all_files {
-        let is_job = p
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.eq_ignore_ascii_case("gbrjob"))
-            .unwrap_or(false);
-        if is_job {
-            if let Ok(text) = std::fs::read_to_string(p) {
-                gbrjob.extend(layers::parse_gbrjob(&text));
-            }
-        }
-    }
-    // Rank the manifest's copper films into provisional stack indices. The
-    // declared numbers ORDER the stack (side tags first, then the number), which
-    // holds even on exporters whose numbers are not physical positions: KiCad 9
-    // writes internal layer IDs, so a four-layer manifest can read L1, L5, L7,
-    // L4. They are fed onward as PHYSICAL positions only when they are exactly
-    // `1..=n` in that rank order; any other scheme handed to the drill
-    // layer-pair resolver would invent layers the board does not have.
-    let present: std::collections::HashSet<String> = all_files
-        .iter()
-        .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(String::from))
-        .collect();
-    let mut job_copper: Vec<(String, u32, layers::GbrJobSide)> = gbrjob
-        .iter()
-        .filter_map(|(f, r)| match r {
-            layers::GbrJobRole::Copper { layer, side } if present.contains(f) => {
-                Some((f.clone(), *layer, *side))
-            }
-            _ => None,
-        })
-        .collect();
-    // File name breaks the tie. `gbrjob` is a HashMap, so a stable sort on
-    // (side, number) alone carries hash order through wherever two films declare
-    // the same side and number. The rank IS the provisional stack index, so a
-    // tie resolved that way moves a film up or down the stack between two runs
-    // and changes which layers a blind via stitches.
-    job_copper.sort_by(|a, b| (a.2, a.1, &a.0).cmp(&(b.2, b.1, &b.0)));
-    let gbrjob_numbers_physical = job_copper
-        .iter()
-        .map(|(_, n, _)| *n)
-        .eq(1..=job_copper.len() as u32);
-    let gbrjob_index: std::collections::HashMap<String, usize> = job_copper
-        .iter()
-        .enumerate()
-        .map(|(i, (f, _, side))| {
-            let idx = match side {
-                layers::GbrJobSide::Bottom => usize::MAX,
-                _ => i,
-            };
-            (f.clone(), idx)
-        })
-        .collect();
-
-    let mut copper: Vec<(LayerRole, std::path::PathBuf)> = Vec::new();
-    let mut drills: Vec<std::path::PathBuf> = Vec::new();
-    let mut outlines: Vec<std::path::PathBuf> = Vec::new();
-    let mut csvs: Vec<std::path::PathBuf> = Vec::new();
-    let mut loc_files: Vec<std::path::PathBuf> = Vec::new();
-    // Every file and how it was read, for a refusal that can say what it saw.
-    let mut inventory: Vec<(String, LayerRole)> = Vec::new();
-
-    for path in all_files {
-        let fname = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        let inferred = layers::classify_file(&path, &read_head(&path));
-        let extrep_declared = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(str::to_ascii_lowercase)
-            .and_then(|extension| extrep_roles.get(&extension))
-            .map(|role| extrep_layer_role(role, &path));
-        // Explicit user mapping first, then `.gbrjob`, `.LDP` drill identity,
-        // then a usable unique `.EXTREP` extension. The file's own attribute,
-        // its name and its body (in that order, see `classify_file`) are the
-        // fallback.
-        let role = if let Some(mapped) = mapping.get(&fname) {
-            mapped.clone()
-        } else if let Some(job_role) = gbrjob.get(&fname) {
-            if ldp_drills.contains_key(&fname.to_ascii_lowercase())
-                && !matches!(job_role, layers::GbrJobRole::Drill { .. })
-            {
-                return Err(ExtractError::Gerber(format!(
-                    ".gbrjob and .LDP disagree about the role of {fname}; one names it as {} and the other as drilling. Resolve the package metadata before reconstructing connectivity",
-                    match job_role {
-                        layers::GbrJobRole::Copper { .. } => "copper",
-                        layers::GbrJobRole::Outline => "the board outline",
-                        layers::GbrJobRole::Ignored => "electrically irrelevant artwork",
-                        layers::GbrJobRole::Drill { .. } => unreachable!(),
-                    }
-                )));
-            }
-            let declared = match job_role {
-                // The provisional stack index is the film's RANK among the
-                // manifest's copper entries (top first, bottom `usize::MAX`,
-                // exactly the ordering contract `assign_inner_indices`
-                // densifies), never the raw declared number.
-                layers::GbrJobRole::Copper { layer, .. } => LayerRole::Copper {
-                    index: gbrjob_index
-                        .get(&fname)
-                        .copied()
-                        .unwrap_or((*layer - 1) as usize),
-                    name: path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_string(),
-                },
-                layers::GbrJobRole::Drill { .. } => LayerRole::Drill,
-                layers::GbrJobRole::Outline => LayerRole::Outline,
-                layers::GbrJobRole::Ignored => LayerRole::Ignored,
-            };
-            if let Some(extrep) = &extrep_declared {
-                if !same_layer_role(&declared, extrep) {
-                    notes.push(format!(
-                        ".gbrjob declares {fname} as {}, while .EXTREP says {}; the exact-file .gbrjob entry was used instead of the extension-wide report.",
-                        layers::role_phrase(&declared),
-                        layers::role_phrase(extrep)
-                    ));
-                }
-            }
-            declared
-        } else if ldp_drills.contains_key(&fname.to_ascii_lowercase()) {
-            LayerRole::Drill
-        } else if let Some(declared) = extrep_declared {
-            if !same_layer_role(&declared, &inferred) {
-                notes.push(format!(
-                    ".EXTREP declares {fname} as {}, while filename inference says {}; exporter metadata was used.",
-                    layers::role_phrase(&declared),
-                    layers::role_phrase(&inferred)
-                ));
-            }
-            declared
-        } else {
-            inferred
-        };
-        inventory.push((fname.clone(), role.clone()));
-        match role {
-            r @ LayerRole::Copper { .. } => copper.push((r, path)),
-            LayerRole::Drill => drills.push(path),
-            LayerRole::Outline => outlines.push(path),
-            _ => {
-                let ext = path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                let lname = fname.to_ascii_lowercase();
-                if ext == "csv" || ext == "pos" {
-                    csvs.push(path);
-                } else if lname.contains("loc")
-                    || lname.contains("place")
-                    || lname.contains("pos")
-                    || lname.contains("pnp")
-                    || lname.contains("xy")
-                {
-                    // Allegro `smt_loc.txt` and similar component-location files.
-                    loc_files.push(path);
-                }
-            }
-        }
-    }
-
-    if copper.is_empty() {
-        return Err(no_copper_error(&inventory));
+    let meta = PackageMetadata::read(dir, &all_files, &mut notes)?;
+    let files = classify_files(all_files, &meta, &mut notes)?;
+    if files.copper.is_empty() {
+        return Err(no_copper_error(&files.inventory));
     }
 
     // Resolve copper layer order (top -> bottom).
-    let role_only: Vec<(LayerRole, usize)> = copper
+    let role_only: Vec<(LayerRole, usize)> = files
+        .copper
         .iter()
         .enumerate()
         .map(|(i, (r, _))| (r.clone(), i))
         .collect();
     let ordered = layers::assign_inner_indices(role_only);
+    let n_copper = ordered.len();
 
     // Parse each copper layer into primitives, in stack order.
     //
     // A film may also state its own PHYSICAL layer number in an X2 attribute
     // (`%TF.FileFunction,Copper,L4,Bot*%`). That is the only thing in a gerber
     // job that ties a film to a position in the real stackup, and it is what
-    // makes a drill file's layer pair placeable: without it we only know which
-    // films we found, not which of the board's layers they are.
-    let mut layer_prims: Vec<Vec<rs274x::CopperPrim>> = vec![Vec::new(); ordered.len()];
-    let mut physical_to_stack: std::collections::HashMap<u32, usize> =
-        std::collections::HashMap::new();
-    let mut physical_layer_sources: std::collections::HashMap<u32, String> =
-        std::collections::HashMap::new();
+    // makes a drill file's layer pair placeable. A trusted manifest (copper
+    // numbers exactly 1..=n) fills in for films that carry no attribute; the
+    // film's own attribute wins where both exist.
+    let mut layer_prims: Vec<Vec<rs274x::CopperPrim>> = vec![Vec::new(); n_copper];
+    let mut physical_to_stack: HashMap<u32, usize> = HashMap::new();
+    let mut physical_layer_sources: HashMap<u32, String> = HashMap::new();
     let mut declared_physical_max: u32 = 0;
     for (role, orig_idx) in &ordered {
         let LayerRole::Copper { index, .. } = role else {
             continue;
         };
-        let path = &copper[*orig_idx].1;
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| ExtractError::Xml(format!("read {}: {e}", film(path))))?;
-        let x2_physical_layer = copper_physical_layer(&text);
-        if let Some(l) = x2_physical_layer {
+        let path = &files.copper[*orig_idx].1;
+        let text = read_text(path, "read")?;
+        let manifest_layer = match meta.gbrjob.get(&*film(path)) {
+            Some(GbrJobRole::Copper { layer, .. }) if meta.gbrjob_numbers_physical => Some(*layer),
+            _ => None,
+        };
+        if let Some(l) = copper_physical_layer(&text).or(manifest_layer) {
             register_physical_layer(
                 &mut physical_to_stack,
                 &mut physical_layer_sources,
@@ -760,79 +783,30 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             )?;
             declared_physical_max = declared_physical_max.max(l);
         }
-        // The job manifest also states the film's physical layer, but only a
-        // manifest whose copper numbers are exactly 1..=n is believed about
-        // PHYSICAL positions (see the trust note where the manifest is read).
-        // The film's own X2 attribute wins where both exist (it is the file
-        // speaking for itself); the manifest fills in for films that carry no
-        // attribute.
-        if x2_physical_layer.is_none() && gbrjob_numbers_physical {
-            let base = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if let Some(layers::GbrJobRole::Copper { layer, .. }) = gbrjob.get(base) {
-                register_physical_layer(
-                    &mut physical_to_stack,
-                    &mut physical_layer_sources,
-                    *layer,
-                    *index,
-                    film(path).to_string(),
-                )?;
-                declared_physical_max = declared_physical_max.max(*layer);
-            }
-        }
-        match rs274x::parse_layer(&text) {
-            Ok(prims) => layer_prims[*index] = prims,
-            Err(e) => {
-                return Err(ExtractError::Xml(format!(
-                    "parse copper {}: {e}",
-                    film(path)
-                )))
-            }
-        }
+        layer_prims[*index] = rs274x::parse_layer(&text)
+            .map_err(|e| ExtractError::Xml(format!("parse copper {}: {e}", film(path))))?;
     }
 
     // Read every drill file into hits and work out what it says about plating
     // and about the copper layers its hits reach. Nothing is stitched yet,
     // because whether SILENCE means "through-hole" depends on the rest of the
     // job.
-    let n_copper = ordered.len();
-    struct ParsedDrill {
-        /// The file name as shipped, for notes.
-        file: String,
-        /// The same lower-cased, for the layer-name tokens.
-        name: String,
-        hits: Vec<excellon::Hole>,
-        declared: excellon::DeclaredSpan,
-        claim: SpanClaim,
-    }
+    //
     // Does the job separate its plated and non-plated drilling into different
     // files? If it does, a sibling that is NOT the non-plated one is the plated
     // set by construction, which is a real signal and not an assumption.
-    let job_has_a_named_npth_drill = drills.iter().any(|d| name_says_non_plated(&film(d)));
+    let job_has_a_named_npth_drill = files.drills.iter().any(|d| name_says_non_plated(&film(d)));
     // Drill files dropped whole because nothing said whether their holes are
     // plated, and hits kept on pad-ring evidence alone.
     let mut refused_plating_files = 0usize;
     let mut inferred_plating_holes = 0usize;
     let mut parsed: Vec<ParsedDrill> = Vec::new();
-    for d in &drills {
-        let text = std::fs::read_to_string(d)
-            .map_err(|e| ExtractError::Xml(format!("read {}: {e}", film(d))))?;
+    for d in &files.drills {
+        let text = read_text(d, "read")?;
         let fname = film(d).to_string();
         let n = fname.to_ascii_lowercase();
-        let ldp_role = ldp_drills.get(&n);
-        // Package manifests outrank the filename for plating. When `.gbrjob`
-        // and `.LDP` both speak they must agree; silently choosing one can turn
-        // a mechanical hole into a conductor or erase a real barrel.
-        let gbrjob_plated = match gbrjob.get(&fname) {
-            Some(layers::GbrJobRole::Drill { plated }) => Some(*plated),
-            _ => None,
-        };
-        let ldp_plated = ldp_role.and_then(|role| role.plated);
-        if matches!((gbrjob_plated, ldp_plated), (Some(a), Some(b)) if a != b) {
-            return Err(ExtractError::Gerber(format!(
-                ".gbrjob and .LDP disagree about whether {fname} is plated; resolve the package metadata before reconstructing connectivity"
-            )));
-        }
-        let manifest_plated = gbrjob_plated.or(ldp_plated);
+        let ldp_role = meta.ldp_drills.get(&n);
+        let manifest_plated = meta.manifest_plated(&fname)?;
         // Whether the NAME says these hits are plated. Weakest of the sources,
         // consulted only when the file itself says nothing. A manifest
         // `Plated` declaration counts as an explicit statement.
@@ -854,20 +828,14 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             continue;
         }
         // A body that declares itself non-plated contributes no hits, so it
-        // must not reach the span analysis at all. Leaving it in let a
-        // mechanical file's layer-pair name mark the job multi-span and
-        // force its plated siblings into a refusal, losing real stitching
-        // on the strength of a file that drills no copper.
-        if read.plated == Some(false) || manifest_plated == Some(false) {
-            continue;
-        }
-        if read.plated.is_none() && manifest_plated.is_none() && name_says_non_plated(&fname) {
-            continue;
-        }
-        // A file that drills nothing is evidence about nothing. Left in, an
-        // empty pass declaring a blind pair would mark the job multi-span and
-        // push every silent sibling into a refusal.
-        if read.hits.is_empty() {
+        // must not reach the span analysis at all: a mechanical file's
+        // layer-pair name would otherwise mark the job multi-span and force
+        // its plated siblings into a refusal. A file that drills nothing is
+        // evidence about nothing, for the same reason.
+        let non_plated = read.plated == Some(false)
+            || manifest_plated == Some(false)
+            || (read.plated.is_none() && manifest_plated.is_none() && name_says_non_plated(&fname));
+        if non_plated || read.hits.is_empty() {
             continue;
         }
         if read.mixed_functions {
@@ -924,7 +892,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
         if let Some(span) = ldp_span {
             notes.push(format!(
                 ".LDP declares {fname} as {} with {}; package metadata was consulted before filename span inference.",
-                match ldp_plated {
+                match ldp_role.and_then(|role| role.plated) {
                     Some(false) => "non-plated",
                     Some(true) => "plated",
                     None => "plating unstated",
@@ -947,20 +915,18 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
         });
     }
 
-    // How many copper layers the finished board has, as the files describe it.
-    //
-    // Two sources, and the answer is the DEEPER of them. The classified copper
-    // films are one lower bound. The deepest layer any drill declaration names
-    // is the other, and it can exceed the film count: KiCad names an inner
-    // layer's film after the user's label ("GND_Cu"), so a six-layer job can
-    // classify only its two outer films while its drill still says `1,6`.
-    // Taking the drill maximum ALONE would fabricate: a four-layer job whose
-    // only drill is a blind `Plated,1,2,PTH` would imply a two-layer board, make
-    // that pair look full-depth and stitch all four layers.
+    // How many copper layers the finished board has, as the files describe it:
+    // the DEEPER of the classified films and the deepest layer any drill or
+    // film declaration names. The declarations can exceed the film count (KiCad
+    // names an inner film after the user's label, so a six-layer job can
+    // classify only its two outer films while its drill still says `1,6`);
+    // the drill maximum ALONE would fabricate (a four-layer job whose only
+    // drill is a blind `Plated,1,2,PTH` would imply a two-layer board and
+    // stitch all four layers).
     let implied_layers = parsed
         .iter()
         .filter_map(|p| match p.declared {
-            excellon::DeclaredSpan::Pair(pair) => Some(pair.to as usize),
+            DeclaredSpan::Pair(pair) => Some(pair.to as usize),
             _ => None,
         })
         .max()
@@ -979,24 +945,24 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
 
     // The layer-name table is built HERE, not before the drills were read,
     // because whether a positional `L<n>` reading is safe depends on whether
-    // anything in the job says the board is deeper than the films we found, and
-    // a drill declaration is one of the things that can say so.
-    let token_to_stack = copper_layer_tokens(&ordered, &copper, &physical_to_stack, implied_layers);
+    // anything in the job says the board is deeper than the films we found.
+    let token_to_stack =
+        copper_layer_tokens(&ordered, &files.copper, &physical_to_stack, implied_layers);
 
     for p in parsed.iter_mut() {
         p.claim = match p.declared {
-            excellon::DeclaredSpan::Pair(pair) => {
-                // (a) Both ends name a film that told us its physical layer:
-                // the placement is exact, whatever else is missing.
+            DeclaredSpan::Pair(pair) => {
                 if let (Some(&f), Some(&t)) = (
                     physical_to_stack.get(&pair.from),
                     physical_to_stack.get(&pair.to),
                 ) {
+                    // (a) Both ends name a film that told us its physical
+                    // layer: the placement is exact, whatever else is missing.
                     SpanClaim::Resolved(f.min(t), f.max(t))
                 } else if pair.from == 1 && pair.to as usize == implied_layers {
                     // (b) Top to bottom of the board the files describe: this
-                    // hit goes right through, which stays true whatever subset
-                    // of the films we classified.
+                    // hit goes right through, whatever subset of the films we
+                    // classified.
                     SpanClaim::Resolved(0, n_copper.saturating_sub(1))
                 } else if implied_layers == n_copper {
                     // (c) Nothing says the board has more layers than the films
@@ -1007,37 +973,34 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
                         None => SpanClaim::DeclaredButUnresolvable,
                     }
                 } else {
-                    // A partial span against a stack we know is incomplete. The
-                    // film at index 1 is only "layer 2" if no layer is missing
-                    // above it, and here one is, so indexing into our densified
-                    // films would place the via somewhere it does not go. NOT
-                    // silence either: a file that named its span is the last one
-                    // whose hits may be assumed to reach everything.
+                    // A partial span against a stack we know is incomplete:
+                    // indexing into the densified films would place the via
+                    // somewhere it does not go. NOT silence either: a file that
+                    // named its span is the last one whose hits may be assumed
+                    // to reach everything.
                     SpanClaim::DeclaredButUnresolvable
                 }
             }
-            excellon::DeclaredSpan::Unreadable => SpanClaim::DeclaredButUnresolvable,
-            excellon::DeclaredSpan::Absent => {
-                match span_from_filename(&p.name, &token_to_stack, n_copper) {
-                    NameSpan::Placed(f, t) => SpanClaim::Resolved(f, t),
-                    NameSpan::NamesLayersButUnplaceable => SpanClaim::DeclaredButUnresolvable,
-                    NameSpan::NoLayerNames if names_a_partial_span(&p.name) => {
-                        SpanClaim::PartialButUnreadable
-                    }
-                    NameSpan::NoLayerNames => SpanClaim::Silent,
+            DeclaredSpan::Unreadable => SpanClaim::DeclaredButUnresolvable,
+            DeclaredSpan::Absent => match span_from_filename(&p.name, &token_to_stack, n_copper) {
+                NameSpan::Placed(f, t) => SpanClaim::Resolved(f, t),
+                NameSpan::NamesLayersButUnplaceable => SpanClaim::DeclaredButUnresolvable,
+                NameSpan::NoLayerNames if names_a_partial_span(&p.name) => {
+                    SpanClaim::PartialButUnreadable
                 }
-            }
+                NameSpan::NoLayerNames => SpanClaim::Silent,
+            },
         };
     }
 
     // Does this job actually carry a multi-span drill set? Only then is a
     // silent file ambiguous. A job whose every declaration is the full stack is
     // a plain through-hole job, and reading a silent sibling as through-hole
-    // there is not a guess, it is the only thing the set can mean.
+    // there is not a guess, it is the only thing the set can mean. A
+    // declaration we could not place means this job has vias that stop
+    // somewhere we cannot locate, so no silent sibling is safe either.
     let job_is_multi_span = parsed.iter().any(|p| match p.claim {
         SpanClaim::Resolved(f, t) => (f, t) != (0, n_copper.saturating_sub(1)),
-        // A declaration we could not place means this job has vias that stop
-        // somewhere we cannot locate, so no silent sibling is safe either.
         SpanClaim::PartialButUnreadable | SpanClaim::DeclaredButUnresolvable => true,
         SpanClaim::Silent => false,
     });
@@ -1086,48 +1049,11 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
 
     // The board outline, for the castellation count. Not connectivity: an
     // outline is a cut, and a cut joins nothing.
-    let outline_prims = read_outline(&outlines);
-
-    // Parse P&P + BOM from the CSVs. Any CSV that yields placements is a P&P
-    // file, a job with separate top and bottom placement CSVs contributes both,
-    // so we EXTEND rather than keep only the first (the second is not a BOM). A
-    // CSV that yields no placements (no X/Y columns) is tried as a BOM.
-    let mut placements: Vec<placement::Placement> = Vec::new();
-    let mut bom: std::collections::HashMap<String, placement::BomEntry> =
-        std::collections::HashMap::new();
-    for c in &csvs {
-        let Ok(text) = std::fs::read_to_string(c) else {
-            continue;
-        };
-        let pnp = placement::parse_pnp(&text);
-        if !pnp.is_empty() {
-            placements.extend(pnp);
-        } else {
-            let b = placement::parse_bom(&text);
-            if !b.is_empty() {
-                bom.extend(b);
-            }
-        }
-    }
-    // Allegro-style component-location files (`smt_loc.txt`): tried when no CSV
-    // P&P was found, or when a `*loc*`/`*place*` text file exists.
-    if placements.is_empty() {
-        for l in &loc_files {
-            let Ok(text) = std::fs::read_to_string(l) else {
-                continue;
-            };
-            let pnp = placement::parse_allegro_loc(&text);
-            if !pnp.is_empty() {
-                placements = pnp;
-                break;
-            }
-        }
-    }
-
-    let name = board_name.to_string();
+    let outline_prims = read_outline(&files.outlines);
+    let (placements, bom) = read_placements(&files.csvs, &files.loc_files);
 
     let n_castellations = count_castellations(&holes, &outline_prims);
-    let (mut board, mut stats) = connect::reconstruct(&name, layer_prims, holes, placements);
+    let (mut board, mut stats) = connect::reconstruct(board_name, layer_prims, holes, placements);
     stats.n_castellations = n_castellations;
     stats.refused_plating_files = refused_plating_files;
     stats.inferred_plating_holes = inferred_plating_holes;
@@ -1148,20 +1074,18 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     stats.notes = notes;
 
     // Enrich components from the BOM (value / part number / do-not-populate).
-    if !bom.is_empty() {
-        for c in &mut board.components {
-            if let Some(entry) = bom.get(&c.reference) {
-                if !entry.value.is_empty() {
-                    c.value = entry.value.clone();
-                }
-                if !entry.mpn.is_empty() {
-                    c.properties
-                        .push(("part_number".to_string(), entry.mpn.clone()));
-                }
-                // A BOM marking is authoritative for populate state; never clear
-                // a DNP already established by the P&P side.
-                c.dnp = c.dnp || entry.dnp;
+    for c in &mut board.components {
+        if let Some(entry) = bom.get(&c.reference) {
+            if !entry.value.is_empty() {
+                c.value = entry.value.clone();
             }
+            if !entry.mpn.is_empty() {
+                c.properties
+                    .push(("part_number".to_string(), entry.mpn.clone()));
+            }
+            // A BOM marking is authoritative for populate state; never clear
+            // a DNP already established by the P&P side.
+            c.dnp = c.dnp || entry.dnp;
         }
     }
 
@@ -1337,10 +1261,10 @@ fn film_file_function(text: &str) -> Option<String> {
 
 /// The copper layer pair a gerber-format drill film declares, read from the
 /// same `TF.FileFunction` attribute an Excellon file carries it in.
-fn film_declared_span(text: &str) -> excellon::DeclaredSpan {
+fn film_declared_span(text: &str) -> DeclaredSpan {
     match film_file_function(text) {
         Some(f) => excellon::parse_file_function_span(&f),
-        None => excellon::DeclaredSpan::Absent,
+        None => DeclaredSpan::Absent,
     }
 }
 
@@ -1394,8 +1318,8 @@ fn copper_physical_layer(text: &str) -> Option<u32> {
 /// order. That ambiguity controls blind/buried-via attachment, so it must be a
 /// refusal whichever of the two authorities supplied the duplicate.
 fn register_physical_layer(
-    physical_to_stack: &mut std::collections::HashMap<u32, usize>,
-    physical_layer_sources: &mut std::collections::HashMap<u32, String>,
+    physical_to_stack: &mut HashMap<u32, usize>,
+    physical_layer_sources: &mut HashMap<u32, String>,
     layer: u32,
     stack_index: usize,
     source: String,
@@ -1433,11 +1357,11 @@ fn resolve_pair(from: u32, to: u32, n_copper: usize) -> Option<(usize, usize)> {
 /// against a fixed table.
 fn copper_layer_tokens(
     ordered: &[(LayerRole, usize)],
-    copper: &[(LayerRole, std::path::PathBuf)],
-    physical_to_stack: &std::collections::HashMap<u32, usize>,
+    copper: &[(LayerRole, PathBuf)],
+    physical_to_stack: &HashMap<u32, usize>,
     implied_layers: usize,
-) -> std::collections::HashMap<String, usize> {
-    let mut out: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+) -> HashMap<String, usize> {
+    let mut out: HashMap<String, usize> = HashMap::new();
     let n = ordered.len();
     // `L<n>` is PHYSICAL numbering, so a film that declared its own position
     // owns that token outright.
@@ -1466,8 +1390,7 @@ fn copper_layer_tokens(
     // F-to-In1 span on the wrong pair. And a token claimed by two different
     // films names neither: it is dropped rather than won by whichever came
     // last, because nothing here can tell which film was meant.
-    let mut claims: std::collections::HashMap<String, Vec<usize>> =
-        std::collections::HashMap::new();
+    let mut claims: HashMap<String, Vec<usize>> = HashMap::new();
     for (role, orig_idx) in ordered {
         let LayerRole::Copper { index, .. } = role else {
             continue;
@@ -1487,7 +1410,7 @@ fn copper_layer_tokens(
             }
         }
     }
-    let mut contested: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut contested: HashSet<String> = HashSet::new();
     for (tok, films) in claims {
         // A physical declaration already settled this token; it outranks a name.
         match films.as_slice() {
@@ -1537,11 +1460,7 @@ enum NameSpan {
 /// name films this job actually has. A name that clears the first step and
 /// fails the second is evidence that these hits are NOT through-holes, so it
 /// must not fall back to being read as one.
-fn span_from_filename(
-    fname: &str,
-    tokens: &std::collections::HashMap<String, usize>,
-    n_copper: usize,
-) -> NameSpan {
+fn span_from_filename(fname: &str, tokens: &HashMap<String, usize>, n_copper: usize) -> NameSpan {
     if n_copper == 0 {
         return NameSpan::NoLayerNames;
     }
@@ -1637,7 +1556,7 @@ fn names_a_partial_span(fname: &str) -> bool {
 /// Parse the board outline films into primitives. Purely for the castellation
 /// count: an outline is a cut line, never a conductor, so these primitives are
 /// deliberately kept out of the connectivity graph.
-fn read_outline(outlines: &[std::path::PathBuf]) -> Vec<geo::Shape> {
+fn read_outline(outlines: &[PathBuf]) -> Vec<geo::Shape> {
     let mut out = Vec::new();
     for p in outlines {
         let Ok(text) = std::fs::read_to_string(p) else {
@@ -1724,7 +1643,6 @@ fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
 /// reconstructed net that no component pad sits on cannot be a net anybody
 /// routed to, so it is a fragment the reconstruction failed to attach.
 fn warn_if_nets_are_fragmented(board: &ExtractedBoard) {
-    use std::collections::HashSet;
     if board.components.is_empty() || board.nets.is_empty() {
         return;
     }
@@ -1806,7 +1724,7 @@ pub fn from_gerber_zip_named(
 }
 
 /// A directory removed when it goes out of scope, however the scope is left.
-struct TempTree(std::path::PathBuf);
+struct TempTree(PathBuf);
 
 impl Drop for TempTree {
     fn drop(&mut self) {
@@ -1828,7 +1746,7 @@ fn is_archive_noise(name: &Path) -> bool {
 }
 
 /// If `dir` contains exactly one entry and it's a directory, return it.
-fn single_subdir(dir: &Path) -> Option<std::path::PathBuf> {
+fn single_subdir(dir: &Path) -> Option<PathBuf> {
     let mut it = std::fs::read_dir(dir).ok()?.flatten();
     let first = it.next()?.path();
     if it.next().is_none() && first.is_dir() {
@@ -1920,9 +1838,7 @@ impl ExtractedBoard {
 
 /// Whether `path` names a `.zip`, case-insensitively.
 fn is_zip_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s.eq_ignore_ascii_case("zip"))
+    ext_is(path, "zip")
 }
 
 fn not_a_gerber_job() -> ExtractError {
@@ -1957,8 +1873,6 @@ mod error_message_tests {
 #[cfg(test)]
 mod span_tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
 
     /// The token table for a job whose two films declare that they are layers
     /// 1 and 4 of a four-layer board, so the inner two are missing.

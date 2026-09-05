@@ -1,0 +1,29 @@
+[package]
+name = "hauksbee-checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+description = "Static board checks over a bound board: netlist lints, boot/strap/contention/USB-C rules, decoupling parasitics and DC-path classification"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+hauksbee-bind = { version = "0.1.0", path = "../hauksbee-bind" }
+hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
+hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
+hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
+hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
+
+[dev-dependencies]
+hauksbee-testkit = { path = "../hauksbee-testkit" }
+
+[lints]
+workspace = true

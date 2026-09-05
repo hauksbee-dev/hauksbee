@@ -249,14 +249,10 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
                 .map(|c| c.reference.clone())
                 .collect();
             let near = crate::error::near_matches(&rule.reference, &refs, 5);
-            let hint = if near.is_empty() {
-                String::new()
-            } else {
-                format!("; did you mean: {}?", near.join(", "))
-            };
             return Err(SpecError::Invalid(format!(
-                "[[tolerance]] ref '{}' matches no component on the board{hint}",
-                rule.reference
+                "[[tolerance]] ref '{}' matches no component on the board{}",
+                rule.reference,
+                crate::error::suggestion_clause(&near)
             )));
         }
     }
@@ -267,19 +263,12 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
     // the value of whichever (possibly earlier) override carries the tolerance
     // field. Otherwise duplicate overrides on one ref spread the ensemble around a
     // stale nominal while the board runs the last override's value.
-    let mut last_value: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
-    for ov in &spec.overrides {
-        last_value.insert(ov.reference.as_str(), ov.value.as_str());
-    }
     for ov in &spec.overrides {
         let Some(percent) = ov.tolerance else {
             continue;
         };
         let dist = Distribution::parse(ov.distribution.as_deref().unwrap_or("uniform"))?;
-        let eff_value = last_value
-            .get(ov.reference.as_str())
-            .copied()
-            .unwrap_or(ov.value.as_str());
+        let eff_value = overridden_value(&ov.reference).unwrap_or(&ov.value);
         let nominal = parse_nominal(&ov.reference, eff_value)?;
         by_ref.insert(
             ov.reference.clone(),

@@ -749,14 +749,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
     // pin → net map and the package lookups all key on what the document says)
     // and un-escaped only on the way into the IR, so nothing depends on the
     // order the two forms are compared in.
-    let kicad = doc.producer.to_ascii_uppercase().contains("KICAD");
-    let unescape = |s: &str| -> String {
-        if kicad {
-            crate::unescape_kicad_name(s)
-        } else {
-            s.to_string()
-        }
-    };
+    let unescape = crate::name_unescaper(&doc.producer);
 
     // The step to read: the first that has components, else the first at all.
     let step = doc

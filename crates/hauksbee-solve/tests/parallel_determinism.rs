@@ -21,12 +21,7 @@ use hauksbee_solve::{
     Waveforms,
 };
 
-// Single source of truth for the graded-board topologies (see the header of
-// benches/fixtures.rs for why this is a by-path include).
-#[path = "../benches/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
-use fixtures::{build_rc_ladder, build_shunt_array};
+use crate::fixtures::{build_rc_ladder, build_shunt_array};
 
 /// The thread counts the gate pins, per the plan. `Off` (run separately) is
 /// the sequential reference every pooled run must match bit-for-bit.

@@ -287,10 +287,10 @@ fn dispatch_recognises_eagle() {
     assert!(report.primitive_count > 0, "Eagle geometry was extracted");
 }
 
-#[test]
-fn wire_wire_crossing_is_a_short() {
-    // Two 0.5 mm wires crossing on the top copper, different nets.
-    let signals = r#"
+/// One Eagle copper kind overlapping foreign copper: (name, packages, elements,
+/// signals, whether exactly one contact is made (a flattened arc can touch a
+/// crossing wire in two links), the layer and the pad owner the finding must name).
+const WIRE_WIRE: &str = r#"
 <signal name="A">
   <wire x1="0" y1="0" x2="10" y2="0" width="0.5" layer="1"/>
 </signal>
@@ -298,16 +298,121 @@ fn wire_wire_crossing_is_a_short() {
   <wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="1"/>
 </signal>
 "#;
-    let report = drc("", "", signals);
-    assert_eq!(report.short_count(), 1, "exactly one short");
-    assert_short(&report, "A", "B");
-    let f = report.shorts().next().unwrap();
-    assert_eq!(f.layer, "F.Cu");
-    assert!(
-        f.gap_mm <= 0.0,
-        "overlap gap is non-positive ({})",
-        f.gap_mm
-    );
+// The package defines pad "1", U1 places it, the contactref nets it.
+const SMD_PKG: &str = r#"
+<package name="PAD1">
+  <smd name="1" x="0" y="0" dx="1.5" dy="1.5" layer="1"/>
+</package>"#;
+const SMD_EL: &str = r#"<element name="U1" library="lib" package="PAD1" x="5" y="0"/>"#;
+const WIRE_SMD: &str = r#"
+<signal name="A">
+  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="1"/>
+</signal>
+<signal name="B">
+  <contactref element="U1" pad="1"/>
+</signal>
+"#;
+// An explicit-diameter via spans every copper layer, so it shorts the
+// bottom-layer wire.
+const VIA_WIRE: &str = r#"
+<signal name="A">
+  <via x="5" y="0" extent="1-16" drill="0.4" diameter="1.0"/>
+</signal>
+<signal name="B">
+  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="16"/>
+</signal>
+"#;
+// The +90 arc from (0,0) to (10,0) bulges to y<0; the vertical wire at
+// x=5 reaches up to y=-2, into the arc. A chord-only approximation
+// would miss the bulge.
+const CURVED_WIRE: &str = r#"
+<signal name="A">
+  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="1" curve="90"/>
+</signal>
+<signal name="B">
+  <wire x1="5" y1="-6" x2="5" y2="-2" width="0.4" layer="1"/>
+</signal>
+"#;
+const OCT_PKG: &str = r#"
+<package name="OCT">
+  <pad name="1" x="0" y="0" drill="0.6" diameter="1.6" shape="octagon"/>
+</package>"#;
+const OCT_EL: &str = r#"<element name="U1" library="lib" package="OCT" x="5" y="0"/>"#;
+const OCT_WIRE: &str = r#"
+<signal name="A">
+  <contactref element="U1" pad="1"/>
+</signal>
+<signal name="B">
+  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="16"/>
+</signal>
+"#;
+
+#[rustfmt::skip]
+const OVERLAPS: &[(&str, &str, &str, &str, bool, Option<&str>, Option<&str>)] = &[
+    ("wire/wire crossing on top copper", "", "", WIRE_WIRE, true, Some("F.Cu"), None),
+    ("wire/smd pad", SMD_PKG, SMD_EL, WIRE_SMD, true, None, Some("U1")),
+    ("via/bottom wire", "", "", VIA_WIRE, true, Some("B.Cu"), None),
+    ("curved wire/straight wire", "", "", CURVED_WIRE, false, None, None),
+    ("octagon through-hole pad/wire", OCT_PKG, OCT_EL, OCT_WIRE, false, None, None),
+];
+
+#[test]
+fn each_copper_kind_overlapping_foreign_copper_is_a_short() {
+    for &(name, packages, elements, signals, exactly_one, layer, owner) in OVERLAPS {
+        let report = drc(packages, elements, signals);
+        assert_short(&report, "A", "B");
+        if exactly_one {
+            assert_eq!(report.short_count(), 1, "{name}: exactly one short");
+        }
+        let f = report.shorts().next().unwrap();
+        assert!(
+            f.gap_mm <= 0.0,
+            "{name}: overlap gap {} is non-positive",
+            f.gap_mm
+        );
+        if let Some(layer) = layer {
+            assert_eq!(f.layer, layer, "{name}: layer");
+        }
+        if let Some(owner) = owner {
+            let owners = [f.item_a.owner.as_str(), f.item_b.owner.as_str()];
+            assert!(
+                owners.contains(&owner),
+                "{name}: owner recorded: {owners:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn separated_wires_report_nothing() {
+    let cases = [
+        (
+            "wires 5 mm apart",
+            r#"
+<signal name="A">
+  <wire x1="0" y1="0" x2="10" y2="0" width="0.25" layer="1"/>
+</signal>
+<signal name="B">
+  <wire x1="0" y1="5" x2="10" y2="5" width="0.25" layer="1"/>
+</signal>
+"#,
+        ),
+        (
+            "crossing wires on opposite layers",
+            r#"
+<signal name="A">
+  <wire x1="0" y1="0" x2="10" y2="0" width="0.5" layer="1"/>
+</signal>
+<signal name="B">
+  <wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="16"/>
+</signal>
+"#,
+        ),
+    ];
+    for (name, signals) in cases {
+        let report = drc("", "", signals);
+        assert!(report.findings.is_empty(), "{name}: nothing reported");
+    }
 }
 
 #[test]
@@ -334,44 +439,6 @@ fn parallel_wires_within_clearance_are_a_clearance_violation() {
         cv[0].gap_mm,
         report.clearance_mm
     );
-}
-
-#[test]
-fn well_separated_wires_report_nothing() {
-    let signals = r#"
-<signal name="A">
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.25" layer="1"/>
-</signal>
-<signal name="B">
-  <wire x1="0" y1="5" x2="10" y2="5" width="0.25" layer="1"/>
-</signal>
-"#;
-    let report = drc("", "", signals);
-    assert!(report.findings.is_empty(), "nothing reported");
-}
-
-#[test]
-fn wire_smd_overlap_is_a_short() {
-    // A wire on net A driven straight through an SMD pad on net B. The package
-    // defines pad "1"; element U1 places it; the contactref puts it on net B.
-    let packages = r#"
-<package name="PAD1">
-  <smd name="1" x="0" y="0" dx="1.5" dy="1.5" layer="1"/>
-</package>"#;
-    let elements = r#"<element name="U1" library="lib" package="PAD1" x="5" y="0"/>"#;
-    let signals = r#"
-<signal name="A">
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="1"/>
-</signal>
-<signal name="B">
-  <contactref element="U1" pad="1"/>
-</signal>
-"#;
-    let report = drc(packages, elements, signals);
-    assert_short(&report, "A", "B");
-    let f = report.shorts().next().unwrap();
-    let owners = [f.item_a.owner.as_str(), f.item_b.owner.as_str()];
-    assert!(owners.contains(&"U1"), "pad owner U1 recorded: {owners:?}");
 }
 
 #[test]
@@ -427,40 +494,6 @@ fn eagle_jumper_does_not_hide_ordinary_copper_crossing_over_its_pads() {
         "A",
         "B",
     );
-}
-
-#[test]
-fn via_wire_overlap_is_a_short() {
-    // A via on net A dropped onto a wire on net B. The via has an explicit
-    // diameter and spans all copper layers, so it shorts the bottom-layer wire.
-    let signals = r#"
-<signal name="A">
-  <via x="5" y="0" extent="1-16" drill="0.4" diameter="1.0"/>
-</signal>
-<signal name="B">
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="16"/>
-</signal>
-"#;
-    let report = drc("", "", signals);
-    assert_short(&report, "A", "B");
-    let f = report.shorts().next().unwrap();
-    assert_eq!(f.layer, "B.Cu", "via reaches the bottom layer");
-}
-
-#[test]
-fn different_layers_do_not_short() {
-    // Two crossing wires on opposite copper layers: separated by the dielectric,
-    // not a short.
-    let signals = r#"
-<signal name="A">
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.5" layer="1"/>
-</signal>
-<signal name="B">
-  <wire x1="5" y1="-5" x2="5" y2="5" width="0.5" layer="16"/>
-</signal>
-"#;
-    let report = drc("", "", signals);
-    assert!(report.is_clean(), "cross-layer crossings are not shorts");
 }
 
 #[test]
@@ -554,45 +587,6 @@ fn no_designrules_falls_back_to_default() {
         "fallback clearance is the 0.2 mm default, got {}",
         report.clearance_mm
     );
-}
-
-#[test]
-fn curved_wire_is_flattened_and_detected() {
-    // A wire with a 90-degree curve attribute sweeps an arc. A straight wire on a
-    // different net crossing the arc's path is a short, proving the arc is
-    // flattened (a chord-only approximation would miss the bulge).
-    let signals = r#"
-<signal name="A">
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="1" curve="90"/>
-</signal>
-<signal name="B">
-  <wire x1="5" y1="-6" x2="5" y2="-2" width="0.4" layer="1"/>
-</signal>
-"#;
-    // The +90 arc from (0,0) to (10,0) bulges downward (to y<0); the vertical B
-    // wire at x=5 reaches up to y=-2, into the arc.
-    let report = drc("", "", signals);
-    assert_short(&report, "A", "B");
-}
-
-#[test]
-fn octagon_pad_shape_is_detected() {
-    // A through-hole octagon pad on net A overlapping a wire on net B.
-    let packages = r#"
-<package name="OCT">
-  <pad name="1" x="0" y="0" drill="0.6" diameter="1.6" shape="octagon"/>
-</package>"#;
-    let elements = r#"<element name="U1" library="lib" package="OCT" x="5" y="0"/>"#;
-    let signals = r#"
-<signal name="A">
-  <contactref element="U1" pad="1"/>
-</signal>
-<signal name="B">
-  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="16"/>
-</signal>
-"#;
-    let report = drc(packages, elements, signals);
-    assert_short(&report, "A", "B");
 }
 
 // ---------------------------------------------------------------------------

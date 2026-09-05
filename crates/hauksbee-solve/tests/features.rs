@@ -93,33 +93,7 @@ fn partitioning_off_is_deterministic_reference() {
     assert!(max_abs < 5e-3, "Auto vs Off diverged: {max_abs:.3e}");
 }
 
-/// Build the standard RC low-pass with a DC step.
-fn rc(v: f64, r: f64, cap: f64) -> Circuit {
-    let mut c = Circuit::new();
-    let vin = c.node("in");
-    let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(v),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: out,
-        ohms: r,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: cap,
-        ic: Some(0.0),
-    });
-    c
-}
+use crate::shared::rc_lowpass as rc;
 
 #[test]
 fn gear2_matches_rc_analytic() {

@@ -34,6 +34,7 @@ pub mod assembly;
 pub mod bom;
 pub mod dnp;
 pub mod drc;
+mod dsu;
 mod eagle;
 /// The pre-Eagle-6 BINARY drawing detector and its refusal message. Exported
 /// because the board-input normalizer has to refuse this format on the RAW
@@ -573,7 +574,20 @@ impl ExtractedBoard {
 /// [`ipc2581::Ipc2581Stats::producer`]), because the tokens are KiCad's
 /// convention and not the formats': a net another tool genuinely named
 /// `A{slash}B` must survive intact.
-pub(crate) fn unescape_kicad_name(s: &str) -> String {
+/// The name mapping an exchange reader applies, given the file's stated
+/// producer: KiCad's `{token}` escapes are undone only when KiCad wrote it.
+pub(crate) fn name_unescaper(producer: &str) -> impl Fn(&str) -> String {
+    let kicad = producer.to_ascii_uppercase().contains("KICAD");
+    move |s: &str| {
+        if kicad {
+            unescape_kicad_name(s)
+        } else {
+            s.to_string()
+        }
+    }
+}
+
+fn unescape_kicad_name(s: &str) -> String {
     if !s.contains('{') {
         return s.to_string();
     }
@@ -633,32 +647,15 @@ pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Comp
 
     fn hard_conflicts(previous: &Component, incoming: &Component) -> Vec<String> {
         let mut conflicts = Vec::new();
-        if !previous.value.is_empty()
-            && !incoming.value.is_empty()
-            && previous.value != incoming.value
-        {
-            conflicts.push(format!(
-                "values differ ('{}' versus '{}')",
-                previous.value, incoming.value
-            ));
-        }
-        if !previous.footprint.is_empty()
-            && !incoming.footprint.is_empty()
-            && previous.footprint != incoming.footprint
-        {
-            conflicts.push(format!(
-                "footprints differ ('{}' versus '{}')",
-                previous.footprint, incoming.footprint
-            ));
-        }
-        if !previous.lib_id.is_empty()
-            && !incoming.lib_id.is_empty()
-            && previous.lib_id != incoming.lib_id
-        {
-            conflicts.push(format!(
-                "library ids differ ('{}' versus '{}')",
-                previous.lib_id, incoming.lib_id
-            ));
+        let fields = [
+            ("values", &previous.value, &incoming.value),
+            ("footprints", &previous.footprint, &incoming.footprint),
+            ("library ids", &previous.lib_id, &incoming.lib_id),
+        ];
+        for (what, a, b) in fields {
+            if !a.is_empty() && !b.is_empty() && a != b {
+                conflicts.push(format!("{what} differ ('{a}' versus '{b}')"));
+            }
         }
         for previous_pin in &previous.pins {
             for incoming_pin in &incoming.pins {
@@ -892,9 +889,60 @@ pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Comp
     out
 }
 
+/// Builders for the hand-made boards the unit tests use.
+#[cfg(test)]
+pub(crate) mod testutil {
+    use crate::{Component, ExtractedBoard, Net, Pin};
+
+    pub(crate) fn pin(number: &str, net: Option<i64>) -> Pin {
+        Pin {
+            number: number.into(),
+            net,
+            function: String::new(),
+            kind: String::new(),
+            position: None,
+        }
+    }
+
+    pub(crate) fn part(
+        reference: &str,
+        value: &str,
+        lib_id: &str,
+        footprint: &str,
+        pins: Vec<Pin>,
+    ) -> Component {
+        Component {
+            reference: reference.into(),
+            value: value.into(),
+            lib_id: lib_id.into(),
+            footprint: footprint.into(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins,
+        }
+    }
+
+    pub(crate) fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
+        ExtractedBoard {
+            name: "b".into(),
+            nets: nets
+                .iter()
+                .map(|&(id, name)| Net {
+                    id,
+                    name: name.into(),
+                })
+                .collect(),
+            components,
+        }
+    }
+}
+
 #[cfg(test)]
 mod duplicate_reference_merge_tests {
     use super::*;
+    use crate::testutil::{part, pin};
 
     fn component(
         reference: &str,
@@ -903,29 +951,13 @@ mod duplicate_reference_merge_tests {
         properties: Vec<(&str, &str)>,
         pins: Vec<(&str, Option<i64>)>,
     ) -> Component {
-        Component {
-            reference: reference.into(),
-            value: value.into(),
-            lib_id: footprint.into(),
-            footprint: footprint.into(),
-            position: None,
-            layer: String::new(),
-            properties: properties
-                .into_iter()
-                .map(|(key, value)| (key.into(), value.into()))
-                .collect(),
-            dnp: false,
-            pins: pins
-                .into_iter()
-                .map(|(number, net)| Pin {
-                    number: number.into(),
-                    net,
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                })
-                .collect(),
-        }
+        let pins = pins.into_iter().map(|(n, net)| pin(n, net)).collect();
+        let mut c = part(reference, value, footprint, footprint, pins);
+        c.properties = properties
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect();
+        c
     }
 
     #[test]

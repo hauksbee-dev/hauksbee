@@ -25,9 +25,9 @@ description = "Integration heart: binds an extracted board to models and co-simu
 # See docs/about/release-and-licensing.md.
 default = ["serve", "avr", "renode", "qemu"]
 serve = ["dep:hauksbee-server"]
-avr = ["hauksbee-mcu/avr", "hauksbee-server?/avr"]
-renode = ["hauksbee-mcu/renode", "hauksbee-server?/renode"]
-qemu = ["hauksbee-mcu/qemu", "hauksbee-server?/qemu"]
+avr = ["hauksbee-mcu/avr", "hauksbee-cosim/avr", "hauksbee-server?/avr"]
+renode = ["hauksbee-mcu/renode", "hauksbee-cosim/renode", "hauksbee-server?/renode"]
+qemu = ["hauksbee-mcu/qemu", "hauksbee-cosim/qemu", "hauksbee-server?/qemu"]
 # Embed the built web app (frontend/dist, minus the large 3D demo models) into
 # the binary, extracted to ~/.cache/hauksbee on first `serve`. OFF by default:
 # a source checkout serves the live frontend/dist directly (fresher, and the
@@ -60,6 +60,14 @@ sha2 = "0.11"
 # pattern as hauksbee-ci's spec schema).
 schemars = "1.2"
 same-file = "1.0"
+# The engine is split into layers so an edit recompiles one layer and the
+# layers build in parallel: bind (binder + device models + inputs), then
+# cosim (scheduler, peripherals, HauksbeeEngine) and checks (static lints)
+# side by side, then this crate (reports, front door, CLI). Every path the
+# downstream crates used before the split is re-exported from lib.rs.
+hauksbee-bind = { version = "0.1.0", path = "../hauksbee-bind" }
+hauksbee-cosim = { version = "0.1.0", path = "../hauksbee-cosim", default-features = false }
+hauksbee-checks = { version = "0.1.0", path = "../hauksbee-checks" }
 hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
 hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
 hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }

@@ -35,7 +35,10 @@ pub mod support;
 // rather than the backend.
 pub use process::{find_renode, is_available, RenodeProcess};
 
-use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent, UartSocket};
+use crate::external::{
+    adc_count, builtin_configs, free_ports, poll_state_mcu_methods, I2cTxn, PollState, UartSocket,
+};
+use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 use anyhow::{bail, Context, Result};
 use monitor::Monitor;
 use serde::{Deserialize, Serialize};
@@ -344,41 +347,20 @@ impl RenodeConfig {
     // `.expect` is correct here: a shipped descriptor failing to load is a build
     // bug `tests/soc_descriptors.rs` catches, never a runtime condition.
 
-    /// STM32F072C8/CB. See `db/mcu/stm32f072.soc.toml`.
-    pub fn stm32f072() -> Self {
-        Self::from_soc_toml(include_str!("../../db/mcu/stm32f072.soc.toml"))
-            .expect("built-in stm32f072.soc.toml is valid")
-    }
-
-    /// STM32F103C8 "blue pill". See `db/mcu/stm32f103.soc.toml`.
-    pub fn stm32f103() -> Self {
-        Self::from_soc_toml(include_str!("../../db/mcu/stm32f103.soc.toml"))
-            .expect("built-in stm32f103.soc.toml is valid")
-    }
-
-    /// STM32F4 Discovery (STM32F407). See `db/mcu/stm32f4_discovery.soc.toml`.
-    pub fn stm32f4_discovery() -> Self {
-        Self::from_soc_toml(include_str!("../../db/mcu/stm32f4_discovery.soc.toml"))
-            .expect("built-in stm32f4_discovery.soc.toml is valid")
-    }
-
-    /// nRF52840. See `db/mcu/nrf52840.soc.toml`.
-    pub fn nrf52840() -> Self {
-        Self::from_soc_toml(include_str!("../../db/mcu/nrf52840.soc.toml"))
-            .expect("built-in nrf52840.soc.toml is valid")
-    }
-
-    /// SiFive FE310 (HiFive1) RISC-V. See `db/mcu/sifive_fe310.soc.toml`.
-    pub fn sifive_fe310() -> Self {
-        Self::from_soc_toml(include_str!("../../db/mcu/sifive_fe310.soc.toml"))
-            .expect("built-in sifive_fe310.soc.toml is valid")
-    }
-
-    /// RP2040 (Raspberry Pi Pico). See `db/mcu/rp2040.soc.toml`, that file
-    /// carries the full SIO-footgun and verification-status notes.
-    pub fn rp2040() -> Self {
-        Self::from_soc_toml(include_str!("../../db/mcu/rp2040.soc.toml"))
-            .expect("built-in rp2040.soc.toml is valid")
+    builtin_configs! {
+        /// STM32F072C8/CB. See `db/mcu/stm32f072.soc.toml`.
+        stm32f072 => "renode:stm32f072";
+        /// STM32F103C8 "blue pill". See `db/mcu/stm32f103.soc.toml`.
+        stm32f103 => "renode:stm32f103";
+        /// STM32F4 Discovery (STM32F407). See `db/mcu/stm32f4_discovery.soc.toml`.
+        stm32f4_discovery => "renode:stm32f4_discovery";
+        /// nRF52840. See `db/mcu/nrf52840.soc.toml`.
+        nrf52840 => "renode:nrf52840";
+        /// SiFive FE310 (HiFive1) RISC-V. See `db/mcu/sifive_fe310.soc.toml`.
+        sifive_fe310 => "renode:sifive_fe310";
+        /// RP2040 (Raspberry Pi Pico). See `db/mcu/rp2040.soc.toml`, that file
+        /// carries the full SIO-footgun and verification-status notes.
+        rp2040 => "renode:rp2040";
     }
 
     /// Add one ADC channel injection recipe. Chainable.
@@ -404,21 +386,6 @@ impl RenodeConfig {
     }
 }
 
-/// Convert a modeled voltage to an ADC count against a converter's full scale.
-/// Clamps to `[0, max_count]`; a non-positive full scale yields 0 (a broken map
-/// must read as "stuck at zero", not NaN-poisoned).
-fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
-    if !(full_scale_volts > 0.0) {
-        return 0;
-    }
-    let frac = (volts / full_scale_volts).clamp(0.0, 1.0);
-    // Multiply by 2^n (= max_count + 1), not the top code 2^n-1, then clamp to
-    // the top code; the LSB = Vref/2^n transfer function. Multiplying by
-    // (2^n-1) systematically under-reads by up to ~1 LSB (the same fix applied
-    // to the MCP3008 model in peripherals/spi.rs).
-    ((frac * (f64::from(max_count) + 1.0)).round() as u32).min(max_count)
-}
-
 /// Render the Monitor command that delivers `count` for one channel's recipe.
 /// `millivolts` is the already-clamped voltage (the caller applies the
 /// channel's `[0, full_scale_volts]` clamp so ALL placeholders stay inside
@@ -442,24 +409,9 @@ fn render_adc_inject(inject: &AdcInject, count: u32, millivolts: u64) -> String 
     }
 }
 
-/// Allocate two distinct free TCP ports, holding both listeners until both
-/// numbers are read so the OS cannot reissue one to the other. Renode binds
-/// each shortly after we release them.
-fn free_port_pair() -> Result<(u16, u16)> {
-    let a = std::net::TcpListener::bind(("127.0.0.1", 0)).context("allocating monitor TCP port")?;
-    let b = std::net::TcpListener::bind(("127.0.0.1", 0)).context("allocating uart TCP port")?;
-    let pa = a.local_addr()?.port();
-    let pb = b.local_addr()?.port();
-    // Distinct by construction (both listeners are bound simultaneously), but
-    // assert to make any future regression loud rather than silent.
-    anyhow::ensure!(pa != pb, "port allocator returned a collision");
-    Ok((pa, pb))
-    // listeners drop here, releasing both ports for Renode to bind.
-}
-
 /// How many times to re-roll the ports before giving up on a spawn.
 ///
-/// `free_port_pair` releases both listeners before Renode binds them, so the
+/// `free_ports` releases both listeners before Renode binds them, so the
 /// numbers are only free at the instant we read them. Under a parallel test
 /// run or a machine hosting several sessions, another process can take one in
 /// that window, and Renode then dies at startup with a bind failure that
@@ -482,11 +434,9 @@ fn spawn_and_connect() -> Result<(RenodeProcess, Monitor, u16)> {
             "Renode monitor did not bind within the {:?} startup budget",
             startup_timeout
         );
-        let (monitor_port, uart_port) = free_port_pair()?;
+        let [monitor_port, uart_port] = free_ports()?;
         let mut process = RenodeProcess::spawn(monitor_port)?;
-        let connected = Monitor::connect_while(("127.0.0.1", monitor_port), remaining, || {
-            process.exit_reason()
-        });
+        let connected = Monitor::connect(monitor_port, remaining, || process.exit_reason());
         match connected {
             Ok(monitor) => return Ok((process, monitor, uart_port)),
             Err(e) => {
@@ -605,7 +555,7 @@ impl<C> Drop for BridgeServer<C> {
 
 #[derive(Default)]
 struct I2cBridgeState {
-    active: Option<(u8, I2cBridgeMode)>,
+    txn: I2cTxn,
     /// STM32F1 two-byte-receive prefetch quirk (host-side policy).
     ///
     /// Renode 1.16.1's `STM32F4_I2C` controller model (used by the stock
@@ -642,12 +592,6 @@ struct I2cBridgeState {
     /// without a preceding pointer write, and such firmware opts out with the
     /// env override.
     single_read_prefetch: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum I2cBridgeMode {
-    Read,
-    Write,
 }
 
 /// I2C bridge op codes, shared by the Rust handler and the generated C# source.
@@ -714,8 +658,8 @@ impl I2cBridgeState {
         }
         let op = header[0];
         let addr = header[1];
-        let read_count = be_u32(&header[2..6]) as usize;
-        let payload_len = be_u32(&header[6..10]) as usize;
+        let be = |b: &[u8]| u32::from_be_bytes(b.try_into().expect("4 bytes")) as usize;
+        let (read_count, payload_len) = (be(&header[2..6]), be(&header[6..10]));
         anyhow::ensure!(
             payload_len <= I2C_BRIDGE_MAX_PAYLOAD,
             "Renode I2C bridge payload too large: {payload_len}"
@@ -740,14 +684,14 @@ impl I2cBridgeState {
             let mut cb = callback.lock().unwrap_or_else(|e| e.into_inner());
             match op {
                 I2C_OP_WRITE => {
-                    self.ensure_mode(addr, I2cBridgeMode::Write, &mut cb);
+                    self.txn.ensure(addr, false, &mut *cb);
                     for data in payload {
                         let _ = cb(I2cEvent::Write { addr, data });
                     }
                     Vec::new()
                 }
                 I2C_OP_READ => {
-                    self.ensure_mode(addr, I2cBridgeMode::Read, &mut cb);
+                    self.txn.ensure(addr, true, &mut *cb);
                     // See `single_read_prefetch`: with the flag off (every
                     // platform but the gated STM32F1s) a single-byte read
                     // consumes exactly one byte from the slave callback and
@@ -772,58 +716,21 @@ impl I2cBridgeState {
                     response
                 }
                 I2C_OP_FINISH => {
-                    if let Some((active_addr, _)) = self.active.take() {
-                        let _ = cb(I2cEvent::Stop { addr: active_addr });
-                    }
+                    self.txn.stop(&mut *cb);
                     Vec::new()
                 }
                 other => bail!("Renode I2C bridge: unknown op code 0x{other:02X}"),
             }
         };
 
-        write_be_u32(stream, response.len() as u32)
+        stream
+            .write_all(&(response.len() as u32).to_be_bytes())
             .context("I2C bridge: failed to write response length to Renode")?;
         stream
             .write_all(&response)
             .context("I2C bridge: failed to write response payload to Renode")?;
         Ok(())
     }
-
-    fn ensure_mode(&mut self, addr: u8, mode: I2cBridgeMode, cb: &mut I2cCb) {
-        if self.active != Some((addr, mode)) {
-            if mode == I2cBridgeMode::Write {
-                if let Some((active_addr, _)) = self.active.take() {
-                    let _ = cb(I2cEvent::Stop { addr: active_addr });
-                }
-            } else if let Some((active_addr, _)) = self.active {
-                if active_addr != addr {
-                    let _ = cb(I2cEvent::Stop { addr: active_addr });
-                    self.active = None;
-                }
-            }
-            let _ = cb(I2cEvent::Start {
-                addr,
-                read: mode == I2cBridgeMode::Read,
-            });
-            self.active = Some((addr, mode));
-        }
-    }
-}
-
-fn be_u32(bytes: &[u8]) -> u32 {
-    u32::from(bytes[0]) << 24
-        | u32::from(bytes[1]) << 16
-        | u32::from(bytes[2]) << 8
-        | u32::from(bytes[3])
-}
-
-fn write_be_u32(stream: &mut TcpStream, value: u32) -> std::io::Result<()> {
-    stream.write_all(&[
-        (value >> 24) as u8,
-        (value >> 16) as u8,
-        (value >> 8) as u8,
-        value as u8,
-    ])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -928,12 +835,9 @@ pub struct RenodeBackend {
     // Field order matters for drop: monitor and uart close before the process
     // is killed.
     monitor: Monitor,
-    uart: Option<UartSocket>,
-    /// Host bytes not accepted by the emulator UART socket. Sticky and exposed
-    /// through `uart_rx_overflow` so a dead/missing transport cannot look clean.
-    uart_rx_failed: u64,
-    /// Host bytes handed to the socket since the last successful RunFor.
-    uart_rx_inflight: usize,
+    /// UART bridge, callbacks, wired-port hint and cycle counter shared with
+    /// the other poll-based backend.
+    core: PollState,
     _process: RenodeProcess,
 
     /// Last-read ODR per port letter, for edge synthesis. For a port with a
@@ -945,13 +849,6 @@ pub struct RenodeBackend {
     /// get entries. Cached at each poll so the `&self` trait surface
     /// (`pins_configured_output`) can report it without a Monitor round-trip.
     last_dir: HashMap<char, u32>,
-    /// If set, only these port letters are polled each chunk (the ports the
-    /// engine actually wired). `None` means poll every configured port.
-    active_ports: Option<Vec<char>>,
-    /// Pin-change callback.
-    on_pin_change: Option<Box<dyn FnMut(PinId, bool, u64) + Send>>,
-    /// UART byte callback.
-    on_uart: Option<Box<dyn FnMut(u8) + Send>>,
     /// 7-bit I2C addresses the engine attached to this MCU.
     i2c_slave_addresses: Vec<u8>,
     /// Host-side bridge serving Renode I2C peripheral callbacks.
@@ -970,9 +867,6 @@ pub struct RenodeBackend {
     /// The fragment defines ALL the SPI controller peripherals at once, so it
     /// only needs to be loaded on the first bridge installation.
     spi_extra_repl_loaded: bool,
-    firmware_loaded: bool,
-    /// Virtual time advanced so far, in cycles-equivalent (frequency * seconds).
-    cycles: u64,
     /// Coarse virtual-cycle stamp shared with the SPI bridge thread. The bridge
     /// services byte transfers on its own thread (the TCP server), so it cannot
     /// read `cycles` directly; this atomic is updated each time `cycles` advances
@@ -1070,15 +964,10 @@ impl RenodeBackend {
         Ok(RenodeBackend {
             config,
             monitor,
-            uart,
-            uart_rx_failed: 0,
-            uart_rx_inflight: 0,
+            core: PollState::new("Renode", uart),
             _process: process,
             last_odr,
             last_dir: HashMap::new(),
-            active_ports: None,
-            on_pin_change: None,
-            on_uart: None,
             i2c_slave_addresses: Vec::new(),
             i2c_bridge: None,
             spi_bridges: Vec::new(),
@@ -1087,8 +976,6 @@ impl RenodeBackend {
             bridge_source_files: platform_file.into_iter().collect(),
             support_dir,
             spi_extra_repl_loaded: false,
-            firmware_loaded: false,
-            cycles: 0,
             spi_cycle: Arc::new(AtomicU64::new(0)),
             trace_log_path: None,
             adc_unmapped_warned: std::collections::HashSet::new(),
@@ -1100,17 +987,20 @@ impl RenodeBackend {
         Self::new(RenodeConfig::stm32f103())
     }
 
-    /// Read one port's output-data register from the system bus.
+    /// Read one register word from a peripheral on the system bus; `None`
+    /// when the Monitor call failed or answered with something unparseable.
+    fn read_word(&mut self, peripheral: &str, offset: u32) -> Option<u32> {
+        self.monitor
+            .command(&format!("sysbus.{peripheral} ReadDoubleWord 0x{offset:X}"))
+            .ok()
+            .and_then(|r| parse_hex_or_dec(&r))
+    }
+
+    /// Read one port's output-data register, holding the cached value on a
+    /// failed read.
     fn read_odr(&mut self, port: &PortMap) -> u32 {
-        let cmd = format!(
-            "sysbus.{} ReadDoubleWord 0x{:X}",
-            port.peripheral, port.odr_offset
-        );
-        match self.monitor.command(&cmd) {
-            Ok(resp) => parse_hex_or_dec(&resp)
-                .unwrap_or_else(|| *self.last_odr.get(&port.letter).unwrap_or(&0)),
-            Err(_) => *self.last_odr.get(&port.letter).unwrap_or(&0),
-        }
+        self.read_word(&port.peripheral, port.odr_offset)
+            .unwrap_or_else(|| self.last_odr.get(&port.letter).copied().unwrap_or(0))
     }
 
     /// Read one port's direction/mode register and decode it to a "1 = output"
@@ -1120,23 +1010,16 @@ impl RenodeBackend {
     /// pin release.
     fn read_dir(&mut self, port: &PortMap) -> Option<u32> {
         let dir = port.dir?;
-        let read_word = |monitor: &mut Monitor, offset: u32| -> Option<u32> {
-            let cmd = format!("sysbus.{} ReadDoubleWord 0x{:X}", port.peripheral, offset);
-            monitor
-                .command(&cmd)
-                .ok()
-                .and_then(|r| parse_hex_or_dec(&r))
-        };
-        let low = read_word(&mut self.monitor, dir.offset);
+        let low = self.read_word(&port.peripheral, dir.offset);
         let high = match dir.encoding {
-            DirEncoding::Stm32f1CrlCrh => read_word(&mut self.monitor, dir.offset + 4),
+            DirEncoding::Stm32f1CrlCrh => self.read_word(&port.peripheral, dir.offset + 4),
             _ => Some(0),
         };
         let mask = match (low, high) {
             (Some(l), Some(h)) => decode_dir_mask(dir.encoding, l, h, port.width),
             // Read failure: hold the previous mask rather than decoding
             // half-read garbage into a phantom release/drive.
-            _ => *self.last_dir.get(&port.letter).unwrap_or(&0),
+            _ => self.last_dir.get(&port.letter).copied().unwrap_or(0),
         };
         self.last_dir.insert(port.letter, mask);
         Some(mask)
@@ -1154,66 +1037,33 @@ impl RenodeBackend {
     /// a driven-level edge. For a port without a dir map every ODR change is
     /// reported and direction stays unobservable.
     fn poll_gpio_edges(&mut self) {
-        let ports: Vec<PortMap> = match &self.active_ports {
-            Some(active) => self
-                .config
-                .ports
-                .iter()
-                .filter(|p| active.contains(&p.letter))
-                .cloned()
-                .collect(),
-            None => self.config.ports.clone(),
-        };
-        // Poll boundary virtual time, in cycles-equivalent. Every edge observed
-        // this poll shares it: the ODR diff cannot recover intra-slice ordering,
-        // so the stamp is coarse and `cycle_exact()` is false for this
-        // backend. Snapshot before the mutable-callback borrow.
-        let cyc = self.cycles;
+        let ports: Vec<PortMap> = self
+            .config
+            .ports
+            .iter()
+            .filter(|p| self.core.polls(p.letter))
+            .cloned()
+            .collect();
         for port in &ports {
             let dir_mask = self.read_dir(port);
-            let odr = self.read_odr(port);
             // Only a configured-output pin's ODR bit is a drive; a port with no
             // dir map reports every ODR bit (mask all-ones).
-            let new = odr & dir_mask.unwrap_or(!0);
-            let prev = *self.last_odr.get(&port.letter).unwrap_or(&0);
+            let new = self.read_odr(port) & dir_mask.unwrap_or(!0);
+            let prev = self.last_odr.get(&port.letter).copied().unwrap_or(0);
             if new != prev {
-                let changed = new ^ prev;
-                if let Some(cb) = &mut self.on_pin_change {
-                    for bit in 0..port.width {
-                        if (changed >> bit) & 1 != 0 {
-                            let high = (new >> bit) & 1 != 0;
-                            cb(
-                                PinId {
-                                    port: port.letter,
-                                    bit,
-                                },
-                                high,
-                                cyc,
-                            );
-                        }
-                    }
-                }
+                self.core
+                    .publish_edges(port.letter, port.width, new ^ prev, new);
                 self.last_odr.insert(port.letter, new);
             }
         }
     }
 
-    /// Drain UART bytes the firmware emitted and dispatch them to the callback.
-    fn pump_uart_out(&mut self) -> Result<()> {
-        if let Some(u) = &mut self.uart {
-            let bytes = u.drain()?;
-            let trace = std::env::var_os("HAUKSBEE_RENODE_I2C_TRACE").is_some()
-                || std::env::var_os("HAUKSBEE_RENODE_SPI_TRACE").is_some();
-            if !bytes.is_empty() && trace {
-                eprintln!("renode-uart {}", String::from_utf8_lossy(&bytes));
-            }
-            if let Some(cb) = &mut self.on_uart {
-                for b in bytes {
-                    cb(b);
-                }
-            }
-        }
-        Ok(())
+    /// `machine LoadPlatformDescriptionFromString` for one `.repl` fragment.
+    fn load_repl(&mut self, repl: &str) -> Result<String> {
+        let escaped = repl.replace('"', "\\\"");
+        self.monitor.run(&format!(
+            "machine LoadPlatformDescriptionFromString \"{escaped}\""
+        ))
     }
 
     /// Write a generated C# bridge peripheral to a temp file, `include` it into
@@ -1262,25 +1112,27 @@ impl RenodeBackend {
         let source = render_i2c_bridge_source(bridge.port(), &self.i2c_slave_addresses);
         self.install_bridge_source("i2c", source, bridge.port())?;
 
-        for controller in &self.config.i2c_controllers {
-            for &addr in &self.i2c_slave_addresses {
-                let class_name = format!("HauksbeeI2CBridge_{addr:02X}");
-                // The device name must be unique per (controller, address):
-                // Renode's Monitor namespace is machine-global, so a name
-                // keyed only on the address collides the moment a platform
-                // has TWO controllers (nRF52840 twi0+twi1, caught live by
-                // tests/renode_nrf52840_bus.rs; the single-controller STM32
-                // platforms never exposed it).
-                let sanitized: String = controller
-                    .chars()
-                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
-                    .collect();
-                let device_name = format!("hauksbee_i2c_{sanitized}_{addr:02x}");
-                let repl = format!("{device_name}: I2C.{class_name} @ {controller} 0x{addr:02X}");
-                self.monitor.run(&format!(
-                    "machine LoadPlatformDescriptionFromString \"{repl}\""
-                ))?;
-            }
+        // The device name must be unique per (controller, address): Renode's
+        // Monitor namespace is machine-global, so a name keyed only on the
+        // address collides the moment a platform has TWO controllers
+        // (nRF52840 twi0+twi1, caught live by tests/renode_nrf52840_bus.rs;
+        // the single-controller STM32 platforms never exposed it).
+        let repls: Vec<String> = self
+            .config
+            .i2c_controllers
+            .iter()
+            .flat_map(|controller| {
+                let sanitized = sanitize_ident(controller);
+                self.i2c_slave_addresses.iter().map(move |addr| {
+                    format!(
+                        "hauksbee_i2c_{sanitized}_{addr:02x}: I2C.HauksbeeI2CBridge_{addr:02X} \
+                         @ {controller} 0x{addr:02X}"
+                    )
+                })
+            })
+            .collect();
+        for repl in &repls {
+            self.load_repl(repl)?;
         }
 
         self.i2c_bridge = Some(bridge);
@@ -1317,10 +1169,7 @@ impl RenodeBackend {
 
         // Derive a unique C# class name: "HauksbeeSpiBridge_spi2", etc.
         // Replace non-alphanumeric characters with underscores.
-        let sanitized: String = controller
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '_' })
-            .collect();
+        let sanitized = sanitize_ident(controller);
         let class_name = format!("HauksbeeSpiBridge_{sanitized}");
         let device_name = format!("hauksbee_spi_{sanitized}");
 
@@ -1332,20 +1181,14 @@ impl RenodeBackend {
         // platform peripherals.
         if !self.spi_extra_repl_loaded {
             if let Some(extra) = self.config.spi_extra_repl.clone() {
-                let escaped = extra.replace('"', "\\\"");
-                self.monitor.run(&format!(
-                    "machine LoadPlatformDescriptionFromString \"{escaped}\""
-                ))?;
+                self.load_repl(&extra)?;
             }
             self.spi_extra_repl_loaded = true;
         }
 
         // Register the bridge peripheral on just this controller.
         // SPI uses NullRegistrationPoint: no address, just `@ spi2`.
-        let repl = format!("{device_name}: SPI.{class_name} @ {controller}");
-        self.monitor.run(&format!(
-            "machine LoadPlatformDescriptionFromString \"{repl}\""
-        ))?;
+        self.load_repl(&format!("{device_name}: SPI.{class_name} @ {controller}"))?;
 
         self.spi_bridges.push((controller.to_string(), bridge));
         Ok(())
@@ -1370,6 +1213,13 @@ impl Drop for RenodeBackend {
             let _ = std::fs::remove_dir_all(dir);
         }
     }
+}
+
+/// A Renode peripheral name as a C#/Monitor identifier fragment.
+fn sanitize_ident(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect()
 }
 
 /// Replace the literal `{support}` token in every path-bearing config field with
@@ -1779,7 +1629,7 @@ impl Mcu for RenodeBackend {
         for cmd in &post {
             self.monitor.run(&cmd.replace("{cpu}", &cpu))?;
         }
-        self.firmware_loaded = true;
+        self.core.firmware_loaded = true;
 
         // Execution-trace introspection: opt-in via HAUKSBEE_RENODE_TRACE=1.
         // When set, redirect Renode's log to a temp file and enable
@@ -1822,13 +1672,7 @@ impl Mcu for RenodeBackend {
         Ok(n)
     }
 
-    fn run_micros(&mut self, us: u64) -> Result<()> {
-        self.run_seconds(us as f64 / 1_000_000.0)
-    }
-
-    fn frequency(&self) -> u64 {
-        self.config.frequency_hz
-    }
+    poll_state_mcu_methods!(core);
 
     fn set_digital_in(&mut self, pin: PinId, high: bool) {
         // Find the Renode peripheral for this logical port and drive the pin.
@@ -1889,47 +1733,6 @@ impl Mcu for RenodeBackend {
         }
     }
 
-    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
-        self.on_pin_change = Some(cb);
-    }
-
-    fn current_cycle(&self) -> u64 {
-        self.cycles
-    }
-
-    fn cycle_exact(&self) -> bool {
-        // Poll-based: GPIO edges are observed by diffing ODRs per time slice, so
-        // toggles within a slice collapse and the ordering is coarse.
-        false
-    }
-
-    fn uart_write(&mut self, bytes: &[u8]) {
-        let result = self
-            .uart
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("this Renode descriptor has no UART socket"))
-            .and_then(|uart| uart.write_bytes(bytes));
-        let accepted = crate::traits::account_uart_injection(
-            "Renode",
-            bytes.len(),
-            result,
-            &mut self.uart_rx_failed,
-        );
-        self.uart_rx_inflight = self.uart_rx_inflight.saturating_add(accepted);
-    }
-
-    fn uart_rx_overflow(&self) -> u64 {
-        self.uart_rx_failed
-    }
-
-    fn uart_rx_pending(&self) -> usize {
-        self.uart_rx_inflight
-    }
-
-    fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>) {
-        self.on_uart = Some(cb);
-    }
-
     fn on_i2c(&mut self, cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>) {
         if let Err(e) = self.install_i2c_bridge(cb) {
             panic!("failed to install Renode I2C bridge: {e:#}");
@@ -1939,38 +1742,14 @@ impl Mcu for RenodeBackend {
     fn on_spi(&mut self, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
         // Route to the first configured SPI controller (backward-compat for
         // single-controller setups such as the STM32F103 SPI ADC demo).
-        let controller = self
-            .config
-            .spi_controllers
-            .first()
-            .cloned()
-            .unwrap_or_default();
-        if controller.is_empty() {
-            return;
-        }
-        if let Err(e) = self.install_spi_bridge_for(&controller, cb) {
-            panic!("failed to install Renode SPI bridge on {controller}: {e:#}");
+        if let Some(controller) = self.config.spi_controllers.first().cloned() {
+            self.on_spi_controller(&controller, cb);
         }
     }
 
     fn on_spi_controller(&mut self, controller: &str, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
         if let Err(e) = self.install_spi_bridge_for(controller, cb) {
             panic!("failed to install Renode SPI bridge on {controller}: {e:#}");
-        }
-    }
-
-    fn state(&self) -> McuState {
-        // `state` takes &self but the Monitor needs &mut to query; rather than
-        // interior mutability we report the cached cycle count, which is what
-        // the scheduler uses. PC is read lazily as 0 when unavailable.
-        McuState {
-            pc: 0,
-            cycles: self.cycles,
-            sleeping: false,
-            // Renode's poll path carries no terminal-CPU signal here;
-            // conservatively report "still running" rather than guessing.
-            done: false,
-            crashed: false,
         }
     }
 
@@ -1983,7 +1762,7 @@ impl Mcu for RenodeBackend {
             .filter(|p| ports.contains(&p.letter))
             .map(|p| p.letter)
             .collect();
-        self.active_ports = Some(known);
+        self.core.active_ports = Some(known);
     }
 
     fn pins_configured_output(&self) -> Vec<PinId> {
@@ -2014,7 +1793,7 @@ impl Mcu for RenodeBackend {
         // then an empty configured-output set is authoritative ("nothing is an
         // output"), not "cannot tell". If the engine hinted the wired ports,
         // only those must be covered; otherwise every configured port must be.
-        dir_covers_ports(&self.config, self.active_ports.as_deref())
+        dir_covers_ports(&self.config, self.core.active_ports.as_deref())
     }
 
     fn set_i2c_slave_addresses(&mut self, addresses: &[u8]) {
@@ -2064,7 +1843,7 @@ impl Mcu for RenodeBackend {
 impl RenodeBackend {
     /// Advance virtual time by `seconds`, then exchange GPIO/UART state.
     fn run_seconds(&mut self, seconds: f64) -> Result<()> {
-        if !self.firmware_loaded {
+        if !self.core.firmware_loaded {
             bail!("no firmware loaded into the Renode machine");
         }
 
@@ -2073,7 +1852,7 @@ impl RenodeBackend {
         // every byte in the slice carries the chunk's coarse virtual time (poll
         // tier, `cycle_exact()` is false). Exact intra-slice ordering is not
         // recoverable on a poll backend, matching the pin-edge stamping.
-        self.spi_cycle.store(self.cycles, Ordering::Relaxed);
+        self.spi_cycle.store(self.core.cycles, Ordering::Relaxed);
 
         // `emulation RunFor` self-advances the (paused) machine by the interval
         // and pauses again; it must NOT be preceded by `start`, or Renode
@@ -2084,7 +1863,7 @@ impl RenodeBackend {
             Duration::from_secs(60),
         )?;
 
-        self.cycles += (seconds * self.config.frequency_hz as f64).round() as u64;
+        self.core.credit(seconds, self.config.frequency_hz);
 
         // Advance a descriptor-owned oscillator/PLL state machine while the
         // machine is paused. Readiness injected here becomes visible on the
@@ -2100,8 +1879,10 @@ impl RenodeBackend {
 
         // Exchange state after the chunk, matching the simavr backend's timing.
         self.poll_gpio_edges();
-        self.pump_uart_out()?;
-        self.uart_rx_inflight = 0;
+        let trace = std::env::var_os("HAUKSBEE_RENODE_I2C_TRACE").is_some()
+            || std::env::var_os("HAUKSBEE_RENODE_SPI_TRACE").is_some();
+        self.core.pump_uart_out(trace)?;
+        self.core.uart_rx_inflight = 0;
         Ok(())
     }
 
@@ -2318,24 +2099,6 @@ mod tests {
         assert!(!dir_covers_ports(&mixed, None));
         assert!(dir_covers_ports(&mixed, Some(&['A', 'C'])));
         assert!(!dir_covers_ports(&mixed, Some(&['A', 'B'])));
-    }
-
-    #[test]
-    fn adc_count_conversion() {
-        // 12-bit converter, 3.3 V full scale.
-        assert_eq!(adc_count(0.0, 3.3, 4095), 0);
-        assert_eq!(adc_count(3.3, 3.3, 4095), 4095);
-        // Clamped above full scale and below zero.
-        assert_eq!(adc_count(5.0, 3.3, 4095), 4095);
-        assert_eq!(adc_count(-1.0, 3.3, 4095), 0);
-        // 2.0 V of 3.3 V against the 2^n full scale: (2.0/3.3)*4096 = 2482.4 →
-        // 2482 (top-code clamp only bites at true full scale).
-        assert_eq!(adc_count(2.0, 3.3, 4095), 2482);
-        // Near full scale the 2^n scaling reads 4095 where a (2^n-1) scaling
-        // would under-read to 4094: 3.2992/3.3 → *4096 = 4095.0 vs *4095 = 4094.
-        assert_eq!(adc_count(3.2992, 3.3, 4095), 4095);
-        // Broken map (zero full scale) reads stuck-at-zero, not NaN.
-        assert_eq!(adc_count(1.0, 0.0, 4095), 0);
     }
 
     #[test]

@@ -45,7 +45,7 @@ use hauksbee_models::sensor_spec::{
     WriteCommandSpec, WriteRegisterSpec,
 };
 
-use crate::drivers::PinDriver;
+use hauksbee_bind::drivers::PinDriver;
 
 use super::i2c::I2cSlave;
 use super::spi::SpiSlave;

@@ -33,37 +33,46 @@ pub mod staged;
 
 pub use balance::{settle_rails, BalancePolicy, BalanceReport, RailChannel, RailLoads};
 pub use capture::{
-    execute_composed_group, execute_stiff_group, execute_stiff_group_held,
-    execute_stiff_group_held_capped, BoundaryKind, CapturePolicy, ComposedPolicy, StiffExecution,
-    StiffOutcome,
+    execute_composed_group, execute_stiff_group, execute_stiff_group_held_capped, BoundaryKind,
+    CapturePolicy, ComposedPolicy, StiffExecution, StiffOutcome,
 };
 pub use staged::{run_staged, StagedResult};
 
-/// March `engine` over `circuit` to `tstop`, collecting every accepted step
-/// into a [`Waveforms`] whose node index 0 is ground. The torn executors share
-/// this because a partitioned engine only streams samples; it never assembles
-/// a waveform table of its own.
-fn collect_waveforms(
-    engine: &mut crate::partitioned::PartitionedTransient,
-    circuit: &hauksbee_ir::Circuit,
-    tstop: f64,
-) -> crate::error::SolveResult<crate::transient::Waveforms> {
-    let n_nodes = circuit.node_count();
-    let mut wf = crate::transient::Waveforms {
-        time: Vec::new(),
-        node_voltages: vec![Vec::new(); n_nodes],
-        branch_currents: Vec::new(),
-    };
-    engine.run_streaming(circuit, tstop, |s| {
-        wf.time.push(s.time);
-        for node in 0..n_nodes {
-            let v = if node == 0 {
-                0.0
-            } else {
-                s.x.get(node - 1).copied().unwrap_or(0.0)
-            };
-            wf.node_voltages[node].push(v);
+/// The uniform accepted-step grid a fixed-dt run marches (mirrors the run
+/// loop: the last step shortens to land exactly on tstop).
+pub(crate) fn uniform_grid(dt: f64, tstop: f64) -> Vec<f64> {
+    let mut grid = vec![0.0];
+    let mut t = 0.0;
+    let eps = dt * 1e-9;
+    while t < tstop - eps {
+        t += dt.min(tstop - t);
+        grid.push(t);
+    }
+    grid
+}
+
+/// First-order-hold sample of a captured series at time `t` (clamped at the
+/// ends, exactly like PWL replay).
+pub(crate) fn lerp_at(times: &[f64], vals: &[f64], t: f64) -> f64 {
+    if times.is_empty() {
+        return 0.0;
+    }
+    match times.binary_search_by(|x| x.partial_cmp(&t).expect("non-finite sample time")) {
+        Ok(i) => vals[i],
+        Err(0) => vals[0],
+        Err(i) if i >= times.len() => *vals.last().unwrap(),
+        Err(i) => {
+            let (t0, t1) = (times[i - 1], times[i]);
+            let w = if t1 > t0 { (t - t0) / (t1 - t0) } else { 0.0 };
+            vals[i - 1] + w * (vals[i] - vals[i - 1])
         }
-    })?;
-    Ok(wf)
+    }
+}
+
+/// One node of a run, first-order-hold resampled onto `grid` (the reading a
+/// replay consumer gets).
+pub(crate) fn resample(wf: &crate::transient::Waveforms, node: usize, grid: &[f64]) -> Vec<f64> {
+    grid.iter()
+        .map(|&t| lerp_at(&wf.time, &wf.node_voltages[node], t))
+        .collect()
 }

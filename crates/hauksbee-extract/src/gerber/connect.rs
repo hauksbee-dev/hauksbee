@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 use rstar::{RTree, RTreeObject, AABB};
 
+use crate::dsu::Dsu;
 use crate::{Component, ExtractedBoard, Net, Pin};
 
 use super::geo::{shape_gap, Shape};
@@ -66,41 +67,6 @@ impl RTreeObject for Leaf {
             [self.bounds[0], self.bounds[1]],
             [self.bounds[2], self.bounds[3]],
         )
-    }
-}
-
-/// Disjoint-set (union-find) with path compression + union by size.
-struct Dsu {
-    parent: Vec<usize>,
-    size: Vec<usize>,
-}
-
-impl Dsu {
-    fn new(n: usize) -> Self {
-        Dsu {
-            parent: (0..n).collect(),
-            size: vec![1; n],
-        }
-    }
-    fn find(&mut self, mut x: usize) -> usize {
-        while self.parent[x] != x {
-            self.parent[x] = self.parent[self.parent[x]];
-            x = self.parent[x];
-        }
-        x
-    }
-    fn union(&mut self, a: usize, b: usize) {
-        let (ra, rb) = (self.find(a), self.find(b));
-        if ra == rb {
-            return;
-        }
-        let (big, small) = if self.size[ra] >= self.size[rb] {
-            (ra, rb)
-        } else {
-            (rb, ra)
-        };
-        self.parent[small] = big;
-        self.size[big] += self.size[small];
     }
 }
 

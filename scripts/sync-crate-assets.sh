@@ -26,7 +26,7 @@ pairs=(
   "crates/hauksbee-ci/examples/boards/blinky.kicad_pcb:crates/hauksbee-engine/assets/examples/blinky.kicad_pcb"
   "examples/decks/rlc_ringdown.cir:crates/hauksbee-engine/assets/examples/rlc_ringdown.cir"
   "testdata/firmware/demo/demo.hex:crates/hauksbee-ci/assets/firmware/demo.hex"
-  "testdata/sensor-specs/mcp4728.toml:crates/hauksbee-engine/assets/sensor-specs/mcp4728.toml"
+  "testdata/sensor-specs/mcp4728.toml:crates/hauksbee-cosim/assets/sensor-specs/mcp4728.toml"
 )
 for name in lm75 bma423_chip_id bme280 mpu6050 ads1115 ina219 mcp4728 icm42605; do
   pairs+=("testdata/sensor-specs/${name}.toml:crates/hauksbee-server/assets/sensor-specs/${name}.toml")

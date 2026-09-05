@@ -1,0 +1,38 @@
+[package]
+name = "hauksbee-bind"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+description = "Board binding layer: resolves an extracted board to models and stamps the device library (binder, digital/logic/behavioral device models, stress, inputs)"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# BindSummary is part of the generated `run --json` report schema.
+schemars = "1.2"
+same-file = "1.0"
+toml = "0.8"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+tempfile = { workspace = true }
+hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
+hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
+hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
+forge-model = { workspace = true }
+forge-codegen = { workspace = true }
+# Sandboxed arithmetic/boolean expression evaluator for behavioural-model laws
+# and FSM guards (see the hauksbee-engine manifest for the rationale and the
+# licence pin).
+evalexpr = { version = "=11.3.1", default-features = false }
+
+[dev-dependencies]
+hauksbee-testkit = { path = "../hauksbee-testkit" }
+
+[lints]
+workspace = true

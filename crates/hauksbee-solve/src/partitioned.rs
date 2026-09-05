@@ -67,8 +67,9 @@ use crate::orchestrate::balance::{
 };
 use crate::partition::{Island, Partition};
 use crate::stamp::IntegCoeffs;
+use crate::subcircuit::SubCircuit;
 use crate::system::ReactiveState;
-use crate::transient::StepSample;
+use crate::transient::{branch_i, node_v, StepSample};
 
 /// A nonlinear island lowered to a self-contained sub-circuit plus its solver
 /// workspace. Boundary input nodes appear as pinned voltage sources whose value
@@ -429,11 +430,11 @@ impl PartitionedTransient {
                     None => {
                         // Couldn't reduce (e.g. pure-resistive island): treat it
                         // as a nonlinear sub-circuit so it's still solved.
-                        nonlinear.push(NonlinearIsland::build(circuit, isl, opts)?);
+                        nonlinear.push(NonlinearIsland::build(circuit, isl)?);
                     }
                 }
             } else {
-                nonlinear.push(NonlinearIsland::build(circuit, isl, opts)?);
+                nonlinear.push(NonlinearIsland::build(circuit, isl)?);
             }
         }
 
@@ -791,61 +792,56 @@ impl PartitionedTransient {
             // Inside the engine's own pool (every caller reaches `sweep`
             // through `in_pool`), so the ambient `par_iter`s below execute on
             // it, never on the global rayon pool.
-            {
-                let (_, nl_err) = rayon::join(
-                    || {
-                        (
-                            self.linear.as_slice(),
-                            self.lin_state.as_mut_slice(),
-                            self.lin_state_prev.as_mut_slice(),
-                            self.lin_input_buf.as_mut_slice(),
-                            self.lin_vfree.as_mut_slice(),
-                        )
-                            .into_par_iter()
-                            .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
-                            .for_each(|(li, state, prev, buf, vfree)| {
-                                linear_phase_a(
-                                    li, circuit, vbuf, tnext, first, state, prev, buf, vfree,
-                                )
-                            })
-                    },
-                    || {
-                        self.nonlinear
-                            .par_iter_mut()
-                            .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
-                            .enumerate()
-                            .filter_map(|(i, nl)| {
-                                nl.phase_a(vbuf, h, tnext, first, opts)
-                                    .err()
-                                    .map(|e| (i, e))
-                            })
-                            .min_by_key(|(i, _)| *i)
-                    },
-                );
-                nl_err.map(|(_, e)| e)
-            }
+            let (_, nl_err) = rayon::join(
+                || {
+                    (
+                        self.linear.as_slice(),
+                        self.lin_state.as_mut_slice(),
+                        self.lin_state_prev.as_mut_slice(),
+                        self.lin_input_buf.as_mut_slice(),
+                        self.lin_vfree.as_mut_slice(),
+                    )
+                        .into_par_iter()
+                        .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
+                        .for_each(|(li, state, prev, buf, vfree)| {
+                            linear_phase_a(li, circuit, vbuf, tnext, first, state, prev, buf, vfree)
+                        })
+                },
+                || {
+                    nonlinear_phase_a(
+                        &mut self.nonlinear,
+                        true,
+                        vbuf,
+                        h,
+                        tnext,
+                        first,
+                        opts,
+                        |_| true,
+                    )
+                },
+            );
+            nl_err
         } else {
+            for ((((li, state), prev), buf), vfree) in self
+                .linear
+                .iter()
+                .zip(self.lin_state.iter_mut())
+                .zip(self.lin_state_prev.iter_mut())
+                .zip(self.lin_input_buf.iter_mut())
+                .zip(self.lin_vfree.iter_mut())
             {
-                for ((((li, state), prev), buf), vfree) in self
-                    .linear
-                    .iter()
-                    .zip(self.lin_state.iter_mut())
-                    .zip(self.lin_state_prev.iter_mut())
-                    .zip(self.lin_input_buf.iter_mut())
-                    .zip(self.lin_vfree.iter_mut())
-                {
-                    linear_phase_a(li, circuit, vbuf, tnext, first, state, prev, buf, vfree);
-                }
-                let mut first_err: Option<SolveError> = None;
-                for nl in self.nonlinear.iter_mut() {
-                    if let Err(e) = nl.phase_a(vbuf, h, tnext, first, opts) {
-                        if first_err.is_none() {
-                            first_err = Some(e);
-                        }
-                    }
-                }
-                first_err
+                linear_phase_a(li, circuit, vbuf, tnext, first, state, prev, buf, vfree);
             }
+            nonlinear_phase_a(
+                &mut self.nonlinear,
+                false,
+                vbuf,
+                h,
+                tnext,
+                first,
+                opts,
+                |_| true,
+            )
         };
         if let Some(e) = first_err {
             return Err(e);
@@ -915,37 +911,19 @@ impl PartitionedTransient {
         }
         // Fill exchange buffer with node voltages (ground stays 0).
         for ni in 1..=self.n_nodes {
-            let v = ws
-                .layout
-                .node(NodeId(ni as u32))
-                .map(|i| ws.x[i])
-                .unwrap_or(0.0);
-            self.vbuf[ni] = v;
+            self.vbuf[ni] = node_v(&ws, NodeId(ni as u32));
         }
-        // Seed linear island states (cap voltages, inductor currents).
-        for (idx, li) in self.linear.iter().enumerate() {
-            let st = &mut self.lin_state[idx];
-            for (k, (id, is_cap)) in li.state_devices().enumerate() {
-                st[k] = if is_cap {
-                    match &circuit.devices[id.0 as usize] {
-                        Device::Capacitor { a, b, ic, .. } => ic.unwrap_or_else(|| {
-                            crate::transient::node_v(&ws, *a) - crate::transient::node_v(&ws, *b)
-                        }),
-                        _ => 0.0,
-                    }
-                } else {
-                    match &circuit.devices[id.0 as usize] {
-                        Device::Inductor { ic, .. } => ic.unwrap_or_else(|| {
-                            ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0)
-                        }),
-                        _ => 0.0,
-                    }
-                };
-            }
-        }
-        // Seed nonlinear islands from the same DC point.
+        seed_linear_states(
+            &self.linear,
+            &mut self.lin_state,
+            circuit,
+            |n| node_v(&ws, n),
+            |id| branch_i(&ws, id),
+        );
+        // Seed nonlinear islands from the same DC point (its boundary voltages
+        // are in the buffer now); a block whose own DC fails fails the seed.
         for nl in &mut self.nonlinear {
-            nl.seed_from_global(&ws, circuit, &self.opts)?;
+            nl.seed_from_vbuf(&self.vbuf, &self.opts, true)?;
         }
         Ok(())
     }
@@ -985,38 +963,28 @@ impl PartitionedTransient {
             }
         }
 
-        // 2. Linear island states from the boundary estimates.
-        let vbuf_v = |n: NodeId, vbuf: &[f64]| -> f64 {
-            if n.is_ground() {
-                0.0
-            } else {
-                vbuf[n.0 as usize]
-            }
-        };
-        for (idx, li) in self.linear.iter().enumerate() {
-            let st = &mut self.lin_state[idx];
-            for (k, (id, is_cap)) in li.state_devices().enumerate() {
-                st[k] = if is_cap {
-                    match &circuit.devices[id.0 as usize] {
-                        Device::Capacitor { a, b, ic, .. } => {
-                            ic.unwrap_or_else(|| vbuf_v(*a, &self.vbuf) - vbuf_v(*b, &self.vbuf))
-                        }
-                        _ => 0.0,
-                    }
+        // 2. Linear island states from the boundary estimates (an inductor
+        //    with no `ic` starts at rest).
+        let vbuf = &self.vbuf;
+        seed_linear_states(
+            &self.linear,
+            &mut self.lin_state,
+            circuit,
+            |n| {
+                if n.is_ground() {
+                    0.0
                 } else {
-                    match &circuit.devices[id.0 as usize] {
-                        Device::Inductor { ic, .. } => ic.unwrap_or(0.0),
-                        _ => 0.0,
-                    }
-                };
-            }
-        }
+                    vbuf[n.0 as usize]
+                }
+            },
+            |_| 0.0,
+        );
 
         // 3. Per-island DC from the boundary estimates (robust to failure),
         //    writing each island's internal nodes back so the emitted t=0
         //    sample and the next step's boundary reads are consistent.
         for nl in &mut self.nonlinear {
-            nl.seed_from_vbuf(&self.vbuf, &self.opts);
+            nl.seed_from_vbuf(&self.vbuf, &self.opts, false)?;
             nl.write_back(&mut self.vbuf);
         }
         Ok(())
@@ -1114,34 +1082,17 @@ impl RailLoads for PartitionedRailLoads<'_> {
         // split is bit-neutral for the same reason it is safe in parallel.
         let vbuf: &[f64] = self.vbuf;
         let (h, tnext, opts) = (self.h, self.tnext, self.opts);
-        let err: Option<(usize, SolveError)> = if self.par {
-            self.nonlinear
-                .par_iter_mut()
-                .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
-                .enumerate()
-                .filter(|(_, nl)| nl.touches_rail(rail))
-                .filter_map(|(k, nl)| {
-                    nl.phase_a(vbuf, h, tnext, false, opts)
-                        .err()
-                        .map(|e| (k, e))
-                })
-                .min_by_key(|(k, _)| *k)
-        } else {
-            {
-                let mut first_err = None;
-                for (k, nl) in self.nonlinear.iter_mut().enumerate() {
-                    if nl.touches_rail(rail) {
-                        if let Err(e) = nl.phase_a(vbuf, h, tnext, false, opts) {
-                            if first_err.is_none() {
-                                first_err = Some((k, e));
-                            }
-                        }
-                    }
-                }
-                first_err
-            }
-        };
-        if let Some((_, e)) = err {
+        let err = nonlinear_phase_a(
+            self.nonlinear,
+            self.par,
+            vbuf,
+            h,
+            tnext,
+            false,
+            opts,
+            |nl| nl.touches_rail(rail),
+        );
+        if let Some(e) = err {
             return Err(e);
         }
         for nl in self.nonlinear.iter() {
@@ -1176,6 +1127,67 @@ impl RailLoads for PartitionedRailLoads<'_> {
             .iter()
             .filter(|nl| nl.touches_rail(rail))
             .count()
+    }
+}
+
+/// Phase (a) for every nonlinear island `keep` selects: each refreshes its
+/// pins from the frozen `vbuf` and re-solves on its own workspace, on the
+/// engine's pool when `par` (the caller is inside `in_pool`, so the ambient
+/// `par_iter` is that pool). Both arms surface the LOWEST-indexed failure, so
+/// the error (not just the waveform) is independent of execution order and
+/// thread count.
+#[allow(clippy::too_many_arguments)]
+fn nonlinear_phase_a(
+    islands: &mut [NonlinearIsland],
+    par: bool,
+    vbuf: &[f64],
+    h: f64,
+    tnext: f64,
+    first: bool,
+    opts: &SolverOptions,
+    keep: impl Fn(&NonlinearIsland) -> bool + Sync,
+) -> Option<SolveError> {
+    if par {
+        islands
+            .par_iter_mut()
+            .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
+            .enumerate()
+            .filter(|(_, nl)| keep(nl))
+            .filter_map(|(i, nl)| {
+                nl.phase_a(vbuf, h, tnext, first, opts)
+                    .err()
+                    .map(|e| (i, e))
+            })
+            .min_by_key(|(i, _)| *i)
+            .map(|(_, e)| e)
+    } else {
+        islands
+            .iter_mut()
+            .filter(|nl| keep(nl))
+            .find_map(|nl| nl.phase_a(vbuf, h, tnext, first, opts).err())
+    }
+}
+
+/// Seed every linear island's state vector (capacitor voltages, inductor
+/// currents): a device's own `ic` first, else the value `node_v` / `branch_i`
+/// read from the seed source (the global DC point, or the boundary estimates).
+fn seed_linear_states(
+    linear: &[LinearIsland],
+    lin_state: &mut [Vec<f64>],
+    circuit: &Circuit,
+    node_v: impl Fn(NodeId) -> f64,
+    branch_i: impl Fn(DeviceId) -> f64,
+) {
+    for (li, st) in linear.iter().zip(lin_state.iter_mut()) {
+        for (k, (id, is_cap)) in li.state_devices().enumerate() {
+            st[k] = match &circuit.devices[id.0 as usize] {
+                Device::Capacitor { a, b, ic, .. } if is_cap => {
+                    ic.unwrap_or_else(|| node_v(*a) - node_v(*b))
+                }
+                Device::Inductor { ic, .. } if !is_cap => ic.unwrap_or_else(|| branch_i(id)),
+                _ => 0.0,
+            };
+        }
     }
 }
 
@@ -1367,86 +1379,46 @@ fn collect_free_nodes(isl: &Island, li: &LinearIsland) -> Vec<NodeId> {
 
 impl NonlinearIsland {
     /// Extract a nonlinear island into a sub-circuit with pinned-source boundaries.
-    fn build(circuit: &Circuit, isl: &Island, opts: &SolverOptions) -> Option<NonlinearIsland> {
-        let n_nodes_global = circuit.max_node() as usize;
-        let mut g2l: Vec<Option<NodeId>> = vec![None; n_nodes_global + 1];
-        g2l[0] = Some(NodeId::GROUND);
-        let mut sub = Circuit::new();
-        sub.temp_c = circuit.temp_c;
-        let mut l2g: Vec<NodeId> = vec![NodeId::GROUND]; // index 0 = ground
-
-        // Map every node the island touches.
-        let map_node = |sub: &mut Circuit,
-                        g2l: &mut Vec<Option<NodeId>>,
-                        l2g: &mut Vec<NodeId>,
-                        gn: NodeId|
-         -> NodeId {
-            if gn.is_ground() {
-                return NodeId::GROUND;
-            }
-            if let Some(ln) = g2l[gn.0 as usize] {
-                return ln;
-            }
-            let ln = sub.node(&format!("n{}", gn.0));
-            g2l[gn.0 as usize] = Some(ln);
-            // l2g is dense by local id; push to align.
-            while (l2g.len() as u32) <= ln.0 {
-                l2g.push(NodeId::GROUND);
-            }
-            l2g[ln.0 as usize] = gn;
-            ln
-        };
-
-        // Copy devices, remapping nodes.
+    fn build(circuit: &Circuit, isl: &Island) -> Option<NonlinearIsland> {
+        let mut sub = SubCircuit::new(circuit);
         for &id in &isl.devices {
-            let dev = &circuit.devices[id.0 as usize];
-            let remap = |g2l: &mut Vec<Option<NodeId>>,
-                         l2g: &mut Vec<NodeId>,
-                         sub: &mut Circuit,
-                         n: NodeId| { map_node(sub, g2l, l2g, n) };
-            let nd = clone_remapped(dev, |n| {
-                // closure capturing requires the helper; do it inline.
-                remap(&mut g2l, &mut l2g, &mut sub, n)
-            });
-            sub.add(nd);
+            sub.copy(circuit, id);
         }
-
         // Retarget control references (F/H `ctrl_src`, behavioral `I(...)`
-        // deps) from GLOBAL device ids to the sub-circuit's LOCAL ids
-        // (`clone_remapped` walks nodes only; a DeviceId would otherwise
-        // silently point at whatever occupies that index in `sub`). The
-        // partitioner demotes a control Vsource from cut to island member
-        // precisely so it is present here; if a partition from an external
-        // decision layer split them anyway, there is no column for the stamp
-        // to write and the only honest move is to refuse the build,
-        // `try_build*` then falls back to the exact monolithic path.
+        // deps) from GLOBAL device ids to the sub-circuit's LOCAL ids (the
+        // copy walks nodes only; a DeviceId would otherwise silently point at
+        // whatever occupies that index in `sub`). The partitioner demotes a
+        // control Vsource from cut to island member precisely so it is present
+        // here; if a partition from an external decision layer split them
+        // anyway, there is no column for the stamp to write and the only
+        // honest move is to refuse the build, `try_build*` then falls back to
+        // the exact monolithic path.
         for li in 0..isl.devices.len() {
-            for (slot, gctrl) in sub.devices[li]
-                .controlling_sources()
-                .into_iter()
-                .enumerate()
-            {
-                let Some(local) = isl.devices.iter().position(|&d| d == gctrl) else {
-                    return None;
-                };
-                sub.devices[li].retarget_controlling_source_slot(slot, DeviceId(local as u32));
+            let ctrls = sub.circuit.devices[li].controlling_sources();
+            for (slot, gctrl) in ctrls.into_iter().enumerate() {
+                let local = isl.devices.iter().position(|&d| d == gctrl)?;
+                sub.circuit.devices[li]
+                    .retarget_controlling_source_slot(slot, DeviceId(local as u32));
             }
         }
+        // A pinned voltage source for each boundary input node.
+        let boundary: Vec<(NodeId, DeviceId)> = isl
+            .boundary_in
+            .iter()
+            .map(|&bn| {
+                let p = sub.map(circuit, bn);
+                let sid = sub.add(Device::Vsource {
+                    name: format!("VB{}", bn.0),
+                    p,
+                    n: NodeId::GROUND,
+                    kind: SourceKind::Dc(0.0),
+                });
+                (bn, sid)
+            })
+            .collect();
+        let l2g = sub.l2g().to_vec();
+        let (sub, _) = sub.into_parts();
 
-        // Add a pinned voltage source for each boundary input node.
-        let mut boundary = Vec::new();
-        for &bn in &isl.boundary_in {
-            let ln = map_node(&mut sub, &mut g2l, &mut l2g, bn);
-            let sid = sub.add(Device::Vsource {
-                name: format!("VB{}", bn.0),
-                p: ln,
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(0.0),
-            });
-            boundary.push((bn, sid));
-        }
-
-        let _ = (opts, &g2l);
         let mut ws = Workspace::new(&sub);
         // Same convergence doctrine as the monolithic transient driver: a
         // behavioral source's presence arms the per-step Armijo line search
@@ -1459,26 +1431,18 @@ impl NonlinearIsland {
         {
             ws.set_tran_line_search(true);
         }
-        let n_dev = sub.devices.len();
-        let size = ws.layout.size;
         // Owned slots: every mapped non-ground node that is not a boundary
         // input, resolved once to (global node, ws.x index) so the per-sweep
         // scatter is a flat copy with no layout lookups or boundary scans.
-        let mut owned = Vec::new();
-        for ln in 1..l2g.len() {
-            let gn = l2g[ln];
-            if gn.is_ground() || boundary.iter().any(|(bn, _)| *bn == gn) {
-                continue;
-            }
-            if let Some(i) = ws.layout.node(NodeId(ln as u32)) {
-                owned.push((gn, i));
-            }
-        }
+        let owned = (1..l2g.len())
+            .filter(|&ln| !boundary.iter().any(|(bn, _)| *bn == l2g[ln]))
+            .filter_map(|ln| ws.layout.node(NodeId(ln as u32)).map(|i| (l2g[ln], i)))
+            .collect();
         Some(NonlinearIsland {
+            state: ReactiveState::new(sub.devices.len()),
+            x_accepted: vec![0.0; ws.layout.size],
             sub,
             ws,
-            state: ReactiveState::new(n_dev),
-            x_accepted: vec![0.0; size],
             l2g,
             boundary,
             owned,
@@ -1487,53 +1451,29 @@ impl NonlinearIsland {
         })
     }
 
-    /// Seed the sub-circuit's accepted state from the global DC operating point.
-    fn seed_from_global(
+    /// Seed the accepted state from the exchange buffer's boundary voltages:
+    /// pin the boundaries, solve the island's own DC so its internal nodes are
+    /// consistent, then seed the reactive history. `strict` fails on a DC that
+    /// does not exist; otherwise (the decomposed seed, where a per-island DC
+    /// failure is expected, not fatal: the island may itself be an astable
+    /// with no fixed point) the boundary estimates are projected onto every
+    /// mapped node as the accepted start and the first marching steps
+    /// integrate out of the guess.
+    fn seed_from_vbuf(
         &mut self,
-        global_ws: &Workspace,
-        _circuit: &Circuit,
+        vbuf: &[f64],
         opts: &SolverOptions,
+        strict: bool,
     ) -> SolveResult<()> {
-        // Set boundary sources to the global DC node voltages, then solve the
-        // sub-circuit's own DC point so its internal nodes are consistent.
-        for (gn, sid) in &self.boundary {
-            let v = crate::transient::node_v(global_ws, *gn);
-            if let Device::Vsource { kind, .. } = &mut self.sub.devices[sid.0 as usize] {
-                *kind = SourceKind::Dc(v);
+        self.refresh_boundary(vbuf);
+        if let Err(e) = dc_operating_point(&mut self.ws, &self.sub, opts) {
+            if strict {
+                return Err(e);
             }
-        }
-        dc_operating_point(&mut self.ws, &self.sub, opts)?;
-        self.x_accepted.copy_from_slice(&self.ws.x);
-        // Seed reactive history from the sub DC point.
-        crate::transient::seed_reactive_state(&mut self.state, &self.sub, &self.ws, opts);
-        Ok(())
-    }
-
-    /// Seed the sub-circuit's accepted state from the exchange buffer's boundary
-    /// ESTIMATES, used by the decomposed seed when no global DC exists. Sets the
-    /// boundary sources from `vbuf`, then tries the island's own DC. If that DC
-    /// also fails (the island is itself an astable with no fixed point), the
-    /// boundary estimates are projected onto the island's nodes as the accepted
-    /// start and the first marching steps integrate out of it. Never errors: a
-    /// per-island DC failure is expected here, not fatal.
-    fn seed_from_vbuf(&mut self, vbuf: &[f64], opts: &SolverOptions) {
-        for (gn, sid) in &self.boundary {
-            let v = vbuf[gn.0 as usize];
-            if let Device::Vsource { kind, .. } = &mut self.sub.devices[sid.0 as usize] {
-                *kind = SourceKind::Dc(v);
-            }
-        }
-        if dc_operating_point(&mut self.ws, &self.sub, opts).is_err() {
-            // Project the boundary estimates onto every mapped node; unmapped
-            // internal nodes stay at zero (power-on rest for this window).
             for xi in self.ws.x.iter_mut() {
                 *xi = 0.0;
             }
-            for ln in 1..self.l2g.len() {
-                let gn = self.l2g[ln];
-                if gn.is_ground() {
-                    continue;
-                }
+            for (ln, gn) in self.l2g.iter().enumerate().skip(1) {
                 if let Some(i) = self.ws.layout.node(NodeId(ln as u32)) {
                     self.ws.x[i] = vbuf[gn.0 as usize];
                 }
@@ -1541,14 +1481,14 @@ impl NonlinearIsland {
         }
         self.x_accepted.copy_from_slice(&self.ws.x);
         crate::transient::seed_reactive_state(&mut self.state, &self.sub, &self.ws, opts);
+        Ok(())
     }
 
     /// Refresh boundary source values from the global exchange buffer.
     fn refresh_boundary(&mut self, vbuf: &[f64]) {
         for (gn, sid) in &self.boundary {
-            let v = vbuf[gn.0 as usize];
             if let Device::Vsource { kind, .. } = &mut self.sub.devices[sid.0 as usize] {
-                *kind = SourceKind::Dc(v);
+                *kind = SourceKind::Dc(vbuf[gn.0 as usize]);
             }
         }
     }
@@ -1568,7 +1508,7 @@ impl NonlinearIsland {
             // pins are time-invariant (SourceKind::Dc by construction, build,
             // seed and refresh all write Dc, so tnext cannot move them); an
             // independent source that is a genuine MEMBER of this island was
-            // copied verbatim by clone_remapped and keeps its Sin/Pulse/Pwl
+            // copied verbatim into the sub-circuit and keeps its Sin/Pulse/Pwl
             // kind, and its stamp evaluates kind.eval(ctx.time). Passing 0.0
             // here froze such members at their t=0 value for the whole march,
             // a silently wrong waveform on the default Auto path (the linear
@@ -1589,28 +1529,14 @@ impl NonlinearIsland {
                 self.sub.devices.len(),
                 names.join(", ")
             );
-            return Err(if let Some(fault) = self.ws.behavioral_fault() {
-                SolveError::behavioral(
-                    message,
-                    crate::error::behavioral_device(fault),
-                    SolvePhase::Partitioned,
-                )
-            } else if self.ws.last_solve_was_singular() {
-                SolveError::Singular {
-                    message,
-                    unknown: None,
-                    net: None,
-                }
-            } else {
-                SolveError::NonConvergence {
-                    message,
-                    phase: SolvePhase::Partitioned,
-                    time: Some(tnext),
-                    dt: Some(h),
-                    iterations: None,
-                    blame: None,
-                }
-            });
+            return Err(self.ws.failure(
+                &self.sub,
+                message,
+                SolvePhase::Partitioned,
+                Some(tnext),
+                Some(h),
+                None,
+            ));
         }
         Ok(())
     }
@@ -1681,20 +1607,6 @@ impl NonlinearIsland {
     }
 }
 
-/// Clone a device with each NodeId passed through `f` (node remapping).
-///
-/// The per-variant walk lives once, on the IR type: see [`Device::map_nodes`].
-fn clone_remapped(dev: &Device, mut f: impl FnMut(NodeId) -> NodeId) -> Device {
-    let mut d = dev.clone();
-    d.map_nodes(&mut f);
-    d
-}
-
-// Reactive-state helpers mirroring the monolithic transient driver, applied to
-// a sub-circuit. Kept here so the partitioned path is self-contained.
-// The graded-board fixtures (single source of truth in benches/, see the
-// header there); `#[path]` resolves against `src/`, not the nested inline
-// `tests` module, so the include lives at file level like alloc_audit's.
 #[cfg(test)]
 mod tests {
     use super::*;

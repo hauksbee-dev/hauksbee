@@ -52,6 +52,8 @@ pub mod ffi {
 pub mod avr;
 pub mod children;
 pub mod elf;
+#[cfg(any(feature = "renode", feature = "qemu"))]
+mod external;
 pub mod hostserial;
 pub mod traits;
 
@@ -69,21 +71,6 @@ pub use traits::{I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent};
 
 use std::path::{Path, PathBuf};
 
-/// Resolve `path` to an absolute form for error messages, without requiring the
-/// file to exist (so `canonicalize` is not an option: it fails on a missing
-/// path). A relative path is joined onto the current working directory.
-fn absolutize(path: &Path) -> PathBuf {
-    std::path::absolute(path).unwrap_or_else(|_| {
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .map(|d| d.join(path))
-                .unwrap_or_else(|_| path.to_path_buf())
-        }
-    })
-}
-
 /// Validate a firmware path BEFORE it is handed to a native emulator backend.
 ///
 /// simavr's `read_ihex_file` / `elf_read_firmware` (and the QEMU/Renode loaders)
@@ -98,22 +85,19 @@ fn absolutize(path: &Path) -> PathBuf {
 /// or unreadable. Callers with extra provenance (e.g. a CI spec field) should
 /// wrap this error to add where the path came from.
 pub fn validate_firmware_path(path: &Path) -> anyhow::Result<PathBuf> {
-    let abs = absolutize(path);
+    // Absolute for the message without requiring existence (`canonicalize`
+    // fails on a missing path, which is the case being diagnosed).
+    let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     match std::fs::metadata(path) {
-        Ok(md) => {
-            if md.is_dir() {
-                anyhow::bail!(
-                    "firmware path is a directory, not a file: {}",
-                    abs.display()
-                );
-            }
-            // Readability: open it now so a permission problem surfaces here with
-            // a clean message rather than deep inside the native loader.
-            std::fs::File::open(path).map_err(|e| {
-                anyhow::anyhow!("firmware file is not readable: {} ({e})", abs.display())
-            })?;
-            Ok(abs)
-        }
+        Ok(md) if md.is_dir() => anyhow::bail!(
+            "firmware path is a directory, not a file: {}",
+            abs.display()
+        ),
+        // Readability: open it now so a permission problem surfaces here with
+        // a clean message rather than deep inside the native loader.
+        Ok(_) => std::fs::File::open(path)
+            .map(|_| abs.clone())
+            .map_err(|e| anyhow::anyhow!("firmware file is not readable: {} ({e})", abs.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             anyhow::bail!("no firmware file at {}", abs.display())
         }

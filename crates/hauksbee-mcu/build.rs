@@ -1,32 +1,18 @@
 use std::env;
-use std::fmt::Write as _;
-use std::fs::File;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
 fn sha256(path: &Path) -> String {
-    let mut file =
-        File::open(path).unwrap_or_else(|e| panic!("could not hash {}: {e}", path.display()));
-    let mut hash = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .unwrap_or_else(|e| panic!("could not hash {}: {e}", path.display()));
-        if read == 0 {
-            break;
-        }
-        hash.update(&buffer[..read]);
-    }
-    let mut output = String::with_capacity(64);
-    for byte in hash.finalize() {
-        write!(&mut output, "{byte:02x}").unwrap();
-    }
-    output
+    let bytes =
+        std::fs::read(path).unwrap_or_else(|e| panic!("could not hash {}: {e}", path.display()));
+    Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
+/// Every `.h` under `root`, recursively, sorted.
 fn installed_simavr_headers(root: &Path) -> Vec<PathBuf> {
     fn visit(dir: &Path, out: &mut Vec<PathBuf>) {
         let entries = std::fs::read_dir(dir)
@@ -42,11 +28,21 @@ fn installed_simavr_headers(root: &Path) -> Vec<PathBuf> {
             }
         }
     }
-
     let mut headers = Vec::new();
     visit(root, &mut headers);
     headers.sort();
     headers
+}
+
+/// Resolve a directory to its canonical path, or fail naming the variable.
+fn canonical(var: &str, dir: &str) -> PathBuf {
+    std::fs::canonicalize(dir).unwrap_or_else(|e| panic!("could not resolve {var} {dir}: {e}"))
+}
+
+fn read_marker(path: &Path) -> String {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+    text.trim().to_string()
 }
 
 fn main() {
@@ -88,13 +84,10 @@ fn main() {
         if expected_commit.len() != 40 || !expected_commit.bytes().all(|b| b.is_ascii_hexdigit()) {
             panic!("SIMAVR_COMMIT must be one 40-character hexadecimal Git commit");
         }
-        let include_root = std::fs::canonicalize(&include_dir)
-            .unwrap_or_else(|e| panic!("could not resolve SIMAVR_INCLUDE_DIR {include_dir}: {e}"));
-        let lib_root = std::fs::canonicalize(&lib_dir)
-            .unwrap_or_else(|e| panic!("could not resolve SIMAVR_LIB_DIR {lib_dir}: {e}"));
+        let include_root = canonical("SIMAVR_INCLUDE_DIR", &include_dir);
+        let lib_root = canonical("SIMAVR_LIB_DIR", &lib_dir);
         let prefix = include_root.parent().unwrap_or(Path::new("/"));
-        let lib_prefix = lib_root.parent().unwrap_or(Path::new("/"));
-        if prefix != lib_prefix {
+        if prefix != lib_root.parent().unwrap_or(Path::new("/")) {
             panic!(
                 "SIMAVR_INCLUDE_DIR and SIMAVR_LIB_DIR must share one prefix when SIMAVR_COMMIT attests the linked source (got {} and {})",
                 include_root.display(),
@@ -103,36 +96,33 @@ fn main() {
         }
         let marker = prefix.join(".hauksbee-simavr-commit");
         println!("cargo:rerun-if-changed={}", marker.display());
-        let installed_commit = std::fs::read_to_string(&marker)
-            .unwrap_or_else(|e| panic!("could not read {}: {e}", marker.display()));
-        if installed_commit.trim() != expected_commit {
+        let installed_commit = read_marker(&marker);
+        if installed_commit != expected_commit {
             panic!(
-                "simavr provenance mismatch: build requested {expected_commit}, but {} records {}",
-                marker.display(),
-                installed_commit.trim()
+                "simavr provenance mismatch: build requested {expected_commit}, but {} records {installed_commit}",
+                marker.display()
             );
         }
         let payload_record = prefix.join(".hauksbee-simavr-payload.sha256");
         println!("cargo:rerun-if-changed={}", payload_record.display());
         let archive = lib_root.join("libsimavr.a");
         println!("cargo:rerun-if-changed={}", archive.display());
-        let mut payload_lines = Vec::new();
-        for header in installed_simavr_headers(&include_root.join("simavr")) {
-            println!("cargo:rerun-if-changed={}", header.display());
-            let relative = header.strip_prefix(prefix).unwrap_or_else(|_| {
-                panic!(
-                    "simavr header escaped {}: {}",
-                    prefix.display(),
-                    header.display()
-                )
-            });
-            payload_lines.push(format!("{}  {}", sha256(&header), relative.display()));
-        }
+        let mut payload_lines: Vec<String> = installed_simavr_headers(&include_root.join("simavr"))
+            .iter()
+            .map(|header| {
+                println!("cargo:rerun-if-changed={}", header.display());
+                let relative = header.strip_prefix(prefix).unwrap_or_else(|_| {
+                    panic!(
+                        "simavr header escaped {}: {}",
+                        prefix.display(),
+                        header.display()
+                    )
+                });
+                format!("{}  {}", sha256(header), relative.display())
+            })
+            .collect();
         payload_lines.push(format!("{}  lib/libsimavr.a", sha256(&archive)));
-        let expected_payload = payload_lines.join("\n");
-        let recorded_payload = std::fs::read_to_string(&payload_record)
-            .unwrap_or_else(|e| panic!("could not read {}: {e}", payload_record.display()));
-        if recorded_payload.trim() != expected_payload {
+        if read_marker(&payload_record) != payload_lines.join("\n") {
             panic!(
                 "simavr payload digest mismatch under {}: installed headers/archive are not the bytes recorded after the pinned build",
                 prefix.display()
@@ -147,18 +137,15 @@ fn main() {
     // Check the resolved layout up front and, if it is missing, fail with ONE
     // actionable message. `make install DESTDIR=<prefix>` puts the header at
     // <prefix>/include/simavr/sim_avr.h and the archive at <prefix>/lib/libsimavr.a.
-    let header = format!("{include_dir}/simavr/sim_avr.h");
-    let static_lib = format!("{lib_dir}/libsimavr.a");
-    let header_present = Path::new(&header).exists();
-    let lib_present = Path::new(&static_lib).exists();
-    if !header_present || !lib_present {
-        let mut missing = Vec::new();
-        if !header_present {
-            missing.push(format!("simavr headers (looked for {header})"));
-        }
-        if !lib_present {
-            missing.push(format!("libsimavr.a (looked for {static_lib})"));
-        }
+    let missing: Vec<String> = [
+        ("simavr headers", format!("{include_dir}/simavr/sim_avr.h")),
+        ("libsimavr.a", format!("{lib_dir}/libsimavr.a")),
+    ]
+    .into_iter()
+    .filter(|(_, path)| !Path::new(path).exists())
+    .map(|(what, path)| format!("{what} (looked for {path})"))
+    .collect();
+    if !missing.is_empty() {
         panic!(
             "\n\
              hauksbee-mcu: the `avr` co-sim feature needs a system libsimavr, but \
@@ -294,22 +281,21 @@ fn probe_static_preferred(name: &str, missing_msg: &str) {
         .args(["--variable=libdir", name])
         .output()
     {
-        if out.status.success() {
-            let libdir = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !libdir.is_empty() {
-                search_dirs.push(PathBuf::from(libdir));
-            }
+        let libdir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if out.status.success() && !libdir.is_empty() {
+            search_dirs.push(PathBuf::from(libdir));
         }
     }
-    for dir in [
-        "/usr/lib/x86_64-linux-gnu",
-        "/usr/lib/aarch64-linux-gnu",
-        "/usr/lib64",
-        "/usr/lib",
-        "/usr/local/lib",
-    ] {
-        search_dirs.push(PathBuf::from(dir));
-    }
+    search_dirs.extend(
+        [
+            "/usr/lib/x86_64-linux-gnu",
+            "/usr/lib/aarch64-linux-gnu",
+            "/usr/lib64",
+            "/usr/lib",
+            "/usr/local/lib",
+        ]
+        .map(PathBuf::from),
+    );
 
     for lib in &probe.libs {
         let archive = format!("lib{lib}.a");

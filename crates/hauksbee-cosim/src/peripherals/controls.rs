@@ -4,8 +4,8 @@
 //!
 //! Each control attaches to one or more nets and drives them through the same
 //! stamped-source machinery the rest of the engine uses (an ideal `Vsource`
-//! behind a series resistor, exactly the [`SupplyLeg`](crate::power_supply)
-//! and [`PinDriver`](crate::drivers) pattern). Updating the control between
+//! behind a series resistor, exactly the [`SupplyLeg`](hauksbee_bind::power_supply)
+//! and [`PinDriver`](hauksbee_bind::drivers) pattern). Updating the control between
 //! chunks is just mutating the source value or a switch resistance; MNA
 //! resolves contention with whatever else is on the net.
 //!
@@ -560,7 +560,7 @@ impl Peripheral for Stimulus {
 
 /// Stamp an ideal `Vsource` behind a 50 Ω series resistor on `net`, returning
 /// the `Vsource` device id (the controllable handle). Mirrors
-/// [`PinDriver`](crate::drivers) but as a free helper so the controls can own
+/// [`PinDriver`](hauksbee_bind::drivers) but as a free helper so the controls can own
 /// the source directly.
 fn stamp_driver(circuit: &mut Circuit, net: NodeId, tag: &str, v0: f64) -> DeviceId {
     let drv_node = circuit.node(&format!("__ctrl_{tag}"));

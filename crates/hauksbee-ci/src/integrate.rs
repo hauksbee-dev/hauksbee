@@ -461,12 +461,11 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
                     hook.display()
                 );
             };
-            let has_own_logic = !remainder.trim().is_empty() && remainder.trim() != "#!/bin/sh";
+            let has_own_logic = !is_bare_shebang(&remainder);
             if has_own_logic {
                 park_local_hook(&local, &remainder)?;
             }
-            fs::write(&hook, &script).with_context(|| format!("writing {}", hook.display()))?;
-            set_executable(&hook)?;
+            write_executable(&hook, &script)?;
             let note = if has_own_logic {
                 format!(
                     "refreshed {} and moved your own hook logic to {}, which now runs \
@@ -487,8 +486,7 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
         // gate would report success while gating nothing. Move it aside and
         // chain it first instead, the pre-commit framework's pattern.
         park_local_hook(&local, &text)?;
-        fs::write(&hook, &script).with_context(|| format!("writing {}", hook.display()))?;
-        set_executable(&hook)?;
+        write_executable(&hook, &script)?;
         return Ok(format!(
             "moved your existing hook to {} and installed {}, which runs the moved \
              hook FIRST and blocks the commit if it fails\n{}",
@@ -497,13 +495,32 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
             install_next_steps(&root)
         ));
     }
-    fs::write(&hook, plain_hook_script()).with_context(|| format!("writing {}", hook.display()))?;
-    set_executable(&hook)?;
+    write_executable(&hook, &plain_hook_script())?;
     Ok(format!(
         "installed {}\n{}",
         hook.display(),
         install_next_steps(&root)
     ))
+}
+
+/// Is this hook text nothing but (at most) a shebang: no logic worth keeping?
+fn is_bare_shebang(text: &str) -> bool {
+    let t = text.trim();
+    t.is_empty() || t == "#!/bin/sh"
+}
+
+/// Rejoin the surviving lines of an edited file, with trailing blank lines
+/// dropped and a final newline restored; empty when nothing survived.
+fn join_kept(kept: &[&str]) -> String {
+    let kept = kept
+        .iter()
+        .rposition(|l| !l.trim().is_empty())
+        .map_or(&kept[..0], |last| &kept[..=last]);
+    if kept.is_empty() {
+        String::new()
+    } else {
+        kept.join("\n") + "\n"
+    }
 }
 
 /// Index just past the last line of the `repos:` list that begins at
@@ -553,9 +570,7 @@ fn park_local_hook(local: &Path, text: &str) -> anyhow::Result<()> {
     if !parked.ends_with('\n') {
         parked.push('\n');
     }
-    fs::write(local, parked).with_context(|| format!("writing {}", local.display()))?;
-    set_executable(local)?;
-    Ok(())
+    write_executable(local, &parked)
 }
 
 /// Remove the hauksbee-ci block (the lines from `# {MARKER}` through
@@ -571,16 +586,8 @@ fn strip_hook_block(text: &str) -> Option<String> {
     if end < begin {
         return None;
     }
-    let mut kept: Vec<&str> = Vec::new();
-    kept.extend(&lines[..begin]);
-    kept.extend(&lines[end + 1..]);
-    while kept.last().is_some_and(|l| l.trim().is_empty()) {
-        kept.pop();
-    }
-    if kept.is_empty() {
-        return Some(String::new());
-    }
-    Some(kept.join("\n") + "\n")
+    let kept: Vec<&str> = [&lines[..begin], &lines[end + 1..]].concat();
+    Some(join_kept(&kept))
 }
 
 /// `hauksbee-ci hook uninstall`: undo whichever wiring [`hook_install`] did in
@@ -634,8 +641,7 @@ pub fn hook_uninstall(cwd: &Path) -> anyhow::Result<String> {
     if local.exists() {
         let parked =
             fs::read_to_string(&local).with_context(|| format!("reading {}", local.display()))?;
-        fs::write(&hook, parked).with_context(|| format!("writing {}", hook.display()))?;
-        set_executable(&hook)?;
+        write_executable(&hook, &parked)?;
         fs::remove_file(&local).with_context(|| format!("removing {}", local.display()))?;
         return Ok(format!(
             "removed the hauksbee-ci hook and restored your own hook from {} back to {}",
@@ -650,7 +656,7 @@ pub fn hook_uninstall(cwd: &Path) -> anyhow::Result<String> {
             hook.display()
         );
     };
-    if remainder.trim().is_empty() || remainder.trim() == "#!/bin/sh" {
+    if is_bare_shebang(&remainder) {
         fs::remove_file(&hook).with_context(|| format!("removing {}", hook.display()))?;
         return Ok(format!("removed {}", hook.display()));
     }
@@ -673,71 +679,29 @@ fn remove_pre_commit_entry(text: &str) -> String {
     }) else {
         return text.to_string();
     };
-    let indent = lines[start].len() - lines[start].trim_start().len();
-    let mut end = start + 1;
-    while end < lines.len() {
-        let line = lines[end];
-        if line.trim().is_empty() {
-            end += 1;
-            continue;
-        }
-        let line_indent = line.len() - line.trim_start().len();
-        // The entry ends at the next sibling list item or anything dedented
-        // to (or past) the entry's own level.
-        if line_indent <= indent && line.trim_start().starts_with("- ") {
-            break;
-        }
-        if line_indent < indent || (line_indent == indent && !line.trim_start().starts_with("- ")) {
-            break;
-        }
-        end += 1;
-    }
-    let mut kept: Vec<&str> = Vec::new();
-    kept.extend(&lines[..start]);
-    kept.extend(&lines[end..]);
-    while kept.last().is_some_and(|l| l.trim().is_empty()) {
-        kept.pop();
-    }
-    if kept.is_empty() {
-        return String::new();
-    }
-    kept.join("\n") + "\n"
+    let indent_of = |l: &str| l.len() - l.trim_start().len();
+    let indent = indent_of(lines[start]);
+    // The entry ends at the next sibling list item or anything dedented to
+    // (or past) the entry's own level; blank lines inside it are its own.
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| !line.trim().is_empty() && indent_of(line) <= indent)
+        .map_or(lines.len(), |i| start + 1 + i);
+    let kept: Vec<&str> = [&lines[..start], &lines[end..]].concat();
+    join_kept(&kept)
 }
 
-/// CLI entry for `hauksbee-ci hook uninstall`, kept here so main.rs stays a
-/// pure dispatch table. Exit 0 with the outcome, 2 on error, matching
-/// `hook install`'s contract.
-pub fn run_hook_uninstall() -> std::process::ExitCode {
-    let cwd = match std::env::current_dir() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("hauksbee-ci: cannot determine the current directory: {e}");
-            return std::process::ExitCode::from(2);
-        }
-    };
-    match hook_uninstall(&cwd) {
-        Ok(msg) => {
-            println!("{msg}");
-            std::process::ExitCode::from(0)
-        }
-        Err(e) => {
-            eprintln!("hauksbee-ci: {e}");
-            std::process::ExitCode::from(2)
-        }
+/// Write a hook script and mark it executable (on unix; elsewhere the write
+/// alone is what git needs).
+fn write_executable(path: &Path, text: &str) -> anyhow::Result<()> {
+    fs::write(path, text).with_context(|| format!("writing {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path)?.permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        fs::set_permissions(path, perms)?;
     }
-}
-
-#[cfg(unix)]
-fn set_executable(path: &Path) -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = fs::metadata(path)?.permissions();
-    perms.set_mode(perms.mode() | 0o111);
-    fs::set_permissions(path, perms)?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn set_executable(_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 

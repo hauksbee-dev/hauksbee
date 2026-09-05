@@ -25,7 +25,7 @@ attacking:
   disk on a modest upload, or crash the process is in scope.
 - **The board extractors** (`hauksbee-extract`): KiCad, Eagle, Altium, IPC-D-356,
   and gerber parsing. These read untrusted binary and text.
-- **Firmware ingestion** (`hauksbee-engine/src/firmware_input.rs`), including
+- **Firmware ingestion** (`hauksbee-bind/src/firmware_input.rs`), including
   zip extraction and the PlatformIO build path, which can invoke a toolchain.
 - **The CI spec parser** (`hauksbee-ci`), since specs arrive from repositories.
 

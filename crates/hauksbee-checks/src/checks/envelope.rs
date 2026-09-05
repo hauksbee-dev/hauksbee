@@ -12,7 +12,7 @@ use hauksbee_extract::{
 };
 use hauksbee_models::{EnvelopeSeverity, ModelEntry, ModelLibrary, OperatingEnvelope};
 
-use crate::binder::{is_ground, power_rail_voltage, resolve};
+use hauksbee_bind::binder::{is_ground, power_rail_voltage, resolve};
 
 /// The complete DC interval a net can present during normal operation.
 #[derive(Debug, Clone, Copy, PartialEq)]

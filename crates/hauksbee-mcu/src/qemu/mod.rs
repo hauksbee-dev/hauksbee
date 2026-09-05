@@ -83,7 +83,11 @@ mod qmp;
 // rather than the backend.
 pub use process::{find_qemu, is_available, QemuArch, QemuProcess};
 
-use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent, UartSocket};
+use crate::external::{
+    adc_count, builtin_configs, free_ports, nonempty_or, poll_state_mcu_methods, I2cTxn, PollState,
+    UartSocket,
+};
+use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 use anyhow::{bail, ensure, Context, Result};
 use gdb::GdbStub;
 use qmp::Qmp;
@@ -298,30 +302,13 @@ pub enum GpioOutputObservation {
 }
 
 impl QemuConfig {
-    // ── Built-in parts ──────────────────────────────────────────────
-    //
-    // Named accessors over the shipped `db/mcu/*.soc.toml` descriptors
-    // (embedded via `include_str!`): the mailbox layout, arch and clocking all
-    // live in the TOML, and a fresh part is addable purely as data via
-    // [`crate::SocConfig::resolve`]. `.expect` is correct here -- a shipped
-    // descriptor failing to load is a build bug tests/soc_descriptors.rs catches.
-
-    /// Classic ESP32 (Xtensa LX6). See `db/mcu/esp32.soc.toml`.
-    pub fn esp32() -> Self {
-        Self::from_soc_toml(include_str!("../../db/mcu/esp32.soc.toml"))
-            .expect("built-in esp32.soc.toml is valid")
-    }
-
-    /// ESP32-S3 (Xtensa LX7). See `db/mcu/esp32s3.soc.toml`.
-    pub fn esp32s3() -> Self {
-        Self::from_soc_toml(include_str!("../../db/mcu/esp32s3.soc.toml"))
-            .expect("built-in esp32s3.soc.toml is valid")
-    }
-
-    /// ESP32-C3 (RISC-V RV32IMC). See `db/mcu/esp32c3.soc.toml`.
-    pub fn esp32c3() -> Self {
-        Self::from_soc_toml(include_str!("../../db/mcu/esp32c3.soc.toml"))
-            .expect("built-in esp32c3.soc.toml is valid")
+    builtin_configs! {
+        /// Classic ESP32 (Xtensa LX6). See `db/mcu/esp32.soc.toml`.
+        esp32 => "qemu:esp32";
+        /// ESP32-S3 (Xtensa LX7). See `db/mcu/esp32s3.soc.toml`.
+        esp32s3 => "qemu:esp32s3";
+        /// ESP32-C3 (RISC-V RV32IMC). See `db/mcu/esp32c3.soc.toml`.
+        esp32c3 => "qemu:esp32c3";
     }
 }
 
@@ -413,16 +400,6 @@ fn validate_flash_image_arch(flash_image: &Path, expected: u16, mcu_label: &str)
     crate::elf::validate_arch(report, expected, mcu_label)
 }
 
-/// `s` unless it is empty, else the fallback: error messages that embed a
-/// captured stderr must say "nothing" rather than trail off into blank space.
-fn nonempty_or<'a>(s: &'a str, fallback: &'a str) -> &'a str {
-    if s.is_empty() {
-        fallback
-    } else {
-        s
-    }
-}
-
 /// Refuse a merged flash image whose 2nd-stage bootloader is not at the offset
 /// this machine's ROM reads (0x1000 on esp32/esp32s2, 0x0 on esp32s3/esp32c3).
 ///
@@ -474,23 +451,6 @@ fn validate_bootloader_magic(image: &Path, machine: &str) -> Result<()> {
          header instead of running. {hint}",
         image.display()
     );
-}
-
-/// Allocate three distinct free TCP ports (QMP, gdbstub, UART), holding all
-/// listeners until every number is read so the OS cannot reissue one to
-/// another. QEMU binds each shortly after we release them.
-fn free_port_triple() -> Result<(u16, u16, u16)> {
-    let a = std::net::TcpListener::bind(("127.0.0.1", 0)).context("alloc QMP port")?;
-    let b = std::net::TcpListener::bind(("127.0.0.1", 0)).context("alloc gdb port")?;
-    let c = std::net::TcpListener::bind(("127.0.0.1", 0)).context("alloc uart port")?;
-    let pa = a.local_addr()?.port();
-    let pb = b.local_addr()?.port();
-    let pc = c.local_addr()?.port();
-    anyhow::ensure!(
-        pa != pb && pb != pc && pa != pc,
-        "port allocator returned a collision"
-    );
-    Ok((pa, pb, pc))
 }
 
 /// Wall-time floor applied to every run window while the guest is BOOTING.
@@ -549,14 +509,9 @@ pub struct QemuBackend {
     /// gdbserver could not be attached, input injection is disabled but the rest
     /// of the backend (UART, GPIO output, stepping) still works.
     gdb: Option<GdbStub>,
-    uart: UartSocket,
-    /// Host bytes not accepted by the emulator UART socket. Sticky and exposed
-    /// through `uart_rx_overflow` so a dead transport cannot look clean.
-    uart_rx_failed: u64,
-    /// Bytes accepted by the host socket since the last successful guest
-    /// advance. They are not claimed as presented to the emulated UART until
-    /// that next lockstep window completes.
-    uart_rx_inflight: usize,
+    /// UART bridge, callbacks, wired-bank hint and cycle counter shared with
+    /// the other poll-based backend.
+    core: PollState,
     process: QemuProcess,
     /// When the caller handed us a bare app ELF, this is the merged flash
     /// image built from it (see [`flashimage`]); QEMU boots from this file, so
@@ -573,18 +528,11 @@ pub struct QemuBackend {
     gpio_output_observation: GpioOutputObservation,
     /// Current driven IN register per bank letter (what we poke for inputs).
     in_shadow: HashMap<char, u32>,
-    /// If set, only these bank letters are polled each chunk.
-    active_ports: Option<Vec<char>>,
-    on_pin_change: Option<Box<dyn FnMut(PinId, bool, u64) + Send>>,
-    on_uart: Option<Box<dyn FnMut(u8) + Send>>,
-    firmware_loaded: bool,
     /// True once mailbox-aware firmware raises [`mailbox::MAGIC`], or ordinary
     /// firmware produces an enabled real-GPIO transition on the capability-
     /// probed patched model. Gates the boot-only run-window floor (see
     /// [`run_window`]); without either signal the conservative floor remains.
     boot_complete: bool,
-    /// Virtual time advanced so far, in cycles-equivalent.
-    cycles: u64,
     /// Resolved QOM path of the emulated I2C device at each modeled sensor
     /// address (`None` once searched and not found, so we do not re-walk QMP
     /// every frame). Populated lazily by [`Mcu::set_i2c_device_temperature`].
@@ -601,9 +549,9 @@ pub struct QemuBackend {
     /// Last serviced I2C / SPI request sequence numbers.
     i2c_serviced_seq: u32,
     spi_serviced_seq: u32,
-    /// Open I2C transaction state for Start/Stop synthesis: `(addr, read)`.
-    /// Mirrors the Renode bridge's `I2cBridgeState::ensure_mode` semantics.
-    i2c_ring_active: Option<(u8, bool)>,
+    /// Open I2C transaction for Start/Stop synthesis (the same state machine
+    /// the Renode bridge runs).
+    i2c_txn: I2cTxn,
     /// Shadow of the ADC_MASK word (channels injected so far).
     adc_mask_shadow: u32,
     /// One-time warning flag for ADC injection without a gdbstub.
@@ -673,7 +621,7 @@ impl QemuBackend {
             (flash_image.to_path_buf(), None)
         };
 
-        let (qmp_port, gdb_port, uart_port) = free_port_triple()?;
+        let [qmp_port, gdb_port, uart_port] = free_ports()?;
 
         let mut process = QemuProcess::spawn(
             config.arch,
@@ -688,34 +636,28 @@ impl QemuBackend {
         // connect using `human-monitor-command gdbserver`, which attaches a stub
         // without restarting. That keeps the spawn argument list stable.
 
+        let died = |process: &QemuProcess, phase: &str| {
+            anyhow::anyhow!(
+                "Espressif QEMU exited {phase} booting {} on machine '{}'. QEMU said: {}",
+                flash_image.display(),
+                config.machine,
+                nonempty_or(&process.stderr_output(), "(nothing on stderr)"),
+            )
+        };
         // Give QEMU a moment; if it died immediately the image/args were bad,
         // and its own stderr says why (bad drive size, unknown machine, ...).
         std::thread::sleep(Duration::from_millis(150));
         if process.has_exited() {
-            bail!(
-                "Espressif QEMU exited immediately booting {} on machine '{}'. \
-                 QEMU said: {}",
-                flash_image.display(),
-                config.machine,
-                nonempty_or(&process.stderr_output(), "(nothing on stderr)"),
-            );
+            return Err(died(&process, "immediately"));
         }
 
-        let mut qmp = match Qmp::connect(("127.0.0.1", qmp_port), QemuProcess::startup_timeout()) {
+        let mut qmp = match Qmp::connect(qmp_port, QemuProcess::startup_timeout()) {
             Ok(q) => q,
+            // Losing the control socket almost always means QEMU died between
+            // the spawn check and the handshake; report the death and QEMU's
+            // stderr rather than the raw socket error.
+            Err(_) if process.has_exited() => return Err(died(&process, "while")),
             Err(e) => {
-                // Losing the control socket almost always means QEMU died
-                // between the spawn check and the handshake; report the death
-                // and QEMU's stderr rather than the raw socket error.
-                if process.has_exited() {
-                    bail!(
-                        "Espressif QEMU exited while booting {} on machine '{}'. \
-                         QEMU said: {}",
-                        flash_image.display(),
-                        config.machine,
-                        nonempty_or(&process.stderr_output(), "(nothing on stderr)"),
-                    );
-                }
                 return Err(e).with_context(|| {
                     format!(
                         "connecting to the QEMU control (QMP) socket for machine \
@@ -728,12 +670,7 @@ impl QemuBackend {
         qmp.set_timeout(Duration::from_secs(20));
         // The guest is running at boot; pause it so the first chunk starts from a
         // known stopped state (the lockstep is cont -> window -> stop).
-        if let Err(e) = qmp.stop() {
-            return match process.ensure_running("performing the initial QMP stop") {
-                Err(death) => Err(death).context(format!("initial QMP stop failed: {e:#}")),
-                Ok(()) => Err(e).context("performing the initial QMP stop"),
-            };
-        }
+        checked_control(&mut process, "initial stop", qmp.stop())?;
 
         // Attach a gdbstub for GPIO-input memory writes. Best-effort: if it fails
         // we keep going with input injection disabled (the common demo path
@@ -793,28 +730,21 @@ impl QemuBackend {
             config,
             qmp,
             gdb,
-            uart,
-            uart_rx_failed: 0,
-            uart_rx_inflight: 0,
+            core: PollState::new("QEMU", Some(uart)),
             process,
             _flash_temp: flash_temp,
             last_out,
             last_enable,
             gpio_output_observation,
             in_shadow,
-            active_ports: None,
-            on_pin_change: None,
-            on_uart: None,
-            firmware_loaded: true, // booted from the image
             boot_complete: false,
-            cycles: 0,
             i2c_temp_paths: HashMap::new(),
             on_i2c: None,
             on_spi: None,
             bus_magic_seen: false,
             i2c_serviced_seq: 0,
             spi_serviced_seq: 0,
-            i2c_ring_active: None,
+            i2c_txn: I2cTxn::default(),
             adc_mask_shadow: 0,
             adc_no_gdb_warned: false,
             digital_no_gdb_warned: false,
@@ -827,8 +757,28 @@ impl QemuBackend {
         Self::new(QemuConfig::esp32(), flash_image)
     }
 
-    /// Read one bank's selected output word, preferring QMP `xp` and falling
-    /// back to the gdbstub on a parse failure. The live QOM capability probe,
+    /// Read one GPIO register word, preferring QMP `xp` and falling back to
+    /// the gdbstub, with a dead child reported as such rather than as a
+    /// socket error.
+    fn read_gpio_word(&mut self, what: &str, addr: u32) -> Result<u32> {
+        let qmp_err = match self.qmp.read_u32(addr) {
+            Ok(v) => return Ok(v),
+            Err(e) => e,
+        };
+        self.process
+            .ensure_running(&format!("reading a GPIO {what} word over QMP"))
+            .with_context(|| format!("QMP GPIO {what} read at {addr:#x} failed: {qmp_err:#}"))?;
+        match self.gdb.as_mut() {
+            Some(gdb) => gdb.read_u32(addr).with_context(|| {
+                format!("QMP GPIO {what} read at {addr:#x} failed ({qmp_err:#}); gdb fallback failed too")
+            }),
+            None => Err(qmp_err).context(format!(
+                "QMP GPIO {what} read at {addr:#x} failed and no gdbstub fallback is attached"
+            )),
+        }
+    }
+
+    /// Read one bank's selected output word. The live QOM capability probe,
     /// not the configured address alone, decides between peripheral and
     /// mailbox so an unpatched QEMU never yields a false zero register trace.
     fn read_out(&mut self, bank: &GpioBank) -> Result<u32> {
@@ -836,126 +786,42 @@ impl QemuBackend {
             GpioOutputObservation::PeripheralRegisters => bank.peripheral_out_reg,
             GpioOutputObservation::FirmwareMailbox => bank.out_reg,
         };
-        match self.qmp.read_u32(addr) {
-            Ok(v) => Ok(v),
-            Err(qmp_err) => {
-                if let Err(death) = self
-                    .process
-                    .ensure_running("reading a GPIO output word over QMP")
-                {
-                    return Err(death)
-                        .context(format!("QMP GPIO read at {:#x} failed: {qmp_err:#}", addr));
-                }
-                match self.gdb.as_mut() {
-                    Some(gdb) => gdb.read_u32(addr).with_context(|| {
-                        format!(
-                            "QMP GPIO read at {:#x} failed ({qmp_err:#}); \
-                             gdb fallback failed too",
-                            addr
-                        )
-                    }),
-                    None => Err(qmp_err).context(format!(
-                        "QMP GPIO read at {:#x} failed and no gdbstub fallback is attached",
-                        addr
-                    )),
-                }
-            }
-        }
-    }
-
-    /// Read one real GPIO ENABLE word after the paired QOM capability succeeds.
-    fn read_enable(&mut self, bank: &GpioBank) -> Result<u32> {
-        let addr = bank.peripheral_enable_reg;
-        match self.qmp.read_u32(addr) {
-            Ok(v) => Ok(v),
-            Err(qmp_err) => {
-                if let Err(death) = self
-                    .process
-                    .ensure_running("reading a GPIO enable word over QMP")
-                {
-                    return Err(death).context(format!(
-                        "QMP GPIO enable read at {addr:#x} failed: {qmp_err:#}"
-                    ));
-                }
-                match self.gdb.as_mut() {
-                    Some(gdb) => gdb.read_u32(addr).with_context(|| {
-                        format!(
-                            "QMP GPIO enable read at {addr:#x} failed ({qmp_err:#}); gdb fallback failed too"
-                        )
-                    }),
-                    None => Err(qmp_err).context(format!(
-                        "QMP GPIO enable read at {addr:#x} failed and no gdbstub fallback is attached"
-                    )),
-                }
-            }
-        }
+        self.read_gpio_word("output", addr)
     }
 
     /// Poll the relevant banks' OUT/ENABLE registers, diff against the
     /// snapshot, and fire per-bit edges for pins actually configured as output.
     fn poll_gpio_edges(&mut self) -> Result<bool> {
-        let banks: Vec<GpioBank> = match &self.active_ports {
-            Some(active) => self
-                .config
-                .banks
-                .iter()
-                .filter(|b| active.contains(&b.letter))
-                .cloned()
-                .collect(),
-            None => self.config.banks.clone(),
-        };
-        // Wall-clock-derived poll boundary time, in cycles-equivalent. QEMU has
-        // no icount here, so this is coarse and every edge this poll shares it;
-        // `cycle_exact()` is false. Snapshot before the callback borrow.
-        let cyc = self.cycles;
+        let banks: Vec<GpioBank> = self
+            .config
+            .banks
+            .iter()
+            .filter(|b| self.core.polls(b.letter))
+            .cloned()
+            .collect();
         let mut observed_change = false;
         for bank in &banks {
             let new = self.read_out(bank)?;
-            let enable =
-                if self.gpio_output_observation == GpioOutputObservation::PeripheralRegisters {
-                    self.read_enable(bank)?
-                } else {
-                    // Mailbox firmware publishes only levels. Preserve the old
-                    // behavior while reporting direction as unobservable.
-                    u32::MAX
-                };
-            let prev = *self.last_out.get(&bank.letter).unwrap_or(&0);
-            let prev_enable = *self.last_enable.get(&bank.letter).unwrap_or(&0);
-            let level_changed = new ^ prev;
-            if level_changed != 0 || enable != prev_enable {
+            let enable = match self.gpio_output_observation {
+                GpioOutputObservation::PeripheralRegisters => {
+                    self.read_gpio_word("enable", bank.peripheral_enable_reg)?
+                }
+                // Mailbox firmware publishes only levels. Preserve the old
+                // behavior while reporting direction as unobservable.
+                GpioOutputObservation::FirmwareMailbox => u32::MAX,
+            };
+            let prev = self.last_out.get(&bank.letter).copied().unwrap_or(0);
+            let prev_enable = self.last_enable.get(&bank.letter).copied().unwrap_or(0);
+            if new != prev || enable != prev_enable {
                 observed_change = true;
                 let changed = observable_gpio_changes(prev, new, prev_enable, enable);
-                if let Some(cb) = &mut self.on_pin_change {
-                    for bit in 0..bank.width {
-                        if (changed >> bit) & 1 != 0 {
-                            let high = (new >> bit) & 1 != 0;
-                            cb(
-                                PinId {
-                                    port: bank.letter,
-                                    bit,
-                                },
-                                high,
-                                cyc,
-                            );
-                        }
-                    }
-                }
+                self.core
+                    .publish_edges(bank.letter, bank.width, changed, new);
                 self.last_out.insert(bank.letter, new);
                 self.last_enable.insert(bank.letter, enable);
             }
         }
         Ok(observed_change)
-    }
-
-    /// Drain UART bytes the firmware emitted and dispatch them.
-    fn pump_uart_out(&mut self) -> Result<()> {
-        let bytes = self.uart.drain()?;
-        if let Some(cb) = &mut self.on_uart {
-            for b in bytes {
-                cb(b);
-            }
-        }
-        Ok(())
     }
 
     /// Advance the guest by ~`seconds` of virtual time, then exchange state.
@@ -972,26 +838,16 @@ impl QemuBackend {
     /// interval exactly, so steady-state chunks stay leveled with the analog
     /// solve and the other MCUs (R8 #5).
     fn run_seconds(&mut self, seconds: f64) -> Result<()> {
-        if !self.firmware_loaded {
+        if !self.core.firmware_loaded {
             bail!("no firmware image booted in the QEMU machine");
         }
         // Forget any RESUME/STOP pair from the previous chunk BEFORE resuming,
         // so this chunk's measurement can never be a stale one.
         self.qmp.clear_run_events();
-        if let Err(e) = self.qmp.cont() {
-            return match self.process.ensure_running("servicing QMP cont") {
-                Err(death) => Err(death).context(format!("QMP cont failed: {e:#}")),
-                Ok(()) => Err(e).context("qmp cont"),
-            };
-        }
+        checked_control(&mut self.process, "cont", self.qmp.cont())?;
         let window = run_window(seconds, self.boot_complete);
         std::thread::sleep(window);
-        if let Err(e) = self.qmp.stop() {
-            return match self.process.ensure_running("servicing QMP stop") {
-                Err(death) => Err(death).context(format!("QMP stop failed: {e:#}")),
-                Ok(()) => Err(e).context("qmp stop"),
-            };
-        }
+        checked_control(&mut self.process, "stop", self.qmp.stop())?;
 
         // Credit cycles from the window the guest ACTUALLY ran, not the
         // requested `seconds` and not even the slept `window`: QEMU stamps its
@@ -1012,7 +868,8 @@ impl QemuBackend {
             .measured_run_window(Duration::from_millis(200))
             .filter(|m| *m >= window)
             .unwrap_or(window);
-        self.cycles += (credited.as_secs_f64() * self.config.frequency_hz as f64).round() as u64;
+        self.core
+            .credit(credited.as_secs_f64(), self.config.frequency_hz);
 
         // Boot-complete detection (one word read per chunk, only until seen):
         // the demo firmware writes MAGIC_VALUE into the mailbox as the first
@@ -1031,7 +888,7 @@ impl QemuBackend {
         // Service the mailbox bus cells while the guest is paused,
         // so a firmware spin-waiting on RSP_SEQ proceeds next chunk.
         self.service_bus_mailbox()?;
-        self.pump_uart_out()?;
+        self.core.pump_uart_out(false)?;
         // Unmodified firmware deliberately has no mailbox MAGIC. With the
         // patched GPIO model, a real enabled peripheral transition is direct
         // guest activity and is therefore a valid end-of-boot signal;
@@ -1046,7 +903,7 @@ impl QemuBackend {
         // even if a buffered/fallback read happened to return stale state.
         self.process
             .ensure_running("completing the QEMU co-simulation chunk")?;
-        self.uart_rx_inflight = 0;
+        self.core.uart_rx_inflight = 0;
         Ok(())
     }
 
@@ -1135,19 +992,19 @@ impl QemuBackend {
     /// Renode bridge produce (the state machine mirrors the Renode bridge's
     /// `I2cBridgeState::ensure_mode`).
     fn service_i2c_cell(&mut self) -> Result<()> {
-        let seq = self.read_guest_u32(mailbox::I2C_REQ_SEQ)?;
-        if seq == 0 || seq == self.i2c_serviced_seq {
+        let Some((seq, op, len)) = self.pending_request(
+            "I2C",
+            [
+                mailbox::I2C_REQ_SEQ,
+                mailbox::I2C_REQ_OP,
+                mailbox::I2C_REQ_LEN,
+            ],
+            self.i2c_serviced_seq,
+        )?
+        else {
             return Ok(());
-        }
-        let op = self.read_guest_u32(mailbox::I2C_REQ_OP)?;
+        };
         let addr = self.read_guest_u32(mailbox::I2C_REQ_ADDR)? as u8;
-        let len = self.read_guest_u32(mailbox::I2C_REQ_LEN)?;
-        ensure!(
-            len <= mailbox::BUS_DATA_MAX,
-            "QEMU I2C mailbox request too large: {len} bytes (max {})",
-            mailbox::BUS_DATA_MAX
-        );
-        let len = len as usize;
         let payload = if op == mailbox::I2C_OP_WRITE && len != 0 {
             self.read_guest_bytes(mailbox::I2C_REQ_DATA, len)?
         } else {
@@ -1157,39 +1014,18 @@ impl QemuBackend {
         // Dispatch with the callback taken out of `self` so the borrow does
         // not pin the control channels.
         let mut cb = self.on_i2c.take().expect("checked by caller");
-        let mut active = self.i2c_ring_active.take();
-        // Mirrors the Renode bridge's `I2cBridgeState::ensure_mode` exactly:
-        // switching TO write stops any open transaction; switching to read on
-        // the SAME address is a repeated START (no Stop, a register-read
-        // slave must not see its transaction boundary mid-read); a read on a
-        // DIFFERENT address stops the old transaction first.
-        let ensure_mode = |active: &mut Option<(u8, bool)>, cb: &mut I2cCb, a: u8, read: bool| {
-            if *active != Some((a, read)) {
-                if !read {
-                    if let Some((prev, _)) = active.take() {
-                        let _ = cb(I2cEvent::Stop { addr: prev });
-                    }
-                } else if let Some((prev, _)) = *active {
-                    if prev != a {
-                        let _ = cb(I2cEvent::Stop { addr: prev });
-                        *active = None;
-                    }
-                }
-                let _ = cb(I2cEvent::Start { addr: a, read });
-                *active = Some((a, read));
-            }
-        };
+        let txn = &mut self.i2c_txn;
         let mut reply: Vec<u8> = Vec::new();
         let dispatch = (|| -> Result<()> {
             match op {
                 mailbox::I2C_OP_WRITE => {
-                    ensure_mode(&mut active, &mut cb, addr, false);
+                    txn.ensure(addr, false, &mut cb);
                     for data in payload {
                         let _ = cb(I2cEvent::Write { addr, data });
                     }
                 }
                 mailbox::I2C_OP_READ => {
-                    ensure_mode(&mut active, &mut cb, addr, true);
+                    txn.ensure(addr, true, &mut cb);
                     for _ in 0..len {
                         // `None` is the model layer's "no slave / NACK"; 0xFF
                         // is the level an open-drain bus floats to (the same
@@ -1197,17 +1033,12 @@ impl QemuBackend {
                         reply.push(cb(I2cEvent::Read { addr }).unwrap_or(0xFF));
                     }
                 }
-                mailbox::I2C_OP_STOP => {
-                    if let Some((prev, _)) = active.take() {
-                        let _ = cb(I2cEvent::Stop { addr: prev });
-                    }
-                }
+                mailbox::I2C_OP_STOP => txn.stop(&mut cb),
                 other => bail!("QEMU I2C mailbox: unknown op {other}"),
             }
             Ok(())
         })();
         self.on_i2c = Some(cb);
-        self.i2c_ring_active = active;
         // The request is SERVICED once dispatched, acknowledged or not: mark
         // it before the response writes so a caller that retries after a
         // failed write cannot replay the byte events into a stateful slave
@@ -1215,30 +1046,25 @@ impl QemuBackend {
         // spin-wait then times out rather than reading a half-written reply).
         self.i2c_serviced_seq = seq;
         dispatch?;
-
-        if !reply.is_empty() {
-            self.write_guest_bytes(mailbox::I2C_RSP_DATA, &reply)?;
-        }
-        self.write_guest_u32(mailbox::I2C_RSP_SEQ, seq)?;
-        Ok(())
+        self.reply(mailbox::I2C_RSP_DATA, mailbox::I2C_RSP_SEQ, &reply, seq)
     }
 
     /// Service one pending SPI request: a byte-transfer burst (one
     /// [`SpiEvent`] per byte, MISO bytes returned in the response cell) or a
     /// chip-select deassert.
     fn service_spi_cell(&mut self) -> Result<()> {
-        let seq = self.read_guest_u32(mailbox::SPI_REQ_SEQ)?;
-        if seq == 0 || seq == self.spi_serviced_seq {
+        let Some((seq, op, len)) = self.pending_request(
+            "SPI",
+            [
+                mailbox::SPI_REQ_SEQ,
+                mailbox::SPI_REQ_OP,
+                mailbox::SPI_REQ_LEN,
+            ],
+            self.spi_serviced_seq,
+        )?
+        else {
             return Ok(());
-        }
-        let op = self.read_guest_u32(mailbox::SPI_REQ_OP)?;
-        let len = self.read_guest_u32(mailbox::SPI_REQ_LEN)?;
-        ensure!(
-            len <= mailbox::BUS_DATA_MAX,
-            "QEMU SPI mailbox request too large: {len} bytes (max {})",
-            mailbox::BUS_DATA_MAX
-        );
-        let len = len as usize;
+        };
         let mosi = if op == mailbox::SPI_OP_TRANSFER && len != 0 {
             self.read_guest_bytes(mailbox::SPI_REQ_DATA, len)?
         } else {
@@ -1247,7 +1073,7 @@ impl QemuBackend {
 
         // Coarse poll-boundary stamp, the same tier the pin edges carry
         // (`cycle_exact()` is false on this backend).
-        let cyc = self.cycles;
+        let cyc = self.core.cycles;
         let mut cb = self.on_spi.take().expect("checked by caller");
         let mut miso: Vec<u8> = Vec::new();
         let dispatch = (|| -> Result<()> {
@@ -1277,12 +1103,39 @@ impl QemuBackend {
         // events into a stateful slave model on a retry after a failed write.
         self.spi_serviced_seq = seq;
         dispatch?;
+        self.reply(mailbox::SPI_RSP_DATA, mailbox::SPI_RSP_SEQ, &miso, seq)
+    }
 
-        if !miso.is_empty() {
-            self.write_guest_bytes(mailbox::SPI_RSP_DATA, &miso)?;
+    /// The pending request in a mailbox cell as `(seq, op, len)`, or `None`
+    /// when the firmware has raised nothing since `serviced`. `cell` is the
+    /// cell's `[REQ_SEQ, REQ_OP, REQ_LEN]` words.
+    fn pending_request(
+        &mut self,
+        bus: &str,
+        cell: [u32; 3],
+        serviced: u32,
+    ) -> Result<Option<(u32, u32, usize)>> {
+        let seq = self.read_guest_u32(cell[0])?;
+        if seq == 0 || seq == serviced {
+            return Ok(None);
         }
-        self.write_guest_u32(mailbox::SPI_RSP_SEQ, seq)?;
-        Ok(())
+        let op = self.read_guest_u32(cell[1])?;
+        let len = self.read_guest_u32(cell[2])?;
+        ensure!(
+            len <= mailbox::BUS_DATA_MAX,
+            "QEMU {bus} mailbox request too large: {len} bytes (max {})",
+            mailbox::BUS_DATA_MAX
+        );
+        Ok(Some((seq, op, len as usize)))
+    }
+
+    /// Write the reply bytes (if any) into a response cell and acknowledge
+    /// `seq`, which releases the firmware's spin-wait.
+    fn reply(&mut self, data_addr: u32, seq_addr: u32, reply: &[u8], seq: u32) -> Result<()> {
+        if !reply.is_empty() {
+            self.write_guest_bytes(data_addr, reply)?;
+        }
+        self.write_guest_u32(seq_addr, seq)
     }
 
     /// Read a guest physical word over the control channels (QMP `xp`, gdbstub
@@ -1335,6 +1188,19 @@ impl QemuBackend {
             }
         }
         None
+    }
+}
+
+/// A QMP run-control result with a dead child reported as the cause: the
+/// control socket failing almost always means QEMU exited, and its exit
+/// status plus stderr explain far more than a bare socket error.
+fn checked_control(process: &mut QemuProcess, what: &str, result: Result<()>) -> Result<()> {
+    let Err(e) = result else {
+        return Ok(());
+    };
+    match process.ensure_running(&format!("servicing QMP {what}")) {
+        Err(death) => Err(death).context(format!("QMP {what} failed: {e:#}")),
+        Ok(()) => Err(e).context(format!("qmp {what}")),
     }
 }
 
@@ -1398,18 +1264,12 @@ impl Mcu for QemuBackend {
         // slack (and by the boot floor/cap while booting), and the trait
         // promises "cycles actually executed". The delta is what keeps this
         // return consistent with `current_cycle()` after the call.
-        let before = self.cycles;
+        let before = self.core.cycles;
         self.run_seconds(seconds)?;
-        Ok(self.cycles - before)
+        Ok(self.core.cycles - before)
     }
 
-    fn run_micros(&mut self, us: u64) -> Result<()> {
-        self.run_seconds(us as f64 / 1_000_000.0)
-    }
-
-    fn frequency(&self) -> u64 {
-        self.config.frequency_hz
-    }
+    poll_state_mcu_methods!(core);
 
     /// Backend-wide, not per-part: the ESP32 family's timer-group watchdogs are
     /// disabled by a `-global` on the QEMU command line
@@ -1550,43 +1410,6 @@ impl Mcu for QemuBackend {
         }
     }
 
-    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
-        self.on_pin_change = Some(cb);
-    }
-
-    fn current_cycle(&self) -> u64 {
-        self.cycles
-    }
-
-    fn cycle_exact(&self) -> bool {
-        // Wall-clock-derived virtual time, no icount: GPIO is observed by diffing
-        // a RAM-mailbox output word per chunk, so edge ordering is coarse.
-        false
-    }
-
-    fn uart_write(&mut self, bytes: &[u8]) {
-        let result = self.uart.write_bytes(bytes);
-        let accepted = crate::traits::account_uart_injection(
-            "QEMU",
-            bytes.len(),
-            result,
-            &mut self.uart_rx_failed,
-        );
-        self.uart_rx_inflight = self.uart_rx_inflight.saturating_add(accepted);
-    }
-
-    fn uart_rx_overflow(&self) -> u64 {
-        self.uart_rx_failed
-    }
-
-    fn uart_rx_pending(&self) -> usize {
-        self.uart_rx_inflight
-    }
-
-    fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>) {
-        self.on_uart = Some(cb);
-    }
-
     fn on_i2c(&mut self, cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>) {
         // The Espressif QEMU controller exposes no host-byte hook for its RX
         // FIFO, so byte events cannot be intercepted from the emulated I2C
@@ -1630,18 +1453,6 @@ impl Mcu for QemuBackend {
         self.on_spi = Some(cb);
     }
 
-    fn state(&self) -> McuState {
-        McuState {
-            pc: 0,
-            cycles: self.cycles,
-            sleeping: false,
-            // QEMU's QMP poll path carries no terminal-CPU signal here;
-            // conservatively report "still running" rather than guessing.
-            done: false,
-            crashed: false,
-        }
-    }
-
     fn set_active_ports(&mut self, ports: &[char]) {
         let known: Vec<char> = self
             .config
@@ -1672,53 +1483,13 @@ impl Mcu for QemuBackend {
                 );
             }
         }
-        self.active_ports = Some(known);
+        self.core.active_ports = Some(known);
     }
-}
-
-/// Quantize a voltage to an n-bit ADC code. An n-bit converter's transfer
-/// function is round(frac * 2^n) saturated at 2^n - 1: multiply by
-/// (`max_count` + 1) then clamp to `max_count`. Multiplying by `max_count`
-/// itself (2^n - 1) systematically under-reads sub-full-scale voltages by up to
-/// ~1 LSB and only reaches the top code at exactly full scale. Kept identical to
-/// renode's `adc_count` and the engine SPI ADC path so every backend quantizes
-/// a given voltage to the same code.
-fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
-    if !(full_scale_volts > 0.0) {
-        return 0;
-    }
-    let frac = (volts / full_scale_volts).clamp(0.0, 1.0);
-    ((frac * (f64::from(max_count) + 1.0)).round() as u32).min(max_count)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// R14: the QEMU ADC injection must use the 2^n transfer function (like
-    /// renode and the SPI path), not 2^n-1 which under-reads by up to ~1 LSB.
-    #[test]
-    fn adc_count_uses_2n_scaling() {
-        let max = mailbox::ADC_MAX_COUNT; // 4095 (12-bit)
-        let fs = mailbox::ADC_FULL_SCALE_VOLTS;
-        assert_eq!(adc_count(0.0, fs, max), 0);
-        assert_eq!(adc_count(fs, fs, max), max, "full scale reads the top code");
-        assert_eq!(
-            adc_count(2.0 * fs, fs, max),
-            max,
-            "over-range clamps to the top code"
-        );
-        // Near-full-scale: 2^n scaling rounds up to the top code where a
-        // 2^n-1 scaling (round(0.99976*4095)) sticks one code low at 4094.
-        let near_full = fs * (f64::from(max) - 0.5) / f64::from(max);
-        assert_eq!(
-            adc_count(near_full, fs, max),
-            max,
-            "the top LSB band reaches 4095"
-        );
-        // A guard against a zero/negative reference.
-        assert_eq!(adc_count(1.0, 0.0, max), 0);
-    }
 
     #[test]
     fn gpio_change_mask_respects_real_drive_enable() {
@@ -1869,12 +1640,6 @@ mod tests {
             run_window(0.0, false),
             Duration::from_secs_f64(BOOT_WINDOW_FLOOR_S)
         );
-    }
-
-    #[test]
-    fn ports_triple_distinct() {
-        let (a, b, c) = free_port_triple().unwrap();
-        assert!(a != b && b != c && a != c);
     }
 
     // ── validate_flash_image_arch: sibling-ELF resolution ────────────────────

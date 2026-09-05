@@ -24,6 +24,8 @@
 
 use std::collections::HashMap;
 
+use crate::bom::{parse_populate, sniff_delimiter, split_delimited};
+
 /// One placed component from the P&P file.
 #[derive(Debug, Clone)]
 pub struct Placement {
@@ -50,32 +52,9 @@ pub struct BomEntry {
     pub dnp: bool,
 }
 
-/// Split a CSV line honouring double-quotes. Good enough for fab CSVs (no
-/// embedded newlines; quote-escaped commas handled).
+/// Split a fab CSV line on whatever delimiter it uses, honouring quotes.
 fn split_csv(line: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_q = false;
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => {
-                if in_q && chars.peek() == Some(&'"') {
-                    cur.push('"');
-                    chars.next();
-                } else {
-                    in_q = !in_q;
-                }
-            }
-            ',' | ';' if !in_q => {
-                out.push(cur.trim().to_string());
-                cur.clear();
-            }
-            _ => cur.push(c),
-        }
-    }
-    out.push(cur.trim().to_string());
-    out
+    split_delimited(line, sniff_delimiter(line))
 }
 
 /// Normalise a header cell for matching: lowercase, strip spaces/underscores/
@@ -110,21 +89,11 @@ fn find_col(headers: &[String], aliases: &[&str]) -> Option<usize> {
     None
 }
 
-/// A cell in an explicit do-not-populate column: truthy means "not assembled".
-fn cell_is_dnp(s: &str) -> bool {
-    matches!(
-        s.trim().to_ascii_lowercase().as_str(),
-        "dnp" | "dnf" | "yes" | "y" | "true" | "1" | "x" | "noload" | "no-load" | "donotpopulate"
-    )
-}
-
-/// A cell in a "populate/fitted/assemble" column: reversed polarity, a
-/// negative value means the part is NOT assembled.
-fn cell_says_not_fitted(s: &str) -> bool {
-    matches!(
-        s.trim().to_ascii_lowercase().as_str(),
-        "no" | "n" | "false" | "0" | "dnp" | "dnf" | "notfitted" | "no-load" | "noload"
-    )
+/// Whether a DNP column (or, with reversed polarity, a populate/fitted column)
+/// says the part is NOT assembled.
+fn not_populated(dnp_cell: &str, fit_cell: Option<&str>) -> bool {
+    parse_populate(dnp_cell, "dnp") == Some(false)
+        || fit_cell.is_some_and(|cell| parse_populate(cell, "fitted") == Some(false))
 }
 
 /// The unit scale implied by a coordinate column HEADER (e.g. `PosX (mil)`),
@@ -275,8 +244,7 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
         let rotation = get(rot_col).trim().parse().unwrap_or(0.0);
         let side_raw = get(side_col).to_ascii_lowercase();
         let top = !(side_raw.contains("bot") || side_raw.contains("back") || side_raw == "b");
-        let dnp =
-            cell_is_dnp(get(dnp_col)) || (fit_col.is_some() && cell_says_not_fitted(get(fit_col)));
+        let dnp = not_populated(get(dnp_col), fit_col.map(|_| get(fit_col)));
         out.push(Placement {
             reference,
             value: get(val_col).to_string(),
@@ -541,8 +509,7 @@ pub fn parse_bom(text: &str) -> HashMap<String, BomEntry> {
         };
         let value = cell(val_col).to_string();
         let mpn = cell(mpn_col).to_string();
-        let dnp = cell_is_dnp(cell(dnp_col))
-            || (fit_col.is_some() && cell_says_not_fitted(cell(fit_col)));
+        let dnp = not_populated(cell(dnp_col), fit_col.map(|_| cell(fit_col)));
         for tok in refs
             .split([',', ' ', ';'])
             .map(str::trim)

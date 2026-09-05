@@ -639,29 +639,22 @@ impl CiResult {
     /// injection, unexercised bus device), the per-MCU timing resolution, a
     /// timing claim the backend could not represent, and waiver housekeeping.
     fn honesty_notes(&self) -> Vec<(&'static str, String)> {
-        let mut notes: Vec<(&'static str, String)> = Vec::new();
-        notes.extend(
-            self.substitutions
-                .iter()
-                .map(|m| ("co-sim ran on a SUBSTITUTE chip", m.clone())),
-        );
-        notes.extend(
-            self.coverage_warnings
-                .iter()
-                .map(|m| ("co-sim COVERAGE HOLE", m.clone())),
-        );
-        notes.extend(
-            self.timing_coverage
-                .iter()
-                .map(|t| ("TIMING COVERAGE", timing_coverage_note(t))),
-        );
-        notes.extend(
-            self.timing_refusals
-                .iter()
-                .map(|m| ("TIMING INVALID", m.clone())),
-        );
-        notes.extend(self.waiver_notes.iter().map(|m| ("waivers", m.clone())));
-        notes
+        fn tagged<'m>(
+            tag: &'static str,
+            msgs: &'m [String],
+        ) -> impl Iterator<Item = (&'static str, String)> + 'm {
+            msgs.iter().map(move |m| (tag, m.clone()))
+        }
+        tagged("co-sim ran on a SUBSTITUTE chip", &self.substitutions)
+            .chain(tagged("co-sim COVERAGE HOLE", &self.coverage_warnings))
+            .chain(
+                self.timing_coverage
+                    .iter()
+                    .map(|t| ("TIMING COVERAGE", timing_coverage_note(t))),
+            )
+            .chain(tagged("TIMING INVALID", &self.timing_refusals))
+            .chain(tagged("waivers", &self.waiver_notes))
+            .collect()
     }
 
     pub fn render_human(&self) -> String {
@@ -758,11 +751,7 @@ impl CiResult {
         // A RED report ends with where to read about the failing check: the
         // assertion catalog's section for the first gating failure's kind.
         if verdict == "RED" {
-            if let Some(r) = self
-                .results
-                .iter()
-                .find(|r| !r.passed && !r.invalid && r.waived.is_none())
-            {
+            if let Some(r) = self.gating_failures().next() {
                 out.push_str(&format!(
                     "next: the \"{}\" section of {} explains this check and its knobs\n",
                     r.kind,
@@ -815,26 +804,37 @@ impl CiResult {
         ));
         for r in &self.results {
             let evidence = self.evidence_text(&r.label);
+            let gating = !r.passed && !r.invalid && r.waived.is_none();
+            // The body is the measured detail, then (on a gating red) the
+            // `why:` line, then the evidence. Plenty of people only ever read
+            // the Tests tab of a CI run, and the why is the actionable half:
+            // without it the failure says what the number was and nothing
+            // about what to do next.
+            let body = [
+                Some(r.detail.clone()),
+                gating
+                    .then(|| why_line(r))
+                    .flatten()
+                    .map(|w| format!("why: {w}")),
+                (!evidence.is_empty()).then(|| evidence.clone()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n");
+            let (message, body) = (xml_escape(&r.detail), xml_escape(&body));
             out.push_str(&format!(
                 "    <testcase classname=\"{}\" name=\"{}\">\n",
                 xml_escape(&r.kind),
                 xml_escape(&r.label)
             ));
             if r.invalid {
-                let body = if evidence.is_empty() {
-                    r.detail.clone()
-                } else {
-                    format!("{}\n{evidence}", r.detail)
-                };
                 out.push_str(&format!(
-                    "      <error message=\"{}\">{}</error>\n",
-                    xml_escape(&r.detail),
-                    xml_escape(&body)
+                    "      <error message=\"{message}\">{body}</error>\n"
                 ));
             } else if let (false, Some(w)) = (r.passed, &r.waived) {
                 out.push_str(&format!(
-                    "      <skipped message=\"waived FAIL: {} ({})\"/>\n",
-                    xml_escape(&r.detail),
+                    "      <skipped message=\"waived FAIL: {message} ({})\"/>\n",
                     xml_escape(w)
                 ));
                 if !evidence.is_empty() {
@@ -844,33 +844,11 @@ impl CiResult {
                     ));
                 }
             } else if !r.passed {
-                // The body carries the `why:` line as well as the measured one.
-                // Plenty of people only ever read the Tests tab of a CI run, and
-                // the why is the actionable half: without it the failure says
-                // what the number was and nothing about what to do next.
-                let mut body = match why_line(r) {
-                    Some(why) => format!("{}\nwhy: {why}", r.detail),
-                    None => r.detail.clone(),
-                };
-                if !evidence.is_empty() {
-                    body.push('\n');
-                    body.push_str(&evidence);
-                }
                 out.push_str(&format!(
-                    "      <failure message=\"{}\">{}</failure>\n",
-                    xml_escape(&r.detail),
-                    xml_escape(&body)
+                    "      <failure message=\"{message}\">{body}</failure>\n"
                 ));
             } else {
-                let body = if evidence.is_empty() {
-                    r.detail.clone()
-                } else {
-                    format!("{}\n{evidence}", r.detail)
-                };
-                out.push_str(&format!(
-                    "      <system-out>{}</system-out>\n",
-                    xml_escape(&body)
-                ));
+                out.push_str(&format!("      <system-out>{body}</system-out>\n"));
             }
             out.push_str("    </testcase>\n");
         }
@@ -959,52 +937,49 @@ impl CiResult {
         }
 
         // Warnings: dead rails first (they change what every other line
-        // means), then waived failures, substitutions, coverage holes and
-        // waiver notes, all through one capped channel.
-        let mut warnings: Vec<String> = Vec::new();
-        if !self.dead_rails.is_empty() {
-            warnings.push(format!(
-                "UNPOWERED RAIL::{} sat at 0 V (no voltage could be read from the name and no [[supply]] fed it); any analog result above may be an artifact",
-                gh_escape(&self.dead_rails.join(", "))
-            ));
-        }
-        for r in self.results.iter().filter(|r| r.waived.is_some()) {
-            warnings.push(format!(
-                "WAIVED FAIL::{} - {} (waived: {})",
-                gh_escape(&r.label),
-                gh_escape(&r.detail),
-                gh_escape(r.waived.as_deref().unwrap_or(""))
-            ));
-        }
-        let mut surfaced_assumptions = std::collections::HashSet::new();
-        for map in self
+        // means), then waived failures, unclean evidence assumptions (each
+        // once), substitutions, coverage holes and waiver notes, all through
+        // one capped channel.
+        let mut surfaced = std::collections::HashSet::new();
+        let assumptions = self
             .evidence
             .iter()
             .filter(|map| map.status() != hauksbee_ir::evidence::EvidenceStatus::Clean)
-        {
-            for id in map.assumptions() {
-                if !surfaced_assumptions.insert(id.clone()) {
-                    continue;
-                }
-                if let Some(assumption) = self.assumptions.iter().find(|a| a.id() == id) {
-                    warnings.push(format!(
-                        "ASSUMPTION {}::{} ({})",
-                        gh_escape(&id.to_string()),
-                        gh_escape(assumption.statement()),
-                        gh_escape(assumption.replacement())
-                    ));
-                }
-            }
+            .flat_map(|map| map.assumptions())
+            .filter(|id| surfaced.insert((*id).clone()))
+            .filter_map(|id| Some((id, self.assumptions.iter().find(|a| a.id() == id)?)))
+            .map(|(id, a)| {
+                format!(
+                    "ASSUMPTION {}::{} ({})",
+                    gh_escape(&id.to_string()),
+                    gh_escape(a.statement()),
+                    gh_escape(a.replacement())
+                )
+            });
+        fn tagged<'m>(tag: &'static str, msgs: &'m [String]) -> impl Iterator<Item = String> + 'm {
+            msgs.iter().map(move |m| format!("{tag}::{}", gh_escape(m)))
         }
-        for msg in &self.substitutions {
-            warnings.push(format!("SUBSTITUTE MCU::{}", gh_escape(msg)));
-        }
-        for msg in &self.coverage_warnings {
-            warnings.push(format!("COSIM COVERAGE HOLE::{}", gh_escape(msg)));
-        }
-        for msg in &self.waiver_notes {
-            warnings.push(format!("WAIVERS::{}", gh_escape(msg)));
-        }
+        let warnings: Vec<String> = (!self.dead_rails.is_empty())
+            .then(|| {
+                format!(
+                    "UNPOWERED RAIL::{} sat at 0 V (no voltage could be read from the name and no [[supply]] fed it); any analog result above may be an artifact",
+                    gh_escape(&self.dead_rails.join(", "))
+                )
+            })
+            .into_iter()
+            .chain(self.results.iter().filter(|r| r.waived.is_some()).map(|r| {
+                format!(
+                    "WAIVED FAIL::{} - {} (waived: {})",
+                    gh_escape(&r.label),
+                    gh_escape(&r.detail),
+                    gh_escape(r.waived.as_deref().unwrap_or(""))
+                )
+            }))
+            .chain(assumptions)
+            .chain(tagged("SUBSTITUTE MCU", &self.substitutions))
+            .chain(tagged("COSIM COVERAGE HOLE", &self.coverage_warnings))
+            .chain(tagged("WAIVERS", &self.waiver_notes))
+            .collect();
         for w in warnings.iter().take(Self::MAX_WARNING_ANNOTATIONS) {
             out.push_str(&format!("::warning title=hauksbee-ci {w}\n"));
         }
@@ -1100,21 +1075,15 @@ pub fn render_junit_document(suites: &[JunitSuite]) -> String {
 /// errored test, distinct from a failure. `name` labels the suite (the spec
 /// path in a multi-spec run, "spec error" for one).
 pub fn junit_error_suite(name: &str, message: &str) -> JunitSuite {
-    let mut out = String::new();
-    out.push_str(&format!(
-        "  <testsuite name=\"{}\" tests=\"1\" failures=\"0\" errors=\"1\" time=\"0.000\">\n",
-        xml_escape(name)
-    ));
-    out.push_str("    <testcase classname=\"spec\" name=\"spec/board loads\">\n");
-    out.push_str(&format!(
-        "      <error message=\"{}\">{}</error>\n",
-        xml_escape(message),
-        xml_escape(message)
-    ));
-    out.push_str("    </testcase>\n");
-    out.push_str("  </testsuite>\n");
+    let message = xml_escape(message);
     JunitSuite {
-        xml: out,
+        xml: format!(
+            "  <testsuite name=\"{}\" tests=\"1\" failures=\"0\" errors=\"1\" time=\"0.000\">\n    \
+             <testcase classname=\"spec\" name=\"spec/board loads\">\n      \
+             <error message=\"{message}\">{message}</error>\n    \
+             </testcase>\n  </testsuite>\n",
+            xml_escape(name)
+        ),
         tests: 1,
         failures: 0,
         errors: 1,
@@ -1315,7 +1284,9 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Escape the characters that are special in GitHub workflow-command data.
-fn gh_escape(s: &str) -> String {
+/// Percent first, then the control characters, else the `%0A`/`%0D` inserted
+/// for them would get their own `%` re-encoded to `%25`.
+pub fn gh_escape(s: &str) -> String {
     s.replace('%', "%25")
         .replace('\r', "%0D")
         .replace('\n', "%0A")
@@ -1329,18 +1300,9 @@ mod tests {
 
     fn result(label: &str, kind: &str, passed: bool, detail: &str) -> AssertResult {
         AssertResult {
-            label: label.to_string(),
-            kind: kind.to_string(),
             passed,
-            invalid: false,
             detail: detail.to_string(),
-            failing_seed: None,
-            failing_seeds: Vec::new(),
-            seeds_total: 1,
-            why: None,
-            waived: None,
-            subject_nets: Vec::new(),
-            subject_refs: Vec::new(),
+            ..AssertResult::shell(label.to_string(), kind, 1)
         }
     }
 

@@ -69,10 +69,7 @@ fn read_board_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
 /// True when the text is a Board-as-Code (`.board`) DSL source, recognised by
 /// the header `program_from_extracted`/`to_code` emit. Lets a `.board` saved
 /// without that extension still route through the recompile path.
-pub fn is_board_code_header(text: &str) -> bool {
-    let head: String = text.chars().take(256).collect();
-    head.contains("Board-as-Code") || head.contains("board version ")
-}
+pub use hauksbee_bind::board_input::is_board_code_header;
 
 /// Width-cap every line of an error message that quotes file content (a TOML
 /// parser's caret-annotated snippet). A machine-written input can be one

@@ -25,7 +25,7 @@ use hauksbee_extract::{
 };
 use hauksbee_models::ModelLibrary;
 
-use crate::binder::resolve;
+use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
 
 /// Recognised MCU part-number family prefixes (compared case-insensitively

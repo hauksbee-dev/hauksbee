@@ -3,7 +3,7 @@
 **Goal.** Add a digital IC, such as a gate, flip-flop, shift register, or
 tri-state buffer, as a `[models.logic]` block in a model TOML entry. This
 needs no Rust: the engine's generic evaluator (`LogicComponent` in
-`crates/hauksbee-engine/src/logic.rs`) compiles the block at bind time. The
+`crates/hauksbee-bind/src/logic.rs`) compiles the block at bind time. The
 worked example is the 74HC74 dual D flip-flop. It ships in
 `crates/hauksbee-models/db/digital.toml` with a datasheet-cited test in
 `crates/hauksbee-engine/tests/logic_gates_74hc.rs`.
@@ -213,7 +213,7 @@ Not everything digital is a boolean-comb data entry, on purpose:
   boolean combinational logic.
 - **MCU-facing chain controllers** (`Hc595Chain`/`Hc165Chain`) and the
   binder's 74HC02 cross-couple fusion stay in Rust, documented in
-  `crates/hauksbee-engine/src/digital.rs`. Net-level feedback cannot settle
+  `crates/hauksbee-bind/src/digital.rs`. Net-level feedback cannot settle
   at chunk granularity, so the binder fuses it at bind time instead.
 
 ---

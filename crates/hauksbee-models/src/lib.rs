@@ -40,6 +40,7 @@
 //! ```
 
 pub mod behavioral;
+mod check;
 pub mod datasheet;
 pub mod logic_spec;
 pub mod matcher;
@@ -80,29 +81,28 @@ pub use sensor_spec::{
 pub use spice_input::SpiceCard;
 pub use unmodelled::{UnmodelledNote, UnmodelledPart, UnmodelledTable};
 
-/// Built-in pin-role inference rules, embedded at compile time.
-static BUILTIN_PIN_RULES_TOML: &str = include_str!("../db/pin_rules.toml");
-static BUILTIN_UNMODELLED_TOML: &str = include_str!("../db/unmodelled.toml");
-
 // ── Embedded database files ───────────────────────────────────────────────────
 
-/// All built-in TOML database files embedded at compile time.
-static BUILTIN_TOML_FILES: &[(&str, &str)] = &[
-    ("passives", include_str!("../db/passives.toml")),
-    ("diodes", include_str!("../db/diodes.toml")),
-    ("bjt", include_str!("../db/bjt.toml")),
-    ("mosfet", include_str!("../db/mosfet.toml")),
-    (
-        "opamp_comparator",
-        include_str!("../db/opamp_comparator.toml"),
-    ),
-    ("analog_switch", include_str!("../db/analog_switch.toml")),
-    ("digital", include_str!("../db/digital.toml")),
-    ("dac_adc", include_str!("../db/dac_adc.toml")),
-    ("vreg", include_str!("../db/vreg.toml")),
-    ("power_ics", include_str!("../db/power_ics.toml")),
-    ("mcu", include_str!("../db/mcu.toml")),
-    ("ignore", include_str!("../db/ignore.toml")),
+macro_rules! builtin_db {
+    ($($name:literal),* $(,)?) => {
+        &[$(($name, include_str!(concat!("../db/", $name, ".toml")))),*]
+    };
+}
+
+/// All built-in `[[models]]` database files embedded at compile time.
+static BUILTIN_TOML_FILES: &[(&str, &str)] = builtin_db![
+    "passives",
+    "diodes",
+    "bjt",
+    "mosfet",
+    "opamp_comparator",
+    "analog_switch",
+    "digital",
+    "dac_adc",
+    "vreg",
+    "power_ics",
+    "mcu",
+    "ignore",
 ];
 
 // ── Error type ────────────────────────────────────────────────────────────────
@@ -186,6 +186,17 @@ impl SourceLayer {
             SourceLayer::Spice => "spice",
         }
     }
+
+    /// The coarse source string [`Resolution::source`] keeps for existing
+    /// consumers: every user layer collapses to the historical `"user"`.
+    pub fn coarse_name(self) -> &'static str {
+        match self {
+            SourceLayer::UserDir | SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag => {
+                "user"
+            }
+            other => other.name(),
+        }
+    }
 }
 
 impl std::fmt::Display for SourceLayer {
@@ -211,12 +222,12 @@ pub enum Confidence {
 
 impl std::fmt::Display for Confidence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Confidence::Exact => write!(f, "exact"),
-            Confidence::Family => write!(f, "family"),
-            Confidence::Guessed => write!(f, "guessed"),
-            Confidence::Unresolved => write!(f, "unresolved"),
-        }
+        f.write_str(match self {
+            Confidence::Exact => "exact",
+            Confidence::Family => "family",
+            Confidence::Guessed => "guessed",
+            Confidence::Unresolved => "unresolved",
+        })
     }
 }
 
@@ -328,13 +339,13 @@ impl ModelLibrary {
         let mut lib = ModelLibrary::empty();
         for (name, toml_src) in BUILTIN_TOML_FILES {
             lib.load_toml_str(toml_src, name, SourceLayer::Builtin)
-                .unwrap_or_else(|e| panic!("built-in database '{}' failed to load: {}", name, e));
+                .unwrap_or_else(|e| panic!("built-in database '{name}' failed to load: {e}"));
         }
         lib.pin_rules
-            .load_toml_str(BUILTIN_PIN_RULES_TOML, false)
+            .load_toml_str(include_str!("../db/pin_rules.toml"), false)
             .unwrap_or_else(|e| panic!("built-in pin_rules.toml failed to load: {e}"));
         lib.unmodelled
-            .load_toml_str(BUILTIN_UNMODELLED_TOML, false)
+            .load_toml_str(include_str!("../db/unmodelled.toml"), false)
             .unwrap_or_else(|e| panic!("built-in unmodelled.toml failed to load: {e}"));
         lib
     }
@@ -433,8 +444,7 @@ impl ModelLibrary {
         // model id -> pack dir_name that first shipped it, for conflict reports.
         let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         for record in &records {
-            let dir = store.pack_dir(record);
-            let pack = match pack::Pack::load(&dir) {
+            let pack = match pack::Pack::load(&store.pack_dir(record)) {
                 Ok(p) => p,
                 Err(e) => {
                     warnings.push(format!(
@@ -445,41 +455,40 @@ impl ModelLibrary {
                 }
             };
             let origin = pack.manifest.dir_name();
+            let pack_tier = match pack.manifest.provenance {
+                Provenance::Vendor => ModelSourceTier::VendorSpice,
+                Provenance::HandWritten => ModelSourceTier::CuratedPack,
+                Provenance::DatasheetExtracted => ModelSourceTier::DatasheetDerived,
+            };
             for file in &pack.model_files {
-                let src = match std::fs::read_to_string(file) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warnings.push(format!(
-                            "pack '{origin}': reading '{}': {e}",
-                            file.display()
-                        ));
-                        continue;
-                    }
-                };
                 let before = self.entries.len();
-                let pack_tier = match pack.manifest.provenance {
-                    Provenance::Vendor => ModelSourceTier::VendorSpice,
-                    Provenance::HandWritten => ModelSourceTier::CuratedPack,
-                    Provenance::DatasheetExtracted => ModelSourceTier::DatasheetDerived,
-                };
-                if let Err(e) =
-                    self.load_toml_str_with_tier(&src, &origin, SourceLayer::Pack, Some(pack_tier))
-                {
+                let loaded = std::fs::read_to_string(file)
+                    .map_err(|e| format!("reading '{}': {e}", file.display()))
+                    .and_then(|src| {
+                        self.load_toml_str_with_tier(
+                            &src,
+                            &origin,
+                            SourceLayer::Pack,
+                            Some(pack_tier),
+                        )
+                        .map_err(|e| e.to_string())
+                    });
+                if let Err(e) = loaded {
                     warnings.push(format!("pack '{origin}': {e}"));
                     continue;
                 }
                 for le in &self.entries[before..] {
                     let id = le.compiled.entry.id.clone();
-                    if let Some(other) = seen.get(&id) {
-                        if *other != origin {
-                            warnings.push(format!(
-                                "same-layer conflict: model id '{id}' is shipped by both \
-                                 pack '{other}' and pack '{origin}'; within the pack layer \
-                                 nothing orders them; remove one pack or rename the entry"
-                            ));
+                    match seen.get(&id) {
+                        Some(other) if *other != origin => warnings.push(format!(
+                            "same-layer conflict: model id '{id}' is shipped by both \
+                             pack '{other}' and pack '{origin}'; within the pack layer \
+                             nothing orders them; remove one pack or rename the entry"
+                        )),
+                        Some(_) => {}
+                        None => {
+                            seen.insert(id, origin.clone());
                         }
-                    } else {
-                        seen.insert(id, origin.clone());
                     }
                 }
             }
@@ -543,42 +552,29 @@ impl ModelLibrary {
                 .unwrap_or("?")
                 .to_string();
             // A `pin_rules.toml` (or any file carrying a `[[pin_rules]]` array)
-            // is loaded into the pin-role inference table, prepended so user
-            // rules override the built-ins. Everything else is model entries.
-            if name == "pin_rules" || src.contains("[[pin_rules]]") {
-                if let Err(e) = self.pin_rules.load_toml_str(&src, true) {
-                    errors.push(ModelError::PinRules {
-                        file: name,
-                        message: e,
-                    });
-                }
-                continue;
-            }
-            // An `unmodelled.toml` (or any file carrying an `[[unmodelled]]`
-            // array) is loaded into the abstention table, prepended so a user can
-            // override a built-in abstention's text.
-            //
-            // The `contains` half is deliberately narrower than the `[[pin_rules]]`
-            // dispatch above: it also requires the file to carry NO `[[models]]`
-            // array. These DB files are heavily commented, and a models file that
-            // merely MENTIONS the token in prose would otherwise be routed here and
-            // lose every model in it, silently. A file with both arrays keeps its
-            // models and its abstentions are ignored, which is the safe half of an
-            // ambiguous case; naming the file `unmodelled.toml` always works.
-            let is_unmodelled_file = name == "unmodelled"
-                || (src.contains("[[unmodelled]]") && !src.contains("[[models]]"));
-            if is_unmodelled_file {
-                if let Err(e) = self.unmodelled.load_toml_str(&src, true) {
-                    errors.push(ModelError::PinRules {
-                        file: name,
-                        message: e,
-                    });
-                }
-                continue;
-            }
-            if let Err(e) = self.load_toml_str(&src, &name, layer) {
-                errors.push(e);
-            }
+            // feeds the pin-role table and an `unmodelled.toml` the abstention
+            // table, both prepended so user rules override the built-ins.
+            // The unmodelled dispatch is deliberately narrower: it also requires
+            // NO `[[models]]` array, because these files are heavily commented
+            // and a models file that merely MENTIONS the token in prose would
+            // otherwise be routed here and silently lose every model in it.
+            let table = if name == "pin_rules" || src.contains("[[pin_rules]]") {
+                Some(self.pin_rules.load_toml_str(&src, true))
+            } else if name == "unmodelled"
+                || (src.contains("[[unmodelled]]") && !src.contains("[[models]]"))
+            {
+                Some(self.unmodelled.load_toml_str(&src, true))
+            } else {
+                None
+            };
+            let result = match table {
+                Some(r) => r.map(drop).map_err(|message| ModelError::PinRules {
+                    file: name,
+                    message,
+                }),
+                None => self.load_toml_str(&src, &name, layer),
+            };
+            errors.extend(result.err());
         }
         errors
     }
@@ -646,20 +642,11 @@ impl ModelLibrary {
             }
         }
         if let Some((le, score)) = best {
-            let source = match le.layer {
-                SourceLayer::Builtin => "builtin",
-                SourceLayer::Pack => "pack",
-                // Both user layers keep the historical "user" string.
-                SourceLayer::UserDir | SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag => {
-                    "user"
-                }
-                SourceLayer::Spice => "spice",
-            };
             return Resolution {
                 model: Some(le.compiled.entry.clone()),
                 confidence: score_to_confidence(score),
                 query: q.clone(),
-                source: Some(source.to_string()),
+                source: Some(le.layer.coarse_name().to_string()),
                 layer: Some(le.layer),
                 origin: Some(le.origin.clone()),
                 provenance: Some(le.provenance.clone()),
@@ -694,11 +681,17 @@ impl ModelLibrary {
         layer: SourceLayer,
         default_tier: Option<ModelSourceTier>,
     ) -> Result<(), ModelError> {
-        let db_file: schema::DbFile = toml::from_str(src).map_err(|e| ModelError::TomlParse {
+        let parse = |e| ModelError::TomlParse {
             source: source_name.to_string(),
             error: e,
-        })?;
+        };
+        let db_file: schema::DbFile = toml::from_str(src).map_err(parse)?;
 
+        // The model entry parser ignores the auxiliary `[models.source]` table,
+        // so provenance is parsed through its own typed schema and fails
+        // closed: swallowing an error here would leave executable physics in
+        // place while silently replacing its citations/uncertainty with a
+        // default unknown record, the worst direction of degradation.
         #[derive(serde::Deserialize)]
         struct SourceFile {
             #[serde(default)]
@@ -707,93 +700,61 @@ impl ModelLibrary {
         #[derive(serde::Deserialize)]
         struct SourceRow {
             id: String,
-            #[serde(default)]
             source: Option<schema::ModelSourceSpec>,
         }
-        // Parse provenance through its typed schema and fail closed. The model
-        // entry parser intentionally ignores the auxiliary `[models.source]`
-        // table, so swallowing an error here would leave executable physics in
-        // place while silently replacing its citations/uncertainty with a
-        // default unknown record—the worst possible direction of degradation.
-        let source_file = toml::from_str::<SourceFile>(src).map_err(|e| ModelError::TomlParse {
-            source: source_name.to_string(),
-            error: e,
-        })?;
-        let declarations: std::collections::HashMap<String, schema::ModelSourceSpec> = source_file
-            .models
-            .into_iter()
-            .filter_map(|row| row.source.map(|source| (row.id, source)))
-            .collect();
+        let mut declarations: std::collections::HashMap<String, schema::ModelSourceSpec> =
+            toml::from_str::<SourceFile>(src)
+                .map_err(parse)?
+                .models
+                .into_iter()
+                .filter_map(|row| Some((row.id, row.source?)))
+                .collect();
 
         for entry in db_file.models {
             let id = entry.id.clone();
-            // Fail loud on an entry with no match rules. An all-None `[match]`
-            // block (an omitted section, or a typo'd key like `mch_re` that serde
-            // silently drops) matches EVERY component at specificity 0. Since the
-            // user layer outranks pack/builtin in `resolve`'s sort key, one such
-            // stray entry would silently rebind the whole board to it, a
-            // wholesale-wrong simulation with no diagnostic. The schema documents
-            // "at least one rule must be populated"; enforce it here.
+            let invalid = |messages: String| ModelError::ValidationFailed {
+                id: id.clone(),
+                messages,
+            };
+            // An all-None `[match]` block (an omitted section, or a typo'd key
+            // serde silently drops) matches EVERY component at specificity 0;
+            // one such stray user entry would silently rebind the whole board.
             if entry.r#match.is_empty() {
-                return Err(ModelError::ValidationFailed {
-                    id,
-                    messages: "entry has no match rules (lib_id / value_re / \
-                               footprint_re / mpn_re all absent); at least one is \
-                               required, else it would match every component"
+                return Err(invalid(
+                    "entry has no match rules (lib_id / value_re / footprint_re / mpn_re all \
+                     absent); at least one is required, else it would match every component"
                         .to_string(),
-                });
+                ));
             }
             let compiled = CompiledEntry::compile(entry).map_err(|e| ModelError::InvalidRegex {
                 id: id.clone(),
                 error: e,
             })?;
-            let declaration = declarations.get(&compiled.entry.id);
+            let declaration = declarations.remove(&id);
             let references = declaration
+                .as_ref()
                 .map(|source| source.references.clone())
                 .unwrap_or_default();
             for (index, reference) in references.iter().enumerate() {
-                if !reference.url.starts_with("https://") {
-                    return Err(ModelError::ValidationFailed {
-                        id: compiled.entry.id.clone(),
-                        messages: format!(
-                            "source reference {index} url must use https://, got '{}'",
-                            reference.url
-                        ),
-                    });
-                }
-                if reference.title.trim().is_empty() || reference.locator.trim().is_empty() {
-                    return Err(ModelError::ValidationFailed {
-                        id: compiled.entry.id.clone(),
-                        messages: format!(
-                            "source reference {index} requires non-empty title and locator"
-                        ),
-                    });
-                }
-                if let Some(hash) = reference.sha256.as_deref() {
-                    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                        return Err(ModelError::ValidationFailed {
-                            id: compiled.entry.id.clone(),
-                            messages: format!(
-                                "source reference {index} sha256 must be 64 hexadecimal characters"
-                            ),
-                        });
-                    }
-                }
+                reference
+                    .validate()
+                    .map_err(|e| invalid(format!("source reference {index} {e}")))?;
             }
-            // Pack-manifest provenance is authoritative. An entry in a
+            // Pack-manifest provenance is authoritative: an entry in a
             // datasheet-derived pack cannot promote itself to a vendor tier.
+            let declared = declaration.as_ref();
             let tier = default_tier
-                .or_else(|| declaration.map(|source| source.tier))
+                .or(declared.map(|s| s.tier))
                 .unwrap_or_else(|| default_source_tier(layer));
-            let validation = declaration
-                .map(|source| source.validation)
+            let validation = declared
+                .map(|s| s.validation)
                 .unwrap_or_else(|| default_validation(layer));
             let uncertainty = declaration
-                .map(|source| source.uncertainty.clone())
+                .map(|s| s.uncertainty)
                 .filter(|values| !values.is_empty())
                 .unwrap_or_else(|| {
                     vec![ModelUncertainty::unknown(
-                        format!("{}.model", compiled.entry.id),
+                        format!("{id}.model"),
                         "the source publishes no validated numeric error interval",
                     )
                     .expect("static unknown uncertainty is valid")]
@@ -805,10 +766,7 @@ impl ModelLibrary {
                 validation,
                 uncertainty,
             )
-            .map_err(|error| ModelError::ValidationFailed {
-                id: compiled.entry.id.clone(),
-                messages: format!("invalid [models.source]: {error}"),
-            })?;
+            .map_err(|error| invalid(format!("invalid [models.source]: {error}")))?;
             self.entries.push(LayeredEntry {
                 layer,
                 origin: source_name.to_string(),
@@ -830,10 +788,6 @@ impl ModelLibrary {
     }
 
     fn resolution_from_spice(&self, card: &SpiceCard, query: ComponentQuery) -> Resolution {
-        // Build a synthetic ModelEntry from the SPICE card
-        use schema::{MatchRules, ModelEntry, Params};
-        use std::collections::BTreeMap;
-
         // A `.subckt` is a multi-terminal macro, not a single-device kind, and
         // an unrecognized `.model` type must not be silently claimed as a
         // passive with Exact confidence (that shadows the real part). Both
@@ -851,19 +805,15 @@ impl ModelLibrary {
         for (k, v) in &card.params {
             params.set_f64(k.to_lowercase(), *v);
         }
-        // For subckt: store port names as pin map
-        let mut pins = BTreeMap::new();
-        for (i, port) in card.ports.iter().enumerate() {
-            pins.insert((i + 1).to_string(), port.clone());
-        }
-
         let entry = ModelEntry {
             id: card.name.to_lowercase(),
             kind,
             description: format!("User SPICE card: {}", card.name),
-            r#match: MatchRules::default(),
             params,
-            pins,
+            pins: (1..)
+                .map(|i| i.to_string())
+                .zip(card.ports.iter().cloned())
+                .collect(),
             ..Default::default()
         };
 
@@ -929,12 +879,10 @@ fn default_validation(layer: SourceLayer) -> ModelValidation {
 
 /// Convert a specificity score to a confidence level.
 fn score_to_confidence(score: u32) -> Confidence {
-    if score >= 50 {
-        Confidence::Exact
-    } else if score >= 20 {
-        Confidence::Family
-    } else {
-        Confidence::Guessed
+    match score {
+        50.. => Confidence::Exact,
+        20.. => Confidence::Family,
+        _ => Confidence::Guessed,
     }
 }
 
@@ -963,29 +911,14 @@ pub struct ResolutionReport {
 }
 
 impl ResolutionReport {
-    /// Count resolutions by confidence level.
+    /// Count resolutions by confidence level: `(exact, family, guessed,
+    /// unresolved)`.
     pub fn counts(&self) -> (usize, usize, usize, usize) {
-        let exact = self
-            .resolutions
-            .iter()
-            .filter(|r| r.confidence == Confidence::Exact)
-            .count();
-        let family = self
-            .resolutions
-            .iter()
-            .filter(|r| r.confidence == Confidence::Family)
-            .count();
-        let guessed = self
-            .resolutions
-            .iter()
-            .filter(|r| r.confidence == Confidence::Guessed)
-            .count();
-        let unresolved = self
-            .resolutions
-            .iter()
-            .filter(|r| r.confidence == Confidence::Unresolved)
-            .count();
-        (exact, family, guessed, unresolved)
+        let mut n = [0usize; 4];
+        for r in &self.resolutions {
+            n[r.confidence as usize] += 1;
+        }
+        (n[0], n[1], n[2], n[3])
     }
 
     /// All unresolved queries.
@@ -1028,13 +961,9 @@ impl std::fmt::Display for ResolutionReport {
         for res in &self.resolutions {
             let ref_s = res.query.reference.as_deref().unwrap_or("?");
             let val_s = res.query.value.as_deref().unwrap_or("");
-            let (model_id, conf) = match &res.model {
-                Some(m) => (m.id.as_str(), res.confidence.to_string()),
-                None => ("UNRESOLVED", "unresolved".to_string()),
-            };
-            // Truncate on CHAR boundaries, a byte slice like `&val_s[..24]`
-            // panics when a multibyte char (e.g. 'µ' in a "µF" value) straddles
-            // the cut point.
+            let model_id = res.model.as_ref().map_or("UNRESOLVED", |m| m.id.as_str());
+            // Truncate on CHAR boundaries: a byte slice panics when a multibyte
+            // char (the 'µ' in a "µF" value) straddles the cut point.
             let clip = |s: &str, n: usize| -> String { s.chars().take(n).collect() };
             writeln!(
                 f,
@@ -1042,14 +971,13 @@ impl std::fmt::Display for ResolutionReport {
                 clip(ref_s, 8),
                 clip(val_s, 24),
                 clip(model_id, 10),
-                clip(&conf, 10),
+                clip(&res.confidence.to_string(), 10),
             )?;
         }
         writeln!(
             f,
             "└──────────┴──────────────────────────┴────────────┴────────────┘"
-        )?;
-        Ok(())
+        )
     }
 }
 
