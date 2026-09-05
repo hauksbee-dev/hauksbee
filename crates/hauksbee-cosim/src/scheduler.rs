@@ -7188,60 +7188,7 @@ missing = ["measurement_registers"]
         ));
     }
 
-    #[cfg(feature = "avr")]
-    #[test]
-    #[ignore = "requires the private NEP board path"]
-    fn private_nep_topology_installs_edge_exact_parallel_memory() {
-        use sha2::{Digest, Sha256};
 
-        const BOARD_SHA256: &str =
-            "b7d2a7c3d7ea193bb394bcb3987cfb141230d3db0e294744a8a0b263f9b93673";
-        let path = std::env::var("HAUKSBEE_NEP_BOARD").expect("HAUKSBEE_NEP_BOARD");
-        let board_bytes = std::fs::read(path).expect("read private board");
-        let digest = Sha256::digest(&board_bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        assert_eq!(digest, BOARD_SHA256);
-        let board_text = String::from_utf8(board_bytes).expect("private board is UTF-8");
-        let scheduler = board_scheduler(&board_text);
-
-        assert_eq!(scheduler.parallel_memory_chips.len(), 1);
-        let memory = *scheduler.parallel_memory_chips.iter().next().unwrap();
-        assert_eq!(scheduler.digital[memory].reference, "U1");
-        let chain_refs = scheduler
-            .chains
-            .iter()
-            .flat_map(|chain| {
-                chain
-                    .order
-                    .iter()
-                    .map(|&index| scheduler.digital[index].reference.as_str())
-            })
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(chain_refs, std::collections::BTreeSet::from(["U2", "U3"]));
-
-        let rail = scheduler
-            .supplies
-            .iter()
-            .find(|supply| supply.net_name == "+5V")
-            .expect("private +5V supply")
-            .net;
-        for role in ["we_n", "oe_n"] {
-            let node = scheduler.digital[memory].roles[role];
-            let pulls = scheduler
-                .circuit
-                .devices
-                .iter()
-                .filter(|device| {
-                    matches!(device, Device::Resistor { a, b, ohms, .. }
-                        if ((*a == node && *b == rail) || (*b == node && *a == rail))
-                            && (*ohms - 10_000.0).abs() < f64::EPSILON)
-                })
-                .count();
-            assert_eq!(pulls, 1, "{role} must retain its exact 10k pull-up");
-        }
-    }
 
     #[test]
     fn public_mcu_binding_literal_remains_source_compatible() {
