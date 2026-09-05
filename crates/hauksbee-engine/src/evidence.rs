@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::Path;
 
-use crate::report::{BindOutcome, BindReport};
+use crate::reports::bind::{BindOutcome, BindReport};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::evidence::{
     ArtifactId, ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionId,
@@ -414,7 +414,7 @@ impl BoardEvidence {
             if !matches!(
                 &row.outcome,
                 BindOutcome::Analog { device } | BindOutcome::Behavioral { device }
-                    if crate::report::is_active_fallback_device(device)
+                    if crate::reports::bind::is_active_fallback_device(device)
             ) {
                 continue;
             }
@@ -2091,7 +2091,7 @@ fn documented_default(warning: Option<&str>) -> Option<(String, String)> {
 mod tests {
     use super::*;
     use crate::board_input::InputKind;
-    use crate::report::BindRow;
+    use crate::reports::bind::BindRow;
     use crate::result::{CustomRulesCoverage, DrcGroup, DrcStructured};
     use hauksbee_extract::{Component, Net, Pin};
 

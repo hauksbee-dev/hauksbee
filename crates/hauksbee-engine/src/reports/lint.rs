@@ -426,7 +426,7 @@ mod tests {
         assert!(!res.contains("net-lint:"), "{res}");
     }
     use crate::binder::BoundBoard;
-    use crate::report::BindReport;
+    use crate::reports::bind::BindReport;
     use hauksbee_extract::NetLintReport;
     use hauksbee_ir::Circuit;
     use std::collections::HashMap;

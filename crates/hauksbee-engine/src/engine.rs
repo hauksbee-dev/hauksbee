@@ -27,7 +27,7 @@ use hauksbee_solve::{Integration, SolverOptions, StepControl};
 use crate::binder::{bind_board, BoundBoard};
 use crate::peripherals::{CsProvenance, I2cBus, RegisterMapSensor, ResolvedCs, SpiBus};
 use crate::power_supply::{Chemistry, PowerSupply, UsbSpec};
-use crate::report::BindReport;
+use crate::reports::bind::BindReport;
 use crate::scheduler::Scheduler;
 
 /// Analog chunk for boards whose MCU runs on an external emulator (Renode or

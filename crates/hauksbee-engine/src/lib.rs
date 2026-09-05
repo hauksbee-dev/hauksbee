@@ -41,7 +41,6 @@ pub mod logic;
 pub mod peripherals;
 pub mod plain;
 pub mod power_supply;
-pub mod report;
 pub mod reports;
 pub mod responders;
 pub mod result;
@@ -98,7 +97,7 @@ pub use plain::{
     PlainFinding, PlainLevel, PlainReport,
 };
 pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, UsbSpec};
-pub use report::{BindOutcome, BindReport, BindRow};
+pub use reports::bind::{BindOutcome, BindReport, BindRow};
 pub use responders::{
     BitBangSpiPins, BitBangSpiResponder, InputResponder, ResponderRegistry, SoftI2cResponder,
 };

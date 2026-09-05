@@ -1,5 +1,5 @@
 use hauksbee_engine::binder::bind_board;
-use hauksbee_engine::report::BindOutcome;
+use hauksbee_engine::reports::bind::BindOutcome;
 use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 use hauksbee_models::ModelLibrary;
 

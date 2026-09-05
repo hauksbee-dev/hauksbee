@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use hauksbee_engine::binder::BoundBoard;
-use hauksbee_engine::report::BindReport;
+use hauksbee_engine::reports::bind::BindReport;
 use hauksbee_engine::result::{
     strict_analog_exit_code, CosimFailedWindow, CosimJson, EXIT_INVALID_FOR_ANALYSIS,
 };

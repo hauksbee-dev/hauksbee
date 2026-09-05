@@ -935,7 +935,7 @@ mod tests {
             device_meta: Vec::new(),
             dacs: Vec::new(),
             peripherals: Vec::new(),
-            report: crate::report::BindReport::default(),
+            report: crate::reports::bind::BindReport::default(),
         }
     }
 
@@ -1051,7 +1051,7 @@ mod tests {
     fn jumper_remaps_cached_mcu_and_dac_node_ids() {
         use crate::binder::{BoundBoard, DacBinding, McuBinding};
         use crate::drivers::PinDriver;
-        use crate::report::BindReport;
+        use crate::reports::bind::BindReport;
         use hauksbee_ir::{Circuit, DeviceId, NodeId};
         use std::collections::HashMap;
 

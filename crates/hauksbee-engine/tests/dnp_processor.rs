@@ -209,7 +209,7 @@ fn a_left_open_link_contributes_nothing_and_its_absence_is_reported() {
         .find(|r| r.reference == "R7")
         .expect("R7 has a bind row");
     match &row.outcome {
-        hauksbee_engine::report::BindOutcome::Skipped { reason } => {
+        hauksbee_engine::reports::bind::BindOutcome::Skipped { reason } => {
             assert_eq!(
                 reason,
                 &DnpReason::ZeroOhmLink.describe().to_string(),

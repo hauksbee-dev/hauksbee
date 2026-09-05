@@ -465,7 +465,7 @@ fn reader_accounting_is_decomposed_into_typed_facts_not_one_generic_caveat() {
 
 #[test]
 fn a_bind_default_warning_becomes_parameter_provenance_and_a_typed_assumption() {
-    use hauksbee_engine::report::{BindOutcome, BindReport, BindRow};
+    use hauksbee_engine::reports::bind::{BindOutcome, BindReport, BindRow};
     use hauksbee_models::Confidence;
 
     let mut report = BindReport::default();

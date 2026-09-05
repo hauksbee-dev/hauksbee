@@ -1,19 +1,20 @@
-//! Reverse-extract a gerber job directory and print a reconstruction report.
-//! Usage: cargo run --example gerber_report -- <gerber_dir>
+//! Reverse-extract a gerber job directory (or a zip of one) and print a
+//! reconstruction report.
+//! Usage: cargo run --example gerber_report -- <gerber_dir_or_zip>
 
 use std::path::Path;
 use std::time::Instant;
 
-use hauksbee_extract::gerber::from_gerber_dir;
+use hauksbee_extract::ExtractedBoard;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     if a.len() < 2 {
-        eprintln!("usage: gerber_report <gerber_dir>");
+        eprintln!("usage: gerber_report <gerber_dir_or_zip>");
         std::process::exit(2);
     }
     let t = Instant::now();
-    let g = match from_gerber_dir(Path::new(&a[1])) {
+    let g = match ExtractedBoard::from_gerber_with_stats(Path::new(&a[1])) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("extract failed: {e}");
