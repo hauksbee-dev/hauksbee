@@ -293,9 +293,8 @@ mod tests {
 
     #[test]
     fn truncated_record_is_skipped_full_record_parses() {
-        // Bug-hunt #7: a truncated 317 line (too short to hold its ref-des
-        // columns) must be dropped as truncated, NOT silently treated as a
-        // blank-ref via record, while a full record still parses.
+        // A truncated 317 line (too short to hold its ref-des columns) must be
+        // dropped, NOT silently treated as a blank-ref via record.
         let full = record("GND", "R1", "1");
         let truncated = "317GND"; // 6 chars: a truncated data record
         let text = format!("{full}\n{truncated}\n");

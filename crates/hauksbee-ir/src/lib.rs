@@ -35,7 +35,7 @@ pub use spice::{
 
 use serde::{Deserialize, Serialize};
 
-/// What a behavioral B-source's expression drives (dev-plan 04 §2.5).
+/// What a behavioral B-source's expression drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BOutput {
     /// `Bxxx n+ n- V={expr}`: the output port voltage is constrained to the
@@ -379,7 +379,7 @@ pub enum Device {
         ctrl_src: DeviceId,
         transres: f64,
     },
-    /// Behavioral B-source (SPICE `B` card, dev-plan 04 §2.5): the output is
+    /// Behavioral B-source (SPICE `B` card): the output is
     /// an arbitrary expression `f(V(...), I(...), time)`. `V={expr}` owns a
     /// branch unknown (constraint row `v_p - v_n - f = 0`); `I={expr}` injects
     /// `f` as a current `p -> n`. The expression is canonical (see
@@ -397,7 +397,7 @@ pub enum Device {
         expr: CompiledExpr,
         deps: Vec<BDep>,
     },
-    /// Mutual-inductance coupling (SPICE `K` card, dev-plan 04 §2.3):
+    /// Mutual-inductance coupling (SPICE `K` card):
     /// `Kxxx L1 L2 k` couples two existing [`Device::Inductor`]s with mutual
     /// inductance `M = k·sqrt(L1·L2)`. This is a RELATIONSHIP between two
     /// devices, not a stamped-per-Newton element: it has NO terminals of its
@@ -415,7 +415,7 @@ pub enum Device {
     /// never its inverse. Multiple K cards may chain 3+ windings; each card
     /// contributes one pairwise M.
     ///
-    /// Fidelity (plan §2.3): this is the LOSSLESS LINEAR mutual model, which
+    /// Fidelity: this is the LOSSLESS LINEAR mutual model, which
     /// matches ngspice's `K` closely (the differential decks pin it).
     /// Saturating/hysteretic cores are UNSUPPORTED, no core model card
     /// parses, so a deck needing one refuses at load rather than running
@@ -758,10 +758,10 @@ impl Device {
             Device::Bjt { c, b, e, .. } => vec![*c, *b, *e],
             // Level-1 channel current flows d<->s. The gate row receives
             // entries exactly when the model carries gate capacitance
-            // (displacement current through the §3.3 charge companions), and
+            // (displacement current through the charge companions), and
             // the bulk row exactly when it carries bulk-junction physics
             // (body-diode DC branch and/or depletion caps). A default model
-            // (no cap/body fields) keeps the pre-§3.3 [d, s] classification
+            // (no cap/body fields) keeps the plain [d, s] classification
             // bit-identically, gate stays sense, bulk stays unstamped.
             Device::Mosfet {
                 d, g, s, b, model, ..
@@ -830,7 +830,7 @@ impl Device {
             | Device::Bjt { .. } => Vec::new(),
             // Exactly the complement of the conduction claim above: gate and
             // bulk are sense terminals only while the model gives their rows
-            // nothing (no gate caps / no bulk junctions, dev-plan 04 §3.3).
+            // nothing (no gate caps / no bulk junctions).
             Device::Mosfet { g, b, model, .. } => {
                 let mut v = Vec::new();
                 if !model.has_gate_charge() {
@@ -872,8 +872,8 @@ impl Device {
             // the partitioner/conduction graph consume that directly.
             Device::Cccs { .. } | Device::Ccvs { .. } => Vec::new(),
             // Every V(node) dep is a declared SENSE edge; the tear layers
-            // must see that this device reads across island boundaries (plan
-            // §2.5). Deduped, and EXCLUDING the output terminals: a
+            // must see that this device reads across island boundaries.
+            // Deduped, and EXCLUDING the output terminals: a
             // self-referencing expression (`B1 out 0 I={tanh(V(out))}`, the
             // nonlinear-resistor idiom) senses a node it also conducts into,
             // and a terminal must be in exactly one of the two sets; the

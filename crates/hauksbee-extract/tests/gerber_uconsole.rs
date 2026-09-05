@@ -105,7 +105,7 @@ fn uconsole_mainboard_reconstructs() {
     assert!(gnd_pads > 500, "GND only has {gnd_pads} pads");
 }
 
-/// The gerber trace-current surface (Round 5): per-net copper geometry is
+/// The gerber trace-current surface: per-net copper geometry is
 /// reconstructed from the gerber primitives so a trace-current check can run on
 /// a board that ships no CAD. The decisive correctness property is the same as
 /// the native-CAD trace_current module: the high-current planes are reported
@@ -174,7 +174,7 @@ fn uconsole_per_net_copper_is_reconstructed_and_planes_are_poured() {
     assert!((amp - 0.52).abs() < 0.1, "0.122 mm ampacity was {amp:.2} A");
 }
 
-/// The uConsole/DevTerm CM4 adapter (Round 5 addition): a second Allegro-dialect
+/// The uConsole/DevTerm CM4 adapter: a second Allegro-dialect
 /// board, 4-layer, with a gerber-format drill. No P&P ships in the zip, so no
 /// components bind (the documented honest limit); the connectivity and per-net
 /// copper still reconstruct, and the planes are correctly Poured.

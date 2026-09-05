@@ -46,7 +46,7 @@
 //!
 //! Two things sit outside the ladder. [`SpiFramingMode::Backend`]: the emulator
 //! surfaces CS itself (Renode hardware NSS) with no net resolved at all, and it
-//! takes precedence when reported. And a bit-banged slave (05 §1.5), whose CS pin
+//! takes precedence when reported. And a bit-banged slave, whose CS pin
 //! comes from the GPIO wiring its responder was attached with rather than from any
 //! net lookup, so it reaches the exact tier by a third route and labels itself
 //! [`CsProvenance::BitBangPins`].
@@ -78,7 +78,7 @@ pub trait SpiSlave: Send {
 
     /// Chip-select ASSERTED (active-low falling edge): begin a fresh transaction
     /// by resetting the command state machine to its start-of-transaction state
-    /// (05 §2.1). The default reuses [`Self::deselect`], which for the built-in slaves
+    ///. The default reuses [`Self::deselect`], which for the built-in slaves
     /// resets the sequence/command counter to idle without disturbing latched
     /// permission bits (the 25xx `deselect` only clears the write-enable latch
     /// when it lands mid-WRITE, and a select edge never does, because the previous
@@ -116,7 +116,7 @@ pub trait SpiSlave: Send {
     /// before the master clocks, so MISO byte N can never depend on MOSI
     /// byte N. The byte-level `transfer(mosi) -> miso` API conflates the two
     /// directions; this hook un-conflates them for bit-level consumers (the
-    /// bit-banged SPI responder, 05 §1.5), which must present MISO bits before
+    /// bit-banged SPI responder), which must present MISO bits before
     /// the master's byte has finished arriving. The responder cross-checks the
     /// preview against the eventual `transfer` return and refuses loudly on a
     /// mismatch, so a model whose reply genuinely depends on the incoming byte
@@ -131,7 +131,7 @@ pub trait SpiSlave: Send {
 
     /// The datasheet-declared SPI clock mode `(CPOL, CPHA)` this slave expects
     /// the master to clock: `0 = (0,0)`, `1 = (0,1)`, `2 = (1,0)`, `3 = (1,1)`.
-    /// Only the bit-banged SPI responder (05 §1.5), which reconstructs the wire
+    /// Only the bit-banged SPI responder, which reconstructs the wire
     /// timing from GPIO edges, consults this; the byte-level `on_spi` path is
     /// mode-agnostic (simavr's hardware SPI already clocks the configured mode).
     /// Default `0` (CPOL=0, CPHA=0); the historical assumption.
@@ -177,7 +177,7 @@ pub enum CsProvenance {
     /// witness is the only door to a model), so a DNP or identity-refused slave
     /// contributes nothing and the bus stays on the heuristic.
     ModelRoles,
-    /// The bus is a bit-banged SPI slave (05 §1.5) whose CS pin came from the
+    /// The bus is a bit-banged SPI slave whose CS pin came from the
     /// GPIO wiring the responder was attached with, not from a `cs_net` and not
     /// from a model pad map. The framing is real (the responder owns the CS
     /// edges), but neither of the other two labels would be true of it, and a
@@ -209,7 +209,7 @@ impl CsProvenance {
 
 /// How a bus's transactions are being framed, surfaced per-slave in the co-sim
 /// coverage so a consumer knows whether the CS boundaries are real or guessed
-/// (05 §2.1). Precedence when reported: `Backend` (a real backend CS event was
+///. Precedence when reported: `Backend` (a real backend CS event was
 /// observed) over `Exact` (a CS pin resolved) over `Heuristic`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpiFramingMode {
@@ -286,7 +286,7 @@ pub struct SpiBus {
     id: String,
     slave: Box<dyn SpiSlave>,
     /// The MCU pin (port, bit) that drives this slave's chip-select net, when
-    /// the binder resolved it (05 §2.1). `Some` selects real CS-edge framing;
+    /// the binder resolved it. `Some` selects real CS-edge framing;
     /// `None` leaves the bus on the chunk-boundary heuristic.
     cs_pin: Option<(char, u8)>,
     /// Who named the CS net that `cs_pin` was traced from. Set by whoever built
@@ -337,7 +337,7 @@ impl SpiBus {
 
     /// The declared SPI clock mode (0..=3) of this bus's slave, cached from
     /// [`SpiSlave::spi_mode`] at construction. Consumed by the bit-banged SPI
-    /// responder to time its sample/shift edges (05 §1.5).
+    /// responder to time its sample/shift edges.
     pub fn spi_mode(&self) -> u8 {
         self.spi_mode
     }
@@ -386,7 +386,7 @@ impl SpiBus {
     /// True when this bus frames its own transactions from a real CS source (a
     /// resolved CS pin OR a backend CS event), so the scheduler must NOT apply
     /// the chunk-boundary deselect heuristic to it, since doing so would truncate a
-    /// transaction that legitimately spans a chunk boundary (05 §2, failure mode
+    /// transaction that legitimately spans a chunk boundary (failure mode
     /// b: the debug warning below must stop firing on these buses).
     pub fn frames_itself(&self) -> bool {
         self.cs_pin.is_some() || self.backend_deselect_seen
@@ -429,7 +429,7 @@ impl SpiBus {
     }
 
     /// CS ASSERTED (active-low falling edge): begin a transaction. Interleaved in
-    /// cycle order with `transfer` on the exact-framing path (05 §2.1).
+    /// cycle order with `transfer` on the exact-framing path.
     pub fn cs_assert(&mut self) {
         self.selected = true;
         self.slave.select();

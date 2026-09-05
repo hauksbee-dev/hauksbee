@@ -68,7 +68,7 @@ fn execute_and_collect_observations(
     let probes = crate::reports::cosim::dedup_probes(&cfg.probe);
     // `--probe ''` (an empty shell expansion, usually) would silently
     // record nothing: the dedup drops empties, so catch the case where
-    // everything the user passed was empty (M8).
+    // everything the user passed was empty.
     if !cfg.probe.is_empty() && probes.is_empty() {
         anyhow::bail!(
             "--probe was given only empty net name(s); pass a real net \
@@ -97,7 +97,7 @@ fn execute_and_collect_observations(
     let wall_s = headless.wall_s;
     let faults = headless.faults;
 
-    // Co-sim honesty summary (Track B): total net toggles, UART activity, and
+    // Co-sim honesty summary: total net toggles, UART activity, and
     // any chip substitution detected at build time. Built from the SAME run
     // stats the text table reads, so every surface agrees. The achieved
     // rate is stamped from the run's own wall-clock measurement so the
@@ -108,7 +108,7 @@ fn execute_and_collect_observations(
         c
     });
     let total_toggles = cosim.as_ref().map(|c| c.total_toggles).unwrap_or(0);
-    // Analog-fidelity honesty (05 §3b): once any chunk's analog solve failed,
+    // Analog-fidelity honesty: once any chunk's analog solve failed,
     // the run held stale voltages and cannot vouch for analog-derived findings
     // over the failed windows. `analog_abort` is the stricter condition: the
     // solve was stuck for a whole streak of chunks, so a strict run must
@@ -304,6 +304,57 @@ fn assemble_evidence_and_ci_artifacts(
     })
 }
 
+/// The co-sim coverage messages EVERY surface carries, in one order and one
+/// wording so the `--json` notes and the `--plain` heads-ups cannot drift
+/// apart: a drive that lost to a co-located source, dropped ADC injections,
+/// never-exercised bus peripherals, watchdog and timing limitations, watchdog
+/// reboots, heuristic SPI framing, sub-chunk pulses invisible to tick-evaluated
+/// sequential parts, and runtime driver contention. Each is a silent-garbage
+/// mode: they ride this channel in ADDITION to the structured `CosimJson`
+/// fields, so a consumer that only filters notes still sees them.
+///
+/// `framing_prefix` is the only difference between the surfaces: every other
+/// message already opens with `co-sim:`, and the shared framing warning
+/// (rendered identically in the coverage report) does not.
+fn shared_coverage_messages(
+    scheduler: &crate::scheduler::Scheduler,
+    framing_prefix: &str,
+) -> Vec<String> {
+    let mut out = scheduler.drive_conflicts();
+    out.extend(scheduler.adc_dropped().iter().map(|d| d.message()));
+    out.extend(scheduler.unexercised_buses().iter().map(|b| b.message()));
+    out.extend(
+        scheduler
+            .watchdog_limitations()
+            .iter()
+            .map(|(mcu_ref, limitation)| {
+                crate::scheduler::watchdog_limitation_message(mcu_ref, limitation)
+            }),
+    );
+    out.extend(
+        scheduler
+            .watchdog_resets()
+            .iter()
+            .map(|(mcu_ref, resets)| crate::scheduler::watchdog_reset_message(mcu_ref, *resets)),
+    );
+    out.extend(
+        scheduler
+            .timing_limitations()
+            .iter()
+            .map(|(mcu_ref, limitation)| {
+                crate::scheduler::timing_limitation_message(mcu_ref, limitation)
+            }),
+    );
+    out.extend(
+        crate::reports::cosim::heuristic_framing_warnings(&scheduler.spi_framing_modes())
+            .into_iter()
+            .map(|w| format!("{framing_prefix}{w}")),
+    );
+    out.extend(scheduler.short_pulses().iter().map(|p| p.message()));
+    out.extend(scheduler.driver_contentions().iter().map(|c| c.message()));
+    out
+}
+
 fn emit_report(
     cfg: &RunConfig,
     run_inputs: &RunInputs,
@@ -379,7 +430,7 @@ fn emit_report(
         }
         // A non-convergent chunk held stale voltages: a loud coverage note so
         // a CI consumer that filters notes (not just the CosimJson body) sees
-        // the analog side is not trustworthy over the failed windows (05 §3b).
+        // the analog side is not trustworthy over the failed windows.
         if !analog_valid {
             jr.notes.push(JsonNote {
                 kind: JsonNoteKind::Coverage,
@@ -392,7 +443,7 @@ fn emit_report(
             });
             // One note PER failed window naming the interval and the
             // solver's diagnosis, so a JSON consumer gets the offending net
-            // and element without re-running the board (E29).
+            // and element without re-running the board.
             for d in engine.scheduler().failed_window_diagnoses() {
                 jr.notes.push(JsonNote {
                     kind: JsonNoteKind::Coverage,
@@ -400,79 +451,10 @@ fn emit_report(
                 });
             }
         }
-        // A drive that lost to a co-located source, named on both sides
-        // (E30). Never silent: a run that reports 3.300 V on a net the user
-        // asked to force to 20 V has to say why.
-        for msg in engine.scheduler().drive_conflicts() {
+        for message in shared_coverage_messages(engine.scheduler(), "co-sim: ") {
             jr.notes.push(JsonNote {
                 kind: JsonNoteKind::Coverage,
-                message: msg,
-            });
-        }
-        // Co-sim coverage honesty (U3): dropped ADC injections and
-        // never-exercised bus peripherals are silent-garbage modes; they
-        // ride the same Coverage note channel analog_valid uses, in
-        // addition to the structured CosimJson fields, so a consumer that
-        // only filters notes still sees them.
-        for d in engine.scheduler().adc_dropped() {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: d.message(),
-            });
-        }
-        for b in engine.scheduler().unexercised_buses() {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: b.message(),
-            });
-        }
-        // Watchdog coverage, same channel and the same reason: a backend
-        // whose armed watchdog never fires lets hung firmware run forever,
-        // so a consumer that only filters notes must still learn that this
-        // run cannot vouch for the recovery path.
-        for (mcu_ref, limitation) in engine.scheduler().watchdog_limitations() {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: crate::scheduler::watchdog_limitation_message(&mcu_ref, &limitation),
-            });
-        }
-        for (mcu_ref, resets) in engine.scheduler().watchdog_resets() {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: crate::scheduler::watchdog_reset_message(&mcu_ref, resets),
-            });
-        }
-        // Timing coverage: a known systematic time bias on a core makes a
-        // time-based assertion there mean less than it looks, and a
-        // consumer that only filters notes must still learn it.
-        for (mcu_ref, limitation) in engine.scheduler().timing_limitations() {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: crate::scheduler::timing_limitation_message(&mcu_ref, &limitation),
-            });
-        }
-        for w in crate::reports::cosim::heuristic_framing_warnings(
-            &engine.scheduler().spi_framing_modes(),
-        ) {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: format!("co-sim: {w}"),
-            });
-        }
-        // Sub-chunk pulses invisible to tick-evaluated sequential parts
-        // (friction 1.16) and runtime driver contention: same Coverage
-        // note channel, in addition to the structured CosimJson fields,
-        // so a consumer that only filters notes still sees them.
-        for p in engine.scheduler().short_pulses() {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: p.message(),
-            });
-        }
-        for c in engine.scheduler().driver_contentions() {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: c.message(),
+                message,
             });
         }
         for net in held_high_boot_nets {
@@ -543,64 +525,15 @@ fn emit_report(
             )));
             // The interval AND the diagnosis, inline. "Rerun with --json to
             // see the windows" was the whole defect: the one surface a
-            // person actually reads named nothing (E29).
+            // person actually reads named nothing.
             for d in engine.scheduler().failed_window_diagnoses() {
                 report.heads_up.push(crate::plain::HeadsUp::note(format!(
                     "analog non-convergence at {d}"
                 )));
             }
         }
-        for msg in engine.scheduler().drive_conflicts() {
-            report.heads_up.push(crate::plain::HeadsUp::note(msg));
-        }
-        // Co-sim coverage honesty (U3): the same dropped-ADC / unexercised-bus
-        // / heuristic-framing warnings the JSON notes carry, as plain
-        // heads-ups so the verdict reads "no failures, but N worth a look".
-        for d in engine.scheduler().adc_dropped() {
-            report
-                .heads_up
-                .push(crate::plain::HeadsUp::note(d.message()));
-        }
-        for b in engine.scheduler().unexercised_buses() {
-            report
-                .heads_up
-                .push(crate::plain::HeadsUp::note(b.message()));
-        }
-        // Watchdog coverage, worded identically to the JSON notes and the
-        // default text summary.
-        for (mcu_ref, limitation) in engine.scheduler().watchdog_limitations() {
-            report.heads_up.push(crate::plain::HeadsUp::note(
-                crate::scheduler::watchdog_limitation_message(&mcu_ref, &limitation),
-            ));
-        }
-        for (mcu_ref, resets) in engine.scheduler().watchdog_resets() {
-            report.heads_up.push(crate::plain::HeadsUp::note(
-                crate::scheduler::watchdog_reset_message(&mcu_ref, resets),
-            ));
-        }
-        // Timing coverage, worded identically to the JSON notes and the
-        // default text summary.
-        for (mcu_ref, limitation) in engine.scheduler().timing_limitations() {
-            report.heads_up.push(crate::plain::HeadsUp::note(
-                crate::scheduler::timing_limitation_message(&mcu_ref, &limitation),
-            ));
-        }
-        for w in crate::reports::cosim::heuristic_framing_warnings(
-            &engine.scheduler().spi_framing_modes(),
-        ) {
-            report.heads_up.push(crate::plain::HeadsUp::note(w));
-        }
-        // Sub-chunk pulse and driver-contention findings, same wording as
-        // the JSON notes and the default text summary.
-        for p in engine.scheduler().short_pulses() {
-            report
-                .heads_up
-                .push(crate::plain::HeadsUp::note(p.message()));
-        }
-        for c in engine.scheduler().driver_contentions() {
-            report
-                .heads_up
-                .push(crate::plain::HeadsUp::note(c.message()));
+        for message in shared_coverage_messages(engine.scheduler(), "") {
+            report.heads_up.push(crate::plain::HeadsUp::note(message));
         }
         // Boot-safety heads-up: control nets the firmware switches ON and
         // holds from power-up, with no resistor setting a safe default. The

@@ -702,14 +702,13 @@ fn user_model_dir() -> Option<PathBuf> {
 /// is wrong, their part is exotic, or we are simply thin.
 ///
 /// The answer comes from the REAL front end, `hauksbee_ir::SpiceLoader`, and
-/// that matters. An earlier version of this asked a minimal card scanner in
-/// hauksbee-models instead, and reported that a `.subckt` "will not simulate on
-/// its own". That was false: the loader flattens subcircuits at load, mangling
-/// internal names, mapping formal ports to actual nodes, recursing through
-/// nested calls with a depth guard, and substituting per-instance parameters.
-/// Most vendor models ship as a subckt, so telling those users we could not
-/// run theirs would have turned a supported path into a refusal. Ask the thing
-/// that would actually do the work.
+/// that matters: a lighter card scanner would report that a `.subckt` "will not
+/// simulate on its own", which is false. The loader flattens subcircuits at
+/// load, mangling internal names, mapping formal ports to actual nodes,
+/// recursing through nested calls with a depth guard, and substituting
+/// per-instance parameters. Most vendor models ship as a subckt, so a
+/// second-guessing scanner would turn a supported path into a refusal. Ask the
+/// thing that would actually do the work.
 pub fn spice_report(text: &str) -> Result<String, String> {
     if text.trim().is_empty() {
         return Err("nothing to check yet".to_string());
@@ -980,8 +979,8 @@ max_current_a = 0.5 # Source: absolute maximum ratings
         );
     }
 
-    /// A `#` inside a quoted string is not a comment. The description used to
-    /// lose everything after it and the citation column gained a fragment of
+    /// A `#` inside a quoted string is not a comment: the description must keep
+    /// everything after it, and the citation column must not gain a fragment of
     /// prose.
     #[test]
     fn a_hash_inside_a_string_is_not_a_citation() {

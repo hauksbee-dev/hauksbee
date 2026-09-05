@@ -590,31 +590,20 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     let bounds: Vec<[f64; 4]> = regions.iter().map(|&i| out[i].shape.bounds()).collect();
     // A pour whose own outline is detailed is tested for enclosure once per void,
     // and each test walks every vertex of every void against every vertex of the
-    // outline. On an 8000-vertex plane outline with 6000 antipads that alone was
-    // 1.1 s. The same scanline grid the connectivity pass uses answers each point
-    // in O(1) and is exact, so build one per detailed pour and reuse it. The
-    // threshold matches `connect`'s: below it the direct test is cheaper than the
-    // build.
-    // Built LAZILY, and only for a pour some void actually reaches. Building one
-    // for every detailed pour up front, and holding them all, cost 4.2 MB apiece
-    // for pours no void ever touches: a film of 300 finely flattened 10000-gon
-    // fill regions and ONE clear stroke paid 1.3 GB and 1.9 s for the 299 grids it
-    // never queried.
-    // Laziness alone is not a bound: if a void does reach every detailed pour, all
-    // the grids are live at once and the 1.3 GB is back. They share a cell budget
-    // for the same reason `connect`'s do, and the grid is exact at any resolution,
-    // so this only ever moves work.
+    // outline. The same scanline grid the connectivity pass uses answers each
+    // point in O(1) and is exact, so build one per detailed pour and reuse it.
+    // The vertex threshold matches `connect`'s: below it the direct test is
+    // cheaper than the build. Grids are built LAZILY and only for a pour some
+    // void actually reaches (one costs megabytes), and they share a cell budget
+    // so a film where every pour IS reached stays bounded. The grid is exact at
+    // any resolution, so the budget only ever moves work.
     const ENCLOSE_GRID_VERTS: usize = 2000;
     const ENCLOSE_CELL_BUDGET: usize = 64 << 20;
     let enclose_side_ceiling = {
         // Divided by the pours that could take a GRID, not by every pour on the
-        // film. Dividing by all of them let regions that are never gridded derate
-        // the ones that are, and a coarse grid means every pad lands in the
-        // boundary band and pays the exact test: on a plane with a 40000-vertex
-        // outline and 3000 antipads, 500 unrelated four-vertex fill regions made
-        // the cut 37 times slower for byte-identical output. A film that draws its
-        // traces as filled regions AND its plane negatively is exactly the shape
-        // this reader exists for.
+        // film: regions that are never gridded must not derate the ones that
+        // are, since a coarse grid puts every pad in the boundary band where it
+        // pays the exact test.
         let gridded = originals
             .iter()
             .filter(|cs| cs.iter().map(Vec::len).sum::<usize>() >= ENCLOSE_GRID_VERTS)
@@ -628,17 +617,14 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     let mut enclose_grids: Vec<Option<Option<super::geo::PolyGrid>>> =
         (0..regions.len()).map(|_| None).collect();
     // The void contours already cut from each pour, bucketed spatially so the
-    // already-void probe below is not a scan of every earlier void. Without the
-    // grid a plane carrying tens of thousands of antipads paid O(voids^2) bound
-    // comparisons for an answer that is "no" almost every time.
+    // already-void probe below is not an O(voids^2) scan of every earlier void.
     let mut applied: Vec<VoidIndex> = bounds.iter().map(|&b| VoidIndex::new(b)).collect();
     // Which pours took a cut, so only those are re-split afterwards.
     let mut cut: Vec<usize> = Vec::new();
     // Pours by bounding box, so a void reaches only the pours that could contain
     // it. Scanning every pour for every void is the last quadratic in this
     // function, and a film that draws its tracks as filled regions AND its plane
-    // negatively has both factors large at once: 500 pours and 500 voids cost
-    // 8.9 ms, 4000 and 4000 cost 107 ms.
+    // negatively has both factors large at once.
     let region_tree = rstar::RTree::bulk_load(
         (0..regions.len())
             .map(|slot| BoundsLeaf {
@@ -649,16 +635,10 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     );
 
     // The pieces of ONE clear image are decided together, and cut all or none.
-    // Each piece was gated independently before, on its own bounds and its own
-    // enclosure, and a void whose island touches its outer boundary at the very
-    // corner the interior witness keys on gets split into two pieces (both
-    // witnesses land on the shared boundary, so each reads as enclosed by the
-    // other). If such a void straddles the pour's edge, the outer piece is refused
-    // and the island piece is cut ALONE, which flips the island's interior from
-    // copper to empty: the pour loses copper the film explicitly kept and keeps
-    // the copper the film cleared. `group_contours` no longer produces that split,
-    // and deciding per image means no future misgrouping can turn into an erasure
-    // either.
+    // Gating each piece independently lets a void that straddles the pour's edge
+    // have its outer piece refused and its island piece cut alone, which flips
+    // the island's interior from copper to empty: the pour would lose copper the
+    // film kept and keep the copper the film cleared.
     let mut start = 0usize;
     while start < clears.len() {
         let mut end = start + 1;
@@ -725,12 +705,12 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
             // pour weaves around while every vertex sits on copper; parity is then
             // ODD inside that intersection and the bare board fills with phantom
             // copper, which can short a conductor routed through the pour's slot to
-            // the plane. Testing the pour's hole LIST caught only the enclosed form:
-            // a slot routed in from the pour's edge is one concave contour, with no
-            // hole to find. The test is now the exact one, no pour boundary may cross
+            // the plane. A slot routed in from the pour's edge is one concave
+            // contour with no hole to find, so the test is the exact one: no pour
+            // boundary may cross
             // the void, which covers both forms and is what "inside the copper"
             // means. Refusing leaves the pour's copper standing, this module's
-            // direction.
+            // safe direction.
             if !void_lies_in_copper(&originals[slot], grid.as_ref(), group, gb) {
                 continue;
             }
@@ -789,10 +769,9 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     // primitive rather than duplicate geometry and force the connectivity pass to
     // rediscover that the identical regions overlap.
     // Keyed on the void's identity, its clear image and which of that image's
-    // contours it is, never on the coordinates. Comparing coordinates meant every
-    // island was compared against every island freed so far, and all the islands of
-    // one aperture are the same 32-gon so the length check never short-circuited:
-    // 62500 annular antipads spent 5.4 s in that scan alone.
+    // contours it is, never on the coordinates: all the islands of one aperture
+    // are the same polygon, so a coordinate comparison degrades to a scan of
+    // every island freed so far.
     let mut already_freed: std::collections::HashSet<(usize, usize, usize)> =
         std::collections::HashSet::new();
     // The caller proved this is exactly one convex plane, every clear was painted
@@ -849,12 +828,11 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
 /// nesting-depth classifier cannot be used here. Its precondition is that
 /// contours never cross, which holds inside one region statement and NOT across
 /// the voids of a whole film: two overlapping antipads put one void's witness
-/// vertex inside the other, which reads as even depth, i.e. an outer boundary,
-/// and the void was then promoted to a phantom polygon of COPPER and removed from
-/// the pour. On a 12000-antipad plane whose columns overlap, 11890 voids were
-/// promoted that way and the board-sized sheet came back. The bounding-box test
-/// is conservative in the safe direction: an island it declines to promote stays a
-/// contour of the pour, i.e. over-connected.
+/// vertex inside the other, which reads as even depth (an outer boundary), and
+/// the void is then promoted to a phantom polygon of COPPER and removed from the
+/// pour, restoring the board-sized sheet. The bounding-box test is conservative
+/// in the safe direction: an island it declines to promote stays a contour of the
+/// pour, i.e. over-connected.
 fn free_ringed_islands(
     shape: &mut Shape,
     applied: &VoidIndex,
@@ -1042,10 +1020,9 @@ fn contours_enclose(outer: &[Vec<(f64, f64)>], inner: &[Vec<(f64, f64)>]) -> boo
 ///
 /// The unit of storage is a whole void, not a contour: a void with a hole (an
 /// annular clear flash) removes copper only under its RING, so asking whether a
-/// candidate sits inside its outer boundary is the wrong question. Indexing
-/// contours separately answered yes for a later void at the ring's centre, which
-/// the ring had deliberately left standing, and skipped the cut that should have
-/// removed it, keeping the pad on the pour.
+/// candidate sits inside its outer boundary is the wrong question: indexing
+/// contours separately answers yes for a later void at the ring's centre, which
+/// the ring deliberately left standing, and skips the cut that should remove it.
 ///
 /// A void can only be swallowed by an earlier void whose bounds contain it, and
 /// such a void necessarily covers the candidate's own min-corner cell, so one
@@ -1060,13 +1037,12 @@ struct VoidIndex {
     all: Vec<[f64; 4]>,
     /// `RES * RES` buckets of void ids, once the pour has enough voids for a bucket
     /// lookup to beat scanning `all`. Ids only, not bounds: a copy of the bounds in
-    /// every cell a void spans cost 55 kB for a void with large bounds.
+    /// every cell a void spans is far larger than the ids.
     cells: Vec<Vec<usize>>,
     /// Voids whose bounds span more than `MAX_STAMP` cells, which are scanned for
     /// every query instead of being stamped into hundreds of buckets. Long clear
     /// STROKES, which is how some exporters draw a plane's splits, span nearly the
-    /// whole grid each: stamping 8000 of them took 575 MB and 1.25 s, almost all of
-    /// it allocation churn.
+    /// whole grid each, so stamping them is almost pure allocation churn.
     overflow: Vec<usize>,
     /// Per void id, the contour indices it occupies in the pour's contour list.
     /// The first is its outer boundary, the rest its holes.
@@ -1162,9 +1138,8 @@ impl VoidIndex {
     ///
     /// A void is stamped into every cell its bounds span, so a void overlapping
     /// `b` has an entry in some cell `b` spans; scanning that span is therefore
-    /// complete. Without the grid this was a scan of every void ever cut from the
-    /// pour, once per island, which is quadratic in the antipad count: a plane
-    /// with 64000 annular antipads spent 9.3 s there.
+    /// complete, and avoids a per-island scan of every void ever cut from the
+    /// pour (quadratic in the antipad count).
     fn any_other_overlaps(&self, b: [f64; 4], own: usize) -> bool {
         let hit = |&other: &usize| {
             let ob = self.all[other];
@@ -1222,15 +1197,13 @@ impl VoidIndex {
 /// contours, so the copper island an annular void leaves standing does not count
 /// as covered.
 ///
-/// Each vertex is nudged a whisker toward the candidate's own centroid before the
-/// test. A void emitted TWICE (panelisers do it; so does any re-plot that
+/// Each vertex is nudged a whisker toward the candidate's own removed area before
+/// the test. A void emitted TWICE (panelisers do it; so does any re-plot that
 /// concatenates films) puts the duplicate's vertices exactly ON the first void's
-/// boundary, and `point_in_polygon` is half-open, so the duplicate read as
-/// not-covered, was appended a second time, and even-odd flipped the clearance
-/// back to COPPER. The nudge is 0.1 um, three orders below any real clearance and
-/// well above coordinate noise; being wrong either way is survivable (a missed
-/// skip over-connects, an over-eager skip leaves copper that is already gone),
-/// but the coincident case is common enough to be worth getting right.
+/// boundary, and `point_in_polygon` is half-open, so without the nudge the
+/// duplicate reads as not-covered, is appended a second time, and even-odd flips
+/// the clearance back to COPPER. The nudge is 0.1 um, three orders below any real
+/// clearance and well above coordinate noise.
 fn already_void(
     shape: &Shape,
     applied: &VoidIndex,
@@ -1244,11 +1217,9 @@ fn already_void(
     // Each vertex is nudged toward the candidate's own REMOVED area: inward for
     // the outer boundary, OUTWARD for a hole, because a hole's interior is the
     // copper island the void leaves standing and is not removed at all. Nudging
-    // everything toward one centre got the annular case backwards, pushing the
-    // hole's vertices into the island where the earlier void reads as
-    // not-removed. A duplicated annular antipad, the commonest construct on a
-    // negative plane, was therefore cut twice, and even-odd flipped its whole
-    // cleared ring back to copper: the pad shorted to the plane.
+    // everything toward one centre gets the annular case backwards: a duplicated
+    // annular antipad is cut twice and even-odd flips its cleared ring back to
+    // copper, shorting the pad to the plane.
     let probes: Vec<(f64, f64)> = contours
         .iter()
         .enumerate()
@@ -1380,7 +1351,7 @@ struct Plotter<'a> {
     /// region carry several closed contours (each begun by a D02 move), an
     /// outer boundary plus holes cut out of it, or several disjoint islands,
     /// so contours are kept SEPARATE; the last entry is the contour currently
-    /// being drawn. Flattening them into one ring bridged the pieces with
+    /// being drawn. Flattening them into one ring bridges the pieces with
     /// phantom edges (false shorts across islands, holes filled back in).
     region: Option<Vec<Vec<(f64, f64)>>>,
     /// Polarity in effect when the current region OPENED. A region is a single
@@ -1397,10 +1368,9 @@ struct Plotter<'a> {
     ///
     /// Snapshotted for the same reason `region_dark` is: the graphics state can move
     /// inside a region. A `%LS0.5*%` in force while the contour is drawn and reset
-    /// before `G37` otherwise banked the UNTRANSFORMED void, which is larger than
-    /// what the film cleared, and erased copper the film kept. Both ends have to
-    /// agree, so a transform, an `%AB` body or a negative image anywhere across the
-    /// region refuses it.
+    /// before `G37` would otherwise bank the UNTRANSFORMED void, which is larger
+    /// than what the film cleared. Both ends have to agree, so a transform, an
+    /// `%AB` body or a negative image anywhere across the region refuses it.
     region_bankable: bool,
     /// Current load polarity. Clear (LPC) geometry is banked as a void and cut
     /// from the copper beneath it (see [`apply_clears`]).
@@ -1463,11 +1433,10 @@ struct Plotter<'a> {
     /// modern exporter writes)?
     ///
     /// On a NEGATIVE image the film is complemented, so the `%LPC*%` objects are the
-    /// copper and the dark ones are the voids. This plotter does not complement,
-    /// which used to be merely wrong in the same direction as the bug this module
-    /// fixes; now that clears subtract, believing them on a negative film would cut
-    /// real conductors out of a phantom pour, the one direction `apply_clears`
-    /// promises never to take. So no clear is banked while the image is negative.
+    /// copper and the dark ones are the voids. This plotter does not complement, so
+    /// believing a clear on a negative film would cut real conductors out of a
+    /// phantom pour, the one direction `apply_clears` promises never to take. No
+    /// clear is banked while the image is negative.
     image_positive: bool,
     /// Is the deprecated image scale factor (`%SF`) the identity?
     ///
@@ -1478,8 +1447,8 @@ struct Plotter<'a> {
     /// semantics are not something to reconstruct from memory, so a non-identity one
     /// refuses every clear. That is free for the `SFA1B1` that actually arrives, and
     /// it is NOT free otherwise: on a negatively-drawn plane, refusing every clear
-    /// returns the board-sized solid slab, i.e. every net on that layer shorted. The
-    /// permitted direction, but a real cost, not a costless one.
+    /// returns the board-sized solid slab, i.e. every net on that layer shorted.
+    /// The permitted direction, but a real cost.
     image_scale_identity: bool,
 }
 
@@ -1489,8 +1458,8 @@ struct Plotter<'a> {
 /// plane as ONE dark region covering the whole board followed by `%LPC*%` and a
 /// few hundred clear regions, one per clearance, antipad and thermal gap. The
 /// clears are not decoration: they are the only thing that makes the plane
-/// anything other than a solid slab. Dropping them left a board-sized sheet of
-/// copper on every signal layer, which unioned every net on the board into one.
+/// anything other than a solid slab. Dropping them leaves a board-sized sheet of
+/// copper on every signal layer, unioning every net on the board into one.
 #[derive(Clone)]
 struct Clear {
     /// EVERY contour of the void, kept together as one unit. An annular clear
@@ -1513,9 +1482,9 @@ struct Clear {
     /// Which connected piece of that image this is. One region statement can carry
     /// several disjoint voids, so `statement` alone does not identify a void: two
     /// pieces of one image that each have a hole would key their islands
-    /// identically, and the freed-island dedup would keep the first island and
-    /// silently drop the second while still cutting its contour out of the pour.
-    /// That is copper the film kept, erased.
+    /// identically, and the freed-island dedup would keep the first island while
+    /// still cutting the second's contour out of the pour, erasing copper the film
+    /// kept.
     piece: usize,
 }
 
@@ -1613,9 +1582,9 @@ impl<'a> Plotter<'a> {
     /// 4.10.4 allows them to be an outer plus its holes OR several disjoint
     /// islands. Banking them verbatim as one void and then treating everything
     /// after the first as a hole is a guess about draw order, and when it is wrong
-    /// the void is undone and re-emitted as copper: a second disjoint void in one
-    /// statement was cancelled outright, and an annular void drawn hole-first had
-    /// its cleared RING promoted to copper. Splitting into pieces here makes
+    /// the void is undone and re-emitted as copper (a second disjoint void in one
+    /// statement cancelled outright; an annular void drawn hole-first with its
+    /// cleared RING promoted to copper). Splitting into pieces here makes
     /// "index 0 is the outer, the rest are its holes" true by construction.
     /// Nesting-depth classification is valid at this point, and only at this
     /// point: the contours of one region statement do not cross, which is exactly
@@ -1725,9 +1694,9 @@ impl<'a> Plotter<'a> {
                 }
                 gerber_types::ApertureBlock::Close => {
                     // Only a close that actually matches an open restores the
-                    // polarity. A stray `%AB*%` in a malformed file otherwise
-                    // reset `dark` to its initial `true` and painted every
-                    // following clear object as copper.
+                    // polarity: a stray `%AB*%` in a malformed file would otherwise
+                    // reset `dark` to `true` and paint every following clear object
+                    // as copper.
                     if let Some(d) = self.ab_depth.checked_sub(1) {
                         self.ab_depth = d;
                         if d == 0 {
@@ -1825,8 +1794,8 @@ impl<'a> Plotter<'a> {
     /// the primitives appended since the block opened, across the `repeat_x` ×
     /// `repeat_y` grid at the I/J step. The base copy at cell (0,0) is already in
     /// `out`; only the other cells are cloned, each translated by its grid
-    /// offset. Without this the repeated copies of a panelized/arrayed layer
-    /// were silently dropped, losing every pad/track/pour but the first.
+    /// offset. Without this the repeated copies of a panelized/arrayed layer are
+    /// silently dropped, losing every pad/track/pour but the first.
     fn flush_step_repeat(&mut self) {
         let Some(block) = self.sr.take() else {
             return;
@@ -1846,7 +1815,7 @@ impl<'a> Plotter<'a> {
             .collect();
         // A cell may be voids ALONE: a pour painted before the block, then an
         // arrayed set of clear antipads over it. Returning on empty base copper
-        // replicated none of them and left every repeat but the first solid.
+        // would replicate none of them and leave every repeat but the first solid.
         if base.is_empty() && base_clears.is_empty() {
             return;
         }
@@ -1874,9 +1843,9 @@ impl<'a> Plotter<'a> {
                 }
                 // Each replica's voids are a DIFFERENT clear image from the base
                 // cell's, so they take fresh statement ids. Sharing the base's id
-                // put every replica's void in one group with the base's, and the
-                // group's combined bounding box then spanned the whole panel, so it
-                // was enclosed by no single pour and NOTHING was cut.
+                // would put every replica's void in one group whose combined
+                // bounding box spans the whole panel, enclosed by no single pour,
+                // so nothing would be cut.
                 let mut remap: HashMap<usize, usize> = HashMap::new();
                 for c in &base_clears {
                     let at = replica_start + (c.painted_before - block.start);
@@ -1921,7 +1890,7 @@ impl<'a> Plotter<'a> {
                     // drawn under circular interpolation (G02/G03) contributes
                     // its flattened arc; the same centre/sweep geometry a
                     // stroked arc sweeps, NOT just its chord: chord-collapsing
-                    // turned a round pour drawn as two semicircles into a
+                    // turns a round pour drawn as two semicircles into a
                     // zero-area polygon, vanishing its copper entirely.
                     let seg: Vec<(f64, f64)> = match self.interp {
                         InterpolationMode::Linear => vec![(ex, ey)],
@@ -2020,10 +1989,10 @@ impl<'a> Plotter<'a> {
             | Some(Aperture::Obround(Rectangular { x, y, .. })) => x.min(*y) * self.to_mm,
             // Unknown aperture (polygon/macro/undefined): a fixed 0.1 mm hairline,
             // enough to connect endpoints. This is a physical millimetre size and
-            // must NOT be scaled by `to_mm`, on an inch-unit file (`%MOIN%`,
+            // must NOT be scaled by `to_mm`: on an inch-unit file (`%MOIN%`,
             // to_mm=25.4) `0.1 * to_mm` = 2.54 mm, a fat stroke that union-merges
-            // adjacent copper into a false short (the same unit-scaling hazard the
-            // MACRO_FALLBACK_DISC_MM constant is documented to avoid).
+            // adjacent copper into a false short (the same unit-scaling hazard
+            // MACRO_FALLBACK_DISC_MM avoids).
             _ => 0.1,
         }
     }
@@ -2113,11 +2082,10 @@ impl<'a> Plotter<'a> {
         let s = self.to_mm;
         // A standard aperture's optional hole diameter: the hole is BARE BOARD
         // (RS-274X 4.4.6: the hole is not part of the aperture image), so a
-        // flash that carries one must not paint copper there. Discarding it
-        // read the hole as solid, and foreign copper passing through a large
-        // hole was unioned onto the pad's net. A holed flash materializes as
-        // an outer contour plus a hole contour (even-odd containment); a flash
-        // with no hole keeps its exact old shape.
+        // flash that carries one must not paint copper there, or foreign copper
+        // passing through a large hole is unioned onto the pad's net. A holed
+        // flash materializes as an outer contour plus a hole contour (even-odd
+        // containment).
         let hole_mm = match ap {
             Aperture::Circle(Circle { hole_diameter, .. }) => *hole_diameter,
             Aperture::Rectangle(Rectangular { hole_diameter, .. })
@@ -2269,8 +2237,8 @@ impl<'a> Plotter<'a> {
                             // support): fall back to a small disc so the flash
                             // still anchors a pad rather than vanishing. The
                             // radius is a fixed physical size (mm); `cx`/`cy` are
-                            // already mm, so it must NOT be scaled by `to_mm`,
-                            // doing so bloated the anchor to 6.35 mm (0.25 inch)
+                            // already mm, so it must NOT be scaled by `to_mm`:
+                            // that would bloat the anchor to 6.35 mm (0.25 inch)
                             // on an inch-unit file, big enough to merge adjacent
                             // copper into one net.
                             Shape::disc(cx, cy, MACRO_FALLBACK_DISC_MM)
@@ -2475,14 +2443,14 @@ impl<'a> Plotter<'a> {
             return;
         }
         // Contours that enclose no area (a stray D02 with no draws, a lone
-        // segment) are dropped, as the flat model always did.
+        // segment) are dropped.
         let contours: Vec<Vec<(f64, f64)>> =
             contours.into_iter().filter(|c| c.len() >= 3).collect();
         if contours.is_empty() {
             return;
         }
         // The overwhelmingly common case (KiCad emits one contour per G36
-        // block): a plain polygon, exactly as before.
+        // block): a plain polygon.
         if contours.len() == 1 {
             let pts = contours.into_iter().next().unwrap();
             self.out.push(CopperPrim {
@@ -2538,8 +2506,7 @@ impl rstar::RTreeObject for BoundsLeaf {
 ///
 /// The enclosure search is R-tree pruned. Comparing every ordered pair of
 /// contours, even by bounding box alone, is quadratic in the contour count, and a
-/// cut plane's contour count IS its antipad count: on a 6000-antipad plane that
-/// pair scan was the single most expensive thing in the reader.
+/// cut plane's contour count IS its antipad count.
 fn group_contours_into_pieces(contours: Vec<Vec<(f64, f64)>>) -> Vec<Shape> {
     group_contours(contours)
         .into_iter()
@@ -2587,9 +2554,9 @@ fn contour_area2(c: &[(f64, f64)]) -> f64 {
 /// answers inside or outside depending on the orientation it happens to be drawn
 /// in, and boolean-op CAM routinely starts a hole's loop at a point it shares with
 /// its outer. A hole misread as an outer splits one clear region statement into two
-/// independent voids, the outer is then cut whole and the piece that would restore
-/// the island is swallowed as already-void, and the island copper the film kept is
-/// gone: the one failure this reader must never produce.
+/// independent voids: the outer is cut whole, the piece that would restore the
+/// island is swallowed as already-void, and the island copper the film kept is
+/// gone, the one failure this reader must never produce.
 ///
 /// The lowest vertex of a simple polygon lies on its convex hull, so its interior
 /// angle is convex and the bisector of the two edges leaving it points into the
@@ -2625,10 +2592,8 @@ pub(super) fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
     // directions. The immediate neighbours are not usable: a region contour is
     // built from its start point plus every draw endpoint, so a properly closed
     // loop repeats its start vertex at the end, and when that start point is also
-    // the lowest vertex the previous neighbour IS `c`. That made the whole
-    // construction fall back to the bare vertex for the commonest shape in the
-    // format, a rectangular void whose loop starts at its lower-left corner, which
-    // is exactly the ambiguity this function exists to remove. The polygonised
+    // the lowest vertex the previous neighbour IS `c` (a rectangular void whose
+    // loop starts at its lower-left corner is the commonest case). The polygonised
     // aperture outlines have the same shape of problem: `stadium_outline`'s two
     // cap loops repeat the segment-perpendicular vertices, and on a degenerate
     // capsule (a clear circle flash) the repeated pair is the lowest vertex.

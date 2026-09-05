@@ -44,7 +44,7 @@
 //! #   addr_mask = 0x7f
 //! ```
 //!
-//! ## Write side (05 §3.2)
+//! ## Write side
 //!
 //! Firmware writes are described by three additional block families, see the
 //! "Write side" section below for the full types and the Rust/expression
@@ -166,7 +166,7 @@ pub enum Encoding {
     /// by them, and the value expressions (`evalexpr`) operate on scalars; they
     /// cannot themselves emit a 3-byte MSB/LSB/XLSB frame with a shifted low
     /// nibble. This encoding is the "minor encoding addition" the co-sim-fidelity
-    /// plan (05 §6.1) anticipated for BME280. It packs a **raw ADC count** (the
+    /// BME280-style packed frame. It packs a **raw ADC count** (the
     /// register's `expr` supplies the count, e.g. an `adc_press` input); the
     /// raw↔physical Bosch compensation is applied by the firmware / test
     /// consumer, not here (see the BME280 spec header for why the compensation
@@ -251,7 +251,7 @@ impl RegisterSpec {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Write side (05 §3.2): what the FIRMWARE writes, and what those writes do.
+// Write side: what the FIRMWARE writes, and what those writes do.
 //
 // The read side above maps physical inputs → register bytes. The write side is
 // the mirror: firmware bytes → decoded values → (a) stored variables that read
@@ -489,7 +489,7 @@ pub struct Sensor {
     pub inputs: Vec<InputSpec>,
     #[serde(default, rename = "register")]
     pub registers: Vec<RegisterSpec>,
-    // ── Write side (05 §3.2) ──
+    // ── Write side ──
     /// How many independent channels the per-channel `state` variables have
     /// (an MCP4728 has 4). Default 1.
     #[serde(default = "default_channels")]
@@ -764,7 +764,7 @@ impl SensorSpec {
         Ok(())
     }
 
-    /// Structural validation of the write side (05 §3.2): framing coherence,
+    /// Structural validation of the write side: framing coherence,
     /// bit ranges, namespace uniqueness, expression references. Split out of
     /// [`SensorSpec::validate`] (which calls it) purely for readability.
     fn validate_write_side(&self) -> Result<(), SensorSpecError> {

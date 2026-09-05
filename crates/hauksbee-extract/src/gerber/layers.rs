@@ -87,14 +87,11 @@ impl<'a> Name<'a> {
     /// Does the name carry `cu` as a COPPER token?
     ///
     /// As a bare substring `cu` matches inside `circuit`, `accumulator`, `vcut`,
-    /// `document` and `cube`, so any project so named supplied the copper token and a
-    /// mechanical or documentation film became copper. Requiring `cu` to END a word
-    /// fixed that and broke the other side: `cu` glued to a FOLLOWING role word is a
-    /// real convention, and `-CuTop.gbr` / `-CuBottom.gbr` ship on thirteen corpus
-    /// zips plus a loose directory (the crkbd corne boards, six switch-plate PCBs and
-    /// the RoyalBlue54L antenna). Those went Unknown, which is dropped with no note,
-    /// and the RoyalBlue54L directory failed outright with "no copper gerber layers
-    /// found here".
+    /// `document` and `cube`, so a mechanical or documentation film of a project so
+    /// named would read as copper. Requiring `cu` to END a word breaks the other
+    /// side: `cu` glued to a FOLLOWING role word is a real convention
+    /// (`-CuTop.gbr`, `-CuBottom.gbr`), and such films would go Unknown, which is
+    /// dropped with no note.
     ///
     /// So: a whole word (`-F_Cu`, `_cu.gbr`), or ending one (`TopCu`), or abutting a
     /// side or stack token on its right (`CuTop`, `CuBottom`, `CuIn1`). Nothing else.
@@ -347,17 +344,14 @@ pub fn classify(path: &Path) -> LayerRole {
         ("dimension", &[][..]),
         ("drawing", &[][..]),
         ("keepout", &[][..]),
-        // Altium and Eagle both plot these beside the copper, and every name-based
-        // copper rule below keys on WORDS: `MyCircuit_Mechanical_Layer_1.gbr` and
-        // `Documentation Layer 1.gbr` came back as inner COPPER, which puts outline
-        // and dimension lines on a layer every drill barrel stitches. That is a
-        // large false merge, the very bug the negative-pour work exists to fix,
-        // reintroduced by a filename, and it inflates the layer count that
+        // Altium and Eagle both plot these beside the copper, and without this
+        // `MyCircuit_Mechanical_Layer_1.gbr` and `Documentation Layer 1.gbr` read as
+        // inner COPPER, putting outline and dimension lines on a layer every drill
+        // barrel stitches (a large false merge) and inflating the layer count
         // blind-via span resolution reads.
-        // Whole words, unlike the rest of this list. `MechanicalKeyboard-B_Cu.gbr`
+        // Whole words, unlike the rest of this list: `MechanicalKeyboard-B_Cu.gbr`
         // glues the word to the next one, and the explicit-suffix rule above already
-        // rescues the separated forms; requiring a word here means the raw substring
-        // cannot reach past a project name either.
+        // rescues the separated forms.
         ("mechanical", &[][..]),
         ("documentation", &[][..]),
         ("adhes", &["gma", "gba"][..]),
@@ -414,17 +408,16 @@ pub fn classify(path: &Path) -> LayerRole {
     // puts on its copper films appear just as readily on the documents beside
     // them: Altium's per-side pick-and-place is `Pick Place for <board> - Top
     // Layer.csv` and its per-layer prints are `<board>_Copper_Top.pdf`. The
-    // directory scan claims copper before it looks for placement data, so a
-    // matched CSV was swallowed as an empty copper film and the components never
-    // bound. Refusing here rather than inside one rule covers the top, bottom,
+    // directory scan claims copper before it looks for placement data, so such a
+    // CSV would be swallowed as an empty copper film and the components never
+    // bind. Refusing here rather than inside one rule covers the top, bottom,
     // inner, bare-role and `.art` rules alike.
     //
-    // Stated as what a film is NOT, deliberately. An allowlist of film extensions
-    // would drop the copper of any exporter using a name outside it
-    // (`-Inner1.gbx`, `-signal_2.gb`), which is the same silent loss this
-    // function has been fixed for twice; the thing actually being excluded is a
-    // small, known set of non-films. Everything genuinely ambiguous (`.txt` for a
-    // drill, extensionless plots) is already resolved above or left to the rules.
+    // Stated as what a film is NOT, deliberately: an allowlist of film extensions
+    // would silently drop the copper of any exporter using a name outside it
+    // (`-Inner1.gbx`, `-signal_2.gb`), whereas the set of non-films is small and
+    // known. Everything genuinely ambiguous (`.txt` for a drill, extensionless
+    // plots) is already resolved above or left to the rules.
     if n.ext.as_deref().is_some_and(is_definitely_not_a_film) {
         return LayerRole::Unknown;
     }
@@ -469,10 +462,8 @@ pub fn classify(path: &Path) -> LayerRole {
     // `Top.gbr` / `Bottom.gbr`, `1 - Top.gbr` / `2 - Bottom.gbr`,
     // `board-Front.gbr` / `board-Back.gbr`, `TOP.gbr` / `BOTTOM.gbr` with
     // `L2-GND.gbr` inners. DipTrace, Sprint Layout, PCB Elegance and several
-    // house CAM scripts all plot copper this way, and it was the single most
-    // common shape in a 60-job corpus of real fab folders: the KiCad and Protel
-    // rules above matched none of them, so the whole job was refused with "no
-    // copper gerber layers found here" while the copper sat right there.
+    // house CAM scripts all plot copper this way, and the KiCad and Protel rules
+    // above match none of them.
     //
     // Safe only HERE, at the end: every mask / paste / silk / assembly /
     // dimension / outline film carrying the same role word has already been
@@ -1023,16 +1014,15 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
         .then_some(k)
     };
     // Scan EVERY occurrence of a marker, not just the first: a project name that
-    // itself contains one (e.g. "mainboard-In2_Cu", "arduino-In1_Cu") puts a
-    // non-digit-tailed "in" ahead of the real `In<k>_Cu` token. `find` stopped at
-    // that first match and gave up, silently dropping the inner copper layer.
+    // itself contains one ("mainboard-In2_Cu", "arduino-In1_Cu") puts a
+    // non-digit-tailed "in" ahead of the real `In<k>_Cu` token, and stopping at
+    // the first match silently drops the inner copper layer.
     //
     // A BUTT-UP digit wins over a separated one, everywhere, before any separated
-    // match is considered. `Main_2-In1_Cu.gbr` otherwise reads its own project
-    // name: the "in" inside "main" is followed by `_2`, which the separator form
-    // accepts, and the film came back as inner layer 2 instead of 1. The separated
-    // form additionally requires the marker to start a token, so an "in" buried in
-    // a word cannot claim a number that follows the word.
+    // match is considered: `Main_2-In1_Cu.gbr` otherwise reads its own project
+    // name, the "in" inside "main" followed by `_2` that the separator form
+    // accepts. The separated form additionally requires the marker to start a
+    // token, so an "in" buried in a word cannot claim a number after the word.
     for pass in 0..2 {
         // `plane` is here because an INTERNAL PLANE is copper and is exactly the film
         // drawn negatively: `Internal Plane 1.gbr` and
@@ -1041,31 +1031,22 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
         for marker in ["in", "inner", "signal", "layer", "plane"] {
             for (pos, _) in n.full.match_indices(marker) {
                 let tail = &n.full[pos + marker.len()..];
-                // A marker BURIED in a word may not claim a layer index, in
-                // either form. `main2-In1_Cu.gbr` otherwise read its own
-                // project name: the "in" inside "main" butts straight against
-                // `2`, so the butt-up pass took it and reported inner layer 2.
-                // Worse than a wrong label, since two films of one job can then
+                // `in` is the one marker short enough to hide inside ordinary
+                // words: `main`, `pin`, `origin`, `austin`. `main2-In1_Cu.gbr`
+                // would otherwise read its own project name, the "in" inside
+                // "main" butting straight against `2`, and report inner layer 2.
+                // That is worse than a wrong label: two films of one job then
                 // collide on an index and `assign_inner_indices` densifies them
-                // into the wrong stack order, which is what the blind-via layer
-                // pair resolution keys on.
-                // `in` is the one marker short enough to hide inside ordinary words:
-                // `main`, `pin`, `origin`, `austin`. `main2-In1_Cu.gbr` read its own
-                // project name that way, the "in" inside "main" butting straight
-                // against `2`, and reported inner layer 2. Worse than a wrong label,
-                // since two films of one job then collide on an index and
-                // `assign_inner_indices` densifies them into the wrong stack order,
-                // which is what blind-via layer-pair resolution keys on. So `in` has
-                // to start a token in EITHER form.
+                // into the wrong stack order, which is what blind-via layer-pair
+                // resolution keys on. So `in` has to start a token in EITHER form.
                 //
-                // The longer markers must NOT carry that requirement in the butt-up
-                // form. They glue to a preceding word only in names where the digit
-                // IS the layer index, and demanding a token start there discarded
-                // `board-InnerLayer1_Cu.gbr`, `board_MidLayer1_Cu.gbr` and
-                // `board-CopperLayer2_Cu.gbr`, which classified as copper before:
-                // the same silent loss this function has been fixed for twice
-                // already. The separated form keeps the requirement for all of them,
-                // that being where a stray number after a word is the real hazard.
+                // The longer markers must NOT carry that requirement in the
+                // butt-up form. They glue to a preceding word only in names where
+                // the digit IS the layer index, and demanding a token start there
+                // would discard `board-InnerLayer1_Cu.gbr`,
+                // `board_MidLayer1_Cu.gbr` and `board-CopperLayer2_Cu.gbr`. The
+                // separated form keeps the requirement for all of them, that
+                // being where a stray number after a word is the real hazard.
                 let at_token_start = pos == 0 || !n.full.as_bytes()[pos - 1].is_ascii_alphabetic();
                 // `plane` needs a token start in BOTH forms, like `in`: without it
                 // any project ending "...plane<digit>" had its TOP film reindexed as
@@ -1153,27 +1134,37 @@ mod tests {
         classify(&PathBuf::from(name))
     }
 
+    /// The stack index `classify` gives this film, or `None` when it is not
+    /// copper. `usize::MAX` is the bottom-layer sentinel.
+    fn copper_index(name: &str) -> Option<usize> {
+        match role(name) {
+            LayerRole::Copper { index, .. } => Some(index),
+            _ => None,
+        }
+    }
+
+    /// Assert every name classifies as copper at the stack index beside it.
+    fn copper_at(cases: &[(&str, usize)]) {
+        for &(name, want) in cases {
+            assert_eq!(copper_index(name), Some(want), "{name}");
+        }
+    }
+
+    /// Assert none of these names classifies as copper.
+    fn not_copper(names: &[&str]) {
+        for &name in names {
+            assert!(!role(name).is_copper(), "{name} is not a copper film");
+        }
+    }
+
     #[test]
     fn kicad_names() {
-        assert!(matches!(
-            role("board-F_Cu.gbr"),
-            LayerRole::Copper { index: 0, .. }
-        ));
-        assert!(matches!(
-            role("board-B_Cu.gbr"),
-            LayerRole::Copper {
-                index: usize::MAX,
-                ..
-            }
-        ));
-        assert!(matches!(
-            role("board-In1_Cu.gbr"),
-            LayerRole::Copper { index: 1, .. }
-        ));
-        assert!(matches!(
-            role("board-In2_Cu.gbr"),
-            LayerRole::Copper { index: 2, .. }
-        ));
+        copper_at(&[
+            ("board-F_Cu.gbr", 0),
+            ("board-B_Cu.gbr", usize::MAX),
+            ("board-In1_Cu.gbr", 1),
+            ("board-In2_Cu.gbr", 2),
+        ]);
         assert_eq!(role("board-F_Mask.gbr"), LayerRole::Ignored);
         assert_eq!(role("board-F_Silkscreen.gbr"), LayerRole::Ignored);
         assert_eq!(role("board-F_Paste.gbr"), LayerRole::Ignored);
@@ -1182,126 +1173,68 @@ mod tests {
     #[test]
     fn altium_inner_signal_films_are_copper() {
         // Altium 24 plots inner copper as `<board>_Copper_Signal_1.gbr`, with a
-        // separator between the word and the layer index. Requiring the digit
-        // to butt straight up against `signal` matched none of them, so both
-        // inner films of every Altium four-layer job classified Unknown and
-        // their copper never reached the reconstruction: a real four-layer
-        // board came back as two layers.
-        assert!(matches!(
-            role("ARDEP_Mainboard_Copper_Signal_1.gbr"),
-            LayerRole::Copper { index: 1, .. }
-        ));
-        assert!(matches!(
-            role("ARDEP_Mainboard_Copper_Signal_2.gbr"),
-            LayerRole::Copper { index: 2, .. }
-        ));
-        assert!(matches!(
-            role("ARDEP_Mainboard_Copper_Signal_Top.gbr"),
-            LayerRole::Copper { index: 0, .. }
-        ));
-        assert!(matches!(
-            role("ARDEP_Mainboard_Copper_Signal_Bot.gbr"),
-            LayerRole::Copper {
-                index: usize::MAX,
-                ..
-            }
-        ));
+        // separator between the word and the layer index, so requiring the digit
+        // to butt straight up against `signal` matches none of them.
+        copper_at(&[
+            ("ARDEP_Mainboard_Copper_Signal_1.gbr", 1),
+            ("ARDEP_Mainboard_Copper_Signal_2.gbr", 2),
+            ("ARDEP_Mainboard_Copper_Signal_Top.gbr", 0),
+            ("ARDEP_Mainboard_Copper_Signal_Bot.gbr", usize::MAX),
+        ]);
         // The separator is one character of `-`, `_` or space, never a run and
         // never a dot: `signal.1` is a stem/extension boundary, not an index.
-        assert!(matches!(
-            role("board Inner 3 Cu.gbr"),
-            LayerRole::Copper { index: 3, .. }
-        ));
-        assert!(matches!(
-            role("board-signal-2.gbr"),
-            LayerRole::Copper { index: 2, .. }
-        ));
+        copper_at(&[("board Inner 3 Cu.gbr", 3), ("board-signal-2.gbr", 2)]);
         // And only a plotted FILM can be copper. The signal/inner markers need
         // no `cu` token, so without an extension gate a placement CSV or a
-        // drawing whose name happens to carry one became a copper layer; the
-        // directory scan claims copper before it looks for placement data, so
-        // the CSV was swallowed as an empty copper film and no component bound.
+        // drawing carrying one becomes a copper layer.
         assert!(!role("signal_1.csv").is_copper());
         assert!(!role("inner_2.pdf").is_copper());
         assert!(!role("board-Inner1.xlsx").is_copper());
-        // A butt-up digit wins over a separated one, everywhere, and a marker
-        // buried inside a word cannot claim a number that follows the word.
-        // `Main_2-In1_Cu.gbr` otherwise read its own project name: the "in" inside
-        // "main" is followed by `_2`, so the film came back as inner layer 2.
-        assert!(matches!(
-            role("Main_2-In1_Cu.gbr"),
-            LayerRole::Copper { index: 1, .. }
-        ));
-        assert!(matches!(
-            role("Pin_3-In1_Cu.gbr"),
-            LayerRole::Copper { index: 1, .. }
-        ));
-        assert!(matches!(
-            role("Origin_4-In2_Cu.gbr"),
-            LayerRole::Copper { index: 2, .. }
-        ));
-        assert!(matches!(
-            role("Austin 1-In2_Cu.gbr"),
-            LayerRole::Copper { index: 2, .. }
-        ));
+        // A butt-up digit wins over a separated one, and a marker buried inside a
+        // word cannot claim a number that follows it: the "in" inside "Main_2"
+        // would otherwise make `Main_2-In1_Cu.gbr` inner layer 2.
+        copper_at(&[
+            ("Main_2-In1_Cu.gbr", 1),
+            ("Pin_3-In1_Cu.gbr", 1),
+            ("Origin_4-In2_Cu.gbr", 2),
+            ("Austin 1-In2_Cu.gbr", 2),
+        ]);
         assert!(!role("board-Inner 2024-05-01.gbr").is_copper());
-        // The bound is on the SEPARATED form only. A butt-up digit always IS a
-        // stack position, and bounding it there discarded the copper of a
-        // >32-layer stackup outright.
-        assert!(matches!(
-            role("board-in40_cu.gbr"),
-            LayerRole::Copper { index: 40, .. }
-        ));
-        // "copper" spelled out is the copper token too. `cu` is not a substring of
-        // it, so a name using the long spelling with the `layer` or `in` marker
-        // classified Unknown and its copper was discarded.
-        assert!(matches!(
-            role("ARDEP_Mainboard_Copper_Layer_1.gbr"),
-            LayerRole::Copper { index: 1, .. }
-        ));
-        assert!(matches!(
-            role("board_copper_layer_2.gbr"),
-            LayerRole::Copper { index: 2, .. }
-        ));
-        // A marker buried in a word may not claim an index in EITHER form. The
-        // butt-up pass had no token-start gate, so `main2-In1_Cu.gbr` read the "in"
-        // inside "main" against the `2` right after it. Two films of one job then
-        // collide on an index and `assign_inner_indices` densifies them into the
-        // wrong stack order, which is what blind-via layer-pair resolution reads.
-        assert!(matches!(
-            role("main2-In1_Cu.gbr"),
-            LayerRole::Copper { index: 1, .. }
-        ));
-        assert!(matches!(
-            role("origin3-In1_Cu.gbr"),
-            LayerRole::Copper { index: 1, .. }
-        ));
-        assert!(matches!(
-            role("pin2-In10_Cu.gbr"),
-            LayerRole::Copper { index: 10, .. }
-        ));
+        // The bound is on the SEPARATED form only: a butt-up digit always IS a
+        // stack position, and bounding it there discards a >32-layer stackup.
+        assert_eq!(
+            copper_index("board-in40_cu.gbr"),
+            Some(40),
+            "board-in40_cu.gbr"
+        );
+        // "copper" spelled out is the copper token too; `cu` is not a substring
+        // of it.
+        copper_at(&[
+            ("ARDEP_Mainboard_Copper_Layer_1.gbr", 1),
+            ("board_copper_layer_2.gbr", 2),
+        ]);
+        // A marker buried in a word may not claim an index in EITHER form:
+        // without a token-start gate the "in" inside "main2" takes the `2` right
+        // after it, two films then collide on an index, and
+        // `assign_inner_indices` densifies them into the wrong stack order.
+        copper_at(&[
+            ("main2-In1_Cu.gbr", 1),
+            ("origin3-In1_Cu.gbr", 1),
+            ("pin2-In10_Cu.gbr", 10),
+        ]);
         // The longer markers keep the butt-up form ungated: they glue to a
-        // preceding word only where the digit IS the layer index, and requiring a
-        // token start there discarded copper these names classified before.
-        for (name, want) in [
-            ("board-InnerLayer1_Cu.gbr", 1usize),
+        // preceding word only where the digit IS the layer index.
+        copper_at(&[
+            ("board-InnerLayer1_Cu.gbr", 1),
             ("board_MidLayer1_Cu.gbr", 1),
             ("board-CopperLayer2_Cu.gbr", 2),
             ("board-CopperInner1.gbr", 1),
-        ] {
-            match role(name) {
-                LayerRole::Copper { index, .. } => assert_eq!(index, want, "{name}"),
-                other => panic!("{name} should be copper, got {other:?}"),
-            }
-        }
-        // A name-based copper rule must not read a MECHANICAL or DOCUMENTATION film
-        // as copper. `cu` was a substring test, so any project name containing
-        // `circuit`, `accumulator`, `vcut`, `document` or `cube` supplied the copper
-        // token, and a film with `Layer <n>` in its name became inner copper. That
-        // puts outline and dimension lines on a layer every drill barrel stitches,
-        // which is a large false merge, and it inflates the layer count blind-via
-        // span resolution reads.
-        for name in [
+        ]);
+        // A name-based copper rule must not read a MECHANICAL or DOCUMENTATION
+        // film as copper. As a bare substring `cu` hides in `circuit`,
+        // `accumulator`, `vcut`, `document` and `cube`, which would put outline
+        // and dimension lines on a layer every drill barrel stitches.
+        not_copper(&[
             "MyCircuit_Mechanical_Layer_1.gbr",
             "Documentation Layer 1.gbr",
             "Accumulator_Mechanical_Layer_3.gbr",
@@ -1309,33 +1242,19 @@ mod tests {
             "MyCircuit_Component_Layer_1.gbr",
             "MyCircuit-Profile_Layer_1.gbr",
             "MyCircuit_Top_Layer_Drawing.gbr",
-        ] {
-            assert!(!role(name).is_copper(), "{name} is not a copper film");
-        }
-        // `cu` is the copper token as a whole word, ending one, OR abutting a side or
-        // stack token on its RIGHT. `-CuTop.gbr` / `-CuBottom.gbr` is a real
-        // convention: thirteen corpus zips and a loose directory ship it, and
-        // requiring `cu` to end a word turned both films of those boards Unknown,
-        // which is dropped with no note. `cutop_named_corpus_boards_still_reconstruct`
-        // reads two of those boards end to end.
+        ]);
+        // `cu` is the copper token as a whole word, ending one, OR abutting a
+        // side or stack token on its RIGHT: `-CuTop.gbr` / `-CuBottom.gbr` is a
+        // real convention. `cutop_named_corpus_boards_still_reconstruct` reads
+        // two such boards end to end.
         assert!(role("TopCu.gbr").is_copper());
         assert!(role("board-F_Cu.gbr").is_copper());
-        assert!(matches!(
-            role("corne-cherry-CuTop.gbr"),
-            LayerRole::Copper { index: 0, .. }
-        ));
-        assert!(matches!(
-            role("corne-cherry-CuBottom.gbr"),
-            LayerRole::Copper {
-                index: usize::MAX,
-                ..
-            }
-        ));
-        assert!(matches!(
-            role("RoyalBlue54L-NFC-Antenna-CuTop.gbr"),
-            LayerRole::Copper { index: 0, .. }
-        ));
-        for name in [
+        copper_at(&[
+            ("corne-cherry-CuTop.gbr", 0),
+            ("corne-cherry-CuBottom.gbr", usize::MAX),
+            ("RoyalBlue54L-NFC-Antenna-CuTop.gbr", 0),
+        ]);
+        not_copper(&[
             "board-CuTopography.gbr",
             "board-CuTopcoat.gbr",
             "board-CuBottomless.gbr",
@@ -1343,134 +1262,84 @@ mod tests {
             "board-CuMidpoint.gbr",
             "board-CuInvention.gbr",
             "board-CuLayer.gbr",
-        ] {
-            assert!(
-                !role(name).is_copper(),
-                "a word merely beginning with a copper role is not a copper token: {name}"
-            );
-        }
-        // An EXPLICIT copper suffix outranks the non-copper word sweep, which returns
-        // Ignored on a raw substring and so discarded the copper of any project whose
-        // NAME carried one of its words. Mechanical keyboards are one of the largest
-        // open-hardware PCB categories and this corpus is full of them.
-        for (name, want) in [
-            ("mechanical-keyboard-F_Cu.gbr", 0usize),
+        ]);
+        // An EXPLICIT copper suffix outranks the non-copper word sweep, which
+        // returns Ignored on a raw substring and would discard the copper of any
+        // project whose NAME carries one of its words (mechanical keyboards are
+        // one of the largest open-hardware PCB categories).
+        copper_at(&[
+            ("mechanical-keyboard-F_Cu.gbr", 0),
             ("MechanicalKeyboard-B_Cu.gbr", usize::MAX),
             ("mechanical_keyboard-In1_Cu.gbr", 1),
             ("Documentation-F_Cu.gbr", 0),
             ("fabricator-F_Cu.gbr", 0),
-        ] {
-            match role(name) {
-                LayerRole::Copper { index, .. } => assert_eq!(index, want, "{name}"),
-                other => panic!("{name} should be copper, got {other:?}"),
-            }
-        }
-        for name in [
+        ]);
+        not_copper(&[
             "Pin2_Cu-Mechanical_1.gbr",
             "Spin2_Cu-Documentation_1.gbr",
             "project-in2_cu-mechanical.gbr",
-        ] {
-            assert!(
-                !role(name).is_copper(),
-                "an in<n>_cu substring in the project name must not override the film role: {name}"
-            );
-        }
-        // `.GM1` is Altium's board-outline film and `Mechanical_1` is the layer it is
-        // plotted from, so the word sweep claimed it and the outline was lost.
+        ]);
+        // `.GM1` is Altium's board-outline film and `Mechanical_1` is the layer it
+        // is plotted from, so the word sweep must not claim it.
         assert_eq!(role("board-Mechanical_1.GM1"), LayerRole::Outline);
-        // `plane` counts only where the name states a copper ROLE, and only at a token
-        // start. Otherwise any project ending "...plane<digit>" had its TOP film
-        // reindexed as inner 1, which corrupts the stack order blind-via span
-        // resolution reads.
-        for name in ["Peelable Plane 1.gbr", "Carbon Plane 1.gbr"] {
-            assert!(!role(name).is_copper(), "{name} is a film, not copper");
-        }
-        for name in [
-            "Backplane1-Top.gbr",
-            "Airplane1-Top.gbr",
-            "Mainplane1-Top.gbr",
-        ] {
-            assert!(
-                matches!(role(name), LayerRole::Copper { index: 0, .. }),
-                "{name} is a TOP film, not inner 1"
-            );
-        }
-        assert!(matches!(
-            role("Backplane2-Bottom.gbr"),
-            LayerRole::Copper {
-                index: usize::MAX,
-                ..
-            }
-        ));
-        assert!(matches!(
-            role("GND Plane 2.gbr"),
-            LayerRole::Copper { index: 2, .. }
-        ));
-        // A drill MAP is a drawing. It carries the `drl` token, matched a name-based
-        // drill rule, and reading the PDF as text failed the whole extraction.
+        // `plane` counts only where the name states a copper ROLE, and only at a
+        // token start; otherwise any project ending "...plane<digit>" has its TOP
+        // film reindexed as inner 1.
+        not_copper(&["Peelable Plane 1.gbr", "Carbon Plane 1.gbr"]);
+        copper_at(&[
+            ("Backplane1-Top.gbr", 0),
+            ("Airplane1-Top.gbr", 0),
+            ("Mainplane1-Top.gbr", 0),
+        ]);
+        copper_at(&[
+            ("Backplane2-Bottom.gbr", usize::MAX),
+            ("GND Plane 2.gbr", 2),
+        ]);
+        // A drill MAP is a drawing: it carries the `drl` token, and reading the
+        // PDF as text fails the whole extraction.
         assert!(!matches!(
             role("corne-cherry-NPTH-drl_map.pdf"),
             LayerRole::Drill
         ));
-        // And a name shorter than a marker must not panic. `hay.len() - needle.len()`
-        // under-flowed into `0..1`, and indexing then panicked, so a fab folder with a
-        // one-character filename aborted extraction instead of returning an error.
+        // And a name shorter than a marker must not panic: `hay.len() -
+        // needle.len()` under-flows, and a fab folder with a one-character
+        // filename would abort extraction instead of returning an error.
         for name in ["a", "1", "ab", "abc", "x.g", ""] {
             let _ = role(name);
         }
         // An INTERNAL PLANE is copper, and is exactly the film drawn negatively.
-        // Both of these classified Unknown, so their copper was discarded outright.
-        for (name, want) in [
-            ("Internal Plane 1.gbr", 1usize),
+        copper_at(&[
+            ("Internal Plane 1.gbr", 1),
             ("ARDEP_Mainboard_Internal_Plane_1.gbr", 1),
             ("Internal Plane 2.gbr", 2),
-        ] {
-            match role(name) {
-                LayerRole::Copper { index, .. } => assert_eq!(index, want, "{name}"),
-                other => panic!("{name} should be copper, got {other:?}"),
-            }
-        }
+        ]);
         assert_eq!(role("board-Paste_Plane.gbr"), LayerRole::Ignored);
 
         // And no name-based copper rule may claim a file that is plainly not a
-        // film. Altium's per-side pick-and-place and its per-layer prints both
-        // carry the words the top and bottom rules key on, and the directory scan
-        // claims copper before it looks for placement data, so a matched CSV was
-        // swallowed as an empty copper film and no component bound.
-        for name in [
+        // film: Altium's per-side pick-and-place and its per-layer prints both
+        // carry the words the top and bottom rules key on.
+        not_copper(&[
             "Pick Place for ARDEP - Top Layer.csv",
             "ARDEP_Mainboard_Copper_Top.csv",
             "ARDEP_Mainboard_Copper_Top.pdf",
             "ARDEP_Mainboard-Top Layer.pdf",
             "top layer bom.xlsx",
             "ARDEP_Mainboard_Copper_Bottom.csv",
-        ] {
-            assert!(!role(name).is_copper(), "{name} is not a copper film");
-        }
+        ]);
     }
 
     #[test]
     fn inner_copper_survives_a_project_name_containing_the_marker() {
-        // Round-27: a project name whose text contains "in" (or inner/signal/
-        // layer) put a non-digit-tailed marker ahead of the real `In<k>_Cu`
-        // token. `find` stopped at that first match and dropped the inner copper
-        // layer to Unknown, silently vanishing it from reconstruction. Every
-        // occurrence must be scanned so the genuine layer index is recovered.
-        assert!(
-            matches!(
-                role("mainboard-In1_Cu.gbr"),
-                LayerRole::Copper { index: 1, .. }
-            ),
-            "the 'in' inside 'mainboard' must not shadow the real In1 token"
-        );
-        assert!(matches!(
-            role("mainboard-In2_Cu.gbr"),
-            LayerRole::Copper { index: 2, .. }
-        ));
-        assert!(matches!(
-            role("arduino-In1_Cu.gbr"),
-            LayerRole::Copper { index: 1, .. }
-        ));
+        // A project name containing "in" (or inner/signal/layer) puts a
+        // non-digit-tailed marker ahead of the real `In<k>_Cu` token, so stopping
+        // at the first match drops the inner copper layer to Unknown. Every
+        // occurrence must be scanned.
+        copper_at(&[
+            // The 'in' inside 'mainboard' must not shadow the real In<k> token.
+            ("mainboard-In1_Cu.gbr", 1),
+            ("mainboard-In2_Cu.gbr", 2),
+            ("arduino-In1_Cu.gbr", 1),
+        ]);
         // A name with the marker but no real inner token stays non-copper.
         assert_ne!(
             role("arduino-F_Silkscreen.gbr"),
@@ -1486,21 +1355,11 @@ mod tests {
 
     #[test]
     fn protel_extensions() {
-        assert!(matches!(
-            role("design.GTL"),
-            LayerRole::Copper { index: 0, .. }
-        ));
-        assert!(matches!(
-            role("design.gbl"),
-            LayerRole::Copper {
-                index: usize::MAX,
-                ..
-            }
-        ));
-        assert!(matches!(
-            role("design.G1L"),
-            LayerRole::Copper { index: 1, .. }
-        ));
+        copper_at(&[
+            ("design.GTL", 0),
+            ("design.gbl", usize::MAX),
+            ("design.G1L", 1),
+        ]);
         assert_eq!(role("design.GTS"), LayerRole::Ignored);
         assert_eq!(role("design.GTO"), LayerRole::Ignored);
         assert_eq!(role("design.GKO"), LayerRole::Outline);
@@ -1511,40 +1370,17 @@ mod tests {
 
     #[test]
     fn generic_words() {
-        assert!(matches!(
-            role("TopLayer.gbr"),
-            LayerRole::Copper { index: 0, .. }
-        ));
-        assert!(matches!(
-            role("Bottom Copper.gbr"),
-            LayerRole::Copper {
-                index: usize::MAX,
-                ..
-            }
-        ));
+        copper_at(&[("TopLayer.gbr", 0), ("Bottom Copper.gbr", usize::MAX)]);
     }
 
     #[test]
     fn allegro_art_names() {
-        assert!(matches!(
-            role("top.art"),
-            LayerRole::Copper { index: 0, .. }
-        ));
-        assert!(matches!(
-            role("bottom.art"),
-            LayerRole::Copper {
-                index: usize::MAX,
-                ..
-            }
-        ));
-        assert!(matches!(
-            role("gnd02.art"),
-            LayerRole::Copper { index: 2, .. }
-        ));
-        assert!(matches!(
-            role("pwr04.art"),
-            LayerRole::Copper { index: 4, .. }
-        ));
+        copper_at(&[
+            ("top.art", 0),
+            ("bottom.art", usize::MAX),
+            ("gnd02.art", 2),
+            ("pwr04.art", 4),
+        ]);
         assert_eq!(role("drill-1-6.art"), LayerRole::Drill);
         assert_eq!(role("silk_top.art"), LayerRole::Ignored);
         assert_eq!(role("solder_bot.art"), LayerRole::Ignored);
@@ -1682,75 +1518,37 @@ weird_bot.gbr = copper:bottom\n\
 holes.txt = drill\n\
 edge.gbr = outline\n";
         let m = parse_mapping(text);
-        assert!(matches!(
-            m.get("weird_top.gbr"),
-            Some(LayerRole::Copper { index: 0, .. })
-        ));
-        assert!(matches!(
-            m.get("weird_in1.gbr"),
-            Some(LayerRole::Copper { index: 1, .. })
-        ));
-        assert!(matches!(
-            m.get("weird_bot.gbr"),
-            Some(LayerRole::Copper {
-                index: usize::MAX,
-                ..
-            })
-        ));
+        let index = |name: &str| match m.get(name) {
+            Some(LayerRole::Copper { index, .. }) => Some(*index),
+            _ => None,
+        };
+        assert_eq!(index("weird_top.gbr"), Some(0));
+        assert_eq!(index("weird_in1.gbr"), Some(1));
+        assert_eq!(index("weird_bot.gbr"), Some(usize::MAX));
         assert_eq!(m.get("holes.txt"), Some(&LayerRole::Drill));
         assert_eq!(m.get("edge.gbr"), Some(&LayerRole::Outline));
     }
 
     #[test]
     fn dense_reorder() {
-        let coppers = vec![
-            (
-                LayerRole::Copper {
-                    index: usize::MAX,
-                    name: "B".into(),
-                },
-                0,
-            ),
-            (
-                LayerRole::Copper {
-                    index: 0,
-                    name: "F".into(),
-                },
-                1,
-            ),
-            (
-                LayerRole::Copper {
-                    index: 2,
-                    name: "In2".into(),
-                },
-                2,
-            ),
-            (
-                LayerRole::Copper {
-                    index: 1,
-                    name: "In1".into(),
-                },
-                3,
-            ),
-        ];
-        let out = assign_inner_indices(coppers);
-        // Order: F(0), In1(1), In2(2), B(3)
-        let idxs: Vec<usize> = out
+        let copper = |index: usize, name: &str| LayerRole::Copper {
+            index,
+            name: name.into(),
+        };
+        let out = assign_inner_indices(vec![
+            (copper(usize::MAX, "B"), 0),
+            (copper(0, "F"), 1),
+            (copper(2, "In2"), 2),
+            (copper(1, "In1"), 3),
+        ]);
+        // Order: F(0), In1(1), In2(2), B(3); the back-references follow the names.
+        let seen: Vec<(usize, &str)> = out
             .iter()
             .map(|(r, _)| match r {
-                LayerRole::Copper { index, .. } => *index,
-                _ => 999,
+                LayerRole::Copper { index, name } => (*index, name.as_str()),
+                _ => (999, ""),
             })
             .collect();
-        assert_eq!(idxs, vec![0, 1, 2, 3]);
-        // The original-vec back-references follow the names.
-        let names: Vec<&str> = out
-            .iter()
-            .map(|(r, _)| match r {
-                LayerRole::Copper { name, .. } => name.as_str(),
-                _ => "",
-            })
-            .collect();
-        assert_eq!(names, vec!["F", "In1", "In2", "B"]);
+        assert_eq!(seen, vec![(0, "F"), (1, "In1"), (2, "In2"), (3, "B")]);
     }
 }

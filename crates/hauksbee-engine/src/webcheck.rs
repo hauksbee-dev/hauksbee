@@ -309,7 +309,7 @@ const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Stop a timed-out `hauksbee-ci` child WITHOUT orphaning its emulators.
 ///
-/// The E50 leak: a bare `child.kill()` is SIGKILL, which the child cannot
+/// A bare `child.kill()` is SIGKILL, which the child cannot
 /// catch, so the QEMU / Renode emulators it spawned (each in its OWN process
 /// group, deliberately, see hauksbee_mcu::children) are orphaned and keep
 /// free-running at full CPU forever. Verified live: SIGKILL of a mid-co-sim
@@ -733,7 +733,7 @@ kind = "no_faults"
         assert_eq!(validate_web_limits("this = = not toml ]["), Ok(()));
     }
 
-    /// E50 regression: a timed-out child must get SIGTERM (so its signal
+    /// A timed-out child must get SIGTERM (so its signal
     /// reaper can kill the emulators it spawned), not a blind SIGKILL. A child
     /// that exits on TERM must NOT be SIGKILLed; verified by its exit status
     /// carrying the clean trap exit, not a signal death.

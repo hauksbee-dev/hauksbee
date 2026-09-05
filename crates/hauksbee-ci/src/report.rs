@@ -27,7 +27,7 @@ pub struct CiJsonAssertion {
     /// Did the assertion hold on every ensemble member. False on an ordinary
     /// red, on a waived red, and on an INVALID result.
     pub passed: bool,
-    /// A THIRD outcome distinct from pass/fail (05 §3b): the assertion could
+    /// A THIRD outcome distinct from pass/fail: the assertion could
     /// not be honestly evaluated because its analog evaluation window overlaps
     /// a chunk the solver failed on. When `invalid` is true, `passed` is always
     /// false, but the run exits 3 (invalid-for-analysis) rather than 1.
@@ -72,7 +72,7 @@ pub struct CiResult {
     pub seeds: u32,
     pub elapsed: Duration,
     /// True if any seed's analog co-sim tripped the consecutive-failed-chunk
-    /// abort (05 §3b). Forces exit 3 on its own, even when no single assertion's
+    /// abort. Forces exit 3 on its own, even when no single assertion's
     /// window overlapped a failed span (e.g. a spec with only a UART assertion
     /// over a run whose analog side collapsed).
     pub analog_abort: bool,
@@ -525,7 +525,7 @@ impl CiResult {
     }
 
     /// Count of assertions that could not be honestly evaluated (their window
-    /// overlapped a failed analog chunk, 05 §3b).
+    /// overlapped a failed analog chunk).
     pub fn invalid_count(&self) -> usize {
         self.results.iter().filter(|r| r.invalid).count()
     }
@@ -537,7 +537,7 @@ impl CiResult {
     }
 
     /// Process exit code: 3 invalid-for-analysis (any INVALID assertion or a
-    /// tripped analog abort, 05 §3b), else 1 any ordinary red, else 0 all green.
+    /// tripped analog abort), else 1 any ordinary red, else 0 all green.
     /// The invalid path is checked first so a diverged co-sim refuses rather than
     /// reports a fake pass/fail.
     pub fn exit_code(&self) -> i32 {
@@ -630,6 +630,40 @@ impl CiResult {
     }
 
     /// Human-readable terminal report.
+    /// Every qualification a green verdict would otherwise hide, as
+    /// `(tag, message)` pairs.
+    ///
+    /// One producer feeds all three human-facing formats, so a note cannot
+    /// reach the log and quietly miss the JUnit tab a dashboard reader lives
+    /// in: a substitute MCU core, a co-sim path that never ran (dropped ADC
+    /// injection, unexercised bus device), the per-MCU timing resolution, a
+    /// timing claim the backend could not represent, and waiver housekeeping.
+    fn honesty_notes(&self) -> Vec<(&'static str, String)> {
+        let mut notes: Vec<(&'static str, String)> = Vec::new();
+        notes.extend(
+            self.substitutions
+                .iter()
+                .map(|m| ("co-sim ran on a SUBSTITUTE chip", m.clone())),
+        );
+        notes.extend(
+            self.coverage_warnings
+                .iter()
+                .map(|m| ("co-sim COVERAGE HOLE", m.clone())),
+        );
+        notes.extend(
+            self.timing_coverage
+                .iter()
+                .map(|t| ("TIMING COVERAGE", timing_coverage_note(t))),
+        );
+        notes.extend(
+            self.timing_refusals
+                .iter()
+                .map(|m| ("TIMING INVALID", m.clone())),
+        );
+        notes.extend(self.waiver_notes.iter().map(|m| ("waivers", m.clone())));
+        notes
+    }
+
     pub fn render_human(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!(
@@ -675,7 +709,7 @@ impl CiResult {
         if self.analog_abort && self.invalid_count() == 0 {
             out.push_str(
                 "  analog co-sim aborted (solve failed on too many chunks in a row); \
-                 the run is INVALID for analysis (05 §3b)\n",
+                 the run is INVALID for analysis\n",
             );
         }
         if let Some(refusal) = self.refusal() {
@@ -683,33 +717,8 @@ impl CiResult {
             out.push_str(&refusal.render_text());
             out.push('\n');
         }
-        // Substitution honesty: a GREEN over a substitute MCU core cannot vouch
-        // for firmware behaviour on the real silicon. Say so plainly.
-        for msg in &self.substitutions {
-            out.push_str(&format!("  co-sim ran on a SUBSTITUTE chip: {msg}\n"));
-        }
-        // Coverage honesty: a GREEN over a co-sim path that never ran (dropped
-        // ADC injection, unexercised bus device) must be qualified plainly.
-        for msg in &self.coverage_warnings {
-            out.push_str(&format!("  co-sim COVERAGE HOLE: {msg}\n"));
-        }
-        for timing in &self.timing_coverage {
-            out.push_str(&format!(
-                "  TIMING COVERAGE {} ({}): edge timestamps ±{:.3} us; pulses >= {:.3} us guaranteed; {:.3} us chunk; {} stamps\n",
-                timing.mcu_ref,
-                timing.backend,
-                timing.timestamp_precision_s * 1e6,
-                timing.minimum_guaranteed_pulse_s * 1e6,
-                timing.chunk_s * 1e6,
-                if timing.cycle_exact { "cycle-exact" } else { "poll-boundary" },
-            ));
-        }
-        for refusal in &self.timing_refusals {
-            out.push_str(&format!("  TIMING INVALID: {refusal}\n"));
-        }
-        // Waiver housekeeping: lapsed / stale / malformed waiver-file notes.
-        for msg in &self.waiver_notes {
-            out.push_str(&format!("  waivers: {msg}\n"));
+        for (tag, msg) in self.honesty_notes() {
+            out.push_str(&format!("  {tag}: {msg}\n"));
         }
         let verdict = if self.analog_invalid() {
             "INVALID (run or assertion evidence is not trustworthy)"
@@ -779,7 +788,7 @@ impl CiResult {
         // verdict), ordinary reds to `<failure>`. Keep the two counts distinct so
         // a CI dashboard shows "errored" apart from "failed".
         //
-        // An analog abort that no assertion happened to cover (05 §3b) still
+        // An analog abort that no assertion happened to cover still
         // forces exit 3, so it must surface here too: `render_human` and
         // `render_github_annotations` both special-case that state, and a JUnit
         // that said `failures="0" errors="0"` would be a false ALL-GREEN on the
@@ -894,45 +903,12 @@ impl CiResult {
                 xml_escape(&self.dead_rails.join(", "))
             ));
         }
-        // Substitution honesty as a suite-level system-out note (dashboards show
-        // it alongside the results): a pass over a substitute core is qualified.
-        for msg in &self.substitutions {
+        // The honesty notes ride the suite-level channel, so a dashboard-only
+        // reader sees the same qualifications the log carries.
+        for (tag, msg) in self.honesty_notes() {
             out.push_str(&format!(
-                "    <system-out>co-sim ran on a SUBSTITUTE chip: {}</system-out>\n",
-                xml_escape(msg)
-            ));
-        }
-        // Coverage honesty: dropped-ADC / unexercised-bus warnings ride the same
-        // suite-level channel so the JUnit surface carries the qualification too.
-        for msg in &self.coverage_warnings {
-            out.push_str(&format!(
-                "    <system-out>co-sim COVERAGE HOLE: {}</system-out>\n",
-                xml_escape(msg)
-            ));
-        }
-        for timing in &self.timing_coverage {
-            out.push_str(&format!(
-                "    <system-out>TIMING COVERAGE {} ({}): edge timestamps +/−{:.3} us; pulses &gt;= {:.3} us guaranteed; {:.3} us chunk; {} stamps</system-out>\n",
-                xml_escape(&timing.mcu_ref),
-                xml_escape(&timing.backend),
-                timing.timestamp_precision_s * 1e6,
-                timing.minimum_guaranteed_pulse_s * 1e6,
-                timing.chunk_s * 1e6,
-                if timing.cycle_exact { "cycle-exact" } else { "poll-boundary" },
-            ));
-        }
-        for refusal in &self.timing_refusals {
-            out.push_str(&format!(
-                "    <system-out>TIMING INVALID: {}</system-out>\n",
-                xml_escape(refusal)
-            ));
-        }
-        // Waiver housekeeping notes ride along so a dashboard-only reader sees
-        // a lapsed or stale waiver too.
-        for msg in &self.waiver_notes {
-            out.push_str(&format!(
-                "    <system-out>waivers: {}</system-out>\n",
-                xml_escape(msg)
+                "    <system-out>{tag}: {}</system-out>\n",
+                xml_escape(&msg)
             ));
         }
         out.push_str("  </testsuite>\n");
@@ -1043,20 +1019,7 @@ impl CiResult {
             let coverage = self
                 .timing_coverage
                 .iter()
-                .map(|t| {
-                    format!(
-                        "{} {} edge +/−{:.3} us, pulse >= {:.3} us ({})",
-                        t.mcu_ref,
-                        t.backend,
-                        t.timestamp_precision_s * 1e6,
-                        t.minimum_guaranteed_pulse_s * 1e6,
-                        if t.cycle_exact {
-                            "cycle-exact"
-                        } else {
-                            "poll-boundary"
-                        }
-                    )
-                })
+                .map(timing_coverage_note)
                 .collect::<Vec<_>>()
                 .join("; ");
             out.push_str(&format!(
@@ -1323,6 +1286,24 @@ fn failure_hint(kind: &str) -> Option<String> {
         ),
         _ => return None,
     })
+}
+
+/// One MCU's timing resolution, in the wording every report format uses.
+fn timing_coverage_note(t: &hauksbee_engine::scheduler::TimingCoverage) -> String {
+    format!(
+        "{} ({}): edge timestamps +/-{:.3} us; pulses >= {:.3} us guaranteed; \
+         {:.3} us chunk; {} stamps",
+        t.mcu_ref,
+        t.backend,
+        t.timestamp_precision_s * 1e6,
+        t.minimum_guaranteed_pulse_s * 1e6,
+        t.chunk_s * 1e6,
+        if t.cycle_exact {
+            "cycle-exact"
+        } else {
+            "poll-boundary"
+        },
+    )
 }
 
 fn xml_escape(s: &str) -> String {

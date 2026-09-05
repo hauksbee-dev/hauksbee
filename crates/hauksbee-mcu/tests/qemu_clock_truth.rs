@@ -47,9 +47,7 @@ const HALF_PERIOD_MS: f64 = 100.0;
 const EDGES: usize = 11;
 
 fn flash_image() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/esp32_blinky/flash.bin");
-    p.exists().then(|| p.canonicalize().unwrap_or(p))
+    crate::support::firmware("esp32_blinky/flash.bin")
 }
 
 #[test]

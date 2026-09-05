@@ -6,9 +6,10 @@
 //! `emit`.
 //!
 //! Rendering itself lives elsewhere: each `emit` delegates to the shared
-//! renderers (`DrcStructured::render`, `plain_*`, `JsonReport`, the extract-crate
-//! text renderers), so every surface emits byte-identical output for the same
-//! report.
+//! renderers (`DrcStructured::render_with_clearance_rule_provenance`, `plain_*`,
+//! `JsonReport`, the extract-crate text renderers), so every surface emits
+//! byte-identical output for the same report. The per-surface map and the
+//! register of deliberate divergences are in [`crate::result`]'s module doc.
 
 pub mod ac;
 pub mod ampacity;
@@ -42,7 +43,7 @@ pub enum OutputMode {
 
 impl OutputMode {
     /// Resolve the surface from the two CLI flags. `--json` wins over `--plain`
-    /// (a machine consumer never wants prose), matching the historical precedence.
+    /// (a machine consumer never wants prose).
     pub fn from_flags(json: bool, plain: bool) -> Self {
         if json {
             OutputMode::Json
@@ -76,7 +77,7 @@ pub(crate) fn render_evidence_appendix(
 }
 
 /// The one prominent note printed by `--check`/`--drc` when a KiCad layout
-/// carries no routed copper at all (D2): the spacing check then had only pads
+/// carries no routed copper at all: the spacing check then had only pads
 /// to compare, and a clean result must not read as "the routing is clean" on
 /// a board that has no routing yet.
 pub(crate) const UNROUTED_COPPER_NOTE: &str =
@@ -343,7 +344,7 @@ pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
 /// here: `--lint`, `--resources`, `--check`, bare `--json`, `--drc`, `--si`,
 /// `--usb-c`, and the co-sim fault gate in `commands::run`. Name WHY the process
 /// is about to exit 2, then exit. Exit 2 with no line saying why reads as a tool
-/// crash, and `--plain --strict` used to print a "not a failure" verdict while
+/// crash, and `--plain --strict` must not print a "not a failure" verdict while
 /// failing.
 ///
 /// Not every exit 2 in the binary comes through here, so do not read this as the
@@ -362,7 +363,7 @@ pub fn exit_invalid_for_analysis(blockers: &[String]) -> ! {
 pub fn strict_gate_exit(mode: OutputMode, items: &[String]) -> ! {
     // --plain promised prose a non-engineer can read; a failure line full of
     // rule ids ("drc-short", "crystal_load_cap") breaks that promise at the
-    // one moment it matters most (L4). Text/JSON keep the exact ids (they are
+    // one moment it matters most. Text/JSON keep the exact ids (they are
     // the grep/waiver keys).
     let humanized: Vec<String>;
     let mut shown: Vec<&str> = if mode == OutputMode::Plain {
@@ -397,7 +398,7 @@ pub fn strict_gate_exit(mode: OutputMode, items: &[String]) -> ! {
 }
 
 /// A gate item ("drc-short GND/+5V", "crystal_load_cap XTAL1") in words a
-/// non-engineer can read, for the `--plain` strict failure line (L4). The id
+/// non-engineer can read, for the `--plain` strict failure line. The id
 /// prefix maps to its check family; underscores become spaces.
 fn plain_gate_item(item: &str) -> String {
     let (id, subject) = match item.split_once(' ') {

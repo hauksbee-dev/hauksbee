@@ -107,10 +107,9 @@ fn assert_short(report: &hauksbee_extract::DrcReport, a: &str, b: &str) {
     );
 }
 
-/// Bug-hunt #8: an <element> with no `package` attribute is schema-invalid and
-/// lands with zero pins (its own pad connectivity lost), but extraction must not
-/// crash and the nets it touched must survive. Guards the missing-package path
-/// that now also emits a diagnostic.
+/// An `<element>` with no `package` attribute is schema-invalid and lands with
+/// zero pins (its own pad connectivity lost), but extraction must not crash and
+/// the nets it touched must survive.
 #[test]
 fn element_missing_package_still_extracts_and_keeps_nets() {
     let packages = r#"

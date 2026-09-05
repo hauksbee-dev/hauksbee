@@ -22,23 +22,43 @@ pub struct ValidationError {
 /// Validate a [`ModelEntry`], checking that required params are present and
 /// within physical bounds.
 ///
+/// Does `entry` declare `role` in `[models.pins]`? Exact match, as the
+/// register-map and SPI-NOR rules spell their roles verbatim.
+fn declares_role(entry: &ModelEntry, role: &str) -> bool {
+    entry.pins.values().any(|known| known == role)
+}
+
+/// [`declares_role`], case-insensitively. The rules that read author-written
+/// role lists (`must_not_float_roles`, the current-program role sets) accept
+/// any casing, so they compare this way.
+fn declares_role_ci(entry: &ModelEntry, role: &str) -> bool {
+    entry
+        .pins
+        .values()
+        .any(|known| known.eq_ignore_ascii_case(role))
+}
+
+/// Record one violation against `entry`. Every rule in this module reports the
+/// same way: the entry's id plus a sentence naming the field and what is wrong.
+fn push_err(errors: &mut Vec<ValidationError>, entry: &ModelEntry, message: impl Into<String>) {
+    errors.push(ValidationError {
+        id: entry.id.clone(),
+        message: message.into(),
+    });
+}
+
 /// Returns `Ok(())` on success, or a list of violations.
 pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
 
-    let role_exists = |role: &str| {
-        entry
-            .pins
-            .values()
-            .any(|known| known.eq_ignore_ascii_case(role))
-    };
+    let role_exists = |role: &str| declares_role_ci(entry, role);
     for envelope in &entry.envelope {
         if envelope.basis().trim().is_empty() {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: "operating envelope requires a non-empty basis naming the datasheet table and row"
-                    .to_string(),
-            });
+            push_err(
+                &mut errors,
+                entry,
+                "operating envelope requires a non-empty basis naming the datasheet table and row",
+            );
         }
         match envelope {
             OperatingEnvelope::SupplyRange {
@@ -49,47 +69,45 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 ..
             } => {
                 if !role_exists(pin) {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
-                            "operating envelope pin '{pin}' is not a role in [models.pins]"
-                        ),
-                    });
+                    push_err(
+                        &mut errors,
+                        entry,
+                        format!("operating envelope pin '{pin}' is not a role in [models.pins]"),
+                    );
                 }
                 if !min_v.is_finite() || !max_v.is_finite() || min_v >= max_v {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
-                            "operating envelope requires finite min_v < max_v, got {min_v} and {max_v}"
-                        ),
-                    });
+                    push_err(
+                        &mut errors,
+                        entry,
+                        format!(
+                        "operating envelope requires finite min_v < max_v, got {min_v} and {max_v}"
+                    ),
+                    );
                 }
                 if abs_max_v.is_some_and(|value| !value.is_finite() || value < *max_v) {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
-                            "operating envelope abs_max_v must be finite and at least max_v {max_v}"
-                        ),
-                    });
+                    push_err(
+                        &mut errors,
+                        entry,
+                        format!(
+                        "operating envelope abs_max_v must be finite and at least max_v {max_v}"
+                    ),
+                    );
                 }
             }
             OperatingEnvelope::RailOrder { lower, upper, .. } => {
                 for (field, role) in [("lower", lower), ("upper", upper)] {
                     if !role_exists(role) {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: format!(
-                                "operating envelope {field} role '{role}' is not a role in [models.pins]"
-                            ),
-                        });
+                        push_err(&mut errors, entry, format!(
+                            "operating envelope {field} role '{role}' is not a role in [models.pins]"
+                        ));
                     }
                 }
                 if lower.eq_ignore_ascii_case(upper) {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: "operating envelope rail_order lower and upper roles must differ"
-                            .to_string(),
-                    });
+                    push_err(
+                        &mut errors,
+                        entry,
+                        "operating envelope rail_order lower and upper roles must differ",
+                    );
                 }
             }
         }
@@ -103,10 +121,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     if entry.params.0.contains_key("identity_only")
         && entry.params.get_bool("identity_only").is_none()
     {
-        errors.push(ValidationError {
-            id: entry.id.clone(),
-            message: "params.identity_only must be a boolean".to_string(),
-        });
+        push_err(&mut errors, entry, "params.identity_only must be a boolean");
     }
     if identity_only {
         for key in ["warning", "unlocked_by"] {
@@ -115,12 +130,9 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 .get_str(key)
                 .is_none_or(|value| value.trim().is_empty())
             {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!(
-                        "identity-only model requires non-empty params.{key} so reports state both the limitation and what would unlock behavior"
-                    ),
-                });
+                push_err(&mut errors, entry, format!(
+                    "identity-only model requires non-empty params.{key} so reports state both the limitation and what would unlock behavior"
+                ));
             }
         }
         if !entry.logic.is_empty()
@@ -129,18 +141,10 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             || entry.peripheral.is_some()
             || entry.peripheral_power.is_some()
         {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: "identity-only model cannot also declare logic, behavioral physics, current_program, a firmware peripheral, or peripheral power; remove identity_only only after that behavior is validated"
-                    .to_string(),
-            });
+            push_err(&mut errors, entry, "identity-only model cannot also declare logic, behavioral physics, current_program, a firmware peripheral, or peripheral power; remove identity_only only after that behavior is validated");
         }
         if !entry.coverage.implements.is_empty() {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: "identity-only model cannot declare coverage.implements; it has no executable behavior"
-                    .to_string(),
-            });
+            push_err(&mut errors, entry, "identity-only model cannot declare coverage.implements; it has no executable behavior");
         }
     }
 
@@ -153,34 +157,22 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 word_address_bytes,
             } => {
                 if *address > 0x7f {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
-                            "peripheral I2C address 0x{address:02x} is not a 7-bit address"
-                        ),
-                    });
+                    push_err(&mut errors, entry, format!(
+                        "peripheral I2C address 0x{address:02x} is not a 7-bit address"
+                    ));
                 }
                 if *size_bytes == 0 {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: "peripheral I2C EEPROM size_bytes must be positive".into(),
-                    });
+                    push_err(&mut errors, entry, "peripheral I2C EEPROM size_bytes must be positive");
                 }
                 if !page_size.is_power_of_two() || *page_size > *size_bytes {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
-                            "peripheral I2C EEPROM page_size {page_size} must be a power of two no larger than size_bytes {size_bytes}"
-                        ),
-                    });
+                    push_err(&mut errors, entry, format!(
+                        "peripheral I2C EEPROM page_size {page_size} must be a power of two no larger than size_bytes {size_bytes}"
+                    ));
                 }
                 if !matches!(word_address_bytes, 1 | 2) {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
-                            "peripheral I2C EEPROM word_address_bytes must be 1 or 2, got {word_address_bytes}"
-                        ),
-                    });
+                    push_err(&mut errors, entry, format!(
+                        "peripheral I2C EEPROM word_address_bytes must be 1 or 2, got {word_address_bytes}"
+                    ));
                 }
             }
             PeripheralSpec::SpiNorFlash {
@@ -200,37 +192,25 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                     ("sector_size", *sector_size),
                 ] {
                     if value == 0 {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: format!("peripheral SPI NOR {name} must be positive"),
-                        });
+                        push_err(&mut errors, entry, format!("peripheral SPI NOR {name} must be positive"));
                     }
                 }
                 if !page_size.is_power_of_two()
                     || !sector_size.is_power_of_two()
                     || (*size_bytes > 0 && (*page_size > *size_bytes || *sector_size > *size_bytes))
                 {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: "peripheral SPI NOR page_size and sector_size must be power-of-two regions no larger than the array".into(),
-                    });
+                    push_err(&mut errors, entry, "peripheral SPI NOR page_size and sector_size must be power-of-two regions no larger than the array");
                 }
                 if jedec_id.len() != 3 {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
-                            "peripheral SPI NOR jedec_id must contain exactly 3 bytes, got {}",
-                            jedec_id.len()
-                        ),
-                    });
+                    push_err(&mut errors, entry, format!(
+                        "peripheral SPI NOR jedec_id must contain exactly 3 bytes, got {}",
+                        jedec_id.len()
+                    ));
                 }
                 if *spi_mode > 3 {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
-                            "peripheral SPI NOR spi_mode must be 0..3, got {spi_mode}"
-                        ),
-                    });
+                    push_err(&mut errors, entry, format!(
+                        "peripheral SPI NOR spi_mode must be 0..3, got {spi_mode}"
+                    ));
                 }
                 for (name, role) in [
                     ("cs_role", cs_role),
@@ -238,13 +218,10 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                     ("mosi_role", mosi_role),
                     ("miso_role", miso_role),
                 ] {
-                    if !entry.pins.values().any(|pin_role| pin_role == role) {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: format!(
-                                "peripheral SPI NOR {name} '{role}' is not a role in [models.pins]"
-                            ),
-                        });
+                    if !declares_role(entry, role) {
+                        push_err(&mut errors, entry, format!(
+                            "peripheral SPI NOR {name} '{role}' is not a role in [models.pins]"
+                        ));
                     }
                 }
             }
@@ -271,10 +248,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 }),
                 Ok(sensor) => {
                     if controller.as_ref().is_some_and(|name| name.trim().is_empty()) {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: "peripheral register-map controller must not be empty".into(),
-                        });
+                        push_err(&mut errors, entry, "peripheral register-map controller must not be empty");
                     }
                     let roles: &[(&str, &String)] = match sensor.sensor.bus {
                         Bus::I2c => &[("scl_role", scl_role), ("sda_role", sda_role)],
@@ -286,15 +260,10 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                         ],
                     };
                     for (name, role) in roles {
-                        if role.trim().is_empty()
-                            || !entry.pins.values().any(|pin_role| pin_role == *role)
-                        {
-                            errors.push(ValidationError {
-                                id: entry.id.clone(),
-                                message: format!(
-                                    "peripheral register-map {name} '{role}' is not a role in [models.pins]"
-                                ),
-                            });
+                        if role.trim().is_empty() || !declares_role(entry, role) {
+                            push_err(&mut errors, entry, format!(
+                                "peripheral register-map {name} '{role}' is not a role in [models.pins]"
+                            ));
                         }
                     }
                     for (level, role) in required_high_roles
@@ -302,25 +271,17 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                         .map(|role| ("high", role))
                         .chain(required_low_roles.iter().map(|role| ("low", role)))
                     {
-                        if role.trim().is_empty()
-                            || !entry.pins.values().any(|pin_role| pin_role == role)
-                        {
-                            errors.push(ValidationError {
-                                id: entry.id.clone(),
-                                message: format!(
-                                    "peripheral register-map required-{level} role '{role}' is not a role in [models.pins]"
-                                ),
-                            });
+                        if role.trim().is_empty() || !declares_role(entry, role) {
+                            push_err(&mut errors, entry, format!(
+                                "peripheral register-map required-{level} role '{role}' is not a role in [models.pins]"
+                            ));
                         }
                     }
                     for role in required_high_roles {
                         if required_low_roles.contains(role) {
-                            errors.push(ValidationError {
-                                id: entry.id.clone(),
-                                message: format!(
-                                    "peripheral register-map role '{role}' cannot be required both high and low"
-                                ),
-                            });
+                            push_err(&mut errors, entry, format!(
+                                "peripheral register-map role '{role}' cannot be required both high and low"
+                            ));
                         }
                     }
 
@@ -332,37 +293,22 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                     if address_fields.iter().any(|present| *present)
                         && !address_fields.iter().all(|present| *present)
                     {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: "peripheral register-map address selection requires address_select_role, address_when_low, and address_when_high together".into(),
-                        });
+                        push_err(&mut errors, entry, "peripheral register-map address selection requires address_select_role, address_when_low, and address_when_high together");
                     } else if let (Some(role), Some(low), Some(high)) =
                         (address_select_role, address_when_low, address_when_high)
                     {
                         if sensor.sensor.bus != Bus::I2c {
-                            errors.push(ValidationError {
-                                id: entry.id.clone(),
-                                message: "peripheral register-map address selection is only valid for I2C"
-                                    .into(),
-                            });
+                            push_err(&mut errors, entry, "peripheral register-map address selection is only valid for I2C");
                         }
-                        if role.trim().is_empty()
-                            || !entry.pins.values().any(|pin_role| pin_role == role)
-                        {
-                            errors.push(ValidationError {
-                                id: entry.id.clone(),
-                                message: format!(
-                                    "peripheral register-map address-select role '{role}' is not a role in [models.pins]"
-                                ),
-                            });
+                        if role.trim().is_empty() || !declares_role(entry, role) {
+                            push_err(&mut errors, entry, format!(
+                                "peripheral register-map address-select role '{role}' is not a role in [models.pins]"
+                            ));
                         }
                         if *low > 0x7f || *high > 0x7f || low == high {
-                            errors.push(ValidationError {
-                                id: entry.id.clone(),
-                                message: format!(
-                                    "peripheral register-map address strap must select two distinct 7-bit I2C addresses, got 0x{low:02x}/0x{high:02x}"
-                                ),
-                            });
+                            push_err(&mut errors, entry, format!(
+                                "peripheral register-map address strap must select two distinct 7-bit I2C addresses, got 0x{low:02x}/0x{high:02x}"
+                            ));
                         }
                     }
                 }
@@ -372,34 +318,36 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
 
     if let Some(power) = &entry.peripheral_power {
         if entry.peripheral.is_none() {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: "peripheral_power requires a [models.peripheral] protocol model".into(),
-            });
+            push_err(
+                &mut errors,
+                entry,
+                "peripheral_power requires a [models.peripheral] protocol model",
+            );
         }
         for (field, role) in [
             ("supply_role", power.supply_role.as_str()),
             ("return_role", power.return_role.as_str()),
         ] {
             if role.trim().is_empty() {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!("peripheral_power {field} must not be empty"),
-                });
-            } else if !entry.pins.values().any(|pin_role| pin_role == role) {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!(
-                        "peripheral_power {field} '{role}' is not a role in [models.pins]"
-                    ),
-                });
+                push_err(
+                    &mut errors,
+                    entry,
+                    format!("peripheral_power {field} must not be empty"),
+                );
+            } else if !declares_role(entry, role) {
+                push_err(
+                    &mut errors,
+                    entry,
+                    format!("peripheral_power {field} '{role}' is not a role in [models.pins]"),
+                );
             }
         }
         if !power.power_on_threshold_v.is_finite() || power.power_on_threshold_v <= 0.0 {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: "peripheral_power power_on_threshold_v must be finite and positive".into(),
-            });
+            push_err(
+                &mut errors,
+                entry,
+                "peripheral_power power_on_threshold_v must be finite and positive",
+            );
         }
         for (field, value) in [
             ("idle_a", power.idle_a),
@@ -407,20 +355,22 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             ("write_a", power.write_a),
         ] {
             if !value.is_finite() || value < 0.0 {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!("peripheral_power {field} must be finite and non-negative"),
-                });
+                push_err(
+                    &mut errors,
+                    entry,
+                    format!("peripheral_power {field} must be finite and non-negative"),
+                );
             }
         }
         if power
             .low_power_a
             .is_some_and(|value| !value.is_finite() || value < 0.0)
         {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: "peripheral_power low_power_a must be finite and non-negative".into(),
-            });
+            push_err(
+                &mut errors,
+                entry,
+                "peripheral_power low_power_a must be finite and non-negative",
+            );
         }
     }
 
@@ -437,40 +387,37 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     let mut implemented = std::collections::HashSet::new();
     for capability in &entry.coverage.implements {
         if !valid_capability(capability) {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: format!(
-                    "coverage capability '{capability}' must use lowercase ASCII letters, digits, and underscores"
-                ),
-            });
+            push_err(&mut errors, entry, format!(
+                "coverage capability '{capability}' must use lowercase ASCII letters, digits, and underscores"
+            ));
         } else if !implemented.insert(capability.as_str()) {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: format!("coverage.implements repeats '{capability}'"),
-            });
+            push_err(
+                &mut errors,
+                entry,
+                format!("coverage.implements repeats '{capability}'"),
+            );
         }
     }
     let mut missing = std::collections::HashSet::new();
     for capability in &entry.coverage.missing {
         if !valid_capability(capability) {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: format!(
-                    "coverage capability '{capability}' must use lowercase ASCII letters, digits, and underscores"
-                ),
-            });
+            push_err(&mut errors, entry, format!(
+                "coverage capability '{capability}' must use lowercase ASCII letters, digits, and underscores"
+            ));
         } else if !missing.insert(capability.as_str()) {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: format!("coverage.missing repeats '{capability}'"),
-            });
+            push_err(
+                &mut errors,
+                entry,
+                format!("coverage.missing repeats '{capability}'"),
+            );
         } else if implemented.contains(capability.as_str()) {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: format!(
+            push_err(
+                &mut errors,
+                entry,
+                format!(
                     "coverage capability '{capability}' cannot be both implemented and missing"
                 ),
-            });
+            );
         }
     }
 
@@ -488,32 +435,19 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                     .filter(|role| !role.is_empty())
                     .collect();
                 if roles.is_empty() {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: "params.must_not_float_roles names no roles".to_string(),
-                    });
+                    push_err(&mut errors, entry, "params.must_not_float_roles names no roles");
                 }
                 let mut seen = std::collections::HashSet::new();
                 for role in roles {
                     let normalized = role.to_ascii_lowercase();
                     if !seen.insert(normalized) {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: format!(
-                                "params.must_not_float_roles repeats role '{role}'"
-                            ),
-                        });
-                    } else if !entry
-                        .pins
-                        .values()
-                        .any(|known| known.eq_ignore_ascii_case(role))
-                    {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: format!(
-                                "params.must_not_float_roles entry '{role}' is not a role in [models.pins]"
-                            ),
-                        });
+                        push_err(&mut errors, entry, format!(
+                            "params.must_not_float_roles repeats role '{role}'"
+                        ));
+                    } else if !declares_role_ci(entry, role) {
+                        push_err(&mut errors, entry, format!(
+                            "params.must_not_float_roles entry '{role}' is not a role in [models.pins]"
+                        ));
                     }
                 }
             }
@@ -523,10 +457,11 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     macro_rules! require_f64 {
         ($key:expr) => {
             if entry.params.get_f64($key).is_none() {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!("missing required param '{}'", $key),
-                });
+                push_err(
+                    &mut errors,
+                    entry,
+                    format!("missing required param '{}'", $key),
+                );
             }
         };
     }
@@ -540,13 +475,14 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 // or a `nan`/`inf` TOML literal defeats the whole physical-bounds
                 // gate and propagates into the solver.
                 if !v.is_finite() || v < $min || v > $max {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
+                    push_err(
+                        &mut errors,
+                        entry,
+                        format!(
                             "param '{}' = {} is outside physical range [{}, {}]",
                             $key, v, $min, $max
                         ),
-                    });
+                    );
                 }
             }
         };
@@ -559,14 +495,15 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         ($key:expr, $min:expr, $max:expr) => {
             if let Some(v) = entry.params.get_f64($key) {
                 if !v.is_finite() || v.abs() < $min || v.abs() > $max {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
+                    push_err(
+                        &mut errors,
+                        entry,
+                        format!(
                             "param '{}' = {} is outside physical range (magnitude {} to {}, \
-                             either sign)",
+                         either sign)",
                             $key, v, $min, $max
                         ),
-                    });
+                    );
                 }
             }
         };
@@ -581,13 +518,14 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         ($lo:expr, $hi:expr) => {
             if let (Some(lo), Some(hi)) = (entry.params.get_f64($lo), entry.params.get_f64($hi)) {
                 if lo >= hi {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
+                    push_err(
+                        &mut errors,
+                        entry,
+                        format!(
                             "param '{}' = {} must be strictly less than '{}' = {}",
                             $lo, lo, $hi, hi
                         ),
-                    });
+                    );
                 }
             }
         };
@@ -724,10 +662,11 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     ] {
         if let Some(v) = rating {
             if !v.is_finite() || v <= 0.0 {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!("rating '{name}' = {v} must be a positive finite number"),
-                });
+                push_err(
+                    &mut errors,
+                    entry,
+                    format!("rating '{name}' = {v} must be a positive finite number"),
+                );
             }
         }
     }
@@ -738,19 +677,17 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // threshold makes the part promise operation in a region the datasheet does
     // not specify as normal.
     if let Some(program) = &entry.current_program {
-        let role_exists = !program.pin.trim().is_empty()
-            && entry
-                .pins
-                .values()
-                .any(|role| role.eq_ignore_ascii_case(program.pin.trim()));
+        let role_exists =
+            !program.pin.trim().is_empty() && declares_role_ci(entry, program.pin.trim());
         if !role_exists {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: format!(
+            push_err(
+                &mut errors,
+                entry,
+                format!(
                     "current_program.pin '{}' is not a role in [models.pins]",
                     program.pin
                 ),
-            });
+            );
         }
 
         for (field, roles) in [
@@ -758,33 +695,29 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             ("current_out_roles", &program.current_out_roles),
         ] {
             if program.semantics == CurrentProgramSemantics::RegulatedCurrent && roles.is_empty() {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!(
-                        "current_program regulated_current requires non-empty {field}"
-                    ),
-                });
+                push_err(
+                    &mut errors,
+                    entry,
+                    format!("current_program regulated_current requires non-empty {field}"),
+                );
             }
             let mut seen = std::collections::HashSet::new();
             for role in roles {
                 let normalized = role.trim().to_ascii_lowercase();
-                if normalized.is_empty()
-                    || !entry
-                        .pins
-                        .values()
-                        .any(|known| known.eq_ignore_ascii_case(role.trim()))
-                {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
+                if normalized.is_empty() || !declares_role_ci(entry, role.trim()) {
+                    push_err(
+                        &mut errors,
+                        entry,
+                        format!(
                             "current_program.{field} entry '{role}' is not a role in [models.pins]"
                         ),
-                    });
+                    );
                 } else if !seen.insert(normalized) {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!("current_program.{field} repeats role '{role}'"),
-                    });
+                    push_err(
+                        &mut errors,
+                        entry,
+                        format!("current_program.{field} repeats role '{role}'"),
+                    );
                 }
             }
         }
@@ -794,41 +727,28 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 .iter()
                 .any(|output| output.eq_ignore_ascii_case(input))
             {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!(
-                        "current_program role '{input}' appears in both current_in_roles and current_out_roles"
-                    ),
-                });
+                push_err(&mut errors, entry, format!(
+                    "current_program role '{input}' appears in both current_in_roles and current_out_roles"
+                ));
             }
         }
 
         if program.semantics == CurrentProgramSemantics::RegulatedCurrent
             && program.max_operating_current_a.is_none()
         {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: "current_program regulated_current requires max_operating_current_a so an undersized programming resistor cannot imply operation beyond the sourced domain".into(),
-            });
+            push_err(&mut errors, entry, "current_program regulated_current requires max_operating_current_a so an undersized programming resistor cannot imply operation beyond the sourced domain");
         }
         if program.above_domain == AboveDomainBehavior::Saturate
             && program.max_operating_current_a.is_none()
         {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: "current_program above_domain = saturate requires max_operating_current_a as the sourced saturation value"
-                    .into(),
-            });
+            push_err(&mut errors, entry, "current_program above_domain = saturate requires max_operating_current_a as the sourced saturation value");
         }
 
         if let Some(limit) = program.max_operating_current_a {
             if !limit.is_finite() || limit <= 0.0 {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!(
-                        "current_program.max_operating_current_a = {limit} must be a positive finite number"
-                    ),
-                });
+                push_err(&mut errors, entry, format!(
+                    "current_program.max_operating_current_a = {limit} must be a positive finite number"
+                ));
             }
             // The programmed quantity is the part's rail/load current. A
             // generic per-pin source/sink limit applies to the PROG/control pin
@@ -839,24 +759,20 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 .filter(|value| value.is_finite() && *value > 0.0)
             {
                 if limit.is_finite() && limit > device_limit {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
-                            "current_program.max_operating_current_a = {limit} A exceeds ratings.max_current_a = {device_limit} A"
-                        ),
-                    });
+                    push_err(&mut errors, entry, format!(
+                        "current_program.max_operating_current_a = {limit} A exceeds ratings.max_current_a = {device_limit} A"
+                    ));
                 }
             }
         }
 
         let mut check_positive = |name: &str, value: f64| {
             if !value.is_finite() || value <= 0.0 {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!(
-                        "current_program.{name} = {value} must be a positive finite number"
-                    ),
-                });
+                push_err(
+                    &mut errors,
+                    entry,
+                    format!("current_program.{name} = {value} must be a positive finite number"),
+                );
                 false
             } else {
                 true
@@ -904,12 +820,9 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                     let relative_gap =
                         (high_at_transition - *transition_current_a).abs() / *transition_current_a;
                     if relative_gap > 0.01 {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: format!(
-                                "current_program piecewise branches are not continuous at {transition_current_a} A (high branch gives {high_at_transition} A)"
-                            ),
-                        });
+                        push_err(&mut errors, entry, format!(
+                            "current_program piecewise branches are not continuous at {transition_current_a} A (high branch gives {high_at_transition} A)"
+                        ));
                     }
                 }
             }
@@ -928,57 +841,44 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                     check_positive(name, value);
                 }
                 if sense_roles.is_empty() {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: "current_program.sense_roles must name at least one role"
-                            .to_string(),
-                    });
+                    push_err(
+                        &mut errors,
+                        entry,
+                        "current_program.sense_roles must name at least one role",
+                    );
                 }
                 let mut normalized_roles = std::collections::HashSet::new();
                 for role in sense_roles {
-                    if role.trim().is_empty()
-                        || !entry
-                            .pins
-                            .values()
-                            .any(|known| known.eq_ignore_ascii_case(role.trim()))
-                    {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: format!(
-                                "current_program.sense_roles entry '{role}' is not a role in [models.pins]"
-                            ),
-                        });
+                    if role.trim().is_empty() || !declares_role_ci(entry, role.trim()) {
+                        push_err(&mut errors, entry, format!(
+                            "current_program.sense_roles entry '{role}' is not a role in [models.pins]"
+                        ));
                     }
                     if !normalized_roles.insert(role.trim().to_ascii_lowercase()) {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: format!("current_program.sense_roles repeats role '{role}'"),
-                        });
+                        push_err(
+                            &mut errors,
+                            entry,
+                            format!("current_program.sense_roles repeats role '{role}'"),
+                        );
                     }
                 }
                 if sense_far_roles.len() != sense_roles.len() {
-                    errors.push(ValidationError {
-                        id: entry.id.clone(),
-                        message: format!(
+                    push_err(
+                        &mut errors,
+                        entry,
+                        format!(
                             "current_program.sense_far_roles has {} entries but sense_roles has {}",
                             sense_far_roles.len(),
                             sense_roles.len()
                         ),
-                    });
+                    );
                 }
                 for role in sense_far_roles {
-                    if !role.eq_ignore_ascii_case("ground")
-                        && !entry
-                            .pins
-                            .values()
-                            .any(|known| known.eq_ignore_ascii_case(role.trim()))
+                    if !role.eq_ignore_ascii_case("ground") && !declares_role_ci(entry, role.trim())
                     {
-                        errors.push(ValidationError {
-                            id: entry.id.clone(),
-                            message: format!(
-                                "current_program.sense_far_roles entry '{role}' is neither 'ground' nor a role in [models.pins]"
-                            ),
-                        });
+                        push_err(&mut errors, entry, format!(
+                            "current_program.sense_far_roles entry '{role}' is neither 'ground' nor a role in [models.pins]"
+                        ));
                     }
                 }
             }
@@ -1005,33 +905,24 @@ fn check_behavioral_series_path_roles(entry: &ModelEntry, errors: &mut Vec<Valid
     for (index, path) in entry.behavioral.series_paths.iter().enumerate() {
         for (end, role) in [("a", &path.a), ("b", &path.b)] {
             if !declared.contains(&role.to_ascii_lowercase()) {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!(
-                        "behavioral.series_paths[{index}].{end} role '{role}' is not present in [models.pins]"
-                    ),
-                });
+                push_err(errors, entry, format!(
+                    "behavioral.series_paths[{index}].{end} role '{role}' is not present in [models.pins]"
+                ));
             }
         }
     }
     for (index, load) in entry.behavioral.profiled_loads.iter().enumerate() {
         if !declared.contains(&load.supply_pin.to_ascii_lowercase()) {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: format!(
-                    "behavioral.profiled_loads[{index}].supply_pin role '{}' is not present in [models.pins]",
-                    load.supply_pin
-                ),
-            });
+            push_err(errors, entry, format!(
+                "behavioral.profiled_loads[{index}].supply_pin role '{}' is not present in [models.pins]",
+                load.supply_pin
+            ));
         }
         if let Some(role) = &load.return_pin {
             if !declared.contains(&role.to_ascii_lowercase()) {
-                errors.push(ValidationError {
-                    id: entry.id.clone(),
-                    message: format!(
-                        "behavioral.profiled_loads[{index}].return_pin role '{role}' is not present in [models.pins]"
-                    ),
-                });
+                push_err(errors, entry, format!(
+                    "behavioral.profiled_loads[{index}].return_pin role '{role}' is not present in [models.pins]"
+                ));
             }
         }
     }
@@ -1047,10 +938,7 @@ fn check_behavioral_series_path_roles(entry: &ModelEntry, errors: &mut Vec<Valid
 /// empty pins map is the footprint/pin-rules inference path and is left alone.
 fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
     if entry.kind == ComponentKind::Digital && entry.pins.is_empty() {
-        errors.push(ValidationError {
-            id: entry.id.clone(),
-            message: "digital model has no [models.pins]; without declared roles it can bind cleanly while driving and observing nothing".to_string(),
-        });
+        push_err(errors, entry, "digital model has no [models.pins]; without declared roles it can bind cleanly while driving and observing nothing");
         return;
     }
     if entry.pins.is_empty() {
@@ -1113,16 +1001,17 @@ fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
 
     for role_family in required {
         if !role_family.iter().any(|name| declared.contains(*name)) {
-            errors.push(ValidationError {
-                id: entry.id.clone(),
-                message: format!(
+            push_err(
+                errors,
+                entry,
+                format!(
                     "[models.pins] declares no '{}' pin (a {:?} needs it); \
-                     the part would bind OPEN. Accepted role names: {}",
+                 the part would bind OPEN. Accepted role names: {}",
                     role_family[0],
                     entry.kind,
                     role_family.join(" / ")
                 ),
-            });
+            );
         }
     }
 }
@@ -1228,7 +1117,6 @@ mod tests {
         AboveDomainBehavior, ComponentKind, CurrentProgramEquation, ModelEntry, Params,
         PeripheralPower, PeripheralSpec,
     };
-    use std::collections::BTreeMap;
 
     fn entry(kind: ComponentKind, params: &[(&str, f64)]) -> ModelEntry {
         let mut p = Params::default();
@@ -1238,20 +1126,8 @@ mod tests {
         ModelEntry {
             id: "t".into(),
             kind,
-            description: String::new(),
-            r#match: Default::default(),
             params: p,
-            pins: BTreeMap::new(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
+            ..Default::default()
         }
     }
 
@@ -1655,7 +1531,7 @@ high_offset = 1.3333333333333333
 
     #[test]
     fn kind_vocabulary_and_suggestions() {
-        #[derive(serde::Deserialize)]
+        #[derive(Debug, serde::Deserialize)]
         struct Probe {
             #[allow(dead_code)]
             kind: ComponentKind,
@@ -1666,6 +1542,20 @@ high_offset = 1.3333333333333333
                 "{name}"
             );
         }
+        // Lockstep with the enum: serde's own "expected one of" list, which
+        // enumerates every variant, must be exactly KIND_NAMES.
+        let err = toml::from_str::<Probe>("kind = \"__not_a_kind__\"")
+            .expect_err("sentinel kind must not deserialize")
+            .to_string();
+        let listed: Vec<&str> = err
+            .split("expected one of ")
+            .nth(1)
+            .expect("serde names the variants")
+            .split(',')
+            .map(|t| t.trim().trim_matches(|c| c == '`' || c == '.'))
+            .filter(|t| !t.is_empty())
+            .collect();
+        assert_eq!(listed, KIND_NAMES, "KIND_NAMES drifted from ComponentKind");
         assert_eq!(kind_suggestion("LDO"), Some("vreg"));
         assert_eq!(kind_suggestion("npn"), Some("bjt_npn"));
         assert_eq!(kind_suggestion("led"), Some("diode"));

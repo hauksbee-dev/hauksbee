@@ -80,26 +80,12 @@ fn is_i2c_net(name: &str) -> bool {
     })
 }
 
-/// A plain two-terminal, assembled resistor with a parseable value.
+/// A plain two-terminal, assembled resistor with a parseable value. The
+/// three-state assembly contract is part of the shared predicate: a DNP or
+/// identity-refused pull-up must not count toward the bus's effective pull
+/// resistance.
 fn resistor_ohms(c: &Component) -> Option<f64> {
-    // Three-state contract: a DNP or identity-refused pull-up must not count
-    // toward the bus's effective pull resistance.
-    if !AssemblyState::of(c).is_present() {
-        return None;
-    }
-    let r = c.reference.to_ascii_uppercase();
-    let lib = c.lib_id.to_ascii_lowercase();
-    let is_r_ref = r.starts_with('R')
-        && !r.starts_with("RV")
-        && !r.starts_with("RT")
-        && !r.starts_with("RN")
-        && !r.starts_with("RP")
-        && !r.starts_with("RM");
-    if !is_r_ref
-        || c.pins.iter().filter(|p| p.net.is_some()).count() != 2
-        || lib.contains("ferrite")
-        || lib.contains("inductor")
-    {
+    if !super::straps::is_assembled_resistor(c) {
         return None;
     }
     hauksbee_models::value::parse_value(&c.value)

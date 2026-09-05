@@ -121,7 +121,7 @@ pub struct SpiEvent {
     /// `current_cycle()` clock that stamps [`Mcu::on_pin_change`] edges. This is
     /// what lets the scheduler merge the byte stream against the CS-pin edge
     /// stream into ONE cycle-ordered event queue and frame transactions on real
-    /// CS assert/deassert (05 §2). On push backends (simavr) it is exact: the C
+    /// CS assert/deassert. On push backends (simavr) it is exact: the C
     /// SPI IRQ fires synchronously inside `avr_run`, so the cycle read in the
     /// hook is the true transfer cycle. On poll backends (Renode/QEMU) it is the
     /// poll-boundary virtual time and coarse, the same tier `Mcu::cycle_exact`
@@ -217,7 +217,7 @@ pub trait Mcu {
     /// the output registers per time slice, so every edge inside a slice shares
     /// the slice's virtual time and intra-slice ordering is lost). Downstream
     /// cadence and framing logic reads this to know whether the drained ordering
-    /// can be trusted at sub-slice granularity (05 §1.1, amended: the drain
+    /// can be trusted at sub-slice granularity (the drain
     /// carries the coarse flag rather than pretending the order is exact).
     fn cycle_exact(&self) -> bool {
         true
@@ -611,6 +611,66 @@ pub(crate) fn write_uart_bytes_counted(
         .flush()
         .map_err(|source| UartWriteFailure { written, source })?;
     Ok(written)
+}
+
+/// Host side of an emulator's UART TCP bridge.
+///
+/// Renode (`emulation CreateServerSocketTerminal <port> "term" false`, then
+/// `connector Connect sysbus.<usart> term`; the trailing `false` disables
+/// Renode's terminal config handshake) and Espressif QEMU (`-serial
+/// tcp:127.0.0.1:<port>,server,nowait`) both expose the firmware's UART as a
+/// raw byte stream on a loopback port: bytes the firmware transmits arrive on
+/// the socket, and bytes written here are injected into the UART receiver.
+/// `label` only names the backend in error messages.
+pub(crate) struct UartSocket {
+    label: &'static str,
+    stream: std::net::TcpStream,
+}
+
+impl UartSocket {
+    /// Connect to the emulator's UART socket on `127.0.0.1:port`, retrying
+    /// until `connect_timeout` elapses (the emulator may still be starting).
+    pub(crate) fn connect(
+        label: &'static str,
+        port: u16,
+        connect_timeout: std::time::Duration,
+    ) -> anyhow::Result<Self> {
+        use anyhow::Context as _;
+        use std::time::{Duration, Instant};
+
+        let deadline = Instant::now() + connect_timeout;
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        loop {
+            match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+                Ok(stream) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(20)))
+                        .with_context(|| format!("setting {label} UART read timeout"))?;
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(2)))
+                        .with_context(|| format!("setting {label} UART write timeout"))?;
+                    stream.set_nodelay(true).ok();
+                    return Ok(UartSocket { label, stream });
+                }
+                Err(e) if Instant::now() >= deadline => {
+                    return Err(e).with_context(|| format!("connecting to {label} UART socket"))
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+    }
+
+    /// Inject bytes into the firmware's UART receiver.
+    pub(crate) fn write_bytes(&mut self, bytes: &[u8]) -> anyhow::Result<usize> {
+        use anyhow::Context as _;
+        write_uart_bytes_counted(&mut self.stream, bytes)
+            .with_context(|| format!("writing to {} UART socket", self.label))
+    }
+
+    /// Drain any bytes the firmware has transmitted since the last call.
+    pub(crate) fn drain(&mut self) -> anyhow::Result<Vec<u8>> {
+        drain_uart_bytes(&mut self.stream, self.label)
+    }
 }
 
 pub(crate) fn drain_uart_bytes(

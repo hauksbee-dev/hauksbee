@@ -60,7 +60,7 @@ pub fn decompile_board_to_code(kicad_pcb_text: &str) -> anyhow::Result<String> {
 /// lacks. The Board-as-Code `pad` line has no role slot (it is a geometry +
 /// net record), so the function is not re-emitted verbatim; what survives is
 /// the pad *number*, which the binder's pin-role rule table maps back to a role
-/// (Feature 2). For a netlist with a generic diode the standard `1->K, 2->A`
+///. For a netlist with a generic diode the standard `1->K, 2->A`
 /// numbering binds the part directly, with a guess-warning naming the rule.
 pub fn decompile_any_to_code(board_text: &str) -> anyhow::Result<String> {
     let head: String = board_text.chars().take(512).collect();
@@ -410,7 +410,7 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
     let board = ExtractedBoard::from_auto(board_text)?;
     // A zero-component board can prove nothing: every stress check passes
     // vacuously, and "100% resolved, no faults" on an empty .board is false
-    // comfort (M6). Refuse loudly instead.
+    // comfort. Refuse loudly instead.
     if board.components.is_empty() {
         anyhow::bail!(
             "this board has no components; nothing to check, so a pass would be \

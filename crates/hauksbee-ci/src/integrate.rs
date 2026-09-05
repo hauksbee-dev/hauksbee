@@ -196,17 +196,9 @@ fn plain_hook_script() -> String {
 /// The GitHub workflow YAML `github-action` prints/writes. `mode: auto` in
 /// the action detects the repo's spec or board, so the generated file needs
 /// no per-repo editing to start.
-/// Compatibility wrapper for existing Rust callers. Builds without verified
-/// Hauksbee identity return an explanatory, non-runnable YAML comment instead
-/// of panicking or emitting a credential-bearing workflow pinned to zeros or
-/// a foreign repository. CLI code uses [`try_github_workflow_yaml`] and gives a
-/// normal exit-2 diagnostic.
-pub fn github_workflow_yaml() -> String {
-    try_github_workflow_yaml().unwrap_or_else(|error| {
-        format!("# hauksbee-ci could not generate a runnable workflow.\n# {error}\n")
-    })
-}
-
+/// A build without a verified Hauksbee identity errors rather than emitting a
+/// credential-bearing workflow pinned to zeros or to a foreign repository; the
+/// CLI turns that into a normal exit-2 diagnostic.
 pub fn try_github_workflow_yaml() -> anyhow::Result<String> {
     #[cfg(test)]
     let source_commit =

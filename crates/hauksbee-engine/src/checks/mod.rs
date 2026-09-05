@@ -58,6 +58,21 @@ pub mod usb_c;
 use hauksbee_extract::{ExtractedBoard, NetLintReport, SiReport};
 use hauksbee_models::ModelLibrary;
 
+/// Every assembled component paired with the model that resolved it.
+///
+/// The three-state assembly contract, asked once: only a Present record can be
+/// a resolvable part, so DNP and identity-refused records abstain rather than
+/// contribute a model-derived finding.
+pub(crate) fn resolved_components<'a>(
+    board: &'a ExtractedBoard,
+    lib: &'a ModelLibrary,
+) -> impl Iterator<Item = (&'a hauksbee_extract::Component, hauksbee_models::ModelEntry)> + 'a {
+    board.components.iter().filter_map(move |comp| {
+        let part = hauksbee_extract::assembly::AssemblyState::of(comp).fitted()?;
+        Some((comp, crate::binder::resolve(lib, part).model?))
+    })
+}
+
 /// The full engine-level lint: the connectivity net-lint plus the model-aware
 /// checks, strap pins, MCU resource conflicts, the unmodelled-MCU coverage
 /// note, configured-device decode faults (e.g. a CYPD3177 PD-sink divider), and

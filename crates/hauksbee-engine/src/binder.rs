@@ -49,7 +49,7 @@ pub struct McuBinding {
     /// `"STM32F411RET6"`), captured BEFORE `route_mcu_family_str` collapses it to
     /// a coarse family backend. Used by the scheduler to emit a chip-substitution
     /// warning when the modelled core is less specific than the requested part
-    /// (Track B). May be empty when the board gives no value string.
+    ///. May be empty when the board gives no value string.
     pub requested_part: String,
     /// True when an assembled crystal/resonator physically bridges this MCU's
     /// `osc_in` and `osc_out` nets. The Renode descriptor consumes this as
@@ -88,7 +88,7 @@ pub struct McuBinding {
 /// [`RegisterMapSensor`](crate::RegisterMapSensor) instance of
 /// `testdata/sensor-specs/mcp4728.toml` on a shared bus, binding these drivers to
 /// the spec's per-channel outputs; the slave then drives the VOUT nets itself
-/// at each transaction end (the ctx-bearing `on_stop`, 05 §3.1), so the analog
+/// at each transaction end (the ctx-bearing `on_stop`), so the analog
 /// solve sees the DAC output voltages.
 pub struct DacBinding {
     pub reference: String,
@@ -153,7 +153,7 @@ pub struct BoundBoard {
     /// Named controllable input sources: reference -> DeviceId of a Vsource /
     /// Isource the UI can override (sliders).
     pub input_sources: HashMap<String, hauksbee_ir::DeviceId>,
-    /// Configurable power supplies, one per detected supply net (Feature 1).
+    /// Configurable power supplies, one per detected supply net.
     /// Default to [`PowerSupply::Ideal`] at the rail's nominal voltage, so a
     /// board whose supplies are left unconfigured sees perfect rails.
     pub supplies: Vec<SupplyLeg>,
@@ -161,7 +161,7 @@ pub struct BoundBoard {
     /// chargers, PMICs, balancers). Iterated by the scheduler each chunk, the
     /// same cadence as the supplies.
     pub behavioral: Vec<crate::behavioral::BehavioralDevice>,
-    /// Per-device metadata for the fault/stress monitor (Feature 2).
+    /// Per-device metadata for the fault/stress monitor.
     pub device_meta: Vec<DeviceMeta>,
     /// MCP4728 quad DACs discovered on the board, with their VOUT drivers. The
     /// scheduler turns these into I2C slaves and drives the analog VOUT nets.
@@ -513,19 +513,16 @@ pub fn bind_board_with(
     }
 
     // ── Assign MCP4728 I2C addresses deterministically by reference order ────
-    // The board reprograms the three DACs to 0x60/0x61/0x62 during bring-up
-    // (that bit-banged address-reprogramming is OUT OF SCOPE here). We model the
-    // post-bring-up state: addresses 0x60+i assigned by ascending reference
-    // designator (U1101->0x60, U1102->0x61, U1103->0x62). ASSUMPTION: the
-    // netlist does not encode the final address per device, so by-ref ordering
-    // is the deterministic stand-in; it matches the board's U1101/02/03 layout
-    // and the firmware's CONF_MCP4728_ADDRS = {0x60,0x61,0x62}.
+    // A board reprograms its DACs to 0x60/0x61/0x62 during bring-up (the
+    // bit-banged address-reprogramming itself is out of scope). Model the
+    // post-bring-up state: 0x60+i by ascending reference designator. ASSUMPTION:
+    // the netlist does not encode the final address per device, so by-ref
+    // ordering is the deterministic stand-in.
     //
     // Sort by a NATURAL key (alpha prefix, then the parsed trailing integer),
-    // not raw String Ord: byte-lexicographic ordering puts "U10" before "U2",
-    // which would hand out addresses in the wrong order for non-uniform-width
-    // designators (U2 -> 0x61, U10 -> 0x60). Natural order gives U2 -> 0x60,
-    // U10 -> 0x61.
+    // not raw String Ord: byte-lexicographic ordering puts "U10" before "U2" and
+    // would hand out addresses in the wrong order for non-uniform-width
+    // designators.
     dacs.sort_by(|a, b| natural_ref_key(&a.reference).cmp(&natural_ref_key(&b.reference)));
     for (i, d) in dacs.iter_mut().enumerate() {
         d.address = 0x60 + i as u8;
@@ -1414,10 +1411,8 @@ fn is_crystal_like(prefix: &str, value: &str) -> bool {
 /// frequency, while accepting real crystal values.
 ///
 /// This defers to the value parser rather than doing its own suffix arithmetic:
-/// a hand-rolled `strip_suffix("hz")` here and the parser's own unit table are
-/// two answers to one question, and they drifted (the parser called "16Mhz"
-/// unparseable while this said it was a frequency, so a crystal the DB resolved
-/// as a passive died on the parse the fallback never reached).
+/// a hand-rolled `strip_suffix("hz")` here and the parser's own unit table would
+/// be two answers to one question, free to drift apart.
 fn value_is_frequency(value: &str) -> bool {
     hauksbee_models::value::parse_frequency_hz(value).is_some()
 }
@@ -1445,10 +1440,10 @@ fn route_mcu_family(comp: &Component) -> Option<McuFamilyRoute> {
 /// The backend string for a component the model DB resolved as an MCU.
 ///
 /// The model's explicit `backend` param always wins. When the entry carries
-/// none, the family router decides from the part's identity strings, a DB
-/// entry that exists for strap-lint data (esp32s3, esp32s2) must not silently
-/// inherit the AVR default: that sent an ESP32-S3 into simavr (wrong ISA, and
-/// the GPL-gated `avr` feature the GPL-free build excludes) instead of
+/// none, the family router decides from the part's identity strings: a DB entry
+/// that exists only for strap-lint data (esp32s3, esp32s2) must not silently
+/// inherit the AVR default, which would send an ESP32-S3 into simavr (wrong ISA,
+/// and the GPL-gated `avr` feature the GPL-free build excludes) instead of
 /// `qemu:esp32s3`. A recognized family with no co-sim platform gets an
 /// explicit `none:<family>` token the scheduler refuses loudly at
 /// instantiation. Only a part NO family route recognizes keeps the historical
@@ -1967,294 +1962,26 @@ fn bind_component(
     let (role_nets, guesses) = role_node_map_guessed(comp, model, node_of, pin_rules);
 
     // A model-declared firmware peripheral is executable behavior in its own
-    // right. Validate that the board actually wires the bus roles before
-    // registering it; a flash with no CS or an EEPROM with no SDA is left open,
-    // not counted as modeled because its part number was recognized.
+    // right, but only when the board actually wires the bus roles.
     if let Some(spec) = model.peripheral.clone() {
-        let power = if let Some(power) = model.peripheral_power.clone() {
-            let Some(supply_node) = role_nets.get(&power.supply_role).copied() else {
-                return (
-                    BindOutcome::Unresolved {
-                        reason: format!(
-                            "model declares peripheral power but supply role '{}' is not connected",
-                            power.supply_role
-                        ),
+        return match bind_model_peripheral(comp, model, spec, &role_nets, power_nets, circuit) {
+            Ok(binding) => {
+                let device = match &binding.spec {
+                    PeripheralSpec::I2cEeprom { .. } => "model-declared I2C EEPROM",
+                    PeripheralSpec::SpiNorFlash { .. } => "model-declared SPI NOR flash",
+                    PeripheralSpec::RegisterMap { .. } => "model-declared register-map peripheral",
+                };
+                peripherals.push(binding);
+                (
+                    BindOutcome::Behavioral {
+                        device: device.to_string(),
                     },
-                    Some(format!(
-                        "{} ({}): peripheral model '{}' cannot attach its electrical load because supply role '{}' is not connected",
-                        comp.reference, comp.value, model.id, power.supply_role
-                    )),
+                    entry_warning(comp, model),
                     guesses,
-                );
-            };
-            let Some(return_node) = role_nets.get(&power.return_role).copied() else {
-                return (
-                    BindOutcome::Unresolved {
-                        reason: format!(
-                            "model declares peripheral power but return role '{}' is not connected",
-                            power.return_role
-                        ),
-                    },
-                    Some(format!(
-                        "{} ({}): peripheral model '{}' cannot attach its electrical load because return role '{}' is not connected",
-                        comp.reference, comp.value, model.id, power.return_role
-                    )),
-                    guesses,
-                );
-            };
-            Some(BoundPeripheralPower {
-                spec: power,
-                supply_node,
-                return_node,
-            })
-        } else {
-            None
-        };
-        let binding = match &spec {
-            PeripheralSpec::I2cEeprom { .. } => {
-                if !role_nets.contains_key("scl") || !role_nets.contains_key("sda") {
-                    return (
-                        BindOutcome::Unresolved {
-                            reason: "model declares an I2C EEPROM but SCL/SDA are not both connected"
-                                .to_string(),
-                        },
-                        Some(format!(
-                            "{} ({}): I2C EEPROM model '{}' cannot attach because SCL/SDA are not both connected",
-                            comp.reference, comp.value, model.id
-                        )),
-                        guesses,
-                    );
-                }
-                PeripheralBinding {
-                    reference: comp.reference.clone(),
-                    spec,
-                    cs_net: None,
-                    i2c_address_override: None,
-                    power,
-                }
+                )
             }
-            PeripheralSpec::SpiNorFlash {
-                cs_role,
-                clk_role,
-                mosi_role,
-                miso_role,
-                ..
-            } => {
-                let Some(cs_net) = role_nets.get(cs_role).copied() else {
-                    return (
-                        BindOutcome::Unresolved {
-                            reason: format!(
-                                "model declares SPI NOR but chip-select role '{cs_role}' is not connected"
-                            ),
-                        },
-                        Some(format!(
-                            "{} ({}): SPI NOR model '{}' cannot attach because chip-select role '{cs_role}' is not connected",
-                            comp.reference, comp.value, model.id
-                        )),
-                        guesses,
-                    );
-                };
-                if !role_nets.contains_key(clk_role)
-                    || !role_nets.contains_key(mosi_role)
-                    || !role_nets.contains_key(miso_role)
-                {
-                    return (
-                        BindOutcome::Unresolved {
-                            reason: format!(
-                                "model declares SPI NOR but {clk_role}/{mosi_role}/{miso_role} are not all connected"
-                            ),
-                        },
-                        Some(format!(
-                            "{} ({}): SPI NOR model '{}' cannot attach because {clk_role}/{mosi_role}/{miso_role} are not all connected",
-                            comp.reference, comp.value, model.id,
-                        )),
-                        guesses,
-                    );
-                }
-                PeripheralBinding {
-                    reference: comp.reference.clone(),
-                    spec,
-                    cs_net: Some(cs_net),
-                    i2c_address_override: None,
-                    power,
-                }
-            }
-            PeripheralSpec::RegisterMap {
-                spec_toml,
-                scl_role,
-                sda_role,
-                cs_role,
-                clk_role,
-                mosi_role,
-                miso_role,
-                required_high_roles,
-                required_low_roles,
-                address_select_role,
-                address_when_low,
-                address_when_high,
-                ..
-            } => {
-                let sensor = SensorSpec::from_toml(spec_toml)
-                    .expect("model validation guarantees a valid register-map spec");
-                let strap_level = |role: &str| -> Result<bool, String> {
-                    let node = role_nets
-                        .get(role)
-                        .copied()
-                        .ok_or_else(|| format!("strap role '{role}' is not connected"))?;
-                    if node.is_ground() {
-                        Ok(false)
-                    } else if power_nets.contains_key(circuit.node_name(node)) {
-                        Ok(true)
-                    } else {
-                        Err(format!(
-                            "strap role '{role}' is on '{}' rather than a resolved supply or ground",
-                            circuit.node_name(node)
-                        ))
-                    }
-                };
-                for role in required_high_roles {
-                    if strap_level(role) != Ok(true) {
-                        let actual = strap_level(role)
-                            .map(|_| "resolved low".to_string())
-                            .unwrap_or_else(|error| error);
-                        return (
-                            BindOutcome::Unresolved {
-                                reason: format!(
-                                    "register-map bus personality requires role '{role}' high, but it is {actual}"
-                                ),
-                            },
-                            Some(format!(
-                                "{} ({}): model '{}' register-map behavior not attached: role '{role}' must resolve high ({actual})",
-                                comp.reference, comp.value, model.id
-                            )),
-                            guesses,
-                        );
-                    }
-                }
-                for role in required_low_roles {
-                    if strap_level(role) != Ok(false) {
-                        let actual = strap_level(role)
-                            .map(|_| "resolved high".to_string())
-                            .unwrap_or_else(|error| error);
-                        return (
-                            BindOutcome::Unresolved {
-                                reason: format!(
-                                    "register-map bus personality requires role '{role}' low, but it is {actual}"
-                                ),
-                            },
-                            Some(format!(
-                                "{} ({}): model '{}' register-map behavior not attached: role '{role}' must resolve low ({actual})",
-                                comp.reference, comp.value, model.id
-                            )),
-                            guesses,
-                        );
-                    }
-                }
-                let i2c_address_override = match (
-                    address_select_role.as_deref(),
-                    address_when_low,
-                    address_when_high,
-                ) {
-                    (Some(role), Some(low), Some(high)) => match strap_level(role) {
-                        Ok(false) => Some(*low),
-                        Ok(true) => Some(*high),
-                        Err(error) => {
-                            return (
-                                BindOutcome::Unresolved {
-                                    reason: format!(
-                                        "register-map I2C address cannot be selected: {error}"
-                                    ),
-                                },
-                                Some(format!(
-                                    "{} ({}): model '{}' register-map behavior not attached because {error}",
-                                    comp.reference, comp.value, model.id
-                                )),
-                                guesses,
-                            );
-                        }
-                    },
-                    _ => None,
-                };
-                match sensor.sensor.bus {
-                    Bus::I2c => {
-                        if !role_nets.contains_key(scl_role) || !role_nets.contains_key(sda_role) {
-                            return (
-                                BindOutcome::Unresolved {
-                                    reason: format!(
-                                        "model declares an I2C register map but roles '{scl_role}'/'{sda_role}' are not both connected"
-                                    ),
-                                },
-                                Some(format!(
-                                    "{} ({}): register-map model '{}' cannot attach because I2C roles '{scl_role}'/'{sda_role}' are not both connected",
-                                    comp.reference, comp.value, model.id
-                                )),
-                                guesses,
-                            );
-                        }
-                        PeripheralBinding {
-                            reference: comp.reference.clone(),
-                            spec,
-                            cs_net: None,
-                            i2c_address_override,
-                            power,
-                        }
-                    }
-                    Bus::Spi => {
-                        let Some(cs_net) = role_nets.get(cs_role).copied() else {
-                            return (
-                                BindOutcome::Unresolved {
-                                    reason: format!(
-                                        "model declares an SPI register map but chip-select role '{cs_role}' is not connected"
-                                    ),
-                                },
-                                Some(format!(
-                                    "{} ({}): register-map model '{}' cannot attach because chip-select role '{cs_role}' is not connected",
-                                    comp.reference, comp.value, model.id
-                                )),
-                                guesses,
-                            );
-                        };
-                        if !role_nets.contains_key(clk_role)
-                            || !role_nets.contains_key(mosi_role)
-                            || !role_nets.contains_key(miso_role)
-                        {
-                            return (
-                                BindOutcome::Unresolved {
-                                    reason: format!(
-                                        "model declares an SPI register map but {clk_role}/{mosi_role}/{miso_role} are not all connected"
-                                    ),
-                                },
-                                Some(format!(
-                                    "{} ({}): register-map model '{}' cannot attach because {clk_role}/{mosi_role}/{miso_role} are not all connected",
-                                    comp.reference, comp.value, model.id
-                                )),
-                                guesses,
-                            );
-                        }
-                        PeripheralBinding {
-                            reference: comp.reference.clone(),
-                            spec,
-                            cs_net: Some(cs_net),
-                            i2c_address_override: None,
-                            power,
-                        }
-                    }
-                }
-            }
+            Err((reason, warning)) => (BindOutcome::Unresolved { reason }, Some(warning), guesses),
         };
-        let device = match &binding.spec {
-            PeripheralSpec::I2cEeprom { .. } => "model-declared I2C EEPROM",
-            PeripheralSpec::SpiNorFlash { .. } => "model-declared SPI NOR flash",
-            PeripheralSpec::RegisterMap { .. } => "model-declared register-map peripheral",
-        };
-        peripherals.push(binding);
-        return (
-            BindOutcome::Behavioral {
-                device: device.to_string(),
-            },
-            entry_warning(comp, model),
-            guesses,
-        );
     }
     // pad number -> node, regardless of role.
     let pad_nodes = |pad: &str| -> Option<NodeId> {
@@ -2266,74 +1993,43 @@ fn bind_component(
 
     // A crystal, resonator or packaged oscillator is `kind = "passive"` in the
     // DB because that is the shape of its pad map, but it is NOT a two-terminal
-    // R/C/L and its value field is a FREQUENCY or a part number, never a
-    // magnitude. Sending it through `bind_passive` asks the value parser for
-    // ohms and gets one of three wrong answers: `None` for "16Mhz" and
-    // "Abracon_ABM11" (the part reported as an unresolved open, dragging the
-    // board's verdict down for a part the library had in fact identified), or,
-    // worse, a NUMBER for a bare "32.768", which stamps a 32.768 Ω resistor
-    // across an oscillator that has no such conductance.
+    // R/C/L: its value field is a FREQUENCY or a part number, never a magnitude.
+    // Sending it through `bind_passive` asks the value parser for ohms and gets
+    // `None` for "16Mhz" or "Abracon_ABM11" (reported as an unresolved open) or,
+    // worse, a NUMBER for a bare "32.768", stamping a 32.768 Ω resistor across
+    // an oscillator that has no such conductance. Bind it high-impedance
+    // instead, with the clock supplied by the MCU model; the two load caps
+    // beside it are genuine passives and are unaffected.
     //
-    // The engine's own `crystal_fallback` already binds this class Skipped for
-    // exactly this reason, so the DB path was the only one that got it wrong,
-    // and a curated entry was strictly worse than no entry at all. Same
-    // treatment here: high-impedance, clock supplied by the MCU model. The two
-    // load caps beside it are genuine passives and are unaffected.
-    // WHAT `Skipped` ACTUALLY COSTS, because it is not free and an earlier version
-    // of this comment claimed the opposite. `BindOutcome::Skipped` is
-    // `is_ignored()`, so the row leaves `non_ignored()`: it drops out of the
-    // resolved/total denominator, and `BoardEvidence::from_bound` builds an
-    // `open_part` assumption only for `Unresolved`, so it produces no assumption on
-    // any evidence surface either. Skipping a part therefore makes the board read as
-    // MORE fully handled, not less.
-    //
-    // For a bare two-terminal quartz that is right, and is what the engine's own
-    // `crystal_fallback` has always done: there is no motional arm to model, so
-    // there is nothing a reader could act on.
-    //
-    // For a PACKAGED OSCILLATOR it is not right on its own. `crystal_footprint` in
-    // db/passives.toml matches `^Oscillator...:` too, so a TCXO lands here, and a
-    // TCXO is not a quartz blank: it has a supply pin and it DRIVES a clock. Its
-    // supply draw and its driven output both go unmodelled, and a board whose only
-    // clock source is a TCXO should not read as fully handled. So that case carries
-    // a WARNING, which `BindReport::warnings` collects over every row including the
-    // ignored ones and the bind report prints; the reason string alone would reach
-    // only the bind table's own line.
+    // `BindOutcome::Skipped` is `is_ignored()`, so the row leaves
+    // `non_ignored()`: it drops out of the resolved/total denominator, and
+    // `BoardEvidence::from_bound` builds an `open_part` assumption only for
+    // `Unresolved`. Skipping a part therefore makes the board read as MORE
+    // fully handled. For a bare two-terminal quartz that is right, because
+    // there is no motional arm to model and nothing a reader could act on. For
+    // a PACKAGED OSCILLATOR it is not: `crystal_footprint` in db/passives.toml
+    // matches `^Oscillator...:` too, and a TCXO has a supply pin and DRIVES a
+    // clock, so its supply draw and its driven output both go unmodelled. That
+    // case carries a WARNING, which `BindReport::warnings` collects over every
+    // row including the ignored ones.
     if model.passive_class == Some(hauksbee_models::schema::PassiveClass::Crystal) {
-        // THE DISCRIMINATOR IS THE WIRING, NOT THE FOOTPRINT STRING. An earlier
-        // version of this tested only `footprint.contains("oscillator")`, which is
-        // the KiCad library's spelling and nobody else's. `crystal_value` in
-        // db/passives.toml matches a bare frequency with no footprint constraint at
-        // all, so a TCXO in an Eagle-style land ("complib:OSC_SMD_3225_4P",
-        // "XO-5032") resolved to this class and took the SILENT path: measured on a
-        // corpus board, renaming the footprint alone moved the part from 52 mentions
-        // under `--check --plain` to zero. That was also a REGRESSION, and the worst
-        // kind. Before this branch such a part reached `bind_passive_array`, failed
-        // `parse_value("40MHz")`, and came out `Unresolved`, i.e. disclosed as an
-        // open active part. Skipping it silently moved it from disclosed to
-        // undisclosed, which is the one transition this project forbids.
+        // THE DISCRIMINATOR IS THE WIRING, NOT THE FOOTPRINT STRING.
+        // `crystal_value` in db/passives.toml matches a bare frequency with no
+        // footprint constraint, so a TCXO in an Eagle-style land
+        // ("complib:OSC_SMD_3225_4P", "XO-5032") resolves to this class; testing
+        // only `footprint.contains("oscillator")` (the KiCad spelling and
+        // nobody else's) would take the silent path for it.
         //
-        // What actually separates the two kinds is that a POWERED part has a pin on a
-        // supply rail. A quartz blank has two terminals that go to the MCU's
-        // oscillator pins and, on a 4-pad part, two shield pads that go to GROUND: it
-        // is never wired to a rail. So the board's own resolved power nets answer the
-        // question, and the footprint string stays as a third-chance signal for a
-        // part whose supply net the rail detector did not classify.
-        //
-        // A COUNT OF NON-GROUND NETS DOES NOT WORK, and it is worth recording why so
-        // nobody tries it again. The idea was that a quartz blank presents exactly two
-        // non-ground nets, so more than two means a powered part. Two corpus boards
-        // break it. corne-cherry grounds its 4-pad crystal's shield pads to a net
-        // called "GNDR", which is not `NodeId::GROUND`, and lily58's Pro_V2 wires its
-        // shield pads to the load-capacitor nets rather than to ground at all, giving
-        // four non-ground nets on an ordinary 12 MHz crystal. Both produced a caveat
-        // about a part that is modelled correctly, and a warning list with false
-        // entries in it is how the true ones lose their audience.
-        //
-        // What is left is the two signals that do not depend on how a board names or
-        // wires its ground: a pin on a RESOLVED SUPPLY RAIL, which is what a powered
-        // oscillator has and a crystal never does, and the footprint string, which
-        // catches a KiCad-library part whose supply net the rail detector missed.
+        // What separates the two kinds is that a POWERED part has a pin on a
+        // supply rail: a quartz blank has two terminals going to the MCU's
+        // oscillator pins and, on a 4-pad part, two shield pads going to ground,
+        // and is never wired to a rail. A COUNT OF NON-GROUND NETS DOES NOT
+        // WORK: corne-cherry grounds its 4-pad crystal's shield pads to a net
+        // called "GNDR" (not `NodeId::GROUND`), and lily58's Pro_V2 wires its
+        // shield pads to the load-capacitor nets, giving four non-ground nets on
+        // an ordinary 12 MHz crystal. So the test is a pin on a RESOLVED SUPPLY
+        // RAIL, with the footprint string as a third-chance signal for a
+        // KiCad-library part whose supply net the rail detector missed.
         let mut on_a_supply_rail = false;
         for pin in &comp.pins {
             let Some(node) = node_of(pin.net) else {
@@ -2388,28 +2084,7 @@ fn bind_component(
             } else {
                 "digital"
             };
-            match bind_digital(comp, model, circuit, &role_nets, digital) {
-                Ok(()) => (
-                    BindOutcome::Digital {
-                        kind: kind.to_string(),
-                    },
-                    entry_warning(comp, model),
-                ),
-                // A part whose logic spec does not compile is NOT bound: its
-                // nets float. Reporting it as `Digital` anyway made a broken
-                // part look healthy in every report surface (including
-                // `critical_parts_bound`); record the truth and warn.
-                Err(e) => (
-                    BindOutcome::Unresolved {
-                        reason: format!("invalid [models.logic]: {e}"),
-                    },
-                    Some(format!(
-                        "{} ({}): invalid [models.logic] in model '{}': {e}; the part is \
-                         unmodeled and its output nets float",
-                        comp.reference, comp.value, model.id
-                    )),
-                ),
-            }
+            bound_digital_outcome(comp, model, circuit, &role_nets, digital, kind)
         }
         Dac => {
             // MCP4728-class quad I2C DAC: stamp Thevenin drivers on the four
@@ -2419,27 +2094,8 @@ fn bind_component(
             // `on_i2c` hook, not these nets, so no digital buffer is stamped.
             bind_mcp4728_dac(comp, model, circuit, &role_nets, dacs)
         }
-        Adc => {
-            // Treated as a behavioral passthrough buffer for now.
-            match bind_digital(comp, model, circuit, &role_nets, digital) {
-                Ok(()) => (
-                    BindOutcome::Digital {
-                        kind: "adc".to_string(),
-                    },
-                    entry_warning(comp, model),
-                ),
-                Err(e) => (
-                    BindOutcome::Unresolved {
-                        reason: format!("invalid [models.logic]: {e}"),
-                    },
-                    Some(format!(
-                        "{} ({}): invalid [models.logic] in model '{}': {e}; the part is \
-                         unmodeled and its output nets float",
-                        comp.reference, comp.value, model.id
-                    )),
-                ),
-            }
-        }
+        // Treated as a behavioral passthrough buffer for now.
+        Adc => bound_digital_outcome(comp, model, circuit, &role_nets, digital, "adc"),
         Mcu => {
             let backend = mcu_backend_string(comp, model);
             let warning = bind_mcu(comp, model, circuit, node_of, &pad_nodes, power_nets, mcus);
@@ -2459,6 +2115,272 @@ fn bind_component(
         ),
     };
     (outcome, warning, guesses)
+}
+
+/// Bind one declarative-logic part and turn the result into a report outcome.
+///
+/// A part whose logic spec does not compile is NOT bound: its nets float.
+/// Reporting it as `Digital` anyway would make a broken part look healthy on
+/// every report surface (`critical_parts_bound` included), so the failure is
+/// recorded as unresolved and warned about.
+fn bound_digital_outcome(
+    comp: &Component,
+    model: &ModelEntry,
+    circuit: &mut Circuit,
+    role_nets: &HashMap<String, NodeId>,
+    digital: &mut Vec<DigitalComponent>,
+    kind: &str,
+) -> (BindOutcome, Option<String>) {
+    match bind_digital(comp, model, circuit, role_nets, digital) {
+        Ok(()) => (
+            BindOutcome::Digital {
+                kind: kind.to_string(),
+            },
+            entry_warning(comp, model),
+        ),
+        Err(e) => (
+            BindOutcome::Unresolved {
+                reason: format!("invalid [models.logic]: {e}"),
+            },
+            Some(format!(
+                "{} ({}): invalid [models.logic] in model '{}': {e}; the part is \
+                 unmodeled and its output nets float",
+                comp.reference, comp.value, model.id
+            )),
+        ),
+    }
+}
+
+/// Resolve a model-declared firmware peripheral (EEPROM, SPI NOR, register-map
+/// sensor) against the board's own wiring.
+///
+/// `Err((reason, warning))` when the board does not wire the bus roles, the
+/// supply roles, or the strap levels the spec needs: a flash with no CS or an
+/// EEPROM with no SDA is left open, not counted as modelled because its part
+/// number was recognised.
+fn bind_model_peripheral(
+    comp: &Component,
+    model: &ModelEntry,
+    spec: PeripheralSpec,
+    role_nets: &HashMap<String, NodeId>,
+    power_nets: &HashMap<String, f64>,
+    circuit: &Circuit,
+) -> Result<PeripheralBinding, (String, String)> {
+    // Every refusal reads the same way: the machine-facing reason, then the
+    // human warning prefixed with which board part it is about.
+    let refuse = |reason: String, detail: String| -> (String, String) {
+        (
+            reason,
+            format!("{} ({}): {detail}", comp.reference, comp.value),
+        )
+    };
+    let all_connected = |roles: &[&str]| roles.iter().all(|role| role_nets.contains_key(*role));
+
+    let power = match model.peripheral_power.clone() {
+        Some(power) => {
+            let node = |role: &str, which: &str| -> Result<NodeId, (String, String)> {
+                role_nets.get(role).copied().ok_or_else(|| {
+                    refuse(
+                        format!(
+                            "model declares peripheral power but {which} role '{role}' is not connected"
+                        ),
+                        format!(
+                            "peripheral model '{}' cannot attach its electrical load because {which} role '{role}' is not connected",
+                            model.id
+                        ),
+                    )
+                })
+            };
+            let supply_node = node(&power.supply_role, "supply")?;
+            let return_node = node(&power.return_role, "return")?;
+            Some(BoundPeripheralPower {
+                spec: power,
+                supply_node,
+                return_node,
+            })
+        }
+        None => None,
+    };
+
+    let (cs_net, i2c_address_override) = match &spec {
+        PeripheralSpec::I2cEeprom { .. } => {
+            if !all_connected(&["scl", "sda"]) {
+                return Err(refuse(
+                    "model declares an I2C EEPROM but SCL/SDA are not both connected".to_string(),
+                    format!(
+                        "I2C EEPROM model '{}' cannot attach because SCL/SDA are not both connected",
+                        model.id
+                    ),
+                ));
+            }
+            (None, None)
+        }
+        PeripheralSpec::SpiNorFlash {
+            cs_role,
+            clk_role,
+            mosi_role,
+            miso_role,
+            ..
+        } => {
+            let Some(cs_net) = role_nets.get(cs_role).copied() else {
+                return Err(refuse(
+                    format!(
+                        "model declares SPI NOR but chip-select role '{cs_role}' is not connected"
+                    ),
+                    format!(
+                        "SPI NOR model '{}' cannot attach because chip-select role '{cs_role}' is not connected",
+                        model.id
+                    ),
+                ));
+            };
+            if !all_connected(&[clk_role, mosi_role, miso_role]) {
+                return Err(refuse(
+                    format!(
+                        "model declares SPI NOR but {clk_role}/{mosi_role}/{miso_role} are not all connected"
+                    ),
+                    format!(
+                        "SPI NOR model '{}' cannot attach because {clk_role}/{mosi_role}/{miso_role} are not all connected",
+                        model.id
+                    ),
+                ));
+            }
+            (Some(cs_net), None)
+        }
+        PeripheralSpec::RegisterMap {
+            spec_toml,
+            scl_role,
+            sda_role,
+            cs_role,
+            clk_role,
+            mosi_role,
+            miso_role,
+            required_high_roles,
+            required_low_roles,
+            address_select_role,
+            address_when_low,
+            address_when_high,
+            ..
+        } => {
+            let sensor = SensorSpec::from_toml(spec_toml)
+                .expect("model validation guarantees a valid register-map spec");
+            // A strap role must resolve to ground or to a rail the board's own
+            // power-net resolution accepted; anything else is not a level.
+            let strap_level = |role: &str| -> Result<bool, String> {
+                let node = role_nets
+                    .get(role)
+                    .copied()
+                    .ok_or_else(|| format!("strap role '{role}' is not connected"))?;
+                if node.is_ground() {
+                    Ok(false)
+                } else if power_nets.contains_key(circuit.node_name(node)) {
+                    Ok(true)
+                } else {
+                    Err(format!(
+                        "strap role '{role}' is on '{}' rather than a resolved supply or ground",
+                        circuit.node_name(node)
+                    ))
+                }
+            };
+            let require_strap = |role: &str, want: bool| -> Result<(), (String, String)> {
+                if strap_level(role) == Ok(want) {
+                    return Ok(());
+                }
+                let level = if want { "high" } else { "low" };
+                let opposite = if want {
+                    "resolved low"
+                } else {
+                    "resolved high"
+                };
+                let actual = strap_level(role)
+                    .map(|_| opposite.to_string())
+                    .unwrap_or_else(|error| error);
+                Err(refuse(
+                    format!(
+                        "register-map bus personality requires role '{role}' {level}, but it is {actual}"
+                    ),
+                    format!(
+                        "model '{}' register-map behavior not attached: role '{role}' must resolve {level} ({actual})",
+                        model.id
+                    ),
+                ))
+            };
+            for role in required_high_roles {
+                require_strap(role, true)?;
+            }
+            for role in required_low_roles {
+                require_strap(role, false)?;
+            }
+            let address = match (
+                address_select_role.as_deref(),
+                address_when_low,
+                address_when_high,
+            ) {
+                (Some(role), Some(low), Some(high)) => match strap_level(role) {
+                    Ok(false) => Some(*low),
+                    Ok(true) => Some(*high),
+                    Err(error) => {
+                        return Err(refuse(
+                            format!("register-map I2C address cannot be selected: {error}"),
+                            format!(
+                                "model '{}' register-map behavior not attached because {error}",
+                                model.id
+                            ),
+                        ))
+                    }
+                },
+                _ => None,
+            };
+            match sensor.sensor.bus {
+                Bus::I2c => {
+                    if !all_connected(&[scl_role, sda_role]) {
+                        return Err(refuse(
+                            format!(
+                                "model declares an I2C register map but roles '{scl_role}'/'{sda_role}' are not both connected"
+                            ),
+                            format!(
+                                "register-map model '{}' cannot attach because I2C roles '{scl_role}'/'{sda_role}' are not both connected",
+                                model.id
+                            ),
+                        ));
+                    }
+                    (None, address)
+                }
+                Bus::Spi => {
+                    let Some(cs_net) = role_nets.get(cs_role).copied() else {
+                        return Err(refuse(
+                            format!(
+                                "model declares an SPI register map but chip-select role '{cs_role}' is not connected"
+                            ),
+                            format!(
+                                "register-map model '{}' cannot attach because chip-select role '{cs_role}' is not connected",
+                                model.id
+                            ),
+                        ));
+                    };
+                    if !all_connected(&[clk_role, mosi_role, miso_role]) {
+                        return Err(refuse(
+                            format!(
+                                "model declares an SPI register map but {clk_role}/{mosi_role}/{miso_role} are not all connected"
+                            ),
+                            format!(
+                                "register-map model '{}' cannot attach because {clk_role}/{mosi_role}/{miso_role} are not all connected",
+                                model.id
+                            ),
+                        ));
+                    }
+                    (Some(cs_net), None)
+                }
+            }
+        }
+    };
+
+    Ok(PeripheralBinding {
+        reference: comp.reference.clone(),
+        spec,
+        cs_net,
+        i2c_address_override,
+        power,
+    })
 }
 
 /// Map each connected pin to its model role string.
@@ -2661,17 +2583,11 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
         // A regulator's pad NUMBERS are the least portable thing about it, and
         // its pin NAMES are among the most: "VIN"/"VOUT"/"GND"/"CE" mean the
         // same on every LDO ever built, while the pad they land on changes with
-        // the package and, worse, between a vendor's own package options.
-        //
-        // The XC6204 is the case that forced this arm. Torex's own pin-assignment
-        // table gives SOT-25 as 1=VIN, 2=VSS, 3=CE, 4=NC, 5=VOUT and SOT-89-5 as
-        // 4=VIN, 2=VSS, 3=CE, 1=NC, 5=VOUT: pads 1 and 4 trade places between two
-        // packages of the same part. A board that fits the SOT-89-5 land with a
-        // symbol carrying the SOT-25 numbers (the MWGEN-G1 does, on all three of
-        // its regulators) then disagrees with whichever map the DB entry chose,
-        // and the input pin lands on a pad the model calls "nc". The board's own
-        // pinfunction is the evidence that settles it, and it was being thrown
-        // away because this function had no arm for the kind.
+        // the package and even between a vendor's own package options (the
+        // XC6204's pads 1 and 4 trade places between SOT-25 and SOT-89-5, so a
+        // board fitting one land with a symbol carrying the other's numbers puts
+        // the input pin on a pad the model calls "nc"). The board's own
+        // pinfunction is the evidence that settles it.
         //
         // `fb` covers the adjustable parts' feedback node. `shdn` is deliberately
         // NOT folded into `en`: it is the same pin with the opposite sense, and a
@@ -2856,14 +2772,12 @@ fn bind_passive(
         );
     };
 
-    // Source-bound package parasitics are real circuit elements. `esr`/`esl`
-    // have been accepted model vocabulary for years, and exact inductor cards
-    // carry DCR as `ohms`, but the binder previously discarded every one of
-    // those values. Realize them as an explicit series chain with internal
-    // nodes so DC, transient, AC, loss and thermal consumers all see the same
-    // physics. Arrays retain their existing per-element path for now: a single
-    // pack-level ESR/DCR cannot be assigned to multiple elements without a
-    // per-element schema.
+    // Source-bound package parasitics are real circuit elements: `esr`/`esl` on
+    // a capacitor card and DCR (`ohms`) on an inductor card. Realize them as an
+    // explicit series chain with internal nodes so DC, transient, AC, loss and
+    // thermal consumers all see the same physics. Arrays keep the per-element
+    // path: a single pack-level ESR/DCR cannot be assigned to multiple elements
+    // without a per-element schema.
     let prefix = comp
         .reference
         .chars()
@@ -3464,7 +3378,7 @@ fn bind_mosfet(
         phi: p.get_f64("phi").unwrap_or(def.phi),
         w_over_l: p.get_f64("w_over_l").unwrap_or(def.w_over_l),
         n_sub: p.get_f64("n_sub").unwrap_or(def.n_sub),
-        // Gate charge (dev-plan 04 §3.3): the db carries TOTAL capacitances
+        // Gate charge: the db carries TOTAL capacitances
         // (`cgs`/`cgd` in farads, datasheet-style), which map onto the model's
         // total overlap fields directly. Absent fields leave the pre-§3.3
         // no-gate-charge stamp bit-identically.
@@ -3503,13 +3417,10 @@ fn bind_mosfet(
 /// An entry's own `warning` param, as a caveat ready for the bind report AND the
 /// evidence map.
 ///
-/// ONE helper rather than a copy per binder, because the copies were the bug. The
-/// param existed and only `bind_opamp` read it, so an `analog_switch`, a `vreg` and
-/// a `digital` entry could describe its own gap in the database and have that text
-/// reach nobody: the `Digital` dispatch arms hard-coded `None` and `bind_vreg` had no
-/// warning channel at all. Five regulator entries and six logic entries were added
-/// against exactly those two paths, so the disclosure mechanism this file builds was
-/// unavailable to most of the coverage it shipped.
+/// ONE helper rather than a copy per binder: a per-kind copy lets an entry
+/// describe its own gap in the database and have that text reach nobody, which
+/// is the disclosure mechanism this file builds being unavailable to most of the
+/// coverage it ships.
 ///
 /// The marker is what makes it evidence. See [`Assumption::PARTIAL_MODEL_MARKER`]:
 /// without it the text lands only on `--report`, and a caveat present on one surface
@@ -3665,6 +3576,25 @@ fn bind_vreg(
     )
 }
 
+/// The fully wired channels of a multi-channel package (LM358 dual, INA2181
+/// dual, LM324 quad), as `(unit index, out, in+, in-)` for every complete
+/// `out_X`/`in_plus_X`/`in_minus_X` triple. A channel-A-only lookup would leave
+/// channel B/C/D outputs silently floating.
+fn wired_channels(roles: &HashMap<String, NodeId>) -> Vec<(usize, NodeId, NodeId, NodeId)> {
+    ["_a", "_b", "_c", "_d"]
+        .iter()
+        .enumerate()
+        .filter_map(|(unit, sfx)| {
+            Some((
+                unit,
+                roles.get(&format!("out{sfx}")).copied()?,
+                roles.get(&format!("in_plus{sfx}")).copied()?,
+                roles.get(&format!("in_minus{sfx}")).copied()?,
+            ))
+        })
+        .collect()
+}
+
 fn bind_opamp(
     comp: &Component,
     model: &ModelEntry,
@@ -3680,20 +3610,10 @@ fn bind_opamp(
     let rail_hi = model.params.get_f64("rail_hi").unwrap_or(5.0);
     let warning = entry_warning(comp, model);
 
-    // Multi-channel packages (LM358 dual, INA2181 dual, LM324 quad) carry
-    // per-channel roles out_a/in_plus_a/in_minus_a, ..._b/_c/_d. Stamp one
-    // OpAmp per complete channel; a channel-A-only lookup would leave channel
-    // B/C/D outputs silently floating. Per-unit names use the `_q<N>` key the
-    // CI thermal aggregation matches (as bind_bjt does for paired BJTs).
-    let mut stamped = 0;
-    for (unit, sfx) in ["_a", "_b", "_c", "_d"].iter().enumerate() {
-        let (Some(out), Some(inp), Some(inn)) = (
-            roles.get(&format!("out{sfx}")).copied(),
-            roles.get(&format!("in_plus{sfx}")).copied(),
-            roles.get(&format!("in_minus{sfx}")).copied(),
-        ) else {
-            continue; // channel not (fully) wired on this board
-        };
+    // Per-unit names use the `_q<N>` key the CI thermal aggregation matches
+    // (as bind_bjt does for paired BJTs).
+    let channels = wired_channels(roles);
+    for &(unit, out, inp, inn) in &channels {
         circuit.add(Device::OpAmp {
             name: format!("{}_q{}", comp.reference, unit + 1),
             out,
@@ -3706,12 +3626,11 @@ fn bind_opamp(
             rail_lo,
             rail_hi,
         });
-        stamped += 1;
     }
-    if stamped > 0 {
+    if !channels.is_empty() {
         return (
             BindOutcome::Behavioral {
-                device: format!("opamp x{stamped}"),
+                device: format!("opamp x{}", channels.len()),
             },
             warning,
         );
@@ -3783,18 +3702,10 @@ fn bind_comparator(
         }
     }
 
-    // Multi-channel packages (LM393 dual, LM339 quad): one Comparator per
-    // complete out_X/in_plus_X/in_minus_X channel, keyed `_q<N>`, same shape
-    // and rationale as bind_opamp above.
-    let mut stamped = 0;
-    for (unit, sfx) in ["_a", "_b", "_c", "_d"].iter().enumerate() {
-        let (Some(out), Some(inp), Some(inn)) = (
-            roles.get(&format!("out{sfx}")).copied(),
-            roles.get(&format!("in_plus{sfx}")).copied(),
-            roles.get(&format!("in_minus{sfx}")).copied(),
-        ) else {
-            continue;
-        };
+    // Multi-channel packages (LM393 dual, LM339 quad): one Comparator per wired
+    // channel, keyed `_q<N>`, same shape and rationale as bind_opamp above.
+    let channels = wired_channels(roles);
+    for &(unit, out, inp, inn) in &channels {
         circuit.add(Device::Comparator {
             name: format!("{}_q{}", comp.reference, unit + 1),
             out,
@@ -3804,12 +3715,11 @@ fn bind_comparator(
             out_hi,
             hysteresis: hyst,
         });
-        stamped += 1;
     }
-    if stamped > 0 {
+    if !channels.is_empty() {
         return (
             BindOutcome::Behavioral {
-                device: format!("comparator x{stamped}"),
+                device: format!("comparator x{}", channels.len()),
             },
             None,
         );
@@ -4086,14 +3996,12 @@ fn bind_analog_switch(
             // invents a conducting path between terminals the datasheet says are not
             // a switch at all.
             //
-            // The PCA9306 is the case that showed it. Its map names SCL2 `in_out_a`
-            // and SCL1 `in_out_b`, and its other pads are VREF1, VREF2, SDA1, SDA2.
-            // `is_power_role` matches only vcc/vdd/vss/gnd, so VREF1 and the two SDA
-            // pads are all candidates here: a board leaving one SCL pad unconnected
-            // got 25.5 Ohm stamped from VREF1 onto SDA1, a path that exists on no
-            // board, WHILE the entry's own disclosure said the modelled channel was
-            // SCL1<->SCL2. A wrong path described by a confident caveat is worse than
-            // either alone.
+            // The PCA9306 shows why: its map names SCL2 `in_out_a` and SCL1
+            // `in_out_b`, and its other pads (VREF1, VREF2, SDA1, SDA2) are all
+            // candidates for a blind two-pad scan, since `is_power_role` matches
+            // only vcc/vdd/vss/gnd. A board leaving one SCL pad unconnected would
+            // get 25.5 Ω stamped from VREF1 onto SDA1, a path that exists on no
+            // board, while the entry's own disclosure named SCL1<->SCL2.
             let names_its_terminals = model.pins.values().any(|r| {
                 matches!(
                     r.as_str(),
@@ -4160,13 +4068,11 @@ fn bind_analog_switch(
         ron,
         roff,
     });
-    // AN ENTRY'S OWN `warning` REACHES THE REPORT FROM HERE, the way `bind_opamp`
-    // already does it. This path stamps ONE switch, so a multi-channel part
-    // (TXS0108E: eight channels, PCA9306: two) and a two-throw mux whose second
-    // throw cannot be modelled (TPS2104) are all bound with a real gap in them.
-    // Those gaps were stated only in TOML comments, which no report surface reads,
-    // while the board saw `Behavioral vswitch` with no warning and counted the part
-    // as resolved. A comment is not a disclosure.
+    // An entry's own `warning` reaches the report from here. This path stamps
+    // ONE switch, so a multi-channel part (TXS0108E: eight channels, PCA9306:
+    // two) and a two-throw mux whose second throw cannot be modelled (TPS2104)
+    // are all bound with a real gap in them, and that gap has to be disclosed
+    // where a report surface reads it rather than in a TOML comment.
     (
         BindOutcome::Behavioral {
             device: "vswitch".to_string(),
@@ -4245,9 +4151,9 @@ fn bind_mcp4728_dac(
 /// Bind a digital part's [models.logic] spec. `Err` carries the logic-compile
 /// failure: the part is NOT modeled (its stamped legs are tri-stated so the
 /// output nets genuinely float) and the caller MUST record it as unresolved.
-/// Swallowing the error while still reporting the part as bound was the
-/// NEP-board study's defect 3: a part that cannot possibly work showed as a
-/// healthy `Digital` row in the bind coverage report.
+/// Swallowing the error while still reporting the part as bound would show a
+/// part that cannot possibly work as a healthy `Digital` row in the bind
+/// coverage report.
 fn bind_digital(
     comp: &Component,
     model: &ModelEntry,
@@ -4486,14 +4392,11 @@ fn bind_mcu(
     };
     // Merge the two role sources PER PAD instead of treating a non-empty model
     // map as exhaustive. A DB pin map is curated for one package's numbering
-    // (often a module, e.g. the ESP32-S3 entry's WROOM-1 strap pads); applied
-    // to a different footprint it covers a handful of pads and the old
-    // model-only rule then discarded every OTHER pad's own pinfunction. On the
-    // Watchy v3's bare QFN-56 that left ALL display pins (RES/DC/CS, SCK/MOSI,
-    // SDA/SCL, all named "GPIOnn/..." right in the board file) with no GPIO
-    // driver at all, so firmware could never drive them and the live sim
-    // presented their static levels as measurements. Model roles still win on
-    // pads they name (they carry curated semantic suffixes like "pc6_reset"
+    // (often a module, e.g. the ESP32-S3 entry's WROOM-1 strap pads); applied to
+    // a different footprint it covers a handful of pads, and a model-only rule
+    // would then discard every OTHER pad's own pinfunction, leaving pins the
+    // board names explicitly with no GPIO driver at all. Model roles still win
+    // on pads they name (they carry curated semantic suffixes like "pc6_reset"
     // that the plain pinfunction derivation would weaken); the derivation only
     // fills pads the model map does not cover.
     let effective_pins: std::collections::BTreeMap<String, String> = {

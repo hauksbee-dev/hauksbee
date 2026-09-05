@@ -33,14 +33,7 @@ use std::sync::{Arc, Mutex};
 const F072: &str = include_str!("../db/mcu/stm32f072.soc.toml");
 
 fn firmware(name: &str) -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/stm32f072_blinky")
-        .join(name);
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::firmware(&format!("stm32f072_blinky/{name}"))
 }
 
 // ── (1) No emulator needed ───────────────────────────────────────────────────

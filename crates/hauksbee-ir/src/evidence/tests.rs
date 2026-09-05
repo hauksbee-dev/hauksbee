@@ -1188,7 +1188,7 @@ fn an_unresolved_part_undermines_its_own_net_and_only_its_own_net() {
                 // two are NOT membership-by-electrical-reachability, and the
                 // real traversal owes each its own rule and its own test. A
                 // NotChecked assumption is on-path for every assertion that
-                // relies on that check (§2.4's "covering this assertion's
+                // relies on that check ("covering this assertion's
                 // check"), and a TimeWindow one for every assertion whose
                 // observation window overlaps it. Dropping them here, in the
                 // one worked example, is how they would go missing there:

@@ -1,9 +1,8 @@
-//! Regression for R23 (NETLIST-DNP-ALWAYS-FALSE): the KiCad netlist reader used
-//! to hardcode `dnp = false`, so a do-not-populate part ingested through the
-//! netlist path was reported as populated, DNP-aware analysis then reasoned
-//! about a component physically absent from the assembled board. KiCad writes
-//! DNP as a (usually value-less) `(property (name "dnp"))` child; presence must
-//! set `dnp = true`, matching the PCB and schematic ingestion paths.
+//! A do-not-populate part ingested through the KiCad netlist path must not be
+//! reported as populated, or DNP-aware analysis reasons about a component
+//! physically absent from the assembled board. KiCad writes DNP as a (usually
+//! value-less) `(property (name "dnp"))` child; presence must set `dnp = true`,
+//! matching the PCB and schematic ingestion paths.
 
 use hauksbee_extract::ExtractedBoard;
 

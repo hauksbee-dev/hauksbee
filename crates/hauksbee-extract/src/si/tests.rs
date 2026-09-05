@@ -985,19 +985,15 @@ fn a_pair_crossing_a_plane_void_names_the_span_instead_of_a_zdiff() {
 
 #[test]
 fn a_via_antipad_in_the_plane_is_not_a_missing_reference() {
-    // The Watchy lesson, in unit form. A plane's anti-pads are a DESIGNED hole:
-    // the copper is cleared so the via can pass through. A differential pair's
-    // segments terminate at its layer-transition vias, so endpoint samples land
-    // in an anti-pad systematically. On Watchy that produced "reference missing
-    // under trace" on a board whose In2.Cu plane is in fact solid under the pair:
-    // all seven uncovered samples were within 0.36 mm of a via centre and four
-    // were exactly on one. A pinhole is not a return-path detour.
+    // A plane's anti-pads are a DESIGNED hole: the copper is cleared so the via
+    // can pass through, and a differential pair's segments terminate at its
+    // layer-transition vias, so endpoint samples land in one systematically. A
+    // pinhole is not a return-path detour.
     //
-    // Here the pour is solid except for a 0.45 mm anti-pad punched out around the
-    // via the pair drops through at x = 10.
-    // A pour with a square anti-pad bitten out of it around x = 10: the outline
-    // walks in to the hole and back out, which is how a fill with a void in it is
-    // written. The pair drops through vias at (10, 0) and (10, 0.5).
+    // Here the pour is solid except for a square 0.45 mm anti-pad bitten out
+    // around x = 10, written the way a fill with a void in it is: the outline
+    // walks in to the hole and back out. The pair drops through vias at (10, 0)
+    // and (10, 0.5).
     let holed_fill = r#"(filled_polygon (pts
         (xy -5 -5) (xy 25 -5) (xy 25 5) (xy 10.3 5)
         (xy 10.3 -0.3) (xy 9.7 -0.3) (xy 9.7 5) (xy -5 5)))"#;

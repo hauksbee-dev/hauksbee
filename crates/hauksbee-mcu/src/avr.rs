@@ -101,7 +101,7 @@ const IOPORT_IRQ_DIRECTION_ALL: i32 = ffi::IOPORT_IRQ_DIRECTION_ALL as i32;
 ///
 /// 1. The per-bit ioport IRQ raise updates the PIN register immediately, so a
 ///    drive issued from inside the port-output hook lands before the
-///    firmware's next instruction (the 74HC165 readback path, 05 §1.5).
+///    firmware's next instruction (the 74HC165 readback path).
 /// 2. The `SET_EXTERNAL` ioctl records the level in the port's
 ///    `external.pull_mask/pull_value`. Without it the drive is a one-shot:
 ///    simavr's `avr_ioport_update_irqs` runs after EVERY firmware PORT or DDR
@@ -760,7 +760,7 @@ unsafe extern "C" fn spi_output_hook(
         // The SPI IRQ fires synchronously inside `avr_run`, so `avr->cycle` here
         // is the EXACT cycle of this byte transfer, the same clock the pin-edge
         // hook stamps. Carrying it lets the scheduler interleave the byte stream
-        // with the CS-pin edge stream in true order for real CS framing (05 §2).
+        // with the CS-pin edge stream in true order for real CS framing.
         let cycle = if avr.is_null() {
             0
         } else {
@@ -829,12 +829,12 @@ pub struct AvrMcu {
     /// Absolute cumulative cycle target: the sum of every whole-cycle budget
     /// ever requested through `run_cycles` (and thus `run_micros`). The step
     /// loop runs until `avr->cycle >= run_target` rather than `start + n`:
-    /// `avr_run` advances by whole instructions (1–5 cycles), so each chunk
+    /// `avr_run` advances by whole instructions (1-5 cycles), so each chunk
     /// stops up to 4 cycles PAST its endpoint, and a per-chunk `start + n`
-    /// target discarded that overshoot, re-incurring it every chunk, the
-    /// guest clock ran unboundedly AHEAD of simulated time. Anchoring to this
-    /// running absolute target lets a prior chunk's overshoot shrink (or
-    /// zero) the next chunk's deficit, so `|cycle − freq·t|` stays bounded by
+    /// target would discard that overshoot and re-incur it every chunk,
+    /// running the guest clock unboundedly AHEAD of simulated time. Anchoring
+    /// to a running absolute target lets a prior chunk's overshoot shrink (or
+    /// zero) the next chunk's deficit, so `|cycle - freq*t|` stays bounded by
     /// one instruction forever. `cycle_carry` still owns the sub-cycle
     /// fraction; this owns the instruction-boundary remainder on top of it.
     run_target: u64,
@@ -926,24 +926,20 @@ impl AvrMcu {
         let leaked = Box::into_raw(Box::new(state.clone()));
         let callback_ptr = leaked as *mut std::os::raw::c_void;
 
-        // Disable simavr's UART "stdio echo" (on by default). Besides being
-        // redundant here (every TX byte reaches the engine through `on_uart`),
-        // v1.8's echo has a heap buffer overflow this backend kept tripping:
-        // `avr_uart_udr_write` accumulates TX bytes into a 256-byte
-        // `stdio_out` line buffer and NUL-terminates at `stdio_out[stdio_len]`
-        // AFTER incrementing `stdio_len`, so the 256th byte of a stream with
-        // no '\n' writes `stdio_out[256]`, one byte past the malloc. Firmware
-        // that streams >255 bytes of newline-less binary (an EEPROM dump, a
-        // block protocol) plants a stray zero byte in whatever heap chunk
-        // follows, which surfaced as intermittent SIGTRAPs at unrelated
-        // allocation sites, most often during exactly those streams (verified
-        // with an ASan-instrumented libsimavr: WRITE of size 1 at 0 bytes
-        // after a 256-byte region, allocated and overflowed in
-        // `avr_uart_udr_write`). simavr is linked from the system by license
-        // choice, so the minimal correct fix on our side is to switch the
-        // whole feature off before any firmware byte can be transmitted.
-        // Every UART the part actually has (the ioctl simply misses on absent
-        // ones): a mega2560 streaming binary on USART1 has the same overflow.
+        // Disable simavr's UART "stdio echo" (on by default). It is redundant
+        // here (every TX byte reaches the engine through `on_uart`) and v1.8's
+        // echo has a heap buffer overflow: `avr_uart_udr_write` accumulates TX
+        // bytes into a 256-byte `stdio_out` line buffer and NUL-terminates at
+        // `stdio_out[stdio_len]` AFTER incrementing `stdio_len`, so the 256th
+        // byte of a stream with no '\n' writes one byte past the malloc.
+        // Firmware streaming >255 bytes of newline-less binary (an EEPROM dump,
+        // a block protocol) then plants a stray zero in the following heap
+        // chunk, surfacing as intermittent SIGTRAPs at unrelated allocation
+        // sites (confirmed under ASan). simavr is linked from the system by
+        // license choice, so switching the feature off before any firmware byte
+        // is transmitted is the fix available here. Done for every UART the
+        // part has (the ioctl simply misses on absent ones): a mega2560
+        // streaming binary on USART1 has the same overflow.
         for uart in [b'0', b'1', b'2', b'3'] {
             unsafe {
                 let mut flags: u32 = 0;
@@ -1283,10 +1279,8 @@ impl Mcu for AvrMcu {
                 // underneath us. The only in-simulation cause is a watchdog
                 // timeout: simavr's `avr_reset` zeroes `avr->cycle`, and
                 // `run_target` is an ABSOLUTE cumulative target the rewound
-                // counter can never reach again, so the loop above spun
-                // forever. `wdt_enable(WDTO_15MS)` with no `wdt_reset()` used
-                // to hang the whole co-sim in the chunk where the watchdog
-                // first fired: the third 5 ms chunk never returned.
+                // counter can never reach again, so without this the loop
+                // above spins forever and the chunk never returns.
                 //
                 // Re-anchor the target the way `Mcu::reset` already does, but
                 // keeping the UNSPENT part of this chunk's budget so the

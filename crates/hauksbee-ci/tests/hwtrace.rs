@@ -1,4 +1,4 @@
-//! The hardware-trace corpus harness (T6, validation plan §T6).
+//! The hardware-trace corpus harness (T6).
 //!
 //! For every `testdata/hwtraces/<board>/<scenario>/spec.toml`, run the spec's
 //! co-sim (same board + firmware + supply the capture session used) and let

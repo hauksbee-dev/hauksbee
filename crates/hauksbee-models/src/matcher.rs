@@ -452,20 +452,8 @@ mod tests {
         CompiledEntry::compile(ModelEntry {
             id: "t".to_string(),
             kind,
-            description: String::new(),
             r#match: rules,
-            params: Default::default(),
-            pins: Default::default(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
+            ..Default::default()
         })
         .expect("compiles")
     }

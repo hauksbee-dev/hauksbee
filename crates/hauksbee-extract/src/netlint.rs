@@ -222,7 +222,7 @@ impl ExtractedBoard {
 // ---------------------------------------------------------------------------
 
 /// Normalise a net name: trim, drop a leading hierarchical path and `/`, upper.
-fn norm(name: &str) -> String {
+pub(crate) fn norm(name: &str) -> String {
     let n = name.trim();
     // Keep only the leaf of a hierarchical net path so "/Power/+3V3" -> "+3V3".
     let leaf = n.rsplit('/').next().unwrap_or(n);
@@ -230,7 +230,7 @@ fn norm(name: &str) -> String {
 }
 
 /// Ground net?
-fn is_ground(name: &str) -> bool {
+pub(crate) fn is_ground(name: &str) -> bool {
     let n = norm(name);
     matches!(
         n.as_str(),
@@ -325,7 +325,7 @@ fn has_signal_role_token(n: &str) -> bool {
 /// the KiCad digit-V-digit "5V0"/"3V3" form. Returns `None` for names that
 /// don't start with a digit after the optional '+' (VCC, VDD_IO), leaving them
 /// to the token heuristics. Mirrors the engine binder's `positive_rail_fallback`.
-fn numeric_rail_magnitude(n: &str) -> Option<f64> {
+pub(crate) fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     let rest = n.strip_prefix('+').unwrap_or(n);
     let int_part: String = rest
         .chars()
@@ -367,9 +367,10 @@ fn numeric_rail_magnitude(n: &str) -> Option<f64> {
 /// Delegates to [`crate::part_class::classify_two_terminal`], which answers from
 /// the model DB's declared passive class through the assembly witness and only
 /// falls back to the designator / `lib_id` strings when no better evidence
-/// exists. Keeping the answer in one place also ends the drift between this and
-/// si.rs's copy, which had already diverged twice.
-fn is_resistor(c: &Component) -> bool {
+/// exists. A bare designator-prefix test loses a real resistor numbered into an
+/// `RN` range and accepts a capacitor labelled `R5` as a pull-up, farads read as
+/// ohms. Shared with the SI checks so the two surfaces cannot disagree.
+pub(crate) fn is_resistor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_resistor()
 }
 
@@ -511,11 +512,11 @@ fn is_connector_like(c: &Component) -> bool {
 ///
 /// A pin grid is INTEGER counts with no unit. A body DIMENSION ("7x7mm",
 /// "3.9x4.9mm") is a package size, not a pin grid, and KiCad appends one to
-/// essentially every SMD IC footprint ("LQFP-48_7x7mm", "QFN-48-1EP_7x7mm"). The
-/// old code accepted any `<digit>X<digit>`, so those ICs read as connector-like
-/// and silently suppressed the floating-control / I2C-pull-up / output-contention
-/// lints on real ICs. Reject decimal and `mm`-suffixed tokens, mirroring the R36
-/// fix in [`crate::gerber::connect`]'s grid_hint.
+/// essentially every SMD IC footprint ("LQFP-48_7x7mm", "QFN-48-1EP_7x7mm"), so
+/// accepting any `<digit>X<digit>` makes those ICs read as connector-like and
+/// silently suppresses the floating-control / I2C-pull-up / output-contention
+/// lints on them. Decimal and `mm`-suffixed tokens are rejected, matching
+/// [`crate::gerber::connect`]'s `grid_hint`.
 fn is_pin_array_package(fp: &str) -> bool {
     let bytes: Vec<char> = fp.to_ascii_uppercase().chars().collect();
     for i in 0..bytes.len() {
@@ -555,10 +556,11 @@ fn members<'a>(board: &'a ExtractedBoard, net_id: i64) -> Vec<(&'a Component, &'
     board.net_members(net_id)
 }
 
-/// Is this component a decoupling / bulk capacitor? Delegates to the same
-/// evidence ladder as [`is_resistor`], so the capacitor and resistor questions
-/// stay consistent about any one part.
-fn is_capacitor(c: &Component) -> bool {
+/// Is this component a decoupling / bulk capacitor, the kind used as a crystal
+/// load cap and the kind whose presence to ground makes a net read as a local
+/// supply rail? Delegates to the same evidence ladder as [`is_resistor`], so the
+/// capacitor and resistor questions stay consistent about any one part.
+pub(crate) fn is_capacitor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_capacitor()
 }
 
@@ -779,7 +781,7 @@ fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
     }
     let mem = members(board, net_id);
     // A bypass cap to ground on this net?
-    let has_bypass_to_gnd = mem.iter().any(|(c, _)| {
+    mem.iter().any(|(c, _)| {
         is_capacitor(c)
             && c.pins.iter().any(|op| {
                 op.net
@@ -788,14 +790,13 @@ fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
                     .map(|on| is_ground(&on.name))
                     .unwrap_or(false)
             })
-    });
-    has_bypass_to_gnd
+    })
 }
 
 /// KiCad emits one placeholder net per deliberately-unconnected pad, named
 /// `unconnected-(REF-PIN-PadN)`. A pin on such a net is an explicit no-connect,
 /// never a fault.
-fn is_unconnected_net(name: &str) -> bool {
+pub(crate) fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
 
@@ -813,7 +814,7 @@ fn pin_is_no_connect(p: &Pin) -> bool {
 /// recognised decorated form (I2C_SDA, SDA1, ASDA, SDA_3V3, ...). We require the
 /// SDA/SCL token to stand as its own word so we do not match "USDA" sub-strings
 /// or unrelated nets.
-fn i2c_role(name: &str) -> Option<&'static str> {
+pub(crate) fn i2c_role(name: &str) -> Option<&'static str> {
     let n = norm(name);
     // Split on common separators and look for an exact SDA/SCL token.
     let toks: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).collect();
@@ -1006,9 +1007,9 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
 /// so a sheet merely *named* after the card cannot turn an unrelated leaf
 /// signal into a bus line.
 ///
-/// Name context alone is deliberately not enough to fire the check: SDRAM
-/// buses are conventionally named `SD_D0..SD_D15` too, so `check_sd_pullups`
-/// additionally requires an actual card socket on the net.
+/// Name context alone is deliberately not enough to fire the check: SDRAM buses
+/// are conventionally named `SD_D0..SD_D15` too, so `check_sd_pullups` also
+/// requires an actual card socket on the net.
 fn sd_role(name: &str) -> Option<&'static str> {
     const DAT: [&str; 8] = [
         "DAT0", "DAT1", "DAT2", "DAT3", "DAT4", "DAT5", "DAT6", "DAT7",
@@ -1281,23 +1282,18 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         }
 
         // Scan one net's assembled members for a credible pull-up: a resistor
-        // (or array element) of at least 1 kΩ reaching a rail-like,
-        // non-ground net. Sub-1 kΩ values are series dampers (22-100 Ω is
-        // routine on SDIO), not pull-ups, and crediting one would silence a
-        // real finding when its far side carries an EMI cap that makes the
-        // net look rail-like; ground is excluded so a DAT3 card-detect
-        // pull-down (or a split-ground stitching cap) cannot be credited
-        // either. Like the I2C check, a resistor ARRAY is credited if ANY
-        // element reaches a rail, without pairing the element to this net's
-        // pad, a stated over-credit inherited for consistency rather than an
-        // oversight. Returns (fitted, dnp_policy_ref, unjudgeable): a pull-up
-        // that is only present because the default fit policy assumed a DNP
-        // part will be placed is reported separately, because the assembled
-        // board does not carry it; a resistor whose VALUE cannot be parsed
-        // (an MPN or a blank field, routine in Altium/EAGLE extraction) but
-        // which sits where a pull-up would makes the net unjudgeable: it must
-        // neither be credited as the pull-up nor ignored so the check claims
-        // "has no pull-up" about a resistor it cannot read.
+        // (or array element) of at least 1 kΩ reaching a rail-like, non-ground
+        // net. Sub-1 kΩ values are series dampers (22-100 Ω is routine on SDIO),
+        // not pull-ups; ground is excluded so a DAT3 card-detect pull-down or a
+        // split-ground stitching cap cannot be credited. Like the I2C check, a
+        // resistor ARRAY is credited if ANY element reaches a rail, without
+        // pairing the element to this net's pad: a stated over-credit kept for
+        // consistency. Returns (fitted, dnp_policy_ref, unjudgeable). A pull-up
+        // present only because the default fit policy assumed a DNP part will be
+        // placed is reported separately, the assembled board not carrying it; a
+        // resistor whose VALUE cannot be parsed (an MPN or blank field, routine
+        // in Altium/EAGLE extraction) but which sits where a pull-up would makes
+        // the net unjudgeable, neither credited nor silently ignored.
         let scan_for_pullup = |net_id: i64| -> (bool, Option<String>, bool) {
             let mut fitted = false;
             let mut dnp_ref = None;
@@ -1378,23 +1374,20 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 active_refs.insert(c.reference.as_str());
             }
             // One-hop traversal through a series element: SD buses routinely
-            // interpose a small damper (or a ferrite) between the host and
-            // the socket. The far half-net legitimately carries the pull-up,
-            // the host, or the connector the bus exits through, so ALL three
-            // kinds of evidence cross the hop; socket evidence deliberately
-            // does not (only the socket-side net reports, which is what keeps
-            // a split bus from double-reporting one defect). A two-terminal
-            // resistor below 1 kΩ, or an FB/L-referenced two-pin part (not an
-            // LED), qualifies as the series element; a hop into ground or a
-            // NAMED rail is refused, because everything touches ground and an
-            // unrelated bleeder there would count as this line's pull-up.
-            // (The refusal deliberately does not use the structural
-            // bypass-cap rail test: a host pin with an EMI cap to ground is a
-            // signal node that must still be searched.)
-            // An unparseable resistor value also qualifies for the hop: it
-            // MIGHT be a damper (MPN and blank value fields are routine), and
-            // refusing the hop while also refusing the credit would fail
-            // toward silence twice on the same unknown.
+            // interpose a small damper or a ferrite between host and socket. The
+            // far half-net legitimately carries the pull-up, the host, or the
+            // connector the bus exits through, so all three kinds of evidence
+            // cross the hop; socket evidence deliberately does not, so only the
+            // socket-side net reports and a split bus cannot double-report one
+            // defect. A two-terminal resistor below 1 kΩ, or an FB/L-referenced
+            // two-pin part that is not an LED, qualifies as the series element.
+            // A hop into ground or a NAMED rail is refused, since everything
+            // touches ground and an unrelated bleeder would count as this line's
+            // pull-up; the refusal deliberately does not use the structural
+            // bypass-cap rail test, a host pin with an EMI cap to ground being a
+            // signal node that must still be searched. An unparseable resistor
+            // value also qualifies for the hop: refusing both the hop and the
+            // credit would fail toward silence twice on one unknown.
             let two_pin_series = c.pins.len() == 2
                 && ((is_resistor(c) && parse_ohms(&c.value).is_none_or(|o| o < 1_000.0))
                     || r.starts_with("FB")
@@ -1709,11 +1702,13 @@ fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintRepor
 /// Parse a resistor value string ("330", "1k", "4k7", "1.2K", "0R") to ohms via
 /// the single canonical parser in `hauksbee-models`.
 ///
-/// Delegated to `value::parse_value` so this copy never drifts from the SI-check
-/// copy or the canonical one again; the three hand-rolled variants had diverged
-/// on the "/footprint" qualifier, milli-`m` (a 1e9 error), and inline
-/// annotations. Accept only an ohmic magnitude (no unit, or explicit Ω).
-fn parse_ohms(v: &str) -> Option<f64> {
+/// The canonical parser handles µ/Ω/ohm-sign glyphs, MEG/GIG, milli-`m`, the
+/// R/K/M-decimal form, "/footprint" qualifiers, chip-size codes and trailing
+/// tolerance annotations in one tested place; a hand-rolled copy drifts from it
+/// (lowercase-`m` read as MEG is a 1e9 error). Accept only an ohmic magnitude
+/// (no unit, or an explicit Ω) so a stray farad/volt value still reads as "not
+/// a resistor".
+pub(crate) fn parse_ohms(v: &str) -> Option<f64> {
     hauksbee_models::value::parse_value(v)
         .filter(|p| matches!(p.unit.as_deref(), None | Some("Ω")))
         .map(|p| p.si)
@@ -1834,10 +1829,8 @@ fn resistor_to_rail(
 //
 // This is built purely from the KiCad pin electrical type (`Pin.kind`), which
 // only the schematic / netlist extraction paths populate. It is calibrated to be
-// SILENT on the full known-good schematic corpus (ZSWatch x4, Watchy, LumenPnP
-// x2, Olimex EVB, Corne, Lily58, RP2040-minimal, Reform x2, Olimex Pico-PC):
-// the single raw fire on that corpus (Reform `EDP_IRQ`) is an open-drain
-// interrupt line whose pins a symbol author typed `output`, and it is excluded
+// SILENT on the full known-good schematic corpus; the one raw fire there is an
+// open-drain interrupt line whose pins a symbol author typed `output`, excluded
 // by the open-drain-name and tiebreaker rules below. The sibling "undriven
 // input" check is deliberately absent: on the same corpus it could not be
 // calibrated to zero false positives.

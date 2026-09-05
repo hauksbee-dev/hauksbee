@@ -61,20 +61,11 @@ pub(crate) fn emit_quiet(
     // get it too), so it must not be spliced in here as well: that
     // double-counts every decode finding.
     let mut report = crate::checks::engine_lint(board, lib);
-    // Waivers, same semantics as `--check`: without this, a lint finding the
-    // board's owner overruled turns `--lint --strict` red on a board that
-    // `--check --strict` passes, and the narrower command looks like it lost
-    // the waiver. Same key as check.rs, so the same waiver file covers both.
+    // Without this, a lint finding the board's owner overruled turns
+    // `--lint --strict` red on a board that `--check --strict` passes, and the
+    // narrower command looks like it lost the waiver.
     let mut waivers = super::check::load_waivers(board_path);
-    let (kept, waived) = waivers.partition("lint", std::mem::take(&mut report.findings), |f| {
-        (
-            f.check.as_str().to_string(),
-            f.nets.clone(),
-            f.refs.clone(),
-            f.message.clone(),
-        )
-    });
-    report.findings = kept;
+    let waived = partition_lint_waivers(&mut report, &mut waivers);
     // Bind once: both the JSON header and the pin-role guess surfacing read it.
     let bound = bind_board(board, lib);
     let evidence = crate::evidence::BoardEvidence::from_bound(
@@ -155,6 +146,26 @@ pub(crate) fn emit_quiet(
     Ok(())
 }
 
+/// Apply the board's `lint`-scoped waivers to `report`, returning what was
+/// excused. Resource conflicts are lint-class findings and ride the same check
+/// name inside `--check`, so one waiver file covers `--lint`, `--resources` and
+/// the combined report; keying them differently here would split it.
+fn partition_lint_waivers(
+    report: &mut hauksbee_extract::NetLintReport,
+    waivers: &mut crate::waiver::WaiverSet,
+) -> Vec<crate::waiver::WaivedFinding> {
+    let (kept, waived) = waivers.partition("lint", std::mem::take(&mut report.findings), |f| {
+        (
+            f.check.as_str().to_string(),
+            f.nets.clone(),
+            f.refs.clone(),
+            f.message.clone(),
+        )
+    });
+    report.findings = kept;
+    waived
+}
+
 /// Guesses beyond this many collapse to a per-pattern summary. A correct guess
 /// on a standard 2-pin or 3-pin footprint is not news; printing one line each
 /// buries the actual findings under 15 lines on a 137-part board and 300 on a
@@ -197,11 +208,12 @@ fn render_pin_role_guesses(guesses: &[(String, String)]) -> String {
     s
 }
 
-/// Build the `--lint --json` document: the bind header, the lint findings, and
-/// the pin-role guesses as structured `bind_role` notes. Kept as a pure helper
-/// (no stdout) so a test can assert the whole thing is ONE valid JSON document;
-/// the guesses must ride the `notes` array, never trail the document as loose
-/// text that would break a JSON consumer.
+/// Build the `--lint` / `--resources` `--json` document: the bind header, the
+/// lint findings, and any pin-role guesses as structured `bind_role` notes
+/// (`--resources` passes none). Kept as a pure helper (no stdout) so a test can
+/// assert the whole thing is ONE valid JSON document; the guesses must ride the
+/// `notes` array, never trail the document as loose text that would break a
+/// JSON consumer.
 fn lint_json(
     bound: &crate::binder::BoundBoard,
     report: &hauksbee_extract::NetLintReport,
@@ -285,20 +297,8 @@ pub(crate) fn emit_resources_quiet(
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     let mut report = crate::checks::resources_lint(board, lib);
-    // Resource conflicts are lint-class findings and ride the "lint" check in a
-    // waiver file, exactly as they do inside `--check` (where they arrive via
-    // engine_lint). Waiving them under a different check name here would mean
-    // one waiver file cannot cover both commands.
     let mut waivers = super::check::load_waivers(board_path);
-    let (kept, waived) = waivers.partition("lint", std::mem::take(&mut report.findings), |f| {
-        (
-            f.check.as_str().to_string(),
-            f.nets.clone(),
-            f.refs.clone(),
-            f.message.clone(),
-        )
-    });
-    report.findings = kept;
+    let waived = partition_lint_waivers(&mut report, &mut waivers);
     let bound = bind_board(board, lib);
     let evidence = crate::evidence::BoardEvidence::from_bound(
         board,
@@ -315,24 +315,10 @@ pub(crate) fn emit_resources_quiet(
     let human_evidence = evidence.clone().with_maps(human_maps);
     match mode {
         OutputMode::Json => {
-            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
-                .with_bind_verdict_gate()
-                // Same gate as `--lint` above, so the same widening applies.
-                .with_surface_gate(lint_fails(&report))
-                .with_inputs(inputs)
-                .with_evidence(&evidence);
-            jr.findings = Some(lint_findings_json(&report));
-            jr.attach_finding_evidence(&evidence, Vec::new())?;
-            if !blockers.is_empty() {
-                jr.notes.push(JsonNote {
-                    kind: JsonNoteKind::Coverage,
-                    message: crate::result::inconclusive_verdict(&blockers),
-                });
-            }
-            // Same honesty rule as every other machine surface: the verdict may
-            // not quietly drop findings, so the waived list travels with it.
-            jr.waived = waived.iter().cloned().map(Into::into).collect();
-            println!("{}", jr.to_json());
+            println!(
+                "{}",
+                lint_json(&bound, &report, &[], &waived, &blockers, inputs, &evidence)?
+            );
         }
         OutputMode::Plain => {
             let mut plain = crate::plain_netlint(&report);
@@ -465,10 +451,10 @@ mod tests {
         }
     }
 
-    /// R16: `println!`ing the pin-role guess block AFTER the JSON document
-    /// leaves stdout a valid JSON object followed by loose "pin-role guesses
-    /// (...)" text, so the stream as a whole does not parse as one JSON
-    /// document. The guesses must ride the structured `notes` array instead.
+    /// The pin-role guesses ride the structured `notes` array. Printing the
+    /// guess block after the JSON document would leave stdout a valid JSON
+    /// object followed by loose text, so the stream as a whole would not parse
+    /// as one JSON document.
     #[test]
     fn lint_json_with_guesses_is_one_valid_json_document() {
         let bound = empty_bound();

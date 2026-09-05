@@ -92,16 +92,25 @@ struct FrontDoorState {
     analyze: Analyzer,
 }
 
+/// Bind a multipart router's state behind the shared upload guard: one body
+/// size limit and one 413 namer, so every upload endpoint answers an over-size
+/// request the same way.
+fn with_upload_guard<S: Send + Sync + 'static>(router: Router<Arc<S>>, state: Arc<S>) -> Router {
+    router
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
+        .with_state(state)
+}
+
 /// Build the board-only analysis routes (`/api/analyze`). No server-rendered
 /// page: the React bundle owns `/`. Kept for tests and any board-only caller;
 /// production wires the firmware-aware [`api_routes`] into the unified server.
 pub fn router(analyze: Analyzer) -> Router {
     let state = Arc::new(FrontDoorState { analyze });
-    Router::new()
-        .route("/api/analyze", post(analyze_handler))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .layer(axum::middleware::map_response(name_upload_limit_413))
-        .with_state(state)
+    with_upload_guard(
+        Router::new().route("/api/analyze", post(analyze_handler)),
+        state,
+    )
 }
 
 struct FirmwareState {
@@ -122,12 +131,12 @@ struct SchematicState {
 /// React bundle, keeping the whole web experience on one server path.
 pub fn api_routes(analyze: FirmwareAnalyzer) -> Router {
     let state = Arc::new(FirmwareState { analyze });
-    Router::new()
-        .route("/api/analyze", post(analyze_handler_fw))
-        .route("/api/analyze-with-firmware", post(analyze_firmware_handler))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .layer(axum::middleware::map_response(name_upload_limit_413))
-        .with_state(state)
+    with_upload_guard(
+        Router::new()
+            .route("/api/analyze", post(analyze_handler_fw))
+            .route("/api/analyze-with-firmware", post(analyze_firmware_handler)),
+        state,
+    )
 }
 
 /// Analysis routes which additionally accept a `schematic` multipart part.
@@ -169,11 +178,10 @@ pub fn check_route(check: CheckRunner) -> Router {
     let state = Arc::new(CheckState {
         check: CheckCallback::Legacy(check),
     });
-    Router::new()
-        .route("/api/check", post(check_handler))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .layer(axum::middleware::map_response(name_upload_limit_413))
-        .with_state(state)
+    with_upload_guard(
+        Router::new().route("/api/check", post(check_handler)),
+        state,
+    )
 }
 
 /// Schematic-aware checks route used by the shipped standalone app.
@@ -181,11 +189,10 @@ pub fn check_route_with_schematic(check: SchematicCheckRunner) -> Router {
     let state = Arc::new(CheckState {
         check: CheckCallback::Schematic(check),
     });
-    Router::new()
-        .route("/api/check", post(check_handler))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .layer(axum::middleware::map_response(name_upload_limit_413))
-        .with_state(state)
+    with_upload_guard(
+        Router::new().route("/api/check", post(check_handler)),
+        state,
+    )
 }
 
 struct LiveState {
@@ -207,12 +214,12 @@ struct SchematicLiveState {
 /// `reject_cross_site` guard as the other mutating endpoints.
 pub fn live_routes(hub: Arc<crate::LiveHub>, launch: LiveLauncher) -> Router {
     let state = Arc::new(LiveState { hub, launch });
-    Router::new()
-        .route("/api/live/launch", post(live_launch_handler))
-        .route("/api/live/status", get(live_status_handler))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .layer(axum::middleware::map_response(name_upload_limit_413))
-        .with_state(state)
+    with_upload_guard(
+        Router::new()
+            .route("/api/live/launch", post(live_launch_handler))
+            .route("/api/live/status", get(live_status_handler)),
+        state,
+    )
 }
 
 /// Live-launch routes which additionally accept a `schematic` multipart part.
@@ -221,22 +228,30 @@ pub fn live_routes_with_schematic(
     launch: SchematicLiveLauncher,
 ) -> Router {
     let state = Arc::new(SchematicLiveState { hub, launch });
-    Router::new()
-        .route("/api/live/launch", post(live_launch_schematic_handler))
-        .route("/api/live/status", get(live_status_schematic_handler))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .layer(axum::middleware::map_response(name_upload_limit_413))
-        .with_state(state)
+    with_upload_guard(
+        Router::new()
+            .route("/api/live/launch", post(live_launch_schematic_handler))
+            .route("/api/live/status", get(live_status_schematic_handler)),
+        state,
+    )
+}
+
+/// `GET /api/live/status`: whether a live session is running, and on which
+/// board, so the UI can confirm before replacing it.
+fn live_status(hub: &crate::LiveHub) -> impl IntoResponse {
+    json_body(
+        StatusCode::OK,
+        match hub.active_board() {
+            Some(name) => serde_json::json!({ "active": true, "board_name": name }),
+            None => serde_json::json!({ "active": false }),
+        },
+    )
 }
 
 async fn live_status_schematic_handler(
     State(state): State<Arc<SchematicLiveState>>,
 ) -> impl IntoResponse {
-    let body = match state.hub.active_board() {
-        Some(name) => serde_json::json!({ "active": true, "board_name": name }),
-        None => serde_json::json!({ "active": false }),
-    };
-    json_body(StatusCode::OK, body)
+    live_status(&state.hub)
 }
 
 async fn live_launch_schematic_handler(
@@ -267,31 +282,11 @@ async fn live_launch_schematic_handler(
         (launch)(&parts.board_name, &board_bytes, firmware, schematic)
     })
     .await;
-    match built {
-        Ok(Ok(live)) => {
-            let board_name = live.board_name.clone();
-            let replaced = state.hub.launch(
-                live.engine,
-                live.board_name,
-                live.board_file,
-                live.keepalive,
-            );
-            json_body(
-                StatusCode::OK,
-                serde_json::json!({ "ok": true, "board_name": board_name, "replaced": replaced }),
-            )
-        }
-        Ok(Err(message)) => json_error(&message),
-        Err(_) => json_error("the live launch task panicked; see the server log"),
-    }
+    install_launched(&state.hub, built)
 }
 
 async fn live_status_handler(State(state): State<Arc<LiveState>>) -> impl IntoResponse {
-    let body = match state.hub.active_board() {
-        Some(name) => serde_json::json!({ "active": true, "board_name": name }),
-        None => serde_json::json!({ "active": false }),
-    };
-    json_body(StatusCode::OK, body)
+    live_status(&state.hub)
 }
 
 /// POST `/api/live/launch`: build the engine for the uploaded board (blocking
@@ -322,10 +317,21 @@ async fn live_launch_handler(
         None => (launch)(&board_name, &board_bytes, None),
     })
     .await;
+    install_launched(&state.hub, built)
+}
+
+/// Install a freshly built session as THE live one and answer the launch POST.
+/// A refusal (no processor for the firmware, unloadable firmware, unreadable
+/// board) comes back as `{ok:false, error}` with the engine's own message, so
+/// the report stays up and the UI shows a reason instead of a dead spinner.
+fn install_launched(
+    hub: &crate::LiveHub,
+    built: Result<Result<LiveLaunch, String>, tokio::task::JoinError>,
+) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
     match built {
         Ok(Ok(live)) => {
             let board_name = live.board_name.clone();
-            let replaced = state.hub.launch(
+            let replaced = hub.launch(
                 live.engine,
                 live.board_name,
                 live.board_file,
@@ -336,7 +342,7 @@ async fn live_launch_handler(
                 serde_json::json!({ "ok": true, "board_name": board_name, "replaced": replaced }),
             )
         }
-        Ok(Err(msg)) => json_error(&msg),
+        Ok(Err(message)) => json_error(&message),
         Err(_) => json_error("the live launch task panicked; see the server log"),
     }
 }
@@ -365,13 +371,10 @@ pub fn deps_routes(status: DepsStatus, install: DepInstaller) -> Router {
 /// async runtime.
 async fn deps_status_handler(State(state): State<Arc<DepsState>>) -> impl IntoResponse {
     let status = state.status.clone();
-    let json = tokio::task::spawn_blocking(move || (status)())
-        .await
-        .unwrap_or_else(|_| "{\"deps\":[]}".to_string());
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
+    json_ok(
+        tokio::task::spawn_blocking(move || (status)())
+            .await
+            .unwrap_or_else(|_| "{\"deps\":[]}".to_string()),
     )
 }
 
@@ -799,6 +802,25 @@ fn sse_response(rx: tokio::sync::mpsc::Receiver<String>) -> axum::response::Resp
         .expect("static headers build")
 }
 
+/// A `200 OK` carrying an already-serialized JSON document.
+fn json_ok(json: String) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
+}
+
+/// The board's original filename, which the page sends in `X-Board-Filename`.
+/// Falls back to `"board"`: the analyzer sniffs the format from the bytes, so a
+/// missing header costs only the name in the report.
+fn board_filename(headers: &HeaderMap) -> &str {
+    headers
+        .get("x-board-filename")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("board")
+}
+
 /// A JSON body response with the standard content-type header. Every error is
 /// built through `serde_json` so backslashes / control chars in a message can
 /// never produce invalid JSON (B9).
@@ -982,23 +1004,11 @@ async fn analyze_handler(
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
-    let file_name = headers
-        .get("x-board-filename")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("board")
-        .to_string();
-
     // Board files may be text (KiCad/Eagle/IPC), a zip (gerbers) or a binary
     // container (Altium .PcbDoc). The analyzer's extractor sniffs the format
     // from the RAW bytes; decoding here to a lossy-UTF8 string would corrupt the
     // binary formats before they are ever parsed.
-    let json = (state.analyze)(&file_name, &body);
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
-    )
+    json_ok((state.analyze)(board_filename(&headers), &body))
 }
 
 /// Board-only analysis for the firmware-aware router: same contract as
@@ -1013,19 +1023,9 @@ async fn analyze_handler_fw(
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
-    let file_name = headers
-        .get("x-board-filename")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("board")
-        .to_string();
     // Raw bytes, same as [`analyze_handler`]: a binary board must not be
     // lossy-decoded on its way to the analyzer.
-    let json = (state.analyze)(&file_name, &body, None);
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
-    )
+    json_ok((state.analyze)(board_filename(&headers), &body, None))
 }
 
 /// Accept a `multipart/form-data` upload with a `board` part (required) and a
@@ -1055,16 +1055,11 @@ async fn analyze_firmware_handler(
 
     // Firmware is optional: an absent (or empty) part falls back to a
     // board-only analysis, which is the same contract /api/analyze offers.
-    let json = match &fw_bytes {
-        Some(bytes) => (state.analyze)(&board_name, &board_bytes, Some((&fw_name, bytes))),
-        None => (state.analyze)(&board_name, &board_bytes, None),
-    };
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
-    )
+    json_ok((state.analyze)(
+        &board_name,
+        &board_bytes,
+        fw_bytes.as_deref().map(|bytes| (fw_name.as_str(), bytes)),
+    ))
 }
 
 async fn analyze_handler_schematic(
@@ -1075,16 +1070,7 @@ async fn analyze_handler_schematic(
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
-    let file_name = headers
-        .get("x-board-filename")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("board");
-    let json = (state.analyze)(file_name, &body, None, None);
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
-    )
+    json_ok((state.analyze)(board_filename(&headers), &body, None, None))
 }
 
 async fn analyze_schematic_handler(
@@ -1110,10 +1096,10 @@ async fn analyze_schematic_handler(
         .schematic_bytes
         .as_deref()
         .map(|bytes| (parts.schematic_name.as_str(), bytes));
-    let json = (state.analyze)(&parts.board_name, &board_bytes, firmware, schematic);
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
-    )
+    json_ok((state.analyze)(
+        &parts.board_name,
+        &board_bytes,
+        firmware,
+        schematic,
+    ))
 }

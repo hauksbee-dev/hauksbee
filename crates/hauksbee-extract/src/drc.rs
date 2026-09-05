@@ -42,6 +42,8 @@ use std::collections::HashMap;
 
 use forge_sexpr::{Document, List};
 use rstar::{RTree, RTreeObject, AABB};
+
+use crate::gerber::geo::{point_in_polygon, segments_intersect};
 use serde::{Deserialize, Serialize};
 
 /// Default copper-to-copper clearance (mm) when the board states no rule.
@@ -53,32 +55,28 @@ pub const DEFAULT_CLEARANCE_MM: f64 = 0.2;
 /// A gap reported as `clearance - epsilon` is overwhelmingly a routing-to-rule
 /// artifact: KiCad lets the router lay copper *at* the design rule, and the nm
 /// grid plus our capsule/arc flattening (chord error a few microns, see
-/// `ARC_SEGMENTS`) leaves the measured gap a hair under the nominal rule. Those
-/// boundary gaps generated 137 spurious clearance notes on bms-c1 and 66 on the
-/// PD-sink board, drowning real findings. So a gap within this many microns of
-/// the rule is not a violation; only a gap genuinely *under* (rule - tolerance)
-/// is. Shorts (gap <= 0, actual copper overlap) are unaffected: this only
-/// raises the floor for the soft clearance band, never for true intersections.
-/// 5 um is well under any real copper clearance (the tightest fab rules are
-/// ~75 um) yet above the geometry's own rounding noise.
+/// `ARC_SEGMENTS`) leaves the measured gap a hair under the nominal rule. So a
+/// gap within this many microns of the rule is not a violation; only a gap
+/// genuinely *under* (rule - tolerance) is. Shorts (gap <= 0, actual copper
+/// overlap) are unaffected: this only raises the floor for the soft clearance
+/// band, never for true intersections. 5 um is well under any real copper
+/// clearance (the tightest fab rules are ~75 um) yet above the geometry's own
+/// rounding noise.
 pub const CLEARANCE_TOLERANCE_MM: f64 = 0.005;
 
 /// Gaps at or below this (mm) are copper *touching*: a short, not a clearance.
 ///
-/// `gap <= 0.0` was the whole test, and it is not enough. The gap comes out of
-/// `shape_gap`, which subtracts and square-roots f64 coordinates in millimetres;
-/// on a 300 mm board that arithmetic carries an absolute error around 1e-13 mm,
-/// so two edges that meet exactly can measure a hair *positive*. A real corpus
-/// board produced a 9.77e-15 mm gap between different nets, which is touching
-/// copper by any physical reading, and the bare `> 0.0` test filed it as a
-/// clearance note instead of a short. Under-reporting a short is the worst
-/// failure this detector has: it is the one finding a board cannot ship with.
+/// A bare `gap <= 0.0` test is not enough. The gap comes out of `shape_gap`,
+/// which subtracts and square-roots f64 coordinates in millimetres; on a 300 mm
+/// board that arithmetic carries an absolute error around 1e-13 mm, so two edges
+/// that meet exactly can measure a hair *positive*, and copper that touches
+/// would be filed as a mere clearance note. Under-reporting a short is the worst
+/// failure this detector has.
 ///
-/// 1e-9 mm (one picometre) is the band. It sits four orders above the f64 noise
-/// floor described above, and three orders BELOW KiCad's nanometre coordinate
-/// grid, which is the finest gap a KiCad file can even express. So it cannot
-/// swallow a gap any real design intended: the smallest representable non-zero
-/// gap, 1e-6 mm, is a thousand times wider than this band.
+/// 1e-9 mm (one picometre) is the band. It sits four orders above that f64 noise
+/// floor and three orders BELOW KiCad's nanometre coordinate grid, the finest
+/// gap a KiCad file can even express, so it cannot swallow a gap any real design
+/// intended.
 pub const SHORT_TOUCH_EPS_MM: f64 = 1e-9;
 
 /// Whether a measured gap means the copper is in contact.
@@ -147,12 +145,9 @@ impl ClearanceRules {
     pub fn add_class(&mut self, rule: NetClassRule) {
         // Keep a class that carries ANY usable rule, an explicit clearance OR a
         // diff-pair gap. A KiCad class routinely leaves `clearance` at 0 ("inherit
-        // board default") while still defining a `diff_pair_gap`; dropping it
-        // wholesale (a bare `clearance_mm > 0.0` gate) discards the gap AND makes
-        // `assign_net` reject its nets, so a diff pair routed at its own gap gets
-        // checked against the wider board default and falsely flagged. A class
-        // with clearance 0 is retained and resolves to the board default for
-        // spacing (see `clearance_for_net`) while still contributing its gap.
+        // board default") while still defining a `diff_pair_gap`; such a class is
+        // retained and resolves to the board default for spacing (see
+        // `clearance_for_net`) while still contributing its gap.
         if rule.clearance_mm > 0.0 || rule.diff_pair_gap_mm.is_some_and(|g| g > 0.0) {
             self.classes.insert(rule.name.clone(), rule);
         }
@@ -320,12 +315,8 @@ pub fn clearance_rules_from_kicad_pro<'a>(
     let mut rules = ClearanceRules::default();
     for class in classes {
         // Skip a nameless/malformed class entry rather than aborting the whole
-        // parse. A bare `?` here propagates None out of the function, so one bad
-        // object (e.g. in a hand-edited .kicad_pro) silently discards EVERY
-        // class, default clearance, and diff-pair gap, dropping DRC to the bare
-        // default everywhere, a KiCad 10 board keeps its clearances only here.
-        // The sibling assignment/pattern loops already skip bad entries; match
-        // that.
+        // parse: one bad object in a hand-edited `.kicad_pro` must not discard
+        // every other class, the default clearance and the diff-pair gaps.
         let Some(name) = class
             .get("name")
             .and_then(|x| x.as_str())
@@ -521,8 +512,7 @@ pub struct Item {
 }
 
 /// A schematic's declaration that the two nets of a finding are joined on
-/// purpose. Stored in [`DrcTieQualification`], not in [`DrcFinding`], so the
-/// established public finding/report struct-literal API remains source-compatible.
+/// purpose. Stored in [`DrcTieQualification`], not in [`DrcFinding`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeclaredTie {
     /// The declaration in the schematic's own vocabulary, naming the symbols and
@@ -558,6 +548,31 @@ pub struct DrcTieQualification {
     qualified: Vec<QualifiedFinding>,
 }
 
+/// The tie recorded for exactly this net pair, layer and location. Coordinates
+/// are compared at nanometre resolution, far below any source format's own
+/// precision but enough to absorb float round-off between the layer-specific
+/// geometry paths.
+fn find_at<'a>(
+    rows: &'a [QualifiedFinding],
+    net_a: &str,
+    net_b: &str,
+    layer: &str,
+    x: f64,
+    y: f64,
+) -> Option<&'a DeclaredTie> {
+    let x_nm = (x * 1_000_000.0).round() as i64;
+    let y_nm = (y * 1_000_000.0).round() as i64;
+    rows.iter()
+        .find(|row| {
+            row.net_a_name == net_a
+                && row.net_b_name == net_b
+                && row.layer == layer
+                && row.x_nm == x_nm
+                && row.y_nm == y_nm
+        })
+        .map(|row| &row.tie)
+}
+
 impl DrcTieQualification {
     pub fn tie_for<'a>(&'a self, finding: &DrcFinding) -> Option<&'a DeclaredTie> {
         self.tie_at(
@@ -577,18 +592,7 @@ impl DrcTieQualification {
         x: f64,
         y: f64,
     ) -> Option<&DeclaredTie> {
-        let x_nm = (x * 1_000_000.0).round() as i64;
-        let y_nm = (y * 1_000_000.0).round() as i64;
-        self.qualified
-            .iter()
-            .find(|qualified| {
-                qualified.net_a_name == net_a
-                    && qualified.net_b_name == net_b
-                    && qualified.layer == layer
-                    && qualified.x_nm == x_nm
-                    && qualified.y_nm == y_nm
-            })
-            .map(|qualified| &qualified.tie)
+        find_at(&self.qualified, net_a, net_b, layer, x, y)
     }
 
     pub fn qualified_count(&self) -> usize {
@@ -615,18 +619,7 @@ impl DrcTieQualification {
         x: f64,
         y: f64,
     ) -> Option<&DeclaredTie> {
-        let x_nm = (x * 1_000_000.0).round() as i64;
-        let y_nm = (y * 1_000_000.0).round() as i64;
-        self.declared
-            .iter()
-            .find(|candidate| {
-                candidate.net_a_name == net_a
-                    && candidate.net_b_name == net_b
-                    && candidate.layer == layer
-                    && candidate.x_nm == x_nm
-                    && candidate.y_nm == y_nm
-            })
-            .map(|candidate| &candidate.tie)
+        find_at(&self.declared, net_a, net_b, layer, x, y)
     }
 
     pub fn declaration_count(&self) -> usize {
@@ -740,10 +733,7 @@ pub struct DrcReport {
     /// suppression site), but it silences a whole finding class, and a silenced
     /// class the user cannot see is indistinguishable from a clean board.
     /// Surfaces disclose this via [`DrcReport::suppression_note`].
-    /// `None` means the payload predates this accounting, which is not the same
-    /// claim as `Some(0)`. A report serialised before the counter existed was
-    /// still produced by a run that suppressed the class, so defaulting it to zero
-    /// would assert "nothing was suppressed" about a run that never measured it.
+    /// `None` means "never measured", which is not the same claim as `Some(0)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_pad_overlaps_suppressed: Option<usize>,
 }
@@ -915,11 +905,9 @@ impl DrcReport {
     /// cannot audit a rule they were never told was applied.
     pub fn suppression_note(&self) -> Option<String> {
         let Some(n) = self.zone_pad_overlaps_suppressed else {
-            // Never measured. Two ways to get here, and the sentence has to cover
-            // both without asserting either: a payload serialised before this
-            // counter existed, or a report carrying no copper DRC pass at all (a
-            // netlist-only input, or a default-constructed report). Both mean "we
-            // do not know", which is not the claim "none were suppressed".
+            // Never measured: either no copper DRC pass ran (a netlist-only input
+            // or a default-constructed report) or the payload predates the
+            // counter. Both mean "unknown", not "none were suppressed".
             return Some(
                 concat!(
                     "drc: whether the zone-versus-pad finding class was suppressed is not ",
@@ -943,18 +931,6 @@ impl DrcReport {
                 n
             )
         })
-    }
-
-    /// Distinct unordered net pairs that are shorted together, as (id, id) with
-    /// the lower id first. The engine uses these to merge nets.
-    pub fn shorted_net_pairs(&self) -> Vec<(i64, i64)> {
-        let mut pairs: Vec<(i64, i64)> = self
-            .shorts()
-            .map(|f| (f.net_a.min(f.net_b), f.net_a.max(f.net_b)))
-            .collect();
-        pairs.sort_unstable();
-        pairs.dedup();
-        pairs
     }
 }
 
@@ -1086,49 +1062,6 @@ fn seg_seg_closest(
         best = (d2, a2, p);
     }
     (best.0.sqrt(), best.1, best.2)
-}
-
-/// Orientation sign of the triplet (p, q, r): >0 ccw, <0 cw, 0 colinear.
-fn orient(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
-    (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
-}
-
-fn on_seg(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> bool {
-    q.0 <= p.0.max(r.0) && q.0 >= p.0.min(r.0) && q.1 <= p.1.max(r.1) && q.1 >= p.1.min(r.1)
-}
-
-/// Proper / improper segment intersection test.
-fn segments_intersect(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f64, f64)) -> bool {
-    let d1 = orient(p3, p4, p1);
-    let d2 = orient(p3, p4, p2);
-    let d3 = orient(p1, p2, p3);
-    let d4 = orient(p1, p2, p4);
-    if ((d1 > 0.0) != (d2 > 0.0)) && ((d3 > 0.0) != (d4 > 0.0)) {
-        return true;
-    }
-    (d1 == 0.0 && on_seg(p3, p1, p4))
-        || (d2 == 0.0 && on_seg(p3, p2, p4))
-        || (d3 == 0.0 && on_seg(p1, p3, p2))
-        || (d4 == 0.0 && on_seg(p1, p4, p2))
-}
-
-/// Even-odd point-in-polygon test.
-fn point_in_polygon(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
-    let n = poly.len();
-    if n < 3 {
-        return false;
-    }
-    let mut inside = false;
-    let mut j = n - 1;
-    for i in 0..n {
-        let (xi, yi) = poly[i];
-        let (xj, yj) = poly[j];
-        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
 }
 
 /// Minimum boundary-to-boundary distance between two polygons (0 if their
@@ -1616,12 +1549,10 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
     // the bare drilled barrel there. A layer is "used" (keeps its full-size
     // ring) when it is an END layer under `(keep_end_layers yes)`, when it is
     // named in `(zone_layer_connections ...)` (the zones that connect), or
-    // when a track/arc on that layer lands on the via. Modeling the removed
-    // ring at FULL size fabricated phantom clearance findings and even
-    // phantom "shorts" against inner-layer copper the real board never
-    // touches (a board with 400 unused-layer stitching vias produced 7 false
-    // SERIOUS shorts); the honest model on a ring-removed layer is the drill
-    // barrel itself, which still owns its hole-to-copper spacing.
+    // when a track/arc on that layer lands on the via. On a ring-removed layer
+    // the honest model is the drill barrel itself, which still owns its
+    // hole-to-copper spacing; modelling the removed ring at full size invents
+    // clearance findings and shorts against copper the board never touches.
     let track_touch: std::collections::HashMap<String, Vec<(f64, f64)>> = {
         let mut map: std::collections::HashMap<String, Vec<(f64, f64)>> =
             std::collections::HashMap::new();
@@ -1750,9 +1681,8 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
             // thermal reliefs are not represented).
             //
             // A zone may span SEVERAL layers via `(layers "F.Cu" "B.Cu")` (or a
-            // `*.Cu` wildcard); reading only the single `(layer ...)` dropped the
-            // outline of every multi-layer unfilled zone. Expand the declared
-            // layer set and keep the outline on each copper layer it occupies.
+            // `*.Cu` wildcard), so expand the declared layer set and keep the
+            // outline on each copper layer it occupies.
             if let Some(poly) = zone.find("polygon").and_then(read_pts) {
                 let mut layers: Vec<String> = Vec::new();
                 if let Some(decl) = zone.find("layers") {
@@ -1833,11 +1763,9 @@ fn collect_pad(
 
     // A through-hole pad can carry `(drill ... (offset x y))`: the pad's `(at)`
     // is the HOLE position and the copper shape is displaced by the offset,
-    // rotated with the pad. Castellated / edge-solder module footprints (e.g.
-    // the OpenMower xESC2-mini) use this to hang half the copper past the hole;
-    // ignoring it draws the copper up to half a pad away from where KiCad
-    // filled the surrounding zone, which manufactured 114 phantom clearance
-    // warnings on a board KiCad's own DRC scores clean.
+    // rotated with the pad. Castellated / edge-solder module footprints use this
+    // to hang half the copper past the hole, so ignoring the offset draws the
+    // copper up to half a pad away from where KiCad filled the surrounding zone.
     let (offx, offy) = pad
         .find("drill")
         .and_then(|d| d.find("offset"))
@@ -1917,9 +1845,7 @@ fn collect_pad(
         // understates the wide edge and overstates the narrow one.
         "trapezoid" => vec![trapezoid_polygon(pad, sx, sy, &outline_to_world)],
         // Custom pad: the copper is the anchor pad shape UNION every drawn
-        // primitive. Stamping only the first polygon (the old behaviour)
-        // dropped the anchor disc and every further primitive, silently
-        // un-checking real copper.
+        // primitive.
         "custom" => custom_pad_shapes(pad, sx, sy, &outline_to_world),
         // rect, roundrect and anything else: a rectangle. For roundrect we
         // keep a corner radius as inflation so the rounded copper is not
@@ -1937,9 +1863,7 @@ fn collect_pad(
             // 45-degree cut of size ratio * min(w, h), while the un-named
             // corners keep the roundrect radius. Treating such a pad as a full
             // rectangle manufactures false shorts against copper legitimately
-            // routed through the notch (the Kailh-socket pads on PolyKybd
-            // slice 0.77 mm off both bottom corners and a 45-degree track
-            // passes through; KiCad 9 DRC reports no short there).
+            // routed through the notch.
             let chamfered = chamfered_corners(pad);
             let ch = if chamfered.iter().any(|&c| c) {
                 (pad.find_f64("chamfer_ratio").unwrap_or(0.0) * min_side).max(0.0)
@@ -2056,24 +1980,29 @@ fn chamfered_rect_polygon(
     }
     // A maximal chamfer (ratio 0.5 on adjacent corners of a square-ish pad)
     // can make consecutive vertices coincide; drop the duplicates.
-    let mut pts: Vec<(f64, f64)> = Vec::with_capacity(local.len());
-    for &(x, y) in &local {
-        if pts
-            .last()
-            .is_none_or(|&(px, py)| (px - x).abs() > 1e-9 || (py - y).abs() > 1e-9)
-        {
-            pts.push((x, y));
-        }
-    }
-    if pts.len() > 1 {
-        let first = pts[0];
-        let last = *pts.last().unwrap();
-        if (first.0 - last.0).abs() <= 1e-9 && (first.1 - last.1).abs() <= 1e-9 {
-            pts.pop();
-        }
-    }
-    let pts = pts.into_iter().map(|(x, y)| to_world(x, y)).collect();
+    let pts = dedup_ring(local)
+        .into_iter()
+        .map(|(x, y)| to_world(x, y))
+        .collect();
     Shape::Polygon { pts, r: rr }
+}
+
+/// Drop consecutive coincident vertices, and a closing duplicate, from a
+/// polygon ring. A maximal chamfer or trapezoid delta collapses two corners
+/// onto each other, and a repeated vertex makes edge distances meaningless.
+fn dedup_ring(ring: impl IntoIterator<Item = (f64, f64)>) -> Vec<(f64, f64)> {
+    let same =
+        |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() <= 1e-9 && (a.1 - b.1).abs() <= 1e-9;
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    for p in ring {
+        if pts.last().is_none_or(|&q| !same(q, p)) {
+            pts.push(p);
+        }
+    }
+    if pts.len() > 1 && same(pts[0], pts[pts.len() - 1]) {
+        pts.pop();
+    }
+    pts
 }
 
 /// A KiCad trapezoid pad outline. `(rect_delta dx dy)` on a `(size sx sy)`
@@ -2113,22 +2042,7 @@ fn trapezoid_polygon(
         (hw - ddy, -hh + ddx),
         (hw + ddy, hh - ddx),
     ];
-    let mut pts: Vec<(f64, f64)> = Vec::with_capacity(4);
-    for (x, y) in local {
-        if pts
-            .last()
-            .is_none_or(|&(px, py)| (px - x).abs() > 1e-9 || (py - y).abs() > 1e-9)
-        {
-            pts.push((x, y));
-        }
-    }
-    if pts.len() > 1 {
-        let first = pts[0];
-        let last = *pts.last().unwrap();
-        if (first.0 - last.0).abs() <= 1e-9 && (first.1 - last.1).abs() <= 1e-9 {
-            pts.pop();
-        }
-    }
+    let pts = dedup_ring(local);
     if pts.len() < 3 {
         // A pathological delta (both edges collapsed) leaves no area to
         // stamp; fall back to the size box rather than a degenerate polygon.
@@ -2976,11 +2890,9 @@ fn sweep_buckets(
                 // clears a pad out of a different-net pour, and KiCad-10 (format
                 // 20260206) fills represent that antipad with keyhole slits whose
                 // boundary edges run through the pad interior, producing spurious
-                // negative gaps (a 1668-short false-positive epidemic on one ESC,
-                // none on the same board's tracks/vias). A real pour incursion is a
-                // Track / Via / Arc crossing the boundary, which is still caught
-                // (the BMS REG1_3V3 and FPV-Drone shorts are Track/Via<->Zone). So
-                // a Zone<->Pad *overlap* is suppressed here; a positive sub-clearance
+                // negative gaps. A real pour incursion is a Track / Via / Arc
+                // crossing the boundary, which is still caught. So a Zone<->Pad
+                // *overlap* is suppressed here; a positive sub-clearance
                 // Zone<->Pad gap is still kept as a normal clearance note.
                 let zone_pad = (p.kind == ItemKind::Zone && q.kind == ItemKind::Pad)
                     || (p.kind == ItemKind::Pad && q.kind == ItemKind::Zone);
@@ -3086,20 +2998,12 @@ pub fn drc_from_text(text: &str) -> Result<DrcReport, forge_sexpr::ParseError> {
     Ok(report)
 }
 
-/// Like [`drc_from_text`] but with an explicit clearance rule (mm). KiCad 10
-/// (format 20260206) keeps the design-rule clearance in the sibling `.kicad_pro`
+/// Like [`drc_from_text`] but with concrete per-net rules. KiCad 10 (format
+/// 20260206) keeps the design-rule clearance in the sibling `.kicad_pro`
 /// (`net_settings.classes[].clearance`), not in the `.kicad_pcb` `(setup)` block,
-/// so `board_clearance` would otherwise fall back to [`DEFAULT_CLEARANCE_MM`]. The
-/// caller (which knows the board path) reads the project's Default-class clearance
-/// and passes it here. `None` keeps the board/`DEFAULT_CLEARANCE_MM` behaviour.
-pub fn drc_from_text_with_clearance(
-    text: &str,
-    clearance_override: Option<f64>,
-) -> Result<DrcReport, forge_sexpr::ParseError> {
-    drc_from_text_with_clearance_rules(text, clearance_override.map(ClearanceRules::new))
-}
-
-/// Like [`drc_from_text_with_clearance`] but with concrete per-net rules.
+/// so `board_clearance` would otherwise fall back to [`DEFAULT_CLEARANCE_MM`];
+/// the caller, which knows the board path, reads the project's rules and passes
+/// them here. `None` keeps the board/`DEFAULT_CLEARANCE_MM` behaviour.
 pub fn drc_from_text_with_clearance_rules(
     text: &str,
     rules: Option<ClearanceRules>,
@@ -3140,6 +3044,7 @@ pub mod eagle_drc {
         ClearanceRules, DrcFinding, DrcReport, Item, ItemKind, LayerBuckets, NetClassRule,
         NetTieOwners, Shape, ViolationKind, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
     };
+    use crate::eagle::xml_attrs as attrs_of;
     use quick_xml::events::Event;
     use quick_xml::Reader;
     use std::collections::HashMap;
@@ -3166,27 +3071,6 @@ pub mod eagle_drc {
     #[derive(Default)]
     struct EagleClass {
         clearances: Vec<(i64, f64)>,
-    }
-
-    fn attrs_of(e: &quick_xml::events::BytesStart) -> Attrs {
-        e.attributes()
-            .flatten()
-            .map(|a| {
-                // Unescape XML entities in the value (quick-xml leaves them raw),
-                // consistent with the eagle.rs reader; fall back to raw bytes on
-                // a decode error.
-                // quick-xml deprecates this in favour of `normalized_value`, which takes an
-                // `XmlVersion` the crate does not export, so the replacement is not
-                // callable from outside quick-xml. Staying on the deprecated call
-                // until upstream makes the successor reachable.
-                #[allow(deprecated)]
-                let value = a
-                    .unescape_value()
-                    .map(|c| c.into_owned())
-                    .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
-                (String::from_utf8_lossy(a.key.as_ref()).into_owned(), value)
-            })
-            .collect()
     }
 
     fn num(a: &Attrs, k: &str) -> Option<f64> {
@@ -3318,11 +3202,10 @@ pub mod eagle_drc {
             /// max(isolate, design-rule / class clearance), so 0 means "rules
             /// only" and the fill can never crowd them.
             ///
-            /// Pour-to-POUR it is NOT a sufficient predictor of contact, which is
-            /// measured: the emonTx V3.4.0 pours at 0.00030625 against a GND pour
-            /// under an 8 mil `mdWireWire` rule on both layers, and its shipped
-            /// gerbers show one layer joined and the other not. The value is
-            /// parsed and disclosed on the finding; nothing keys a verdict on it.
+            /// Pour-to-POUR it is NOT a sufficient predictor of contact: two
+            /// pours at the same isolate can be joined on one layer and apart on
+            /// another. The value is parsed and disclosed on the finding;
+            /// nothing keys a verdict on it.
             isolate: f64,
             /// Pour priority. With differing ranks the higher-numbered pour
             /// yields; same-rank pours of different signals get no arbitration
@@ -3893,19 +3776,10 @@ pub mod eagle_drc {
         // Element transform: local (lx, ly) → world. Eagle is y-up, rotation CCW.
         // A mirrored element (`MR<deg>`) is reflected about the Y axis (negate
         // local X) and then rotated CLOCKWISE by `deg` (mirroring flips the sense
-        // of rotation). Equivalently: flip-X, then rotate by `-deg`.
-        //
-        // The earlier form used flip-Y with `+deg`. That is *identical* to
-        // flip-X/`-deg` only when the rotation is a non-trivial multiple that
-        // absorbs the sign (e.g. MR90), which is why it tested clean on the QT
-        // Py's `MR90` SOIC8. But for `MR0` / `MR180` (no rotation to absorb the
-        // sign) flip-Y and flip-X diverge, and flip-Y placed pads on the wrong
-        // side of the package origin. That manufactured false shorts on the
-        // SparkFun RP2040 Thing Plus, whose `MR0` micro-SD socket J6 then dropped
-        // its SCLK/VCC/GND pads ~23 mm away, on top of the V_USB / EN bottom
-        // traces. With flip-X/`-deg`, J6's SCLK pad lands at (10.51, 49.05),
-        // exactly on its own SPI_SCK1 net copper (verified), and the QT Py `MR90`
-        // placement is unchanged (the two transforms coincide there).
+        // of rotation). Equivalently: flip-X, then rotate by `-deg`. Flip-Y with
+        // `+deg` coincides with this only when the rotation absorbs the sign
+        // (e.g. MR90) and places pads on the wrong side of the package origin
+        // for MR0 / MR180.
         let eff_rot = if el.mirrored { -el.rot_deg } else { el.rot_deg };
         let (esin, ecos) = eff_rot.to_radians().sin_cos();
         let to_world = |lx: f64, ly: f64| -> (f64, f64) {
@@ -4066,8 +3940,7 @@ pub mod eagle_drc {
             |id: i64| -> String { names.get((id - 1) as usize).cloned().unwrap_or_default() };
 
         // The two-layer copper stack these boards use; a TH pad / via sits on all
-        // of them. (Inner layers would be added here for a multilayer board, but
-        // the famous corpus is all two-layer.)
+        // of them.
         let copper_layers: Vec<i64> = vec![1, 16];
 
         let mut buckets = LayerBuckets::default();
@@ -4158,20 +4031,18 @@ pub mod eagle_drc {
                         // the fill safe to leave un-stamped against ordinary
                         // copper: Eagle carves max(isolate, applicable
                         // design-rule / net-class clearance) around every
-                        // foreign-net wire, pad and via (an `isolate` below
-                        // the rules distance is ignored), thermal spokes only
+                        // foreign-net wire, pad and via, thermal spokes only
                         // remove same-net copper, and orphan removal only
                         // deletes fill pockets. Every setting keeps or widens
-                        // gaps, so a fill Eagle derives from these settings
-                        // cannot short or crowd foreign copper in the same
-                        // file (pour-to-copper pairs are therefore left
-                        // unchecked, not checked-and-clean), while treating the drawn
-                        // outline as solid copper would turn every legitimate
-                        // crossing track and every isolated foreign pad into a
-                        // false short. Two overlapping same-rank pours of
-                        // different signals are the one pair the settings cannot
-                        // make safe on their own; see the rank check below, and
-                        // its measured error rate.
+                        // gaps, so a fill Eagle derives from them cannot short
+                        // or crowd foreign copper in the same file (pour-to-copper
+                        // pairs are therefore left unchecked, not
+                        // checked-and-clean), while treating the drawn outline as
+                        // solid copper would turn every legitimate crossing track
+                        // and every isolated foreign pad into a false short. Two
+                        // overlapping same-rank pours of different signals are the
+                        // one pair the settings cannot make safe on their own; see
+                        // the rank check below.
                         if !cutout {
                             pours.push(Pour {
                                 net,
@@ -4314,14 +4185,11 @@ pub mod eagle_drc {
         // max-of-two-classes fallback in `effective_clearance`, so only
         // explicit non-zero matrix cells are registered as pair overrides.
         //
-        // "The design rules" here is this path's single clearance: the
-        // TIGHTEST copper-gating md* value (resolved above). The Eagle engine
-        // deliberately models one clearance rather than the per-item-kind md*
-        // matrix (mdWireWire vs mdPadPad, ...), the documented
-        // no-manufactured-noise choice this DRC has always made; a class or
-        // pair value is therefore floored at that single rule, not at the
-        // item-kind-specific one. Modelling the full md* matrix would be a
-        // separate feature touching every finding, not a net-class concern.
+        // "The design rules" here is this path's single clearance: the TIGHTEST
+        // copper-gating md* value (resolved above). This engine models one
+        // clearance rather than the per-item-kind md* matrix (mdWireWire vs
+        // mdPadPad, ...), so a class or pair value is floored at that single
+        // rule, never at an item-kind-specific one.
         let mut rules = ClearanceRules::new(clearance);
         let class_key = |n: i64| format!("class-{n}");
         for (number, class) in &parsed.classes {
@@ -4360,26 +4228,15 @@ pub mod eagle_drc {
         // the lower), so they stay silent. Same-rank pours of different signals
         // get no arbitration from the rank, and their overlap is reported.
         //
-        // This is a coarse rule and its error rate is measured, not guessed. The
-        // emonTx revision family (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`)
-        // supplies six layer-instances whose shipped gerbers say whether the two
-        // nets actually share copper, and the rule is right about four: it flags
-        // the three layers where they do, and over-reports two top layers where
-        // the pour outlines overlap but nothing bridges them.
-        //
-        // Keying on `isolate` instead was tried and reverted. It is necessary but
-        // not sufficient for a merge (V3.4.0 has both top pours at 0.00030625 and
-        // their fills apart), it fixes only one of the two over-reports, and it
-        // silences V3.4.5's top layer, where a trace does join the two nets. That
-        // trade is the wrong way round: see SHORT_TOUCH_EPS_MM above on
-        // under-reporting a short being the worst failure this detector has.
-        //
-        // What the over-reports need is Eagle's fill reconstructed from the
-        // outline, the pour settings and the foreign copper, which is not
-        // implemented. What the emonTx findings separately need is net-tie
-        // recognition that can see a tie DECLARED IN THE SCHEMATIC (that board
-        // wires an AGND supply symbol to a GND one from V3.4.1 on), which this
-        // reader cannot: it is handed a `.brd` and the tie is in the `.sch`.
+        // The rule is deliberately coarse and biased towards reporting: it can
+        // over-report two pours whose outlines overlap but whose Eagle-derived
+        // fills stay apart. `isolate` is necessary but not sufficient to predict
+        // a merge, so keying on it instead would silence real bridges, and
+        // under-reporting a short is this detector's worst failure (see
+        // SHORT_TOUCH_EPS_MM). Removing the over-reports needs Eagle's fill
+        // reconstructed from the outline, the pour settings and the foreign
+        // copper, which is not implemented. Error rate measured against the
+        // emonTx family in `docs/evidence/KNOWN_FAULTS_VALIDATION.md`.
         for (i, a) in pours.iter().enumerate() {
             for b in pours.iter().skip(i + 1) {
                 if a.layer != b.layer

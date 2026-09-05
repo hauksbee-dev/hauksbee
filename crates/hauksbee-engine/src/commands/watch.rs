@@ -121,7 +121,7 @@ fn accepted_targets_msg(path: &Path) -> String {
 
 /// A run's verdict, derived from the child's exit code. `Fail` is "the check ran
 /// and found a problem"; `Error` is "the check could not run" (bad input, a spec
-/// error); `Invalid` is a spec whose analog co-sim did not converge (05 §3b).
+/// error); `Invalid` is a spec whose analog co-sim did not converge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Pass,

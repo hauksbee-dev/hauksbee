@@ -354,7 +354,7 @@ struct ModelsNewArgs {
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
     /// Create a model-pack skeleton at this directory (pack.toml plus
-    /// models/<id>.toml). Existing files are never overwritten. The generated
+    /// `models/<id>.toml`). Existing files are never overwritten. The generated
     /// pack intentionally omits its license until the author supplies one.
     #[arg(long, value_name = "DIR", conflicts_with = "out")]
     pack_dir: Option<PathBuf>,
@@ -365,7 +365,7 @@ struct ModelsPrepareArgs {
     /// Board to inspect for unresolved, identity-only, or partial components.
     #[arg(value_name = "BOARD")]
     board: PathBuf,
-    /// Directory to receive pack.toml and models/<id>.toml files.
+    /// Directory to receive `pack.toml` and `models/<id>.toml` files.
     #[arg(long, value_name = "DIR")]
     pack_dir: PathBuf,
     /// Additional model directory to include while deciding which identities
@@ -837,10 +837,9 @@ struct RunArgs {
     )]
     strict_thermal: bool,
 
-    /// Opt out of the default strict thermal gate, restoring the old
-    /// non-strict behaviour: a PARTIAL-coverage thermal result exits 0 instead
-    /// of 3, and undermined thermal evidence no longer escalates either (the
-    /// two exits --strict-thermal used to opt in to). The INCONCLUSIVE
+    /// Opt out of the default strict thermal gate: a PARTIAL-coverage thermal
+    /// result exits 0 instead of 3, and undermined thermal evidence does not
+    /// escalate either. The INCONCLUSIVE
     /// coverage caveat (text stderr + JSON note) still prints; only the exit
     /// code changes. An empty thermal table over open power ICs stays invalid
     /// (exit 3) regardless.
@@ -1463,8 +1462,8 @@ fn main() -> anyhow::Result<()> {
             args.json,
         ),
         Command::CheckCode(args) => {
-            // A board file handed to check-code used to fall into the DSL
-            // parser and emit a nonsense parse error; name the actual fix.
+            // A board file handed to check-code would otherwise fall into the
+            // DSL parser and emit a nonsense parse error; name the actual fix.
             if board_extension(&args.code) {
                 eprintln!(
                     "error: check-code reads Board-as-Code (.board) files; for board checks run: \
@@ -1577,26 +1576,9 @@ fn main() -> anyhow::Result<()> {
         } else {
             eprintln!("error: {e}");
         }
-        std::process::exit(error_exit_code(e));
+        std::process::exit(hauksbee_engine::commands::run::error_exit_code(e));
     }
     result
-}
-
-/// Preserve the typed invalid-for-analysis contract through anyhow's shared
-/// CLI error envelope. Parser and reconciliation errors are not failed checks:
-/// there was no trustworthy board state to check, so they exit 3 in text and
-/// JSON modes alike.
-fn error_exit_code(error: &anyhow::Error) -> i32 {
-    if let Some(error) = error.downcast_ref::<hauksbee_extract::bom::BomError>() {
-        return error.exit_code();
-    }
-    if let Some(error) = error.downcast_ref::<hauksbee_extract::placement::PlacementError>() {
-        return error.exit_code();
-    }
-    if let Some(error) = error.downcast_ref::<hauksbee_engine::binder::IdentityRefusal>() {
-        return error.exit_code();
-    }
-    1
 }
 
 /// Whether a path carries an extension of a BOARD design format (the inputs

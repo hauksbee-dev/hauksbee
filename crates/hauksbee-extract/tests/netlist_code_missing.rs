@@ -1,6 +1,6 @@
-//! Regression for round-4 #6: two `(net ...)` blocks that both lack a parseable
-//! `(code ...)` must stay electrically distinct, not fuse onto one shared
-//! sentinel id (which silently shorted them).
+//! Two `(net ...)` blocks that both lack a parseable `(code ...)` must stay
+//! electrically distinct, not fuse onto one shared sentinel id, which would
+//! silently short them.
 
 use hauksbee_extract::ExtractedBoard;
 

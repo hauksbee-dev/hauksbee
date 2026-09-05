@@ -36,9 +36,7 @@
 //! `ATRACK6` / `AARC6` / `ACOMPONENT6` / `ANET6` parsers and the
 //! `ALTIUM_LAYER` enum), `common/io/altium/altium_binary_parser.cpp`
 //! (`ReadProperties`, the unit conversion), and `altium_props_utils.cpp`
-//! (`ConvertToKicadUnit`). The `cfb` crate replaces KiCad's vendored
-//! `CompoundFileReader`. Cross-checked against the `altium2kicad` project and a
-//! Python `olefile` prototype before porting. See `docs/ingest/ALTIUM.md`.
+//! (`ConvertToKicadUnit`). See `docs/ingest/ALTIUM.md`.
 //!
 //! [`cfb`]: https://docs.rs/cfb
 
@@ -249,11 +247,10 @@ impl<'a> StreamReader<'a> {
 /// uppercased-key map, decoding each value by its key. Altium writes a name
 /// field twice in one block: a CP1252 twin (`NAME=Mü` as `M\xFC`) and a UTF-8
 /// twin (`%UTF8%NAME=Mü` as `M\xC3\xBC`). Decoding the whole block as one unit
-/// failed UTF-8 on the CP1252 twin's high byte and fell back to CP1252 for
-/// everything, mojibake'ing the genuine UTF-8 twin (`M\xC3\xBC` → `MÃ¼`),
-/// which is exactly the twin `prop_str` prefers. So decode per value: a
-/// `%UTF8%` key is genuine UTF-8 (strict, lossy only as a last resort); the
-/// ANSI twin keeps the UTF-8-or-CP1252 heuristic.
+/// fails UTF-8 on the CP1252 twin's high byte and falls back to CP1252 for
+/// everything, mojibake'ing the genuine UTF-8 twin that `prop_str` prefers. So
+/// decode per value: a `%UTF8%` key is strict UTF-8, lossy only as a last
+/// resort; the ANSI twin keeps the UTF-8-or-CP1252 heuristic.
 fn parse_properties_bytes(raw: &[u8]) -> HashMap<String, String> {
     // Trim the block's trailing NUL terminator(s).
     let mut end = raw.len();
@@ -470,6 +467,49 @@ pub const REFERENCE_IDENTITY_NOTE_KEY: &str = "reference_identity_note";
 /// phantom "R74 = 0.74 ohm" faults.
 pub const VALUE_UNRESOLVED_REASON: &str =
     "no value in the PcbDoc; Altium keeps values in the .SchDoc";
+
+/// Resolve a component's value and append the properties that go with it: the
+/// board's comment text when it carries one, else whatever
+/// [`value_from_description`] recovers from SOURCEDESCRIPTION (value plus any
+/// voltage / power rating), else the empty string with
+/// [`VALUE_UNRESOLVED_KEY`] / [`VALUE_UNRESOLVED_REASON`] recorded. A layout-only
+/// Altium file genuinely does not carry the value, and saying so is what stops a
+/// binder fabricating a magnitude from the refdes.
+pub(crate) fn resolve_component_value(
+    comment: &str,
+    description: &str,
+    properties: &mut Vec<(String, String)>,
+) -> String {
+    let mut value = comment.to_string();
+    if value.is_empty() && !description.is_empty() {
+        let d = value_from_description(description);
+        if let Some(v) = d.value {
+            value = v;
+        }
+        if let Some(v) = d.voltage {
+            properties.push(("voltage_rating".to_string(), v));
+        }
+        if let Some(p) = d.power {
+            properties.push(("power_rating".to_string(), p));
+        }
+    }
+    if value.is_empty() {
+        properties.push((
+            VALUE_UNRESOLVED_KEY.to_string(),
+            VALUE_UNRESOLVED_REASON.to_string(),
+        ));
+    }
+    value
+}
+
+/// `library:pattern`, or the bare pattern when the record names no library.
+pub(crate) fn lib_id(library: &str, pattern: &str) -> String {
+    if library.is_empty() {
+        pattern.to_string()
+    } else {
+        format!("{library}:{pattern}")
+    }
+}
 
 /// What [`value_from_description`] recovered from a SOURCEDESCRIPTION string.
 #[derive(Default)]
@@ -839,6 +879,44 @@ fn base_properties(hierarchy: &str, source_unique_id: &str) -> Vec<(String, Stri
     properties
 }
 
+/// Emit one identity per positive-identity component when the records sharing a
+/// designator could not be merged wholesale. A component holding several records
+/// takes a `@records-<key>` suffix and `merged_reason`; a lone record takes
+/// `@record-<key>` and `distinct_reason`. Both stay flagged
+/// [`REFERENCE_AMBIGUOUS_KEY`], because connectivity was inferred from pad nets
+/// rather than proved by an authoritative unique id.
+#[allow(clippy::too_many_arguments)]
+fn assign_ambiguous_components(
+    inputs: &[ComponentIdentityInput],
+    groups: Vec<Vec<usize>>,
+    prefix: &str,
+    merged_reason: &str,
+    distinct_reason: &str,
+    hierarchies: &[String],
+    source_unique_ids: &[String],
+    used: &mut HashSet<String>,
+    output: &mut [Option<ComponentIdentity>],
+) {
+    for group in groups {
+        let key = &inputs[group[0]].record_key;
+        let (candidate, reason) = if group.len() > 1 {
+            (format!("{prefix}@records-{key}"), merged_reason)
+        } else {
+            (format!("{prefix}@record-{key}"), distinct_reason)
+        };
+        assign_shared_identity(
+            inputs,
+            &group,
+            &candidate,
+            Some((REFERENCE_AMBIGUOUS_KEY, reason.to_string())),
+            hierarchies,
+            source_unique_ids,
+            used,
+            output,
+        );
+    }
+}
+
 fn assign_shared_identity(
     inputs: &[ComponentIdentityInput],
     indices: &[usize],
@@ -1112,38 +1190,17 @@ pub(crate) fn canonical_component_identities(
                     });
                 }
             } else {
-                for group in inferred_groups {
-                    let first = group[0];
-                    let (candidate, reason) = if group.len() > 1 {
-                        (
-                            format!(
-                                "{raw_reference}@records-{}",
-                                inputs[first].record_key
-                            ),
-                            "repeated designator has no source hierarchy; only this record group shares identically-netted pads, so it is merged for connectivity but remains identity-ambiguous"
-                                .to_string(),
-                        )
-                    } else {
-                        (
-                            format!(
-                                "{raw_reference}@record-{}",
-                                inputs[first].record_key
-                            ),
-                            "repeated designator has no source hierarchy and no positive pad-identity edge to another record; kept distinct"
-                                .to_string(),
-                        )
-                    };
-                    assign_shared_identity(
-                        inputs,
-                        &group,
-                        &candidate,
-                        Some((REFERENCE_AMBIGUOUS_KEY, reason)),
-                        &hierarchies,
-                        &source_unique_ids,
-                        &mut used,
-                        &mut output,
-                    );
-                }
+                assign_ambiguous_components(
+                    inputs,
+                    inferred_groups,
+                    &raw_reference,
+                    "repeated designator has no source hierarchy; only this record group shares identically-netted pads, so it is merged for connectivity but remains identity-ambiguous",
+                    "repeated designator has no source hierarchy and no positive pad-identity edge to another record; kept distinct",
+                    &hierarchies,
+                    &source_unique_ids,
+                    &mut used,
+                    &mut output,
+                );
             }
             continue;
         }
@@ -1166,38 +1223,17 @@ pub(crate) fn canonical_component_identities(
                     });
                 }
             } else {
-                for group in inferred_groups {
-                    let first = group[0];
-                    let (candidate, reason) = if group.len() > 1 {
-                        (
-                            format!(
-                                "{raw_reference}@records-{}",
-                                inputs[first].record_key
-                            ),
-                            "records share a source hierarchy and positive pad-identity edges only within this subset; merged for connectivity but left identity-ambiguous without an authoritative unique id"
-                                .to_string(),
-                        )
-                    } else {
-                        (
-                            format!(
-                                "{raw_reference}@record-{}",
-                                inputs[first].record_key
-                            ),
-                            "records share a source hierarchy but this record has no positive pad-identity edge and no authoritative unique id; kept distinct"
-                                .to_string(),
-                        )
-                    };
-                    assign_shared_identity(
-                        inputs,
-                        &group,
-                        &candidate,
-                        Some((REFERENCE_AMBIGUOUS_KEY, reason)),
-                        &hierarchies,
-                        &source_unique_ids,
-                        &mut used,
-                        &mut output,
-                    );
-                }
+                assign_ambiguous_components(
+                    inputs,
+                    inferred_groups,
+                    &raw_reference,
+                    "records share a source hierarchy and positive pad-identity edges only within this subset; merged for connectivity but left identity-ambiguous without an authoritative unique id",
+                    "records share a source hierarchy but this record has no positive pad-identity edge and no authoritative unique id; kept distinct",
+                    &hierarchies,
+                    &source_unique_ids,
+                    &mut used,
+                    &mut output,
+                );
             }
             continue;
         }
@@ -1227,38 +1263,17 @@ pub(crate) fn canonical_component_identities(
                     &mut output,
                 );
             } else {
-                for group in inferred_groups {
-                    let first = group[0];
-                    let (candidate, reason) = if group.len() > 1 {
-                        (
-                            format!(
-                                "{raw_reference}@{path}@records-{}",
-                                inputs[first].record_key
-                            ),
-                            "records share a channel hierarchy and positive pad-identity edges only within this subset; merged for connectivity but left identity-ambiguous without an authoritative unique id"
-                                .to_string(),
-                        )
-                    } else {
-                        (
-                            format!(
-                                "{raw_reference}@{path}@record-{}",
-                                inputs[first].record_key
-                            ),
-                            "records share a channel hierarchy but this record has no positive pad-identity edge and no authoritative unique id; kept distinct"
-                                .to_string(),
-                        )
-                    };
-                    assign_shared_identity(
-                        inputs,
-                        &group,
-                        &candidate,
-                        Some((REFERENCE_AMBIGUOUS_KEY, reason)),
-                        &hierarchies,
-                        &source_unique_ids,
-                        &mut used,
-                        &mut output,
-                    );
-                }
+                assign_ambiguous_components(
+                    inputs,
+                    inferred_groups,
+                    &format!("{raw_reference}@{path}"),
+                    "records share a channel hierarchy and positive pad-identity edges only within this subset; merged for connectivity but left identity-ambiguous without an authoritative unique id",
+                    "records share a channel hierarchy but this record has no positive pad-identity edge and no authoritative unique id; kept distinct",
+                    &hierarchies,
+                    &source_unique_ids,
+                    &mut used,
+                    &mut output,
+                );
             }
         }
         for index in missing_path {
@@ -1514,40 +1529,17 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
                     .collect()
             })
             .unwrap_or_default();
-        // Value: the comment text when the board carries one; else recovered
-        // from SOURCEDESCRIPTION; else honestly absent, with the reason exposed
-        // as a property so the bind report can say why instead of the binder
-        // fabricating a magnitude from the refdes.
         let mut properties: Vec<(String, String)> = Vec::new();
         properties.extend(identity.properties.clone());
-        let mut value = comments.get(&idx16).cloned().unwrap_or_default();
-        if value.is_empty() && !c.description.is_empty() {
-            let d = value_from_description(&c.description);
-            if let Some(v) = d.value {
-                value = v;
-            }
-            if let Some(v) = d.voltage {
-                properties.push(("voltage_rating".to_string(), v));
-            }
-            if let Some(p) = d.power {
-                properties.push(("power_rating".to_string(), p));
-            }
-        }
-        if value.is_empty() {
-            properties.push((
-                VALUE_UNRESOLVED_KEY.to_string(),
-                VALUE_UNRESOLVED_REASON.to_string(),
-            ));
-        }
-        let lib_id = if c.library.is_empty() {
-            c.pattern.clone()
-        } else {
-            format!("{}:{}", c.library, c.pattern)
-        };
+        let value = resolve_component_value(
+            comments.get(&idx16).map(String::as_str).unwrap_or_default(),
+            &c.description,
+            &mut properties,
+        );
         components.push(Component {
             reference,
             value,
-            lib_id,
+            lib_id: lib_id(&c.library, &c.pattern),
             footprint: c.pattern.clone(),
             position: Some((c.x_mm, c.y_mm, c.rotation)),
             layer: side_from_layer_name(&c.layer_name).to_string(),
@@ -1604,9 +1596,8 @@ mod tests {
 
     #[test]
     fn truncated_pad_geometry_is_dropped_not_zeroed() {
-        // Bug-hunt #4: a geometry sub-record shorter than the 21 bytes the fields
-        // span would read as zeros, placing a phantom pad at the origin. The
-        // guard drops the truncated record entirely.
+        // A geometry sub-record shorter than the 21 bytes the fields span would
+        // read as zeros, placing a phantom pad at the origin, so it is dropped.
         let buf = pads_stream(50, 10);
         assert!(
             parse_pads(&buf).is_empty(),
@@ -1786,8 +1777,8 @@ mod tests {
 
     #[test]
     fn cp1252_decode_recovers_non_ascii() {
-        // Bug-hunt #5: a Windows-1252 'ä' (0xE4) must decode to 'ä', not the
-        // U+FFFD that from_utf8_lossy produced.
+        // A Windows-1252 'ä' (0xE4) must decode to 'ä', not the U+FFFD
+        // `from_utf8_lossy` yields.
         assert_eq!(decode_altium_str(&[b'R', 0xE4]), "Rä");
         // The CP1252-specific range (0x80-0x9F): 0x92 is a right single quote.
         assert_eq!(decode_altium_str(&[0x92]), "\u{2019}");

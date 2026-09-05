@@ -242,7 +242,7 @@ impl AcAnalysis {
         let n_nodes = circuit.node_count();
         // SPDT leg pairing for the switch quiescent conductance (the DC
         // stamp's break-before-make coupling), built once per sweep.
-        let siblings = spdt_siblings(circuit);
+        let siblings = crate::newton::SpdtPairs::analyze(circuit).sibling;
         // The relay states the operating-point solve settled on: `.ac` must stamp
         // the same device the bias was found with.
         let latch = ws.switch_latch().cloned();
@@ -340,7 +340,7 @@ struct OperatingPoint {
     node_v: Vec<f64>,
     /// The full converged unknown vector, so stamps that live on layout-level
     /// unknowns without a `NodeId` (a series-resistance BJT's internal nodes,
-    /// dev-plan 04 §3.2) can read their bias too.
+    /// can read their bias too.
     x: Vec<f64>,
 }
 
@@ -409,15 +409,7 @@ fn stamp_ac(
         Device::Inductor { a, b, henries, .. } => {
             // MNA branch row: v_a - v_b - jwL * i = 0.
             let br = layout.branch(id).expect("inductor has a branch unknown");
-            let (ai, bi) = (n(*a), n(*b));
-            if let Some(ai) = ai {
-                sys.add(ai, br, Complex64::new(1.0, 0.0));
-                sys.add(br, ai, Complex64::new(1.0, 0.0));
-            }
-            if let Some(bi) = bi {
-                sys.add(bi, br, Complex64::new(-1.0, 0.0));
-                sys.add(br, bi, Complex64::new(-1.0, 0.0));
-            }
+            branch_incidence(sys, br, n(*a), n(*b));
             sys.add(br, br, Complex64::new(0.0, -w * *henries));
             // Mutual inductance: the coupled branch relation
             // `v_j = jw·Σ_k L_jk·i_k` adds −jwM at (this branch row, partner
@@ -434,15 +426,7 @@ fn stamp_ac(
         Device::Vsource { p, n: neg, .. } => {
             // AC voltage source: branch row sets v_p - v_n = drive.
             let br = layout.branch(id).expect("vsource has a branch unknown");
-            let (pi, ni) = (n(*p), n(*neg));
-            if let Some(pi) = pi {
-                sys.add(pi, br, Complex64::new(1.0, 0.0));
-                sys.add(br, pi, Complex64::new(1.0, 0.0));
-            }
-            if let Some(ni) = ni {
-                sys.add(ni, br, Complex64::new(-1.0, 0.0));
-                sys.add(br, ni, Complex64::new(-1.0, 0.0));
-            }
+            branch_incidence(sys, br, n(*p), n(*neg));
             sys.add_rhs(br, drive);
         }
         Device::Isource { p, n: neg, .. } => {
@@ -457,7 +441,7 @@ fn stamp_ac(
         Device::Diode { a, k, model, .. } => {
             // Small-signal tangent at the bias, through the SAME device eval
             // the transient stamp uses (so breakdown biases get the breakdown
-            // conductance). A charge-storing diode (dev-plan 04 §3.1)
+            // conductance). A charge-storing diode
             // additionally contributes jw*C(vd): junction depletion plus
             // diffusion capacitance frozen at the operating point, an AC
             // answer without it would silently miss the pole the transient
@@ -604,14 +588,7 @@ fn stamp_ac(
             // Branch row `v_p - v_n - gain*(v_cp - v_cn) = 0`, RHS 0 (a
             // dependent source is never an AC drive).
             let br = layout.branch(id).expect("vcvs has a branch unknown");
-            if let Some(pi) = n(*p) {
-                sys.add(pi, br, Complex64::new(1.0, 0.0));
-                sys.add(br, pi, Complex64::new(1.0, 0.0));
-            }
-            if let Some(ni) = n(*neg) {
-                sys.add(ni, br, Complex64::new(-1.0, 0.0));
-                sys.add(br, ni, Complex64::new(-1.0, 0.0));
-            }
+            branch_incidence(sys, br, n(*p), n(*neg));
             if let Some(cpi) = n(*cp) {
                 sys.add(br, cpi, Complex64::new(-gain, 0.0));
             }
@@ -682,14 +659,7 @@ fn stamp_ac(
             let cbr = layout
                 .branch(*ctrl_src)
                 .expect("ccvs control source owns a branch unknown");
-            if let Some(pi) = n(*p) {
-                sys.add(pi, br, Complex64::new(1.0, 0.0));
-                sys.add(br, pi, Complex64::new(1.0, 0.0));
-            }
-            if let Some(ni) = n(*neg) {
-                sys.add(ni, br, Complex64::new(-1.0, 0.0));
-                sys.add(br, ni, Complex64::new(-1.0, 0.0));
-            }
+            branch_incidence(sys, br, n(*p), n(*neg));
             sys.add(br, cbr, Complex64::new(-*transres, 0.0));
         }
         // Behavioral B-source: a LINEARIZED AC stamp at the operating point,
@@ -754,14 +724,7 @@ fn stamp_ac(
                     let br = layout
                         .branch(id)
                         .expect("V-output behavioral source owns a branch unknown");
-                    if let Some(pi) = n(*p) {
-                        sys.add(pi, br, Complex64::new(1.0, 0.0));
-                        sys.add(br, pi, Complex64::new(1.0, 0.0));
-                    }
-                    if let Some(ni) = n(*neg) {
-                        sys.add(ni, br, Complex64::new(-1.0, 0.0));
-                        sys.add(br, ni, Complex64::new(-1.0, 0.0));
-                    }
+                    branch_incidence(sys, br, n(*p), n(*neg));
                     for (g, col) in partials.iter().zip(&cols) {
                         if let Some(col) = col {
                             sys.add(br, *col, Complex64::new(-*g, 0.0));
@@ -820,7 +783,7 @@ fn resistor_value(ohms: f64, tc1: Option<f64>, opts: &SolverOptions) -> f64 {
 /// BJT small-signal model at the bias: input conductances gpi (b-e), gmu (b-c),
 /// output go (c-e), and transconductance gm (ic vs vbe). This mirrors the
 /// Gummel-Poon tangents the transient stamp computes, frozen at the OP,
-/// including its §3.2 additions: the ohmic rb/re/rc between external and
+/// including the ohmic-resistance additions: the ohmic rb/re/rc between external and
 /// internal nodes (with the tangents relocated onto the internal nodes,
 /// through the same node-resolution rule), and `jw·C` per junction (depletion
 /// plus diffusion capacitance at the bias) when the model stores charge, an
@@ -936,7 +899,7 @@ fn stamp_bjt_ac(
         stamp_transconductance(sys, ci, ei, bi, ei, gm);
     }
 
-    // Junction + diffusion capacitances at the OP (dev-plan 04 §3.2), through
+    // Junction + diffusion capacitances at the OP, through
     // the SAME charge eval the transient companion linearizes.
     if crate::stamp::bjt_has_charge(model, &opts.effects) {
         let cf = is * (ef - 1.0);
@@ -1051,7 +1014,7 @@ fn stamp_mosfet_ac(
         stamp_transconductance(sys, dn, sn, bi, sn, -gm * dvth_dvbs);
     }
 
-    // Gate-charge capacitances at the OP (dev-plan 04 §3.3): jw·C per gate
+    // Gate-charge capacitances at the OP: jw·C per gate
     // junction, the small-signal image of the transient charge companions,
     // an AC answer without them would miss the very poles the switching
     // physics adds. Charge-free models add exactly nothing: bit-identical.
@@ -1163,33 +1126,19 @@ fn opamp_ac_gain(gain: f64, pole_hz: Option<f64>, w: f64) -> Complex64 {
     a0 / Complex64::new(1.0, w / wp)
 }
 
-/// SPDT leg sibling map: two `VSwitch` devices sharing the same common node
-/// `a` whose names differ only in the binder's `_s0`/`_s1` throw suffix.
-/// Mirrors `SpdtPairs::analyze` in newton.rs (the DC path's pairing rule,
-/// rebuilt here because the workspace keeps its map private). Empty for
-/// boards with no SPDTs; the break-before-make factor is then inert.
-fn spdt_siblings(circuit: &Circuit) -> std::collections::HashMap<DeviceId, DeviceId> {
-    let mut groups: std::collections::HashMap<(u32, String), Vec<DeviceId>> =
-        std::collections::HashMap::new();
-    for (id, dev) in circuit.iter() {
-        if let Device::VSwitch { name, a, .. } = dev {
-            let base = name
-                .strip_suffix("_s0")
-                .or_else(|| name.strip_suffix("_s1"))
-                .map(|s| s.to_string());
-            if let Some(base) = base {
-                groups.entry((a.0, base)).or_default().push(id);
-            }
-        }
+/// MNA branch incidence for a branch row `br` between `pi` and `ni`: `+1` at
+/// (node, branch) and (branch, node) on the positive side, `-1` on the
+/// negative. Ground terminals contribute nothing.
+#[inline]
+fn branch_incidence(sys: &mut ComplexSystem, br: usize, pi: Option<usize>, ni: Option<usize>) {
+    if let Some(pi) = pi {
+        sys.add(pi, br, Complex64::new(1.0, 0.0));
+        sys.add(br, pi, Complex64::new(1.0, 0.0));
     }
-    let mut sibling = std::collections::HashMap::new();
-    for (_, ids) in groups {
-        if ids.len() == 2 {
-            sibling.insert(ids[0], ids[1]);
-            sibling.insert(ids[1], ids[0]);
-        }
+    if let Some(ni) = ni {
+        sys.add(ni, br, Complex64::new(-1.0, 0.0));
+        sys.add(br, ni, Complex64::new(-1.0, 0.0));
     }
-    sibling
 }
 
 #[inline]

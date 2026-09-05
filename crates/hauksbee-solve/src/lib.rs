@@ -36,7 +36,7 @@
 //! ```
 
 mod ac;
-// S1 allocation-hygiene enforcement gate (plan §4.4): a counting global
+// S1 allocation-hygiene enforcement gate: a counting global
 // allocator + zero-alloc per-step-loop tests, compiled ONLY for the crate's
 // own test binary. Non-test builds never see it.
 #[cfg(test)]
@@ -49,7 +49,6 @@ static AUDIT_ALLOC: alloc_audit::CountingAlloc = alloc_audit::CountingAlloc;
 
 pub mod blame;
 mod bypass;
-mod census;
 mod cmatrix;
 pub mod decompose;
 mod diagnostics;
@@ -72,7 +71,7 @@ mod transient;
 pub use ac::{has_dedicated_ac_source, AcAnalysis, AcPoint, AcResponse, AcSpec, Sweep};
 pub use blame::{blame_clause, stiff_links, StiffLink};
 pub use cmatrix::ComplexSystem;
-pub use diagnostics::{peek_strategy_activations, take_strategy_activations};
+pub use diagnostics::take_strategy_activations;
 pub use error::{SolveError, SolvePhase, SolveResult};
 pub use linear::LinearIsland;
 pub use loop_stability::{margins_from_bode, phase_margin, LoopStability, StabilityMargins};

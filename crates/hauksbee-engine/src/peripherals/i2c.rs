@@ -48,7 +48,7 @@ pub trait I2cSlave: Send {
     /// The firmware is reading a byte; return the byte to clock back.
     fn on_read(&mut self) -> u8;
 
-    /// A STOP condition ended a transaction addressed to this device (05 §3.1).
+    /// A STOP condition ended a transaction addressed to this device.
     ///
     /// The [`TickCtx`] is the same context the peripheral `pre_solve` /
     /// `post_solve` hooks receive, so a slave can convert its accumulated

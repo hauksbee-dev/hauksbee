@@ -5,33 +5,19 @@
 //! constraint types for checks Hauksbee does not implement are counted so the
 //! engine can disclose them instead of treating their absence as coverage.
 //!
-//! ## Precedence evidence
+//! ## The two precedence rules, and where they were established
 //!
-//! The retained probe uses the outlined
-//! `tests/fixtures/kicad_dru_bare_scope.kicad_pcb` and its 0.150 mm project
-//! netclass with the two rule orderings in the `kicad_dru_precedence` fixtures.
-//! Its two 0.2 mm tracks have a 0.180 mm copper-edge gap. With restrictive
-//! 0.250 mm first and relaxed 0.150 mm last, last-wins predicted no violation
-//! while most-restrictive-wins predicted one. KiCad CLI 10.0.5 produced none.
-//! With relaxed first and restrictive last, both hypotheses predicted a
-//! violation. KiCad produced one naming `restrictive 0.250 mm second`, with a
-//! 0.2500 mm rule and 0.1800 mm actual gap. The loose-last result discriminates
-//! the hypotheses and proves that the later matching custom rule wins. Raw
-//! outputs and hashes are retained in
-//! `qc/evidence/drc-parity/kicad-dru-precedence-10.0.5.md`.
-//! The doorbell oracle independently established that a global 0.127 mm custom
-//! clearance overrides the sibling project's 0.200 mm Default netclass even
-//! though the custom rule is looser.
+//! A LATER matching custom rule wins over an earlier one, even when the later
+//! rule is looser, and a custom rule outranks the project netclass in both
+//! directions. Bare-value rejection is FILE-scoped: one constraint written
+//! without a unit silently deactivates every custom rule in the file, and
+//! Hauksbee then falls back to project/netclass rules.
 //!
-//! The retained bare-value scope probe is
-//! `tests/fixtures/kicad_dru_bare_scope.kicad_pcb`; full evidence is in
-//! `qc/evidence/drc-parity/dru-bare-value-poisons-the-whole-file.md`. Its project rule is
-//! 0.150 mm, its gap is 0.180 mm, and its custom file contains a bare 0.200
-//! rule followed by an explicit 0.200mm rule. KiCad CLI 10.0.5 reported no
-//! clearance violation. Removing only the bare rule made the explicit `mm
-//! rule` fire at 0.2000 mm against the same 0.1800 mm gap. Bare-value rejection
-//! is therefore file-scoped: one missing unit silently deactivates every custom
-//! rule in the file, and Hauksbee falls back to project/netclass rules.
+//! Both were established against KiCad CLI 10.0.5 with the
+//! `kicad_dru_precedence` fixtures and
+//! `tests/fixtures/kicad_dru_bare_scope.kicad_pcb`; the raw outputs and hashes
+//! are retained in `qc/evidence/drc-parity/kicad-dru-precedence-10.0.5.md` and
+//! `qc/evidence/drc-parity/dru-bare-value-poisons-the-whole-file.md`.
 
 use std::collections::BTreeMap;
 
@@ -102,12 +88,6 @@ pub struct KicadDruRule {
 }
 
 impl KicadDruRule {
-    pub fn has_constraint(&self, kind: KicadDruConstraintKind) -> bool {
-        self.constraints
-            .iter()
-            .any(|constraint| constraint.kind == kind)
-    }
-
     pub fn clearance_min_mm(&self) -> Option<f64> {
         self.constraints.iter().rev().find_map(|constraint| {
             (constraint.kind == KicadDruConstraintKind::Clearance)

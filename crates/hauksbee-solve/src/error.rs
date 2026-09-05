@@ -199,75 +199,42 @@ pub(crate) fn behavioral_device(fault: &str) -> String {
 mod tests {
     use super::*;
 
+    /// `Display` is the carried `message`, verbatim, for every variant: the
+    /// drivers compose the wording, this type never rewrites it.
     #[test]
-    fn non_convergence_display_is_verbatim() {
-        let error = SolveError::NonConvergence {
-            message: "Newton failed at t=1 even at dt_min=0.1 [node out]".into(),
-            phase: SolvePhase::Transient,
-            time: Some(1.0),
-            dt: Some(0.1),
-            iterations: None,
-            blame: Some("node out".into()),
-        };
-        assert_eq!(
-            error.to_string(),
-            "Newton failed at t=1 even at dt_min=0.1 [node out]"
-        );
-    }
-
-    #[test]
-    fn singular_display_is_verbatim() {
-        let error = SolveError::Singular {
-            message: "AC system singular at w=6.2832 rad/s (f=1.0000 Hz)".into(),
-            unknown: None,
-            net: None,
-        };
-        assert_eq!(
-            error.to_string(),
-            "AC system singular at w=6.2832 rad/s (f=1.0000 Hz)"
-        );
-    }
-
-    #[test]
-    fn invalid_input_display_is_verbatim() {
-        let error = SolveError::InvalidInput {
-            message: "points must be >= 1".into(),
-        };
-        assert_eq!(error.to_string(), "points must be >= 1");
-    }
-
-    #[test]
-    fn refused_display_is_verbatim() {
-        let error = SolveError::Refused {
-            message: "staged execution refused: the decomposition is unsound".into(),
-        };
-        assert_eq!(
-            error.to_string(),
-            "staged execution refused: the decomposition is unsound"
-        );
-    }
-
-    #[test]
-    fn behavioral_display_is_verbatim() {
-        let error = SolveError::Behavioral {
-            message: "AC linearization refused: behavioral source `B1`: ln domain error".into(),
-            device: "B1".into(),
-            phase: SolvePhase::Ac,
-        };
-        assert_eq!(
-            error.to_string(),
-            "AC linearization refused: behavioral source `B1`: ln domain error"
-        );
-    }
-
-    #[test]
-    fn internal_display_is_verbatim() {
-        let error = SolveError::Internal {
-            message: "invalid transient result window: end precedes start".into(),
-        };
-        assert_eq!(
-            error.to_string(),
-            "invalid transient result window: end precedes start"
-        );
+    fn display_is_the_carried_message_verbatim() {
+        let msg = "Newton failed at t=1 even at dt_min=0.1 [node out]";
+        let variants = [
+            SolveError::NonConvergence {
+                message: msg.into(),
+                phase: SolvePhase::Transient,
+                time: Some(1.0),
+                dt: Some(0.1),
+                iterations: None,
+                blame: Some("node out".into()),
+            },
+            SolveError::Singular {
+                message: msg.into(),
+                unknown: None,
+                net: None,
+            },
+            SolveError::InvalidInput {
+                message: msg.into(),
+            },
+            SolveError::Refused {
+                message: msg.into(),
+            },
+            SolveError::Behavioral {
+                message: msg.into(),
+                device: "B1".into(),
+                phase: SolvePhase::Ac,
+            },
+            SolveError::Internal {
+                message: msg.into(),
+            },
+        ];
+        for e in &variants {
+            assert_eq!(e.to_string(), msg, "{e:?}");
+        }
     }
 }

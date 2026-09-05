@@ -1,4 +1,4 @@
-//! Model packs (06-extensibility-sdk §3): versioned, shareable bundles of
+//! Model packs: versioned, shareable bundles of
 //! model data with an explicit place in the resolution priority order.
 //!
 //! # Pack format

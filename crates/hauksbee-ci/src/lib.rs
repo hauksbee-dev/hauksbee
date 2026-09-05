@@ -231,7 +231,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let applied_waivers = apply_waivers(&mut results, &mut waivers);
     notes.extend(waiver_notes(&waivers));
     // A strict analog abort on ANY seed forces the invalid-for-analysis exit even
-    // if no assertion's window happened to overlap the failed span (05 §3b).
+    // if no assertion's window happened to overlap the failed span.
     let analog_abort = outcomes.iter().any(|o| o.analog_abort);
     // Union of substitution messages across members (an MCU substituted once is
     // substituted for the whole ensemble), deduped and order-stable.

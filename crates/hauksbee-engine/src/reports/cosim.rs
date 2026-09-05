@@ -80,7 +80,7 @@ pub fn build_cosim_json(
         })
         .collect();
 
-    // Analog-fidelity honesty (05 §3b): a run that held stale voltages over one
+    // Analog-fidelity honesty: a run that held stale voltages over one
     // or more non-convergent chunks is not a faithful analog result. Surface the
     // exact windows so a consumer sees which span cannot be trusted rather than
     // reading the quiet-held voltages as real.
@@ -216,7 +216,7 @@ pub fn build_cosim_json(
     }))
 }
 
-/// One canonical warning per HEURISTIC-framed SPI bus (05 §2 / U3 finding 3),
+/// One canonical warning per HEURISTIC-framed SPI bus,
 /// shared by the default-text summary, the `--plain` heads-ups, and the
 /// `--json` coverage notes so those three name the same failure mode in the same
 /// words. The TUI, the web front door and hauksbee-ci each report the framing
@@ -440,7 +440,7 @@ pub fn run_headless(
     // net order follows the order the user gave, which becomes the CSV columns.
     let mut probe_rows: Vec<(f64, Vec<f64>)> = Vec::new();
     while t < seconds {
-        // Refuse rather than fake (05 §3b): under --strict, stop as soon as the
+        // Refuse rather than fake: under --strict, stop as soon as the
         // analog solve has been stuck for a whole streak of chunks. Continuing
         // would burn wall time producing more held-voltage frames the strict gate
         // is about to reject anyway, so break and let the caller exit 3. Non-strict
@@ -542,7 +542,7 @@ pub fn run_headless(
         }
         println!("└────────────────────────────┴──────────┴──────────┴──────────┘");
 
-        // Analog-fidelity line (05 §3b): if any chunk failed to converge, say so
+        // Analog-fidelity line: if any chunk failed to converge, say so
         // and where, so the default text mode never presents held-stale voltages
         // as a quiet, healthy run.
         let failed = sched.failed_chunk_count();
@@ -650,7 +650,7 @@ pub fn run_headless(
                 crate::scheduler::timing_limitation_message(&mcu_ref, &limitation)
             );
         }
-        // Per-bus SPI transaction-framing tier (05 §2). `heuristic` is the
+        // Per-bus SPI transaction-framing tier. `heuristic` is the
         // documented actively-wrong tier (merges two transactions in a chunk;
         // truncates a boundary-spanning one), so it gets the canonical loud
         // caveat; exact/backend framing is real and stated plainly.
@@ -759,10 +759,9 @@ mod tests {
 
     #[test]
     fn substituted_is_board_wide_not_scoped_to_the_first_mcu() {
-        // R52: the flag was `substitutions().any(|s| s.reference == first_mcu_ref)`,
-        // so a board whose FIRST MCU bound exactly but whose SECOND MCU was
-        // substituted reported substituted=false, contradicting the same JSON's
-        // notes[] and the web report, which flag substitution board-wide.
+        // Substitution is board-wide: a board whose FIRST MCU bound exactly but
+        // whose SECOND MCU was substituted must still report substituted=true,
+        // agreeing with the same JSON's notes[] and the web report.
         let sub = |r: &str| McuSubstitution {
             reference: r.to_string(),
             backend: "renode:stm32f4".to_string(),

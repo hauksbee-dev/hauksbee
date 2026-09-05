@@ -42,11 +42,7 @@ use std::sync::{Arc, Mutex};
 const SLAVE_ADDR: u8 = 0x48;
 
 fn firmware(dir: &str, name: &str) -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware")
-        .join(dir)
-        .join(name);
-    p.exists().then(|| p.canonicalize().unwrap_or(p))
+    crate::support::firmware(&format!("{dir}/{name}"))
 }
 
 #[test]

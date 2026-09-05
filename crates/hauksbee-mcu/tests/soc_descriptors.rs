@@ -1,16 +1,16 @@
-//! Data-driven MCU/SoC descriptor loader tests (06-extensibility-sdk §2).
+//! Data-driven MCU/SoC descriptor loader tests.
 //!
 //! Three proofs:
 //!   1. EQUIVALENCE, every shipped `db/mcu/*.soc.toml` loads to a config
 //!      byte-identical to the Rust constructor it replaces. This is the gate the
-//!      constructors' hand-written bodies were deleted behind (06 §2: "verified
+//!      constructors' hand-written bodies were deleted behind ("verified
 //!      by the existing backend tests before its Rust constructor is deleted").
 //!   2. VALIDATION, each named-error category fires against a deliberately
 //!      broken descriptor (unknown backend, empty platform, overlapping/zero-
 //!      width ports, duplicate controllers, unknown e_machine, …).
 //!   3. RESOLUTION, `SocConfig::resolve("backend:part")` finds the embedded
 //!      built-ins, and a user descriptor dropped in `$HAUKSBEE_MCU_DIR` is added
-//!      purely as data (06 §6.4).
+//!      purely as data.
 
 #![cfg(all(feature = "renode", feature = "qemu"))]
 
@@ -90,7 +90,7 @@ fn qemu_descriptors_equal_constructors() {
 }
 
 /// The FE310's post_load_setup (the bring-up footgun) survives the round trip:
-/// this is the field the 06 §2 example predated, and losing it would silently
+/// this is a field the plan example predated, and losing it would silently
 /// break FE310 boot.
 #[test]
 fn fe310_post_load_setup_is_carried() {
@@ -169,7 +169,7 @@ fn stm32f103_descriptor_ships_the_hal_boot_platform_inline() {
     );
 }
 
-/// The AdcChannelMap schema (05 §5.1, post-plan) loads: no built-in uses it, but
+/// The AdcChannelMap schema loads: no built-in uses it, but
 /// a descriptor that carries an injection recipe must parse into the right map.
 #[test]
 fn adc_channel_recipe_loads_from_descriptor() {
@@ -504,7 +504,7 @@ fn resolve_bad_spec_and_missing() {
     ));
 }
 
-/// 06 §6.4 acceptance: a NEW Renode MCU added purely as data, drop a descriptor
+/// Acceptance: a NEW Renode MCU added purely as data, drop a descriptor
 /// in $HAUKSBEE_MCU_DIR and resolve it, no recompile. The override dir also wins
 /// over a built-in of the same part name.
 #[test]

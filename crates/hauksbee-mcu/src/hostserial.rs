@@ -53,7 +53,7 @@
 //! (a `tcsetattr` on the master discards bytes already written). A close+reopen
 //! completed between probes is not observable, so every host process must
 //! configure its own serial fd before writing, as ordinary serial clients do.
-//! See `raw_via_slave` for the failure that taught us.
+//! See `raw_via_slave` for the discard this avoids.
 //!
 //! # Buffering, and what is honestly lost
 //!
@@ -221,11 +221,9 @@ impl HostSerial {
                 );
             }
 
-            // Arm the hung-up state so "no peer" is distinguishable from
-            // "attached and silent" (see the module doc's table), and take the
-            // opportunity to raw the discipline for the first peer.
-            // Arm the hung-up state (see the module doc's table) by opening the
-            // slave and closing it again. Nothing may `tcsetattr` the MASTER
+            // Arm the hung-up state (see the module doc's table) by opening
+            // the slave and closing it again, so "no peer" is distinguishable
+            // from "attached and silent". Nothing may `tcsetattr` the MASTER
             // afterwards: on Darwin that both clears the armed hangup and
             // discards pending input, which is why raw mode is applied per
             // attach through a slave fd in `refresh` instead of once here.

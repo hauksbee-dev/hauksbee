@@ -15,6 +15,7 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 
+use crate::children::{home_dir, which};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -123,15 +124,6 @@ fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates.iter().find(|c| c.is_file()).cloned()
 }
 
-/// The user's home directory: `$HOME` first (Unix, and any shell that sets it
-/// deliberately wins on every OS), then `%USERPROFILE%` (the Windows
-/// convention, where HOME is normally unset).
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 /// True if a usable Renode install can be located. Used to skip tests cleanly.
 pub fn is_available() -> bool {
     find_renode().is_ok()
@@ -167,19 +159,8 @@ impl RenodeProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            // Own process group: teardown kills the whole tree (the .NET
-            // Renode host plus anything it forks) with one group kill, and
-            // the signal reaper (crate::children) can do the same when the
-            // parent itself is terminated. See children.rs for the emulator
-            // leak this prevents.
-            cmd.process_group(0);
-        }
-        let (child, tree_guard) = crate::children::spawn_owned(&mut cmd)
+        let (child, tree_guard) = crate::children::spawn_emulator(&mut cmd)
             .with_context(|| format!("spawning owned Renode from {}", bin.display()))?;
-        crate::children::register(child.id(), &tree_guard);
 
         Ok(RenodeProcess {
             child,
@@ -219,38 +200,10 @@ impl RenodeProcess {
 
 impl Drop for RenodeProcess {
     fn drop(&mut self) {
-        // Best-effort terminate; Renode has no clean SIGTERM handler we rely
-        // on, so kill and reap to avoid zombies. Unix addresses the process
-        // group; Windows addresses the retained Job Object rather than a PID
-        // that could have been reaped and recycled.
-        crate::children::unregister(self.child.id());
-        #[cfg(unix)]
-        crate::children::kill_tree(self.child.id());
-        let _ = self._tree_guard.terminate();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Renode has no clean SIGTERM handler worth waiting on, so kill and
+        // reap rather than leaving a zombie.
+        crate::children::terminate_emulator(&mut self.child, &self._tree_guard);
     }
-}
-
-/// Minimal `which`: search `PATH` for an executable named `name`. On Windows
-/// executables carry an extension, so `<name>.exe` is tried first there (that
-/// is what Renode ships); the bare name stays as a fallback for MSYS2-style
-/// shims.
-fn which(name: &str) -> Result<PathBuf> {
-    let path = std::env::var_os("PATH").context("PATH not set")?;
-    for dir in std::env::split_paths(&path) {
-        if cfg!(windows) {
-            let exe = dir.join(format!("{name}.exe"));
-            if exe.is_file() {
-                return Ok(exe);
-            }
-        }
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    bail!("{name} not found on PATH")
 }
 
 #[cfg(test)]

@@ -26,6 +26,41 @@
 //! - `3`  **board invalid for the requested analysis** (AC with no signal path,
 //!        thermal with no resolved dissipating devices). A run that could not
 //!        produce a meaningful answer must never exit 0.
+//!
+//! ## Rendering paths
+//!
+//! One path per output surface, each reading the structured types below rather
+//! than re-deriving a finding of its own:
+//!
+//! - **text**: `reports::<family>::emit` under [`crate::reports::OutputMode`]`::Text`,
+//!   rendering through [`DrcStructured::render_with_clearance_rule_provenance`],
+//!   [`crate::reports::bind::BindReport::render_table_compact`],
+//!   [`BindSummary::render_banner`], [`Refusal::render_text`] and
+//!   `reports::render_evidence_appendix`.
+//! - **plain-language** (`--plain`): the same `emit`, through
+//!   [`crate::plain`]'s `plain_*` builders into [`crate::plain::PlainReport::render`]
+//!   (DRC condenses through `plain::render_drc_condensed*`, which prints its
+//!   findings with the same `PlainReport` writers).
+//! - **JSON** (`--json`): the same `emit`, through [`JsonReport::to_json`].
+//! - **web**: [`crate::frontdoor::analyze`] and friends, building a `WebReport`
+//!   from the same [`DrcStructured`], [`BindSummary`] and `plain_*` values as
+//!   the three above, serialized in the browser's own shape.
+//!
+//! ## Deliberate divergences
+//!
+//! The one register of them. Anything else that differs between two surfaces
+//! for the same board is a bug, not a variant.
+//!
+//! 1. **Web DRC clearance rules.** The front door receives one file's bytes and
+//!    cannot see a sibling `.kicad_pro`, so its DRC uses the board's
+//!    default/embedded clearance where the CLI applies per-netclass rules. On a
+//!    board with non-default netclass clearances the two surfaces can report
+//!    different violations; every other check is byte-for-byte the same.
+//! 2. **JSON keeps the SI info notes** `--plain` suppresses
+//!    ([`si_findings_json`]), so a machine consumer never loses a note the
+//!    prose surface chose not to nag about.
+//! 3. **`--plain` humanises strict gate ids** (`reports::strict_gate_exit`);
+//!    text and JSON keep the exact rule ids, which are the grep/waiver keys.
 
 use serde::ser::SerializeStruct;
 use serde::Serialize;
@@ -102,7 +137,7 @@ pub fn strict_analog_exit_code(analog_abort_tripped: bool) -> Option<i32> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bind summary by ROLE (Fix #5 / Theme F)
+// Bind summary by ROLE
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// One unresolved part that sits on a connected (active) net, with the
@@ -223,10 +258,8 @@ impl BindSummary {
                 // SPLIT, don't pass through. `unresolved_outcome` joins the two
                 // halves of a `db/unmodelled.toml` abstention with
                 // `UNLOCKED_BY_MARKER` because the binder has one `reason` channel;
-                // every consumer is expected to split it. This one used to copy the
-                // string verbatim, so the JSON surface, which is the one a CI
-                // pipeline parses, was the only reader that got the marker text in
-                // its face.
+                // every consumer splits it, so no reader (least of all the JSON a
+                // CI pipeline parses) ever sees the marker text.
                 let (reason, unlocked_by) = split_marker(&raw, Assumption::UNLOCKED_BY_MARKER);
                 let consequence = if active_ic {
                     format!(
@@ -498,7 +531,7 @@ fn is_open_pin_warning(warning: &str) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AC validity (Fix #1 / Theme A)
+// AC validity
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The magnitude floor in [`hauksbee_solve`]'s `bode()`: `20*log10(1e-300)`
@@ -899,7 +932,7 @@ pub struct CosimJson {
     pub timing_refusals: Vec<String>,
     /// False once any chunk's analog solve failed to converge: the run held stale
     /// node voltages over `failed_windows` and cannot vouch for analog-derived
-    /// findings there (05 §3b, refuse rather than fake). A fully valid run reports
+    /// findings there: it refuses rather than fakes them. A fully valid run reports
     /// `true` with an empty `failed_windows`, so the common shape is unchanged and
     /// existing consumers keep parsing.
     pub analog_valid: bool,
@@ -1078,7 +1111,7 @@ pub struct CosimFailedWindow {
     pub end_s: f64,
     /// The solver's own refusal message for this window: the blame clause
     /// naming the net that refused to settle, the devices on it, and any
-    /// near-zero-ohm link poisoning the matrix (E29). Defaulted (and omitted
+    /// near-zero-ohm link poisoning the matrix. Defaulted (and omitted
     /// from JSON) when empty, so an older consumer keeps parsing.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
@@ -1115,7 +1148,7 @@ pub struct NetActivity {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DRC grouping (Fix #8 / Theme D)
+// DRC grouping
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Where the clearance value applied by DRC came from.  A default is not a
@@ -1639,6 +1672,13 @@ pub struct DrcGroup {
     pub fix: String,
 }
 
+/// `"3 locations"` / `"1 location"`: how many places one grouped clearance
+/// finding covers. Shared so the expert label and the plain sentence count the
+/// same way.
+pub(crate) fn locations(count: usize) -> String {
+    format!("{count} location{}", if count == 1 { "" } else { "s" })
+}
+
 impl DrcGroup {
     /// The honest one-line label. `gap == rule` is "exactly at minimum clearance
     /// (no margin)", NOT "below the spacing the board asks for" (which is only
@@ -1649,7 +1689,7 @@ impl DrcGroup {
     }
 
     pub fn label_with_rule_provenance(&self, provenance: &ClearanceRuleProvenance) -> String {
-        let loc = |n: usize| format!("{n} location{}", if n == 1 { "" } else { "s" });
+        let loc = locations;
         let rule = provenance.rule_reference(self.rule_mm);
         if self.at_limit {
             format!(
@@ -1938,14 +1978,9 @@ impl DrcStructured {
 
     /// Render the grouped DRC as text (the honest, de-duplicated view). Shorts
     /// first (the things that actually break a board), then below-rule groups,
-    /// then the at-limit bucket (separated and labelled correctly).
-    pub fn render(&self) -> String {
-        self.render_with_clearance_rule_provenance(&ClearanceRuleProvenance::defaulted(
-            self.clearance_rule_mm,
-            false,
-        ))
-    }
-
+    /// then the at-limit bucket (separated and labelled correctly). The only
+    /// text rendering of a DRC result; `provenance` decides whether the header
+    /// announces the clearance as the project's rule or as a tool default.
     pub fn render_with_clearance_rule_provenance(
         &self,
         provenance: &ClearanceRuleProvenance,
@@ -2037,12 +2072,12 @@ impl DrcStructured {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Machine-readable JSON (Fix #6 / §4.1), one structured surface for every check
+// Machine-readable JSON: one structured surface for every check
 // ─────────────────────────────────────────────────────────────────────────────
 
 use hauksbee_extract::{LintCheck, NetLintReport, Severity, SiCheck, SiReport, SiSeverity};
 
-/// One finding in the uniform machine-readable shape (§4.1): every check's
+/// One finding in the uniform machine-readable shape: every check's
 /// findings serialize the same way, so a CI pipeline or AI never parses prose.
 #[derive(Debug, Clone)]
 pub struct JsonFinding {
@@ -2114,7 +2149,7 @@ impl Serialize for JsonFinding {
     }
 }
 
-/// One finding in the uniform machine-readable shape (§4.1): every check's
+/// One finding in the uniform machine-readable shape: every check's
 /// findings serialize the same way, so a CI pipeline or AI never parses prose.
 #[derive(schemars::JsonSchema)]
 #[allow(dead_code)]
@@ -2201,8 +2236,8 @@ fn si_info_actionable(message: &str) -> bool {
 }
 
 /// Convert an [`SiReport`] (findings AND info notes) to uniform JSON findings.
-/// Info notes are INCLUDED in JSON even though `--plain` suppresses most of them
-/// (§4.1: "Info notes appear in JSON even when suppressed from --plain text").
+/// Info notes are INCLUDED in JSON even though `--plain` suppresses most of
+/// them, so a machine consumer sees every note the text surface hides.
 pub fn si_findings_json(report: &SiReport) -> Vec<JsonFinding> {
     report
         .findings
@@ -2319,7 +2354,7 @@ pub fn fault_findings_json(faults: &[crate::stress::FaultEvent]) -> Vec<JsonFind
 
 /// The top-level `--json` document. Only the section(s) for the requested check
 /// are populated; the rest stay `None` (omitted from output). `board` + `bind`
-/// are always present so an AI always has the bind-role context (Theme F).
+/// are always present so an AI always has the bind-role context.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct JsonReport {
     /// Version of the `run --json` document contract. Bumped when a field
@@ -3235,7 +3270,12 @@ mod tests {
             "{}",
             st.shorts[0].fix
         );
-        assert!(st.render().contains("[SERIOUS] GND touches AGND on F.Cu"));
+        assert!(st
+            .render_with_clearance_rule_provenance(&ClearanceRuleProvenance::defaulted(
+                st.clearance_rule_mm,
+                false
+            ))
+            .contains("[SERIOUS] GND touches AGND on F.Cu"));
 
         let st = DrcStructured::from_report_with_ties(&report, None, true);
         assert_eq!(st.shorts[0].severity, "serious");

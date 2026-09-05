@@ -4,21 +4,14 @@
 //! Several checks need one narrow fact: "is this component a plain resistor?"
 //! A pull-up must be a resistor (net-lint's missing-pull-up and the SI I2C
 //! rise-time model both divide by its resistance); a device-count must exclude
-//! passives; a crystal load cap must be a capacitor. For a long time the answer
-//! was a reference-designator prefix test with a growing exclusion list
-//! (`R` but not `RV`/`RT`/`RN`/`RP`/`RM`, plus a `lib_id` substring scan for
-//! "ferrite"/"inductor"). Both inputs are free text a CAD user typed. That
-//! produced two symmetric errors:
-//!
-//! - A genuine resistor that does not sit in an `R`-prefixed slot (a part
-//!   numbered into an `RN` range, a mirrored/renamed designator, a symbol whose
-//!   reference is `X1`) was not counted, so a real pull-up read as missing.
-//! - A part that merely *looks* R-prefixed was counted: a capacitor a designer
-//!   labelled `R5` was accepted as a pull-up and its farads were read as ohms.
-//!
-//! The fix is to ask the model DB, which is curated in-tree, instead of the
-//! board file. [`hauksbee_models::schema::PassiveClass`] is the DB's own
-//! statement of which two-terminal element an entry is.
+//! passives; a crystal load cap must be a capacitor. Answering from the
+//! reference designator and `lib_id`, both free text a CAD user typed, produces
+//! two symmetric errors: a genuine resistor outside an `R`-prefixed slot is not
+//! counted, so a real pull-up reads as missing; and a capacitor a designer
+//! labelled `R5` is accepted as a pull-up with its farads read as ohms. So the
+//! answer comes from the in-tree model DB instead:
+//! [`hauksbee_models::schema::PassiveClass`] is the DB's own statement of which
+//! two-terminal element an entry is.
 //!
 //! What gates that evidence is [`AssemblyState`] *identity trust*, not presence:
 //! a record whose identity is refused (a contradictory duplicate designator, an
@@ -70,10 +63,9 @@
 //! before rung 4 in program order. That does not make them outrank it: every
 //! answer either of the model rungs produces is cross-examined against rung 4's
 //! dimension, and a disagreement yields `Unknown` rather than either witness.
-//! 6. **The designator and `lib_id` strings**, exactly as before. This rung is
-//!    a last-resort hint, kept so a board with no resolvable model and a bare
-//!    magnitude for a value behaves the way it always did rather than losing a
-//!    pull-up it used to find.
+//! 6. **The designator and `lib_id` strings.** A last-resort hint, so a board
+//!    with no resolvable model and a bare magnitude for a value still gets an
+//!    answer rather than losing a pull-up.
 //!
 //! Resolution is memoised per distinct (lib_id, value, footprint, mpn) tuple:
 //! `is_resistor` is called inside per-net member loops, and a full library scan
@@ -173,20 +165,12 @@ pub(crate) fn classify_two_terminal(c: &Component) -> PartClass {
     }
 
     // Rungs 2-5 read the model DB, and what gates them is IDENTITY TRUST, not
-    // presence. The question here is "what part does this record name?", which
-    // is answerable for a DNP part (it is a known part that is not fitted) and
-    // unanswerable for an identity-refused one (a contradictory duplicate
-    // designator, an inferred reference with no authoritative UID): there,
-    // nothing about the record, including its value and lib_id, is evidence.
-    //
-    // Gating on the fitted witness instead would have been a subtler version of
-    // the bug this module exists to fix: a DNP capacitor a designer had labelled
-    // `R5` would skip the value-dimension rung that reads its farads and land on
-    // the designator string, classifying as a resistor again.
-    // A refused identity stops here. "Nothing about the record is evidence" has
-    // to include its designator: falling through to the string rung would let a
-    // conflicting duplicate `R5` be called a resistor with confidence, which is
-    // the opposite of what refusing its identity meant.
+    // presence. "What part does this record name?" is answerable for a DNP part
+    // (a known part that is not fitted) and unanswerable for an identity-refused
+    // one, where nothing about the record, its designator included, is evidence.
+    // Gating on the fitted witness instead would send a DNP capacitor labelled
+    // `R5` past the value-dimension rung that reads its farads and back onto the
+    // designator string.
     if !identity_is_trusted(c) {
         return PartClass::Unknown;
     }
@@ -226,9 +210,8 @@ fn identity_is_trusted(c: &Component) -> bool {
 /// unambiguous.
 ///
 /// A sub-unity multiplier says "reactive", not "capacitive": `10u` is also how
-/// some libraries spell 10 uH. Which one it is comes from the string hint, so an
-/// inductor is not recorded as a capacitor. Either way it is not a resistor, which
-/// is the answer that matters most to the callers.
+/// some libraries spell 10 uH, so which one it is comes from the string hint.
+/// Either way it is not a resistor, the answer that matters most to callers.
 fn from_value_dimension(c: &Component) -> Option<PartClass> {
     let parsed = hauksbee_models::value::parse_value(&c.value)?;
     match parsed.unit.as_deref() {
@@ -392,10 +375,9 @@ fn non_empty(s: &str) -> Option<String> {
     (!s.trim().is_empty()).then(|| s.to_string())
 }
 
-/// Rung 6: the designator prefix plus the `lib_id` substring scan, i.e. exactly
-/// what this question used to be answered with. Reached only when no better
-/// evidence exists, so a board the model DB cannot resolve keeps the behaviour
-/// it has always had.
+/// Rung 6: the designator prefix plus the `lib_id` substring scan. Reached only
+/// when no better evidence exists, so a board the model DB cannot resolve still
+/// gets an answer.
 fn from_strings(c: &Component) -> PartClass {
     let lib = c.lib_id.to_ascii_lowercase();
     if lib.contains("ferrite") {

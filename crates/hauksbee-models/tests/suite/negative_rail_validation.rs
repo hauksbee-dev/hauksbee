@@ -24,20 +24,9 @@ fn vreg(vout: f64) -> ModelEntry {
     ModelEntry {
         id: "test_vreg".into(),
         kind: ComponentKind::Vreg,
-        description: String::new(),
-        r#match: Default::default(),
         params,
         pins,
-        envelope: Default::default(),
-        ratings: Default::default(),
-        straps: Vec::new(),
-        behavioral: Default::default(),
-        logic: Default::default(),
-        current_program: None,
-        peripheral: None,
-        peripheral_power: None,
-        coverage: Default::default(),
-        passive_class: None,
+        ..Default::default()
     }
 }
 

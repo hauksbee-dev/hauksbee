@@ -1,5 +1,5 @@
-//! Corpus-gated trace-current sweep on the LumenPnP motherboard (the round-3
-//! motor-driver target). This pins the honest result behind the IPC-2221
+//! Corpus-gated trace-current sweep on the LumenPnP motherboard. This pins the
+//! honest result behind the IPC-2221
 //! trace-current check: the high-current motor supply is a copper POUR (out of
 //! the discrete-segment check's reach, correctly skipped), and the discrete
 //! TMC2226 coil traces that ARE routed are adequately sized for the cited coil

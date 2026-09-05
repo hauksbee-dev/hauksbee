@@ -73,12 +73,11 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
     //   plunge, ONE cut segment, a retract. That is 4 routed plated slots, and
     //   each is one plated hit whose barrel is the stadium swept along the cut.
     //
-    // So 630 + 4 = 634. This test previously pinned 638 because the reader
-    // predated rout handling: it read both the `G00` rapid and the `G01` cut
-    // endpoint of every rout as separate round hits, which turned one slot into
-    // two phantom barrels and counted a cutter-up positioning move as a drilled
-    // hole. The corpus files are fixed, so the exact pin is stable and catches
-    // any dialect regression (a partial parse lands on a different number).
+    // So 630 + 4 = 634. Reading the `G00` rapid and the `G01` cut endpoint of a
+    // rout as separate round hits would give 638: one slot as two phantom
+    // barrels, plus a cutter-up positioning move counted as a drilled hole. The
+    // corpus files are fixed, so the exact pin is stable and a partial parse
+    // lands on a different number.
     assert_eq!(
         s.n_holes, 634,
         "Inkplate plated-hole count must be 630 round + 4 routed slots"

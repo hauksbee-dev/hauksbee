@@ -1,13 +1,11 @@
 //! Stiff-rail detection: where a balance tear fragments a fused core.
 //!
-//! The shape this hunts is the one that defeats a monolithic solve of the
-//! Tarski board: a supply rail fed through one series impedance, loaded by
-//! many nonlinear blocks. Every block couples
-//! to every other only through the scalar rail voltage, so the system is
-//! bordered-block-diagonal and tears *exactly* into per-block solves plus one
-//! scalar KCL balance at the rail (the balance tear;
-//! `partition::analyze_with_tears` and its `rail_tear.rs` round-off gate are
-//! the proven solver-side mechanics this module decides *when* to use).
+//! The shape this hunts is the one that defeats a monolithic solve: a supply
+//! rail fed through one series impedance, loaded by many nonlinear blocks.
+//! Every block couples to every other only through the scalar rail voltage, so
+//! the system is bordered-block-diagonal and tears *exactly* into per-block
+//! solves plus one scalar KCL balance at the rail. This module decides *when*
+//! to use the solver-side mechanics in `partition::analyze_with_tears`.
 //!
 //! ## Why a cost model and not thresholds
 //!
@@ -16,45 +14,39 @@
 //! here is a first-order cost model, and a block-size cap falls out of it for
 //! free: if tearing fails to fragment the core (one block nearly the whole
 //! island), the torn cost is the monolithic cost times the outer-loop count
-//! and the model refuses on its own. No threshold needed.
+//! and the model refuses on its own.
 //!
-//! The model is deliberately crude and says so: per-step Newton cost on an
-//! island of `n` devices is estimated as `n^ALPHA` with `ALPHA = 1.4`, the
-//! textbook-ish fill exponent for sparse LU on circuit matrices (between the
-//! linear ideal of a perfect elimination order and the quadratic of a dense
-//! band; the *decision* only needs the ratio to be roughly right, correctness
-//! never depends on it). A torn solve pays `OUTER_ITERS` re-solves of every
-//! rail-loading block for the scalar balance (the secant loop converges in
-//! about three trials on the proven fixtures). Both constants carry their
-//! provenance here and are policy fields, not buried literals.
+//! The model is deliberately crude: per-step Newton cost on an island of `n`
+//! devices is estimated as `n^ALPHA` with `ALPHA = 1.4`, the textbook fill
+//! exponent for sparse LU on circuit matrices (between the linear ideal of a
+//! perfect elimination order and the quadratic of a dense band; the decision
+//! only needs the ratio to be roughly right, correctness never depends on it).
+//! A torn solve pays `OUTER_ITERS` re-solves of every rail-loading block for
+//! the scalar balance (the secant loop converges in about three trials on the
+//! fixtures). Both constants are policy fields, not buried literals.
 //!
 //! ## Two ways in
 //!
-//! Profitability is not the only trigger. The flagship motivation is a board
-//! whose monolith never converges at any cost, so the caller can pass
-//! [`TearMotive::ConvergenceEscalation`]: structural guards still apply (an
-//! unsound tear stays refused), but the cost gate is bypassed, because a slow
-//! answer beats no answer. This is the "decompose" rung of the robustness
-//! ladder: the escalation reached when the plain monolithic solve has already
-//! failed.
+//! Profitability is not the only trigger. A board whose monolith never
+//! converges at any cost passes [`TearMotive::ConvergenceEscalation`]:
+//! structural guards still apply (an unsound tear stays refused), but the cost
+//! gate is bypassed, because a slow answer beats no answer. This is the
+//! "decompose" rung of the robustness ladder.
 //!
-//! ## Stacked feeds (the flagship's actual shape)
+//! ## Stacked feeds
 //!
-//! Real supplies cascade: on the Tarski board the path is source -> +5V ->
-//! 1k shunt -> ANALOG_VDD, and single-hop detection (feed must be
-//! source-pinned) stops one hop short of the rail that fragments the board
-//! (the analysis probe's founding finding). Discovery is therefore
-//! transitive: a discovered rail is a valid feed for the next hop, walked to
-//! a fixpoint. Decisions are then JOINT: every surviving candidate is held
-//! as a boundary while each island's fragmentation is computed once, because
-//! that is the system the multi-rail balance executor actually solves.
-//! Within a cascade every accepted rail tears, parent and child alike:
-//! the balance executor carries the inter-rail shunt term. A parent's KCL
-//! subtracts the current leaving through the shunt toward each accepted child,
-//! whose shunt belongs to no block because it sits between two held rails (see
-//! `orchestrate::balance::RailChannel::children`). The parent does not have to
-//! stay fused to keep its books straight, so it joins the joint cost
-//! evaluation like any other candidate.
+//! Real supplies cascade (source -> +5V -> 1k shunt -> ANALOG_VDD), and
+//! single-hop detection (feed must be source-pinned) stops one hop short of
+//! the rail that fragments the board. Discovery is therefore transitive: a
+//! discovered rail is a valid feed for the next hop, walked to a fixpoint.
+//! Decisions are then JOINT: every surviving candidate is held as a boundary
+//! while each island's fragmentation is computed once, because that is the
+//! system the multi-rail balance executor actually solves. Within a cascade
+//! every accepted rail tears, parent and child alike: the balance executor
+//! carries the inter-rail shunt term. A parent's KCL subtracts the current
+//! leaving through the shunt toward each accepted child, whose shunt belongs
+//! to no block because it sits between two held rails (see
+//! `orchestrate::balance::RailChannel::children`).
 //!
 //! ## What can refuse a tear
 //!
@@ -64,13 +56,12 @@
 //! * **No fragmentation / unprofitable**: the cost model above (unless
 //!   escalating).
 //!
-//! Stranding (the bypass-cap hazard: a device whose conduction terminals
-//! all land in {held rails, pinned, ground} losing its current from every
-//! block's books) is not a refusal here, because it cannot happen: the island
-//! analysis gives such devices boundary-only islands whose currents the
-//! balance reads like any block's (`partition.rs`). The refusal survives only
-//! on the legacy `detect_rail_tears` path, whose executor does not carry those
-//! boundary-only currents.
+//! Stranding (a device whose conduction terminals all land in {held rails,
+//! pinned, ground} losing its current from every block's books) is not a
+//! refusal here: the island analysis gives such devices boundary-only islands
+//! whose currents the balance reads like any block's (`partition.rs`). The
+//! refusal survives only on the `detect_rail_tears` path, whose executor does
+//! not carry those boundary-only currents.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md

@@ -29,14 +29,13 @@
 mod monitor;
 mod process;
 pub mod support;
-mod uart;
 
 // RenodeProcess is exported (not just used internally) for the child-reaping
 // integration tests and any host that needs the raw spawned-emulator handle
 // rather than the backend.
 pub use process::{find_renode, is_available, RenodeProcess};
 
-use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
+use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent, UartSocket};
 use anyhow::{bail, Context, Result};
 use monitor::Monitor;
 use serde::{Deserialize, Serialize};
@@ -50,19 +49,15 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use uart::UartSocket;
 
 type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
 type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 
 /// How a single GPIO port is addressed inside Renode.
 ///
-/// Every per-part difference is carried as plain data rather than as backend
-/// logic, and this is the per-port slice of that surface: the STM32F1-vs-F4
-/// ODR-offset footgun lives here as an explicit `odr_offset`
-/// field, not as logic scattered through the backend, so a new part declares
-/// "where do I read output state" as data. `Serialize`/`Deserialize` make it a
-/// file-load target for W5 without any loader landing now.
+/// Every per-part difference is plain data rather than backend logic: the
+/// STM32F1-vs-F4 ODR-offset footgun lives here as an explicit `odr_offset`
+/// field, so a new part declares "where do I read output state" as data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortMap {
     /// Logical port letter the engine uses in [`PinId`] (e.g. `'C'`).
@@ -164,10 +159,10 @@ fn decode_dir_mask(encoding: DirEncoding, low: u32, high: u32, width: u8) -> u32
 /// How a modeled ADC voltage is delivered into the Renode machine for one
 /// engine ADC channel.
 ///
-/// Both variants ride the same Monitor TCP channel the backend already uses
-/// for its ODR diffing, injection is one Monitor command per chunk, issued
-/// while the machine is paused between `RunFor` steps, so the firmware sees
-/// the new count before its next instruction runs.
+/// Both variants ride the same Monitor TCP channel the backend uses for ODR
+/// diffing: injection is one Monitor command per chunk, issued while the
+/// machine is paused between `RunFor` steps, so the firmware sees the new count
+/// before its next instruction runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdcInject {
     /// Run a Renode Monitor command each chunk, with `{count}` replaced by the
@@ -180,17 +175,14 @@ pub enum AdcInject {
     MonitorCommand(String),
     /// Write the modeled count into a fixed word each chunk via
     /// `sysbus WriteDoubleWord <addr> <count>`: the ADC result RAM word (an
-    /// address the firmware reads) or a memory-backed data register. This is
-    /// the Monitor/RAM path of 05 §5.1; the write-direction twin of the ODR
-    /// poll.
+    /// address the firmware reads) or a memory-backed data register, the
+    /// write-direction twin of the ODR poll.
     MemoryWord(u32),
 }
 
-/// Maps one engine ADC channel to its Renode injection recipe (05 §5.1).
+/// Maps one engine ADC channel to its Renode injection recipe.
 ///
-/// Not `Eq`: `full_scale_volts` is an `f64`. This is `PartialEq` for the config
-/// round-trip proof (05 §5.5) and folds into `RenodeConfig::adc_channels` as
-/// plain data, so a W5 descriptor can carry ADC recipes with no backend change.
+/// Not `Eq`: `full_scale_volts` is an `f64`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdcChannelMap {
     /// Engine-facing ADC channel index ([`Mcu::set_analog_in`]'s `channel`).
@@ -224,15 +216,12 @@ pub struct ClockControl {
 
 /// Per-MCU Renode configuration: enough to bring up a machine and wire it.
 ///
-/// This is the whole per-part surface as plain data, with no part-specific
-/// branching left in the backend:
-/// the platform-description reference, GPIO port maps with their register
-/// offsets, the UART/I2C/SPI controller names, and the ADC injection recipes are
-/// all struct fields a constructor fills, not logic in the backend. Adding a
-/// part is filling this struct (see [`RenodeConfig::rp2040`], the first config
-/// written directly against the struct shape). `Serialize`/`Deserialize` make it
-/// the file-load target for W5's data-driven MCU descriptor; no loader lands now
-/// (the constructors below stay the source of truth for the built-in parts).
+/// The whole per-part surface is plain data, with no part-specific branching
+/// left in the backend: the platform-description reference, GPIO port maps with
+/// their register offsets, the UART/I2C/SPI controller names and the ADC
+/// injection recipes are all struct fields. Adding a part is filling this
+/// struct, which `Serialize`/`Deserialize` also make loadable from a
+/// `db/mcu/*.soc.toml` descriptor.
 ///
 /// Not `Eq` because [`AdcChannelMap`] carries an `f64`; `PartialEq` backs the
 /// round-trip bit-identity proof in the tests.
@@ -268,16 +257,13 @@ pub struct RenodeConfig {
     pub ports: Vec<PortMap>,
     /// The part's core clock in Hz, reported by [`Mcu::frequency`].
     ///
-    /// NOT advisory, though it used to be described that way. Renode does clock
-    /// the machine from the platform description rather than from this field, so
-    /// this number cannot set the emulated rate on its own, and that is exactly
-    /// why the descriptor loader cross-checks it against the platform's own
-    /// `cpu PerformanceInMips` / `nvic systickFrequency` and refuses a mismatch
-    /// (`soc::check_clock_declarations`). Treating it as advisory is what let
-    /// four platforms ship running 4.5x to 9x fast: it cancels out of both
-    /// `cycles = seconds * frequency_hz` and [`Mcu::frequency`], so a 9x
-    /// disagreement with the platform produced no wrong answer anywhere the
-    /// engine looked.
+    /// NOT advisory. Renode clocks the machine from the platform description,
+    /// not from this field, so a disagreement produces no visible wrong answer
+    /// (the value cancels out of both `cycles = seconds * frequency_hz` and
+    /// [`Mcu::frequency`]) while the machine silently runs at the wrong rate.
+    /// The descriptor loader therefore cross-checks it against the platform's
+    /// own `cpu PerformanceInMips` / `nvic systickFrequency` and refuses a
+    /// mismatch (`soc::check_clock_declarations`).
     pub frequency_hz: u64,
     /// Extra Monitor commands run verbatim after platform load and before the
     /// firmware is started (e.g. attaching a button so a GPIO input has a
@@ -331,36 +317,32 @@ pub struct RenodeConfig {
     /// that leaves it out is asserting one.
     #[serde(default)]
     pub timing_limitation: Option<String>,
-    /// Per-channel ADC injection recipes (05 §5.1). Empty means ADC injection
+    /// Per-channel ADC injection recipes. Empty means ADC injection
     /// is a LOUD drop (a once-per-channel stderr warning), never a silent one.
     ///
     /// The stock constructors leave this empty on purpose: the Renode 1.16
     /// platform descriptions for the F103 / F4-Discovery / nRF52840 / FE310
     /// model no ADC peripheral at all, and Renode's `Analog.STM32_ADC` speaks
-    /// the F0/L0 register layout, registering it at an F1 address would let
-    /// firmware "read" a peripheral whose registers are laid out wrong, which
-    /// is fake fidelity, and this tool refuses rather than fakes. A
+    /// the F0/L0 register layout, so registering it at an F1 address would let
+    /// firmware read a peripheral whose registers are laid out wrong. A
     /// board/test that knows where its counts must land (a modeled ADC's feed
     /// command, or the RAM result word its firmware reads) supplies the map.
     pub adc_channels: Vec<AdcChannelMap>,
 }
 
 impl RenodeConfig {
-    // ── Built-in parts (06 §2) ──────────────────────────────────────────────
+    // ── Built-in parts ──────────────────────────────────────────────
     //
-    // These are named accessors over the shipped `db/mcu/*.soc.toml` descriptors:
-    // the register offsets, platform paths, and port maps all live in the TOML
-    // (the single source of truth, embedded via `include_str!` so the binary
-    // stays self-contained; the mcp4728.toml precedent). Each descriptor's
-    // header comment carries the
-    // hard-won knowledge (the F1-vs-F4 ODR footgun, the RP2040 SIO adaptation,
-    // the F4 SPI-redefinition trap, the FE310 PRCI/vinit bring-up). A fresh part
-    // is added purely as data via [`crate::SocConfig::resolve`], these
-    // constructors exist only for the in-tree callers that name a part directly.
+    // Named accessors over the shipped `db/mcu/*.soc.toml` descriptors, which
+    // are the single source of truth for register offsets, platform paths and
+    // port maps and are embedded with `include_str!` so the binary stays
+    // self-contained. Each descriptor's header comment carries the per-part
+    // traps (the F1-vs-F4 ODR offset, the RP2040 SIO adaptation, the F4
+    // SPI-redefinition trap, the FE310 PRCI/vinit bring-up). A fresh part is
+    // added purely as data via [`crate::SocConfig::resolve`].
     //
     // `.expect` is correct here: a shipped descriptor failing to load is a build
-    // bug the `tests/soc_descriptors.rs` equivalence suite catches, never a
-    // runtime condition.
+    // bug `tests/soc_descriptors.rs` catches, never a runtime condition.
 
     /// STM32F072C8/CB. See `db/mcu/stm32f072.soc.toml`.
     pub fn stm32f072() -> Self {
@@ -399,7 +381,7 @@ impl RenodeConfig {
             .expect("built-in rp2040.soc.toml is valid")
     }
 
-    /// Add one ADC channel injection recipe (05 §5.1). Chainable.
+    /// Add one ADC channel injection recipe. Chainable.
     pub fn with_adc_channel(mut self, map: AdcChannelMap) -> Self {
         self.adc_channels.push(map);
         self
@@ -528,10 +510,9 @@ const BRIDGE_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 /// Generic host-side bridge server shared by the I2C and SPI bridges.
 ///
 /// Both bridges have the same lifecycle: bind an ephemeral loopback port, accept
-/// connections on a background thread, hand each connection to a protocol-specific
-/// handler, and tear the thread down on drop. The only differences are the
-/// callback type `C` (`I2cCb` vs `SpiCb`) and the per-connection handler, so that
-/// is all the bridge-specific code that remains; everything else lives here.
+/// connections on a background thread, hand each connection to a
+/// protocol-specific handler, and tear the thread down on drop. Only the
+/// callback type `C` (`I2cCb` vs `SpiCb`) and the per-connection handler differ.
 ///
 /// The callback is stored behind `Arc<Mutex<C>>` so the engine can swap it with
 /// [`BridgeServer::replace_callback`] when a new board is bound without tearing
@@ -545,10 +526,9 @@ struct BridgeServer<C> {
 
 impl<C: Send + 'static> BridgeServer<C> {
     /// Start a bridge server. `label` names the bridge in error logs (e.g.
-    /// `"I2C"`). `handler` services one accepted connection; it owns any
-    /// per-thread state (the I2C bridge threads a small transaction state
-    /// machine through it). A handler error is logged loudly and the connection
-    /// dropped, a broken bridge must be visible, never silently absorbed.
+    /// `"I2C"`). `handler` services one accepted connection and owns any
+    /// per-thread state. A handler error is logged and the connection dropped:
+    /// a broken bridge must be visible, never silently absorbed.
     fn start<H>(label: &'static str, cb: C, mut handler: H) -> Result<Self>
     where
         H: FnMut(&mut TcpStream, &Arc<Mutex<C>>) -> Result<()> + Send + 'static,
@@ -647,35 +627,20 @@ struct I2cBridgeState {
     /// per backend from the platform description (see
     /// [`platform_needs_i2c_single_read_prefetch`]).
     ///
-    /// WHY `read_count == 1` IS THE ONLY POSSIBLE KEY (proven against the
-    /// pinned model source, renode-infrastructure @ add012af; the exact
-    /// submodule of the Renode v1.16.1 tag, `STM32F4_I2C.cs`):
-    ///
-    ///   - `DataWrite`, `State.AwaitingAddress`, read bit set:
-    ///     `dataToReceive = new Queue<byte>(selectedSlave.Read());`; the ONE
-    ///     call to the slave, with no argument, and
-    ///     `II2CPeripheral.Read(int count = 1)`, so every STM32F1 read
-    ///     transaction reaches this bridge as a single `read_count == 1`
-    ///     request regardless of how many DR reads the firmware will perform.
-    ///   - `DataRead()` only dequeues that local fifo (it logs "Tried to read
-    ///     from an empty fifo" and returns 0 when it drains); it never calls
-    ///     `selectedSlave.Read()` again, and RxNE is `dataToReceive.Any()`.
-    ///   - The model never calls `FinishTransmission()` on the slave, and
-    ///     `StopWrite` touches only controller-side state, a read
-    ///     transaction produces NO bridge traffic after the address phase.
-    ///
-    /// A standalone one-byte read and the RM0008 two-byte receive are
-    /// therefore byte-identical on the wire (one `READ count=1` message, then
-    /// silence), so no discriminator, count, framing, or STOP boundary, can
-    /// separate them here. Serving both correctly at once is impossible with
-    /// this controller model; the platform gate plus the
-    /// `HAUKSBEE_RENODE_I2C_SINGLE_READ_PREFETCH` override (see
-    /// [`resolve_single_read_prefetch`]) are the entire available policy
+    /// `read_count == 1` is the only possible key, against the pinned model
+    /// source (renode-infrastructure @ add012af, `STM32F4_I2C.cs`): the address
+    /// phase issues the single `selectedSlave.Read()` with `count` defaulting
+    /// to 1, `DataRead()` only dequeues that local fifo, and no
+    /// `FinishTransmission()` or stop condition reaches the slave. A standalone
+    /// one-byte read and the RM0008 two-byte receive are therefore
+    /// byte-identical on the wire, so nothing here can separate them. The
+    /// platform gate plus the `HAUKSBEE_RENODE_I2C_SINGLE_READ_PREFETCH`
+    /// override (see [`resolve_single_read_prefetch`]) are the whole policy
     /// surface. The F1 default favours the two-byte receive because the
-    /// alternative is a firmware hang (RxNE never sets for the second DR
-    /// read), whereas the over-fetch only skews slaves that carry read state
-    /// across transactions AND are read one byte at a time without a
-    /// preceding pointer write; such firmware opts out with the env override.
+    /// alternative is a firmware hang; the over-fetch only skews slaves that
+    /// carry read state across transactions AND are read one byte at a time
+    /// without a preceding pointer write, and such firmware opts out with the
+    /// env override.
     single_read_prefetch: bool,
 }
 
@@ -719,14 +684,9 @@ impl I2cBridgeState {
         callback: &Arc<Mutex<I2cCb>>,
         trace: bool,
     ) -> Result<()> {
-        // Read the 10-byte request header with explicit byte counting so we can
-        // distinguish two different EOF cases:
-        //   0 bytes read then EOF → benign: this is the drop-time wake-up
-        //     connection / a probe; return Ok and let the accept loop continue.
-        //   1..9 bytes read then EOF → TRUNCATED header: real corruption; fail
-        //     loud so the broken bridge surfaces as an error rather than being
-        //     silently swallowed as an Ok.
-        //   10 bytes read → proceed normally.
+        // Explicit byte counting so a clean EOF before any byte (the drop-time
+        // wake-up connection, or a probe) stays benign while an EOF mid-header
+        // fails loud as the truncated request it is.
         let mut header = [0u8; I2C_BRIDGE_HEADER_LEN];
         let mut bytes_read: usize = 0;
         loop {
@@ -900,7 +860,7 @@ fn handle_spi_stream(
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
         Err(e) => return Err(e).context("reading SPI bridge op byte"),
     }
-    // Coarse chunk virtual-cycle stamp, shared from the backend thread (05 §2.2).
+    // Coarse chunk virtual-cycle stamp, shared from the backend thread.
     let cyc = cycle.load(Ordering::Relaxed);
     match op_buf[0] {
         SPI_OP_TRANSMIT => {
@@ -1018,7 +978,7 @@ pub struct RenodeBackend {
     /// read `cycles` directly; this atomic is updated each time `cycles` advances
     /// and read when constructing a [`SpiEvent`], giving the byte the poll-boundary
     /// virtual time. Coarse by construction (all bytes in a slice share it), which
-    /// is exactly the tier `cycle_exact()` reports false for (05 §2.2 QEMU-like).
+    /// is exactly the tier `cycle_exact()` reports false for.
     spi_cycle: Arc<AtomicU64>,
     /// When `HAUKSBEE_RENODE_TRACE=1`, the path of Renode's log file to which
     /// function-name trace lines are written. `None` when tracing is disabled.
@@ -1040,13 +1000,7 @@ impl RenodeBackend {
         monitor.set_timeout(Duration::from_secs(60));
 
         // Bring up the machine.
-        let mach = monitor.command(&format!("mach create \"{}\"", config.machine))?;
-        if monitor_failed(&mach) {
-            bail!(
-                "Renode failed to create machine \"{}\": {mach}",
-                config.machine
-            );
-        }
+        monitor.run(&format!("mach create \"{}\"", config.machine))?;
 
         // Support bundle, if this part needs peripheral models Renode does not
         // ship. This MUST run before the platform description is parsed: the
@@ -1063,16 +1017,15 @@ impl RenodeBackend {
             })?;
             let dir = bundle.unpack()?;
             for cmd in bundle.prelude_commands(&dir) {
-                let resp = monitor.command(&cmd)?;
-                if monitor_failed(&resp) {
-                    // Keep the unpacked directory: the Renode error names a file
-                    // in it, and deleting it makes the message unfollowable.
-                    bail!(
-                        "Renode failed to load the \"{name}\" support bundle ({cmd}): {resp}\n\
-                         The unpacked bundle was left at {} for inspection.",
+                // On failure the unpacked directory is deliberately left in
+                // place: the Renode error names a file inside it.
+                monitor.run(&cmd).with_context(|| {
+                    format!(
+                        "loading the \"{name}\" support bundle, left unpacked at {} \
+                         for inspection",
                         dir.display()
-                    );
-                }
+                    )
+                })?;
             }
             support_dir = Some(dir);
         }
@@ -1082,40 +1035,29 @@ impl RenodeBackend {
         // the single-line Monitor socket, so it is materialized to a temp file
         // and loaded by path; a plain `@path` passes through untouched.
         let (platform_arg, platform_file) = materialize_platform(&config.platform)?;
-        let plat = monitor.command(&format!("machine LoadPlatformDescription {platform_arg}"))?;
-        if monitor_failed(&plat) {
-            bail!("Renode failed to load platform {platform_arg}: {plat}");
-        }
+        monitor.run(&format!("machine LoadPlatformDescription {platform_arg}"))?;
 
         // Run at host speed: the analog solver sets the pace, not wall time.
-        let adv = monitor.command("emulation SetGlobalAdvanceImmediately true")?;
-        if monitor_failed(&adv) {
-            bail!("Renode failed to set global advance immediately: {adv}");
-        }
+        monitor.run("emulation SetGlobalAdvanceImmediately true")?;
 
         // Optional UART bridge: a server socket terminal on the pre-allocated
         // port (distinct from the monitor port by construction).
         let mut uart = None;
         if let Some(usart) = &config.uart {
-            let term = monitor.command(&format!(
+            monitor.run(&format!(
                 "emulation CreateServerSocketTerminal {uart_port} \"hauksbee_uart\" false"
             ))?;
-            if monitor_failed(&term) {
-                bail!("Renode failed to create UART terminal on port {uart_port}: {term}");
-            }
-            let conn = monitor.command(&format!("connector Connect {usart} hauksbee_uart"))?;
-            if monitor_failed(&conn) {
-                bail!("Renode failed to connect UART {usart}: {conn}");
-            }
-            uart = Some(UartSocket::connect(uart_port, Duration::from_secs(10))?);
+            monitor.run(&format!("connector Connect {usart} hauksbee_uart"))?;
+            uart = Some(UartSocket::connect(
+                "Renode",
+                uart_port,
+                Duration::from_secs(10),
+            )?);
         }
 
         // Any platform-specific extra setup (e.g. attaching a button).
         for cmd in &config.extra_setup {
-            let resp = monitor.command(cmd)?;
-            if monitor_failed(&resp) {
-                bail!("Renode extra setup command failed ({cmd}): {resp}");
-            }
+            monitor.run(cmd)?;
         }
 
         // Setup is the cold path. Runtime register polls must keep the tighter
@@ -1224,8 +1166,8 @@ impl RenodeBackend {
         };
         // Poll boundary virtual time, in cycles-equivalent. Every edge observed
         // this poll shares it: the ODR diff cannot recover intra-slice ordering,
-        // so the stamp is coarse and `cycle_exact()` is false for this backend
-        // (05 §1.1). Snapshot before the mutable-callback borrow.
+        // so the stamp is coarse and `cycle_exact()` is false for this
+        // backend. Snapshot before the mutable-callback borrow.
         let cyc = self.cycles;
         for port in &ports {
             let dir_mask = self.read_dir(port);
@@ -1285,13 +1227,10 @@ impl RenodeBackend {
         ));
         std::fs::write(&source_path, source)
             .with_context(|| format!("writing {}", source_path.display()))?;
-        let include = self
-            .monitor
-            .command(&format!("include \"{}\"", source_path.display()))?;
-        if monitor_failed(&include) {
-            // Leave the file in place for post-mortem inspection on failure.
-            bail!("Renode failed to include {kind} bridge source: {include}");
-        }
+        // The generated file is left in place on failure, for post-mortem.
+        self.monitor
+            .run(&format!("include \"{}\"", source_path.display()))
+            .with_context(|| format!("including the {kind} bridge source"))?;
         self.bridge_source_files.push(source_path);
         Ok(())
     }
@@ -1338,14 +1277,9 @@ impl RenodeBackend {
                     .collect();
                 let device_name = format!("hauksbee_i2c_{sanitized}_{addr:02x}");
                 let repl = format!("{device_name}: I2C.{class_name} @ {controller} 0x{addr:02X}");
-                let resp = self.monitor.command(&format!(
+                self.monitor.run(&format!(
                     "machine LoadPlatformDescriptionFromString \"{repl}\""
                 ))?;
-                if monitor_failed(&resp) {
-                    bail!(
-                        "Renode failed to register I2C bridge at 0x{addr:02X} on {controller}: {resp}"
-                    );
-                }
             }
         }
 
@@ -1399,12 +1333,9 @@ impl RenodeBackend {
         if !self.spi_extra_repl_loaded {
             if let Some(extra) = self.config.spi_extra_repl.clone() {
                 let escaped = extra.replace('"', "\\\"");
-                let resp = self.monitor.command(&format!(
+                self.monitor.run(&format!(
                     "machine LoadPlatformDescriptionFromString \"{escaped}\""
                 ))?;
-                if monitor_failed(&resp) {
-                    bail!("Renode failed to add SPI controllers: {resp}");
-                }
             }
             self.spi_extra_repl_loaded = true;
         }
@@ -1412,12 +1343,9 @@ impl RenodeBackend {
         // Register the bridge peripheral on just this controller.
         // SPI uses NullRegistrationPoint: no address, just `@ spi2`.
         let repl = format!("{device_name}: SPI.{class_name} @ {controller}");
-        let resp = self.monitor.command(&format!(
+        self.monitor.run(&format!(
             "machine LoadPlatformDescriptionFromString \"{repl}\""
         ))?;
-        if monitor_failed(&resp) {
-            bail!("Renode failed to register SPI bridge on {controller}: {resp}");
-        }
 
         self.spi_bridges.push((controller.to_string(), bridge));
         Ok(())
@@ -1464,11 +1392,6 @@ fn substitute_support_dir(mut config: RenodeConfig, dir: Option<&Path>) -> Renod
     config.extra_setup = config.extra_setup.iter().map(|c| sub(c)).collect();
     config.post_load_setup = config.post_load_setup.iter().map(|c| sub(c)).collect();
     config
-}
-
-fn monitor_failed(resp: &str) -> bool {
-    let lower = resp.to_lowercase();
-    lower.contains("error") || lower.contains("exception") || lower.contains("failed")
 }
 
 /// The Monitor argument for `machine LoadPlatformDescription`, plus the temp
@@ -1842,26 +1765,19 @@ impl Mcu for RenodeBackend {
         // [`crate::elf`].
         crate::elf::validate_arch(path, self.config.expected_e_machine, &self.config.mcu_label)?;
 
-        let resp = match ext.as_str() {
-            "elf" | "" => self.monitor.command(&format!("sysbus LoadELF @{p}"))?,
-            "hex" => self.monitor.command(&format!("sysbus LoadHEX @{p}"))?,
+        match ext.as_str() {
+            "elf" | "" => self.monitor.run(&format!("sysbus LoadELF @{p}"))?,
+            "hex" => self.monitor.run(&format!("sysbus LoadHEX @{p}"))?,
             "bin" => bail!("raw .bin needs a load address; supply an ELF instead"),
             other => bail!("unsupported firmware extension '.{other}'; use .elf or .hex"),
         };
-        if monitor_failed(&resp) {
-            bail!("Renode failed to load firmware {p}: {resp}");
-        }
         // Post-load Monitor commands (e.g. FE310 needs `cpu PC vinit` and PRCI
         // clock tags after the ELF is loaded). `{cpu}` is substituted with the
         // configured CPU path so commands stay SoC-generic.
         let cpu = self.config.cpu.clone();
         let post = self.config.post_load_setup.clone();
         for cmd in &post {
-            let cmd = cmd.replace("{cpu}", &cpu);
-            let r = self.monitor.command(&cmd)?;
-            if monitor_failed(&r) {
-                bail!("Renode post-load command failed ({cmd}): {r}");
-            }
+            self.monitor.run(&cmd.replace("{cpu}", &cpu))?;
         }
         self.firmware_loaded = true;
 
@@ -1876,19 +1792,18 @@ impl Mcu for RenodeBackend {
             let path_str = trace_path.to_str().unwrap_or("").to_string();
             // `logFile @<path>` redirects Renode's main log to the file.
             // The `@` prefix is Renode's convention for an absolute path.
-            let log_cmd = format!("logFile @{path_str}");
-            let log_resp = self.monitor.command(&log_cmd)?;
-            if monitor_failed(&log_resp) {
-                eprintln!("[hauksbee-trace] warning: logFile command failed: {log_resp}");
+            if let Err(e) = self.monitor.run(&format!("logFile @{path_str}")) {
+                eprintln!("[hauksbee-trace] warning: {e}");
             }
             // `sysbus.cpu LogFunctionNames true true`:
             //   first bool  = enable function-name logging,
             //   second bool = also log guessed (non-entry) symbols.
             let cpu = self.config.cpu.clone();
-            let fn_cmd = format!("{cpu} LogFunctionNames true true");
-            let fn_resp = self.monitor.command(&fn_cmd)?;
-            if monitor_failed(&fn_resp) {
-                eprintln!("[hauksbee-trace] warning: LogFunctionNames command failed: {fn_resp}");
+            if let Err(e) = self
+                .monitor
+                .run(&format!("{cpu} LogFunctionNames true true"))
+            {
+                eprintln!("[hauksbee-trace] warning: {e}");
             } else {
                 eprintln!(
                     "[hauksbee-trace] function tracing enabled → {}",
@@ -1930,16 +1845,14 @@ impl Mcu for RenodeBackend {
             // from the analog solve with zero diagnostic.
             let input_peripheral = port.input_peripheral.as_deref().unwrap_or(&port.peripheral);
             let cmd = format!("sysbus.{} OnGPIO {} {}", input_peripheral, pin.bit, high);
-            match self.monitor.command(&cmd) {
-                Ok(resp) if !monitor_failed(&resp) => {}
-                Ok(resp) => panic!("Renode digital-input drive failed ({cmd}): {resp}"),
-                Err(e) => panic!("Renode digital-input drive failed ({cmd}): {e:#}"),
+            if let Err(e) = self.monitor.run(&cmd) {
+                panic!("Renode digital-input drive failed: {e:#}");
             }
         }
     }
 
     fn set_analog_in(&mut self, channel: u8, volts: f64) {
-        // ADC injection through the Monitor/RAM path (05 §5.1): translate the
+        // ADC injection through the Monitor/RAM path: translate the
         // modeled voltage into a count and deliver it per this channel's
         // config recipe (a modeled-ADC feed command, or a WriteDoubleWord into
         // the result word the firmware reads). The Monitor is idle between
@@ -1953,7 +1866,7 @@ impl Mcu for RenodeBackend {
             .cloned()
         else {
             // LOUD drop, once per channel: an unmapped platform must not
-            // silently swallow the scheduler's ADC pushes (the pre-05 §5.1
+            // silently swallow the scheduler's ADC pushes (the pre-injection
             // behaviour this replaces).
             if self.adc_unmapped_warned.insert(channel) {
                 eprintln!(
@@ -1971,10 +1884,8 @@ impl Mcu for RenodeBackend {
         // FAIL LOUD, matching the on_i2c/on_spi bridge discipline: a failed
         // injection means the firmware quietly reads a stale/zero count as if
         // it were real, exactly the fake-data mode this backend refuses.
-        match self.monitor.command(&cmd) {
-            Ok(resp) if !monitor_failed(&resp) => {}
-            Ok(resp) => panic!("Renode ADC injection failed ({cmd}): {resp}"),
-            Err(e) => panic!("Renode ADC injection failed ({cmd}): {e:#}"),
+        if let Err(e) = self.monitor.run(&cmd) {
+            panic!("Renode ADC injection failed: {e:#}");
         }
     }
 
@@ -1988,7 +1899,7 @@ impl Mcu for RenodeBackend {
 
     fn cycle_exact(&self) -> bool {
         // Poll-based: GPIO edges are observed by diffing ODRs per time slice, so
-        // toggles within a slice collapse and the ordering is coarse (05 §1.1).
+        // toggles within a slice collapse and the ordering is coarse.
         false
     }
 
@@ -2168,16 +2079,10 @@ impl RenodeBackend {
         // and pauses again; it must NOT be preceded by `start`, or Renode
         // rejects it as "already started". RunFor is the whole lockstep step.
         // Format with enough precision for sub-microsecond chunks.
-        let resp = self
-            .monitor
-            .command_with_timeout(
-                &format!("emulation RunFor \"{seconds:.9}\""),
-                Duration::from_secs(60),
-            )
-            .context("RunFor")?;
-        if monitor_failed(&resp) {
-            bail!("Renode RunFor failed: {resp}");
-        }
+        self.monitor.run_with_timeout(
+            &format!("emulation RunFor \"{seconds:.9}\""),
+            Duration::from_secs(60),
+        )?;
 
         self.cycles += (seconds * self.config.frequency_hz as f64).round() as u64;
 
@@ -2188,11 +2093,8 @@ impl RenodeBackend {
         if let Some(clock) = &self.config.clock_control {
             let micros = (seconds * 1_000_000.0).round() as u64;
             if micros > 0 {
-                let cmd = clock.tick_command.replace("{micros}", &micros.to_string());
-                let tick = self.monitor.command(&cmd)?;
-                if monitor_failed(&tick) {
-                    bail!("Renode clock-control tick failed ({cmd}): {tick}");
-                }
+                self.monitor
+                    .run(&clock.tick_command.replace("{micros}", &micros.to_string()))?;
             }
         }
 
@@ -2201,15 +2103,6 @@ impl RenodeBackend {
         self.pump_uart_out()?;
         self.uart_rx_inflight = 0;
         Ok(())
-    }
-
-    /// Read the CPU program counter live (separate from the cached `state`).
-    pub fn read_pc(&mut self) -> Option<u32> {
-        let resp = self
-            .monitor
-            .command(&format!("{} PC", self.config.cpu))
-            .ok()?;
-        parse_hex_or_dec(&resp)
     }
 
     /// Return the path of the Renode log file that captures the execution trace,
@@ -2478,20 +2371,12 @@ mod tests {
         assert_eq!(cmd, "sysbus WriteDoubleWord 0x20004000 0x9B2");
     }
 
-    /// Bit-identity proof for the data-driven config bridge (05 §5.5): every
-    /// stock config serializes and deserializes back to a value that is EQUAL to
-    /// what the constructor produced. This proves two things at once:
-    ///   1. the struct is a *lossless* plain-data carrier, no field is dropped
-    ///      or altered on the round trip, so W5's future file load reconstructs
-    ///      the exact config the constructor makes today (the whole point of the
-    ///      bridge);
-    ///   2. the config VALUE is unchanged by the refactor; the constructors
-    ///      were not touched (only inert `#[derive]`s were added), and the
-    ///      `*_config_shape` tests below still pin the individual field values
-    ///      they always pinned, so before == after.
-    ///
-    /// A config with an `AdcChannelMap` is included so the just-merged ADC work
-    /// (the `f64` full-scale field) is proven to fold through the round trip too.
+    /// Bit-identity proof for the data-driven config bridge: every stock config
+    /// serializes and deserializes back to a value EQUAL to what the
+    /// constructor produced, so the struct is a lossless plain-data carrier and
+    /// a descriptor file load reconstructs exactly the config the constructor
+    /// makes. A config with an `AdcChannelMap` is included so the `f64`
+    /// full-scale field is proven to fold through the round trip too.
     fn assert_roundtrip(config: &RenodeConfig) {
         let json = serde_json::to_string(config).expect("serialize RenodeConfig");
         let back: RenodeConfig = serde_json::from_str(&json).expect("deserialize RenodeConfig");

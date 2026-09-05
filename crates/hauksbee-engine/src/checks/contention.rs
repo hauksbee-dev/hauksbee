@@ -86,9 +86,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
 use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
-use crate::binder::resolve;
 use crate::digital::output_roles;
-use hauksbee_extract::assembly::AssemblyState;
 
 /// One modelled push-pull output pin found on a net.
 struct Driver {
@@ -208,14 +206,8 @@ pub fn scan(board: &ExtractedBoard, lib: &ModelLibrary) -> Scan {
     let mut parts = Vec::new();
     let mut by_net: BTreeMap<i64, Vec<Driver>> = BTreeMap::new();
 
-    for comp in &board.components {
-        // Not assembled, or identity refused: no trusted drivers either way.
-        let Some(part) = AssemblyState::of(comp).fitted() else {
-            continue;
-        };
-        let Some(model) = resolve(lib, part).model else {
-            continue; // no model, so nothing to say about its pin directions
-        };
+    // A component with no model says nothing about its pin directions.
+    for (comp, model) in super::resolved_components(board, lib) {
         if !is_digital_kind(model.kind) {
             continue;
         }

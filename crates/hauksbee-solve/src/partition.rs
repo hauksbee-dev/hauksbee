@@ -38,25 +38,26 @@
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 
-/// A union-find over node indices (1..=n_nodes; ground excluded).
-struct UnionFind {
+/// A path-halving union-find over node indices (1..=n_nodes; ground excluded).
+/// Shared with the conduction graph, which unions the same index space.
+pub(crate) struct UnionFind {
     parent: Vec<usize>,
 }
 
 impl UnionFind {
-    fn new(n: usize) -> Self {
+    pub(crate) fn new(n: usize) -> Self {
         UnionFind {
             parent: (0..n).collect(),
         }
     }
-    fn find(&mut self, mut x: usize) -> usize {
+    pub(crate) fn find(&mut self, mut x: usize) -> usize {
         while self.parent[x] != x {
             self.parent[x] = self.parent[self.parent[x]];
             x = self.parent[x];
         }
         x
     }
-    fn union(&mut self, a: usize, b: usize) {
+    pub(crate) fn union(&mut self, a: usize, b: usize) {
         let ra = self.find(a);
         let rb = self.find(b);
         if ra != rb {

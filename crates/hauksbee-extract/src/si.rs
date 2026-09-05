@@ -29,8 +29,7 @@
 //! `i2c_rise_time_ns`, `routed_length_mm` helpers, all hand-checked in the unit
 //! tests) and the board-level audits that attribute the physics to real parts.
 //! Geometry is read from the same `.kicad_pcb` s-expression the DRC parses,
-//! reusing nothing private to `drc.rs` (this module re-derives only the narrow
-//! slice it needs, exactly as `trace_current.rs` does).
+//! re-deriving only the narrow slice needed here.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/si.md.
 
@@ -39,6 +38,10 @@ use std::collections::HashMap;
 use forge_sexpr::List;
 
 use crate::assembly::AssemblyState;
+use crate::netlint::{
+    i2c_role, is_capacitor, is_ground, is_resistor, is_unconnected_net, norm,
+    numeric_rail_magnitude, parse_ohms,
+};
 use crate::part_class::{self, connected_pads};
 use crate::{Component, ExtractedBoard};
 
@@ -184,24 +187,11 @@ impl ExtractedBoard {
 pub mod impedance;
 
 // ===========================================================================
-// Shared net / part helpers (kept local so the module is self-contained, like
-// trace_current.rs; deliberately not pulling private items out of netlint.rs).
+// Net / part helpers. The name classifiers the --si and --lint reports must
+// agree on (`norm`, `is_ground`, `i2c_role`, `numeric_rail_magnitude`) live in
+// `netlint` and are shared, so the two surfaces cannot classify one net two
+// ways; what follows is what only this module needs.
 // ===========================================================================
-
-/// Normalise a net name: trim, keep the leaf of a hierarchical path, uppercase.
-fn norm(name: &str) -> String {
-    let n = name.trim();
-    let leaf = n.rsplit('/').next().unwrap_or(n);
-    leaf.trim().to_ascii_uppercase()
-}
-
-fn is_ground(name: &str) -> bool {
-    let n = norm(name);
-    matches!(
-        n.as_str(),
-        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
-    ) || n.starts_with("GND")
-}
 
 /// Power-rail nominal voltage by net name (only the rails the I2C check needs to
 /// know the high level of). `None` for non-rail nets.
@@ -279,61 +269,9 @@ fn rail_voltage(name: &str) -> Option<f64> {
     }
 }
 
-/// A rail whose name carries its own numeric magnitude: an optional leading '+',
-/// then digits, 'V', and optional trailing digits, plain "12V"/"24V" or the
-/// KiCad digit-V-digit "5V0" form. The name must be ENTIRELY consumed by the
-/// grammar, so a rail-named signal net ("5V_DET") does NOT match. Mirrors
-/// netlint's `numeric_rail_magnitude`.
-fn numeric_rail_magnitude(n: &str) -> Option<f64> {
-    let rest = n.strip_prefix('+').unwrap_or(n);
-    let int_part: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    if int_part.is_empty() {
-        return None;
-    }
-    let after = rest[int_part.len()..].strip_prefix('V')?;
-    let frac: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if !after[frac.len()..].is_empty() {
-        return None;
-    }
-    let mag: f64 = if frac.is_empty() {
-        int_part.parse().ok()?
-    } else {
-        format!("{}.{}", int_part.trim_end_matches('.'), frac)
-            .parse()
-            .ok()?
-    };
-    (mag > 0.0 && mag.is_finite()).then_some(mag)
-}
-
-/// A plain two-terminal resistor (the kind that can be a pull-up).
-///
-/// Delegates to [`crate::part_class::classify_two_terminal`], which answers from
-/// the model DB's declared passive class through the assembly witness and only
-/// falls back to the designator/`lib_id` strings when nothing better exists.
-/// This used to be a designator-prefix test with an exclusion list, so a real
-/// resistor numbered into an `RN` range was lost and a capacitor a designer had
-/// labelled `R5` was accepted as a pull-up with farads read as ohms.
-fn is_resistor(c: &Component) -> bool {
-    part_class::classify_two_terminal(c).is_resistor()
-}
-
-/// A two-terminal capacitor: the kind used as a crystal load cap, and the kind
-/// whose presence to ground makes a net read as a local supply rail.
-///
-/// Delegates to the same ladder as [`is_resistor`], so the two questions cannot
-/// disagree about one part and neither is decided by the designator alone when
-/// better evidence exists. A `Device:C` in an oddly-named slot now counts, and a
-/// resistor a designer labelled `C5` no longer does.
-fn is_capacitor(c: &Component) -> bool {
-    part_class::classify_two_terminal(c).is_capacitor()
-}
-
 /// A net is rail-like if its name is a rail, or it structurally behaves like a
 /// local supply (a bypass cap to ground sits on it). Used by the I2C check to
-/// recognise pull-ups to CAD-auto-named local rails (the round-1 lesson).
+/// recognise pull-ups to CAD-auto-named local rails.
 fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
     if let Some(n) = board.net(net_id) {
         if rail_voltage(&n.name).is_some() {
@@ -351,28 +289,6 @@ fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
                     .unwrap_or(false)
             })
     })
-}
-
-fn is_unconnected_net(name: &str) -> bool {
-    name.trim_start_matches('/').starts_with("unconnected-")
-}
-
-/// Parse a resistor value string ("330", "1k", "4k7", "2.2k/R0603", "0R") to
-/// ohms via the single canonical parser in `hauksbee-models`.
-///
-/// A parser hand-rolled here would drift from `value::parse_value` and from
-/// net-lint's copy: reading lowercase-`m` milliohms as MEGohms (a 1e9
-/// error), rejecting leading-`R` shunt marks ("R47") and inline annotations
-/// ("10k 1%"), and missing unicode/SPICE forms. Delegating kills that whole
-/// drift class: the canonical parser handles µ/Ω/ohm-sign glyphs, MEG/GIG,
-/// milli-`m`, the R/K/M-decimal form, "/footprint" qualifiers, chip-size codes,
-/// and trailing tolerance annotations, all in one tested place. Accept only an
-/// ohmic magnitude (no unit, or an explicit Ω) so a stray farad/volt value here
-/// still reads as "not a resistor".
-fn parse_ohms(v: &str) -> Option<f64> {
-    hauksbee_models::value::parse_value(v)
-        .filter(|p| matches!(p.unit.as_deref(), None | Some("Ω")))
-        .map(|p| p.si)
 }
 
 /// Parse a capacitor value string to farads. Handles "15p", "18pF", "1n", "0.1uF",
@@ -441,11 +357,10 @@ fn parse_farads(v: &str) -> Option<f64> {
 // capacitance into Cstray (~3-5 pF). If CL_board deviates from the crystal's
 // spec the oscillation frequency shifts by roughly
 //     df/f ~ -C1_motional / (2 * (C0 + CL)^... )
-// but the design-rule form we use is simpler and honest: flag only when the
-// *load presented* is far enough from the *spec* that the pullability of a
-// normal crystal (typically +-20..30 ppm trim range, a few pF of CL slack)
-// cannot absorb it, or when caps are absent on a discrete oscillator that needs
-// them.
+// but the design-rule form used here is simpler: flag only when the *load
+// presented* is far enough from the *spec* that a normal crystal's pullability
+// (+-20..30 ppm trim, a few pF of CL slack) cannot absorb it, or when caps are
+// absent on a discrete oscillator that needs them.
 //
 // Reach / honesty. The crystal's CL spec is almost never in the netlist: most
 // boards put only the frequency in the value field ("12MHz", "8MHz"). We can
@@ -882,26 +797,6 @@ pub fn i2c_rise_time_ns(r_ohm: f64, c_pf: f64) -> f64 {
     K_RISE * r_ohm * c_pf * 1e-3
 }
 
-/// I2C role (SDA/SCL) of a net, by leaf name token. Mirrors the netlint matcher.
-fn i2c_role(name: &str) -> Option<&'static str> {
-    let n = norm(name);
-    let toks: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).collect();
-    let has = |needle: &str| {
-        toks.iter().any(|t| {
-            let t = t.strip_prefix('A').unwrap_or(t);
-            let t = t.trim_end_matches(|c: char| c.is_ascii_digit());
-            t == needle
-        })
-    };
-    if has("SDA") {
-        Some("SDA")
-    } else if has("SCL") {
-        Some("SCL")
-    } else {
-        None
-    }
-}
-
 /// True if a net leaf name carries an explicit I2C fast-mode tag as a whole
 /// token (`FM` or `FAST`). Tokenised like [`i2c_role`] so a bus that merely
 /// embeds the letters (`FMC_SDA`, `CONFIRM_SCL`) is NOT misread as fast-mode.
@@ -1245,19 +1140,12 @@ fn antenna_keepout(c: &Component) -> Option<(KeepoutRect, &'static str)> {
         // We model the band from the antenna edge (local y -5.3) outward by 15 mm
         // (to -20.3), spanning the module half-width (+-9 mm).
         //
-        // Calibration, measured rather than assumed: on the Olimex ESP32-EVB the
-        // module sits near the board's top edge but not at it. U3's origin is at
-        // y 79.883 with the antenna edge at y 74.58, while the board outline
-        // starts at y 67.06, so only about 7.5 mm of the 15 mm band hangs off
-        // the board. The remaining 7.5 mm lies over board copper that Olimex
-        // floods with ground, and the check reports 17 to 21 intrusions on every
-        // revision.
-        //
-        // Whether that is a real RF defect or an acceptable compromise is a
-        // hardware question this table cannot settle, and it is the difference
-        // between a true positive and the kind of false alarm that gets a
-        // checker switched off. Until it is settled the corpus expectations name
-        // it as an open question rather than asserting either answer.
+        // A module set back from the board edge leaves part of the 15 mm band
+        // over board copper, which on ground-flooded designs reports intrusions
+        // on every revision. Whether that is a real RF defect or an accepted
+        // compromise is a hardware question this table cannot settle, so the
+        // corpus expectations name it as an open question rather than asserting
+        // either answer.
         return Some((
             KeepoutRect {
                 x_min: -9.0,
@@ -1765,10 +1653,9 @@ fn lower_layer_pours(root: &List) -> Vec<Vec<(f64, f64)>> {
 /// against the pour polygons, so a route that leaves the plane falls back to the
 /// assumed range.
 ///
-/// The residual is stated plainly: a segment whose midpoint is covered but whose
-/// ends overhang the pour edge still counts as covered. That is a narrow
-/// over-reach next to the board-wide test it replaces, and shrinking it further
-/// needs real polygon clipping.
+/// Residual: a segment whose midpoint is covered but whose ends overhang the
+/// pour edge still counts as covered. Shrinking that further needs real polygon
+/// clipping.
 fn net_is_over_a_plane(root: &List, net_id: i64) -> bool {
     let pours = lower_layer_pours(root);
     if pours.is_empty() {
@@ -1850,13 +1737,11 @@ fn track_width_range(root: &List, net_id: i64) -> Option<(f64, f64)> {
 ///
 /// A pair is only the two polarity legs of the *same logical net*: they must
 /// share an identical scope key (the hierarchical sheet path PLUS the leaf stem
-/// with the polarity token removed) and differ only in polarity. This is what
-/// keeps the matcher from pairing two electrically-distinct nets that merely
-/// look USB-ish, in particular the connector-side and MCU-side legs on opposite
-/// sides of a series device (an ESD array, common-mode choke, or series R), which
-/// KiCad gives different names (different sheet path and/or different stem). See
-/// the regression note in `usb_pair_key` and
-/// `tests::usb_pair_key_scopes_by_sheet_and_stem`.
+/// with the polarity token removed) and differ only in polarity. That keeps the
+/// matcher from pairing two electrically-distinct nets that merely look USB-ish,
+/// in particular the connector-side and MCU-side legs on opposite sides of a
+/// series device (an ESD array, common-mode choke, or series R). See
+/// [`usb_pair_key`].
 fn usb_pairs(board: &ExtractedBoard) -> Vec<(i64, i64, String)> {
     // Index nets by their full scope key (sheet path + stem) with the polarity
     // stripped. Two legs pair only when this key is identical, so DP and DN (or
@@ -1906,14 +1791,12 @@ fn usb_pairs(board: &ExtractedBoard) -> Vec<(i64, i64, String)> {
 ///
 /// Why the scope, not just the stem: across a series device (ESD array,
 /// common-mode choke, series resistor) the two sides are electrically distinct
-/// nodes with distinct names. On the klp5e-esp32 board the connector side is
-/// `/USB_DP` + `/USB_DN` (root sheet `/`, stem `USB_`) and the MCU side is
-/// `/ESP32-C3-02/USB_D+` + `/ESP32-C3-02/USB_D-` (sheet `/ESP32-C3-02/`, stem
-/// `USB_`). Keying on sheet path + stem keeps those two real pairs separate, so
-/// the matcher never compares geometry across the ESD device. The previous
-/// implementation collapsed every USB-ish net to the constant base `"USB"`, which
-/// paired `/USB_DP` with `/ESP32-C3-02/USB_D-` across the ESD array and reported a
-/// bogus width/spacing/skew mismatch; the false positive this guards against.
+/// nodes with distinct names, e.g. a connector side `/USB_DP` + `/USB_DN` (root
+/// sheet `/`, stem `USB_`) against an MCU side `/ESP32-C3-02/USB_D+` +
+/// `/ESP32-C3-02/USB_D-` (sheet `/ESP32-C3-02/`, stem `USB_`). Keying on sheet
+/// path + stem keeps those two real pairs separate, so the matcher never
+/// compares geometry across the series device and invents a width/spacing/skew
+/// mismatch.
 fn usb_pair_key(raw_name: &str) -> Option<(String, char)> {
     let trimmed = raw_name.trim();
     // Split the raw name into the sheet path (up to and including the final '/')

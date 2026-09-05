@@ -25,43 +25,33 @@
 //! followed by the GPIO/UART exchange. This is the QMP analogue of Renode's
 //! `RunFor`: it advances the guest a bounded amount and pauses.
 //!
-//! ## Why not `-icount` (measured, not assumed)
+//! ## Why not `-icount`
 //!
-//! The theoretically ideal primitive is `-icount shift=N`, which makes virtual
-//! time a deterministic function of executed instructions and gives bit-exact
-//! reproducibility (this is how the Renode-vs-QEMU note in docs/cosim/MCU.md framed
-//! it). We TESTED it against the Espressif fork's `esp32` machine and it does not
-//! work: with `-icount` at any shift (4/6/8/auto), with or without `sleep=off`,
-//! the Xtensa esp32 machine produces ZERO UART output in a 15 s wall window,
-//! versus ~1 s to the "hello from esp32" banner with no icount. icount on these
-//! Xtensa machines is undocumented by Espressif and, empirically, breaks boot.
-//! So icount is off, and determinism comes from the guest's own timers rather
-//! than an instruction-counted clock.
+//! `-icount shift=N` would make virtual time a deterministic function of
+//! executed instructions, but it BREAKS boot on the Espressif fork's `esp32`
+//! machine: at any shift (4/6/8/auto), with or without `sleep=off`, the Xtensa
+//! esp32 machine produces zero UART output in a 15 s wall window, against ~1 s
+//! to the "hello from esp32" banner without it. icount on these Xtensa machines
+//! is undocumented by Espressif and empirically broken, so it stays off.
+//!
+//! Two other exact primitives are also unusable here. qtest `clock_step` gives
+//! exact virtual-time advance and clean `readl`/`writel`, but it replaces the
+//! accelerator and gates all guest execution on test-driven clock steps, so it
+//! cannot boot a real flash image through the normal TCG path. A gdbstub
+//! single-step budget is exact but far too slow for millions of instructions
+//! per chunk over RSP; the gdbstub is used only for word-granular memory
+//! writes (the GPIO input mailbox), never for stepping.
 //!
 //! ## Determinism without icount
 //!
-//! Without icount the esp32 machine runs its virtual clock roughly at wall rate
+//! Without icount the esp32 machine runs its virtual clock at roughly wall rate
 //! (like Renode's `RunFor` blocking for the interval). Run-to-run timing is not
 //! bit-exact, but the firmware's *logic behaviour* is reproducible because it is
 //! driven by the guest's deterministic peripheral timers (the FreeRTOS tick, the
-//! UART baud generator), which we sample only at chunk boundaries. The
-//! integration test asserts this directly: the boot banner is identical and the
-//! GPIO toggle count is stable (within a couple of chunks) across repeated runs.
-//! That is the same standard a logic-analyser sampling a real board at the chunk
-//! rate would meet.
-//!
-//! Alternatives considered and rejected:
-//!   - **`-icount` + QMP stepping**: the ideal, but breaks esp32 boot (measured
-//!     above). Rejected.
-//!   - **qtest `clock_step`**: gives exact virtual-time advance and clean
-//!     `readl`/`writel`, but qtest replaces the accelerator and gates all guest
-//!     execution on test-driven clock steps; it cannot boot a real flash image
-//!     through the normal TCG path. Rejected: it cannot boot the app the way a
-//!     product does.
-//!   - **gdbstub single-step budget**: exact, but stepping millions of
-//!     instructions per chunk over RSP is far too slow. We DO use the gdbstub,
-//!     but only for word-granular memory writes (GPIO input mailbox), never for
-//!     stepping.
+//! UART baud generator), sampled only at chunk boundaries: the same standard a
+//! logic analyser sampling a real board at the chunk rate would meet. The
+//! integration test pins it -- identical boot banner, GPIO toggle count stable
+//! within a couple of chunks across repeated runs.
 //!
 //! # Coupling model (transplanted ODR-poll, register-first)
 //!
@@ -87,14 +77,13 @@ mod gdb;
 pub mod install;
 mod process;
 mod qmp;
-mod uart;
 
 // QemuProcess is exported (not just used internally) for the child-reaping
 // integration tests and any host that needs the raw spawned-emulator handle
 // rather than the backend.
 pub use process::{find_qemu, is_available, QemuArch, QemuProcess};
 
-use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
+use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent, UartSocket};
 use anyhow::{bail, ensure, Context, Result};
 use gdb::GdbStub;
 use qmp::Qmp;
@@ -102,7 +91,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
-use uart::UartSocket;
 
 type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
 type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
@@ -134,17 +122,14 @@ pub mod mailbox {
     /// Magic tag value ("inlj" little-endian of 0x6A6C6E69).
     pub const MAGIC_VALUE: u32 = 0x6A6C_6E69;
 
-    /// ESP32-C3 (RISC-V) RTC slow memory base differs from the Xtensa parts.
-    pub const C3_BASE: u32 = 0x5000_0000;
-
     // ── Mailbox v2: the ADC + bus extension ─────────────────────────────────
     //
     // Espressif QEMU models neither the SAR ADC nor a host hook for I2C/SPI
     // byte traffic, so these functions ride the same RAM mailbox as GPIO.
     // Like the GPIO words, this is a FIRMWARE CONTRACT, not general firmware
-    // support (05 §5.3): unmodified vendor firmware does not read these slots.
+    // support: unmodified vendor firmware does not read these slots.
     // Each function is stated here precisely so a firmware author (or the
-    // repo's demo firmware) can opt in; §5.3 retires each slot the day the
+    // repo's demo firmware) can opt in; a slot is retired the day the
     // QEMU fork grows the corresponding peripheral hook.
     //
     // ADC (host → firmware, no handshake): `Mcu::set_analog_in(ch, volts)` is
@@ -188,18 +173,14 @@ pub mod mailbox {
     /// Voltage mapping to `ADC_MAX_COUNT`, shared by the ESP32 family
     /// backends this module drives.
     ///
-    /// The constraint: this constant must match what the converter SATURATES
-    /// at, not what the board's rail is, or every injected voltage scales
-    /// wrong as a count. The old 3.3 V was the rail, which no member of the
-    /// family converts up to. 3.1 V is the datasheet full-scale input at the
-    /// highest attenuation for the ESP32-S2/S3/C3 (e.g. ESP32-C3 datasheet
-    /// §"ADC Characteristics": ATTEN_DB_11 measurable range 0 ~ 3100 mV).
-    /// The classic ESP32 is messier and 3.1 V is the honest single figure
-    /// for it too: its characterized-accurate range at 11 dB ends at
-    /// 2450 mV (ESP32 datasheet, ADC characteristics table) while its
-    /// theoretical 11 dB full scale is 1.1 V x 3.548 = 3.9 V clipped by the
-    /// rail, and real parts saturate near 3.1 V. Injections between 3.1 V
-    /// and the rail clamp to the top code, as the silicon does.
+    /// This must be what the converter SATURATES at, not the board's rail, or
+    /// every injected voltage scales wrong as a count. 3.1 V is the datasheet
+    /// full-scale input at the highest attenuation for the ESP32-S2/S3/C3
+    /// (ESP32-C3 datasheet, "ADC Characteristics": ATTEN_DB_11 measurable range
+    /// 0 ~ 3100 mV). The classic ESP32 is messier -- characterized-accurate to
+    /// 2450 mV at 11 dB, theoretical full scale 1.1 V x 3.548 = 3.9 V clipped
+    /// by the rail -- but real parts saturate near 3.1 V too. Injections
+    /// between 3.1 V and the rail clamp to the top code, as the silicon does.
     pub const ADC_FULL_SCALE_VOLTS: f64 = 3.1;
 
     /// The mailbox word carrying channel `ch`'s injected count.
@@ -245,8 +226,7 @@ pub mod mailbox {
 /// use the GPIO_OUT bit layout, so edge synthesis is identical on either path.
 ///
 /// Plain-data register-offset carrier, so a new part declares its mailbox
-/// addresses instead of adding branches to the backend; serde-derivable so it
-/// is a W5 file-load target with no loader landing now.
+/// addresses instead of adding branches to the backend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GpioBank {
     /// Logical port letter the engine uses in [`PinId`]. The ESP32 GPIO matrix
@@ -271,10 +251,9 @@ pub struct GpioBank {
 /// Per-part QEMU configuration: enough to boot a machine and bridge it.
 ///
 /// Plain-data per-part surface, carrying every part difference as data rather
-/// than as backend logic: the machine name, GPIO
-/// banks with their mailbox offsets, icount/frequency, expected ISA, and I2C bus
-/// paths are struct fields a constructor fills. `Serialize`/`Deserialize` make it
-/// the file-load target for W5's data-driven MCU descriptor; no loader now.
+/// than as backend logic: the machine name, GPIO banks with their mailbox
+/// offsets, icount/frequency, expected ISA and I2C bus paths are struct fields,
+/// loadable from a `db/mcu/*.soc.toml` descriptor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QemuConfig {
     /// Which QEMU system binary to use.
@@ -319,13 +298,13 @@ pub enum GpioOutputObservation {
 }
 
 impl QemuConfig {
-    // ── Built-in parts (06 §2) ──────────────────────────────────────────────
+    // ── Built-in parts ──────────────────────────────────────────────
     //
-    // Named accessors over the shipped `db/mcu/*.soc.toml` descriptors (embedded
-    // via `include_str!`): the mailbox layout, arch, and clocking all live in
-    // the TOML. A fresh part is addable purely as
-    // data via [`crate::SocConfig::resolve`]. `.expect` is correct, a shipped
-    // descriptor failing to load is a build bug caught by tests/soc_descriptors.rs.
+    // Named accessors over the shipped `db/mcu/*.soc.toml` descriptors
+    // (embedded via `include_str!`): the mailbox layout, arch and clocking all
+    // live in the TOML, and a fresh part is addable purely as data via
+    // [`crate::SocConfig::resolve`]. `.expect` is correct here -- a shipped
+    // descriptor failing to load is a build bug tests/soc_descriptors.rs catches.
 
     /// Classic ESP32 (Xtensa LX6). See `db/mcu/esp32.soc.toml`.
     pub fn esp32() -> Self {
@@ -358,23 +337,16 @@ impl QemuConfig {
 ///      Xtensa-on-RISC-V mistake catchable even though the bin itself is opaque.
 ///   3. If neither yields an ELF, the image is left unchecked (no false error).
 ///
-/// # Sibling resolution (conservative: zero false positives)
+/// # Sibling resolution
 ///
 /// A firmware directory can legitimately hold sibling ELFs of *different* ISAs
-/// (e.g. `testdata/firmware/esp32_blinky/` ships both the Xtensa
-/// `esp32_blinky.elf` and the RISC-V `esp32c3_blinky.elf` next to the raw
-/// `flash.bin`). We must not false-error just because *some* sibling disagrees
-/// with the board. The rule is therefore "any sibling matches → pass":
-///   - collect every sibling that parses as an ELF and read its `e_machine`;
-///   - if ANY of them matches `expected`, the image is arch-consistent → `Ok`;
-///   - only if there are sibling ELFs and NONE matches do we raise the clear
-///     two-sided mismatch error (the genuine Xtensa-on-RISC-V case the gate was
-///     built for, where the *only* sibling disagrees, is still caught);
-///   - no parseable sibling ELF at all → unchecked (`Ok`, never a false error).
-///
-/// As a tie-break, when nothing matches we report the mismatch against a sibling
-/// whose filename stem matches the `.bin`'s stem if one exists, else the first
-/// mismatching sibling, so the message is the most relevant one.
+/// (`testdata/firmware/esp32_blinky/` ships both the Xtensa `esp32_blinky.elf`
+/// and the RISC-V `esp32c3_blinky.elf` next to the raw `flash.bin`), so the
+/// rule is "any sibling matches -> pass": read `e_machine` from every sibling
+/// that parses as an ELF, and error only when there are such siblings and NONE
+/// matches. No parseable sibling means unchecked, never a false error. When
+/// nothing matches, the reported mismatch prefers a sibling whose filename stem
+/// matches the `.bin`'s.
 ///
 /// Returns `Err` only on a genuine architecture mismatch.
 fn validate_flash_image_arch(flash_image: &Path, expected: u16, mcu_label: &str) -> Result<()> {
@@ -618,7 +590,7 @@ pub struct QemuBackend {
     /// every frame). Populated lazily by [`Mcu::set_i2c_device_temperature`].
     i2c_temp_paths: HashMap<u8, Option<String>>,
 
-    // ── Mailbox v2 (05 §5.1/§5.2) state ─────────────────────────────────────
+    // ── Mailbox v2 state ─────────────────────────────────────
     /// I2C byte-event handler, serviced from the mailbox I2C request cell.
     on_i2c: Option<I2cCb>,
     /// SPI byte-event handler, serviced from the mailbox SPI request cell.
@@ -776,7 +748,7 @@ impl QemuBackend {
             _ => None,
         };
 
-        let uart = UartSocket::connect(uart_port, Duration::from_secs(10))?;
+        let uart = UartSocket::connect("QEMU", uart_port, Duration::from_secs(10))?;
 
         let gpio_output_observation = match (
             qmp.qom_get(&config.gpio_qom_path, "gpio-out"),
@@ -934,7 +906,7 @@ impl QemuBackend {
         };
         // Wall-clock-derived poll boundary time, in cycles-equivalent. QEMU has
         // no icount here, so this is coarse and every edge this poll shares it;
-        // `cycle_exact()` is false (05 §1.1). Snapshot before the callback borrow.
+        // `cycle_exact()` is false. Snapshot before the callback borrow.
         let cyc = self.cycles;
         let mut observed_change = false;
         for bank in &banks {
@@ -1023,23 +995,18 @@ impl QemuBackend {
 
         // Credit cycles from the window the guest ACTUALLY ran, not the
         // requested `seconds` and not even the slept `window`: QEMU stamps its
-        // RESUME and STOP events with the host time of the state transition,
-        // so the cont→stop span is a measurement of the whole run, including
-        // the QMP round-trip slack the guest keeps executing through on each
-        // side of the sleep. That slack used to be uncredited (the old comment
-        // here called it unmeasurable), which is exactly the systematic
-        // 1.35-1.45x-slow bias docs/cosim/MCU.md used to carry for this
-        // backend. Boot chunks are covered by the same measurement: the
-        // floor/cap reshapes the window, and the event pair brackets whatever
-        // window actually ran, so the boot-floor crediting is preserved.
+        // RESUME and STOP events with the host time of the state transition, so
+        // the cont->stop span measures the whole run including the QMP
+        // round-trip slack the guest keeps executing through on each side of
+        // the sleep. Leaving that slack uncredited is a systematic ~1.4x-slow
+        // bias. Boot chunks are covered by the same measurement: the floor/cap
+        // reshapes the window, and the event pair brackets whatever ran.
         //
         // The measurement is trusted only when it is at least the slept window
         // (the events bracket the sleep, so a smaller span means a stale or
-        // torn pair); otherwise the slept window is credited, which is the old
-        // behaviour and the conservative side. What no wall measurement can
-        // see is TCG pace itself: virtual time tracks the host clock only
-        // approximately while running, which is why TIMING_LIMITATION below
-        // still reaches every report surface.
+        // torn pair); otherwise the slept window is credited, the conservative
+        // side. What no wall measurement can see is TCG pace itself, which is
+        // why TIMING_LIMITATION below still reaches every report surface.
         let credited = self
             .qmp
             .measured_run_window(Duration::from_millis(200))
@@ -1061,7 +1028,7 @@ impl QemuBackend {
         }
 
         let gpio_activity = self.poll_gpio_edges()?;
-        // Service the mailbox bus cells while the guest is paused (05 §5.2),
+        // Service the mailbox bus cells while the guest is paused,
         // so a firmware spin-waiting on RSP_SEQ proceeds next chunk.
         self.service_bus_mailbox()?;
         self.pump_uart_out()?;
@@ -1132,7 +1099,7 @@ impl QemuBackend {
         self.write_guest_bytes(addr, &val.to_le_bytes())
     }
 
-    /// Service the mailbox v2 bus cells once per chunk (05 §5.2), while the
+    /// Service the mailbox v2 bus cells once per chunk, while the
     /// guest is paused. Zero-cost when no callback is registered; one word
     /// read per chunk until the firmware raises BUS_MAGIC.
     fn service_bus_mailbox(&mut self) -> Result<()> {
@@ -1403,13 +1370,13 @@ pub const WATCHDOG_LIMITATION: &str =
 /// Why ESP32 virtual time is approximate here, stated once.
 ///
 /// Backend-wide for the same reason as [`WATCHDOG_LIMITATION`]: the cause is
-/// how this co-simulator drives QEMU (no icount, because it breaks esp32 boot,
-/// measured), not anything a descriptor declares. Each chunk's cont→stop
-/// window is measured from QEMU's own RESUME/STOP event timestamps, so the
-/// control-channel slack that used to be silently dropped is credited; what
-/// remains systematic is TCG pace itself, which tracks the host wall clock
-/// only approximately and degrades under host load. A `const` so `hauksbee
-/// models lint` quotes the same sentence a run reports.
+/// how this co-simulator drives QEMU (no icount, because it breaks esp32 boot),
+/// not anything a descriptor declares. Each chunk's cont->stop window is
+/// measured from QEMU's own RESUME/STOP event timestamps, so the
+/// control-channel slack is credited; what remains systematic is TCG pace
+/// itself, which tracks the host wall clock only approximately and degrades
+/// under host load. A `const` so `hauksbee models lint` quotes the same
+/// sentence a run reports.
 pub const TIMING_LIMITATION: &str =
     "ESP32 virtual time is paced by the host wall clock in this co-simulator \
      (QEMU icount breaks esp32 boot), so simulated time is approximate and \
@@ -1449,12 +1416,11 @@ impl Mcu for QemuBackend {
     /// (`process.rs`, `wdt_disable=true`), so it is a property of how this
     /// backend launches QEMU rather than of the descriptor.
     ///
-    /// Disabling them is the right call and stays: co-simulation pauses the
-    /// guest at every chunk boundary while the analog side solves, and a
-    /// running timer-group watchdog would read those pauses as a hung firmware
-    /// and reset a core that is doing nothing wrong. The wrong part was that
-    /// the trade was recorded only in a source comment, where a user reading a
-    /// green report never sees it.
+    /// Disabling them is deliberate: co-simulation pauses the guest at every
+    /// chunk boundary while the analog side solves, and a running timer-group
+    /// watchdog would read those pauses as a hung firmware and reset a core
+    /// that is doing nothing wrong. Surfaced as data so a user reading a green
+    /// report sees the trade.
     fn watchdog_limitation(&self) -> Option<String> {
         Some(WATCHDOG_LIMITATION.to_string())
     }
@@ -1548,12 +1514,12 @@ impl Mcu for QemuBackend {
 
     fn set_analog_in(&mut self, channel: u8, volts: f64) {
         // The ESP32 SAR ADC is not modelled by the QEMU fork's peripheral set,
-        // so injection rides the RAM mailbox (05 §5.1): the modeled voltage is
+        // so injection rides the RAM mailbox: the modeled voltage is
         // converted to a 12-bit count and written into the channel's mailbox
         // slot each chunk, with the channel's ADC_MASK bit set. Firmware reads
         // the count from the slot rather than a real peripheral, a FIRMWARE
         // CONTRACT, stated as such in [`mailbox`], retired per function the
-        // day the fork models the peripheral (05 §5.3).
+        // day the fork models the peripheral.
         if channel >= mailbox::ADC_CHANNELS {
             eprintln!(
                 "qemu: DROPPING ADC injection for channel {channel}: the mailbox \
@@ -1594,7 +1560,7 @@ impl Mcu for QemuBackend {
 
     fn cycle_exact(&self) -> bool {
         // Wall-clock-derived virtual time, no icount: GPIO is observed by diffing
-        // a RAM-mailbox output word per chunk, so edge ordering is coarse (05 §1.1).
+        // a RAM-mailbox output word per chunk, so edge ordering is coarse.
         false
     }
 
@@ -1626,18 +1592,17 @@ impl Mcu for QemuBackend {
         // FIFO, so byte events cannot be intercepted from the emulated I2C
         // controller the way simavr/Renode do. Two paths coexist instead:
         //
-        //   1. This callback services the RAM-mailbox I2C cell (05 §5.2): a
-        //      firmware participating in the mailbox v2 contract gets its
-        //      transactions surfaced as the same Start/Write/Read/Stop events,
-        //      so the engine's I2C slave models answer uniformly across
-        //      backends. Coarse (one transaction per chunk) and gated on
-        //      BUS_MAGIC; a non-participating firmware costs nothing.
-        //   2. Temperature sensors are ALSO pushed into QEMU's own emulated
-        //      I2C device (the machine ships a tmp105 at 0x48 on i2c0) via
+        //   1. This callback services the RAM-mailbox I2C cell, surfacing a
+        //      participating firmware's transactions as the same
+        //      Start/Write/Read/Stop events so the engine's I2C slave models
+        //      answer uniformly across backends. Coarse (one transaction per
+        //      chunk) and gated on BUS_MAGIC, so a non-participating firmware
+        //      costs nothing.
+        //   2. Temperature sensors are ALSO pushed into QEMU's own emulated I2C
+        //      device (the machine ships a tmp105 at 0x48 on i2c0) via
         //      `set_i2c_device_temperature`, which unmodified vendor firmware
-        //      reads through its real I2C controller. Where such a device
-        //      exists it is preferred (05 §5.3: retire the mailbox function
-        //      when a real peripheral emulation exists).
+        //      reads through its real I2C controller. Preferred wherever such a
+        //      device exists: a real peripheral emulation retires a mailbox slot.
         self.on_i2c = Some(cb);
     }
 
@@ -1656,7 +1621,7 @@ impl Mcu for QemuBackend {
 
     fn on_spi(&mut self, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
         // Espressif QEMU exposes no host hook for GPSPI transfers, so SPI byte
-        // events ride the RAM-mailbox SPI cell (05 §5.2): a firmware
+        // events ride the RAM-mailbox SPI cell: a firmware
         // participating in the mailbox v2 contract submits transaction-level
         // bursts and each byte is surfaced through this callback (MISO bytes
         // return via the response cell). Gated on BUS_MAGIC; unmodified vendor
@@ -1808,7 +1773,7 @@ mod tests {
         assert_eq!(c.banks[0].out_reg, mailbox::GPIO_OUT);
     }
 
-    /// Bit-identity proof for the data-driven config bridge (05 §5.5): every
+    /// Bit-identity proof for the data-driven config bridge: every
     /// stock QEMU config round-trips through serde equal to the constructor's
     /// output, so it is a lossless plain-data carrier for W5's future file load,
     /// and the refactor (inert `#[derive]`s only) left the values unchanged.

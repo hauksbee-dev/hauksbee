@@ -156,11 +156,6 @@ impl DiodeModel {
     pub fn is_at(&self, t_c: f64) -> f64 {
         saturation_current(self.is, self.n, self.xti, self.eg, t_c)
     }
-
-    /// Thermal voltage scaled by the emission coefficient, `N*Vt`.
-    pub fn nvt(&self, t_c: f64) -> f64 {
-        self.n * thermal_voltage(t_c)
-    }
 }
 
 /// Bipolar junction transistor, Gummel-Poon basics.
@@ -315,7 +310,7 @@ pub struct MosfetModel {
     /// omits them, so every ngspice level-1 MOS carries intrinsic Meyer
     /// capacitance. Here an omitted `TOX` yields `c_ox = 0`, no intrinsic
     /// gate charge, because the bit-identity bar requires default models to
-    /// stamp exactly what they stamped before this field existed. A deck
+    /// stamp exactly what a model without the field stamps. A deck
     /// that wants the intrinsic caps states `TOX` (and real `W`/`L`).
     pub c_ox: f64,
     /// Body-diode saturation current (A), SPICE `IS`. `0` disables the body
@@ -339,7 +334,7 @@ pub struct MosfetModel {
     /// datasheet-Rds(on) split (`rd + rs + channel`): a power FET carries most
     /// of its on-state drop here, not in the channel. `0` = ideal drain (the
     /// default). Default-zero is load-bearing: a model without `rd` allocates
-    /// no internal drain node and stamps bit-identically to before this field.
+    /// no internal drain node and stamps as an ideal drain.
     pub rd: f64,
     /// Source ohmic series resistance (ohms), SPICE `RS`. The other half of the
     /// datasheet-Rds(on) split. `0` = ideal source (the default), bit-identical.

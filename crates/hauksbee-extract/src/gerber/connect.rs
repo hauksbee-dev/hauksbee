@@ -310,13 +310,11 @@ pub fn reconstruct(
 
         // Region overlap pass: a non-region primitive joins a pour when its
         // copper genuinely *overlaps* the filled area, not merely runs near the
-        // boundary. We test the primitive's representative point AND (for
-        // tracks) its endpoints for containment inside the keyholed contour. A
-        // thermal spoke or a pad that the pour floods up to has a point inside
-        // the fill; an antipad-isolated pad sits in a pocket the even-odd test
-        // puts *outside*, and a track merely skirting the keyhole boundary has
-        // no point inside. This keeps legitimate pour connections (GND flood +
-        // thermal spokes) while never bridging the nets a pour weaves around.
+        // boundary. The primitive's representative point, and for tracks its
+        // endpoints, are tested for containment inside the keyholed contour. A
+        // thermal spoke or a pad the pour floods up to has a point inside the
+        // fill; an antipad-isolated pad sits in a pocket the even-odd test puts
+        // *outside*, and a track skirting the boundary has no point inside.
         let regions: Vec<usize> = members
             .iter()
             .copied()
@@ -343,18 +341,15 @@ pub fn reconstruct(
             // (the common case: a few hundred separate fill islands) are cheaper
             // tested directly than gridded, so they skip the build cost.
             //
-            // Multi-contour pours take the grid too. They used to be left to the
-            // exact test on the grounds that they are "rare and small", which a
-            // negative-drawn plane broke outright: cutting its `%LPC%` voids
-            // turns it into ONE board-sized shape carrying a contour per antipad,
-            // exactly the case the grid exists for.
+            // Multi-contour pours take the grid too: cutting a negative-drawn
+            // plane's `%LPC%` voids turns it into ONE board-sized shape carrying
+            // a contour per antipad, exactly the case the grid exists for.
             const GRID_VERT_THRESHOLD: usize = 2000;
-            // A MultiPolygon pour's contours are borrowed, not copied. Those are the
-            // board-sized ones, a cut negative plane being exactly a multi-contour
-            // pour, so cloning them held the layer's largest geometry twice over for
-            // the whole pass. A `Polygon` has to be wrapped in a one-contour slice
-            // to be gridded at all, so those alone are materialised, and they are the
-            // small ones.
+            // A MultiPolygon pour's contours are borrowed, not copied: those are
+            // the board-sized ones (a cut negative plane is exactly a
+            // multi-contour pour), so cloning holds the layer's largest geometry
+            // twice for the whole pass. Only a `Polygon`, which has to be wrapped
+            // in a one-contour slice to be gridded at all, is materialised.
             let mut owned: Vec<(usize, Vec<Vec<(f64, f64)>>, Vec<i16>)> = Vec::new();
             let mut borrowed: Vec<(usize, &[Vec<(f64, f64)>], &[i16])> = Vec::new();
             for &rgi in &regions {
@@ -393,29 +388,18 @@ pub fn reconstruct(
                 .map(|(rgi, contours, weights)| {
                     let verts: usize = contours.iter().map(Vec::len).sum();
                     // Resolution scales with vertex count, so detail buys cells,
-                    // and the ceiling is 4096 rather than 512 because the cell
-                    // size decides how often a query falls back to the exact
-                    // test. A negative plane's pads sit ~0.2 mm from the void rim
-                    // that isolates them, which at 512 cells over a 100 mm board
-                    // (0.2 mm a cell) is one cell: every pad landed in the
-                    // boundary band and paid the exact poly distance over the
-                    // pour's whole vertex count anyway. A 4096 ceiling also keeps
-                    // an annular island's bounds clear of its surrounding hole's
-                    // boundary cells, so dense plane/island reconstruction stays
-                    // indexed instead of falling back to a whole-plane Boolean
-                    // comparison. The grid is exact at any resolution (scanline
-                    // coverage plus an exact test on a boundary cell), so this only
-                    // moves work, never answers.
-                    //
-                    // Whole-extraction times for a 100 mm plane with 6084
-                    // rectangular antipads and a pad in each: 3.97 s with the
-                    // ceiling at 512, 60-75 ms at 2048. With the antipads drawn as
-                    // ANNULAR clear flashes, the shape a real negative plane
-                    // carries (a 64-gon plus a 32-gon rim each, some 600k contour
-                    // vertices), 90-100 ms; 62500 non-overlapping annular ones,
-                    // each leaving an island to free, 1-2 s. Those last two are only
-                    // affordable because the scanline buckets its edges by row (see
-                    // `PolyGrid::new`); without that the build alone was 3.2 s.
+                    // and the ceiling is 4096 because the cell size decides how
+                    // often a query falls back to the exact test. A negative
+                    // plane's pads sit ~0.2 mm from the void rim that isolates
+                    // them, which at 512 cells over a 100 mm board is one cell, so
+                    // every pad lands in the boundary band and pays the exact poly
+                    // distance over the pour's whole vertex count. A 4096 ceiling
+                    // also keeps an annular island's bounds clear of its
+                    // surrounding hole's boundary cells, so dense plane/island
+                    // reconstruction stays indexed instead of falling back to a
+                    // whole-plane Boolean comparison. The grid is exact at any
+                    // resolution (scanline coverage plus an exact test on a
+                    // boundary cell), so this only moves work, never answers.
                     let cells = (verts / 4).clamp(64, side_ceiling);
                     (
                         rgi,
@@ -443,14 +427,12 @@ pub fn reconstruct(
                 if near_regions.is_empty() {
                     continue;
                 }
-                // Test points: the centre, capsule endpoints, and (for a track)
-                // a few interior samples along the segment. A pour that floods
-                // onto a pad/spoke contains at least one of these points inside
-                // its filled outline; an antipad-isolated pad has none inside
-                // (the signed-coverage keyhole puts the pocket outside); a track merely
-                // skirting the boundary also has none inside. Pure point-in-
-                // polygon (no poly-poly distance) keeps this near-linear in the
-                // pour's vertex count, so big copper pours stay cheap.
+                // Test points: the centre, capsule endpoints, and for a track a
+                // few interior samples. A pour flooding onto a pad or spoke
+                // contains at least one of them; an antipad-isolated pad has none
+                // (signed coverage puts the pocket outside), and neither has a
+                // track skirting the boundary. Pure point-in-polygon, no
+                // poly-poly distance, so big pours stay near-linear.
                 let mut test_pts = match &prims[gi].shape {
                     // A region's vertex-average may sit in one of its holes. It is
                     // not copper and using it as a containment witness joins the
@@ -525,9 +507,8 @@ pub fn reconstruct(
                         // A gridded pour also answers "is there any boundary in
                         // this pad's bounds at all" in O(1). Without that guard a
                         // board-sized pour's bounds overlap EVERY pad, so every
-                        // antipad-isolated pad paid an exact poly distance over
-                        // the pour's whole vertex count, which is the quadratic
-                        // the grid was introduced to remove.
+                        // antipad-isolated pad pays an exact poly distance over
+                        // the pour's whole vertex count.
                         let penetrates = !inside
                             && matches!(
                                 prims[gi].kind,
@@ -574,19 +555,16 @@ pub fn reconstruct(
     // ── 3b. X2 net identity: union copper the film NAMES onto one net ───────
     // An X2 film states each object's net outright (`%TO.N,<name>`), so two
     // primitives carrying the same name are one conductor by the film's own
-    // declaration, whether or not their copper touches in the films we
-    // classified (the routing may pass through an inner layer this job did
-    // not ship). This runs AFTER the geometric passes so that every join the
-    // film asserts and the copper does not make on its own is COUNTED and
-    // surfaced: that gap is either routing on films we never saw, or a
-    // genuine open the film's intent would otherwise paper over, and hiding
-    // it would mask exactly the defect a connectivity reader exists to see.
-    // On a stripped film no primitive carries a name and this pass does
-    // nothing, leaving the geometric reconstruction bit-for-bit alone.
-    // A net-tie object carries SEVERAL names (`%TO.N,A,B*%`); each name is
-    // unioned through the object itself, which is exactly what a net tie is.
-    // The same co-occurrence feeds `tied_names`, so the naming pass below can
-    // tell a film-declared tie from a genuine geometric conflict.
+    // declaration, whether or not their copper touches in the classified films
+    // (the routing may pass through an inner layer the job did not ship). This
+    // runs AFTER the geometric passes so every join the film asserts and the
+    // copper does not make on its own is COUNTED and surfaced: that gap is
+    // either routing on films never seen, or a genuine open the film's intent
+    // would paper over. On a stripped film no primitive carries a name and this
+    // pass does nothing. A net-tie object carries SEVERAL names
+    // (`%TO.N,A,B*%`); each is unioned through the object itself, which is what
+    // a net tie is, and the co-occurrence feeds `tied_names` so the naming pass
+    // below can tell a declared tie from a geometric conflict.
     let mut x2_net_first: HashMap<&str, usize> = HashMap::new();
     let mut x2_fragment_joins: usize = 0;
     let mut tied_names: Vec<(Arc<str>, Arc<str>)> = Vec::new();
@@ -692,12 +670,11 @@ pub fn reconstruct(
 
     // Build the Net table with names, in net-id order.
     //
-    // Sorted BEFORE the walk, not after: the walk pushes an X2-disagreement
-    // note per conflicting net, and `root_to_net` is a HashMap, so walking it
-    // raw emitted those notes (and the evidence assumptions built from them) in
-    // hash order. Sorting the finished `nets` afterwards fixed the net table
-    // and left the notes shuffled, which is enough to make two analyses of one
-    // archive export different JSON.
+    // Sorted BEFORE the walk, not after: the walk pushes an X2-disagreement note
+    // per conflicting net and `root_to_net` is a HashMap, so walking it raw
+    // emits those notes (and the evidence assumptions built from them) in hash
+    // order, which is enough to make two analyses of one archive export
+    // different JSON.
     let mut net_ids: Vec<i64> = root_to_net.values().copied().collect();
     net_ids.sort_unstable();
     let nets: Vec<Net> = net_ids
@@ -760,13 +737,11 @@ pub fn reconstruct(
         .collect();
     let x2_pins_present = !x2_pin_flashes.is_empty();
     // Every flash the film did not bind by `.P` keeps its geometric fallback,
-    // UNLESS the film stated what the flash is and it is not a component pad
-    // (a fiducial, an antipad, a washer; via flashes were already classified
-    // as vias at parse time). Absence of `.P` is NOT a non-pad assertion: a
-    // partially attributed film (a merged film, an exporter that attributes
-    // only a subset of its pads) must not have its bare pads silently
-    // deleted just because another flash somewhere carried pin identity. On
-    // a stripped job every flash lands here: the pre-X2 path, unchanged.
+    // UNLESS the film stated what the flash is and it is not a component pad (a
+    // fiducial, an antipad, a washer; via flashes were classified as vias at
+    // parse time). Absence of `.P` is NOT a non-pad assertion: a partially
+    // attributed film must not have its bare pads deleted just because another
+    // flash carried pin identity. On a stripped job every flash lands here.
     let geometric_flashes: Vec<usize> = flash_idxs
         .iter()
         .copied()
@@ -986,13 +961,10 @@ pub fn reconstruct(
     // ── Per-net copper geometry (for the gerber trace-current surface) ───────
     // A drawn copper track (`PrimKind::Track`) is a finite-width capsule whose
     // width is exactly `2*r` (the aperture diameter). A pour (`PrimKind::Region`)
-    // is a plane: its true cross-section is not a discrete-segment width, so a
+    // is a plane whose true cross-section is not a discrete-segment width, so a
     // net carrying any region is `Poured` and out of the discrete-width check's
-    // reach, exactly as in the native-CAD trace_current module. Flashes (pads)
-    // and vias are not conductor-length segments, so they do not set the
-    // bottleneck width. This is computed here, where `net_of_prim` and the
-    // primitive shapes are both in scope, and surfaced for the gerber
-    // trace-current sweep.
+    // reach, as in the native-CAD trace_current module. Flashes and vias are not
+    // conductor-length segments, so they do not set the bottleneck width.
     let net_name_of: HashMap<i64, String> = nets.iter().map(|n| (n.id, n.name.clone())).collect();
     let mut min_w: HashMap<i64, f64> = HashMap::new();
     let mut max_w: HashMap<i64, f64> = HashMap::new();
@@ -1127,17 +1099,12 @@ impl ReconStats {
     /// sentences: the reader's own refusal notes, plus the pad-location
     /// accounting.
     ///
-    /// The accounting existed on this struct from the start and reached nothing
-    /// but an example binary, so a job where a third of the pads landed on no
-    /// component produced a report that looked exactly like a complete one. A
-    /// closed-loop percentage computed off this reconstruction only scores the
-    /// pads that WERE located, which is a claim about part of the board being
-    /// presented as a claim about the board.
-    ///
-    /// Note the precise scope of an unmatched flash: it is copper, so it still
-    /// joins whatever net it touches during connectivity reconstruction. What it
-    /// lacks is a component and a pin, which is what makes every per-part figure
-    /// partial.
+    /// Without the accounting, a job where a third of the pads landed on no
+    /// component reads exactly like a complete one: a closed-loop percentage
+    /// computed off this reconstruction scores only the pads that WERE located.
+    /// An unmatched flash is still copper and still joins whatever net it
+    /// touches; what it lacks is a component and a pin, which is what makes
+    /// every per-part figure partial.
     pub fn coverage_notes(&self) -> Vec<String> {
         let mut out = self.notes.clone();
         if self.unassigned_flashes > 0 {
@@ -1259,15 +1226,13 @@ fn footprint_half_extent(package: &str) -> f64 {
 /// The oriented pad window of a grid footprint (pin header / connector),
 /// rotated by the placement's stored rotation.
 ///
-/// The square window sized for a long header's full span is enormous in BOTH
-/// axes (a 1x40 header gets a ~100 mm square), while the part itself is a
-/// line. The P&P row stores the rotation, so the window can be the part's
-/// actual shape: a box `long` half-extent along the pin row and `cross`
-/// half-extent across it, rotated by the placement angle. Which of the
-/// footprint's two grid dimensions runs along the placement's local x is not
-/// derivable from the name alone, so BOTH orientations of the box are
-/// accepted (their union is still a small subset of the old square). Non-grid
-/// packages keep the square window unchanged.
+/// A square window sized for a long header's full span is enormous in BOTH axes
+/// (a 1x40 header gets a ~100 mm square) while the part itself is a line, so the
+/// stored rotation is used to make the window the part's actual shape: a box
+/// `long` half-extent along the pin row and `cross` half-extent across it,
+/// rotated by the placement angle. Which of the footprint's two grid dimensions
+/// runs along the placement's local x is not derivable from the name, so BOTH
+/// orientations are accepted. Non-grid packages keep the square window.
 struct GridWindow {
     /// Half-extent along the pin row (the full span, pin-1-corner origins).
     long: f64,
@@ -1312,11 +1277,10 @@ fn grid_hint(p: &str) -> Option<(u32, u32)> {
     for i in 0..bytes.len() {
         if bytes[i] == 'x' && i > 0 && i + 1 < bytes.len() {
             // Walk across a decimal point too, so a body dimension like
-            // "3.2x2.5mm" captures left="3.2"/right="2.5" (which then fail the
-            // u32 parse and drop out) instead of the integer fragments "2"/"2"
-            // that touch the 'x', those parsed as a bogus 2x2 pin grid and
-            // oversized the crystal pad window. A real pin grid ("2x18") has no
-            // '.', so this does not change it.
+            // "3.2x2.5mm" captures left="3.2"/right="2.5", which then fail the
+            // u32 parse and drop out, instead of the fragments "2"/"2" touching
+            // the 'x' that would parse as a bogus 2x2 pin grid. A real pin grid
+            // ("2x18") has no '.', so this does not change it.
             let is_grid_char = |c: char| c.is_ascii_digit() || c == '.';
             let mut a = i;
             while a > 0 && is_grid_char(bytes[a - 1]) {

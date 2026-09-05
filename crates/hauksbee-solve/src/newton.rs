@@ -34,18 +34,17 @@ pub struct Workspace {
     pub x_prev_iter: Vec<f64>,
     /// Persistent work buffer for `Symbolic::solve`'s permuted RHS. Owned by the
     /// workspace and passed into every solve so the factorization stays `&self`
-    /// and no `vec![0.0; n]` is allocated per Newton iteration (plan §4.1).
+    /// and no `vec![0.0; n]` is allocated per Newton iteration.
     solve_scratch: Vec<f64>,
     /// Persistent linearization-point buffer: a snapshot of `x` taken at the top
     /// of each Newton iteration (the point the Jacobian is stamped at), replacing
     /// the per-iteration `x.clone()`. Fully overwritten each iteration before any
     /// read, so its lifetime, not its value history, is all that changed (plan
-    /// §4.3).
     lin_point: Vec<f64>,
     /// Persistent buffer holding the PREVIOUS iteration's linearization point,
     /// which feeds the singular-refactor node-block convergence check without a
     /// per-iteration `lin_point.clone()`. Copied from `x_prev_iter` before that
-    /// buffer is refreshed (plan §4.3).
+    /// buffer is refreshed.
     prev_iterate: Vec<f64>,
     /// Per-node UNDAMPED Newton step from the previous iteration, used by the
     /// staged-DC adaptive damping to detect oscillating nodes (a sign reversal)
@@ -133,14 +132,14 @@ pub struct Workspace {
     /// factorization that was singular on the first iterate; the blame then
     /// falls back to the board-wide suspects. Never read on a converged solve.
     stall_site: Option<(f64, usize)>,
-    /// Device-evaluation bypass caches (dev-plan 03 §6), built lazily on the
+    /// Device-evaluation bypass caches, built lazily on the
     /// first bypass-armed solve (`Workspace::new` does not see the options).
     /// `None` on every run with `NewtonBypass::Off`; the default path never
     /// allocates or consults it, which is the bit-identical-when-off contract.
     bypass: Option<Box<crate::bypass::BypassState>>,
     /// Transient-driver hold: set for the trials that follow an event-resolved
-    /// accept (mirroring the extrapolation-seed skip), because the plan's
-    /// SPICE discipline forbids bypass on the step immediately after an event.
+    /// accept (mirroring the extrapolation-seed skip): SPICE discipline
+    /// forbids bypass on the step immediately after an event.
     /// Only read when bypass is armed; inert (a bool store) otherwise.
     bypass_hold: bool,
     /// SPDT leg sibling map (device id -> the device id of its complementary
@@ -170,10 +169,10 @@ pub struct Workspace {
     /// every `newton_solve_core` entry; threaded into the main iteration's
     /// stamp only, so residual probes and trial evaluations stay stateless.
     junction_eval: crate::stamp::JunctionEval,
-    /// TEST-ONLY probe of the stall/census norm plumbing: when armed
+    /// TEST-ONLY probe of the stall-norm plumbing: when armed
     /// (`Some`), every `newton_solve` iteration appends
     /// `(stall_norm, post_globalizer_norm)`; the norm actually handed to the
-    /// stall detector and census, and the node-step norm re-measured from
+    /// stall detector, and the node-step norm re-measured from
     /// `ws.x` AFTER the line search has rewritten it. The pair is what lets a
     /// unit test prove the detector sees the TRUE undamped step (the two
     /// differ by exactly `use_alpha` on a backtracked iteration) without any
@@ -184,11 +183,6 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Access the compiled constant-backbone stamp plan.
-    pub fn stamp_plan(&self) -> &StampPlan {
-        &self.plan
-    }
-
     /// Arm/disarm the per-step transient event-freeze retry. Set by the transient
     /// driver only on a board that needed the staged DC (or via TRANSIENT_DYN);
     /// the default-false keeps ordinary circuits on the plain per-step path.
@@ -210,7 +204,7 @@ impl Workspace {
 
     /// `(evaluations, skips)` of the device-evaluation bypass since this
     /// workspace was built, `(0, 0)` when bypass never armed. Observability
-    /// for tests and gates (the census carries the per-march view).
+    /// for tests and gates.
     pub fn bypass_counters(&self) -> (u64, u64) {
         self.bypass.as_ref().map_or((0, 0), |b| b.counters())
     }
@@ -820,7 +814,7 @@ fn newton_solve_core(
     }
     const ARMIJO_C: f64 = 1e-4;
     const ARMIJO_ALPHA_FLOOR: f64 = 1.0 / 64.0;
-    // Device-evaluation bypass (dev-plan 03 §6): an explicit opt-in, and even
+    // Device-evaluation bypass: an explicit opt-in, and even
     // then only on the per-step transient Newton with self-deciding discrete
     // states, never DC (reactive elements open/short and the staged ladder
     // owns its own convergence story), never event-frozen inner solves (the
@@ -881,20 +875,13 @@ fn newton_solve_core(
     // Undamped step inf-norm of the PREVIOUS line-search iteration, plus the
     // hysteresis arm state, the lazy-arming predictor's history (see the
     // line_search block). Armed at entry: the first iteration always searches.
-    let mut prev_ls_step_norm = f64::INFINITY;
-    let mut sim_ls_armed = true;
-    // Census (lever-3 attribution): the previous iteration's post-line-search
-    // node-step norm, for the contraction-ratio histogram. NaN = none yet.
-    // Pure readout, only computed when the census is live.
-    let census_on = crate::census::enabled();
-    let mut census_prev_norm = f64::NAN;
     loop {
         iters += 1;
         // Snapshot the point we're about to linearize around BEFORE the solve
         // overwrites ws.x, so it becomes next iteration's limiting anchor. Copied
         // into the persistent `lin_point` buffer rather than a fresh clone; the
         // buffer is fully rewritten here every iteration, so this is a pure
-        // lifetime change (plan §4.3).
+        // lifetime change.
         ws.lin_point.copy_from_slice(&ws.x);
         ws.matrix.clear_values();
         for v in ws.rhs.iter_mut() {
@@ -922,40 +909,34 @@ fn newton_solve_core(
                 spdt_sibling: &ws.spdt_sibling,
                 junction_eval: Some(&ws.junction_eval),
             };
-            // Census hooks (HAUKSBEE_STEP_CENSUS): the march-cost attribution
-            // needs the stamp/factor/backsolve split and these three calls are
-            // the only place the phases exist. A cached-bool branch when off.
-            //
-            // AssemblyMode routing: `Planned`
-            // (explicit opt-in) replays the compiled constant backbone and
-            // re-stamps only the nonlinear/time-varying tier through
-            // pre-resolved slots; the default `Interpreted` keeps the classic
-            // walk bit-identical. `stamp_all_planned` itself falls back to the
-            // interpreted walk on contexts the plan does not model (DC solves,
-            // staged regularizers, event-frozen states).
+            // AssemblyMode routing: `Planned` (explicit opt-in) replays the
+            // compiled constant backbone and re-stamps only the
+            // nonlinear/time-varying tier through pre-resolved slots; the
+            // default `Interpreted` keeps the classic walk bit-identical.
+            // `stamp_all_planned` itself falls back to the interpreted walk on
+            // contexts the plan does not model (DC solves, staged
+            // regularizers, event-frozen states).
             // Bypass routing: when armed (see the eligibility block above),
             // the bypass-aware walk replaces the assembly for THIS solve; it
-            // takes precedence over `Planned` (the two optimize the same
-            // pass, and bypass already writes fresh evaluations through
-            // resolved slots). The line-search residual evals below keep the
-            // plain `stamp_all` regardless: the Armijo norms sit on the
-            // cancellation noise floor (the 7A lesson), so the residual the
-            // search compares stays order-exact.
-            crate::census::timed(crate::census::Phase::Stamp, || {
-                if bypass_armed {
-                    crate::bypass::stamp_all_bypass(
-                        &ctx,
-                        ws.bypass.as_mut().expect("bypass_armed implies state"),
-                        &mut ws.matrix,
-                        &mut ws.rhs,
-                        iters <= 2,
-                    )
-                } else if opts.assembly == crate::options::AssemblyMode::Planned {
-                    crate::plan::stamp_all_planned(&ctx, &ws.plan, &mut ws.matrix, &mut ws.rhs)
-                } else {
-                    stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs)
-                }
-            });
+            // takes precedence over `Planned` (the two optimize the same pass,
+            // and bypass already writes fresh evaluations through resolved
+            // slots). The line-search residual evals below keep the plain
+            // `stamp_all` regardless: the Armijo norms sit on the cancellation
+            // noise floor, so the residual the search compares stays
+            // order-exact.
+            if bypass_armed {
+                crate::bypass::stamp_all_bypass(
+                    &ctx,
+                    ws.bypass.as_mut().expect("bypass_armed implies state"),
+                    &mut ws.matrix,
+                    &mut ws.rhs,
+                    iters <= 2,
+                );
+            } else if opts.assembly == crate::options::AssemblyMode::Planned {
+                crate::plan::stamp_all_planned(&ctx, &ws.plan, &mut ws.matrix, &mut ws.rhs);
+            } else {
+                stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
+            }
         }
         // A behavioral expression that faulted at this iterate stamped
         // nothing: the assembled system is silently incomplete, so it must
@@ -964,9 +945,6 @@ fn newton_solve_core(
         // different iterate / smaller dt may legitimately clear it).
         if let Some(fault) = crate::stamp::take_behavioral_fault() {
             ws.behavioral_fault = Some(fault);
-            if census_on {
-                crate::census::newton_exit(crate::census::NewtonExit::MaxIters, iters);
-            }
             return NewtonResult {
                 converged: false,
                 iters,
@@ -978,13 +956,11 @@ fn newton_solve_core(
         // equivalent of `prev_iterate = mem::replace(&mut x_prev_iter,
         // lin_point.clone())`: stash the OLD x_prev_iter into `prev_iterate`
         // before overwriting x_prev_iter with this iteration's lin_point. Same
-        // values, no per-iteration clone (plan §4.3).
+        // values, no per-iteration clone.
         ws.prev_iterate.copy_from_slice(&ws.x_prev_iter);
         ws.x_prev_iter.copy_from_slice(&ws.lin_point);
 
-        let factored = crate::census::timed(crate::census::Phase::Factor, || {
-            ws.symbolic.refactor(&ws.matrix)
-        });
+        let factored = ws.symbolic.refactor(&ws.matrix);
         if !factored {
             // The Jacobian assembled at this iterate is numerically singular.
             // This can happen AT a valid solution of a diode-laden board: once
@@ -1011,14 +987,6 @@ fn newton_solve_core(
                 eprintln!(
                     "[newton] refactor singular at iter {iters} (already_converged={already})"
                 );
-            }
-            if census_on {
-                let reason = if already {
-                    crate::census::NewtonExit::SingularAccept
-                } else {
-                    crate::census::NewtonExit::SingularFail
-                };
-                crate::census::newton_exit(reason, iters);
             }
             return NewtonResult {
                 converged: already,
@@ -1049,18 +1017,13 @@ fn newton_solve_core(
             0.0
         };
 
-        crate::census::timed(crate::census::Phase::Backsolve, || {
-            ws.symbolic.solve(&mut ws.rhs, &mut ws.solve_scratch)
-        });
+        ws.symbolic.solve(&mut ws.rhs, &mut ws.solve_scratch);
         // rhs now holds the new (UNDAMPED) Newton iterate.
         ws.x.copy_from_slice(&ws.rhs);
 
         // A fully linear system is solved exactly in one shot; no need to
         // assemble and factor a second time just to watch the residual be zero.
         if ws.linear {
-            if census_on {
-                crate::census::newton_exit(crate::census::NewtonExit::Linear, iters);
-            }
             return NewtonResult {
                 converged: true,
                 iters,
@@ -1074,12 +1037,12 @@ fn newton_solve_core(
         // per-node damping -- are PATH globalizations: they shorten the step
         // the iteration actually walks, not the distance to the root, so
         // convergence must never be judged on their output. Judging the damped
-        // iterate lets a small damped step masquerade as convergence (R7 #3:
-        // a line search that backtracks to the alpha=1/64 floor shrinks the
-        // measured lin_point->ws.x step 64x, which reads as "converged" at an
-        // iterate the full Newton step still wants to move far away from --
-        // precisely when the search backtracked hard because the iterate is
-        // NOT near a root). Hence these predicates are computed HERE, before
+        // iterate lets a small damped step masquerade as convergence: a line
+        // search that backtracks to the alpha=1/64 floor shrinks the measured
+        // lin_point->ws.x step 64x, which reads as "converged" at an iterate
+        // the full Newton step still wants to move far away from, precisely
+        // when the search backtracked hard because the iterate is NOT near a
+        // root. Hence these predicates are computed HERE, before
         // either damper rewrites ws.x. On the undamped paths (no line search,
         // branch_reg==0) nothing touches ws.x in between, so this is
         // bit-identical to testing after.
@@ -1101,7 +1064,7 @@ fn newton_solve_core(
         // reason as the predicates above: the Armijo line search below rewrites
         // ws.x to lin_point + use_alpha*dx, so a measurement taken after it
         // sees the GLOBALIZED step (use_alpha * max|dx|), not the Newton step.
-        // The stall detector and the census/"maxdV(undamped)" readouts judge
+        // The stall detector and the "maxdV(undamped)" readout judge
         // limit-cycle progress on this norm; feeding them the globalized step
         // registers phantom "progress" whenever the search backtracks; the
         // exact failure the post-damping ordering invariant on
@@ -1124,50 +1087,17 @@ fn newton_solve_core(
         // loop continues -- exactly what stops the traveling overshoot.
         if line_search {
             let dx: Vec<f64> = (0..ws.x.len()).map(|i| ws.x[i] - ws.lin_point[i]).collect();
-            // Lazy-arming predictor SHADOW (census only, no behaviour): a
-            // two-state hysteresis machine. ARMED runs the search every
-            // iteration and only DISARMS when the search itself accepts
-            // alpha=1 (proof the full step currently satisfies Armijo);
-            // DISARMED skips the search and RE-ARMS the moment the proposed
-            // step norm stops shrinking (the traveling-overshoot signature the
-            // search exists for). Floor-grinding iterations never see an
-            // alpha=1 accept, so they structurally keep their full search. The
-            // first cut of this predictor (skip on any monotone shrink,
-            // stateless) was measured near-uninformative on the flagship
-            // march: it skipped 93% of iterations with P(pass|skip)=57%
-            // against a 58% base rate, and it disarmed the floor-grinders.
-            // Cross-tabbed against the ground truth of the alpha=1 trial
-            // below to measure the hit rate BEFORE any skip is wired in.
-            let step_norm = dx.iter().fold(0.0f64, |m, &d| m.max(d.abs()));
-            let would_skip = !sim_ls_armed && step_norm < prev_ls_step_norm;
-            if !sim_ls_armed && step_norm >= prev_ls_step_norm {
-                sim_ls_armed = true;
-            }
-            prev_ls_step_norm = step_norm;
             let mut alpha = 1.0;
             let mut best_alpha = 1.0;
             let mut best_norm = f64::INFINITY;
-            // Census readout: whether this iteration's search ended by Armijo
-            // sufficient decrease (vs hitting the floor and falling back to
-            // the best trial). The loop below has one exit and assigns it
-            // there, so it needs no initial value.
-            let armijo_ok;
-            // Ground truth for the predictor: did the FIRST (alpha=1) trial
-            // pass Armijo?
-            let mut trials = 0u32;
-            let mut first_trial_pass = false;
             loop {
                 // Trial point x = lin_point + alpha*dx, evaluated into ws.x scratch.
                 for i in 0..ws.x.len() {
                     ws.x[i] = ws.lin_point[i] + alpha * dx[i];
                 }
-                let trial_norm = crate::census::timed(crate::census::Phase::LineSearch, || {
-                    residual_inf_norm_at(
-                        ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale,
-                        branch_reg,
-                    )
-                });
-                trials += 1;
+                let trial_norm = residual_inf_norm_at(
+                    ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
+                );
                 if trial_norm < best_norm {
                     best_norm = trial_norm;
                     best_alpha = alpha;
@@ -1177,21 +1107,10 @@ fn newton_solve_core(
                 // start) accepts the full step.
                 let accept = trial_norm.is_finite()
                     && (f_norm_lin <= 0.0 || trial_norm < (1.0 - ARMIJO_C * alpha) * f_norm_lin);
-                if trials == 1 && accept {
-                    first_trial_pass = true;
-                }
                 if accept || alpha <= ARMIJO_ALPHA_FLOOR + 1e-15 {
-                    armijo_ok = accept;
                     break;
                 }
                 alpha *= 0.5;
-            }
-            crate::census::ls_predictor(would_skip, first_trial_pass);
-            // Shadow state update from the ground truth (in the real design
-            // the DISARM transition comes from the search's own outcome, so
-            // it is only ever taken on iterations that actually searched).
-            if sim_ls_armed && first_trial_pass {
-                sim_ls_armed = false;
             }
             // If even the floor step did not satisfy Armijo, take the best alpha
             // tried (the largest residual decrease seen) rather than a step that
@@ -1211,9 +1130,6 @@ fn newton_solve_core(
             for i in 0..ws.x.len() {
                 ws.x[i] = ws.lin_point[i] + use_alpha * dx[i];
             }
-            // Census: the alpha this iteration actually stepped with, and how
-            // the search ended (the lever-1c lazy-arming decision data).
-            crate::census::ls_alpha(use_alpha, armijo_ok);
             if dbg_newton {
                 eprintln!(
                     "[newton-ls] iter {iters} alpha={use_alpha:.4} ||F||: {f_norm_lin:.3e} -> {best_norm:.3e}"
@@ -1226,79 +1142,49 @@ fn newton_solve_core(
         }
 
         // (undamped_converged / undamped_node_converged were computed above,
-        // BEFORE the line search could rewrite ws.x -- see the R7 #3 comment.)
+        // BEFORE the line search could rewrite ws.x -- see the comment above.)
 
-        // (Staged path only) damp ws.x in place. The undamped norm the census,
-        // the "maxdV(undamped)" debug line and the stall detector report was
+        // (Staged path only) damp ws.x in place. The undamped norm the
+        // "maxdV(undamped)" debug line and the stall detector report was
         // captured ABOVE, before the line search, never re-derived from ws.x
         // here, where it would be the globalized and/or damped step (see the
         // ordering invariant on `damp_node_steps`).
         #[cfg(test)]
         if ws.stall_norm_probe.is_some() {
-            // Record the stall/census norm next to a re-measurement of ws.x
-            // at THIS point (post-line-search, pre-damping): the regression
-            // test asserts the first is the true undamped step, not the
-            // second (the globalized step the R15 bug reported).
+            // Record the stall norm next to a re-measurement of ws.x at THIS
+            // point (post-line-search, pre-damping): the test asserts the
+            // first is the true undamped step, not the globalized second.
             let post_ls = node_step_norm(ws).0;
             if let Some(probe) = ws.stall_norm_probe.as_mut() {
                 probe.push((undamped_step_norm, post_ls));
             }
         }
-        let census_osc_nodes = damp_node_steps(ws, branch_reg > 0.0);
-        // Census (lever-3 attribution): the node-block step norm this
-        // iteration will be judged on. Pure readout behind the cached bool.
-        let census_step_norm = if census_on { undamped_step_norm } else { 0.0 };
-
-        if census_on {
-            crate::census::newton_iter_norm(
-                census_step_norm,
-                census_prev_norm,
-                branch_reg > 0.0 && iters < 3 && undamped_node_converged && !undamped_converged,
-                census_osc_nodes,
-            );
-            census_prev_norm = census_step_norm;
-        }
+        damp_node_steps(ws, branch_reg > 0.0);
 
         // A settled step is not the same as a solved circuit.
         //
         // `converged` above is the step-norm half of SPICE's criterion: every
-        // unknown moved less than its tolerance. The other half, which was
-        // missing, is that the currents actually balance. They usually coincide,
-        // and they come apart exactly when a node's only conductance to ground
-        // is a junction tangent that has collapsed toward zero: the Jacobian row
-        // is then effectively empty, so the computed step is tiny however wrong
-        // the point is, and Newton settles at a fixed point that is not a root.
+        // unknown moved less than its tolerance. The other half is that the
+        // currents actually balance. They usually coincide, and they come apart
+        // exactly when a node's only conductance to ground is a junction
+        // tangent that has collapsed toward zero: the Jacobian row is then
+        // effectively empty, so the computed step is tiny however wrong the
+        // point is, and Newton settles at a fixed point that is not a root.
+        // Accepting such an iterate costs a RESCUE: the gmin and
+        // source-stepping rungs below never run on a circuit that needs them.
+        // The bar is deliberately the same one `.op` applies, because an inner
+        // test laxer than the outer gate accepts iterates the caller rejects.
         //
-        // The consequence was not a wrong answer, because `.op` re-checks the
-        // real residual and refuses (see sim.rs). It was a LOST RESCUE: this
-        // returned converged, so the gmin and source-stepping rungs below never
-        // ran on circuits that needed them, and ngspice solved shapes we
-        // declined. Being too lax here made us too strict overall.
-        //
-        // The bar is the same one `.op` will apply, deliberately. An inner test
-        // laxer than the outer gate accepts iterates the caller then rejects,
-        // which is how this went unnoticed.
-        //
-        // DC only, and only while Newton is solving the PRISTINE circuit.
-        //
-        // The residual is computed against the unmodified network: default
-        // gmin, full source scale, no branch regularizer, no frozen discrete
-        // states. The ladder and the co-sim deliberately solve something else:
-        // gmin stepping runs at 1e-2 on its way down, source stepping at a
-        // fraction of full drive, the staged path adds a branch regularizer,
-        // and the event-driven path freezes comparator and switch states. Held
-        // to the pristine residual, those iterates read as wildly unconverged
-        // because they are roots of a different circuit, which is the right
-        // answer to the wrong question.
-        //
-        // Measured, not assumed: gating unconditionally made the MCP4728
-        // co-simulation report a 16.76 mA imbalance and drive its DAC output to
-        // 0 V instead of 2.048 V, because that solve runs with frozen states.
-        //
-        // The case this fix exists for is the plain cold start, where Newton is
-        // already solving the real circuit, so restricting the gate to those
-        // conditions loses nothing and keeps every regularized path
-        // bit-identical.
+        // DC only, and only while Newton is solving the PRISTINE circuit: the
+        // residual is computed against the unmodified network (default gmin,
+        // full source scale, no branch regularizer, no frozen discrete states).
+        // The ladder and the co-sim deliberately solve something else (gmin
+        // stepping at 1e-2 on its way down, source stepping at a fraction of
+        // full drive, the staged branch regularizer, frozen comparator and
+        // switch states), so their iterates are roots of a different circuit
+        // and would read as wildly unconverged against the pristine residual.
+        // Restricting the gate to a plain cold start keeps every regularized
+        // path bit-identical.
         let pristine = gmin == opts.gmin
             && src_scale == 1.0
             && branch_reg == 0.0
@@ -1320,9 +1206,6 @@ fn newton_solve_core(
         };
 
         if undamped_converged && residual_ok {
-            if census_on {
-                crate::census::newton_exit(crate::census::NewtonExit::Full, iters);
-            }
             return NewtonResult {
                 converged: true,
                 iters,
@@ -1337,9 +1220,6 @@ fn newton_solve_core(
         // branch currents are derived and the leftover noise is below any real
         // signal current. Only for branch_reg>0 (staged path).
         if branch_reg > 0.0 && iters >= 3 && undamped_node_converged {
-            if census_on {
-                crate::census::newton_exit(crate::census::NewtonExit::NodeBlock, iters);
-            }
             return NewtonResult {
                 converged: true,
                 iters,
@@ -1374,9 +1254,6 @@ fn newton_solve_core(
                 stall += 1;
                 if stall >= STALL_WINDOW {
                     // No progress for a full window: this solve is limit-cycling.
-                    if census_on {
-                        crate::census::newton_exit(crate::census::NewtonExit::Stall, iters);
-                    }
                     return NewtonResult {
                         converged: false,
                         iters,
@@ -1384,46 +1261,7 @@ fn newton_solve_core(
                 }
             }
         }
-        // FIXED. Kept as the record of what the fix was for.
-        //
-        // (Was: a known false-convergence mode, diagnosed 2026-07-30.)
-        //
-        // The step-norm test above can be satisfied while the KCL residual is
-        // not. It happens when a node's only conductance to ground is a
-        // junction tangent that has collapsed toward zero: the Jacobian row is
-        // effectively empty, so the computed update is tiny no matter how wrong
-        // the point is, and Newton reports converged at a fixed point that is
-        // not a root.
-        //
-        // `.op` catches it after the fact (sim.rs re-checks the real residual
-        // and refuses), so nothing wrong is ever reported. What is lost is the
-        // ladder: this returns converged, so the gmin and source-stepping rungs
-        // below never run on a circuit that needs them, and ngspice solves
-        // shapes we decline.
-        //
-        // Reproduces with a forced current into a BJT base or across a PMOS
-        // source-to-drain (residuals 1.076e-5 and 2.565e-5 against a 1e-6 bar,
-        // unchanged at 2000 iterations). It does NOT reproduce when the forced
-        // node reaches ground through a channel, which is what identifies the
-        // rule.
-        //
-        // The fix is the residual gate above: an iterate whose KCL residual is
-        // still above OP_KCL_TOL is no longer called converged, so the loop
-        // keeps going and, failing that, the ladder below finally runs.
-        //
-        // Two things the fix had to learn, both caught by tests rather than by
-        // reasoning. The residual must be computed WITHOUT allocating, because
-        // alloc_audit holds this loop to zero heap allocations and the first cut
-        // took 600 over 50 solves. And it must only be judged when Newton is
-        // solving the pristine circuit: gating it during gmin stepping, source
-        // stepping, staged regularization or event freezes measures a root of a
-        // deliberately different network, which drove the MCP4728 co-simulation
-        // to report 16.76 mA of imbalance and put 0 V on a DAC output that
-        // should read 2.048 V.
         if iters >= opts.max_newton {
-            if census_on {
-                crate::census::newton_exit(crate::census::NewtonExit::MaxIters, iters);
-            }
             return NewtonResult {
                 converged: false,
                 iters,
@@ -1443,7 +1281,7 @@ fn newton_solve_core(
 /// (use_alpha*|dx| after the search, alpha_node*|dx| after the damping) that
 /// registers phantom "progress" every backtracking iteration, resetting the
 /// stall counter on a genuine limit cycle, and misreports the
-/// census/"maxdV(undamped)" readouts. Same doctrine as the convergence
+/// "maxdV(undamped)" readout. Same doctrine as the convergence
 /// predicates: judge on the undamped step, always.
 fn node_step_norm(ws: &Workspace) -> (f64, usize) {
     let mut undamped_norm = 0.0f64;
@@ -1479,11 +1317,7 @@ fn node_step_norm(ws: &Workspace) -> (f64, usize) {
 /// kills the oscillation while letting the well-behaved majority converge
 /// fast. At the root every step is zero, so damping is inert. Active only for
 /// branch_reg>0 (`damp`), so the normal solve paths stay bit-identical.
-fn damp_node_steps(ws: &mut Workspace, damp: bool) -> u64 {
-    // How many nodes the staged damping classifies as oscillating this
-    // iteration (integer side-channel out of the damping loop; no float
-    // behaviour touched). Census readout.
-    let mut osc_nodes = 0u64;
+fn damp_node_steps(ws: &mut Workspace, damp: bool) {
     if damp {
         const NODE_STEP_MAX: f64 = 2.0; // hard cap (V) per iteration
         const ALPHA_CONVERGING: f64 = 0.9; // same-sign: near-full step
@@ -1506,7 +1340,6 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) -> u64 {
             // oscillates, so this is inert at the root and bit-identical on the
             // normal path (branch_reg==0 skips this block entirely).
             let alpha = if oscillating {
-                osc_nodes += 1;
                 ws.osc_count[i] = ws.osc_count[i].saturating_add(1);
                 // 0.25 / 2^(min(osc_count-1, 8)) -> floors at ~1e-3.
                 let shrink = ws.osc_count[i].saturating_sub(1).min(8);
@@ -1525,7 +1358,6 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) -> u64 {
             ws.x[i] = ws.lin_point[i] + step;
         }
     }
-    osc_nodes
 }
 
 /// Stamp the full nonlinear system at `ws.x` (a trial point) with the SAME
@@ -1829,7 +1661,7 @@ pub fn dc_operating_point_seeded(
 }
 
 /// Copy each series-resistance BJT's EXTERNAL terminal voltages onto its
-/// device-private internal unknowns (dev-plan 04 §3.2). `.nodeset` can only
+/// device-private internal unknowns. `.nodeset` can only
 /// name netlist nodes, so a cold start would otherwise leave the intrinsic
 /// nodes at zero volts behind a seeded external, putting the intrinsic
 /// junction back into the limiting-walk trap the nodeset was written to
@@ -1923,7 +1755,7 @@ fn dc_solve(
     }
 
     // Attempt 1: direct cold start. Normally the zero vector; but `.nodeset`
-    // cards (SPICE-compat §4.1) seed the START VECTOR for named nodes. This is a
+    // cards seed the START VECTOR for named nodes. This is a
     // convergence GUESS only, Newton is free to walk away from it (nothing is
     // pinned), so on a well-posed circuit the root is unchanged, while on a
     // multi-stable one the seed selects which root is found. Every other node
@@ -2376,9 +2208,9 @@ fn eval_comparator_states(
 /// `a` = the summing/common node, opposite control senses). The summing bus must
 /// never be simultaneously low-Z to BOTH throws, so the break-before-make logic
 /// in [`eval_switch_states`] consults these pairs.
-struct SpdtPairs {
+pub(crate) struct SpdtPairs {
     /// device id -> the device id of its sibling leg (only present for paired legs).
-    sibling: std::collections::HashMap<DeviceId, DeviceId>,
+    pub(crate) sibling: std::collections::HashMap<DeviceId, DeviceId>,
 }
 
 impl SpdtPairs {
@@ -2396,7 +2228,7 @@ impl SpdtPairs {
         }
     }
 
-    fn analyze(circuit: &Circuit) -> SpdtPairs {
+    pub(crate) fn analyze(circuit: &Circuit) -> SpdtPairs {
         // Group VSwitch legs by (common node a, base name without the _sN suffix).
         let mut groups: std::collections::HashMap<(u32, String), Vec<DeviceId>> =
             std::collections::HashMap::new();
@@ -2448,11 +2280,9 @@ impl SpdtPairs {
 /// uses runs from `voff` down to `voff - w`. If the latch flipped at `von`, then at
 /// the flip the old ramp would be at its `roff` end while the new ramp is already
 /// fully saturated at `ron`, so the conductance would jump the entire eight
-/// decades in a single Newton solve. Measured: that is exactly what broke the
-/// current-mirror deck, whose per-step Newton failed at t = 38.3 us, the make
-/// instant, at every timestep down to 1e-15. Flipping at `von + w` means the old
-/// ramp is ALSO saturated at `ron` there, so the two agree across the flip and
-/// Newton keeps a continuous path.
+/// decades in a single Newton solve, which no step cut can recover. Flipping at
+/// `von + w` means the old ramp is ALSO saturated at `ron` there, so the two
+/// agree across the flip and Newton keeps a continuous path.
 ///
 /// The device's switching instant is unaffected: conduction still begins at
 /// exactly `von`, since that is where the ramp starts. All the offset changes is
@@ -2721,47 +2551,36 @@ pub fn newton_solve_event(
     // budget is typed tuning (event_retry.flip_budget); the default is high
     // enough to flip a neuron's whole gate fan-out in one pass.
     let max_flips_per_pass: usize = opts.event_retry.flip_budget;
-    // Comparator handling in the inner solve. By default the comparators are
-    // FROZEN per inner solve (like the DC event loop), which converges the hidden
-    // spike-gate flip. But the OUTPUT neuron has an adaptation feedback (C_adapt
-    // couples its comparator OUT back to its own -IN threshold node): with the
-    // output comparator pinned to a constant rail the inner Newton cannot resolve
-    // that feedback and stalls right at the membrane-crosses-threshold instant.
-    // CMP_SMOOTH leaves comparators SELF-DECIDING via the smooth high-gain
-    // logistic transfer (the branch_reg>0 path, which has a real tangent), so the
-    // comparator tracks its flip continuously while the switch mesh stays frozen.
+    // Comparator handling in the inner solve, and why it is a two-mode retry.
     //
-    // The OUTPUT refractory reset is the opposite regime: once the output spike
-    // SPIKE1 climbs through the refractory NEURON_SWITCH's control threshold the
-    // switch shorts the output membrane to GND in a fast positive-feedback
-    // discharge (membrane -> comparator -> spike -> switch -> membrane). With the
-    // output comparator left SMOOTH its ~2000 V^-1 logistic gain couples the
-    // collapsing membrane straight back into the spike/switch loop and the
-    // per-step Newton diverges. There the comparator must be FROZEN like every
-    // other state so the inner circuit is a smooth resistor network. The caller
-    // therefore tries cmp_smooth=true first (resolves the membrane-crosses-up
-    // FIRE, the C_adapt feedback) and, if that fails, cmp_smooth=false (resolves
-    // the reset discharge). `cmp_smooth` is the per-call mode, not the env, so the
-    // two-mode retry can pick the regime that converges this step.
+    // Frozen comparators (the DC event loop's regime) converge a hidden
+    // switch-gate flip, but a comparator with adaptation feedback (its output
+    // capacitively coupled back to its own threshold node) cannot be resolved
+    // while pinned to a constant rail: the inner Newton stalls right at the
+    // crossing instant. `cmp_smooth` instead leaves comparators SELF-DECIDING
+    // through the smooth high-gain logistic transfer (the branch_reg>0 path,
+    // which has a real tangent), so a comparator tracks its flip continuously
+    // while the switch mesh stays frozen.
     //
-    // GMIN FLOOR for the inner solves. The DC staged path anchors the
-    // otherwise-floating high-impedance synapse-mesh nodes (BJT mirror bases /
-    // off-switch internal nodes between the magnitude switches and the spike
-    // gate, DC-coupled only through reverse-biased junctions and DC-open caps)
-    // with a STAGED_GMIN=1e-7 floor; without it those nodes have no defined
-    // operating point and the inner Newton limit-cycles on them (the measured
-    // "maxdV pinned at the 2 V damping cap, rotating across mesh nodes" at the
-    // refractory-reset follow-on step). The per-step event-freeze is called with
-    // opts.gmin (1e-12), far too small to anchor them, so floor it to the same
-    // staged value here. Pure-resistor inner conductances dwarf 1e-7 S, so the
-    // physical nodes are unaffected (a 1e-7 S leak across 5 V is 0.5 uA, below the
-    // signal currents); it only pins the genuinely-floating ones.
+    // A refractory reset is the opposite regime: once a spike climbs through a
+    // reset switch's control threshold the switch shorts the membrane to GND in
+    // a fast positive-feedback discharge (membrane -> comparator -> spike ->
+    // switch -> membrane), and a smooth comparator's ~2000 V^-1 logistic gain
+    // couples the collapsing membrane straight back into that loop, diverging.
+    // There the comparator must be frozen so the inner circuit is a smooth
+    // resistor network. The caller therefore tries `cmp_smooth = true` first and
+    // falls back to `false`, picking whichever regime converges this step.
     //
-    // Applied ONLY in the frozen-comparator (reset) regime: the smooth-comparator
-    // FIRE step converges on the bare opts.gmin, and a 1e-7 floor there perturbs
-    // the membrane-near-threshold operating point enough to BREAK the earlier
-    // hidden spike-gate flip (measured: the floor moved the failure from the
-    // refractory reset back to the fire). So only the reset pass raises the floor.
+    // GMIN FLOOR for the inner solves. High-impedance mesh nodes (mirror bases,
+    // off-switch internal nodes coupled only through reverse-biased junctions
+    // and DC-open caps) have no defined operating point at `opts.gmin` (1e-12)
+    // and the inner Newton limit-cycles on them, so floor gmin to the same 1e-7
+    // the staged DC path uses. Pure-resistor inner conductances dwarf 1e-7 S
+    // (a 1e-7 S leak across 5 V is 0.5 uA, below the signal currents), so only
+    // the genuinely-floating nodes are pinned. Applied ONLY in the frozen
+    // regime: the smooth pass converges on the bare `opts.gmin`, and the floor
+    // there perturbs a membrane-near-threshold operating point enough to break
+    // the crossing it is meant to resolve.
     let inner_gmin = if cmp_smooth { gmin } else { gmin.max(1e-7) };
     let mut x = seed.clone();
     for pass in 0..MAX_EVENT_PASSES {
@@ -2979,7 +2798,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
     let mut ws = Workspace::new(&relaxed);
     // Cold solve of the relaxed circuit (no seed). It is far better conditioned
     // than the full one: the diode nonlinearity is gone, and so is the BJT
-    // intrinsic mesh (dev-plan 04 §3.2): `series_resistance` is relaxed OFF,
+    // intrinsic mesh: `series_resistance` is relaxed OFF,
     // which pins each internal unknown behind a unit diagonal and puts the
     // Gummel-Poon cores back on the external nodes, the base-topology system
     // the cold ladder is known to converge (measured on the flagship board:
@@ -3380,12 +3199,9 @@ mod tests {
             let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
             ws.x[0] = ws.lin_point[0] + sign * A;
             let (norm, argmax) = node_step_norm(&ws);
-            let osc = damp_node_steps(&mut ws, true);
+            damp_node_steps(&mut ws, true);
             assert!((norm - A).abs() < 1e-12, "iter {k}: norm {norm} != {A}");
             assert_eq!(argmax, 0);
-            if k >= 1 {
-                assert_eq!(osc, 1, "iter {k}: the sign-flipping node is oscillating");
-            }
             let damped = (ws.x[0] - ws.lin_point[0]).abs();
             if (1..=8).contains(&k) {
                 assert!(

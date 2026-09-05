@@ -67,8 +67,8 @@ pub struct PlainFinding {
 
 /// An actionable "heads up" note: worth knowing, not a failure. Carries the same
 /// what / why / what-to-do shape a finding does, so the web / TUI / CLI can all
-/// give a novice the translation instead of a bare jargon line (the persona-panel
-/// "Zdiff 173 vs 90 with no what-to-do" fix). `why` / `fix` may be empty for a
+/// give a novice the translation instead of a bare jargon line. `why` / `fix`
+/// may be empty for a
 /// note that is already a complete self-contained sentence (e.g. a co-sim
 /// caveat); renderers omit those lines when empty.
 #[derive(Debug, Clone, Default)]
@@ -122,10 +122,10 @@ pub struct PlainReport {
     /// Actionable info-level notes promoted into a "Heads up:" section. These are
     /// NOT counted as findings (they don't change the verdict), but they are also
     /// NEVER silently dropped in `--plain` mode: the 171-ohm USB-impedance note
-    /// the hobbyist persona lost is exactly this (Fix #3 / Theme A). A "Looks
-    /// healthy" verdict that hides the only actionable observation is the breach
-    /// of trust we refuse to ship. Each note carries a what / why / what-to-do
-    /// gloss so it translates the jargon rather than dumping it.
+    /// the 171-ohm USB-impedance note is exactly this. A "Looks healthy" verdict
+    /// that hides the only actionable observation is a breach of trust. Each note
+    /// carries a what / why / what-to-do gloss so it translates the jargon rather
+    /// than dumping it.
     pub heads_up: Vec<HeadsUp>,
     /// Current-carrying / active parts with no model
     /// ([`crate::result::unmodelled_critical_refs`]). Non-empty forces the
@@ -263,9 +263,8 @@ impl PlainReport {
             // vacuous, not healthy. Refuse the clean bill and name what unlocks
             // a conclusive verdict. This does NOT change any exit code; it is
             // verdict prose only (the exit contract lives in docs/ci/CI.md).
-            // Actionable heads-up notes stay on the verdict line (Fix #3's
-            // never-bury rule): INCONCLUSIVE must not hide the one observation
-            // the user may have come to check.
+            // Actionable heads-up notes stay on the verdict line: INCONCLUSIVE
+            // must not hide the one observation the user may have come to check.
             if !self.unmodelled_critical.is_empty() {
                 let mut v = crate::result::inconclusive_verdict(&self.unmodelled_critical);
                 if !self.heads_up.is_empty() {
@@ -313,27 +312,41 @@ impl PlainReport {
         if !self.findings.is_empty() {
             let _ = writeln!(s);
             for (i, f) in self.sorted().iter().enumerate() {
-                let _ = writeln!(s, "{}. [{}] {}", i + 1, f.level.tag(), f.what);
-                let _ = writeln!(s, "     Why it matters: {}", f.why);
-                let _ = writeln!(s, "     What to do:     {}", f.fix);
-                let _ = writeln!(s);
+                write_finding(&mut s, i + 1, f);
             }
         }
-        // Actionable info notes are NEVER dropped, even when the verdict reads
-        // "healthy". This is the anti-false-comfort guarantee (Fix #3).
-        if !self.heads_up.is_empty() {
-            let _ = writeln!(s, "\nHeads up (worth knowing, not a failure):");
-            for note in &self.heads_up {
-                let _ = writeln!(s, "  - {}", note.what);
-                if !note.why.is_empty() {
-                    let _ = writeln!(s, "       Why it matters: {}", note.why);
-                }
-                if !note.fix.is_empty() {
-                    let _ = writeln!(s, "       What to do:     {}", note.fix);
-                }
-            }
-        }
+        write_heads_up(&mut s, &self.heads_up);
         s
+    }
+}
+
+/// One finding as the numbered what / why / what-to-do block. The single
+/// rendering of a [`PlainFinding`]: both the full report and the condensed DRC
+/// view print findings through here, so the two can never drift apart.
+fn write_finding(out: &mut String, index: usize, finding: &PlainFinding) {
+    let _ = writeln!(out, "{}. [{}] {}", index, finding.level.tag(), finding.what);
+    let _ = writeln!(out, "     Why it matters: {}", finding.why);
+    let _ = writeln!(out, "     What to do:     {}", finding.fix);
+    let _ = writeln!(out);
+}
+
+/// The "Heads up" section, or nothing when there are no notes. Actionable info
+/// notes are NEVER dropped, even when the verdict reads "healthy" and even when
+/// the finding list above them was condensed: that is the anti-false-comfort
+/// guarantee, so it has one implementation.
+fn write_heads_up(out: &mut String, notes: &[HeadsUp]) {
+    if notes.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "\nHeads up (worth knowing, not a failure):");
+    for note in notes {
+        let _ = writeln!(out, "  - {}", note.what);
+        if !note.why.is_empty() {
+            let _ = writeln!(out, "       Why it matters: {}", note.why);
+        }
+        if !note.fix.is_empty() {
+            let _ = writeln!(out, "       What to do:     {}", note.fix);
+        }
     }
 }
 
@@ -510,16 +523,8 @@ pub(crate) fn order_triage_with_rule_source(
             ));
         }
     }
-    push_triage_class(
-        &mut triage.do_not_order,
-        serious_shorts,
-        "oracle-confirmed copper shorts",
-    );
-    push_triage_class(
-        &mut triage.inspect,
-        tool_only_shorts,
-        "tool-only potential copper shorts with coordinates",
-    );
+    triage.do_not_order.extend(serious_shorts);
+    triage.inspect.extend(tool_only_shorts);
     // The structured/plain order is shorts, below-rule violations, then
     // at-limit observations. Only actual below-rule groups belong on the order
     // screen; no-margin observations remain in the detail below.
@@ -530,11 +535,7 @@ pub(crate) fn order_triage_with_rule_source(
         .take(drc.violations.len())
         .map(|finding| TriageEntry::new("drc", "clearance", finding.what.clone(), finding.loc_mm))
         .collect();
-    push_triage_class(
-        &mut triage.inspect,
-        clearance_findings,
-        "below-rule clearance groups with coordinates",
-    );
+    triage.inspect.extend(clearance_findings);
 
     let lint_plain = plain_netlint(lint);
     for (raw, finding) in lint.findings.iter().zip(&lint_plain.findings) {
@@ -599,14 +600,6 @@ pub(crate) fn order_triage_with_rule_source(
     triage
 }
 
-/// Keep the leading surface genuinely screen-sized without dropping a risk
-/// class. Three or fewer existing findings remain verbatim; a larger class is
-/// one counted line with its first existing finding as an example and an
-/// explicit pointer to the complete coordinate detail below.
-fn push_triage_class(target: &mut Vec<TriageEntry>, entries: Vec<TriageEntry>, _class: &str) {
-    target.extend(entries);
-}
-
 // ── Severity bridges ─────────────────────────────────────────────────────────
 
 fn from_lint_sev(s: Severity) -> PlainLevel {
@@ -639,7 +632,7 @@ fn join_refs(refs: &[String]) -> String {
 }
 
 /// Expand KiCad's copper-layer codes to plain language on first sight. A novice
-/// (persona-panel) has no idea `F.Cu` / `B.Cu` mean the front / back copper
+/// has no idea `F.Cu` / `B.Cu` mean the front / back copper
 /// layer, so spell it out while keeping the code in parentheses for the expert.
 fn friendly_layer(layer: &str) -> String {
     match layer {
@@ -650,6 +643,16 @@ fn friendly_layer(layer: &str) -> String {
 }
 
 // ── DRC (copper shorts / clearance) ───────────────────────────────────────────
+
+/// A net name as a plain sentence names it: an unnamed net has to be described,
+/// not quoted as an empty string.
+fn net_label(name: &str) -> &str {
+    if name.is_empty() {
+        "an unnamed net"
+    } else {
+        name
+    }
+}
 
 /// Translate the geometric DRC report (copper shorts and near-shorts).
 pub fn plain_drc(report: &DrcReport) -> PlainReport {
@@ -753,16 +756,8 @@ pub fn plain_drc_structured_with_rule_source(
 
     // Real shorts first; the things that actually break a board.
     for sh in &st.shorts {
-        let a = if sh.net_a.is_empty() {
-            "an unnamed net"
-        } else {
-            &sh.net_a
-        };
-        let b = if sh.net_b.is_empty() {
-            "an unnamed net"
-        } else {
-            &sh.net_b
-        };
+        let a = net_label(&sh.net_a);
+        let b = net_label(&sh.net_b);
         let where_ = format!(
             "near x={:.1} mm, y={:.1} mm on {}",
             sh.loc_mm[0],
@@ -830,21 +825,9 @@ pub fn plain_drc_structured_with_rule_source(
 
     // Genuinely below-rule clearance groups (gap < rule).
     for g in &st.violations {
-        let a = if g.net_a.is_empty() {
-            "an unnamed net"
-        } else {
-            &g.net_a
-        };
-        let b = if g.net_b.is_empty() {
-            "an unnamed net"
-        } else {
-            &g.net_b
-        };
-        let places = format!(
-            "{} location{}",
-            g.count,
-            if g.count == 1 { "" } else { "s" }
-        );
+        let a = net_label(&g.net_a);
+        let b = net_label(&g.net_b);
+        let places = crate::result::locations(g.count);
         let what = if g.below_count == g.count {
             format!(
                 "\"{a}\" and \"{b}\" are very close but not quite touching at {places} on {} (tightest {:.3} mm, below {}).",
@@ -887,21 +870,9 @@ fn push_at_limit_findings(
     provenance: &crate::result::ClearanceRuleProvenance,
 ) {
     for g in at_limit {
-        let a = if g.net_a.is_empty() {
-            "an unnamed net"
-        } else {
-            &g.net_a
-        };
-        let b = if g.net_b.is_empty() {
-            "an unnamed net"
-        } else {
-            &g.net_b
-        };
-        let places = format!(
-            "{} location{}",
-            g.count,
-            if g.count == 1 { "" } else { "s" }
-        );
+        let a = net_label(&g.net_a);
+        let b = net_label(&g.net_b);
+        let places = crate::result::locations(g.count);
         out.push_at(
             PlainLevel::Warning,
             format!(
@@ -1011,10 +982,7 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
             continue;
         }
         idx += 1;
-        let _ = writeln!(s, "{}. [{}] {}", idx, f.level.tag(), f.what);
-        let _ = writeln!(s, "     Why it matters: {}", f.why);
-        let _ = writeln!(s, "     What to do:     {}", f.fix);
-        let _ = writeln!(s);
+        write_finding(&mut s, idx, f);
     }
     // The clearance findings enter `pr` in order: violations, then at_limit.
     // Everything past the first FULL of that combined list aggregates by
@@ -1064,19 +1032,7 @@ pub(crate) fn render_drc_condensed_with_rule_source_and_unlock(
             if *locs == 1 { "" } else { "s" },
         );
     }
-    // Heads-up notes are never dropped, condensed or not.
-    if !pr.heads_up.is_empty() {
-        let _ = writeln!(s, "\nHeads up (worth knowing, not a failure):");
-        for note in &pr.heads_up {
-            let _ = writeln!(s, "  - {}", note.what);
-            if !note.why.is_empty() {
-                let _ = writeln!(s, "       Why it matters: {}", note.why);
-            }
-            if !note.fix.is_empty() {
-                let _ = writeln!(s, "       What to do:     {}", note.fix);
-            }
-        }
-    }
+    write_heads_up(&mut s, &pr.heads_up);
     let _ = writeln!(s, "{summary}");
     s
 }
@@ -1184,10 +1140,9 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 format!("A configuration pin on {parts} (net \"{net}\") decodes to the wrong setting. {}", f.message),
                 // Deliberately generic: this template covers EVERY decoder in the
                 // device_decode family (a PD sink's requested voltage, a charger's
-                // safety-timer length, an eFuse's current limit). An earlier version
-                // narrated the PD case specifically, so an eFuse ILIM finding was
-                // explained as a USB-C voltage table: the right math wearing the
-                // wrong story, which reads as a bug even when the numbers are right.
+                // safety-timer length, an eFuse's current limit). Narrating one
+                // decoder specifically would explain an eFuse ILIM finding as a
+                // USB-C voltage table: the right math wearing the wrong story.
                 "Some chips read a resistor on a configuration pin and decode its value against a table in the datasheet to set a mode or a limit: which voltage a USB-PD sink requests, how long a charger's safety timer runs, how much current an eFuse passes. If the fitted resistor lands in the wrong band, the chip silently takes the wrong setting: every part is in spec and every wire connects, so a normal value or short check cannot see it. This finding applies the datasheet's own decode rule to the fitted value, which is why it works even when the part has no simulation model and the report lists it as unresolved.".to_string(),
                 "Change the resistor so the decoded value matches the intent; the finding above names the fitted value, what it decodes to, and the value that would decode correctly. Then re-check against the part's own decode table and any min/max override note.".to_string(),
             ),
@@ -1261,10 +1216,10 @@ pub fn plain_si(report: &SiReport) -> PlainReport {
         out.push(level, what, why, fix);
     }
 
-    // Fix #3: promote ACTIONABLE info notes into "Heads up" rather than dropping
-    // them. An info note is actionable when it reports a real off-target value
-    // (the controlled-impedance "+N% from target" note; the 171-ohm USB case),
-    // as opposed to a within-tolerance "ok" or a "no judgement" observation.
+    // Promote ACTIONABLE info notes into "Heads up" rather than dropping them.
+    // An info note is actionable when it reports a real off-target value (the
+    // controlled-impedance "+N% from target" note), as opposed to a
+    // within-tolerance "ok" or a "no judgement" observation.
     for f in info_only(report) {
         if let Some(note) = actionable_info_note(f) {
             out.push_note(note);
@@ -1286,10 +1241,9 @@ fn info_only(report: &SiReport) -> impl Iterator<Item = &SiFinding> {
 /// actionable iff it expresses a deviation from a target (its message says
 /// "from target") and is not a within-tolerance "ok".
 ///
-/// The controlled-impedance note gets the same what / why / what-to-do treatment
-/// a finding does (persona-panel fix): a novice saw a bare "Zdiff ~ 173 ohm
-/// [target 90]" with no idea what to do. We keep the honest number and add the
-/// translation.
+/// The controlled-impedance note gets the same what / why / what-to-do
+/// treatment a finding does: the honest number ("Zdiff ~ 173 ohm [target 90]")
+/// plus the translation a novice needs to act on it.
 fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
     let m = &f.message;
     let off_target = m.contains("from target") && !m.contains("within");
@@ -1297,8 +1251,7 @@ fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
         return None;
     }
     // Name the actual copper: the impedance info notes carry their NETS (refs
-    // are empty), and the old refs-only fallback printed "the trace pair noted
-    // above", a pointer at nothing, on every one of them.
+    // are empty), so a refs-only fallback would point at nothing.
     let affected = if !f.refs.is_empty() {
         join_refs(&f.refs)
     } else if !f.nets.is_empty() {

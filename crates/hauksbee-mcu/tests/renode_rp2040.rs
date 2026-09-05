@@ -1,25 +1,21 @@
 //! RP2040 co-sim, proven against real pico-sdk firmware.
 //!
-//! # What changed, and why this is no longer skip-gated
+//! # Why this is not skip-gated on the local Renode
 //!
-//! This test used to skip with "the installed Renode ships no rp2040 platform",
-//! which was true and is still true: Renode 1.16.1 carries no RP2040, and
-//! neither does Renode `master`. The RP2040 peripheral models now travel with
-//! hauksbee instead (`db/mcu/rp2040/`, vendored MIT, compiled by Renode at run
-//! time through the support-bundle mechanism in `src/renode/support.rs`), so the
-//! platform no longer depends on what the local Renode install happens to
-//! contain. The only remaining gate is whether Renode itself is installed.
+//! Renode 1.16.1 carries no RP2040 platform, and neither does Renode `master`.
+//! The RP2040 peripheral models travel with hauksbee instead
+//! (`db/mcu/rp2040/`, vendored MIT, compiled by Renode at run time through the
+//! support-bundle mechanism in `src/renode/support.rs`), so the only gate left
+//! is whether Renode itself is installed.
 //!
 //! # The firmware is real
 //!
-//! Both images are stock pico-sdk 2.1.1 builds linked for flash, committed under
-//! `testdata/firmware/rp2040_*`, with sources and build instructions beside
-//! them. They boot through the real RP2040 boot ROM image, run the SDK's own
-//! `runtime_init` (resets, XOSC, both PLLs, the clock muxes, the timer, the ROM
-//! function table) and reach `main`. Nothing here is a hand-assembled register
-//! poke: the previous revision of this file built a 32-byte Thumb image that
-//! wrote SIO directly, which proved the register offsets and nothing about
-//! whether an SDK firmware can boot at all.
+//! Both images are stock pico-sdk 2.1.1 builds linked for flash, committed
+//! under `testdata/firmware/rp2040_*`, with sources and build instructions
+//! beside them. They boot through the real RP2040 boot ROM image, run the SDK's
+//! own `runtime_init` (resets, XOSC, both PLLs, the clock muxes, the timer, the
+//! ROM function table) and reach `main`: a hand-assembled register poke would
+//! prove the register offsets and nothing about whether an SDK firmware boots.
 //!
 //! # Two-sided by construction
 //!
@@ -40,11 +36,7 @@ use std::sync::{Arc, Mutex};
 const LED_PIN: PinId = PinId { port: '0', bit: 25 };
 
 fn firmware(dir: &str, name: &str) -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware")
-        .join(dir)
-        .join(name);
-    p.exists().then(|| p.canonicalize().unwrap_or(p))
+    crate::support::firmware(&format!("{dir}/{name}"))
 }
 
 /// Bring up an RP2040 with one of the bundled pico-sdk images, or skip.

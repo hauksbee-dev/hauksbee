@@ -22,7 +22,7 @@
 //! - `[[cut]]`, severed traces: every device terminal of the named role
 //!   (`base`/`collector`/`emitter`) on a net matching `net_glob` is moved to
 //!   a fresh floating node (floating beats grounded for cut terminals;
-//!   dev-plan 02 §6). `expect_matches` pins the severed-terminal count.
+//!   `expect_matches` pins the severed-terminal count.
 //! - `[[lift]]`, one lifted pin: like `cut` but for a single named device.
 //! - `[[jumper]]`, a bodge wire: net `to` is merged onto net `from`.
 //! - `[[fit]]`, a part wired ON: a new two-terminal device (`ohms` or
@@ -438,21 +438,8 @@ impl AsBuiltOverlay {
                 reference: reference.to_string(),
             });
         }
-        let resolve = |net: &Spanned<String>, what: &'static str| {
-            let name = net.get_ref().as_str();
-            bound.net_nodes.get(name).copied().ok_or_else(|| {
-                let known: Vec<String> = bound.net_nodes.keys().cloned().collect();
-                AsBuiltError::UnknownNet {
-                    origin: self.origin.clone(),
-                    line: self.line_of(net),
-                    what,
-                    pattern: name.to_string(),
-                    suggestions: near_matches(name, &known, 3),
-                }
-            })
-        };
-        let a = resolve(&fit.from, "[[fit]] from")?;
-        let b = resolve(&fit.to, "[[fit]] to")?;
+        let a = self.resolve_net(bound, &fit.from, "[[fit]] from")?;
+        let b = self.resolve_net(bound, &fit.to, "[[fit]] to")?;
         if a == b {
             return Err(AsBuiltError::FitSelf {
                 origin: self.origin.clone(),
@@ -729,27 +716,35 @@ impl AsBuiltOverlay {
         Ok(())
     }
 
+    /// Resolve an overlay-named net to its bound node, or refuse with the
+    /// overlay line, what the net was for, and the nearest real net names.
+    fn resolve_net(
+        &self,
+        bound: &BoundBoard,
+        net: &Spanned<String>,
+        what: &'static str,
+    ) -> Result<NodeId, AsBuiltError> {
+        let name = net.get_ref().as_str();
+        bound.net_nodes.get(name).copied().ok_or_else(|| {
+            let known: Vec<String> = bound.net_nodes.keys().cloned().collect();
+            AsBuiltError::UnknownNet {
+                origin: self.origin.clone(),
+                line: self.line_of(net),
+                what,
+                pattern: name.to_string(),
+                suggestions: near_matches(name, &known, 3),
+            }
+        })
+    }
+
     fn apply_jumper(
         &self,
         jumper: &Jumper,
         bound: &mut BoundBoard,
         report: &mut AsBuiltReport,
     ) -> Result<(), AsBuiltError> {
-        let resolve = |net: &Spanned<String>, what: &'static str| {
-            let name = net.get_ref().as_str();
-            bound.net_nodes.get(name).copied().ok_or_else(|| {
-                let known: Vec<String> = bound.net_nodes.keys().cloned().collect();
-                AsBuiltError::UnknownNet {
-                    origin: self.origin.clone(),
-                    line: self.line_of(net),
-                    what,
-                    pattern: name.to_string(),
-                    suggestions: near_matches(name, &known, 3),
-                }
-            })
-        };
-        let from = resolve(&jumper.from, "[[jumper]] from")?;
-        let to = resolve(&jumper.to, "[[jumper]] to")?;
+        let from = self.resolve_net(bound, &jumper.from, "[[jumper]] from")?;
+        let to = self.resolve_net(bound, &jumper.to, "[[jumper]] to")?;
         if from == to {
             return Err(AsBuiltError::JumperSelf {
                 origin: self.origin.clone(),

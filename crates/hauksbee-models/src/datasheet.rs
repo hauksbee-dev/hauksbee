@@ -880,8 +880,7 @@ fn topic_score(text: &str, terms: &[&str]) -> usize {
     if index_or_revision {
         return 0;
     }
-    let score = occurrences * 100 + usize::from(heading) * 2_000;
-    score
+    occurrences * 100 + usize::from(heading) * 2_000
 }
 
 fn select_relevant_pages(pages: &[PdfPageText], limit: usize) -> Vec<SelectedPage> {
@@ -1137,37 +1136,20 @@ fn truncate_to_chars(s: &str, max: usize) -> String {
 
 // ── Prompt construction ───────────────────────────────────────────────────────
 
-/// The kinds the schema actually deserializes, extracted from serde's own
-/// "unknown variant" error so this list can never drift from the enum. The
-/// extraction surface must speak the same closed vocabulary the validator
-/// enforces: a backend that invents "charger" burns every attempt against a
-/// parser that was never going to accept it.
+/// The kinds the schema deserializes. The extraction surface must speak the
+/// same closed vocabulary the validator enforces: a backend that invents
+/// "charger" burns every attempt against a parser that was never going to
+/// accept it. `kind_vocabulary_and_suggestions` pins this list to the enum.
 pub fn legal_kinds() -> Vec<String> {
-    #[derive(Debug, serde::Deserialize)]
-    struct Probe {
-        #[allow(dead_code)]
-        kind: crate::schema::ComponentKind,
-    }
-    let err = toml::from_str::<Probe>("kind = \"__not_a_kind__\"")
-        .expect_err("sentinel kind must not deserialize")
-        .to_string();
-    let Some(list) = err.split("expected one of ").nth(1) else {
-        return Vec::new();
-    };
-    list.split(',')
-        .map(|t| t.trim().trim_matches(|c| c == '`' || c == '.').to_string())
-        .filter(|t| !t.is_empty())
+    crate::validation::KIND_NAMES
+        .iter()
+        .map(|k| (*k).to_string())
         .collect()
 }
 
 /// Is this kind string one the schema accepts?
 pub fn kind_is_legal(kind: &str) -> bool {
-    #[derive(serde::Deserialize)]
-    struct Probe {
-        #[allow(dead_code)]
-        kind: crate::schema::ComponentKind,
-    }
-    toml::from_str::<Probe>(&format!("kind = \"{kind}\"")).is_ok()
+    crate::validation::KIND_NAMES.contains(&kind)
 }
 
 fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
@@ -2095,12 +2077,10 @@ fn verification_clause(ws: &Workspace) -> String {
 /// device. So the default is the strongest tier at high reasoning effort rather
 /// than whatever codex happens to default to.
 ///
-/// Deliberately keep `high` for non-sol overrides too. The only observed xhigh
-/// Luna failure answered the old prompt's first sub-question instead of the
-/// card task, so it does not isolate effort as the cause; silently dropping a
-/// weaker model to medium could make the pin-map work less reliable. `high` is
-/// already below that xhigh run, and `HAUKSBEE_CODEX_EFFORT` remains the explicit
-/// escape hatch. A per-model default needs comparative benchmark evidence first.
+/// Deliberately keep `high` for non-sol overrides too: silently dropping a
+/// weaker model to medium could make the pin-map work less reliable, and
+/// `HAUKSBEE_CODEX_EFFORT` remains the explicit escape hatch. A per-model
+/// default needs comparative benchmark evidence first.
 ///
 /// Override with `--model` or `HAUKSBEE_CODEX_MODEL` / `HAUKSBEE_CODEX_EFFORT`.
 pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-sol";
@@ -2215,69 +2195,12 @@ fn run_codex_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<S
         // dropping `stdin` here sends EOF
     }
 
-    // Poll for completion up to CLI_BACKEND_TIMEOUT, then kill.
-    let deadline = Instant::now() + CLI_BACKEND_TIMEOUT;
-    loop {
-        match child.try_wait().context("polling codex")? {
-            Some(_status) => break,
-            None => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    bail!(
-                        "codex timed out after {}s with no answer; \
-                         retry with a tighter prompt or set HAUKSBEE_LLM_API_KEY",
-                        CLI_BACKEND_TIMEOUT.as_secs()
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
-        }
-    }
-
-    let output = child
-        .wait_with_output()
-        .context("collecting codex output")?;
-    if !output.status.success() {
-        // stderr is not captured (see the spawn above), so report what codex
-        // put on stdout. Its session log is on the terminal, where a user
-        // watching a long run wants it anyway.
-        let tail = String::from_utf8_lossy(&output.stdout);
-        // codex puts the reason it gave up on stderr, so a failure with an
-        // empty stdout (a refused model, a rate limit, a bad config key) has
-        // its whole explanation in the log file and none of it here.
-        let err_tail = std::fs::read_to_string(&log_path)
-            .map(|t| {
-                t.lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .rev()
-                    .take(5)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join(" | ")
-            })
-            .unwrap_or_default();
-        let detail = [
-            tail.lines().rev().take(5).collect::<Vec<_>>().join(" | "),
-            err_tail,
-        ]
-        .into_iter()
-        .filter(|s| !s.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join(" || ");
-        bail!(
-            "codex exited with status {}{}",
-            output.status,
-            if detail.is_empty() {
-                " and said nothing on stdout or stderr".to_string()
-            } else {
-                format!(": {detail}")
-            }
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    wait_for_cli_backend(
+        child,
+        "codex",
+        "retry with a tighter prompt or set HAUKSBEE_LLM_API_KEY",
+        &log_path,
+    )
 }
 
 /// One headless `claude -p` invocation, holding the same contract as the codex
@@ -2337,17 +2260,41 @@ fn run_claude_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<
         // dropping `stdin` here sends EOF
     }
 
+    wait_for_cli_backend(
+        child,
+        "claude",
+        "retry with a tighter prompt or another --backend",
+        &log_path,
+    )
+}
+
+/// Poll a spawned CLI agent to completion, killing it at `CLI_BACKEND_TIMEOUT`,
+/// and return its stdout.
+///
+/// On a non-zero exit the error quotes the last few non-empty lines of BOTH
+/// stdout and the captured stderr log: a CLI agent puts the reason it gave up
+/// (a refused model, a rate limit, a bad config key) on stderr, so a failure
+/// with an empty stdout would otherwise read as "exited with status 1: " and
+/// nothing after the colon.
+fn wait_for_cli_backend(
+    mut child: std::process::Child,
+    tool: &str,
+    retry_hint: &str,
+    log_path: &Path,
+) -> Result<String> {
     let deadline = Instant::now() + CLI_BACKEND_TIMEOUT;
     loop {
-        match child.try_wait().context("polling claude")? {
+        match child
+            .try_wait()
+            .with_context(|| format!("polling {tool}"))?
+        {
             Some(_status) => break,
             None => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
                     bail!(
-                        "claude timed out after {}s with no answer; retry with a \
-                         tighter prompt or another --backend",
+                        "{tool} timed out after {}s with no answer; {retry_hint}",
                         CLI_BACKEND_TIMEOUT.as_secs()
                     );
                 }
@@ -2358,41 +2305,36 @@ fn run_claude_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<
 
     let output = child
         .wait_with_output()
-        .context("collecting claude output")?;
-    if !output.status.success() {
-        let tail = String::from_utf8_lossy(&output.stdout);
-        let err_tail = std::fs::read_to_string(&log_path)
-            .map(|t| {
-                t.lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .rev()
-                    .take(5)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join(" | ")
-            })
-            .unwrap_or_default();
-        let detail = [
-            tail.lines().rev().take(5).collect::<Vec<_>>().join(" | "),
-            err_tail,
-        ]
-        .into_iter()
-        .filter(|s| !s.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join(" || ");
-        bail!(
-            "claude exited with status {}{}",
-            output.status,
-            if detail.is_empty() {
-                " and said nothing on stdout or stderr".to_string()
-            } else {
-                format!(": {detail}")
-            }
-        );
+        .with_context(|| format!("collecting {tool} output"))?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    let last_lines = |text: &str| {
+        let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        lines.reverse();
+        lines.truncate(5);
+        lines.reverse();
+        lines.join(" | ")
+    };
+    let detail = [
+        last_lines(&String::from_utf8_lossy(&output.stdout)),
+        std::fs::read_to_string(log_path)
+            .map(|t| last_lines(&t))
+            .unwrap_or_default(),
+    ]
+    .into_iter()
+    .filter(|s| !s.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join(" || ");
+    bail!(
+        "{tool} exited with status {}{}",
+        output.status,
+        if detail.is_empty() {
+            " and said nothing on stdout or stderr".to_string()
+        } else {
+            format!(": {detail}")
+        }
+    );
 }
 
 /// The default base URL for the api backend.

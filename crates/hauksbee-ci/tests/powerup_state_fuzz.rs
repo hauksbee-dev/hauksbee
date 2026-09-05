@@ -1,5 +1,5 @@
-//! Round-4 Surface A: power-up state fuzz with rail assertions on the boards
-//! where boot state could matter.
+//! Power-up state fuzz with rail assertions, on the boards where boot state
+//! could matter.
 //!
 //! The hunt: a board control net whose logic level is *undefined* at power-on
 //! (an MCU GPIO that is Hi-Z at reset driving a gate/enable, a latch output with
@@ -8,7 +8,7 @@
 //! undefined boot bit, compound interactions, a rail down.
 //!
 //! Method, per board: identify the genuinely-undefined boot control nets
-//! (chased to the schematic and recorded in `docs/evidence/FAMOUS_SWEEP.md` Round 4),
+//! (chased to the schematic and recorded in `docs/evidence/FAMOUS_SWEEP.md`),
 //! fuzz them across seeds via the `[fuzz]` machinery, solve the DC operating
 //! point per seed, and assert the rails hold and no stress fault fires across
 //! *every* seed.

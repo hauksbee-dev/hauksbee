@@ -1,4 +1,4 @@
-//! Finding 3 gate (05 §3b, "refuse rather than fake" for the CI surface). When
+//! Finding 3 gate. When
 //! the analog co-sim fails a chunk under an assertion's evaluation window, that
 //! assertion must be reported INVALID (a distinct outcome, not a pass and not an
 //! ordinary fail) and the run must exit 3 (invalid-for-analysis), even when the

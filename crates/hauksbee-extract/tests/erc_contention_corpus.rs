@@ -1,9 +1,8 @@
-//! Round-4 Surface B calibration guard: the `output_contention` schematic-ERC
-//! check must stay SILENT on every known-good board in the famous schematic
-//! corpus. This is the round-2 rejected-check discipline made a regression: a
-//! check whose findings are only trustworthy if it is provably quiet on
-//! boards known to be correct. If a future change makes it fire on any of these,
-//! this test goes red before the false positive ships.
+//! Calibration guard: the `output_contention` schematic-ERC check must stay
+//! SILENT on every known-good board in the famous schematic corpus. Its findings
+//! are only trustworthy if it is provably quiet on boards known to be correct,
+//! so if a future change makes it fire on any of these, this goes red before the
+//! false positive ships.
 //!
 //! Corpus-gated: skipped when the board corpus is absent, unless
 //! `HAUKSBEE_REQUIRE_CORPUS=1` is set (then a missing corpus is a failure). The
@@ -17,10 +16,8 @@ use hauksbee_extract::{ExtractedBoard, LintCheck};
 
 /// The directory the board ids sit under, whichever layout this machine has.
 ///
-/// This used to be `corpus_dir(..).unwrap_or_default().join("famous")`, which
-/// only ever resolved on the hand-built corpus. On the corpus that
-/// `scripts/fetch-corpus.sh` produces there is no `famous/` level, so the path
-/// did not exist, the guard read it as "no corpus", and the gate skipped.
+/// The corpus `scripts/fetch-corpus.sh` produces has no `famous/` level, so a
+/// path built with one does not exist and the guard silently skips.
 fn corpus() -> Option<PathBuf> {
     hauksbee_testkit::corpus_boards_root_or_skip(
         env!("CARGO_MANIFEST_DIR"),
@@ -70,10 +67,7 @@ fn load(p: &Path) -> Option<ExtractedBoard> {
 #[test]
 fn output_contention_is_silent_on_known_good_corpus() {
     // `corpus()` already prints the not-run note, and panics under
-    // HAUKSBEE_REQUIRE_CORPUS. It used to be reported here as "board-corpus is
-    // absent", which named the wrong thing: board-corpus was present, the
-    // `famous/` level under it was not, and the message sent readers looking for
-    // a directory that was already there.
+    // HAUKSBEE_REQUIRE_CORPUS.
     let Some(root) = corpus() else { return };
 
     let mut scanned = 0usize;

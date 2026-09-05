@@ -12,8 +12,9 @@
 //!   prints, the modeled board does not define this level. A voltage
 //!   assertion here must not pass numerically; the honest verdict is "the
 //!   net floats: add a pull or a model for the parts that would drive it".
-//! - [`NetDcDefinition::Defined`]: a chain of resistors/inductors reaches
-//!   ground or an independent source, so the level stands on modeled
+//! - [`NetDcDefinition::DefinedThroughBoard`] (and
+//!   [`NetDcDefinition::DefinedBySource`]): a chain of resistors/inductors
+//!   reaches ground or an independent source, so the level stands on modeled
 //!   elements even if every unmodelled (open) part is high-impedance. Open
 //!   parts on such a net downgrade from verdict-blocking to a stated caveat
 //!   ("holds unless an unmodelled part actively drives the net") via
@@ -26,7 +27,7 @@
 //! The distinction is what lets one user assertion discriminate a real
 //! defect pair: "SWCLK stays low" on a board whose pull-down is missing is
 //! Floating (red, traced to the absent resistor), and on the fixed board is
-//! Defined through that resistor (green, with the open-MCU caveat stated).
+//! defined through that resistor (green, with the open-MCU caveat stated).
 //! Same stated assumption set, opposite verdicts, no new lint rule.
 
 use hauksbee_ir::{Circuit, Device, NodeId};

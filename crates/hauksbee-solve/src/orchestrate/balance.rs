@@ -23,11 +23,9 @@
 //! rail node. Summing the blocks' boundary currents therefore over-draws the
 //! rail by `(n_loads - 1) * gmin * v_rail`, and without the correction the
 //! torn solution is O(n_loads * gmin) below the monolithic one: small enough
-//! to pass a sloppy eyeball, large enough to fail the 1e-6 gate, and
-//! maddening to rediscover (it was found by bisecting the residual books
-//! line by line against the monolith's row; see the how-and-why doc). The
-//! surplus term is added back inside [`settle_rails`] so every executor gets
-//! the correction whether or not its author has read this paragraph.
+//! to pass a sloppy eyeball, large enough to fail the 1e-6 gate. The surplus
+//! term is added back inside [`settle_rails`] so every executor gets the
+//! correction whether or not its author has read this paragraph.
 //!
 //! The correction stays exact when rails CASCADE (a stacked feed:
 //! `source -> R1 -> MID -> R2 -> INNER`, both torn). The shunt `R2` between

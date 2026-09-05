@@ -700,7 +700,7 @@
           "type": "number"
         },
         "reason": {
-          "description": "The solver's own refusal message for this window: the blame clause\nnaming the net that refused to settle, the devices on it, and any\nnear-zero-ohm link poisoning the matrix (E29). Defaulted (and omitted\nfrom JSON) when empty, so an older consumer keeps parsing.",
+          "description": "The solver's own refusal message for this window: the blame clause\nnaming the net that refused to settle, the devices on it, and any\nnear-zero-ohm link poisoning the matrix. Defaulted (and omitted\nfrom JSON) when empty, so an older consumer keeps parsing.",
           "type": "string"
         },
         "start_s": {
@@ -765,7 +765,7 @@
           "type": "array"
         },
         "analog_valid": {
-          "description": "False once any chunk's analog solve failed to converge: the run held stale\nnode voltages over `failed_windows` and cannot vouch for analog-derived\nfindings there (05 §3b, refuse rather than fake). A fully valid run reports\n`true` with an empty `failed_windows`, so the common shape is unchanged and\nexisting consumers keep parsing.",
+          "description": "False once any chunk's analog solve failed to converge: the run held stale\nnode voltages over `failed_windows` and cannot vouch for analog-derived\nfindings there: it refuses rather than fakes them. A fully valid run reports\n`true` with an empty `failed_windows`, so the common shape is unchanged and\nexisting consumers keep parsing.",
           "type": "boolean"
         },
         "backend": {
@@ -1594,7 +1594,7 @@
       "type": "object"
     },
     "JsonFinding": {
-      "description": "One finding in the uniform machine-readable shape (§4.1): every check's\nfindings serialize the same way, so a CI pipeline or AI never parses prose.",
+      "description": "One finding in the uniform machine-readable shape: every check's\nfindings serialize the same way, so a CI pipeline or AI never parses prose.",
       "properties": {
         "actionable": {
           "description": "Whether a user should act on this (true for real findings and for\noff-target info notes; false for within-tolerance observations).",

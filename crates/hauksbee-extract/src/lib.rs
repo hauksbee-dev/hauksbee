@@ -186,6 +186,85 @@ pub(crate) fn reject_merge_conflict(text: &str) -> Result<(), ExtractError> {
     Ok(())
 }
 
+/// Split placements that carry no pad out of a component list.
+///
+/// A placement with no pad is board artwork, not a part: a silkscreen logo, a
+/// mechanical outline, a display keep-out. The native KiCad reader drops these
+/// for the same reason (a `Logo-` footprint binding as an inductor, and
+/// bind-rate denominators padded with decoration), so the exchange readers must
+/// drop them too or two readings of one board disagree on the part count.
+/// Returns the surviving components (duplicate designators merged) and the
+/// references that went, so the loss is reported rather than silent.
+pub(crate) fn split_board_artwork(components: Vec<Component>) -> (Vec<Component>, Vec<String>) {
+    let artwork: Vec<String> = components
+        .iter()
+        .filter(|c| c.pins.is_empty())
+        .map(|c| c.reference.clone())
+        .collect();
+    let kept = merge_duplicate_references(
+        components
+            .into_iter()
+            .filter(|c| !c.pins.is_empty())
+            .collect(),
+    );
+    (kept, artwork)
+}
+
+/// Names of nets no component pin sits on. Computed from the FINISHED board, so
+/// it catches a net lost to any resolution step as well as one the source really
+/// declares unused.
+pub(crate) fn nets_without_pads(nets: &[Net], components: &[Component]) -> Vec<String> {
+    let attached: HashSet<i64> = components
+        .iter()
+        .flat_map(|c| c.pins.iter())
+        .filter_map(|p| p.net)
+        .collect();
+    nets.iter()
+        .filter(|n| !attached.contains(&n.id))
+        .map(|n| n.name.clone())
+        .collect()
+}
+
+/// The two disclosure sentences every exchange reader owes: which placements
+/// were read as board artwork, and which declared nets touch no pad.
+pub(crate) fn exchange_disclosures(
+    artwork: &[String],
+    nets_without_pads: &[String],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if !artwork.is_empty() {
+        out.push(format!(
+            "{} placement(s) have no pad and were read as board artwork \
+             rather than parts: {}.",
+            artwork.len(),
+            sample_list(artwork)
+        ));
+    }
+    if !nets_without_pads.is_empty() {
+        out.push(format!(
+            "{} net(s) are declared but touch no component pad, so nothing \
+             downstream can see them: {}.",
+            nets_without_pads.len(),
+            sample_list(nets_without_pads)
+        ));
+    }
+    out
+}
+
+/// A comma list truncated to a sentence-sized sample, so a 600-net
+/// disagreement stays readable rather than filling the report.
+pub(crate) fn sample_list(items: &[String]) -> String {
+    const MAX: usize = 6;
+    if items.len() <= MAX {
+        return items.join(", ");
+    }
+    format!(
+        "{}, and {} more",
+        items[..MAX].join(", "),
+        items.len() - MAX
+    )
+}
+
 /// One electrical net. `id` is the KiCad net number (0 = the unconnected
 /// net in PCB files); `name` like "GND", "/Debugger/nRF52_VDD".
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -404,26 +483,6 @@ impl ExtractedBoard {
         registry
             .detect_binary(bytes, None)
             .map(|r| r.read(bytes, None))
-    }
-
-    /// Extract from an already-parsed forge-sexpr [`Document`], avoiding a
-    /// re-parse when the caller has already built the CST (e.g. for lossless
-    /// editing). Dispatches on the root keyword: `kicad_pcb` → layout
-    /// extraction, `export` → netlist extraction.
-    ///
-    /// [`Document`]: forge_sexpr::Document
-    pub fn from_document(doc: &forge_sexpr::Document) -> Result<Self, ExtractError> {
-        match doc.root().and_then(|r| r.name()) {
-            Some("kicad_pcb") | Some("module") => pcb::extract_from_doc(doc),
-            Some("export") => netlist::extract_from_doc(doc),
-            // Schematic: single sheet only here (no directory to find
-            // sub-sheets from). The path-based entry point recurses.
-            Some("kicad_sch") => schematic::extract_from_doc(doc, None),
-            other => Err(ExtractError::WrongRoot {
-                expected: "kicad_pcb, export or kicad_sch",
-                found: other.map(str::to_string),
-            }),
-        }
     }
 
     /// Sniff the format from content and extract accordingly.

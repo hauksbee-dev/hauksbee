@@ -20,14 +20,14 @@
 //! `with_slave`), or a [`super::spi::SpiBus`] (`SpiBus::new`). The `on_i2c` / `on_spi` Renode/simavr bridge is
 //! untouched; this is just another slave.
 //!
-//! ## Write side (05 §3.2)
+//! ## Write side
 //!
 //! The interpreter also EXECUTES firmware writes per the spec's write side:
 //! pointer-framed register writes decode into stored variables the read
 //! expressions see (write→read coupling: an ADS1115 config write selects what
 //! the conversion register reads), and command-framed writes (the MCP4728
 //! shape) update per-channel state whose output voltage laws drive analog nets
-//! through the ctx-bearing `on_stop` (05 §3.1). Bit-field extraction happens
+//! through the ctx-bearing `on_stop`. Bit-field extraction happens
 //! here in Rust from the spec's declared `[high, low]` ranges, evalexpr has
 //! no bit operations, so the bit surgery is framing-layer data, never
 //! expression math (see the boundary note in `sensor_spec.rs`). Write bytes
@@ -258,7 +258,7 @@ pub struct RegisterMapSensor {
     /// Live input values, seeded from each input's `default`.
     inputs: HashMap<String, f64>,
 
-    // ── Write side (05 §3.2) ──
+    // ── Write side ──
     /// addr -> pointer-framed writable register.
     write_regs: HashMap<u8, WriteRegisterSpec>,
     /// Stored write variables (each write_register's `store` and its extracted
@@ -407,7 +407,7 @@ impl RegisterMapSensor {
             inputs.insert(i.name.clone(), i.default);
         }
 
-        // ── Write side (05 §3.2) ──
+        // ── Write side ──
         // Stores seed from each write register's POR default; the fields seed
         // by extracting from that default's bit pattern, so a read expr that
         // references a field (the ADS1115 conversion law) is well-defined
@@ -563,7 +563,7 @@ impl RegisterMapSensor {
         Some(value * reg.spec.scale.unwrap_or(1.0) + reg.spec.offset.unwrap_or(0.0))
     }
 
-    // ── Write side (05 §3.2) ─────────────────────────────────────────────────
+    // ── Write side ─────────────────────────────────────────────────
 
     /// Override the spec's I2C address for this instance (a board carries
     /// several MCP4728s at 0x60/0x61/0x62 from one spec).
@@ -782,7 +782,7 @@ impl RegisterMapSensor {
         let key = self.normalize_addr(addr);
         // Reads see the merged variables: physical inputs PLUS the stored
         // write variables, so a written config register feeds the read-side
-        // expressions (write→read coupling, 05 §3.2).
+        // expressions (write→read coupling).
         self.registers
             .get(&key)
             .map(|r| r.bytes(&self.vars(None)))
@@ -848,7 +848,7 @@ impl I2cSlave for RegisterMapSensor {
     }
 
     fn on_write(&mut self, data: u8) {
-        // Command-framed device (05 §3.2): the first byte selects the command,
+        // Command-framed device: the first byte selects the command,
         // the rest decode as its groups. There is no register pointer.
         if !self.write_cmds.is_empty() {
             match self.cmd_phase {
@@ -956,7 +956,7 @@ impl I2cSlave for RegisterMapSensor {
 
     fn on_stop(&mut self, ctx: &mut super::TickCtx) {
         self.got_pointer = false;
-        // Drive every bound output net from its law's current value (05 §3.1).
+        // Drive every bound output net from its law's current value.
         // Evaluate first (immutable pass), then push (drivers mutate ctx).
         let volts: Vec<(usize, f64)> = self
             .outputs

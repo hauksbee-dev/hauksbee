@@ -41,10 +41,7 @@ const CHUNK_US: u64 = 5_000;
 const CHUNKS: u32 = 40;
 
 fn firmware(name: &str) -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/avr_watchdog")
-        .join(name);
-    p.exists().then(|| p.canonicalize().unwrap_or(p))
+    crate::support::firmware(&format!("avr_watchdog/{name}"))
 }
 
 /// Run `elf` for `CHUNKS` chunks and return (chunks completed, PB5 edges,

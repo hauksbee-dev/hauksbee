@@ -105,7 +105,7 @@ outputs = ["q", "qb"]
 
 /// A single cycle-stamped GPIO output transition captured from an MCU.
 ///
-/// This is the ordered, cycle-stamped edge event of 05 §1.1: it carries the MCU
+/// The ordered, cycle-stamped edge event: it carries the MCU
 /// cycle counter at the instant of the edge alongside the pin and its new level,
 /// so a sub-µs `shiftOut` SCLK burst replays in true order and multiplicity
 /// instead of collapsing to a resting level. Within a chunk the log preserves
@@ -125,7 +125,7 @@ pub struct PinEdge {
 }
 
 /// Collapse a cycle-stamped edge log into per-pin ordered `(cycle, level)`
-/// waveforms, the shape the analog PWL side consumes (05 §1.1/§1.3).
+/// waveforms, the shape the analog PWL side consumes.
 ///
 /// The input log is append-ordered within a chunk, so each pin's resulting
 /// series is already cycle-monotonic; a `(port,bit)` maps to its ordered edge
@@ -142,7 +142,7 @@ pub fn pin_edges_by_pin(edges: &[PinEdge]) -> HashMap<(char, u8), Vec<(u64, bool
     per_pin
 }
 
-/// Generalized digital edge replay (05 §1.2): drain a cycle-stamped edge log and
+/// Generalized digital edge replay: drain a cycle-stamped edge log and
 /// micro-tick a set of GPIO-driven digital components in cycle order, one
 /// micro-tick per edge-group sharing a cycle.
 ///
@@ -622,30 +622,45 @@ impl DigitalComponent {
 /// This is the single source of truth for chain ordering, shared by the
 /// scheduler's edge-driven chain controllers and the `tarski_inference` example.
 pub fn order_595_chains(digital: &[DigitalComponent]) -> Vec<Vec<usize>> {
+    order_serial_chains(digital, DigitalComponent::chains_as_595, "qh_serial", "ser")
+}
+
+/// Recover the separate physical daisy chains formed by a serial link between
+/// chips of one family.
+///
+/// `link_out` is the role carrying the serial signal OUT of a chip and
+/// `link_in` the role carrying it IN. A chain's head is the chip whose
+/// `link_in` is not produced by any chip in the set (it is driven from
+/// elsewhere: the MCU's serial-data net for a 595 write chain, the MCU's MISO
+/// for a 165 read chain), and each chain is walked head-to-tail by following
+/// `link_out` to the chip that consumes it. Two chains fed by different sources
+/// are NOT flattened into one, so their serial streams cannot bleed across, and
+/// a chip not reachable from any head (a ring, or a chip whose head was pruned)
+/// becomes its own singleton chain rather than being silently merged.
+fn order_serial_chains(
+    digital: &[DigitalComponent],
+    is_member: impl Fn(&DigitalComponent) -> bool,
+    link_out: &str,
+    link_in: &str,
+) -> Vec<Vec<usize>> {
     let chips: Vec<usize> = digital
         .iter()
         .enumerate()
-        .filter(|(_, d)| d.chains_as_595())
+        .filter(|(_, d)| is_member(d))
         .map(|(i, _)| i)
         .collect();
+    let node_of = |i: usize, role: &str| digital[i].roles.get(role).map(|n| n.0 as i64);
 
-    // node -> chip whose qh_serial is that node (the producer).
-    let mut producer: HashMap<i64, usize> = HashMap::new();
-    for &i in &chips {
-        if let Some(n) = digital[i].roles.get("qh_serial") {
-            producer.insert(n.0 as i64, i);
-        }
-    }
-    let ser_of = |i: usize| digital[i].roles.get("ser").map(|n| n.0 as i64);
+    // node -> chip whose `link_out` is that node (the producer).
+    let producer: HashMap<i64, usize> = chips
+        .iter()
+        .filter_map(|&i| Some((node_of(i, link_out)?, i)))
+        .collect();
 
-    // Head: a chip whose ser is not produced by any chip in the set.
     let mut heads: Vec<usize> = chips
         .iter()
         .copied()
-        .filter(|&i| match ser_of(i) {
-            Some(s) => !producer.contains_key(&s),
-            None => true,
-        })
+        .filter(|&i| node_of(i, link_in).is_none_or(|n| !producer.contains_key(&n)))
         .collect();
     // Deterministic.
     heads.sort_by(|&a, &b| digital[a].reference.cmp(&digital[b].reference));
@@ -660,20 +675,17 @@ pub fn order_595_chains(digital: &[DigitalComponent]) -> Vec<Vec<usize>> {
                 break;
             }
             chain.push(i);
-            let next_node = digital[i].roles.get("qh_serial").map(|n| n.0 as i64);
-            cur = next_node.and_then(|node| {
+            cur = node_of(i, link_out).and_then(|node| {
                 chips
                     .iter()
                     .copied()
-                    .find(|&j| ser_of(j) == Some(node) && !seen.contains(&j))
+                    .find(|&j| node_of(j, link_in) == Some(node) && !seen.contains(&j))
             });
         }
         if !chain.is_empty() {
             out.push(chain);
         }
     }
-    // Any chip not reachable from a head (e.g. a ring, or a chip whose head was
-    // pruned) becomes its own singleton chain rather than being silently merged.
     for &i in &chips {
         if seen.insert(i) {
             out.push(vec![i]);
@@ -935,64 +947,7 @@ impl Hc595Chain {
 /// Mirror of [`order_595_chains`] for the read direction. A chip not reachable
 /// from any head becomes its own singleton chain rather than being merged.
 pub fn order_165_chains(digital: &[DigitalComponent]) -> Vec<Vec<usize>> {
-    let chips: Vec<usize> = digital
-        .iter()
-        .enumerate()
-        .filter(|(_, d)| d.chains_as_165())
-        .map(|(i, _)| i)
-        .collect();
-
-    // node -> chip whose `ser` input is that node (the consumer of a QH).
-    let mut consumer: HashMap<i64, usize> = HashMap::new();
-    for &i in &chips {
-        if let Some(n) = digital[i].roles.get("ser") {
-            consumer.insert(n.0 as i64, i);
-        }
-    }
-    let qh_of = |i: usize| digital[i].roles.get("qh").map(|n| n.0 as i64);
-
-    // Head: a chip whose `qh` is not consumed by any chip's `ser` (it feeds the
-    // MCU's MISO instead).
-    let mut heads: Vec<usize> = chips
-        .iter()
-        .copied()
-        .filter(|&i| match qh_of(i) {
-            Some(q) => !consumer.contains_key(&q),
-            None => true,
-        })
-        .collect();
-    heads.sort_by(|&a, &b| digital[a].reference.cmp(&digital[b].reference));
-
-    let mut seen = std::collections::HashSet::new();
-    let mut out: Vec<Vec<usize>> = Vec::new();
-    for head in heads {
-        let mut chain = Vec::new();
-        let mut cur = Some(head);
-        while let Some(i) = cur {
-            if !seen.insert(i) {
-                break;
-            }
-            chain.push(i);
-            // The next (upstream) chip is the one whose `qh` feeds THIS chip's
-            // `ser`.
-            let ser_node = digital[i].roles.get("ser").map(|n| n.0 as i64);
-            cur = ser_node.and_then(|node| {
-                chips
-                    .iter()
-                    .copied()
-                    .find(|&j| qh_of(j) == Some(node) && !seen.contains(&j))
-            });
-        }
-        if !chain.is_empty() {
-            out.push(chain);
-        }
-    }
-    for &i in &chips {
-        if seen.insert(i) {
-            out.push(vec![i]);
-        }
-    }
-    out
+    order_serial_chains(digital, DigitalComponent::chains_as_165, "ser", "qh")
 }
 
 /// An edge-driven model of one MCU-bit-banged 74HC165 parallel-in / serial-out

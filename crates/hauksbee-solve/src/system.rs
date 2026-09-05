@@ -35,7 +35,7 @@ enum NodeMap {
 /// sources and inductors each get an appended branch-current unknown. Ground
 /// is never an unknown.
 ///
-/// Device-private INTERNAL nodes (dev-plan 04 §3.2): a BJT whose model carries
+/// Device-private INTERNAL nodes: a BJT whose model carries
 /// a positive series resistance (`rb`/`re`/`rc`) owns one internal unknown per
 /// nonzero terminal resistance; the intrinsic base/emitter/collector the
 /// Gummel-Poon core moves onto, with the ohmic resistor stamped between the
@@ -84,7 +84,7 @@ pub struct Layout {
     mos_internal_of: Vec<[Option<usize>; 2]>,
     diode_internal_of: Vec<Option<usize>>,
     /// Mutual-inductance partners per device, indexed by `DeviceId.0`
-    /// (dev-plan 04 §2.3): for each inductor in a coupled group, the OTHER
+    ///: for each inductor in a coupled group, the OTHER
     /// windings it couples to as `(partner, M)` with `M = k·sqrt(L1·L2)`
     /// precomputed from the deck's `Device::Coupling` relationships. Chained
     /// K cards compose pairwise, so a row here IS the off-diagonal of the
@@ -413,7 +413,7 @@ mod tests {
 /// the previous step(s). This struct carries that history per timestep so the
 /// stamping code stays stateless.
 ///
-/// Slot packing for multi-state devices (dev-plan 04 §3.2/§3.3): the primary
+/// Slot packing for multi-state devices: the primary
 /// bank (`x1`/`dx1`/`x2`) holds ONE state per device, capacitor voltage,
 /// inductor current, a charge-storing diode's junction charge, a BJT's
 /// BASE-EMITTER charge, or a MOSFET's GATE-SOURCE charge. Devices with more
@@ -424,7 +424,7 @@ mod tests {
 /// * MOSFET (up to four):  bank A = Q_gs,  `xb[0]` = Q_gd,
 ///                         `xb[1]` = Q_bd, `xb[2]` = Q_bs.
 ///
-/// (The §3.2 arc introduced a single named secondary bank for "the one
+/// (A single named secondary bank exists for "the one
 /// device with two charges"; the MOSFET's four charges are why it is now an
 /// indexed array, bank letters do not scale, indices do.) All banks are
 /// indexed by `DeviceId.0` and roll forward together; a device leaves the

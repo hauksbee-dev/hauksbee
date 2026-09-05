@@ -631,10 +631,9 @@ impl<'a> PolyGrid<'a> {
         //
         // The edges are bucketed by the rows they span first. Walking every edge
         // for every row is O(rows x vertices), and rows scale with the vertex
-        // count, so a plane with 6084 annular antipads (each a 64-gon plus a 32-gon
-        // rim, ~600k vertices over 2048 rows) spent 3.2 s here. Bucketing makes it
-        // O(vertices + rows swept + cells): each EDGE of an antipad's outline spans
-        // two or three rows, which is the quantity the cost sums over.
+        // count, so a plane with thousands of annular antipads pays seconds here.
+        // Bucketing makes it O(vertices + rows swept + cells): each EDGE of an
+        // antipad's outline spans two or three rows.
         if contours.iter().any(|c| c.len() >= 3) {
             let row_of = |y: f64| -> isize { ((y - miny) * inv_cell).floor() as isize };
             // One copy of each non-horizontal edge, plus the row it becomes active
@@ -774,11 +773,10 @@ impl<'a> PolyGrid<'a> {
     /// horizontal cell boundary the segment reaches first. Point-sampling the
     /// segment at one-cell spacing does NOT do this: whenever a step advances
     /// both cell coordinates, the cell the segment crossed in between is never
-    /// visited. Those missed cells then took their classification from the
-    /// scanline parity at their CENTRE, so every query in one of them on the far
-    /// side of the boundary got the wrong answer, and `near_boundary` could
-    /// answer "no boundary here" over a boundary that was really there. A rotated
-    /// square at 512 cells missed 524 crossed cells.
+    /// visited. A missed cell then takes its classification from the scanline
+    /// parity at its CENTRE, so every query in it on the far side of the boundary
+    /// gets the wrong answer and `near_boundary` can answer "no boundary here"
+    /// over a boundary that is really there.
     fn stamp_edge(
         cells: &mut [u8],
         nx: usize,

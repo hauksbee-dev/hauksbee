@@ -39,6 +39,7 @@
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
+use crate::partition::UnionFind;
 use hauksbee_ir::{Circuit, DeviceId, NodeId};
 
 /// A device reading a node it does not conduct into: the raw material of a
@@ -182,34 +183,6 @@ impl ConductionGraph {
                 }
             })
             .collect()
-    }
-}
-
-/// Path-halving union-find over node indices (same shape as the partitioner's;
-/// kept private to each because the two must be able to evolve separately).
-struct UnionFind {
-    parent: Vec<usize>,
-}
-
-impl UnionFind {
-    fn new(n: usize) -> Self {
-        UnionFind {
-            parent: (0..n).collect(),
-        }
-    }
-    fn find(&mut self, mut x: usize) -> usize {
-        while self.parent[x] != x {
-            self.parent[x] = self.parent[self.parent[x]];
-            x = self.parent[x];
-        }
-        x
-    }
-    fn union(&mut self, a: usize, b: usize) {
-        let ra = self.find(a);
-        let rb = self.find(b);
-        if ra != rb {
-            self.parent[ra] = rb;
-        }
     }
 }
 

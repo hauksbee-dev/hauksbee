@@ -1,4 +1,4 @@
-//! Configurable power supplies (Feature 1).
+//! Configurable power supplies.
 //!
 //! A power supply replaces the binder's ideal rail on a supply net with a
 //! *behavioral source*: an [`PinDriver`](crate::drivers)-style Thevenin leg

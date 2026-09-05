@@ -65,31 +65,22 @@
 //!   against the pads that reference it.
 //!
 //! A pad whose net ordinal is out of range, or whose net field is not a number,
-//! or a job with no net table at all: these three used to become "no net"
-//! silently, which reports a connected board as a disconnected one. The first two
-//! are now named; the third is a refusal, because without `eda/data`'s `NET`
-//! sequence the ordinals on every pad mean nothing at all.
+//! is named rather than silently read as "no net", which would report a
+//! connected board as a disconnected one. A job with no net table at all is a
+//! refusal: without `eda/data`'s `NET` sequence the ordinals on every pad mean
+//! nothing.
 //!
 //! ## Deliberately dropped
 //!
 //! ODB++ is far richer than hauksbee's IR ([`ExtractedBoard`]: nets, components,
-//! pads and their net). These are read past on purpose, not missed:
-//!
-//! * **Fabrication attributes** — the whole `.attr` namespace beyond `.no_pop`
-//!   (`.comp_mount_type`, `.comp_height`, `.drill`, `.pad_usage`, `.smd`,
-//!   impedance and tolerance attributes), `misc/attrlist`, `misc/sysattr*`.
-//! * **Copper and drill geometry.** The IR holds no polygons, so `features`
-//!   files are parsed only to *count* what is on each layer
-//!   ([`OdbStats::layers`]) and to check the `F` header. Clearance DRC needs the
-//!   original layout file, and ODB++ input therefore reports DRC as not checked
-//!   rather than green.
-//! * **Stackup and materials** (`stephdr`, `DIELECTRIC` rows, `tools` drill
-//!   tables beyond the hole count), **panelization** (multi-step `SR` step
-//!   repeats), **profile/rout**, **silkscreen, paste and mask layers**,
-//!   **`fonts/`**, **`user/`**, and the subnet/feature-id back-references
-//!   (`SNT`/`FID`) that tie a net to individual features.
-//! * **Non-`PRP` component metadata**: `PRP` properties are kept verbatim, but
-//!   tool-specific routing/strategy properties are not interpreted.
+//! pads and their net). Read past on purpose, not missed: the `.attr` namespace
+//! beyond `.no_pop`, `misc/attrlist` and `misc/sysattr*`; copper and drill
+//! geometry (`features` files are parsed only to *count* what is on each layer
+//! and to check the `F` header, so ODB++ input reports clearance DRC as not
+//! checked rather than green); stackup and materials (`stephdr`, `DIELECTRIC`,
+//! `tools`); panelization (`SR` step repeats); profile/rout; silk, paste and
+//! mask layers; `fonts/`; `user/`; the `SNT`/`FID` subnet back-references; and
+//! tool-specific routing/strategy properties (`PRP` values are kept verbatim).
 //!
 //! ## Two things worth knowing about the KiCad producer specifically
 //!
@@ -110,18 +101,17 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use crate::altium::VALUE_UNRESOLVED_KEY;
-use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
+use crate::{sample_list, Component, ExtractError, ExtractedBoard, Net, Pin};
 
 /// Why a part read from an ODB++ job has no value, for the bind report to print
 /// next to its UNRESOLVED verdict.
 ///
-/// It must say *ODB++*: reusing the Altium reason told users of an ODB++ job to
-/// go and look in a `.SchDoc` they do not have. ODB++ carries a component's
-/// value only as a `PRP` property, and plenty of producers (Valor NPI writes
-/// `PRP CLASS` and routing rules but no `PRP Value`) simply do not write one.
-/// The value is not fabricated from the `part_name` field, because that field is
-/// a footprint string in KiCad's export and inventing "R_0603" as a resistance
-/// is how phantom faults get reported.
+/// It must say *ODB++* rather than reuse the Altium reason, which sends the
+/// reader to a `.SchDoc` they do not have. ODB++ carries a component's value only
+/// as a `PRP` property and plenty of producers do not write one (Valor NPI writes
+/// `PRP CLASS` and routing rules but no `PRP Value`). The value is never
+/// fabricated from `part_name`: that field is a footprint string in KiCad's
+/// export, and reading "R_0603" as a resistance is how phantom faults appear.
 pub const VALUE_UNRESOLVED_REASON: &str =
     "no value in the ODB++ job: it carries no `PRP Value` property for this part, \
      and the part name is a library/footprint id rather than a value";
@@ -240,22 +230,10 @@ impl OdbStats {
                     .to_string(),
             );
         }
-        if !self.artwork.is_empty() {
-            out.push(format!(
-                "{} placement(s) have no pad and were read as board artwork \
-                 rather than parts: {}.",
-                self.artwork.len(),
-                sample_list(&self.artwork)
-            ));
-        }
-        if !self.nets_without_pads.is_empty() {
-            out.push(format!(
-                "{} net(s) are declared but touch no component pad, so nothing \
-                 downstream can see them: {}.",
-                self.nets_without_pads.len(),
-                sample_list(&self.nets_without_pads)
-            ));
-        }
+        out.extend(crate::exchange_disclosures(
+            &self.artwork,
+            &self.nets_without_pads,
+        ));
         out.extend(self.disagreements.clone());
         out
     }
@@ -341,11 +319,9 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
 
     // The step to read: the first that carries a PLACEMENT, not simply the
     // first. A fab deliverable routinely ships `steps/panel` (an array of board
-    // instances, with no components of its own) ahead of `steps/pcb`, and taking
-    // the first step read the panel and reported a one-component board.
-    // No step with a placement falls through to the first step, so the
-    // "carries no component placement" refusal below can name what that step DID
-    // contain instead of a vaguer message here.
+    // instances, with no components of its own) ahead of `steps/pcb`. No step
+    // with a placement falls through to the first step, so the "carries no
+    // component placement" refusal below can name what that step DID contain.
     let with_placement = steps.iter().any(|s| step_has_placement(&tree, s, &matrix));
     let step = match steps
         .iter()
@@ -478,11 +454,10 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     //
     // A placement's `TOP` records address nets by their ORDINAL in `eda/data`'s
     // `NET` sequence, so without that table the ordinals mean nothing. A job
-    // whose `eda/data` is absent, or whose `eda/data` would not inflate, used to
-    // read as a board with zero nets and every pad unconnected — a complete
-    // circuit reported as a completely disconnected one. Refuse instead: the
-    // whole point of reading ODB++ rather than gerbers is that the connectivity
-    // is stated.
+    // whose `eda/data` is absent, or would not inflate, would read as a board
+    // with zero nets and every pad unconnected: a complete circuit reported as a
+    // completely disconnected one. Refuse instead, the whole point of reading
+    // ODB++ rather than gerbers being that the connectivity is stated.
     let netted_toeprints = raw_components
         .iter()
         .flat_map(|c| c.toeprints.iter())
@@ -543,8 +518,8 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     let mut pin_name_mismatches = 0usize;
     let mut pads_per_net: BTreeMap<i64, usize> = BTreeMap::new();
     // Pads whose net number is outside the net table, and pads whose net field
-    // was not a number at all. Both used to become "no net" without a word, which
-    // reports a connected pad as floating.
+    // is not a number at all. Reading either as "no net" without a word reports a
+    // connected pad as floating.
     let mut out_of_range: Vec<String> = Vec::new();
     let mut unparseable: Vec<String> = Vec::new();
     let mut synthesised_names = 0usize;
@@ -648,35 +623,8 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             pins,
         });
     }
-    // A placement with no pads is board artwork, not a part: a silkscreen logo,
-    // a mechanical outline, a display's keep-out. The native KiCad reader drops
-    // these for the same reason (a `Logo-` footprint binding as an inductor, and
-    // bind-rate denominators padded with decoration), so an ODB++ re-export of
-    // one board must drop them too or the two readings disagree on the part
-    // count. How many went is recorded rather than silently lost.
-    let artwork: Vec<String> = components
-        .iter()
-        .filter(|c| c.pins.is_empty())
-        .map(|c| c.reference.clone())
-        .collect();
-    let components = crate::merge_duplicate_references(
-        components
-            .into_iter()
-            .filter(|c| !c.pins.is_empty())
-            .collect(),
-    );
-    // Nets nothing is attached to, computed from the FINISHED board so it catches
-    // a net lost anywhere above as well as one the job really declares unused.
-    let attached: HashSet<i64> = components
-        .iter()
-        .flat_map(|c| c.pins.iter())
-        .filter_map(|p| p.net)
-        .collect();
-    let nets_without_pads: Vec<String> = nets
-        .iter()
-        .filter(|n| !attached.contains(&n.id))
-        .map(|n| n.name.clone())
-        .collect();
+    let (components, artwork) = crate::split_board_artwork(components);
+    let nets_without_pads = crate::nets_without_pads(&nets, &components);
 
     if pads == 0 {
         return Err(ExtractError::Odb(format!(
@@ -934,19 +882,6 @@ fn sorted_diff(a: &HashSet<&str>, b: &HashSet<&str>) -> Vec<String> {
     let mut v: Vec<String> = a.difference(b).map(|s| s.to_string()).collect();
     v.sort();
     v
-}
-
-/// A comma list, truncated so a 600-net disagreement stays a sentence.
-fn sample_list(items: &[String]) -> String {
-    const MAX: usize = 6;
-    if items.len() <= MAX {
-        return items.join(", ");
-    }
-    format!(
-        "{}, and {} more",
-        items[..MAX].join(", "),
-        items.len() - MAX
-    )
 }
 
 fn list_or_none(items: &[String]) -> String {
