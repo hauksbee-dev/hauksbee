@@ -179,6 +179,14 @@ mod stormduino_bind;
 mod strap_lint_corpus;
 #[path = "synthetic_cosim.rs"]
 mod synthetic_cosim;
+#[path = "tarski_595_chain.rs"]
+mod tarski_595_chain;
+#[path = "tarski_bind.rs"]
+mod tarski_bind;
+#[path = "tarski_full.rs"]
+mod tarski_full;
+#[path = "tarski_stretcher_transient.rs"]
+mod tarski_stretcher_transient;
 #[path = "thermal.rs"]
 mod thermal;
 #[path = "usb_c_double_termination.rs"]
@@ -195,11 +203,3 @@ mod watchdog_coverage_surfaces;
 mod zero_ohm_jumper;
 #[path = "zero_ohm_link.rs"]
 mod zero_ohm_link;
-#[path = "tarski_full.rs"]
-mod tarski_full;
-#[path = "tarski_bind.rs"]
-mod tarski_bind;
-#[path = "tarski_595_chain.rs"]
-mod tarski_595_chain;
-#[path = "tarski_stretcher_transient.rs"]
-mod tarski_stretcher_transient;

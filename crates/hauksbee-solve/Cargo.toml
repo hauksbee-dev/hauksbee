@@ -55,3 +55,7 @@ workspace = true
 [[test]]
 name = "it"
 path = "tests/main.rs"
+
+[[test]]
+name = "speed_gate"
+path = "tests/speed_gate.rs"

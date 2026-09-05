@@ -140,5 +140,5 @@ hauksbee run <board>.kicad_pcb --si
 hauksbee run <board>.kicad_pcb --si --json | jq '.findings[] | select(.check=="si")'
 cargo test -p hauksbee-extract --lib si::
 cargo test -p hauksbee-engine --lib checks::ripple checks::ampacity checks::converter
-cargo test -p hauksbee-engine --test si_ampacity_ripple
+cargo test -p hauksbee-engine --test it si_ampacity_ripple
 ```

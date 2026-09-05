@@ -28,4 +28,4 @@ HAUKSBEE_QEMU_XTENSA="$xtensa" \
 HAUKSBEE_QEMU_RISCV32="$riscv32" \
 HAUKSBEE_REQUIRE_PATCHED_QEMU=1 \
   cargo test --locked -p hauksbee-mcu --no-default-features --features qemu \
-    --test qemu_gpio_register_state -- --nocapture --test-threads=1
+    --test it qemu_gpio_register_state -- --nocapture --test-threads=1

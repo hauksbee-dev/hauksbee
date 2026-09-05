@@ -1,4 +1,5 @@
 //! SPICE netlist loader for the `.cir` subset hauksbee simulates.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/spice.md.
 //!
 //! Elements `R C L V I D Q M S E G F H B K` and `X` subcircuit calls; `.model`
 //! cards for `D`, `NPN`/`PNP`, `NMOS`/`PMOS` (level 1) and `SW`; `DC`/`SIN`/
@@ -240,14 +241,23 @@ fn read_lines(
             .next()
             .unwrap_or("")
             .to_ascii_lowercase();
-        if head == ".lib" {
-            bail!(line, "`.lib` is unsupported; use `.include <file>`");
-        }
-        if head != ".include" && head != ".inc" {
+        if head != ".include" && head != ".inc" && head != ".lib" {
             out.push(line);
             continue;
         }
-        let arg = line.text[head.len()..].trim().trim_matches(['"', '\'']);
+        let args: Vec<&str> = line.text[head.len()..]
+            .split_whitespace()
+            .map(|a| a.trim_matches(['"', '\'']))
+            .collect();
+        let (arg, section) = match (head.as_str(), args.as_slice()) {
+            (".lib", [file, section]) => (*file, Some(*section)),
+            (".lib", _) => bail!(
+                line,
+                "`.lib <file>` is ambiguous; use `.include <file>` or `.lib <file> <section>`"
+            ),
+            (_, [file]) => (*file, None),
+            _ => bail!(line, "`{head}` takes one file argument"),
+        };
         let path = dir.join(arg);
         if depth >= 20 {
             bail!(line, "`.include` nesting deeper than 20 (a cycle?)");
@@ -258,6 +268,38 @@ fn read_lines(
                 path.display()
             ))
         })?;
+        // `.lib <file> <section>` splices only the `.lib <section>` .. `.endl`
+        // block of the library file.
+        let inc = match section {
+            None => inc,
+            Some(section) => {
+                let mut inside = false;
+                let mut picked = String::new();
+                for raw in inc.lines() {
+                    let t = raw.trim();
+                    let mut words = t.split_whitespace();
+                    match words.next().map(|w| w.to_ascii_lowercase()).as_deref() {
+                        Some(".lib")
+                            if words
+                                .next()
+                                .is_some_and(|n| n.eq_ignore_ascii_case(section)) =>
+                        {
+                            inside = true
+                        }
+                        Some(".endl") => inside = false,
+                        _ if inside => {
+                            picked.push_str(raw);
+                            picked.push('\n');
+                        }
+                        _ => {}
+                    }
+                }
+                if picked.is_empty() {
+                    bail!(line, "section `{section}` not found in `{arg}`");
+                }
+                picked
+            }
+        };
         let sub = path.parent().unwrap_or(Path::new("."));
         read_lines(&inc, sub, Rc::from(arg), false, depth + 1, out)?;
     }
@@ -582,8 +624,13 @@ fn add_model(
             None => {} // string metadata (mfg=, type=)
         }
     }
-    if matches!(kind.as_str(), "nmos" | "pmos") && params.get("level").is_some_and(|l| *l != 1.0) {
-        bail!(line, "only MOSFET LEVEL=1 is implemented");
+    if let Some(level) = params.get("level").filter(|l| **l != 1.0) {
+        if matches!(kind.as_str(), "nmos" | "pmos") {
+            bail!(
+                line,
+                "MOSFET LEVEL={level} is not implemented (only LEVEL=1)"
+            );
+        }
     }
     let name = toks[1].to_ascii_lowercase();
     if models
@@ -698,13 +745,18 @@ fn collect(
             ".nodeset" => deck.nodeset.push(line),
             ".end" | ".op" | ".title" | ".width" | ".save" => {}
             h if h.starts_with('.') => {
-                let why = match h {
-                    ".tf" | ".noise" | ".disto" | ".pz" | ".sens" | ".four" | ".meas"
-                    | ".measure" => "this analysis is not implemented",
-                    _ => "unrecognized cards are refused, not ignored",
-                };
                 let url = crate::docs_url("docs/spice-compat/compatibility.md");
-                bail!(line, "unsupported directive `{h}`: {why}; see {url}");
+                match h {
+                    ".tf" | ".noise" | ".disto" | ".pz" | ".sens" | ".four" | ".meas"
+                    | ".measure" => bail!(
+                        line,
+                        "unsupported directive `{h}`: this analysis is not implemented; see {url}"
+                    ),
+                    _ => bail!(
+                        line,
+                        "unrecognized directive `{h}`: refused, not ignored; see {url}"
+                    ),
+                }
             }
             _ => deck.elems.push(line),
         }
@@ -735,6 +787,18 @@ fn resolve_params(cards: &[Param], base: &ParamEnv) -> Result<ParamEnv, SpiceErr
         }
         if next.len() == pending.len() {
             let (p, e) = &next[0];
+            let names: Vec<&str> = next.iter().map(|(p, _)| p.name.as_str()).collect();
+            let cycle = next.len() > 1
+                || next
+                    .iter()
+                    .any(|(p, e)| e.contains(&format!("`{}`", p.name)));
+            if cycle && e.contains("undefined parameter") {
+                bail!(
+                    p.line,
+                    "`.param` dependency cycle among {}",
+                    names.join(", ")
+                );
+            }
             bail!(p.line, "`.param {}`: {e}", p.name);
         }
         pending = next.into_iter().map(|(p, _)| p).collect();
@@ -829,12 +893,12 @@ impl Build<'_> {
         let m = self.deck.models.get(&name.to_ascii_lowercase());
         let m = m.ok_or_else(|| line.err(format!("references undefined .model `{name}`")))?;
         if !kinds.contains(&m.kind.as_str()) {
-            bail!(
-                line,
-                "`.model {name}` is a `{}` model, not one of {}",
-                m.kind,
-                kinds.join("/")
-            );
+            let wanted = if kinds == ["d"] {
+                "not a diode model".to_string()
+            } else {
+                format!("not one of {}", kinds.join("/"))
+            };
+            bail!(line, "`.model {name}` is a `{}` model, {wanted}", m.kind);
         }
         Ok(m)
     }
@@ -870,10 +934,12 @@ impl Build<'_> {
         let poly =
             |t: &String| matches!(t.to_ascii_lowercase().as_str(), "poly" | "value" | "table");
         if matches!(kind, 'E' | 'G' | 'F' | 'H' | 'B') && toks.iter().skip(3).any(poly) {
-            bail!(
-                line,
-                "POLY/VALUE/TABLE controlled-source forms are unsupported"
-            );
+            let what = match kind {
+                'E' | 'G' => "the POLY/VALUE/TABLE controlled-source form is unsupported (only `n+ n- nc+ nc- gain`)",
+                'F' | 'H' => "the `POLY` controlled-source form is unsupported (only `n+ n- vname gain`)",
+                _ => "the POLY/TABLE/VALUE B-source form is unsupported (only `V={expr}` / `I={expr}`)",
+            };
+            bail!(line, "{what}");
         }
         let placeholder = DeviceId(u32::MAX);
         let dev = match kind {
@@ -1069,12 +1135,12 @@ impl Build<'_> {
         let output = match out.to_ascii_lowercase().as_str() {
             "v" => BOutput::Voltage,
             "i" => BOutput::Current,
-            _ => bail!(line, "B-source output must be `V={{expr}}` or `I={{expr}}`"),
+            _ => bail!(line, "this B-source form is unsupported: the output must be `V={{expr}}` or `I={{expr}}`"),
         };
         let Some(inner) = braced(expr) else {
             bail!(
                 line,
-                "B-source expression must be brace-wrapped (`V={{expr}}`)"
+                "this B-source form is unsupported: the expression must be brace-wrapped (`V={{expr}}`)"
             );
         };
         exact(line, toks, 4, "")?;
@@ -1216,7 +1282,7 @@ impl Build<'_> {
             };
             let dev = &self.circuit.devices[id.0 as usize];
             if f.want_vsource && !matches!(dev, Device::Vsource { .. }) {
-                bail!(f.line, "`{}` is not an independent V source (sense a current with a zero-volt `Vsense a b 0`)", f.name);
+                bail!(f.line, "`{}` is not an independent voltage source (sense a current with a zero-volt `Vsense a b 0`)", f.name);
             }
             if !f.want_vsource && !matches!(dev, Device::Inductor { .. }) {
                 bail!(f.line, "`{}` is not an inductor", f.name);
@@ -1712,7 +1778,7 @@ mod tests {
         };
         assert!(*von == 2.0 && *voff == 1.0 && *ron == 10.0 && *roff == 1e9);
         assert!(err("t\nD1 a 0 NOPE\n").contains("undefined .model `NOPE`"));
-        assert!(err("t\nD1 a 0 Q\n.model Q NPN(BF=1)\n").contains("not one of d"));
+        assert!(err("t\nD1 a 0 Q\n.model Q NPN(BF=1)\n").contains("not a diode model"));
         assert!(err("t\nM1 d g s b MM\n.model MM NMOS(LEVEL=3)\n").contains("LEVEL=1"));
         assert!(err("t\n.model X D(IS=1x)\n").contains("unparseable value for `is`"));
         assert!(err("t\n.model X D(IS=1)\n.model X D(IS=2)\n").contains("conflicting redefinition"));
@@ -1743,7 +1809,7 @@ mod tests {
                 && *k == 0.9
         );
         assert!(err("t\nF1 a 0 Vnope 1\n").contains("undefined element `Vnope`"));
-        assert!(err("t\nF1 a 0 R1 1\nR1 a 0 1k\n").contains("not an independent V source"));
+        assert!(err("t\nF1 a 0 R1 1\nR1 a 0 1k\n").contains("not an independent voltage source"));
         assert!(err("t\nK1 L1 R1 0.5\nL1 a 0 1m\nR1 b 0 1\n").contains("not an inductor"));
         assert!(err("t\nK1 L1 L2 1.5\nL1 a 0 1m\nL2 b 0 1m\n").contains("outside 0 < k <= 1"));
         assert!(err("t\nE1 a 0 POLY(1) b 0 1 2\n").contains("POLY"));
@@ -1796,7 +1862,7 @@ mod tests {
                 ..
             }
         ));
-        assert!(err("t\n.param a={b} b={a}\n").contains("`.param a`: undefined parameter `b`"));
+        assert!(err("t\n.param a={b} b={a}\n").contains("dependency cycle"));
         assert!(err("t\n.param a={zz*2}\n").contains("undefined parameter `zz`"));
         assert!(err("t\n.param a\n").contains("expected `name=value`"));
         assert!(err("t\nR1 a 0 {1k*2}\n").contains("engineering suffix"));
@@ -1875,7 +1941,7 @@ mod tests {
             "{e}"
         );
         assert!(err("t\n.include /nonexistent/x.lib\n").contains("cannot read included file"));
-        assert!(err("t\n.lib x.lib sec\n").contains("`.lib` is unsupported"));
+        assert!(err("t\n.lib x.lib sec\n").contains("cannot read included file"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1916,7 +1982,7 @@ mod tests {
         assert!(err("t\nV1 a 0 1\n.dc Vz 0 5 1\n").contains("does not exist"));
         assert!(err("t\n.print foo v(a)\n").contains("analysis type"));
         assert!(err("t\n.four 1k v(out)\n").contains("unsupported directive `.four`"));
-        assert!(err("t\n.control\nrun\n.endc\n").contains("unsupported directive `.control`"));
+        assert!(err("t\n.control\nrun\n.endc\n").contains("unrecognized directive `.control`"));
         assert!(err("t\n.ends\n").contains("without a matching"));
     }
 }

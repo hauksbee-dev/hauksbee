@@ -1,4 +1,8 @@
-//! Sourced operating-envelope checks.
+//! Sourced operating-envelope checks: every rail a bound model declares an
+//! operating range for is compared against the supply the board actually
+//! feeds it, and a pin driven outside its absolute-maximum rating is reported
+//! as a finding that names the model, the datasheet range and the offending
+//! net. Ranges come only from model cards, never from guesses.
 
 use std::collections::{BTreeMap, BTreeSet};
 

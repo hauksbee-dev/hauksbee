@@ -91,8 +91,8 @@ renode	ok	/Users/you/renode-portable/Renode.app/Contents/MacOS/renode
 `doctor` runs the engine's own discovery, so it cannot disagree with a co-sim.
 On a TTY it prints a table; piped, one `NAME<TAB>STATUS<TAB>PATH-OR-HINT` line
 per backend on stdout; `--json` gives `{"backends":[{name,status,available,...}]}`.
-Integration tests: `cargo test -p hauksbee-engine --test stm32_renode_cosim`
-and `--test esp32_qemu_cosim`.
+Integration tests: `cargo test -p hauksbee-engine --test it stm32_renode_cosim`
+and `--test it esp32_qemu_cosim`.
 
 ## Manual install
 

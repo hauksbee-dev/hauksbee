@@ -261,7 +261,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         self.assertIn("qemu-patches/esp32-gpio-register-state.patch", bundle)
         self.assertIn('install-sims.sh" --qemu-patched-source', acceptance)
         self.assertIn("HAUKSBEE_REQUIRE_PATCHED_QEMU=1", acceptance)
-        self.assertIn("--test qemu_gpio_register_state", acceptance)
+        self.assertIn("--test it qemu_gpio_register_state", acceptance)
         self.assertTrue(patch.is_file())
         body = patch.read_text()
         self.assertIn('object_property_add_uint32_ptr(obj, "gpio-out"', body)
