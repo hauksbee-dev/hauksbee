@@ -100,7 +100,7 @@ fn exponent_overflowing_to_infinity_is_refused() {
 #[test]
 fn eagle_non_finite_coordinate_is_refused() {
     // Same hazard through the Eagle reader, whose `f64` parse also accepts
-    // "NaN" and used to fall back to placing the element at the origin.
+    // "NaN"; falling back would place the element at the origin.
     let err = ExtractedBoard::from_eagle_brd(&read("eagle_non_finite_coordinate.brd"))
         .expect_err("a NaN element coordinate must be refused");
     message_says(
@@ -151,9 +151,8 @@ fn ipc_356_without_designators_says_what_is_missing() {
 #[test]
 fn ipc_356_with_no_connectivity_at_all_is_refused() {
     // A netlist whose every designator-bearing record is N/C names parts but
-    // wires nothing. It used to read as an analysable board with 50 components
-    // and zero nets, so every connectivity check passed over a netlist with no
-    // connectivity in it.
+    // wires nothing. Read as a board it would be 50 components and zero nets,
+    // and every connectivity check would pass over nothing.
     let err = ExtractedBoard::from_ipc_d356(&read("all_no_connect.d356"))
         .expect_err("a netlist with no nets cannot be checked");
     message_says(

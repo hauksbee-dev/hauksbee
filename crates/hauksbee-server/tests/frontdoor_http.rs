@@ -2,8 +2,8 @@
 //! the server crate test stays independent of the engine crate), then drive them
 //! over a real TCP socket, POST `/api/analyze` runs the analyzer on the uploaded
 //! bytes and echoes the filename header back; `/api/analyze-with-firmware` threads
-//! board + firmware parts through verbatim. There is no server-rendered page
-//! (W6 §1): the React bundle owns `/` in the unified server router.
+//! board + firmware parts through verbatim. There is no server-rendered page:
+//! the React bundle owns `/` in the unified server router.
 
 use std::sync::Arc;
 
@@ -43,10 +43,9 @@ async fn spawn() -> std::net::SocketAddr {
     addr
 }
 
-// (W6 §1) The server-rendered HTML front door is gone: the one web experience
-// is the React bundle in `frontend/dist`, and this crate now exposes only the
-// JSON analysis API it fetches. There is no GET `/` here anymore; the static
-// bundle owns `/` in the unified server router.
+// There is no server-rendered HTML front door: the one web experience is the
+// React bundle in `frontend/dist`, and this crate exposes only the JSON
+// analysis API it fetches. The static bundle owns `/` in the unified router.
 
 #[tokio::test]
 async fn analyze_runs_the_callback_on_uploaded_bytes() {

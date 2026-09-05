@@ -1595,10 +1595,7 @@ mod tests {
         SpiceLoader::load(net).unwrap_or_else(|e| panic!("{e}"))
     }
     fn err(net: &str) -> String {
-        SpiceLoader::load(net)
-            .err()
-            .expect("must refuse")
-            .to_string()
+        SpiceLoader::load(net).expect_err("must refuse").to_string()
     }
     fn dev<'a>(c: &'a Circuit, name: &str) -> &'a Device {
         c.devices

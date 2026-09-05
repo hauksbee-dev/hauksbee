@@ -6,14 +6,14 @@
 //! analysis as the CLI (`ExtractedBoard` extraction + the DRC / lint / SI /
 //! resource checks + the plain-language [`crate::plain`] templates).
 //!
-//! One documented divergence: the web path receives a single file's bytes and so
-//! cannot see a sibling `.kicad_pro` project file. Its DRC therefore uses the
-//! board's default/embedded clearances, whereas the CLI (`hauksbee run --drc`,
-//! given the `.kicad_pro` next to the board) applies per-netclass clearances. On
-//! a KiCad board with non-default netclass clearances the two DRC surfaces can
-//! report different violations. Everything else is byte-for-byte the same. The
-//! HTTP plumbing lives in `hauksbee-server`; this module is pure (bytes in, JSON
-//! string out) so it has no web dependency and is unit-testable.
+//! One divergence from the CLI: the web path receives a single file's bytes and
+//! so cannot see a sibling `.kicad_pro` project file, leaving its DRC on the
+//! board's default/embedded clearances where `hauksbee run --drc` applies
+//! per-netclass ones. That is entry 1 of the divergence register in
+//! [`crate::result`], which is where any other deliberate difference between two
+//! surfaces must be recorded. The HTTP plumbing lives in `hauksbee-server`; this
+//! module is pure (bytes in, JSON string out) so it has no web dependency and is
+//! unit-testable.
 
 use serde::Serialize;
 
@@ -47,8 +47,7 @@ pub struct WebFinding {
 }
 
 /// A heads-up note in the shape the browser renders. Carries the same
-/// what / why / what-to-do gloss a finding does (persona-panel fix: a bare
-/// "Zdiff 173 vs 90" jargon line got the finding treatment). `why` / `fix` are
+/// what / why / what-to-do gloss a finding does. `why` / `fix` are
 /// omitted from the JSON when empty (a self-contained note), so the browser
 /// renders only the lines that exist.
 #[derive(Debug, Clone, Serialize)]
@@ -171,30 +170,9 @@ impl BindSummaryWeb {
     /// verdict uses, so the browser can never print a clean bill over an
     /// unbound FET the CLI refuses to bless.
     pub fn from_summary(s: &BindSummary) -> Self {
-        let mut active_path_unresolved: Vec<String> = s
-            .active_path_unresolved
-            .iter()
-            .filter(|u| crate::result::is_verdict_critical(u))
-            .chain(s.resolved_but_open_active.iter().filter(|u| u.active_ic))
-            .map(|u| u.reference.clone())
-            .collect();
-        // Sorted, not report order: every surface that prints this list (the
-        // web banner, the bind-role note) must agree on one order, and "U3,
-        // U6, U2, U5, U1" reads as noise next to "U1, U2, U3, U5, U6".
-        // Reference-natural order (prefix, then numeric index) so U10 does not
-        // sort before U2.
-        let ref_key = |r: &String| -> (String, u64) {
-            let split = r.find(|c: char| c.is_ascii_digit()).unwrap_or(r.len());
-            let (prefix, digits) = r.split_at(split);
-            (prefix.to_string(), digits.parse().unwrap_or(0))
-        };
-        active_path_unresolved.sort_by_key(ref_key);
-        active_path_unresolved.dedup();
-
-        // Same two buckets, same active-IC filter, same order as the ref list
-        // above, so the banner and the per-part detail can never name different
-        // parts. `bound` is what separates the buckets: an unresolved part has no
-        // model, a resolved-but-open one has a model and a wiring problem.
+        // The two buckets, one entry each. `bound` separates them: an
+        // unresolved part has no model, a resolved-but-open one has a model and
+        // a wiring problem.
         let mut open_parts: Vec<WebOpenPart> = s
             .active_path_unresolved
             .iter()
@@ -215,12 +193,18 @@ impl BindSummaryWeb {
                 bound,
             })
             .collect();
-        open_parts.sort_by_key(|p| ref_key(&p.reference));
+        // Sorted, not report order: every surface that prints this list (the
+        // web banner, the bind-role note) must agree on one order, and "U3, U6,
+        // U2, U5, U1" reads as noise next to "U1, U2, U3, U5, U6". The shared
+        // reference-natural key, so U10 does not sort before U2.
+        open_parts.sort_by_key(|p| crate::report::natural_ref_key(&p.reference));
         open_parts.dedup_by(|a, b| a.reference == b.reference);
 
         BindSummaryWeb {
             critical_parts_bound: s.critical_parts_bound.clone(),
-            active_path_unresolved,
+            // Projected from the detail list, so the banner and the per-part
+            // detail can never name different parts in a different order.
+            active_path_unresolved: open_parts.iter().map(|p| p.reference.clone()).collect(),
             open_parts,
         }
     }
@@ -266,7 +250,7 @@ pub struct WebCosimSection {
     pub gpio_nets: Vec<WebGpioNet>,
     /// False once any chunk's analog solve failed to converge during the co-sim:
     /// the run held stale node voltages over `failed_windows` and cannot vouch
-    /// for electrical results there (05 §3b, refuse rather than fake). A clean
+    /// for electrical results there: it refuses rather than fakes them. A clean
     /// run reports `true` with an empty `failed_windows`, so the common JSON shape
     /// is unchanged and existing consumers keep parsing. This is the STRUCTURAL
     /// mirror of the prepended analog-validity finding: a JSON consumer must be
@@ -415,7 +399,7 @@ pub struct WebFailedWindow {
     pub end_s: f64,
     /// The solver's own refusal message for this window, carrying the blame
     /// clause that names the net which refused to settle, the devices on it,
-    /// and any near-zero-ohm link poisoning the matrix (E29). Never empty: a
+    /// and any near-zero-ohm link poisoning the matrix. Never empty: a
     /// window with no recorded reason gets the generic march-did-not-advance
     /// line rather than a blank, because a blank reads as "no diagnosis
     /// available" when in fact one was simply dropped.
@@ -1539,17 +1523,12 @@ fn analyze_with_firmware_parts(
                 report.inventory = evidence.inventory().to_vec();
                 report.assumptions = evidence.assumptions().to_vec();
                 report.evidence = evidence.maps().to_vec();
-                // Same run-level split as everywhere else: the static
-                // finding-backed maps folded in above must not invalidate the
-                // firmware headline; the static run-level bit travels on the
-                // report, and the simulation maps appended after the static
-                // prefix are all run-level claims graded directly.
-                // The per-fault maps are finding-backed (each fault is a
-                // finding on this surface, wearing its own badge), so only
-                // the substitution and activity maps after them are run-level
-                // simulation claims. everything before
-                // `fault_maps_end` is the static prefix plus the fault
-                // segment; grade what follows it.
+                // Same run-level split as everywhere else. Finding-backed
+                // maps wear their badge on the finding and must not invalidate
+                // the headline; the static run-level bit already travels on the
+                // report. Everything up to `fault_maps_end` is the static
+                // prefix plus the per-fault (finding-backed) maps, so only what
+                // follows it is a run-level simulation claim to grade here.
                 let sim_undermined = evidence
                     .maps()
                     .get(fault_maps_end..)
@@ -1581,16 +1560,14 @@ fn analyze_with_firmware_parts(
             },
         );
     }
-    // Fold co-sim electrical FAULTS into the top-level verdict: analyze() computed
-    // serious/total/headline from the STATIC sections only, so an electrical fault
-    // the firmware co-sim produced otherwise left the badge green and the headline
-    // "Looks healthy". A destructive fault (e.g. an overcurrent-killed MOSFET) is
-    // SERIOUS; a non-destructive over-stress (a part carrying past its continuous
-    // rating without dying) is a WARNING, but it is still an actionable issue the
-    // CLI counts ("N issues found, none serious. Worth a look.") and that --strict
-    // exits 2 on, so it must escalate the web headline too rather than sit silently
-    // in the co-sim card under a "Looks healthy" banner. Only note-level honesty
-    // caveats stay out of the count (they demote via cosim_caveat_headline below).
+    // Fold co-sim electrical FAULTS into the top-level verdict: analyze()
+    // counted the STATIC sections only, so a fault the firmware co-sim produced
+    // would otherwise sit in the co-sim card under a green badge. A destructive
+    // fault (e.g. an overcurrent-killed MOSFET) is SERIOUS; a non-destructive
+    // over-stress is a WARNING, still an actionable issue the CLI counts and
+    // --strict exits 2 on, so it escalates the web headline too. Only
+    // note-level honesty caveats stay out of the count (they demote via
+    // cosim_caveat_headline below).
     if let Some((total, serious, headline)) =
         fold_cosim_faults(report.total, report.serious, &cosim)
     {
@@ -1803,9 +1780,8 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
 
 /// The loud, plain-language analog-validity finding, prepended to a co-sim
 /// section when the run held stale voltages over one or more failed windows
-/// (05 §3b). Factored out (a) so `run_web_cosim` reads cleanly and (b) so its
-/// exact wording is unit-testable without staging a diverging board through the
-/// whole engine. `failed_chunks` is the count and `windows` the merged spans.
+/// rather than faking a result over them. `failed_chunks` is the count and
+/// `windows` the merged spans.
 fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> WebFinding {
     // Human-readable span list in milliseconds: "1.20-3.40 ms". Empty windows
     // (should not happen when failed_chunks > 0) degrade to "unknown span".
@@ -1821,7 +1797,7 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
     // The DIAGNOSIS, not just the span. "10 chunks failed" sent a user bisecting
     // a 259-part board by model class; the solver's own refusal message names the
     // net that refused to settle, the devices on it, and any element whose
-    // conductance is outside the board's own distribution (E29). Deduplicated,
+    // conductance is outside the board's own distribution. Deduplicated,
     // because ten failed windows on one bad jumper should say it once.
     let mut seen: Vec<&str> = Vec::new();
     for w in windows {
@@ -2274,7 +2250,7 @@ fn run_web_cosim(
             },
         );
     }
-    // Analog-validity refusal (05 §3b): if any chunk's analog solve failed, the
+    // Analog-validity refusal: if any chunk's analog solve failed, the
     // web report is the surface most likely to give false comfort (an empty
     // findings list reads as "no faults"). Surface it BOTH as a loud prepended
     // finding (so it leads the prose) and as the structural `analog_valid` /

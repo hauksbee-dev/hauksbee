@@ -41,85 +41,57 @@
 //! is the veto: when it fails outright there is no impedance to report at all,
 //! only the named span where the reference is absent.
 //!
-//! 1. **A real stackup.** The impedance can only be computed when the stackup is
-//!    known: KiCad stores it in `(setup (stackup ...))` with per-dielectric
-//!    `thickness` / `epsilon_r` and per-copper `thickness`. When the board has
-//!    no stackup (e.g. the RP2040 minimal board), we report the estimate under a
-//!    stated default assumption (1.6 mm 2-layer FR4, Er 4.3, 1 oz copper) as info
-//!    only, never a fire.
+//! 1. **A real stackup.** KiCad stores it in `(setup (stackup ...))` with
+//!    per-dielectric `thickness` / `epsilon_r` and per-copper `thickness`. With
+//!    no stackup, the estimate is reported under a stated default assumption
+//!    (1.6 mm 2-layer FR4, Er 4.3, 1 oz copper) as info only, never a fire.
 //!
-//! 2. **A reference plane verified under the trace.** Every formula above takes
-//!    `H`, the height to a reference plane, and so assumes solid copper exists
-//!    at that height directly beneath the trace. The stackup says how far away
-//!    the next copper layer is; it does not say whether that layer has copper
-//!    under *this* trace. A pair that crosses a plane void, a power-domain split,
-//!    or the edge of a partial pour has no reference there, its real impedance
-//!    rises steeply as the return current detours, and the formula's output is
-//!    not an estimate of anything. So for a differential pair (only: the
-//!    single-ended 50 ohm path still assumes its plane) the assumption is checked
-//!    against the copper. Points along both legs, at a half-millimetre pitch, are
-//!    tested against the fill polygons of the pours on the adjacent copper layer,
-//!    on *every* outer layer the pair routes on rather than only its longest.
+//! 2. **A reference plane verified under the trace.** Every formula takes `H`,
+//!    the height to a reference plane, and so assumes solid copper exists at
+//!    that height directly beneath the trace. The stackup says how far away the
+//!    next copper layer is; it does not say whether that layer has copper under
+//!    *this* trace. A pair crossing a plane void, a power-domain split or the
+//!    edge of a partial pour has no reference there, its real impedance rises
+//!    steeply as the return current detours, and the formula's output is not an
+//!    estimate of anything. So for a differential pair (only: the single-ended
+//!    50 ohm path still assumes its plane) points along both legs, at a
+//!    half-millimetre pitch, are tested against the fill polygons of the pours
+//!    on the adjacent copper layer, on *every* outer layer the pair routes on.
 //!    Three guards keep designed plane features from reading as defects:
 //!
-//!    - Samples inside the anti-pad of a via **or pad** are excused. Anti-pads are
-//!      deliberate clearance, and because a pair's segments terminate at its
-//!      layer-transition vias, endpoint samples land in one systematically. A
-//!      through-hole connector pad or mounting hole clears far more copper than a
-//!      signal via, which is why pads count too.
-//!    - Uncovered samples are grouped by proximity, and a void's size is its
-//!      geometric *extent* within one group. Copper between two clearances
-//!      therefore separates them instead of being bridged, so a scatter of small
-//!      holes cannot add up to one large void.
-//!    - The extent must reach 2 mm. That is a conservative floor rather than a
-//!      derived limit, set where a void is unambiguous even after clearances are
-//!      excused; see `MIN_REFERENCE_VOID_MM`.
+//!    - Samples inside the anti-pad of a via **or pad** are excused. Anti-pads
+//!      are deliberate clearance, and a pair's segments terminate at its
+//!      layer-transition vias, so endpoint samples land in one systematically.
+//!    - Uncovered samples are grouped by proximity and a void's size is its
+//!      geometric *extent* within one group, so a scatter of small clearances
+//!      cannot add up to one large void.
+//!    - The extent must reach 2 mm; see `MIN_REFERENCE_VOID_MM`.
 //!
-//!    Two limitations are worth stating plainly. The reference layer is taken to
-//!    be the copper layer ADJACENT to the routing layer, which is the same
-//!    assumption `read_stackup` already makes when it reads `H` from the first
-//!    dielectric: the stackup block names no plane layer, so neither can this. On
-//!    a stack whose adjacent layer is a signal layer with routing channels and
-//!    whose real plane is one deeper, a gap in that adjacent layer is reported,
-//!    and a solid plane further down does not rescue the estimate because `H`
-//!    would be measured to the wrong layer anyway. And an unfilled or absent pour
-//!    yields `Unverified` rather than an abstention, so the estimate is still
-//!    printed with its reference declared unverified; that is a deliberate choice
-//!    to keep boards that were simply never poured reporting what they used to.
+//!    Two limitations. The reference layer is taken to be the copper layer
+//!    ADJACENT to the routing layer, the same assumption `read_stackup` makes
+//!    when it reads `H` from the first dielectric, so on a stack whose real
+//!    plane is one deeper the estimate is measured to the wrong layer anyway.
+//!    And an unfilled or absent pour yields `Unverified` rather than an
+//!    abstention, so the estimate is still printed with its reference declared
+//!    unverified.
 //!
-//!    Where copper is genuinely absent over such a void, the check reports
-//!    "reference missing under trace", names it, and says what would unlock a
-//!    confident answer, instead of printing a Zdiff. Where the reference cannot be
-//!    established either way (no pour on the adjacent layer, zones with no stored
-//!    fill, no declared `(layers)` stack, a pair routed on an inner layer) the
-//!    estimate is reported as before with its reference stated as unverified: the
-//!    bias is against inventing a void.
-//!
-//! 3. **Declared impedance-control intent.** This is the hard-won corpus lesson.
-//!    The closed-form microstrip/differential model is a quasi-static estimate
-//!    with a real error band on dense real boards: it has no co-planar-ground
-//!    term and assumes the trace references the nearest plane at the dielectric
-//!    height, so on 4-layer boards with ground-flanked routing it over-estimates
-//!    Zdiff by ~25-35%, and on 2-layer boards a full-speed USB pair that was
-//!    *deliberately not* impedance-controlled (every keyboard / trackball in the
-//!    corpus) reads 140-160 ohm and is perfectly fine. We cannot tell a
-//!    full-speed pair (impedance irrelevant) from a high-speed one (impedance
-//!    critical) from the netlist. So a deviation only becomes a finding when the
-//!    board itself declares it is impedance-controlled, via KiCad's
-//!    `(stackup (dielectric_constraints yes))`. Every known-good corpus board
-//!    sets `dielectric_constraints no` (they chose not to control these nets),
-//!    so the check is silent on the whole corpus while still computing and
-//!    surfacing every impedance as an auditable info note. A board that *does*
-//!    declare impedance control yet routes a pair out of band is the genuine bug
-//!    class this fires on.
+//! 3. **Declared impedance-control intent.** The closed-form model is a
+//!    quasi-static estimate with a real error band on dense boards: it has no
+//!    co-planar-ground term and assumes the trace references the nearest plane
+//!    at the dielectric height, so on 4-layer boards with ground-flanked routing
+//!    it over-estimates Zdiff by ~25-35%, and on 2-layer boards a full-speed USB
+//!    pair that was deliberately not impedance-controlled reads 140-160 ohm and
+//!    is perfectly fine. The netlist cannot tell a full-speed pair (impedance
+//!    irrelevant) from a high-speed one. So a deviation only becomes a finding
+//!    when the board itself declares impedance control, via KiCad's
+//!    `(stackup (dielectric_constraints yes))`.
 //!
 //! A finding therefore always carries a real, file-derived stackup AND the
 //! board's own statement that the net should be controlled. A reported
 //! *differential* impedance additionally carries a reference plane that was
 //! either verified under the pair or explicitly stated as unverified; the
 //! single-ended 50 ohm path does NOT yet check its plane and still assumes one,
-//! which is a known gap rather than a claim. This matches checks 1-4: unknown /
-//! unintended -> info, never a confident false positive.
+//! a known gap rather than a claim.
 
 use forge_sexpr::List;
 
@@ -218,13 +190,12 @@ impl Stackup {
 /// block. Returns `None` (caller falls back to the default-assumption stackup)
 /// when no stackup is present.
 ///
-/// KiCad's stackup lists physical layers top-to-bottom; we want the first
-/// `dielectric` layer's `thickness` + `epsilon_r` (the gap from the top copper
-/// to the next plane) and the F.Cu `copper` thickness. Inner dielectric layers
-/// for stripline are not modelled here (a separate, smaller reach): the common
-/// controlled-impedance case in this corpus is outer-layer microstrip, and
-/// claiming a stripline reference plane requires knowing which inner layer is a
-/// solid plane, which the stackup block alone does not say.
+/// KiCad's stackup lists physical layers top-to-bottom; wanted here are the first
+/// `dielectric` layer's `thickness` + `epsilon_r` (the gap from the top copper to
+/// the next plane) and the F.Cu `copper` thickness. Inner dielectric layers for
+/// stripline are not modelled: claiming a stripline reference plane requires
+/// knowing which inner layer is a solid plane, which the stackup block does not
+/// say.
 pub fn read_stackup(root: &List) -> Option<Stackup> {
     let setup = root.find("setup")?;
     let stackup = setup.find("stackup")?;
@@ -359,9 +330,6 @@ impl ImpedanceClass {
             ImpedanceClass::EthernetDiff => 100.0,
             ImpedanceClass::SingleEnded50 => 50.0,
         }
-    }
-    pub fn is_differential(self) -> bool {
-        matches!(self, ImpedanceClass::UsbDiff | ImpedanceClass::EthernetDiff)
     }
     pub fn label(self) -> &'static str {
         match self {
@@ -784,27 +752,17 @@ fn judge(
 // Reference-plane verification.
 // ===========================================================================
 //
-// The microstrip and differential-microstrip formulas both take `H`, the height
-// to *the reference plane*, and every one of them assumes there IS solid copper
-// at that height directly beneath the trace. The stackup block says how far away
-// the next copper layer is; it does not say whether that layer has copper under
-// this particular trace. A pair that crosses a plane void, a split between two
-// power domains, or the edge of a partial pour has no reference under it there:
-// its real impedance rises steeply (the return current has to detour) and the
-// number the formula produces is not an estimate of anything. Emitting it as a
-// confident Zdiff is exactly the kind of unearned confidence this codebase
-// refuses, and the fact that the assumption existed only in this module's prose
-// is what made it invisible.
+// The formulas take `H`, the height to *the reference plane*, and assume solid
+// copper at that height directly beneath the trace. The stackup says how far
+// away the next copper layer is, not whether it has copper under this particular
+// trace, so the assumption is checked against the copper: sample points along
+// both legs and test each against the fill polygons of the pours on the adjacent
+// copper layer. Where copper is absent, the check names the span and says what
+// would unlock a confident answer instead of printing a Zdiff.
 //
-// So the assumption is now checked against the copper: sample points along both
-// legs of the pair and test each against the fill polygons of the pours on the
-// adjacent copper layer. Where copper is absent, the check names the span and
-// says what would unlock a confident answer instead of printing a Zdiff.
-//
-// The bias is deliberately toward *not* abstaining: a board whose reference
-// layer has no pour at all, or whose zones carry no stored fill, or whose pair
-// routes somewhere the microstrip model does not describe, yields "cannot
-// verify" and the existing behaviour, never a fabricated void.
+// The bias is deliberately toward *not* abstaining: a reference layer with no
+// pour, zones with no stored fill, or a pair routed somewhere the microstrip
+// model does not describe all yield "cannot verify", never a fabricated void.
 
 /// The state of the reference copper under a routed pair.
 #[derive(Debug, Clone, PartialEq)]
@@ -874,10 +832,9 @@ const MAX_SAMPLES_PER_SEG: usize = 512;
 /// Anti-pads are a *designed* feature: the copper is deliberately cleared so the
 /// hole can pass through. Sampling into one is not evidence of a missing
 /// reference, and because a pair's segments terminate at its layer-transition
-/// vias, endpoint samples land in one systematically. Watchy proved it: the first
-/// cut of this check reported a 2.91 mm void there where all seven uncovered
-/// samples were within 0.36 mm of a via centre, four exactly on one, on a plane
-/// that is in fact continuous.
+/// vias, endpoint samples land in one systematically: without this margin a
+/// continuous plane reports a multi-millimetre void built entirely out of
+/// samples sitting on via centres.
 ///
 /// This is a FLOOR, not the whole margin. The actual clearance a board's filler
 /// left around each aperture is the zone's own declared clearance, which can be
@@ -897,26 +854,22 @@ const ANTIPAD_MARGIN_FLOOR_MM: f64 = 0.3;
 /// mutually-close uncovered samples, so copper between two holes separates them
 /// instead of being bridged over.
 ///
-/// It is deliberately FIXED rather than scaled to the sampling pitch. Scaling it
-/// looked like a fix for coarsely-sampled long segments and was in fact a false
-/// positive: on a 100 mm run the pitch reaches 1.56 mm, a 1.5x-scaled link
-/// reaches 2.34 mm, and two designed clearances 2 mm apart would single-link into
-/// one "void" past the threshold, undoing the separation clustering is for. The
-/// pitch is instead kept fine enough ([`MAX_SAMPLES_PER_SEG`]) that consecutive
-/// samples always fall well inside this distance.
+/// It is deliberately FIXED rather than scaled to the sampling pitch: on a 100 mm
+/// run the pitch reaches 1.56 mm, so a 1.5x-scaled link would single-link two
+/// designed clearances 2 mm apart into one "void", undoing the separation
+/// clustering exists for. The pitch is instead kept fine enough
+/// ([`MAX_SAMPLES_PER_SEG`]) that consecutive samples always fall well inside
+/// this distance.
 const VOID_LINK_MM: f64 = 1.0;
 
 /// Minimum void extent (mm) before the check abstains.
 ///
-/// A conservative floor, not a derived physical limit. What actually matters to a
-/// pair is a gap comparable to or larger than its trace-to-plane height, which is
-/// a few tenths of a millimetre, so a stricter threshold would be defensible
-/// physics and a much worse check: the geometry available here (fill outlines
-/// that weave around every aperture, plus a 0.5 mm sampling pitch) cannot resolve
-/// sub-millimetre features reliably. 2 mm is set where a void is unambiguous
-/// enough to report even after designed clearances have been excused. It is
-/// deliberately loose, in the same spirit as the +-15% impedance tolerance:
-/// whatever it lets through was never going to be a confident finding.
+/// A conservative floor, not a derived physical limit. What matters physically is
+/// a gap comparable to the trace-to-plane height, a few tenths of a millimetre,
+/// but the geometry available here (fill outlines weaving around every aperture,
+/// plus a 0.5 mm sampling pitch) cannot resolve sub-millimetre features reliably.
+/// 2 mm is where a void is unambiguous even after designed clearances have been
+/// excused.
 const MIN_REFERENCE_VOID_MM: f64 = 2.0;
 
 /// Verify that solid reference copper exists under both legs of a pair.

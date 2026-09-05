@@ -95,16 +95,9 @@ const WEAK_DIGITAL_DRIVE_OHMS: f64 = 1e8;
 /// next chunk recovers from, so aborting on the first would be trigger-happy on a
 /// board that self-heals within a chunk or two. Three back-to-back failures is a
 /// solve that is genuinely stuck rather than a blip, and a run that reaches it is
-/// reporting fiction (held stale voltages), so it must refuse rather than fake
-/// (05 §3b, master doctrine §5).
+/// reporting fiction (held stale voltages), so it must refuse rather than fake.
 pub const STRICT_CONSECUTIVE_FAILED_ABORT: u32 = 3;
 
-/// Which fallback rung produced a chunk's converged answer after the primary
-/// integration failed (see `Scheduler::solve_chunk`'s ladder, tried in this
-/// order). A number obtained by a more dissipative method is not the same
-/// number, so the rung is RECORDED per window and surfaced with its accuracy
-/// cost rather than the chunk passing as a first-class solve.
-///
 /// Per-chunk thermal integral over the solver's accepted steps: each monitored
 /// device's dissipated energy (J, index-aligned with the stress monitor's
 /// metas) plus the simulated time it covers. Filled by `march_chunk`'s
@@ -130,9 +123,11 @@ impl ChunkThermalAccum {
     }
 }
 
-/// Deliberately minimal: a name and a fixed accuracy note per rung, shaped so a
-/// typed error-budget/provenance spine can absorb it later as one provenance
-/// tag per window without changing the semantics recorded here.
+/// Which fallback rung produced a chunk's converged answer after the primary
+/// integration failed (see `Scheduler::solve_chunk`'s ladder, tried in this
+/// order). A number obtained by a more dissipative method is not the same
+/// number, so the rung is recorded per window and surfaced with its accuracy
+/// cost rather than the chunk passing as a first-class solve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChunkFallbackMethod {
     /// The primary integration re-run with the maximum step bounded to a small
@@ -161,13 +156,9 @@ impl ChunkFallbackMethod {
         }
     }
 
-    /// Qualitative numerical-fidelity context for this rung.
-    ///
-    /// The note stays qualitative on purpose: it names the rung's known
-    /// algorithmic trade-off. The MEASURED number lives next to it on the
-    /// window record (`FallbackWindow::error_estimate_v`, a step-doubling
-    /// estimate of the chunk-end output error), so the note points there
-    /// instead of claiming or disclaiming a bound itself.
+    /// Qualitative numerical-fidelity context for this rung: it names the
+    /// rung's algorithmic trade-off and points at the measured number, which
+    /// lives on `FallbackWindow::error_estimate_v`.
     pub fn fidelity_note(&self) -> &'static str {
         match self {
             ChunkFallbackMethod::ReducedStep => {
@@ -193,10 +184,8 @@ impl ChunkFallbackMethod {
 }
 
 /// One sim-time window `[start_s, end_s)` whose answer a fallback rung
-/// produced after the primary analog solve failed there, with the rung and
-/// the MEASURED accuracy record attached (B12: a fallback window used to
-/// disclose "no empirical output-error bound was established"; now it carries
-/// one).
+/// produced after the primary analog solve failed there, with the rung and the
+/// measured accuracy record attached.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FallbackWindow {
     pub start_s: f64,
@@ -219,14 +208,13 @@ pub struct FallbackWindow {
 }
 
 /// Live chip-select framing hook installed by [`Scheduler::attach_spi_bus`] when
-/// the binder resolved a slave's CS net to an MCU pin (05 §2.1). When `pin`
-/// toggles, the `on_pin_change` closure frames `bus` from the REAL chip-select
-/// edge, synchronously and in cycle order with the byte stream: on a push backend
-/// (simavr) the SPI byte IRQ and the CS GPIO IRQ both fire inside `avr_run`, so
-/// asserting/deasserting here interleaves the transaction boundaries exactly where
-/// the firmware put them (mid-chunk included), instead of guessing at the chunk
-/// boundary. SPI CS is active-low by convention: a falling edge (level=false)
-/// asserts (begin transaction), a rising edge (level=true) deasserts (end).
+/// the binder resolved a slave's CS net to an MCU pin. When `pin` toggles, the
+/// `on_pin_change` closure frames `bus` from the real chip-select edge,
+/// synchronously and in cycle order with the byte stream: on a push backend the
+/// SPI byte IRQ and the CS GPIO IRQ both fire inside `avr_run`, so the
+/// transaction boundaries land exactly where the firmware put them (mid-chunk
+/// included) instead of at the chunk boundary. SPI CS is active-low by
+/// convention: a falling edge asserts, a rising edge deasserts.
 struct CsFrame {
     pin: (char, u8),
     active_low: bool,
@@ -236,21 +224,21 @@ struct CsFrame {
 /// Captured state shared between an MCU's C callbacks and the scheduler.
 #[derive(Default)]
 struct McuShared {
-    /// Pin edges since last drain: (port, bit) -> latest level. Still used by
+    /// Pin edges since last drain: (port, bit) -> latest level. Used by
     /// ordinary GPIO drivers (which only care about the final level a chunk
     /// settles to) and diagnostics / frame state.
     pin_edges: HashMap<(char, u8), bool>,
     /// Ordered, cycle-stamped log of EVERY pin transition since the last drain,
-    /// in the order the firmware produced them. Unlike `pin_edges` (latest-level
-    /// map, which collapses a sub-µs `shiftOut` SCLK pulse train to its final
-    /// level), this preserves each edge AND its MCU cycle so the bit-banged
-    /// digital layer replays at edge granularity in cycle order (FIX 1, 05 §1.1).
+    /// in the order the firmware produced them. Unlike `pin_edges` (a
+    /// latest-level map, which collapses a sub-µs `shiftOut` SCLK pulse train to
+    /// its final level), this preserves each edge and its MCU cycle so the
+    /// bit-banged digital layer replays at edge granularity in cycle order.
     pin_edge_log: Vec<PinEdge>,
     /// UART bytes the firmware emitted since last drain.
     uart_out: Vec<u8>,
     /// Live CS-framing hooks for SPI slaves whose CS net resolved to a pin on
-    /// this MCU (05 §2.1). Consulted by the `on_pin_change` closure so a CS edge
-    /// frames its bus in true cycle order with the byte transfers. Empty on the
+    /// this MCU. Consulted by the `on_pin_change` closure so a CS edge frames
+    /// its bus in true cycle order with the byte transfers. Empty on the
     /// heuristic path (no resolved CS pin), so this is zero-overhead there.
     cs_frames: Vec<CsFrame>,
 }
@@ -263,13 +251,12 @@ struct LiveMcu {
     /// Last known GPIO output levels, for diagnostics / frame state.
     last_levels: HashMap<(char, u8), bool>,
     /// The configured-output pin set reported by the core at the END of the
-    /// previous chunk (`pins_configured_output`). Tracked so a pin the
-    /// firmware switches from output back to input (DDR output→input, e.g.
-    /// an open-drain bus hand-off) gets its Thevenin driver DISABLED again:
-    /// without the release, a handed-off net stays clamped at its stale
-    /// driven level; the latched-bus failure. Backends that cannot report
-    /// direction always return an empty set, so this stays empty there and
-    /// the release is a no-op (edge-enabled drivers are never torn down).
+    /// previous chunk (`pins_configured_output`). Tracked so a pin the firmware
+    /// switches from output back to input (DDR output→input, e.g. an open-drain
+    /// bus hand-off) gets its Thevenin driver disabled again; without the
+    /// release a handed-off net stays clamped at its stale driven level.
+    /// Backends that cannot report direction return an empty set, so this stays
+    /// empty there and the release is a no-op.
     configured_outputs: std::collections::HashSet<(char, u8)>,
     /// Logic-high output voltage for this MCU's GPIO drivers (rail-dependent:
     /// 5 V for classic AVR, 3.3 V for STM32-class parts).
@@ -300,6 +287,17 @@ struct ParallelMemoryDrive {
     runtime: Arc<Mutex<crate::responders::ParallelMemoryRuntime>>,
 }
 
+/// A parallel memory whose provenance checks passed, waiting to be registered
+/// with its owning MCU's responder registry.
+struct PendingParallelMemory {
+    mcu: usize,
+    component: usize,
+    outputs: Vec<String>,
+    output_pins: Vec<(char, u8)>,
+    runtime: Arc<Mutex<crate::responders::ParallelMemoryRuntime>>,
+    responder: crate::responders::ParallelMemoryResponder,
+}
+
 /// One model-declared firmware peripheral's electrical supply projection.
 ///
 /// The bus model remains the authority for protocol work; this leg only drains
@@ -327,6 +325,65 @@ struct ModelPeripheralPowerLeg {
     last_current_a: f64,
 }
 
+impl ModelPeripheralPowerLeg {
+    /// Supply current with no transaction in flight: zero while the rail is
+    /// below the power-on threshold, else the datasheet idle (or deep-power-down)
+    /// envelope.
+    fn quiescent_a(&self, low_power: bool) -> f64 {
+        if !self.powered {
+            0.0
+        } else if low_power {
+            self.low_power_a.unwrap_or(self.idle_a)
+        } else {
+            self.idle_a
+        }
+    }
+
+    /// Gate the bus model with the rail: an unpowered part cannot ACK.
+    fn set_bus_powered(&self, powered: bool) {
+        match &self.bus {
+            ModelPeripheralBus::I2c(bus) => bus
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set_powered(powered),
+            ModelPeripheralBus::Spi(bus) => bus
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set_powered(powered),
+        }
+    }
+
+    /// Whether the bus is a SPI slave currently in a deep-power-down state.
+    fn low_power_mode(&self) -> bool {
+        match &self.bus {
+            ModelPeripheralBus::I2c(_) => false,
+            ModelPeripheralBus::Spi(bus) => bus
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .low_power_mode(),
+        }
+    }
+
+    /// Discard any protocol activity the bus recorded but has not been charged
+    /// for, so a replay starts from an idle envelope.
+    fn drain_activity(&self) {
+        match &self.bus {
+            ModelPeripheralBus::I2c(bus) => {
+                let _ = bus
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take_activity();
+            }
+            ModelPeripheralBus::Spi(bus) => {
+                let _ = bus
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take_activity();
+            }
+        }
+    }
+}
+
 /// The scheduler driving one bound board.
 pub struct Scheduler {
     pub circuit: Circuit,
@@ -340,7 +397,7 @@ pub struct Scheduler {
     pub net_nodes: HashMap<String, NodeId>,
     pub digital: Vec<DigitalComponent>,
     /// MCU-bit-banged 74HC595 chains, clocked from the ordered pin-edge log at
-    /// edge granularity (FIX 1). One controller PER physical chain (independent
+    /// edge granularity. One controller PER physical chain (independent
     /// chains are not merged). The chips these drive are listed in `chain_chips`
     /// and are skipped by the once-per-chunk `digital` tick so they are not
     /// driven twice.
@@ -363,12 +420,12 @@ pub struct Scheduler {
     last_dc_seed: Option<Vec<f64>>,
     /// Frozen MNA unknown layout for the current circuit (branch lookup).
     layout: Layout,
-    /// Configurable power supplies, updated between chunks (Feature 1).
+    /// Configurable power supplies, updated between chunks.
     pub supplies: Vec<SupplyLeg>,
     /// Behavioural devices (power ICs), updated between chunks the same way the
     /// supplies are.
     pub behavioral: Vec<BehavioralDevice>,
-    /// Fault / stress monitor, evaluated after each chunk (Feature 2).
+    /// Fault / stress monitor, evaluated after each chunk.
     pub stress: StressMonitor,
     /// Faults raised since the last frame drain.
     faults_pending: Vec<FaultEvent>,
@@ -411,7 +468,7 @@ pub struct Scheduler {
     /// [`attach_spi_bus_on`]; not populated by the legacy [`attach_spi_bus`]
     /// path. Used for look-up by controller name after the run.
     spi_controller_map: HashMap<String, Arc<Mutex<SpiBus>>>,
-    /// MCU chip-substitution events detected at build time (Track B): the board
+    /// MCU chip-substitution events detected at build time: the board
     /// asked for a more specific part than the emulator core models. Surfaced as
     /// a co-sim warning + JSON note; never gates an exit code on its own.
     substitutions: Vec<McuSubstitution>,
@@ -420,14 +477,11 @@ pub struct Scheduler {
     /// two independently ordered collections or fall back to display refs.
     scoped_substitutions: Vec<ScopedMcuSubstitution>,
     /// Bus peripherals (I2C/SPI slave models) attached on a board whose live
-    /// MCU backends model NO matching bus controller; the firmware's bus
+    /// MCU backends model NO matching bus controller: the firmware's bus
     /// traffic can never reach them, so they sit at their power-on defaults for
-    /// the whole run. Recorded at attach time (mirroring `substitutions`) and
-    /// surfaced as a co-sim coverage warning on the four batch report surfaces
-    /// (default text, `--plain`, `--json`, hauksbee-ci) and the TUI. The
-    /// synchronous web report does not run the external backend that emits it; a CI
-    /// `peripheral` assertion against one of these FAILS rather than passing on
-    /// the slave's untouched default state (U3 finding 2).
+    /// the whole run. Recorded at attach time and surfaced as a co-sim coverage
+    /// warning; a CI `peripheral` assertion against one of these FAILS rather
+    /// than passing on the slave's untouched default state.
     unexercised_buses: Vec<UnexercisedBus>,
     /// MCU-bit-banged 74HC165 read chains, resolved at GPIO-output edge
     /// granularity inside the owning MCU's run loop via its synchronous input
@@ -436,7 +490,7 @@ pub struct Scheduler {
     /// `input_volts` snapshot the scheduler refreshes from the last solve so the
     /// 165 captures the latest spike-latch states on its PL load.
     hc165_chains: Vec<Arc<Mutex<crate::digital::Hc165Chain>>>,
-    /// Per-MCU synchronous input-responder registries (05 §1.5): the
+    /// Per-MCU synchronous input-responder registries: the
     /// multiplexer that shares each MCU's single `on_input_responder` slot
     /// across every registered bit-banged input protocol (165 chains,
     /// bit-banged SPI MISO, soft-I2C). `None` until the first responder is
@@ -473,7 +527,7 @@ pub struct Scheduler {
     /// arm), so its operating point is not a real solve: it is excluded from the
     /// running net stats and the stress monitor and surfaced as
     /// `analog_valid: false` in coverage and the co-sim JSON, rather than being
-    /// silently held and reported as a quiet run (05 §3b, refuse rather than fake).
+    /// silently held and reported as a quiet run.
     failed_chunks: u64,
     /// Sim-time windows `[start_s, end_s)` of the failed chunks, merged where
     /// consecutive so a diverged stretch reads as its true extent. Surfaced in the
@@ -485,19 +539,16 @@ pub struct Scheduler {
     /// the one worth naming. Carries the solver's blame clause (the net that
     /// refused to settle, the devices on it, any near-zero-ohm link poisoning
     /// the matrix), so a non-convergence names the smallest identifiable thing
-    /// instead of only a chunk count (E29).
+    /// instead of only a chunk count.
     failed_window_reasons: Vec<String>,
     /// Per-run count of chunks whose PRIMARY analog solve failed but a fallback
     /// integration rung produced a real converged answer (see `solve_chunk`'s
     /// ladder). A fallback-solved chunk is a solved chunk, so it counts toward
-    /// neither `failed_chunks` nor the strict abort streak, but its number is a
-    /// second-class number (a more dissipative method, a smaller step, or a
-    /// subdivided march), and a consumer reading a waveform is entitled to know
-    /// which windows those are: the count and windows are surfaced in the
-    /// co-sim JSON as `fallback_windows`, each with the method that produced
-    /// it, that method's qualitative fidelity note, and a MEASURED
-    /// step-doubling estimate of the chunk-end output error (B12). An answer
-    /// carries its provenance with a measured estimate, never an invented one.
+    /// neither `failed_chunks` nor the strict abort streak, but its number came
+    /// from a more dissipative method, a smaller step or a subdivided march.
+    /// The count and windows reach the co-sim JSON as `fallback_windows`, each
+    /// with its rung, that rung's fidelity note, and a MEASURED step-doubling
+    /// estimate of the chunk-end output error.
     fallback_chunks: u64,
     /// Sim-time windows `[start_s, end_s)` solved by a fallback rung, with the
     /// rung that produced each and its measured error estimate, merged where
@@ -545,7 +596,7 @@ pub struct Scheduler {
     /// streak, which is the breadcrumb a bisection needs.
     last_solve_error: Option<String>,
     /// Standalone GPIO-edge-driven digital components (indices into `digital`)
-    /// advanced through the generalized micro-tick replay (05 §1.2), NOT through
+    /// advanced through the generalized micro-tick replay, NOT through
     /// a 595 chain or the 165 responder. Empty on the current corpus (every GPIO
     /// 595 is a chain, every 165 a responder), so the generalized path is a no-op
     /// there and nothing regresses; a board with a standalone GPIO-clocked shift
@@ -593,9 +644,9 @@ pub struct Scheduler {
     /// net feeds. "Tick-evaluated" excludes every edge-exact path: 595 chain
     /// chips (`chain_chips`), generalized replay chips (`replay_chips`), and
     /// 165 read-chain chips (responder-owned). Built once at construction;
-    /// consulted by [`Scheduler::detect_short_pulses`] (friction 1.16).
+    /// consulted by [`Scheduler::detect_short_pulses`].
     tick_sequential_nets: HashMap<u32, Vec<String>>,
-    /// Sub-chunk GPIO pulse warnings raised this run (friction 1.16), one per
+    /// Sub-chunk GPIO pulse warnings raised this run, one per
     /// offending net. See [`ShortPulse`].
     short_pulses: Vec<ShortPulse>,
     /// Nets already warned about by `detect_short_pulses`, so a pulse train
@@ -617,7 +668,7 @@ pub struct Scheduler {
 /// A chip-substitution event: the board asked for `requested_part` but the
 /// available emulator core models a less-specific platform (`modelled_core`).
 /// Recorded at scheduler-build time so every surface (CLI text, JSON, TUI) can
-/// warn that co-sim results stand in for the requested silicon (Track B).
+/// warn that co-sim results stand in for the requested silicon.
 #[derive(Debug, Clone)]
 pub struct McuSubstitution {
     /// The MCU reference designator (e.g. `"U1"`).
@@ -675,7 +726,7 @@ impl ScopedMcuSubstitution {
 }
 
 /// A bus peripheral bound on a platform that models no matching bus controller
-/// (U3 finding 2). The device is on the board, but the emulated MCU has no
+///. The device is on the board, but the emulated MCU has no
 /// controller the bridge could attach to, so the firmware never talks to it,
 /// a silent no-op unless surfaced.
 #[derive(Debug, Clone)]
@@ -689,8 +740,7 @@ pub struct UnexercisedBus {
 }
 
 impl UnexercisedBus {
-    /// The one-line warning every surface (text, --plain, --json note, CI
-    /// report) emits for this device, so they all name the same facts.
+    /// The one-line warning every surface emits for this device.
     pub fn message(&self) -> String {
         let on = match &self.controller {
             Some(c) => format!(" (bound to controller '{c}')"),
@@ -712,7 +762,7 @@ impl UnexercisedBus {
 }
 
 /// One ADC channel whose per-chunk injections the MCU backend DROPPED because
-/// the platform has no injection map (U3 finding 1). The analog solve drove
+/// the platform has no injection map. The analog solve drove
 /// the net; the firmware never received a single sample.
 #[derive(Debug, Clone)]
 pub struct AdcDrop {
@@ -728,10 +778,7 @@ pub struct AdcDrop {
 }
 
 impl AdcDrop {
-    /// The one-line warning the four batch surfaces and TUI emit for this
-    /// channel. The synchronous web report does not run the external backend
-    /// that emits it; same shared-wording discipline as
-    /// [`UnexercisedBus::message`].
+    /// The one-line warning every surface emits for this channel.
     pub fn message(&self) -> String {
         let parts = if self.parts.is_empty() {
             String::new()
@@ -752,25 +799,20 @@ impl AdcDrop {
     }
 }
 
-/// The one-line warning the four batch surfaces emit for an entry of
-/// [`Scheduler::watchdog_limitations`], so the default text summary, `--plain`,
-/// the `--json` notes and the CI report all name the same gap in the same words.
-/// The batch call sites and interactive TUI all render this sentence. The
-/// synchronous web report does not run the external backends that emit it (see
-/// `docs/cosim/MCU.md`).
+/// The one-line warning every surface emits for an entry of
+/// [`Scheduler::watchdog_limitations`], so they all name the same gap in the
+/// same words.
 ///
 /// `limitation` is the backend's own whole sentence and is passed through
-/// UNCHANGED. Two surfaces wording the same coverage hole differently is the
-/// failure this shared formatter exists to prevent, so nothing here may
-/// paraphrase it; the only thing added is which MCU it is about.
+/// UNCHANGED. Two surfaces wording one coverage hole differently is the failure
+/// this shared formatter exists to prevent, so nothing here may paraphrase it;
+/// the only thing added is which MCU it is about.
 pub fn watchdog_limitation_message(mcu_ref: &str, limitation: &str) -> String {
     format!("MCU {mcu_ref}: {limitation}")
 }
 
-/// The one-line warning the same four batch surfaces emit for an entry of
-/// [`Scheduler::timing_limitations`]. Same verbatim-passthrough discipline as
-/// [`watchdog_limitation_message`]: the backend's whole sentence, unchanged,
-/// prefixed only with which MCU it is about.
+/// The same, for an entry of [`Scheduler::timing_limitations`]: the backend's
+/// whole sentence, unchanged, prefixed only with which MCU it is about.
 pub fn timing_limitation_message(mcu_ref: &str, limitation: &str) -> String {
     format!("MCU {mcu_ref}: {limitation}")
 }
@@ -778,11 +820,8 @@ pub fn timing_limitation_message(mcu_ref: &str, limitation: &str) -> String {
 /// The one-line resolution statement for a [`TimingCoverage`] row: the edge
 /// timestamp uncertainty, the narrowest pulse guaranteed observable, the chunk
 /// actually run, and whether the stamps are cycle-exact or poll-boundary.
-///
-/// Shared for the same reason as [`watchdog_limitation_message`]: the `hauksbee
-/// run` default-text timing-coverage table and the interactive surfaces' coverage
-/// caveats (`reports::coverage`) must not word one core's resolution two ways.
-/// The leading indent belongs to the text table and is added there, not here.
+/// Shared so no surface words one core's resolution two ways. The leading
+/// indent belongs to the text table and is added there, not here.
 pub fn timing_coverage_line(t: &TimingCoverage) -> String {
     format!(
         "{} ({}): edge timestamps ±{:.3} us; pulses >= {:.3} us guaranteed; \
@@ -800,9 +839,8 @@ pub fn timing_coverage_line(t: &TimingCoverage) -> String {
     )
 }
 
-/// The one-line finding the same four batch surfaces emit for an entry of
-/// [`Scheduler::watchdog_resets`]. Same shared-wording discipline as
-/// [`watchdog_limitation_message`] and [`AdcDrop::message`].
+/// The one-line finding every surface emits for an entry of
+/// [`Scheduler::watchdog_resets`].
 pub fn watchdog_reset_message(mcu_ref: &str, resets: u64) -> String {
     let plural = if resets == 1 { "" } else { "s" };
     format!(
@@ -812,8 +850,7 @@ pub fn watchdog_reset_message(mcu_ref: &str, resets: u64) -> String {
 }
 
 /// A firmware GPIO pulse that rose AND fell inside a single solver chunk, on a
-/// net that clocks a TICK-evaluated sequential part (cold-drive friction 1.16,
-/// defect report 7). Chain-responder parts (74HC595/165 chains, bit-banged
+/// net that clocks a TICK-evaluated sequential part. Chain-responder parts (74HC595/165 chains, bit-banged
 /// SPI/I2C) resolve such edges synchronously inside the firmware's instruction
 /// stream, but an ordinary sequential part (a 74HC74 latch, a ripple counter)
 /// is evaluated once per chunk against the PREVIOUS solve, so a pulse contained
@@ -857,9 +894,7 @@ fn fmt_seconds(s: f64) -> String {
 }
 
 impl ShortPulse {
-    /// The one-line warning every surface (text, --plain, --json note, web)
-    /// emits for this net, so they all name the same facts; same
-    /// shared-wording discipline as [`UnexercisedBus::message`].
+    /// The one-line warning every surface emits for this net.
     pub fn message(&self) -> String {
         let suggest_us = (self.pulse_s * 1e6 / 2.0).max(0.1);
         format!(
@@ -924,10 +959,7 @@ pub struct DriverContention {
 }
 
 impl DriverContention {
-    /// The one-line finding the default text summary, `--plain`, `--json`, TUI
-    /// and web front door emit for this net (hauksbee-ci does not); same
-    /// shared-wording discipline as
-    /// [`UnexercisedBus::message`].
+    /// The one-line finding every surface but hauksbee-ci emits for this net.
     pub fn message(&self) -> String {
         format!(
             "co-sim: driver contention on net '{}' from t={:.6}s: firmware configured \
@@ -973,7 +1005,7 @@ impl McuSubstitution {
 }
 
 /// The cycle-stamped GPIO edges one MCU produced during the most recent chunk,
-/// exposed for the analog PWL side (05 §1.1/§1.3).
+/// exposed for the analog PWL side.
 ///
 /// A `(port,bit)` maps to its ordered `(cycle, level)` series; `cycle_span` is
 /// the chunk's `[start, end)` cycle counter so a consumer normalises an edge
@@ -1097,31 +1129,15 @@ impl Scheduler {
             if let Some(max_v) = binding.max_supply_v {
                 let mut seen_nodes = std::collections::HashSet::new();
                 for (role, &node) in &binding.role_nets {
-                    // The role vocabulary a datasheet actually uses for a direct
-                    // supply pin, which is wider than the AVR/STM32 spellings this
-                    // list started with. `dvdd`/`avdd`/`iovdd`/`vddio`/`vregvdd`
-                    // are the EFM32 and sensor families' names for the same thing:
-                    // a pad fed straight from a board rail, whose ceiling is the
-                    // part's abs-max Vcc. Without them an entry could carry
-                    // `max_voltage_v` and have it compared against nothing, which
-                    // is a rating that reads as enforced and is not.
-                    //
-                    // A NUMBERED PAD OF THE SAME DOMAIN MUST BE STRIPPED, and an
-                    // earlier version of this comment claimed otherwise on the
-                    // grounds that "the loop deduplicates by NODE". It does not
-                    // help: `seen_nodes.insert` runs INSIDE the `direct_supply`
-                    // arm, so it only ever sees roles that already matched. A pad
-                    // named `dvdd2` therefore matched nothing and contributed no
-                    // watch, and a rail reaching ONLY numbered pads got none at
-                    // all. That is two of the three DVDD pads on the EFM32PG22
-                    // entry added in this batch, whose own note says a rating
-                    // compared against nothing is worse than no rating.
-                    //
-                    // Stripping a trailing digit run makes `vcc2`, `gnd2`, `dvdd3`
-                    // and `iovdd2` read as their domain. It cannot collide with a
-                    // rail whose NAME ends in a digit and means something else:
-                    // `5v` is in the list verbatim and survives because the strip
-                    // is only applied when the bare form is not already a match.
+                    // A numbered pad of the same supply domain must be stripped
+                    // to its domain name before the match: dedup is by NODE, but
+                    // `seen_nodes.insert` runs inside the `direct_supply` arm, so
+                    // a pad named `dvdd2` would match nothing and a rail reaching
+                    // ONLY numbered pads would get no watch at all. Stripping a
+                    // trailing digit run makes `vcc2`, `gnd2`, `dvdd3` and
+                    // `iovdd2` read as their domain, and cannot collide with a
+                    // rail whose name legitimately ends in a digit (`5v` is in
+                    // the list verbatim and matches before the strip applies).
                     let bare = role.trim_end_matches(|c: char| c.is_ascii_digit());
                     let domain = if is_direct_supply_role(role) {
                         role.as_str()
@@ -1171,7 +1187,7 @@ impl Scheduler {
             live.push(core_with_hooks(core, binding));
         }
 
-        // Build the MCU-bit-banged 74HC595 chain controllers (FIX 1). For each
+        // Build the MCU-bit-banged 74HC595 chain controllers. For each
         // live MCU, map the net node each GPIO driver pushes onto back to its
         // (port, bit), then identify the 595 daisy-chain(s) and bind their
         // broadcast control signals (SRCLK / RCLK / SRCLR_n) and head SER to
@@ -1180,7 +1196,7 @@ impl Scheduler {
         // just at chunk granularity.
         let (chains, chain_mcu, chain_chips) = build_595_chains(&digital, &live);
 
-        // Standalone GPIO-edge-driven digital components (05 §1.2): shift/latch
+        // Standalone GPIO-edge-driven digital components: shift/latch
         // parts clocked directly by an MCU pin that are NOT part of a 595 chain
         // or a 165 responder. On the current corpus this is empty; it is the
         // generalization hook so a lone GPIO-clocked 595/165 replays at edge
@@ -1281,7 +1297,7 @@ impl Scheduler {
         // bus (so firmware TWI writes reach them through `on_i2c`), with each
         // connected VOUT net's PinDriver bound to the matching spec output so
         // the slave drives the analog nets itself at every transaction end
-        // (the ctx-bearing on_stop, 05 §3.1).
+        // (the ctx-bearing on_stop).
         if !dacs.is_empty() {
             sched.attach_mcp4728_dacs(dacs);
         }
@@ -1303,7 +1319,7 @@ impl Scheduler {
         sched.rebuild_digital_in_evidence();
 
         // Index the nets that clock TICK-evaluated sequential parts, for the
-        // sub-chunk pulse warning (friction 1.16). Built after the 595 chains,
+        // sub-chunk pulse warning. Built after the 595 chains,
         // replay chips, and 165 read chains above, because those edge-exact
         // paths are exactly what the index must EXCLUDE.
         sched.rebuild_tick_sequential_nets();
@@ -1381,16 +1397,15 @@ impl Scheduler {
     }
 
     /// Build and attach the MCP4728 DAC slaves discovered by the binder. One
-    /// shared [`I2cBus`] holds all of them (addressed 0x60/0x61/0x62); the bus
-    /// is registered as every MCU's `on_i2c` handler.
+    /// shared [`I2cBus`] holds all of them, registered as every MCU's `on_i2c`
+    /// handler.
     ///
     /// Each slave is a [`RegisterMapSensor`] instance of the shipped MCP4728
-    /// spec (05 §3.2: the DAC is data, not Rust) with the binder-resolved
-    /// per-instance address / VREF / gain applied over the spec defaults and
-    /// each connected VOUT channel's [`crate::drivers::PinDriver`] bound to
-    /// the matching spec output. Net driving happens in the slave's own
-    /// `on_stop(ctx)`, delivered by the chunk loop's `flush_stops`, no
-    /// scheduler-side polling.
+    /// spec (the DAC is data, not Rust), with the binder-resolved per-instance
+    /// address / VREF / gain over the spec defaults and each connected VOUT
+    /// channel's [`crate::drivers::PinDriver`] bound to the matching spec
+    /// output. Net driving happens in the slave's own `on_stop(ctx)`, delivered
+    /// by the chunk loop's `flush_stops`: no scheduler-side polling.
     fn attach_mcp4728_dacs(&mut self, dacs: Vec<crate::binder::DacBinding>) {
         /// The shipped declarative MCP4728 spec. Embedded (rather than loaded
         /// from disk at runtime) so an engine binary is self-contained.
@@ -1438,6 +1453,7 @@ impl Scheduler {
         for peripheral in peripherals {
             let reference = peripheral.reference;
             let power = peripheral.power;
+            let cs_net = peripheral.cs_net;
             match peripheral.spec {
                 PeripheralSpec::I2cEeprom {
                     address,
@@ -1448,22 +1464,8 @@ impl Scheduler {
                     let slave = Eeprom24c::new(address, size_bytes)
                         .with_word_address_bytes(word_address_bytes)
                         .with_page_size(page_size);
-                    let bus = Arc::new(Mutex::new(
-                        I2cBus::new(&reference).with_slave(Box::new(slave)),
-                    ));
-                    if power.is_some() {
-                        bus.lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .set_powered(false);
-                    }
-                    self.attach_i2c_bus(bus.clone());
-                    if let Some(power) = power {
-                        self.attach_model_peripheral_power(
-                            &reference,
-                            power,
-                            ModelPeripheralBus::I2c(bus),
-                        );
-                    }
+                    let bus = I2cBus::new(&reference).with_slave(Box::new(slave));
+                    self.attach_powered_i2c(&reference, power, bus);
                 }
                 PeripheralSpec::SpiNorFlash {
                     size_bytes,
@@ -1477,41 +1479,9 @@ impl Scheduler {
                     let id: [u8; 3] = jedec_id
                         .try_into()
                         .expect("validated SPI NOR JEDEC ID has exactly three bytes");
-                    let bus = Arc::new(Mutex::new(SpiBus::new(
-                        &reference,
-                        Box::new(SpiNorFlash::new(
-                            size_bytes,
-                            page_size,
-                            sector_size,
-                            id,
-                            spi_mode,
-                        )),
-                    )));
-                    if power.is_some() {
-                        bus.lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .set_powered(false);
-                    }
-                    let cs = peripheral.cs_net.and_then(|net| {
-                        self.pin_driving_node(net).map(|pin| ResolvedCs {
-                            pin,
-                            net: Some(net),
-                            provenance: CsProvenance::ModelRoles,
-                        })
-                    });
-                    self.attach_spi_bus(bus, cs);
-                    if let Some(power) = power {
-                        self.attach_model_peripheral_power(
-                            &reference,
-                            power,
-                            ModelPeripheralBus::Spi(
-                                self.spi_buses
-                                    .last()
-                                    .expect("just-attached SPI bus is retained")
-                                    .clone(),
-                            ),
-                        );
-                    }
+                    let flash = SpiNorFlash::new(size_bytes, page_size, sector_size, id, spi_mode);
+                    let bus = SpiBus::new(&reference, Box::new(flash));
+                    self.attach_powered_spi(&reference, power, bus, cs_net, None);
                 }
                 PeripheralSpec::RegisterMap {
                     spec_toml,
@@ -1525,50 +1495,18 @@ impl Scheduler {
                     }
                     match sensor.bus() {
                         Bus::I2c => {
-                            let bus = Arc::new(Mutex::new(
-                                I2cBus::new(&reference).with_slave(Box::new(sensor)),
-                            ));
-                            if power.is_some() {
-                                bus.lock()
-                                    .unwrap_or_else(|error| error.into_inner())
-                                    .set_powered(false);
-                            }
-                            self.attach_i2c_bus(bus.clone());
-                            if let Some(power) = power {
-                                self.attach_model_peripheral_power(
-                                    &reference,
-                                    power,
-                                    ModelPeripheralBus::I2c(bus),
-                                );
-                            }
+                            let bus = I2cBus::new(&reference).with_slave(Box::new(sensor));
+                            self.attach_powered_i2c(&reference, power, bus);
                         }
                         Bus::Spi => {
-                            let bus =
-                                Arc::new(Mutex::new(SpiBus::new(&reference, Box::new(sensor))));
-                            if power.is_some() {
-                                bus.lock()
-                                    .unwrap_or_else(|error| error.into_inner())
-                                    .set_powered(false);
-                            }
-                            let cs = peripheral.cs_net.and_then(|net| {
-                                self.pin_driving_node(net).map(|pin| ResolvedCs {
-                                    pin,
-                                    net: Some(net),
-                                    provenance: CsProvenance::ModelRoles,
-                                })
-                            });
-                            if let Some(controller) = controller.as_deref() {
-                                self.attach_spi_bus_on(controller, bus.clone(), cs);
-                            } else {
-                                self.attach_spi_bus(bus.clone(), cs);
-                            }
-                            if let Some(power) = power {
-                                self.attach_model_peripheral_power(
-                                    &reference,
-                                    power,
-                                    ModelPeripheralBus::Spi(bus),
-                                );
-                            }
+                            let bus = SpiBus::new(&reference, Box::new(sensor));
+                            self.attach_powered_spi(
+                                &reference,
+                                power,
+                                bus,
+                                cs_net,
+                                controller.as_deref(),
+                            );
                         }
                     }
                 }
@@ -1576,6 +1514,60 @@ impl Scheduler {
         }
         if !self.model_peripheral_power.is_empty() {
             self.relayout();
+        }
+    }
+
+    /// Attach one model-declared I2C slave bus, starting it electrically off
+    /// when the model card carries a supply spec (the first converged operating
+    /// point decides whether the rail clears the power-on threshold).
+    fn attach_powered_i2c(
+        &mut self,
+        reference: &str,
+        power: Option<crate::binder::BoundPeripheralPower>,
+        bus: I2cBus,
+    ) {
+        let bus = Arc::new(Mutex::new(bus));
+        if power.is_some() {
+            bus.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set_powered(false);
+        }
+        self.attach_i2c_bus(bus.clone());
+        if let Some(power) = power {
+            self.attach_model_peripheral_power(reference, power, ModelPeripheralBus::I2c(bus));
+        }
+    }
+
+    /// The SPI counterpart of [`Scheduler::attach_powered_i2c`], resolving the
+    /// model's declared CS net to an MCU pin and routing to a named controller
+    /// when the card asked for one.
+    fn attach_powered_spi(
+        &mut self,
+        reference: &str,
+        power: Option<crate::binder::BoundPeripheralPower>,
+        bus: SpiBus,
+        cs_net: Option<NodeId>,
+        controller: Option<&str>,
+    ) {
+        let bus = Arc::new(Mutex::new(bus));
+        if power.is_some() {
+            bus.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set_powered(false);
+        }
+        let cs = cs_net.and_then(|net| {
+            self.pin_driving_node(net).map(|pin| ResolvedCs {
+                pin,
+                net: Some(net),
+                provenance: CsProvenance::ModelRoles,
+            })
+        });
+        match controller {
+            Some(controller) => self.attach_spi_bus_on(controller, bus.clone(), cs),
+            None => self.attach_spi_bus(bus.clone(), cs),
+        }
+        if let Some(power) = power {
+            self.attach_model_peripheral_power(reference, power, ModelPeripheralBus::Spi(bus));
         }
     }
 
@@ -1629,32 +1621,8 @@ impl Scheduler {
                     .unwrap_or(0.0);
             let powered = supply_v.is_finite() && supply_v >= leg.power_on_threshold_v;
             leg.powered = powered;
-            match &leg.bus {
-                ModelPeripheralBus::I2c(bus) => bus
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .set_powered(powered),
-                ModelPeripheralBus::Spi(bus) => bus
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .set_powered(powered),
-            }
-            let low_power = match &leg.bus {
-                ModelPeripheralBus::I2c(_) => false,
-                ModelPeripheralBus::Spi(bus) => bus
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .low_power_mode(),
-            };
-            let current_a = if powered {
-                if low_power {
-                    leg.low_power_a.unwrap_or(leg.idle_a)
-                } else {
-                    leg.idle_a
-                }
-            } else {
-                0.0
-            };
+            leg.set_bus_powered(powered);
+            let current_a = leg.quiescent_a(leg.low_power_mode());
             leg.last_current_a = current_a;
             set_isource_dc(&mut self.circuit, leg.isource, current_a);
         }
@@ -1678,15 +1646,7 @@ impl Scheduler {
                     (bus.take_activity(), bus.low_power_mode())
                 }
             };
-            let mut current_a = if leg.powered {
-                if low_power {
-                    leg.low_power_a.unwrap_or(leg.idle_a)
-                } else {
-                    leg.idle_a
-                }
-            } else {
-                0.0
-            };
+            let mut current_a = leg.quiescent_a(low_power);
             if leg.powered && activity.read_units > 0 {
                 current_a = current_a.max(leg.read_a);
             }
@@ -1701,15 +1661,15 @@ impl Scheduler {
         }
     }
 
-    /// The synchronous input-responder registry for MCU `mi` (05 §1.5),
-    /// creating it and installing its dispatch closure into the MCU's single
+    /// The synchronous input-responder registry for MCU `mi`, creating it and
+    /// installing its dispatch closure into the MCU's single
     /// `on_input_responder` slot on first use. Every bit-banged input protocol
-    /// (165 chains, bit-banged SPI MISO, soft-I2C) registers here; the registry
-    /// keys dispatch on the output pins each responder watches, so an edge on
-    /// a non-protocol pin costs one map miss. Lazy install keeps the backend
-    /// hook empty (its `None` fast path) on boards with no responders. On poll
-    /// backends (Renode/QEMU) `on_input_responder` is a documented no-op; the
-    /// registry exists but never fires, the deliberate coarse tier of 05 §1.5.
+    /// (165 chains, bit-banged SPI MISO, soft-I2C) registers here; dispatch is
+    /// keyed on the output pins each responder watches, so an edge on a
+    /// non-protocol pin costs one map miss, and the lazy install keeps the
+    /// backend hook empty on boards with no responders. On poll backends
+    /// `on_input_responder` is a documented no-op, so the registry exists but
+    /// never fires: the deliberate coarse tier.
     fn responder_registry(
         &mut self,
         mi: usize,
@@ -1843,398 +1803,19 @@ impl Scheduler {
     /// Nano EEPROM Programmer). The responder owns write timing for installed
     /// parts; ordinary tick/replay paths are disabled for those components.
     fn build_and_install_parallel_memories(&mut self) {
-        use crate::responders::{
-            ParallelMemoryResponder, ParallelMemoryRuntime, ParallelMemoryWrite, ParallelSignal,
-        };
-
-        struct Pending {
-            mcu: usize,
-            component: usize,
-            outputs: Vec<String>,
-            output_pins: Vec<(char, u8)>,
-            runtime: Arc<Mutex<ParallelMemoryRuntime>>,
-            responder: ParallelMemoryResponder,
-        }
-
-        let gpio_maps: Vec<HashMap<i64, (char, u8)>> = self
-            .mcus
-            .iter()
-            .map(|m| {
-                m.binding
-                    .gpio_drivers
-                    .iter()
-                    .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
-                    .collect()
-            })
-            .collect();
         let mut pending = Vec::new();
-
         for component in 0..self.digital.len() {
-            let ports = self.digital[component].memory_ports();
-            for port in ports {
+            for port in self.digital[component].memory_ports() {
                 // Installing a responder suppresses this component's whole
                 // once-per-chunk tick. Refuse a partial takeover: unrelated
                 // combinational/register/output behavior must keep running.
                 if !self.digital[component].has_exclusive_memory_port(&port.name) {
                     continue;
                 }
-                for (mcu, gpio) in gpio_maps.iter().enumerate() {
-                    // Poll backends cannot answer between guest instructions;
-                    // leave the component on the ordinary tick path there.
-                    if !self.mcus[mcu].core.cycle_exact()
-                        || !self.mcus[mcu].core.input_responder_synchronous()
-                    {
-                        continue;
-                    }
-                    let chains: Vec<crate::digital::Hc595Chain> = self
-                        .chains
-                        .iter()
-                        .zip(&self.chain_mcu)
-                        .filter(|(_, owner)| **owner == mcu)
-                        .map(|(chain, _)| chain.clone())
-                        .collect();
-
-                    // Resolve physical provenance before choosing a fast-path
-                    // representation. A node does not become MCU-owned merely
-                    // because the candidate MCU has one pin on it: another MCU
-                    // pin or digital output on the same copper can change the
-                    // level inside the chunk and would be invisible to this
-                    // responder. Count every producer, including duplicate
-                    // pins on one MCU and 595 outputs. The memory component's
-                    // own bidirectional data drivers are excluded because the
-                    // responder is precisely the replacement for those.
-                    let mut producer_counts: HashMap<NodeId, usize> = HashMap::new();
-                    for live in &self.mcus {
-                        for driver in live.binding.gpio_drivers.values() {
-                            *producer_counts.entry(driver.net).or_default() += 1;
-                        }
-                    }
-                    for (digital_i, digital) in self.digital.iter().enumerate() {
-                        for role in digital.drivers.keys() {
-                            if digital_i == component && port.data_out.contains(role) {
-                                continue;
-                            }
-                            if let Some(&node) = digital.roles.get(role) {
-                                *producer_counts.entry(node).or_default() += 1;
-                            }
-                        }
-                    }
-                    let permitted_driver_resistors: std::collections::HashSet<DeviceId> = self.mcus
-                        [mcu]
-                        .binding
-                        .gpio_drivers
-                        .values()
-                        .map(|driver| driver.resistor)
-                        .chain(port.data_out.iter().filter_map(|role| {
-                            self.digital[component]
-                                .drivers
-                                .get(role)
-                                .map(|driver| driver.resistor)
-                        }))
-                        .chain(chains.iter().flat_map(|chain| {
-                            chain.order.iter().flat_map(|&digital_i| {
-                                self.digital[digital_i]
-                                    .drivers
-                                    .values()
-                                    .map(|driver| driver.resistor)
-                            })
-                        }))
-                        .collect();
-                    let levels = self.digital[component].levels;
-                    let mut fixed_volts = HashMap::from([(NodeId::GROUND, 0.0)]);
-                    for supply in &self.supplies {
-                        fixed_volts.insert(supply.net, supply.supply.nominal_volts());
-                    }
-                    for device in &self.circuit.devices {
-                        if let Device::Vsource {
-                            p,
-                            n,
-                            kind: hauksbee_ir::SourceKind::Dc(volts),
-                            ..
-                        } = device
-                        {
-                            if *n == NodeId::GROUND {
-                                fixed_volts.insert(*p, *volts);
-                            }
-                        }
-                    }
-                    let mut pull_candidates: HashMap<NodeId, Vec<(DeviceId, bool)>> =
-                        HashMap::new();
-                    for (index, device) in self.circuit.devices.iter().enumerate() {
-                        if permitted_driver_resistors.contains(&DeviceId(index as u32)) {
-                            continue;
-                        }
-                        let Device::Resistor { a, b, ohms, .. } = device else {
-                            continue;
-                        };
-                        if !ohms.is_finite() || *ohms < 1_000.0 {
-                            continue;
-                        }
-                        let pulled = fixed_volts
-                            .get(a)
-                            .map(|&volts| (*b, volts))
-                            .or_else(|| fixed_volts.get(b).map(|&volts| (*a, volts)));
-                        let pulled = pulled.and_then(|(node, volts)| {
-                            if volts >= levels.vih {
-                                Some((node, true))
-                            } else if volts <= levels.vil {
-                                Some((node, false))
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some((node, level)) = pulled {
-                            pull_candidates
-                                .entry(node)
-                                .or_default()
-                                .push((DeviceId(index as u32), level));
-                        }
-                    }
-                    let mut passive_pull_devices = std::collections::HashSet::new();
-                    let mut pulled_levels = HashMap::new();
-                    for (node, candidates) in pull_candidates {
-                        if let [(device, level)] = candidates.as_slice() {
-                            passive_pull_devices.insert(*device);
-                            pulled_levels.insert(node, *level);
-                        }
-                    }
-                    let externally_coupled_nodes: std::collections::HashSet<NodeId> = self
-                        .circuit
-                        .devices
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, _)| {
-                            let id = DeviceId(*index as u32);
-                            !permitted_driver_resistors.contains(&id)
-                                && !passive_pull_devices.contains(&id)
-                        })
-                        .flat_map(|(_, device)| device.nodes())
-                        .filter(|node| *node != NodeId::GROUND)
-                        .collect();
-
-                    let signal_for_node = |node: NodeId| -> Option<ParallelSignal> {
-                        if node == NodeId::GROUND {
-                            return Some(ParallelSignal::Node(NodeId::GROUND));
-                        }
-                        let producers = producer_counts.get(&node).copied().unwrap_or(0);
-                        if producers > 1 {
-                            return None;
-                        }
-                        if externally_coupled_nodes.contains(&node) {
-                            return None;
-                        }
-                        if let Some(&pin) = gpio.get(&(node.0 as i64)) {
-                            return Some(ParallelSignal::Mcu(pin));
-                        }
-                        for (chain_i, chain) in chains.iter().enumerate() {
-                            for (chip_i, &digital_i) in chain.order.iter().enumerate() {
-                                for (bit, role) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
-                                    .iter()
-                                    .enumerate()
-                                {
-                                    if self.digital[digital_i].roles.get(*role) == Some(&node) {
-                                        return Some(ParallelSignal::Hc595 {
-                                            chain: chain_i,
-                                            chip: chip_i,
-                                            bit: bit as u8,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        Some(ParallelSignal::Node(node))
-                    };
-                    let role_signal = |role: &str| {
-                        let node = self.digital[component].roles.get(role).copied()?;
-                        signal_for_node(node)
-                    };
-                    let initial_pin_levels: HashMap<(char, u8), bool> = gpio
-                        .iter()
-                        .filter_map(|(&node, &pin)| {
-                            pulled_levels
-                                .get(&NodeId(node as u32))
-                                .map(|&level| (pin, level))
-                        })
-                        .collect();
-                    if !initial_pin_levels.is_empty()
-                        && !self.mcus[mcu].core.input_responder_tracks_direction()
-                    {
-                        continue;
-                    }
-
-                    let Some(address) = port
-                        .address
-                        .iter()
-                        .map(|role| role_signal(role))
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        continue;
-                    };
-                    let Some(writes) = port
-                        .writes
-                        .iter()
-                        .map(|write| {
-                            let signal = role_signal(&write.pin)?;
-                            let gates = write
-                                .gates
-                                .iter()
-                                .map(|(role, active)| role_signal(role).map(|s| (s, *active)))
-                                .collect::<Option<Vec<_>>>()?;
-                            Some(ParallelMemoryWrite::new(signal, write.edge, gates))
-                        })
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        continue;
-                    };
-                    let Some(read_gates) = port
-                        .read_gates
-                        .iter()
-                        .map(|(role, active)| role_signal(role).map(|s| (s, *active)))
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        continue;
-                    };
-                    let Some(data_in) = port
-                        .data_in
-                        .iter()
-                        .map(|role| role_signal(role))
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        continue;
-                    };
-                    // A legacy singleton callback remains exact when one MCU
-                    // output is the only mutable input to this memory. With two
-                    // MCU inputs (or an MCU-clocked 595 feeding it), one hardware
-                    // port write can change a write edge and a gate/address/data
-                    // bit together; only an atomic batch exposes the final state.
-                    let mut mcu_inputs = std::collections::HashSet::new();
-                    let mut referenced_595_chains = std::collections::HashSet::new();
-                    let mut has_unproven_node = false;
-                    for signal in address
-                        .iter()
-                        .chain(writes.iter().flat_map(|write| {
-                            std::iter::once(&write.signal)
-                                .chain(write.gates.iter().map(|(signal, _)| signal))
-                        }))
-                        .chain(read_gates.iter().map(|(signal, _)| signal))
-                        .chain(data_in.iter())
-                    {
-                        match signal {
-                            ParallelSignal::Mcu(pin) => {
-                                mcu_inputs.insert(*pin);
-                            }
-                            ParallelSignal::Hc595 { chain, .. } => {
-                                referenced_595_chains.insert(*chain);
-                            }
-                            ParallelSignal::Node(node) => {
-                                // The responder runs before the first analogue
-                                // solve and therefore cannot trust a pulled or
-                                // supplied node's all-zero voltage snapshot.
-                                // Ground is the sole node whose LOW level is an
-                                // identity, independent of a solve. Everything
-                                // else stays on the ordinary tick path.
-                                has_unproven_node |= *node != NodeId::GROUND;
-                            }
-                        }
-                    }
-                    if has_unproven_node {
-                        continue;
-                    }
-                    let chain_controls = chains
-                        .iter()
-                        .map(|chain| {
-                            let mut pins = vec![chain.srclk, chain.rclk, chain.ser];
-                            pins.extend(chain.srclr_n);
-                            pins.extend(chain.oe_n);
-                            (chain.oe_n, pins)
-                        })
-                        .collect::<Vec<_>>();
-                    let pulled_pins = initial_pin_levels.keys().copied().collect();
-                    if !referenced_595_controls_are_proven(
-                        &referenced_595_chains,
-                        &chain_controls,
-                        &pulled_pins,
-                    ) {
-                        // ParallelSignal::Hc595 carries a stored bit, not
-                        // drive ownership or externally-biased control state.
-                        // A referenced chain with mutable OE can be Hi-Z, and
-                        // a pulled clock/data/clear control does not start at
-                        // Hc595Chain's built-in default. Both stay on the
-                        // analogue tick path; unrelated chains do not matter.
-                        continue;
-                    }
-                    let has_shifted_input = !referenced_595_chains.is_empty();
-                    let has_callback_trigger = !mcu_inputs.is_empty() || has_shifted_input;
-                    let initial_level = |signal: &ParallelSignal| match signal {
-                        ParallelSignal::Mcu(pin) => {
-                            initial_pin_levels.get(pin).copied().unwrap_or(false)
-                        }
-                        ParallelSignal::Hc595 { .. } | ParallelSignal::Node(NodeId::GROUND) => {
-                            false
-                        }
-                        ParallelSignal::Node(_) => false,
-                    };
-                    let power_on_read_is_inhibited = read_gates
-                        .iter()
-                        .any(|(signal, active)| !active.is_active(initial_level(signal)));
-                    // Responders have no trustworthy solved analogue snapshot
-                    // at construction and start with MCU/595 levels LOW. A
-                    // memory with no watched source never runs at all; one
-                    // whose read is already active would need an initial drive
-                    // before the first guest instruction. Keep both on the
-                    // ordinary tick path. At least one dynamic read gate must
-                    // be inactive under the proven initial MCU/595/pull state;
-                    // the enabling edge then synchronously establishes the drive.
-                    if !has_callback_trigger || !power_on_read_is_inhibited {
-                        continue;
-                    }
-                    let needs_atomic_batch = has_shifted_input || mcu_inputs.len() > 1;
-                    if needs_atomic_batch && !self.mcus[mcu].core.input_responder_batches_atomic() {
-                        continue;
-                    }
-                    let Some(output_pins) = port
-                        .data_out
-                        .iter()
-                        .map(|role| {
-                            let node = self.digital[component].roles.get(role)?;
-                            if *node == NodeId::GROUND {
-                                return None;
-                            }
-                            if producer_counts.get(node).copied().unwrap_or(0) != 1 {
-                                return None;
-                            }
-                            gpio.get(&(node.0 as i64)).copied()
-                        })
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        continue;
-                    };
-
-                    let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
-                    let responder = ParallelMemoryResponder::new(
-                        format!("{}.{}", self.digital[component].reference, port.name),
-                        port.clone(),
-                        self.digital[component].levels,
-                        self.mcus[mcu].core.frequency(),
-                        self.input_volts.clone(),
-                        address,
-                        writes,
-                        read_gates,
-                        data_in,
-                        output_pins.clone(),
-                        chains,
-                        runtime.clone(),
-                    )
-                    .with_initial_pin_levels(initial_pin_levels);
-                    pending.push(Pending {
-                        mcu,
-                        component,
-                        outputs: port.data_out.clone(),
-                        output_pins,
-                        runtime,
-                        responder,
-                    });
-                    break;
+                if let Some(bound) = (0..self.mcus.len())
+                    .find_map(|mcu| self.bind_parallel_memory(component, &port, mcu))
+                {
+                    pending.push(bound);
                 }
             }
         }
@@ -2258,6 +1839,341 @@ impl Scheduler {
             .retain(|chip| !self.parallel_memory_chips.contains(chip));
     }
 
+    /// Try to resolve one memory port of `component` against MCU `mcu`,
+    /// returning the responder to install when every signal the port needs is
+    /// provably owned by that MCU (directly, or through a 74HC595 chain it
+    /// clocks). Returns `None` — leaving the part on the ordinary once-per-chunk
+    /// tick path — whenever provenance cannot be established, which is the
+    /// conservative answer in every ambiguous case below.
+    fn bind_parallel_memory(
+        &self,
+        component: usize,
+        port: &crate::logic::ParallelMemoryPort,
+        mcu: usize,
+    ) -> Option<PendingParallelMemory> {
+        use crate::responders::{
+            ParallelMemoryResponder, ParallelMemoryRuntime, ParallelMemoryWrite, ParallelSignal,
+        };
+
+        // Poll backends cannot answer between guest instructions.
+        if !self.mcus[mcu].core.cycle_exact() || !self.mcus[mcu].core.input_responder_synchronous()
+        {
+            return None;
+        }
+        let gpio: HashMap<i64, (char, u8)> = self.mcus[mcu]
+            .binding
+            .gpio_drivers
+            .iter()
+            .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
+            .collect();
+        let chains: Vec<crate::digital::Hc595Chain> = self
+            .chains
+            .iter()
+            .zip(&self.chain_mcu)
+            .filter(|(_, owner)| **owner == mcu)
+            .map(|(chain, _)| chain.clone())
+            .collect();
+
+        // Resolve physical provenance before choosing a fast-path
+        // representation. A node does not become MCU-owned merely because the
+        // candidate MCU has one pin on it: another MCU pin or digital output on
+        // the same copper can change the level inside the chunk and would be
+        // invisible to this responder. Count every producer, including duplicate
+        // pins on one MCU and 595 outputs. The memory component's own
+        // bidirectional data drivers are excluded because the responder is
+        // precisely the replacement for those.
+        let mut producer_counts: HashMap<NodeId, usize> = HashMap::new();
+        for live in &self.mcus {
+            for driver in live.binding.gpio_drivers.values() {
+                *producer_counts.entry(driver.net).or_default() += 1;
+            }
+        }
+        for (digital_i, digital) in self.digital.iter().enumerate() {
+            for role in digital.drivers.keys() {
+                if digital_i == component && port.data_out.contains(role) {
+                    continue;
+                }
+                if let Some(&node) = digital.roles.get(role) {
+                    *producer_counts.entry(node).or_default() += 1;
+                }
+            }
+        }
+        let permitted_driver_resistors: std::collections::HashSet<DeviceId> = self.mcus[mcu]
+            .binding
+            .gpio_drivers
+            .values()
+            .map(|driver| driver.resistor)
+            .chain(port.data_out.iter().filter_map(|role| {
+                self.digital[component]
+                    .drivers
+                    .get(role)
+                    .map(|driver| driver.resistor)
+            }))
+            .chain(chains.iter().flat_map(|chain| {
+                chain.order.iter().flat_map(|&digital_i| {
+                    self.digital[digital_i]
+                        .drivers
+                        .values()
+                        .map(|driver| driver.resistor)
+                })
+            }))
+            .collect();
+        let levels = self.digital[component].levels;
+        let mut fixed_volts = HashMap::from([(NodeId::GROUND, 0.0)]);
+        for supply in &self.supplies {
+            fixed_volts.insert(supply.net, supply.supply.nominal_volts());
+        }
+        for device in &self.circuit.devices {
+            if let Device::Vsource {
+                p,
+                n,
+                kind: SourceKind::Dc(volts),
+                ..
+            } = device
+            {
+                if *n == NodeId::GROUND {
+                    fixed_volts.insert(*p, *volts);
+                }
+            }
+        }
+        let mut pull_candidates: HashMap<NodeId, Vec<(DeviceId, bool)>> = HashMap::new();
+        for (index, device) in self.circuit.devices.iter().enumerate() {
+            if permitted_driver_resistors.contains(&DeviceId(index as u32)) {
+                continue;
+            }
+            let Device::Resistor { a, b, ohms, .. } = device else {
+                continue;
+            };
+            if !ohms.is_finite() || *ohms < 1_000.0 {
+                continue;
+            }
+            let pulled = fixed_volts
+                .get(a)
+                .map(|&volts| (*b, volts))
+                .or_else(|| fixed_volts.get(b).map(|&volts| (*a, volts)))
+                .and_then(|(node, volts)| {
+                    if volts >= levels.vih {
+                        Some((node, true))
+                    } else if volts <= levels.vil {
+                        Some((node, false))
+                    } else {
+                        None
+                    }
+                });
+            if let Some((node, level)) = pulled {
+                pull_candidates
+                    .entry(node)
+                    .or_default()
+                    .push((DeviceId(index as u32), level));
+            }
+        }
+        let mut passive_pull_devices = std::collections::HashSet::new();
+        let mut pulled_levels = HashMap::new();
+        for (node, candidates) in pull_candidates {
+            if let [(device, level)] = candidates.as_slice() {
+                passive_pull_devices.insert(*device);
+                pulled_levels.insert(node, *level);
+            }
+        }
+        let externally_coupled_nodes: std::collections::HashSet<NodeId> = self
+            .circuit
+            .devices
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                let id = DeviceId(*index as u32);
+                !permitted_driver_resistors.contains(&id) && !passive_pull_devices.contains(&id)
+            })
+            .flat_map(|(_, device)| device.nodes())
+            .filter(|node| *node != NodeId::GROUND)
+            .collect();
+
+        let signal_for_node = |node: NodeId| -> Option<ParallelSignal> {
+            if node == NodeId::GROUND {
+                return Some(ParallelSignal::Node(NodeId::GROUND));
+            }
+            if producer_counts.get(&node).copied().unwrap_or(0) > 1
+                || externally_coupled_nodes.contains(&node)
+            {
+                return None;
+            }
+            if let Some(&pin) = gpio.get(&(node.0 as i64)) {
+                return Some(ParallelSignal::Mcu(pin));
+            }
+            for (chain_i, chain) in chains.iter().enumerate() {
+                for (chip_i, &digital_i) in chain.order.iter().enumerate() {
+                    for (bit, role) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
+                        .iter()
+                        .enumerate()
+                    {
+                        if self.digital[digital_i].roles.get(*role) == Some(&node) {
+                            return Some(ParallelSignal::Hc595 {
+                                chain: chain_i,
+                                chip: chip_i,
+                                bit: bit as u8,
+                            });
+                        }
+                    }
+                }
+            }
+            Some(ParallelSignal::Node(node))
+        };
+        let role_signal =
+            |role: &str| signal_for_node(self.digital[component].roles.get(role).copied()?);
+        let signals = |roles: &[String]| {
+            roles
+                .iter()
+                .map(|role| role_signal(role))
+                .collect::<Option<Vec<_>>>()
+        };
+        let gate_signals = |gates: &[(String, hauksbee_models::logic_spec::Level)]| {
+            gates
+                .iter()
+                .map(|(role, active)| role_signal(role).map(|s| (s, *active)))
+                .collect::<Option<Vec<_>>>()
+        };
+
+        let initial_pin_levels: HashMap<(char, u8), bool> = gpio
+            .iter()
+            .filter_map(|(&node, &pin)| {
+                pulled_levels
+                    .get(&NodeId(node as u32))
+                    .map(|&level| (pin, level))
+            })
+            .collect();
+        if !initial_pin_levels.is_empty() && !self.mcus[mcu].core.input_responder_tracks_direction()
+        {
+            return None;
+        }
+
+        let address = signals(&port.address)?;
+        let writes = port
+            .writes
+            .iter()
+            .map(|write| {
+                let signal = role_signal(&write.pin)?;
+                let gates = gate_signals(&write.gates)?;
+                Some(ParallelMemoryWrite::new(signal, write.edge, gates))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let read_gates = gate_signals(&port.read_gates)?;
+        let data_in = signals(&port.data_in)?;
+
+        // A legacy singleton callback remains exact when one MCU output is the
+        // only mutable input to this memory. With two MCU inputs (or an
+        // MCU-clocked 595 feeding it), one hardware port write can change a
+        // write edge and a gate/address/data bit together; only an atomic batch
+        // exposes the final state.
+        let mut mcu_inputs = std::collections::HashSet::new();
+        let mut referenced_595_chains = std::collections::HashSet::new();
+        let mut has_unproven_node = false;
+        for signal in address
+            .iter()
+            .chain(writes.iter().flat_map(|write| {
+                std::iter::once(&write.signal).chain(write.gates.iter().map(|(signal, _)| signal))
+            }))
+            .chain(read_gates.iter().map(|(signal, _)| signal))
+            .chain(data_in.iter())
+        {
+            match signal {
+                ParallelSignal::Mcu(pin) => {
+                    mcu_inputs.insert(*pin);
+                }
+                ParallelSignal::Hc595 { chain, .. } => {
+                    referenced_595_chains.insert(*chain);
+                }
+                // The responder runs before the first analogue solve and
+                // therefore cannot trust a pulled or supplied node's all-zero
+                // voltage snapshot. Ground is the sole node whose LOW level is
+                // an identity, independent of a solve.
+                ParallelSignal::Node(node) => has_unproven_node |= *node != NodeId::GROUND,
+            }
+        }
+        if has_unproven_node {
+            return None;
+        }
+        let chain_controls = chains
+            .iter()
+            .map(|chain| {
+                let mut pins = vec![chain.srclk, chain.rclk, chain.ser];
+                pins.extend(chain.srclr_n);
+                pins.extend(chain.oe_n);
+                (chain.oe_n, pins)
+            })
+            .collect::<Vec<_>>();
+        let pulled_pins = initial_pin_levels.keys().copied().collect();
+        // ParallelSignal::Hc595 carries a stored bit, not drive ownership or
+        // externally-biased control state. A referenced chain with mutable OE
+        // can be Hi-Z, and a pulled clock/data/clear control does not start at
+        // Hc595Chain's built-in default; both stay on the analogue tick path.
+        if !referenced_595_controls_are_proven(
+            &referenced_595_chains,
+            &chain_controls,
+            &pulled_pins,
+        ) {
+            return None;
+        }
+        let has_shifted_input = !referenced_595_chains.is_empty();
+        let has_callback_trigger = !mcu_inputs.is_empty() || has_shifted_input;
+        let initial_level = |signal: &ParallelSignal| match signal {
+            ParallelSignal::Mcu(pin) => initial_pin_levels.get(pin).copied().unwrap_or(false),
+            ParallelSignal::Hc595 { .. } | ParallelSignal::Node(_) => false,
+        };
+        let power_on_read_is_inhibited = read_gates
+            .iter()
+            .any(|(signal, active): &(ParallelSignal, _)| !active.is_active(initial_level(signal)));
+        // Responders have no trustworthy solved analogue snapshot at
+        // construction and start with MCU/595 levels LOW. A memory with no
+        // watched source never runs at all; one whose read is already active
+        // would need an initial drive before the first guest instruction. At
+        // least one dynamic read gate must be inactive under the proven initial
+        // MCU/595/pull state, so the enabling edge synchronously establishes the
+        // drive.
+        if !has_callback_trigger || !power_on_read_is_inhibited {
+            return None;
+        }
+        let needs_atomic_batch = has_shifted_input || mcu_inputs.len() > 1;
+        if needs_atomic_batch && !self.mcus[mcu].core.input_responder_batches_atomic() {
+            return None;
+        }
+        let output_pins = port
+            .data_out
+            .iter()
+            .map(|role| {
+                let node = self.digital[component].roles.get(role)?;
+                if *node == NodeId::GROUND || producer_counts.get(node).copied().unwrap_or(0) != 1 {
+                    return None;
+                }
+                gpio.get(&(node.0 as i64)).copied()
+            })
+            .collect::<Option<Vec<_>>>()?;
+
+        let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
+        let responder = ParallelMemoryResponder::new(
+            format!("{}.{}", self.digital[component].reference, port.name),
+            port.clone(),
+            self.digital[component].levels,
+            self.mcus[mcu].core.frequency(),
+            self.input_volts.clone(),
+            address,
+            writes,
+            read_gates,
+            data_in,
+            output_pins.clone(),
+            chains,
+            runtime.clone(),
+        )
+        .with_initial_pin_levels(initial_pin_levels);
+        Some(PendingParallelMemory {
+            mcu,
+            component,
+            outputs: port.data_out.clone(),
+            output_pins,
+            runtime,
+            responder,
+        })
+    }
+
     fn apply_parallel_memory_outputs(&mut self) {
         for binding in &self.parallel_memory_drives {
             let runtime = binding.runtime.lock().unwrap_or_else(|e| e.into_inner());
@@ -2277,8 +2193,8 @@ impl Scheduler {
         }
     }
 
-    /// Chip-substitution events detected at build time (Track B). Empty when
-    /// every instantiated MCU was modelled by its exact requested part.
+    /// Chip-substitution events detected at build time. Empty when every
+    /// instantiated MCU was modelled by its exact requested part.
     pub fn substitutions(&self) -> &[McuSubstitution] {
         &self.substitutions
     }
@@ -2289,9 +2205,7 @@ impl Scheduler {
     }
 
     /// Loud notes for every net whose voltage is decided by something other
-    /// than the thing the user asked for (E30).
-    ///
-    /// Two shapes, both of which used to pass in silence:
+    /// than the thing the user asked for. Two shapes:
     ///
     ///   - Two ideal sources pinning one net. Forcing a net to 20 V beside a
     ///     3.3 V rail leaves it reading 3.300 V; the note names both sources
@@ -2343,25 +2257,24 @@ impl Scheduler {
     }
 
     /// Bus peripherals attached on a platform that models no matching bus
-    /// controller (U3 finding 2), never exercised, recorded at attach time.
+    /// controller: never exercised, recorded at attach time.
     pub fn unexercised_buses(&self) -> &[UnexercisedBus] {
         &self.unexercised_buses
     }
 
-    /// Nets wired to an MCU pin whose drive this backend has NOT observed,
-    /// on backends that cannot report drive direction. The honesty layer for
-    /// the live-sim scope: on such a backend (the ESP32 QEMU RAM mailbox
-    /// carries output LEVELS only, and the fork models no GPSPI/I2C
-    /// controller, so hardware-peripheral traffic on a pin is invisible), a
-    /// pin whose Thevenin driver is still tri-stated might be genuinely
-    /// undriven OR driven in ways the backend cannot see; either way, the
-    /// solved voltage on its net is the passive network's static level, not a
+    /// Nets wired to an MCU pin whose drive this backend has NOT observed, on
+    /// backends that cannot report drive direction. There (the ESP32 QEMU RAM
+    /// mailbox carries output LEVELS only, and the fork models no GPSPI/I2C
+    /// controller) a pin whose Thevenin driver is still tri-stated might be
+    /// genuinely undriven OR driven in ways the backend cannot see; either way
+    /// its net's solved voltage is the passive network's static level, not a
     /// measurement of MCU activity, and the UI must not present it as one.
-    /// Direction-observable backends (simavr DDR hooks, dir-mapped Renode
-    /// ports) are excluded: there a tri-stated driver IS the measured truth.
-    /// A net some other, observed MCU driver is actively pushing on is also
-    /// excluded: its reading is a real driven measurement. Recomputed per
-    /// frame: the flag clears the moment the pin first reports a level.
+    ///
+    /// Direction-observable backends (simavr DDR hooks, dir-mapped Renode ports)
+    /// are excluded: there a tri-stated driver IS the measured truth. A net some
+    /// other, observed MCU driver is actively pushing on is excluded too: that
+    /// reading is a real driven measurement. Recomputed per frame, so the flag
+    /// clears the moment the pin first reports a level.
     pub fn unobserved_drive_nets(&self) -> Vec<String> {
         let driven: std::collections::HashSet<u32> = self
             .mcus
@@ -2384,7 +2297,7 @@ impl Scheduler {
     }
 
     /// ADC channels whose injections the MCU backends DROPPED (no injection
-    /// map), resolved to their board nets and nearby parts (U3 finding 1).
+    /// map), resolved to their board nets and nearby parts.
     /// Populated by the run itself (a drop is recorded when the scheduler's
     /// per-chunk push hits the backend's unmapped path), so query it after
     /// the co-sim, deterministic ordering by (mcu, channel).
@@ -2459,16 +2372,15 @@ impl Scheduler {
     }
 
     /// Per-MCU statements of how the backend's watchdog fidelity falls short of
-    /// the part, keyed by MCU reference. Exactly the same class of finding as
-    /// `adc_dropped`: the run happened, but something the board would have done
-    /// did not, so a green result on the recovery path means less than it looks.
-    /// A firmware that HANGS runs forever here, so every assertion about
-    /// behaviour after a hang is fiction.
+    /// the part, keyed by MCU reference. Same class of finding as `adc_dropped`:
+    /// the run happened, but something the board would have done did not, so a
+    /// green result on the recovery path means less than it looks. A firmware
+    /// that HANGS runs forever here, so every assertion about behaviour after a
+    /// hang is fiction.
     ///
     /// The value is the backend's whole sentence, rendered verbatim through
-    /// [`watchdog_limitation_message`] on the four batch surfaces that read it.
-    /// Backends whose armed, never-fed watchdog reboots the core the way silicon
-    /// does (simavr) report nothing and are absent from this list: the silence is
+    /// [`watchdog_limitation_message`]. Backends whose armed, never-fed watchdog
+    /// reboots the core the way silicon does (simavr) are absent: the silence is
     /// what makes the warning mean something. Ordered by MCU reference.
     pub fn watchdog_limitations(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = self
@@ -2485,17 +2397,14 @@ impl Scheduler {
     }
 
     /// Per-MCU statements of how the backend's TIMING fidelity falls short of
-    /// the part, keyed by MCU reference. Same coverage class as
-    /// [`Scheduler::watchdog_limitations`]: the run happened, but time-based
-    /// results on these cores carry a known systematic bias (wall-clock-paced
-    /// virtual time on the QEMU family, the F103's deliberate TIMx-at-72MHz
-    /// divergence), so a green time-based assertion means less than it looks.
-    ///
-    /// The value is the backend's whole sentence, rendered verbatim through
-    /// [`timing_limitation_message`] on the four batch surfaces that read it,
-    /// and in `hauksbee models lint` before a run happens. Clock-truth-gated
-    /// backends report nothing and are absent: the silence is the claim the
-    /// gate measures. Ordered by MCU reference.
+    /// the part. Same coverage class as [`Scheduler::watchdog_limitations`]:
+    /// time-based results on these cores carry a known systematic bias
+    /// (wall-clock-paced virtual time on the QEMU family, the F103's deliberate
+    /// TIMx-at-72MHz divergence), so a green time-based assertion means less
+    /// than it looks. The value is the backend's whole sentence, rendered
+    /// verbatim through [`timing_limitation_message`]. Clock-truth-gated
+    /// backends are absent: the silence is the claim the gate measures. Ordered
+    /// by MCU reference.
     pub fn timing_limitations(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = self
             .mcus
@@ -2567,9 +2476,9 @@ impl Scheduler {
     /// firmware's TWI activity and readable for assertions (EEPROM contents,
     /// sensor temperature).
     pub fn attach_i2c_bus(&mut self, bus: Arc<Mutex<I2cBus>>) {
-        // Coverage honesty (U3 finding 2): a slave bound on a platform whose
-        // backend models no I2C controller receives no traffic, ever. Record
-        // it so every report surface says so instead of a silent green.
+        // A slave bound on a platform whose backend models no I2C controller
+        // receives no traffic, ever. Record it so every report surface says so
+        // instead of a silent green.
         let id = {
             use crate::peripherals::Peripheral as _;
             let g = bus.lock().unwrap_or_else(|e| e.into_inner());
@@ -2578,13 +2487,12 @@ impl Scheduler {
         self.record_bus_if_unexercised(&id, "I2C", None);
         self.i2c_buses.push(bus);
         // The AVR core's `on_i2c` closure and `set_i2c_slave_addresses` are
-        // SINGLE-SLOT replacers, so a per-bus closure meant a second attach
-        // silently overwrote the first bus's dispatcher AND dropped its addresses
-        // from the TWI filter; the first bus went dead. Rebuild a MULTIPLEXING
-        // dispatcher and the address UNION from the full bus list on every attach
-        // (the last attach installs the complete handler). Each 7-bit address is
-        // owned by at most one bus, so route by address and dispatch only to the
-        // owner, never touching a sibling bus's state.
+        // SINGLE-SLOT replacers, so a per-bus closure would let a second attach
+        // overwrite the first bus's dispatcher and drop its addresses from the
+        // TWI filter. Rebuild a MULTIPLEXING dispatcher and the address union
+        // from the full bus list on every attach. Each 7-bit address is owned by
+        // at most one bus, so route by address and dispatch only to the owner,
+        // never touching a sibling bus's state.
         let all: Vec<Arc<Mutex<I2cBus>>> = self.i2c_buses.clone();
         let addresses: Vec<u8> = all
             .iter()
@@ -2613,12 +2521,12 @@ impl Scheduler {
 
     /// Attach a SPI bus and register it as every live MCU's `on_spi` handler.
     ///
-    /// `cs` is the resolved chip-select (05 §2.1). `Some` puts the bus on exact
-    /// CS-edge framing: the CS GPIO edge stream frames each transaction at its
-    /// true assert/deassert, so two transactions in one chunk are separated and a
+    /// `cs` is the resolved chip-select. `Some` puts the bus on exact CS-edge
+    /// framing: the CS GPIO edge stream frames each transaction at its true
+    /// assert/deassert, so two transactions in one chunk are separated and a
     /// boundary-spanning transaction is not truncated. `None` leaves the bus on
-    /// the chunk-boundary heuristic (the pre-05-§2 behaviour), reported honestly
-    /// as `heuristic` in the co-sim coverage.
+    /// the chunk-boundary heuristic, reported as `heuristic` in the co-sim
+    /// coverage.
     pub fn attach_spi_bus(&mut self, bus: Arc<Mutex<SpiBus>>, cs: Option<ResolvedCs<NodeId>>) {
         let id = bus
             .lock()
@@ -2632,13 +2540,13 @@ impl Scheduler {
         );
         self.register_cs_frame(&bus, cs.map(|c| c.pin), cs.and_then(|c| c.net));
         self.spi_buses.push(bus);
-        // Rebuild a MULTIPLEXING `on_spi` across ALL attached buses. `on_spi` is a
-        // single-slot replacer on the AVR core, so a per-bus closure meant a second
-        // attach silently overwrote the first bus's transfer path, every byte then
-        // went to the last-attached slave regardless of which chip-select was
-        // asserted. Route each byte to the bus whose CS is currently asserted
-        // (`is_selected`); a lone bus is always routed to, preserving the
-        // single-slave path exactly (including before its first CS edge).
+        // Rebuild a MULTIPLEXING `on_spi` across ALL attached buses. `on_spi` is
+        // a single-slot replacer on the AVR core, so a per-bus closure would let
+        // a second attach overwrite the first bus's transfer path and send every
+        // byte to the last-attached slave whatever chip-select was asserted.
+        // Route each byte to the bus whose CS is currently asserted
+        // (`is_selected`); a lone bus is always routed to, which preserves the
+        // single-slave path exactly, including before its first CS edge.
         let all: Vec<Arc<Mutex<SpiBus>>> = self.spi_buses.clone();
         for m in &mut self.mcus {
             let buses = all.clone();
@@ -2646,18 +2554,12 @@ impl Scheduler {
         }
     }
 
-    /// Attach a SPI bus to a specific named SPI controller.
-    ///
-    /// Calls `on_spi_controller(controller, cb)` on each live MCU core so
-    /// transfers from that controller route to this slave. On single-controller
-    /// backends (AVR, QEMU), `on_spi_controller` falls back to `on_spi`, so
-    /// calling this is safe even when there is only one physical SPI peripheral.
-    ///
-    /// The bus is also added to `spi_buses` so the chunk-boundary deselect
-    /// loop (which is controller-agnostic) can reach it.
-    ///
-    /// `cs` behaves exactly as in [`Self::attach_spi_bus`]: `Some` frames from the
-    /// real CS edge, `None` falls back to the chunk-boundary heuristic.
+    /// Attach a SPI bus to a specific named SPI controller, so transfers from
+    /// that controller route to this slave. On single-controller backends (AVR,
+    /// QEMU) `on_spi_controller` falls back to `on_spi`, so this is safe even
+    /// with one physical SPI peripheral. The bus also joins `spi_buses` so the
+    /// controller-agnostic chunk-boundary deselect can reach it. `cs` behaves
+    /// exactly as in [`Self::attach_spi_bus`].
     pub fn attach_spi_bus_on(
         &mut self,
         controller: &str,
@@ -2696,21 +2598,15 @@ impl Scheduler {
         self.spi_buses.push(bus);
     }
 
-    // (dispatch_spi is a free fn below.)
-
     /// Install the live CS-framing hook for `bus` on whichever MCU actually
-    /// drives `cs_pin` (05 §2.1). Registers the hook on the SINGLE owning MCU, so a
-    /// different MCU's identically-named pin cannot spuriously frame the bus. A
-    /// `None` pin (unresolved CS) installs nothing and the bus stays on the
-    /// chunk-boundary heuristic.
+    /// drives `cs_pin`. A `None` pin (unresolved CS) installs nothing and the
+    /// bus stays on the chunk-boundary heuristic.
     ///
-    /// `gpio_drivers` is keyed by chip-local `(port,bit)`, so on a multi-MCU board
-    /// two MCUs can each own a driver for the SAME tuple on UNRELATED nets. Framing
-    /// every such MCU let an unrelated MCU's toggle of its like-named pin
-    /// spuriously select/deselect this bus, corrupting the decoded transaction. We
-    /// install on only the FIRST MCU owning the pin, mirroring [`pin_driving_node`]
-    /// (from which `cs_pin` was resolved), which returns the first match on the
-    /// documented "a net is driven by at most one MCU" invariant.
+    /// `gpio_drivers` is keyed by chip-local `(port,bit)`, so on a multi-MCU
+    /// board two MCUs can each own a driver for the SAME tuple on UNRELATED
+    /// nets; framing every such MCU would let an unrelated MCU's toggle of its
+    /// like-named pin select/deselect this bus and corrupt the decoded
+    /// transaction. The hook goes on the single owning MCU only.
     fn register_cs_frame(
         &mut self,
         bus: &Arc<Mutex<SpiBus>>,
@@ -2718,14 +2614,9 @@ impl Scheduler {
         cs_net: Option<NodeId>,
     ) {
         let Some(pin) = cs_pin else { return };
-        // Install on the MCU that actually DRIVES the CS net, matching
-        // pin_driving_node's net-based resolution, from which `cs_pin` was derived.
-        // gpio_drivers is keyed by chip-local (port,bit), so on a multi-MCU board
-        // the SAME tuple recurs on UNRELATED nets; keying only on the tuple installed
-        // the frame on the first MCU that owns it, which need not drive the CS net,
-        // so an unrelated MCU's like-named pin spuriously framed the bus. When the CS
-        // net is known, require `drv.net == cs_net`; with no net (legacy callers) fall
-        // back to the first tuple owner.
+        // When the CS net is known, require `drv.net == cs_net`, matching
+        // `pin_driving_node`'s net-based resolution (from which `cs_pin` was
+        // derived); with no net, fall back to the first tuple owner.
         let owner = self.mcus.iter().find(|m| {
             m.binding
                 .gpio_drivers
@@ -2742,27 +2633,24 @@ impl Scheduler {
         }
     }
 
-    /// Attach a bit-banged SPI slave (05 §1.5): the firmware toggles
-    /// SCLK/MOSI/CS as plain GPIOs and reads MISO as a GPIO, and the
-    /// [`crate::responders::BitBangSpiResponder`] bridges the bit stream to
-    /// the byte-level slave in `bus`, answering MISO synchronously inside the
+    /// Attach a bit-banged SPI slave: the firmware toggles SCLK/MOSI/CS as
+    /// plain GPIOs and reads MISO as a GPIO, and the
+    /// [`crate::responders::BitBangSpiResponder`] bridges the bit stream to the
+    /// byte-level slave in `bus`, answering MISO synchronously inside the
     /// firmware's own clock loop.
     ///
-    /// The responder registers with the input-responder registry of the MCU
-    /// whose binding owns the SCLK GPIO driver (the same ownership rule as
-    /// `register_cs_frame`); all four pins must belong to that MCU. Pin tuples
-    /// come from the board, resolve nets with [`Scheduler::mcu_pin_for_net`],
-    /// the same net-to-pin trace the 165/595 chain discovery performs.
+    /// The responder registers with the registry of the MCU whose binding owns
+    /// the SCLK GPIO driver; all four pins must belong to that MCU (resolve nets
+    /// to pins with [`Scheduler::mcu_pin_for_net`]).
     ///
-    /// The bus records `cs_n` as its CS pin so coverage reports `exact`
-    /// framing and the chunk-boundary deselect heuristic stays off it
-    /// (`frames_itself`). Deliberately NOT `register_cs_frame`: the responder
-    /// owns select/deselect from the same CS edges, and registering both would
-    /// double-deliver every CS event to the slave.
+    /// The bus records `cs_n` as its CS pin so coverage reports `exact` framing
+    /// and the chunk-boundary deselect stays off it. Deliberately NOT
+    /// `register_cs_frame`: the responder owns select/deselect from the same CS
+    /// edges, and registering both would double-deliver every CS event.
     ///
     /// Only meaningful on push backends (simavr): on poll backends the
-    /// responder never fires (`on_input_responder` is a documented no-op) and
-    /// a bit-banged read stays coarse, per the 05 §1.5 backend tier.
+    /// responder never fires (`on_input_responder` is a documented no-op) and a
+    /// bit-banged read stays coarse.
     pub fn attach_bitbang_spi(
         &mut self,
         bus: Arc<Mutex<SpiBus>>,
@@ -2808,20 +2696,19 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Attach a soft-I2C slave bus (05 §1.5): the firmware bit-bangs SCL/SDA
-    /// as plain GPIOs and the [`crate::responders::SoftI2cResponder`] protocol
-    /// engine recovers the transaction from the pin edges, routing it to the
-    /// existing [`I2cBus`] slave models and answering SDA synchronously inside
-    /// the firmware's own clock loop. See the responder's docs for the honest
-    /// waveform subset (single master, no clock stretching, push-pull master).
+    /// Attach a soft-I2C slave bus: the firmware bit-bangs SCL/SDA as plain
+    /// GPIOs and the [`crate::responders::SoftI2cResponder`] recovers the
+    /// transaction from the pin edges, routing it to the existing [`I2cBus`]
+    /// slave models and answering SDA synchronously inside the firmware's own
+    /// clock loop. See the responder's docs for the honest waveform subset.
     ///
     /// The responder registers with the registry of the MCU whose binding owns
     /// the SCL GPIO driver; SDA must belong to the same MCU. The bus joins
-    /// `i2c_buses` so the chunk loop's `flush_stops` delivers the ctx-bearing
-    /// `on_stop` exactly like the hardware-TWI path, but deliberately WITHOUT
-    /// `attach_i2c_bus`'s `on_i2c` registration: this bus lives on GPIO pins,
-    /// not the TWI peripheral, and answering hardware-TWI traffic at these
-    /// addresses would invent a device on the wrong pins.
+    /// `i2c_buses` so `flush_stops` delivers the ctx-bearing `on_stop` exactly
+    /// like the hardware-TWI path, but deliberately WITHOUT `attach_i2c_bus`'s
+    /// `on_i2c` registration: this bus lives on GPIO pins, not the TWI
+    /// peripheral, and answering hardware-TWI traffic at these addresses would
+    /// invent a device on the wrong pins.
     pub fn attach_soft_i2c(
         &mut self,
         bus: Arc<Mutex<I2cBus>>,
@@ -2853,13 +2740,11 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Resolve a named net to the MCU GPIO pin wired to it. This is the
-    /// net-to-pin trace the 165/595 chain discovery performs, exposed by net
-    /// NAME so a caller wiring a bit-banged topology can go from the board's
-    /// nets straight to responder pins. Input pins resolve too: every wired
-    /// digital-capable pin gets a (possibly tri-stated) GPIO driver, so a
-    /// MISO/SDA-style read pin carries the mapping even though the firmware
-    /// never drives it.
+    /// Resolve a named net to the MCU GPIO pin wired to it, so a caller wiring
+    /// a bit-banged topology can go from the board's nets straight to responder
+    /// pins. Input pins resolve too: every wired digital-capable pin gets a
+    /// (possibly tri-stated) GPIO driver, so a MISO/SDA-style read pin carries
+    /// the mapping even though the firmware never drives it.
     pub fn mcu_pin_for_net(&self, net: &str) -> Option<(char, u8)> {
         let node = *self.net_nodes.get(net)?;
         self.pin_driving_node(node)
@@ -2867,17 +2752,15 @@ impl Scheduler {
 
     /// Trace a net back to the MCU pin that drives it: the (port, bit) of the
     /// GPIO driver whose net is `node`, if any MCU drives it. This is the CS-net
-    /// resolution the binder uses to populate `cs_pin` (05 §2.1): the same
+    /// resolution the binder uses to populate `cs_pin`, and the same
     /// net-to-driving-pin trace the 74HC595 chain wiring performs to find its
-    /// SRCLK/RCLK/SER pins. Returns the first match (a net is driven by at most
-    /// one MCU push-pull output in a well-formed board).
+    /// SRCLK/RCLK/SER pins.
     pub fn pin_driving_node(&self, node: NodeId) -> Option<(char, u8)> {
-        // `gpio_drivers` is a HashMap with randomized iteration order, so when more
-        // than one of an MCU's pins sits on `node`, a legitimate self-monitoring
-        // topology, or two pins collapsed onto one net by a [[jumper]] bodge; the
-        // first match, and hence the CS-framing pin, varied run to run. Pick the
-        // lowest (port, bit) so the resolution is stable across process runs
-        // (mirrors the sorted driver maps used for deterministic frame order).
+        // `gpio_drivers` is a HashMap with randomized iteration order, and more
+        // than one of an MCU's pins can legitimately sit on `node` (a
+        // self-monitoring topology, or two pins collapsed onto one net by a
+        // [[jumper]] bodge). Pick the lowest (port, bit) so the resolution is
+        // stable across process runs.
         self.mcus
             .iter()
             .flat_map(|m| m.binding.gpio_drivers.iter())
@@ -2887,7 +2770,7 @@ impl Scheduler {
     }
 
     /// Per-slave SPI framing tier for the co-sim coverage: `(bus id, mode)` for
-    /// every attached SPI bus (05 §2). A consumer reads this to know whether each
+    /// every attached SPI bus. A consumer reads this to know whether each
     /// slave's transaction boundaries are real (`exact`/`backend`) or guessed
     /// (`heuristic`).
     pub fn spi_framing_modes(&self) -> Vec<(String, SpiFramingMode)> {
@@ -3010,7 +2893,7 @@ impl Scheduler {
     }
 
     /// `(reference, backend, requested_part)` for each live MCU, in board order.
-    /// The co-sim summary (Track B) reads this to report what part the board
+    /// The co-sim summary reads this to report what part the board
     /// asked for alongside the backend that actually ran it.
     pub fn mcu_identities(&self) -> Vec<(String, String, String)> {
         self.mcus
@@ -3217,36 +3100,27 @@ impl Scheduler {
     fn run_chunk(&mut self, chunk: f64, uart: &mut HashMap<String, Vec<u8>>) {
         self.gate_model_peripherals_from_rails();
 
-        // Integer microseconds for `run_micros`, carrying the sub-microsecond
+        // Integer microseconds for `run_micros`, banking the sub-microsecond
         // remainder across chunks so the firmware clock does not drift from sim
-        // time. A bare `(chunk * 1e6).round()` per chunk accumulates a rounding
-        // error every chunk (and a chunk under 0.5 µs rounds to 0, then gets
-        // clamped up to 1 µs, injecting time that never elapsed); banking the
-        // truncated fraction makes the delivered microseconds sum to the true
-        // elapsed time.
-        //
-        // Do NOT clamp the floored value up to 1: a persistent sub-1 µs chunk
-        // (e.g. a fine `fixed_dt = 0.5e-6`) never reaches a whole banked
-        // microsecond, so a `.max(1.0)` would deliver 1 µs every chunk while
-        // banking unrepayable negative debt; the firmware clock races ahead of
-        // sim time without bound. Instead the core advances 0 µs on a sub-µs
+        // time. The floored value is deliberately NOT clamped up to 1: a
+        // persistent sub-1 µs chunk (a fine `fixed_dt = 0.5e-6`) never reaches a
+        // whole banked microsecond, so a `.max(1.0)` would deliver 1 µs every
+        // chunk while banking unrepayable negative debt and racing the firmware
+        // clock ahead of sim time. Instead the core advances 0 µs on a sub-µs
         // chunk and rolls forward once the banked fraction accrues a full
-        // microsecond, which keeps `micros_carry` in [0, 1) and the delivered
-        // microseconds tracking true elapsed time exactly. `run_micros(0)` is a
-        // no-op, and a normal-size chunk (floor ≥ 1) is unaffected.
+        // microsecond, keeping `micros_carry` in [0, 1).
         let exact = chunk * 1e6 + self.micros_carry;
         let micros_f = exact.floor();
         self.micros_carry = exact - micros_f;
         let micros = micros_f as u64;
-        // Set when any MCU refuses to advance this chunk (see the `run_micros`
-        // Err handling below); folded into the chunk-failure accounting after
-        // the analog solve so the run refuses to report a fake-quiet chunk.
+        // Set when any MCU refuses to advance this chunk; folded into the
+        // chunk-failure accounting after the analog solve so the run refuses to
+        // report a fake-quiet chunk.
         let mut mcu_run_failed = false;
 
         // Refresh the snapshot the edge-driven 74HC165 read chains sample on a
         // PL load (it fires inside the MCU run below, so it must reflect the
-        // PREVIOUS chunk's settled spike-latch voltages). Cheap clone; only
-        // taken when a 165 read chain is present.
+        // PREVIOUS chunk's settled spike-latch voltages).
         if !self.hc165_chains.is_empty() {
             let mut snap = self.input_volts.lock().unwrap_or_else(|e| e.into_inner());
             snap.clear();
@@ -3257,11 +3131,11 @@ impl Scheduler {
         self.last_chunk_edges.clear();
         self.last_replay_microticks = 0;
 
-        // Nets currently driven by ANY MCU's enabled GPIO driver, for the
-        // plain digital-input sync below: an enabled driver is real drive
-        // evidence even though pin-driver legs are excluded from the static
-        // `digital_in_evidence` index (this is what makes a direct
-        // MCU-to-MCU GPIO link readable on the receiving side).
+        // Nets currently driven by ANY MCU's enabled GPIO driver, for the plain
+        // digital-input sync below: an enabled driver is real drive evidence
+        // even though pin-driver legs are excluded from the static
+        // `digital_in_evidence` index (this is what makes a direct MCU-to-MCU
+        // GPIO link readable on the receiving side).
         let mcu_driven_nets: std::collections::HashSet<u32> = self
             .mcus
             .iter()
@@ -3272,130 +3146,20 @@ impl Scheduler {
 
         // 1. MCU: inject latest ADC voltages, run the chunk, drain captures.
         for mi in 0..self.mcus.len() {
+            self.inject_mcu_inputs(mi, &mcu_driven_nets);
             let m = &mut self.mcus[mi];
-            for (&ch, &node) in &m.binding.adc_nets {
-                // Skip a pin the firmware has promoted to a GPIO output. An
-                // analog-capable pin binds BOTH an ADC channel and a tri-stated
-                // GPIO driver (dynamic promotion); once
-                // that driver is enabled the pin is being DRIVEN, not read, so
-                // injecting an ADC voltage for it is contradictory (a phantom
-                // analog reading on a pin the firmware owns as an output).
-                // Promotion is detected as THIS channel's OWN pin driver being
-                // enabled, not merely any enabled driver sharing the net. Keying
-                // on the net wrongly suppressed injection whenever a DIFFERENT
-                // pin's output driver happened to sit on the same net (e.g. an
-                // output pin wired directly to an ADC input to self-monitor it),
-                // and it could never inject an ADC-ONLY channel (A6/A7 own no
-                // driver, so they have no `adc_pin` entry and are never promoted).
-                // A pin never driven keeps its driver disabled and is injected.
-                if adc_channel_promoted(&m.binding, ch) {
-                    continue;
-                }
-                let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
-                m.core.set_analog_in(ch, v.max(0.0));
-            }
-            // 1a. Plain digital inputs: mirror the previous chunk's SOLVED net
-            // voltage into the core's digital-in for every wired GPIO pin the
-            // circuit (not the firmware) owns. This is the inbound direction
-            // of the pin coupling: without it nothing calls `set_digital_in`,
-            // and a pushbutton / limit switch / comparator output on a plain
-            // input pin never reaches `digitalRead`. Symmetric to the
-            // adc_nets loop above: injected before `run_micros`, so firmware
-            // reads the level of the last settled operating point.
-            //
-            // A pin is synced only when ALL of these hold:
-            //   * its driver is tri-stated (an enabled driver means the
-            //     firmware owns the pin as an output, same promotion rule as
-            //     the ADC skip above);
-            //   * it is not responder-owned (165 MISO / bit-bang SPI MISO /
-            //     soft-I2C SDA get edge-granularity drives from their
-            //     responder inside the run loop; a chunk-boundary level would
-            //     fight them);
-            //   * its net shows real drive evidence: a non-pin device with
-            //     live resistance under `WEAK_DIGITAL_DRIVE_OHMS` (or any
-            //     non-R/C device), or another enabled GPIO driver. A floating
-            //     net's ~0 V solve is the pins' own 1 GΩ legs talking, and
-            //     pushing it would defeat an (unmodeled) internal pull-up.
-            //
-            // Levels use the 0.3/0.7-rail thresholds (the classic CMOS
-            // Vil/Vih convention at the MCU's own rail) with the in-between
-            // band as hysteresis: a mid-rail solve holds the pin's previous
-            // level rather than chattering. `set_digital_in` fires only on a
-            // level CHANGE, so poll backends pay per transition. Skipped on
-            // the very first chunk (`sim_time == 0`): nothing has been solved
-            // yet, and pushing the zero-filled seed would report fiction,
-            // the core's power-on level is the honest state until a solve.
-            if self.sim_time > 0.0 {
-                let vih = 0.7 * m.logic_high_v;
-                let vil = 0.3 * m.logic_high_v;
-                for (&(port, bit), drv) in &m.binding.gpio_drivers {
-                    if drv.enabled || m.responder_input_pins.contains(&(port, bit)) {
-                        continue;
-                    }
-                    let net = drv.net.0;
-                    let driven = mcu_driven_nets.contains(&net)
-                        || self.digital_in_evidence.get(&net).is_some_and(|devs| {
-                            devs.iter().any(|&di| {
-                                match self.circuit.devices.get(di as usize) {
-                                    Some(Device::Resistor { ohms, .. }) => {
-                                        *ohms < WEAK_DIGITAL_DRIVE_OHMS
-                                    }
-                                    // A capacitor cannot decide a DC level.
-                                    Some(Device::Capacitor { .. }) => false,
-                                    Some(_) => true,
-                                    None => false,
-                                }
-                            })
-                        });
-                    if !driven {
-                        continue;
-                    }
-                    let v = self.node_volts.get(net as usize).copied().unwrap_or(0.0);
-                    let prev = m.digital_in_levels.get(&(port, bit)).copied();
-                    let level = if v >= vih {
-                        true
-                    } else if v <= vil {
-                        false
-                    } else {
-                        match prev {
-                            Some(p) => p,     // hysteresis: hold the last level
-                            None => continue, // mid-band, no history: leave power-on
-                        }
-                    };
-                    if prev != Some(level) {
-                        m.core.set_digital_in(PinId { port, bit }, level);
-                        m.digital_in_levels.insert((port, bit), level);
-                    }
-                }
-            }
-            // Push modeled I2C temperature-sensor readings into the backend's own
-            // emulated device (the QEMU ESP32 tmp105). The simavr/Renode backends
-            // ignore this (they answer I2C reads through the `on_i2c` byte
-            // callback); QEMU runs the firmware against a real device, so it reads
-            // the value through its own I2C controller. Done each chunk so a
-            // temperature sweep tracks.
-            for bus in &self.i2c_buses {
-                let sensors = bus
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .temperature_sensors();
-                for (addr, milli_c) in sensors {
-                    m.core.set_i2c_device_temperature(addr, milli_c);
-                }
-            }
             // Cycle counter bracketing this run: the chunk's [start, end) span,
-            // so the drained edge stamps normalize to a fraction of the chunk for
-            // the analog PWL side (05 §1.1). Exact on simavr, coarse on poll
-            // backends (flagged by `cycle_exact`).
+            // so the drained edge stamps normalize to a fraction of the chunk
+            // for the analog PWL side. Exact on simavr, coarse on poll backends
+            // (flagged by `cycle_exact`).
             let cyc_start = m.core.current_cycle();
             if let Err(e) = m.core.run_micros(micros) {
-                // The MCU backend refused to advance this chunk (a crashed core,
-                // a backend transport error, a HALT). Do NOT swallow it: the
-                // firmware side of this chunk did not run, so folding the
-                // subsequent solve as a normal quiet chunk would report a fake
-                // clean run. Flag it loudly and mark the chunk failed below so
-                // strict/CI runs abort rather than trust it (05 §3b, refuse
-                // rather than fake).
+                // The MCU backend refused to advance (a crashed core, a
+                // transport error, a HALT). The firmware side of this chunk did
+                // not run, so folding the subsequent solve as a normal quiet
+                // chunk would report a fake clean run: flag it and mark the
+                // chunk failed below so strict/CI runs abort rather than trust
+                // it.
                 eprintln!(
                     "WARNING: MCU {} refused to advance chunk at t={:.6}s ({micros} us): {e:#}",
                     m.binding.reference, self.sim_time,
@@ -3426,25 +3190,23 @@ impl Scheduler {
                 cycle_exact,
             });
             self.record_firmware_edge_toggles(mi, &edge_log);
-            // 1b. Generalized digital replay (05 §1.2): drain THIS MCU's ordered,
+            // 1b. Generalized digital replay: drain THIS MCU's ordered,
             // cycle-stamped log and replay it in cycle order through every
-            // edge-driven digital element on one path; the 595 chains it owns AND
-            // any standalone GPIO-clocked shift/latch (`replay_chips`). Each
-            // edge-group sharing a cycle is one micro-tick, so a bit-banged
-            // SRCLK/RCLK pulse train clocks the chain per edge instead of
-            // collapsing to a level (FIX 1). Only chains whose owning MCU is `mi`
-            // are replayed, so a different MCU's identically-named pin cannot
-            // inject spurious clocks. Latched outputs reach the analog nets via the
-            // digital tick / chain apply below.
+            // edge-driven digital element on one path (the 595 chains it owns
+            // and any standalone GPIO-clocked shift/latch). Each edge-group
+            // sharing a cycle is one micro-tick, so a bit-banged SRCLK/RCLK
+            // pulse train clocks the chain per edge instead of collapsing to a
+            // level. Only chains whose owning MCU is `mi` are replayed, so a
+            // different MCU's identically-named pin cannot inject spurious
+            // clocks.
             self.last_replay_microticks += self.replay_digital_edges(mi, &edge_log);
             // 2. Apply GPIO edges to drivers. An edge means the firmware has
             // configured the pin as a driven output, so enable the (initially
             // tri-stated) Thevenin leg before setting its level. This is also
-            // the promotion path for a dual-bound analog-capable pin (dynamic
-            // promotion): the first firmware drive of
-            // an A-pin enables its driver exactly like any other GPIO, while a
-            // pin never driven keeps its driver disabled and stays a pure ADC
-            // input.
+            // the promotion path for a dual-bound analog-capable pin: the first
+            // firmware drive of an A-pin enables its driver exactly like any
+            // other GPIO, while a pin never driven keeps its driver disabled and
+            // stays a pure ADC input.
             let m = &mut self.mcus[mi];
             let edge_pins: std::collections::HashSet<(char, u8)> = edges.keys().copied().collect();
             for ((port, bit), level) in edges {
@@ -3455,12 +3217,10 @@ impl Scheduler {
                     drv.set_volts(&mut self.circuit, v);
                 }
             }
-            // 2b. Promotion AND release from the configured pin direction
-            // (`pins_configured_output`); see `sync_configured_outputs`.
-            // On a direction-blind backend the set is empty and the
-            // edge-evidence release arm is gated off, so nothing is promoted
-            // or torn down there; the edge-driven enable above remains the
-            // primary path.
+            // 2b. Promotion AND release from the configured pin direction; see
+            // `sync_configured_outputs`. On a direction-blind backend the set is
+            // empty and the edge-evidence release arm is gated off, so nothing
+            // is promoted or torn down there.
             let configured: std::collections::HashSet<(char, u8)> = m
                 .core
                 .pins_configured_output()
@@ -3470,21 +3230,17 @@ impl Scheduler {
             self.sync_configured_outputs(mi, configured, &edge_pins);
         }
 
-        // 1c. Sub-chunk pulse honesty (friction 1.16): a GPIO pulse that rose
-        // and fell inside THIS chunk is invisible to every tick-evaluated
-        // sequential part on its net (they sample once per chunk, against the
-        // previous solve), while chain responders resolve the same edges
-        // exactly. Warn once per offending net, from the cycle-stamped edge
-        // log just drained.
+        // 1c. Sub-chunk pulse honesty: a GPIO pulse that rose and fell inside
+        // THIS chunk is invisible to every tick-evaluated sequential part on its
+        // net (they sample once per chunk, against the previous solve), while
+        // chain responders resolve the same edges exactly.
         self.detect_short_pulses(chunk);
 
         // 5(prev). Digital components drive their outputs from current state,
-        // sampling the previous chunk's solved node voltages. Chips clocked by an
-        // edge path are SKIPPED here: chips owned by an edge-driven 595 chain
-        // (`chain_chips`) and standalone GPIO-clocked shift/latch parts advanced
-        // by the generalized replay (`replay_chips`) already ran at edge
-        // granularity above, so ticking them once-per-chunk too would double-drive
-        // them with a stale, pulse-collapsed sample.
+        // sampling the previous chunk's solved node voltages. Chips clocked by
+        // an edge path are SKIPPED here: they already ran at edge granularity
+        // above, so ticking them once per chunk too would double-drive them with
+        // a stale, pulse-collapsed sample.
         {
             let volts = self.node_volts.clone();
             let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
@@ -3499,9 +3255,8 @@ impl Scheduler {
             }
         }
         // 5b(prev). Push the edge-driven chains' latched outputs onto the analog
-        // nets (the latched switch-select levels the membrane solve will see).
-        // Move the chains out to satisfy the borrow checker (apply needs &mut
-        // self.digital and &mut self.circuit), then put them back.
+        // nets. Move the chains out to satisfy the borrow checker (apply needs
+        // &mut self.digital and &mut self.circuit), then put them back.
         if !self.chains.is_empty() {
             let mut chains = std::mem::take(&mut self.chains);
             for chain in &mut chains {
@@ -3511,21 +3266,18 @@ impl Scheduler {
         }
         self.apply_parallel_memory_outputs();
 
-        // 5b'. Runtime driver-contention monitor (the model-vs-MCU half of the
-        // field failure the static lint documents as out of static reach in
-        // checks/contention.rs). Runs after the MCU edge/DDR sync (which sets
-        // the firmware side's driver enables) AND after the digital tick /
-        // chain apply (which set the model side's, tri-state included), so
-        // both sides' live drive states are current for this chunk.
+        // 5b'. Runtime driver-contention monitor. Runs after the MCU edge/DDR
+        // sync (which sets the firmware side's driver enables) AND after the
+        // digital tick / chain apply (which set the model side's, tri-state
+        // included), so both sides' live drive states are current.
         self.detect_driver_contention();
 
         // 5b2(prev). Refresh every digital part's VCC supply draw for this
-        // chunk: drain the output-transition accumulators (filled above by the
+        // chunk: drain the output-transition accumulators (filled by the
         // per-chunk ticks AND the edge-granularity replay/chain paths) and set
-        // each part's supply Isource to static + n·Cpd_eff·VCC/dt. This runs
-        // over ALL digital components, chain-owned chips are skipped by the
-        // tick loop but still switch, and their supply legs are refreshed
-        // here. Parts without supply params have no leg and no-op.
+        // each part's supply Isource to static + n·Cpd_eff·VCC/dt. Chain-owned
+        // chips are skipped by the tick loop but still switch, so this runs over
+        // ALL digital components. Parts without supply params no-op.
         {
             let volts = self.node_volts.clone();
             let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
@@ -3534,15 +3286,13 @@ impl Scheduler {
             }
         }
 
-        // 5c(prev). Deliver the deferred I2C transaction-end hooks (05 §3.1):
-        // every slave that saw a STOP during this chunk's MCU run gets
-        // `on_stop(ctx)` so it can drive its output nets before this chunk's
-        // solve; the write-side analogue of the 595 chain apply above (and
-        // how a firmware MCP4728 write becomes a real VOUT net voltage). The
-        // byte dispatch itself runs inside the MCU's `on_i2c` callback, where
-        // no TickCtx can be built; the STOP is recorded there and delivered
-        // here, the first point the circuit is borrowable and the earliest the
-        // analog solve could see the result anyway.
+        // 5c(prev). Deliver the deferred I2C transaction-end hooks: every slave
+        // that saw a STOP during this chunk's MCU run gets `on_stop(ctx)` so it
+        // can drive its output nets before this chunk's solve (this is how a
+        // firmware MCP4728 write becomes a real VOUT net voltage). The byte
+        // dispatch itself runs inside the MCU's `on_i2c` callback, where no
+        // TickCtx can be built; the STOP is recorded there and delivered here,
+        // the first point the circuit is borrowable.
         if !self.i2c_buses.is_empty() {
             let buses = self.i2c_buses.clone();
             let volts = self.node_volts.clone();
@@ -3588,33 +3338,32 @@ impl Scheduler {
             self.peripherals.pre_solve(&mut ctx);
         }
 
+        // 2d. PWL edge drive. A pin that toggled more than once this chunk
+        // collapsed to its final level in the driver path above, which is
+        // electrically wrong for any net whose analog response integrates the
+        // pulse train (an RC-loaded clock line, a charge pump, a gate filter).
+        // For such pins, swap the driver's source to the chunk's exact
+        // cycle-stamped PWL waveform for this one solve; the solver's
+        // source-breakpoint table then lands the adaptive integrator on every
+        // corner. Restored to the settled DC level right after, so the digital
+        // tick and the next chunk see the final level.
+        //
         // 3. Analog: solve a transient over the chunk; read final voltages and
         // branch currents. A false return means the solve did not converge and
-        // this chunk is holding stale voltages (05 §3b): its operating point is
-        // fiction, so the stats/stress fold below is skipped for it.
-        // 2d. PWL edge drive (05 section 1.3). A pin that toggled more than
-        // once this chunk collapsed to its final level in the driver path
-        // above, which is electrically wrong for any net whose analog
-        // response integrates the pulse train (an RC-loaded clock line, a
-        // charge pump, a gate filter). For such pins, swap the driver's
-        // source to the chunk's exact cycle-stamped PWL waveform for this one
-        // solve; the solver's source-breakpoint table then lands the adaptive
-        // integrator on every corner. Restored to the settled DC level right
-        // after, so the digital tick and the next chunk see the final level.
+        // this chunk is holding stale voltages: its operating point is fiction,
+        // so the stats/stress fold below is skipped for it.
         let pwl_restores = self.apply_pwl_drives(chunk);
         self.chunk_has_pwl_drives = !pwl_restores.is_empty();
         let chunk_converged = self.solve_chunk(chunk);
         self.chunk_has_pwl_drives = false;
         self.restore_pwl_drives(&pwl_restores);
         // An MCU that refused to advance makes this chunk untrustworthy even if
-        // the analog march converged. `solve_chunk` records an analog failure but
-        // does NOT reset the consecutive-failure streak on its own; the streak
-        // must reflect an MCU failure too. Fold the MCU failure into the same
-        // accounting so the failed-window and consecutive-failure surfaces see
-        // it. Only record here when the analog side converged, otherwise
+        // the analog march converged, so fold the MCU failure into the same
+        // accounting the failed-window and consecutive-failure surfaces read.
+        // Only record here when the analog side converged; otherwise
         // `solve_chunk` already recorded this exact window and a second call
-        // would double-count it. `sim_time` has not advanced yet, so the window
-        // start matches `solve_chunk`'s.
+        // would double-count it (`sim_time` has not advanced yet, so the window
+        // start matches `solve_chunk`'s).
         if mcu_run_failed && chunk_converged {
             self.record_failed_chunk(
                 chunk,
@@ -3624,38 +3373,35 @@ impl Scheduler {
             );
         }
         // The consecutive-failure streak resets ONLY on a fully-successful chunk
-        // (analog converged AND the MCU advanced). Doing this reset inside
-        // `solve_chunk` on analog convergence alone let an MCU-failed-but-analog-
-        // converged chunk zero the streak before `record_failed_chunk` bumped it
-        // back to 1, capping `max_consecutive_failed_chunks` at 1 and defeating
-        // the strict/CI abort (05 §3b) for a sustained MCU crash.
+        // (analog converged AND the MCU advanced). Resetting on analog
+        // convergence alone would let an MCU-failed-but-analog-converged chunk
+        // zero the streak before `record_failed_chunk` bumped it back to 1,
+        // capping `max_consecutive_failed_chunks` at 1 and defeating the
+        // strict/CI abort for a sustained MCU crash.
         if chunk_converged && !mcu_run_failed {
             self.consecutive_failed_chunks = 0;
         }
 
         // 3b. Peripherals: output sinks sample the freshly-solved voltages.
         //
-        // Runs UNCONDITIONALLY, even when `chunk_converged` is false (05 §3b). We
-        // deliberately do NOT gate this on the analog solve, for two reasons:
+        // Runs UNCONDITIONALLY, even when `chunk_converged` is false, for two
+        // reasons:
         //
-        //   * The SPI/I2C slave state machines reached via `post_solve` (e.g. the
-        //     SpiBus deselect) are DIGITAL frame-boundary resets. The byte
+        //   * The SPI/I2C slave state machines reached via `post_solve` (e.g.
+        //     the SpiBus deselect) are DIGITAL frame-boundary resets. The byte
         //     transfers they frame happened during this chunk's `run_micros`
-        //     (step 1) regardless of whether the analog march converged. Skipping
-        //     the per-chunk deselect on a failed chunk would leave a slave stuck
-        //     mid-command and desync the NEXT chunk's transaction (its bytes would
-        //     append to stale command state). That is a real correctness bug, so
-        //     the reset must fire every chunk.
-        //   * The only voltage-sampling sink here is `VcdSink`, which emits a VCD
+        //     regardless of whether the analog march converged. Skipping the
+        //     per-chunk deselect on a failed chunk would leave a slave stuck
+        //     mid-command and desync the NEXT chunk's transaction.
+        //   * The only voltage-sampling sink here is `VcdSink`, which emits a
         //     change only when a net's level CROSSES a threshold. A failed chunk
-        //     holds (or DC-recovers) the previous voltages, so a held net is at the
-        //     same level and no spurious transition is recorded; a DC-recovered
-        //     net records its bias, not a fabricated toggle. Either way the sample
-        //     lands inside a window already surfaced as `analog_valid:false` with
-        //     the exact `failed_windows` span (JSON/coverage), so a VCD consumer
-        //     can mask it. What we DO gate on convergence is the stats/stress fold
-        //     below (step 4/6): those manufacture analog findings and must not run
-        //     on a solve that never happened.
+        //     holds (or DC-recovers) the previous voltages, so no spurious
+        //     transition is recorded, and the sample lands inside a window
+        //     already surfaced as `analog_valid:false` with its exact span.
+        //
+        // What IS gated on convergence is the stats/stress fold below: those
+        // manufacture analog findings and must not run on a solve that never
+        // happened.
         if !self.peripherals.is_empty() {
             let volts = self.node_volts.clone();
             let mut ctx = TickCtx {
@@ -3667,55 +3413,156 @@ impl Scheduler {
             self.peripherals.post_solve(&mut ctx);
         }
 
-        // 3c. SPI bus chunk-boundary deselect: HEURISTIC-MODE BUSES ONLY.
-        //
-        // A chunk-boundary deselect stands in for a real chip-select edge,
-        // which simavr's SPI IRQ never surfaces (it reports byte transfers and
-        // nothing else). Applied to EVERY bus unconditionally it is wrong in
-        // two documented ways (05 §2):
-        //   * two CS-framed transactions inside one chunk are NOT separated:
-        //     the second transaction's bytes append to the first slave's state,
-        //     because no reset happens between them; and
-        //   * a single transaction SPANNING a chunk boundary is reset mid-way:
-        //     the slave deselects with bytes still pending, corrupting the reply
-        //     (the debug guard below fires on exactly this case).
-        //
-        // Neither can bite a bus with a real CS source. When the binder
-        // resolves the CS net to an MCU pin (`cs_pin`), the `on_pin_change`
-        // closure frames transactions at the true active-low CS edges (mid-chunk
-        // included) via the `CsFrame` hook (05 §2.1); and a backend that surfaces
-        // CS itself (Renode hardware-NSS `FinishTransmission`) frames via the
-        // `note_backend_deselect` path. For those buses (`frames_itself()`), a
-        // chunk-boundary reset would CAUSE failure mode b (truncating a
-        // legitimately boundary-spanning transaction), so we SKIP it and let the
-        // real CS edges own framing (05 §2, failure mode b).
-        //
-        // Only buses still on the heuristic (no resolved CS pin, no backend CS
-        // event, e.g. simavr with an unrouted CS, or Renode software-NSS) keep
-        // the chunk-boundary deselect, and their coverage says `heuristic` so the
-        // guess is surfaced rather than hidden.
-        //
-        // Runs UNCONDITIONALLY on a failed chunk (05 §3b), same reason as the 3b
-        // post_solve deselects: this is a DIGITAL frame-boundary reset of the SPI
-        // slave command state machine, not an analog sample. The byte transfers it
-        // frames already happened in this chunk's `run_micros`, so whether the
-        // analog march converged is irrelevant; skipping it would desync the next
-        // transaction, so we keep it and surface the failed span via
-        // `failed_windows` / `analog_valid:false` instead.
+        self.deselect_heuristic_spi_buses(chunk);
+
+        // 4. Advance time (time passes even when the solve failed), then fold
+        // the chunk into the running stats and the stress monitor, but ONLY if
+        // the analog solve converged. A failed chunk holds the previous chunk's
+        // stale voltages, and folding that operating point into the net stats or
+        // the stress monitor would manufacture toggles and faults from a solve
+        // that never happened; the failed window is recorded and surfaced as
+        // `analog_valid:false` instead.
+        self.sim_time += chunk;
+        if chunk_converged {
+            self.update_stats();
+            self.accumulate_frame_peaks();
+
+            // 6. Fault / stress monitor: evaluate every device against its
+            // ratings using this chunk's solved operating point (may mutate the
+            // circuit in destructive mode).
+            self.evaluate_faults();
+        }
+    }
+
+    /// Inject the previous chunk's solved operating point into one MCU core
+    /// before it runs: ADC channel voltages, plain digital-input levels, and the
+    /// modelled I2C temperature-sensor readings a backend answers itself.
+    ///
+    /// An ADC channel is skipped when the firmware has promoted its pin to a
+    /// GPIO output: an analog-capable pin binds BOTH an ADC channel and a
+    /// tri-stated GPIO driver, and once that driver is enabled the pin is being
+    /// driven, not read, so injecting a voltage for it would manufacture a
+    /// phantom analog reading. Promotion keys on THIS channel's own pin driver,
+    /// not on any enabled driver sharing the net (an output pin wired to an ADC
+    /// input to self-monitor it must still be injected, and an ADC-only channel
+    /// such as A6/A7 owns no driver at all).
+    ///
+    /// A plain digital input is synced only when its driver is tri-stated, it is
+    /// not responder-owned (165 MISO / bit-bang SPI MISO / soft-I2C SDA take
+    /// edge-granularity drives from their responder inside the run loop, which a
+    /// chunk-boundary level would fight), and its net shows real drive evidence:
+    /// a non-pin device with live resistance under [`WEAK_DIGITAL_DRIVE_OHMS`]
+    /// (or any non-R/C device), or another enabled GPIO driver. A floating net's
+    /// ~0 V solve is the pins' own 1 GΩ legs talking, and pushing it into the
+    /// core would defeat an unmodeled internal pull-up.
+    ///
+    /// Levels use the 0.3/0.7-rail CMOS Vil/Vih convention at the MCU's own
+    /// rail, with the in-between band as hysteresis so a mid-rail solve holds
+    /// the previous level rather than chattering. `set_digital_in` fires only on
+    /// a level CHANGE, so poll backends pay per transition. The whole digital
+    /// sync is skipped on the first chunk (`sim_time == 0`): nothing has been
+    /// solved yet, and the core's power-on level is the honest state.
+    fn inject_mcu_inputs(&mut self, mi: usize, mcu_driven_nets: &std::collections::HashSet<u32>) {
+        let m = &mut self.mcus[mi];
+        for (&ch, &node) in &m.binding.adc_nets {
+            if adc_channel_promoted(&m.binding, ch) {
+                continue;
+            }
+            let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
+            m.core.set_analog_in(ch, v.max(0.0));
+        }
+        if self.sim_time > 0.0 {
+            let vih = 0.7 * m.logic_high_v;
+            let vil = 0.3 * m.logic_high_v;
+            for (&(port, bit), drv) in &m.binding.gpio_drivers {
+                if drv.enabled || m.responder_input_pins.contains(&(port, bit)) {
+                    continue;
+                }
+                let net = drv.net.0;
+                let driven = mcu_driven_nets.contains(&net)
+                    || self.digital_in_evidence.get(&net).is_some_and(|devs| {
+                        devs.iter()
+                            .any(|&di| match self.circuit.devices.get(di as usize) {
+                                Some(Device::Resistor { ohms, .. }) => {
+                                    *ohms < WEAK_DIGITAL_DRIVE_OHMS
+                                }
+                                // A capacitor cannot decide a DC level.
+                                Some(Device::Capacitor { .. }) => false,
+                                Some(_) => true,
+                                None => false,
+                            })
+                    });
+                if !driven {
+                    continue;
+                }
+                let v = self.node_volts.get(net as usize).copied().unwrap_or(0.0);
+                let prev = m.digital_in_levels.get(&(port, bit)).copied();
+                let level = if v >= vih {
+                    true
+                } else if v <= vil {
+                    false
+                } else {
+                    match prev {
+                        Some(p) => p,     // hysteresis: hold the last level
+                        None => continue, // mid-band, no history: leave power-on
+                    }
+                };
+                if prev != Some(level) {
+                    m.core.set_digital_in(PinId { port, bit }, level);
+                    m.digital_in_levels.insert((port, bit), level);
+                }
+            }
+        }
+        // Push modelled I2C temperature-sensor readings into the backend's own
+        // emulated device (the QEMU ESP32 tmp105). The simavr/Renode backends
+        // ignore this (they answer I2C reads through the `on_i2c` byte
+        // callback); QEMU runs the firmware against a real device, so it reads
+        // the value through its own I2C controller.
+        for bus in &self.i2c_buses {
+            let sensors = bus
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .temperature_sensors();
+            for (addr, milli_c) in sensors {
+                m.core.set_i2c_device_temperature(addr, milli_c);
+            }
+        }
+    }
+
+    /// Chunk-boundary SPI deselect, for HEURISTIC-MODE BUSES ONLY.
+    ///
+    /// A chunk-boundary deselect stands in for a real chip-select edge, which
+    /// simavr's SPI IRQ never surfaces (it reports byte transfers and nothing
+    /// else). Applied to every bus unconditionally it is wrong in two ways: two
+    /// CS-framed transactions inside one chunk are not separated (the second's
+    /// bytes append to the first slave's state), and a single transaction
+    /// spanning a chunk boundary is reset mid-way, corrupting the reply.
+    ///
+    /// Neither can bite a bus with a real CS source. When the binder resolves
+    /// the CS net to an MCU pin, the `on_pin_change` closure frames transactions
+    /// at the true active-low CS edges (mid-chunk included) via [`CsFrame`]; a
+    /// backend that surfaces CS itself (Renode hardware-NSS
+    /// `FinishTransmission`) frames via `note_backend_deselect`. For those buses
+    /// (`frames_itself()`) a chunk-boundary reset would itself truncate a
+    /// legitimately boundary-spanning transaction, so it is skipped and the real
+    /// CS edges own framing. Only buses still on the heuristic keep the
+    /// boundary deselect, and their coverage says `heuristic` so the guess is
+    /// surfaced rather than hidden.
+    ///
+    /// Runs unconditionally on a failed chunk, same reason as the `post_solve`
+    /// deselects: this is a digital frame-boundary reset of the slave command
+    /// state machine, not an analog sample.
+    fn deselect_heuristic_spi_buses(&mut self, chunk: f64) {
         for bus in &self.spi_buses {
             let mut guard = bus.lock().unwrap_or_else(|e| e.into_inner());
-            // Real-CS buses frame themselves; the chunk boundary must not touch
-            // them (05 §2, failure mode b). The debug warning below therefore also
-            // stops firing for them: a spanning transaction is now correct, not a
-            // truncation to warn about.
             if guard.frames_itself() {
                 continue;
             }
-            // Debug-only: a heuristic-mode slave still mid-transaction at the chunk
-            // boundary means a transfer spanned the boundary, and the heuristic cannot
-            // frame it. Warn loudly in debug builds rather than silently truncating.
-            // (Not an assert/panic: spanning is a known limitation of the heuristic
-            // path, not a bug to abort on.)
+            // Debug-only: a heuristic-mode slave still mid-transaction at the
+            // chunk boundary means a transfer spanned the boundary, and the
+            // heuristic cannot frame it. Warn rather than silently truncating;
+            // spanning is a known limitation of the heuristic path, not a bug to
+            // abort on.
             #[cfg(debug_assertions)]
             if guard.slave_mid_transaction() {
                 eprintln!(
@@ -3728,26 +3575,6 @@ impl Scheduler {
                 );
             }
             guard.slave_deselect();
-        }
-
-        // 4. Advance time (time passes even when the solve failed), then fold the
-        // chunk into the running stats and the stress monitor, but ONLY if the
-        // analog solve converged. A failed chunk holds the previous chunk's stale
-        // voltages (solve_chunk's `Err` arm); folding that stale operating point
-        // into the net stats or evaluating the stress monitor on it would
-        // manufacture toggles and faults from a solve that never happened. That is
-        // exactly the silent-hold defect 05 §3b refuses: the failed window is
-        // recorded instead and surfaced as analog_valid:false, rather than an
-        // analog-derived finding evaluated on stale state.
-        self.sim_time += chunk;
-        if chunk_converged {
-            self.update_stats();
-            self.accumulate_frame_peaks();
-
-            // 6. Fault / stress monitor: evaluate every device against its ratings
-            // using this chunk's solved operating point (may mutate the circuit in
-            // destructive mode).
-            self.evaluate_faults();
         }
     }
 
@@ -3947,7 +3774,7 @@ impl Scheduler {
             // The message travels with the recovered state. It carries the
             // solver's blame clause (the net that refused to settle, the devices
             // on it, any near-zero-ohm link poisoning the matrix), which is the
-            // difference between a diagnosable refusal and a chunk count (E29).
+            // difference between a diagnosable refusal and a chunk count.
             // A fallback rung's own failure message is discarded by the ladder:
             // the primary's is the one that describes the board.
             Err(msg) => Err((msg.to_string(), final_x)),
@@ -3989,7 +3816,7 @@ impl Scheduler {
     /// vouch for, never to manufacture a plausible number for one: every rung
     /// is a real converged solve of the chunk, just by a second-class method,
     /// and the rung is recorded per window, WITH a measured step-doubling
-    /// error estimate (B12), so the consumer knows which method produced
+    /// error estimate, so the consumer knows which method produced
     /// which answer and how far the chunk-end state can be trusted.
     fn fallback_ladder(
         &self,
@@ -4004,57 +3831,31 @@ impl Scheduler {
         let seed = self.last_dc_seed.as_deref();
         let reduced = self.reduced_step_opts(chunk);
         // Rungs below the forced one are skipped (test hook; 0 in production,
-        // so every rung runs exactly as before).
+        // so every rung runs).
         let min_rung = self.debug_force_fallback_rung.map(|m| m as u8).unwrap_or(0);
-
-        // A rung that "converged" onto a non-physical state (a node beyond the
-        // voltage sanity bound) has not rescued anything: it must not be
-        // adopted, AND it must not end the ladder, because a later, more
-        // robust rung can still produce the real answer. Checked per rung,
-        // not on the ladder's result, for exactly that reason.
-        let sane = |x: &[f64]| self.insane_node_state(x).is_none();
-
-        // Rung 1: the primary integration at a bounded step.
-        if min_rung <= ChunkFallbackMethod::ReducedStep as u8 {
-            thermal.clear();
-            if let Ok((x, diagnostics)) = self.march_chunk(chunk, reduced, seed, thermal) {
-                if sane(&x) {
-                    let method = ChunkFallbackMethod::ReducedStep;
-                    let err = self.fallback_error_estimate(chunk, 1, reduced, seed, &x);
-                    return Some((method, x, diagnostics, err));
-                }
-            }
-        }
-
-        // Rung 2: backward Euler at the bounded step. L-stable, so the
-        // trapezoidal ringing that kills a stiff chunk is damped; costs the
-        // integration order, which the record discloses.
+        // Backward Euler at the bounded step: L-stable, so the trapezoidal
+        // ringing that kills a stiff chunk is damped; costs the integration
+        // order, which the record discloses.
         let mut be = reduced;
         be.integration = hauksbee_solve::Integration::BackwardEuler;
-        if min_rung <= ChunkFallbackMethod::BackwardEuler as u8 {
-            thermal.clear();
-            if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, seed, thermal) {
-                if sane(&x) {
-                    let method = ChunkFallbackMethod::BackwardEuler;
-                    let err = self.fallback_error_estimate(chunk, 1, be, seed, &x);
-                    return Some((method, x, diagnostics, err));
-                }
-            }
-        }
 
+        // Rung 1: the primary integration at a bounded step.
+        // Rung 2: backward Euler at the bounded step.
         // Rung 3: backward Euler from a COLD start. Dropping the warm seed
-        // forces the solver's own DC continuation ladder (gmin stepping,
-        // source stepping, the staged rescue) to re-derive this chunk's
-        // operating point from scratch: a warm seed that has drifted onto a
-        // bad basin is exactly the state a continuation restart escapes.
-        if min_rung <= ChunkFallbackMethod::ColdStartBackwardEuler as u8 {
-            thermal.clear();
-            if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, None, thermal) {
-                if sane(&x) {
-                    let method = ChunkFallbackMethod::ColdStartBackwardEuler;
-                    let err = self.fallback_error_estimate(chunk, 1, be, None, &x);
-                    return Some((method, x, diagnostics, err));
-                }
+        //   forces the solver's own DC continuation ladder (gmin stepping,
+        //   source stepping, the staged rescue) to re-derive this chunk's
+        //   operating point from scratch: a warm seed that has drifted onto a
+        //   bad basin is exactly the state a continuation restart escapes.
+        for (method, opts, seed) in [
+            (ChunkFallbackMethod::ReducedStep, reduced, seed),
+            (ChunkFallbackMethod::BackwardEuler, be, seed),
+            (ChunkFallbackMethod::ColdStartBackwardEuler, be, None),
+        ] {
+            if min_rung > method as u8 {
+                continue;
+            }
+            if let Some(rescued) = self.try_fallback_rung(chunk, method, opts, seed, thermal) {
+                return Some(rescued);
             }
         }
 
@@ -4081,12 +3882,44 @@ impl Scheduler {
         thermal.clear();
         let (x, diagnostics) =
             self.march_chunk_subdivided(chunk, 4, be, self.last_dc_seed.clone(), thermal)?;
-        if !sane(&x) {
+        if self.insane_node_state(&x).is_some() {
             return None;
         }
         let method = ChunkFallbackMethod::SubdividedBackwardEuler;
         let err = self.fallback_error_estimate(chunk, 4, be, self.last_dc_seed.as_deref(), &x);
         Some((method, x, diagnostics, err))
+    }
+
+    /// One rung of [`Scheduler::fallback_ladder`]: discard the previous rung's
+    /// partial thermal integral (a failed rung's is fiction), march the chunk
+    /// with `opts` from `seed`, and accept the result only when it both
+    /// converged AND is physical.
+    ///
+    /// A rung that "converged" onto a non-physical state (a node beyond the
+    /// voltage sanity bound) has not rescued anything: it must not be adopted,
+    /// and it must not end the ladder either, because a later, more robust rung
+    /// can still produce the real answer. Hence the check per rung rather than
+    /// on the ladder's result.
+    fn try_fallback_rung(
+        &self,
+        chunk: f64,
+        method: ChunkFallbackMethod,
+        opts: SolverOptions,
+        seed: Option<&[f64]>,
+        thermal: &mut ChunkThermalAccum,
+    ) -> Option<(
+        ChunkFallbackMethod,
+        Vec<f64>,
+        TransientDiagnostics,
+        Option<f64>,
+    )> {
+        thermal.clear();
+        let (x, diagnostics) = self.march_chunk(chunk, opts, seed, thermal).ok()?;
+        if self.insane_node_state(&x).is_some() {
+            return None;
+        }
+        let error_estimate_v = self.fallback_error_estimate(chunk, 1, opts, seed, &x);
+        Some((method, x, diagnostics, error_estimate_v))
     }
 
     /// Whether every source the current chunk sees holds a constant value
@@ -4179,7 +4012,7 @@ impl Scheduler {
         opts
     }
 
-    /// MEASURED per-window error estimate for a fallback rung (B12), by the
+    /// MEASURED per-window error estimate for a fallback rung, by the
     /// step-doubling family of constructions: the adopted rung solved the
     /// chunk at accuracy dial h (step bounds and tolerances together);
     /// re-solve the same window (same rung structure, same seed,
@@ -4355,7 +4188,7 @@ impl Scheduler {
     /// converged (on the primary path or on a RECORDED fallback rung), `false`
     /// when every rung failed and this chunk is holding recovered/stale
     /// voltages (the caller then excludes it from stats and stress, and the
-    /// run reports `analog_valid: false` over the failed window; 05 §3b).
+    /// run reports `analog_valid: false` over the failed window).
     fn solve_chunk(&mut self, chunk: f64) -> bool {
         // Keep temperature in sync with the circuit's global temp.
         self.circuit.temp_c = self.opts.temperature_c;
@@ -4424,7 +4257,7 @@ impl Scheduler {
                     // it carries the blame clause naming the net that refused to
                     // settle and the offending element(s). Throwing it away is
                     // what left a 259-part board diagnosable only by bisection
-                    // (E29). Said once per failed streak rather than per chunk.
+                    //. Said once per failed streak rather than per chunk.
                     if self.consecutive_failed_chunks == 0 {
                         eprintln!(
                             "WARNING: analog solve failed at t={:.6e}s: {err}",
@@ -4467,7 +4300,7 @@ impl Scheduler {
         // A failed transient (either DC-recovered or held) is not a real solve of
         // this chunk. Record it so the run refuses to pass it off as quiet: the
         // failed-chunk count and window feed coverage/JSON (analog_valid:false),
-        // and the consecutive streak drives the strict/CI abort (05 §3b). The
+        // and the consecutive streak drives the strict/CI abort. The
         // streak is NOT reset here on convergence: an MCU-failed chunk can still
         // reach this point analog-converged, and only `run_chunk`, which also
         // knows the MCU status, may reset the streak on a fully-successful chunk.
@@ -4630,7 +4463,7 @@ impl Scheduler {
 
     /// Number of chunks this run whose analog transient solve failed to converge.
     /// Zero on a clean run. A non-zero count means at least one window held stale
-    /// voltages and cannot vouch for analog-derived findings there (05 §3b).
+    /// voltages and cannot vouch for analog-derived findings there.
     pub fn failed_chunk_count(&self) -> u64 {
         self.failed_chunks
     }
@@ -4651,7 +4484,7 @@ impl Scheduler {
     /// The solver's refusal message for each failed window, parallel to
     /// [`Self::failed_windows`]. Each carries the blame clause naming the net
     /// that refused to settle, the devices on it, and any element whose
-    /// conductance is outside the board's own distribution (E29). Empty on a
+    /// conductance is outside the board's own distribution. Empty on a
     /// clean run.
     pub fn failed_window_reasons(&self) -> &[String] {
         &self.failed_window_reasons
@@ -4839,12 +4672,11 @@ impl Scheduler {
         if self.stress.destructive {
             self.circuit = self.original_circuit.clone();
         }
-        // Reboot the MCU cores. Restarting the sim clock while the firmware
-        // kept its old PC and SRAM left a wedged firmware wedged forever (the
-        // NEP-board study's defect 2: the UI's Reset button restarted the
-        // story for everything EXCEPT the processor, and the only recovery
-        // from a stuck serial protocol was killing the server). A reset that
-        // rewinds time must also pulse the cores' RESET line.
+        // Reboot the MCU cores: restarting the sim clock while the firmware
+        // keeps its old PC and SRAM would leave a wedged firmware wedged
+        // forever, with no recovery from a stuck serial protocol short of
+        // killing the server. A reset that rewinds time must also pulse the
+        // cores' RESET line.
         for mi in 0..self.mcus.len() {
             match self.mcus[mi].core.reset() {
                 Ok(()) => {
@@ -4888,18 +4720,8 @@ impl Scheduler {
         for leg in &mut self.model_peripheral_power {
             leg.powered = false;
             leg.last_current_a = 0.0;
-            match &leg.bus {
-                ModelPeripheralBus::I2c(bus) => {
-                    let mut bus = bus.lock().unwrap_or_else(|e| e.into_inner());
-                    bus.set_powered(false);
-                    let _ = bus.take_activity();
-                }
-                ModelPeripheralBus::Spi(bus) => {
-                    let mut bus = bus.lock().unwrap_or_else(|e| e.into_inner());
-                    bus.set_powered(false);
-                    let _ = bus.take_activity();
-                }
-            }
+            leg.set_bus_powered(false);
+            leg.drain_activity();
             set_isource_dc(&mut self.circuit, leg.isource, 0.0);
         }
     }
@@ -5045,7 +4867,6 @@ impl Scheduler {
         }
     }
 
-    /// Current voltage of a net by name.
     /// Reconcile one MCU's GPIO Thevenin drivers with the configured-output
     /// pin set its core reported at the end of a chunk (both halves of the
     /// dynamic promotion):
@@ -5111,7 +4932,7 @@ impl Scheduler {
             // would tear down the edge-driven enables that are those
             // backends' only signal. The dropped-from-last-chunk arm above
             // stays unconditional: it only ever names pins the core itself
-            // previously reported as outputs, which is exactly the old rule.
+            // reported as outputs in the previous chunk.
             release.extend(edge_pins.difference(&configured).copied());
         }
         for (port, bit) in release {
@@ -5124,6 +4945,7 @@ impl Scheduler {
         m.configured_outputs = configured;
     }
 
+    /// Current voltage of a net by name.
     pub fn net_voltage(&self, net: &str) -> Option<f64> {
         let node = self.net_nodes.get(net)?;
         self.node_volts.get(node.0 as usize).copied()
@@ -5131,10 +4953,8 @@ impl Scheduler {
 
     /// The name of the net on `node`, or `"node N"` for an unnamed one.
     fn net_name_of(&self, node: u32) -> String {
-        self.net_nodes
-            .iter()
-            .find(|(_, n)| n.0 == node)
-            .map(|(name, _)| name.clone())
+        self.net_name_for(NodeId(node))
+            .map(str::to_string)
             .unwrap_or_else(|| format!("node {node}"))
     }
 
@@ -5291,7 +5111,7 @@ impl Scheduler {
         }
     }
 
-    /// Sub-chunk GPIO pulse warnings raised this run (friction 1.16), one per
+    /// Sub-chunk GPIO pulse warnings raised this run, one per
     /// offending net, in detection order.
     pub fn short_pulses(&self) -> &[ShortPulse] {
         &self.short_pulses
@@ -5316,6 +5136,62 @@ impl Scheduler {
             .collect()
     }
 
+    /// The board net name a node interns as, when the board named it.
+    fn net_name_for(&self, target: NodeId) -> Option<&str> {
+        self.net_nodes
+            .iter()
+            .find(|(_, n)| n.0 == target.0)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Per-MCU sets of the pins the firmware currently has configured as
+    /// outputs, read once per query (each read can be a backend round-trip).
+    fn configured_output_pins(&self) -> Vec<std::collections::HashSet<(char, u8)>> {
+        self.mcus
+            .iter()
+            .map(|m| {
+                m.core
+                    .pins_configured_output()
+                    .into_iter()
+                    .map(|p| (p.port, p.bit))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Sorted, deduped board-net names for every MCU GPIO pin `keep` accepts,
+    /// called with the MCU's index, the MCU, the pin and the net's name.
+    ///
+    /// Promoted analog pins (Nano A0..A5 = PC0..PC5) are included: `bind_mcu`
+    /// stamps a real GPIO driver on them through the same apin fallback, so a
+    /// firmware-driven A-pin is modelled electrically and must be visible to
+    /// every caller below (else a held-high enable on an A-pin is silently
+    /// omitted from the boot-hazard report).
+    fn gpio_nets_where(
+        &self,
+        mut keep: impl FnMut(usize, &LiveMcu, (char, u8), &str) -> bool,
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        for (mi, m) in self.mcus.iter().enumerate() {
+            for (role, &node) in &m.binding.role_nets {
+                let Some(pin) = gpio_of_role(role, m.binding.module)
+                    .or_else(|| apin_gpio_of_role(role, m.binding.module))
+                else {
+                    continue;
+                };
+                let Some(name) = self.net_name_for(node) else {
+                    continue;
+                };
+                if keep(mi, m, pin, name) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// MCU GPIO control nets the firmware drives HIGH and holds from boot: a
     /// settled, non-toggling logic-high. The power-up level of such a net is
     /// decided entirely by firmware, so if one controls a load that must be OFF
@@ -5326,57 +5202,27 @@ impl Scheduler {
     /// enable that *should* be high is fine). The caller frames it for the user
     /// and may further narrow to nets with no static bias resistor; the case
     /// where there is no hardware fail-safe at all.
+    ///
+    /// "Held HIGH" is the firmware's most recent drive being high AND the net
+    /// physically reaching a clear logic-high (>= 3.0 V, the floor
+    /// `update_stats` uses) with at most one rising edge: driven once and held.
+    /// Many edges is SPI / UART / PWM / a blinking LED, not a control hold.
     pub fn firmware_held_high_nets(&self) -> Vec<String> {
-        let name_of = |target: NodeId| -> Option<&str> {
-            self.net_nodes
-                .iter()
-                .find(|(_, n)| n.0 == target.0)
-                .map(|(name, _)| name.as_str())
-        };
-        let mut out = Vec::new();
-        for m in &self.mcus {
-            for (role, &node) in &m.binding.role_nets {
-                // Include promoted analog pins (Nano A0..A5 = PC0..PC5): bind_mcu
-                // stamps a real GPIO driver on these via the same apin fallback, so
-                // a firmware-driven A-pin is modelled electrically and MUST be
-                // visible to the boot-hazard panel too, else a held-high enable on
-                // an A-pin is silently omitted from the hazard report.
-                let Some((port, bit)) = gpio_of_role(role, m.binding.module)
-                    .or_else(|| apin_gpio_of_role(role, m.binding.module))
-                else {
-                    continue;
-                };
-                // The firmware's most recent (and, for a held line, final) drive.
-                if m.last_levels.get(&(port, bit)) != Some(&true) {
-                    continue;
-                }
-                let Some(name) = name_of(node) else { continue };
-                let Some(st) = self.stats.get(name) else {
-                    continue;
-                };
-                // Held HIGH: reached a clear logic-high (>= 3.0 V, the same floor
-                // update_stats uses) and is not a busy signal line (<=1 rising
-                // edge = driven once and held; many edges = SPI / UART / PWM / a
-                // blinking LED, which are not control holds). The analog check is
-                // belt-and-suspenders: last_levels already confirms the firmware
-                // drove the pin high; this confirms the net physically went high.
-                if st.max_v >= 3.0 && st.toggles <= 1 {
-                    out.push(name.to_string());
-                }
-            }
-        }
-        out.sort();
-        out.dedup();
-        out
+        self.gpio_nets_where(|_, m, pin, name| {
+            m.last_levels.get(&pin) == Some(&true)
+                && self
+                    .stats
+                    .get(name)
+                    .is_some_and(|st| st.max_v >= 3.0 && st.toggles <= 1)
+        })
     }
 
     /// How a net arrived at the level it is sitting at.
     ///
-    /// The distinction boot coverage lives or dies on (E51). A control net that
+    /// The distinction boot coverage lives or dies on: a control net that
     /// reaches its level because a pull-up holds it there has NOT been shown to
-    /// boot: `boot_coverage` passed on a watchy RES net at 1 ms with no firmware
-    /// staged at all, which is a green verdict vouching for firmware behaviour
-    /// that never ran.
+    /// boot, and calling that a pass vouches for firmware behaviour that never
+    /// ran.
     pub fn level_provenance(&self, net: &str) -> LevelProvenance {
         if self.firmware_driven_nets().iter().any(|n| n == net) {
             return LevelProvenance::FirmwareDriven;
@@ -5420,44 +5266,17 @@ impl Scheduler {
         }
     }
 
-    /// MCU GPIO nets the firmware drove to a *defined* level during the run,
+    /// MCU GPIO nets the firmware drove to a *defined* level during the run:
     /// either it wrote the pin (a `last_levels` entry, high or low) or it
     /// configured the pin as an output (so an output-low-held pin counts as
     /// driven LOW, not floating). A net NOT in this set was never driven by any
     /// MCU: it floats. Used by the boot-state panel to classify each gate as
     /// driven-high / driven-low / floating without enabling any circuit driver.
     pub fn firmware_driven_nets(&self) -> Vec<String> {
-        let name_of = |target: NodeId| -> Option<&str> {
-            self.net_nodes
-                .iter()
-                .find(|(_, n)| n.0 == target.0)
-                .map(|(name, _)| name.as_str())
-        };
-        let mut out = Vec::new();
-        for m in &self.mcus {
-            let configured: std::collections::HashSet<(char, u8)> = m
-                .core
-                .pins_configured_output()
-                .into_iter()
-                .map(|p| (p.port, p.bit))
-                .collect();
-            for (role, &node) in &m.binding.role_nets {
-                let Some((port, bit)) = gpio_of_role(role, m.binding.module)
-                    .or_else(|| apin_gpio_of_role(role, m.binding.module))
-                else {
-                    continue;
-                };
-                if !m.last_levels.contains_key(&(port, bit)) && !configured.contains(&(port, bit)) {
-                    continue;
-                }
-                if let Some(name) = name_of(node) {
-                    out.push(name.to_string());
-                }
-            }
-        }
-        out.sort();
-        out.dedup();
-        out
+        let configured = self.configured_output_pins();
+        self.gpio_nets_where(|mi, m, pin, _| {
+            m.last_levels.contains_key(&pin) || configured[mi].contains(&pin)
+        })
     }
 
     /// MCU GPIO nets whose pin the firmware actively configured as an OUTPUT
@@ -5465,36 +5284,8 @@ impl Scheduler {
     /// push-pull drive; a net high but NOT in it is a weak internal pull-up.
     /// Observation metadata (from `pins_configured_output`), never a drive.
     pub fn firmware_output_configured_nets(&self) -> Vec<String> {
-        let name_of = |target: NodeId| -> Option<&str> {
-            self.net_nodes
-                .iter()
-                .find(|(_, n)| n.0 == target.0)
-                .map(|(name, _)| name.as_str())
-        };
-        let mut out = Vec::new();
-        for m in &self.mcus {
-            let configured: std::collections::HashSet<(char, u8)> = m
-                .core
-                .pins_configured_output()
-                .into_iter()
-                .map(|p| (p.port, p.bit))
-                .collect();
-            for (role, &node) in &m.binding.role_nets {
-                let Some((port, bit)) = gpio_of_role(role, m.binding.module)
-                    .or_else(|| apin_gpio_of_role(role, m.binding.module))
-                else {
-                    continue;
-                };
-                if configured.contains(&(port, bit)) {
-                    if let Some(name) = name_of(node) {
-                        out.push(name.to_string());
-                    }
-                }
-            }
-        }
-        out.sort();
-        out.dedup();
-        out
+        let configured = self.configured_output_pins();
+        self.gpio_nets_where(|mi, _, pin, _| configured[mi].contains(&pin))
     }
 
     /// Last GPIO levels per MCU, for component-state frames.
@@ -5511,7 +5302,7 @@ impl Scheduler {
         out
     }
 
-    /// Generalized digital edge replay (05 §1.2): drain MCU `mi`'s ordered,
+    /// Generalized digital edge replay: drain MCU `mi`'s ordered,
     /// cycle-stamped log and replay it in cycle order through every edge-driven
     /// digital element on ONE path; the 595 chains it owns AND any standalone
     /// GPIO-clocked shift/latch (`replay_chips`). One micro-tick per edge-group
@@ -5607,11 +5398,7 @@ impl Scheduler {
         }
     }
 
-    /// The cycle-stamped GPIO edges each MCU produced in the most recent chunk,
-    /// one entry per MCU that ran. The analog PWL side consumes this to translate
-    /// each pin's ordered `(cycle, level)` series into a `SourceKind::Pwl`
-    /// waveform on the driven net (05 §1.1/§1.3).
-    /// The PWL edge drive of 05 section 1.3, and its policy.
+    /// The PWL edge drive, and its policy.
     ///
     /// Eligibility, which IS the cadence negotiation: a pin gets a PWL drive
     /// only when (a) it toggled at least twice this chunk (a single edge is
@@ -5756,10 +5543,6 @@ impl Scheduler {
         }
     }
 
-    pub fn last_chunk_pin_edges(&self) -> &[ChunkPinEdges] {
-        &self.last_chunk_edges
-    }
-
     /// Micro-ticks replayed through the generalized digital path in the last
     /// chunk (one per distinct edge-group cycle). A diagnostic that a bit-banged
     /// burst produced N ordered micro-ticks rather than one collapsed level.
@@ -5771,7 +5554,7 @@ impl Scheduler {
     /// SRCLK, RCLK, optional SRCLR_n, optional OE_n, and head SER, plus the chip
     /// count. Empty when no chain is clocked by the MCU (the once-per-chunk
     /// path handles it). Exposed for diagnostics and co-sim tests of the chain
-    /// wiring (FIX 1).
+    /// wiring.
     pub fn hc595_chain_pins(
         &self,
     ) -> Vec<(
@@ -5838,11 +5621,6 @@ impl Scheduler {
             }
         }
         false
-    }
-
-    /// Names of the configurable supply nets, in stable order.
-    pub fn supply_nets(&self) -> Vec<String> {
-        self.supplies.iter().map(|s| s.net_name.clone()).collect()
     }
 
     /// Live supply readout per net: (kind label, last rail current A, SoC).
@@ -5977,35 +5755,7 @@ pub struct StepResult {
     pub uart: HashMap<String, Vec<u8>>,
 }
 
-/// Instantiate an MCU core for a binding and load firmware if given.
-///
-/// The backend string (from the model db) selects the emulator:
-///   - `simavr:<part>`  -> in-process AVR via libsimavr.
-///   - `renode:<part>`  -> external headless Renode (STM32 / nRF52 / RISC-V).
-///   - `qemu:<part>`    -> external Espressif QEMU (ESP32 / ESP32-S3 / ESP32-C3).
-///
-/// A `renode:` / `qemu:` backend on a build without the matching feature, or on
-/// a host without the emulator installed, is a clear error rather than a silent
-/// AVR fallback (that would run the wrong firmware against the circuit).
-///
-/// `renode:<part>` / `qemu:<part>` configs come from the SoC-descriptor
-/// resolution path (`SocConfig::resolve`): `$HAUKSBEE_MCU_DIR` →
-/// `~/.config/hauksbee/mcu` → the embedded builtin, so a user descriptor can
-/// add a new part, or override a builtin, purely as data (06 §6.4).
-///
-/// For the QEMU backend the firmware path is either the app `.elf` (the
-/// backend builds the bootable merged image from it in-process) or an
-/// esptool-merged flash image; QEMU boots it at spawn, so there is no separate
-/// load step (the trait's `load_firmware` is a no-op for QEMU).
-/// Route one SPI byte to the correct bus among all attached slaves (05 §2.3).
-///
-/// A single bus is always the target; this is the single-slave path and it must
-/// stay byte-for-byte identical to the pre-multiplexing behaviour, even before
-/// the bus has seen its first CS edge. With two or more buses, dispatch to the
-/// first bus whose CS is currently asserted (`is_selected`); if none is selected
-/// (all deasserted between transactions) the bus is idle and MISO floats high
-/// (`0xFF`). At most one bus lock is held at a time, preserving the
-/// McuShared→SpiBus lock order.
+/// Point one model-peripheral supply leg's Isource at `amps`.
 fn set_isource_dc(circuit: &mut Circuit, id: DeviceId, amps: f64) {
     match circuit.devices.get_mut(id.0 as usize) {
         Some(Device::Isource { kind, .. }) => *kind = SourceKind::Dc(amps),
@@ -6017,6 +5767,15 @@ fn set_isource_dc(circuit: &mut Circuit, id: DeviceId, amps: f64) {
     }
 }
 
+/// Route one SPI byte to the correct bus among all attached slaves.
+///
+/// A single bus is always the target; this is the single-slave path and it must
+/// stay byte-for-byte identical to the pre-multiplexing behaviour, even before
+/// the bus has seen its first CS edge. With two or more buses, dispatch to the
+/// first bus whose CS is currently asserted (`is_selected`); if none is selected
+/// (all deasserted between transactions) the bus is idle and MISO floats high
+/// (`0xFF`). At most one bus lock is held at a time, preserving the
+/// McuShared→SpiBus lock order.
 fn dispatch_spi(
     buses: &[std::sync::Arc<std::sync::Mutex<crate::peripherals::SpiBus>>],
     ev: hauksbee_mcu::SpiEvent,
@@ -6044,6 +5803,26 @@ fn dispatch_spi(
     0xFF
 }
 
+/// Instantiate an MCU core for a binding and load firmware if given.
+///
+/// The backend string (from the model db) selects the emulator:
+///   - `simavr:<part>`  -> in-process AVR via libsimavr.
+///   - `renode:<part>`  -> external headless Renode (STM32 / nRF52 / RISC-V).
+///   - `qemu:<part>`    -> external Espressif QEMU (ESP32 / ESP32-S3 / ESP32-C3).
+///
+/// A `renode:` / `qemu:` backend on a build without the matching feature, or on
+/// a host without the emulator installed, is a clear error rather than a silent
+/// AVR fallback (that would run the wrong firmware against the circuit).
+///
+/// `renode:<part>` / `qemu:<part>` configs come from the SoC-descriptor
+/// resolution path (`SocConfig::resolve`): `$HAUKSBEE_MCU_DIR` →
+/// `~/.config/hauksbee/mcu` → the embedded builtin, so a user descriptor can
+/// add a new part, or override a builtin, purely as data.
+///
+/// For the QEMU backend the firmware path is either the app `.elf` (the
+/// backend builds the bootable merged image from it in-process) or an
+/// esptool-merged flash image; QEMU boots it at spawn, so there is no separate
+/// load step (the trait's `load_firmware` is a no-op for QEMU).
 fn instantiate_mcu(
     binding: &McuBinding,
     firmware: Option<&std::path::Path>,
@@ -6175,13 +5954,12 @@ pub fn backend_is_external(backend: &str) -> bool {
 ///
 /// The part token is passed STRAIGHT to simavr, which owns the list of cores it
 /// has and returns a null MCU for anything else (`AvrMcu::new` turns that into a
-/// named error). This used to silently substitute an ATmega328P for every token
-/// it did not literally recognise, which is the wrong-ISA failure the QEMU and
-/// Renode paths above refuse by name: an ATmega1284P board has ports A-D, 16 KB
-/// of SRAM and two USARTs, and running its firmware on a 2 KB three-port core
-/// produces a plausible-looking trace of a chip that is not on the board. A
-/// board asking for a core simavr does not have now fails loudly and says which
-/// cores it does have.
+/// named error). Silently substituting an ATmega328P for an unrecognised token
+/// would be the wrong-ISA failure the QEMU and Renode paths above refuse by
+/// name: an ATmega1284P board has ports A-D, 16 KB of SRAM and two USARTs, and
+/// running its firmware on a 2 KB three-port core produces a plausible-looking
+/// trace of a chip that is not on the board. A board asking for a core simavr
+/// does not have fails loudly and says which cores it does have.
 ///
 /// Port hooks are registered per part because the hook set is what connects
 /// firmware GPIO writes to the analog solve; a port the part does not have is
@@ -6351,7 +6129,7 @@ fn renode_part_alias(part: &str) -> Option<&'static str> {
 /// Resolve a `renode:<part>` token to a `RenodeConfig` through the descriptor
 /// path ([`hauksbee_mcu::SocConfig::resolve`]): `$HAUKSBEE_MCU_DIR` →
 /// `~/.config/hauksbee/mcu` → the embedded builtin. This is the product-path
-/// half of "add a Renode MCU purely as data" (06 §6.4): an override-dir
+/// half of "add a Renode MCU purely as data": an override-dir
 /// descriptor WINS over the embedded builtin of the same name, and an INVALID
 /// override descriptor for the requested part fails loudly with its named
 /// validation error; it is never silently skipped in favour of the builtin.
@@ -6388,21 +6166,12 @@ fn resolve_renode_config(part: &str) -> anyhow::Result<hauksbee_mcu::RenodeConfi
     }
 }
 
-/// Whether a backend STRING names a core that can report pin drive direction,
-/// decided from static data (no emulator is spawned). The scaffold-time
-/// companion of [`Scheduler::drive_direction_observable`], for callers (like
-/// `hauksbee-ci init`) that reason about a board before any co-sim runs:
-///   - `simavr:*`, true, the in-process core reads DDR;
-///   - `renode:<part>`, true iff the part's SoC descriptor resolves and every
-///     GPIO port carries a direction-register map (`dir = {...}`, verified
-///     per-part; see `db/mcu/*.soc.toml`);
-///   - anything else (QEMU, unknown futures), false, fail-safe.
 /// How a net arrived at the level it is sitting at.
 ///
 /// Reported by [`Scheduler::level_provenance`]. A caller about to claim a
 /// control net "was driven" to a level must consult this first: a level reached
 /// passively is a fact about the passive network, not about firmware, and
-/// presenting it as the latter is the E51 defect.
+/// presenting it as the latter would be a false claim of coverage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LevelProvenance {
     /// An MCU drove the net to a defined level this run.
@@ -6415,6 +6184,15 @@ pub enum LevelProvenance {
     Unobservable,
 }
 
+/// Whether a backend STRING names a core that can report pin drive direction,
+/// decided from static data (no emulator is spawned). The scaffold-time
+/// companion of [`Scheduler::drive_direction_observable`], for callers (like
+/// `hauksbee-ci init`) that reason about a board before any co-sim runs:
+///   - `simavr:*`, true, the in-process core reads DDR;
+///   - `renode:<part>`, true iff the part's SoC descriptor resolves and every
+///     GPIO port carries a direction-register map (`dir = {...}`, verified
+///     per-part; see `db/mcu/*.soc.toml`);
+///   - anything else (QEMU, unknown futures), false, fail-safe.
 pub fn backend_reports_drive_direction(backend: &str) -> bool {
     if !backend_is_external(backend) {
         return true;
@@ -6511,7 +6289,7 @@ fn referenced_595_controls_are_proven(
 }
 
 /// Identify standalone GPIO-edge-driven digital components for the generalized
-/// replay (05 §1.2), and build each MCU's GPIO `(port,bit)` -> driven-net map.
+/// replay, and build each MCU's GPIO `(port,bit)` -> driven-net map.
 ///
 /// A component qualifies when it is a shift/latch part (74HC595 / 74HC165) that
 /// is NOT already owned by a 595 chain (`chain_chips`) nor by a 165 read chain
@@ -6596,7 +6374,7 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
             bit: pin.bit,
             level: high,
         });
-        // Real SPI chip-select framing (05 §2.1): if this pin drives a slave's
+        // Real SPI chip-select framing: if this pin drives a slave's
         // CS net, frame that transaction NOW, interleaved in cycle order with the
         // byte transfers (which arrive through the separate `on_spi` closure).
         // Collect the matching buses while holding the McuShared lock, then RELEASE

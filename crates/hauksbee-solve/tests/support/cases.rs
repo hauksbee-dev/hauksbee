@@ -49,6 +49,8 @@ pub fn rectifier_opts() -> SolverOptions {
 pub struct Synapse {
     pub netlist: String,
     pub circuit: Circuit,
+    /// `mem0..mem{n-1}`, in block order: the membrane nodes a probe reads.
+    pub membrane_nodes: Vec<String>,
 }
 
 pub fn build_synapse_array(n: usize) -> Synapse {
@@ -61,6 +63,7 @@ pub fn build_synapse_array(n: usize) -> Synapse {
         kind: SourceKind::Dc(5.0),
     });
     let mut net = String::from("synapse array\nVCC vcc 0 DC 5\n");
+    let mut membrane_nodes = Vec::new();
     let model = BjtModel {
         polarity: Polarity::N,
         is: 1e-15,
@@ -164,6 +167,7 @@ pub fn build_synapse_array(n: usize) -> Synapse {
             ic: Some(5.0),
         });
         net.push_str(&format!("CM{k} mem{k} 0 1n IC=5\n"));
+        membrane_nodes.push(format!("mem{k}"));
     }
 
     net.push_str(".model SMOD SW(VT=1.5 VH=1.0 RON=10 ROFF=1e9)\n");
@@ -175,6 +179,7 @@ pub fn build_synapse_array(n: usize) -> Synapse {
     Synapse {
         netlist: net,
         circuit: c,
+        membrane_nodes,
     }
 }
 

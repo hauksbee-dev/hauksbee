@@ -26,8 +26,8 @@ use sha2::{Digest, Sha256};
 /// the loader leaves to author intent, plus an inspection of what the descriptor
 /// will actually do (see `lint_soc`).
 pub fn lint(file: &Path) -> anyhow::Result<()> {
-    // A board file handed to `models lint` used to fall into the TOML parser,
-    // which dumped the whole one-line board file as error context. Detect it
+    // A board file handed to `models lint` would fall into the TOML parser,
+    // which dumps the whole one-line board file as error context. Detect it
     // (extension first: a binary .PcbDoc fails read_to_string with a UTF-8
     // error that hides the actual mistake) and name the command they meant.
     let ext = file

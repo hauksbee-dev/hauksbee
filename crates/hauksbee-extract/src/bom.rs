@@ -558,12 +558,7 @@ impl ColumnOverrides {
 /// One thing an artifact contributed to the analysis.
 ///
 /// Deliberately the smallest shape that answers "which file identified this
-/// part". The names and fields mirror `docs/dev-plans/evidence-spine.md` §2.2
-/// exactly (`Contribution { what, detail }`,
-/// `IgnoredInput { what, why }`, `ArtifactProvenance { path, kind, sha256,
-/// contributed, ignored, .. }`) so that when `hauksbee-ir`'s `evidence` module
-/// lands, this is absorbed rather than becoming a second vocabulary for the
-/// same idea.
+/// part".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Contribution {
     pub what: String,
@@ -1711,14 +1706,12 @@ fn map_columns(
     // turns a Digi-Key BOM-manager export, whose designators live under the
     // ambiguous header `Customer Reference`, from a refusal into a read.
     //
-    // Two guards, and the first is the important one. Only headers whose PURPOSE
-    // is a reference field are eligible, not any guess. Shape alone cannot tell a
-    // designator from a part number, because `BC547` and `LM358` have exactly the
-    // shape of `R547` and `LM358`; promoting a `Part` column full of part numbers
-    // on shape alone would attach every row to a designator the board does not
-    // have. So the evidence is "this header is the tool's own reference field AND
-    // its content agrees", which is a real claim, rather than "this column looks
-    // designator-ish", which is not.
+    // Two guards, and the first is the important one: only headers whose PURPOSE
+    // is a reference field are eligible. Shape alone cannot tell a designator
+    // from a part number, `BC547` having exactly the shape of `R547`, so
+    // promoting a `Part` column on shape alone would attach every row to a
+    // designator the board does not have. The evidence is "this header is the
+    // tool's own reference field AND its content agrees".
     if let Some(candidates) = per_role.get_mut(&ColumnRole::Reference) {
         for c in candidates.iter_mut() {
             let eligible = matches!(

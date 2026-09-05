@@ -27,6 +27,7 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
+use crate::children::{home_dir, which};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -189,15 +190,6 @@ fn idf_tools_candidates(root: &std::path::Path, file: &str) -> Vec<PathBuf> {
     out
 }
 
-/// The user's home directory: `$HOME` first (Unix, and a deliberate override
-/// wins on every OS), then `%USERPROFILE%` (the Windows convention, where HOME
-/// is normally unset).
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 /// True if a usable Espressif QEMU for `arch` can be located. Used to skip
 /// integration tests cleanly when the emulator is absent.
 pub fn is_available(arch: QemuArch) -> bool {
@@ -304,20 +296,9 @@ impl QemuProcess {
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(stderr_sink);
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            // Own process group: teardown kills the whole tree (QEMU plus
-            // anything it forks) with one group kill, and the signal reaper
-            // (crate::children) can do the same when the parent itself is
-            // terminated. Without this, killing a serving hauksbee orphaned
-            // its emulators; see children.rs.
-            cmd.process_group(0);
-        }
 
-        let (child, tree_guard) = crate::children::spawn_owned(&mut cmd)
+        let (child, tree_guard) = crate::children::spawn_emulator(&mut cmd)
             .with_context(|| format!("spawning owned Espressif QEMU from {}", bin.display()))?;
-        crate::children::register(child.id(), &tree_guard);
 
         Ok(QemuProcess {
             child,
@@ -384,36 +365,8 @@ impl QemuProcess {
 
 impl Drop for QemuProcess {
     fn drop(&mut self) {
-        // Tree-kill first: process group on Unix, retained Job Object on
-        // Windows. Never target a reaped/recycled Windows numeric PID.
-        crate::children::unregister(self.child.id());
-        #[cfg(unix)]
-        crate::children::kill_tree(self.child.id());
-        let _ = self._tree_guard.terminate();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        crate::children::terminate_emulator(&mut self.child, &self._tree_guard);
     }
-}
-
-/// Minimal `which`: search `PATH` for an executable named `name`. On Windows
-/// executables carry an extension, so `<name>.exe` is tried first there (what
-/// the Espressif builds ship); the bare name stays as a fallback for
-/// MSYS2-style shims.
-fn which(name: &str) -> Result<PathBuf> {
-    let path = std::env::var_os("PATH").context("PATH not set")?;
-    for dir in std::env::split_paths(&path) {
-        if cfg!(windows) {
-            let exe = dir.join(format!("{name}.exe"));
-            if exe.is_file() {
-                return Ok(exe);
-            }
-        }
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    bail!("{name} not found on PATH")
 }
 
 #[cfg(test)]

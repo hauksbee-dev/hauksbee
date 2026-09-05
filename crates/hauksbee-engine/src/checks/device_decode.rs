@@ -163,22 +163,10 @@ fn is_cypd3177(c: &Component) -> bool {
     v.contains("CYPD3177") || l.contains("CYPD3177") || v.contains("EZPDBCR")
 }
 
-/// A plain two-terminal, assembled resistor (ref R*, not RV/RT/RN/RP/RM), with a
-/// parseable ohm value. Mirrors the strap-lint resistor test plus a value parse.
+/// A plain two-terminal, assembled resistor (the shared strap-lint predicate)
+/// with a parseable ohm value.
 fn resistor_ohms(c: &Component) -> Option<f64> {
-    if !AssemblyState::of(c).is_present() {
-        return None;
-    }
-    let r = c.reference.to_ascii_uppercase();
-    let lib = c.lib_id.to_ascii_lowercase();
-    let is_r_ref = r.starts_with('R')
-        && !r.starts_with("RV")
-        && !r.starts_with("RT")
-        && !r.starts_with("RN")
-        && !r.starts_with("RP")
-        && !r.starts_with("RM");
-    let connected = c.pins.iter().filter(|p| p.net.is_some()).count();
-    if !is_r_ref || connected != 2 || lib.contains("ferrite") || lib.contains("inductor") {
+    if !is_plain_resistor(c) {
         return None;
     }
     parse_value(&c.value)
@@ -531,21 +519,7 @@ fn is_tps25982(c: &Component) -> bool {
     })
 }
 
-fn is_plain_resistor(c: &Component) -> bool {
-    if !AssemblyState::of(c).is_present() {
-        return false;
-    }
-    let r = c.reference.to_ascii_uppercase();
-    let lib = c.lib_id.to_ascii_lowercase();
-    let is_r_ref = r.starts_with('R')
-        && !r.starts_with("RV")
-        && !r.starts_with("RT")
-        && !r.starts_with("RN")
-        && !r.starts_with("RP")
-        && !r.starts_with("RM");
-    let connected = c.pins.iter().filter(|p| p.net.is_some()).count();
-    is_r_ref && connected == 2 && !lib.contains("ferrite") && !lib.contains("inductor")
-}
+use super::straps::is_assembled_resistor as is_plain_resistor;
 
 enum ProgramResistor {
     Floating,

@@ -198,7 +198,7 @@ impl StampPlan {
         };
         // Slot table over a device's deduped, non-ground node unknowns, plus
         // any device-private internal unknowns (a series-resistance BJT's
-        // intrinsic nodes, dev-plan 04 §3.2); the relocated core and the
+        // intrinsic nodes); the relocated core and the
         // ohmic couplings stamp there, and a table miss would fall back to
         // the slow row search every iteration.
         let node_table = |dev: &Device, id: hauksbee_ir::DeviceId| {
@@ -267,7 +267,7 @@ impl StampPlan {
                     }
                     // Branch self-term -req = -(L * coeffs.g).
                     push_at(&mut reactive_ops, br, br, -*henries);
-                    // Mutual terms (dev-plan 04 §2.3): −M·coeffs.g at (this
+                    // Mutual terms: −M·coeffs.g at (this
                     // branch row, partner branch column) folds into the
                     // reactive backbone with multiplier −M; the exact same
                     // (slot, multiplier)×coeffs.g dt-dependence as the self
@@ -361,7 +361,7 @@ impl StampPlan {
                     // The folding is SOUND here; this compilation runs after
                     // layout freeze, so `layout.branch(ctrl_src)` is the same
                     // resolved index the interpreted stamp uses (the question
-                    // §2.2 flags for F/H is answered by construction: the plan
+                    // flagging F/H is answered by construction: the plan
                     // is built from the layout, never before it). No restamp:
                     // gain is a device constant and the RHS is zero.
                     let cbr = layout
@@ -500,16 +500,6 @@ impl StampPlan {
     /// Number of constant conductance writes (diagnostics).
     pub fn cond_op_count(&self) -> usize {
         self.cond_ops.len()
-    }
-
-    /// Number of reactive backbone writes (diagnostics).
-    pub fn reactive_op_count(&self) -> usize {
-        self.reactive_ops.len()
-    }
-
-    /// Number of tier-2 re-stamped devices (diagnostics).
-    pub fn restamp_count(&self) -> usize {
-        self.restamp.len()
     }
 }
 

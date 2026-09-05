@@ -13,8 +13,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 fn demo_hex() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/firmware/demo/demo.hex");
-    p.exists().then_some(p)
+    crate::support::firmware("demo/demo.hex")
 }
 
 fn boot() -> Option<(AvrMcu, Arc<Mutex<Vec<u8>>>)> {

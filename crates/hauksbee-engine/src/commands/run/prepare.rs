@@ -36,6 +36,196 @@ pub(crate) struct RunArtifacts {
     pub(crate) ci_findings: Option<Vec<JsonFinding>>,
 }
 
+/// One manufacturing-input row of the run's input inventory: what the artifact
+/// contributed, what it could not, and the identity lines it settled.
+fn artifact_evidence(
+    kind: &str,
+    path: &str,
+    format: &str,
+    sha256: &str,
+    contributed: &[hauksbee_extract::bom::Contribution],
+    ignored: &[hauksbee_extract::bom::IgnoredInput],
+    identity: Vec<String>,
+) -> JsonInputEvidence {
+    JsonInputEvidence {
+        path: path.to_string(),
+        kind: kind.to_string(),
+        format: format.to_string(),
+        sha256: valid_digest(sha256),
+        contributed: contributed
+            .iter()
+            .map(|item| format!("{}: {}", item.what, item.detail))
+            .collect(),
+        ignored: ignored
+            .iter()
+            .map(|item| format!("{}: {}", item.what, item.why))
+            .collect(),
+        identity,
+    }
+}
+
+/// The flag-consistency contract: a flag that names an output artifact, or an
+/// analysis input whose producing analysis was not requested, is an ERROR, because honouring it silently means
+/// a file that never appears or a selector that selects nothing. A flag that
+/// merely loses a rendering/serving preference to a higher-precedence one WARNS
+/// on stderr and continues. One policy, no third category: nothing the user
+/// asked for is ever dropped without a word.
+fn validate_flag_consistency(cfg: &RunConfig, any_report_flag: bool) -> anyhow::Result<()> {
+    if cfg.probe_csv.is_some() && cfg.probe.is_empty() {
+        anyhow::bail!(
+            "--probe-csv names an output file, but no --probe net was given; \
+             add --probe <NET> (and --headless)"
+        );
+    }
+    if cfg.ac_csv.is_some() && cfg.ac.is_none() {
+        anyhow::bail!(
+            "--ac-csv names an output file, but no --ac sweep was requested; \
+             add --ac <FSTART:FSTOP:POINTS>"
+        );
+    }
+    if (!cfg.ac_node.is_empty() || cfg.ac_loop.is_some()) && cfg.ac.is_none() {
+        anyhow::bail!(
+            "--ac-node/--ac-loop describe an --ac sweep, but no --ac was requested; \
+             add --ac <FSTART:FSTOP:POINTS>"
+        );
+    }
+    if cfg.ampacity && cfg.json {
+        anyhow::bail!(
+            "--ampacity has no --json form yet; \
+             refusing rather than silently ignoring the output flag"
+        );
+    }
+    // --list-nets prints its list and exits, so a report flag alongside it
+    // never renders. Warn (a lost rendering preference, not an error).
+    if cfg.list_nets && any_report_flag {
+        eprintln!(
+            "warning: --list-nets prints the net list and exits, so the report flag \
+             is ignored here"
+        );
+    }
+    // Same for --tui: an explicit report flag prints and exits, so the
+    // dashboard never launches.
+    if cfg.plain && cfg.json {
+        eprintln!(
+            "warning: --plain and --json were both given; --json wins (machine output \
+             has no prose form)"
+        );
+    }
+    if cfg.serve
+        && (cfg.report
+            || cfg.drc
+            || cfg.lint
+            || cfg.si
+            || cfg.resources
+            || cfg.usb_c
+            || cfg.check
+            || cfg.ampacity
+            || cfg.thermal)
+    {
+        eprintln!("warning: a report flag prints and exits, so --serve is ignored here");
+    }
+    if cfg.oracle && !cfg.drc {
+        eprintln!("warning: --oracle only applies with --drc; ignored");
+    }
+    Ok(())
+}
+
+/// Evaluate the selected surface for the `--junit` / `--sarif` artifacts, with
+/// the same waiver and gate policy that surface renders. Findings stay in the
+/// transaction until the final outcome commits them; co-sim appends its dynamic
+/// findings later.
+#[allow(clippy::too_many_arguments)]
+fn gather_ci_artifact_findings(
+    cfg: &RunConfig,
+    surface: SelectedSurface,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    input_kind: InputKind,
+    is_altium: bool,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    schematic_ties: Option<&SchematicTies>,
+) -> anyhow::Result<Vec<JsonFinding>> {
+    let mut findings = crate::reports::check::gather_findings_with_schematic(
+        &cfg.board,
+        &board,
+        &text,
+        &raw,
+        is_altium,
+        lib,
+        schematic_ties,
+    )?;
+    findings.retain(|finding| ci_check_selected(surface, finding));
+    let bound = bind_board(&board, &lib);
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        &board,
+        &bound.report,
+        &reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?
+    .with_input_artifact(&cfg.board, &raw, input_kind)?;
+    let mut maps = evidence.maps_for_findings(&findings)?;
+    // The same run-level/finding-backed split the JSON verdict makes:
+    // finding-backed maps become badges, never gate-grade JUnit failures,
+    // and the run-level claims (input coverage, bind completeness) are
+    // added so an invalid JSON verdict shows red here too instead of a
+    // green test-report tab beside it.
+    let finding_messages: std::collections::HashSet<String> =
+        findings.iter().map(|f| f.message.clone()).collect();
+    for (check, assertion) in [
+        ("drc", "DRC input coverage"),
+        ("si", "Signal-integrity input coverage"),
+    ] {
+        if !(findings.iter().any(|finding| finding.check == check)
+            || (surface == SelectedSurface::Drc && check == "drc")
+            || (surface == SelectedSurface::Si && check == "si"))
+        {
+            continue;
+        }
+        let coverage = evidence.check_coverage_map(check, assertion)?;
+        if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
+            maps.push(coverage);
+        }
+    }
+    findings.extend(crate::reports::ci_artifacts::evidence_findings_with_gate(
+        &maps,
+        |m| !finding_messages.contains(m.assertion()),
+    ));
+    let blockers = crate::result::unmodelled_critical_refs(
+        &crate::result::BindSummary::from_report(&bound.report),
+    );
+    let blockers = if surface == SelectedSurface::UsbC {
+        crate::reports::usb_c::scoped_blockers(&board, &blockers)
+    } else {
+        blockers
+    };
+    if ci_surface_is_model_dependent(surface) && !blockers.is_empty() {
+        findings.push(crate::result::JsonFinding {
+            check: "evidence".into(),
+            kind: "undermined".into(),
+            severity: "serious".into(),
+            nets: Vec::new(),
+            location_mm: None,
+            layer: None,
+            refs: blockers.clone(),
+            actionable: true,
+            message: format!(
+                "INVALID evidence: {}",
+                crate::result::inconclusive_verdict(&blockers)
+            ),
+            plain: format!(
+                "INVALID evidence: {}",
+                crate::result::inconclusive_verdict(&blockers)
+            ),
+            fix: Some("supply device models or BOM identity for the named parts".into()),
+        });
+    }
+    crate::reports::ci_artifacts::set_current_findings(findings.clone());
+    crate::reports::ci_artifacts::set_current_findings(findings.clone());
+    Ok(findings)
+}
+
 pub(crate) fn prepare_run_inputs(
     cfg: &mut RunConfig,
     quiet: bool,
@@ -117,48 +307,30 @@ pub(crate) fn prepare_run_inputs(
         }
         let artifact = hauksbee_extract::bom::Bom::read_with(path, &overrides)?;
         let identity = crate::binder::apply_bom_identity(&mut board, &artifact, &lib)?;
-        inputs.push(JsonInputEvidence {
-            path: artifact.provenance.path.clone(),
-            kind: "bom".to_string(),
-            format: artifact.provenance.kind.clone(),
-            sha256: valid_digest(&artifact.provenance.sha256),
-            contributed: artifact
-                .provenance
-                .contributed
-                .iter()
-                .map(|item| format!("{}: {}", item.what, item.detail))
-                .collect(),
-            ignored: artifact
-                .provenance
-                .ignored
-                .iter()
-                .map(|item| format!("{}: {}", item.what, item.why))
-                .collect(),
-            identity: identity.lines(),
-        });
+        let p = &artifact.provenance;
+        inputs.push(artifact_evidence(
+            "bom",
+            &p.path,
+            &p.kind,
+            &p.sha256,
+            &p.contributed,
+            &p.ignored,
+            identity.lines(),
+        ));
     }
     if let Some(path) = &cfg.placement {
         let artifact = hauksbee_extract::placement::PlacementFile::read(path)?;
         let identity = crate::binder::apply_placement_identity(&mut board, &artifact, &lib)?;
-        inputs.push(JsonInputEvidence {
-            path: artifact.provenance.path.clone(),
-            kind: "placement".to_string(),
-            format: artifact.provenance.kind.clone(),
-            sha256: valid_digest(&artifact.provenance.sha256),
-            contributed: artifact
-                .provenance
-                .contributed
-                .iter()
-                .map(|item| format!("{}: {}", item.what, item.detail))
-                .collect(),
-            ignored: artifact
-                .provenance
-                .ignored
-                .iter()
-                .map(|item| format!("{}: {}", item.what, item.why))
-                .collect(),
-            identity: identity.lines(),
-        });
+        let p = &artifact.provenance;
+        inputs.push(artifact_evidence(
+            "placement",
+            &p.path,
+            &p.kind,
+            &p.sha256,
+            &p.contributed,
+            &p.ignored,
+            identity.lines(),
+        ));
     }
     if inputs.len() > 1 && !quiet && !cfg.json {
         eprintln!("Input inventory:");
@@ -188,7 +360,7 @@ pub(crate) fn prepare_run_inputs(
     let board = board;
     // A board with zero components can prove nothing ABOUT ITS PARTS: every
     // part-level check would pass vacuously and a "100% clean" verdict on an
-    // empty board is exactly the false comfort this tool exists to prevent (M6).
+    // empty board is exactly the false comfort this tool exists to prevent.
     // Refuse as invalid for analysis, on every path (reports, TUI, co-sim,
     // serve).
     //
@@ -236,70 +408,7 @@ pub(crate) fn prepare_run_inputs(
         anyhow::bail!("--probe records co-sim waveforms and needs --headless");
     }
 
-    // Flag-consistency contract (the --probe guard above is the model): a flag
-    // that names an output artifact or an analysis input whose producing
-    // analysis was not requested is an ERROR, because honouring it silently
-    // means a file that never appears or a selector that selects nothing. A
-    // flag that merely loses a rendering/serving preference to a
-    // higher-precedence one WARNS on stderr and continues. ONE policy, no
-    // third category: nothing the user asked for is ever dropped without a
-    // word (M1: --list-nets and --tui used to lose to a report flag silently).
-    if cfg.probe_csv.is_some() && cfg.probe.is_empty() {
-        anyhow::bail!(
-            "--probe-csv names an output file, but no --probe net was given; \
-             add --probe <NET> (and --headless)"
-        );
-    }
-    if cfg.ac_csv.is_some() && cfg.ac.is_none() {
-        anyhow::bail!(
-            "--ac-csv names an output file, but no --ac sweep was requested; \
-             add --ac <FSTART:FSTOP:POINTS>"
-        );
-    }
-    if (!cfg.ac_node.is_empty() || cfg.ac_loop.is_some()) && cfg.ac.is_none() {
-        anyhow::bail!(
-            "--ac-node/--ac-loop describe an --ac sweep, but no --ac was requested; \
-             add --ac <FSTART:FSTOP:POINTS>"
-        );
-    }
-    if cfg.ampacity && cfg.json {
-        anyhow::bail!(
-            "--ampacity has no --json form yet; \
-             refusing rather than silently ignoring the output flag"
-        );
-    }
-    // --list-nets prints its list and exits, so a report flag alongside it
-    // never renders. Warn (a lost rendering preference, not an error).
-    if cfg.list_nets && any_report_flag {
-        eprintln!(
-            "warning: --list-nets prints the net list and exits, so the report flag \
-             is ignored here"
-        );
-    }
-    // Same for --tui: an explicit report flag prints and exits, so the
-    // dashboard never launches.
-    if cfg.plain && cfg.json {
-        eprintln!(
-            "warning: --plain and --json were both given; --json wins (machine output \
-             has no prose form)"
-        );
-    }
-    if cfg.serve
-        && (cfg.report
-            || cfg.drc
-            || cfg.lint
-            || cfg.si
-            || cfg.resources
-            || cfg.usb_c
-            || cfg.check
-            || cfg.ampacity
-            || cfg.thermal)
-    {
-        eprintln!("warning: a report flag prints and exits, so --serve is ignored here");
-    }
-    if cfg.oracle && !cfg.drc {
-        eprintln!("warning: --oracle only applies with --drc; ignored");
-    }
+    validate_flag_consistency(cfg, any_report_flag)?;
 
     // --asbuilt describes the physical board, so it is validated and applied on
     // EVERY path, not only the simulating one (the static report branches used
@@ -385,85 +494,22 @@ pub(crate) fn prepare_run_inputs(
     // --junit/--sarif: evaluate the selected surface with the same waiver and
     // gate policy that surface renders. Findings remain in the transaction
     // until the final outcome commits them; co-sim appends its dynamic findings.
-    let mut ci_findings: Option<Vec<crate::result::JsonFinding>> = None;
-    if cfg.junit.is_some() || cfg.sarif.is_some() {
-        let mut findings = crate::reports::check::gather_findings_with_schematic(
-            &cfg.board,
+    let ci_findings = if cfg.junit.is_some() || cfg.sarif.is_some() {
+        Some(gather_ci_artifact_findings(
+            cfg,
+            surface,
             &board,
             &text,
             &raw,
+            input_kind,
             is_altium,
             &lib,
-            schematic_ties.as_ref(),
-        )?;
-        findings.retain(|finding| ci_check_selected(surface, finding));
-        let bound = bind_board(&board, &lib);
-        let evidence = crate::evidence::BoardEvidence::from_bound(
-            &board,
-            &bound.report,
             &reader_notes,
-            hauksbee_ir::evidence::RunDate::from_system_clock(),
-        )?
-        .with_input_artifact(&cfg.board, &raw, input_kind)?;
-        let mut maps = evidence.maps_for_findings(&findings)?;
-        // The same run-level/finding-backed split the JSON verdict makes:
-        // finding-backed maps become badges, never gate-grade JUnit failures,
-        // and the run-level claims (input coverage, bind completeness) are
-        // added so an invalid JSON verdict shows red here too instead of a
-        // green test-report tab beside it.
-        let finding_messages: std::collections::HashSet<String> =
-            findings.iter().map(|f| f.message.clone()).collect();
-        for (check, assertion) in [
-            ("drc", "DRC input coverage"),
-            ("si", "Signal-integrity input coverage"),
-        ] {
-            if !(findings.iter().any(|finding| finding.check == check)
-                || (surface == SelectedSurface::Drc && check == "drc")
-                || (surface == SelectedSurface::Si && check == "si"))
-            {
-                continue;
-            }
-            let coverage = evidence.check_coverage_map(check, assertion)?;
-            if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
-                maps.push(coverage);
-            }
-        }
-        findings.extend(crate::reports::ci_artifacts::evidence_findings_with_gate(
-            &maps,
-            |m| !finding_messages.contains(m.assertion()),
-        ));
-        let blockers = crate::result::unmodelled_critical_refs(
-            &crate::result::BindSummary::from_report(&bound.report),
-        );
-        let blockers = if surface == SelectedSurface::UsbC {
-            crate::reports::usb_c::scoped_blockers(&board, &blockers)
-        } else {
-            blockers
-        };
-        if ci_surface_is_model_dependent(surface) && !blockers.is_empty() {
-            findings.push(crate::result::JsonFinding {
-                check: "evidence".into(),
-                kind: "undermined".into(),
-                severity: "serious".into(),
-                nets: Vec::new(),
-                location_mm: None,
-                layer: None,
-                refs: blockers.clone(),
-                actionable: true,
-                message: format!(
-                    "INVALID evidence: {}",
-                    crate::result::inconclusive_verdict(&blockers)
-                ),
-                plain: format!(
-                    "INVALID evidence: {}",
-                    crate::result::inconclusive_verdict(&blockers)
-                ),
-                fix: Some("supply device models or BOM identity for the named parts".into()),
-            });
-        }
-        crate::reports::ci_artifacts::set_current_findings(findings.clone());
-        ci_findings = Some(findings);
-    }
+            schematic_ties.as_ref(),
+        )?)
+    } else {
+        None
+    };
 
     // --serial-attach bridges a host serial port to the firmware's UART, so
     // without firmware there is nothing on the far end to answer. Refuse here,

@@ -29,7 +29,7 @@
 //!   recorded sag bounds the disagreement between the possible choices.
 //!
 //! What this iteration actually is: waveform relaxation (Gauss-Seidel over
-//! sub-circuits), and that upgrades the claim beyond the plan's stiffness
+//! sub-circuits), and that upgrades the claim beyond a stiffness
 //! framing. If the iteration CONVERGES, the assembled answer is a fixed
 //! point of the true equations, full stop; physical stiffness only sets the
 //! convergence RATE (a passive chain with soft impedances still contracts
@@ -39,7 +39,7 @@
 //! is a cut through an ACTIVE feedback loop with gain above one, which is
 //! precisely the cut nobody should be allowed to fake through: the group
 //! falls back to the exact fused solve and the outcome carries the residual
-//! that refused it. The tolerance follows the plan's `10 x reltol x Vnom`
+//! that refused it. The tolerance is `10 x reltol x Vnom`
 //! with `Vnom` from the candidate's own rest level, floored at 1 V.
 //!
 //! ## Rest estimates without a converging monolith
@@ -1437,24 +1437,7 @@ fn solve_composed(
     let Some(mut engine) = PartitionedTransient::try_build_from_partition(&subp, opts, part) else {
         return Ok(None);
     };
-    let n_nodes = subp.node_count();
-    let mut wf = Waveforms {
-        time: Vec::new(),
-        node_voltages: vec![Vec::new(); n_nodes],
-        branch_currents: Vec::new(),
-    };
-    engine.run_streaming(&subp, tstop, |s| {
-        wf.time.push(s.time);
-        for node in 0..n_nodes {
-            let v = if node == 0 {
-                0.0
-            } else {
-                s.x.get(node - 1).copied().unwrap_or(0.0)
-            };
-            wf.node_voltages[node].push(v);
-        }
-    })?;
-    Ok(Some(wf))
+    Ok(Some(super::collect_waveforms(&mut engine, &subp, tstop)?))
 }
 
 /// Refusal outcomes for the composed executor: signals carry their sag (INF for

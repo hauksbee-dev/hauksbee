@@ -491,9 +491,9 @@ pub fn check(
     };
     let code = load_code(code_path)?;
     let mut report = check_code(&code, &opts)?;
-    // A .board without a name line used to print a dangling "Board-as-Code
-    // check:" label; fall back to the file name so the header always says
-    // WHAT was checked.
+    // A .board without a name line would print a dangling "Board-as-Code
+    // check:" label; fall back to the file name so the header always says WHAT
+    // was checked.
     if report.board_name.trim().is_empty() {
         report.board_name = code_path
             .file_stem()

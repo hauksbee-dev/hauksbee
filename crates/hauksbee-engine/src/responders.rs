@@ -1,4 +1,4 @@
-//! Synchronous MCU input-responder registry (05 §1.5, generalized).
+//! Synchronous MCU input-responder registry.
 //!
 //! A firmware bit-bang loop that READS a pin inside the same `run_micros` that
 //! toggles its clock (74HC165 readback, bit-banged SPI MISO, a soft-I2C read)
@@ -8,7 +8,7 @@
 //! synchronously and its returned input-pin drives are applied before the
 //! firmware's next instruction (`hauksbee-mcu/src/avr.rs`, the per-port IRQ
 //! hook). Poll backends (Renode/QEMU) keep the hook's no-op default, their
-//! responder tier is deliberately coarse (05 §1.5), and nothing in this module
+//! responder tier is deliberately coarse, and nothing in this module
 //! assumes any particular backend feature.
 //!
 //! The hook takes ONE closure per MCU. This module is the multiplexer that
@@ -16,7 +16,7 @@
 //! the output pins it consumes edges from, and the [`ResponderRegistry`]
 //! dispatches each atomic port-update batch to exactly the responders keyed on
 //! its changed pins. The
-//! registry is what 05 §1.5 calls "input responder callbacks keyed on
+//! The registry keys "input responder callbacks on
 //! (MCU, input pin)": the MCU key is the registry instance (one per live MCU,
 //! held by the scheduler), the pin key is the dispatch map here.
 //!
@@ -458,6 +458,21 @@ impl ParallelMemoryResponder {
             })
     }
 
+    /// Mark the read side inactive and release every data-bus pin, the answer
+    /// whenever this responder cannot present a word (read gate inactive,
+    /// address unresolved, or the address outside the part).
+    fn release_data_bus(&self) -> Vec<InputDrive> {
+        self.runtime
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .read_enabled = false;
+        self.data_out
+            .iter()
+            .copied()
+            .map(InputDrive::release)
+            .collect()
+    }
+
     fn gates_active(&self, gates: &[(ParallelSignal, Level)], volts: &[f64]) -> bool {
         gates.iter().all(|&(source, active)| {
             self.source_level(source, volts)
@@ -553,28 +568,10 @@ impl ParallelMemoryResponder {
 
         let read_active = self.gates_active(&self.read_gates, volts);
         if !read_active {
-            self.runtime
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .read_enabled = false;
-            return self
-                .data_out
-                .iter()
-                .copied()
-                .map(InputDrive::release)
-                .collect();
+            return self.release_data_bus();
         }
         let Some(address) = self.address(volts) else {
-            self.runtime
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .read_enabled = false;
-            return self
-                .data_out
-                .iter()
-                .copied()
-                .map(InputDrive::release)
-                .collect();
+            return self.release_data_bus();
         };
         let word = cycle
             .and_then(|cycle| self.port.read_at(address, cycle, self.frequency_hz))
@@ -585,16 +582,7 @@ impl ParallelMemoryResponder {
                 self.id,
                 self.port.words()
             );
-            self.runtime
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .read_enabled = false;
-            return self
-                .data_out
-                .iter()
-                .copied()
-                .map(InputDrive::release)
-                .collect();
+            return self.release_data_bus();
         };
         {
             let mut runtime = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
@@ -784,7 +772,7 @@ pub struct BitBangSpiPins {
 /// Firmware bit-bangs SCLK/MOSI/CS on GPIOs; this responder clocks the bits
 /// into the EXISTING byte-level [`SpiBus`] slave model and answers MISO
 /// synchronously, so `digitalRead(MISO)` inside the firmware's own clock loop
-/// sees the slave's bit (05 §1.5).
+/// sees the slave's bit.
 ///
 /// ## Supported waveform (stated subset, refused loudly outside it)
 ///
@@ -1136,7 +1124,7 @@ enum I2cPhase {
 /// decoding, ACK generation, byte clocking, routing the transaction to the
 /// EXISTING [`I2cBus`] slave models and answering SDA synchronously, so the
 /// firmware's `digitalRead(SDA)` inside its own clock loop sees the slave's
-/// bit (05 §1.5).
+/// bit.
 ///
 /// ## The honest subset (stated; everything else refused or absent, loudly)
 ///

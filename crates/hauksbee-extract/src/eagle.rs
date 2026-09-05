@@ -10,6 +10,30 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;
 
+/// One XML element's attributes as a map, with entities unescaped.
+///
+/// quick-xml does NOT unescape attribute values, so an `&amp;`/`&lt;`/`&#38;` in
+/// an Eagle net name, value or reference would otherwise be stored literally and
+/// never match the same net's spelling elsewhere. Falls back to the raw bytes
+/// only on a decode error.
+///
+/// quick-xml deprecates `unescape_value` in favour of `normalized_value`, which
+/// takes an `XmlVersion` the crate does not export, so the replacement is not
+/// callable from outside quick-xml.
+pub(crate) fn xml_attrs(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
+    e.attributes()
+        .flatten()
+        .map(|a| {
+            #[allow(deprecated)]
+            let value = a
+                .unescape_value()
+                .map(|c| c.into_owned())
+                .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
+            (String::from_utf8_lossy(a.key.as_ref()).into_owned(), value)
+        })
+        .collect()
+}
+
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let mut reader = Reader::from_str(text);
     reader.config_mut().trim_text(true);
@@ -43,27 +67,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                let attrs = |e: &quick_xml::events::BytesStart| -> HashMap<String, String> {
-                    e.attributes()
-                        .flatten()
-                        .map(|a| {
-                            // quick-xml does NOT unescape attribute values: an
-                            // `&amp;`/`&lt;`/`&#38;` in an Eagle net name, value,
-                            // or reference would be stored literally. Unescape it,
-                            // falling back to the raw bytes only on a decode error.
-                            // quick-xml deprecates this in favour of `normalized_value`, which takes an
-                            // `XmlVersion` the crate does not export, so the replacement is not
-                            // callable from outside quick-xml. Staying on the deprecated call
-                            // until upstream makes the successor reachable.
-                            #[allow(deprecated)]
-                            let value = a
-                                .unescape_value()
-                                .map(|c| c.into_owned())
-                                .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
-                            (String::from_utf8_lossy(a.key.as_ref()).into_owned(), value)
-                        })
-                        .collect()
-                };
+                let attrs = xml_attrs;
                 match e.name().as_ref() {
                     b"eagle" => saw_eagle_root = true,
                     b"library" => {
@@ -292,13 +296,11 @@ fn corrupt_coord(tag: &str, attr: &str, raw: &str) -> ExtractError {
 /// importer keys the two branches of its reader.
 ///
 /// Byte 2 is NOT part of the magic. It is a per-era number that genuinely
-/// varies: `0x64` across the 70 Mutable Instruments drawings, and `0x30`,
-/// `0x31`, `0x6a` and `0x72` across KiCad's own pre-v6 regression boards. An
-/// earlier version of this detector pinned it to `0x64` and so recognised the
-/// corpus and missed real Eagle files, which is exactly the wrong way round for
-/// a check whose whole job is to name a format hauksbee cannot read. Byte 3 is
-/// zero in all 76 of those files and is kept as the one cheap guard against a
-/// two-byte coincidence.
+/// varies (`0x64`, `0x30`, `0x31`, `0x6a`, `0x72` across the surveyed drawings),
+/// so pinning it would recognise one corpus and miss real Eagle files, the wrong
+/// way round for a check whose job is to name a format hauksbee cannot read.
+/// Byte 3 is zero in all 76 surveyed files and is kept as the one cheap guard
+/// against a two-byte coincidence.
 ///
 /// No text format can begin with a `0x10` control byte, and no container
 /// hauksbee reads (OLE2 `D0 CF 11 E0`, zip `PK`, gzip `1F 8B`) starts this way,

@@ -142,7 +142,7 @@ pub(crate) fn emit_with_schematic_quiet(
         )
     });
     report.findings = kept;
-    // Zero routed copper (D2): a pads-only board passes the spacing check
+    // Zero routed copper: a pads-only board passes the spacing check
     // vacuously, so `UNROUTED_COPPER_NOTE` is printed by the two surfaces that
     // read this flag, `--drc` and `--check`.
     let unrouted = !altium_present && super::unrouted_kicad_layout(text);
@@ -205,7 +205,7 @@ pub(crate) fn emit_with_schematic_quiet(
     let evidence = evidence.with_maps(maps);
     match mode {
         OutputMode::Json => {
-            // Grouped DRC (Fix #8): shorts kept verbatim, clearance findings
+            // Grouped DRC: shorts kept verbatim, clearance findings
             // grouped by (net_a, net_b, layer), at-limit separated from below-rule.
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
                 .with_inputs(inputs)
@@ -253,7 +253,7 @@ pub(crate) fn emit_with_schematic_quiet(
             }
             // Grouped, honest DRC: one line per (net pair + cause) with a count,
             // and gap==rule labelled "at minimum clearance (no margin)" rather
-            // than the wrong "below the spacing the board asks for" (Fix #8).
+            // than the wrong "below the spacing the board asks for".
             print!(
                 "{}",
                 structured.render_with_clearance_rule_provenance(&provenance)

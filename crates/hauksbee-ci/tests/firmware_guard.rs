@@ -1,7 +1,7 @@
-//! Defect: a spec whose `firmware` path is stale (missing on disk) used to reach
-//! the native emulator loader and SIGSEGV (exit 139). The classic trigger is the
-//! bundled blinky.toml, whose firmware path is spec-relative three levels up: it
-//! resolves fine in-tree and breaks the moment the spec is copied elsewhere.
+//! A spec whose `firmware` path is stale (missing on disk) must not reach the
+//! native emulator loader, which SIGSEGVs (exit 139) on it. The classic trigger
+//! is the bundled blinky.toml, whose firmware path is spec-relative three
+//! levels up: it resolves in-tree and breaks the moment the spec is copied.
 //!
 //! The runner must instead fail with a clean, actionable error that names the
 //! resolved absolute path, the spec field it came from, and what it was resolved

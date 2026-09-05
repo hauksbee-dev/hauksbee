@@ -78,11 +78,9 @@ fn impossible_capacitance_for_0603_is_flagged() {
 
 #[test]
 fn capacitor_value_with_voltage_rating_or_package_suffix_is_not_misparsed() {
-    // Regression: parse_capacitance_uf used to collect every digit in the whole
-    // string, so "10uF25V" -> 1025 uF and "10u_0402" -> 100402 uF, both falsely
-    // tripping the 0402 ceiling (a zero-false-positive violation seen on a real
-    // board's "10u_0402" value). Only the leading number+unit token counts, so
-    // these are correctly read as 10 uF and not flagged.
+    // Collecting every digit in the string reads "10uF25V" as 1025 uF and
+    // "10u_0402" as 100402 uF, both falsely tripping the 0402 ceiling. Only the
+    // leading number+unit token counts, so these are 10 uF and not flagged.
     let comps = r#"
     (comp (ref C1) (value 10uF25V) (footprint Capacitor_SMD:C_0402))
     (comp (ref C2) (value 10u_0402) (footprint Capacitor_SMD:C_0402))"#;
@@ -446,13 +444,13 @@ fn led_sane_current_is_clean() {
 }
 
 // ---------------------------------------------------------------------------
-// Output-vs-output contention check (Round-4 schematic ERC).
+// Output-vs-output contention check (schematic ERC).
 //
-// True-positive plus every false-positive shape the Round-4 calibration hit on
-// the known-good corpus: a series resistor between two outputs, an input/
-// bidirectional member reframing the net, an IRQ/wired-OR name, two pins of a
-// single part, and an off-board connector. The check must fire ONLY on the bare
-// two-part push-pull short.
+// The true positive plus every false-positive shape the known-good corpus
+// carries: a series resistor between two outputs, an input/bidirectional member
+// reframing the net, an IRQ/wired-OR name, two pins of a single part, and an
+// off-board connector. The check must fire ONLY on the bare two-part push-pull
+// short.
 // ---------------------------------------------------------------------------
 
 /// Two distinct ICs each driving one net with a push-pull `output` pin, nothing

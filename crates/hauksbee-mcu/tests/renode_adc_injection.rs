@@ -1,4 +1,4 @@
-//! Regression fixture for Renode ADC injection (05-cosim-fidelity §5.1).
+//! Regression fixture for Renode ADC injection.
 //!
 //! `Mcu::set_analog_in` must not be a no-op on the Renode backend. When it is,
 //! the scheduler pushes modeled ADC voltages every chunk and they are dropped

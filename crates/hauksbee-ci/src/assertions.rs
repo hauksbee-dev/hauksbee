@@ -21,7 +21,7 @@ pub struct AssertResult {
     /// Did the assertion hold on every ensemble member. False on an ordinary
     /// red, on a waived red, and on an INVALID result.
     pub passed: bool,
-    /// A THIRD outcome distinct from pass/fail (05 §3b): the assertion could not
+    /// A THIRD outcome distinct from pass/fail: the assertion could not
     /// be honestly evaluated because its analog evaluation window overlaps a
     /// chunk the solver failed on, so the samples there are held-stale. When
     /// `invalid` is true, `passed` is always false, but this is NOT an ordinary
@@ -64,6 +64,28 @@ pub struct AssertResult {
     /// Component references this assertion judges, for waiver matching.
     #[serde(skip)]
     pub subject_refs: Vec<String>,
+}
+
+impl AssertResult {
+    /// A neutral result for one assertion: an unwaived, unexplained, non-invalid
+    /// failure with no failing member and no subjects. Every construction site
+    /// sets only the fields that differ, via struct-update syntax.
+    fn shell(label: String, kind: impl Into<String>, seeds_total: usize) -> Self {
+        Self {
+            label,
+            kind: kind.into(),
+            passed: false,
+            invalid: false,
+            detail: String::new(),
+            failing_seed: None,
+            failing_seeds: Vec::new(),
+            seeds_total: seeds_total as u32,
+            why: None,
+            waived: None,
+            subject_nets: Vec::new(),
+            subject_refs: Vec::new(),
+        }
+    }
 }
 
 /// An ensemble-member index that is ALWAYS emitted and may be `null`. Hand
@@ -132,18 +154,8 @@ fn evaluate_hwtrace(
     };
 
     let hard_fail = |label: String, detail: String| AssertResult {
-        label,
-        kind: "hwtrace".to_string(),
-        passed: false,
-        invalid: false,
         detail,
-        failing_seed: None,
-        failing_seeds: Vec::new(),
-        seeds_total: outcomes.len() as u32,
-        why: None,
-        waived: None,
-        subject_nets: Vec::new(),
-        subject_refs: Vec::new(),
+        ..AssertResult::shell(label, "hwtrace", outcomes.len())
     };
 
     let path = match hwtrace::trace_path(spec, a) {
@@ -163,7 +175,7 @@ fn evaluate_hwtrace(
         ""
     };
 
-    // The analog-validity gate (05 §3b): the simulated waveforms are per-frame
+    // The analog-validity gate: the simulated waveforms are per-frame
     // analog samples over the whole run, so any failed-solve window inside the
     // run makes every feature INVALID rather than pass/fail.
     let stale = outcomes.iter().find(|o| !o.failed_windows.is_empty());
@@ -220,14 +232,11 @@ fn evaluate_hwtrace(
                 if let Some(out) = stale {
                     let (fs, fe) = out.failed_windows[0];
                     results.push(AssertResult {
-                        label,
-                        kind: "hwtrace".to_string(),
-                        passed: false,
                         invalid: true,
                         detail: format!(
                             "{}INVALID: the analog solve failed within {:.2}-{:.2} ms of the \
                              run; the simulated waveform contains held-stale samples, so no \
-                             feature comparison against the capture can be trusted (05 §3b).",
+                             feature comparison against the capture can be trusted.",
                             if outcomes.len() > 1 {
                                 format!("{}: ", member_label(member, out))
                             } else {
@@ -238,11 +247,8 @@ fn evaluate_hwtrace(
                         ),
                         failing_seed: Some(out.seed),
                         failing_seeds: vec![out.seed],
-                        seeds_total: outcomes.len() as u32,
-                        why: None,
-                        waived: None,
                         subject_nets: vec![ch.net.clone()],
-                        subject_refs: Vec::new(),
+                        ..AssertResult::shell(label, "hwtrace", outcomes.len())
                     });
                     continue;
                 }
@@ -261,18 +267,12 @@ fn evaluate_hwtrace(
             };
             detail.push_str(provenance);
             results.push(AssertResult {
-                label,
-                kind: "hwtrace".to_string(),
                 passed,
-                invalid: false,
                 detail,
                 failing_seed: failing_seeds.first().copied(),
                 failing_seeds,
-                seeds_total: outcomes.len() as u32,
-                why: None,
-                waived: None,
                 subject_nets: vec![ch.net.clone()],
-                subject_refs: Vec::new(),
+                ..AssertResult::shell(label, "hwtrace", outcomes.len())
             });
         }
     }
@@ -308,7 +308,7 @@ fn evaluate_one(
 
     // Is this member's analog evaluation window held-stale, i.e. does it overlap
     // a chunk the solver failed on? Such a member's samples cannot be trusted, so
-    // its pass/fail is meaningless (05 §3b, "refuse rather than fake").
+    // its pass/fail is meaningless.
     let member_invalid = |out: &RunOutcome| -> bool {
         analog_eval_window(a, out).is_some_and(|(ws, we)| {
             out.failed_windows
@@ -426,18 +426,13 @@ fn evaluate_one(
             ));
         }
         return AssertResult {
-            label,
-            kind,
-            passed: false,
-            invalid: false,
             detail,
             failing_seed: Some(failures[0].0.seed),
             failing_seeds: failures.iter().map(|(o, _, _)| o.seed).collect(),
-            seeds_total: outcomes.len() as u32,
             why: first_why.clone(),
-            waived: None,
             subject_nets,
             subject_refs,
+            ..AssertResult::shell(label, kind, outcomes.len())
         };
     }
 
@@ -459,15 +454,12 @@ fn evaluate_one(
                     String::new()
                 };
                 return AssertResult {
-                    label,
-                    kind,
-                    passed: false,
                     invalid: true,
                     detail: format!(
                         "{per_seed}INVALID: the analog solve failed within this \
                          assertion's window ({:.2}-{:.2} ms overlaps its \
                          {:.2}-{:.2} ms evaluation span); those voltages are \
-                         held-stale, so the result cannot be trusted (05 §3b).",
+                         held-stale, so the result cannot be trusted.",
                         fs * 1e3,
                         fe * 1e3,
                         ws * 1e3,
@@ -475,11 +467,9 @@ fn evaluate_one(
                     ),
                     failing_seed: Some(out.seed),
                     failing_seeds: vec![out.seed],
-                    seeds_total: outcomes.len() as u32,
-                    why: None,
-                    waived: None,
                     subject_nets,
                     subject_refs,
+                    ..AssertResult::shell(label, kind, outcomes.len())
                 };
             }
         }
@@ -495,18 +485,11 @@ fn evaluate_one(
         last_detail,
     );
     AssertResult {
-        label,
-        kind,
         passed: true,
-        invalid: false,
         detail,
-        failing_seed: None,
-        failing_seeds: Vec::new(),
-        seeds_total: outcomes.len() as u32,
-        why: None,
-        waived: None,
         subject_nets,
         subject_refs,
+        ..AssertResult::shell(label, kind, outcomes.len())
     }
 }
 
@@ -1246,59 +1229,67 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
             None,
         );
     }
-    // For a >= bound we care about the worst (minimum) the rail dipped to in
-    // the window; for a <= bound, the worst (maximum) it rose to. A failing
-    // bound is MARKED in the detail and the passing one left un-annotated, so
-    // a two-bound failure reads at a glance; the `why` names the observed
-    // shortfall in volts, which is the number the fix has to close.
+    // For a >= bound the worst case is the minimum the rail dipped to in the
+    // window; for a <= bound, the maximum it rose to. A failing bound is MARKED
+    // in the detail and the passing one left un-annotated, so a two-bound
+    // failure reads at a glance; the `why` names the observed shortfall in
+    // volts, which is the number the fix has to close.
     let mut ok = true;
     let mut parts = Vec::new();
     let mut whys = Vec::new();
-    if let Some(lo) = a.min {
-        let worst = win.min_v;
-        if worst >= lo - 1e-6 {
-            parts.push(format!("min={worst:.3}V (>= {lo}V)"));
-        } else {
-            ok = false;
-            parts.push(format!("min={worst:.3}V < required {lo}V <- FAILED HERE"));
-            whys.push(if win.last_v >= lo - 1e-6 {
-                format!(
-                    "{net} dipped to {worst:.3} V, {:.3} V below your {lo} V floor, \
-                     before settling back to {:.3} V",
-                    lo - worst,
-                    win.last_v
-                )
-            } else {
-                format!(
-                    "{net} settled {:.3} V below your floor ({:.3} V vs min {lo} V)",
-                    lo - win.last_v,
-                    win.last_v
-                )
-            });
+    let bounds = [
+        // (limit, worst-case sample, label, comparison, excursion verb, side)
+        (
+            a.min,
+            win.min_v,
+            "min",
+            ">=",
+            "dipped to",
+            "below your",
+            "floor",
+        ),
+        (
+            a.max,
+            win.max_v,
+            "max",
+            "<=",
+            "rose to",
+            "above your",
+            "ceiling",
+        ),
+    ];
+    for (limit, worst, label, cmp, verb, side, bound_noun) in bounds {
+        let Some(limit) = limit else { continue };
+        // One signed distance drives both directions: positive means the sample
+        // is past the bound, whichever bound it is.
+        let signed = |v: f64| if label == "min" { limit - v } else { v - limit };
+        if signed(worst) <= 1e-6 {
+            parts.push(format!("{label}={worst:.3}V ({cmp} {limit}V)"));
+            continue;
         }
-    }
-    if let Some(hi) = a.max {
-        let worst = win.max_v;
-        if worst <= hi + 1e-6 {
-            parts.push(format!("max={worst:.3}V (<= {hi}V)"));
+        ok = false;
+        let breach = if label == "min" {
+            "< required"
         } else {
-            ok = false;
-            parts.push(format!("max={worst:.3}V > allowed {hi}V <- FAILED HERE"));
-            whys.push(if win.last_v <= hi + 1e-6 {
-                format!(
-                    "{net} rose to {worst:.3} V, {:.3} V above your {hi} V ceiling, \
-                     before settling back to {:.3} V",
-                    worst - hi,
-                    win.last_v
-                )
-            } else {
-                format!(
-                    "{net} settled {:.3} V above your ceiling ({:.3} V vs max {hi} V)",
-                    win.last_v - hi,
-                    win.last_v
-                )
-            });
-        }
+            "> allowed"
+        };
+        parts.push(format!(
+            "{label}={worst:.3}V {breach} {limit}V <- FAILED HERE"
+        ));
+        whys.push(if signed(win.last_v) <= 1e-6 {
+            format!(
+                "{net} {verb} {worst:.3} V, {:.3} V {side} {limit} V {bound_noun}, \
+                 before settling back to {:.3} V",
+                signed(worst),
+                win.last_v
+            )
+        } else {
+            format!(
+                "{net} settled {:.3} V {side} {bound_noun} ({:.3} V vs {label} {limit} V)",
+                signed(win.last_v),
+                win.last_v
+            )
+        });
     }
     let when = if thr > 0.0 {
         format!(" after {thr}ms")
@@ -1669,30 +1660,10 @@ fn check_no_faults(out: &RunOutcome) -> (bool, String) {
 fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let reference = a.reference.clone().unwrap_or_default();
     let limit = a.amps.unwrap_or(0.0);
-    // Aggregate over the package's units, exactly like `check_max_temp`:
-    // `peak_current` is keyed by the stamped device name, which for a multi-unit
-    // package (a resistor array `RN1` stamps `RN1_e1..RN1_e4`) is the per-unit
-    // form, never the bare `RN1` the assertion names. A bare exact `.get(&ref)`
-    // would always miss and drop into the None branch, so a max_current safety
-    // assert on any multi-unit package could NEVER pass. `check_trackable_
-    // assert_refs` already greenlights a bare ref whose units are tracked, so
-    // the consumer here MUST match those unit keys too (`key_belongs_to_ref`).
-    let peak = out
-        .peak_current
-        .iter()
-        .filter(|(k, _)| key_belongs_to_ref(&reference, k))
-        // Highest-current entry; ties broken on the unit key so the reported
-        // unit is stable across HashMap iteration order (reproducibility).
-        .max_by(|a, b| a.1.total_cmp(b.1).then_with(|| b.0.cmp(a.0)))
-        .map(|(k, v)| (k.clone(), *v));
-    match peak {
+    match peak_for_ref(&out.peak_current, &reference) {
         Some((key, peak)) => {
             let ok = peak <= limit + 1e-9;
-            let unit = if key != reference {
-                format!(" (peak unit {key})")
-            } else {
-                String::new()
-            };
+            let unit = unit_note("peak unit", &key, &reference);
             let peak_s = format_amps(peak);
             if ok {
                 (
@@ -1724,6 +1695,33 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<S
             ),
             None,
         ),
+    }
+}
+
+/// The highest-valued entry of a per-device map that belongs to `reference`,
+/// as `(key, value)`.
+///
+/// A multi-unit package stamps one device per unit, so a bare `.get(reference)`
+/// would always miss and silently drop a safety assert into its no-data branch.
+/// Ties break on the unit key so the reported unit is stable across HashMap
+/// iteration order.
+fn peak_for_ref(
+    map: &std::collections::HashMap<String, f64>,
+    reference: &str,
+) -> Option<(String, f64)> {
+    map.iter()
+        .filter(|(k, _)| key_belongs_to_ref(reference, k))
+        .max_by(|a, b| a.1.total_cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(k, v)| (k.clone(), *v))
+}
+
+/// `" (<noun> <key>)"` when the peak came from a package unit rather than the
+/// named reference itself, and empty otherwise.
+fn unit_note(noun: &str, key: &str, reference: &str) -> String {
+    if key == reference {
+        String::new()
+    } else {
+        format!(" ({noun} {key})")
     }
 }
 
@@ -1759,28 +1757,14 @@ fn key_belongs_to_ref(reference: &str, key: &str) -> bool {
 /// `SW1_q1` / `SW1_s0` form, never the bare `SW1` the assertion names.
 fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let reference = a.reference.clone().unwrap_or_default();
-    // Hottest matching entry: the bare ref for a single device, or the hottest
-    // unit of a multi-unit package.
-    let peak = out
-        .peak_temp_c
-        .iter()
-        .filter(|(k, _)| key_belongs_to_ref(&reference, k))
-        // Break temperature ties on the unit key so the reported hottest unit is
-        // stable across HashMap iteration order (reproducibility doctrine): among
-        // tied-max units the lowest key name wins deterministically.
-        .max_by(|a, b| a.1.total_cmp(b.1).then_with(|| b.0.cmp(a.0)))
-        .map(|(k, v)| (k.clone(), *v));
+    let peak = peak_for_ref(&out.peak_temp_c, &reference);
 
     // Explicit ceiling: compare the peak junction temperature against it.
     if let Some(limit) = a.celsius {
         return match peak {
             Some((key, tj)) => {
                 let ok = tj <= limit + 1e-6;
-                let unit = if key != reference {
-                    format!(" (hottest unit {key})")
-                } else {
-                    String::new()
-                };
+                let unit = unit_note("hottest unit", &key, &reference);
                 if ok {
                     (
                         true,

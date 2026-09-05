@@ -73,10 +73,10 @@ const FAMOUS_EAGLE: &[(&str, &str)] = &[
         "SparkFun Pro Micro",
         "sparkfun_pro_micro/Hardware/v20/SparkFun_Pro_Micro.brd",
     ),
-    // Round-3 additions. The RP2040 Thing Plus is the regression guard for the
-    // Eagle mirror-transform fix (drc.rs): its MR0 micro-SD socket J6 used to
-    // drop pads ~23 mm onto the V_USB/EN bottom traces and report 5 false
-    // shorts. It must stay short-clean.
+    // The RP2040 Thing Plus guards the Eagle mirror transform (drc.rs): a
+    // flip-Y reading of its MR0 micro-SD socket J6 drops pads ~23 mm onto the
+    // V_USB/EN bottom traces and reports 5 false shorts. It must stay
+    // short-clean.
     (
         "SparkFun Thing Plus SAMD51",
         "sparkfun_thingplus_samd51/Hardware/SAMD51_Thing_Plus.brd",

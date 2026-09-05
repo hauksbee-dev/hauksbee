@@ -3,15 +3,11 @@
 //!
 //! Every semantic check eventually asks the same question about a component
 //! record: "is this part actually on the assembled board, as the part the
-//! record claims to be?" Before this module, the answer lived in two
-//! vocabularies in two crates: the DNP decision (`dnp.rs`) answered the
-//! present-versus-absent axis, and the engine's identity-refusal detection
-//! answered the trusted-versus-ambiguous axis. A check that consulted one and
-//! not the other let a part leak through as ordinary and fitted: Board-as-Code
-//! recompiled an unknown part into a fitted one, and the binder, ideal-supply
-//! and ampacity paths each needed an individual fix to leave refused
-//! identities open. Those were point fixes; this type is the contract that
-//! stops the next check from needing its own.
+//! record claims to be?" That answer spans two axes which used to live in two
+//! vocabularies in two crates: present-versus-absent (the DNP decision in
+//! `dnp.rs`) and trusted-versus-ambiguous (the engine's identity refusal). A
+//! check consulting one and not the other lets a part leak through as ordinary
+//! and fitted, so both are answered here, once.
 //!
 //! [`AssemblyState::of`] classifies one component record into exactly one of
 //! three states:
@@ -130,10 +126,9 @@ pub enum AssemblyState<'c> {
 }
 
 impl<'c> AssemblyState<'c> {
-    /// Classify one component record. This is the single entry point: every
-    /// consumer that used to read `component.dnp` or probe the identity
-    /// properties asks this instead, so no two checks can disagree about what
-    /// "present" means.
+    /// Classify one component record. The single entry point: consumers ask this
+    /// rather than reading `component.dnp` or probing the identity properties,
+    /// so no two checks can disagree about what "present" means.
     pub fn of(component: &'c Component) -> AssemblyState<'c> {
         if let Some(refusal) = identity_refusal(component) {
             return AssemblyState::IdentityUnknown(refusal);

@@ -154,6 +154,19 @@ impl CustomRegistry {
 /// is well defined (mirrors `power_supply::STIFF_R_OHMS`).
 const STIFF_R_OHMS: f64 = 1e-3;
 
+/// Intern a hidden node holding a literal DC voltage, for a model-internal rail
+/// (a pull target or an open-drain sink) the board itself does not name.
+fn hidden_dc_node(circuit: &mut Circuit, reference: &str, tag: &str, volts: f64) -> NodeId {
+    let node = circuit.node(&format!("__beh_{reference}_{tag}"));
+    circuit.add(Device::Vsource {
+        name: format!("Vbeh_{reference}_{tag}"),
+        p: node,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(volts),
+    });
+    node
+}
+
 /// High-impedance "off" resistance for a tri-stated open-drain / drive leg.
 const OFF_OHMS: f64 = 1e12;
 
@@ -161,15 +174,6 @@ const OFF_OHMS: f64 = 1e12;
 /// parsed component records.
 const MATCHED_SHUNT_RELATIVE_TOLERANCE: f64 = 1e-12;
 const MATCHED_SHUNT_MIN_SCALE_OHMS: f64 = 1.0;
-
-/// One pull leg: a resistor from a pin to a rail, stamped once. The device id
-/// is retained so a future extension can retune or tri-state the pull; the pull
-/// itself is static, so the runtime never touches it after stamping.
-#[derive(Debug, Clone)]
-struct PullLeg {
-    #[allow(dead_code)]
-    resistor: DeviceId,
-}
 
 /// One open-drain leg: a resistor whose value we swap on/off by state.
 #[derive(Debug, Clone)]
@@ -246,6 +250,18 @@ struct ConverterLeg {
     last_iout_a: f64,
     /// Last reflected input current commanded (A).
     last_iin_a: f64,
+}
+
+impl ConverterLeg {
+    /// Stop delivering: nothing commanded on the output, nothing reflected onto
+    /// the input. The last commanded voltage is deliberately NOT cleared here,
+    /// so a caller that wants the regulation loop to restart from zero says so.
+    fn shut_down(&mut self, circuit: &mut Circuit) {
+        self.last_iout_a = 0.0;
+        self.last_iin_a = 0.0;
+        set_source_dc(circuit, self.out_vsource, 0.0);
+        set_source_dc(circuit, self.in_isource, 0.0);
+    }
 }
 
 /// A stamped expression law: a controllable source whose value is recomputed
@@ -459,7 +475,10 @@ pub struct BehavioralDevice {
     /// Static numeric params (from the model entry), bound into every context.
     params: Params,
 
-    pulls: Vec<PullLeg>,
+    /// Count of static pull legs (a resistor from a pin to a rail) stamped for
+    /// this device. The legs never change after stamping, so only their
+    /// presence matters.
+    pulls: usize,
     open_drains: Vec<OpenDrainLeg>,
     drives: Vec<DriveLeg>,
     series_paths: Vec<SeriesPathLeg>,
@@ -535,7 +554,7 @@ impl BehavioralDevice {
             reference: reference.to_string(),
             role_nodes: role_nodes.clone(),
             params: params.clone(),
-            pulls: Vec::new(),
+            pulls: 0,
             open_drains: Vec::new(),
             drives: Vec::new(),
             series_paths: Vec::new(),
@@ -575,7 +594,7 @@ impl BehavioralDevice {
             reference: reference.to_string(),
             role_nodes: role_nodes.clone(),
             params: params.clone(),
-            pulls: Vec::new(),
+            pulls: 0,
             open_drains: Vec::new(),
             drives: Vec::new(),
             series_paths: Vec::new(),
@@ -594,7 +613,29 @@ impl BehavioralDevice {
             custom: None,
         };
 
-        // ── Pins: internal pulls and open-drain sinks ──────────────────────
+        dev.stamp_pins(circuit, reference, model, role_nodes);
+        dev.stamp_fsm(circuit, reference, model, role_nodes);
+        dev.stamp_series_paths(circuit, reference, model, role_nodes);
+        dev.stamp_profiled_loads(circuit, reference, model, role_nodes);
+        dev.stamp_converter(circuit, reference, model, role_nodes, board_resistor);
+        dev.stamp_laws(circuit, reference, model, params, role_nodes);
+
+        if dev.is_inert() {
+            None
+        } else {
+            Some(dev)
+        }
+    }
+
+    /// Internal pull resistors and open-drain sink legs for every connected pin
+    /// the model declares. A sink leg starts at [`OFF_OHMS`], i.e. released.
+    fn stamp_pins(
+        &mut self,
+        circuit: &mut Circuit,
+        reference: &str,
+        model: &Behavioral,
+        role_nodes: &BTreeMap<String, NodeId>,
+    ) {
         for (role, pin) in &model.pins {
             let Some(&pin_node) = role_nodes.get(role) else {
                 continue; // pin not connected on this board; nothing to stamp
@@ -603,28 +644,26 @@ impl BehavioralDevice {
             if let Some(ohms) = pin.pull_ohms {
                 let rail = if let Some(v) = pin.pull_to_volts {
                     // Literal-voltage rail: stamp a hidden stiff source node.
-                    let n = circuit.node(&format!("__beh_{reference}_{role}_railv"));
-                    circuit.add(Device::Vsource {
-                        name: format!("Vbeh_{reference}_{role}_rail"),
-                        p: n,
-                        n: NodeId::GROUND,
-                        kind: SourceKind::Dc(v),
-                    });
-                    Some(n)
+                    Some(hidden_dc_node(
+                        circuit,
+                        reference,
+                        &format!("{role}_rail"),
+                        v,
+                    ))
                 } else if let Some(rail_role) = &pin.pull_to {
                     role_nodes.get(rail_role).copied()
                 } else {
                     None
                 };
                 if let Some(rail_node) = rail {
-                    let r = circuit.add(Device::Resistor {
+                    circuit.add(Device::Resistor {
                         name: format!("Rbeh_{reference}_{role}_pull"),
                         a: pin_node,
                         b: rail_node,
                         ohms,
                         tc1: None,
                     });
-                    dev.pulls.push(PullLeg { resistor: r });
+                    self.pulls += 1;
                 }
             }
             // Open-drain sink leg (starts off / high-impedance).
@@ -633,14 +672,7 @@ impl BehavioralDevice {
                 let sink_node = if sink.abs() < 1e-12 {
                     NodeId::GROUND
                 } else {
-                    let n = circuit.node(&format!("__beh_{reference}_{role}_odsink"));
-                    circuit.add(Device::Vsource {
-                        name: format!("Vbeh_{reference}_{role}_odsink"),
-                        p: n,
-                        n: NodeId::GROUND,
-                        kind: SourceKind::Dc(sink),
-                    });
-                    n
+                    hidden_dc_node(circuit, reference, &format!("{role}_odsink"), sink)
                 };
                 let on_ohms = pin.od_ohms.unwrap_or(20.0);
                 let r = circuit.add(Device::Resistor {
@@ -650,21 +682,30 @@ impl BehavioralDevice {
                     ohms: OFF_OHMS,
                     tc1: None,
                 });
-                dev.open_drains.push(OpenDrainLeg {
+                self.open_drains.push(OpenDrainLeg {
                     pin_role: role.clone(),
                     resistor: r,
                     on_ohms,
                 });
             }
         }
+    }
 
-        // ── FSM ────────────────────────────────────────────────────────────
+    /// The FSM: its compiled transition guards, its initial state, and one
+    /// swappable drive leg per pin any state drives to a voltage.
+    fn stamp_fsm(
+        &mut self,
+        circuit: &mut Circuit,
+        reference: &str,
+        model: &Behavioral,
+        role_nodes: &BTreeMap<String, NodeId>,
+    ) {
         if let Some(fsm) = &model.fsm {
-            dev.fsm_states = fsm.states.clone();
+            self.fsm_states = fsm.states.clone();
             // Compile each transition guard once. A guard that fails to parse is
             // reported here (not silently, not re-parsed every chunk) and stored
             // as `None`, so it simply never fires.
-            dev.fsm_transitions = fsm
+            self.fsm_transitions = fsm
                 .transitions
                 .iter()
                 .map(|tr| {
@@ -673,7 +714,7 @@ impl BehavioralDevice {
                         Err(e) => {
                             eprintln!(
                                 "[behavioural] {reference}: FSM guard '{}' ({} -> {}) \
-                                 failed to parse: {e}; transition disabled",
+                             failed to parse: {e}; transition disabled",
                                 tr.guard, tr.from, tr.to
                             );
                             None
@@ -685,9 +726,9 @@ impl BehavioralDevice {
                     }
                 })
                 .collect();
-            dev.transition_guard_true_s = vec![0.0; dev.fsm_transitions.len()];
-            dev.state_pins = fsm.state_pins.clone();
-            dev.state_idx = fsm
+            self.transition_guard_true_s = vec![0.0; self.fsm_transitions.len()];
+            self.state_pins = fsm.state_pins.clone();
+            self.state_idx = fsm
                 .initial
                 .as_ref()
                 .and_then(|init| fsm.states.iter().position(|s| s == init))
@@ -722,7 +763,7 @@ impl BehavioralDevice {
                     ohms: OFF_OHMS,
                     tc1: None,
                 });
-                dev.drives.push(DriveLeg {
+                self.drives.push(DriveLeg {
                     pin_role: role,
                     vsource,
                     resistor,
@@ -730,13 +771,22 @@ impl BehavioralDevice {
                 });
             }
         }
+    }
 
-        // ── State-controlled series conduction paths ─────────────────────
+    /// State-controlled series conduction paths (a load switch's pass element,
+    /// a mux arm), stamped at whichever resistance the initial state selects.
+    fn stamp_series_paths(
+        &mut self,
+        circuit: &mut Circuit,
+        reference: &str,
+        model: &Behavioral,
+        role_nodes: &BTreeMap<String, NodeId>,
+    ) {
         for path in &model.series_paths {
             let (Some(&a), Some(&b)) = (role_nodes.get(&path.a), role_nodes.get(&path.b)) else {
                 continue;
             };
-            let active = dev.state();
+            let active = self.state();
             let initial_ohms = path
                 .state_ohms
                 .get(active)
@@ -749,7 +799,7 @@ impl BehavioralDevice {
                 ohms: initial_ohms,
                 tc1: None,
             });
-            dev.series_paths.push(SeriesPathLeg {
+            self.series_paths.push(SeriesPathLeg {
                 name: path.name.clone(),
                 a,
                 b,
@@ -759,8 +809,17 @@ impl BehavioralDevice {
                 current_ohms: initial_ohms,
             });
         }
+    }
 
-        // ── Model-owned dynamic current profiles ─────────────────────────
+    /// Model-owned dynamic current profiles: one Isource per declared load,
+    /// seeded at the profile's own pre-start current.
+    fn stamp_profiled_loads(
+        &mut self,
+        circuit: &mut Circuit,
+        reference: &str,
+        model: &Behavioral,
+        role_nodes: &BTreeMap<String, NodeId>,
+    ) {
         for load in &model.profiled_loads {
             let Some(&supply) = role_nodes.get(&load.supply_pin) else {
                 continue;
@@ -787,7 +846,7 @@ impl BehavioralDevice {
                 n: return_node,
                 kind: SourceKind::Dc(initial_i),
             });
-            dev.profiled_loads.push(ProfiledLoadLeg {
+            self.profiled_loads.push(ProfiledLoadLeg {
                 name: load.name.clone(),
                 source,
                 profile,
@@ -797,8 +856,20 @@ impl BehavioralDevice {
                 peak_i_a: initial_i,
             });
         }
+    }
 
-        // ── Converter ──────────────────────────────────────────────────────
+    /// The averaged converter: a commandable output source behind its series
+    /// resistance, plus the Isource carrying the reflected input draw. Skipped
+    /// when a programmable limit has no board evidence to read, or when either
+    /// power pin is unconnected.
+    fn stamp_converter(
+        &mut self,
+        circuit: &mut Circuit,
+        reference: &str,
+        model: &Behavioral,
+        role_nodes: &BTreeMap<String, NodeId>,
+        board_resistor: &dyn Fn(&str) -> Option<f64>,
+    ) {
         if let Some(c) = &model.converter {
             let iin_limit_a = resolve_iin_limit(c, board_resistor);
             let has_required_program_evidence = c.iin_program.is_none() || iin_limit_a.is_some();
@@ -834,7 +905,7 @@ impl BehavioralDevice {
                         n: NodeId::GROUND,
                         kind: SourceKind::Dc(0.0),
                     });
-                    dev.converter = Some(ConverterLeg {
+                    self.converter = Some(ConverterLeg {
                         cfg: c.clone(),
                         out_vsource,
                         out_drv_node: drv,
@@ -858,8 +929,18 @@ impl BehavioralDevice {
                 }
             }
         }
+    }
 
-        // ── Laws ───────────────────────────────────────────────────────────
+    /// Expression laws, preferring the solver-implicit form where the law is a
+    /// pure function of pin voltages and params.
+    fn stamp_laws(
+        &mut self,
+        circuit: &mut Circuit,
+        reference: &str,
+        model: &Behavioral,
+        params: &Params,
+        role_nodes: &BTreeMap<String, NodeId>,
+    ) {
         for law in &model.laws {
             let Some(&a_node) = role_nodes.get(&law.a) else {
                 continue;
@@ -896,7 +977,7 @@ impl BehavioralDevice {
                         expr,
                         deps,
                     });
-                    dev.laws.push(LawLeg {
+                    self.laws.push(LawLeg {
                         law: law.clone(),
                         program,
                         stamp: LawStamp::Implicit,
@@ -933,24 +1014,18 @@ impl BehavioralDevice {
                     (vs, Some((r, on_ohms)))
                 }
             };
-            dev.laws.push(LawLeg {
+            self.laws.push(LawLeg {
                 law: law.clone(),
                 program,
                 stamp: LawStamp::Runtime { source, series_r },
             });
-        }
-
-        if dev.is_inert() {
-            None
-        } else {
-            Some(dev)
         }
     }
 
     /// True when nothing was stamped (no legs / FSM / custom): inert.
     fn is_inert(&self) -> bool {
         self.custom.is_none()
-            && self.pulls.is_empty()
+            && self.pulls == 0
             && self.open_drains.is_empty()
             && self.drives.is_empty()
             && self.series_paths.is_empty()
@@ -982,11 +1057,6 @@ impl BehavioralDevice {
     /// The effective input-current limit of the converter (A), or None.
     pub fn converter_iin_limit(&self) -> Option<f64> {
         self.converter.as_ref().and_then(|c| c.iin_limit_a)
-    }
-
-    /// Last delivered output current of the converter (A), or None.
-    pub fn converter_iout(&self) -> Option<f64> {
-        self.converter.as_ref().map(|c| c.last_iout_a)
     }
 
     /// Last reflected input current the converter drew (A), or None.
@@ -1266,18 +1336,12 @@ impl BehavioralDevice {
                 .unwrap_or(false);
             if !enabled {
                 c.last_cmd_vout = 0.0;
-                c.last_iout_a = 0.0;
-                c.last_iin_a = 0.0;
-                set_source_dc(circuit, c.out_vsource, 0.0);
-                set_source_dc(circuit, c.in_isource, 0.0);
+                c.shut_down(circuit);
                 return;
             }
         }
         if c.cfg.iin_program.is_some() && c.iin_limit_a.is_none() {
-            c.last_iout_a = 0.0;
-            c.last_iin_a = 0.0;
-            set_source_dc(circuit, c.out_vsource, 0.0);
-            set_source_dc(circuit, c.in_isource, 0.0);
+            c.shut_down(circuit);
             return;
         }
         // Delivered output current = the drop across the output series resistor
@@ -1309,10 +1373,7 @@ impl BehavioralDevice {
         let mut v_cmd = if let Some(feedback) = &c.cfg.feedback {
             let Some(feedback_node) = c.feedback_node else {
                 c.last_cmd_vout = 0.0;
-                c.last_iout_a = 0.0;
-                c.last_iin_a = 0.0;
-                set_source_dc(circuit, c.out_vsource, 0.0);
-                set_source_dc(circuit, c.in_isource, 0.0);
+                c.shut_down(circuit);
                 return;
             };
             c.last_cmd_vout + feedback.relaxation_gain * (feedback.vref_v - node_v(feedback_node))

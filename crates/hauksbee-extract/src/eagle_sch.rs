@@ -32,6 +32,8 @@
 use crate::ExtractError;
 use quick_xml::events::Event;
 use quick_xml::Reader;
+
+use crate::eagle::xml_attrs as attrs;
 use std::collections::HashMap;
 
 /// One deliberate tie between two named nets, as the schematic declares it.
@@ -102,12 +104,10 @@ impl DeclaredNetTie {
 /// element, which a `.brd` never carries (it has `<board>` instead).
 ///
 /// `<schematic>` is deliberately searched over the WHOLE document, not a head
-/// slice. Eagle writes `<settings>`, `<grid>` and the full `<layers>` table
-/// first: on emonTx V3.4.5 the root is at byte 75 but `<schematic>` is at 10856,
-/// so a 4 KB head slice rejected a perfectly good schematic and silently
-/// disabled this whole pathway on the very board it exists for. Only `<eagle>`
-/// is checked near the top, where it genuinely is. The scan is one linear pass
-/// and cheap next to parsing the file.
+/// slice: Eagle writes `<settings>`, `<grid>` and the full `<layers>` table
+/// first, so `<schematic>` can sit ten kilobytes in and a head slice would
+/// reject a perfectly good schematic. Only `<eagle>` is checked near the top,
+/// where it genuinely is; the scan is one linear pass, cheap next to parsing.
 pub fn looks_like_eagle_schematic(text: &str) -> bool {
     parse(text).is_ok()
 }
@@ -177,13 +177,11 @@ struct Segment {
 ///
 /// The single-pin requirement is load-bearing, and getting it wrong is how this
 /// module silences real shorts. Eagle libraries routinely mark an ordinary
-/// component's power pins `direction="sup"`: the `SD-MMC` symbol in
-/// `margay_logger/Hardware/Margay.sch` has 13 pins of which 4 are `sup`, and the
-/// `XBEE` symbol in `emonTx V3.2.sch` has 20 pins of which 2 are. Registering
-/// those as supply symbols made the SD socket and the radio module "declare" a
-/// tie between ground and every net they touch, which would attach false intent
-/// context to a genuine rail-to-ground short. A real Eagle supply symbol is a
-/// bare marker: one pin, and that pin is `sup`.
+/// component's power pins `direction="sup"` (an SD socket, a radio module), and
+/// registering those as supply symbols would make the part "declare" a tie
+/// between ground and every net it touches, attaching false intent context to a
+/// genuine rail-to-ground short. A real Eagle supply symbol is a bare marker:
+/// one pin, and that pin is `sup`.
 #[derive(Default)]
 struct SymbolPins {
     total: usize,
@@ -592,26 +590,6 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
         physical_parts,
         physical_pin_nets,
     })
-}
-
-/// Attribute map with entities unescaped, mirroring `eagle.rs`: quick-xml hands
-/// back raw attribute bytes, so an `&amp;` in a net name would otherwise reach a
-/// report literally and never match the `.brd`'s own spelling of that net.
-fn attrs(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
-    e.attributes()
-        .flatten()
-        .map(|a| {
-            // quick-xml deprecates this in favour of `normalized_value`, which
-            // takes an `XmlVersion` the crate does not export. Same call and
-            // same reasoning as `eagle.rs`.
-            #[allow(deprecated)]
-            let value = a
-                .unescape_value()
-                .map(|c| c.into_owned())
-                .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
-            (String::from_utf8_lossy(a.key.as_ref()).into_owned(), value)
-        })
-        .collect()
 }
 
 #[cfg(test)]

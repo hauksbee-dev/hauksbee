@@ -11,11 +11,8 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
-use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
 use hauksbee_models::ModelLibrary;
-
-use crate::binder::resolve;
 
 fn unconnected_placeholder(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -25,13 +22,7 @@ fn unconnected_placeholder(name: &str) -> bool {
 /// Find model-declared control pads that sit alone on a named net.
 pub fn model_control_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
-    for comp in &board.components {
-        let Some(part) = AssemblyState::of(comp).fitted() else {
-            continue;
-        };
-        let Some(model) = resolve(lib, part).model else {
-            continue;
-        };
+    for (comp, model) in super::resolved_components(board, lib) {
         let Some(raw_roles) = model.params.get_str("must_not_float_roles") else {
             continue;
         };

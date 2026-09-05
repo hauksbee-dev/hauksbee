@@ -117,12 +117,6 @@ impl VcdSink {
         }
     }
 
-    /// Override the logic thresholds.
-    pub fn with_thresholds(mut self, t: Thresholds) -> Self {
-        self.thresholds = t;
-        self
-    }
-
     /// Number of recorded transitions (for assertions / tests).
     pub fn transition_count(&self) -> usize {
         // The initial value dump every net emits at t=0 is not a transition,
@@ -181,7 +175,6 @@ impl VcdSink {
         s
     }
 
-    /// Write the VCD to the configured path (no-op if none set).
     /// Create the output's parent directory if it is not there.
     ///
     /// Naming an output under a directory that does not exist yet is an
@@ -196,6 +189,7 @@ impl VcdSink {
         }
     }
 
+    /// Write the VCD to the configured path (no-op if none set).
     pub fn write(&self) -> std::io::Result<()> {
         if let Some(p) = &self.path {
             Self::ensure_parent(p)?;

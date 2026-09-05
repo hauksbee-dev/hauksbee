@@ -365,9 +365,7 @@ fn shipped_boards_survive_gerbers() {
         ("testdata/boards/vcd_pulse.kicad_pcb", false),
     ];
     if kicad_cli().is_none() {
-        // This used to skip unconditionally, and CI has no KiCad, so it never
-        // ran once while its own doc comment called it "a real gate". A gate
-        // that silently does not run is worse than no gate: it reads as
+        // A gate that silently does not run is worse than no gate: it reads as
         // evidence. HAUKSBEE_REQUIRE_KICAD=1 makes a missing kicad-cli a hard
         // failure, and scripts/make-public.sh sets it, so the release gate
         // exercises the claim even though a per-PR runner does not.

@@ -963,9 +963,9 @@ fn receptacle_score(comp: &hauksbee_extract::Component) -> i32 {
 /// Delegates to the evidence ladder in `hauksbee_extract`, which answers from
 /// the model DB's declared passive class through the assembly witness and only
 /// falls back to the designator/`lib_id` strings when nothing better exists.
-/// This used to be a designator-prefix test with an exclusion list, so a
-/// capacitor a designer had labelled `R5` on the CC line was over-credited as
-/// an Rd, and a model-DB-known resistor in an odd slot was lost.
+/// A designator-prefix test with an exclusion list is not enough: it
+/// over-credits a capacitor a designer labelled `R5` on the CC line as an Rd,
+/// and loses a model-DB-known resistor in an odd slot.
 fn is_resistor(comp: &hauksbee_extract::Component) -> bool {
     hauksbee_extract::is_plain_resistor(comp)
 }

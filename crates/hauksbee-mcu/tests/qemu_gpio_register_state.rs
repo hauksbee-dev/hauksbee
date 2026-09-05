@@ -1,4 +1,4 @@
-//! Live proof that ESP32 GPIO output no longer requires cooperating firmware.
+//! Live proof that ESP32 GPIO output does not require cooperating firmware.
 //!
 //! The fixture is an ordinary ESP-IDF app: it never reads or writes Hauksbee's
 //! RTC-slow-RAM mailbox. This test therefore passes only when the emulator's
@@ -16,9 +16,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 fn fixture() -> Option<PathBuf> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/esp32_native_gpio/flash.bin");
-    path.exists().then(|| path.canonicalize().unwrap_or(path))
+    crate::support::firmware("esp32_native_gpio/flash.bin")
 }
 
 #[test]

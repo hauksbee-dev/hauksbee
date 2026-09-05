@@ -58,7 +58,7 @@ use hauksbee_extract::{
 };
 use hauksbee_models::ModelLibrary;
 
-use crate::binder::{power_rail_voltage, resolve};
+use crate::binder::power_rail_voltage;
 use hauksbee_extract::assembly::AssemblyState;
 
 /// Margin (V) a rail must exceed the part's supply by before the finding
@@ -171,15 +171,7 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
     // pull-ups to one rail, or a part with two pins on the net, reads once.
     let mut seen: BTreeSet<(String, i64, String)> = BTreeSet::new();
 
-    for comp in &board.components {
-        // Three-state contract: only a Present record can be a resolvable
-        // part with a supply domain; DNP and identity-refused records abstain.
-        let Some(part) = AssemblyState::of(comp).fitted() else {
-            continue;
-        };
-        let Some(model) = resolve(lib, part).model else {
-            continue;
-        };
+    for (comp, model) in super::resolved_components(board, lib) {
         // Deterministic pad order for stable finding order.
         let pins: std::collections::BTreeMap<String, String> = model
             .pins

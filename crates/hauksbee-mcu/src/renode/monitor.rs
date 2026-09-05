@@ -27,17 +27,13 @@ pub struct Monitor {
 impl Monitor {
     /// Connect to a Renode Monitor listening on `addr`, retrying until
     /// `connect_timeout` elapses (Renode takes several seconds to bind).
-    pub fn connect<A: ToSocketAddrs + Clone>(addr: A, connect_timeout: Duration) -> Result<Self> {
-        Self::connect_while(addr, connect_timeout, || None)
-    }
-
-    /// As `connect`, but `dead` is polled between attempts and short-circuits
-    /// the wait when the peer process has already exited.
     ///
-    /// Without this, a Renode that died at startup (most often because another
-    /// process took the port between our probe and its bind) costs the caller
-    /// the whole connect timeout and then reports "connection refused", which
-    /// names the symptom and hides the cause.
+    /// `dead` is polled between attempts and short-circuits the wait when the
+    /// peer process has already exited. Without it, a Renode that died at
+    /// startup (most often because another process took the port between our
+    /// probe and its bind) costs the caller the whole connect timeout and then
+    /// reports "connection refused", which names the symptom and hides the
+    /// cause.
     pub fn connect_while<A: ToSocketAddrs + Clone>(
         addr: A,
         connect_timeout: Duration,
@@ -109,6 +105,32 @@ impl Monitor {
 
         let raw = self.read_until_prompt(timeout)?;
         Ok(clean_response(cmd, &raw))
+    }
+
+    /// Send a command and refuse a response that reports a Renode-side
+    /// failure.
+    ///
+    /// The Monitor carries no exit status: a rejected command answers with
+    /// prose on the same channel as a successful one, so the words `error`,
+    /// `exception` and `failed` are the only failure signal there is. Callers
+    /// that must not silently proceed on a rejected command use this instead of
+    /// [`Monitor::command`].
+    pub fn run(&mut self, cmd: &str) -> Result<String> {
+        let resp = self.command(cmd)?;
+        Self::refuse_failure(cmd, resp)
+    }
+
+    /// [`Monitor::run`] with an explicit per-command timeout.
+    pub fn run_with_timeout(&mut self, cmd: &str, timeout: Duration) -> Result<String> {
+        let resp = self.command_with_timeout(cmd, timeout)?;
+        Self::refuse_failure(cmd, resp)
+    }
+
+    fn refuse_failure(cmd: &str, resp: String) -> Result<String> {
+        if response_failed(&resp) {
+            bail!("Renode command `{cmd}` failed: {resp}");
+        }
+        Ok(resp)
     }
 
     /// Read from the socket until a trailing prompt `(name) ` is seen.
@@ -287,4 +309,11 @@ mod tests {
         let cleaned = clean_response("start", raw);
         assert_eq!(cleaned, "Starting emulation...");
     }
+}
+
+/// True if a Monitor response reports a Renode-side failure. See
+/// [`Monitor::run`] for why prose is the only signal available.
+pub fn response_failed(resp: &str) -> bool {
+    let lower = resp.to_lowercase();
+    lower.contains("error") || lower.contains("exception") || lower.contains("failed")
 }

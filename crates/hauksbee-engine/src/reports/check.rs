@@ -199,7 +199,7 @@ pub(crate) fn emit_with_schematic_quiet(
     }
     let evidence = evidence.with_maps(evidence_maps);
 
-    // Zero routed copper (D2): a pads-only board passes the spacing check
+    // Zero routed copper: a pads-only board passes the spacing check
     // vacuously (there is nothing to space). Say so prominently instead of
     // letting "no copper spacing problems" read as "the routing is clean" on
     // a board that has no routing yet.
@@ -1006,10 +1006,10 @@ pub fn emit_combined_json_with_schematic(
     // the ampacity/ripple findings too, or a machine consumer of the JSON reads
     // a false-clean SI section.
     let mut si = crate::checks::engine_si(board, lib, geo_text);
-    // Same waivers as `--check` and as the artifact writer. This surface used to
-    // skip them, so an excused finding stayed live in `findings`, gated the run
-    // to exit 2 with `verdict: "fail"`, and left the `--junit`/`--sarif` file
-    // written from the waived-down suite reading `failures="0"` beside it.
+    // Same waivers as `--check` and as the artifact writer. Skipping them here
+    // would leave an excused finding live in `findings`, gating the run to exit 2
+    // with `verdict: "fail"` beside a `--junit`/`--sarif` file, written from the
+    // waived-down suite, that reads `failures="0"`.
     let mut waivers = load_waivers(board_path);
     let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
     let provenance = if altium_present {

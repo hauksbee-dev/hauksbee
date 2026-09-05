@@ -600,8 +600,8 @@ fn unit_token(s: &str) -> Option<(String, &str)> {
     let upper = s.to_uppercase();
     // "HZ" MUST be tested before the bare "H", or "16MHz" reads as 16 mega-
     // HENRIES with a stray 'z' left over, which `parse_tail` then rejects as
-    // garbage. That rejection is why a crystal valued "16Mhz" used to reach the
-    // binder as "unparseable value" instead of as the frequency it plainly is.
+    // garbage, so a crystal valued "16Mhz" reaches the binder as an
+    // unparseable value instead of as the frequency it plainly is.
     let (unit, len) = if upper.starts_with("HZ") {
         ("Hz", 2)
     } else if upper.starts_with("OHMS") {

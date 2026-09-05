@@ -4,8 +4,7 @@
 //! this crate resolves a simulation model definition. Physics arrives by
 //! several authoring routes (built-in DB, installed model packs, LLM
 //! datasheet extraction, hand-written behavioural models, user SPICE) that
-//! map onto six explicit priority layers ([`SourceLayer`],
-//! 06-extensibility-sdk §3):
+//! map onto six explicit priority layers ([`SourceLayer`]):
 //!
 //! | layer                                    | priority |
 //! |------------------------------------------|----------|
@@ -138,12 +137,10 @@ pub enum ModelError {
 
 // ── Source layers ─────────────────────────────────────────────────────────────
 
-/// The explicit resolution priority layer an entry was loaded from
-/// (06-extensibility-sdk §3). A higher-priority layer beats a lower one
-/// *regardless of specificity*; specificity only breaks ties within a layer.
-/// Before this existed, user-over-builtin worked only because user entries
-/// happened to score higher on specificity; now the layer is the comparison's
-/// first key, by construction.
+/// The explicit resolution priority layer an entry was loaded from. A
+/// higher-priority layer beats a lower one *regardless of specificity*;
+/// specificity only breaks ties within a layer, so user-over-builtin holds by
+/// construction rather than by an entry happening to score more specifically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SourceLayer {
     /// The embedded `db/*.toml` database.
@@ -165,7 +162,7 @@ pub enum SourceLayer {
 }
 
 impl SourceLayer {
-    /// The plan-mandated priority integer: builtin=0, pack=10, user dir=20,
+    /// Layer priority integer: builtin=0, pack=10, user dir=20,
     /// user config dir=25, `--models-dir`=30, user SPICE=40.
     pub fn priority(self) -> u32 {
         match self {
@@ -424,7 +421,7 @@ impl ModelLibrary {
     /// survive one bad installed pack), but nothing is silent either:
     ///   - a recorded pack whose dir fails validation is skipped with a warning;
     ///   - two packs shipping the same model id is a same-layer conflict,
-    ///     reported naming both packs (the plan forbids resolving it quietly,
+    ///     reported naming both packs (resolving it quietly is forbidden,
     ///     within a layer only specificity orders entries, so identical ids
     ///     would tie on match rules and win by load order, i.e. by accident).
     pub fn load_packs(&mut self, store: &PackStore) -> Vec<String> {
@@ -839,8 +836,8 @@ impl ModelLibrary {
 
         // A `.subckt` is a multi-terminal macro, not a single-device kind, and
         // an unrecognized `.model` type must not be silently claimed as a
-        // passive with Exact confidence (that shadowed the real part). Both
-        // resolve to Unresolved instead. (R8 #10)
+        // passive with Exact confidence (that shadows the real part). Both
+        // resolve to Unresolved instead.
         let kind = match card.kind {
             spice_input::SpiceCardKind::Subckt => None,
             spice_input::SpiceCardKind::Model => {
@@ -867,16 +864,7 @@ impl ModelLibrary {
             r#match: MatchRules::default(),
             params,
             pins,
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: None,
+            ..Default::default()
         };
 
         Resolution {

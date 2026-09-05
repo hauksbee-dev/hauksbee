@@ -14,11 +14,11 @@
 //! primitive whose area sits wholly inside the solid hull, and which no LATER
 //! exposure-on primitive paints back over, becomes a hole contour in the
 //! returned shape (even-odd containment reads its interior as empty). Ignoring
-//! these read a macro's punched-out void as solid copper, so foreign copper
-//! routed through the void was unioned onto the pad's net: a false short. A
-//! clear that a later dark repaints, or one that crosses the hull boundary, is
-//! dropped (the area stays solid), which errs toward the old over-approximation
-//! and never toward inventing emptiness where copper is.
+//! these reads a macro's punched-out void as solid copper, so foreign copper
+//! routed through the void is unioned onto the pad's net: a false short. A clear
+//! that a later dark repaints, or one that crosses the hull boundary, is dropped
+//! and the area stays solid, erring toward over-approximation and never toward
+//! inventing emptiness where copper is.
 //!
 //! Variable substitution handles `$1..$n` from the flash's positional
 //! arguments and a small arithmetic evaluator covers the `$1+$1`,
@@ -548,8 +548,8 @@ mod tests {
 
     #[test]
     fn division_by_zero_refuses() {
-        // Bug-hunt #6: a zero divisor must yield None (routing to the disc
-        // fallback), not the Inf/NaN that silently poisoned the pad geometry.
+        // A zero divisor must yield None (routing to the disc fallback), not an
+        // Inf/NaN that silently poisons the pad geometry.
         let mut vars = HashMap::new();
         vars.insert(1u32, 5.0);
         assert_eq!(eval_expr("$1/0", &vars), None);

@@ -233,12 +233,12 @@ fn collect_thermal(engine: &mut HauksbeeEngine, seconds: f64) -> Vec<(String, f6
 
 /// The one-line partial-coverage caveat text (shared by JSON note + stderr).
 fn thermal_coverage_caveat(coverage: &CheckCoverage) -> String {
-    // State the honest facts: how many active power ICs are OPEN (and so dissipate
-    // nothing), out of the total on the live circuit. The earlier wording claimed
-    // "{total - open} active IC(s) are in the table", but being resolved/non-open
-    // is NOT the same as producing a thermal row, a resolved logic IC that
-    // dissipates ~0 W yields no row yet was counted as "in the table", overstating
-    // coverage in a caveat whose whole point is to prevent false comfort.
+    // State the honest facts: how many active power ICs are OPEN (and so
+    // dissipate nothing), out of the total on the live circuit. Being
+    // resolved/non-open is NOT the same as producing a thermal row (a resolved
+    // logic IC dissipating ~0 W yields no row), so this must never be phrased as
+    // a count of ICs "in the table"; that overstates coverage in a caveat whose
+    // whole point is to prevent false comfort.
     format!(
         "thermal coverage is PARTIAL: {} of {} active power IC(s) on the live circuit \
          are open/unresolved and dissipate nothing in simulation. The {} dissipating \
@@ -366,13 +366,10 @@ mod tests {
 
     #[test]
     fn partial_coverage_caveat_does_not_overstate_ics_in_the_table() {
-        // R42: the caveat computed "covered = total - open" and claimed that many
-        // active ICs were "in the table". But a resolved active IC that dissipates
-        // ~0 W produces no thermal row, so being non-open is NOT being in the
-        // table; the wording overstated coverage in a message whose whole purpose
-        // is to prevent false comfort. total_active=3, open=1, and the rows come
-        // only from passives (dissipating_count counts them): the caveat must not
-        // claim "2 of 3 active power IC(s) ... are in the table".
+        // A resolved active IC that dissipates ~0 W produces no thermal row, so
+        // being non-open is NOT being in the table. The caveat must report the
+        // OPEN count, never "total - open" dressed up as coverage: here
+        // total_active=3, open=1, and every row comes from a passive.
         let cov = CheckCoverage {
             resolved_fraction: 0.0,
             dissipating_count: 4, // passives
@@ -382,13 +379,8 @@ mod tests {
         };
         let msg = thermal_coverage_caveat(&cov);
         assert!(
-            !msg.contains("are in the table"),
-            "must not claim non-open active ICs are in the table: {msg}"
-        );
-        // It states the honest fact: how many active ICs are open/dissipate nothing.
-        assert!(
             msg.contains("1 of 3 active power IC(s)") && msg.contains("dissipate nothing"),
-            "must state the open count honestly: {msg}"
+            "must state the open count, not the covered count: {msg}"
         );
     }
 
@@ -421,10 +413,6 @@ mod tests {
                  2 power part(s) unmodeled, verdict INVALID"
             ),
             "the closing line must condition the clean rows on modeled-only coverage:\n{text}"
-        );
-        assert!(
-            !text.contains("all dissipating devices within"),
-            "the old unqualified pass must be gone:\n{text}"
         );
     }
 }

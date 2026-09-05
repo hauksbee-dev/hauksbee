@@ -29,7 +29,10 @@ pub struct DbFile {
 // ── Model entry ───────────────────────────────────────────────────────────────
 
 /// A single model entry in the database.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+///
+/// Every field but `id` and `kind` defaults, so a construction site spells the
+/// fields it means and takes the rest from `..Default::default()`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ModelEntry {
     /// Stable identifier used in diagnostics and as a cross-reference key.
     pub id: String,
@@ -782,7 +785,11 @@ impl Ratings {
 // ── Component kind ────────────────────────────────────────────────────────────
 
 /// Classification of a component for the solver and extractor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+///
+/// `Default` is [`ComponentKind::Ignore`], the inert arm: it exists so
+/// [`ModelEntry`] can derive `Default` for struct-update construction, and it
+/// is never reached through deserialization (`kind` has no `serde(default)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentKind {
     /// Passive element: resistor, capacitor, inductor. Value is parsed from
@@ -819,36 +826,8 @@ pub enum ComponentKind {
     /// Connector: models pin continuity only.
     Connector,
     /// Mounting hole, logo, test point, fiducial, silently ignored.
+    #[default]
     Ignore,
-}
-
-impl ComponentKind {
-    /// Whether this kind carries SPICE-level analog params.
-    pub fn is_analog(self) -> bool {
-        matches!(
-            self,
-            ComponentKind::Passive
-                | ComponentKind::Diode
-                | ComponentKind::BjtNpn
-                | ComponentKind::BjtPnp
-                | ComponentKind::Nmos
-                | ComponentKind::Pmos
-        )
-    }
-
-    /// Whether this kind is event-driven / behavioral.
-    pub fn is_behavioral(self) -> bool {
-        matches!(
-            self,
-            ComponentKind::Opamp
-                | ComponentKind::Comparator
-                | ComponentKind::AnalogSwitch
-                | ComponentKind::Digital
-                | ComponentKind::Dac
-                | ComponentKind::Adc
-                | ComponentKind::ShiftRegister
-        )
-    }
 }
 
 // ── Passive class ─────────────────────────────────────────────────────────────
@@ -861,9 +840,8 @@ impl ComponentKind {
 /// resistor, a crystal load cap must be a capacitor, and a ferrite bead sitting
 /// between a rail and a net is neither. Before this field the only available
 /// answer was the reference designator's first letter, which is a comment the
-/// CAD user wrote, not evidence: a resistor in an `RN`-numbered slot was read as
-/// a resistor network and a capacitor a designer had labelled `R5` was counted
-/// as a pull-up.
+/// CAD user wrote, not evidence: a resistor in an `RN`-numbered slot reads as a
+/// resistor network and a capacitor labelled `R5` counts as a pull-up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PassiveClass {

@@ -1,95 +1,71 @@
-//! The classic SPICE device-evaluation bypass (dev-plan 03 §6): skip
-//! re-evaluating a nonlinear device whose inputs did not move, replaying its
-//! previously recorded stamp instead of recomputing the `exp()`-heavy model.
+//! The classic SPICE device-evaluation bypass: skip re-evaluating a nonlinear
+//! device whose inputs did not move, replaying its previously recorded stamp
+//! instead of recomputing the `exp()`-heavy model.
 //!
 //! # What is cacheable, and for how long
 //!
-//! A nonlinear device's stamped contribution at iterate `x` is a function of
-//! three groups of inputs, with three different lifetimes:
-//!
-//! * **Per iteration**: the unknowns the device reads (`ctx.x` at its
-//!   terminals, plus a series-R BJT's internal unknowns) and the pn-limiting
-//!   anchor (`ctx.x_prev`). These are the tangent + equivalent current; the
-//!   thing bypass exists to reuse.
-//! * **Per step**: the integration factor `coeffs.g`, the charge-companion
-//!   history (`state.x1/dx1/x2`; the diode/BJT/MOS charge companions landed
-//!   in dev-plan 04 carry per-step history in their RHS terms), the source
-//!   time, and `gmin`. Constant across one step's whole Newton iteration
-//!   sequence, DIFFERENT on the next step.
-//! * **Per run**: the model parameters, temperature, effects toggles.
+//! A nonlinear device's stamped contribution at iterate `x` depends on inputs
+//! with three lifetimes: **per iteration** (the unknowns it reads at its
+//! terminals, a series-R BJT's internal unknowns, and the pn-limiting anchor
+//! `ctx.x_prev`), **per step** (the integration factor `coeffs.g`, the
+//! charge-companion history `state.x1/dx1/x2`, the source time, `gmin`), and
+//! **per run** (model parameters, temperature, effects toggles).
 //!
 //! Bypass operates WITHIN one step's Newton iteration sequence, so the cache
-//! may hold everything in the first two groups **as long as it never survives
-//! a `newton_solve` call**: a `generation` counter bumps at solve start and a
-//! device's record is only replayable inside the generation that recorded it.
-//! That single rule covers every cross-step hazard at once, dt changes, LTE
-//! retries at a different h, event retries, companion-history advance,
-//! because each of those is a fresh `newton_solve` call. (The first-two-
-//! iterations rule below re-evaluates everything at the start of every solve
-//! anyway; the generation is the structural guarantee, not the only line of
-//! defense.)
+//! may hold the first two groups as long as it never survives a `newton_solve`
+//! call: a `generation` counter bumps at solve start and a record is only
+//! replayable inside the generation that recorded it. That single rule covers
+//! every cross-step hazard at once (dt changes, LTE retries at a different h,
+//! event retries, companion-history advance), because each is a fresh
+//! `newton_solve` call.
 //!
 //! # The movement test
 //!
-//! Before evaluating device `d` on iteration ≥ 3, compare every unknown in
-//! its READ set against the values at its last recorded evaluation: if all of
-//! them satisfy `|v − v_last| ≤ 0.1·(reltol·max(|v|,|v_last|) + vntol)` (the
-//! plan's tightened SPICE `bypasstol`), replay the record; else evaluate
-//! fresh and re-record. The comparison is written NaN-safe (`!(Δ ≤ tol)`
-//! counts as moved), so a poisoned iterate always re-evaluates and hits the
-//! stamps' own non-finite guards.
+//! Before evaluating device `d` on iteration >= 3, compare every unknown in
+//! its READ set against the values at its last recorded evaluation: if all
+//! satisfy `|v - v_last| <= 0.1*(reltol*max(|v|,|v_last|) + vntol)` (a
+//! tightened SPICE `bypasstol`), replay the record; else evaluate fresh and
+//! re-record. The comparison is NaN-safe (`!(delta <= tol)` counts as moved),
+//! so a poisoned iterate always re-evaluates and hits the stamps' own
+//! non-finite guards.
 //!
 //! The READ set is the device's node unknowns (`Device::nodes()` through the
-//! layout, for a MOSFET that includes the optional bulk; for a VSwitch its
-//! control pair, though switches are excluded below) plus a series-R BJT's
-//! device-private internal unknowns (dev-plan 04 §3.2): the intrinsic
-//! junction voltages live there, so "the internal unknowns' movement counts
-//! as terminal movement". Ground is not an unknown and never moves.
+//! layout) plus a series-R BJT's device-private internal unknowns, where the
+//! intrinsic junction voltages live. Ground is not an unknown and never moves.
 //!
-//! # SPICE's safety discipline (all enforced by the caller + this module)
+//! # Safety discipline (enforced by the caller and this module)
 //!
 //! * never bypass on the first two iterations of a solve (`force_eval`);
 //! * never on DC solves, event-frozen solves (`cmp_freeze`/`switch_freeze`),
-//!   or the trials immediately after an event-resolved accept (the transient
-//!   driver holds bypass there, mirroring its extrapolation-seed skip);
+//!   or the trials immediately after an event-resolved accept;
 //! * the Armijo line-search residual evaluations keep the full `stamp_all`:
-//!   the census arc (7A) proved those norms sit on the cancellation noise
-//!   floor, so the residual the line search compares must stay order-exact,
-//!   bypass never touches `residual_inf_norm_at`;
-//! * the accepted step must match the no-bypass reference to reltol (§6.2's
-//!   gate), bypass may change the iterate PATH, never the answer.
+//!   those norms sit on the cancellation noise floor, so the residual the line
+//!   search compares must stay order-exact;
+//! * the accepted step must match the no-bypass reference to reltol: bypass
+//!   may change the iterate PATH, never the answer.
 //!
-//! # Exclusion list (refuse-rather-than-fake)
+//! # Exclusion list (refuse rather than fake)
 //!
-//! Bypassed: **Diode, BJT, MOSFET**: the `exp()`-heavy junction devices,
-//! exactly SPICE's classic set, and the devices whose evaluation dominates a
-//! quiescent board's assembly.
-//!
-//! Excluded, each with its reason:
+//! Bypassed: **Diode, BJT, MOSFET**, the `exp()`-heavy junction devices whose
+//! evaluation dominates a quiescent board's assembly. Excluded:
 //!
 //! * **Behavioral (B-source)**: its FD Jacobian probes the expression at
 //!   perturbed dependency values every evaluation, and its fault channel
-//!   (`take_behavioral_fault`) must see every iterate, a cached stamp would
-//!   silently skip the very evaluation that detects `ln(-2)` at a new point.
+//!   (`take_behavioral_fault`) must see every iterate.
 //! * **Comparator**: bang-bang output with hysteresis read from the CURRENT
-//!   iterate's output voltage; the discrete decision is the event the march
-//!   bisects on, exactly the "disable bypass near breakpoints" case; also
-//!   nearly free to evaluate (no exp).
-//! * **VSwitch**: the event-flip device of the flagship board (the
-//!   event-freeze machinery exists for it), and under break-before-make its
-//!   stamp reads its SIBLING leg's control nodes, inputs outside its own
-//!   terminal set. Cheap tanh, dangerous semantics: excluded.
-//! * **OpAmp**: rail-clamp discontinuity decides its stamp shape; evaluation
-//!   is a handful of multiplies. Nothing to win.
-//! * Linear devices (R, C, L, sources, E/F/G/H, coupling): their matrix parts
-//!   are constant or already backbone-compiled (plan.rs); their RHS history
-//!   terms change per step, which the cache cannot outlive anyway. No exp to
-//!   skip, bypassing them buys nothing and risks the reactive history.
+//!   iterate; the discrete decision is the event the march bisects on.
+//! * **VSwitch**: the event-flip device, and under break-before-make its stamp
+//!   reads its SIBLING leg's control nodes, inputs outside its own terminals.
+//! * **OpAmp**: a rail-clamp discontinuity decides its stamp shape, and
+//!   evaluation is a handful of multiplies.
+//! * Linear devices (R, C, L, sources, E/F/G/H, coupling): matrix parts are
+//!   constant or backbone-compiled (plan.rs), RHS history changes per step,
+//!   and there is no `exp()` to skip.
 //!
 //! # Replay fidelity
 //!
 //! A fresh evaluation stamps through [`RecordingSink`], which resolves each
-//! write to its frozen-pattern slot and applies it with `add_at`; the same
+//! write to its frozen-pattern slot and applies it with `add_at`, the same
 //! `+=` on the same slot `SparseMatrix::add` performs, so a bypass-armed
 //! assembly in which nothing qualifies for skipping is bit-identical to the
 //! interpreted walk. A replay re-adds the recorded raw writes in the original
@@ -160,7 +136,7 @@ impl BypassState {
             }
             // A series-R BJT's intrinsic unknowns: the junction voltages the
             // model actually evaluates live there, so their movement counts
-            // as terminal movement (dev-plan 03 §6 brief).
+            // as terminal movement.
             if let Some(ints) = layout.bjt_internal(id) {
                 for i in ints.iter().flatten() {
                     if !read_idx.contains(&(*i as u32)) {
@@ -211,7 +187,7 @@ impl BypassState {
         self.gen = self.gen.wrapping_add(1);
     }
 
-    /// (evaluations, skips) since construction; the observability the §6.2
+    /// (evaluations, skips) since construction; the observability the bypass
     /// gate wants (skip rate measured, not guessed).
     pub(crate) fn counters(&self) -> (u64, u64) {
         (self.evals, self.skips)
@@ -281,7 +257,6 @@ pub(crate) fn stamp_all_bypass(
     rhs: &mut [f64],
     force_eval: bool,
 ) {
-    let (evals0, skips0) = (st.evals, st.skips);
     // Prologue: identical to `stamp_into` (stamp.rs).
     if ctx.gmin > 0.0 {
         for i in 0..ctx.layout.n_nodes {
@@ -345,7 +320,6 @@ pub(crate) fn stamp_all_bypass(
             st.evals += 1;
         }
     }
-    crate::census::bypass_assembly(st.evals - evals0, st.skips - skips0);
 }
 
 #[cfg(test)]

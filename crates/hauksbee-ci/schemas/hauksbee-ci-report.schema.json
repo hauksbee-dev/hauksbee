@@ -377,7 +377,7 @@
           "type": "array"
         },
         "invalid": {
-          "description": "A THIRD outcome distinct from pass/fail (05 §3b): the assertion could\nnot be honestly evaluated because its analog evaluation window overlaps\na chunk the solver failed on. When `invalid` is true, `passed` is always\nfalse, but the run exits 3 (invalid-for-analysis) rather than 1.",
+          "description": "A THIRD outcome distinct from pass/fail: the assertion could\nnot be honestly evaluated because its analog evaluation window overlaps\na chunk the solver failed on. When `invalid` is true, `passed` is always\nfalse, but the run exits 3 (invalid-for-analysis) rather than 1.",
           "type": "boolean"
         },
         "kind": {

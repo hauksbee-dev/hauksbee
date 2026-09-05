@@ -256,16 +256,15 @@ pub fn parse(text: &str) -> DrillFile {
         // ── G85 canned slot: `X<a>Y<b>G85X<c>Y<d>` cuts from (a,b) to (c,d) ──
         // Read before the rout block, because a G85 record is self-describing:
         // it carries both of its own endpoints and means the same thing whether
-        // or not a cutter happens to be down. Letting the rout block see it
-        // first read the line as a bare modal continuation, which cut a
-        // fabricated stadium from wherever the tool last was to the G85's START
-        // and then dropped the real slot entirely.
+        // or not a cutter happens to be down. Letting the rout block see it first
+        // reads the line as a bare modal continuation, cutting a fabricated
+        // stadium from wherever the tool last was to the G85's START.
         //
         // The two coordinate pairs live on one line, so the plain modal parser
-        // (which keys on the FIRST `X` and `Y`) sees only the start point and
-        // would record a round hole where the file describes a slot. Split on
-        // the G85 and parse both halves through the SAME modal reader, so the
-        // units and zero-suppression that apply to the start apply to the end.
+        // (which keys on the FIRST `X` and `Y`) would see only the start point
+        // and record a round hole. Split on the G85 and parse both halves through
+        // the SAME modal reader, so the units and zero-suppression that apply to
+        // the start apply to the end.
         if let Some((head, tail)) = split_g85(line) {
             // A head with no coordinates means the cut starts from where the
             // head already is, so the modal position IS the start point.
@@ -359,16 +358,14 @@ pub fn parse(text: &str) -> DrillFile {
             // slot from where it was to where it lands.
             //
             // Motion codes are modal: a run of moves is written with the code
-            // once and then bare `X..Y..` lines. Inside a rout section those
-            // bare lines are motion too, cuts while the cutter is down and
-            // plain moves while it is up. Letting them fall through to the
-            // drilled-point reader is wrong in both directions: with the cutter
-            // down it loses the wall, and with the cutter up it plants a plated
-            // hit where the file only repositioned. Which is why `rout_mode` is
-            // tracked separately from `tool_down`, and why `G05` clears it: a
-            // file that returns to drill mode really does drill bare
-            // coordinates again, which is how every rout-carrying board in the
-            // corpus is written.
+            // once and then bare `X..Y..` lines. Inside a rout section those bare
+            // lines are motion too, cuts while the cutter is down and plain moves
+            // while it is up. Letting them fall through to the drilled-point
+            // reader is wrong in both directions: with the cutter down it loses
+            // the wall, with the cutter up it plants a plated hit where the file
+            // only repositioned. Hence `rout_mode` tracked separately from
+            // `tool_down`, and `G05` clearing it, a file returning to drill mode
+            // really does drill bare coordinates again.
             let bare_motion = g.is_none() && rout_mode && (up.contains('X') || up.contains('Y'));
             let is_linear = g == Some(0) || g == Some(1) || bare_motion;
             // Geometry is cut only while the cutter is down; every other linear
@@ -565,12 +562,11 @@ const ARC_STEP_RAD: f64 = std::f64::consts::TAU / 16.0;
 /// in that band, closer than six microns to touching the wall but not
 /// touching it, is joined by the approximation rather than by the board.
 ///
-/// Six microns is a twentieth of the tightest clearance a board is designed
-/// to, so this cannot bridge a gap anyone drew; it can only disagree about
-/// contacts already too close to call. Keeping the budget here rather than
-/// fixing the segment count is what makes that true at every radius: a fixed
-/// count leaves a 50 mm arc bulging most of a millimetre off its own wall,
-/// which is well inside the range where real copper lives.
+/// Six microns is a twentieth of the tightest clearance a board is designed to,
+/// so this cannot bridge a gap anyone drew; it can only disagree about contacts
+/// already too close to call. Budgeting the sagitta rather than fixing the
+/// segment count is what makes that true at every radius: a fixed count leaves a
+/// 50 mm arc bulging most of a millimetre off its own wall.
 const ARC_SAGITTA_TOL_MM: f64 = 0.001;
 
 /// Hard cap on the segments one arc may produce, so a hostile radius cannot

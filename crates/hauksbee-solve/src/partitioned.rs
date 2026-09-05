@@ -13,7 +13,7 @@
 //!   far cheaper than one global factorization.
 //!
 //! Islands exchange boundary node voltages once per step in a DOUBLE-BUFFERED
-//! JACOBI sweep (dev-plan 03 §3.3): every island reads its inputs from the
+//! JACOBI sweep: every island reads its inputs from the
 //! frozen previous-generation buffer and writes the nodes it owns into a write
 //! buffer; the buffers swap at sweep end. No island ever reads another's
 //! this-sweep output, so the sweep result is a pure function of (previous
@@ -40,18 +40,16 @@
 //!
 //! ## Why Jacobi and not Gauss-Seidel
 //!
-//! The pre-S4 sweep was sequential Gauss-Seidel: island *k+1* could read island
-//! *k*'s freshly written value. That ordering is exactly what a parallel sweep
-//! cannot preserve, and a lock-ordered parallel Gauss-Seidel would serialize the
-//! very dependency chain we want to spread across cores while still being
-//! "deterministic" only relative to an arbitrary lock order. Jacobi's
-//! order-independence is a property of the math, not of a lock discipline. The
-//! trade is convergence rate (Jacobi is the weaker relaxation), which is why the
-//! sweep count is convergence-gated rather than fixed. In every partition the
-//! current analyzer produces, island inputs are outer-written nodes (source pins
-//! and torn rails), never another island's owned node; the union-find fuses any
-//! shared free node into one island, so on real boards today the Jacobi sweep
-//! computes bit-for-bit what the Gauss-Seidel sweep did.
+//! Sequential Gauss-Seidel (island *k+1* reads island *k*'s freshly written
+//! value) is exactly what a parallel sweep cannot preserve, and a lock-ordered
+//! parallel Gauss-Seidel would serialize the dependency chain we want to spread
+//! across cores while being "deterministic" only relative to an arbitrary lock
+//! order. Jacobi's order-independence is a property of the math, not of a lock
+//! discipline. The trade is convergence rate (Jacobi is the weaker relaxation),
+//! which is why the sweep count is convergence-gated rather than fixed. In every
+//! partition the analyzer produces, island inputs are outer-written nodes
+//! (source pins and torn rails), never another island's owned node, so the
+//! Jacobi sweep computes bit-for-bit what a Gauss-Seidel sweep would.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies; shared with `partition.rs`, whose analysis this executes):
@@ -63,7 +61,7 @@ use rayon::prelude::*;
 use crate::error::{SolveError, SolvePhase, SolveResult};
 use crate::linear::LinearIsland;
 use crate::newton::{dc_operating_point, newton_solve, Workspace};
-use crate::options::{Integration, ParallelPolicy, SolverOptions, StepControl};
+use crate::options::{ParallelPolicy, SolverOptions, StepControl};
 use crate::orchestrate::balance::{
     ensure_balanced, settle_rails, BalancePolicy, RailChannel, RailLoads,
 };
@@ -115,14 +113,14 @@ const SMALL_ISLAND_STATES: usize = 48;
 /// island, so the win is taken only when it is real.
 const TEAR_MAX_BLOCK_DEVICES: usize = 600;
 
-/// Sweep-count cap for the convergence-gated Jacobi relaxation (plan §3.3).
+/// Sweep-count cap for the convergence-gated Jacobi relaxation.
 /// Jacobi's spectral radius on a genuinely tight coupling can sit near 1, so an
 /// uncapped loop would hang exactly on the boards that need help most; a
 /// coupling that has not relaxed to tolerance within this many sweeps is a sign
 /// the cut is stronger than the partitioner believed, and the step FAILS over
 /// to the caller's escalation path (the staged orchestrator re-solves the group
 /// fused/monolithic, see `orchestrate::staged::solve_group`) rather than
-/// silently accepting a half-converged exchange. 16 is the plan's starting
+/// silently accepting a half-converged exchange. 16 is the starting
 /// value; every real partition today converges in <= 2 sweeps (island inputs
 /// are outer-written pins/rails), so the cap only bites on imposed partitions
 /// with genuine inter-island feedback.
@@ -130,7 +128,7 @@ const COUPLING_SWEEP_CAP: usize = 16;
 
 /// [`ParallelPolicy::Auto`] engages the thread pool only when at least this
 /// many NONLINEAR islands exist. Measured on the shunt-fed mirror arrays
-/// (the graded boards, plan §9.1): a warm per-block re-solve at quiescence is
+/// (the graded boards): a warm per-block re-solve at quiescence is
 /// sub-microsecond, so the 24-block array LOSES to pool coordination at any
 /// worker count, the 90-block array breaks even, and the 240-block array wins;
 /// the threshold sits between 24 and 90. Boards whose islands carry real
@@ -230,7 +228,7 @@ pub struct PartitionedTransient {
     /// Per linear island: reconstructed free-node voltage buffer, pre-allocated
     /// (sized `li.n_free()`) and reused across sweeps instead of a per-sweep
     /// `vec![0.0; n_free]`. `node_voltages` fully overwrites every entry before
-    /// any read, so reuse is a pure lifetime change (plan §4.2).
+    /// any read, so reuse is a pure lifetime change.
     lin_vfree: Vec<Vec<f64>>,
     nonlinear: Vec<NonlinearIsland>,
     /// Global voltage source ids (cut points), each paired with the terminal
@@ -260,7 +258,7 @@ pub struct PartitionedTransient {
     /// than measured, a re-solved Newton island jitters by its own step
     /// tolerance, which would flap a measured gate without conveying anything.
     coupled: bool,
-    /// Per-engine rayon pool (plan §3.4): `Some` when the policy engaged.
+    /// Per-engine rayon pool: `Some` when the policy engaged.
     /// Owned by THIS engine, never a global pool, so a caller that runs
     /// many engines concurrently cannot oversubscribe through us. Entered
     /// ONCE per step (`in_pool`), because entry from an outside thread is a
@@ -458,7 +456,7 @@ impl PartitionedTransient {
         // in-order sweep in `apply_sources` correct for stacked floating rails.
         let sources = order_sources(circuit, &part.sources);
 
-        // ---- Single-writer-per-slot invariant (plan §3.2, hazard A). ----
+        // ---- Single-writer-per-slot invariant. ----
         // Owned sets must be pairwise disjoint across ALL islands (linear and
         // nonlinear alike), and no island may own an outer-written slot: a
         // torn rail belongs to the scalar balance, not to any island. This is
@@ -731,7 +729,7 @@ impl PartitionedTransient {
         )))
     }
 
-    /// Test-only accessor for the S1 allocation-hygiene gate (plan §4.4): run
+    /// Test-only accessor for the S1 allocation-hygiene gate: run
     /// one sweep directly so the `alloc_audit` counter can measure the per-step
     /// inner loop in isolation. Keeps `sweep` itself private; not engine API.
     #[cfg(test)]
@@ -748,11 +746,11 @@ impl PartitionedTransient {
     }
 
     /// One relaxation sweep over all islands, as an explicit double-buffered
-    /// Jacobi exchange (plan §3.3), in two phases:
+    /// Jacobi exchange, in two phases:
     ///
     /// * **Compute** (phase a): every island reads the frozen `vbuf` and
     ///   computes its owned outputs into private scratch, `lin_vfree` for
-    ///   linear islands (the S1 buffer, plan §4.2), the island's own workspace
+    ///   linear islands, the island's own workspace
     ///   for nonlinear ones. No shared writes anywhere, so island order cannot
     ///   affect a single bit of the result; this is the phase
     ///   [`crate::ParallelPolicy`] may hand to the thread pool.
@@ -930,9 +928,9 @@ impl PartitionedTransient {
             for (k, (id, is_cap)) in li.state_devices().enumerate() {
                 st[k] = if is_cap {
                     match &circuit.devices[id.0 as usize] {
-                        Device::Capacitor { a, b, ic, .. } => {
-                            ic.unwrap_or_else(|| node_v(&ws, *a) - node_v(&ws, *b))
-                        }
+                        Device::Capacitor { a, b, ic, .. } => ic.unwrap_or_else(|| {
+                            crate::transient::node_v(&ws, *a) - crate::transient::node_v(&ws, *b)
+                        }),
                         _ => 0.0,
                     }
                 } else {
@@ -1186,7 +1184,7 @@ impl RailLoads for PartitionedRailLoads<'_> {
 /// at the end of the step, ZOH over the interval), advance the exact
 /// matrix-exponential state from the ACCEPTED snapshot, and reconstruct
 /// free-node voltages into the island's private `vfree` scratch (pre-allocated
-/// per S1, plan §4.2; `node_voltages` overwrites every entry, so no clearing
+/// `node_voltages` overwrites every entry, so no clearing
 /// needed).
 ///
 /// The advance runs on EVERY sweep, not just the first: the exact ZOH update
@@ -1236,7 +1234,7 @@ fn linear_phase_a(
 }
 
 /// Enforce the single-writer-per-slot invariant the Jacobi scatter relies on
-/// (plan §3.2, hazard A): every exchange-buffer slot is written by AT MOST one
+///: every exchange-buffer slot is written by AT MOST one
 /// island, and never by an island when the outer loop owns it (a torn rail is
 /// written by the scalar balance; ground is never written). Returns the claim
 /// mask (slot -> owned by some island) on success, which the caller reuses to
@@ -1365,10 +1363,6 @@ fn collect_free_nodes(isl: &Island, li: &LinearIsland) -> Vec<NodeId> {
     }
     free.sort_by_key(|(l, _)| *l);
     free.into_iter().map(|(_, n)| n).collect()
-}
-
-fn node_v(ws: &Workspace, node: NodeId) -> f64 {
-    ws.layout.node(node).map(|i| ws.x[i]).unwrap_or(0.0)
 }
 
 impl NonlinearIsland {
@@ -1503,7 +1497,7 @@ impl NonlinearIsland {
         // Set boundary sources to the global DC node voltages, then solve the
         // sub-circuit's own DC point so its internal nodes are consistent.
         for (gn, sid) in &self.boundary {
-            let v = node_v(global_ws, *gn);
+            let v = crate::transient::node_v(global_ws, *gn);
             if let Device::Vsource { kind, .. } = &mut self.sub.devices[sid.0 as usize] {
                 *kind = SourceKind::Dc(v);
             }
@@ -1511,7 +1505,7 @@ impl NonlinearIsland {
         dc_operating_point(&mut self.ws, &self.sub, opts)?;
         self.x_accepted.copy_from_slice(&self.ws.x);
         // Seed reactive history from the sub DC point.
-        seed_sub_reactive(&mut self.state, &self.sub, &self.ws, opts);
+        crate::transient::seed_reactive_state(&mut self.state, &self.sub, &self.ws, opts);
         Ok(())
     }
 
@@ -1546,7 +1540,7 @@ impl NonlinearIsland {
             }
         }
         self.x_accepted.copy_from_slice(&self.ws.x);
-        seed_sub_reactive(&mut self.state, &self.sub, &self.ws, opts);
+        crate::transient::seed_reactive_state(&mut self.state, &self.sub, &self.ws, opts);
     }
 
     /// Refresh boundary source values from the global exchange buffer.
@@ -1673,7 +1667,7 @@ impl NonlinearIsland {
 
     /// Commit accepted state and advance reactive history.
     fn commit(&mut self, h: f64, opts: &SolverOptions) {
-        advance_sub_reactive(
+        crate::transient::advance_reactive_state(
             &mut self.state,
             &self.sub,
             &self.ws,
@@ -1698,311 +1692,11 @@ fn clone_remapped(dev: &Device, mut f: impl FnMut(NodeId) -> NodeId) -> Device {
 
 // Reactive-state helpers mirroring the monolithic transient driver, applied to
 // a sub-circuit. Kept here so the partitioned path is self-contained.
-
-fn seed_sub_reactive(
-    state: &mut ReactiveState,
-    sub: &Circuit,
-    ws: &Workspace,
-    opts: &SolverOptions,
-) {
-    for (id, dev) in sub.iter() {
-        let i = id.0 as usize;
-        match dev {
-            Device::Capacitor { a, b, ic, .. } => {
-                state.x1[i] = ic.unwrap_or_else(|| node_v(ws, *a) - node_v(ws, *b));
-                state.x2[i] = state.x1[i];
-                state.dx1[i] = 0.0;
-            }
-            Device::Inductor { ic, .. } => {
-                let cur = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
-                state.x1[i] = ic.unwrap_or(cur);
-                state.x2[i] = state.x1[i];
-                state.dx1[i] = 0.0;
-            }
-            // Charge-storing diode (dev-plan 04 §3.1): its slots hold CHARGE,
-            // seeded at the island's DC junction voltage.
-            Device::Diode { a, k, model, .. }
-                if crate::stamp::diode_has_charge(model, &opts.effects) =>
-            {
-                state.x1[i] = sub_diode_q(model, sub_diode_vj(ws, id, *a, *k), opts);
-                state.x2[i] = state.x1[i];
-                state.dx1[i] = 0.0;
-            }
-            // Charge-storing BJT (dev-plan 04 §3.2): both junction charges
-            // seeded at the island's DC intrinsic junction voltages (the
-            // sub-workspace's own layout allocated any internal nodes, so
-            // the resolution rule is the monolithic one verbatim). Without
-            // this arm a torn-island BJT would read zero charge history on
-            // every step; the failure the diode arm already guards against.
-            Device::Bjt { c, b, e, model, .. }
-                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
-            {
-                let (q_be, q_bc) = sub_bjt_q(ws, id, *c, *b, *e, model, opts);
-                state.x1[i] = q_be;
-                state.x2[i] = q_be;
-                state.dx1[i] = 0.0;
-                state.xb[0].x1[i] = q_bc;
-                state.xb[0].x2[i] = q_bc;
-                state.xb[0].dx1[i] = 0.0;
-            }
-            // Charge-storing MOSFET (dev-plan 04 §3.3): all four charges
-            // (A = Q_gs, xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs) seeded at
-            // the island's DC junction voltages; the monolithic driver's
-            // arm, mirrored for the same reason as the diode's and BJT's.
-            Device::Mosfet {
-                d, g, s, b, model, ..
-            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
-                let (q_gs, q_gd, q_bd, q_bs) = sub_mos_q(ws, *d, *g, *s, *b, model, opts);
-                state.x1[i] = q_gs;
-                state.x2[i] = q_gs;
-                state.dx1[i] = 0.0;
-                for (bank, q) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
-                    state.xb[bank].x1[i] = q;
-                    state.xb[bank].x2[i] = q;
-                    state.xb[bank].dx1[i] = 0.0;
-                }
-            }
-            // Op-amp with output dynamics (pole_hz/slew): its reactive slot is
-            // the internal drive EMF, seeded at the island's DC-point clipped
-            // ideal target; the monolithic seed arm (transient.rs), mirrored
-            // here for the same reason as the diode/BJT/MOSFET arms above. A
-            // torn-island op-amp with a finite pole or nonzero slew otherwise
-            // read a zero EMF history and its output collapsed toward 0 instead
-            // of starting at the operating point. Ideal op-amps never read the
-            // slot; the seed is harmless.
-            Device::OpAmp {
-                inp,
-                inn,
-                reference,
-                gain,
-                rail_lo,
-                rail_hi,
-                ..
-            } => {
-                let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
-                let target =
-                    (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi);
-                state.x1[i] = target;
-                state.x2[i] = target;
-                state.dx1[i] = 0.0;
-            }
-            _ => {}
-        }
-    }
-}
-
-/// A diode's JUNCTION voltage on an island, at the intrinsic anode when the
-/// model carries a series resistance. The island mirror of the monolithic
-/// driver's helper, and it has to agree with the stamp for the same reason.
-fn sub_diode_vj(ws: &Workspace, id: hauksbee_ir::DeviceId, a: NodeId, k: NodeId) -> f64 {
-    let anode = match ws.layout.diode_internal(id) {
-        Some(i) => ws.x[i],
-        None => node_v(ws, a),
-    };
-    anode - node_v(ws, k)
-}
-
-/// Diode stored charge at junction voltage `vd`, through the same model code
-/// the stamp uses (the sub-island mirror of the monolithic driver's helper).
-fn sub_diode_q(model: &hauksbee_ir::DiodeModel, vd: f64, opts: &SolverOptions) -> f64 {
-    let (idc, gd) =
-        crate::stamp::diode_eval(model, vd, opts.model_temp(), opts.effects.temperature);
-    crate::stamp::diode_charge(model, vd, idc, gd).0
-}
-
-/// BJT stored charges `(Q_be, Q_bc)` at the sub-island's solution, through
-/// the same model code and intrinsic-node resolution the stamp uses (the
-/// sub-island mirror of the monolithic driver's helper).
-fn sub_bjt_q(
-    ws: &Workspace,
-    id: hauksbee_ir::DeviceId,
-    c: NodeId,
-    b: NodeId,
-    e: NodeId,
-    model: &hauksbee_ir::BjtModel,
-    opts: &SolverOptions,
-) -> (f64, f64) {
-    let (vbe, vbc) =
-        crate::stamp::bjt_junction_voltages(&ws.layout, &ws.x, id, c, b, e, model, &opts.effects);
-    crate::stamp::bjt_charges_at(model, vbe, vbc, opts.model_temp(), opts.effects.temperature)
-}
-
-/// MOSFET stored charges `(Q_gs, Q_gd, Q_bd, Q_bs)` at the island solution,
-/// through the same model code the stamp uses (the sub-island mirror of the
-/// monolithic driver's helper).
-fn sub_mos_q(
-    ws: &Workspace,
-    d: NodeId,
-    g: NodeId,
-    s: NodeId,
-    b: Option<NodeId>,
-    model: &hauksbee_ir::MosfetModel,
-    opts: &SolverOptions,
-) -> (f64, f64, f64, f64) {
-    let (vgs, vgd, vbd, vbs) =
-        crate::stamp::mos_junction_voltages(&ws.layout, &ws.x, d, g, s, b, model);
-    crate::stamp::mos_charges_at(
-        model,
-        vgs,
-        vgd,
-        vbd,
-        vbs,
-        opts.model_temp(),
-        opts.effects.temperature,
-    )
-}
-
 // The graded-board fixtures (single source of truth in benches/, see the
 // header there); `#[path]` resolves against `src/`, not the nested inline
 // `tests` module, so the include lives at file level like alloc_audit's.
-fn advance_sub_reactive(
-    state: &mut ReactiveState,
-    sub: &Circuit,
-    ws: &Workspace,
-    h: f64,
-    opts: &SolverOptions,
-    first: bool,
-) {
-    let trapz = opts.integration == Integration::Trapezoidal && !first;
-    for (id, dev) in sub.iter() {
-        let i = id.0 as usize;
-        match dev {
-            Device::Capacitor { a, b, .. } => {
-                let v_new = node_v(ws, *a) - node_v(ws, *b);
-                let v_old = state.x1[i];
-                let dv = if trapz {
-                    2.0 * (v_new - v_old) / h - state.dx1[i]
-                } else {
-                    (v_new - v_old) / h
-                };
-                state.x2[i] = v_old;
-                state.x1[i] = v_new;
-                state.dx1[i] = dv;
-            }
-            Device::Inductor { .. } => {
-                let i_new = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
-                let i_old = state.x1[i];
-                let di = if trapz {
-                    2.0 * (i_new - i_old) / h - state.dx1[i]
-                } else {
-                    (i_new - i_old) / h
-                };
-                state.x2[i] = i_old;
-                state.x1[i] = i_new;
-                state.dx1[i] = di;
-            }
-            // Charge-storing diode: the capacitor roll, in CHARGE (dx1 is
-            // dQ/dt, the capacitive branch current the trapezoidal history
-            // term needs next step).
-            Device::Diode { a, k, model, .. }
-                if crate::stamp::diode_has_charge(model, &opts.effects) =>
-            {
-                let q_new = sub_diode_q(model, sub_diode_vj(ws, id, *a, *k), opts);
-                let q_old = state.x1[i];
-                let dq = if trapz {
-                    2.0 * (q_new - q_old) / h - state.dx1[i]
-                } else {
-                    (q_new - q_old) / h
-                };
-                state.x2[i] = q_old;
-                state.x1[i] = q_new;
-                state.dx1[i] = dq;
-            }
-            // Charge-storing BJT: the diode's roll applied to both charge
-            // banks (A = Q_be, B = Q_bc), mirroring the monolithic driver.
-            Device::Bjt { c, b, e, model, .. }
-                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
-            {
-                let (q_be, q_bc) = sub_bjt_q(ws, id, *c, *b, *e, model, opts);
-                let q_old = state.x1[i];
-                let dq = if trapz {
-                    2.0 * (q_be - q_old) / h - state.dx1[i]
-                } else {
-                    (q_be - q_old) / h
-                };
-                state.x2[i] = q_old;
-                state.x1[i] = q_be;
-                state.dx1[i] = dq;
-                let qb_old = state.xb[0].x1[i];
-                let dqb = if trapz {
-                    2.0 * (q_bc - qb_old) / h - state.xb[0].dx1[i]
-                } else {
-                    (q_bc - qb_old) / h
-                };
-                state.xb[0].x2[i] = qb_old;
-                state.xb[0].x1[i] = q_bc;
-                state.xb[0].dx1[i] = dqb;
-            }
-            // Charge-storing MOSFET: the roll applied to all four banks,
-            // mirroring the monolithic driver.
-            Device::Mosfet {
-                d, g, s, b, model, ..
-            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
-                let (q_gs, q_gd, q_bd, q_bs) = sub_mos_q(ws, *d, *g, *s, *b, model, opts);
-                let q_old = state.x1[i];
-                let dq = if trapz {
-                    2.0 * (q_gs - q_old) / h - state.dx1[i]
-                } else {
-                    (q_gs - q_old) / h
-                };
-                state.x2[i] = q_old;
-                state.x1[i] = q_gs;
-                state.dx1[i] = dq;
-                for (bank, q_new) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
-                    let q_old = state.xb[bank].x1[i];
-                    let dq = if trapz {
-                        2.0 * (q_new - q_old) / h - state.xb[bank].dx1[i]
-                    } else {
-                        (q_new - q_old) / h
-                    };
-                    state.xb[bank].x2[i] = q_old;
-                    state.xb[bank].x1[i] = q_new;
-                    state.xb[bank].dx1[i] = dq;
-                }
-            }
-            // Op-amp with output dynamics: roll the internal drive EMF forward
-            // from the frozen previous EMF and the accepted input voltages, the
-            // monolithic advance arm (transient.rs) mirrored here. Without it a
-            // torn-island op-amp's EMF slot never advanced, so `stamp_opamp`
-            // re-derived the output from a stale (never-updated) v_prev every
-            // step and the bandwidth/slew-limited output never integrated
-            // toward its target. Ideal op-amps return None and leave the slot
-            // untouched.
-            Device::OpAmp {
-                inp,
-                inn,
-                reference,
-                gain,
-                pole_hz,
-                slew,
-                rail_lo,
-                rail_hi,
-                ..
-            } => {
-                let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
-                let target =
-                    (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi);
-                if let Some((v_out, _)) =
-                    crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, h)
-                {
-                    state.x2[i] = state.x1[i];
-                    state.x1[i] = v_out;
-                    state.dx1[i] = 0.0;
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "../benches/fixtures.rs"]
-#[allow(dead_code)]
-mod test_fixtures_bench;
-
 #[cfg(test)]
 mod tests {
-    use super::test_fixtures_bench as fixtures;
     use super::*;
     use crate::test_fixtures::{cap_ic, comparator, res, vdc, vdc_between, GND};
     use hauksbee_ir::{Device, SourceKind};
@@ -2034,70 +1728,6 @@ mod tests {
             nodes,
             linear,
             boundary_in,
-        }
-    }
-
-    /// Timing probe (ignored; prints, asserts nothing). Run with
-    /// `cargo test -p hauksbee-solve --release --lib -- --ignored --nocapture probe_step`.
-    #[test]
-    #[ignore]
-    fn probe_step_breakdown() {
-        use std::time::Instant;
-        for par in [
-            ParallelPolicy::Off,
-            ParallelPolicy::Threads(2),
-            ParallelPolicy::Threads(4),
-            ParallelPolicy::Threads(8),
-        ] {
-            let (c, _m) = fixtures::build_shunt_array(240);
-            let opts = SolverOptions {
-                integration: Integration::Trapezoidal,
-                reltol: 1e-9,
-                vntol: 1e-9,
-                max_newton: 200,
-                gmin: 1e-9,
-                parallel: par,
-                ..fixed_opts(1e-6)
-            };
-            let mut e = PartitionedTransient::try_build(&c, &opts).expect("tears");
-            let t0 = Instant::now();
-            e.seed(&c).expect("seed");
-            let t_seed = t0.elapsed();
-            let dt = 1e-6;
-            for li in &mut e.linear {
-                li.ensure_cache(dt);
-            }
-            let steps = 200;
-            let (mut t_src, mut t_bal, mut t_commit, mut t_gather) =
-                (0.0f64, 0.0f64, 0.0f64, 0.0f64);
-            let mut xg = vec![0.0; e.global_x_len()];
-            let mut t = 0.0;
-            for _ in 0..steps {
-                let tnext = t + dt;
-                let t0 = Instant::now();
-                e.apply_sources(&c, tnext);
-                t_src += t0.elapsed().as_secs_f64();
-                let t0 = Instant::now();
-                e.in_pool(|me| me.step_with_rail_balance(&c, dt, tnext))
-                    .expect("step");
-                t_bal += t0.elapsed().as_secs_f64();
-                let t0 = Instant::now();
-                e.commit(&c, dt);
-                t_commit += t0.elapsed().as_secs_f64();
-                let t0 = Instant::now();
-                e.gather_into(&mut xg);
-                t_gather += t0.elapsed().as_secs_f64();
-                t = tnext;
-            }
-            let per = |x: f64| x / steps as f64 * 1e6;
-            println!(
-                "{par:?}: seed {:.2}ms | per step: sources {:.1}us, balance {:.1}us, commit {:.1}us, gather {:.1}us",
-                t_seed.as_secs_f64() * 1e3,
-                per(t_src),
-                per(t_bal),
-                per(t_commit),
-                per(t_gather),
-            );
         }
     }
 

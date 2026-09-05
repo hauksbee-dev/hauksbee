@@ -6,15 +6,12 @@
 //! in that layer solves anything. This layer is the other half: given a
 //! decomposition, actually run it.
 //!
-//! The split is deliberate and load-bearing. The original `tarski_decomp`
-//! fused deciding and executing into one 781-line function, and the saga
-//! (`docs/learn/tarski-saga.md`) records what that cost: every
-//! decision was invisible (no way to ask "what did it tear and why" without
-//! reading a debugger), and every executor bug looked like a decision bug
-//! (and vice versa; the STEP-1 dead-membrane hunt burned days deciding which
-//! side was lying). Here a decision is a datum with a certificate, an
-//! execution is a mechanism with a gate, and each can be tested against the
-//! other's contract.
+//! The split is deliberate and load-bearing. Fusing deciding and executing
+//! into one function makes every decision invisible (no way to ask "what did
+//! it tear and why" without a debugger) and makes every executor bug look
+//! like a decision bug, and vice versa. Here a decision is a datum with a
+//! certificate, an execution is a mechanism with a gate, and each can be
+//! tested against the other's contract.
 //!
 //! Submodules:
 //! * [`balance`]: the scalar rail-balance outer loop for balance tears. The
@@ -41,3 +38,32 @@ pub use capture::{
     StiffOutcome,
 };
 pub use staged::{run_staged, StagedResult};
+
+/// March `engine` over `circuit` to `tstop`, collecting every accepted step
+/// into a [`Waveforms`] whose node index 0 is ground. The torn executors share
+/// this because a partitioned engine only streams samples; it never assembles
+/// a waveform table of its own.
+fn collect_waveforms(
+    engine: &mut crate::partitioned::PartitionedTransient,
+    circuit: &hauksbee_ir::Circuit,
+    tstop: f64,
+) -> crate::error::SolveResult<crate::transient::Waveforms> {
+    let n_nodes = circuit.node_count();
+    let mut wf = crate::transient::Waveforms {
+        time: Vec::new(),
+        node_voltages: vec![Vec::new(); n_nodes],
+        branch_currents: Vec::new(),
+    };
+    engine.run_streaming(circuit, tstop, |s| {
+        wf.time.push(s.time);
+        for node in 0..n_nodes {
+            let v = if node == 0 {
+                0.0
+            } else {
+                s.x.get(node - 1).copied().unwrap_or(0.0)
+            };
+            wf.node_voltages[node].push(v);
+        }
+    })?;
+    Ok(wf)
+}

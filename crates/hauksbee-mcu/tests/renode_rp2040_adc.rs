@@ -21,9 +21,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 fn adc_elf() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/rp2040_adc_probe/adc_probe.elf");
-    p.exists().then(|| p.canonicalize().unwrap_or(p))
+    crate::support::firmware("rp2040_adc_probe/adc_probe.elf")
 }
 
 /// Pull the last `adc count=N` value out of the firmware's UART chatter.

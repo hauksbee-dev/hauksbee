@@ -107,11 +107,11 @@ pub struct NormalizedBoard {
     /// the connectivity came from, what the format could not state, and every
     /// cross-check inside the file that disagreed with itself.
     ///
-    /// The exchange readers compute all of that and it used to stop at the
-    /// extract crate's boundary, which is the same failure as not computing it:
-    /// a stale CAD netlist, a wrong package reference, or a `.Z` member that
-    /// would not inflate were all found, unit-tested, and invisible to the user.
-    /// Surfaces render these alongside their own notes.
+    /// Carried out of the extract crate, because stopping at its boundary is
+    /// the same failure as not computing them: a stale CAD netlist, a wrong
+    /// package reference, or a `.Z` member that would not inflate would all be
+    /// found and then invisible to the user. Surfaces render these alongside
+    /// their own notes.
     pub notes: Vec<String>,
 }
 
@@ -433,9 +433,9 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
 
     // A directory: usually a gerber job folder, but a directory HOLDING a
     // board file is a common mistake (pointing at the project folder instead
-    // of the layout inside it). Look for board files first: assuming gerbers
-    // used to produce a baffling "no copper gerber layers" error right next
-    // to a perfectly good .kicad_pcb.
+    // of the layout inside it). Look for board files first, so a project folder
+    // does not draw a baffling "no copper gerber layers" error right next to a
+    // perfectly good .kicad_pcb.
     if path.is_dir() {
         // An UNPACKED ODB++ job, checked first: it is a directory tree whose
         // `matrix/matrix` identifies it, and it holds no board file, so without
@@ -447,15 +447,13 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             let out = hauksbee_extract::odbpp::from_odbpp(path)
                 .map_err(|e| BoardInputError::Extract(format!("'{}': {e}", path.display())))?;
             let notes = out.stats.notes();
-            return Ok(with_name_fallback(
-                NormalizedBoard {
-                    board: out.board,
-                    layout_text: None,
-                    raw: Vec::new(),
-                    kind: InputKind::Odb,
-                    notes,
-                },
+            return Ok(normalized(
                 path,
+                out.board,
+                None,
+                Vec::new(),
+                InputKind::Odb,
+                notes,
             ));
         }
         let boards = board_files_in(path);
@@ -493,15 +491,13 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 path, &board,
             )));
         }
-        return Ok(with_name_fallback(
-            NormalizedBoard {
-                board,
-                layout_text: None,
-                raw: Vec::new(),
-                kind: InputKind::Gerber,
-                notes: out.stats.coverage_notes(),
-            },
+        return Ok(normalized(
             path,
+            board,
+            None,
+            Vec::new(),
+            InputKind::Gerber,
+            out.stats.coverage_notes(),
         ));
     }
 
@@ -556,15 +552,13 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         let out = hauksbee_extract::odbpp::from_odbpp_archive(&raw)
             .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
         let notes = out.stats.notes();
-        return Ok(with_name_fallback(
-            NormalizedBoard {
-                board: out.board,
-                layout_text: None,
-                raw,
-                kind: InputKind::Odb,
-                notes,
-            },
+        return Ok(normalized(
             path,
+            out.board,
+            None,
+            raw,
+            InputKind::Odb,
+            notes,
         ));
     }
 
@@ -577,20 +571,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
     if is_zip {
         if let Some(src) = zip_board_code(&file_name, &raw)? {
-            let compiled = crate::boardcode::code_to_board_text(&src)
-                .map_err(|e| BoardInputError::BoardCode(e.to_string()))?;
-            let board = ExtractedBoard::from_auto(&compiled)
-                .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
-            return Ok(with_name_fallback(
-                NormalizedBoard {
-                    board,
-                    layout_text: Some(compiled),
-                    raw,
-                    kind: InputKind::BoardCode,
-                    notes: Vec::new(),
-                },
-                path,
-            ));
+            return board_code_input(&file_name, &src, raw, path);
         }
         if let Some(norm) = ipc356_from_fab_zip(&file_name, &raw)? {
             return Ok(with_name_fallback(norm, path));
@@ -611,15 +592,13 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 path, &board,
             )));
         }
-        return Ok(with_name_fallback(
-            NormalizedBoard {
-                board,
-                layout_text: None,
-                raw,
-                kind: InputKind::Gerber,
-                notes: out.stats.coverage_notes(),
-            },
+        return Ok(normalized(
             path,
+            board,
+            None,
+            raw,
+            InputKind::Gerber,
+            out.stats.coverage_notes(),
         ));
     }
 
@@ -627,15 +606,13 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     // streams, exactly as the Eagle path is auto-detected from XML content.
     if let Some(binary) = ExtractedBoard::from_auto_bytes(&raw) {
         let board = binary.map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
-        return Ok(with_name_fallback(
-            NormalizedBoard {
-                board,
-                layout_text: None,
-                raw,
-                kind: InputKind::Altium,
-                notes: Vec::new(),
-            },
+        return Ok(normalized(
             path,
+            board,
+            None,
+            raw,
+            InputKind::Altium,
+            Vec::new(),
         ));
     }
 
@@ -646,20 +623,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     let is_board_code = path.extension().and_then(|e| e.to_str()) == Some("board")
         || crate::commands::common::is_board_code_header(&text);
     if is_board_code {
-        let compiled = crate::boardcode::code_to_board_text(&text)
-            .map_err(|e| BoardInputError::BoardCode(e.to_string()))?;
-        let board = ExtractedBoard::from_auto(&compiled)
-            .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
-        return Ok(with_name_fallback(
-            NormalizedBoard {
-                board,
-                layout_text: Some(compiled),
-                raw,
-                kind: InputKind::BoardCode,
-                notes: Vec::new(),
-            },
-            path,
-        ));
+        return board_code_input(&file_name, &text, raw, path);
     }
 
     // IPC-2581: text, but not layout text. Same reasoning as the web path — it
@@ -669,15 +633,13 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         let out = hauksbee_extract::ipc2581::extract(&text)
             .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
         let notes = out.stats.notes();
-        return Ok(with_name_fallback(
-            NormalizedBoard {
-                board: out.board,
-                layout_text: None,
-                raw,
-                kind: InputKind::Ipc2581,
-                notes,
-            },
+        return Ok(normalized(
             path,
+            out.board,
+            None,
+            raw,
+            InputKind::Ipc2581,
+            notes,
         ));
     }
 
@@ -691,15 +653,13 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     if is_sch {
         let board = ExtractedBoard::from_kicad_schematic_path(path)
             .map_err(|e| BoardInputError::Schematic(e.to_string()))?;
-        return Ok(with_name_fallback(
-            NormalizedBoard {
-                board,
-                layout_text: Some(text),
-                raw,
-                kind: InputKind::Schematic,
-                notes: Vec::new(),
-            },
+        return Ok(normalized(
             path,
+            board,
+            Some(text),
+            raw,
+            InputKind::Schematic,
+            Vec::new(),
         ));
     }
 
@@ -729,15 +689,13 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             None => BoardInputError::Extract(format!("'{file_name}': {e}")),
         }
     })?;
-    Ok(with_name_fallback(
-        NormalizedBoard {
-            board,
-            layout_text: Some(text),
-            raw,
-            kind: InputKind::Text,
-            notes: Vec::new(),
-        },
+    Ok(normalized(
         path,
+        board,
+        Some(text),
+        raw,
+        InputKind::Text,
+        Vec::new(),
     ))
 }
 
@@ -845,6 +803,51 @@ fn gerber_without_parts_message(path: &Path, board: &ExtractedBoard) -> String {
 
 /// Fall back to the source file stem when the layout carries no title-block
 /// name (gerber, DSL, and many real boards ship no title). [`from_path`] only.
+/// One resolved input: the normalized board with the file-stem name fallback
+/// applied, so a titleless export still carries a name.
+fn normalized(
+    path: &Path,
+    board: ExtractedBoard,
+    layout_text: Option<String>,
+    raw: Vec<u8>,
+    kind: InputKind,
+    notes: Vec<String>,
+) -> NormalizedBoard {
+    with_name_fallback(
+        NormalizedBoard {
+            board,
+            layout_text,
+            raw,
+            kind,
+            notes,
+        },
+        path,
+    )
+}
+
+/// Compile a Board-as-Code source (loose `.board` file or the single `.board`
+/// inside a zip) and feed the recompiled layout text through the same analysis
+/// path the native layout formats use.
+fn board_code_input(
+    file_name: &str,
+    src: &str,
+    raw: Vec<u8>,
+    path: &Path,
+) -> Result<NormalizedBoard, BoardInputError> {
+    let compiled = crate::boardcode::code_to_board_text(src)
+        .map_err(|e| BoardInputError::BoardCode(e.to_string()))?;
+    let board = ExtractedBoard::from_auto(&compiled)
+        .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
+    Ok(normalized(
+        path,
+        board,
+        Some(compiled),
+        raw,
+        InputKind::BoardCode,
+        Vec::new(),
+    ))
+}
+
 fn with_name_fallback(mut norm: NormalizedBoard, path: &Path) -> NormalizedBoard {
     if norm.board.name.trim().is_empty() {
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {

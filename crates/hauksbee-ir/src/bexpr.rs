@@ -1,4 +1,4 @@
-//! Compiled behavioral-source expressions (dev-plan 04 §2.5).
+//! Compiled behavioral-source expressions.
 //! Long-form how-and-why: docs/how-and-why/hauksbee-ir/bexpr.md.
 //!
 //! A B-source card (`Bxxx n+ n- V={expr}` / `I={expr}`) carries an arithmetic
@@ -20,19 +20,18 @@
 //! So the ONLY identifiers a canonical expression may contain are `__d{k}`
 //! and `time`; [`CompiledExpr::compile`] enforces that, which is what makes
 //! the serde story sound: the expression **serializes as its canonical
-//! source text and recompiles on deserialize** (the 06 §5 enforcement test
+//! source text and recompiles on deserialize** (the enforcement test
 //! serde-round-trips every `Device` variant, and a pre-parsed tree is not a
 //! serializable thing). `Debug`/`PartialEq` are likewise defined on the
 //! source text, so a recompiled expression is indistinguishable from the
 //! original.
 //!
-//! # The exact expression subset shipped (be honest, §4.3)
+//! # The exact expression subset shipped
 //!
 //! Operators: `+ - * / % ^` (`^` is exponentiation; the loader also rewrites
 //! `**` to `^`), comparisons `== != < <= > >=` and boolean `&& ||` (useful
 //! inside `if`), numeric literals with optional exponent (`1e-3`; SPICE
 //! engineering suffixes are NOT valid inside `{...}`; the suffix rule of
-//! §4.2 applies).
 //!
 //! Functions (mapped onto evalexpr builtins): `ln`, `log10`, `log2`, `exp`,
 //! `pow(x,y)`, `sqrt`, `cbrt`, `abs`, `sin`, `cos`, `tan`, `asin`, `acos`,
@@ -57,7 +56,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// difference Jacobian in `hauksbee-solve` calls [`CompiledExpr::eval`]
 /// `1 + n_deps` times per Newton iteration per B-source. Evaluation lives
 /// HERE, on the IR type, so `hauksbee-solve` needs no `evalexpr` dependency
-/// edge of its own, a deliberate Cargo decision (04 §2.5 flags the edge).
+/// edge of its own, a deliberate Cargo decision.
 #[derive(Clone)]
 pub struct CompiledExpr {
     /// Canonical source text (what serializes; see the module doc).
@@ -174,7 +173,7 @@ impl std::fmt::Debug for CompiledExpr {
     }
 }
 
-/// Serializes as the canonical source string (the plan is explicit: the
+/// Serializes as the canonical source string (the
 /// expression serializes as text and recompiles on deserialize).
 impl Serialize for CompiledExpr {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

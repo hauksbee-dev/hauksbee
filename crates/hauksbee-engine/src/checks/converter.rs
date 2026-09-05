@@ -234,20 +234,6 @@ fn pin_is_gate_by_name(p: &Pin) -> bool {
     f == "G" || f == "GATE"
 }
 
-/// Detect every discrete switching-converter power stage on the board.
-///
-/// Returns one [`ConverterStage`] per recovered stage. The detection is
-/// conservative: a stage is emitted only when a switch-node net ties a power FET
-/// to a power inductor and the input rail (the FET power net that is *not* the
-/// switch node) is distinct and not ground. Boards with no discrete switching
-/// stage (or whose topology is ambiguous) return an empty vector.
-/// A switching stage that was found in the graph but whose direction could not
-/// be established, so no buck/boost verdict was reached for it.
-///
-/// This exists because the abstention used to be a bare `continue`. A converter
-/// nobody could classify then produced exactly the same output as a board with
-/// no converter on it: nothing. The two are very different claims, and only one
-/// of them is a pass.
 /// Why a detected switching stage could not be given a direction.
 ///
 /// `classify_topology` returns `None` for several distinct situations, and they
@@ -291,6 +277,12 @@ impl AbstentionReason {
     }
 }
 
+/// A switching stage that was found in the graph but whose direction could not
+/// be established, so no buck/boost verdict was reached for it.
+///
+/// This exists so the abstention is not a bare `continue`: a converter nobody
+/// could classify would then produce exactly the same output as a board with no
+/// converter on it, and the two are very different claims.
 #[derive(Debug, Clone)]
 pub struct ConverterAbstention {
     /// The power inductor that anchors the unclassified stage.

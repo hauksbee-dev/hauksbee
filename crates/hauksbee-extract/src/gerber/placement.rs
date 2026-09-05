@@ -20,9 +20,7 @@
 //! and [`crate::bom`] run when a layout exists, so they can reconcile rather than
 //! guess, and they refuse a mapping they cannot reach confidently.
 //!
-//! They share the dialect vocabulary, not the code. Folding this one onto the
-//! other belongs with the gerber-recovery work, where the gerber corpus tests
-//! that would catch a behavioural change are the deliverable.
+//! They share the dialect vocabulary, not the code.
 
 use std::collections::HashMap;
 
@@ -745,8 +743,8 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
 
     #[test]
     fn header_unit_scale_matches_unit_words_not_substrings() {
-        // Round-28: contains("mil") fired inside "millimeters" (a 39x shrink) and
-        // the "in" abbreviation was missed (a 25.4x error). Match whole unit words.
+        // A substring test fires `mil` inside "millimeters" (a 39x shrink) and
+        // misses the "in" abbreviation (a 25.4x error): match whole unit words.
         assert_eq!(header_unit_scale("PosX (millimeters)"), 1.0);
         assert_eq!(header_unit_scale("X (mm)"), 1.0);
         assert_eq!(header_unit_scale("X (in)"), 25.4);
@@ -778,10 +776,9 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
 
     #[test]
     fn parse_len_recognizes_spelled_out_and_plural_units() {
-        // Round-27: the doc advertises cell-named units (mm/mil/inch), but the
-        // spelled-out "inch" and plural "mils" fell through as unitless and were
-        // re-scaled by the header (25.4x / 39x error). They must convert like
-        // their abbreviations and report had_unit=true so the header is ignored.
+        // The spelled-out "inch" and plural "mils" must convert like their
+        // abbreviations and report had_unit=true, or they fall through as
+        // unitless and are re-scaled by the header (25.4x / 39x error).
         let (v, had) = parse_len("0.5inch").unwrap();
         assert!(
             (v - 12.7).abs() < 1e-9 && had,

@@ -2,9 +2,9 @@
 //!
 //! Solver/engine internals sometimes want to say something that is true and
 //! useful *to a hauksbee developer* but is noise, or worse, a trust wound, in
-//! a user's CI log: dev-plan references, "not stamped yet" caveats, emulator
+//! a user's CI log: internal plan references, "not stamped yet" caveats, emulator
 //! stack dumps. The persona-validation panel caught two of these reaching
-//! user-facing CI output (`[effects] ... (dev-plan 04 §3.2)` from the diode
+//! user-facing CI output (`[effects] ...` from the diode
 //! stamp, and simavr's `avr_sadly_crashed` crash dump).
 //!
 //! This module is the single boundary those notes must pass through. By default

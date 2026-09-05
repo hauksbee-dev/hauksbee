@@ -1,5 +1,5 @@
-//! Regression fixtures for QEMU ADC injection and I2C/SPI byte callbacks
-//! (05-cosim-fidelity §5.1/§5.2), against a REAL Espressif QEMU guest.
+//! Regression fixtures for QEMU ADC injection and I2C/SPI byte callbacks,
+//! against a REAL Espressif QEMU guest.
 //!
 //! Both features ride the RAM mailbox (`qemu::mailbox`), which is a firmware
 //! contract, stated honestly as such: Espressif QEMU models neither the SAR
@@ -41,13 +41,7 @@ fn qemu_test_lock() -> MutexGuard<'static, ()> {
 }
 
 fn flash_image() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/esp32_blinky/flash.bin");
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::firmware("esp32_blinky/flash.bin")
 }
 
 macro_rules! qemu_or_skip {
@@ -66,7 +60,7 @@ macro_rules! qemu_or_skip {
     };
 }
 
-/// §5.1: an injected analog voltage must land as a firmware-visible 12-bit
+/// an injected analog voltage must land as a firmware-visible 12-bit
 /// count in the channel's mailbox slot, with the channel's mask bit raised.
 #[test]
 fn qemu_adc_injection_lands_in_guest_ram() {
@@ -92,7 +86,7 @@ fn qemu_adc_injection_lands_in_guest_ram() {
     assert_eq!(
         got, expected,
         "channel 0: 2.0 V must appear as count {expected} in the mailbox slot; \
-         got {got}. Zero here is the pre-§5.1 no-op set_analog_in."
+         got {got}. Zero here is the pre-injection no-op set_analog_in."
     );
     let ch3 = mcu
         .debug_read_u32(mailbox::adc_channel_word(3))
@@ -116,7 +110,7 @@ fn qemu_adc_injection_lands_in_guest_ram() {
     assert_eq!(updated, expected2, "count must track the injected voltage");
 }
 
-/// §5.2: an I2C transaction submitted through the mailbox cell must surface
+/// an I2C transaction submitted through the mailbox cell must surface
 /// as the same Start/Write/Read/Stop events the simavr/Renode backends
 /// produce, with read replies landing back in guest RAM.
 #[test]
@@ -175,7 +169,7 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
             "write 0x50 0x30"
         ],
         "the write burst must surface as Start + one Write per byte \
-         (no events at all is the pre-§5.2 discarded callback)"
+         (no events at all is the pre-bridge discarded callback)"
     );
     assert_eq!(
         mcu.debug_read_u32(mailbox::I2C_RSP_SEQ).expect("rsp seq"),
@@ -224,7 +218,7 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
     assert_eq!(mcu.debug_read_u32(mailbox::I2C_RSP_SEQ).unwrap(), 3);
 }
 
-/// §5.2: an SPI burst submitted through the mailbox cell must fire one
+/// an SPI burst submitted through the mailbox cell must fire one
 /// [`SpiEvent`] per byte and return the MISO bytes; a deselect op surfaces the
 /// same `deselect` event Renode's FinishTransmission produces.
 #[test]
@@ -253,7 +247,7 @@ fn qemu_spi_mailbox_surfaces_byte_events() {
         events.lock().unwrap().as_slice(),
         [(0x01, false), (0x80, false), (0xAA, false)],
         "the burst must surface one on_spi byte event per MOSI byte \
-         (no events is the pre-§5.2 no-op on_spi)"
+         (no events is the pre-bridge no-op on_spi)"
     );
     let rsp = mcu.debug_read_u32(mailbox::SPI_RSP_DATA).expect("rsp data");
     assert_eq!(

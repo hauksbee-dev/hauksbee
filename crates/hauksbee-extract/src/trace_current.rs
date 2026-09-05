@@ -11,17 +11,13 @@
 //!
 //! ## The honest reach of this check (read before trusting a result)
 //!
-//! 1. **Pour fidelity.** Hauksbee models copper as the discrete `(segment ...)`
-//!    primitives KiCad writes. It does **not** rasterise filled `(zone ...)`
-//!    pours. On real boards the high-current rails (motor supply, ground, bulk
-//!    5 V) are almost always distributed as *copper pours*, and the only
-//!    discrete segments left on those nets are the thin pad-entry / thermal-spoke
-//!    stubs into the pour. Measuring "minimum segment width" on a poured net
-//!    therefore reads a 0.25 mm stub and would scream "undersized" when the
-//!    actual conductor is a centimetres-wide plane. That is a guaranteed false
-//!    positive. So **any net that carries a copper zone is reported as
-//!    `Poured` and never flagged** - its true cross-section is out of hauksbee's
-//!    reach, and saying so is the honest answer, not a pass.
+//! 1. **Pour fidelity.** Copper is modelled as the discrete `(segment ...)`
+//!    primitives KiCad writes; filled `(zone ...)` pours are NOT rasterised. On
+//!    real boards the high-current rails are distributed as pours, and the only
+//!    discrete segments left on those nets are thin pad-entry / thermal-spoke
+//!    stubs, so a "minimum segment width" reading there is a 0.25 mm stub where
+//!    the actual conductor is a centimetres-wide plane. So **any net that
+//!    carries a copper zone is reported as `Poured` and never flagged**.
 //!
 //! 2. **Current attribution.** The netlist does not encode how much current a
 //!    net carries. This module never invents a current: the caller supplies the
@@ -51,11 +47,9 @@
 //!    1 oz external default, and every message built on that default is marked
 //!    ASSUMED and names the upload that would replace it.
 //!
-//! The result is a check that *discriminates*: it fires on a genuinely
-//! under-width discrete trace carrying a cited current, and it stays silent
-//! (with an explicit `Poured` / `NoCurrentCited` reason) everywhere it cannot
-//! see the real conductor. A check that cannot tell a thin pour-stub from a thin
-//! signal trace would be worse than no check; this one refuses to guess.
+//! The result discriminates: it fires on a genuinely under-width discrete trace
+//! carrying a cited current, and stays silent with an explicit `Poured` /
+//! `NoCurrentCited` reason everywhere it cannot see the real conductor.
 
 use std::collections::{HashMap, HashSet};
 
@@ -125,11 +119,9 @@ impl CopperWeights {
     /// The outer layers are identified **by name** (`F.Cu` / `B.Cu`, the only
     /// names KiCad gives outer copper) rather than by position, because position
     /// lies on a truncated declaration: a stackup listing only `F.Cu` and
-    /// `In1.Cu` would make `In1.Cu` the last copper entry and rate inner copper
-    /// with the external constant, doubling its apparent capacity. Positional
-    /// first/last is used only as a fallback for a stackup that names no
-    /// `F.Cu`/`B.Cu` at all (a non-KiCad producer), where it is the only signal
-    /// available.
+    /// `In1.Cu` makes `In1.Cu` the last copper entry, rating inner copper with
+    /// the external constant and doubling its apparent capacity. Positional
+    /// first/last is a fallback for a stackup naming no `F.Cu`/`B.Cu` at all.
     ///
     /// A stackup that declares a copper layer without a thickness contributes
     /// nothing, so that layer falls back to the assumed default rather than to a
@@ -157,18 +149,15 @@ impl CopperWeights {
             if *thickness <= 0.0 {
                 continue;
             }
-            // Three signals, in order of how much they actually tell us:
-            //
+            // Three signals, strongest first:
             //   1. A canonical outer name (F.Cu / B.Cu) IS the answer.
-            //   2. A canonical inner name (In<N>.Cu) is likewise decisive, and it
-            //      has to outrank position: a stackup that lists F.Cu and In1.Cu
-            //      but forgets B.Cu makes In1.Cu the LAST entry, and reading that
-            //      positionally would rate inner copper with the external constant
-            //      and double its apparent capacity.
-            //   3. Otherwise position is all there is. A producer mixing
-            //      conventions (F.Cu plus L2.Cu on a 2-layer board) must not have
-            //      its physical bottom layer derated as internal just because the
-            //      name is unfamiliar: that halves k and can fire a false verdict.
+            //   2. A canonical inner name (In<N>.Cu), which must outrank
+            //      position: a stackup listing F.Cu and In1.Cu but forgetting
+            //      B.Cu makes In1.Cu the LAST entry.
+            //   3. Otherwise position. A producer mixing conventions (F.Cu plus
+            //      L2.Cu on a 2-layer board) must not have its physical bottom
+            //      layer derated as internal merely for an unfamiliar name:
+            //      that halves k and can fire a false verdict.
             let external = if is_outer_layer_name(name) {
                 true
             } else if is_inner_layer_name(name) {
@@ -269,17 +258,6 @@ pub struct NetCopper {
     pub segment_count: usize,
     /// Number of filled zones on the net.
     pub zone_count: usize,
-}
-
-impl NetCopper {
-    /// IPC-2221 ampacity of the *bottleneck* (narrowest) discrete trace, at the
-    /// given temperature rise / copper weight. `None` when the net has no
-    /// discrete tracks (e.g. pure pour or no copper). Reported only for
-    /// `Traces` nets in the flagging path, but exposed for any net for probing.
-    pub fn bottleneck_ampacity(&self, oz: f64, dt_c: f64, external: bool) -> Option<f64> {
-        self.min_trace_width_mm
-            .map(|w| ipc2221_ampacity(w, oz, dt_c, external))
-    }
 }
 
 /// Parse `.kicad_pcb` text into per-net copper geometry. Returns an empty vector

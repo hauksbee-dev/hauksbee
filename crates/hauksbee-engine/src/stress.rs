@@ -1,4 +1,4 @@
-//! Fault / stress monitor (Feature 2).
+//! Fault / stress monitor.
 //!
 //! After each solver chunk the scheduler hands this module the chunk's final
 //! node voltages plus supply/branch currents. For every device with known
@@ -747,6 +747,43 @@ impl StressMonitor {
             .collect()
     }
 
+    /// Raise `chk` as a fault on device `i`, at most once per fault kind for
+    /// the life of the run, applying the destructive consequence when
+    /// destructive mode is on. Returns whether this call destroyed the device
+    /// (`false` for a kind already raised, which is a no-op).
+    fn raise_once(
+        &mut self,
+        i: usize,
+        meta: &DeviceMeta,
+        chk: &Check,
+        t: f64,
+        circuit: &mut Circuit,
+        faults: &mut Vec<FaultEvent>,
+    ) -> bool {
+        if self.tracks[i]
+            .raised
+            .get(chk.kind.as_str())
+            .copied()
+            .unwrap_or(false)
+        {
+            return false;
+        }
+        self.tracks[i].raised.insert(chk.kind.as_str(), true);
+        let destroyed = self.maybe_destroy(circuit, meta, chk.kind);
+        if destroyed {
+            self.tracks[i].destroyed = true;
+        }
+        faults.push(FaultEvent {
+            component: meta.reference.clone(),
+            kind: chk.kind,
+            value: chk.value,
+            limit: chk.limit,
+            t,
+            destroyed,
+        });
+        destroyed
+    }
+
     /// Add integrated per-device dissipated energy (J, index-aligned with the
     /// metas) covering `elapsed_s` seconds of accepted solver steps to the
     /// pending chunk deposit. The next [`Self::evaluate`] turns the deposit
@@ -978,26 +1015,8 @@ impl StressMonitor {
 
                 if chk.surge {
                     // Surge ceiling: trips instantly.
-                    if frac > 1.0 + OVER_LIMIT_NOISE_MARGIN
-                        && !self.tracks[i]
-                            .raised
-                            .get(chk.kind.as_str())
-                            .copied()
-                            .unwrap_or(false)
-                    {
-                        self.tracks[i].raised.insert(chk.kind.as_str(), true);
-                        let destroyed = self.maybe_destroy(circuit, &meta, chk.kind);
-                        if destroyed {
-                            self.tracks[i].destroyed = true;
-                        }
-                        faults.push(FaultEvent {
-                            component: meta.reference.clone(),
-                            kind: chk.kind,
-                            value: chk.value,
-                            limit: chk.limit,
-                            t,
-                            destroyed,
-                        });
+                    if frac > 1.0 + OVER_LIMIT_NOISE_MARGIN {
+                        self.raise_once(i, &meta, chk, t, circuit, &mut faults);
                     }
                     continue;
                 }
@@ -1012,30 +1031,10 @@ impl StressMonitor {
                 } else {
                     *counter = 0;
                 }
-                let sustained = *counter >= SUSTAIN_CHUNKS;
-                if sustained
-                    && !self.tracks[i]
-                        .raised
-                        .get(chk.kind.as_str())
-                        .copied()
-                        .unwrap_or(false)
+                if *counter >= SUSTAIN_CHUNKS
+                    && self.raise_once(i, &meta, chk, t, circuit, &mut faults)
                 {
-                    self.tracks[i].raised.insert(chk.kind.as_str(), true);
-                    let destroyed = self.maybe_destroy(circuit, &meta, chk.kind);
-                    if destroyed {
-                        self.tracks[i].destroyed = true;
-                    }
-                    faults.push(FaultEvent {
-                        component: meta.reference.clone(),
-                        kind: chk.kind,
-                        value: chk.value,
-                        limit: chk.limit,
-                        t,
-                        destroyed,
-                    });
-                    if destroyed {
-                        break;
-                    }
+                    break;
                 }
             }
 
@@ -1364,139 +1363,64 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
         });
     }
 
+    let mut check = |kind, value, limit: Option<f64>| {
+        if let Some(limit) = limit {
+            checks.push(Check {
+                kind,
+                value,
+                limit,
+                surge: false,
+            });
+        }
+    };
+    // Only the reverse magnitude counts against a blocking-voltage rating.
+    let reverse_v = (-op.voltage_v).max(0.0);
+
     match meta.kind {
         ComponentKind::Diode => {
-            if let Some(imax) = r.max_current_a {
-                checks.push(Check {
-                    kind: FaultKind::Overcurrent,
-                    value: op.current_a,
-                    limit: imax,
-                    surge: false,
-                });
-            }
-            // Reverse blocking voltage: only the reverse magnitude counts.
-            if let Some(vmax) = r.max_voltage_v {
-                let reverse = (-op.voltage_v).max(0.0);
-                checks.push(Check {
-                    kind: FaultKind::Overvoltage,
-                    value: reverse,
-                    limit: vmax,
-                    surge: false,
-                });
-            }
+            check(FaultKind::Overcurrent, op.current_a, r.max_current_a);
+            check(FaultKind::Overvoltage, reverse_v, r.max_voltage_v);
         }
         ComponentKind::Passive => {
             // Resistor power (rated or footprint-derived).
-            if let Some(pmax) = meta.power_rating_w() {
-                checks.push(Check {
-                    kind: FaultKind::Overpower,
-                    value: op.power_w,
-                    limit: pmax,
-                    surge: false,
-                });
-            }
+            check(FaultKind::Overpower, op.power_w, meta.power_rating_w());
             // Continuous current rating; the natural home for an inductor's
             // rated / saturation current. Skip it for passives and a coil's
             // steady-state current limit goes silently unenforced (an inductor's
             // power_w is 0, so Overpower/Overtemperature are dead there too).
-            if let Some(imax) = r.max_current_a {
-                checks.push(Check {
-                    kind: FaultKind::Overcurrent,
-                    value: op.current_a,
-                    limit: imax,
-                    surge: false,
-                });
-            }
+            check(FaultKind::Overcurrent, op.current_a, r.max_current_a);
             // Polarized capacitor reverse bias: any reverse beyond ~0.5 V.
-            if r.polarized {
-                let reverse = (-op.voltage_v).max(0.0);
-                checks.push(Check {
-                    kind: FaultKind::ReverseBias,
-                    value: reverse,
-                    limit: 0.5,
-                    surge: false,
-                });
-            }
-            // Capacitor over-voltage.
-            if let Some(vmax) = r.max_voltage_v {
-                checks.push(Check {
-                    kind: FaultKind::Overvoltage,
-                    value: op.voltage_v.abs(),
-                    limit: vmax,
-                    surge: false,
-                });
-            }
+            check(
+                FaultKind::ReverseBias,
+                reverse_v,
+                r.polarized.then_some(0.5),
+            );
+            check(FaultKind::Overvoltage, op.voltage_v.abs(), r.max_voltage_v);
         }
         ComponentKind::BjtNpn
         | ComponentKind::BjtPnp
         | ComponentKind::Nmos
         | ComponentKind::Pmos => {
-            if let Some(imax) = r.max_current_a {
-                checks.push(Check {
-                    kind: FaultKind::Overcurrent,
-                    value: op.current_a,
-                    limit: imax,
-                    surge: false,
-                });
-            }
-            if let Some(vmax) = r.max_voltage_v {
-                checks.push(Check {
-                    kind: FaultKind::Overvoltage,
-                    value: op.voltage_v.abs(),
-                    limit: vmax,
-                    surge: false,
-                });
-            }
-            if let Some(pmax) = r.max_power_w {
-                checks.push(Check {
-                    kind: FaultKind::Overpower,
-                    value: op.power_w,
-                    limit: pmax,
-                    surge: false,
-                });
-            }
+            check(FaultKind::Overcurrent, op.current_a, r.max_current_a);
+            check(FaultKind::Overvoltage, op.voltage_v.abs(), r.max_voltage_v);
+            check(FaultKind::Overpower, op.power_w, r.max_power_w);
         }
-        ComponentKind::Vreg => {
-            if let Some(imax) = r.max_current_a {
-                checks.push(Check {
-                    kind: FaultKind::Overcurrent,
-                    value: op.current_a,
-                    limit: imax,
-                    surge: false,
-                });
-            }
-        }
+        ComponentKind::Vreg => check(FaultKind::Overcurrent, op.current_a, r.max_current_a),
         ComponentKind::AnalogSwitch => {
-            if let Some(ipin) = r.max_pin_current_a {
-                checks.push(Check {
-                    kind: FaultKind::PinOvercurrent,
-                    value: op.current_a,
-                    limit: ipin,
-                    surge: false,
-                });
-            }
+            check(FaultKind::PinOvercurrent, op.current_a, r.max_pin_current_a)
         }
+        // These kinds get PER-PIN metas, not a package meta: an MCU or logic IC
+        // has no single through-current, but every pin it drives is stamped as a
+        // Thevenin PinDriver whose hidden Vsource's branch unknown IS that pin's
+        // source/sink current. The binder monitors each driver Vsource
+        // (reference "<ref>:<pin>", see `gather_device_meta`), so `op.current_a`
+        // here is a genuine pin current and this check fires on a real per-pin
+        // violation.
         ComponentKind::Mcu
         | ComponentKind::Digital
         | ComponentKind::ShiftRegister
         | ComponentKind::Dac
-        | ComponentKind::Adc => {
-            // These kinds get PER-PIN metas, not a package meta: an MCU or
-            // logic IC has no single through-current, but every pin it drives
-            // is stamped as a Thevenin PinDriver whose hidden Vsource's branch
-            // unknown IS that pin's source/sink current. The binder monitors
-            // each driver Vsource (reference "<ref>:<pin>", see
-            // `gather_device_meta`), so `op.current_a` here is a genuine pin
-            // current and this check fires on a real per-pin violation.
-            if let Some(ipin) = r.max_pin_current_a {
-                checks.push(Check {
-                    kind: FaultKind::PinOvercurrent,
-                    value: op.current_a,
-                    limit: ipin,
-                    surge: false,
-                });
-            }
-        }
+        | ComponentKind::Adc => check(FaultKind::PinOvercurrent, op.current_a, r.max_pin_current_a),
         _ => {}
     }
     checks

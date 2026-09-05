@@ -93,12 +93,6 @@ impl LoadProfile {
         Self::builtin().into_iter().find(|p| p.id == id)
     }
 
-    /// Parse a profile set from an arbitrary TOML string (user-supplied).
-    pub fn from_toml_str(src: &str) -> Result<Vec<LoadProfile>, toml::de::Error> {
-        let file: ProfileFile = toml::from_str(src)?;
-        Ok(file.profiles)
-    }
-
     /// The profile's baseline current (the first segment's level, or 0).
     pub fn baseline_a(&self) -> f64 {
         self.segments.first().map(|s| s.level_a).unwrap_or(0.0)

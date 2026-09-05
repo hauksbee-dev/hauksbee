@@ -1332,12 +1332,6 @@ impl LogicComponent {
         pins
     }
 
-    /// Current level of an input pin (the last decided sample).
-    pub fn input_level(&self, name: &str) -> Option<bool> {
-        let i = self.input_names.iter().position(|n| n == name)?;
-        Some(self.input_levels[i])
-    }
-
     /// Current logic level of an output.
     pub fn output_level(&self, name: &str) -> Option<bool> {
         let i = self.output_names.iter().position(|n| n == name)?;

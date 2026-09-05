@@ -326,29 +326,13 @@ impl StampCtx<'_> {
 /// Stamp a conductance `g` between two nodes into the matrix.
 #[inline]
 fn stamp_cond<S: StampSink>(sink: &mut S, layout: &Layout, a: NodeId, b: NodeId, g: f64) {
-    let ai = layout.node(a);
-    let bi = layout.node(b);
-    if let Some(ai) = ai {
-        sink.g(ai, ai, g);
-    }
-    if let Some(bi) = bi {
-        sink.g(bi, bi, g);
-    }
-    if let (Some(ai), Some(bi)) = (ai, bi) {
-        sink.g(ai, bi, -g);
-        sink.g(bi, ai, -g);
-    }
+    stamp_cond_idx(sink, layout.node(a), layout.node(b), g);
 }
 
 /// Stamp an equivalent current source pushing `i` from `a` to `b`.
 #[inline]
 fn stamp_current<S: StampSink>(sink: &mut S, layout: &Layout, a: NodeId, b: NodeId, i: f64) {
-    if let Some(ai) = layout.node(a) {
-        sink.i(ai, -i);
-    }
-    if let Some(bi) = layout.node(b) {
-        sink.i(bi, i);
-    }
+    stamp_current_idx(sink, layout.node(a), layout.node(b), i);
 }
 
 /// Where device stamps write. Two implementations: the real `(matrix, rhs)`
@@ -380,46 +364,6 @@ impl StampSink for MatrixSink<'_> {
     }
 }
 
-/// Matrix-free residual accumulation: `F = g*x - rhs` over the NODE block,
-/// folded directly as each device stamps (`F[r] += v * x[c]` for a matrix
-/// write, `F[r] -= v` for an rhs write; rows outside the node block are
-/// dropped, they are not part of the residual norm). This skips the
-/// clear/slot-search/store cost of a real assembly AND the separate row-product
-/// pass, which is what makes the line-search residual eval cheap. The per-row
-/// SUM ORDER differs from the assembled row product (device-stamp order,
-/// interleaved with rhs terms, instead of slot order then rhs), so the norm can
-/// differ from the assembled one by rounding: switching the residual eval
-/// onto this sink was tried (assembly-economy sub-lever A), measured 2x on
-/// the eval and -21% on the smoke march wall, and REVERTED: the flagship
-/// joint march died where the assembled eval survived. The sink's F is
-/// proven equal to the assembled row product within accumulation rounding
-/// (`residual_sink_matches_assembled_row_product`), so the death was not a
-/// bug but marginal Armijo decisions flipping under equally-valid rounding
-/// on cancellation-heavy stiff rows: too fragile to ship. Kept (with the
-/// bench and the equivalence gate) as the measurement estate and for any
-/// future order-robust redesign.
-#[cfg_attr(not(test), allow(dead_code))]
-struct ResidualSink<'a> {
-    f: &'a mut [f64],
-    x: &'a [f64],
-    n_nodes: usize,
-}
-
-impl StampSink for ResidualSink<'_> {
-    #[inline]
-    fn g(&mut self, row: usize, col: usize, v: f64) {
-        if row < self.n_nodes {
-            self.f[row] += v * self.x[col];
-        }
-    }
-    #[inline]
-    fn i(&mut self, row: usize, v: f64) {
-        if row < self.n_nodes {
-            self.f[row] -= v;
-        }
-    }
-}
-
 /// Reserve the structural slots a device will ever touch, so the symbolic
 /// factorization sees the complete pattern even when a value is momentarily 0.
 pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix) {
@@ -441,7 +385,7 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
     }
     for (id, dev) in circuit.iter() {
         let mut ns: Vec<Option<usize>> = dev.nodes().iter().map(|&n| layout.node(n)).collect();
-        // A series-resistance BJT's internal unknowns (dev-plan 04 §3.2) join
+        // A series-resistance BJT's internal unknowns join
         // the all-pairs set: the ohmic stamps couple external<->internal and
         // the relocated Gummel-Poon core couples the internals among
         // themselves; the union's all-pairs covers both (and the toggle-off
@@ -557,19 +501,6 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
 
 pub fn stamp_all(ctx: &StampCtx, g: &mut SparseMatrix, rhs: &mut [f64]) {
     let mut sink = MatrixSink { g, rhs };
-    stamp_into(ctx, &mut sink);
-}
-
-/// Accumulate the nonlinear residual `F = g*x - rhs` over the NODE block at
-/// the iterate `ctx.x`, without assembling the matrix (see [`ResidualSink`]
-/// for what that changes). `f[0..n_nodes]` must be zeroed by the caller.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn stamp_residual(ctx: &StampCtx, f: &mut [f64]) {
-    let mut sink = ResidualSink {
-        f,
-        x: ctx.x,
-        n_nodes: ctx.layout.n_nodes,
-    };
     stamp_into(ctx, &mut sink);
 }
 
@@ -751,7 +682,7 @@ pub(crate) fn stamp_device<S: StampSink>(ctx: &StampCtx, id: DeviceId, dev: &Dev
     }
 }
 
-// --- behavioral B-source (nonlinear expression device, dev-plan 04 §2.5) -----
+// --- behavioral B-source (nonlinear expression device) -----
 
 thread_local! {
     /// First behavioral-expression fault of the current assembly (device-named,
@@ -789,7 +720,7 @@ pub(crate) fn take_behavioral_fault() -> Option<String> {
 /// dependency values `vals` (slot-aligned with `deps`). Returns
 /// `(f, partials)` or a human-readable fault description.
 ///
-/// FD scheme (plan §2.5, shipped default; symbolic d/dv is the later
+/// FD scheme (shipped default; symbolic d/dv is the later
 /// upgrade): forward difference per slot with step
 /// `delta_k = reltol*|x_k| + floor`, where the floor is the per-quantity
 /// convergence floor, `vntol` for a `V(...)` slot, `abstol` for an
@@ -1080,7 +1011,7 @@ fn stamp_inductor<S: StampSink>(
     sink.g(br, br, -req);
     sink.i(br, -(veq));
 
-    // Mutual inductance (dev-plan 04 §2.3): with couplings the branch relation
+    // Mutual inductance: with couplings the branch relation
     // generalizes verbatim from `v = L·di/dt` to `v_j = Σ_k L_jk·di_k/dt`
     // (L_jj the self term already stamped above, L_jk = M = k·sqrt(Lj·Lk)).
     // Per partner k this adds one matrix cross term −M·coeffs.g at
@@ -1508,7 +1439,7 @@ pub(crate) fn bjt_effective_nodes(
     }
 }
 
-// --- MOSFET charge helpers (dev-plan 04 §3.3) --------------------------------
+// --- MOSFET charge helpers --------------------------------
 
 /// Meyer-limit intrinsic gate-drain capacitance fraction: `Cgd -> (1/2)·Cox`
 /// in deep triode (Meyer's `vds -> 0` limit); zero in saturation/cutoff where
@@ -1605,13 +1536,13 @@ pub(crate) fn mos_channel(
     }
 }
 
-/// THE CHARGE-MODEL CHOICE (dev-plan 04 §3.3, decided here): the gate
+/// THE CHARGE-MODEL CHOICE: the gate
 /// charges are the "simpler-but-honest" per-junction alternative to true
 /// Meyer capacitances, for a structural reason, not just a stability one.
 /// Meyer's `Cgs(vgs, vds)`/`Cgd(vgs, vds)` depend on TWO junction voltages,
 /// so they do not integrate to a per-junction two-terminal `Q(v)` at all
 /// (the classic Meyer charge-non-conservation problem); the solver's
-/// reactive machinery is charge-based `Q(v)` companions (§3.1) precisely so
+/// reactive machinery is charge-based `Q(v)` companions precisely so
 /// nonlinear capacitance conserves charge. Instead each gate junction gets a
 /// genuine `Q(v)` whose capacitance matches Meyer's REGION LIMITS, smoothly
 /// interpolated over a `delta`-wide transition at the threshold (`softplus`
@@ -1626,7 +1557,7 @@ pub(crate) fn mos_channel(
 ///   electrically exact, and dropping it instead (the first cut of this
 ///   model) made every gate charge ~`Cox` too fast below threshold; the
 ///   switching edges led ngspice by the whole subthreshold gate-RC
-///   (measured on the §3.3 load-switch decks: worst pointwise errors 5.45
+///   (measured on the load-switch decks: worst pointwise errors 5.45
 ///   NMOS / 54.5 PMOS without it). The ON value is Meyer's DEEP-TRIODE
 ///   limit `Cox/2`, not the saturation `2/3·Cox`: a switch dwells in
 ///   triode whenever it is on and only transits saturation briefly during
@@ -1644,7 +1575,7 @@ pub(crate) fn mos_channel(
 /// two-voltage C can express (Meyer's Cgs rises to `2/3·Cox` in
 /// saturation; ours holds the triode `Cox/2` there), bounded and visible
 /// as nanosecond-scale edge skew in the ngspice cross-check tolerances of
-/// the §3.3 decks.
+/// those decks.
 #[inline]
 pub(crate) fn mos_charge_gs(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64, f64) {
     let mut q = c_ov * v;
@@ -1681,7 +1612,7 @@ pub(crate) fn mos_charge_gd(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) 
 /// region switch deliberately ignores the body effect: the common
 /// bulk-tied-to-source switch has none, and a body-biased charge switch
 /// would couple three terminals into what must stay a two-terminal `Q(v)`);
-/// bulk charges are the §3.1 depletion helper with the model's `pb`/`mj`.
+/// bulk charges are the depletion helper with the model's `pb`/`mj`.
 pub(crate) fn mos_charges_at(
     model: &MosfetModel,
     vgs: f64,
@@ -1733,27 +1664,6 @@ pub(crate) fn mos_junction_voltages(
     )
 }
 
-/// §3.4 (`DeviceEffects` contract): a toggle the stamp cannot honor for a
-/// device must LOG ONCE rather than silently ignore the model fields. Each
-/// dishonored (effect, device) pair owns one flag; tests read the flag.
-pub(crate) mod effect_log {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    /// Log `msg` the first time this flag fires; a no-op afterwards.
-    ///
-    /// This is an engine-internal dev note (it references a dev-plan section and
-    /// an unimplemented effect), so it goes through the `HAUKSBEE_DEBUG`-gated
-    /// debug channel rather than straight to stderr: on a user's CI run it was
-    /// leaking `[effects] ... (dev-plan 04 §3.2)` into the output. The flag still
-    /// flips exactly once (tests read it), the print is just now channel-gated.
-    #[allow(dead_code)]
-    pub fn log_once(flag: &AtomicBool, msg: &str) {
-        if !flag.swap(true, Ordering::Relaxed) {
-            hauksbee_ir::debug::note("effects", msg);
-        }
-    }
-}
-
 /// Thermal voltage helper that respects the temperature toggle.
 fn hauksbee_ir_thermal(t_c: f64, temp_on: bool) -> f64 {
     let t = if temp_on { t_c } else { 27.0 };
@@ -1793,7 +1703,7 @@ fn stamp_diode<S: StampSink>(
     let mut a_eff = a_ext;
     if let Some(a_int) = ctx.layout.diode_internal(id) {
         if ctx.opts.effects.series_resistance && model.rs > 0.0 {
-            add_pair(sink, a_ext, Some(a_int), 1.0 / model.rs);
+            stamp_cond_idx(sink, a_ext, Some(a_int), 1.0 / model.rs);
             a_eff = Some(a_int);
         } else {
             sink.g(a_int, a_int, 1.0);
@@ -1859,7 +1769,7 @@ fn stamp_diode<S: StampSink>(
     stamp_cond_idx(sink, a_eff, k_i, gd);
     stamp_current_idx(sink, a_eff, k_i, ieq);
 
-    // Charge storage (dev-plan 04 §3.1): junction (depletion) + diffusion
+    // Charge storage: junction (depletion) + diffusion
     // capacitance as a CHARGE-BASED companion in parallel with the DC
     // junction. Open at DC exactly like a capacitor; only active when the
     // model actually stores charge AND effects.junction_caps is on, so
@@ -1907,7 +1817,7 @@ fn stamp_bjt<S: StampSink>(
     let is = if temp_on { model.is_at(t_c) } else { model.is };
     let vt = hauksbee_ir_thermal(t_c, temp_on);
 
-    // Series resistances rb/re/rc (dev-plan 04 §3.2): the layout allocated an
+    // Series resistances rb/re/rc: the layout allocated an
     // internal unknown per NONZERO terminal resistance (see
     // `Layout::bjt_internal`, zero-valued resistances allocate nothing, so a
     // default model takes none of these branches). With the toggle on, stamp
@@ -1924,7 +1834,7 @@ fn stamp_bjt<S: StampSink>(
             let rs = [model.rc, model.rb, model.re];
             for t in 0..3 {
                 if let Some(int_i) = ints[t] {
-                    add_pair(sink, ext[t], Some(int_i), 1.0 / rs[t]);
+                    stamp_cond_idx(sink, ext[t], Some(int_i), 1.0 / rs[t]);
                     eff[t] = Some(int_i);
                 }
             }
@@ -1993,7 +1903,7 @@ fn stamp_bjt<S: StampSink>(
     // and drops it mis-simulates there silently).
     // (The sign is easy to get backwards: DIVIDING by (1 - vbc/VAF) shrinks ic
     // with vce, and no bias deck catches it, their collector points are
-    // bias-network-set; only the §3.2 amplifier-gain cross-check against
+    // bias-network-set; only the amplifier-gain cross-check against
     // ngspice exposes it. For the default model both `vaf` and `var` are
     // infinite, `early == 1.0`, and `1/1.0 == 1.0` exactly, so default-model
     // decks are insensitive to the whole factor.)
@@ -2083,23 +1993,15 @@ fn stamp_bjt<S: StampSink>(
     // ei) resolved to above: the intrinsic internal nodes when series
     // resistance relocated the core inside, the externals otherwise.
     //
-    // History (B13): this used to be two variants. A LEGACY approximate
-    // Jacobian (∂ic/∂vbc mapped through a go-between-c-e plus gm-on-vbe,
-    // mismatching the true partial by gir) served the external-node path,
-    // kept only because a golden-fixture hash pinned its bytes. The
-    // approximation limit-cycles Newton on a hard-saturated switching edge
-    // (measured: a persistent ~0.1 V two-cycle at the collector, failing the
-    // step at dt_min); the exact tangent converges it. Both Jacobians define
-    // the same root (the RHS residual brackets are the terminal currents
-    // either way), so the promotion changes Newton iterate paths and the
-    // within-tolerance accepted points, never the defined physics; the
-    // ngspice oracle corpus was re-run on both sides of the promotion and
-    // every deck's worst-case error stayed within tolerance (see
-    // docs/spice-compat/results.md). Scope: this is the LARGE-SIGNAL
-    // (DC/transient Newton) stamp. The AC small-signal stamp (`stamp_bjt_ac`
-    // in ac.rs) still carries its own gm/go admittance form on the
-    // external-node path; aligning it with these partials is separate,
-    // AC-oracle-gated work.
+    // The EXACT tangent, on every path. An approximate Jacobian (∂ic/∂vbc
+    // mapped through a go-between-c-e plus gm-on-vbe, mismatching the true
+    // partial by gir) defines the same root but limit-cycles Newton on a
+    // hard-saturated switching edge, failing the step at dt_min.
+    //
+    // Scope: this is the LARGE-SIGNAL (DC/transient Newton) stamp. The AC
+    // small-signal stamp (`stamp_bjt_ac` in ac.rs) carries its own gm/go
+    // admittance form on the external-node path; aligning it with these
+    // partials is separate, AC-oracle-gated work.
     //
     // `sign` folds out of the matrix entries (sign² = 1) and folds
     // the RHS brackets whole; folding only some terms breaks PNP convergence.
@@ -2167,8 +2069,8 @@ fn stamp_bjt<S: StampSink>(
         inject(sink, ei, ic_eq + ib_eq);
     }
 
-    // Charge storage (dev-plan 04 §3.2): base-emitter and base-collector
-    // charges as CHARGE-BASED companions, exactly the diode's §3.1 companion
+    // Charge storage: base-emitter and base-collector
+    // charges as CHARGE-BASED companions, exactly the diode's companion
     // applied per junction, bank A of the device's `ReactiveState` slots
     // holds Q_be, bank B holds Q_bc (both in FOLDED space, like every voltage
     // above). Open at DC like a capacitor; only active when the model stores
@@ -2197,7 +2099,7 @@ fn stamp_bjt<S: StampSink>(
     let ieq_be = (ctx.coeffs.g * q_be
         - hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]))
         - geq_be * vbe;
-    add_pair(sink, bi, ei, geq_be);
+    stamp_cond_idx(sink, bi, ei, geq_be);
     inject(sink, bi, -sign * ieq_be);
     inject(sink, ei, sign * ieq_be);
 
@@ -2209,7 +2111,7 @@ fn stamp_bjt<S: StampSink>(
             ctx.state.xb[0].x2[sl],
         ))
         - geq_bc * vbc;
-    add_pair(sink, bi, ci, geq_bc);
+    stamp_cond_idx(sink, bi, ci, geq_bc);
     inject(sink, bi, -sign * ieq_bc);
     inject(sink, ci, sign * ieq_bc);
 }
@@ -2253,11 +2155,11 @@ fn stamp_mosfet<S: StampSink>(
     if let Some(&ints) = ctx.layout.mos_internal(id) {
         if ctx.opts.effects.series_resistance {
             if let Some(di_int) = ints[0] {
-                add_pair(sink, di_ext, Some(di_int), 1.0 / model.rd);
+                stamp_cond_idx(sink, di_ext, Some(di_int), 1.0 / model.rd);
                 d_eff = Some(di_int);
             }
             if let Some(si_int) = ints[1] {
-                add_pair(sink, si_ext, Some(si_int), 1.0 / model.rs);
+                stamp_cond_idx(sink, si_ext, Some(si_int), 1.0 / model.rs);
                 s_eff = Some(si_int);
             }
         } else {
@@ -2285,12 +2187,11 @@ fn stamp_mosfet<S: StampSink>(
     let vgs = vg - vs;
     let vds = vd - vs;
 
-    // Body-effect threshold shift (dev-plan 04 §3.3): `gamma` was parsed and
-    // silently ignored before this arc. With a bulk terminal present and
+    // Body-effect threshold shift. With a bulk terminal present and
     // `gamma > 0`, `vth = vto + gamma·(sqrt(phi - vbs) - sqrt(phi))` at the
     // folded bulk-to-EFFECTIVE-source voltage (the post-swap source, ngspice
     // measures the body effect from whichever terminal acts as the source).
-    // `gamma == 0` (every pre-§3.3 model, every db entry) takes the plain
+    // `gamma == 0` (every model without a body-effect term) takes the plain
     // `vto` path bit-identically and never reads the bulk voltage.
     let bulk = b.unwrap_or(s);
     let mut vth = model.vto;
@@ -2333,7 +2234,7 @@ fn stamp_mosfet<S: StampSink>(
     let (dn, sn) = if swap { (s_eff, d_eff) } else { (d_eff, s_eff) };
 
     // Conductances: gds between drain-source, gm couples drain current to vgs.
-    add_pair(sink, dn, sn, gds);
+    stamp_cond_idx(sink, dn, sn, gds);
     add_transconductance(sink, dn, sn, gi, sn, gm);
 
     // Equivalent current: id_eq = ids - gm*vgs - gds*vds, flowing d->s.
@@ -2353,7 +2254,7 @@ fn stamp_mosfet<S: StampSink>(
     inject(sink, sn, ieq_signed);
 
     // Trapezoidal/Gear/BE history bracket shared by every charge companion
-    // below; the diode's §3.1 companion verbatim (slots hold CHARGE in
+    // below; the diode's companion verbatim (slots hold CHARGE in
     // x1/x2, dQ/dt in dx1; the discrete current is coeffs.g·Q(v) - hist).
     let hist = |x1: f64, dx1: f64, x2: f64| match ctx.opts.integration {
         Integration::Trapezoidal => ctx.coeffs.g * x1 + dx1,
@@ -2362,7 +2263,7 @@ fn stamp_mosfet<S: StampSink>(
     };
     let sl = id.0 as usize;
 
-    // Body diode (dev-plan 04 §3.3): STRUCTURAL bulk-junction physics, the
+    // Body diode: STRUCTURAL bulk-junction physics, the
     // BJT-junction discipline; the DC branches exist whenever the model
     // carries them (`body_is > 0`), un-toggled; the depletion charges ride
     // `junction_caps`. Each junction is bulk->drain / bulk->source in folded
@@ -2401,7 +2302,7 @@ fn stamp_mosfet<S: StampSink>(
                 let e = (vj / vt).clamp(-40.0, 40.0).exp();
                 let ij = model.body_is * (e - 1.0);
                 let gj = (model.body_is * e / vt).max(ctx.opts.gmin);
-                add_pair(sink, bulk_i, term_i, gj);
+                stamp_cond_idx(sink, bulk_i, term_i, gj);
                 let ieq_j = ij - gj * vj;
                 inject(sink, bulk_i, -sign * ieq_j);
                 inject(sink, term_i, sign * ieq_j);
@@ -2415,14 +2316,14 @@ fn stamp_mosfet<S: StampSink>(
                 let bk = &ctx.state.xb[bank];
                 let geq = ctx.coeffs.g * c;
                 let ieq_c = (ctx.coeffs.g * q - hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])) - geq * vj;
-                add_pair(sink, bulk_i, term_i, geq);
+                stamp_cond_idx(sink, bulk_i, term_i, geq);
                 inject(sink, bulk_i, -sign * ieq_c);
                 inject(sink, term_i, sign * ieq_c);
             }
         }
     }
 
-    // Gate charges (dev-plan 04 §3.3, gated by `junction_caps`, "the single
+    // Gate charges (gated by `junction_caps`, "the single
     // biggest reason a MOS switching deck disagrees with ngspice"): Q_gs on
     // bank A, Q_gd on secondary bank 0, each a two-terminal charge companion.
     // "PHYSICAL (unswapped)" means Q_gs stays on the real SOURCE side and Q_gd
@@ -2443,7 +2344,7 @@ fn stamp_mosfet<S: StampSink>(
         let ieq_gs = (ctx.coeffs.g * q_gs
             - hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]))
             - geq_gs * vgs_p;
-        add_pair(sink, gi, s_eff, geq_gs);
+        stamp_cond_idx(sink, gi, s_eff, geq_gs);
         inject(sink, gi, -sign * ieq_gs);
         inject(sink, s_eff, sign * ieq_gs);
 
@@ -2452,7 +2353,7 @@ fn stamp_mosfet<S: StampSink>(
         let geq_gd = ctx.coeffs.g * c_gd;
         let ieq_gd =
             (ctx.coeffs.g * q_gd - hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])) - geq_gd * vgd_p;
-        add_pair(sink, gi, d_eff, geq_gd);
+        stamp_cond_idx(sink, gi, d_eff, geq_gd);
         inject(sink, gi, -sign * ieq_gd);
         inject(sink, d_eff, sign * ieq_gd);
     }
@@ -2995,19 +2896,6 @@ fn stamp_current_idx<S: StampSink>(sink: &mut S, a: Option<usize>, b: Option<usi
     }
 }
 
-fn add_pair<S: StampSink>(sink: &mut S, a: Option<usize>, b: Option<usize>, gval: f64) {
-    if let Some(a) = a {
-        sink.g(a, a, gval);
-    }
-    if let Some(b) = b {
-        sink.g(b, b, gval);
-    }
-    if let (Some(a), Some(b)) = (a, b) {
-        sink.g(a, b, -gval);
-        sink.g(b, a, -gval);
-    }
-}
-
 /// Stamp a transconductance: current into `(ip, in)` proportional to the
 /// voltage across `(cp, cn)`. `i = gm * (v_cp - v_cn)` added at ip, removed
 /// at in.
@@ -3045,16 +2933,12 @@ fn inject<S: StampSink>(sink: &mut S, node: Option<usize>, val: f64) {
     }
 }
 
-// Junction-voltage memory for limiting is carried on the context via the
-// previous Newton iterate; these helpers read it back.
-impl StampCtx<'_> {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::options::Integration;
     use crate::system::ReactiveState;
-    use crate::test_fixtures::{bjt, cap, comparator, diode, res, stamp_ctx, sw, trapz, vdc, GND};
+    use crate::test_fixtures::{bjt, diode, stamp_ctx, trapz, GND};
     use hauksbee_ir::{BDep, Circuit, CompiledExpr, NodeId};
 
     fn diode_charge_model() -> DiodeModel {
@@ -3078,7 +2962,7 @@ mod tests {
     }
 
     /// Assemble `c` at iterate `x` (previous iterate `x_prev`) with the given
-    /// options, returning `(layout, matrix, rhs, residual)`.
+    /// options, returning `(layout, matrix, rhs, residual `g*x - rhs`)`.
     fn assemble(
         c: &Circuit,
         x: &[f64],
@@ -3099,8 +2983,9 @@ mod tests {
         ctx.branch_reg = branch_reg;
         let mut rhs = vec![0.0; layout.size];
         stamp_all(&ctx, &mut m, &mut rhs);
-        let mut f = vec![0.0; layout.size];
-        stamp_residual(&ctx, &mut f);
+        let f: Vec<f64> = (0..layout.size)
+            .map(|i| m.row(i).iter().map(|&(j, v)| v * x[j]).sum::<f64>() - rhs[i])
+            .collect();
         (layout, m, rhs, f)
     }
 
@@ -3523,62 +3408,6 @@ mod tests {
         assert!(((f(0.5, 2.0).0 - sq) / sq).abs() < 1e-3);
         assert_eq!(f(-0.1, 0.0).0, 0.0);
         assert_eq!(f(0.5, 0.0).0, 0.0);
-    }
-
-    /// Repeated cells of R, C, diode, BJT, comparator and an SPDT switch pair.
-    fn big_board(cells: usize) -> Circuit {
-        let mut c = Circuit::new();
-        let vdd = c.node("vdd");
-        vdc(&mut c, "VDD", vdd, 5.0);
-        for k in 0..cells {
-            let (m, s, o, com) = (
-                c.node(&format!("m{k}")),
-                c.node(&format!("s{k}")),
-                c.node(&format!("o{k}")),
-                c.node(&format!("c{k}")),
-            );
-            res(&mut c, &format!("R{k}a"), vdd, m, 10e3);
-            res(&mut c, &format!("R{k}b"), m, GND, 47e3);
-            cap(&mut c, &format!("C{k}"), m, GND, 1e-9);
-            diode(&mut c, &format!("D{k}"), m, s, Default::default());
-            bjt(&mut c, &format!("Q{k}"), vdd, s, GND, &Default::default());
-            comparator(&mut c, &format!("K{k}"), o, m, s, 0.1);
-            sw(&mut c, &format!("G{k}_s1"), com, m, o, (3.0, 2.0), 10.0);
-            sw(&mut c, &format!("G{k}_s0"), com, vdd, o, (2.0, 3.0), 10.0);
-            res(&mut c, &format!("R{k}c"), com, GND, 100.0);
-        }
-        c
-    }
-
-    /// The matrix-free residual equals the assembled row product within
-    /// accumulation rounding relative to each row's term magnitudes.
-    #[test]
-    fn residual_sink_matches_assembled_row_product() {
-        let circuit = big_board(64);
-        let layout = Layout::new(&circuit);
-        let n = layout.size;
-        let x: Vec<f64> = (0..n)
-            .map(|i| ((i as f64 * 0.7391).sin()) * 3.0 + 0.1)
-            .collect();
-        let state = ReactiveState::new(circuit.devices.len());
-        let opts = SolverOptions::default();
-        let (layout, m, rhs, f) = assemble(&circuit, &x, &x, &opts, &state, false, 1e-12, 1e-2);
-        for i in 0..layout.n_nodes {
-            let mut acc = 0.0;
-            let mut mag = rhs[i].abs();
-            for &(col, val) in m.row(i) {
-                acc += val * x[col];
-                mag += (val * x[col]).abs();
-            }
-            let assembled = acc - rhs[i];
-            let err = (f[i] - assembled).abs();
-            let bound = 1e-12 * mag.max(1.0);
-            assert!(
-                err <= bound,
-                "row {i}: sink F={} assembled F={assembled} err={err:e} > {bound:e}",
-                f[i]
-            );
-        }
     }
 
     /// Forward-difference partials match analytic derivatives (exact on the

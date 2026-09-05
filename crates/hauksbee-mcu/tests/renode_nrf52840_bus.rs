@@ -1,11 +1,11 @@
-//! Live-Renode verification for the nRF52840 bus controllers (U3 finding 2).
+//! Live-Renode verification for the nRF52840 bus controllers.
 //!
-//! `nrf52840.soc.toml` used to ship `controllers = []` for both buses, so a
-//! bound I2C/SPI sensor was silently never exercised (`install_i2c_bridge`
-//! returns Ok on an empty list; `on_spi` returns silently). The descriptor now
-//! names the controllers the stock Renode 1.16.1 `nrf52840.repl` actually
-//! models, `twi0`/`twi1` (I2C.NRF52840_I2C) and `spi2` (NRF52840_SPI), and
-//! this test proves, against the LIVE Renode install, that:
+//! An empty `controllers` list is silent: `install_i2c_bridge` returns Ok and
+//! `on_spi` returns without doing anything, so a bound I2C/SPI sensor is never
+//! exercised. `nrf52840.soc.toml` therefore names the controllers the stock
+//! Renode 1.16.1 `nrf52840.repl` actually models -- `twi0`/`twi1`
+//! (I2C.NRF52840_I2C) and `spi2` (NRF52840_SPI) -- and this test proves,
+//! against the LIVE Renode install, that:
 //!
 //!   1. the descriptor's controller names exist on the booted platform (a
 //!      typo'd name would make the bridge registration fail), and
@@ -13,9 +13,7 @@
 //!      bridge is loaded and attached at a slave address on every configured
 //!      TWI controller, and the SPI bridge attaches on `spi2`. Registration is
 //!      the step Renode validates the container type and name on, so passing
-//!      it is the "this controller can host engine slaves" proof; the same
-//!      bar the shipped STM32F103 controllers were held to when their bridge
-//!      first landed.
+//!      it is the "this controller can host engine slaves" proof.
 //!
 //! Honest scope: this verifies controller existence + bridge registration. An
 //! end-to-end firmware round-trip (an nRF ELF reading a bound sensor through

@@ -1,16 +1,14 @@
 //! UART RX flow control and core reset, against a real emulated ATmega328P.
 //!
-//! Reproduces (and now guards) the NEP-board study's two SEV defects on the
-//! flagship AVR + host-serial path (docs/dev-plans/nep-board-study.md):
+//! Guards two defects on the flagship AVR + host-serial path:
 //!
-//! 1. `uart_write` used to raise every byte onto simavr's `UART_IRQ_INPUT` at
-//!    a single sim instant. simavr's RX fifo is 64 bytes, so byte 65 onward of
-//!    any host record vanished silently and protocol firmwares wedged forever
-//!    mid-record. The fix queues bytes and drains them under simavr's own
-//!    XON/XOFF flow control, so a 256-byte page write (the study's real
-//!    reproduction) arrives complete.
-//! 2. There was no way to reboot a wedged core: `Reset` rezeroed sim time but
-//!    the MCU kept its wedged PC and SRAM. `Mcu::reset` now reboots the core.
+//! 1. simavr's RX fifo is 64 bytes, so raising every byte onto `UART_IRQ_INPUT`
+//!    at a single sim instant loses byte 65 onward of any host record and
+//!    wedges a protocol firmware mid-record. `uart_write` therefore queues
+//!    bytes and drains them under simavr's own XON/XOFF flow control, so a
+//!    256-byte page write arrives complete.
+//! 2. Rezeroing sim time leaves a wedged core with its wedged PC and SRAM, so
+//!    `Mcu::reset` must reboot the core itself.
 //!
 //! The firmware is hand-assembled inline (no toolchain dependency, same
 //! pattern as avr_run_clock.rs): it configures UART0 at 115200, transmits one

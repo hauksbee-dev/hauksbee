@@ -62,17 +62,6 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     builder.finish(root)
 }
 
-/// Extract from an already-parsed top-level schematic document. Sub-sheets,
-/// if any, are resolved relative to `base_dir`.
-pub fn extract_from_doc(
-    doc: &Document,
-    base_dir: Option<&Path>,
-) -> Result<ExtractedBoard, ExtractError> {
-    let mut builder = NetlistBuilder::new();
-    let root = builder.add_sheet_doc(doc, "/", base_dir, None)?;
-    builder.finish(root)
-}
-
 /// Extract from a `.kicad_sch` on disk, recursing into its hierarchy. This is
 /// the path the cross-validation and the CLI use, because the hierarchy lives in
 /// sibling files.
@@ -83,10 +72,8 @@ pub fn extract_from_doc(
 /// to sheet pins in the PARENT, so a net driven from a sibling sheet appears,
 /// inside the child file, as a stub touching exactly one pin. Extracting the
 /// child alone therefore produces a netlist that is not merely incomplete but
-/// *wrong* about connectivity: `net_lint`'s floating-control-pin check raised six
-/// [high] findings across four MNT Reform sub-sheets on exactly this, one of them
-/// `USB_PWR_EN`, which is driven from `reform2-lpc.kicad_sch` in the same
-/// project. The top-level `reform2-motherboard30.kicad_sch` is clean.
+/// *wrong* about connectivity: every cross-sheet driver reads as a floating
+/// control pin.
 ///
 /// So when handed a sub-sheet, this resolves the hierarchy it belongs to and
 /// extracts from the root, which is the only file that can answer a connectivity
@@ -395,13 +382,9 @@ struct NetlistBuilder {
     /// distinction between a cycle and a reused sub-sheet. A hierarchy that
     /// places one sub-sheet several times is the ordinary way to draw a
     /// multi-channel board, and each placement is a separate set of parts with
-    /// its own designators: LumenPnP's mobo places `mosfet.kicad_sch` four
-    /// times and `motor_driver.kicad_sch` six, and KiCad numbers their parts
-    /// R42/R44/R46/R48 and so on through each symbol's `(instances)` block. A
-    /// set-based guard read the second placement as already-in-the-netlist and
-    /// dropped it, so that board extracted 188 of its 359 parts and three of its
-    /// six MOSFETs, silently, with every coverage ratio computed over the
-    /// remainder.
+    /// its own designators, numbered through each symbol's `(instances)` block.
+    /// A set-based guard would read the second placement as already in the
+    /// netlist and silently drop half the board.
     ancestor_sheets: Vec<PathBuf>,
     /// How deep the current `Sheetfile` recursion is. The visited set stops
     /// cycles; this stops a pathological but acyclic chain (a generated project
@@ -1200,21 +1183,11 @@ impl NetlistBuilder {
             self.uf.union(a, b);
         }
 
-        // 2. Named-anchor unification. Group anchor nodes by (scope, name).
-        //    Local labels unify per-sheet only, so they are keyed including a
-        //    sheet discriminator already baked into their node coordinates;
-        //    but two different sheets can legitimately share a local label
-        //    text meaning different nets. We therefore key local labels by the
-        //    union-find *root after geometric pass is irrelevant*; instead we
-        //    bucket by name within the same sheet via the node's origin. To
-        //    keep it simple and correct, we key globals/power by name across
-        //    everything and locals by (name) only after grouping per sheet.
-        //
-        // Implementation: globals & hierarchical-by-name unify across design;
-        // locals unify only among anchors we recorded on the same sheet. We
-        // approximate sheet identity for locals by the fact that their nodes
-        // were created with a sheet-scoped key; to recover that we re-bucket
-        // using a parallel record.
+        // 2. Named-anchor unification. Globals and hierarchical-by-name unify
+        //    across the whole design; locals unify only among anchors recorded
+        //    on the SAME sheet, because two sheets can legitimately carry the
+        //    same local label text meaning different nets. Sheet identity for a
+        //    local comes from the parallel record its node was created with.
         let mut global_by_name: HashMap<String, usize> = HashMap::new();
         for a in &self.anchors {
             if a.scope == NameScope::Global {
@@ -1666,9 +1639,8 @@ fn lib_pin(p: &List) -> Option<LibPin> {
 /// eeschema's transform order (rotate the symbol, then flip it): `mirror x`
 /// flips across the x axis (negate the rotated y), `mirror y` flips across the
 /// y axis (negate the rotated x). The order is load-bearing only when a symbol
-/// is both rotated and mirrored: applying the mirror first instead swaps the
-/// two pins of such a part (e.g. a resistor placed at rot 90 + mirror x), which
-/// is exactly the kind of error that yields a plausible-but-wrong netlist.
+/// is both rotated and mirrored, where mirroring first swaps the part's two
+/// pins.
 fn place_pin(local: (f64, f64, f64), inst: (f64, f64, f64), mirror: Option<&str>) -> Pt {
     // Library symbols are drawn in a y-*up* frame; the schematic canvas is
     // y-*down*. Flip the pin's local y first so "top of symbol" stays at the
@@ -1938,10 +1910,9 @@ mod tests {
 
     #[test]
     fn empty_pin_numbers_are_never_bridged_or_dropped() {
-        // R23 (SCH-EMPTY-PINNO-BRIDGE): pins with empty pad numbers were deduped
-        // together; the second was dropped and its net silently merged onto the
-        // first. Two blank-numbered pins on two DIFFERENT nets must each survive
-        // and must NOT bridge those nets. (A lib pin with no `(number)` yields "".)
+        // Two blank-numbered pins on two DIFFERENT nets must each survive and
+        // must NOT bridge those nets; deduping them by number merges the second
+        // pin's net onto the first. (A lib pin with no `(number)` yields "".)
         let c = comp("J1", vec![pin("", 1), pin("", 2)]);
         let (out, bridged) = merge_units(vec![c]);
         let j1 = out.iter().find(|c| c.reference == "J1").expect("J1 kept");

@@ -67,7 +67,7 @@ pub enum AssemblyMode {
     Planned,
 }
 
-/// The classic SPICE device-evaluation bypass (dev-plan 03 §6): reuse a
+/// The classic SPICE device-evaluation bypass: reuse a
 /// quiescent nonlinear device's previous linearization (its recorded matrix +
 /// RHS stamp) when none of the unknowns it reads moved more than
 /// `0.1·(reltol·max(|v|,|v_last|) + vntol)` since its last evaluation.
@@ -76,7 +76,7 @@ pub enum AssemblyMode {
 /// runs, and every solve path is bit-for-bit the classic assembly. `On` is an
 /// explicit opt-in speed knob whose accepted steps must match the no-bypass
 /// reference to solver tolerance (reltol), never bit-for-bit; the iterate
-/// PATH may change, the answer may not (§6.2's gate). The bypass machinery
+/// PATH may change, the answer may not. The bypass machinery
 /// carries SPICE's safety discipline internally: never on the first two
 /// iterations of a solve, never on DC / event-frozen solves or the trials
 /// immediately after an event-resolved step, cache invalidated across steps
@@ -93,7 +93,7 @@ pub enum NewtonBypass {
 }
 
 /// Whether the partitioned engine may execute its per-sweep island work on a
-/// rayon thread pool (dev-plan 03 §3.4).
+/// rayon thread pool.
 ///
 /// The sweep itself is an order-free double-buffered Jacobi exchange (see
 /// `partitioned::sweep`): every island reads a frozen exchange buffer and
@@ -112,7 +112,7 @@ pub enum ParallelPolicy {
     Off,
     /// Force a pool of exactly `n` threads and engage it regardless of the
     /// Auto threshold. This is the explicit `--threads N`-style knob, and what
-    /// the determinism gate (§3.5) uses to pin 1/2/4/8-thread runs.
+    /// the determinism gate uses to pin 1/2/4/8-thread runs.
     Threads(usize),
 }
 
@@ -202,16 +202,16 @@ pub struct DeviceEffects {
     pub early_effect: bool,
     /// Charge storage: junction (depletion) & diffusion capacitances. Off =>
     /// DC behaviour even in transient (fast, but loses switching dynamics).
-    /// Honored for DIODES (cjo/vj/m/tt, dev-plan 04 §3.1), BJTs (cje/cjc/tf/tr,
-    /// §3.2: two charge banks) and MOSFETs (gate charges + body-diode depletion,
-    /// §3.3), all charge-based companions with LTE participation and jwC in AC.
+    /// Honored for DIODES (cjo/vj/m/tt), BJTs (cje/cjc/tf/tr,
+    /// two charge banks) and MOSFETs (gate charges + body-diode depletion),
+    /// all charge-based companions with LTE participation and jwC in AC.
     /// A model without charge fields stamps identically whatever this toggle
     /// says.
     pub junction_caps: bool,
     /// Ohmic series resistances. Honored for BJTs (RB/RE/RC via layout-private
-    /// internal nodes, dev-plan 04 §3.2). The diode's RS is NOT stamped yet,
+    /// internal nodes). The diode's RS is NOT stamped yet,
     /// a diode model carrying a nonzero RS logs once (under HAUKSBEE_DEBUG)
-    /// instead of silently ignoring it (§3.4); it can ride the same
+    /// instead of silently ignoring it; it can ride the same
     /// internal-node machinery in a follow-up.
     pub series_resistance: bool,
     /// Temperature dependence of saturation currents and thermal voltage.
@@ -224,7 +224,7 @@ pub struct DeviceEffects {
     /// CORRECTNESS fix to the switch model (the bare smooth-tanh model bridges
     /// both throws at mid-band, injecting a weight-independent common-mode
     /// current; a real SN74LVC1G3157 never does that), so it is on by default
-    /// per dev-plan 02 section 2.6. `false` is the explicit compat switch
+    /// `false` is the explicit compat switch
     /// restoring the bridging model.
     #[serde(default = "default_true")]
     pub spdt_bbm: bool,
@@ -300,7 +300,7 @@ impl Default for DeviceEffects {
 /// One rung of the robustness ladder: a named permission for an escalation
 /// mechanism the solver may engage when the plain path is not enough. Each is
 /// BIT-IDENTICAL to baseline when not reached: granting a strategy that never
-/// fires changes nothing. That is the invariant (dev-plan 02 section 2.6) the
+/// fires changes nothing. That is the invariant the
 /// gates pin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
@@ -359,7 +359,7 @@ impl Strategy {
 }
 
 /// The typed escalation ladder: the explicit, per-run control-flow permission
-/// set (dev-plan 02 section 2.6). MEMBERSHIP is the permission, consulted by
+/// set. MEMBERSHIP is the permission, consulted by
 /// the solve paths at each escalation point; the insertion order documents the
 /// intended escalation order (the partitioner selecting ladder aggressiveness
 /// per island builds on that). `Copy` because `SolverOptions` is copied through
@@ -407,9 +407,8 @@ impl RobustnessLadder {
     }
 
     /// Revoke a strategy, preserving the order of the rest. The per-island
-    /// selection (round 2: `orchestrate::staged::select_group_ladder`) only
-    /// ever TRIMS with this: the caller's ladder is the ceiling, never
-    /// escalated past.
+    /// selection (`orchestrate::staged::select_group_ladder`) only ever TRIMS
+    /// with this: the caller's ladder is the ceiling, never escalated past.
     pub fn without(mut self, s: Strategy) -> Self {
         let mut out = [None; 8];
         let mut k = 0;
@@ -495,7 +494,7 @@ pub struct SolverOptions {
     #[serde(default)]
     pub assembly: AssemblyMode,
     /// The classic SPICE device-evaluation bypass; see [`NewtonBypass`].
-    /// Off by default (dev-plan 03 §6.2: promoted only after its gates pass);
+    /// Off by default;
     /// `On` is a per-run opt-in, never flipped by any internal path.
     #[serde(default)]
     pub newton_bypass: NewtonBypass,

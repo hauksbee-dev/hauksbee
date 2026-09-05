@@ -11,26 +11,16 @@
 //!
 //! ## The capture grid, and why it equals the step grid
 //!
-//! The original `tarski_decomp` sampled boundary waveforms every 2 us because
-//! 2 us worked on one board (the magic constant problem, saga §4). Here the
-//! capture grid is the solver's own accepted-step grid: every accepted step
-//! of the upstream solve becomes a PWL breakpoint. Under fixed step control,
-//! the only mode this executor accepts, that grid is exactly the uniform
-//! `dt` grid (the engine's crossing refinement is an adaptive-mode feature;
-//! fixed-step event handling resolves discontinuities at the step boundary
-//! itself), so every replay breakpoint lands exactly on a downstream solve
-//! point and interpolation error at solve points is zero. Downstream engines
-//! interpolate linearly between breakpoints, which is exactly the
-//! first-order-hold assumption their own integrators already make between
-//! steps. The certificate's [`ToleranceClaim::CaptureGrid`] is filled with
-//! `dt`: the breakpoint spacing actually used. When adaptive support lands
-//! (the tau/10 rule), event-bisected points will ride into the capture
-//! automatically, because capture records accepted steps, whatever they are.
-//!
-//! A coarser grid (the plan's tau/10 rule) is a memory optimization for
-//! adaptive-step runs and long captures; it lands with adaptive support.
-//! This executor refuses adaptive step control rather than silently choosing
-//! a grid whose error it cannot state.
+//! The capture grid is the solver's own accepted-step grid: every accepted
+//! step of the upstream solve becomes a PWL breakpoint. Under fixed step
+//! control, the only mode this executor accepts, that grid is exactly the
+//! uniform `dt` grid, so every replay breakpoint lands exactly on a downstream
+//! solve point and interpolation error at solve points is zero. Downstream
+//! engines interpolate linearly between breakpoints, which is the same
+//! first-order-hold assumption their integrators already make between steps.
+//! The certificate's [`ToleranceClaim::CaptureGrid`] carries the breakpoint
+//! spacing actually used. This executor refuses adaptive step control rather
+//! than silently choosing a grid whose error it cannot state.
 //!
 //! ## What the result is
 //!
@@ -46,27 +36,22 @@
 //!
 //! A group whose islands contain an accepted balance tear is not solved
 //! whole: its sub-circuit is partitioned around the torn rail
-//! ([`Partition::analyze_imposing_tears`], the decompose layer's decision
-//! imposed on the proven executor) and marched by the partitioned engine,
-//! whose outer loop is [`super::balance::settle_rails`]. The legacy
-//! magic-constant rail detection never runs on this path: rails.rs decided,
-//! this module executes. When the torn engine declines to construct OR
-//! fails while marching (a per-block Newton death the build could not
-//! foresee; the per-block path has none of the monolithic engine's
-//! escalation ladder), the group falls back to the whole-group monolithic
-//! solve, which is exact and merely forfeits the speedup;
-//! [`StagedResult::torn_groups`] says which path each torn group actually
-//! took, so a performance regression is visible instead of silent.
+//! ([`Partition::analyze_imposing_tears`]) and marched by the partitioned
+//! engine, whose outer loop is [`super::balance::settle_rails`]. When the torn
+//! engine declines to construct OR fails while marching (a per-block Newton
+//! death the build could not foresee; the per-block path has none of the
+//! monolithic engine's escalation ladder), the group falls back to the
+//! whole-group monolithic solve, which is exact and merely forfeits the
+//! speedup; [`StagedResult::torn_groups`] says which path each torn group took,
+//! so a performance regression is visible instead of silent.
 //!
-//! Replay pins compose safely with imposed tears. A pin adds a pinned node
-//! the full-circuit strand guard never saw, which looks like it could
-//! strand a rail device on the extracted sub-circuit; it cannot. The strand
-//! condition tests conduction terminals only, and a conduction terminal on
-//! a replayed node is a contradiction: conducting that node would have
-//! fused this group with its upstream during conduction analysis, so the
-//! tear (and therefore the pin) would not exist. The
-//! `torn_group_with_replay_pin_matches_monolith` fixture exercises the
-//! composition.
+//! Replay pins compose safely with imposed tears. A pin adds a pinned node the
+//! full-circuit strand guard never saw, which looks like it could strand a
+//! rail device on the extracted sub-circuit; it cannot. The strand condition
+//! tests conduction terminals only, and a conduction terminal on a replayed
+//! node is a contradiction: conducting that node would have fused this group
+//! with its upstream during conduction analysis, so the tear (and therefore
+//! the pin) would not exist.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
@@ -124,7 +109,7 @@ pub struct StagedResult {
 
 /// Execute a decomposition's stage DAG. Refuses (rather than approximates)
 /// when the certificate is unsound or the step control is not fixed.
-/// Per-island ladder selection (dev-plan 02 s2.6, round 2): trim the CALLER'S
+/// Per-island ladder selection: trim the CALLER'S
 /// ladder down to what this group's sub-circuit could ever use. The caller's
 /// grants are the ceiling (an island is never escalated past what was
 /// authorized), and every trim below is justified by STRUCTURAL impossibility
@@ -142,8 +127,6 @@ pub struct StagedResult {
 ///   order-independent), but the threshold row-pivoting can reject a
 ///   near-singular pivot under one ordering and accept it under another, so
 ///   "frozen fails => dynamic fails" is not provable and the trim is refused.
-///   (This is the plan sketch's own example; it does not survive this
-///   codebase's threshold pivoting.)
 /// - Ptc / ResidualAccept: the staged-DC rescue rungs are meaningful on any
 ///   island that reaches the staged fallback, regardless of device mix.
 fn select_group_ladder(sub: &Circuit, caller: &SolverOptions) -> SolverOptions {
@@ -217,7 +200,7 @@ pub fn run_staged(
     // bit-identical to the classic solver, so each group's answer carries no
     // partitioning caveats of its own.
     let mut sub_opts = *opts;
-    // Per-group ladder observability (round 2): each group's fired strategies
+    // Per-group ladder observability: each group's fired strategies
     // are drained into this union and re-noted at the end of the run, so the
     // per-group windows are invisible to an outer diagnostics observer.
     let mut fired_union: Vec<Strategy> = Vec::new();
@@ -630,24 +613,7 @@ fn solve_group(
     if !imposed.is_empty() {
         let part = Partition::analyze_imposing_tears(sub, imposed);
         if let Some(mut engine) = PartitionedTransient::try_build_from_partition(sub, opts, part) {
-            let n_nodes = sub.node_count();
-            let mut wf = Waveforms {
-                time: Vec::new(),
-                node_voltages: vec![Vec::new(); n_nodes],
-                branch_currents: Vec::new(),
-            };
-            let run = engine.run_streaming(sub, tstop, |s| {
-                wf.time.push(s.time);
-                for node in 0..n_nodes {
-                    let v = if node == 0 {
-                        0.0
-                    } else {
-                        s.x.get(node - 1).copied().unwrap_or(0.0)
-                    };
-                    wf.node_voltages[node].push(v);
-                }
-            });
-            if run.is_ok() {
+            if let Ok(wf) = super::collect_waveforms(&mut engine, sub, tstop) {
                 return Ok((wf, true, false));
             }
             // A run-time death (per-block Newton failure the build could not

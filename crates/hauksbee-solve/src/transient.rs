@@ -201,7 +201,7 @@ impl Transient {
         let mut ws = Workspace::new(circuit);
         let n_dev = circuit.devices.len();
 
-        // Convergence doctrine for behavioral sources (dev-plan 04 §2.5):
+        // Convergence doctrine for behavioral sources:
         // B-sources are where decks go to diverge, an arbitrary expression's
         // tangent can overshoot Newton exactly like the traveling stiff-mesh
         // case the Armijo line search was built for. Their PRESENCE arms the
@@ -235,7 +235,7 @@ impl Transient {
         // plausible improvement when the strategy ladder lands.
         // `.ic V(node)=val` under `uic`: the named node voltages are the given
         // initial conditions, everything else powers on from rest. (SPICE-compat
-        // §4.1: with `uic`, `.ic` values seed the start directly, no DC solve.)
+        // With `uic`, `.ic` values seed the start directly, no DC solve.)
         let has_ic = !circuit.initial_conditions.is_empty();
         if from_zero {
             // Power-on: the unknown vector rests at zero. No DC solve to fail;
@@ -357,10 +357,10 @@ impl Transient {
         //
         // `seed_reactive_state` is the single place that reads a device's own `ic`
         // and prefers it over the node-derived value, so calling it is exactly
-        // what makes `uic` honour `IC=`. It is unconditional now: with `ws.x` at
-        // rest and no `ic` anywhere it reproduces the all-zero construction value
-        // it used to be skipped in favour of, so a genuine power-on-from-rest
-        // march (`FromZero` + `Ramped` sources, no IC anywhere) is unchanged.
+        // what makes `uic` honour `IC=`. It is unconditional: with `ws.x` at
+        // rest and no `ic` anywhere it reproduces the all-zero construction
+        // value, so a genuine power-on-from-rest march (`FromZero` + `Ramped`
+        // sources, no IC anywhere) is unchanged.
         seed_reactive_state(&mut state, circuit, &ws, opts);
         let _ = has_ic;
 
@@ -402,25 +402,13 @@ impl Transient {
         };
         let mut next_bp = 0usize;
 
-        // Step census (HAUKSBEE_STEP_CENSUS=1): the accepted grid alone cannot
-        // attribute a march's wall (rejected trials, bisection retries and
-        // Newton cuts leave no trace in the waveform), so the loop counts its
-        // own discards. None when unset; every hook below is `if let Some`,
-        // and the report prints on Drop so an erroring march still accounts.
-        let mut census = crate::census::StepCensus::begin(
-            tstop,
-            circuit.devices.len(),
-            ws.layout.size,
-            matches!(opts.step, StepControl::Adaptive { .. }),
-        );
-        // Extrapolated trial seed (lever 3, mechanism (a)). The bare trial
-        // Newton always started from the previous ACCEPTED point; on a
-        // charging/discharging trajectory the root at t+h is a full step away,
-        // and the census seed-shadow measured a linear extrapolation through
-        // the last two accepted points CLOSER to the root on 89% of the joint
-        // march's converged trials (>=10x closer on 57%). A closer start both
-        // cuts iterations and can skip the far-from-root small-alpha
-        // line-search grind entirely. EXACT root, different iterate sequence:
+        // Extrapolated trial seed. Seeding the bare trial Newton from the
+        // previous ACCEPTED point starts a full step away from the root on a
+        // charging/discharging trajectory; a linear extrapolation through the
+        // last two accepted points measures closer to the root on the large
+        // majority of converged trials. A closer start both cuts iterations
+        // and can skip the far-from-root small-alpha line-search grind
+        // entirely. EXACT root, different iterate sequence:
         // Newton converges to the same operating point within tolerance from
         // either seed, and every safety mechanism (Armijo line search, staged
         // damping, stall bail, event retry, step cut) still guards the path.
@@ -440,8 +428,7 @@ impl Transient {
         const PRED_MAX_SCALE: f64 = 2.0;
         let mut pred_skip_once = false;
         // The accepted point BEFORE the current one: the predictor's second
-        // history sample, also read by the census seed-shadow. Maintained only
-        // when the predictor or the census wants it.
+        // history sample. Maintained only when the predictor wants it.
         let mut x_accepted_prev: Option<Vec<f64>> = None;
         let mut final_residual = None;
 
@@ -501,7 +488,6 @@ impl Transient {
 
             // Trial solve at t + h, seeded from the previous accepted point,
             // or from the clamped linear extrapolation when armed (above).
-            let t_trial = census.as_ref().map(|_| std::time::Instant::now());
             ws.x.copy_from_slice(&x_accepted);
             if predictor_armed && !first_step && !pred_skip_once && h_prev_accepted > 0.0 {
                 if let Some(prev) = x_accepted_prev.as_ref() {
@@ -511,7 +497,7 @@ impl Transient {
                     }
                 }
             }
-            // Bypass hold (dev-plan 03 §6 discipline): the trials that follow
+            // Bypass hold: the trials that follow
             // an event-resolved accept must not bypass; the accepted pair
             // straddles the discontinuity the event loop just resolved, the
             // same reason the extrapolation seed is skipped there. Mirrors
@@ -538,37 +524,9 @@ impl Transient {
                 1.0,
             );
 
-            if let Some(c) = census.as_mut() {
-                c.newton_calls += 1;
-                c.newton_iters += r.iters as u64;
-                // Seed shadow: with the root in hand (a converged bare trial),
-                // compare the start iterate the trial actually used
-                // (x_accepted) against a linear extrapolation through the last
-                // two accepted points, both as node-block inf-distances to the
-                // root. Measures how many contraction decades a predictor seed
-                // would buy WITHOUT changing any behaviour.
-                if r.converged && h_prev_accepted > 0.0 {
-                    if let Some(prev) = x_accepted_prev.as_ref() {
-                        let n_nodes = ws.layout.n_nodes;
-                        let scale = h / h_prev_accepted;
-                        let mut d_start = 0.0f64;
-                        let mut d_extrap = 0.0f64;
-                        for i in 0..n_nodes {
-                            let root = ws.x[i];
-                            let cur = x_accepted[i];
-                            let pred = cur + scale * (cur - prev[i]);
-                            d_start = d_start.max((root - cur).abs());
-                            d_extrap = d_extrap.max((root - pred).abs());
-                        }
-                        crate::census::predictor_shadow(d_start, d_extrap);
-                    }
-                }
-            }
-
             let mut converged = r.converged;
             let mut used_event = false;
             if !converged && ws.tran_event() {
-                let t_event = census.as_ref().map(|_| std::time::Instant::now());
                 // The bare per-step Newton limit-cycled (the spike-gate SPDT flip
                 // under synapse current, or the refractory reset). Retry this step
                 // through the event-freeze loop: freeze comparator+switch states
@@ -611,16 +569,9 @@ impl Transient {
                 }
                 ws.symbolic.set_allow_dynamic(had_dyn);
                 used_event = converged;
-                if let (Some(c), Some(t0)) = (census.as_mut(), t_event) {
-                    c.ns_event_retry += t0.elapsed().as_nanos() as u64;
-                }
             }
 
             if !converged {
-                if let (Some(c), Some(t0)) = (census.as_mut(), t_trial) {
-                    c.newton_fail_cuts += 1;
-                    c.ns_newton_fail += t0.elapsed().as_nanos() as u64;
-                }
                 // Cut the step hard and retry.
                 if h <= dt_min * 1.0001 {
                     // A behavioral-expression fault on the final attempt names
@@ -683,26 +634,10 @@ impl Transient {
                 if let Some(frac) =
                     crossing_fraction(circuit, &x_accepted, &ws.x, &ws.layout_nodes())
                 {
-                    // Census: which devices' controls straddled a threshold on this
-                    // trial. A second read-only scan, run only when the census is
-                    // live, so the default path keeps the single-pass check.
-                    if let Some(c) = census.as_mut() {
-                        crossing_census(
-                            circuit,
-                            &x_accepted,
-                            &ws.x,
-                            &ws.layout_nodes(),
-                            &mut c.crossings,
-                        );
-                    }
                     if matches!(opts.step, StepControl::Adaptive { .. }) && h > dt_min * 4.0 {
                         // Bisect toward the crossing for a sharper edge.
                         let refined = (h * frac).clamp(dt_min, h);
                         if (refined - h).abs() > dt_min {
-                            if let (Some(c), Some(t0)) = (census.as_mut(), t_trial) {
-                                c.event_bisections += 1;
-                                c.ns_bisected += t0.elapsed().as_nanos() as u64;
-                            }
                             dt = refined;
                             continue;
                         }
@@ -742,11 +677,7 @@ impl Transient {
                 }
                 StepControl::Fixed { .. } => accept = true,
                 StepControl::Adaptive { .. } => {
-                    let t_lte = census.as_ref().map(|_| std::time::Instant::now());
                     let err = lte_estimate(circuit, &ws, &state, h, h_prev_accepted, opts);
-                    if let (Some(c), Some(t0)) = (census.as_mut(), t_lte) {
-                        c.ns_lte_estimate += t0.elapsed().as_nanos() as u64;
-                    }
                     if err <= 1.0 || h <= dt_min * 1.0001 {
                         accept = true;
                         if bp_landing {
@@ -782,24 +713,8 @@ impl Transient {
             }
 
             if !accept {
-                if let (Some(c), Some(t0)) = (census.as_mut(), t_trial) {
-                    c.lte_rejected += 1;
-                    c.ns_lte_rejected += t0.elapsed().as_nanos() as u64;
-                }
                 dt = next_dt;
                 continue;
-            }
-
-            if let (Some(c), Some(t0)) = (census.as_mut(), t_trial) {
-                c.accept(h);
-                if used_event {
-                    c.event_resolved += 1;
-                }
-                c.ns_accepted += t0.elapsed().as_nanos() as u64;
-                // `t + h` here is bitwise the value `t` holds after the
-                // `t += h` below (one addition either way), so the hash covers
-                // exactly the (time, x) pairs the sink receives.
-                c.hash_sample(t + h, &ws.x);
             }
 
             // Measure the equation residual only at the final accepted point.
@@ -813,8 +728,8 @@ impl Transient {
 
             // Accept: advance time, update reactive history, emit.
             t += h;
-            advance_reactive_state(&mut state, circuit, &ws, &x_accepted, h, opts, first_step);
-            if census.is_some() || predictor_armed {
+            advance_reactive_state(&mut state, circuit, &ws, h, opts, first_step);
+            if predictor_armed {
                 match x_accepted_prev.as_mut() {
                     Some(p) => p.copy_from_slice(&x_accepted),
                     None => x_accepted_prev = Some(x_accepted.clone()),
@@ -843,11 +758,11 @@ impl Transient {
 
 /// At the operating point, capacitor voltage = node-voltage difference and
 /// inductor current = its branch current; derivatives are zero (DC). A
-/// charge-storing diode (dev-plan 04 §3.1) seeds its CHARGE `Q(vd)` at the
+/// charge-storing diode seeds its CHARGE `Q(vd)` at the
 /// operating-point junction voltage; its `ReactiveState` slots hold charge,
 /// not voltage, so the companion stamp's history terms integrate `i = dQ/dt`
 /// on the same machinery the linear capacitor uses.
-fn seed_reactive_state(
+pub(crate) fn seed_reactive_state(
     state: &mut ReactiveState,
     circuit: &Circuit,
     ws: &Workspace,
@@ -874,7 +789,7 @@ fn seed_reactive_state(
                 state.x2[i] = state.x1[i];
                 state.dx1[i] = 0.0;
             }
-            // Charge-storing BJT (dev-plan 04 §3.2): both junction charges,
+            // Charge-storing BJT: both junction charges,
             // seeded at the operating-point INTRINSIC junction voltages
             // (internal nodes when series resistance is stamped). Bank A is
             // Q_be, bank B is Q_bc; the packing `ReactiveState` documents.
@@ -889,7 +804,7 @@ fn seed_reactive_state(
                 state.xb[0].x2[i] = q_bc;
                 state.xb[0].dx1[i] = 0.0;
             }
-            // Charge-storing MOSFET (dev-plan 04 §3.3): all four charges at
+            // Charge-storing MOSFET: all four charges at
             // the operating-point junction voltages, bank A = Q_gs,
             // xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs (the `ReactiveState`
             // packing table).
@@ -956,7 +871,7 @@ fn mos_q(
     )
 }
 
-/// Diode stored charge at junction voltage `vd` (the §3.1 companion's state
+/// Diode stored charge at junction voltage `vd` (the companion's state
 /// variable), evaluated through the same model code the stamp uses.
 fn diode_q(model: &hauksbee_ir::DiodeModel, vd: f64, opts: &SolverOptions) -> f64 {
     let (idc, gd) =
@@ -983,11 +898,10 @@ fn bjt_q(
 
 /// After an accepted step, roll history forward: x2 <- x1, x1 <- new value,
 /// dx1 <- new derivative (for the trapezoidal predictor).
-fn advance_reactive_state(
+pub(crate) fn advance_reactive_state(
     state: &mut ReactiveState,
     circuit: &Circuit,
     ws: &Workspace,
-    _x_prev: &[f64],
     h: f64,
     opts: &SolverOptions,
     first: bool,
@@ -1148,7 +1062,7 @@ fn diode_vj(ws: &Workspace, id: hauksbee_ir::DeviceId, a: NodeId, k: NodeId) -> 
     anode - node_v(ws, k)
 }
 
-fn node_v(ws: &Workspace, node: NodeId) -> f64 {
+pub(crate) fn node_v(ws: &Workspace, node: NodeId) -> f64 {
     match ws.layout.node(node) {
         Some(i) => ws.x[i],
         None => 0.0,
@@ -1165,11 +1079,9 @@ fn node_v(ws: &Workspace, node: NodeId) -> f64 {
 /// an adaptive (NON-uniform) grid, and the raw `x_new - 2*x1 + x2` is nonzero
 /// for a perfectly LINEAR trajectory whenever the step size changes (it equals
 /// `slope * (h - h_prev)`), so every step-size change on a charging slope
-/// manufactured fake curvature. Measured on the flagship joint capture march
-/// (the step census): 44% of ALL trial solves were LTE-rejected, and a gentler
-/// post-reject growth cap did not move that fraction AT ALL (44.1% before and
-/// after), which is the fingerprint of a rejection signal that does not
-/// depend on how the step got proposed. The divided-difference second
+/// manufactured fake curvature: on a stiff adaptive march that alone
+/// LTE-rejected 44% of all trial solves, independently of how the step was
+/// proposed. The divided-difference second
 /// derivative `dd2` is exact-zero on linear trajectories, reduces to the SAME
 /// `x_new - 2*x1 + x2` on a uniform grid (h == h_prev), and `h^2 * dd2` is
 /// the classic uniform-grid curvature the 1/12 trapezoidal coefficient was
@@ -1425,40 +1337,6 @@ fn crossing_fraction(
         }
     }
     earliest
-}
-
-/// Census-only twin of [`crossing_fraction`]: record EVERY device whose
-/// control straddled its threshold on this trial step, by name. Separate from
-/// the detection scan (which reports only the earliest fraction and stays on
-/// the hot path) so the default march keeps its single pass; this one runs
-/// only when HAUKSBEE_STEP_CENSUS is live, to answer "which devices drive the
-/// global bisections".
-fn crossing_census(
-    circuit: &Circuit,
-    x0: &[f64],
-    x1: &[f64],
-    node_idx: &dyn Fn(NodeId) -> Option<usize>,
-    out: &mut std::collections::HashMap<String, u64>,
-) {
-    let vat = |x: &[f64], n: NodeId| node_idx(n).map(|i| x[i]).unwrap_or(0.0);
-    for (_, dev) in circuit.iter() {
-        let (cp, cn, mid) = match dev {
-            Device::Comparator { inp, inn, .. } => (*inp, *inn, 0.0),
-            Device::VSwitch {
-                ctrl_p,
-                ctrl_n,
-                von,
-                voff,
-                ..
-            } => (*ctrl_p, *ctrl_n, 0.5 * (von + voff)),
-            _ => continue,
-        };
-        let d0 = vat(x0, cp) - vat(x0, cn) - mid;
-        let d1 = vat(x1, cp) - vat(x1, cn) - mid;
-        if d0.signum() != d1.signum() && (d1 - d0).abs() > 1e-15 {
-            *out.entry(dev.name().to_string()).or_insert(0) += 1;
-        }
-    }
 }
 
 impl Workspace {

@@ -19,9 +19,8 @@
 //! an ASCII-Protel board gets connectivity checks but no clearance DRC.
 
 use crate::altium::{
-    canonical_component_identities, is_copper_layer, layer_id_from_name, parse_len_mm,
-    side_from_layer_name, value_from_description, ComponentIdentityInput, VALUE_UNRESOLVED_KEY,
-    VALUE_UNRESOLVED_REASON,
+    canonical_component_identities, is_copper_layer, layer_id_from_name, lib_id, parse_len_mm,
+    resolve_component_value, side_from_layer_name, ComponentIdentityInput,
 };
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 use std::collections::HashMap;
@@ -241,39 +240,17 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
             })
             .unwrap_or_default();
 
-        // Value resolution matches the binary path: comment text, else the
-        // SOURCEDESCRIPTION parse, else honestly unresolved with the reason.
         let mut properties: Vec<(String, String)> = Vec::new();
         properties.extend(identity.properties.clone());
-        let mut value = comments.get(&c.id).cloned().unwrap_or_default();
-        if value.is_empty() && !c.description.is_empty() {
-            let d = value_from_description(&c.description);
-            if let Some(v) = d.value {
-                value = v;
-            }
-            if let Some(v) = d.voltage {
-                properties.push(("voltage_rating".to_string(), v));
-            }
-            if let Some(p) = d.power {
-                properties.push(("power_rating".to_string(), p));
-            }
-        }
-        if value.is_empty() {
-            properties.push((
-                VALUE_UNRESOLVED_KEY.to_string(),
-                VALUE_UNRESOLVED_REASON.to_string(),
-            ));
-        }
-
-        let lib_id = if c.library.is_empty() {
-            c.pattern.clone()
-        } else {
-            format!("{}:{}", c.library, c.pattern)
-        };
+        let value = resolve_component_value(
+            comments.get(&c.id).map(String::as_str).unwrap_or_default(),
+            &c.description,
+            &mut properties,
+        );
         components.push(Component {
             reference,
             value,
-            lib_id,
+            lib_id: lib_id(&c.library, &c.pattern),
             footprint: c.pattern.clone(),
             position: Some((c.x_mm, c.y_mm, c.rotation)),
             layer: side_from_layer_name(&c.layer_name).to_string(),
@@ -301,6 +278,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::altium::{VALUE_UNRESOLVED_KEY, VALUE_UNRESOLVED_REASON};
 
     /// A widestring for "1kΩ": '1'=49, 'k'=107, 'Ω'=937.
     const KILOHM: &str = "49,107,937";

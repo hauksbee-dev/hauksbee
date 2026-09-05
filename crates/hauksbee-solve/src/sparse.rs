@@ -757,7 +757,7 @@ impl Symbolic {
     /// per solve, per iteration, per step. `&self` stays immutable so callers
     /// can hold the factorization while bringing their own scratch, which is
     /// also what lets each thread solve a private island matrix without
-    /// contending on a shared buffer (see plan §4.1).
+    /// contending on a shared buffer.
     pub fn solve(&self, b: &mut [f64], scratch: &mut [f64]) {
         let n = self.n;
         // Permute rhs by pivot rows: y[k] = b[pivot_row[k]].
@@ -787,11 +787,6 @@ impl Symbolic {
         for k in 0..n {
             b[self.perm[k]] = y[k];
         }
-    }
-
-    /// Number of stored nonzeros in L+U after the last refactor.
-    pub fn nnz(&self) -> usize {
-        self.l.vals.len() + self.u.vals.len()
     }
 }
 

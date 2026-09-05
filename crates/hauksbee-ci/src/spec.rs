@@ -848,7 +848,7 @@ pub struct PeripheralSpec {
     pub vref: Option<f64>,
     /// Chip-select net for a SPI slave (spi_eeprom / spi_mcp3008 / SPI sensor).
     /// When set and the net resolves to an MCU GPIO pin, the co-sim frames the
-    /// slave's transactions on the real CS edges (exact framing, 05 §2) instead
+    /// slave's transactions on the real CS edges (exact framing) instead
     /// of the chunk-boundary heuristic.
     ///
     /// Takes precedence over the `cs` pin role of the model bound to this

@@ -1,22 +1,20 @@
 //! The evidence spine: what a result rests on, as data.
 //!
-//! Four types live here, and they exist because the tree already expressed the
-//! same idea eleven different ways. An unresolved part defaulted to open, an
+//! Four types live here, and they exist because the same idea was previously
+//! expressed a dozen different ways. An unresolved part defaulted to open, an
 //! MCU modelled by a substitute core, a check that could not run on a gerber
 //! archive, a bus the firmware never addressed, a waived finding: each one is
-//! "this answer rests on something you should know about", and each one had its
-//! own struct, its own wording, and its own renderer. Four vocabularies for one
-//! idea is how a report ends up telling a user two different things about the
-//! same gap.
+//! "this answer rests on something you should know about", and four
+//! vocabularies for one idea is how a report ends up telling a user two
+//! different things about the same gap.
 //!
 //! - [`Assumption`] is one thing the run took as true, or deliberately did not
-//!   examine, carrying the same four sentences every existing mechanism already
-//!   carried in some costume: what is assumed, why, what it does to results,
-//!   and what would close it. The sentence FRAMES are composed here, by the
-//!   constructors: `statement` and `consequence` entirely, `because` and
+//!   examine, carrying four sentences: what is assumed, why, what it does to
+//!   results, and what would close it. The sentence FRAMES are composed here,
+//!   by the constructors: `statement` and `consequence` entirely, `because` and
 //!   `replacement` around a clause the producer supplies where the reason
 //!   genuinely varies per input. Nothing can be re-worded afterwards, by a
-//!   renderer or by anyone else, which is the property the later phases need.
+//!   renderer or by anyone else.
 //! - [`ArtifactProvenance`] and [`ParameterProvenance`] are provenance at the
 //!   two granularities that matter: the file the run consumed, and the value a
 //!   device carried into the solve.
@@ -30,21 +28,19 @@
 //! The one invariant the rest of the design rests on: `EvidenceMap`'s status is
 //! **derived, never set**. The field is private, there is one constructor, and
 //! it computes the status from the on-path assumption kinds through
-//! [`EvidenceMap::derive_status`]. `Undermined` maps onto the run's existing
-//! third outcome (invalid for analysis, exit code 3), which waivers already
-//! refuse to flip green, so an undermined conclusion cannot be waived into a
-//! pass. If any code path could hand-set `Clean` over an undermined input set,
-//! the whole honesty argument would be decoration.
+//! [`EvidenceMap::derive_status`]. `Undermined` maps onto the run's third
+//! outcome (invalid for analysis, exit code 3), which waivers already refuse to
+//! flip green, so an undermined conclusion cannot be waived into a pass.
 //!
-//! Be precise about what that buys, because the precise version is the useful
-//! one: **a status cannot disagree with the set of assumptions it was handed, and
-//! neither the set, the status, nor the assertion they belong to can be edited
-//! afterwards.** Every field those three invariants touch is private behind a
-//! getter, and neither judgement type deserializes. A status is only as
-//! trustworthy as the kinds it came from, so a downstream
-//! `a.kind = ReducedFidelity` would demote an undermined conclusion to a
-//! gradeable one without touching [`EvidenceMap`] at all, and a mutable
-//! `assertion` would let a clean map be relabelled onto an undermined assertion.
+//! What that buys, precisely: **a status cannot disagree with the set of
+//! assumptions it was handed, and neither the set, the status, nor the
+//! assertion they belong to can be edited afterwards.** Every field those three
+//! invariants touch is private behind a getter, and neither judgement type
+//! deserializes. A status is only as trustworthy as the kinds it came from, so
+//! a downstream `a.kind = ReducedFidelity` would demote an undermined
+//! conclusion to a gradeable one without touching [`EvidenceMap`] at all, and a
+//! mutable `assertion` would let a clean map be relabelled onto an undermined
+//! assertion.
 //!
 //! Map construction requires the opaque output of [`CausalPathIndex::traverse`].
 //! Outside this module there is no empty-slice constructor that can mint a clean
@@ -54,7 +50,7 @@
 //! their own construction boundaries too.
 //!
 //! [`CausalPathIndex`] is the validated IR boundary for causal incidence. The
-//! engine binder still owns production of that incidence and remains the exact
+//! engine binder owns production of that incidence and remains the exact
 //! integration seam; the IR contract test rejects both vacuous and saturated
 //! mappings before a production consumer is wired.
 //!
@@ -2490,54 +2486,28 @@ impl ModelUncertainty {
         kind: ModelIntervalKind,
         basis: impl Into<String>,
     ) -> Result<Self, EvidenceError> {
-        finite("model_uncertainty.low", low)?;
-        finite("model_uncertainty.high", high)?;
-        let parameter = parameter.into();
-        if high < low {
-            return Err(EvidenceError::InvertedInterval {
-                parameter,
-                low,
-                high,
-            });
-        }
-        let basis = basis.into();
-        if parameter.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "model_uncertainty.parameter",
-            });
-        }
-        if basis.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "model_uncertainty.basis",
-            });
-        }
-        Ok(Self::Interval {
-            parameter,
+        let out = Self::Interval {
+            parameter: parameter.into(),
             low,
             high,
             unit: unit.into(),
             kind,
-            basis,
-        })
+            basis: basis.into(),
+        };
+        out.validate()?;
+        Ok(out)
     }
 
     pub fn unknown(
         parameter: impl Into<String>,
         reason: impl Into<String>,
     ) -> Result<Self, EvidenceError> {
-        let parameter = parameter.into();
-        let reason = reason.into();
-        if parameter.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "model_uncertainty.parameter",
-            });
-        }
-        if reason.trim().is_empty() {
-            return Err(EvidenceError::Empty {
-                field: "model_uncertainty.reason",
-            });
-        }
-        Ok(Self::Unknown { parameter, reason })
+        let out = Self::Unknown {
+            parameter: parameter.into(),
+            reason: reason.into(),
+        };
+        out.validate()?;
+        Ok(out)
     }
 
     pub fn validate(&self) -> Result<(), EvidenceError> {

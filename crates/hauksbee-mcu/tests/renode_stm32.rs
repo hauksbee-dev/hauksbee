@@ -15,24 +15,12 @@ use std::sync::{Arc, Mutex};
 
 /// Path to the bundled STM32F103 demo firmware ELF.
 fn blinky_elf() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/stm32_blinky/blinky.elf");
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::firmware("stm32_blinky/blinky.elf")
 }
 
 /// Firmware whose PA5/PC13 markers rise only after HSERDY/PLLRDY respectively.
 fn clock_ready_elf() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/stm32_clock_ready/clock_ready.elf");
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::firmware("stm32_clock_ready/clock_ready.elf")
 }
 
 /// Run the external-clock probe in 50 us slices and return the virtual time at

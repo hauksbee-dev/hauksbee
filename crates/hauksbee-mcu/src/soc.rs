@@ -1,4 +1,4 @@
-//! Data-driven MCU/SoC descriptors (06-extensibility-sdk §2).
+//! Data-driven MCU/SoC descriptors.
 //!
 //! The register offsets, platform paths, and port maps behind the per-part
 //! `RenodeConfig`/`QemuConfig` constructors are the largest part-specific
@@ -7,7 +7,7 @@
 //! `db/mcu/<part>.soc.toml` file per part, read through a single validated
 //! path with fail-loud, named errors, mirroring `sensor_spec.rs`.
 //!
-//! # The shape (06 §2)
+//! # The shape
 //!
 //! ```toml
 //! [soc]
@@ -38,36 +38,18 @@
 //! controllers = ["spi1"]
 //! ```
 //!
-//! # What the 2026-07-01 plan example predated
+//! Beyond the fields shown, a descriptor also carries `watchdog_limitation`
+//! and `timing_limitation` (the per-part coverage statements),
+//! `extra_setup`/`post_load_setup` (the FE310 bring-up needs PRCI clock tags
+//! and `{cpu} PC vinit` here, not in code), `[soc.spi].extra_repl` (the
+//! STM32F103 SPI1-injection fragment) and `[[soc.adc]]` injection recipes.
+//! `platform_repl` is inline source rather than a bare stock path because a
+//! Renode part must declare its own core clock and be held to it (see
+//! `check_clock_declarations`). Values are stored exactly as the backend
+//! consumes them: `gpioPortA` (the backend prepends `sysbus.`) and
+//! `@platforms/...` (Renode resolves the `@`).
 //!
-//! The plan's illustrative shape omits several fields the *real* constructors
-//! set, all carried by this schema so a descriptor reproduces its constructor
-//! byte-for-byte:
-//!   - `machine`, `mcu_label`, `frequency_hz`, always present on the structs.
-//!     `platform_repl` is inline source above rather than the plan's bare stock
-//!     path, because a Renode part must declare its own core clock and be held
-//!     to it: see `check_clock_declarations`.
-//!   - `watchdog_limitation`, the per-part watchdog coverage statement, and
-//!     `timing_limitation`, its per-part timing twin (the F103's deliberate
-//!     TIMx-at-72MHz divergence).
-//!   - `extra_setup` / `post_load_setup`; the FE310 bring-up footgun (PRCI
-//!     clock tags + `{cpu} PC vinit`) lives in `post_load_setup`, not code.
-//!   - `[soc.spi].extra_repl`; the STM32F103 SPI1-injection fragment.
-//!   - `[[soc.adc]]`; the AdcChannelMap injection recipes that landed after the
-//!     plan (05 §5.1). No shipped built-in uses them (the stock Renode platforms
-//!     model no ADC, so the loud-drop path is correct), but the schema carries
-//!     them so a board that knows where its counts land can inject purely as
-//!     data. Each entry names the channel, its full-scale volts and max
-//!     count, and exactly one of `monitor_command` or `memory_word`.
-//!
-//! The plan example also wrote `sysbus.gpioPortA` / `platforms/...` (no `@`);
-//! the shipped descriptors instead store the exact backend-facing strings the
-//! constructors used (`gpioPortA`, `@platforms/...`); the backend prepends
-//! `sysbus.` when polling and Renode resolves the `@`-path, so the equivalence
-//! proof against the deleted constructors is byte-exact. The plan's *field
-//! names* are honored; the *values* are whatever the backend consumes.
-//!
-//! # Resolution (06 §6.4: a new Renode MCU addable purely as data)
+//! # Resolution: a new Renode MCU addable purely as data
 //!
 //! [`SocConfig::resolve`] maps a `backend:part` spec (e.g. `"renode:stm32f103"`)
 //! to a descriptor. The shipped parts are embedded via `include_str!` (the
@@ -75,7 +57,7 @@
 //! `mcp4728.toml` precedent), and a user override directory is searched first so
 //! a new part is added without recompiling. See [`SocConfig::resolve`].
 //!
-//! # What honestly stays Rust (06 §2)
+//! # What honestly stays Rust
 //!
 //! A wholly new emulator backend (a new [`Mcu`](crate::traits::Mcu) impl) and
 //! simavr part support are NOT data: simavr's own part database does the work,
@@ -360,7 +342,7 @@ pub fn peek_backend(src: &str) -> Result<Backend, SocError> {
     Backend::parse(&header.soc.backend)
 }
 
-// ── Renode descriptor schema (06 §2) ─────────────────────────────────────────
+// ── Renode descriptor schema ─────────────────────────────────────────
 
 #[cfg(feature = "renode")]
 mod renode_schema {
@@ -376,7 +358,7 @@ mod renode_schema {
         pub soc: RenodeSoc,
     }
 
-    /// The Renode `[soc]` body. Field names follow 06 §2; values are the exact
+    /// The Renode `[soc]` body. Values are the exact
     /// backend-facing strings (see the module docs on the `@`/`sysbus.` note).
     #[derive(Debug, serde::Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -416,7 +398,7 @@ mod renode_schema {
         pub clock_control: Option<ClockControl>,
         // `PortMap` (letter/peripheral/odr_offset/width) already derives
         // Deserialize, so `[[soc.ports]]` maps straight onto it; the existing
-        // derive does the mechanical parsing (06 §2: reuse the derives).
+        // derive does the mechanical parsing.
         #[serde(default)]
         pub ports: Vec<PortMap>,
         #[serde(default)]
@@ -443,7 +425,7 @@ mod renode_schema {
         pub extra_repl: Option<String>,
     }
 
-    /// One `[[soc.adc]]` entry: an ADC channel injection recipe (05 §5.1),
+    /// One `[[soc.adc]]` entry: an ADC channel injection recipe,
     /// flattened for TOML readability. Exactly one of `monitor_command`
     /// (peripheral-model feed) or `memory_word` (RAM result-word write) is set.
     #[derive(Debug, serde::Deserialize)]
@@ -665,7 +647,7 @@ mod renode_schema {
 
 #[cfg(feature = "renode")]
 impl crate::renode::RenodeConfig {
-    /// Load a Renode config from a `*.soc.toml` descriptor (06 §2).
+    /// Load a Renode config from a `*.soc.toml` descriptor.
     ///
     /// Parses the plan's `[soc]` shape, validates it with named errors (unknown
     /// backend, empty `platform_repl`, overlapping/zero-width ports, duplicate
@@ -689,7 +671,7 @@ impl crate::renode::RenodeConfig {
     }
 }
 
-// ── QEMU descriptor schema (06 §2) ───────────────────────────────────────────
+// ── QEMU descriptor schema ───────────────────────────────────────────
 
 #[cfg(feature = "qemu")]
 mod qemu_schema {
@@ -776,7 +758,7 @@ mod qemu_schema {
 
 #[cfg(feature = "qemu")]
 impl crate::qemu::QemuConfig {
-    /// Load a QEMU config from a `*.soc.toml` descriptor (06 §2). Same validated
+    /// Load a QEMU config from a `*.soc.toml` descriptor. Same validated
     /// path as the Renode loader; a `backend = "renode"` descriptor is refused.
     pub fn from_soc_toml(src: &str) -> Result<crate::qemu::QemuConfig, SocError> {
         match peek_backend(src)? {
@@ -992,7 +974,7 @@ fn validate_controllers(bus: &'static str, controllers: &[String]) -> Result<(),
     Ok(())
 }
 
-// ── Resolution: a `backend:part` spec → a descriptor (06 §6.4) ───────────────
+// ── Resolution: a `backend:part` spec → a descriptor ───────────────
 
 /// Built-in descriptors, embedded so the binary is self-contained while the
 /// file stays the single source of truth (the `mcp4728.toml` precedent). Keyed
@@ -1078,7 +1060,7 @@ impl SocConfig {
     /// against the descriptor: a `renode:mypart` spec that resolves to a
     /// `backend = "qemu"` file is a [`SocError::BackendMismatch`], never a
     /// silent backend swap. This is the "add a Renode MCU purely as data"
-    /// path (06 §6.4): drop `mypart.soc.toml` in the override dir and resolve
+    /// path: drop `mypart.soc.toml` in the override dir and resolve
     /// `renode:mypart`.
     ///
     /// Fail-loud contract: a descriptor file that EXISTS for the requested

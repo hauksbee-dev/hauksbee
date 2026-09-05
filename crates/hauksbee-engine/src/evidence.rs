@@ -49,6 +49,27 @@ struct DefaultFact {
     assumption: hauksbee_ir::evidence::AssumptionId,
 }
 
+/// Append one parameter-provenance row per model default recorded against
+/// `reference`, so every evidence surface renders defaults with the same
+/// subject key, label and assumption.
+fn push_default_parameters(
+    parameters: &mut Vec<ParameterProvenance>,
+    reference: &str,
+    defaults: Option<&Vec<DefaultFact>>,
+) -> Result<(), hauksbee_ir::evidence::EvidenceError> {
+    for default in defaults.into_iter().flatten() {
+        parameters.push(ParameterProvenance::for_subject(
+            reference,
+            format!("{}.{}", default.reference, default.parameter),
+            &default.value,
+            ValueOrigin::Default {
+                assumption: default.assumption.clone(),
+            },
+        )?);
+    }
+    Ok(())
+}
+
 fn unspecified_source(model_id: &str) -> ModelSource {
     ModelSource::new(
         ModelSourceTier::EstimatedFallback,
@@ -589,18 +610,11 @@ impl BoardEvidence {
                         )?);
                     }
                 }
-                if let Some(defaults) = defaults_by_ref.get(reference) {
-                    for default in defaults {
-                        parameters.push(ParameterProvenance::for_subject(
-                            reference,
-                            format!("{}.{}", default.reference, default.parameter),
-                            &default.value,
-                            ValueOrigin::Default {
-                                assumption: default.assumption.clone(),
-                            },
-                        )?);
-                    }
-                }
+                push_default_parameters(
+                    &mut parameters,
+                    reference,
+                    defaults_by_ref.get(reference),
+                )?;
             }
             map = map.with_models(models);
             map = map.with_parameters(&registry, parameters)?;
@@ -1478,18 +1492,11 @@ impl BoardEvidence {
         let mut parameters = Vec::new();
         for reference in references {
             let Some(fact) = self.model_by_ref.get(reference) else {
-                if let Some(defaults) = self.defaults_by_ref.get(reference) {
-                    for default in defaults {
-                        parameters.push(ParameterProvenance::for_subject(
-                            reference,
-                            format!("{}.{}", default.reference, default.parameter),
-                            &default.value,
-                            ValueOrigin::Default {
-                                assumption: default.assumption.clone(),
-                            },
-                        )?);
-                    }
-                }
+                push_default_parameters(
+                    &mut parameters,
+                    reference,
+                    self.defaults_by_ref.get(reference),
+                )?;
                 continue;
             };
             models.push(ModelOnPath::for_subject(
@@ -1509,18 +1516,11 @@ impl BoardEvidence {
                     confidence: fact.confidence,
                 },
             )?);
-            if let Some(defaults) = self.defaults_by_ref.get(reference) {
-                for default in defaults {
-                    parameters.push(ParameterProvenance::for_subject(
-                        reference,
-                        format!("{}.{}", default.reference, default.parameter),
-                        &default.value,
-                        ValueOrigin::Default {
-                            assumption: default.assumption.clone(),
-                        },
-                    )?);
-                }
-            }
+            push_default_parameters(
+                &mut parameters,
+                reference,
+                self.defaults_by_ref.get(reference),
+            )?;
         }
         map = map.with_models(models);
         map.with_parameters(&self.registry, parameters)

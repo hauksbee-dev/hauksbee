@@ -50,7 +50,7 @@ pub const EM_RISCV: u16 = 0xF3; // 243
 /// `expected_e_machine` field) to its `e_machine` number.
 ///
 /// This is the reviewable-string side of the numeric [`EM_ARM`]/[`EM_RISCV`]/…
-/// constants: an SoC descriptor says `expected_e_machine = "EM_ARM"` (06 §2's
+/// constants: an SoC descriptor says `expected_e_machine = "EM_ARM"` (the
 /// example shape) rather than a raw `40`, and the loader resolves it here.
 /// Returns `None` for an unrecognised name so the loader raises a named
 /// "unknown e_machine" error instead of silently accepting garbage.

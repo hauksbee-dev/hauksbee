@@ -317,17 +317,16 @@ pub(crate) fn looks_like_tar(bytes: &[u8]) -> bool {
 /// The ceiling on what one job may inflate to, in total.
 ///
 /// A `.tgz` is a compressed container of compressible text, so an ODB++ upload
-/// is a natural decompression bomb: 400 KiB of gzip inflates to 400 MiB at a
-/// ratio real fab jobs never come close to (the largest job tested, a 2 MB Valor
-/// archive, inflates to 24 MB). The web front door accepts uploads up to 256 MiB
-/// and this module reads members whole, so without a ceiling a single upload can
-/// ask for hundreds of gigabytes of memory.
+/// is a natural decompression bomb: 400 KiB of gzip inflates to 400 MiB, a ratio
+/// real fab jobs never come close to (the largest tested, a 2 MB Valor archive,
+/// inflates to 24 MB). The web front door accepts uploads up to 256 MiB and this
+/// module reads members whole, so without a ceiling one upload can ask for
+/// hundreds of gigabytes.
 ///
-/// 512 MiB is roughly 20× the largest real job seen and leaves the honest
-/// professional board — an 8-layer job with tens of megabytes of `features` — far
-/// inside it. Hitting the ceiling is an error naming the limit, not a truncated
-/// read: a job silently missing its last layers is exactly the half-board this
-/// crate refuses to produce.
+/// 512 MiB is roughly 20x the largest real job seen and leaves an 8-layer
+/// professional job with tens of megabytes of `features` far inside it. Hitting
+/// the ceiling is an error naming the limit, not a truncated read: a job silently
+/// missing its last layers is the half-board this crate refuses to produce.
 pub(crate) const MAX_INFLATED_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Inflate a gzip member, or `None` if it is not gzip / is corrupt / would

@@ -30,7 +30,7 @@ pub(super) fn enforce_gates(
     let run_findings = &evidence.run_findings;
     let faults_gate = evidence.faults_gate;
 
-    // 0-activity refusal (Track B): warn always; under --strict this is a hard
+    // 0-activity refusal: warn always; under --strict this is a hard
     // refusal (exit 3), not a clean pass. The UART-AND-toggles guard avoids
     // false positives on firmware that is busy on the bus but quiet on GPIO.
     if zero_activity {
@@ -78,7 +78,7 @@ pub(super) fn enforce_gates(
         }
     }
 
-    // Refuse-rather-than-fake (05 §3b): once the analog solve was stuck for a
+    // Refuse-rather-than-fake: once the analog solve was stuck for a
     // whole streak of chunks, a strict run must abort with the invalid code
     // rather than complete a fake-quiet run. Warn always so the reason is never
     // silent; only --strict turns it into a failing exit.
@@ -121,8 +121,8 @@ pub(super) fn enforce_gates(
     }
 
     // Strict: any fault raised during the run fails the gate, and the last
-    // line says so; a bare exit 2 reads as a tool crash, and --plain's
-    // "worth a look" verdict used to contradict the failing code.
+    // line says so; a bare exit 2 reads as a tool crash, and --plain's "worth a
+    // look" verdict would otherwise contradict the failing code.
     if cfg.strict && faults_gate {
         let items: Vec<String> = faults
             .iter()

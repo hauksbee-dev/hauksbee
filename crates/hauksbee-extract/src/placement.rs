@@ -23,10 +23,9 @@
 //! actually has.
 //!
 //! A second, deliberately more permissive reader for the same files lives in
-//! [`crate::gerber::placement`]. It serves the gerber-only path, where the fab
-//! package is the whole design and there is no layout to reconcile against, so
-//! guessing is the best answer available. This one refuses instead, because here
-//! a layout exists and a wrong reading of it is worse than no reading.
+//! [`crate::gerber::placement`], for the gerber-only path where no layout exists
+//! to reconcile against. This one refuses instead: here a layout exists and a
+//! wrong reading of it is worse than no reading.
 //!
 //! Long-form: `docs/ingest/BOM.md`.
 
@@ -43,12 +42,12 @@ use crate::ExtractedBoard;
 /// How far a placement may sit from the layout's own position for the two to
 /// count as agreeing, in millimetres.
 ///
-/// Every writer surveyed emits four decimal places or better, and the round trip
-/// through a decimal string is exact to well under a micron, so the only thing
-/// this tolerance absorbs is the writers that round to three places. It is
-/// deliberately far tighter than any real placement difference: moving a part by
-/// a tenth of a millimetre between revisions is a change, and this check exists
-/// to notice changes.
+/// Every writer surveyed emits four decimal places or better and the round trip
+/// through a decimal string is exact to well under a micron, so this tolerance
+/// absorbs only the writers that round to three places. It is deliberately far
+/// tighter than any real placement difference: moving a part by a tenth of a
+/// millimetre between revisions is a change, and this check exists to notice
+/// changes.
 pub const POSITION_TOLERANCE_MM: f64 = 0.01;
 
 /// Rotation values within a tenth of a degree are the same placement. This is
@@ -812,14 +811,12 @@ impl PlacementCrossCheck {
     /// True when this file describes a DIFFERENT board rather than a partly
     /// assembled one.
     ///
-    /// The distinction is the whole value of the check. A placement file missing
-    /// half the board's parts is ordinary (only the SMD side gets placed). A
-    /// placement file that places parts the board does not have, or that puts
-    /// the parts it does share somewhere else, is from another revision, and
-    /// every conclusion drawn from the pair would describe a board that does not
-    /// exist. The threshold is a majority of the parts the two share, because a
-    /// single moved part is a change to report and a wholesale disagreement is a
-    /// different board.
+    /// A placement file missing half the board's parts is ordinary (only the SMD
+    /// side gets placed). One that places parts the board does not have, or puts
+    /// the parts it shares somewhere else, is from another revision, and every
+    /// conclusion drawn from the pair would describe a board that does not exist.
+    /// The threshold is a majority of the shared parts: a single moved part is a
+    /// change to report, a wholesale disagreement is a different board.
     pub fn is_different_board(&self) -> bool {
         if self.matched == 0 {
             return !self.only_in_placement.is_empty();

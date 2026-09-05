@@ -1,5 +1,9 @@
-//! One integration-test binary for the crate; each module was a
-//! separate test file (and separate link step) before.
+//! One integration-test binary for the crate: every module below is compiled
+//! and linked once instead of once per file.
+
+#[allow(dead_code)]
+#[path = "support.rs"]
+mod support;
 
 #[path = "avr_hex_flash_bounds.rs"]
 mod avr_hex_flash_bounds;

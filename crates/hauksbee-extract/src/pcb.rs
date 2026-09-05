@@ -196,9 +196,9 @@ const GEOMETRY_LISTS: &[&str] = &[
 /// (`1e400`), which is how a mangled unit conversion usually arrives.
 ///
 /// KiCad cannot write such a file; every instance is a hand edit, a broken
-/// generator or a corrupted transfer, so refusing costs no real board. That is
-/// measured, not assumed: zero files in a 1139-board corpus of real KiCad
-/// layouts (KiCad 4 through 10) carry a non-finite coordinate.
+/// generator or a corrupted transfer, so refusing costs no real board. Measured,
+/// not assumed: zero files in a 1139-board corpus of real KiCad layouts (KiCad 4
+/// through 10) carry a non-finite coordinate.
 fn reject_non_finite_geometry(root: &List) -> Result<(), ExtractError> {
     let mut stack: Vec<&List> = vec![root];
     while let Some(list) = stack.pop() {

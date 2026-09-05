@@ -88,7 +88,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
 use crate::altium::VALUE_UNRESOLVED_KEY;
-use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
+use crate::{sample_list, Component, ExtractError, ExtractedBoard, Net, Pin};
 
 /// Why a part read from an IPC-2581 document has no value.
 ///
@@ -174,14 +174,6 @@ impl Ipc2581Stats {
             mode_or_unknown(&self.function_mode),
             self.net_source.as_str()
         )];
-        if !self.artwork.is_empty() {
-            out.push(format!(
-                "{} placement(s) have no pad and were read as board artwork \
-                 rather than parts: {}.",
-                self.artwork.len(),
-                sample_list(&self.artwork)
-            ));
-        }
         if self.bom_absent {
             out.push(
                 "This document carries no BOM, so no component has a value and \
@@ -190,14 +182,10 @@ impl Ipc2581Stats {
                     .to_string(),
             );
         }
-        if !self.nets_without_pads.is_empty() {
-            out.push(format!(
-                "{} net(s) are declared but touch no component pad, so nothing \
-                 downstream can see them: {}.",
-                self.nets_without_pads.len(),
-                sample_list(&self.nets_without_pads)
-            ));
-        }
+        out.extend(crate::exchange_disclosures(
+            &self.artwork,
+            &self.nets_without_pads,
+        ));
         out.extend(self.disagreements.clone());
         out
     }
@@ -236,12 +224,10 @@ const NAME_PREFIXES: &[&str] = &[
 ///
 /// Zuken's CR5000 exporter prefixes every name with the step: `refDes=
 /// "bd-sample:IC18"`, `componentRef="bd-sample:IC11"`, `name="bd-sample:RESET"`.
-/// The connectivity is internally consistent either way, so the netlist still
-/// resolved — but the reference designator reaching the IR was `bd-sample:IC18`,
-/// which no model binder can recognise as an IC, and every net was called
-/// `bd-sample:RESET`. The step name is only stripped when it is followed by a
-/// colon and something else, so a step called `A` cannot eat a net named `A:B`
-/// belonging to nothing.
+/// The connectivity is internally consistent either way, but no model binder can
+/// recognise `bd-sample:IC18` as an IC. The step name is only stripped when it is
+/// followed by a colon and something else, so a step called `A` cannot eat a net
+/// named `A:B` belonging to nothing.
 fn strip_names(name: &str, step: &str) -> String {
     let once = strip_prefix_tag(name);
     if step.is_empty() {
@@ -440,10 +426,8 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                         // KiCad and Allegro write `<Pin number="7"/>`; Zuken
                         // writes `<Pin name="1" type="THRU" number="0.0"/>`,
                         // where `number` is the pin's ORDINAL in the package and
-                        // `name` is what the netlist references. Reading
-                        // `number` on a Zuken package gave every part pins
-                        // called "0.0", "1.0", "2.0" — names no `<PinRef>` could
-                        // ever match, so every package looked wrong.
+                        // `name` is what the netlist references, so reading
+                        // `number` there gives pins no `<PinRef>` can match.
                         let pin = a
                             .get("name")
                             .or_else(|| a.get("number"))
@@ -968,13 +952,12 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         //
         // Requiring containment rather than mere overlap matters. KiCad
         // de-duplicates packages by pad geometry, so a 2-pin LED gets the axial
-        // resistor's package: with an overlap test, a part whose pins are `1` and
-        // `K` against a package declaring `1`,`2`,`3` "fitted" on the strength of
-        // `1` alone and was emitted with FOUR pads — `2` and `3` fabricated and
-        // unconnected, which downstream reads as two phantom open-pin findings
-        // and a wrong pin count for binding. So: the package's pins are used only
-        // when they are a superset of the referenced ones, and otherwise the
-        // netlist's pins stand alone and the mismatch is named.
+        // resistor's package: under an overlap test a part whose pins are `1` and
+        // `K` would "fit" a package declaring `1`,`2`,`3` on the strength of `1`
+        // alone and be emitted with FOUR pads, two of them fabricated and
+        // unconnected. So the package's pins are used only when they are a
+        // superset of the referenced ones, and otherwise the netlist's pins stand
+        // alone and the mismatch is named.
         let unaccounted: Vec<&str> = match refd {
             Some(r) => r
                 .iter()
@@ -1095,19 +1078,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
             pins,
         });
     }
-    // A placement with no pad is board artwork, not a part (see the same rule in
-    // `pcb.rs` and [`crate::odbpp`]): dropped, and named in the stats.
-    let artwork: Vec<String> = components
-        .iter()
-        .filter(|c| c.pins.is_empty())
-        .map(|c| c.reference.clone())
-        .collect();
-    let components = crate::merge_duplicate_references(
-        components
-            .into_iter()
-            .filter(|c| !c.pins.is_empty())
-            .collect(),
-    );
+    let (components, artwork) = crate::split_board_artwork(components);
 
     if !wrong_packages.is_empty() {
         disagreements.push(format!(
@@ -1148,19 +1119,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         .map(|m| m.iter().map(|(k, v)| (k.clone(), *v)).collect())
         .unwrap_or_default();
 
-    // Nets nothing is attached to. Computed from the finished board rather than
-    // from the document, so it catches a net lost to any of the resolution steps
-    // above as well as one the document really declares unused.
-    let attached: HashSet<i64> = components
-        .iter()
-        .flat_map(|c| c.pins.iter())
-        .filter_map(|p| p.net)
-        .collect();
-    let nets_without_pads: Vec<String> = nets
-        .iter()
-        .filter(|n| !attached.contains(&n.id))
-        .map(|n| n.name.clone())
-        .collect();
+    let nets_without_pads = crate::nets_without_pads(&nets, &components);
 
     Ok(Ipc2581Extraction {
         board: ExtractedBoard {
@@ -1296,18 +1255,6 @@ fn mode_or_unknown(mode: &str) -> String {
     } else {
         mode.to_string()
     }
-}
-
-fn sample_list(items: &[String]) -> String {
-    const MAX: usize = 6;
-    if items.len() <= MAX {
-        return items.join(", ");
-    }
-    format!(
-        "{}, and {} more",
-        items[..MAX].join(", "),
-        items.len() - MAX
-    )
 }
 
 #[cfg(test)]
@@ -1597,9 +1544,9 @@ mod tests {
 
     #[test]
     fn zuken_and_altium_element_names_are_read_as_connectivity() {
-        // Two producer shapes that carried full netlists the reader used to see
-        // nothing in. Kept as unit tests as well as corpus tests so the shapes
-        // stay covered without the multi-megabyte files.
+        // Two producer shapes whose netlists live in element names the schema
+        // shape does not lead you to. Kept as unit tests as well as corpus tests
+        // so they stay covered without the multi-megabyte files.
         let zuken = r#"<IPC-2581 xmlns="http://webstds.ipc.org/2581">
   <Content><FunctionMode mode="DESIGN" level="1"/></Content>
   <Ecad><CadHeader units="MILLIMETER"/><CadData>

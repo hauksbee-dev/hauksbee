@@ -8,23 +8,20 @@
 //! no missing pull, no contention on the board); it only shows up when you know
 //! the MCU's internal peripheral-to-pin binding.
 //!
-//! Two real, shipped bugs define and validate the check:
+//! Two real, shipped boards define and validate the check:
 //!
-//! 1. **Olimex RP2040-PICO-PC** (open issue #1 on OLIMEX/RP2040-PICO-PC,
-//!    unfixed across revisions B/C/D): the PicoDVI clock uses PWM on GP12/GP13
-//!    while the board's PWM stereo audio sits on GP27/GP28. GP12 and GP28 both
-//!    map to RP2040 **PWM slice 6, channel A** (the (n>>1)&7 / A|B rule), so DVI
-//!    and audio cannot have independent PWM, and in fact both want the *same*
-//!    channel.
+//! 1. **Olimex RP2040-PICO-PC**: the PicoDVI clock uses PWM on GP12/GP13 while
+//!    the board's PWM stereo audio sits on GP27/GP28. GP12 and GP28 both map to
+//!    RP2040 **PWM slice 6, channel A** (the (n>>1)&7 / A|B rule), so DVI and
+//!    audio cannot have independent PWM and in fact want the *same* channel.
 //!
-//! 2. **SparkFun SAMD51 Thing Plus**: the on-board AT25SF041 SPI flash is wired
-//!    to PA08..PA11, which are the SAM D5x **QSPI DATA0..3** pins, with SCK/CS
-//!    off the QSPI-locked PB10/PB11. The QSPI peripheral can therefore never
-//!    drive it; only SERCOM SPI can. Vendor firmware (CircuitPython's board
-//!    config) declares plain SPI flash on exactly these pins, so the board works
-//!    as designed - which is why single-function group occupation is reported as
-//!    a low-severity fact, not a conflict. A genuine conflict (two different
-//!    functions on one group) stays serious.
+//! 2. **SparkFun SAMD51 Thing Plus**: the on-board SPI flash is wired to
+//!    PA08..PA11, the SAM D5x **QSPI DATA0..3** pins, with SCK/CS off the
+//!    QSPI-locked PB10/PB11, so the QSPI peripheral can never drive it and only
+//!    SERCOM SPI can. Vendor firmware declares plain SPI flash on exactly these
+//!    pins and the board works as designed, which is why single-function group
+//!    occupation is a low-severity fact rather than a conflict. Two DIFFERENT
+//!    functions on one group stays serious.
 //!
 //! The MCU resource map lives in `db/mcu_resources.toml` (hand-authored from the
 //! reference manuals, cited there). The function each used pin is demanded for
@@ -306,18 +303,16 @@ fn function_for(target: &str, start_net: &str) -> Option<Function> {
             }
         }
         "audio" => {
-            // The pin reaches an audio jack, and (because `infer_target` only
-            // crosses series passives + a small line buffer) it does so through
-            // an RC reconstruction-filter path, not an active codec/DAC IC (a
-            // codec is not a series bridge, so a codec path would not have
-            // resolved here). On an RP2040 - which has no DAC and no hardware
-            // I2S - that path IS PWM audio. The net being named PWM* (rev C/D
-            // `/PWM_L`) or generically (rev B `/GPIO28`) does not change the
-            // physics; the buffer+RC-to-jack topology is the evidence.
+            // The pin reaches an audio jack, and because `infer_target` only
+            // crosses series passives plus a small line buffer it does so through
+            // an RC reconstruction-filter path, not an active codec/DAC (a codec
+            // is not a series bridge, so such a path would not resolve here). On
+            // an RP2040, which has no DAC and no hardware I2S, that path IS PWM
+            // audio whatever the net is named; the buffer+RC-to-jack topology is
+            // the evidence.
             //
-            // BUT exclude a jack control/sense line - a headphone-detect,
-            // insertion, or sense net that reaches the jack but carries no audio
-            // - so such a pin is not mis-counted as a PWM-audio demand.
+            // A jack control/sense line (headphone-detect, insertion, sense) is
+            // excluded: it reaches the jack but carries no audio.
             if has(&[
                 "DET", "SENSE", "SENS", "INS", "INSERT", "HPDET", "JACK_DET", "MIC_DET",
             ]) {
@@ -807,15 +802,13 @@ fn report_qspi_group_conflicts(
             .join("; ");
         // Two DIFFERENT functions on one group is a hard conflict: no pin-mux
         // assignment can serve both, so one feature cannot work. That stays
-        // serious. ONE self-consistent function occupying the group (the
-        // SparkFun Thing Plus SAMD51: a flash wired as plain SERCOM SPI across
-        // the QSPI data pads) is NOT a runtime conflict - nothing contends, the
-        // board works as shipped, and vendor firmware often drives exactly this
-        // arrangement deliberately. The netlist cannot tell deliberate plain-SPI
-        // from a botched QSPI intent, so that case is reported as a low-severity
-        // note that says only what the copper proves: the QSPI peripheral can
-        // never drive these pads. Reporting it as serious on a famous working
-        // board was a wolf-cry by the project's own calibration bar.
+        // serious. ONE self-consistent function occupying the group (a flash
+        // wired as plain SERCOM SPI across the QSPI data pads) is NOT a runtime
+        // conflict: nothing contends, the board works as shipped, and vendor
+        // firmware often drives exactly that arrangement deliberately. The
+        // netlist cannot tell deliberate plain-SPI from a botched QSPI intent,
+        // so it is a low-severity note saying only what the copper proves, that
+        // the QSPI peripheral can never drive these pads.
         let funcs: std::collections::BTreeSet<&str> =
             ds.iter().map(|d| d.function.as_str()).collect();
         let (severity, message) = if funcs.len() >= 2 {

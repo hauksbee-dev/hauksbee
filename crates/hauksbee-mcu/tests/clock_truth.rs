@@ -1,23 +1,20 @@
 //! Per-backend clock-truth gate: does a firmware delay cost the virtual time
 //! the part would really take?
 //!
-//! # The bug this exists to stop coming back
+//! # The failure mode this gate exists to catch
 //!
-//! Four Renode platforms used to run simulated time at the EMULATOR's clock
-//! rate instead of the part's. `platforms/cpus/stm32f103.repl` declares
+//! A Renode platform can run simulated time at the EMULATOR's clock rate rather
+//! than the part's, in silence. `platforms/cpus/stm32f103.repl` declares
 //! `nvic systickFrequency: 72000000` while `db/mcu/stm32f103.soc.toml` declares
 //! an 8 MHz part, and 72/8 is exactly the 9.00x by which a SysTick-timed
-//! firmware ran fast. Every stock platform also left `cpu PerformanceInMips` at
-//! Renode's 100, against roughly 8 MIPS of real F103 silicon. Nothing
-//! complained, because `frequency_hz` cancels out of the engine's own
-//! `cycles = seconds * frequency_hz` bookkeeping: the descriptor could disagree
-//! with the platform by 9x in silence. So the two time-based assertions the
-//! product sells passed at rates a real board cannot hit.
+//! firmware then runs fast; a stock platform also leaves `cpu
+//! PerformanceInMips` at Renode's 100 against roughly 8 MIPS of real F103
+//! silicon. Nothing complains, because `frequency_hz` cancels out of the
+//! engine's `cycles = seconds * frequency_hz` bookkeeping, so the two
+//! time-based assertions the product sells pass at rates a real board cannot
+//! hit. Declaring each part's clock is the fix; measuring it is what keeps it.
 //!
-//! Declaring each part's clock fixed it once. This test is what keeps it fixed:
-//! the numbers rot the moment nobody measures them.
-//!
-//! # How the measurement avoids the trap that nearly buried the bug
+//! # How the measurement avoids aliasing
 //!
 //! The engine sees a pin by polling its output-data register once per chunk, so
 //! a half-period at or below the chunk width ALIASES. At 5 ms chunks the 9x-fast
@@ -77,10 +74,7 @@ const MAX_CHUNKS: u64 = 900;
 const TOLERANCE: f64 = 0.05;
 
 fn firmware(name: &str) -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/clock_truth")
-        .join(name);
-    p.exists().then(|| p.canonicalize().unwrap_or(p))
+    crate::support::firmware(&format!("clock_truth/{name}"))
 }
 
 /// Boot `elf` on `cfg` and return the sim rate divided by the silicon rate,

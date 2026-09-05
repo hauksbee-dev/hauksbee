@@ -6,14 +6,14 @@
 //! 2. a fatal signal to the parent (SIGTERM / SIGINT / SIGHUP) still reaps
 //!    every live emulator before the process dies, instead of orphaning them.
 //!
-//! Why this exists: killing a `hauksbee serve` with live co-sim sessions used
-//! to leak its `qemu-system-*` children. Rust runs no `Drop` when the default
-//! signal disposition terminates the process, so every SIGTERM/SIGINT of the
-//! server orphaned the emulators; 23 accumulated `qemu-system-xtensa`
-//! processes were found on one dev machine. The fix has two independent
-//! layers: process-group kills on Unix, owning kill-on-close Job Objects on
-//! Windows, and
-//! [`install_signal_reaper`] for Unix paths where `Drop` never runs.
+//! Rust runs no `Drop` when the default signal disposition terminates the
+//! process, so without this a SIGTERM/SIGINT of a serving hauksbee orphans
+//! every live emulator. Two independent layers close that: process-group kills
+//! on Unix, owning kill-on-close Job Objects on Windows, plus
+//! [`install_signal_reaper`] for Unix paths where `Drop` never runs. The module
+//! also owns the emulator spawn/teardown pair every backend shares
+//! ([`spawn_emulator`], [`terminate_emulator`]) and the small discovery
+//! primitives (`which`, `home_dir`) their locators use.
 //!
 //! On Unix the registry is a fixed-capacity, lock-free table of PIDs because
 //! the signal handler iterates it, and a signal handler must never take a lock
@@ -109,7 +109,71 @@ impl ProcessTreeGuard {
     }
 }
 
-/// Spawn a backend under structural process-tree ownership.
+/// Spawn an emulator child: own its process tree, then register it for
+/// signal reaping. This is the pairing every backend needs, so it exists once
+/// rather than once per backend.
+pub(crate) fn spawn_emulator(
+    cmd: &mut std::process::Command,
+) -> std::io::Result<(std::process::Child, ProcessTreeGuard)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Own process group: one group kill tears down the emulator and
+        // anything it forked, from `Drop` or from the signal reaper.
+        cmd.process_group(0);
+    }
+    let (child, guard) = spawn_owned(cmd)?;
+    register(child.id(), &guard);
+    Ok((child, guard))
+}
+
+/// Tear an emulator child down: deregister it, then kill its whole tree (the
+/// Unix process group, or the retained Windows Job Object -- never a numeric
+/// PID that may already have been reaped and recycled) and reap it.
+pub(crate) fn terminate_emulator(child: &mut std::process::Child, guard: &ProcessTreeGuard) {
+    unregister(child.id());
+    #[cfg(unix)]
+    kill_tree(child.id());
+    let _ = guard.terminate();
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Minimal `which`: search `PATH` for an executable named `name`. On Windows
+/// executables carry an extension, so `<name>.exe` is tried first (that is what
+/// Renode and the Espressif QEMU builds ship); the bare name stays as a
+/// fallback for MSYS2-style shims.
+pub(crate) fn which(name: &str) -> std::io::Result<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "PATH not set"))?;
+    for dir in std::env::split_paths(&path) {
+        if cfg!(windows) {
+            let exe = dir.join(format!("{name}.exe"));
+            if exe.is_file() {
+                return Ok(exe);
+            }
+        }
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("{name} not found on PATH"),
+    ))
+}
+
+/// The user's home directory: `$HOME` first (Unix, and any shell that sets it
+/// deliberately wins on every OS), then `%USERPROFILE%` (the Windows
+/// convention, where HOME is normally unset).
+pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
+/// Spawn a child under structural process-tree ownership.
 ///
 /// Windows starts the direct child suspended, assigns the still-unexecuted
 /// process to the kill-on-close Job Object, then resumes its primary thread.

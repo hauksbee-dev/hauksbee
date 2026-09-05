@@ -86,13 +86,7 @@ fn model_output_range(model: &ModelEntry) -> Option<RailRange> {
 
 fn regulator_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, RailRange> {
     let mut ranges = BTreeMap::new();
-    for comp in &board.components {
-        let Some(part) = AssemblyState::of(comp).fitted() else {
-            continue;
-        };
-        let Some(model) = resolve(lib, part).model else {
-            continue;
-        };
+    for (comp, model) in super::resolved_components(board, lib) {
         let Some(range) = model_output_range(&model) else {
             continue;
         };
@@ -276,13 +270,7 @@ pub fn envelope_lint_with_drives(
     let mut report = NetLintReport::default();
     let mut abstained_nets = BTreeSet::new();
 
-    for comp in &board.components {
-        let Some(part) = AssemblyState::of(comp).fitted() else {
-            continue;
-        };
-        let Some(model) = resolve(lib, part).model else {
-            continue;
-        };
+    for (comp, model) in super::resolved_components(board, lib) {
         for envelope in &model.envelope {
             match envelope {
                 OperatingEnvelope::SupplyRange {

@@ -132,19 +132,19 @@ pub(crate) fn emit_quiet(
         .map(|net| (net.clone(), resp.bode(circuit, net)))
         .collect();
 
-    // Fix #1 (CRITICAL): an AC sweep where EVERY reported net is at the -6000 dB
-    // sentinel has no signal path; it is a meaningless result, not data. Refuse
-    // to present it as a Bode table; name the unresolved driving ICs and exit 3
-    // ("board invalid for the requested analysis"), never 0.
+    // An AC sweep where EVERY reported net is at the -6000 dB sentinel has no
+    // signal path; it is a meaningless result, not data. Refuse to present it as
+    // a Bode table; name the unresolved driving ICs and exit 3 ("board invalid
+    // for the requested analysis"), never 0.
     let nonempty: Vec<&(String, Vec<(f64, f64, f64)>)> =
         per_net.iter().filter(|(_, b)| !b.is_empty()).collect();
 
-    // Fix #1b (HIGH honesty hole): if EVERY requested net produced no data at all
-    // (none exist in the circuit), `nonempty` is empty. That case slips past the
-    // all-sentinel guard below (which requires `!nonempty.is_empty()`), leaving
-    // the JSON path free to emit `ac: { valid: true, nets: [] }` with exit 0, a
-    // meaningless result reported as valid. Refuse it: name the missing nodes, emit
-    // valid:false, and exit 3, exactly like the all-sentinel path. Only fires when
+    // If EVERY requested net produced no data at all (none exist in the
+    // circuit), `nonempty` is empty. That case slips past the all-sentinel guard
+    // below (which requires `!nonempty.is_empty()`), which would let the JSON
+    // path emit `ac: { valid: true, nets: [] }` with exit 0, a meaningless result
+    // reported as valid. Refuse it: name the missing nodes, emit valid:false, and
+    // exit 3, exactly like the all-sentinel path. Only fires when
     // the user explicitly asked for nodes; the "every node" default never lands
     // here because at least one real node exists in any bound circuit.
     if nonempty.is_empty() {
@@ -516,10 +516,9 @@ mod ac_csv_tests {
 
     #[test]
     fn csv_omits_no_signal_path_nets_instead_of_writing_the_floor() {
-        // R32: the CSV writer emitted every -6000 dB sentinel row verbatim, so a
-        // dead net (no drive path) landed in the file as if it were real -6000 dB
-        // data, contradicting the JSON/text "never present the floor as data"
-        // contract. The floor-only net must be omitted and reported.
+        // A floor-only net (no drive path) must be omitted from the CSV and
+        // reported, not written out as if it were real -6000 dB data: the same
+        // "never present the floor as data" contract the JSON/text paths keep.
         let live: Vec<(f64, f64, f64)> = vec![(1.0, -3.0, -45.0), (10.0, -20.0, -90.0)];
         let dead: Vec<(f64, f64, f64)> = vec![(1.0, AC_FLOOR_DB, 0.0), (10.0, AC_FLOOR_DB, 0.0)];
         let per_net = vec![("OUT".to_string(), live), ("DEAD".to_string(), dead)];

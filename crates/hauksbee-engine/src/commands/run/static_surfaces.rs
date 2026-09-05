@@ -11,6 +11,22 @@ use super::{
     RunConfig, SelectedSurface,
 };
 
+/// The evidence spine every bound static surface attaches: the board's bind
+/// report dated by the run clock, carrying the input artifact it came from.
+fn board_evidence(
+    cfg: &RunConfig,
+    run_inputs: &RunInputs,
+    bound: &crate::binder::BoundBoard,
+) -> anyhow::Result<crate::evidence::BoardEvidence> {
+    Ok(crate::evidence::BoardEvidence::from_bound(
+        &run_inputs.board,
+        &bound.report,
+        &run_inputs.reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?
+    .with_input_artifact(&cfg.board, &run_inputs.raw, run_inputs.input_kind)?)
+}
+
 pub(crate) fn emit_selected(
     cfg: &RunConfig,
     quiet: bool,
@@ -113,13 +129,7 @@ pub(crate) fn emit_selected(
     // and explicitly asks for a current before pass/fail.
     if surface == SelectedSurface::Ampacity {
         let bound = bind_board(&board, &lib);
-        let evidence = crate::evidence::BoardEvidence::from_bound(
-            &board,
-            &bound.report,
-            &reader_notes,
-            hauksbee_ir::evidence::RunDate::from_system_clock(),
-        )?
-        .with_input_artifact(&cfg.board, &raw, input_kind)?;
+        let evidence = board_evidence(cfg, run_inputs, &bound)?;
         let net_names: Vec<String> = board.nets.iter().map(|net| net.name.clone()).collect();
         return crate::reports::ampacity::emit_quiet(
             &text,
@@ -174,13 +184,7 @@ pub(crate) fn emit_selected(
     // any user-facing surface; this is its CLI front door.
     if surface == SelectedSurface::UsbC {
         let bound = bind_board(&board, &lib);
-        let evidence = crate::evidence::BoardEvidence::from_bound(
-            &board,
-            &bound.report,
-            &reader_notes,
-            hauksbee_ir::evidence::RunDate::from_system_clock(),
-        )?
-        .with_input_artifact(&cfg.board, &raw, input_kind)?;
+        let evidence = board_evidence(cfg, run_inputs, &bound)?;
         let blockers = crate::result::unmodelled_critical_refs(
             &crate::result::BindSummary::from_report(&bound.report),
         );
@@ -227,13 +231,7 @@ pub(crate) fn emit_selected(
             Some(b) => b,
             None => bind_board(&board, &lib),
         };
-        let evidence = crate::evidence::BoardEvidence::from_bound(
-            &board,
-            &bound.report,
-            &reader_notes,
-            hauksbee_ir::evidence::RunDate::from_system_clock(),
-        )?
-        .with_input_artifact(&cfg.board, &raw, input_kind)?;
+        let evidence = board_evidence(cfg, run_inputs, &bound)?;
         return crate::reports::ac::emit_quiet(
             &bound,
             &evidence,

@@ -7,7 +7,7 @@
 //! Exit code is 0 if every assertion passed, 1 if any ordinarily failed, 2 on a
 //! usage/spec error, and 3 when the run is invalid for analysis (an analog chunk
 //! failed to converge under an assertion's window, or the strict abort tripped;
-//! 05 §3b). When `GITHUB_ACTIONS` is set in the environment, GitHub workflow
+//! ). When `GITHUB_ACTIONS` is set in the environment, GitHub workflow
 //! annotations are emitted to stdout so failures surface inline.
 //!
 //! The argument surface is defined with `clap` (derive API): `--help`/`-h`,

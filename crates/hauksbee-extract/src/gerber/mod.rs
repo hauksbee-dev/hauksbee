@@ -52,13 +52,11 @@ pub struct GerberExtraction {
     pub stats: ReconStats,
 }
 
-/// The file's own name, for a message about it.
-///
-/// Never the full path. A web upload is read out of a throwaway directory whose
-/// name is a pid, a counter and a clock reading, so a message quoting the path
-/// both leaked a local absolute path into the report and made the FAILING report
-/// differ between two analyses of one malformed archive. The film name is also
-/// the only part the user can act on: they have the job, not our temp dir.
+/// The file's own name, for a message about it. Never the full path: a web
+/// upload is read out of a throwaway directory whose name is a pid, a counter
+/// and a clock reading, so quoting the path leaks a local absolute path into the
+/// report and makes two analyses of one malformed archive differ. The film name
+/// is also the only part the user can act on.
 fn film(path: &Path) -> std::borrow::Cow<'_, str> {
     path.file_name()
         .unwrap_or(path.as_os_str())
@@ -178,12 +176,10 @@ fn declared_span_phrase(span: excellon::DeclaredSpan) -> String {
 /// `*_CAM` / `*_SMT` / `*_ASM` split).
 ///
 /// Sorted by path within each directory, and directories descended in that same
-/// sorted order, because `read_dir` yields whatever order the filesystem
-/// happens to hold. Downstream this list decides which copper film gets which
-/// provisional stack index when a job's names tie, so readdir order would leak
-/// into the reconstruction. Two analyses of one archive extracted into two
-/// different temp directories must not diverge on the order the kernel handed
-/// the entries back.
+/// sorted order, because `read_dir` yields whatever order the filesystem holds.
+/// Downstream this list decides which copper film gets which provisional stack
+/// index when a job's names tie, so readdir order would otherwise leak into the
+/// reconstruction and two extractions of one archive could disagree.
 fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -231,12 +227,9 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
 }
 
 /// [`from_gerber_dir`] with the board name supplied rather than taken from the
-/// directory.
-///
-/// The zip path needs this: it extracts into a throwaway directory whose name
-/// exists only to be unique, so naming the board after it put a nanosecond
-/// clock reading in every report and broke the "same board twice, same JSON"
-/// contract. The archive names the board instead.
+/// directory. The zip path needs it: extraction goes to a throwaway directory
+/// whose name exists only to be unique, so naming the board after it would put a
+/// nanosecond clock reading in every report.
 fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtraction, ExtractError> {
     let mut all_files = Vec::new();
     collect_files(dir, &mut all_files);
@@ -411,12 +404,11 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
         }
     }
     // Rank the manifest's copper films into provisional stack indices. The
-    // declared numbers ORDER the stack (side tags first, then the number:
-    // both hold even on exporters whose numbers are not physical positions;
-    // KiCad 9 writes internal layer IDs, so a four-layer manifest can read
-    // L1, L5, L7, L4). The numbers are fed onward as PHYSICAL positions only
-    // when they are exactly `1..=n` in that rank order, anything else is a
-    // numbering scheme we cannot vouch for, and feeding it to the drill
+    // declared numbers ORDER the stack (side tags first, then the number), which
+    // holds even on exporters whose numbers are not physical positions: KiCad 9
+    // writes internal layer IDs, so a four-layer manifest can read L1, L5, L7,
+    // L4. They are fed onward as PHYSICAL positions only when they are exactly
+    // `1..=n` in that rank order; any other scheme handed to the drill
     // layer-pair resolver would invent layers the board does not have.
     let present: std::collections::HashSet<String> = all_files
         .iter()
@@ -431,13 +423,11 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             _ => None,
         })
         .collect();
-    // File name breaks the tie. `gbrjob` is a HashMap, so the vector above
-    // arrives in whatever order the map hashed into, and a stable sort on
-    // (side, number) alone would carry that order through wherever two films
-    // declare the same side and number. The rank IS the provisional stack
-    // index, so a tie resolved by hash order would move a film up or down the
-    // stack between two runs of the same job and change which layers a blind
-    // via stitches.
+    // File name breaks the tie. `gbrjob` is a HashMap, so a stable sort on
+    // (side, number) alone carries hash order through wherever two films declare
+    // the same side and number. The rank IS the provisional stack index, so a
+    // tie resolved that way moves a film up or down the stack between two runs
+    // and changes which layers a blind via stitches.
     job_copper.sort_by(|a, b| (a.2, a.1, &a.0).cmp(&(b.2, b.1, &b.0)));
     let gbrjob_numbers_physical = job_copper
         .iter()
@@ -737,18 +727,15 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
         // consulted only when the file itself is silent.
         let (body, file_declared) = if is_gerber {
             // A gerber-format drill film carries the same `TF.FileFunction`
-            // attribute an Excellon file does, so it is read the same way: for
+            // attribute an Excellon file does, and is read the same way: for
             // whether the holes are plated at all, and for the layer pair they
-            // span. Discarding either lets a film that plainly states it drills
-            // a mechanical hole, or a blind one, be read as a plated
-            // through-hole and stitch the whole stack.
-            // Plating decides whether these hits are conductors at all, so it
-            // is taken from the strongest source the film offers and, when it
-            // offers none, refused rather than assumed. Order: the film's own
-            // `TF.FileFunction`; its `%TA.AperFunction` drill functions; the
-            // file name; the job splitting plated from non-plated into separate
-            // files. A film with none of those is a picture of some holes with
-            // nothing saying whether they are plated.
+            // span. Discarding either lets a film that states it drills a
+            // mechanical or blind hole be read as a plated through-hole and
+            // stitch the whole stack. Plating is taken from the strongest source
+            // the film offers, in order: its own `TF.FileFunction`, its
+            // `%TA.AperFunction` drill functions, the file name, the job
+            // splitting plated from non-plated into separate files. With none of
+            // those, plating is refused rather than assumed.
             let functions = film_drill_functions(&text);
             let says_plated = film_file_function(&text)
                 .map(|f| f.contains("PLATED") || f.contains("PTH"))
@@ -895,19 +882,14 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
 
     // How many copper layers the finished board has, as the files describe it.
     //
-    // Two sources, and the answer is the DEEPER of them. The copper films we
-    // classified are one lower bound. The deepest layer any drill declaration
-    // names is the other, and it can exceed the film count: KiCad names an
-    // inner layer's film after the user's label ("GND_Cu", "Power_Cu"), so a
-    // six-layer job can classify only its two outer films while its drill still
-    // says `1,6`.
-    //
-    // Taking the drill maximum ALONE would be a fabrication engine. A four-layer
-    // job whose only drill is a blind `Plated,1,2,PTH` would imply a two-layer
-    // board, make that pair look full-depth, and stitch all four layers: a
-    // phantom short built out of a correct declaration. The film count is
-    // evidence too, and it is the evidence that says this board has more layers
-    // than that drill reaches.
+    // Two sources, and the answer is the DEEPER of them. The classified copper
+    // films are one lower bound. The deepest layer any drill declaration names
+    // is the other, and it can exceed the film count: KiCad names an inner
+    // layer's film after the user's label ("GND_Cu"), so a six-layer job can
+    // classify only its two outer films while its drill still says `1,6`.
+    // Taking the drill maximum ALONE would fabricate: a four-layer job whose
+    // only drill is a blind `Plated,1,2,PTH` would imply a two-layer board, make
+    // that pair look full-depth and stitch all four layers.
     let implied_layers = parsed
         .iter()
         .filter_map(|p| match p.declared {
@@ -1034,12 +1016,10 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
             // an ordinary drill film the draws are legend art, and reading
             // those as plated walls paints copper across the board.
             //
-            // Only the film's OWN attribute settles it. A suggestive file name
-            // is not enough: any board whose project name contains "slot" would
-            // have its legend promoted to conductor, which is the invention
-            // this module exists to avoid. Where the name suggests a rout and
-            // the film does not declare one, the draws are left alone and the
-            // reader says why, so the gap is visible rather than silent.
+            // Only the film's OWN attribute settles it: any board whose project
+            // name contains "slot" would otherwise have its legend promoted to
+            // conductor. Where the name suggests a rout and the film declares
+            // none, the draws are left alone and the reader says why.
             let declares_rout = film_file_function(text)
                 .map(|f| f.contains("ROUT") || f.contains("SLOT") || f.contains("MILL"))
                 .unwrap_or(false);
@@ -1225,15 +1205,13 @@ enum SpanClaim {
 /// - the **long axis is the path that bit swept**, so the plated wall is the
 ///   whole stadium, not a circle at the flash's centre.
 ///
-/// Reducing a slot to one inscribed circle is what makes a barrel miss copper
-/// the real cutout plainly touches: a 3 mm by 1 mm slot would reach 0.5 mm from
-/// its centre instead of the 1.5 mm it actually spans.
-///
-/// The narrow direction is found over the flash's own edge directions rather
-/// than an axis-aligned box, because a slot drawn at 45 degrees has a square
-/// bounding box and would otherwise read as a round hole of the diagonal's
-/// width. For a convex outline the minimum-width orientation always lies along
-/// an edge, so testing the edges finds it exactly.
+/// Reducing a slot to one inscribed circle makes the barrel miss copper the real
+/// cutout touches: a 3 mm by 1 mm slot would reach 0.5 mm from its centre
+/// instead of the 1.5 mm it spans. The narrow direction is found over the
+/// flash's own edge directions rather than an axis-aligned box, because a slot
+/// drawn at 45 degrees has a square bounding box; for a convex outline the
+/// minimum-width orientation always lies along an edge, so testing the edges
+/// finds it exactly.
 ///
 /// Returns `(diameter, start, end)`; `start == end` for a round hit.
 fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
@@ -1554,13 +1532,10 @@ fn copper_layer_tokens(
     //
     // The scan is by whole token, the same one the drill names go through: a
     // film called `proj_f_cu_rev.g2l` is an inner Protel layer whose project
-    // name happens to contain the letters, and a substring test handed it the
-    // `f_cu` token, which then placed a drill's F-to-In1 span on the wrong pair.
-    //
-    // And a token claimed by two different films names neither: it is dropped
-    // rather than won by whichever came last. A span built on an ambiguous name
-    // is a span put somewhere nobody said, and there is no way to tell from
-    // here which film was meant.
+    // name merely contains the letters, and a substring test would put a drill's
+    // F-to-In1 span on the wrong pair. And a token claimed by two different
+    // films names neither: it is dropped rather than won by whichever came
+    // last, because nothing here can tell which film was meant.
     let mut claims: std::collections::HashMap<String, Vec<usize>> =
         std::collections::HashMap::new();
     for (role, orig_idx) in ordered {
@@ -1748,14 +1723,12 @@ fn read_outline(outlines: &[std::path::PathBuf]) -> Vec<geo::Shape> {
 /// Count plated hits whose barrel the board outline cuts through: castellations
 /// and plated edge slots.
 ///
-/// A castellation is a half-hole on the board edge. Its copper ring is sliced
-/// by the outline, so a reader that decides "this pad owns this hole" by
-/// testing whether the hole sits wholly inside a closed pad ring finds no
-/// owner and drops the connection. Hauksbee never asks that question: the
-/// barrel is copper and joins whatever copper it touches, which is what a
-/// castellation physically is. This count exists so the claim can be checked
-/// against the board rather than assumed, and so a job with castellations is
-/// visible as such in the reconstruction stats.
+/// A castellation is a half-hole on the board edge. Its copper ring is sliced by
+/// the outline, so a reader that decides pad ownership by testing whether the
+/// hole sits wholly inside a closed pad ring finds no owner and drops the
+/// connection. Here the barrel is copper and joins whatever copper it touches,
+/// which is what a castellation physically is; the count makes a job with
+/// castellations visible in the reconstruction stats.
 fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
     use rstar::{RTree, RTreeObject, AABB};
     if outline.is_empty() {
@@ -1814,16 +1787,12 @@ fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
 /// Say out loud when the reconstructed net count is mostly copper fragments.
 ///
 /// Reverse extraction unions copper that touches. Where it cannot follow the
-/// geometry (a pour whose region the parser does not close, an arc it
-/// approximates too coarsely, a thermal relief), one real net comes out as
-/// several, and the net COUNT is then an over-estimate. Measured on 13 real fab
-/// jobs that carried a placement file, the ratio ranged from 1.6 to 21 nets per
-/// part: the high end is over-segmentation, not a board with 21 nets per part.
-///
-/// This is an exact statement, not a heuristic: a reconstructed net that no
-/// component pad sits on cannot be a net anybody routed to, so it is a fragment
-/// the reconstruction failed to attach. Reporting how many keeps the net count
-/// honest instead of letting a plausible-looking number stand unqualified.
+/// geometry (a pour whose region the parser does not close, an arc approximated
+/// too coarsely, a thermal relief), one real net comes out as several and the
+/// net COUNT is an over-estimate; measured on real fab jobs the ratio ranges
+/// from 1.6 to 21 nets per part. The statement is exact rather than heuristic: a
+/// reconstructed net that no component pad sits on cannot be a net anybody
+/// routed to, so it is a fragment the reconstruction failed to attach.
 fn warn_if_nets_are_fragmented(board: &ExtractedBoard) {
     use std::collections::HashSet;
     if board.components.is_empty() || board.nets.is_empty() {
@@ -1855,14 +1824,9 @@ fn warn_if_nets_are_fragmented(board: &ExtractedBoard) {
 /// Reverse-extract from a gerber job `.zip`. Extracts to a temp dir and
 /// delegates to `from_gerber_dir_named`.
 ///
-/// The board is named after the ARCHIVE, never after the extraction directory.
-/// The extraction directory has to be unique per call (two concurrent analyses
-/// of different jobs must not tread on each other), which used to mean a
-/// nanosecond clock reading in its name, and [`from_gerber_dir`] took the board
-/// name from the directory it was handed: so a single byte-identical upload
-/// analysed twice produced two different `board_name` values, and the exported
-/// JSON differed run to run. The archive's stem is a property of the input, so
-/// it holds across runs.
+/// The board is named after the ARCHIVE, never after the extraction directory,
+/// which is unique per call so two concurrent analyses cannot tread on each
+/// other. The archive's stem is a property of the input; the directory's is not.
 pub fn from_gerber_zip(zip_path: &Path) -> Result<GerberExtraction, ExtractError> {
     let name = zip_path
         .file_stem()
@@ -1876,11 +1840,9 @@ pub fn from_gerber_zip(zip_path: &Path) -> Result<GerberExtraction, ExtractError
 /// [`from_gerber_zip`] with the board name supplied rather than taken from the
 /// archive's own path.
 ///
-/// A web upload arrives as bytes and has to be parked on disk before the reader
-/// can see it, and the name it is parked under is a staging detail, not the
-/// board's identity. Passing the name here keeps the two apart: the caller can
-/// stage the bytes under whatever the filesystem will accept and still report
-/// the board under the name the user uploaded.
+/// A web upload arrives as bytes and is parked on disk before the reader can see
+/// it, and the name it is parked under is a staging detail, not the board's
+/// identity. Passing the name keeps the two apart.
 pub fn from_gerber_zip_named(
     zip_path: &Path,
     board_name: &str,
@@ -1904,8 +1866,8 @@ pub fn from_gerber_zip_named(
     ));
     std::fs::create_dir_all(&tmp).map_err(|e| ExtractError::Xml(format!("mktemp: {e}")))?;
     // From here every exit removes the directory, including the early return on
-    // a corrupt archive: a service fed malformed zips used to accumulate
-    // half-unpacked jobs under the system temp directory forever.
+    // a corrupt archive, so a service fed malformed zips cannot accumulate
+    // half-unpacked jobs under the system temp directory.
     let scratch = TempTree(tmp);
     unzip_into(&bytes, &scratch.0)?;
     // The zip may wrap a single sub-directory; descend if so.
@@ -1983,9 +1945,7 @@ impl ExtractedBoard {
     /// name supplied rather than taken from the path.
     ///
     /// For a caller that has parked bytes in a temp file: the staging name is
-    /// the filesystem's business, the board name is the user's, and reading the
-    /// second off the first put staging details (a process id, a counter) into
-    /// every report.
+    /// the filesystem's business, the board name is the user's.
     pub fn from_gerber_with_stats_named(
         path: &Path,
         board_name: &str,

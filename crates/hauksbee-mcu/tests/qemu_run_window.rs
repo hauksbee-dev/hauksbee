@@ -25,13 +25,7 @@ use hauksbee_mcu::{Mcu, QemuBackend};
 use std::path::PathBuf;
 
 fn flash_image() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/esp32_blinky/flash.bin");
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::firmware("esp32_blinky/flash.bin")
 }
 
 #[test]

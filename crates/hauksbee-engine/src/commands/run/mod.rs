@@ -306,7 +306,12 @@ fn begin_ci_artifact_run(cfg: &RunConfig, surface: SelectedSurface) -> anyhow::R
     Err(error)
 }
 
-fn run_error_exit_code(error: &anyhow::Error) -> i32 {
+/// Preserve the typed invalid-for-analysis contract through anyhow's shared CLI
+/// error envelope. Parser and reconciliation errors are not failed checks:
+/// there was no trustworthy board state to check, so they exit 3 in text and
+/// JSON modes alike. Shared with the binary's top-level error handler so both
+/// map the same errors to the same codes.
+pub fn error_exit_code(error: &anyhow::Error) -> i32 {
     if let Some(error) = error.downcast_ref::<hauksbee_extract::bom::BomError>() {
         return error.exit_code();
     }
@@ -365,7 +370,7 @@ pub fn run_with_schematic(
     match &result {
         Ok(()) => crate::reports::ci_artifacts::finish_success()?,
         Err(error) => {
-            crate::reports::ci_artifacts::finish_error(error, run_error_exit_code(error));
+            crate::reports::ci_artifacts::finish_error(error, error_exit_code(error));
         }
     }
     result
@@ -500,11 +505,11 @@ pub(crate) fn warn_sibling_boards(board: &std::path::Path, notes: Notes) {
 /// The other `.kicad_pcb` FILE NAMES directly inside `dir` (the checked
 /// board's own directory), excluding the board itself.
 ///
-/// PRIVACY scope (U12): the user asked about ONE file, so the note may look
-/// only at that file's OWN directory. No parent/child/sibling-directory walks
-/// (an earlier version surfaced boards from unrelated neighbouring projects),
-/// and only file NAMES are returned, never absolute paths of files the user
-/// did not name. Pure-ish (reads one directory) so it is unit-testable.
+/// PRIVACY scope: the user asked about ONE file, so the note may look only at
+/// that file's OWN directory. No parent/child/sibling-directory walks, which
+/// would surface boards from unrelated neighbouring projects, and only file
+/// NAMES are returned, never absolute paths of files the user did not name.
+/// Pure-ish (reads one directory) so it is unit-testable.
 fn sibling_board_names(board_abs: &std::path::Path, dir: &std::path::Path) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {

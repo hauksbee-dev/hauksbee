@@ -1,5 +1,5 @@
-//! Two places where the gerber reader used to let hash-map iteration order
-//! decide what it reported, both proven on synthetic jobs that need no corpus.
+//! Two places where hash-map iteration order could decide what the gerber reader
+//! reports, both proven on synthetic jobs that need no corpus.
 //!
 //! Neither is a cosmetic ordering. The `.gbrjob` copper rank IS the provisional
 //! stack index, so a tie resolved by hash order moves a film up or down the
