@@ -4,14 +4,13 @@
 # the workspace is compiled as few times as possible. A job compiles the
 # workspace at most once per feature shape, and the shapes are:
 #   rust        default features (avr + renode + qemu), debug: fmt, clippy, tests, docs
-#   rust-macos  the same tests on the platform the project is developed on
 #   no-default  the GPL-free renode+qemu shape and the bare engine
 #   release-qc  a release build driving the scenario suite and the speed gate
-#   windows     the native Windows contract, release binary and front door
 #   frontend    lint, unit tests, browser flows, visual fit (no Rust)
 #   lint        pure Python and shell checks (no Rust)
 #
-# The board-corpus gate runs nightly instead (corpus-gate.yml).
+# The macOS and Windows legs run nightly (nightly.yml), as does the
+# board-corpus gate (corpus-gate.yml).
 
 name: ci
 
@@ -68,22 +67,6 @@ jobs:
       # The //! module headers are rustdoc input; broken intra-doc links rot
       # silently unless something builds the docs.
       - run: cargo doc --workspace --no-deps
-
-  rust-macos:
-    name: cargo test (macos)
-    runs-on: macos-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: cache the immutable simavr build prerequisite
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.hauksbee-simavr
-          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
-      - name: install the immutable simavr build prerequisite
-        run: scripts/setup-ci-simavr.sh
-      - run: cargo test --workspace
 
   no-default:
     name: GPL-free shape, bare engine, VS Code loader, defect regressions
@@ -187,99 +170,6 @@ jobs:
           name: speed-gate-results
           path: docs/about/speed-gate-results.md
           if-no-files-found: warn
-
-  windows:
-    name: native Windows tests, release binary, and drag-and-drop front door
-    runs-on: windows-latest
-    timeout-minutes: 60
-    env:
-      # A Windows-only unused variable or cfg arm is a portability defect, not
-      # a warning to scroll past.
-      RUSTFLAGS: -D warnings
-      # The Windows artifact is permissive-only. If avr leaks into the feature
-      # graph, build.rs must fail rather than finding an accidental runner copy.
-      SIMAVR_INCLUDE_DIR: C:\nonexistent\simavr-must-not-be-linked
-      SIMAVR_LIB_DIR: C:\nonexistent\simavr-must-not-be-linked
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      - name: offline Windows release-contract tests
-        run: python scripts/test-windows-port-contract.py
-      - name: native Windows Job Object timeout regression
-        shell: powershell
-        run: .\scripts\test-windows-process-tree.ps1
-      - name: install checksum-pinned Windows simulator backends
-        shell: pwsh
-        run: .\scripts\install-sims-windows.ps1
-      - name: refuse modified installed simulator payloads
-        shell: powershell
-        run: .\scripts\test-windows-simulator-integrity.ps1
-      - name: native engine, CI, and emulator-lifecycle tests
-        run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
-      - name: require three real firmware-through-emulator flows
-        shell: pwsh
-        run: |
-          .\scripts\run-required-integrations-windows.ps1 `
-            -ExpectedSha "${{ github.sha }}" `
-            -EvidenceOut "output\windows-frontdoor\required-integrations-windows-x86_64.json"
-      - name: build the embedded browser front door
-        working-directory: frontend
-        env:
-          HAUKSBEE_RELEASE_COMMIT: ${{ github.sha }}
-        run: |
-          bun install --frozen-lockfile
-          bunx playwright install chromium
-          bun run build
-      - name: build the exact permissive Windows release binaries
-        env:
-          HAUKSBEE_SOURCE_COMMIT: ${{ github.sha }}
-        run: cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
-      - name: prove the release shape and real drag-and-drop journey
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $doctor = & target\release\hauksbee.exe doctor | Out-String
-          if ($doctor -notmatch '(?m)^avr\s+disabled\b') {
-            throw "the Windows release binary must report avr as disabled:`n$doctor"
-          }
-          New-Item -ItemType Directory -Path output\windows-frontdoor -Force | Out-Null
-          $server = Start-Process -FilePath target\release\hauksbee.exe `
-            -ArgumentList @("serve", "--port", "8417", "--no-open") `
-            -PassThru `
-            -RedirectStandardOutput output\windows-frontdoor\server.stdout.log `
-            -RedirectStandardError output\windows-frontdoor\server.stderr.log
-          try {
-            $ready = $false
-            for ($attempt = 0; $attempt -lt 60; $attempt++) {
-              try {
-                Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8417/ | Out-Null
-                $ready = $true
-                break
-              } catch {
-                Start-Sleep -Milliseconds 500
-              }
-            }
-            if (-not $ready) { throw "the Windows release server never became ready" }
-            $board = (Resolve-Path examples\board-as-code\starter.board).Path
-            $env:HB_E2E_BASE = "http://127.0.0.1:8417"
-            $env:HB_BOARD_FILES = ConvertTo-Json -Compress @($board) # starter.board
-            $env:HB_RELEASE_COHORT = "smoke"
-            $env:HB_E2E_OUT = (Resolve-Path output\windows-frontdoor).Path
-            bun frontend/tests/e2e/drag-drop-release.ts
-          } finally {
-            if (-not $server.HasExited) {
-              taskkill /T /F /PID $server.Id | Out-Null
-            }
-            $server.WaitForExit()
-          }
-      - name: Windows front-door evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: windows-frontdoor-evidence
-          path: output/windows-frontdoor
-          if-no-files-found: error
 
   frontend:
     name: frontend quality (lint, tests, browser flows, visual fit)
