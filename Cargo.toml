@@ -136,12 +136,15 @@ strip = true
 debug = false
 
 [profile.dev]
-# Unoptimised workspace crates build in half the time of opt-level 1 and the
-# suite runs no slower: its wall-clock is emulator process time, not
-# arithmetic. Dependencies below stay optimised, so the solver's hot loops in
-# num/rayon code and the parsers in gerber/quick-xml keep their speed.
+# Unoptimised workspace crates build in half the time of opt-level 1, and the
+# engine suite runs no slower because its wall-clock is emulator process time.
+# The solver is the one crate whose tests are arithmetic-bound (8x slower
+# unoptimised), so it keeps opt-level 1 below. Dependencies stay at 2.
 opt-level = 0
 debug = "line-tables-only"
+
+[profile.dev.package.hauksbee-solve]
+opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 2
