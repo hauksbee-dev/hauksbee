@@ -7,6 +7,7 @@ import { hasDefaultName } from '../lib/session-store'
 import { FirmwareJack } from './FirmwareJack'
 import { SchematicJack } from './SchematicJack'
 import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
+import { UploadBanners } from './ui'
 import { motion, useReducedMotion } from 'motion/react'
 import { CELL, INSTANT } from '../motion/tokens'
 
@@ -285,37 +286,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
               otherwise empty page. */}
           {showSkeleton && <ReportSkeleton />}
 
-          {/* Something the app did on the user's behalf. Not an error: the drop
-              worked, it just went to the other slot. It says which slot and
-              why, because the alternative is the user watching their firmware
-              appear in the firmware jack and having to work out how. */}
-          {uploadNotice && (
-            <ArriveOnce
-              className="mt-6 rounded-lg px-4 py-3 text-[13px] leading-relaxed"
-              style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--silk)' }}
-            >
-              <div data-testid="upload-notice" aria-live="polite">
-                {uploadNotice}
-                <button
-                  type="button"
-                  onClick={dismissNotice}
-                  className="hb-press ml-2 text-[12px] cursor-pointer"
-                  style={{ background: 'none', border: 'none', color: 'var(--copper)' }}
-                >
-                  Got it
-                </button>
-              </div>
-            </ArriveOnce>
-          )}
-
-          {uploadError && (
-            <ArriveOnce
-              className="mt-6 rounded-lg px-4 py-3 text-sm text-center"
-              style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' }}
-            >
-              <div data-testid="upload-error" aria-live="polite">{uploadError}</div>
-            </ArriveOnce>
-          )}
+          <UploadBanners notice={uploadNotice} error={uploadError} onDismiss={dismissNotice} />
 
           {/* Samples, a first report with no file needed at all */}
           {!busy && (

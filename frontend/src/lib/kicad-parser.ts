@@ -89,9 +89,29 @@ function parseXY(n: SNode[] | undefined): { x: number; y: number } {
 }
 
 function layerStr(n: SNode[] | undefined): string {
-  if (!n) return ''
-  const v = n[1]
-  return str(v)
+  return n ? str(n[1]) : ''
+}
+
+/** Stroke width, from either the KiCad 6 `(stroke (width w))` or the older
+ *  bare `(width w)`. Zero (or absent) falls back to `fallback`. */
+function strokeWidth(c: SNode[], fallback: number): number {
+  const stroke = findChild(c, 'stroke')
+  const node = stroke ? findChild(stroke, 'width') : findChild(c, 'width')
+  return num(node?.[1]) || fallback
+}
+
+/** `(fill solid)` and `(fill (type solid))` both mean filled. */
+function fillSolid(c: SNode[]): boolean {
+  const fill = findChild(c, 'fill')
+  if (!fill) return false
+  return str(findChild(fill, 'type')?.[1]) === 'solid' || str(fill[1]) === 'solid'
+}
+
+/** A node's net id and the name it resolves to, ready to spread onto a track. */
+function netOf(c: SNode[], nets: Map<string, string>): { net?: string; netName?: string } {
+  const netNode = findChild(c, 'net')
+  const net = netNode ? str(netNode[1]) : undefined
+  return { net, netName: net ? (nets.get(net) ?? net) : undefined }
 }
 
 // ────────────────────── Board types ───────────────────────────────────
@@ -110,10 +130,10 @@ export interface Pad {
   netName?: string
 }
 
-export interface FpLine { start: Point; end: Point; layer: string; width: number }
-export interface FpArc { start: Point; mid: Point; end: Point; layer: string; width: number }
-export interface FpCircle { center: Point; end: Point; layer: string; width: number }
-export interface FpRect { start: Point; end: Point; layer: string; width: number }
+interface FpLine { start: Point; end: Point; layer: string; width: number }
+interface FpArc { start: Point; mid: Point; end: Point; layer: string; width: number }
+interface FpCircle { center: Point; end: Point; layer: string; width: number }
+interface FpRect { start: Point; end: Point; layer: string; width: number }
 
 export interface Footprint {
   ref: string
@@ -133,25 +153,21 @@ export interface Segment {
   start: Point; end: Point; layer: string; width: number; net?: string; netName?: string
 }
 
-export interface Track {
-  start: Point; end: Point; layer: string; width: number; net?: string; netName?: string
-}
-
-export interface Arc {
+interface Arc {
   start: Point; mid: Point; end: Point; layer: string; width: number; net?: string; netName?: string
 }
 
-export interface Via {
+interface Via {
   at: Point; size: number; drill: number; layers: string[]; net?: string; netName?: string
 }
 
-export interface GrLine { start: Point; end: Point; layer: string; width: number }
-export interface GrArc { start: Point; mid: Point; end: Point; layer: string; width: number }
-export interface GrCircle { center: Point; end: Point; layer: string; width: number; fill?: boolean }
-export interface GrRect { start: Point; end: Point; layer: string; width: number; fill?: boolean }
-export interface GrPoly { pts: Point[]; layer: string; width: number; fill?: boolean }
+interface GrLine { start: Point; end: Point; layer: string; width: number }
+interface GrArc { start: Point; mid: Point; end: Point; layer: string; width: number }
+interface GrCircle { center: Point; end: Point; layer: string; width: number; fill?: boolean }
+interface GrRect { start: Point; end: Point; layer: string; width: number; fill?: boolean }
+interface GrPoly { pts: Point[]; layer: string; width: number; fill?: boolean }
 
-export interface BoardBounds {
+interface BoardBounds {
   minX: number; maxX: number; minY: number; maxY: number
   width: number; height: number; cx: number; cy: number
 }
@@ -326,239 +342,153 @@ function parsePad(c: SNode[], nets: Map<string, string>, fpAt: Point, fpAngle: n
     : { w: 1, h: 1 }
 
   const drillNode = findChild(c, 'drill')
-  let drill: Pad['drill'] | undefined
-  if (drillNode) {
-    const isOval = str(drillNode[1]) === 'oval'
-    if (isOval) {
-      drill = { diameter: num(drillNode[2]), oval: true, dx: num(drillNode[3]), dy: num(drillNode[4]) }
-    } else {
-      drill = { diameter: num(drillNode[1]) }
-    }
+  const drill: Pad['drill'] | undefined = !drillNode
+    ? undefined
+    : str(drillNode[1]) === 'oval'
+      ? { diameter: num(drillNode[2]), oval: true, dx: num(drillNode[3]), dy: num(drillNode[4]) }
+      : { diameter: num(drillNode[1]) }
+
+  return {
+    number: padNum,
+    type: typeStr as Pad['type'],
+    shape: shapeStr as Pad['shape'],
+    at: boardAt,
+    angle: totalAngle,
+    size,
+    drill,
+    ...netOf(c, nets),
   }
+}
 
-  const netNode = findChild(c, 'net')
-  const net = netNode ? str(netNode[1]) : undefined
-  const netName = net ? (nets.get(net) ?? net) : undefined
-
-  const type = typeStr as Pad['type']
-  const shape = shapeStr as Pad['shape']
-
-  return { number: padNum, type, shape, at: boardAt, angle: totalAngle, size, drill, net, netName }
+/** A footprint graphic's endpoints, taken from local coordinates into board
+ *  ones through the footprint's own placement. */
+function fpPoint(c: SNode[], tag: string, fpAt: Point, fpAngle: number): Point {
+  const { x, y } = parseXY(findChild(c, tag))
+  return localToBoard(x, y, fpAt, fpAngle)
 }
 
 function parseFpLine(c: SNode[], fpAt: Point, fpAngle: number): FpLine {
-  const startNode = findChild(c, 'start')
-  const endNode = findChild(c, 'end')
-  const strokeNode = findChild(c, 'stroke')
-  const widthNode = strokeNode ? findChild(strokeNode, 'width') : findChild(c, 'width')
-  const layer = layerStr(findChild(c, 'layer'))
-  const start = parseXY(startNode)
-  const end = parseXY(endNode)
   return {
-    start: localToBoard(start.x, start.y, fpAt, fpAngle),
-    end: localToBoard(end.x, end.y, fpAt, fpAngle),
-    layer,
-    width: num(widthNode?.[1]) || (strokeNode ? num(findChild(strokeNode, 'width')?.[1]) : 0.12),
+    start: fpPoint(c, 'start', fpAt, fpAngle),
+    end: fpPoint(c, 'end', fpAt, fpAngle),
+    layer: layerStr(findChild(c, 'layer')),
+    width: strokeWidth(c, 0.12),
   }
 }
 
 function parseFpArc(c: SNode[], fpAt: Point, fpAngle: number): FpArc {
-  const startNode = findChild(c, 'start')
-  const midNode = findChild(c, 'mid')
-  const endNode = findChild(c, 'end')
-  const strokeNode = findChild(c, 'stroke')
-  const widthNode = strokeNode ? findChild(strokeNode, 'width') : findChild(c, 'width')
-  const layer = layerStr(findChild(c, 'layer'))
-  const start = parseXY(startNode)
-  const mid = parseXY(midNode)
-  const end = parseXY(endNode)
   return {
-    start: localToBoard(start.x, start.y, fpAt, fpAngle),
-    mid: localToBoard(mid.x, mid.y, fpAt, fpAngle),
-    end: localToBoard(end.x, end.y, fpAt, fpAngle),
-    layer,
-    width: num(widthNode?.[1]) || 0.12,
+    ...parseFpLine(c, fpAt, fpAngle),
+    mid: fpPoint(c, 'mid', fpAt, fpAngle),
   }
 }
 
 function parseFpCircle(c: SNode[], fpAt: Point, fpAngle: number): FpCircle {
-  const centerNode = findChild(c, 'center')
-  const endNode = findChild(c, 'end')
-  const strokeNode = findChild(c, 'stroke')
-  const layer = layerStr(findChild(c, 'layer'))
-  const center = parseXY(centerNode)
-  const end = parseXY(endNode)
   return {
-    center: localToBoard(center.x, center.y, fpAt, fpAngle),
-    end: localToBoard(end.x, end.y, fpAt, fpAngle),
-    layer,
-    width: num(strokeNode ? findChild(strokeNode, 'width')?.[1] : findChild(c, 'width')?.[1]) || 0.12,
+    center: fpPoint(c, 'center', fpAt, fpAngle),
+    end: fpPoint(c, 'end', fpAt, fpAngle),
+    layer: layerStr(findChild(c, 'layer')),
+    width: strokeWidth(c, 0.12),
   }
 }
 
 function parseFpRect(c: SNode[], fpAt: Point, fpAngle: number): FpRect {
-  const startNode = findChild(c, 'start')
-  const endNode = findChild(c, 'end')
-  const strokeNode = findChild(c, 'stroke')
-  const layer = layerStr(findChild(c, 'layer'))
-  const start = parseXY(startNode)
-  const end = parseXY(endNode)
-  return {
-    start: localToBoard(start.x, start.y, fpAt, fpAngle),
-    end: localToBoard(end.x, end.y, fpAt, fpAngle),
-    layer,
-    width: num(strokeNode ? findChild(strokeNode, 'width')?.[1] : findChild(c, 'width')?.[1]) || 0.12,
-  }
+  return parseFpLine(c, fpAt, fpAngle)
 }
 
 function parseSegment(c: SNode[], nets: Map<string, string>): Segment | null {
   const startNode = findChild(c, 'start')
   const endNode = findChild(c, 'end')
   if (!startNode || !endNode) return null
-  const layer = layerStr(findChild(c, 'layer'))
-  const widthNode = findChild(c, 'width')
-  const netNode = findChild(c, 'net')
-  const net = netNode ? str(netNode[1]) : undefined
   return {
     start: parseXY(startNode),
     end: parseXY(endNode),
-    layer,
-    width: num(widthNode?.[1]) || 0.25,
-    net,
-    netName: net ? (nets.get(net) ?? net) : undefined,
+    layer: layerStr(findChild(c, 'layer')),
+    width: num(findChild(c, 'width')?.[1]) || 0.25,
+    ...netOf(c, nets),
   }
 }
 
 function parseArcTrack(c: SNode[], nets: Map<string, string>): Arc | null {
-  const startNode = findChild(c, 'start')
+  const track = parseSegment(c, nets)
+  if (!track) return null
   const midNode = findChild(c, 'mid')
-  const endNode = findChild(c, 'end')
-  if (!startNode || !endNode) return null
-  const layer = layerStr(findChild(c, 'layer'))
-  const widthNode = findChild(c, 'width')
-  const netNode = findChild(c, 'net')
-  const net = netNode ? str(netNode[1]) : undefined
-  const mid = midNode ? parseXY(midNode) : {
-    x: (num(startNode[1]) + num(endNode[1])) / 2,
-    y: (num(startNode[2]) + num(endNode[2])) / 2,
-  }
   return {
-    start: parseXY(startNode),
-    mid,
-    end: parseXY(endNode),
-    layer,
-    width: num(widthNode?.[1]) || 0.25,
-    net,
-    netName: net ? (nets.get(net) ?? net) : undefined,
+    ...track,
+    mid: midNode
+      ? parseXY(midNode)
+      : { x: (track.start.x + track.end.x) / 2, y: (track.start.y + track.end.y) / 2 },
   }
 }
 
 function parseVia(c: SNode[], nets: Map<string, string>): Via | null {
   const atNode = findChild(c, 'at')
   if (!atNode) return null
-  const sizeNode = findChild(c, 'size')
-  const drillNode = findChild(c, 'drill')
   const layersNode = findChild(c, 'layers')
-  const netNode = findChild(c, 'net')
-  const net = netNode ? str(netNode[1]) : undefined
-  const layers = layersNode
-    ? layersNode.slice(1).map(l => str(l as SNode))
-    : ['F.Cu', 'B.Cu']
   return {
     at: parseXY(atNode),
-    size: num(sizeNode?.[1]) || 0.8,
-    drill: num(drillNode?.[1]) || 0.4,
-    layers,
-    net,
-    netName: net ? (nets.get(net) ?? net) : undefined,
+    size: num(findChild(c, 'size')?.[1]) || 0.8,
+    drill: num(findChild(c, 'drill')?.[1]) || 0.4,
+    layers: layersNode ? layersNode.slice(1).map(l => str(l)) : ['F.Cu', 'B.Cu'],
+    ...netOf(c, nets),
   }
 }
 
 function parseGrLine(c: SNode[]): GrLine {
-  const startNode = findChild(c, 'start')
-  const endNode = findChild(c, 'end')
-  const strokeNode = findChild(c, 'stroke')
-  const layer = layerStr(findChild(c, 'layer'))
-  const width = strokeNode ? num(findChild(strokeNode, 'width')?.[1]) : num(findChild(c, 'width')?.[1])
-  return { start: parseXY(startNode), end: parseXY(endNode), layer, width: width || 0.05 }
+  return {
+    start: parseXY(findChild(c, 'start')),
+    end: parseXY(findChild(c, 'end')),
+    layer: layerStr(findChild(c, 'layer')),
+    width: strokeWidth(c, 0.05),
+  }
 }
 
 function parseGrArc(c: SNode[]): GrArc {
-  const startNode = findChild(c, 'start')
+  const line = parseGrLine(c)
   const midNode = findChild(c, 'mid')
-  const endNode = findChild(c, 'end')
   const angleNode = findChild(c, 'angle')
-  const strokeNode = findChild(c, 'stroke')
-  const layer = layerStr(findChild(c, 'layer'))
-  const width = strokeNode ? num(findChild(strokeNode, 'width')?.[1]) : num(findChild(c, 'width')?.[1])
-  // KiCad 6 writes three points: (start, mid, end). KiCad 5 and earlier write a
-  // centre, one endpoint and a swept angle: (start = CENTRE, end = the first
-  // endpoint, angle = degrees swept). Defaulting the absent mid to the origin
-  // put a point at (0,0) on every legacy arc, so an Edge.Cuts outline never
-  // closed and the 3D view fell back to a bounding box: any pre-6 board a user
-  // dropped in rendered as a blank slab.
+  // KiCad 6 writes three points: (start, mid, end). KiCad 5 and earlier write
+  // a centre, one endpoint and a swept angle: (start = CENTRE, end = the first
+  // endpoint, angle = degrees swept). Reconstructing the three points is what
+  // lets a pre-6 Edge.Cuts outline close.
   //
   // The sweep is positive in the file's own y-down frame. Measured rather than
   // reasoned: converting all 14 Edge.Cuts arcs of the KiCad-5 Watchy this way
   // lands every far endpoint exactly on a neighbouring segment's endpoint, gap
   // 0.0000 mm, where the opposite sign leaves 10 of 14 stranded by up to 4.1 mm.
   if (!midNode && angleNode) {
-    const centre = parseXY(startNode)
-    const first = parseXY(endNode)
+    const centre = line.start
+    const first = line.end
     const r = Math.hypot(first.x - centre.x, first.y - centre.y)
     const t0 = Math.atan2(first.y - centre.y, first.x - centre.x)
     const sweep = (num(angleNode[1]) * Math.PI) / 180
     const at = (t: number) => ({ x: centre.x + r * Math.cos(t), y: centre.y + r * Math.sin(t) })
-    return {
-      start: first,
-      mid: at(t0 + sweep / 2),
-      end: at(t0 + sweep),
-      layer,
-      width: width || 0.05,
-    }
+    return { ...line, start: first, mid: at(t0 + sweep / 2), end: at(t0 + sweep) }
   }
-  const mid = midNode ? parseXY(midNode) : { x: 0, y: 0 }
-  return { start: parseXY(startNode), mid, end: parseXY(endNode), layer, width: width || 0.05 }
+  return { ...line, mid: midNode ? parseXY(midNode) : { x: 0, y: 0 } }
 }
 
 function parseGrCircle(c: SNode[]): GrCircle {
-  const centerNode = findChild(c, 'center')
-  const endNode = findChild(c, 'end')
-  const strokeNode = findChild(c, 'stroke')
-  const fillNode = findChild(c, 'fill')
-  const layer = layerStr(findChild(c, 'layer'))
-  const width = strokeNode ? num(findChild(strokeNode, 'width')?.[1]) : num(findChild(c, 'width')?.[1])
-  const fill = fillNode ? str(findChild(fillNode, 'type')?.[1]) === 'solid' || str(fillNode[1]) === 'solid' : false
-  return { center: parseXY(centerNode), end: parseXY(endNode), layer, width: width || 0.05, fill }
+  return {
+    center: parseXY(findChild(c, 'center')),
+    end: parseXY(findChild(c, 'end')),
+    layer: layerStr(findChild(c, 'layer')),
+    width: strokeWidth(c, 0.05),
+    fill: fillSolid(c),
+  }
 }
 
 function parseGrRect(c: SNode[]): GrRect {
-  const startNode = findChild(c, 'start')
-  const endNode = findChild(c, 'end')
-  const strokeNode = findChild(c, 'stroke')
-  const fillNode = findChild(c, 'fill')
-  const layer = layerStr(findChild(c, 'layer'))
-  const width = strokeNode ? num(findChild(strokeNode, 'width')?.[1]) : num(findChild(c, 'width')?.[1])
-  const fill = fillNode ? str(findChild(fillNode, 'type')?.[1]) === 'solid' || str(fillNode[1]) === 'solid' : false
-  return { start: parseXY(startNode), end: parseXY(endNode), layer, width: width || 0.05, fill }
+  return { ...parseGrLine(c), fill: fillSolid(c) }
 }
 
 function parseGrPoly(c: SNode[]): GrPoly {
   const ptsNode = findChild(c, 'pts')
   const pts: Point[] = []
-  if (ptsNode) {
-    for (const xy of ptsNode) {
-      if (isList(xy) && head(xy) === 'xy') {
-        pts.push(parseXY(xy))
-      }
-    }
+  for (const xy of ptsNode ?? []) {
+    if (isList(xy) && head(xy) === 'xy') pts.push(parseXY(xy))
   }
-  const strokeNode = findChild(c, 'stroke')
-  const fillNode = findChild(c, 'fill')
-  const layer = layerStr(findChild(c, 'layer'))
-  const width = strokeNode ? num(findChild(strokeNode, 'width')?.[1]) : num(findChild(c, 'width')?.[1])
-  const fill = fillNode ? str(findChild(fillNode, 'type')?.[1]) === 'solid' || str(fillNode[1]) === 'solid' : false
-  return { pts, layer, width: width || 0.05, fill }
+  return { pts, layer: layerStr(findChild(c, 'layer')), width: strokeWidth(c, 0.05), fill: fillSolid(c) }
 }
 
 // ────────────────────── Bounds computation ────────────────────────────
@@ -678,7 +608,7 @@ export function pickFootprintBox(boxes: FootprintBox[], bx: number, by: number):
 // ────────────────────── Net geometry index ────────────────────────────
 
 /** Build a map from netName → all geometric segments/arcs/pads for overlays. */
-export interface NetGeometry {
+interface NetGeometry {
   segments: Segment[]
   arcs: Arc[]
   pads: (Pad & { fpRef: string })[]

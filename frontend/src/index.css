@@ -10,7 +10,7 @@
    coherent everywhere. That includes the instrument surfaces (the board
    render, the scope, the serial scrollback): in light mode they get their own
    re-tuned light palettes (paper substrate, inked copper, light graticule)
-   rather than staying dark islands. Canvas/WebGL code reads these tokens via
+   rather than staying dark islands. Canvas code reads these tokens via
    lib/theme-tokens.ts; the 2D board layer palette lives in lib/layer-colors.ts
    keyed off the same data-theme attribute.
    ──────────────────────────────────────────────────────────────────────────── */
@@ -61,9 +61,9 @@
   --instrument-edge: #1b2735;
   --instrument-text: #cbd5e1;
 
-  /* Floating chips/readouts drawn OVER an instrument surface (zoom chip,
-     orbit hints, loading text). Their ground is the instrument, not the app
-     surface, so they get their own pair. */
+  /* Floating chips/readouts drawn OVER an instrument surface (the zoom chip,
+     the keyboard hints, loading text). Their ground is the instrument, not the
+     app surface, so they get their own pair. */
   --overlay-chip-bg: rgba(15, 23, 42, 0.8);
   --overlay-chip-text: #64748b;
   --overlay-err-bg: #1e293b;

@@ -10,7 +10,7 @@ import type { SimulationState } from '../hooks/useSimulation'
 // Contract: the provided hook's identity must be fixed for the lifetime of
 // the consuming component (the demo shell keys SimView by scenario, so a
 // scenario switch remounts rather than swapping hooks under a live mount).
-export type SimulationHook = () => SimulationState
+type SimulationHook = () => SimulationState
 
 /** Null means "no override": useSimulation falls back to the live WebSocket
  *  source, which is the entire non-demo app's path, unchanged. */

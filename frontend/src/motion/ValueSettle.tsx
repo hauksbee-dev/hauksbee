@@ -2,22 +2,19 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { INSTANT, LEAVE, SETTLE } from './tokens'
 
-// A number (or a short measured string) that changed, adapted from
+// A number (or a short measured string) that changed, vendored from
 // interior.dev's `value-flash`.
 //
-// What was kept: the vertical roll, so a value that went up enters from below
-// and a value that went down enters from above. That direction is the only part
-// of the animation carrying information, and it is information the reader
-// would otherwise have to remember.
+// The vertical roll is the whole point: a value that went up enters from below,
+// one that went down from above. That direction is the only information the
+// animation carries, and it is information the reader would otherwise have to
+// remember.
 //
-// What was cut, and why: the original tints the whole cell green or red and
-// pops a triangle glyph next to it. This is an instrument panel where green and
-// red already mean PASS and FAIL, and a measured value going up is not good
-// news or bad news; it is a measurement. Colouring it would be the UI having an
-// opinion the physics does not support. So the value moves and does not change
-// colour, and the arrow is gone.
+// No colour and no arrow. Green and red already mean PASS and FAIL here, and a
+// measured value going up is neither good news nor bad news; tinting it would
+// be the UI holding an opinion the physics does not support.
 
-export type SettleDirection = 'up' | 'down'
+type SettleDirection = 'up' | 'down'
 
 /** Which way the value went, and a key that changes once per change so
  *  AnimatePresence has something to swap on. */

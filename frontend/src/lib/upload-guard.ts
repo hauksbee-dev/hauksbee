@@ -1,12 +1,7 @@
 // Everything the browser can say about a dropped file BEFORE a byte of it is
-// read or sent.
-//
-// The failure this exists to stop: a 300 MB CAD export dropped on the board
-// zone used to be handed straight to `File.arrayBuffer()`, which pulled the
-// whole thing into the JS heap on the main thread. The page froze for over
-// seven minutes with no error, no progress and no way out, and the request
-// that followed was going to be refused by the server anyway. Every rejection
-// below is one the client can make for certain, instantly, from metadata.
+// read or sent. Every rejection below is one the client can make for certain,
+// instantly, from metadata, and that the server would make anyway after a
+// multi-minute upload.
 //
 // It deliberately does not try to be a format sniffer. The engine's extractors
 // are the authority on whether a file is a readable board, and a small file
@@ -23,7 +18,7 @@ export const MAX_UPLOAD_BYTES = 256 * 1024 * 1024
 
 /** How the limit is written in prose. Kept next to the number so the two can
  *  never disagree. */
-export const MAX_UPLOAD_LABEL = '256 MB'
+const MAX_UPLOAD_LABEL = '256 MB'
 
 /** Above this, an unrecognised extension stops being worth a round trip: a
  *  small mystery file is cheap to try, a large one is a several-minute upload
@@ -54,7 +49,7 @@ function extensionOf(name: string): string {
 
 /** True when the name ends in an extension the board zone knows what to do
  *  with (extract, or re-route to the firmware jack). */
-export function hasKnownBoardExtension(name: string): boolean {
+function hasKnownBoardExtension(name: string): boolean {
   return KNOWN_BOARD_EXTS.includes(extensionOf(name))
 }
 
@@ -90,8 +85,7 @@ export function precheckBoardFile(f: File): string | null {
 /**
  * Turn a failed analysis into a message that names what actually went wrong.
  *
- * Three cases the user experiences completely differently used to arrive as
- * one string, "Analysis failed: Failed to fetch":
+ * Three cases the user experiences completely differently:
  *  - the server refused the body as too large (413, or a connection reset
  *    mid-upload, which is how a body-limit rejection often looks from fetch),
  *  - the connection dropped or the server went away,

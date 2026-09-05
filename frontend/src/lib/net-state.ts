@@ -1,7 +1,7 @@
 // What a net's number MEANS, in one place.
 //
-// A voltage of 0.000 V was being shown for three different situations, and the
-// reader could not tell them apart:
+// A voltage of 0.000 V means one of three different things, and the reader
+// cannot tell them apart from the number alone:
 //
 //   1. driven low:        a real measurement, the net is held at 0 V
 //   2. not observed:      the backend cannot see this pin's drive at all, so
@@ -11,34 +11,24 @@
 //                          between samples, so the sampled instant is a true
 //                          reading of a moment that is not representative
 //
-// A user pointed the tool at a working EEPROM programmer, saw a bit-banged bus
-// sitting flat, and concluded the board was dead. It was case 3, 1024 times
-// over: a 1 µs write strobe inside a much longer sampling chunk.
-//
 // This module gives every surface that prints a net one shared answer, so the
 // board map, the net list, the selection card and the scope cannot disagree.
 //
-// ── What is available, and what is not ──────────────────────────────────────
-//
-// `unobserved_drive_nets` is on the wire, so case 2 is fully answerable today.
-//
-// Case 3 needs the per-net min/max WITHIN a chunk. The engine already tracks
-// exactly that (`Scheduler::frame_v_extremes`, consumed by `hauksbee-ci`), but
-// the `SimFrame` built in `hauksbee-engine/src/engine.rs` does not carry it and
-// `protocol.rs` has no field for it. Until it does, no client can recover a
-// sub-chunk pulse: it is gone before the frame is serialised. `envelope` below
-// therefore reads the engine's extremes WHEN PRESENT (the type is declared so
-// that adding the field is the only change needed), and otherwise falls back to
-// the spread across the frames this client actually received. That fallback
-// catches a net that moves between frames; it CANNOT catch one that moves
-// within a chunk, and `envelopeSource` says which of the two you are looking at
-// so the UI never implies more resolution than it has.
+// `unobserved_drive_nets` is on the wire, so case 2 is answerable today. Case 3
+// needs the per-net min/max WITHIN a chunk; the engine tracks it
+// (`Scheduler::frame_v_extremes`) but `SimFrame` does not carry it yet, so a
+// sub-chunk pulse is gone before the frame is serialised. `envelope` reads the
+// engine's extremes WHEN PRESENT (the type is declared so adding the field is
+// the only change needed) and otherwise falls back to the spread across the
+// frames this client received — which catches a net moving between frames but
+// NOT one moving within a chunk. `envelopeSource` says which of the two you are
+// looking at, so the UI never implies more resolution than it has.
 
 import type { SimFrame } from '../types/protocol'
 
 /** Volts of movement below which a net is flat, not "excursing". Matches the
  *  renderer's own tint threshold so the two agree about a static rail. */
-export const MOVEMENT_FLOOR_V = 0.05
+const MOVEMENT_FLOOR_V = 0.05
 
 export type NetReading =
   /** The backend cannot see this pin's drive; the number is not a measurement. */

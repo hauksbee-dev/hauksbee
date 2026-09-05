@@ -2,14 +2,8 @@ import { type ReactNode } from 'react'
 import { ArriveOnce } from './Stagger'
 
 // A designed empty state: a sentence that says what is missing and one action
-// that fixes it.
-//
-// This is here because the interior.dev collection's `emptyLabel` prop taught
-// the lesson negatively: a grid with no matching items renders the string "No
-// results" centred in grey, which is the shape of every empty state that has
-// ever left a user stuck. An empty region is a question the interface asked and
-// then refused to answer. The two required props below are the answer: what is
-// absent, and the one thing to do about it.
+// that fixes it. An empty region is a question the interface asked and then
+// refused to answer; the two required props below are the answer.
 //
 // Motion is one fade-in on arrival. An empty state that animates repeatedly is
 // drawing attention to the absence of content, which is the opposite of the job.

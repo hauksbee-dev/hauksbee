@@ -1,12 +1,10 @@
 // What kind of zip is this, read from the zip's own directory in the browser.
 //
-// The board zone accepts a zip because a gerber set is a zip. A firmware zip
-// is also a legitimate input, just to the other slot: the engine's
-// `firmware_input.rs` will happily find (or build) an image inside a
-// PlatformIO project archive. Dropping that project zip on the board zone used
-// to hand it to the gerber extractor, which answered with a gerber complaint
-// about a file that has no gerbers in it and never will. The user's mistake was
-// one slot; the error talked about apertures.
+// The board zone accepts a zip because a gerber set is a zip. A firmware zip is
+// also a legitimate input, just to the other slot: the engine's
+// `firmware_input.rs` finds (or builds) an image inside a PlatformIO project
+// archive. Routed to the gerber extractor instead, that project answers with a
+// complaint about apertures a firmware zip will never have.
 //
 // So before routing a zip, read its file list. This costs two small reads at
 // the tail of the file regardless of how big the archive is: the End of Central
@@ -50,7 +48,7 @@ const GERBER_MARKERS: RegExp[] = [
   /\.(kicad_pcb|kicad_sch|brd|pcbdoc|d356|board)$/i,
 ]
 
-export interface ZipReport {
+interface ZipReport {
   /** The first four bytes were a zip local-file-header signature. */
   isZip: boolean
   /** Entry names read from the central directory (may be truncated; see

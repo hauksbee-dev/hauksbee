@@ -58,9 +58,6 @@ export const PlusIcon = ({ size = 14, ...p }: IconProps) =>
 export const CheckIcon = ({ size = 14, ...p }: IconProps) =>
   svg(size, <path d="M20 6 9 17l-5-5" />, p)
 
-// Lucide `arrow-left`.
-export const BackIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></>, p)
 
 // Lucide `zap`; the fault glyph, filled.
 export const BoltIcon = ({ size = 14, ...p }: IconProps) =>

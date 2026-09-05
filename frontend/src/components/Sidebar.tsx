@@ -13,7 +13,7 @@ import { relTime } from '../lib/rel-time'
 
 export type AppView = 'board' | 'checks' | 'sim' | 'env'
 
-export interface NavState {
+interface NavState {
   view: AppView
   setView: (v: AppView) => void
   /** Checks needs an ok report; Live Sim needs a live-capable session. */

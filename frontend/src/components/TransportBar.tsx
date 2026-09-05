@@ -6,9 +6,8 @@ import { PlayIcon, PauseIcon, StepIcon, StepBackIcon, ResetIcon } from './Icons'
 // ── The speed scale ──────────────────────────────────────────────────────────
 //
 // A board that outruns real time is the exception; almost every reason to touch
-// this control is to slow the sim down until a transient is legible. The old
-// control was linear from 0.1x to 10x, which spent 90% of its travel on speeds
-// nobody asks for and made 0.05x unreachable at any position.
+// this control is to slow the sim down until a transient is legible. A linear
+// 0.1x..10x track spends 90% of its travel on speeds nobody asks for.
 //
 // So: logarithmic, four decades, 0.001x to 10x. Realtime sits at 75% of the
 // track and every one of the first three quarters is a decade of slowing down.

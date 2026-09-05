@@ -7,6 +7,8 @@ import { BoardView } from './components/BoardView'
 import { ChecksView, checksStorageKey } from './components/ChecksView'
 import type { ChecksSummary } from './components/ChecksView'
 import { DepsPanel } from './components/DepsPanel'
+import { ShellChips } from './components/ShellChips'
+import { LaunchErrorBanner, ReplaceLiveConfirm, ResumeErrorBanner } from './components/ShellBanners'
 import SimView from './SimView'
 import type { SimShellStatus } from './SimView'
 import { useTheme } from './hooks/useTheme'
@@ -16,78 +18,56 @@ import type { SpecSnapshot } from './hooks/useSessions'
 import type { SavedSession } from './lib/session-store'
 import { BOARD_ACCEPT_ATTR } from './lib/board-formats'
 import { BoardTargetIcon, PlayIcon } from './components/Icons'
-import type { QueuedCheck, QueuedLiveRegisterMap, QueuedPeripheral, QueuedSensor, QueuedSupply, Startup, WebReport } from './types/report'
+import { getJson } from './lib/api'
+import type { QueuedLiveRegisterMap, Startup, WebReport } from './types/report'
 import type { ActionResultMsg } from './types/protocol'
-import { reportVerdictTone } from './lib/report-verdict'
 
-// One web experience (W6 §1) behind an app shell. The app asks the server how
-// it was launched (`/api/startup`) and lands accordingly:
-//   - `hauksbee serve`            -> { preloaded: false, live: true }: the
-//     drop-a-board Board view; an uploaded board's report can launch a live
-//     sim server-side (`/api/live/launch`).
-//   - `hauksbee run <b> --serve`  -> { preloaded: true, report, live: true }:
-//     the Board view opened on that board's report, with the live session
-//     already running on /ws.
+// One web experience behind an app shell. The app asks the server how it was
+// launched (`/api/startup`) and lands accordingly:
+//   - `hauksbee serve`           -> the drop-a-board Board view; an uploaded
+//     board's report can launch a live sim server-side (`/api/live/launch`).
+//   - `hauksbee run <b> --serve` -> the Board view opened on that board's
+//     report, with the live session already running on /ws.
 // The shell's left rail navigates between the four real surfaces: Board
 // (upload + report), Checks (the spec builder), Live Sim, and Environment
 // (co-sim backends and oracles on this machine). Views stay MOUNTED once
 // opened (hidden, not unmounted) so the viewer camera, the checks results and
 // the sim's fault log all survive navigation.
 
-type Boot =
-  | { kind: 'loading' }
-  | {
-      kind: 'ready'
-      report: WebReport | null
-      boardName: string | null
-      canLaunchLive: boolean
-      avrAvailable: boolean
-      engineVersion: string | null
-    }
+interface Boot {
+  report: WebReport | null
+  boardName: string | null
+  canLaunchLive: boolean
+  avrAvailable: boolean
+  engineVersion: string | null
+}
+
+/** What the shell falls back to with no startup endpoint (a stale or odd
+ *  deployment): the drop-a-board Board view, never the live-sim view, which
+ *  would sit "offline" with no way to load a board. */
+const DEGRADED: Boot = {
+  report: null, boardName: null, canLaunchLive: false, avrAvailable: false, engineVersion: null,
+}
 
 export default function App() {
-  const [boot, setBoot] = useState<Boot>({ kind: 'loading' })
+  const [boot, setBoot] = useState<Boot | null>(null)
 
   useEffect(() => {
     let alive = true
-    void (async () => {
-      try {
-        const res = await fetch('/api/startup')
-        if (!res.ok) throw new Error(`startup ${res.status}`)
-        const startup = await res.json() as Startup
-        if (!alive) return
-        if (startup.preloaded) {
-          setBoot({
-            kind: 'ready',
-            report: startup.report,
-            boardName: startup.board_name,
-            canLaunchLive: startup.live === true,
-            avrAvailable: startup.avr !== false,
-            engineVersion: startup.version ?? null,
-          })
-        } else {
-          setBoot({
-            kind: 'ready',
-            report: null,
-            boardName: null,
-            canLaunchLive: startup.live === true,
-            avrAvailable: startup.avr !== false,
-            engineVersion: startup.version ?? null,
-          })
-        }
-      } catch {
-        // No startup endpoint (a stale/odd deployment). Degrade to the
-        // drop-a-board Board view, never the live-sim view, which would sit
-        // "offline" with no way to load a board.
-        if (alive) {
-          setBoot({ kind: 'ready', report: null, boardName: null, canLaunchLive: false, avrAvailable: false, engineVersion: null })
-        }
-      }
-    })()
+    void getJson<Startup>('/api/startup')
+      .then(startup => ({
+        report: startup.preloaded ? startup.report : null,
+        boardName: startup.preloaded ? startup.board_name : null,
+        canLaunchLive: startup.live === true,
+        avrAvailable: startup.avr !== false,
+        engineVersion: startup.version ?? null,
+      }))
+      .catch(() => DEGRADED)
+      .then(next => { if (alive) setBoot(next) })
     return () => { alive = false }
   }, [])
 
-  if (boot.kind === 'loading') {
+  if (!boot) {
     return (
       <div
         className="flex items-center justify-center h-screen text-sm"
@@ -98,26 +78,7 @@ export default function App() {
     )
   }
 
-  return (
-    <Shell
-      preloadedReport={boot.report}
-      preloadedBoardName={boot.boardName}
-      canLaunchLive={boot.canLaunchLive}
-      avrAvailable={boot.avrAvailable}
-      engineVersion={boot.engineVersion}
-    />
-  )
-}
-
-// Name the emulator a launch failure is missing, or null when the failure is
-// something the Environment page cannot fix. Matched on the backends' own
-// "not found" wording (hauksbee-mcu's `find_qemu` / `find_renode`), which is
-// the text the launch error carries verbatim.
-function missingEmulator(error: string): 'Espressif QEMU' | 'Renode' | null {
-  if (!/not found/i.test(error)) return null
-  if (/espressif qemu|qemu-system-/i.test(error)) return 'Espressif QEMU'
-  if (/renode/i.test(error)) return 'Renode'
-  return null
+  return <Shell boot={boot} />
 }
 
 const VIEW_TITLES: Record<AppView, string> = {
@@ -127,13 +88,24 @@ const VIEW_TITLES: Record<AppView, string> = {
   env: 'Environment',
 }
 
-function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailable, engineVersion }: {
-  preloadedReport: WebReport | null
-  preloadedBoardName: string | null
-  canLaunchLive: boolean
-  avrAvailable: boolean
-  engineVersion: string | null
-}) {
+/** A queue of things a board surface asked the checks builder for, consumed by
+ *  `seq` so nothing applies twice. */
+function useQueue<T extends { seq: number }>(nextSeq: () => number) {
+  const [items, setItems] = useState<T[]>([])
+  const push = useCallback((item: Omit<T, 'seq'>) => {
+    const seq = nextSeq()
+    setItems(previous => [...previous, { ...item, seq } as T])
+    return seq
+  }, [nextSeq])
+  const consume = useCallback((upToSeq: number) => {
+    setItems(previous => previous.filter(item => item.seq > upToSeq))
+  }, [])
+  const clear = useCallback(() => setItems([]), [])
+  return { items, push, consume, clear }
+}
+
+function Shell({ boot }: { boot: Boot }) {
+  const { report: preloadedReport, boardName: preloadedBoardName, canLaunchLive, avrAvailable, engineVersion } = boot
   const { theme, toggleTheme } = useTheme()
   const session = useBoardSession({
     preloadedReport,
@@ -162,58 +134,24 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
   const [spec, setSpec] = useState<SpecSnapshot | null>(null)
   // A resume that could not happen, said where the user asked for it.
   const [resumeError, setResumeError] = useState<string | null>(null)
-
-  // Checks queued from a board surface (net/component clicks on the report
-  // map or the live sim) for the checks builder. The builder consumes by
-  // `seq` so nothing applies twice.
-  const [queuedChecks, setQueuedChecks] = useState<QueuedCheck[]>([])
-  const [queuedPeripherals, setQueuedPeripherals] = useState<QueuedPeripheral[]>([])
-  const [queuedSensors, setQueuedSensors] = useState<QueuedSensor[]>([])
-  const [queuedSupplies, setQueuedSupplies] = useState<QueuedSupply[]>([])
-  const [queuedLiveRegisterMaps, setQueuedLiveRegisterMaps] = useState<QueuedLiveRegisterMap[]>([])
   const [liveActionResult, setLiveActionResult] = useState<ActionResultMsg | null>(null)
+
   const seqRef = useRef(0)
-  const queueCheck = useCallback((check: { kind: string; net?: string; ref?: string }) => {
-    seqRef.current += 1
-    setQueuedChecks(prev => [...prev, { ...check, seq: seqRef.current }])
-  }, [])
-  const consumeChecks = useCallback((upToSeq: number) => {
-    setQueuedChecks(prev => prev.filter(c => c.seq > upToSeq))
-  }, [])
-  const queuePeripheral = useCallback((peripheral: Omit<QueuedPeripheral, 'seq'>) => {
-    seqRef.current += 1
-    setQueuedPeripherals(prev => [...prev, { ...peripheral, seq: seqRef.current }])
-  }, [])
-  const consumePeripherals = useCallback((upToSeq: number) => {
-    setQueuedPeripherals(prev => prev.filter(p => p.seq > upToSeq))
-  }, [])
-  const queueSensor = useCallback((sensor: Omit<QueuedSensor, 'seq'>) => {
-    seqRef.current += 1
-    setQueuedSensors(prev => [...prev, { ...sensor, seq: seqRef.current }])
+  const nextSeq = useCallback(() => ++seqRef.current, [])
+  const queuedChecks = useQueue<{ seq: number; kind: string; net?: string; ref?: string }>(nextSeq)
+  const queuedPeripherals = useQueue<{ seq: number; id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }>(nextSeq)
+  const queuedSensors = useQueue<{ seq: number; id: string; ref?: string; modelId?: string | null }>(nextSeq)
+  const queuedSupplies = useQueue<{ seq: number; net: string; volts?: number }>(nextSeq)
+  const queuedLiveRegisterMaps = useQueue<QueuedLiveRegisterMap>(nextSeq)
+
+  const queueSensor = queuedSensors.push
+  const openSensorBuilder = useCallback((sensor: { id: string; ref?: string; modelId?: string | null }) => {
+    queueSensor(sensor)
     // A register map cannot be guessed from the clicked part. Unlike a simple
     // live switch or supply, this action always has a required human-authored
     // next step, so take the user directly to the exact-byte builder.
     setView('checks')
-  }, [])
-  const consumeSensors = useCallback((upToSeq: number) => {
-    setQueuedSensors(prev => prev.filter(sensor => sensor.seq > upToSeq))
-  }, [])
-  const queueSupply = useCallback((supply: Omit<QueuedSupply, 'seq'>) => {
-    seqRef.current += 1
-    setQueuedSupplies(previous => [...previous, { ...supply, seq: seqRef.current }])
-  }, [])
-  const consumeSupplies = useCallback((upToSeq: number) => {
-    setQueuedSupplies(previous => previous.filter(supply => supply.seq > upToSeq))
-  }, [])
-  const attachRegisterMapLive = useCallback((request: Omit<QueuedLiveRegisterMap, 'seq'>) => {
-    seqRef.current += 1
-    const seq = seqRef.current
-    setQueuedLiveRegisterMaps(previous => [...previous, { ...request, seq }])
-    return seq
-  }, [])
-  const consumeLiveRegisterMaps = useCallback((upToSeq: number) => {
-    setQueuedLiveRegisterMaps(previous => previous.filter(request => request.seq > upToSeq))
-  }, [])
+  }, [queueSensor])
 
   const { report } = session
   const reportOk = report?.ok === true
@@ -249,19 +187,12 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
   const navigate = useCallback((v: AppView) => {
     if (v === 'env') setEnvVisited(true)
     if (v === 'sim' && !simMounted) {
-      if (reportOk && session.liveMode !== 'none') {
-        // The nav entry launches (or asks to replace), exactly like the
-        // primary action, so "Live Sim" never opens an offline shell.
-        driveLive()
-        return
-      }
-      if (serverLiveActive) {
-        // No launchable board here, but the server IS running a session:
-        // open it (the sim view names which board it belongs to) instead of
-        // being a dead click.
-        openLiveSession()
-        return
-      }
+      // The nav entry launches (or asks to replace), exactly like the primary
+      // action, so "Live Sim" never opens an offline shell. With no launchable
+      // board but a session running server-side, open that instead of being a
+      // dead click.
+      if (reportOk && session.liveMode !== 'none') driveLive()
+      else if (serverLiveActive) openLiveSession()
       return
     }
     setView(v)
@@ -302,11 +233,8 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
   const resumeSession = useCallback((id: string) => {
     setResumeError(null)
     void sessions.resume(id).then(result => {
-      if (result.kind === 'unavailable') {
-        setResumeError(result.reason)
-        return
-      }
-      setView('board')
+      if (result.kind === 'unavailable') setResumeError(result.reason)
+      else setView('board')
     })
   }, [sessions])
 
@@ -327,49 +255,20 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
   // that no longer exists. Both go the moment a new run starts, not when its
   // report happens to land.
   const runEpoch = session.runEpoch
+  const clearQueues = queuedChecks.clear
+  const clearPeripherals = queuedPeripherals.clear
+  const clearSensors = queuedSensors.clear
+  const clearSupplies = queuedSupplies.clear
+  const clearRegisterMaps = queuedLiveRegisterMaps.clear
   useEffect(() => {
-    setQueuedChecks([])
-    setQueuedPeripherals([])
-    setQueuedSensors([])
-    setQueuedSupplies([])
-    setQueuedLiveRegisterMaps([])
+    clearQueues()
+    clearPeripherals()
+    clearSensors()
+    clearSupplies()
+    clearRegisterMaps()
     setLiveActionResult(null)
     setChecksSummary(null)
-  }, [runEpoch])
-
-  const chip = (
-    label: string,
-    tone: 'ok' | 'err' | 'warn' | 'quiet',
-    onClick?: () => void,
-    testid?: string,
-    pulse = false,
-  ) => {
-    const tones: Record<string, React.CSSProperties> = {
-      ok: { background: 'var(--ok-bg)', border: '1px solid var(--ok-border)', color: 'var(--ok)' },
-      err: { background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err)' },
-      warn: { background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--warn)' },
-      quiet: { background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: 'var(--silk-dim)' },
-    }
-    return (
-      <button
-        key={label}
-        type="button"
-        data-testid={testid}
-        onClick={onClick}
-        disabled={!onClick}
-        // A chip is a pill with one line in it. Left shrinkable, "checks 2 passed"
-        // wrapped to two lines inside a 24px pill and spilled out the bottom of it,
-        // so the chip keeps its own width and the row clips whole chips instead.
-        className="hb-press inline-flex items-center gap-1.5 px-2.5 rounded-full text-[11px] font-semibold tnum whitespace-nowrap shrink-0"
-        style={{ ...tones[tone], height: 24, cursor: onClick ? 'pointer' : 'default' }}
-      >
-        {pulse && (
-          <span className="run-dot" style={{ width: 6, height: 6, borderRadius: 3, background: 'currentColor', display: 'inline-block' }} />
-        )}
-        {label}
-      </button>
-    )
-  }
+  }, [runEpoch, clearQueues, clearPeripherals, clearSensors, clearSupplies, clearRegisterMaps])
 
   // The live session's identity, as the session itself reports it (BoardInfo
   // over /ws when the sim view is connected, /api/live/status otherwise).
@@ -377,96 +276,24 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
   // launch file name from /api/live/status, never read as "a" session name.
   const sessionBoard = (simStatus.sessionBoard?.trim() || null)
     ?? (session.serverLive?.boardName?.trim() || null)
-  // "Matches" means THIS page launched (or preloaded) the session for the
-  // board currently analyzed; a same-named session from a previous page-load
-  // is deliberately foreign (its content may differ).
   const sessionMatchesCurrent = session.liveMode === 'connected'
-  // Fault chips count faulted PARTS (the card in the sim rail counts its own
-  // fault conditions and labels itself); every surface must say what it counts.
-  const faultChipLabel = `${simStatus.faults} part${simStatus.faults === 1 ? '' : 's'} faulted`
-  // A session that was live and lost its socket is not "paused": the chip said
-  // so anyway, which read as a sim sitting there waiting for a play button.
-  // `simMounted` is what proves there WAS a session to lose (the view only
-  // mounts on a real launch), so a not-yet-connected shell never reads as one.
   const simOffline = simMounted && !simStatus.connected
 
-  // The primary action's label, in one place: the header shows it as words where
-  // there is room and as the play glyph alone on a phone, and both spellings have
-  // to say the same thing (the icon-only form carries it as its accessible name
-  // and its tooltip). A label the header cut in half ("Drive it liv") was the
-  // narrow-width defect this replaces.
+  // The primary action's label, in one place: the header shows it as words
+  // where there is room and as the play glyph alone on a phone, and both
+  // spellings have to say the same thing (the icon-only form carries it as its
+  // accessible name).
   const liveLabel = session.launch.phase === 'launching'
     ? 'Launching ...'
     : simMounted ? 'Open live sim' : 'Drive it live'
 
-  const chips: React.ReactNode[] = []
-  if (view === 'sim') {
-    // On the Live Sim view the header describes THE SESSION's board only: the
-    // analyzed board's findings/checks chips belong to the Board/Checks
-    // surfaces, and "another session is live: X" while viewing exactly that
-    // session mislabeled the very surface the user was on.
-    if (simOffline) {
-      chips.push(chip('sim offline', 'err', undefined, 'chip-sim'))
-    } else if (sessionMatchesCurrent) {
-      if (simStatus.faults > 0) {
-        chips.push(chip(faultChipLabel, 'err', () => setView('sim'), 'chip-faults'))
-      }
-      chips.push(chip(
-        simStatus.running ? 'sim running' : 'sim paused',
-        simStatus.running ? 'ok' : 'quiet',
-        undefined,
-        'chip-sim',
-        simStatus.running,
-      ))
-    } else if (sessionBoard) {
-      chips.push(chip(`live: ${sessionBoard}`, 'quiet', undefined, 'chip-sim', simStatus.running))
-    }
-  } else {
-    if (reportOk && report) {
-      const tone = reportVerdictTone(report)
-      if (tone === 'error') {
-        const label = report.serious > 0 ? `${report.serious} serious` : 'analysis failed'
-        chips.push(chip(label, 'err', () => setView('board'), 'chip-findings'))
-      } else if (tone === 'warning') {
-        const label = report.total > 0 ? `${report.total} findings` : 'analysis qualified'
-        chips.push(chip(label, 'warn', () => setView('board'), 'chip-findings'))
-      } else {
-        chips.push(chip('analysis clean', 'ok', () => setView('board'), 'chip-findings'))
-      }
-    }
-    if (checksSummary) {
-      const { passed, failed, invalid } = checksSummary
-      if (failed > 0) chips.push(chip(`checks ${failed} failed`, 'err', () => setView('checks'), 'chip-checks'))
-      else if (invalid > 0) chips.push(chip(`checks ${invalid} invalid`, 'warn', () => setView('checks'), 'chip-checks'))
-      else chips.push(chip(`checks ${passed} passed`, 'ok', () => setView('checks'), 'chip-checks'))
-    }
-    if (simOffline) {
-      chips.push(chip('sim offline', 'err', () => setView('sim'), 'chip-sim'))
-    } else if (simMounted && sessionMatchesCurrent) {
-      if (simStatus.faults > 0) {
-        chips.push(chip(faultChipLabel, 'err', () => setView('sim'), 'chip-faults'))
-      }
-      chips.push(chip(
-        simStatus.running ? 'sim running' : 'sim paused',
-        simStatus.running ? 'ok' : 'quiet',
-        () => setView('sim'),
-        'chip-sim',
-        simStatus.running,
-      ))
-    } else if ((simMounted || serverLiveActive) && sessionBoard) {
-      // A session is live for some OTHER board (or a pre-reload launch of
-      // this one): never show "sim running" as if it were this board's. The
-      // chip names the session's board and opens it.
-      chips.push(chip(
-        `another session is live: ${sessionBoard}`,
-        'warn',
-        simMounted ? () => setView('sim') : openLiveSession,
-        'chip-sim',
-      ))
-    } else if (reportOk && sessionMatchesCurrent) {
-      chips.push(chip('live session ready', 'ok', driveLive, 'chip-sim'))
-    }
-  }
+  // On the sim view the header names the SESSION's board (what /ws actually
+  // streams), never the locally analyzed one: the two can differ, and the
+  // canvas/nets/footer follow the session. Environment is about this machine's
+  // backends and oracles, not about a board, so it carries none.
+  const headerBoard = view === 'env'
+    ? null
+    : view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--canvas)', color: 'var(--silk)' }}>
@@ -495,29 +322,22 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
           style={{ height: 56, borderBottom: '1px solid var(--hairline)', background: 'var(--surface)' }}
         >
           <div className="min-w-0 flex items-baseline gap-2.5">
-            {/* The view's name answers "where am I" and is four words at most, so
-                it keeps its width and the board name (which has a tooltip and a
-                natural ellipsis point) gives ground first. Ellipsed the other way
-                round, a 320px header said "B..." for Board. */}
+            {/* The view's name answers "where am I" and is four words at most,
+                so it keeps its width and the board name (which has a tooltip
+                and a natural ellipsis point) gives ground first. */}
             <h1 className="text-[15px] font-semibold shrink-0" style={{ margin: 0, color: 'var(--silk)' }}>
               {VIEW_TITLES[view]}
             </h1>
-            {/* On the sim view the header names the SESSION's board (what /ws
-                actually streams), never the locally analyzed one: the two can
-                differ, and the canvas/nets/footer follow the session. */}
-            {/* Environment is about this machine's backends and oracles, not about
-                a board, so it does not carry one. That also stops the longest view
-                title from squeezing the name down to two characters on a phone. */}
-            {view !== 'env' && (view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel) && (
+            {headerBoard && (
               <span
                 className="text-[12px] truncate"
                 // On a phone header this is the only place the board's name
                 // appears (the rail's identity card is icon-collapsed), and it
                 // gets ellipsed there: the full name stays reachable.
-                title={(view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel) ?? undefined}
+                title={headerBoard}
                 style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
               >
-                {view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel}
+                {headerBoard}
               </span>
             )}
           </div>
@@ -525,22 +345,33 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
           <div className="flex-1" />
 
           {/* Status chips need about 190px of their own. They appear from `md`,
-              where the header has it to spare once the secondary action is a glyph.
-              A long board name can still leave too little: the row then scrolls
-              horizontally in its own container (the site-wide thin scrollbar),
-              so every chip stays reachable and none is served cut in half. */}
-          <div className="hidden md:flex items-center gap-1.5 overflow-x-auto min-w-0">{chips}</div>
+              where the header has it to spare once the secondary action is a
+              glyph. A long board name can still leave too little: the row then
+              scrolls horizontally in its own container, so every chip stays
+              reachable and none is served cut in half. */}
+          <div className="hidden md:flex items-center gap-1.5 overflow-x-auto min-w-0">
+            <ShellChips
+              view={view}
+              report={report}
+              checks={checksSummary}
+              sim={simStatus}
+              simMounted={simMounted}
+              simOffline={simOffline}
+              sessionBoard={sessionBoard}
+              sessionMatchesCurrent={sessionMatchesCurrent}
+              serverLiveActive={serverLiveActive}
+              goTo={setView}
+              onOpenLiveSession={openLiveSession}
+              onDriveLive={driveLive}
+            />
+          </div>
 
-          {/* Both header actions keep their glyph at every width and give up their
-              words as the header narrows: the secondary one first (from `lg`), the
-              primary CTA last (from `sm`). Icon-only, never a label the header cut
-              in half: the words ride along as the accessible name.
-
-              The name only, deliberately: a `title` carrying the same string is
-              read as the control's description as well as its name, so the
-              button announces itself twice ("Drive it live, Drive it live"). The
-              words are on screen at the widths that have a pointer to hover
-              with, so the tooltip was buying nothing for the duplication. */}
+          {/* Both header actions keep their glyph at every width and give up
+              their words as the header narrows: the secondary one first (from
+              `lg`), the primary CTA last (from `sm`). Icon-only, never a label
+              the header cut in half: the words ride along as the accessible
+              name, and only as the name — a `title` carrying the same string
+              would make the button announce itself twice. */}
           {report && !session.busy && (
             <button
               type="button"
@@ -573,123 +404,23 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
           )}
         </header>
 
-        {/* Replace-the-running-session confirmation, in-app (a native
-            window.confirm is auto-dismissed by automation and unstylable).
-            Covers ALL foreign-session cases: another board, a stale tab, a
-            launch from before a reload. */}
         {session.launch.phase === 'confirm' && (
-          <div
-            data-testid="live-replace-confirm"
-            className="mx-5 mt-3 rounded-lg px-4 py-3 text-[13px]"
-            style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--silk)' }}
-          >
-            <span className="text-[10px] font-bold tracking-widest uppercase block mb-1" style={{ color: 'var(--warn-strong)' }}>
-              A live session is already running
-            </span>
-            The server is running a live session for{' '}
-            <span style={{ fontFamily: 'var(--font-mono)' }}>{session.launch.activeBoard}</span>
-            {session.launch.activeBoard === session.launch.targetBoard
-              ? ' (launched before this page, so it may not match what you just analyzed)'
-              : ''}
-            . One session runs at a time.
-            <div className="mt-2.5 flex flex-wrap gap-2">
-              <button
-                type="button"
-                data-testid="confirm-replace-live"
-                onClick={() => {
-                  session.confirmReplace()
-                  setSimMounted(true)
-                  setView('sim')
-                }}
-                className="hb-btn-primary hb-press px-3 text-[12px]"
-                style={{ height: 30 }}
-              >
-                Replace it with {session.launch.targetBoard}
-              </button>
-              <button
-                type="button"
-                data-testid="open-running-live"
-                onClick={() => {
-                  session.cancelLaunch()
-                  openLiveSession()
-                }}
-                className="hb-btn hb-press px-3 text-[12px]"
-                style={{ height: 30 }}
-              >
-                Open the running session
-              </button>
-              <button
-                type="button"
-                data-testid="cancel-replace-live"
-                onClick={session.cancelLaunch}
-                className="hb-btn hb-press px-3 text-[12px]"
-                style={{ height: 30 }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
+          <ReplaceLiveConfirm
+            launch={session.launch}
+            onReplace={() => {
+              session.confirmReplace()
+              setSimMounted(true)
+              setView('sim')
+            }}
+            onOpenRunning={() => { session.cancelLaunch(); openLiveSession() }}
+            onCancel={session.cancelLaunch}
+          />
         )}
-
-        {/* Launch failures surface here, verbatim, wherever you are. */}
         {session.launch.phase === 'error' && session.launch.error && (
-          <div
-            data-testid="live-launch-error"
-            className="mx-5 mt-3 rounded-lg px-4 py-2.5 text-[13px]"
-            style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' }}
-          >
-            <span className="text-[10px] font-bold tracking-widest uppercase block mb-0.5" style={{ color: 'var(--err)' }}>
-              Live launch failed
-            </span>
-            {session.launch.error}
-            {/* A missing emulator is the one launch failure this app can fix
-                by itself: the Environment page installs Renode and Espressif
-                QEMU with one click. Sending the user to a release page they
-                have to find, unpack and PATH themselves (which the backend
-                error text alone used to do) is the terminal-forcing moment
-                the cold-install audit caught. */}
-            {missingEmulator(session.launch.error) && (
-              <div className="mt-2.5">
-                <button
-                  type="button"
-                  data-testid="launch-error-open-env"
-                  onClick={() => navigate('env')}
-                  className="hb-btn-primary hb-press px-3 text-[12px]"
-                  style={{ height: 30 }}
-                >
-                  Install {missingEmulator(session.launch.error)} on the Environment page
-                </button>
-              </div>
-            )}
-          </div>
+          <LaunchErrorBanner error={session.launch.error} onOpenEnv={() => navigate('env')} />
         )}
-
-        {/* A session that could not be reopened. Same place, and the same
-            plainness, as a launch failure: it says what is missing rather than
-            leaving a click that did nothing. */}
         {resumeError && (
-          <div
-            data-testid="resume-error"
-            className="mx-5 mt-3 rounded-lg px-4 py-2.5 text-[13px]"
-            style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--silk)' }}
-          >
-            <span className="text-[10px] font-bold tracking-widest uppercase block mb-0.5" style={{ color: 'var(--warn-strong)' }}>
-              Could not reopen that session
-            </span>
-            {resumeError}. Drop the board again and everything you composed against it is
-            still here.
-            <div className="mt-2">
-              <button
-                type="button"
-                data-testid="resume-error-dismiss"
-                onClick={() => setResumeError(null)}
-                className="hb-btn hb-press px-3 text-[12px]"
-                style={{ height: 28 }}
-              >
-                Got it
-              </button>
-            </div>
-          </div>
+          <ResumeErrorBanner reason={resumeError} onDismiss={() => setResumeError(null)} />
         )}
 
         {/* Views. Mounted once, hidden on navigation. */}
@@ -698,10 +429,10 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
             {report ? (
               <BoardView
                 session={session}
-                onQueueCheck={queueCheck}
-                onQueuePeripheral={queuePeripheral}
-                onQueueSensor={queueSensor}
-                onQueueSupply={queueSupply}
+                onQueueCheck={queuedChecks.push}
+                onQueuePeripheral={queuedPeripherals.push}
+                onQueueSensor={openSensorBuilder}
+                onQueueSupply={queuedSupplies.push}
                 onOpenChecks={() => setView('checks')}
                 onDriveLive={driveLive}
                 simMounted={simMounted}
@@ -734,16 +465,16 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
                 schematicFile={session.schematicFile}
                 selectedNet={session.selectedNet}
                 selectedComponent={session.selectedComponent}
-                pendingChecks={queuedChecks}
-                pendingPeripherals={queuedPeripherals}
-                pendingSensors={queuedSensors}
-                pendingSupplies={queuedSupplies}
-                onPendingConsumed={consumeChecks}
-                onPendingPeripheralConsumed={consumePeripherals}
-                onPendingSensorConsumed={consumeSensors}
-                onPendingSupplyConsumed={consumeSupplies}
+                pendingChecks={queuedChecks.items}
+                pendingPeripherals={queuedPeripherals.items}
+                pendingSensors={queuedSensors.items}
+                pendingSupplies={queuedSupplies.items}
+                onPendingConsumed={queuedChecks.consume}
+                onPendingPeripheralConsumed={queuedPeripherals.consume}
+                onPendingSensorConsumed={queuedSensors.consume}
+                onPendingSupplyConsumed={queuedSupplies.consume}
                 liveRegisterMapAvailable={simMounted && sessionMatchesCurrent}
-                onAttachRegisterMapLive={attachRegisterMapLive}
+                onAttachRegisterMapLive={queuedLiveRegisterMaps.push}
                 liveActionResult={liveActionResult}
                 onSummary={setChecksSummary}
                 onSpec={setSpec}
@@ -754,12 +485,12 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
           {simMounted && (
             <div style={{ display: view === 'sim' ? 'block' : 'none', height: '100%' }}>
               <SimView
-                onQueueCheck={queueCheck}
-                onQueuePeripheral={queuePeripheral}
-                onQueueSensor={queueSensor}
-                onQueueSupply={queueSupply}
-                pendingLiveRegisterMaps={queuedLiveRegisterMaps}
-                onLiveRegisterMapsConsumed={consumeLiveRegisterMaps}
+                onQueueCheck={queuedChecks.push}
+                onQueuePeripheral={queuedPeripherals.push}
+                onQueueSensor={openSensorBuilder}
+                onQueueSupply={queuedSupplies.push}
+                pendingLiveRegisterMaps={queuedLiveRegisterMaps.items}
+                onLiveRegisterMapsConsumed={queuedLiveRegisterMaps.consume}
                 onLiveActionResult={setLiveActionResult}
                 onStatus={setSimStatus}
                 expectedBoard={session.boardLabel}
@@ -771,10 +502,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
           )}
 
           {envVisited && (
-            <div
-              className="overflow-y-auto"
-              style={{ display: view === 'env' ? 'block' : 'none', height: '100%' }}
-            >
+            <div className="overflow-y-auto" style={{ display: view === 'env' ? 'block' : 'none', height: '100%' }}>
               <div className="max-w-3xl mx-auto px-6 pb-16 view-enter">
                 <DepsPanel engineVersion={engineVersion} />
               </div>
@@ -784,12 +512,12 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, avrAvailabl
       </div>
 
       {/* Hidden file inputs, shared by the drop card and every firmware jack,
-          so the report view can keep offering both slots. */}
+          so the report view can keep offering both slots. The board picker's
+          accepted list comes from lib/board-formats, the one such list, so it
+          cannot offer a different set from the one the copy names. */}
       <input
         id="board-file"
         type="file"
-        // From lib/board-formats, the one accepted-formats list, so the
-        // picker cannot offer a different set from the one the copy names.
         accept={BOARD_ACCEPT_ATTR}
         className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) session.handleBoard(f); e.target.value = '' }}

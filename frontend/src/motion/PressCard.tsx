@@ -2,22 +2,18 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { CELL } from './tokens'
 
-// Press-and-hover feedback for a card-shaped button, adapted from
+// Press-and-hover feedback for a card-shaped button, vendored from
 // interior.dev's `press-depth`.
 //
-// The hook is vendored nearly whole, because the fiddly part is not the
-// animation, it is knowing when the press ENDED. A `:active` pseudo-class lies
-// in three situations that all happen constantly: the pointer leaves the
-// element while still held (the press is cancelled, but `:active` sticks until
-// release), the window loses focus mid-press, and a keyboard Space-hold never
-// gets a pointer event at all. Each leaves a control looking pressed when it is
-// not. The pointer capture below tracks all three.
+// The fiddly part is not the animation, it is knowing when the press ENDED. A
+// `:active` pseudo-class lies in three situations that all happen constantly:
+// the pointer leaves the element while still held (the press is cancelled but
+// `:active` sticks until release), the window loses focus mid-press, and a
+// keyboard Space-hold never gets a pointer event at all. Each leaves a control
+// looking pressed when it is not; the pointer capture below tracks all three.
 //
-// What was cut: the original renders a physical slab with a coloured underside
-// that the face sinks into, and a perspective tilt toward the press point. On a
-// sample card in a tool panel that is a toy. The face translates 1 px, and the
-// origin is kept because the VIEW that opens from a card uses it (a report
-// arriving from the card that was clicked, rather than from nowhere).
+// The face translates 1 px. The press ORIGIN is kept because the view that
+// opens from a card animates out of it, rather than out of nowhere.
 
 export interface PressOrigin {
   /** Press point within the element, in -1..1 from its centre. */
@@ -118,7 +114,7 @@ export function usePressDepth({ disabled = false }: { disabled?: boolean } = {})
   return { pressed, origin, ref, bind }
 }
 
-export interface PressCardProps {
+interface PressCardProps {
   children: ReactNode
   /** Receives where the press landed, so the surface that opens from this card
    *  can animate out of it rather than out of the page centre. */

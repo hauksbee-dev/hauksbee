@@ -1,11 +1,8 @@
 // What is actually in the firmware file the user handed us.
 //
-// The engine does not tell us. `firmware_input.rs` resolves an upload to bytes
-// and carries only `{name, bytes, note}`; the single piece of binary
-// introspection anywhere in the Rust tree is `hauksbee-mcu/src/elf.rs`, which
-// reads the `e_machine` half-word to refuse an architecture mismatch and keeps
-// nothing. None of it reaches the browser: the wire carries a co-sim section,
-// not a firmware description.
+// The engine does not tell us: `firmware_input.rs` carries only
+// `{name, bytes, note}`, and the wire carries a co-sim section, not a firmware
+// description.
 //
 // So this reads the file the browser already holds. Everything below is
 // measured from those bytes: no field is inferred from the extension, and a
@@ -24,7 +21,7 @@ const MACHINES: Record<number, string> = {
 /** SHT_NOBITS: occupies address space but no file bytes (this is `.bss`). */
 const SHT_NOBITS = 8
 
-export interface FirmwareSection {
+interface FirmwareSection {
   name: string
   /** Bytes the section occupies in the loaded image. */
   size: number

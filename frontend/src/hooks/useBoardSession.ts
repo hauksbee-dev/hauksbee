@@ -4,16 +4,14 @@ import type { LiveLaunchResponse, LiveStatus, WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
 import { analysisFailureMessage, precheckBoardFile } from '../lib/upload-guard'
 import { inspectZip, zipIsFirmwareOnly } from '../lib/zip-inspect'
+import { errorText, getJson, isAbort, readJson } from '../lib/api'
 
 // The board session: one uploaded (or preloaded) board, its report, its staged
 // firmware, and the live-sim affordance for it. The app shell needs this shared
 // across the Board, Checks and Live Sim views, so it is a hook the shell owns
 // rather than state inside Landing.
 
-// Fetch aborts (a newer run superseded this one) are expected, not errors.
-const isAbort = (e: unknown) => e instanceof Error && e.name === 'AbortError'
-
-export interface SampleSpec {
+interface SampleSpec {
   board: string
   firmware?: string
 }
@@ -30,19 +28,19 @@ export type LaunchState =
 
 /** The server's one global live session, as last observed. `null` until the
  *  first status fetch resolves (or when the endpoint is unavailable). */
-export interface ServerLive {
+interface ServerLive {
   active: boolean
   boardName: string | null
 }
 
-export type LiveMode = 'connected' | 'launch' | 'none'
+type LiveMode = 'connected' | 'launch' | 'none'
 
 /** A report put back on screen from a saved browser session, with no uploaded
  *  file behind it. Held separately from a real run because the difference is
  *  load-bearing: everything that needs the bytes (re-analysis, a checks run, a
  *  live launch) is unavailable, and the surfaces have to say so instead of
  *  offering buttons that cannot work. */
-export interface RestoredFrom {
+interface RestoredFrom {
   /** The board file the report was produced from, by name. */
   boardName: string
   /** The firmware that was staged at the time, by name. */
@@ -159,17 +157,10 @@ export function useBoardSession(opts: {
   // the header chips and the nav item stay honest about what /ws is serving.
   const [serverLive, setServerLive] = useState<ServerLive | null>(null)
   const refreshLiveStatus = useCallback(() => {
-    void (async () => {
-      try {
-        const res = await fetch('/api/live/status')
-        if (!res.ok) throw new Error(String(res.status))
-        const st = await res.json() as LiveStatus
-        setServerLive({ active: st.active === true, boardName: st.board_name ?? null })
-      } catch {
-        // No status endpoint (older server): leave unknown rather than lying.
-        setServerLive(null)
-      }
-    })()
+    void getJson<LiveStatus>('/api/live/status')
+      .then(st => setServerLive({ active: st.active === true, boardName: st.board_name ?? null }))
+      // No status endpoint (older server): leave unknown rather than lying.
+      .catch(() => setServerLive(null))
   }, [])
   useEffect(() => {
     refreshLiveStatus()
@@ -267,32 +258,17 @@ export function useBoardSession(opts: {
         res = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'X-Board-Filename': board.name, 'Content-Type': 'application/octet-stream' },
-          // The File itself, NOT `await board.arrayBuffer()`. A Blob body is
-          // streamed off disk by the browser; arrayBuffer() pulled the whole
-          // upload into the JS heap on the main thread first, which froze the
-          // page for over seven minutes on a 300 MB file and showed nothing
-          // while it did. The wire format is byte-identical either way, so the
-          // `/api/analyze` contract (raw body + X-Board-Filename) is untouched.
+          // The File itself, NOT `await board.arrayBuffer()`: a Blob body is
+          // streamed off disk by the browser, where arrayBuffer() would pull a
+          // 300 MB upload into the JS heap on the main thread first. The wire
+          // bytes are identical either way.
           body: board,
           signal,
         })
       }
       status = res.status
-      // Read the body ONCE as text, then parse defensively: a stale build, a
-      // proxy, or a body-limit/panic can return plaintext, and res.json() on
-      // that throws a cryptic SyntaxError instead of showing the real message.
-      const text = await res.text()
-      if (!res.ok) {
-        throw new Error(text.trim().slice(0, 400) || `${res.status} ${res.statusText}`)
-      }
-      let parsed: WebReport
-      try {
-        parsed = JSON.parse(text) as WebReport
-      } catch {
-        throw new Error(
-          text.trim().slice(0, 400) || 'the server returned an empty or non-JSON response',
-        )
-      }
+      if (!res.ok) throw new Error((await res.text()).trim().slice(0, 400) || `${res.status} ${res.statusText}`)
+      const parsed = await readJson<WebReport>(res)
       if (isCurrent()) {
         setReport(parsed)
         setAnalyzedAt(Date.now())
@@ -301,8 +277,7 @@ export function useBoardSession(opts: {
       // An abort means the flow was reset mid-run: not an error to show.
       if (isAbort(e)) return
       // A body-limit refusal, a dropped connection and a real analysis failure
-      // are three different problems with three different next steps; they all
-      // used to arrive as "Analysis failed: Failed to fetch".
+      // are three different problems with three different next steps.
       if (isCurrent()) setUploadError(analysisFailureMessage(e, { status, size: board.size }))
     } finally {
       if (isCurrent()) setBusy(null)
@@ -376,8 +351,7 @@ export function useBoardSession(opts: {
     if (busy) return
     // Everything the browser can know for certain about this file, before a
     // byte of it is read or sent: empty, past the server's body limit, or a
-    // large file with an extension nothing claims. A 300 MB CAD export used to
-    // get all the way to a seven-minute frozen tab and then a 413.
+    // large file with an extension nothing claims.
     const refusal = precheckBoardFile(f)
     if (refusal) {
       abortRef.current?.abort()
@@ -418,10 +392,10 @@ export function useBoardSession(opts: {
     acceptBoard(f)
   }, [acceptBoard, busy, clearRunState, handleFirmware])
 
-  // "Analyze another board": resolve the finished flow back to the drop zone.
-  // A running live session keeps running server-side until a new launch
-  // replaces it.
-  const resetFlow = useCallback(() => {
+  // Back to nothing loaded: the run aborted, every input dropped, the object
+  // URL released. A running live session keeps running server-side until a new
+  // launch replaces it.
+  const teardown = useCallback(() => {
     abortRef.current?.abort()
     runIdRef.current += 1
     lastBoardFile.current = null
@@ -436,24 +410,15 @@ export function useBoardSession(opts: {
     })
   }, [clearRunState])
 
-  // Put a saved session's report back on screen. Deliberately the same teardown
-  // `resetFlow` does (no file, no firmware, no board URL, a fresh run epoch)
-  // followed by the stored report: a restored session must not inherit a single
-  // artifact of whatever was loaded before it, and it must not pretend to have a
-  // file. `restoredFrom` is what every surface reads to say so.
+  /** "Analyze another board": resolve the finished flow back to the drop zone. */
+  const resetFlow = teardown
+
+  // Put a saved session's report back on screen. The same teardown, then the
+  // stored report: a restored session must not inherit a single artifact of
+  // whatever was loaded before it, and it must not pretend to have a file.
+  // `restoredFrom` is what every surface reads to say so.
   const restoreReport = useCallback((from: RestoredFrom & { report: WebReport; analyzedAt: number | null }) => {
-    abortRef.current?.abort()
-    runIdRef.current += 1
-    lastBoardFile.current = null
-    clearRunState()
-    setBoardFile(null)
-    setBusy(null)
-    setFirmwareFile(null)
-    setSchematicFile(null)
-    setBoardUrl(prev => {
-      if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
-      return null
-    })
+    teardown()
     setReport(from.report)
     setAnalyzedAt(from.analyzedAt)
     setRestoredFrom({
@@ -462,7 +427,7 @@ export function useBoardSession(opts: {
       schematicName: from.schematicName,
       sessionName: from.sessionName,
     })
-  }, [clearRunState])
+  }, [teardown])
 
   // One-click samples: fetch a bundled board (and optionally its firmware)
   // and push it through the exact same analyze path a dropped file takes.
@@ -501,7 +466,7 @@ export function useBoardSession(opts: {
     } catch (e) {
       if (isAbort(e)) return
       if (isCurrent()) {
-        setUploadError(`Could not load the sample: ${e instanceof Error ? e.message : String(e)}`)
+        setUploadError(`Could not load the sample: ${errorText(e)}`)
         setBusy(null)
       }
     }
@@ -514,20 +479,14 @@ export function useBoardSession(opts: {
     try {
       const fd = buildBoardUpload(board, firmwareFile, schematicFile)
       const res = await fetch('/api/live/launch', { method: 'POST', body: fd })
-      const text = await res.text()
-      let parsed: LiveLaunchResponse
-      try {
-        parsed = JSON.parse(text) as LiveLaunchResponse
-      } catch {
-        throw new Error(text.trim().slice(0, 400) || `${res.status} ${res.statusText}`)
-      }
+      const parsed = await readJson<LiveLaunchResponse>(res)
       if (!parsed.ok) throw new Error(parsed.error || 'the live launch failed')
       setLiveBoard(parsed.board_name ?? board.name)
       setServerLive({ active: true, boardName: parsed.board_name ?? board.name })
       setLaunch({ phase: 'idle' })
       onReady()
     } catch (e) {
-      setLaunch({ phase: 'error', error: e instanceof Error ? e.message : String(e) })
+      setLaunch({ phase: 'error', error: errorText(e) })
     }
   }, [firmwareFile, schematicFile])
 
@@ -535,11 +494,9 @@ export function useBoardSession(opts: {
   const pendingReady = useRef<(() => void) | null>(null)
 
   // Launch (or reconnect to) the live sim for the current report's board.
-  // Server-side session, one at a time. Launching over a session THIS page
-  // did not start for this board (another board, a stale tab, a pre-reload
-  // launch) surfaces an in-app confirm instead of silently doing nothing:
-  // window.confirm was auto-dismissed by automation drivers, which made the
-  // whole live surface a dead click on the second board.
+  // Server-side session, one at a time. Launching over a session THIS page did
+  // not start for this board (another board, a stale tab, a pre-reload launch)
+  // surfaces an in-app confirm rather than silently doing nothing.
   const launchLive = useCallback(async (onReady: () => void) => {
     const board = lastBoardFile.current
     // Preloaded (`run --serve`) report with no re-upload: the session is

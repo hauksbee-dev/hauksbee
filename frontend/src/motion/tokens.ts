@@ -1,15 +1,13 @@
 // The motion vocabulary, in one file, so nothing in the app invents a duration.
 //
-// Vendored from interior.dev (https://github.com/ddoemonn/interior, the
-// copy-the-source component collection built on the `motion` package). Its
-// components each declared these springs locally; here they are shared, because
-// an instrument panel with three different crossfade curves reads as three
+// Vendored from interior.dev (https://github.com/ddoemonn/interior), whose
+// components each declared these springs locally. Shared here, because an
+// instrument panel with three different crossfade curves reads as three
 // different products.
 //
-// The rule this codebase applies on top of interior's defaults: motion is here
-// to make a state change legible, never to decorate. Anything that moves is
-// answering a question the user just asked ("did it take my file?", "is it
-// still working?", "did that number change?"). Everything is in the
+// The rule: motion makes a state change legible, never decorates. Anything that
+// moves is answering a question the user just asked ("did it take my file?",
+// "is it still working?", "did that number change?"). Everything is in the
 // 100-250 ms band, and every curve is asymmetric in the honest direction:
 // things arrive quickly and leave faster.
 
@@ -39,8 +37,8 @@ export const INSTANT = { duration: 0 } as const
  *  is allowed to run. A twenty-row list that staggers all the way is a list
  *  that takes two seconds to become readable, so the delay stops accumulating
  *  after `STAGGER_CAP`. */
-export const STAGGER_STEP = 0.035
-export const STAGGER_CAP = 0.21
+const STAGGER_STEP = 0.035
+const STAGGER_CAP = 0.21
 
 /** The delay of the nth item in a staggered group. */
 export function staggerDelay(index: number): number {

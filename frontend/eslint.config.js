@@ -83,10 +83,10 @@ export default tseslint.config(
       // Hooks after a conditional return change the hook count between renders,
       // which is a crash, not a smell.
       'react-hooks/rules-of-hooks': 'error',
-      // A warning on purpose, and read every time. Four remain, all of them a
-      // judgement about a callback prop or a memo that is deliberately not keyed
-      // on everything it closes over; each has the reason written above it, and
-      // a per-site disable comment would bury that reason under boilerplate.
+      // A warning on purpose, and read every time. The few that remain are
+      // each a judgement about a callback prop or a memo deliberately not keyed
+      // on everything it closes over, with the reason written above it; a
+      // per-site disable comment would bury that reason under boilerplate.
       'react-hooks/exhaustive-deps': 'warn',
       // Bare `any` has one narrow home here: the canvas seams where vendor
       // types meet ours. Worth seeing, not worth failing.

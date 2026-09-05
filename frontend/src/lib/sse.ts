@@ -9,14 +9,14 @@
 // multi-line payload) and two copies drift in different ways.
 
 /** One parsed SSE frame: the text between blank lines. */
-export interface SseFrame {
+interface SseFrame {
   event: string
   data: string
 }
 
 /** Parse one frame's raw text. Defaults to the `log` event, which is what the
  *  servers emit for an unlabelled progress line. */
-export function parseSseFrame(raw: string): SseFrame {
+function parseSseFrame(raw: string): SseFrame {
   let event = 'log'
   const data: string[] = []
   for (const line of raw.split('\n')) {

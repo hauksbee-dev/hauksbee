@@ -1,25 +1,20 @@
 import { useCallback, useRef, useState } from 'react'
 
-// Drag-over feedback for a drop target.
+// Drag-over feedback for a drop target. Two rules make the state machine what
+// it is:
 //
-// interior.dev has no drop-zone component, so this is built from its
-// vocabulary rather than vendored: the state machine here is the interesting
-// part, and it exists because the naive version is wrong in two ways that show
-// up immediately.
+// `dragenter`/`dragleave` fire for every descendant the pointer crosses, so a
+// card with an icon, a heading and a button emits a leave the moment the cursor
+// moves from the card onto the heading. The depth counter below is what stops
+// the flicker: only the leave that balances the outermost enter counts.
 //
-// First, `dragenter`/`dragleave` fire for every descendant the pointer crosses.
-// A drop card with an icon, a heading and a button emits a leave the moment the
-// cursor moves from the card onto the heading, so a single-boolean zone flickers
-// as the user moves toward the middle of it. The depth counter below is the fix:
-// only the leave that balances the outermost enter counts.
-//
-// Second, and more important: the zone must not claim to ACCEPT something it
-// has not looked at. During a drag the browser withholds file names (the
-// dataTransfer entries expose `kind` and `type`, never `name`, until the drop),
-// so "accepted" is not knowable and a green tick would be a guess. What IS
-// knowable is whether the drag carries files at all, which is the one case
-// worth a distinct answer: dragging selected text or a link onto the board zone
-// gets a refusal instead of an invitation, before the user lets go.
+// And the zone must not claim to ACCEPT something it has not looked at. During
+// a drag the browser withholds file names (dataTransfer entries expose `kind`
+// and `type`, never `name`, until the drop), so "accepted" is unknowable and a
+// green tick would be a guess. Whether the drag carries files AT ALL is
+// knowable, and is the one case worth a distinct answer: dragging selected text
+// onto the board zone gets a refusal, not an invitation, before the user lets
+// go.
 
 export type DropState =
   /** Nothing being dragged over this target. */
