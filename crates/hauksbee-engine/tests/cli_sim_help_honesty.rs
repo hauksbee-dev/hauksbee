@@ -1,15 +1,9 @@
-//! Drift guard for the `sim` command's help text (persona-panel finding, analog
-//! engineer): the "Honesty" paragraph must not claim a capability refuses when
-//! it actually works. `--ac`, `--dc`, and `--format raw`/`both` all landed (plan
-//! steps 9/14), so the help must describe them as working, and must NOT repeat
-//! the stale claim that they REFUSE / cannot be fed / are not yet built.
-//!
-//! The SPICE *loader* claims are gated by the compat-drift test in
-//! `hauksbee-ir` against `docs/spice-compat/compatibility.md`. That test lives
-//! IR-side and cannot see the engine's clap strings, so this focused CLI test
-//! owns the help-text surface: it exercises the real compiled binary's
-//! `sim --help` output, the same string a user reads.
+//! Drift guard for the `sim` command's help text: the "Honesty" paragraph must
+//! not claim a capability refuses when it actually works (`--ac`, `--dc`, and
+//! `--format raw`/`both` all landed). Plus an end-to-end run of a deck whose
+//! model comes in through a deck-relative `.include`.
 
+use std::path::PathBuf;
 use std::process::Command;
 
 fn bin() -> &'static str {
@@ -76,5 +70,31 @@ fn sim_help_states_the_working_capabilities() {
     assert!(
         help.contains("docs.hauksbee.dev/docs/spice-compat/compatibility"),
         "help should cross-link the compatibility statement URL"
+    );
+}
+
+/// `.include diode.lib` resolves against the deck's own directory, and the
+/// `.print tran` card selects the CSV columns.
+#[test]
+fn sim_runs_a_deck_with_a_relative_include() {
+    let deck = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/sim_decks/half_wave.cir");
+    let out = Command::new(bin())
+        .args(["sim", deck.to_str().unwrap(), "--tran"])
+        .output()
+        .expect("hauksbee sim runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "sim must succeed:\n{stderr}");
+    assert!(stdout.starts_with("time_s,V(out)\n"), "{stdout}");
+    let last: Vec<f64> = stdout
+        .lines()
+        .last()
+        .unwrap()
+        .split(',')
+        .map(|v| v.parse().unwrap())
+        .collect();
+    assert!(
+        last[0] > 1.9e-3 && last[1] > 3.0 && last[1] < 5.0,
+        "{last:?}"
     );
 }

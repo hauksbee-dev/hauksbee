@@ -1,0 +1,7 @@
+[pack]
+name = "history-campaign-core"
+version = "0.1.0"
+license = "MIT"
+min_hauksbee_version = "0.1.0"
+provenance = "hand-written"
+description = "Six source-bound identity and low-order models selected from the frozen history campaign"

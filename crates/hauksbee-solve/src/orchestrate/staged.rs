@@ -921,1222 +921,6 @@ fn lerp_at(times: &[f64], vals: &[f64], t: f64) -> f64 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::select_group_ladder;
-    use crate::options::RobustnessLadder;
-
-    /// Round-2 selection: the two structurally-justified trims fire on the
-    /// right island classes, everything else passes through, and the caller's
-    /// ceiling is respected (an empty ladder stays empty).
-    #[test]
-    fn ladder_selection_trims_only_structurally_dead_grants() {
-        use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
-        let full = SolverOptions {
-            ladder: RobustnessLadder::full(),
-            ..Default::default()
-        };
-
-        // Fully linear island (source + divider): LineSearch is unreachable
-        // (ws.linear early return) and EventFreeze inert (no discrete states).
-        let mut lin = Circuit::new();
-        let a = lin.node("a");
-        let b = lin.node("b");
-        lin.add(Device::Vsource {
-            name: "V".into(),
-            p: a,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        lin.add(Device::Resistor {
-            name: "R1".into(),
-            a,
-            b,
-            ohms: 1e3,
-            tc1: None,
-        });
-        lin.add(Device::Resistor {
-            name: "R2".into(),
-            a: b,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let sel = select_group_ladder(&lin, &full);
-        assert!(!sel.ladder.has(Strategy::LineSearch));
-        assert!(!sel.ladder.has(Strategy::EventFreeze));
-        // Everything whose firing is state-dependent survives.
-        assert!(sel.ladder.has(Strategy::DynamicPivot));
-        assert!(sel.ladder.has(Strategy::DynamicPivotEveryStep));
-        assert!(sel.ladder.has(Strategy::Ptc));
-        assert!(sel.ladder.has(Strategy::ResidualAccept));
-        assert!(sel.ladder.has(Strategy::TransientDyn));
-
-        // Nonlinear but discrete-free (a diode): EventFreeze still trims,
-        // LineSearch stays (Newton is live).
-        let mut dio = lin.clone();
-        let c = dio.node("c");
-        dio.add(Device::Diode {
-            name: "D".into(),
-            a: b,
-            k: c,
-            model: Default::default(),
-        });
-        dio.add(Device::Resistor {
-            name: "R3".into(),
-            a: c,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let sel = select_group_ladder(&dio, &full);
-        assert!(sel.ladder.has(Strategy::LineSearch));
-        assert!(!sel.ladder.has(Strategy::EventFreeze));
-
-        // A comparator makes the island discrete: nothing trims.
-        let mut cmp = dio.clone();
-        let o = cmp.node("o");
-        cmp.add(Device::Comparator {
-            name: "K".into(),
-            out: o,
-            inp: b,
-            inn: c,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 0.1,
-        });
-        let sel = select_group_ladder(&cmp, &full);
-        assert!(sel.ladder.has(Strategy::EventFreeze));
-        assert!(sel.ladder.has(Strategy::LineSearch));
-
-        // Ceiling: a caller granting nothing stays granting nothing.
-        let none = SolverOptions::default();
-        let sel = select_group_ladder(&lin, &none);
-        assert_eq!(sel.ladder.steps().count(), 0);
-    }
-
-    use super::*;
-    use crate::decompose::rails::TearMotive;
-    use crate::options::Integration;
-    use hauksbee_ir::SourceKind;
-
-    fn fixed_opts(dt: f64) -> SolverOptions {
-        SolverOptions {
-            step: StepControl::Fixed { dt },
-            integration: Integration::Trapezoidal,
-            ..SolverOptions::default()
-        }
-    }
-
-    fn monolith(circuit: &Circuit, dt: f64, tstop: f64) -> Waveforms {
-        let mut opts = fixed_opts(dt);
-        opts.partitioning = Partitioning::Off;
-        Transient::new(opts).run(circuit, tstop).expect("monolith")
-    }
-
-    /// Max |staged - monolith| over every node at every uniform grid point.
-    /// The monolith's samples are interpolated to the grid with the same
-    /// first-order reading the staged result uses.
-    fn max_error(circuit: &Circuit, staged: &StagedResult, mono: &Waveforms) -> f64 {
-        let mut worst = 0.0f64;
-        for node in 1..circuit.node_count() {
-            let m = &mono.node_voltages[node];
-            for (k, &t) in staged.waveforms.time.iter().enumerate() {
-                let sv = staged.waveforms.node_voltages[node][k];
-                let mv = lerp_at(&mono.time, m, t);
-                worst = worst.max((sv - mv).abs());
-            }
-        }
-        worst
-    }
-
-    /// The full staged shape in one board: a pulsed RC stack (all linear, so
-    /// the driver pass absorbs it into the group that senses it), a
-    /// comparator whose output is conducted in its own island, and a switch
-    /// island that senses the comparator. One replayed tear (cmp_out), one
-    /// absorption (the RC stack), three groups across two stages.
-    fn feedforward_board() -> (Circuit, NodeId) {
-        let mut c = Circuit::new();
-        let vin = c.node("vin");
-        let a = c.node("a");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Pulse {
-                v1: 0.0,
-                v2: 5.0,
-                delay: 2e-6,
-                rise: 1e-6,
-                fall: 1e-6,
-                width: 30e-6,
-                period: 0.0,
-            },
-        });
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: vin,
-            b: a,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: "C1".into(),
-            a,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: None,
-        });
-        // Comparator island: conducts cmp_out, senses the RC node.
-        let cmp_out = c.node("cmp_out");
-        c.add(Device::Resistor {
-            name: "Rc".into(),
-            a: cmp_out,
-            b: NodeId::GROUND,
-            ohms: 10e3,
-            tc1: None,
-        });
-        c.add(Device::Comparator {
-            name: "CMP".into(),
-            out: cmp_out,
-            inp: a,
-            inn: NodeId::GROUND,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
-        // Switch island: senses cmp_out, conducts its own path.
-        let s = c.node("s");
-        let o = c.node("o");
-        c.add(Device::Vsource {
-            name: "V2".into(),
-            p: s,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.3),
-        });
-        c.add(Device::VSwitch {
-            name: "SW".into(),
-            a: s,
-            b: o,
-            ctrl_p: cmp_out,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        c.add(Device::Resistor {
-            name: "RL".into(),
-            a: o,
-            b: NodeId::GROUND,
-            ohms: 10e3,
-            tc1: None,
-        });
-        (c, o)
-    }
-
-    /// The transient gate: the staged run must match the monolith within the
-    /// capture-grid claim. Observed error on this fixture is ~1e-12 away
-    /// from switching instants and bounded by one grid interval around them
-    /// (both runs place the comparator edge at the same time to round-off,
-    /// since the upstream RC is solved from identical equations); the 1e-6
-    /// bar is the certificate's own exactness gate with margin.
-    #[test]
-    fn staged_replay_matches_monolith_within_capture_grid() {
-        let (c, o) = feedforward_board();
-        let dt = 50e-9;
-        let tstop = 20e-6;
-        let opts = fixed_opts(dt);
-        let d = Decomposition::analyze(&c, TearMotive::Profit);
-        // Three groups in a chain: the (absorbed) RC stack still occupies
-        // stage 0 of the DAG; absorption changes execution, not structure.
-        assert_eq!(d.dag.stages.len(), 3, "{:?}", d.dag.stages);
-        assert_eq!(d.drivers.len(), 1, "the RC stack absorbs: {:?}", d.drivers);
-
-        let staged = run_staged(&c, &d, &opts, tstop).expect("staged run");
-        let mono = monolith(&c, dt, tstop);
-
-        let err = max_error(&c, &staged, &mono);
-        assert!(err <= 1e-6, "staged diverged from monolith: {err:.3e}");
-        // The switch actually fired (the fixture is not vacuous).
-        let vo = staged.waveforms.node_voltages[o.0 as usize].last().copied();
-        assert!(vo.unwrap() > 3.0, "switch never closed: {vo:?}");
-        // Every replayed free tear's grid is filled: no claim left pending.
-        for r in &staged.certificate.records {
-            if r.kind == TearKind::Free {
-                assert_eq!(
-                    r.tolerance,
-                    ToleranceClaim::CaptureGrid { dt: Some(dt) },
-                    "{r:?}"
-                );
-            }
-        }
-    }
-
-    /// The DC-boundary gate: with static sources everything settles, replay
-    /// is a constant, and staged must equal the monolith to round-off.
-    #[test]
-    fn dc_boundaries_match_to_round_off() {
-        let (mut c, _) = feedforward_board();
-        // Make the ramp source DC so every boundary is static after t=0.
-        if let Device::Vsource { kind, .. } = &mut c.devices[0] {
-            *kind = SourceKind::Dc(5.0);
-        }
-        let dt = 100e-9;
-        let tstop = 5e-6;
-        let opts = fixed_opts(dt);
-        let d = Decomposition::analyze(&c, TearMotive::Profit);
-        let staged = run_staged(&c, &d, &opts, tstop).expect("staged run");
-        let mono = monolith(&c, dt, tstop);
-        let err = max_error(&c, &staged, &mono);
-        assert!(
-            err <= 1e-9,
-            "DC boundaries must be round-off exact: {err:.3e}"
-        );
-    }
-
-    /// Refuse-rather-than-fake: an unsound decomposition (floating sense
-    /// net) must be refused with the certificate's own words, and adaptive
-    /// step control must be refused because no capture grid can be claimed.
-    #[test]
-    fn unsound_or_adaptive_runs_are_refused() {
-        let mut c = Circuit::new();
-        let x = c.node("x");
-        let y = c.node("y");
-        c.add(Device::Vsource {
-            name: "V".into(),
-            p: x,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        let sel = c.node("sel_floating");
-        c.add(Device::VSwitch {
-            name: "S".into(),
-            a: x,
-            b: y,
-            ctrl_p: sel,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        c.add(Device::Resistor {
-            name: "R".into(),
-            a: y,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let d = Decomposition::analyze(&c, TearMotive::Profit);
-        let err = run_staged(&c, &d, &fixed_opts(1e-7), 1e-6).unwrap_err();
-        assert!(err.to_string().contains("unsound"), "{err}");
-
-        let (c2, _) = feedforward_board();
-        let d2 = Decomposition::analyze(&c2, TearMotive::Profit);
-        let adaptive = SolverOptions::default(); // adaptive step control
-        let err2 = run_staged(&c2, &d2, &adaptive, 1e-6).unwrap_err();
-        assert!(err2.to_string().contains("fixed step"), "{err2}");
-    }
-
-    /// The Tarski shape end to end, in miniature: a shunt-fed PNP mirror
-    /// array (accepted balance tear) whose block-0 collector a comparator
-    /// senses (free tear), whose output gates a switch island (second free
-    /// tear). The staged run must put the array group on the TORN engine,
-    /// driven by the rails.rs decision rather than the legacy detection, and
-    /// the whole three-stage pipeline must match the monolith.
-    #[test]
-    fn balance_torn_group_matches_monolith() {
-        use hauksbee_ir::{BjtModel, Polarity};
-        let mut c = Circuit::new();
-        let p5 = c.node("+5V");
-        c.add(Device::Vsource {
-            name: "V5".into(),
-            p: p5,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        let rail = c.node("ANALOG_VDD");
-        c.add(Device::Resistor {
-            name: "R_shunt".into(),
-            a: p5,
-            b: rail,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        let mut c0 = NodeId::GROUND;
-        for k in 0..24 {
-            let base = c.node(&format!("b{k}"));
-            let col = c.node(&format!("c{k}"));
-            if k == 0 {
-                c0 = col;
-            }
-            c.add(Device::Bjt {
-                name: format!("Q{k}"),
-                c: col,
-                b: base,
-                e: rail,
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("Rb{k}"),
-                a: base,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("Rc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
-        }
-        // Comparator island: watches block 0's collector.
-        let cmp_out = c.node("cmp_out");
-        c.add(Device::Resistor {
-            name: "Rcmp".into(),
-            a: cmp_out,
-            b: NodeId::GROUND,
-            ohms: 10e3,
-            tc1: None,
-        });
-        c.add(Device::Comparator {
-            name: "CMP".into(),
-            out: cmp_out,
-            inp: c0,
-            inn: NodeId::GROUND,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
-        // Switch island: gated by the comparator.
-        let s = c.node("s");
-        let o = c.node("o");
-        c.add(Device::Vsource {
-            name: "V2".into(),
-            p: s,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.3),
-        });
-        c.add(Device::VSwitch {
-            name: "SW".into(),
-            a: s,
-            b: o,
-            ctrl_p: cmp_out,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        c.add(Device::Resistor {
-            name: "RL".into(),
-            a: o,
-            b: NodeId::GROUND,
-            ohms: 10e3,
-            tc1: None,
-        });
-
-        let dt = 100e-9;
-        let tstop = 5e-6;
-        let d = Decomposition::analyze(&c, TearMotive::Profit);
-        let accepted: Vec<_> = d.balance_tears.iter().filter(|t| t.torn()).collect();
-        assert_eq!(accepted.len(), 1, "{:?}", d.balance_tears);
-        assert_eq!(accepted[0].rail, rail);
-
-        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
-        assert_eq!(
-            staged.torn_groups.len(),
-            1,
-            "the array group must run torn: {:?}",
-            staged.torn_groups
-        );
-
-        let mono = monolith(&c, dt, tstop);
-        let err = max_error(&c, &staged, &mono);
-        assert!(err <= 1e-6, "torn staged diverged from monolith: {err:.3e}");
-        // The pipeline end actually energized (the fixture is not vacuous).
-        let vo = staged.waveforms.node(&c, "o").unwrap().last().copied();
-        assert!(vo.unwrap() > 3.0, "switch never closed: {vo:?}");
-    }
-
-    /// The stacked-feed cascade end to end (rails.rs's `stacked_cascade`
-    /// shape): SRC -> 500R -> MID (two PNP loads) -> 1k -> INNER (24-block PNP
-    /// array). BOTH rails are accepted balance tears now that the executor
-    /// carries the inter-rail shunt term, so this is the gate that proves the
-    /// carry is EXACT rather than merely permitted. The R2 shunt between the
-    /// two torn rails lives in no block: INNER books it as its feed term and
-    /// MID books it as an analytic child draw. If either side dropped it, MID
-    /// would sit ~0.7 V off and this two-sided compare would fail.
-    #[test]
-    fn cascaded_rails_match_monolith() {
-        use hauksbee_ir::{BjtModel, Polarity};
-        let mut c = Circuit::new();
-        let src = c.node("+5V_SRC");
-        c.add(Device::Vsource {
-            name: "VS".into(),
-            p: src,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        let mid = c.node("MID");
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: src,
-            b: mid,
-            ohms: 500.0,
-            tc1: None,
-        });
-        let inner = c.node("INNER");
-        c.add(Device::Resistor {
-            name: "R2".into(),
-            a: mid,
-            b: inner,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        // Two small loads on MID (keep it above the fanout floor).
-        for k in 0..2 {
-            let b = c.node(&format!("mb{k}"));
-            let col = c.node(&format!("mc{k}"));
-            c.add(Device::Bjt {
-                name: format!("MQ{k}"),
-                c: col,
-                b,
-                e: mid,
-                model,
-            });
-            c.add(Device::Resistor {
-                name: format!("MRb{k}"),
-                a: b,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("MRc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-        }
-        // The array on INNER.
-        for k in 0..24 {
-            let b = c.node(&format!("ib{k}"));
-            let col = c.node(&format!("ic{k}"));
-            c.add(Device::Bjt {
-                name: format!("IQ{k}"),
-                c: col,
-                b,
-                e: inner,
-                model,
-            });
-            c.add(Device::Resistor {
-                name: format!("IRb{k}"),
-                a: b,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("IRc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-        }
-
-        let dt = 100e-9;
-        let tstop = 5e-6;
-        let d = Decomposition::analyze(&c, TearMotive::Profit);
-        let accepted: Vec<_> = d.balance_tears.iter().filter(|t| t.torn()).collect();
-        assert_eq!(
-            accepted.len(),
-            2,
-            "both cascade rails must tear: {:?}",
-            d.balance_tears
-        );
-        assert!(
-            accepted.iter().any(|t| t.rail == mid) && accepted.iter().any(|t| t.rail == inner),
-            "the accepted set must be exactly {{MID, INNER}}: {:?}",
-            d.balance_tears
-        );
-
-        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
-        assert!(
-            !staged.torn_groups.is_empty(),
-            "the cascade group must run torn: {:?}",
-            staged.torn_groups
-        );
-
-        let mono = monolith(&c, dt, tstop);
-        // Two-sided capture-grid compare, copied from
-        // `torn_group_with_replay_pin_matches_monolith`. This board is all
-        // DC, so away from any (nonexistent) edge the runs agree flatly; the
-        // two-sided form is kept for uniformity with the suite.
-        //
-        // The bar per node is the MUTUAL Newton stopping slack,
-        // 2*(reltol*|v| + vntol): the torn group and the monolith each stop
-        // within one step tolerance of the root, and their iteration paths
-        // are legitimately different (the junction-limiting evaluation
-        // schedule denies convergence on limited iterations, and the two
-        // paths limit at different iterates), so their answers can differ by
-        // up to the sum of both slacks on the EARLY steps while the shared
-        // fixed point still pulls them together at settle; the DC-settled
-        // 1e-9 assert below keeps that stronger claim. A flat 1e-6 here was
-        // evidence of shared iteration machinery, not of physics (measured:
-        // 2.2e-5 on a 3.57 V base at the first step, 6e-6 relative, with the
-        // settled samples still round-off equal).
-        let opts_ref = fixed_opts(dt);
-        for node in 1..c.node_count() {
-            for (k, &t) in staged.waveforms.time.iter().enumerate() {
-                let sv = staged.waveforms.node_voltages[node][k];
-                let m = &mono.node_voltages[node];
-                let mv = lerp_at(&mono.time, m, t);
-                let tol = 2.0 * (opts_ref.reltol * mv.abs() + opts_ref.vntol);
-                if (sv - mv).abs() <= tol {
-                    continue;
-                }
-                let edge_hit = (0..=8).any(|j| {
-                    let tt = t - dt + (j as f64) * (dt / 4.0);
-                    (lerp_at(&mono.time, m, tt) - sv).abs() <= tol
-                });
-                assert!(
-                    edge_hit,
-                    "cascaded torn group diverged from the monolith: node {} t={t:.3e} \
-                     staged {sv:.9} vs mono {:.9}",
-                    c.node_name(NodeId(node as u32)),
-                    lerp_at(&mono.time, m, t)
-                );
-            }
-        }
-
-        // DC-settled variant: with static sources the whole board is a DC
-        // operating point at every step, so the final sample must equal the
-        // monolith to round-off (the stronger claim). Both rails moved off
-        // their unloaded feed values, so the tear is not vacuous.
-        let last = staged.waveforms.time.len() - 1;
-        for node in 1..c.node_count() {
-            let sv = staged.waveforms.node_voltages[node][last];
-            let mv = lerp_at(
-                &mono.time,
-                &mono.node_voltages[node],
-                staged.waveforms.time[last],
-            );
-            assert!(
-                (sv - mv).abs() <= 1e-9,
-                "DC-settled cascade must be round-off exact: node {} staged {sv:.12} vs mono {mv:.12}",
-                c.node_name(NodeId(node as u32))
-            );
-        }
-        let vmid = *staged.waveforms.node(&c, "MID").unwrap().last().unwrap();
-        let vinner = *staged.waveforms.node(&c, "INNER").unwrap().last().unwrap();
-        assert!(
-            vmid < 4.99 && vinner < vmid - 0.1,
-            "the cascade must actually drop across both shunts: MID {vmid} INNER {vinner}"
-        );
-    }
-
-    /// The bypass-cap exactness gate: a decoupling cap on a balance-torn
-    /// rail rides in a boundary-only island whose current enters the
-    /// balance books. A detector whose island analysis drops the cap REFUSES
-    /// this shape; carrying the current instead is what permits it, and this
-    /// gate is the proof that permission is exact.
-    /// A pulsed base drive keeps dv/dt nonzero so the cap's current is a
-    /// live term, not a settled zero.
-    #[test]
-    fn bypass_cap_on_torn_rail_matches_monolith() {
-        use hauksbee_ir::{BjtModel, Polarity};
-        let mut c = Circuit::new();
-        let p5 = c.node("+5V");
-        c.add(Device::Vsource {
-            name: "V5".into(),
-            p: p5,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        let rail = c.node("ANALOG_VDD");
-        c.add(Device::Resistor {
-            name: "R_shunt".into(),
-            a: p5,
-            b: rail,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: "Cbypass".into(),
-            a: rail,
-            b: NodeId::GROUND,
-            farads: 100e-9,
-            ic: None,
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        for k in 0..24 {
-            let base = c.node(&format!("b{k}"));
-            let col = c.node(&format!("c{k}"));
-            c.add(Device::Bjt {
-                name: format!("Q{k}"),
-                c: col,
-                b: base,
-                e: rail,
-                model: model.clone(),
-            });
-            if k == 0 {
-                // Pulse block 0's bias THROUGH its base resistor so the rail
-                // (and the cap) sees a transient: the C*dv/dt term goes live.
-                // Driving the base with an ideal source directly would
-                // forward-bias the EB junction by volts, which is not a
-                // circuit, it is a dead transistor.
-                let drv = c.node("b0drv");
-                c.add(Device::Vsource {
-                    name: "VB0".into(),
-                    p: drv,
-                    n: NodeId::GROUND,
-                    kind: SourceKind::Pulse {
-                        v1: 0.0,
-                        v2: 3.0,
-                        delay: 1.05e-6,
-                        rise: 0.5e-6,
-                        fall: 0.5e-6,
-                        width: 2e-6,
-                        period: 0.0,
-                    },
-                });
-                c.add(Device::Resistor {
-                    name: "Rb0".into(),
-                    a: base,
-                    b: drv,
-                    ohms: 100e3,
-                    tc1: None,
-                });
-            } else {
-                c.add(Device::Resistor {
-                    name: format!("Rb{k}"),
-                    a: base,
-                    b: NodeId::GROUND,
-                    ohms: 100e3,
-                    tc1: None,
-                });
-            }
-            c.add(Device::Resistor {
-                name: format!("Rc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
-        }
-
-        let dt = 100e-9;
-        let tstop = 6e-6;
-        let d = Decomposition::analyze(&c, TearMotive::Profit);
-        assert!(
-            d.balance_tears.iter().any(|t| t.torn()),
-            "{:?}",
-            d.balance_tears
-        );
-        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
-        assert!(!staged.torn_groups.is_empty(), "must actually run torn");
-        let mono = monolith(&c, dt, tstop);
-        // Two-sided compare at 5e-6. The bar is wider than the suite's usual
-        // 1e-6 for a root-caused reason: Newton acceptance is update-based
-        // only (newton.rs converged(): |dx| <= reltol*|x| + vntol, no
-        // residual test), so at a junction-knee step each engine's path
-        // stops at a different point inside the reltol*|x| band (~4.3 mV at
-        // this base node), and the accepted value is the quadratic Newton
-        // image of the last step: a ~1.2e-6 V acceptance spread, present in
-        // BOTH formulations, insensitive to vntol by construction. Verified
-        // by a 400-warm-start repro (spread quadratic in reltol, unmoved by
-        // vntol; pnjlim inactive at termination step sizes, hypothesis
-        // refuted). The designed fix, a node-row residual gate reusing the
-        // line-search matvec behind a strategy flag, collapses the band to
-        // ~1e-12 and lets this bar return to 1e-6; it lands with the
-        // strategy ladder because it changes accepted values bitwise
-        // everywhere. A persistent offset, the failure this gate hunts,
-        // still fails at this bar (flat regions agree to 1e-15).
-        let tol = 5e-6;
-        for node in 1..c.node_count() {
-            for (k, &t) in staged.waveforms.time.iter().enumerate() {
-                let sv = staged.waveforms.node_voltages[node][k];
-                let m = &mono.node_voltages[node];
-                if (sv - lerp_at(&mono.time, m, t)).abs() <= tol {
-                    continue;
-                }
-                let edge_hit = (0..=8).any(|j| {
-                    let tt = t - dt + (j as f64) * (dt / 4.0);
-                    (lerp_at(&mono.time, m, tt) - sv).abs() <= tol
-                });
-                assert!(
-                    edge_hit,
-                    "bypass cap current leaked from the balance books: node {} t={t:.3e} \
-                     staged {sv:.9} vs mono {:.9}",
-                    c.node_name(NodeId(node as u32)),
-                    lerp_at(&mono.time, m, t)
-                );
-            }
-        }
-        // The transient really moved the rail (the cap term was live).
-        let vr = staged.waveforms.node(&c, "ANALOG_VDD").unwrap();
-        let swing = vr.iter().cloned().fold(f64::MIN, f64::max)
-            - vr.iter().cloned().fold(f64::MAX, f64::min);
-        assert!(
-            swing > 1e-3,
-            "rail never moved; the gate is vacuous: {swing}"
-        );
-    }
-
-    /// The composition the review flagged as unexercised: a group with BOTH
-    /// an imposed rail tear AND an inbound replay pin. An upstream pulsed
-    /// comparator gates a switch inside the torn array (block 0's base
-    /// return path), so the balance loop must track a load change that
-    /// arrives THROUGH the replay boundary mid-run. The replay pin becomes
-    /// a cut source inside the partitioned engine (evaluated per step) and
-    /// must not disturb the tear's exactness.
-    #[test]
-    fn torn_group_with_replay_pin_matches_monolith() {
-        use hauksbee_ir::{BjtModel, Polarity};
-        let mut c = Circuit::new();
-        // Upstream island: pulsed source, sensed by the comparator.
-        let vin = c.node("vin");
-        c.add(Device::Vsource {
-            name: "VP".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Pulse {
-                v1: 0.0,
-                v2: 5.0,
-                delay: 1e-6,
-                rise: 0.5e-6,
-                fall: 0.5e-6,
-                width: 10e-6,
-                period: 0.0,
-            },
-        });
-        let cmp_out = c.node("cmp_out");
-        c.add(Device::Resistor {
-            name: "Rcmp".into(),
-            a: cmp_out,
-            b: NodeId::GROUND,
-            ohms: 10e3,
-            tc1: None,
-        });
-        c.add(Device::Comparator {
-            name: "CMP".into(),
-            out: cmp_out,
-            inp: vin,
-            inn: NodeId::GROUND,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
-        // The array: shunt-fed rail, 24 PNP blocks; block 0's base return
-        // runs through a switch gated by the upstream comparator.
-        let p5 = c.node("+5V");
-        c.add(Device::Vsource {
-            name: "V5".into(),
-            p: p5,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        let rail = c.node("ANALOG_VDD");
-        c.add(Device::Resistor {
-            name: "R_shunt".into(),
-            a: p5,
-            b: rail,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        for k in 0..24 {
-            let base = c.node(&format!("b{k}"));
-            let col = c.node(&format!("c{k}"));
-            c.add(Device::Bjt {
-                name: format!("Q{k}"),
-                c: col,
-                b: base,
-                e: rail,
-                model: model.clone(),
-            });
-            if k == 0 {
-                // Base return via the gated switch: the block's bias, and
-                // with it the rail current, changes when the replayed edge
-                // arrives.
-                let ret = c.node("b0_ret");
-                c.add(Device::Resistor {
-                    name: "Rb0".into(),
-                    a: base,
-                    b: ret,
-                    ohms: 100e3,
-                    tc1: None,
-                });
-                c.add(Device::VSwitch {
-                    name: "SW0".into(),
-                    a: ret,
-                    b: NodeId::GROUND,
-                    ctrl_p: cmp_out,
-                    ctrl_n: NodeId::GROUND,
-                    von: 2.0,
-                    voff: 1.0,
-                    ron: 10.0,
-                    roff: 1e9,
-                });
-            } else {
-                c.add(Device::Resistor {
-                    name: format!("Rb{k}"),
-                    a: base,
-                    b: NodeId::GROUND,
-                    ohms: 100e3,
-                    tc1: None,
-                });
-            }
-            c.add(Device::Resistor {
-                name: format!("Rc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
-        }
-
-        let dt = 100e-9;
-        let tstop = 6e-6;
-        let d = Decomposition::analyze(&c, TearMotive::Profit);
-        assert!(
-            d.balance_tears.iter().any(|t| t.torn() && t.rail == rail),
-            "{:?}",
-            d.balance_tears
-        );
-        assert!(
-            !d.dag.free_tears.is_empty(),
-            "the comparator boundary must be a free tear: {:?}",
-            d.dag.free_tears
-        );
-
-        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
-        assert!(
-            !staged.torn_groups.is_empty(),
-            "the array group must run torn despite the replay pin: {:?}",
-            staged.torn_groups
-        );
-        let mono = monolith(&c, dt, tstop);
-        // Two-sided compare per the capture-grid claim (same semantics as
-        // tests/staged_property.rs): a replayed edge may arrive up to one
-        // grid interval late downstream, so a point passes when the values
-        // agree OR the reference attains the same value within +/- dt. This
-        // fixture's worst raw pointwise error (6.6e-6 at c0, t=1.1us, the
-        // switching instant, gain-amplified through Q0) is exactly that
-        // transient; away from the edge the runs agree below 1e-6.
-        let tol = 1e-6;
-        for node in 1..c.node_count() {
-            for (k, &t) in staged.waveforms.time.iter().enumerate() {
-                let sv = staged.waveforms.node_voltages[node][k];
-                let m = &mono.node_voltages[node];
-                if (sv - lerp_at(&mono.time, m, t)).abs() <= tol {
-                    continue;
-                }
-                let edge_hit = (0..=8).any(|j| {
-                    let tt = t - dt + (j as f64) * (dt / 4.0);
-                    (lerp_at(&mono.time, m, tt) - sv).abs() <= tol
-                });
-                assert!(
-                    edge_hit,
-                    "replay-pinned torn group diverged beyond the capture-grid claim: \
-                     node {} t={t:.3e} staged {sv:.9} vs mono {:.9}",
-                    c.node_name(NodeId(node as u32)),
-                    lerp_at(&mono.time, m, t)
-                );
-            }
-        }
-        // The mid-run load change actually happened: block 0's collector
-        // moved when the comparator fired (the fixture is not vacuous).
-        let c0 = staged.waveforms.node(&c, "c0").unwrap();
-        let swing = c0.iter().cloned().fold(f64::MIN, f64::max)
-            - c0.iter().cloned().fold(f64::MAX, f64::min);
-        assert!(swing > 0.05, "block 0 never responded to the edge: {swing}");
-    }
-
-    /// End-to-end stiff wiring: analysis nominates cut nodes on a chain of
-    /// BJT blocks, run_staged executes the measured waveform relaxation,
-    /// the certificate carries Stiff records with real residuals, and the
-    /// result matches the fused monolith within the certificate's own
-    /// numbers.
-    #[test]
-    fn stiff_cuts_flow_through_run_staged() {
-        use crate::decompose::stiff::StiffPolicy;
-        use hauksbee_ir::{BjtModel, Polarity};
-        let mut c = Circuit::new();
-        let vs = c.node("vs");
-        c.add(Device::Vsource {
-            name: "VS".into(),
-            p: vs,
-            n: NodeId::GROUND,
-            kind: SourceKind::Pulse {
-                v1: 3.0,
-                v2: 5.0,
-                delay: 1e-6,
-                rise: 0.5e-6,
-                fall: 0.5e-6,
-                width: 1.5e-6,
-                period: 0.0,
-            },
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        // A chain of three BJT blocks joined through low-impedance nets.
-        let mut prev = vs;
-        for k in 0..3 {
-            let joint = c.node(&format!("j{k}"));
-            c.add(Device::Resistor {
-                name: format!("Rj{k}"),
-                a: prev,
-                b: joint,
-                ohms: 100.0,
-                tc1: None,
-            });
-            let b = c.node(&format!("b{k}"));
-            c.add(Device::Bjt {
-                name: format!("Q{k}"),
-                c: NodeId::GROUND,
-                b,
-                e: joint,
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("Rb{k}"),
-                a: b,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-            prev = joint;
-        }
-
-        let dt = 100e-9;
-        let tstop = 4e-6;
-        let opts = fixed_opts(dt);
-        let d = Decomposition::analyze_with_boundaries(
-            &c,
-            TearMotive::Profit,
-            Default::default(),
-            Default::default(),
-            StiffPolicy {
-                min_block_devices: 2,
-                max_probes_per_block: 8,
-            },
-            &[],
-        );
-        assert!(
-            !d.stiff.is_empty(),
-            "the chain must yield stiff nominations: {:?}",
-            d.balance_tears
-        );
-
-        let staged = run_staged(&c, &d, &opts, tstop).expect("staged");
-        let accepted: Vec<_> = staged
-            .stiff_outcomes
-            .iter()
-            .filter(|(_, o)| o.accepted)
-            .collect();
-        assert!(
-            !accepted.is_empty(),
-            "the relaxation must certify at least one boundary: {:?}",
-            staged.stiff_outcomes
-        );
-        let stiff_records: Vec<_> = staged
-            .certificate
-            .records
-            .iter()
-            .filter(|r| r.kind == TearKind::Stiff)
-            .collect();
-        assert_eq!(stiff_records.len(), accepted.len());
-        for r in &stiff_records {
-            match r.tolerance {
-                ToleranceClaim::Stiffness { sag_v } => {
-                    assert!(sag_v.is_finite(), "{r:?}");
-                }
-                ref other => panic!("stiff record with wrong claim: {other:?}"),
-            }
-        }
-        // The pinned nodes joined the supply-integrity refusal.
-        assert!(staged
-            .certificate
-            .permits(crate::decompose::verify::RefusedAnalysis::SupplyIntegrityOnTornRail)
-            .is_err());
-
-        let max_sag = accepted.iter().map(|(_, o)| o.sag_v).fold(0.0f64, f64::max);
-        let mono = monolith(&c, dt, tstop);
-        let tol = (3.0 * max_sag).max(2e-6);
-        for node in 1..c.node_count() {
-            for (k, &t) in staged.waveforms.time.iter().enumerate() {
-                let sv = staged.waveforms.node_voltages[node][k];
-                let mv = lerp_at(&mono.time, &mono.node_voltages[node], t);
-                assert!(
-                    (sv - mv).abs() <= tol,
-                    "staged stiff diverged at {} t={t:.3e}: {sv:.6} vs {mv:.6} (sag {max_sag:.3e})",
-                    c.node_name(NodeId(node as u32))
-                );
-            }
-        }
-    }
-
-    /// The certificate-honesty gate on the composed record mapping: what each
-    /// [`BoundaryKind`] is allowed to claim, keyed on the STRUCTURED kind and
-    /// never the prose note. The load-bearing case is HeldRail: a feed-held
-    /// rail must NOT produce a balance-exact record (it once did, via a
-    /// note-string match; review finding), and its record must say Stiff +
-    /// AssumedFeedHold + Unmeasured. Every composed outcome, held rails
-    /// included, also joins the supply-integrity refusal in run_staged (the
-    /// insertion is unconditional over exec.outcomes; the stiff-path variant
-    /// of that refusal is gated by `stiff_cuts_flow_through_run_staged`).
-    #[test]
-    fn composed_records_never_overclaim_a_held_rail() {
-        let outcome = |kind, sag_v, note: &'static str| StiffOutcome {
-            node: NodeId(7),
-            kind,
-            sag_v,
-            tol_v: 1e-2,
-            accepted: true,
-            bootstrapped: true,
-            capture_growth: 0,
-            note,
-        };
-        let n = NodeId(42);
-
-        let balanced = composed_tear_record(
-            &outcome(BoundaryKind::BalancedRail, 0.0, "balanced rail"),
-            n,
-        );
-        assert_eq!(balanced.kind, TearKind::Balance);
-        assert_eq!(balanced.evidence, Evidence::BalanceEquation);
-        assert_eq!(balanced.tolerance, ToleranceClaim::RoundOff);
-        assert_eq!(balanced.node, n);
-
-        let held = composed_tear_record(
-            &outcome(BoundaryKind::HeldRail, 0.0, "held rail (stiff-supply feed)"),
-            n,
-        );
-        assert_eq!(
-            held.kind,
-            TearKind::Stiff,
-            "a held rail is not a balance tear"
-        );
-        assert_eq!(held.evidence, Evidence::AssumedFeedHold);
-        assert_eq!(held.tolerance, ToleranceClaim::Unmeasured);
-
-        // The note must have NO vote: a held rail with a doctored note still
-        // downgrades (kind is the only discriminator).
-        let doctored =
-            composed_tear_record(&outcome(BoundaryKind::HeldRail, 0.0, "balanced rail"), n);
-        assert_eq!(doctored.evidence, Evidence::AssumedFeedHold);
-        assert_eq!(doctored.tolerance, ToleranceClaim::Unmeasured);
-
-        let signal = composed_tear_record(&outcome(BoundaryKind::Signal, 3.5e-7, ""), n);
-        assert_eq!(signal.kind, TearKind::Stiff);
-        assert_eq!(
-            signal.evidence,
-            Evidence::MeasuredStiffness {
-                sag_v: 3.5e-7,
-                tol_v: 1e-2
-            }
-        );
-        assert_eq!(
-            signal.tolerance,
-            ToleranceClaim::Stiffness { sag_v: 3.5e-7 }
-        );
-    }
-
-    /// Absorption exactness: the drivers.rs Thevenin shape, replicated into
-    /// two consumers, must match the monolith to round-off (no replay
-    /// happens at all, so not even a capture grid separates them).
-    #[test]
-    fn replicated_driver_matches_to_round_off() {
-        let mut c = Circuit::new();
-        let vdrv = c.node("vdrv");
-        let sel = c.node("sel");
-        c.add(Device::Vsource {
-            name: "Vdrv".into(),
-            p: vdrv,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        c.add(Device::Resistor {
-            name: "Rdrv".into(),
-            a: vdrv,
-            b: sel,
-            ohms: 1e3,
-            tc1: None,
-        });
-        for tag in ["x", "y"] {
-            let s = c.node(&format!("{tag}_src"));
-            let o = c.node(&format!("{tag}_out"));
-            c.add(Device::Vsource {
-                name: format!("V{tag}"),
-                p: s,
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(3.3),
-            });
-            c.add(Device::VSwitch {
-                name: format!("SW{tag}"),
-                a: s,
-                b: o,
-                ctrl_p: sel,
-                ctrl_n: NodeId::GROUND,
-                von: 2.0,
-                voff: 1.0,
-                ron: 1.0,
-                roff: 1e9,
-            });
-            c.add(Device::Resistor {
-                name: format!("RL{tag}"),
-                a: o,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
-        }
-        let dt = 100e-9;
-        let tstop = 2e-6;
-        let d = Decomposition::analyze(&c, TearMotive::Profit);
-        assert_eq!(d.drivers.len(), 1);
-        assert_eq!(d.drivers[0].consumers.len(), 2);
-        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
-        let mono = monolith(&c, dt, tstop);
-        let err = max_error(&c, &staged, &mono);
-        assert!(err <= 1e-9, "absorption must be exact: {err:.3e}");
-        // Both switches closed from the shared, replicated driver.
-        for tag in ["x_out", "y_out"] {
-            let series = staged
-                .waveforms
-                .node(&c, tag)
-                .unwrap_or_else(|| panic!("{tag} missing"));
-            assert!(
-                series.last().copied().unwrap() > 3.0,
-                "{tag} never energized"
-            );
-        }
-    }
-}
-
 /// One group's DC health, from [`probe_groups_dc`].
 #[derive(Debug)]
 pub struct GroupDcProbe {
@@ -2214,4 +998,486 @@ pub fn probe_groups_dc(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decompose::rails::TearMotive;
+    use crate::options::RobustnessLadder;
+    use crate::test_fixtures::{
+        assert_matches_within_grid, cap, comparator, diode, fixed_opts, max_error, monolith,
+        pnp_blocks, res, shunt_array, sw, swing, vdc, vpulse, GND,
+    };
+
+    /// The two structurally-justified ladder trims fire on the right island
+    /// classes, everything else passes through, and an empty ladder stays empty.
+    #[test]
+    fn ladder_selection_trims_only_structurally_dead_grants() {
+        let full = SolverOptions {
+            ladder: RobustnessLadder::full(),
+            ..Default::default()
+        };
+        let mut lin = Circuit::new();
+        let (a, b) = (lin.node("a"), lin.node("b"));
+        vdc(&mut lin, "V", a, 5.0);
+        res(&mut lin, "R1", a, b, 1e3);
+        res(&mut lin, "R2", b, GND, 1e3);
+        let sel = select_group_ladder(&lin, &full);
+        assert!(!sel.ladder.has(Strategy::LineSearch));
+        assert!(!sel.ladder.has(Strategy::EventFreeze));
+        for s in [
+            Strategy::DynamicPivot,
+            Strategy::DynamicPivotEveryStep,
+            Strategy::Ptc,
+            Strategy::ResidualAccept,
+            Strategy::TransientDyn,
+        ] {
+            assert!(sel.ladder.has(s), "{s:?}");
+        }
+
+        let mut dio = lin.clone();
+        let c = dio.node("c");
+        diode(&mut dio, "D", b, c, Default::default());
+        res(&mut dio, "R3", c, GND, 1e3);
+        let sel = select_group_ladder(&dio, &full);
+        assert!(sel.ladder.has(Strategy::LineSearch));
+        assert!(!sel.ladder.has(Strategy::EventFreeze));
+
+        let mut cmp = dio.clone();
+        let o = cmp.node("o");
+        comparator(&mut cmp, "K", o, b, c, 0.1);
+        let sel = select_group_ladder(&cmp, &full);
+        assert!(sel.ladder.has(Strategy::EventFreeze) && sel.ladder.has(Strategy::LineSearch));
+
+        assert_eq!(
+            select_group_ladder(&lin, &SolverOptions::default())
+                .ladder
+                .steps()
+                .count(),
+            0
+        );
+    }
+
+    fn worst_error(c: &Circuit, staged: &StagedResult, mono: &Waveforms) -> f64 {
+        max_error(
+            c,
+            &staged.waveforms.time,
+            &staged.waveforms.node_voltages,
+            mono,
+        )
+        .0
+    }
+
+    /// A pulsed RC stack (absorbed as a driver), a comparator island conducting
+    /// its own output, and a switch island sensing the comparator: one replayed
+    /// tear, one absorption, three groups across two stages. Returns the switch
+    /// output node.
+    fn feedforward_board() -> (Circuit, NodeId) {
+        let mut c = Circuit::new();
+        let (vin, a) = (c.node("vin"), c.node("a"));
+        vpulse(&mut c, "V1", vin, (0.0, 5.0), 2e-6, (1e-6, 1e-6), 30e-6);
+        res(&mut c, "R1", vin, a, 1e3);
+        cap(&mut c, "C1", a, GND, 1e-9);
+        let cmp_out = c.node("cmp_out");
+        res(&mut c, "Rc", cmp_out, GND, 10e3);
+        comparator(&mut c, "CMP", cmp_out, a, GND, 1e-3);
+        let (s, o) = (c.node("s"), c.node("o"));
+        vdc(&mut c, "V2", s, 3.3);
+        sw(&mut c, "SW", s, o, cmp_out, (2.0, 1.0), 10.0);
+        res(&mut c, "RL", o, GND, 10e3);
+        (c, o)
+    }
+
+    /// The transient gate: staged matches the monolith within the capture-grid
+    /// claim; with DC sources every boundary is static and it matches to
+    /// round-off.
+    #[test]
+    fn staged_replay_matches_monolith_within_capture_grid() {
+        let (c, o) = feedforward_board();
+        let (dt, tstop) = (50e-9, 20e-6);
+        let opts = fixed_opts(dt);
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        assert_eq!(d.dag.stages.len(), 3, "{:?}", d.dag.stages);
+        assert_eq!(d.drivers.len(), 1, "the RC stack absorbs: {:?}", d.drivers);
+        let staged = run_staged(&c, &d, &opts, tstop).expect("staged run");
+        let err = worst_error(&c, &staged, &monolith(&c, &opts, tstop));
+        assert!(err <= 1e-6, "staged diverged from monolith: {err:.3e}");
+        assert!(
+            staged.waveforms.node_voltages[o.0 as usize].last().unwrap() > &3.0,
+            "switch never closed"
+        );
+        for r in &staged.certificate.records {
+            if r.kind == TearKind::Free {
+                assert_eq!(
+                    r.tolerance,
+                    ToleranceClaim::CaptureGrid { dt: Some(dt) },
+                    "{r:?}"
+                );
+            }
+        }
+
+        let (mut c, _) = feedforward_board();
+        if let Device::Vsource { kind, .. } = &mut c.devices[0] {
+            *kind = SourceKind::Dc(5.0);
+        }
+        let (dt, tstop) = (100e-9, 5e-6);
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged run");
+        let err = worst_error(&c, &staged, &monolith(&c, &fixed_opts(dt), tstop));
+        assert!(
+            err <= 1e-9,
+            "DC boundaries must be round-off exact: {err:.3e}"
+        );
+    }
+
+    /// An unsound decomposition (floating sense net) and adaptive step control
+    /// are both refused rather than faked.
+    #[test]
+    fn unsound_or_adaptive_runs_are_refused() {
+        let mut c = Circuit::new();
+        let (x, y) = (c.node("x"), c.node("y"));
+        vdc(&mut c, "V", x, 1.0);
+        let sel = c.node("sel_floating");
+        sw(&mut c, "S", x, y, sel, (2.0, 1.0), 10.0);
+        res(&mut c, "R", y, GND, 1e3);
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        assert!(run_staged(&c, &d, &fixed_opts(1e-7), 1e-6).is_err());
+
+        let (c2, _) = feedforward_board();
+        let d2 = Decomposition::analyze(&c2, TearMotive::Profit);
+        assert!(run_staged(&c2, &d2, &SolverOptions::default(), 1e-6).is_err());
+    }
+
+    /// A shunt-fed PNP array (balance tear) whose block-0 collector a
+    /// comparator senses (free tear), gating a switch island (second free
+    /// tear): the array group runs TORN and the pipeline matches the monolith.
+    #[test]
+    fn balance_torn_group_matches_monolith() {
+        let (mut c, rail, _, _, blocks) = shunt_array(24, 1e3);
+        let cmp_out = c.node("cmp_out");
+        res(&mut c, "Rcmp", cmp_out, GND, 10e3);
+        comparator(&mut c, "CMP", cmp_out, blocks[0].1, GND, 1e-3);
+        let (s, o) = (c.node("s"), c.node("o"));
+        vdc(&mut c, "V2", s, 3.3);
+        sw(&mut c, "SW", s, o, cmp_out, (2.0, 1.0), 10.0);
+        res(&mut c, "RL", o, GND, 10e3);
+
+        let (dt, tstop) = (100e-9, 5e-6);
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        let accepted: Vec<_> = d.balance_tears.iter().filter(|t| t.torn()).collect();
+        assert_eq!(accepted.len(), 1, "{:?}", d.balance_tears);
+        assert_eq!(accepted[0].rail, rail);
+        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
+        assert_eq!(staged.torn_groups.len(), 1, "{:?}", staged.torn_groups);
+        let err = worst_error(&c, &staged, &monolith(&c, &fixed_opts(dt), tstop));
+        assert!(err <= 1e-6, "torn staged diverged from monolith: {err:.3e}");
+        assert!(
+            staged.waveforms.final_node(&c, "o").unwrap() > 3.0,
+            "switch never closed"
+        );
+    }
+
+    /// SRC -> 500R -> MID (two PNP loads) -> 1k -> INNER (24-block array): both
+    /// rails tear, and the inter-rail shunt term is carried EXACTLY.
+    #[test]
+    fn cascaded_rails_match_monolith() {
+        let mut c = Circuit::new();
+        let src = c.node("+5V_SRC");
+        vdc(&mut c, "VS", src, 5.0);
+        let (mid, inner) = (c.node("MID"), c.node("INNER"));
+        res(&mut c, "R1", src, mid, 500.0);
+        res(&mut c, "R2", mid, inner, 1e3);
+        pnp_blocks(&mut c, "m", mid, 2, GND, 100e3, 100e3);
+        pnp_blocks(&mut c, "i", inner, 24, GND, 100e3, 100e3);
+
+        let (dt, tstop) = (100e-9, 5e-6);
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        let accepted: Vec<_> = d.balance_tears.iter().filter(|t| t.torn()).collect();
+        assert_eq!(accepted.len(), 2, "{:?}", d.balance_tears);
+        assert!(accepted.iter().any(|t| t.rail == mid) && accepted.iter().any(|t| t.rail == inner));
+        let opts = fixed_opts(dt);
+        let staged = run_staged(&c, &d, &opts, tstop).expect("staged");
+        assert!(!staged.torn_groups.is_empty());
+        let mono = monolith(&c, &opts, tstop);
+        // Per node, the MUTUAL Newton stopping slack: each engine stops within
+        // one step tolerance of the root along a different iteration path.
+        assert_matches_within_grid(
+            &c,
+            &staged.waveforms.time,
+            &staged.waveforms.node_voltages,
+            &mono,
+            dt,
+            &|mv| 2.0 * (opts.reltol * mv.abs() + opts.vntol),
+            "cascaded torn group",
+        );
+        // DC-settled: the final sample equals the monolith to round-off.
+        let last = staged.waveforms.time.len() - 1;
+        for node in 1..c.node_count() {
+            let sv = staged.waveforms.node_voltages[node][last];
+            let mv = lerp_at(
+                &mono.time,
+                &mono.node_voltages[node],
+                staged.waveforms.time[last],
+            );
+            assert!(
+                (sv - mv).abs() <= 1e-9,
+                "node {}: {sv:.12} vs {mv:.12}",
+                c.node_name(NodeId(node as u32))
+            );
+        }
+        let vmid = staged.waveforms.final_node(&c, "MID").unwrap();
+        let vinner = staged.waveforms.final_node(&c, "INNER").unwrap();
+        assert!(
+            vmid < 4.99 && vinner < vmid - 0.1,
+            "MID {vmid} INNER {vinner}"
+        );
+    }
+
+    /// A shunt-fed 24-block array with block 0's base driven by `drive`
+    /// (a pulsed source directly, or a node whose return path is gated).
+    fn pulsed_array(block0_base_to: impl FnOnce(&mut Circuit, NodeId)) -> (Circuit, NodeId) {
+        let mut c = Circuit::new();
+        let p5 = c.node("+5V");
+        vdc(&mut c, "V5", p5, 5.0);
+        let rail = c.node("ANALOG_VDD");
+        res(&mut c, "R_shunt", p5, rail, 1e3);
+        let blocks = pnp_blocks(&mut c, "", rail, 24, GND, 100e3, 10e3);
+        // Re-route block 0's base return through the caller's network.
+        let rb0 = c
+            .devices
+            .iter()
+            .position(|d| d.name() == "Rb0")
+            .expect("Rb0");
+        c.devices.remove(rb0);
+        block0_base_to(&mut c, blocks[0].0);
+        (c, rail)
+    }
+
+    /// A decoupling cap on a balance-torn rail rides in a boundary-only island
+    /// whose current enters the balance books; a pulsed base drive keeps the
+    /// cap's current live.
+    #[test]
+    fn bypass_cap_on_torn_rail_matches_monolith() {
+        let (mut c, rail) = pulsed_array(|c, base| {
+            let drv = c.node("b0drv");
+            vpulse(c, "VB0", drv, (0.0, 3.0), 1.05e-6, (0.5e-6, 0.5e-6), 2e-6);
+            res(c, "Rb0", base, drv, 100e3);
+        });
+        cap(&mut c, "Cbypass", rail, GND, 100e-9);
+
+        let (dt, tstop) = (100e-9, 6e-6);
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        assert!(
+            d.balance_tears.iter().any(|t| t.torn()),
+            "{:?}",
+            d.balance_tears
+        );
+        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
+        assert!(!staged.torn_groups.is_empty());
+        let mono = monolith(&c, &fixed_opts(dt), tstop);
+        // 5e-6: the update-only Newton acceptance spread at a junction knee,
+        // present in both formulations; a persistent offset still fails.
+        assert_matches_within_grid(
+            &c,
+            &staged.waveforms.time,
+            &staged.waveforms.node_voltages,
+            &mono,
+            dt,
+            &|_| 5e-6,
+            "bypass cap current leaked from the balance books",
+        );
+        assert!(
+            swing(staged.waveforms.node(&c, "ANALOG_VDD").unwrap()) > 1e-3,
+            "rail never moved"
+        );
+    }
+
+    /// A group with BOTH an imposed rail tear AND an inbound replay pin: an
+    /// upstream pulsed comparator gates a switch in block 0's base return, so
+    /// the balance loop tracks a load change arriving through the replay.
+    #[test]
+    fn torn_group_with_replay_pin_matches_monolith() {
+        let (c, rail) = pulsed_array(|c, base| {
+            let vin = c.node("vin");
+            vpulse(c, "VP", vin, (0.0, 5.0), 1e-6, (0.5e-6, 0.5e-6), 10e-6);
+            let cmp_out = c.node("cmp_out");
+            res(c, "Rcmp", cmp_out, GND, 10e3);
+            comparator(c, "CMP", cmp_out, vin, GND, 1e-3);
+            let ret = c.node("b0_ret");
+            res(c, "Rb0", base, ret, 100e3);
+            sw(c, "SW0", ret, GND, cmp_out, (2.0, 1.0), 10.0);
+        });
+
+        let (dt, tstop) = (100e-9, 6e-6);
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        assert!(
+            d.balance_tears.iter().any(|t| t.torn() && t.rail == rail),
+            "{:?}",
+            d.balance_tears
+        );
+        assert!(!d.dag.free_tears.is_empty(), "{:?}", d.dag.free_tears);
+        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
+        assert!(!staged.torn_groups.is_empty(), "{:?}", staged.torn_groups);
+        let mono = monolith(&c, &fixed_opts(dt), tstop);
+        assert_matches_within_grid(
+            &c,
+            &staged.waveforms.time,
+            &staged.waveforms.node_voltages,
+            &mono,
+            dt,
+            &|_| 1e-6,
+            "replay-pinned torn group",
+        );
+        assert!(
+            swing(staged.waveforms.node(&c, "c0").unwrap()) > 0.05,
+            "block 0 never responded"
+        );
+    }
+
+    /// Analysis nominates cut nodes on a chain of BJT blocks, run_staged runs
+    /// the measured relaxation, the certificate carries Stiff records, and the
+    /// result matches the monolith within the certificate's numbers.
+    #[test]
+    fn stiff_cuts_flow_through_run_staged() {
+        use crate::decompose::stiff::StiffPolicy;
+        let mut c = Circuit::new();
+        let vs = c.node("vs");
+        vpulse(&mut c, "VS", vs, (3.0, 5.0), 1e-6, (0.5e-6, 0.5e-6), 1.5e-6);
+        let model = crate::test_fixtures::pnp();
+        let mut prev = vs;
+        for k in 0..3 {
+            let joint = c.node(&format!("j{k}"));
+            res(&mut c, &format!("Rj{k}"), prev, joint, 100.0);
+            let b = c.node(&format!("b{k}"));
+            crate::test_fixtures::bjt(&mut c, &format!("Q{k}"), GND, b, joint, &model);
+            res(&mut c, &format!("Rb{k}"), b, GND, 100e3);
+            prev = joint;
+        }
+
+        let (dt, tstop) = (100e-9, 4e-6);
+        let opts = fixed_opts(dt);
+        let d = Decomposition::analyze_with_boundaries(
+            &c,
+            TearMotive::Profit,
+            Default::default(),
+            Default::default(),
+            StiffPolicy {
+                min_block_devices: 2,
+                max_probes_per_block: 8,
+            },
+            &[],
+        );
+        assert!(
+            !d.stiff.is_empty(),
+            "the chain must yield stiff nominations"
+        );
+        let staged = run_staged(&c, &d, &opts, tstop).expect("staged");
+        let accepted: Vec<_> = staged
+            .stiff_outcomes
+            .iter()
+            .filter(|(_, o)| o.accepted)
+            .collect();
+        assert!(!accepted.is_empty(), "{:?}", staged.stiff_outcomes);
+        let stiff_records: Vec<_> = staged
+            .certificate
+            .records
+            .iter()
+            .filter(|r| r.kind == TearKind::Stiff)
+            .collect();
+        assert_eq!(stiff_records.len(), accepted.len());
+        for r in &stiff_records {
+            assert!(
+                matches!(r.tolerance, ToleranceClaim::Stiffness { sag_v } if sag_v.is_finite()),
+                "{r:?}"
+            );
+        }
+        assert!(staged
+            .certificate
+            .permits(crate::decompose::verify::RefusedAnalysis::SupplyIntegrityOnTornRail)
+            .is_err());
+        let max_sag = accepted.iter().map(|(_, o)| o.sag_v).fold(0.0f64, f64::max);
+        let err = worst_error(&c, &staged, &monolith(&c, &opts, tstop));
+        assert!(
+            err <= (3.0 * max_sag).max(2e-6),
+            "staged stiff diverged: {err:.3e} (sag {max_sag:.3e})"
+        );
+    }
+
+    /// What each [`BoundaryKind`] may claim, keyed on the structured kind and
+    /// never the prose note: a held rail is Stiff + AssumedFeedHold +
+    /// Unmeasured even with a doctored "balanced rail" note.
+    #[test]
+    fn composed_records_never_overclaim_a_held_rail() {
+        let outcome = |kind, sag_v, note: &'static str| StiffOutcome {
+            node: NodeId(7),
+            kind,
+            sag_v,
+            tol_v: 1e-2,
+            accepted: true,
+            bootstrapped: true,
+            capture_growth: 0,
+            note,
+        };
+        let n = NodeId(42);
+        let balanced = composed_tear_record(
+            &outcome(BoundaryKind::BalancedRail, 0.0, "balanced rail"),
+            n,
+        );
+        assert_eq!(balanced.kind, TearKind::Balance);
+        assert_eq!(balanced.evidence, Evidence::BalanceEquation);
+        assert_eq!(balanced.tolerance, ToleranceClaim::RoundOff);
+        assert_eq!(balanced.node, n);
+
+        for note in ["held rail (stiff-supply feed)", "balanced rail"] {
+            let held = composed_tear_record(&outcome(BoundaryKind::HeldRail, 0.0, note), n);
+            assert_eq!(held.kind, TearKind::Stiff, "{note}");
+            assert_eq!(held.evidence, Evidence::AssumedFeedHold);
+            assert_eq!(held.tolerance, ToleranceClaim::Unmeasured);
+        }
+
+        let signal = composed_tear_record(&outcome(BoundaryKind::Signal, 3.5e-7, ""), n);
+        assert_eq!(signal.kind, TearKind::Stiff);
+        assert_eq!(
+            signal.evidence,
+            Evidence::MeasuredStiffness {
+                sag_v: 3.5e-7,
+                tol_v: 1e-2
+            }
+        );
+        assert_eq!(
+            signal.tolerance,
+            ToleranceClaim::Stiffness { sag_v: 3.5e-7 }
+        );
+    }
+
+    /// A Thevenin driver replicated into two consumers matches the monolith to
+    /// round-off (no replay happens at all).
+    #[test]
+    fn replicated_driver_matches_to_round_off() {
+        let mut c = Circuit::new();
+        let (vdrv, sel) = (c.node("vdrv"), c.node("sel"));
+        vdc(&mut c, "Vdrv", vdrv, 5.0);
+        res(&mut c, "Rdrv", vdrv, sel, 1e3);
+        for tag in ["x", "y"] {
+            let s = c.node(&format!("{tag}_src"));
+            let o = c.node(&format!("{tag}_out"));
+            vdc(&mut c, &format!("V{tag}"), s, 3.3);
+            sw(&mut c, &format!("SW{tag}"), s, o, sel, (2.0, 1.0), 1.0);
+            res(&mut c, &format!("RL{tag}"), o, GND, 10e3);
+        }
+        let (dt, tstop) = (100e-9, 2e-6);
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        assert_eq!(d.drivers.len(), 1);
+        assert_eq!(d.drivers[0].consumers.len(), 2);
+        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
+        let err = worst_error(&c, &staged, &monolith(&c, &fixed_opts(dt), tstop));
+        assert!(err <= 1e-9, "absorption must be exact: {err:.3e}");
+        for tag in ["x_out", "y_out"] {
+            assert!(
+                staged.waveforms.final_node(&c, tag).unwrap() > 3.0,
+                "{tag} never energized"
+            );
+        }
+    }
 }

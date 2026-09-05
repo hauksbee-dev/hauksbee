@@ -71,7 +71,11 @@ fn every_shipped_example_spec_is_one_hauksbee_understands() {
             .expect("run hauksbee-ci");
         let code = out.status.code();
         let stderr = String::from_utf8_lossy(&out.stderr);
-        if code == Some(2) && (stderr.contains("Renode not found") || stderr.contains("QEMU not found") || stderr.contains("qemu-system")) {
+        if code == Some(2)
+            && (stderr.contains("Renode not found")
+                || stderr.contains("QEMU not found")
+                || stderr.contains("qemu-system"))
+        {
             skipped.push(format!("{name} (needs an external emulator)"));
             continue;
         }

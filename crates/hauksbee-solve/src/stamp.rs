@@ -3050,12 +3050,14 @@ fn inject<S: StampSink>(sink: &mut S, node: Option<usize>, val: f64) {
 impl StampCtx<'_> {}
 
 #[cfg(test)]
-mod diode_physics_tests {
+mod tests {
     use super::*;
+    use crate::options::Integration;
     use crate::system::ReactiveState;
-    use hauksbee_ir::{Circuit, Device};
+    use crate::test_fixtures::{bjt, cap, comparator, diode, res, stamp_ctx, sw, trapz, vdc, GND};
+    use hauksbee_ir::{BDep, Circuit, CompiledExpr, NodeId};
 
-    fn charge_model() -> DiodeModel {
+    fn diode_charge_model() -> DiodeModel {
         DiodeModel {
             cjo: 4e-12,
             vj: 0.7,
@@ -3065,280 +3067,7 @@ mod diode_physics_tests {
         }
     }
 
-    /// The FC-knee continuation must be C1 in the CAPACITANCE (C and dC/dv
-    /// continuous), i.e. C2 in the charge; the property that keeps Newton
-    /// from chattering when a switching edge crosses FC·vj.
-    #[test]
-    fn junction_cap_knee_is_c1_continuous() {
-        let m = charge_model();
-        let knee = DIODE_FC * m.vj;
-        let eps = 1e-9;
-        let eval = |vd: f64| {
-            let (idc, gd) = diode_eval(&m, vd, 27.0, false);
-            diode_charge(&m, vd, idc, gd)
-        };
-        let (q_lo, c_lo) = eval(knee - eps);
-        let (q_hi, c_hi) = eval(knee + eps);
-        // Q and C continuous across the knee.
-        assert!(
-            (q_hi - q_lo).abs() < 1e-6 * q_lo.abs().max(1e-15),
-            "Q jump at knee"
-        );
-        assert!((c_hi - c_lo).abs() < 1e-6 * c_lo, "C jump at knee");
-        // dC/dv continuous: one-sided slopes agree.
-        let d = 1e-6;
-        let slope_lo = (eval(knee - eps).1 - eval(knee - eps - d).1) / d;
-        let slope_hi = (eval(knee + eps + d).1 - eval(knee + eps).1) / d;
-        assert!(
-            (slope_hi - slope_lo).abs() < 1e-3 * slope_lo.abs(),
-            "dC/dv kink at knee: {slope_lo:e} vs {slope_hi:e}"
-        );
-    }
-
-    /// Analytic sanity below the knee: C = cjo (1 - v/vj)^-m, and Q'(v) == C
-    /// by finite difference (the charge really is the integral of the cap).
-    #[test]
-    fn junction_charge_is_integral_of_cap() {
-        let m = charge_model();
-        for &vd in &[-5.0, -1.0, -0.2, 0.0, 0.2, 0.34, 0.4, 0.6, 0.9] {
-            let (idc, gd) = diode_eval(&m, vd, 27.0, false);
-            let (_q, c) = diode_charge(&m, vd, idc, gd);
-            let d = 1e-7;
-            let q_of = |v: f64| {
-                let (i2, g2) = diode_eval(&m, v, 27.0, false);
-                diode_charge(&m, v, i2, g2).0
-            };
-            let dq = (q_of(vd + d) - q_of(vd - d)) / (2.0 * d);
-            assert!(
-                (dq - c).abs() < 1e-4 * c.abs().max(1e-18),
-                "dQ/dv != C at vd={vd}: fd={dq:e} c={c:e}"
-            );
-        }
-    }
-
-    /// Breakdown: REVERSE (negative) current growing exponentially below -bv,
-    /// smooth across -bv, and bounded by the exponent clamp far past it.
-    ///
-    /// Leakage and breakdown are separate mechanisms and the reverse current is
-    /// their sum, so at exactly -bv the exponential contributes its full scale
-    /// on top of the leakage. With no `ibv` named that scale is `is`, giving
-    /// -2*is at the knee. What matters is that the curve has no step in it: a
-    /// step is what Newton cannot cross, and with a Zener's knee current it
-    /// would be a step of seven orders rather than a factor of two.
-    #[test]
-    fn breakdown_current_is_reverse_continuous_and_bounded() {
-        let m = DiodeModel {
-            bv: 6.2,
-            ..DiodeModel::default()
-        };
-        let nvt = m.n * hauksbee_ir::thermal_voltage_c(27.0);
-        let (i_at, _) = diode_eval(&m, -6.2, 27.0, false);
-        assert!(
-            (i_at + 2.0 * m.is).abs() < 1e-3 * m.is,
-            "leakage plus a full-scale exponential at -bv: {i_at:e}"
-        );
-        // No step across the knee: the two sides agree to a hair.
-        let (i_below, _) = diode_eval(&m, -6.2 - 1e-6, 27.0, false);
-        assert!(
-            (i_below - i_at).abs() < 1e-3 * m.is,
-            "the curve steps at -bv: {i_at:e} -> {i_below:e}"
-        );
-        let (i_past, g_past) = diode_eval(&m, -6.2 - 5.0 * nvt, 27.0, false);
-        assert!(
-            i_past < 0.0,
-            "breakdown current must be REVERSE, got {i_past:e}"
-        );
-        assert!(
-            (i_past + m.is * (1.0 + 5.0f64.exp())).abs() < 1e-6 * m.is * 5.0f64.exp(),
-            "wrong exponential shape: {i_past:e}"
-        );
-        assert!(g_past > 0.0);
-        // Deep past breakdown: exponent clamped, current finite.
-        let (i_deep, g_deep) = diode_eval(&m, -1e6, 27.0, false);
-        assert!(i_deep.is_finite() && g_deep.is_finite());
-        assert!((i_deep + m.is * 40.0f64.exp()).abs() < 1e-6 * m.is * 40.0f64.exp());
-        // bv = INFINITY leaves the plain reverse branch untouched.
-        let m_inf = DiodeModel::default();
-        let (i_rev, g_rev) = diode_eval(&m_inf, -100.0, 27.0, false);
-        assert_eq!(i_rev, -m_inf.is);
-        assert_eq!(g_rev, m_inf.is / nvt * 1e-3);
-    }
-
-    /// §3.4 contract, stamp level: flipping `junction_caps` on a model WITH
-    /// cjo/tt changes the stamped system (charge terms appear); on a model
-    /// WITHOUT charge fields the two stamps are bit-identical.
-    #[test]
-    fn junction_caps_toggle_changes_diode_stamp() {
-        let stamp_with = |model: DiodeModel, junction_caps: bool| {
-            let mut c = Circuit::new();
-            let a = c.node("a");
-            c.add(Device::Diode {
-                name: "D1".into(),
-                a,
-                k: hauksbee_ir::NodeId::GROUND,
-                model,
-            });
-            let layout = Layout::new(&c);
-            let mut m = SparseMatrix::new(layout.size);
-            reserve_pattern(&c, &layout, &mut m);
-            let x = vec![0.62];
-            let mut state = ReactiveState::new(1);
-            state.x1[0] = 1e-12; // nonzero history so RHS terms show too
-            let mut opts = SolverOptions::default();
-            opts.effects.junction_caps = junction_caps;
-            let coeffs =
-                IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, 1e-9, false);
-            let spdt = std::collections::HashMap::new();
-            let ctx = StampCtx {
-                circuit: &c,
-                layout: &layout,
-                opts: &opts,
-                x: &x,
-                x_prev: &x,
-                time: 0.0,
-                coeffs,
-                state: &state,
-                dc: false,
-                use_ic: false,
-                gmin: 0.0,
-                src_scale: 1.0,
-                branch_reg: 0.0,
-                cmp_freeze: None,
-                switch_freeze: None,
-                switch_latch: None,
-                spdt_sibling: &spdt,
-                junction_eval: None,
-            };
-            let mut rhs = vec![0.0; layout.size];
-            let mut mat = m;
-            stamp_all(&ctx, &mut mat, &mut rhs);
-            let diag = mat
-                .row(0)
-                .iter()
-                .find(|(col, _)| *col == 0)
-                .map(|&(_, v)| v)
-                .unwrap();
-            (diag, rhs[0])
-        };
-        // Charge-carrying model: the toggle must CHANGE the stamp.
-        let (g_on, r_on) = stamp_with(charge_model(), true);
-        let (g_off, r_off) = stamp_with(charge_model(), false);
-        assert!(
-            g_on > g_off,
-            "junction_caps on must add companion conductance"
-        );
-        assert!(r_on != r_off, "junction_caps on must add history RHS terms");
-        // Charge-free (default) model: bit-identical either way.
-        let (g_on0, r_on0) = stamp_with(DiodeModel::default(), true);
-        let (g_off0, r_off0) = stamp_with(DiodeModel::default(), false);
-        assert_eq!(g_on0.to_bits(), g_off0.to_bits());
-        assert_eq!(r_on0.to_bits(), r_off0.to_bits());
-    }
-
-    /// Diode RS is a real stamp: the junction moves onto an intrinsic anode and
-    /// `rs` bridges it to the external one. Every model field the parser accepts
-    /// now reaches the matrix.
-    ///
-    /// Two things have to hold together. The layout must allocate the intrinsic
-    /// node, and `reserve_pattern` must reserve it, because a coordinate outside
-    /// the sparsity pattern is silently discarded: an allocated-but-unreserved
-    /// node leaves the junction stamped nowhere and the diode stops conducting
-    /// at all.
-    #[test]
-    fn diode_series_resistance_is_stamped() {
-        let mut c = Circuit::new();
-        let a = c.node("a");
-        c.add(Device::Diode {
-            name: "D1".into(),
-            a,
-            k: hauksbee_ir::NodeId::GROUND,
-            model: DiodeModel {
-                rs: 0.5,
-                ..DiodeModel::default()
-            },
-        });
-        let layout = Layout::new(&c);
-        let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&c, &layout, &mut m);
-        // Sized from the layout: the intrinsic anode is an unknown too.
-        let x = vec![0.6; layout.size];
-        let state = ReactiveState::new(1);
-        let opts = SolverOptions::default();
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::BackwardEuler, 1e-9, 1e-9, true);
-        let spdt = std::collections::HashMap::new();
-        let ctx = StampCtx {
-            circuit: &c,
-            layout: &layout,
-            opts: &opts,
-            x: &x,
-            x_prev: &x,
-            time: 0.0,
-            coeffs,
-            state: &state,
-            dc: false,
-            use_ic: false,
-            gmin: 0.0,
-            src_scale: 1.0,
-            branch_reg: 0.0,
-            cmp_freeze: None,
-            switch_freeze: None,
-            switch_latch: None,
-            spdt_sibling: &spdt,
-            junction_eval: None,
-        };
-        let mut rhs = vec![0.0; layout.size];
-        stamp_all(&ctx, &mut m, &mut rhs);
-
-        let int = layout
-            .diode_internal(DeviceId(0))
-            .expect("a diode with rs > 0 gets an intrinsic anode");
-        assert_eq!(layout.size, 2, "one external node plus the intrinsic anode");
-        let at = |r: usize, c: usize| {
-            m.row(r)
-                .iter()
-                .find(|(j, _)| *j == c)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0)
-        };
-        // The ohmic bridge: 1/rs between the external and intrinsic anode.
-        let g_bridge = at(0, int).abs();
-        assert!(
-            (g_bridge - 1.0 / 0.5).abs() < 1e-9,
-            "expected the off-diagonal to carry 1/rs = 2 S, got {g_bridge}"
-        );
-        // And the junction landed on the intrinsic node, not the external one.
-        assert!(
-            at(int, int) > 1.0 / 0.5,
-            "the intrinsic diagonal carries the bridge plus the junction"
-        );
-    }
-
-    /// A diode with no series resistance allocates nothing, so every deck that
-    /// omits RS keeps its node numbering and its numbers exactly.
-    #[test]
-    fn a_diode_without_rs_allocates_no_internal_node() {
-        let mut c = Circuit::new();
-        let a = c.node("a");
-        c.add(Device::Diode {
-            name: "D1".into(),
-            a,
-            k: hauksbee_ir::NodeId::GROUND,
-            model: DiodeModel::default(),
-        });
-        let layout = Layout::new(&c);
-        assert!(layout.diode_internal(DeviceId(0)).is_none());
-        assert_eq!(layout.size, 1, "just the one external node");
-    }
-}
-
-#[cfg(test)]
-mod bjt_physics_tests {
-    use super::*;
-    use crate::system::ReactiveState;
-    use hauksbee_ir::{Circuit, Device};
-
-    fn charge_model() -> BjtModel {
+    fn bjt_charge_model() -> BjtModel {
         BjtModel {
             cje: 20e-12,
             cjc: 8e-12,
@@ -3348,346 +3077,87 @@ mod bjt_physics_tests {
         }
     }
 
-    /// Stamp a one-BJT circuit (b at 0.65 V, c at 3 V, e grounded) and return
-    /// the base-row diagonal and base RHS entry.
-    fn stamp_bjt_system(model: BjtModel, opts: SolverOptions) -> (Layout, SparseMatrix, Vec<f64>) {
-        let mut cir = Circuit::new();
-        let nb = cir.node("b");
-        let nc = cir.node("c");
-        cir.add(Device::Bjt {
-            name: "Q1".into(),
-            c: nc,
-            b: nb,
-            e: hauksbee_ir::NodeId::GROUND,
-            model,
-        });
-        let layout = Layout::new(&cir);
+    /// Assemble `c` at iterate `x` (previous iterate `x_prev`) with the given
+    /// options, returning `(layout, matrix, rhs, residual)`.
+    fn assemble(
+        c: &Circuit,
+        x: &[f64],
+        x_prev: &[f64],
+        opts: &SolverOptions,
+        state: &ReactiveState,
+        dc: bool,
+        gmin: f64,
+        branch_reg: f64,
+    ) -> (Layout, SparseMatrix, Vec<f64>, Vec<f64>) {
+        let layout = Layout::new(c);
         let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&cir, &layout, &mut m);
-        let mut x_full = vec![0.65; layout.size];
-        if let Some(i) = layout.node(nc) {
-            x_full[i] = 3.0;
-        }
-        let mut state = ReactiveState::new(1);
-        state.x1[0] = 1e-12; // nonzero history so RHS terms show too
-        state.xb[0].x1[0] = -2e-12;
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, 1e-9, false);
-        let spdt = std::collections::HashMap::new();
-        let ctx = StampCtx {
-            circuit: &cir,
-            layout: &layout,
-            opts: &opts,
-            x: &x_full,
-            x_prev: &x_full,
-            time: 0.0,
-            coeffs,
-            state: &state,
-            dc: false,
-            use_ic: false,
-            gmin: 0.0,
-            src_scale: 1.0,
-            branch_reg: 0.0,
-            cmp_freeze: None,
-            switch_freeze: None,
-            switch_latch: None,
-            spdt_sibling: &spdt,
-            junction_eval: None,
-        };
+        reserve_pattern(c, &layout, &mut m);
+        let mut ctx = stamp_ctx(c, &layout, opts, x, state, trapz(1e-9));
+        ctx.x_prev = x_prev;
+        ctx.dc = dc;
+        ctx.gmin = gmin;
+        ctx.branch_reg = branch_reg;
         let mut rhs = vec![0.0; layout.size];
         stamp_all(&ctx, &mut m, &mut rhs);
-        (layout, m, rhs)
-    }
-
-    /// Diagonal entry and RHS value at `row`.
-    fn pair(m: &SparseMatrix, rhs: &[f64], row: usize) -> (f64, f64) {
-        let d = m
-            .row(row)
-            .iter()
-            .find(|(col, _)| *col == row)
-            .map(|&(_, v)| v)
-            .unwrap();
-        (d, rhs[row])
-    }
-
-    /// §3.4 contract, stamp level: flipping `junction_caps` on a BJT model
-    /// WITH cje/cjc/tf/tr changes the stamped system (two charge companions
-    /// appear); on a default model the two stamps are bit-identical.
-    #[test]
-    fn junction_caps_toggle_changes_bjt_stamp() {
-        let run = |model: BjtModel, junction_caps: bool| {
-            let mut opts = SolverOptions::default();
-            opts.effects.junction_caps = junction_caps;
-            let (layout, m, rhs) = stamp_bjt_system(model, opts);
-            let b_row = layout.node(hauksbee_ir::NodeId(1)).unwrap();
-            pair(&m, &rhs, b_row)
-        };
-        let (g_on, r_on) = run(charge_model(), true);
-        let (g_off, r_off) = run(charge_model(), false);
-        assert!(
-            g_on > g_off,
-            "junction_caps on must add companion conductance"
-        );
-        assert!(r_on != r_off, "junction_caps on must add history RHS terms");
-        let (g_on0, r_on0) = run(BjtModel::default(), true);
-        let (g_off0, r_off0) = run(BjtModel::default(), false);
-        assert_eq!(g_on0.to_bits(), g_off0.to_bits());
-        assert_eq!(r_on0.to_bits(), r_off0.to_bits());
-    }
-
-    /// §3.4 contract, stamp level: flipping `series_resistance` on a model
-    /// with rb/re/rc changes the stamp (the core moves onto internal nodes
-    /// behind ohmic resistors); on a default model (no internal nodes
-    /// allocated) the two stamps are bit-identical.
-    #[test]
-    fn series_resistance_toggle_changes_bjt_stamp() {
-        let model = BjtModel {
-            rb: 100.0,
-            re: 1.0,
-            rc: 10.0,
-            ..BjtModel::default()
-        };
-        let run = |model: BjtModel, series: bool| {
-            let mut opts = SolverOptions::default();
-            opts.effects.series_resistance = series;
-            stamp_bjt_system(model, opts)
-        };
-        let (layout_on, m_on, _) = run(model, true);
-        let (_, m_off, _) = run(model, false);
-        // Three internal unknowns allocated either way (model-keyed).
-        assert_eq!(layout_on.n_nodes, 2 + 3);
-        let b_row = 0usize;
-        let d_on = m_on
-            .row(b_row)
-            .iter()
-            .find(|(c, _)| *c == b_row)
-            .map(|&(_, v)| v)
-            .unwrap();
-        let d_off = m_off
-            .row(b_row)
-            .iter()
-            .find(|(c, _)| *c == b_row)
-            .map(|&(_, v)| v)
-            .unwrap();
-        // Toggle ON: the external base row carries ONLY the 1/rb series
-        // conductance (the junction moved inside). Toggle OFF: it carries the
-        // junction tangents and no series term.
-        assert_eq!(d_on, 1.0 / 100.0);
-        assert!(d_off != d_on);
-        // Toggle OFF pins each internal unknown with a unit diagonal.
-        let int_diag = m_off
-            .row(2)
-            .iter()
-            .find(|(c, _)| *c == 2)
-            .map(|&(_, v)| v)
-            .unwrap();
-        assert_eq!(int_diag, 1.0);
-        // Default model: no internal nodes, bit-identical across the toggle.
-        let (l_def_on, m_def_on, r_def_on) = run(BjtModel::default(), true);
-        let (_, m_def_off, r_def_off) = run(BjtModel::default(), false);
-        assert_eq!(l_def_on.n_nodes, 2);
-        let (g1, r1) = pair(&m_def_on, &r_def_on, 0);
-        let (g2, r2) = pair(&m_def_off, &r_def_off, 0);
-        assert_eq!(g1.to_bits(), g2.to_bits());
-        assert_eq!(r1.to_bits(), r2.to_bits());
-    }
-
-    /// The BJT junction charge is the integral of its capacitance (dQ/dv == C
-    /// by finite difference) on both sides of the FC knee, for both junctions
-    /// including the diffusion term.
-    #[test]
-    fn bjt_charge_is_integral_of_cap() {
-        let m = charge_model();
-        let q_be = |v: f64| {
-            let is = m.is;
-            let nvf = m.nf * hauksbee_ir::thermal_voltage_c(27.0);
-            let ef = (v / nvf).clamp(-40.0, 40.0).exp();
-            bjt_charge_be(&m, v, is * (ef - 1.0), is * ef / nvf)
-        };
-        for &v in &[-5.0, -1.0, 0.0, 0.2, 0.37, 0.5, 0.65] {
-            let (_, c) = q_be(v);
-            let d = 1e-7;
-            let dq = (q_be(v + d).0 - q_be(v - d).0) / (2.0 * d);
-            assert!(
-                (dq - c).abs() < 1e-4 * c.abs().max(1e-18),
-                "dQbe/dv != Cbe at v={v}: fd={dq:e} c={c:e}"
-            );
-        }
-        let q_bc = |v: f64| {
-            let is = m.is;
-            let nvr = m.nr * hauksbee_ir::thermal_voltage_c(27.0);
-            let er = (v / nvr).clamp(-40.0, 40.0).exp();
-            bjt_charge_bc(&m, v, is * (er - 1.0), is * er / nvr)
-        };
-        for &v in &[-12.0, -3.0, 0.0, 0.37, 0.5] {
-            let (_, c) = q_bc(v);
-            let d = 1e-7;
-            let dq = (q_bc(v + d).0 - q_bc(v - d).0) / (2.0 * d);
-            assert!(
-                (dq - c).abs() < 1e-4 * c.abs().max(1e-18),
-                "dQbc/dv != Cbc at v={v}: fd={dq:e} c={c:e}"
-            );
-        }
-    }
-
-    /// Residual (terminal-current) rows `(f_b, f_c)` of a one-BJT system at a
-    /// PINNED iterate: b at `vb` (previous iterate `vb_prev`), c at `vc`, e
-    /// grounded; the pure DC physics through the same `stamp_residual` sink
-    /// Newton brackets with. Temperature toggle OFF so `is` and `Vt` match
-    /// hand arithmetic exactly.
-    fn bjt_residual(model: BjtModel, vb: f64, vc: f64, vb_prev: f64) -> (f64, f64) {
-        let mut cir = Circuit::new();
-        let nb = cir.node("b");
-        let nc = cir.node("c");
-        cir.add(Device::Bjt {
-            name: "Q1".into(),
-            c: nc,
-            b: nb,
-            e: hauksbee_ir::NodeId::GROUND,
-            model,
-        });
-        let layout = Layout::new(&cir);
-        let b_row = layout.node(nb).unwrap();
-        let c_row = layout.node(nc).unwrap();
-        let mut x = vec![0.0; layout.size];
-        x[b_row] = vb;
-        x[c_row] = vc;
-        let mut x_prev = x.clone();
-        x_prev[b_row] = vb_prev;
-        let state = ReactiveState::new(1);
-        let mut opts = SolverOptions::default();
-        opts.effects.temperature = false;
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, 1e-9, false);
-        let spdt = std::collections::HashMap::new();
-        let ctx = StampCtx {
-            circuit: &cir,
-            layout: &layout,
-            opts: &opts,
-            x: &x,
-            x_prev: &x_prev,
-            time: 0.0,
-            coeffs,
-            state: &state,
-            dc: true,
-            use_ic: false,
-            gmin: 0.0,
-            src_scale: 1.0,
-            branch_reg: 0.0,
-            cmp_freeze: None,
-            switch_freeze: None,
-            switch_latch: None,
-            spdt_sibling: &spdt,
-            junction_eval: None,
-        };
         let mut f = vec![0.0; layout.size];
         stamp_residual(&ctx, &mut f);
-        (f[b_row], f[c_row])
+        (layout, m, rhs, f)
     }
 
-    /// Bug-hunt r4 #11: `VAR` (reverse Early voltage) was parsed but never
-    /// stamped; the base-charge factor carried only `-vbc/VAF`. The SGP
-    /// factor is `q1_inv = 1 - vbc/VAF - vbe/VAR`, so at a forward vbe a
-    /// finite VAR must scale the TRANSPORT current by exactly the corrected
-    /// factor and in the physically-correct DIRECTION (forward base charge
-    /// SHRINKS ic); the base current carries no q1 dependence and must be
-    /// bit-identical, and VAR = ∞ must reproduce the VAF-only arithmetic.
-    #[test]
-    fn bjt_var_scales_transport_current() {
-        let vt = hauksbee_ir::thermal_voltage_c(27.0);
-        let (vb, vc) = (0.65, 3.0);
-        let m_inf = BjtModel {
-            vaf: 100.0,
-            ..BjtModel::default()
-        };
-        let m_fin = BjtModel {
-            vaf: 100.0,
-            var: 15.0,
-            ..BjtModel::default()
-        };
-        let (fb_inf, fc_inf) = bjt_residual(m_inf, vb, vc, vb);
-        let (fb_fin, fc_fin) = bjt_residual(m_fin, vb, vc, vb);
-        // Base current has no q1 factor: untouched to the bit.
-        assert_eq!(fb_inf.to_bits(), fb_fin.to_bits());
-        // Collector current scales by q1_inv(VAR)/q1_inv(∞), smaller, not
-        // larger (the ibc offset is ~1e-11 relative at this bias).
-        let (vbe, vbc) = (vb, vb - vc);
-        let q_inf = 1.0 - vbc / 100.0;
-        let q_fin = q_inf - vbe / 15.0;
-        assert!(fc_fin.abs() < fc_inf.abs(), "finite VAR must reduce ic");
-        let ratio = fc_fin / fc_inf;
-        assert!(
-            (ratio - q_fin / q_inf).abs() < 1e-9,
-            "ic ratio {ratio} != q1 ratio {}",
-            q_fin / q_inf
-        );
-        // VAR = ∞ reduces to the VAF-only physics exactly: analytic collector
-        // current at this iterate (br = 1, sign conventions folded out).
-        let is = m_inf.is;
-        let cf = is * ((vbe / vt).clamp(-40.0, 40.0).exp() - 1.0);
-        let cr = is * ((vbc / vt).clamp(-40.0, 40.0).exp() - 1.0);
-        let ic = (cf - cr) * q_inf - cr / m_inf.br;
-        assert!(
-            (fc_inf.abs() - ic).abs() < 1e-9 * ic,
-            "VAR=inf collector current {} != VAF-only analytic {ic}",
-            fc_inf.abs()
-        );
+    fn at(m: &SparseMatrix, r: usize, c: usize) -> f64 {
+        m.row(r)
+            .iter()
+            .find(|(j, _)| *j == c)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0)
     }
 
-    /// Bug-hunt r4 #9: the vbc pnjlim call was fed the FORWARD critical
-    /// voltage (built from nf·Vt) while limiting on the nr·Vt scale, so with
-    /// nf != nr the reverse limiter gated and clamped at the wrong threshold
-    /// (SPICE3 computes separate VCRITF/VCRITR for exactly this reason).
-    /// Iteration-path only, but the wrong clamp bends Newton's path, so pin
-    /// the vcrit values AND the stamped residual at a limited iterate.
-    #[test]
-    fn bjt_vbc_limiter_uses_reverse_vcrit() {
-        let vt = hauksbee_ir::thermal_voltage_c(27.0);
-        let m = BjtModel {
-            nr: 1.5,
-            ..BjtModel::default()
-        };
-        let vcrit_f = vcrit(m.is, m.nf * vt);
-        let vcrit_r = vcrit(m.is, m.nr * vt);
-        assert!(vcrit_r > vcrit_f, "nr-built vcrit must scale with nr");
-        // The regression point: vbc stepping 0.9 -> 1.0 V sits BELOW the
-        // nr-built vcrit (must pass unlimited) but ABOVE the nf-built one the
-        // old wiring passed (which clamped it).
-        assert!(vcrit_f < 1.0 && 1.0 < vcrit_r);
-        assert_eq!(pnjlim(1.0, 0.9, m.nr * vt, vcrit_r), 1.0);
-        assert_ne!(pnjlim(1.0, 0.9, m.nr * vt, vcrit_f), 1.0);
-        // Stamp-level: b at 1.0 V (prev 0.9), c grounded, both junctions
-        // forward. The base-row residual is F_b = A·x - rhs at the RAW x, so
-        // a limited junction contributes its tangent extrapolated back to the
-        // raw voltage: F_b = ib(limited) + gpi·(vbe_raw - vbe_lim)
-        //                               + gmu·(vbc_raw - vbc_lim).
-        // vbc passes UNLIMITED here (vbc_lim == 1.0, so its term is 0);
-        // clamping vbc near 0.95 V instead shifts cr/gmu well past this
-        // tolerance.
-        let (fb, _) = bjt_residual(m, 1.0, 0.0, 0.9);
-        let (nvf, nvr) = (m.nf * vt, m.nr * vt);
-        let vbe_lim = pnjlim(1.0, 0.9, nvf, vcrit_f);
-        let ef = (vbe_lim / nvf).clamp(-40.0, 40.0).exp();
-        let er = (1.0 / nvr).clamp(-40.0, 40.0).exp();
-        let ib = m.is * (ef - 1.0) / m.bf + m.is * (er - 1.0) / m.br;
-        let gpi = m.is * ef / (nvf * m.bf);
-        let expected = ib + gpi * (1.0 - vbe_lim);
-        assert!(
-            (fb.abs() - expected).abs() < 1e-9 * expected,
-            "base residual {} != analytic {expected} at the nr-limited iterate",
-            fb.abs()
-        );
+    fn fd_matches_cap(q: impl Fn(f64) -> (f64, f64), points: &[f64], what: &str) {
+        for &v in points {
+            let (_, c) = q(v);
+            let d = 1e-7;
+            let dq = (q(v + d).0 - q(v - d).0) / (2.0 * d);
+            assert!(
+                (dq - c).abs() < 1e-4 * c.abs().max(1e-18),
+                "{what}: dQ/dv != C at v={v}: fd={dq:e} c={c:e}"
+            );
+        }
     }
 
-    /// The extracted shared depletion helper reproduces the diode's charge
-    /// arithmetic bit-for-bit (the §3.1 regression surface must not move).
+    /// The FC-knee continuation is C1 in the capacitance (C and dC/dv
+    /// continuous), Q'(v) == C by finite difference on both sides, and the
+    /// shared depletion helper reproduces the diode arithmetic bit-for-bit.
     #[test]
-    fn depletion_helper_is_bit_identical_to_diode_charge() {
+    fn junction_charge_is_the_c1_integral_of_the_cap() {
+        let m = diode_charge_model();
+        let eval = |vd: f64| {
+            let (idc, gd) = diode_eval(&m, vd, 27.0, false);
+            diode_charge(&m, vd, idc, gd)
+        };
+        let knee = DIODE_FC * m.vj;
+        let eps = 1e-9;
+        let ((q_lo, c_lo), (q_hi, c_hi)) = (eval(knee - eps), eval(knee + eps));
+        assert!(
+            (q_hi - q_lo).abs() < 1e-6 * q_lo.abs().max(1e-15),
+            "Q jump at knee"
+        );
+        assert!((c_hi - c_lo).abs() < 1e-6 * c_lo, "C jump at knee");
+        let d = 1e-6;
+        let slope_lo = (eval(knee - eps).1 - eval(knee - eps - d).1) / d;
+        let slope_hi = (eval(knee + eps + d).1 - eval(knee + eps).1) / d;
+        assert!(
+            (slope_hi - slope_lo).abs() < 1e-3 * slope_lo.abs(),
+            "dC/dv kink: {slope_lo:e} vs {slope_hi:e}"
+        );
+        fd_matches_cap(
+            eval,
+            &[-5.0, -1.0, -0.2, 0.0, 0.2, 0.34, 0.4, 0.6, 0.9],
+            "diode",
+        );
+
         let m = DiodeModel {
-            cjo: 4e-12,
-            vj: 0.7,
-            m: 0.45,
-            ..DiodeModel::default()
+            tt: 0.0,
+            ..diode_charge_model()
         };
         for &vd in &[-5.0, -1.0, 0.0, 0.2, 0.34, 0.35, 0.4, 0.9] {
             let (q_h, c_h) = depletion_charge(m.cjo, m.vj, m.m, vd);
@@ -3705,337 +3175,394 @@ mod bjt_physics_tests {
             );
         }
     }
-}
 
-#[cfg(test)]
-mod mos_channel_tests {
-    use super::*;
+    /// Breakdown: REVERSE current growing exponentially below -bv, smooth across
+    /// -bv, bounded by the exponent clamp; bv = ∞ leaves plain reverse leakage.
+    #[test]
+    fn breakdown_current_is_reverse_continuous_and_bounded() {
+        let m = DiodeModel {
+            bv: 6.2,
+            ..DiodeModel::default()
+        };
+        let nvt = m.n * hauksbee_ir::thermal_voltage_c(27.0);
+        let (i_at, _) = diode_eval(&m, -6.2, 27.0, false);
+        assert!(
+            (i_at + 2.0 * m.is).abs() < 1e-3 * m.is,
+            "leakage plus a full-scale exponential at -bv: {i_at:e}"
+        );
+        let (i_below, _) = diode_eval(&m, -6.2 - 1e-6, 27.0, false);
+        assert!((i_below - i_at).abs() < 1e-3 * m.is, "step at -bv");
+        let (i_past, g_past) = diode_eval(&m, -6.2 - 5.0 * nvt, 27.0, false);
+        assert!(i_past < 0.0 && g_past > 0.0);
+        assert!((i_past + m.is * (1.0 + 5.0f64.exp())).abs() < 1e-6 * m.is * 5.0f64.exp());
+        let (i_deep, g_deep) = diode_eval(&m, -1e6, 27.0, false);
+        assert!(i_deep.is_finite() && g_deep.is_finite());
+        assert!((i_deep + m.is * 40.0f64.exp()).abs() < 1e-6 * m.is * 40.0f64.exp());
+        let m_inf = DiodeModel::default();
+        let (i_rev, g_rev) = diode_eval(&m_inf, -100.0, 27.0, false);
+        assert_eq!(i_rev, -m_inf.is);
+        assert_eq!(g_rev, m_inf.is / nvt * 1e-3);
+    }
 
-    /// Bug-hunt r4 #10: a two-branch channel has a genuine downward id jump
-    /// of the full `i0 = beta·(n·Vt)²·e` at `vgs == vth` (with gm collapsing
-    /// from `i0/(n·Vt)` to 0), and a "continuity scale" fixes neither the
-    /// value nor the slope. The blended overdrive must give id and gm with NO
-    /// jump across threshold: fine-sweep deltas bounded by the local slope,
-    /// one-sided limits at vth agreeing tightly, and gm equal to the true
-    /// derivative d id/d vgs (C1 by finite difference). Swept for a
-    /// signal-scale beta AND a power-scale kp, with and without CLM, and for
-    /// a crossing that lands in triode (small vds) as well as saturation.
-    /// stamp.rs and ac.rs share this ONE function, so the DC and AC tangents
-    /// cannot disagree at the boundary by construction.
+    fn one_diode(model: DiodeModel) -> Circuit {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        diode(&mut c, "D1", a, GND, model);
+        c
+    }
+
+    fn one_bjt(model: BjtModel) -> (Circuit, NodeId, NodeId) {
+        let mut c = Circuit::new();
+        let (nb, nc) = (c.node("b"), c.node("c"));
+        bjt(&mut c, "Q1", nc, nb, GND, &model);
+        (c, nb, nc)
+    }
+
+    /// Flipping `junction_caps` changes the stamp (companion conductance and
+    /// history RHS) for charge-carrying diode and BJT models, and leaves
+    /// charge-free models bit-identical.
+    #[test]
+    fn junction_caps_toggle_changes_only_charge_carrying_stamps() {
+        let diode_stamp = |model: DiodeModel, junction_caps: bool| {
+            let c = one_diode(model);
+            let mut opts = SolverOptions::default();
+            opts.effects.junction_caps = junction_caps;
+            let mut state = ReactiveState::new(1);
+            state.x1[0] = 1e-12;
+            let x = vec![0.62];
+            let (_, m, rhs, _) = assemble(&c, &x, &x, &opts, &state, false, 0.0, 0.0);
+            (at(&m, 0, 0), rhs[0])
+        };
+        let bjt_stamp = |model: BjtModel, junction_caps: bool| {
+            let (c, nb, nc) = one_bjt(model);
+            let mut opts = SolverOptions::default();
+            opts.effects.junction_caps = junction_caps;
+            let layout = Layout::new(&c);
+            let mut x = vec![0.65; layout.size];
+            x[layout.node(nc).unwrap()] = 3.0;
+            let mut state = ReactiveState::new(1);
+            state.x1[0] = 1e-12;
+            state.xb[0].x1[0] = -2e-12;
+            let (layout, m, rhs, _) = assemble(&c, &x, &x, &opts, &state, false, 0.0, 0.0);
+            let b_row = layout.node(nb).unwrap();
+            (at(&m, b_row, b_row), rhs[b_row])
+        };
+        for (on, off) in [
+            (
+                diode_stamp(diode_charge_model(), true),
+                diode_stamp(diode_charge_model(), false),
+            ),
+            (
+                bjt_stamp(bjt_charge_model(), true),
+                bjt_stamp(bjt_charge_model(), false),
+            ),
+        ] {
+            assert!(
+                on.0 > off.0,
+                "junction_caps on must add companion conductance"
+            );
+            assert!(on.1 != off.1, "junction_caps on must add history RHS terms");
+        }
+        for (on, off) in [
+            (
+                diode_stamp(DiodeModel::default(), true),
+                diode_stamp(DiodeModel::default(), false),
+            ),
+            (
+                bjt_stamp(BjtModel::default(), true),
+                bjt_stamp(BjtModel::default(), false),
+            ),
+        ] {
+            assert_eq!(on.0.to_bits(), off.0.to_bits());
+            assert_eq!(on.1.to_bits(), off.1.to_bits());
+        }
+    }
+
+    /// Diode RS moves the junction onto an intrinsic anode bridged by 1/rs; a
+    /// diode without RS allocates no internal node.
+    #[test]
+    fn diode_series_resistance_is_stamped_on_an_intrinsic_node() {
+        let c = one_diode(DiodeModel {
+            rs: 0.5,
+            ..DiodeModel::default()
+        });
+        let layout = Layout::new(&c);
+        assert_eq!(layout.size, 2);
+        let x = vec![0.6; layout.size];
+        let state = ReactiveState::new(1);
+        let (layout, m, _, _) = assemble(
+            &c,
+            &x,
+            &x,
+            &SolverOptions::default(),
+            &state,
+            false,
+            0.0,
+            0.0,
+        );
+        let int = layout.diode_internal(DeviceId(0)).expect("intrinsic anode");
+        assert!(
+            (at(&m, 0, int).abs() - 2.0).abs() < 1e-9,
+            "off-diagonal carries 1/rs"
+        );
+        assert!(
+            at(&m, int, int) > 2.0,
+            "intrinsic diagonal carries the bridge plus the junction"
+        );
+
+        let layout = Layout::new(&one_diode(DiodeModel::default()));
+        assert!(layout.diode_internal(DeviceId(0)).is_none());
+        assert_eq!(layout.size, 1);
+    }
+
+    /// Flipping `series_resistance` moves the BJT core onto internal nodes
+    /// behind rb/re/rc; a default model is bit-identical across the toggle.
+    #[test]
+    fn series_resistance_toggle_changes_bjt_stamp() {
+        let run = |model: BjtModel, series: bool| {
+            let (c, _, nc) = one_bjt(model);
+            let mut opts = SolverOptions::default();
+            opts.effects.series_resistance = series;
+            let layout = Layout::new(&c);
+            let mut x = vec![0.65; layout.size];
+            x[layout.node(nc).unwrap()] = 3.0;
+            let mut state = ReactiveState::new(1);
+            state.x1[0] = 1e-12;
+            state.xb[0].x1[0] = -2e-12;
+            assemble(&c, &x, &x, &opts, &state, false, 0.0, 0.0)
+        };
+        let model = BjtModel {
+            rb: 100.0,
+            re: 1.0,
+            rc: 10.0,
+            ..BjtModel::default()
+        };
+        let (layout_on, m_on, _, _) = run(model.clone(), true);
+        let (_, m_off, _, _) = run(model, false);
+        assert_eq!(layout_on.n_nodes, 2 + 3);
+        assert_eq!(
+            at(&m_on, 0, 0),
+            1.0 / 100.0,
+            "external base row carries only 1/rb"
+        );
+        assert!(at(&m_off, 0, 0) != at(&m_on, 0, 0));
+        assert_eq!(
+            at(&m_off, 2, 2),
+            1.0,
+            "toggle OFF pins each internal unknown"
+        );
+
+        let (l_def, m_def_on, r_def_on, _) = run(BjtModel::default(), true);
+        let (_, m_def_off, r_def_off, _) = run(BjtModel::default(), false);
+        assert_eq!(l_def.n_nodes, 2);
+        assert_eq!(
+            at(&m_def_on, 0, 0).to_bits(),
+            at(&m_def_off, 0, 0).to_bits()
+        );
+        assert_eq!(r_def_on[0].to_bits(), r_def_off[0].to_bits());
+    }
+
+    #[test]
+    fn bjt_charge_is_integral_of_cap() {
+        let m = bjt_charge_model();
+        let vt = hauksbee_ir::thermal_voltage_c(27.0);
+        let q_be = |v: f64| {
+            let nvf = m.nf * vt;
+            let ef = (v / nvf).clamp(-40.0, 40.0).exp();
+            bjt_charge_be(&m, v, m.is * (ef - 1.0), m.is * ef / nvf)
+        };
+        let q_bc = |v: f64| {
+            let nvr = m.nr * vt;
+            let er = (v / nvr).clamp(-40.0, 40.0).exp();
+            bjt_charge_bc(&m, v, m.is * (er - 1.0), m.is * er / nvr)
+        };
+        fd_matches_cap(q_be, &[-5.0, -1.0, 0.0, 0.2, 0.37, 0.5, 0.65], "Qbe");
+        fd_matches_cap(q_bc, &[-12.0, -3.0, 0.0, 0.37, 0.5], "Qbc");
+    }
+
+    /// Residual rows `(f_b, f_c)` of a one-BJT system at a pinned iterate,
+    /// temperature effects off so the arithmetic matches by hand.
+    fn bjt_residual(model: BjtModel, vb: f64, vc: f64, vb_prev: f64) -> (f64, f64) {
+        let (c, nb, nc) = one_bjt(model);
+        let layout = Layout::new(&c);
+        let (b_row, c_row) = (layout.node(nb).unwrap(), layout.node(nc).unwrap());
+        let mut x = vec![0.0; layout.size];
+        x[b_row] = vb;
+        x[c_row] = vc;
+        let mut x_prev = x.clone();
+        x_prev[b_row] = vb_prev;
+        let mut opts = SolverOptions::default();
+        opts.effects.temperature = false;
+        let state = ReactiveState::new(1);
+        let (_, _, _, f) = assemble(&c, &x, &x_prev, &opts, &state, true, 0.0, 0.0);
+        (f[b_row], f[c_row])
+    }
+
+    /// A finite VAR scales the transport current by exactly the SGP factor
+    /// `1 - vbc/VAF - vbe/VAR` (shrinking ic); the base current is untouched;
+    /// VAR = ∞ reproduces the VAF-only analytic collector current.
+    #[test]
+    fn bjt_var_scales_transport_current() {
+        let vt = hauksbee_ir::thermal_voltage_c(27.0);
+        let (vb, vc) = (0.65, 3.0);
+        let m_inf = BjtModel {
+            vaf: 100.0,
+            ..BjtModel::default()
+        };
+        let m_fin = BjtModel {
+            var: 15.0,
+            ..m_inf.clone()
+        };
+        let (fb_inf, fc_inf) = bjt_residual(m_inf.clone(), vb, vc, vb);
+        let (fb_fin, fc_fin) = bjt_residual(m_fin, vb, vc, vb);
+        assert_eq!(fb_inf.to_bits(), fb_fin.to_bits());
+        let (vbe, vbc) = (vb, vb - vc);
+        let q_inf = 1.0 - vbc / 100.0;
+        let q_fin = q_inf - vbe / 15.0;
+        assert!(fc_fin.abs() < fc_inf.abs(), "finite VAR must reduce ic");
+        assert!((fc_fin / fc_inf - q_fin / q_inf).abs() < 1e-9);
+        let cf = m_inf.is * ((vbe / vt).clamp(-40.0, 40.0).exp() - 1.0);
+        let cr = m_inf.is * ((vbc / vt).clamp(-40.0, 40.0).exp() - 1.0);
+        let ic = (cf - cr) * q_inf - cr / m_inf.br;
+        assert!(
+            (fc_inf.abs() - ic).abs() < 1e-9 * ic,
+            "{} != {ic}",
+            fc_inf.abs()
+        );
+    }
+
+    /// The vbc limiter uses the REVERSE critical voltage (nr·Vt), so with
+    /// nf != nr a step below the nr-built vcrit passes unlimited.
+    #[test]
+    fn bjt_vbc_limiter_uses_reverse_vcrit() {
+        let vt = hauksbee_ir::thermal_voltage_c(27.0);
+        let m = BjtModel {
+            nr: 1.5,
+            ..BjtModel::default()
+        };
+        let vcrit_f = vcrit(m.is, m.nf * vt);
+        let vcrit_r = vcrit(m.is, m.nr * vt);
+        assert!(vcrit_f < 1.0 && 1.0 < vcrit_r);
+        assert_eq!(pnjlim(1.0, 0.9, m.nr * vt, vcrit_r), 1.0);
+        assert_ne!(pnjlim(1.0, 0.9, m.nr * vt, vcrit_f), 1.0);
+        let (fb, _) = bjt_residual(m.clone(), 1.0, 0.0, 0.9);
+        let (nvf, nvr) = (m.nf * vt, m.nr * vt);
+        let vbe_lim = pnjlim(1.0, 0.9, nvf, vcrit_f);
+        let ef = (vbe_lim / nvf).clamp(-40.0, 40.0).exp();
+        let er = (1.0 / nvr).clamp(-40.0, 40.0).exp();
+        let ib = m.is * (ef - 1.0) / m.bf + m.is * (er - 1.0) / m.br;
+        let gpi = m.is * ef / (nvf * m.bf);
+        let expected = ib + gpi * (1.0 - vbe_lim);
+        assert!(
+            (fb.abs() - expected).abs() < 1e-9 * expected,
+            "{} != {expected}",
+            fb.abs()
+        );
+    }
+
+    /// The blended MOS channel gives id and gm with no jump across threshold,
+    /// gm == d id/d vgs by finite difference, for signal- and power-scale
+    /// beta, with and without CLM, in saturation and triode.
     #[test]
     fn mos_channel_id_and_gm_continuous_across_vth() {
         let vt = hauksbee_ir::thermal_voltage_c(27.0);
         for &(beta, nsub, lambda, vds) in &[
-            (2e-5, 1.0, 0.0, 2.0),   // default-scale kp, saturation crossing
-            (2e-5, 2.0, 0.02, 2.0),  // slope factor + CLM
-            (20.0, 1.5, 0.05, 2.0),  // power-scale kp
-            (20.0, 1.5, 0.05, 0.03), // crossing inside triode (small vds)
+            (2e-5, 1.0, 0.0, 2.0),
+            (2e-5, 2.0, 0.02, 2.0),
+            (20.0, 1.5, 0.05, 2.0),
+            (20.0, 1.5, 0.05, 0.03),
         ] {
             let nvt: f64 = nsub * vt;
             let f = |vov: f64| mos_channel(beta, nvt, vov, vds, lambda, 0.0);
             let clm = 1.0 + lambda * vds;
-            // Fine sweep across the threshold: each id step bounded by the
-            // local gm (no jump), each gm step bounded by the curvature scale
-            // beta·clm (the square-law d²id/dvgs², which the blend never
-            // exceeds by more than the sigmoid-chain factor).
             let h = 1e-4;
             let mut prev = f(-0.3);
             let mut k = 1;
             while -0.3 + (k as f64) * h <= 0.3 {
                 let vov = -0.3 + (k as f64) * h;
                 let cur = f(vov);
-                let gmax = prev.1.max(cur.1);
                 assert!(
-                    (cur.0 - prev.0).abs() <= gmax * h * 1.5 + 1e-18,
-                    "id jump at vov={vov} (beta={beta}): {} -> {}",
-                    prev.0,
-                    cur.0
+                    (cur.0 - prev.0).abs() <= prev.1.max(cur.1) * h * 1.5 + 1e-18,
+                    "id jump at vov={vov} (beta={beta})"
                 );
                 assert!(
                     (cur.1 - prev.1).abs() <= 3.0 * beta * clm * h + 1e-18,
-                    "gm jump at vov={vov} (beta={beta}): {} -> {}",
-                    prev.1,
-                    cur.1
+                    "gm jump at vov={vov} (beta={beta})"
                 );
                 prev = cur;
                 k += 1;
             }
-            // One-sided limits at exactly vth: value and slope agree tightly.
-            let below = f(-1e-9);
-            let at = f(0.0);
-            let above = f(1e-9);
-            assert!((above.0 - below.0).abs() <= 1e-6 * at.0.abs().max(1e-30));
-            assert!((above.1 - below.1).abs() <= 1e-6 * at.1.abs().max(1e-30));
-            // gm IS d id / d vgs, through the threshold, not just beside it.
+            let (below, at0, above) = (f(-1e-9), f(0.0), f(1e-9));
+            assert!((above.0 - below.0).abs() <= 1e-6 * at0.0.abs().max(1e-30));
+            assert!((above.1 - below.1).abs() <= 1e-6 * at0.1.abs().max(1e-30));
             for &v in &[-0.1, -0.02, 0.0, 0.02, 0.1] {
                 let d = 1e-7;
                 let fd = (f(v + d).0 - f(v - d).0) / (2.0 * d);
                 let gm = f(v).1;
                 assert!(
                     (fd - gm).abs() <= 1e-4 * gm.abs().max(1e-15),
-                    "gm != d id/d vgs at vov={v} (beta={beta}): fd={fd:e} gm={gm:e}"
+                    "gm != d id/d vgs at vov={v}: fd={fd:e} gm={gm:e}"
                 );
             }
         }
     }
 
-    /// The blend keeps the promised physics on both sides: an exponential
-    /// tail with slope n·Vt below threshold, the plain square law above, and
+    /// Exponential tail with slope n·Vt below threshold, square law above,
     /// zero current across a zero-bias channel.
     #[test]
     fn mos_channel_regions_physically_sane() {
-        let vt = hauksbee_ir::thermal_voltage_c(27.0);
-        let nvt = vt; // nsub = 1
+        let nvt = hauksbee_ir::thermal_voltage_c(27.0);
         let beta = 2e-5;
         let f = |vov: f64, vds: f64| mos_channel(beta, nvt, vov, vds, 0.0, 0.0);
-        // Deep subthreshold: one n·Vt of gate bias is one decade-of-e; the
-        // exponential tail's defining ratio.
         let ratio = f(-0.2 + nvt, 2.0).0 / f(-0.2, 2.0).0;
         assert!(
             (ratio - std::f64::consts::E).abs() < 0.05 * std::f64::consts::E,
-            "subthreshold slope: id ratio per n·Vt = {ratio}, want ~e"
+            "subthreshold ratio {ratio}"
         );
-        // Strong inversion: the unblemished square law to well under 0.1%.
         let sq = 0.5 * beta * 0.5 * 0.5;
         assert!(((f(0.5, 2.0).0 - sq) / sq).abs() < 1e-3);
-        // vds = 0: no phantom channel current at any gate bias.
         assert_eq!(f(-0.1, 0.0).0, 0.0);
         assert_eq!(f(0.5, 0.0).0, 0.0);
     }
-}
 
-#[cfg(test)]
-mod bench {
-    use super::*;
-    use crate::system::ReactiveState;
-    use hauksbee_ir::{Circuit, Device, SourceKind};
-
-    /// A flagship-shaped synthetic board: repeated neuron-ish cells of
-    /// resistors, caps, diode, BJT, comparator and an SPDT switch pair, sized
-    /// to the joint capture march's scale (~5.8k devices, ~4k unknowns).
+    /// Repeated cells of R, C, diode, BJT, comparator and an SPDT switch pair.
     fn big_board(cells: usize) -> Circuit {
         let mut c = Circuit::new();
         let vdd = c.node("vdd");
-        c.add(Device::Vsource {
-            name: "VDD".into(),
-            p: vdd,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
+        vdc(&mut c, "VDD", vdd, 5.0);
         for k in 0..cells {
-            let m = c.node(&format!("m{k}"));
-            let s = c.node(&format!("s{k}"));
-            let o = c.node(&format!("o{k}"));
-            let com = c.node(&format!("c{k}"));
-            c.add(Device::Resistor {
-                name: format!("R{k}a"),
-                a: vdd,
-                b: m,
-                ohms: 10e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("R{k}b"),
-                a: m,
-                b: NodeId::GROUND,
-                ohms: 47e3,
-                tc1: None,
-            });
-            c.add(Device::Capacitor {
-                name: format!("C{k}"),
-                a: m,
-                b: NodeId::GROUND,
-                farads: 1e-9,
-                ic: None,
-            });
-            c.add(Device::Diode {
-                name: format!("D{k}"),
-                a: m,
-                k: s,
-                model: Default::default(),
-            });
-            c.add(Device::Bjt {
-                name: format!("Q{k}"),
-                c: vdd,
-                b: s,
-                e: NodeId::GROUND,
-                model: Default::default(),
-            });
-            c.add(Device::Comparator {
-                name: format!("K{k}"),
-                out: o,
-                inp: m,
-                inn: s,
-                out_lo: 0.0,
-                out_hi: 5.0,
-                hysteresis: 0.1,
-            });
-            c.add(Device::VSwitch {
-                name: format!("G{k}_s1"),
-                a: com,
-                b: m,
-                ctrl_p: o,
-                ctrl_n: NodeId::GROUND,
-                von: 3.0,
-                voff: 2.0,
-                ron: 10.0,
-                roff: 1e9,
-            });
-            c.add(Device::VSwitch {
-                name: format!("G{k}_s0"),
-                a: com,
-                b: vdd,
-                ctrl_p: o,
-                ctrl_n: NodeId::GROUND,
-                von: 2.0,
-                voff: 3.0,
-                ron: 10.0,
-                roff: 1e9,
-            });
-            c.add(Device::Resistor {
-                name: format!("R{k}c"),
-                a: com,
-                b: NodeId::GROUND,
-                ohms: 100.0,
-                tc1: None,
-            });
+            let (m, s, o, com) = (
+                c.node(&format!("m{k}")),
+                c.node(&format!("s{k}")),
+                c.node(&format!("o{k}")),
+                c.node(&format!("c{k}")),
+            );
+            res(&mut c, &format!("R{k}a"), vdd, m, 10e3);
+            res(&mut c, &format!("R{k}b"), m, GND, 47e3);
+            cap(&mut c, &format!("C{k}"), m, GND, 1e-9);
+            diode(&mut c, &format!("D{k}"), m, s, Default::default());
+            bjt(&mut c, &format!("Q{k}"), vdd, s, GND, &Default::default());
+            comparator(&mut c, &format!("K{k}"), o, m, s, 0.1);
+            sw(&mut c, &format!("G{k}_s1"), com, m, o, (3.0, 2.0), 10.0);
+            sw(&mut c, &format!("G{k}_s0"), com, vdd, o, (2.0, 3.0), 10.0);
+            res(&mut c, &format!("R{k}c"), com, GND, 100.0);
         }
         c
     }
 
-    /// Assembly-economy sub-lever B decision measurement (run with
-    /// --ignored --nocapture): split one assembly's cost into device-model
-    /// COMPUTE (the residual sink: same models, trivial writes) and
-    /// ACCUMULATION (clear + slot-search stores + rhs), by timing `stamp_all`
-    /// against `stamp_residual` on the same context. Whatever a deterministic
-    /// parallel stamping scheme (per-thread buffers reduced in device order)
-    /// can parallelize is bounded by the compute share; the accumulation is
-    /// its serial section. Numbers feed the report; this is measurement
-    /// estate, not a regression gate.
-    #[test]
-    #[ignore = "measurement harness, run explicitly"]
-    fn bench_stamp_split() {
-        let circuit = big_board(640); // ~5.8k devices
-        let layout = Layout::new(&circuit);
-        let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&circuit, &layout, &mut m);
-        let n = layout.size;
-        let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.001 * (i % 7) as f64).collect();
-        let state = ReactiveState::new(circuit.devices.len());
-        let opts = SolverOptions::default();
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
-        let spdt = std::collections::HashMap::new();
-        let ctx = StampCtx {
-            circuit: &circuit,
-            layout: &layout,
-            opts: &opts,
-            x: &x,
-            x_prev: &x,
-            time: 1e-6,
-            coeffs,
-            state: &state,
-            dc: false,
-            use_ic: false,
-            gmin: 1e-12,
-            src_scale: 1.0,
-            branch_reg: 1e-2,
-            cmp_freeze: None,
-            switch_freeze: None,
-            switch_latch: None,
-            spdt_sibling: &spdt,
-            junction_eval: None,
-        };
-        let mut rhs = vec![0.0f64; n];
-        let mut f = vec![0.0f64; n];
-        const REPS: usize = 300;
-        // Warm both paths.
-        for _ in 0..10 {
-            m.clear_values();
-            for v in rhs.iter_mut() {
-                *v = 0.0;
-            }
-            stamp_all(&ctx, &mut m, &mut rhs);
-            for v in f.iter_mut() {
-                *v = 0.0;
-            }
-            stamp_residual(&ctx, &mut f);
-        }
-        let t0 = std::time::Instant::now();
-        for _ in 0..REPS {
-            m.clear_values();
-            for v in rhs.iter_mut() {
-                *v = 0.0;
-            }
-            stamp_all(&ctx, &mut m, &mut rhs);
-        }
-        let full = t0.elapsed().as_secs_f64() / REPS as f64;
-        let t1 = std::time::Instant::now();
-        for _ in 0..REPS {
-            for v in f.iter_mut() {
-                *v = 0.0;
-            }
-            stamp_residual(&ctx, &mut f);
-        }
-        let resid = t1.elapsed().as_secs_f64() / REPS as f64;
-        println!(
-            "bench_stamp_split: devices={} unknowns={} full_assembly={:.3}ms residual_only={:.3}ms accumulation_share={:.0}%",
-            circuit.devices.len(),
-            n,
-            full * 1e3,
-            resid * 1e3,
-            (1.0 - resid / full) * 100.0,
-        );
-        assert!(full > 0.0 && resid > 0.0);
-    }
-
-    /// ResidualSink correctness: on the same context, the matrix-free F must
-    /// equal the assembled row product F within accumulation rounding (bounded
-    /// RELATIVE TO EACH ROW'S TERM MAGNITUDES, because MNA rows cancel large
-    /// terms and the two schemes sum in different orders). A systematic
-    /// mismatch (sign error, dropped/duplicated contribution, wrong scope)
-    /// shows up as an error far above the rounding floor.
+    /// The matrix-free residual equals the assembled row product within
+    /// accumulation rounding relative to each row's term magnitudes.
     #[test]
     fn residual_sink_matches_assembled_row_product() {
         let circuit = big_board(64);
         let layout = Layout::new(&circuit);
-        let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&circuit, &layout, &mut m);
         let n = layout.size;
-        // A deliberately non-trivial iterate: mixed signs and magnitudes.
         let x: Vec<f64> = (0..n)
             .map(|i| ((i as f64 * 0.7391).sin()) * 3.0 + 0.1)
             .collect();
         let state = ReactiveState::new(circuit.devices.len());
         let opts = SolverOptions::default();
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
-        let spdt = std::collections::HashMap::new();
-        let ctx = StampCtx {
-            circuit: &circuit,
-            layout: &layout,
-            opts: &opts,
-            x: &x,
-            x_prev: &x,
-            time: 1e-6,
-            coeffs,
-            state: &state,
-            dc: false,
-            use_ic: false,
-            gmin: 1e-12,
-            src_scale: 1.0,
-            branch_reg: 1e-2,
-            cmp_freeze: None,
-            switch_freeze: None,
-            switch_latch: None,
-            spdt_sibling: &spdt,
-            junction_eval: None,
-        };
-        let mut rhs = vec![0.0f64; n];
-        m.clear_values();
-        stamp_all(&ctx, &mut m, &mut rhs);
-        let mut f = vec![0.0f64; n];
-        stamp_residual(&ctx, &mut f);
+        let (layout, m, rhs, f) = assemble(&circuit, &x, &x, &opts, &state, false, 1e-12, 1e-2);
         for i in 0..layout.n_nodes {
             let mut acc = 0.0;
             let mut mag = rhs[i].abs();
@@ -4048,39 +3575,21 @@ mod bench {
             let bound = 1e-12 * mag.max(1.0);
             assert!(
                 err <= bound,
-                "row {i}: sink F={} assembled F={} err={err:e} > bound={bound:e} (mag {mag:e})",
-                f[i],
-                assembled,
+                "row {i}: sink F={} assembled F={assembled} err={err:e} > {bound:e}",
+                f[i]
             );
         }
     }
-}
 
-#[cfg(test)]
-mod behavioral_fd_tests {
-    use super::*;
-    use hauksbee_ir::{BDep, CompiledExpr, DeviceId};
-
-    /// FD-Jacobian accuracy gate (plan §2.5): the forward-difference partials
-    /// must match ANALYTIC derivatives on a known expression at representative
-    /// operating points. With `delta = reltol*|x| + floor` the forward
-    /// difference carries an O(delta * f''/2) truncation term, so the bar is
-    /// set from reltol (1e-3) times the local curvature, a few 1e-3 relative
-    /// on curved terms, tighter on linear ones.
+    /// Forward-difference partials match analytic derivatives (exact on the
+    /// linear term, within the reltol-driven truncation on the curved one),
+    /// and NaN/INF/eval faults come back as Err with `vals` restored.
     #[test]
-    fn fd_partials_match_analytic() {
-        // f(v, i) = 2 v + 100 tanh(5 i) + 0.1 t
-        //   df/dv = 2 (exactly, linear)
-        //   df/di = 500 sech^2(5 i)
+    fn fd_partials_match_analytic_and_report_faults() {
         let expr =
             CompiledExpr::compile("2.0*__d0 + 100.0*math::tanh(5.0*__d1) + 0.1*time").unwrap();
-        let deps = [
-            BDep::Volt(hauksbee_ir::NodeId(1)),
-            BDep::Branch(DeviceId(0)),
-        ];
+        let deps = [BDep::Volt(NodeId(1)), BDep::Branch(DeviceId(0))];
         let opts = SolverOptions::default();
-        let mut worst_lin = 0.0f64;
-        let mut worst_curved = 0.0f64;
         for &(v, i, t) in &[
             (0.0, 0.0, 0.0),
             (1.0, 0.05, 1e-3),
@@ -4092,82 +3601,37 @@ mod behavioral_fd_tests {
             let (f0, partials) =
                 behavioral_eval_partials(&expr, &deps, &mut vals, t, &opts).unwrap();
             let f_true = 2.0 * v + 100.0 * (5.0 * i).tanh() + 0.1 * t;
+            assert!((f0 - f_true).abs() < 1e-12 * f_true.abs().max(1.0));
             assert!(
-                (f0 - f_true).abs() < 1e-12 * f_true.abs().max(1.0),
-                "f0 at ({v},{i},{t})"
-            );
-            // Linear partial: FD is exact to rounding for a linear term...
-            // except for the tanh term's contribution? No: partials are per
-            // SLOT, slot 0 perturbs v only, and f is linear in v, so the
-            // difference quotient is exactly 2 up to cancellation rounding.
-            let dv_err = ((partials[0] - 2.0) / 2.0).abs();
-            worst_lin = worst_lin.max(dv_err);
-            assert!(
-                dv_err < 1e-9,
-                "df/dv at ({v},{i},{t}): {} (rel {dv_err:e})",
+                ((partials[0] - 2.0) / 2.0).abs() < 1e-9,
+                "df/dv at ({v},{i},{t}): {}",
                 partials[0]
             );
-            // Curved partial: truncation O(delta/2 * f''), delta ~ 1e-3|i|+1e-12.
-            let sech2 = 1.0 / (5.0f64 * i).cosh().powi(2);
-            let di_true = 500.0 * sech2;
+            let di_true = 500.0 / (5.0f64 * i).cosh().powi(2);
             let di_err = ((partials[1] - di_true) / di_true.abs().max(1e-12)).abs();
-            worst_curved = worst_curved.max(di_err);
             assert!(
                 di_err < 5e-3,
-                "df/di at ({v},{i},{t}): fd={} analytic={di_true} rel={di_err:e}",
+                "df/di at ({v},{i},{t}): fd={} analytic={di_true}",
                 partials[1]
             );
         }
-        // Print the measured accuracy so the gate report carries real numbers
-        // (run with --nocapture).
-        println!(
-            "behavioral FD accuracy: worst linear rel err {worst_lin:.3e}, \
-             worst curved rel err {worst_curved:.3e}"
-        );
-    }
 
-    /// The fault contract of the partials helper: NaN values, INF values, and
-    /// eval errors all come back as Err, never as poisoned numbers.
-    #[test]
-    fn fd_partials_report_faults() {
-        let opts = SolverOptions::default();
+        let deps = [BDep::Volt(NodeId(1))];
         let ln = CompiledExpr::compile("math::ln(__d0)").unwrap();
-        let deps = [BDep::Volt(hauksbee_ir::NodeId(1))];
-        // NaN at the base point.
-        let mut vals = vec![-1.0];
-        assert!(behavioral_eval_partials(&ln, &deps, &mut vals, 0.0, &opts).is_err());
-        // INF from division by zero.
+        assert!(behavioral_eval_partials(&ln, &deps, &mut vec![-1.0], 0.0, &opts).is_err());
         let div = CompiledExpr::compile("1.0/__d0").unwrap();
-        let mut vals = vec![0.0];
-        assert!(behavioral_eval_partials(&div, &deps, &mut vals, 0.0, &opts).is_err());
-        // A fault while PROBING a partial (base point fine, perturbed point
-        // NaN): ln(x) at x just below 0 after the +delta probe crosses it...
-        // construct via ln(-__d0) with x = -1e-15: base -x = 1e-15 > 0 ok,
-        // probe x+delta makes -x negative -> NaN.
+        assert!(behavioral_eval_partials(&div, &deps, &mut vec![0.0], 0.0, &opts).is_err());
         let flip = CompiledExpr::compile("math::ln(0.0 - __d0)").unwrap();
         let mut vals = vec![-1e-15];
         assert!(behavioral_eval_partials(&flip, &deps, &mut vals, 0.0, &opts).is_err());
-        // And vals is restored even on the fault path? The base value is
-        // written back before the error returns, so callers can reuse it.
-        assert_eq!(vals[0], -1e-15);
+        assert_eq!(vals[0], -1e-15, "base value restored on the fault path");
     }
-}
 
-#[cfg(test)]
-mod gear2_varstep_tests {
-    use super::IntegCoeffs;
-    use crate::options::Integration;
-
-    /// R6 #F7 regression, part 1: on a UNIFORM grid (dt_prev == dt) the
-    /// variable-step BDF2 formula must reproduce the historical constants
-    /// {1.5/dt, 2/dt, 0.5/dt} BIT-FOR-BIT, so the fixed-step path and every
-    /// pinned reference waveform are untouched by the generalization. This
-    /// holds because at r = 1 each coefficient is a single correctly rounded
-    /// division of the same real value: (1+2r) = 3 and (1+r)·dt = 2·dt are
-    /// exact, and fl(3/(2·dt)) = fl(1.5/dt) since 2·dt only bumps the
-    /// exponent. Same argument for a2 = fl(1/(2·dt)) = fl(0.5/dt).
+    /// Variable-step BDF2: bit-identical to the fixed-step constants on a
+    /// uniform grid, exact on quadratics for any step ratio (where uniform
+    /// coefficients are not), and second-order on an alternating grid.
     #[test]
-    fn uniform_grid_is_bit_identical_to_old_constants() {
+    fn gear2_variable_step_coefficients() {
         for &dt in &[
             1e-12,
             1e-9,
@@ -4184,23 +3648,13 @@ mod gear2_varstep_tests {
             assert_eq!(c.g.to_bits(), (1.5 / dt).to_bits(), "g at dt={dt}");
             assert_eq!(c.a1.to_bits(), (2.0 / dt).to_bits(), "a1 at dt={dt}");
             assert_eq!(c.a2.to_bits(), (0.5 / dt).to_bits(), "a2 at dt={dt}");
-            // "No accepted step yet" (dt_prev <= 0) must take the same r = 1
-            // path, exact, because the seeded history is flat (x2 == x1).
             let c0 = IntegCoeffs::for_step(Integration::Gear2, dt, 0.0, false);
-            assert_eq!(c0.g.to_bits(), c.g.to_bits());
-            assert_eq!(c0.a1.to_bits(), c.a1.to_bits());
-            assert_eq!(c0.a2.to_bits(), c.a2.to_bits());
+            assert_eq!(
+                (c0.g.to_bits(), c0.a1.to_bits(), c0.a2.to_bits()),
+                (c.g.to_bits(), c.a1.to_bits(), c.a2.to_bits())
+            );
         }
-    }
 
-    /// R6 #F7 regression, part 2: 2nd-order CONSISTENCY on a non-uniform
-    /// grid. A 2nd-order backward-difference stencil must differentiate any
-    /// quadratic exactly; uniform-grid coefficients fail this the moment
-    /// r != 1 (that failure IS the silent first-order degradation).
-    /// The companion form under test: dq/dt = g·q_n - (a1·q_{n-1} - a2·q_{n-2}).
-    #[test]
-    fn nonuniform_stencil_is_exact_on_quadratics() {
-        // q(t) = 2 + 3t + 5t^2, dq/dt = 3 + 10t.
         let q = |t: f64| 2.0 + 3.0 * t + 5.0 * t * t;
         let dq = |t: f64| 3.0 + 10.0 * t;
         for &(h, r) in &[
@@ -4216,47 +3670,29 @@ mod gear2_varstep_tests {
             let (t1, t2) = (tn - h, tn - h - h_prev);
             let c = IntegCoeffs::for_step(Integration::Gear2, h, h_prev, false);
             let got = c.g * q(tn) - (c.a1 * q(t1) - c.a2 * q(t2));
-            let want = dq(tn);
             assert!(
-                (got - want).abs() <= 1e-9 * want.abs().max(1.0),
-                "stencil not exact on quadratic at h={h}, r={r}: got {got}, want {want}"
+                (got - dq(tn)).abs() <= 1e-9 * dq(tn).abs().max(1.0),
+                "h={h}, r={r}: got {got}, want {}",
+                dq(tn)
             );
-            // And uniform coefficients really do get this wrong when r != 1,
-            // which is what makes the non-uniform stencil load-bearing.
             let cu = IntegCoeffs::for_step(Integration::Gear2, h, h, false);
             let bad = cu.g * q(tn) - (cu.a1 * q(t1) - cu.a2 * q(t2));
             assert!(
-                (bad - want).abs() > 1e-6 * want.abs(),
+                (bad - dq(tn)).abs() > 1e-6 * dq(tn).abs(),
                 "uniform stencil unexpectedly exact at r={r}"
             );
         }
-    }
 
-    /// R6 #F7 regression, part 3: ORDER OF ACCURACY under a CHANGING step.
-    /// Integrate q' = -q (exact: e^{-t}) to t = 1 on a deliberately
-    /// alternating grid h, h/2, h, h/2, ..., every single step changes size.
-    /// Each implicit BDF2 step solves g·q_n - (a1·q_{n-1} - a2·q_{n-2}) = -q_n,
-    /// i.e. q_n = (a1·q_{n-1} - a2·q_{n-2}) / (g + 1), exactly the algebra the
-    /// capacitor companion performs. Halving the base h must cut the error by
-    /// ~4x (2nd order). The pre-fix uniform coefficients on this grid converge
-    /// at ~2x (1st order); the silent degradation this test pins.
-    #[test]
-    fn alternating_grid_converges_at_second_order() {
-        // March q' = -q with variable-step BDF2 on the alternating grid,
-        // exact-starting the one-step history with the analytic solution.
+        // q' = -q on the grid h, h/2, h, h/2, ...: halving h must cut the error ~4x.
         let march = |base_h: f64| -> f64 {
-            // History seeded ANALYTICALLY (q2 at t=0, q1 at t=base_h/2,
-            // spacing base_h/2), so the measured error is pure BDF2
-            // truncation, not a first-step warm-up artifact.
             let mut t = base_h * 0.5;
-            let mut q2 = 1.0_f64; // e^{-0}
+            let mut q2 = 1.0_f64;
             let mut q1 = (-(base_h * 0.5)).exp();
             let mut h_prev = base_h * 0.5;
-            let mut long = true; // next step: full h
+            let mut long = true;
             let mut worst = 0.0_f64;
             while t < 1.0 - 1e-12 {
-                let h = if long { base_h } else { base_h * 0.5 };
-                let h = h.min(1.0 - t);
+                let h = if long { base_h } else { base_h * 0.5 }.min(1.0 - t);
                 let c = IntegCoeffs::for_step(Integration::Gear2, h, h_prev, false);
                 let qn = (c.a1 * q1 - c.a2 * q2) / (c.g + 1.0);
                 t += h;
@@ -4268,16 +3704,10 @@ mod gear2_varstep_tests {
             }
             worst
         };
-        let e1 = march(0.02);
-        let e2 = march(0.01);
-        let e3 = march(0.005);
-        let (r12, r23) = (e1 / e2, e2 / e3);
-        // 2nd order => halving h divides the error by ~4. A 1st-order scheme
-        // gives ~2. Gate at 3.4 to leave rounding headroom while cleanly
-        // rejecting first-order behaviour.
+        let (e1, e2, e3) = (march(0.02), march(0.01), march(0.005));
         assert!(
-            r12 > 3.4 && r23 > 3.4,
-            "error not ~h^2 on alternating grid: e={e1:.3e}/{e2:.3e}/{e3:.3e}, ratios {r12:.2}/{r23:.2}"
+            e1 / e2 > 3.4 && e2 / e3 > 3.4,
+            "not ~h^2: {e1:.3e}/{e2:.3e}/{e3:.3e}"
         );
     }
 }

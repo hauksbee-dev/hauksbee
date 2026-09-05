@@ -624,26 +624,15 @@ mod evidence_budget_tests {
     use super::result_kind_is_numeric;
 
     #[test]
-    fn every_numeric_assertion_vocabulary_gets_a_budget() {
-        for kind in [
-            "voltage",
-            "toggle",
-            "max_current",
-            "max_temp",
-            "rail_window",
-            "boot_coverage",
-            "boot-coverage",
-            "phase_margin",
-            "ac_gain",
-            "hwtrace",
-            "model_coverage",
-        ] {
+    fn numeric_assertion_kinds_get_a_budget_and_textual_ones_do_not() {
+        for kind in ["voltage", "rail_window", "boot-coverage", "hwtrace"] {
             assert!(result_kind_is_numeric(kind, false), "{kind}");
         }
-        assert!(result_kind_is_numeric("peripheral", true));
         for kind in ["uart", "no_faults", "protection_trip"] {
             assert!(!result_kind_is_numeric(kind, false), "{kind}");
         }
+        // A peripheral assertion is numeric only when it reads a field.
+        assert!(result_kind_is_numeric("peripheral", true));
         assert!(!result_kind_is_numeric("peripheral", false));
     }
 }

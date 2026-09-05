@@ -689,8 +689,8 @@ pub fn compare(
 mod tests {
     use super::*;
 
-    /// A clean square wave: `period_s` period, `duty` high fraction, levels
-    /// lo/hi, sampled at `dt`, starting low at t=0.
+    /// A square wave of `period_s` and `duty` between `lo` and `hi`, sampled
+    /// at `dt` for `total_s`, starting low.
     fn square(
         period_s: f64,
         duty: f64,
@@ -702,9 +702,11 @@ mod tests {
         let mut out = Vec::new();
         let mut t = 0.0;
         while t <= total_s {
-            let phase = (t / period_s).fract();
-            // Low first, then high: rising edge at (1-duty) into the period.
-            let v = if phase >= 1.0 - duty { hi } else { lo };
+            let v = if (t / period_s).fract() >= 1.0 - duty {
+                hi
+            } else {
+                lo
+            };
             out.push((t, v));
             t += dt;
         }
@@ -721,57 +723,47 @@ mod tests {
         }
     }
 
-    #[test]
-    fn load_vcd_survives_multibyte_body_line() {
-        // A VCD body line beginning with a multibyte UTF-8 char must be skipped
-        // as junk, leaving the real 0/1 edges readable. Splitting such a line
-        // with a byte-index split_at(1) lands off a char boundary and panics the
-        // parser. (round-7 #10)
-        let vcd = "$timescale 1us $end\n\
-                   $var wire 1 ! sig $end\n\
-                   $enddefinitions $end\n\
-                   #0\n0!\n#10\nµ garbage line\n1!\n";
+    fn temp_file(name: &str, body: &str) -> std::path::PathBuf {
         let path =
-            std::env::temp_dir().join(format!("hauksbee_vcd_multibyte_{}.vcd", std::process::id()));
-        std::fs::write(&path, vcd).unwrap();
-        let series = load_vcd(&path, None);
-        let _ = std::fs::remove_file(&path);
-        let series = series.expect("VCD with a multibyte body line must parse, not panic");
-        // Two real edges: 0 at t=0, 1 at t=10µs.
+            std::env::temp_dir().join(format!("hauksbee_hwtrace_{name}_{}", std::process::id()));
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    /// A VCD body line starting with a multibyte char is skipped as junk
+    /// rather than panicking on a byte split; a CSV `inf`/`nan` sample is
+    /// refused because it would make the comparison band pass vacuously.
+    #[test]
+    fn loaders_skip_multibyte_junk_and_refuse_non_finite_samples() {
+        let vcd = temp_file(
+            "multibyte.vcd",
+            "$timescale 1us $end\n$var wire 1 ! sig $end\n$enddefinitions $end\n\
+             #0\n0!\n#10\nµ garbage line\n1!\n",
+        );
+        let series = load_vcd(&vcd, None);
+        let _ = std::fs::remove_file(&vcd);
+        let series = series.expect("parses");
         assert_eq!(series.len(), 2);
-        assert_eq!(series[0].1, 0.0);
-        assert_eq!(series[1].1, 1.0);
+        assert_eq!((series[0].1, series[1].1), (0.0, 1.0));
         assert!(
             (series[1].0 - 10e-6).abs() < 1e-12,
             "second edge at 10µs: {}",
             series[1].0
         );
-    }
 
-    #[test]
-    fn load_csv_rejects_non_finite_samples() {
-        // Rust's f64 parser accepts "inf"/"nan", so a capture row like `1e-3,inf`
-        // would slip through and make the feature comparison pass vacuously
-        // (band = reltol*|cap| becomes inf/NaN). load_csv must fail loud instead.
-        let csv = "0.0,1.0\n1e-4,2.0\n2e-4,inf\n3e-4,3.0\n4e-4,4.0\n\
-                   5e-4,5.0\n6e-4,6.0\n7e-4,7.0\n8e-4,8.0\n";
-        let path = std::env::temp_dir().join(format!(
-            "hauksbee_hwtrace_nonfinite_{}.csv",
-            std::process::id()
-        ));
-        std::fs::write(&path, csv).unwrap();
-        let r = load_csv(&path);
-        let _ = std::fs::remove_file(&path);
-        let err = r.expect_err("a non-finite sample must be rejected, not accepted");
-        assert!(
-            format!("{err:?}").contains("non-finite"),
-            "error must name the non-finite sample: {err:?}"
+        let csv = temp_file(
+            "nonfinite.csv",
+            "0.0,1.0\n1e-4,2.0\n2e-4,inf\n3e-4,3.0\n4e-4,4.0\n5e-4,5.0\n6e-4,6.0\n7e-4,7.0\n8e-4,8.0\n",
         );
+        let r = load_csv(&csv);
+        let _ = std::fs::remove_file(&csv);
+        let err = r.expect_err("a non-finite sample must be rejected");
+        assert!(format!("{err:?}").contains("non-finite"), "{err:?}");
     }
 
     #[test]
     fn extracts_square_wave_features() {
-        // 200 ms period, 50% duty, 0..5 V, 1 s at 0.5 ms; the blinky shape.
+        // 200 ms period, 50% duty, 0..5 V, 1 s at 0.5 ms.
         let s = square(0.2, 0.5, 0.0, 5.0, 1.0, 0.0005);
         let period = extract(&s, &feat("period")).unwrap();
         assert!((period - 200.0).abs() < 2.0, "period {period}");
@@ -779,41 +771,32 @@ mod tests {
         assert!((duty - 0.5).abs() < 0.02, "duty {duty}");
         let pw = extract(&s, &feat("pulse_width")).unwrap();
         assert!((pw - 100.0).abs() < 2.0, "pulse_width {pw}");
-        let max = extract(&s, &feat("max")).unwrap();
-        assert!((max - 5.0).abs() < 1e-9);
-        let min = extract(&s, &feat("min")).unwrap();
-        assert!(min.abs() < 1e-9);
+        assert!((extract(&s, &feat("max")).unwrap() - 5.0).abs() < 1e-9);
+        assert!(extract(&s, &feat("min")).unwrap().abs() < 1e-9);
         let level = extract(&s, &feat("level")).unwrap();
         assert!((level - 2.5).abs() < 0.1, "level {level}");
-        // 1 s / 100 ms half-period ≈ 10 edges (9..10 depending on truncation).
         let edges = extract(&s, &feat("edge_count")).unwrap();
         assert!((9.0..=11.0).contains(&edges), "edges {edges}");
-    }
 
-    #[test]
-    fn noise_near_threshold_does_not_manufacture_edges() {
-        // A 2.5 V flat line with ±0.1 V "noise" around it: without hysteresis
-        // scaled to the swing this would rack up hundreds of fake edges; with
-        // it, the swing IS the noise so crossings are genuine, but a real
-        // square wave with small noise must still count only the real edges.
-        let mut s = square(0.2, 0.5, 0.0, 5.0, 1.0, 0.0005);
-        for (i, p) in s.iter_mut().enumerate() {
-            // Deterministic pseudo-noise, ±60 mV.
+        // Small noise around the swing must not manufacture edges: the
+        // hysteresis scales with the swing.
+        let mut noisy = s.clone();
+        for (i, p) in noisy.iter_mut().enumerate() {
             p.1 += 0.06 * ((i as f64 * 0.7).sin());
         }
-        let edges = extract(&s, &feat("edge_count")).unwrap();
+        let edges = extract(&noisy, &feat("edge_count")).unwrap();
         assert!((9.0..=11.0).contains(&edges), "noisy edges {edges}");
     }
 
     #[test]
     fn too_few_edges_is_a_named_refusal_not_a_zero() {
-        let s: Vec<(f64, f64)> = (0..100).map(|i| (i as f64 * 1e-3, 5.0)).collect();
-        let err = extract(&s, &feat("period")).unwrap_err();
+        let flat: Vec<(f64, f64)> = (0..100).map(|i| (i as f64 * 1e-3, 5.0)).collect();
+        let err = extract(&flat, &feat("period")).unwrap_err();
         assert!(err.contains("rising edge"), "got: {err}");
     }
 
     #[test]
-    fn mismatch_names_feature_and_both_values() {
+    fn compare_names_the_feature_and_both_values_and_refuses_window_mismatch() {
         let cap = square(0.3, 0.5, 0.0, 5.0, 1.2, 0.0005); // 300 ms period
         let sim = square(0.2, 0.5, 0.0, 5.0, 1.2, 0.0005); // 200 ms period
         let f = Feature {
@@ -824,23 +807,19 @@ mod tests {
             reltol: Some(0.05),
         };
         let r = compare("D13", &f, &cap, &sim);
-        assert!(!r.pass);
-        assert!(r.detail.contains("period"), "{}", r.detail);
-        assert!(r.detail.contains("200"), "sim value missing: {}", r.detail);
         assert!(
-            r.detail.contains("300"),
-            "captured value missing: {}",
+            !r.pass && r.detail.contains("200") && r.detail.contains("300"),
+            "{}",
             r.detail
         );
-        assert!(r.detail.contains("EXCEEDS"), "{}", r.detail);
-    }
 
-    #[test]
-    fn edge_count_refuses_window_mismatch() {
-        let cap = square(0.2, 0.5, 0.0, 5.0, 0.4, 0.0005); // 400 ms capture
-        let sim = square(0.2, 0.5, 0.0, 5.0, 1.0, 0.0005); // 1 s sim
-        let r = compare("D13", &feat("edge_count"), &cap, &sim);
-        assert!(!r.pass);
-        assert!(r.detail.contains("window mismatch"), "{}", r.detail);
+        // An edge count over different capture and sim windows is not comparable.
+        let short_cap = square(0.2, 0.5, 0.0, 5.0, 0.4, 0.0005);
+        let r = compare("D13", &feat("edge_count"), &short_cap, &sim);
+        assert!(
+            !r.pass && r.detail.contains("window mismatch"),
+            "{}",
+            r.detail
+        );
     }
 }

@@ -1,0 +1,138 @@
+title = "Can I swap this part?"
+persona = "An engineer with the wrong value fitted, deciding what to order instead."
+goal = """
+Answer "what happens if I fit a different part here" without editing the board
+file, by writing the swap into the spec and re-running the same assertions.
+"""
+success = """
+The same board and the same two assertions go green on the board's own value and
+red on the swapped one. The report's numbers move to the values the swapped part
+implies, which proves the override reached the circuit rather than being parsed
+and dropped. no_faults flips in both directions.
+"""
+
+[[step]]
+name = "take the board into a working directory"
+do = "copy"
+src = "crates/hauksbee-ci/examples/boards/power_resistor.kicad_pcb"
+dst = "power_resistor.kicad_pcb"
+
+[[step]]
+name = "baseline: the board's own 30 ohm part, nothing overridden"
+do = "write"
+file = "baseline.toml"
+text = """
+name = "power resistor as designed"
+board = "power_resistor.kicad_pcb"
+duration_ms = 20
+ambient_c = 25
+
+[[supply]]
+net = "+5V"
+kind = "bench"
+volts = 5.0
+current_limit_a = 2.0
+
+[[assert]]
+kind = "max_temp"
+ref = "R1"
+celsius = 125
+
+[[assert]]
+kind = "no_faults"
+"""
+
+[[step]]
+name = "as designed: both assertions hold"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "baseline.toml"]
+exit = 0
+max_seconds = 30
+contains = [
+  "[PASS] Tj(R1) <= 125 C",
+  # 5 V across 30 ohm is 0.83 W; in a 2512 at 25 C that lands at 91.7 C.
+  "Tj(R1) peak 91.7C (<= 125C)",
+  "[PASS] no stress faults raised",
+  "no stress faults",
+  "GREEN",
+]
+not_contains = ["[FAIL]", "RED"]
+
+[[step]]
+name = "the swap, written as a spec override rather than a board edit"
+do = "write"
+file = "swapped.toml"
+text = """
+name = "power resistor, 10 ohm fitted instead"
+board = "power_resistor.kicad_pcb"
+duration_ms = 20
+ambient_c = 25
+
+[[supply]]
+net = "+5V"
+kind = "bench"
+volts = 5.0
+current_limit_a = 2.0
+
+# The only difference from baseline.toml. The board file is untouched.
+[[override]]
+ref = "R1"
+value = "10"
+
+[[assert]]
+kind = "max_temp"
+ref = "R1"
+celsius = 125
+
+[[assert]]
+kind = "no_faults"
+"""
+
+[[step]]
+name = "the swapped part cooks, and no_faults flips to red"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "swapped.toml"]
+exit = 1
+max_seconds = 30
+contains = [
+  "[FAIL] Tj(R1) <= 125 C",
+  # 5 V across 10 ohm is 2.5 W: 25 + 2.5*80 = 225 C. Both numbers are only
+  # reachable if the override actually reached the circuit.
+  "Tj(R1) peak 225.0C > ceiling 125C",
+  "why: R1 ran 100.0 C hotter than your 125 C ceiling (peak 225.0 C)",
+  "[FAIL] no stress faults raised",
+  "R1 overpower 2.500 > 1.000",
+  "RED",
+]
+not_contains = ["[PASS]", "GREEN"]
+
+[[step]]
+name = "the machine surface agrees with the human one"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "swapped.toml", "--json"]
+exit = 1
+max_seconds = 30
+json_stdout = true
+json_required_keys = ["exit_code", "passed", "results", "run_valid", "spec_name"]
+json_equals = { "exit_code" = 1, "passed" = false, "run_valid" = true, "results.1.kind" = "no_faults", "results.1.passed" = false }
+
+[[step]]
+name = "and swapping the other way clears it again"
+do = "patch"
+file = "swapped.toml"
+find = "value = \"10\""
+replace = "value = \"100\""
+
+[[step]]
+name = "a 100 ohm part runs cool: no_faults flips back to green"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "swapped.toml"]
+exit = 0
+max_seconds = 30
+contains = [
+  "[PASS] no stress faults raised",
+  # 5 V across 100 ohm is 0.25 W: 25 + 0.25*80 = 45 C.
+  "Tj(R1) peak 45.0C (<= 125C)",
+  "GREEN",
+]
+not_contains = ["[FAIL]", "RED", "overpower"]

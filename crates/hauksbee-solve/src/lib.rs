@@ -42,6 +42,8 @@ mod ac;
 #[cfg(test)]
 mod alloc_audit;
 #[cfg(test)]
+mod test_fixtures;
+#[cfg(test)]
 #[global_allocator]
 static AUDIT_ALLOC: alloc_audit::CountingAlloc = alloc_audit::CountingAlloc;
 

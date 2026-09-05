@@ -136,333 +136,107 @@ mod tests {
     use super::*;
     use crate::decompose::conduction::ConductionGraph;
     use crate::decompose::feedforward::StageDag;
-    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+    use crate::test_fixtures::{cap, comparator, diode, res, sw, vdc, GND};
+    use hauksbee_ir::{Circuit, NodeId};
 
-    /// The STEP-1 dead-membrane regression, in miniature: a VSwitch whose
-    /// select is held by an exogenous Thevenin driver. The driver group must
-    /// be assigned to the switch's group, so the select never floats.
+    fn thevenin_driver(c: &mut Circuit) -> NodeId {
+        let (vdrv, sel) = (c.node("vdrv"), c.node("sel"));
+        vdc(c, "Vdrv", vdrv, 5.0);
+        res(c, "Rdrv", vdrv, sel, 1e3);
+        sel
+    }
+
+    /// A source feeding a load through a switch whose select is `sel`.
+    fn switch_consumer(c: &mut Circuit, tag: &str, sel: NodeId) {
+        let s = c.node(&format!("{tag}_src"));
+        let o = c.node(&format!("{tag}_out"));
+        vdc(c, &format!("V{tag}"), s, 3.3);
+        sw(c, &format!("SW{tag}"), s, o, sel, (2.0, 1.0), 1.0);
+        res(c, &format!("RL{tag}"), o, GND, 10e3);
+    }
+
+    fn assignments(c: &Circuit) -> (StageDag, Vec<DriverAssignment>, ConductionGraph) {
+        let g = ConductionGraph::analyze(c);
+        let dag = StageDag::build(c, &g);
+        let asn = driver_assignments(c, &g, &dag, &DriverPolicy::default());
+        (dag, asn, g)
+    }
+
+    /// A Thevenin select driver is absorbed into its consumer's group; one
+    /// driver holding two consumers' selects is replicated into both.
     #[test]
-    fn thevenin_select_driver_is_absorbed() {
+    fn thevenin_select_driver_is_absorbed_into_every_consumer() {
         let mut c = Circuit::new();
-        // The consumer island: a source feeding a load through the switch.
-        let src = c.node("src");
-        let out = c.node("out");
-        c.add(Device::Vsource {
-            name: "VS".into(),
-            p: src,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        // The driver island: Vdrv behind Rdrv holding the select.
-        let vdrv = c.node("vdrv");
-        let sel = c.node("sel");
-        c.add(Device::Vsource {
-            name: "Vdrv".into(),
-            p: vdrv,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        c.add(Device::Resistor {
-            name: "Rdrv".into(),
-            a: vdrv,
-            b: sel,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::VSwitch {
-            name: "SW".into(),
-            a: src,
-            b: out,
-            ctrl_p: sel,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 1.0,
-            roff: 1e9,
-        });
-        c.add(Device::Resistor {
-            name: "RL".into(),
-            a: out,
-            b: NodeId::GROUND,
-            ohms: 10e3,
-            tc1: None,
-        });
-
-        let g = ConductionGraph::analyze(&c);
-        let dag = StageDag::build(&c, &g);
+        let sel = thevenin_driver(&mut c);
+        switch_consumer(&mut c, "x", sel);
+        let (dag, asn, g) = assignments(&c);
         assert_eq!(dag.groups.len(), 2, "{dag:?}");
-        let assignments = driver_assignments(&c, &g, &dag, &DriverPolicy::default());
-        assert_eq!(assignments.len(), 1, "{assignments:?}");
-        assert_eq!(assignments[0].consumers.len(), 1);
-        // The driver is the group containing exactly the two Thevenin devices.
-        let d = assignments[0].driver_group;
-        let dev_count: usize = dag.groups[d].iter().map(|&i| g.islands[i].len()).sum();
-        assert_eq!(dev_count, 2);
-    }
-
-    /// One driver holding the selects of two independent consumers must be
-    /// replicated into both (exact: zero current leaves it either way).
-    #[test]
-    fn shared_driver_lists_every_consumer() {
-        let mut c = Circuit::new();
-        let vdrv = c.node("vdrv");
-        let sel = c.node("sel");
-        c.add(Device::Vsource {
-            name: "Vdrv".into(),
-            p: vdrv,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        c.add(Device::Resistor {
-            name: "Rdrv".into(),
-            a: vdrv,
-            b: sel,
-            ohms: 1e3,
-            tc1: None,
-        });
-        for tag in ["x", "y"] {
-            let s = c.node(&format!("{tag}_src"));
-            let o = c.node(&format!("{tag}_out"));
-            c.add(Device::Vsource {
-                name: format!("V{tag}"),
-                p: s,
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(3.3),
-            });
-            c.add(Device::VSwitch {
-                name: format!("SW{tag}"),
-                a: s,
-                b: o,
-                ctrl_p: sel,
-                ctrl_n: NodeId::GROUND,
-                von: 2.0,
-                voff: 1.0,
-                ron: 1.0,
-                roff: 1e9,
-            });
-            c.add(Device::Resistor {
-                name: format!("RL{tag}"),
-                a: o,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
-        }
-
-        let g = ConductionGraph::analyze(&c);
-        let dag = StageDag::build(&c, &g);
-        let assignments = driver_assignments(&c, &g, &dag, &DriverPolicy::default());
-        assert_eq!(assignments.len(), 1, "{assignments:?}");
+        assert_eq!(asn.len(), 1, "{asn:?}");
+        assert_eq!(asn[0].consumers.len(), 1);
+        let dev_count: usize = dag.groups[asn[0].driver_group]
+            .iter()
+            .map(|&i| g.islands[i].len())
+            .sum();
         assert_eq!(
-            assignments[0].consumers.len(),
-            2,
-            "replicate into both: {assignments:?}"
+            dev_count, 2,
+            "the driver is exactly the two Thevenin devices"
         );
+
+        switch_consumer(&mut c, "y", sel);
+        let (_, asn, _) = assignments(&c);
+        assert_eq!(asn.len(), 1, "{asn:?}");
+        assert_eq!(asn[0].consumers.len(), 2, "replicate into both: {asn:?}");
     }
 
-    /// A big linear upstream (a long RC ladder driving a comparator input)
-    /// is NOT a driver: it stays a staged tear where the matrix-exponential
-    /// path solves it once and the waveform is replayed.
+    /// A large linear upstream stays a staged tear; a nonlinear upstream and a
+    /// self-sensing upstream are never absorbed.
     #[test]
-    fn large_linear_upstream_stays_staged() {
+    fn large_nonlinear_or_self_sensing_upstreams_are_not_absorbed() {
         let mut c = Circuit::new();
         let vin = c.node("vin");
-        c.add(Device::Vsource {
-            name: "VIN".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        let mut prev = vin;
+        vdc(&mut c, "VIN", vin, 5.0);
         let mut last = vin;
         for k in 0..10 {
             let n = c.node(&format!("l{k}"));
-            c.add(Device::Resistor {
-                name: format!("R{k}"),
-                a: prev,
-                b: n,
-                ohms: 1e3,
-                tc1: None,
-            });
-            c.add(Device::Capacitor {
-                name: format!("C{k}"),
-                a: n,
-                b: NodeId::GROUND,
-                farads: 1e-9,
-                ic: None,
-            });
-            prev = n;
+            res(&mut c, &format!("R{k}"), last, n, 1e3);
+            cap(&mut c, &format!("C{k}"), n, GND, 1e-9);
             last = n;
         }
-        // Downstream comparator island sensing the ladder output.
         let cmp_out = c.node("cmp_out");
-        c.add(Device::Resistor {
-            name: "RCMP".into(),
-            a: cmp_out,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Comparator {
-            name: "CMP".into(),
-            out: cmp_out,
-            inp: last,
-            inn: NodeId::GROUND,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
-
-        let g = ConductionGraph::analyze(&c);
-        let dag = StageDag::build(&c, &g);
+        res(&mut c, "RCMP", cmp_out, GND, 1e3);
+        comparator(&mut c, "CMP", cmp_out, last, GND, 1e-3);
+        let (dag, asn, _) = assignments(&c);
         assert_eq!(dag.groups.len(), 2);
-        let assignments = driver_assignments(&c, &g, &dag, &DriverPolicy::default());
         assert!(
-            assignments.is_empty(),
-            "21 devices exceeds the driver budget: {assignments:?}"
+            asn.is_empty(),
+            "21 devices exceeds the driver budget: {asn:?}"
         );
-        assert_eq!(dag.free_tears.len(), 1, "the staged tear remains");
-    }
+        assert_eq!(dag.free_tears.len(), 1);
 
-    /// A small NONLINEAR upstream must never be absorbed: replication is only
-    /// exact for groups whose state is a linear function of their own sources
-    /// (the doc's "nonlinear upstreams are never absorbed", now enforced).
-    #[test]
-    fn nonlinear_driver_is_not_absorbed() {
         let mut c = Circuit::new();
         let vin = c.node("vin");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.0),
-        });
+        vdc(&mut c, "V1", vin, 3.0);
         let drv = c.node("drv");
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: vin,
-            b: drv,
-            ohms: 1e3,
-            tc1: None,
-        });
-        // The nonlinearity: a diode clamp inside the would-be driver group.
-        c.add(Device::Diode {
-            name: "D1".into(),
-            a: drv,
-            k: NodeId::GROUND,
-            model: hauksbee_ir::DiodeModel::default(),
-        });
-        // Downstream island senses drv through a switch select.
-        let a = c.node("a");
-        let b = c.node("b");
-        c.add(Device::Vsource {
-            name: "V2".into(),
-            p: a,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::VSwitch {
-            name: "S1".into(),
-            a,
-            b,
-            ctrl_p: drv,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        c.add(Device::Resistor {
-            name: "RL".into(),
-            a: b,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let g = ConductionGraph::analyze(&c);
-        let dag = StageDag::build(&c, &g);
-        let asn = driver_assignments(&c, &g, &dag, &DriverPolicy::default());
+        res(&mut c, "R1", vin, drv, 1e3);
+        diode(&mut c, "D1", drv, GND, Default::default());
+        switch_consumer(&mut c, "x", drv);
         assert!(
-            asn.is_empty(),
-            "a nonlinear upstream may not be absorbed: {asn:?}"
+            assignments(&c).1.is_empty(),
+            "a nonlinear upstream may not be absorbed"
         );
-    }
 
-    /// A SELF-SENSING upstream (a relaxation oscillator resetting itself)
-    /// must never be absorbed: its output is not a function of its inputs
-    /// alone, so replicas could diverge.
-    #[test]
-    fn self_sensing_driver_is_not_absorbed() {
         let mut c = Circuit::new();
         let vin = c.node("vin");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.0),
-        });
+        vdc(&mut c, "V1", vin, 3.0);
         let osc = c.node("osc");
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: vin,
-            b: osc,
-            ohms: 1e3,
-            tc1: None,
-        });
-        // The self-sense: a switch in the SAME island whose control reads the
-        // island's own output node.
+        res(&mut c, "R1", vin, osc, 1e3);
         let dump = c.node("dump");
-        c.add(Device::VSwitch {
-            name: "S_reset".into(),
-            a: osc,
-            b: dump,
-            ctrl_p: osc,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        c.add(Device::Resistor {
-            name: "Rdump".into(),
-            a: dump,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        // Downstream consumer senses osc.
-        let a = c.node("a");
-        let b = c.node("b");
-        c.add(Device::Vsource {
-            name: "V2".into(),
-            p: a,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::VSwitch {
-            name: "S1".into(),
-            a,
-            b,
-            ctrl_p: osc,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        c.add(Device::Resistor {
-            name: "RL".into(),
-            a: b,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let g = ConductionGraph::analyze(&c);
-        let dag = StageDag::build(&c, &g);
-        let asn = driver_assignments(&c, &g, &dag, &DriverPolicy::default());
+        sw(&mut c, "S_reset", osc, dump, osc, (2.0, 1.0), 10.0);
+        res(&mut c, "Rdump", dump, GND, 1e3);
+        switch_consumer(&mut c, "x", osc);
         assert!(
-            asn.is_empty(),
-            "a self-sensing upstream may not be absorbed: {asn:?}"
+            assignments(&c).1.is_empty(),
+            "a self-sensing upstream may not be absorbed"
         );
     }
 }

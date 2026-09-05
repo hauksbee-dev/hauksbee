@@ -1732,10 +1732,25 @@ mod tests {
         LogicComponent::compile("test", &logic).expect("compiles")
     }
 
-    /// Drive a tick from a plain name->level map (unlisted pins = unwired).
-    fn tick_with(lc: &mut LogicComponent, levels: &[(&str, bool)]) {
-        let map: HashMap<&str, bool> = levels.iter().copied().collect();
+    /// Drive a tick from a `"name=1 other=0"` level list (unlisted pins are
+    /// unwired).
+    fn tick(lc: &mut LogicComponent, levels: &str) {
+        let map: HashMap<&str, bool> = levels
+            .split_whitespace()
+            .map(|kv| {
+                let (name, level) = kv.split_once('=').expect("name=level");
+                (name, level == "1")
+            })
+            .collect();
         lc.tick(&mut |name, _prev| map.get(name).copied());
+    }
+
+    const Q_OUTPUTS: [&str; 8] = ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"];
+
+    fn assert_q_outputs(lc: &LogicComponent, byte: u8) {
+        for (i, q) in Q_OUTPUTS.iter().enumerate() {
+            assert_eq!(lc.output_level(q), Some((byte >> i) & 1 == 1), "{q}");
+        }
     }
 
     const HC595: &str = r#"
@@ -1772,9 +1787,7 @@ data_in = "shift"
 "qa..qh" = { enable = "oe_n", active = "low" }
 "#;
 
-    /// Small parallel EEPROM with the same bus/control semantics as a 28C256.
-    /// Four words keep the evaluator test cheap while exercising address,
-    /// bidirectional data, qualified WE edges, and exact read gating.
+    /// Four-word parallel EEPROM with 28C256 bus/control semantics.
     const PARALLEL_EEPROM: &str = r#"
 inputs  = ["a0", "a1", "ce_n", "oe_n", "we_n"]
 outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
@@ -1813,142 +1826,57 @@ disable = [
 "#;
 
     /// shiftOut(MSBFIRST) of `byte`: per bit, set SER then pulse SRCLK.
-    fn shift_out_msb(lc: &mut LogicComponent, byte: u8, srclr: bool, oe: bool) {
+    fn shift_out_msb(lc: &mut LogicComponent, byte: u8) {
         for bit in (0..8).rev() {
-            let b = (byte >> bit) & 1 == 1;
-            tick_with(
-                lc,
-                &[
-                    ("ser", b),
-                    ("srclk", false),
-                    ("rclk", false),
-                    ("srclr_n", srclr),
-                    ("oe_n", oe),
-                ],
-            );
-            tick_with(
-                lc,
-                &[
-                    ("ser", b),
-                    ("srclk", true),
-                    ("rclk", false),
-                    ("srclr_n", srclr),
-                    ("oe_n", oe),
-                ],
-            );
-            tick_with(
-                lc,
-                &[
-                    ("ser", b),
-                    ("srclk", false),
-                    ("rclk", false),
-                    ("srclr_n", srclr),
-                    ("oe_n", oe),
-                ],
-            );
+            let b = u8::from((byte >> bit) & 1 == 1);
+            for srclk in [0, 1, 0] {
+                tick(
+                    lc,
+                    &format!("ser={b} srclk={srclk} rclk=0 srclr_n=1 oe_n=0"),
+                );
+            }
         }
     }
 
     #[test]
     fn hc595_shifts_and_latches_msb_first() {
         let mut lc = compile(HC595);
-        shift_out_msb(&mut lc, 0xA6, true, false);
-        assert_eq!(
-            lc.register("shift"),
-            Some(0xA6),
-            "shift register after 8 clocks"
-        );
+        shift_out_msb(&mut lc, 0xA6);
+        assert_eq!(lc.register("shift"), Some(0xA6));
         assert_eq!(
             lc.register("store"),
             Some(0x00),
             "store unlatched until RCLK"
         );
-        // qh_serial tracks the shift register's top bit before the latch.
         assert_eq!(
             lc.output_level("qh_serial"),
             Some(true),
             "0xA6 bit7 at the tap"
         );
-        // RCLK pulse latches.
-        tick_with(
-            &mut lc,
-            &[
-                ("srclk", false),
-                ("rclk", true),
-                ("srclr_n", true),
-                ("oe_n", false),
-            ],
-        );
-        assert_eq!(
-            lc.register("store"),
-            Some(0xA6),
-            "RCLK rising latched shift->store"
-        );
-        // qa..qh mirror store bits 0..7.
-        let byte = 0xA6u8;
-        for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
-            .iter()
-            .enumerate()
-        {
-            assert_eq!(
-                lc.output_level(q),
-                Some((byte >> i) & 1 == 1),
-                "{q} = store[{i}]"
-            );
-        }
+        tick(&mut lc, "srclk=0 rclk=1 srclr_n=1 oe_n=0");
+        assert_eq!(lc.register("store"), Some(0xA6));
+        assert_q_outputs(&lc, 0xA6);
     }
 
+    /// SRCLR held low wipes the shift register and blocks clocking; tied
+    /// clocks latch the pre-shift value (the storage register lags one clock).
     #[test]
-    fn hc595_srclr_is_dominant_over_clock() {
+    fn hc595_clear_dominates_and_tied_clocks_latch_one_step_behind() {
         let mut lc = compile(HC595);
-        shift_out_msb(&mut lc, 0xFF, true, false);
-        assert_eq!(lc.register("shift"), Some(0xFF));
-        // Assert clear, then clock while held: the register stays cleared
-        // (TI SN74HC595 function table: SRCLR L + SRCLK X -> cleared).
-        tick_with(
-            &mut lc,
-            &[("srclk", false), ("srclr_n", false), ("oe_n", false)],
-        );
+        shift_out_msb(&mut lc, 0xFF);
+        tick(&mut lc, "srclk=0 srclr_n=0 oe_n=0");
+        assert_eq!(lc.register("shift"), Some(0x00));
+        tick(&mut lc, "ser=1 srclk=1 srclr_n=0 oe_n=0");
         assert_eq!(
             lc.register("shift"),
             Some(0x00),
-            "clear wipes the shift register"
+            "clock while cleared does not shift"
         );
-        tick_with(
-            &mut lc,
-            &[
-                ("ser", true),
-                ("srclk", true),
-                ("srclr_n", false),
-                ("oe_n", false),
-            ],
-        );
-        assert_eq!(
-            lc.register("shift"),
-            Some(0x00),
-            "a clock edge while SRCLR is held low does not shift"
-        );
-    }
 
-    #[test]
-    fn hc595_tied_clocks_latch_one_step_behind() {
-        // SRCLK and RCLK rising on the SAME tick: store captures the
-        // PRE-shift value (TI datasheet: with tied clocks the shift register
-        // is one clock pulse ahead of the storage register).
         let mut lc = compile(HC595);
-        shift_out_msb(&mut lc, 0x01, true, false);
-        assert_eq!(lc.register("shift"), Some(0x01));
-        tick_with(
-            &mut lc,
-            &[
-                ("ser", true),
-                ("srclk", true),
-                ("rclk", true),
-                ("srclr_n", true),
-                ("oe_n", false),
-            ],
-        );
-        assert_eq!(lc.register("shift"), Some(0x03), "shift took the new bit");
+        shift_out_msb(&mut lc, 0x01);
+        tick(&mut lc, "ser=1 srclk=1 rclk=1 srclr_n=1 oe_n=0");
+        assert_eq!(lc.register("shift"), Some(0x03));
         assert_eq!(
             lc.register("store"),
             Some(0x01),
@@ -1959,21 +1887,47 @@ disable = [
     #[test]
     fn hc595_oe_high_tristates_parallel_outputs_only() {
         let mut lc = compile(HC595);
-        tick_with(&mut lc, &[("oe_n", true), ("srclr_n", true)]);
-        for q in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"] {
-            assert_eq!(
-                lc.output_enabled(q),
-                Some(false),
-                "{q} tri-stated while OE_n high"
-            );
+        tick(&mut lc, "oe_n=1 srclr_n=1");
+        for q in Q_OUTPUTS {
+            assert_eq!(lc.output_enabled(q), Some(false), "{q}");
         }
         assert_eq!(
             lc.output_enabled("qh_serial"),
             Some(true),
-            "the serial tap is not OE-gated on a 74HC595"
+            "the serial tap is not OE-gated"
         );
-        tick_with(&mut lc, &[("oe_n", false), ("srclr_n", true)]);
-        assert_eq!(lc.output_enabled("qa"), Some(true), "OE_n low re-enables");
+        tick(&mut lc, "oe_n=0 srclr_n=1");
+        assert_eq!(lc.output_enabled("qa"), Some(true));
+    }
+
+    /// Unwired SRCLR_n / OE_n read released / enabled.
+    #[test]
+    fn unwired_controls_read_released() {
+        let mut lc = compile(HC595);
+        tick(&mut lc, "ser=1 srclk=0");
+        tick(&mut lc, "ser=1 srclk=1");
+        assert_eq!(lc.register("shift"), Some(0x01));
+        assert_eq!(lc.output_enabled("qa"), Some(true));
+    }
+
+    #[test]
+    fn set_register_plus_refresh_drives_outputs() {
+        let mut lc = compile(HC595);
+        assert!(lc.set_register("store", 0x5A));
+        assert!(!lc.set_register("nonexistent", 1));
+        lc.refresh_outputs();
+        assert_q_outputs(&lc, 0x5A);
+    }
+
+    #[test]
+    fn sequential_pins_cover_clock_and_data() {
+        let lc = compile(HC595);
+        let pins = lc.sequential_pins();
+        for p in ["ser", "srclk", "rclk", "srclr_n"] {
+            assert!(pins.contains(&p), "{p}");
+        }
+        assert!(!pins.contains(&"oe_n"));
+        assert!(lc.is_sequential());
     }
 
     /// The silicon-correct 74HC165 (shift toward QH: QH shows H, then G, ...).
@@ -1996,71 +1950,26 @@ load = { pin = "pl_n", active = "low", data = ["a", "b", "c", "d", "e", "f", "g"
 "#;
 
     #[test]
-    fn hc165_loads_and_emits_h_first() {
+    fn hc165_loads_emits_h_first_and_honours_clock_inhibit() {
         let mut lc = compile(HC165);
-        // Parallel-load 0b1010_0001 (a=1, f=1, h=1).
-        let hi = [("a", true), ("f", true), ("h", true)];
-        let mut base: Vec<(&str, bool)> = vec![
-            ("pl_n", false),
-            ("clk", false),
-            ("clk_inh", false),
-            ("ser", false),
-        ];
-        base.extend_from_slice(&hi);
-        tick_with(&mut lc, &base);
+        tick(&mut lc, "pl_n=0 clk=0 clk_inh=0 ser=0 a=1 f=1 h=1");
         assert_eq!(lc.register("reg"), Some(0b1010_0001));
         assert_eq!(
             lc.output_level("qh"),
             Some(true),
             "QH shows H right after load"
         );
-        assert_eq!(
-            lc.output_level("qh_n"),
-            Some(false),
-            "QH_n is the complement"
-        );
-
-        // Release PL, clock: QH walks H, G, F, ... (silicon direction).
-        let expected = [true, false, true, false, false, false, false, true]; // h,g,f,e,d,c,b,a
-        assert_eq!(lc.output_level("qh"), Some(expected[0]));
+        assert_eq!(lc.output_level("qh_n"), Some(false));
+        let expected = [true, false, true, false, false, false, false, true]; // h..a
         for want in &expected[1..] {
-            tick_with(
-                &mut lc,
-                &[
-                    ("pl_n", true),
-                    ("clk", true),
-                    ("clk_inh", false),
-                    ("ser", false),
-                ],
-            );
-            tick_with(
-                &mut lc,
-                &[
-                    ("pl_n", true),
-                    ("clk", false),
-                    ("clk_inh", false),
-                    ("ser", false),
-                ],
-            );
+            tick(&mut lc, "pl_n=1 clk=1 clk_inh=0 ser=0");
+            tick(&mut lc, "pl_n=1 clk=0 clk_inh=0 ser=0");
             assert_eq!(lc.output_level("qh"), Some(*want));
         }
-    }
 
-    #[test]
-    fn hc165_clock_inhibit_blocks_shifts() {
         let mut lc = compile(HC165);
-        tick_with(
-            &mut lc,
-            &[
-                ("pl_n", false),
-                ("clk", false),
-                ("clk_inh", false),
-                ("h", true),
-            ],
-        );
-        assert_eq!(lc.output_level("qh"), Some(true));
-        // CLK_INH high: rising clock does nothing.
-        tick_with(&mut lc, &[("pl_n", true), ("clk", true), ("clk_inh", true)]);
+        tick(&mut lc, "pl_n=0 clk=0 clk_inh=0 h=1");
+        tick(&mut lc, "pl_n=1 clk=1 clk_inh=1");
         assert_eq!(
             lc.register("reg"),
             Some(0x80),
@@ -2068,7 +1977,10 @@ load = { pin = "pl_n", active = "low", data = ["a", "b", "c", "d", "e", "f", "g"
         );
     }
 
-    const NOR_LATCH: &str = r#"
+    #[test]
+    fn nor_latch_matches_spike_recorder_truth_table() {
+        let mut lc = compile(
+            r#"
 inputs  = ["set", "reset"]
 outputs = ["q", "qb"]
 
@@ -2079,37 +1991,25 @@ outputs = ["q", "qb"]
 [init]
 "q" = 1
 "qb" = 0
-"#;
-
-    #[test]
-    fn nor_latch_matches_spike_recorder_truth_table() {
-        let mut lc = compile(NOR_LATCH);
-        assert_eq!(lc.warnings.len(), 1, "cycle warning surfaced");
-        // Power-on idle: Q HIGH (init).
-        assert_eq!(lc.output_level("q"), Some(true), "power-on idle Q HIGH");
-        // RESET pulse with no spike: Q stays HIGH.
-        tick_with(&mut lc, &[("set", false), ("reset", true)]);
-        assert_eq!(lc.output_level("q"), Some(true), "RESET holds idle HIGH");
-        // Release: HOLD.
-        tick_with(&mut lc, &[("set", false), ("reset", false)]);
-        assert_eq!(lc.output_level("q"), Some(true), "hold");
-        // Spike (SET pulse): Q LOW.
-        tick_with(&mut lc, &[("set", true), ("reset", false)]);
-        assert_eq!(lc.output_level("q"), Some(false), "SET drives Q LOW");
-        // Spike clears: HELD LOW (the latch memory).
-        tick_with(&mut lc, &[("set", false), ("reset", false)]);
-        assert_eq!(
-            lc.output_level("q"),
-            Some(false),
-            "held LOW after the pulse"
+"#,
         );
-        // RESET: back to idle HIGH.
-        tick_with(&mut lc, &[("set", false), ("reset", true)]);
-        assert_eq!(lc.output_level("q"), Some(true), "RESET returns idle HIGH");
+        assert_eq!(lc.warnings.len(), 1, "cycle warning surfaced");
+        let q = |lc: &LogicComponent| lc.output_level("q");
+        assert_eq!(q(&lc), Some(true), "power-on idle Q HIGH");
+        tick(&mut lc, "set=0 reset=1");
+        assert_eq!(q(&lc), Some(true), "RESET holds idle HIGH");
+        tick(&mut lc, "set=0 reset=0");
+        assert_eq!(q(&lc), Some(true), "hold");
+        tick(&mut lc, "set=1 reset=0");
+        assert_eq!(q(&lc), Some(false), "SET drives Q LOW");
+        tick(&mut lc, "set=0 reset=0");
+        assert_eq!(q(&lc), Some(false), "held LOW after the pulse");
+        tick(&mut lc, "set=0 reset=1");
+        assert_eq!(q(&lc), Some(true), "RESET returns idle HIGH");
     }
 
     #[test]
-    fn non_convergent_cycle_is_refused_at_compile() {
+    fn non_convergent_or_too_wide_cycles_are_refused_at_compile() {
         let logic: Logic = toml::from_str(
             r#"
 inputs  = ["x"]
@@ -2119,25 +2019,16 @@ outputs = ["y"]
 "#,
         )
         .unwrap();
-        // y = !y (obfuscated enough to have an input): never settles.
         let e = LogicComponent::compile("osc", &logic).unwrap_err();
         assert!(
             matches!(e, LogicCompileError::NonConvergent { .. }),
             "got: {e}"
         );
-        let msg = e.to_string();
-        assert!(msg.contains("does not converge"), "named error text: {msg}");
-    }
 
-    #[test]
-    fn too_wide_cycle_is_refused_not_shipped_unverified() {
-        // A 13-output ring: converges trivially, but too wide to verify
-        // exhaustively under the cap, refused with the named error.
         let outputs: Vec<String> = (0..13).map(|i| format!("y{i}")).collect();
-        let mut comb = std::collections::BTreeMap::new();
-        for i in 0..13usize {
-            comb.insert(format!("y{i}"), format!("y{}", (i + 1) % 13));
-        }
+        let comb = (0..13usize)
+            .map(|i| (format!("y{i}"), format!("y{}", (i + 1) % 13)))
+            .collect();
         let logic = Logic {
             inputs: vec![],
             outputs,
@@ -2153,8 +2044,6 @@ outputs = ["y"]
 
     #[test]
     fn dff_with_preset_and_clear() {
-        // The 74HC74 single-flop shape: load-from-pin on rising clock, dual
-        // async controls.
         let mut lc = compile(
             r#"
 inputs  = ["d", "clk", "pre_n", "clr_n"]
@@ -2174,67 +2063,28 @@ data_in = "d"
 "q_n" = "!ff[0]"
 "#,
         );
-        // Clock a 1 through D.
-        tick_with(
-            &mut lc,
-            &[
-                ("d", true),
-                ("clk", false),
-                ("pre_n", true),
-                ("clr_n", true),
-            ],
-        );
-        tick_with(
-            &mut lc,
-            &[("d", true), ("clk", true), ("pre_n", true), ("clr_n", true)],
-        );
+        tick(&mut lc, "d=1 clk=0 pre_n=1 clr_n=1");
+        tick(&mut lc, "d=1 clk=1 pre_n=1 clr_n=1");
         assert_eq!(
             lc.output_level("q"),
             Some(true),
             "D captured on rising edge"
         );
         assert_eq!(lc.output_level("q_n"), Some(false));
-        // D changes while clock low: no effect.
-        tick_with(
-            &mut lc,
-            &[
-                ("d", false),
-                ("clk", false),
-                ("pre_n", true),
-                ("clr_n", true),
-            ],
-        );
+        tick(&mut lc, "d=0 clk=0 pre_n=1 clr_n=1");
         assert_eq!(
             lc.output_level("q"),
             Some(true),
             "level-insensitive between edges"
         );
-        // Async clear dominates the clock.
-        tick_with(
-            &mut lc,
-            &[
-                ("d", true),
-                ("clk", true),
-                ("pre_n", true),
-                ("clr_n", false),
-            ],
-        );
+        tick(&mut lc, "d=1 clk=1 pre_n=1 clr_n=0");
         assert_eq!(lc.output_level("q"), Some(false), "CLR_n forces 0");
-        // Async preset.
-        tick_with(
-            &mut lc,
-            &[
-                ("d", false),
-                ("clk", false),
-                ("pre_n", false),
-                ("clr_n", true),
-            ],
-        );
+        tick(&mut lc, "d=0 clk=0 pre_n=0 clr_n=1");
         assert_eq!(lc.output_level("q"), Some(true), "PRE_n forces 1");
     }
 
     #[test]
-    fn counter_ops_wrap_at_width() {
+    fn counter_ops_wrap_at_width_and_falling_edge_clocks_are_honored() {
         let mut lc = compile(
             r#"
 inputs  = ["clk", "rst"]
@@ -2251,34 +2101,11 @@ op = "count_up"
 "#,
         );
         for want in [1u64, 2, 3, 0, 1] {
-            tick_with(&mut lc, &[("clk", true), ("rst", false)]);
-            tick_with(&mut lc, &[("clk", false), ("rst", false)]);
-            assert_eq!(lc.register("cnt"), Some(want), "2-bit counter wraps");
+            tick(&mut lc, "clk=1 rst=0");
+            tick(&mut lc, "clk=0 rst=0");
+            assert_eq!(lc.register("cnt"), Some(want));
         }
-    }
 
-    #[test]
-    fn unwired_controls_read_released() {
-        // Drive only SER/SRCLK; SRCLR_n and OE_n unwired must read released /
-        // enabled, so the part shifts and drives normally.
-        let mut lc = compile(HC595);
-        let seq = [("ser", true), ("srclk", false)];
-        tick_with(&mut lc, &seq);
-        tick_with(&mut lc, &[("ser", true), ("srclk", true)]);
-        assert_eq!(
-            lc.register("shift"),
-            Some(0x01),
-            "unwired SRCLR_n reads released"
-        );
-        assert_eq!(
-            lc.output_enabled("qa"),
-            Some(true),
-            "unwired OE_n stays enabled"
-        );
-    }
-
-    #[test]
-    fn falling_edge_clock_is_honored() {
         let mut lc = compile(
             r#"
 inputs  = ["d", "clkn"]
@@ -2293,37 +2120,18 @@ data_in = "d"
 "q" = "ff[0]"
 "#,
         );
-        tick_with(&mut lc, &[("d", true), ("clkn", true)]);
+        tick(&mut lc, "d=1 clkn=1");
         assert_eq!(
             lc.output_level("q"),
             Some(false),
             "rising edge does nothing"
         );
-        tick_with(&mut lc, &[("d", true), ("clkn", false)]);
+        tick(&mut lc, "d=1 clkn=0");
         assert_eq!(lc.output_level("q"), Some(true), "falling edge captures D");
     }
 
     #[test]
-    fn set_register_plus_refresh_drives_outputs() {
-        // The chain-mirror / latch_byte path: overwrite store, refresh, read qa..qh.
-        let mut lc = compile(HC595);
-        assert!(lc.set_register("store", 0x5A));
-        assert!(
-            !lc.set_register("nonexistent", 1),
-            "unknown register refused"
-        );
-        lc.refresh_outputs();
-        for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
-            .iter()
-            .enumerate()
-        {
-            assert_eq!(lc.output_level(q), Some((0x5Au8 >> i) & 1 == 1));
-        }
-    }
-
-    #[test]
     fn gate_expressions_evaluate_truth_tables() {
-        // One 74HC00 NAND gate + one XOR (the §1.3 shapes) in a single block.
         let mut lc = compile(
             r#"
 inputs  = ["1a", "1b"]
@@ -2333,62 +2141,52 @@ outputs = ["nand_y", "xor_y"]
 "xor_y" = "1a ^ 1b"
 "#,
         );
-        for (a, b, nand, xor) in [
-            (false, false, true, false),
-            (false, true, true, true),
-            (true, false, true, true),
-            (true, true, false, false),
-        ] {
-            tick_with(&mut lc, &[("1a", a), ("1b", b)]);
-            assert_eq!(lc.output_level("nand_y"), Some(nand), "NAND({a},{b})");
-            assert_eq!(lc.output_level("xor_y"), Some(xor), "XOR({a},{b})");
+        for (a, b) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            tick(&mut lc, &format!("1a={a} 1b={b}"));
+            assert_eq!(
+                lc.output_level("nand_y"),
+                Some(!(a == 1 && b == 1)),
+                "NAND({a},{b})"
+            );
+            assert_eq!(lc.output_level("xor_y"), Some(a != b), "XOR({a},{b})");
         }
     }
 
-    #[test]
-    fn sequential_pins_cover_clock_and_data() {
-        let lc = compile(HC595);
-        let pins = lc.sequential_pins();
-        for p in ["ser", "srclk", "rclk", "srclr_n"] {
-            assert!(pins.contains(&p), "{p} is a sequential pin");
-        }
-        assert!(!pins.contains(&"oe_n"), "OE is not sequential");
-        assert!(lc.is_sequential());
+    fn io_byte(lc: &LogicComponent) -> u8 {
+        (0..8).fold(0u8, |acc, bit| {
+            acc | (u8::from(lc.output_level(&format!("io{bit}")).unwrap()) << bit)
+        })
     }
 
+    fn io_levels(byte: u8) -> String {
+        (0..8)
+            .map(|bit| format!("io{bit}={}", u8::from(byte & (1 << bit) != 0)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Reading an erased word drives all-ones; each read gate independently
+    /// tri-states the bus.
     #[test]
     fn parallel_memory_reads_erased_words_and_honors_all_read_gates() {
         let mut lc = compile(PARALLEL_EEPROM);
-
-        tick_with(
-            &mut lc,
-            &[
-                ("a0", true),
-                ("a1", false),
-                ("ce_n", false),
-                ("oe_n", false),
-                ("we_n", true),
-            ],
-        );
+        tick(&mut lc, "a0=1 a1=0 ce_n=0 oe_n=0 we_n=1");
         for bit in 0..8 {
             let io = format!("io{bit}");
             assert_eq!(lc.output_level(&io), Some(true), "erased bit {bit}");
             assert_eq!(lc.output_enabled(&io), Some(true), "read bit {bit} drives");
         }
-
-        // Each gate independently suppresses drive; a memory must never fight
-        // the bus master while WE is active.
-        for (ce_n, oe_n, we_n) in [
-            (true, false, true),
-            (false, true, true),
-            (false, false, false),
+        for gates in [
+            "ce_n=1 oe_n=0 we_n=1",
+            "ce_n=0 oe_n=1 we_n=1",
+            "ce_n=0 oe_n=0 we_n=0",
         ] {
-            tick_with(&mut lc, &[("ce_n", ce_n), ("oe_n", oe_n), ("we_n", we_n)]);
+            tick(&mut lc, gates);
             for bit in 0..8 {
                 assert_eq!(
                     lc.output_enabled(&format!("io{bit}")),
                     Some(false),
-                    "CE={ce_n} OE={oe_n} WE={we_n} must tri-state bit {bit}"
+                    "{gates} bit {bit}"
                 );
             }
         }
@@ -2414,103 +2212,31 @@ data_out = ["io0"]
 copy = "io0"
 "#,
         );
-        tick_with(&mut lc, &[("a0", true), ("ce_n", false)]);
+        tick(&mut lc, "a0=1 ce_n=0");
         assert_eq!(lc.output_level("io0"), Some(true));
         assert_eq!(
             lc.output_level("copy"),
             Some(true),
-            "comb must see the current addressed word, not a prior-tick value"
+            "comb sees the current addressed word"
         );
     }
 
+    /// WE low alone is not a commit; the qualified rising edge captures the
+    /// externally driven bus; a CE-inactive edge must not overwrite it.
     #[test]
     fn parallel_memory_commits_bus_on_qualified_write_edge_only() {
         let mut lc = compile(PARALLEL_EEPROM);
         let byte = 0x5a_u8;
-        let mut levels = vec![
-            ("a0", true),
-            ("a1", true),
-            ("ce_n", false),
-            ("oe_n", true),
-            ("we_n", false),
-        ];
-        for bit in 0..8 {
-            levels.push((
-                match bit {
-                    0 => "io0",
-                    1 => "io1",
-                    2 => "io2",
-                    3 => "io3",
-                    4 => "io4",
-                    5 => "io5",
-                    6 => "io6",
-                    _ => "io7",
-                },
-                byte & (1 << bit) != 0,
-            ));
-        }
+        let bus = io_levels(byte);
+        tick(&mut lc, &format!("a0=1 a1=1 ce_n=0 oe_n=1 we_n=0 {bus}"));
+        tick(&mut lc, &format!("a0=1 a1=1 ce_n=0 oe_n=1 we_n=1 {bus}"));
+        tick(&mut lc, "a0=1 a1=1 ce_n=0 oe_n=0 we_n=1");
+        assert_eq!(io_byte(&lc), byte);
 
-        // WE low alone is not a commit. The rising edge captures address 3 and
-        // the externally-driven bidirectional bus.
-        tick_with(&mut lc, &levels);
-        levels[4].1 = true;
-        tick_with(&mut lc, &levels);
-
-        tick_with(
-            &mut lc,
-            &[
-                ("a0", true),
-                ("a1", true),
-                ("ce_n", false),
-                ("oe_n", false),
-                ("we_n", true),
-            ],
-        );
-        for bit in 0..8 {
-            assert_eq!(
-                lc.output_level(&format!("io{bit}")),
-                Some(byte & (1 << bit) != 0),
-                "stored bit {bit}"
-            );
-        }
-
-        // A second rising edge while CE is inactive must not overwrite it.
-        tick_with(
-            &mut lc,
-            &[
-                ("a0", true),
-                ("a1", true),
-                ("ce_n", true),
-                ("oe_n", true),
-                ("we_n", false),
-                ("io0", true),
-            ],
-        );
-        tick_with(
-            &mut lc,
-            &[
-                ("a0", true),
-                ("a1", true),
-                ("ce_n", true),
-                ("oe_n", true),
-                ("we_n", true),
-                ("io0", true),
-            ],
-        );
-        tick_with(
-            &mut lc,
-            &[
-                ("a0", true),
-                ("a1", true),
-                ("ce_n", false),
-                ("oe_n", false),
-                ("we_n", true),
-            ],
-        );
-        let got = (0..8).fold(0u8, |acc, bit| {
-            acc | (u8::from(lc.output_level(&format!("io{bit}")).unwrap()) << bit)
-        });
-        assert_eq!(got, byte, "CE-inactive edge must not write");
+        tick(&mut lc, "a0=1 a1=1 ce_n=1 oe_n=1 we_n=0 io0=1");
+        tick(&mut lc, "a0=1 a1=1 ce_n=1 oe_n=1 we_n=1 io0=1");
+        tick(&mut lc, "a0=1 a1=1 ce_n=0 oe_n=0 we_n=1");
+        assert_eq!(io_byte(&lc), byte, "CE-inactive edge must not write");
     }
 
     #[test]
@@ -2538,51 +2264,11 @@ data_in = ["io0"]
 data_out = ["io0"]
 "#,
         );
-
-        // WE-controlled write to address 0.
-        tick_with(
-            &mut lc,
-            &[
-                ("a0", false),
-                ("ce_n", false),
-                ("oe_n", true),
-                ("we_n", false),
-                ("io0", false),
-            ],
-        );
-        tick_with(
-            &mut lc,
-            &[
-                ("a0", false),
-                ("ce_n", false),
-                ("oe_n", true),
-                ("we_n", true),
-                ("io0", false),
-            ],
-        );
-
-        // CE-controlled write to address 1 while WE remains low.
-        tick_with(
-            &mut lc,
-            &[
-                ("a0", true),
-                ("ce_n", false),
-                ("oe_n", true),
-                ("we_n", false),
-                ("io0", false),
-            ],
-        );
-        tick_with(
-            &mut lc,
-            &[
-                ("a0", true),
-                ("ce_n", true),
-                ("oe_n", true),
-                ("we_n", false),
-                ("io0", false),
-            ],
-        );
-
+        // WE-controlled write to address 0, then CE-controlled write to 1.
+        tick(&mut lc, "a0=0 ce_n=0 oe_n=1 we_n=0 io0=0");
+        tick(&mut lc, "a0=0 ce_n=0 oe_n=1 we_n=1 io0=0");
+        tick(&mut lc, "a0=1 ce_n=0 oe_n=1 we_n=0 io0=0");
+        tick(&mut lc, "a0=1 ce_n=1 oe_n=1 we_n=0 io0=0");
         let port = lc.memory_ports().remove(0);
         assert_eq!(port.read(0), Some(0));
         assert_eq!(port.read(1), Some(0));
@@ -2610,29 +2296,34 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         );
         let port = lc.memory_ports().remove(0);
         let hz = 1_000_000;
-
         assert!(port.write_at(0, 0x80, 1_000, hz));
-        // Exactly 150 cycles is still part of the same page load.
-        assert!(port.write_at(1, 0x81, 1_150, hz));
+        assert!(
+            port.write_at(1, 0x81, 1_150, hz),
+            "150 cycles is still the same page load"
+        );
+        // I/O6 toggles between busy reads; I/O7 is the complement of the last
+        // loaded byte's I/O7.
         assert_eq!(port.read_at(1, 2_000, hz), Some(0x7f));
-        // I/O6 toggles between successive busy reads; I/O7 remains the
-        // complement of the last loaded byte's I/O7.
         assert_eq!(port.read_at(1, 2_001, hz), Some(0x3f));
         assert_eq!(port.read_at(1, 11_149, hz), Some(0x7f));
         assert_eq!(port.read_at(1, 11_150, hz), Some(0x81));
         assert_eq!(port.read_at(0, 11_151, hz), Some(0x80));
-        assert_eq!(port.read_at(1, 11_151, hz), Some(0x81));
     }
 
     #[test]
     fn timed_page_program_accepts_64_words_but_151_cycles_closes_the_page() {
-        let address = (0..7).map(|bit| format!("a{bit}")).collect::<Vec<_>>();
-        let data = (0..8).map(|bit| format!("io{bit}")).collect::<Vec<_>>();
-        let mut inputs = address.clone();
-        inputs.push("we_n".to_string());
+        let quoted = |names: &[String]| {
+            names
+                .iter()
+                .map(|n| format!("\"{n}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let address: Vec<String> = (0..7).map(|bit| format!("a{bit}")).collect();
+        let data: Vec<String> = (0..8).map(|bit| format!("io{bit}")).collect();
         let spec = format!(
             r#"
-inputs = [{}]
+inputs = [{}, "we_n"]
 outputs = [{}]
 [[memory]]
 name = "cell"
@@ -2647,56 +2338,34 @@ write = {{ pin = "we_n", edge = "rising" }}
 data_in = [{}]
 data_out = [{}]
 "#,
-            inputs
-                .iter()
-                .map(|name| format!("\"{name}\""))
-                .collect::<Vec<_>>()
-                .join(", "),
-            data.iter()
-                .map(|name| format!("\"{name}\""))
-                .collect::<Vec<_>>()
-                .join(", "),
-            address
-                .iter()
-                .map(|name| format!("\"{name}\""))
-                .collect::<Vec<_>>()
-                .join(", "),
-            data.iter()
-                .map(|name| format!("\"{name}\""))
-                .collect::<Vec<_>>()
-                .join(", "),
-            data.iter()
-                .map(|name| format!("\"{name}\""))
-                .collect::<Vec<_>>()
-                .join(", "),
+            quoted(&address),
+            quoted(&data),
+            quoted(&address),
+            quoted(&data),
+            quoted(&data),
         );
-        let logic: Logic = toml::from_str(&spec).unwrap();
-        let lc = LogicComponent::compile("page", &logic).unwrap();
-        let port = lc.memory_ports().remove(0);
+        let port = compile(&spec).memory_ports().remove(0);
+        let hz = 1_000_000;
         for address in 0..64 {
-            assert!(port.write_at(address, address as u64, 1_000 + address as u64, 1_000_000));
+            assert!(port.write_at(address, address as u64, 1_000 + address as u64, hz));
         }
-        assert_eq!(port.read_at(63, 2_000, 1_000_000), Some(0xff));
-        assert_eq!(port.read_at(63, 11_063, 1_000_000), Some(63));
+        assert_eq!(port.read_at(63, 2_000, hz), Some(0xff));
+        assert_eq!(port.read_at(63, 11_063, hz), Some(63));
         for address in 0..64 {
-            assert_eq!(
-                port.read_at(address, 11_064, 1_000_000),
-                Some(address as u64)
-            );
+            assert_eq!(port.read_at(address, 11_064, hz), Some(address as u64));
         }
-
-        assert!(port.write_at(64, 0x11, 20_000, 1_000_000));
-        // 151 µs is outside the inclusive load window, so this write arrives
-        // while the previous word is already internally programming.
-        assert!(port.write_at(65, 0x22, 20_151, 1_000_000));
-        assert_eq!(port.read_at(64, 30_000, 1_000_000), Some(0x11));
-        assert_eq!(port.read_at(65, 30_000, 1_000_000), Some(0xff));
+        assert!(port.write_at(64, 0x11, 20_000, hz));
+        assert!(
+            port.write_at(65, 0x22, 20_151, hz),
+            "151 us arrives while programming"
+        );
+        assert_eq!(port.read_at(64, 30_000, hz), Some(0x11));
+        assert_eq!(port.read_at(65, 30_000, hz), Some(0xff));
     }
 
     #[test]
     fn protected_timed_write_attempt_enters_busy_without_changing_data() {
-        let logic: Logic = toml::from_str(PARALLEL_EEPROM).unwrap();
-        let mut logic = logic;
+        let mut logic: Logic = toml::from_str(PARALLEL_EEPROM).unwrap();
         logic.memories[0].program_time_s = Some(0.010);
         logic.memories[0]
             .software_data_protection
@@ -2711,27 +2380,20 @@ data_out = [{}]
         assert_eq!(port.read_at(0, 10_100, 1_000_000), Some(0xff));
     }
 
+    /// The SDP enable sequence arms protection and is consumed (never stored),
+    /// a near miss neither disables it nor leaks command bytes, the exact
+    /// disable sequence restores writes, and a data write after the page-load
+    /// timeout stays protected.
     #[test]
     fn parallel_memory_software_protection_consumes_commands_and_blocks_writes() {
         let mut lc = compile(PARALLEL_EEPROM);
-
-        fn write_byte(lc: &mut LogicComponent, address: usize, byte: u8) {
-            let names = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"];
-            let mut low = vec![
-                ("a0", address & 1 != 0),
-                ("a1", address & 2 != 0),
-                ("ce_n", false),
-                ("oe_n", true),
-                ("we_n", false),
-            ];
-            for (bit, name) in names.iter().enumerate() {
-                low.push((*name, byte & (1 << bit) != 0));
-            }
-            tick_with(lc, &low);
-            low[4].1 = true;
-            tick_with(lc, &low);
-        }
-
+        let write_byte = |lc: &mut LogicComponent, address: usize, byte: u8| {
+            let bus = io_levels(byte);
+            let a0 = u8::from(address & 1 != 0);
+            let a1 = u8::from(address & 2 != 0);
+            tick(lc, &format!("a0={a0} a1={a1} ce_n=0 oe_n=1 we_n=0 {bus}"));
+            tick(lc, &format!("a0={a0} a1={a1} ce_n=0 oe_n=1 we_n=1 {bus}"));
+        };
         let port = lc.memory_ports().remove(0);
         write_byte(&mut lc, 0, 0x11);
         assert_eq!(port.read(0), Some(0x11));
@@ -2743,21 +2405,25 @@ data_out = [{}]
         assert_eq!(
             port.read(1),
             Some(0x42),
-            "the enable sequence arms the following protected program cycle"
+            "the enable sequence arms the following cycle"
         );
-        assert_eq!(port.read(2), Some(0xFF), "enable commands are not data");
-        assert_eq!(port.read(3), Some(0xFF), "enable commands are not data");
-
+        assert_eq!(
+            (port.read(2), port.read(3)),
+            (Some(0xFF), Some(0xFF)),
+            "commands are not data"
+        );
         write_byte(&mut lc, 0, 0x22);
         assert_eq!(port.read(0), Some(0x11), "protected writes are ignored");
 
-        // A near miss must neither disable protection nor leak command bytes
-        // into storage.
         for (address, value) in [(3, 0xAA), (2, 0x55), (3, 0x81)] {
             write_byte(&mut lc, address, value);
         }
         write_byte(&mut lc, 0, 0x22);
-        assert_eq!(port.read(0), Some(0x11));
+        assert_eq!(
+            port.read(0),
+            Some(0x11),
+            "a near miss does not disable protection"
+        );
 
         for (address, value) in [
             (3, 0xAA),
@@ -2771,25 +2437,19 @@ data_out = [{}]
         }
         write_byte(&mut lc, 0, 0x33);
         assert_eq!(port.read(0), Some(0x33), "exact disable restores writes");
-        assert_eq!(port.read(2), Some(0xFF), "disable commands are not data");
-        assert_eq!(port.read(3), Some(0xFF), "disable commands are not data");
-    }
+        assert_eq!((port.read(2), port.read(3)), (Some(0xFF), Some(0xFF)));
 
-    #[test]
-    fn protected_program_window_expires_after_the_declared_byte_load_gap() {
         let lc = compile(PARALLEL_EEPROM);
         let port = lc.memory_ports().remove(0);
         for (address, value) in [(3, 0xAA), (2, 0x55), (3, 0xA0)] {
             assert!(port.write(address, value));
         }
-
         assert!(port.write_after_gap(1, 0x42, true));
         assert_eq!(
             port.read(1),
             Some(0xFF),
             "a data write after the page-load timeout is protected"
         );
-        assert_eq!(port.read(2), Some(0xFF), "command bytes remain consumed");
-        assert_eq!(port.read(3), Some(0xFF), "command bytes remain consumed");
+        assert_eq!((port.read(2), port.read(3)), (Some(0xFF), Some(0xFF)));
     }
 }

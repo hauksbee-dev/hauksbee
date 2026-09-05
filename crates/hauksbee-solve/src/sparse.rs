@@ -930,75 +930,183 @@ fn min_degree_order(adj: &[Vec<usize>], n: usize) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    fn solve_with(m: &SparseMatrix, b: &[f64]) -> Vec<f64> {
-        let mut sym = m.factorize_symbolic();
-        assert!(sym.refactor(m), "refactor failed");
-        let mut x = b.to_vec();
-        let mut scratch = vec![0.0; x.len()];
-        sym.solve(&mut x, &mut scratch);
-        x
-    }
-
-    /// Solve forcing the DYNAMIC re-pivot path (no frozen attempt), to validate
-    /// the fallback factorization in isolation.
-    fn solve_dynamic(m: &SparseMatrix, b: &[f64]) -> Vec<f64> {
-        let mut sym = m.factorize_symbolic();
-        assert!(sym.refactor_dynamic(m), "dynamic refactor failed");
-        let mut x = b.to_vec();
-        let mut scratch = vec![0.0; x.len()];
-        sym.solve(&mut x, &mut scratch);
-        x
-    }
-
-    #[test]
-    fn structurally_empty_row_is_anchored_instead_of_spinning() {
-        let mut m = SparseMatrix::new(2);
-        m.add(0, 0, 2.0);
-        // Row and column 1 are structurally empty. The dynamic singular-block
-        // convention anchors that genuinely floating unknown to zero.
-        let x = solve_dynamic(&m, &[4.0, 0.0]);
-        assert!((x[0] - 2.0).abs() < 1e-12, "defined row changed: {}", x[0]);
-        assert_eq!(x[1], 0.0, "floating unknown was not anchored");
-    }
-
-    #[test]
-    fn gmin_only_unknowns_are_drained_without_quadratic_symbolic_scan() {
-        // This is the exact ghost-row shape that a high as-built NodeId used to
-        // manufacture: every unknown has only its gmin diagonal. Large enough
-        // that the former rescan-per-elimination path is prohibitive, while the
-        // correct isolated drain is linear.
-        const N: usize = 20_000;
-        let mut m = SparseMatrix::new(N);
-        for i in 0..N {
-            m.add(i, i, 1e-12);
+    fn matrix(n: usize, ent: &[(usize, usize, f64)]) -> SparseMatrix {
+        let mut m = SparseMatrix::new(n);
+        for &(r, c, v) in ent {
+            m.add(r, c, v);
         }
-        let mut symbolic = m.factorize_symbolic();
-        assert_eq!(symbolic.perm.len(), N);
-        assert!(symbolic.refactor(&m));
-        let mut x = vec![0.0; N];
-        let mut scratch = vec![0.0; N];
-        symbolic.solve(&mut x, &mut scratch);
-        assert!(x.iter().all(|v| *v == 0.0));
+        m
+    }
+
+    fn solve_with(m: &SparseMatrix, b: &[f64], dynamic: bool) -> Vec<f64> {
+        let mut sym = m.factorize_symbolic();
+        let ok = if dynamic {
+            sym.refactor_dynamic(m)
+        } else {
+            sym.refactor(m)
+        };
+        assert!(ok, "refactor failed");
+        let mut x = b.to_vec();
+        let mut scratch = vec![0.0; x.len()];
+        sym.solve(&mut x, &mut scratch);
+        x
+    }
+
+    /// Dense partial-pivot reference.
+    fn dense_solve(n: usize, ent: &[(usize, usize, f64)], b: &[f64]) -> Vec<f64> {
+        let mut a = vec![0.0f64; n * n];
+        for &(r, c, v) in ent {
+            a[r * n + c] += v;
+        }
+        let mut bb = b.to_vec();
+        let mut piv: Vec<usize> = (0..n).collect();
+        for k in 0..n {
+            let p = (k..n)
+                .max_by(|&i, &j| a[piv[i] * n + k].abs().total_cmp(&a[piv[j] * n + k].abs()))
+                .unwrap();
+            piv.swap(k, p);
+            let rk = piv[k];
+            for i in (k + 1)..n {
+                let ri = piv[i];
+                let f = a[ri * n + k] / a[rk * n + k];
+                for j in k..n {
+                    a[ri * n + j] -= f * a[rk * n + j];
+                }
+                bb[ri] -= f * bb[rk];
+            }
+        }
+        let mut x = vec![0.0; n];
+        for i in (0..n).rev() {
+            let ri = piv[i];
+            let s = bb[ri] - (i + 1..n).map(|j| a[ri * n + j] * x[j]).sum::<f64>();
+            x[i] = s / a[ri * n + i];
+        }
+        x
+    }
+
+    fn residual(ent: &[(usize, usize, f64)], x: &[f64], b: &[f64]) -> f64 {
+        let mut r = b.to_vec();
+        for &(rr, c, v) in ent {
+            r[rr] -= v * x[c];
+        }
+        r.iter().map(|v| v * v).sum::<f64>().sqrt()
+    }
+
+    fn assert_close(x: &[f64], want: &[f64], tol: f64) {
+        for (a, w) in x.iter().zip(want) {
+            assert!((a - w).abs() < tol, "{x:?} vs {want:?}");
+        }
+    }
+
+    const MNA_ZERO_DIAG: &[(usize, usize, f64)] = &[(0, 0, 1e-3), (0, 1, 1.0), (1, 0, 1.0)];
+    const SPD_3: &[(usize, usize, f64)] = &[
+        (0, 0, 4.0),
+        (0, 1, 1.0),
+        (1, 0, 1.0),
+        (1, 1, 3.0),
+        (1, 2, 1.0),
+        (2, 1, 1.0),
+        (2, 2, 5.0),
+    ];
+
+    /// Small systems with known solutions on both the frozen and the dynamic
+    /// path, including an MNA block whose diagonal is zero.
+    #[test]
+    fn small_systems_solve_exactly() {
+        for dynamic in [false, true] {
+            assert_close(
+                &solve_with(
+                    &matrix(2, &[(0, 0, 2.0), (0, 1, 1.0), (1, 0, 1.0), (1, 1, 3.0)]),
+                    &[3.0, 5.0],
+                    dynamic,
+                ),
+                &[0.8, 1.4],
+                1e-12,
+            );
+            assert_close(
+                &solve_with(
+                    &matrix(3, &[(0, 0, 4.0), (1, 1, 2.0), (2, 2, 8.0)]),
+                    &[8.0, 6.0, 16.0],
+                    dynamic,
+                ),
+                &[2.0, 3.0, 2.0],
+                1e-12,
+            );
+            assert_close(
+                &solve_with(
+                    &matrix(2, &[(0, 1, 1.0), (1, 0, 1.0), (1, 1, 1.0)]),
+                    &[2.0, 3.0],
+                    dynamic,
+                ),
+                &[1.0, 2.0],
+                1e-12,
+            );
+            // KCL at v: g*v + i = 0; branch: v = 5.
+            assert_close(
+                &solve_with(&matrix(2, MNA_ZERO_DIAG), &[0.0, 5.0], dynamic),
+                &[5.0, -5e-3],
+                1e-9,
+            );
+        }
+        let n = 5;
+        let mut m = SparseMatrix::new(n);
+        for i in 0..n {
+            m.add(i, i, 2.0);
+            if i > 0 {
+                m.add(i, i - 1, -1.0);
+            }
+            if i + 1 < n {
+                m.add(i, i + 1, -1.0);
+            }
+        }
+        let b: Vec<f64> = (0..n)
+            .map(|i| 2.0 - (i > 0) as i32 as f64 - (i + 1 < n) as i32 as f64)
+            .collect();
+        assert_close(&solve_with(&m, &b, false), &[1.0; 5], 1e-9);
     }
 
     #[test]
-    fn dynamic_matches_frozen_on_random_spd() {
-        // A handful of well-conditioned systems: the dynamic path must produce
-        // the same solution as the frozen path (to tight tolerance).
+    fn reuses_ordering_with_new_values() {
+        let mut m = matrix(2, &[(0, 0, 1.0), (1, 1, 1.0)]);
+        let mut sym = m.factorize_symbolic();
+        m.clear_values();
+        m.add(0, 0, 4.0);
+        m.add(1, 1, 2.0);
+        assert!(sym.refactor(&m));
+        let mut x = vec![8.0, 6.0];
+        let mut scratch = vec![0.0; 2];
+        sym.solve(&mut x, &mut scratch);
+        assert_close(&x, &[2.0, 3.0], 1e-12);
+    }
+
+    /// The default `refactor` keeps the exact frozen-only behaviour (dynamic
+    /// is off unless set) and is bit-identical to `refactor_frozen`.
+    #[test]
+    fn refactor_default_is_frozen_and_bit_identical() {
+        let m = matrix(3, SPD_3);
+        let b = [1.0, 2.0, 3.0];
+        let mut a = m.factorize_symbolic();
+        assert!(!a.allow_dynamic);
+        assert!(a.refactor(&m));
+        let mut xa = b.to_vec();
+        a.solve(&mut xa, &mut vec![0.0; 3]);
+        let mut f = m.factorize_symbolic();
+        assert!(f.refactor_frozen(&m));
+        let mut xf = b.to_vec();
+        f.solve(&mut xf, &mut vec![0.0; 3]);
+        assert!(
+            xa.iter().zip(&xf).all(|(p, q)| p.to_bits() == q.to_bits()),
+            "{xa:?} vs {xf:?}"
+        );
+    }
+
+    /// The dynamic path matches the frozen path on well-conditioned systems,
+    /// anchors a structurally empty row instead of spinning, and recovers
+    /// (against a dense reference) where the frozen order corners a tiny pivot.
+    #[test]
+    fn dynamic_pivoting_matches_frozen_and_recovers_from_bad_orders() {
         let cases: &[(usize, &[(usize, usize, f64)], &[f64])] = &[
-            (
-                3,
-                &[
-                    (0, 0, 4.0),
-                    (0, 1, 1.0),
-                    (1, 0, 1.0),
-                    (1, 1, 3.0),
-                    (1, 2, 1.0),
-                    (2, 1, 1.0),
-                    (2, 2, 5.0),
-                ],
-                &[1.0, 2.0, 3.0],
-            ),
+            (3, SPD_3, &[1.0, 2.0, 3.0]),
             (
                 4,
                 &[
@@ -1015,45 +1123,15 @@ mod tests {
             ),
         ];
         for (n, ent, b) in cases {
-            let mut m = SparseMatrix::new(*n);
-            for &(r, c, v) in *ent {
-                m.add(r, c, v);
-            }
-            let xf = solve_with(&m, b);
-            let xd = solve_dynamic(&m, b);
-            for (a, c) in xf.iter().zip(xd.iter()) {
-                assert!((a - c).abs() < 1e-9, "frozen {xf:?} vs dynamic {xd:?}");
-            }
+            let m = matrix(*n, ent);
+            assert_close(&solve_with(&m, b, true), &solve_with(&m, b, false), 1e-9);
         }
-    }
 
-    #[test]
-    fn dynamic_handles_zero_diagonal_mna() {
-        // Same MNA-with-zero-diagonal block the frozen path covers; dynamic must
-        // also pick the off-diagonal pivot.
-        let mut m = SparseMatrix::new(2);
-        let gload = 1.0 / 1000.0;
-        m.add(0, 0, gload);
-        m.add(0, 1, 1.0);
-        m.add(1, 0, 1.0);
-        let x = solve_dynamic(&m, &[0.0, 5.0]);
-        assert!((x[0] - 5.0).abs() < 1e-9, "v = {}", x[0]);
-        assert!((x[1] + gload * 5.0).abs() < 1e-9, "i = {}", x[1]);
-    }
+        let x = solve_with(&matrix(2, &[(0, 0, 2.0)]), &[4.0, 0.0], true);
+        assert!((x[0] - 2.0).abs() < 1e-12);
+        assert_eq!(x[1], 0.0, "floating unknown was not anchored");
 
-    #[test]
-    fn dynamic_recovers_where_frozen_order_fails() {
-        // Construct a matrix whose min-degree column order leaves a column with
-        // a (numerically) zero pivot when factored in that fixed order, but
-        // which is non-singular and solvable with dynamic column choice.
-        // Arrow-like pattern: the frozen order can corner a near-zero pivot;
-        // the dynamic Markowitz path reorders and succeeds. We assert the
-        // dynamic path solves it and matches a dense reference.
-        let n = 5;
-        let mut m = SparseMatrix::new(n);
-        // dense-ish coupled block with a tiny (1e-13) diagonal on node 2 that a
-        // fixed order can hit as a pivot, but which has strong off-diagonals.
-        let ent = [
+        let arrow = [
             (0, 0, 3.0),
             (0, 2, 4.0),
             (1, 1, 2.0),
@@ -1068,249 +1146,50 @@ mod tests {
             (4, 3, 1.0),
             (4, 4, 3.0),
         ];
-        for &(r, c, v) in &ent {
-            m.add(r, c, v);
-        }
         let b = [1.0, 2.0, 3.0, 4.0, 5.0];
-        // Dense reference (partial-pivot Gaussian elimination).
-        let xref = dense_solve(n, &ent, &b);
-        let xd = solve_dynamic(&m, &b);
-        for (a, c) in xref.iter().zip(xd.iter()) {
-            assert!((a - c).abs() < 1e-6, "ref {xref:?} vs dynamic {xd:?}");
-        }
-        // And the residual of the dynamic solution is near zero.
-        let res = residual(n, &ent, &xd, &b);
-        assert!(res < 1e-8, "dynamic residual {res}");
-    }
+        let xd = solve_with(&matrix(5, &arrow), &b, true);
+        assert_close(&xd, &dense_solve(5, &arrow, &b), 1e-6);
+        assert!(residual(&arrow, &xd, &b) < 1e-8);
 
-    fn dense_solve(n: usize, ent: &[(usize, usize, f64)], b: &[f64]) -> Vec<f64> {
-        let mut a = vec![0.0f64; n * n];
-        for &(r, c, v) in ent {
-            a[r * n + c] += v;
-        }
-        let mut bb = b.to_vec();
-        let mut piv: Vec<usize> = (0..n).collect();
-        for k in 0..n {
-            let mut p = k;
-            let mut best = a[piv[k] * n + k].abs();
-            for i in (k + 1)..n {
-                let mag = a[piv[i] * n + k].abs();
-                if mag > best {
-                    best = mag;
-                    p = i;
-                }
-            }
-            piv.swap(k, p);
-            let rk = piv[k];
-            let pivot = a[rk * n + k];
-            for i in (k + 1)..n {
-                let ri = piv[i];
-                let f = a[ri * n + k] / pivot;
-                for j in k..n {
-                    let t = f * a[rk * n + j];
-                    a[ri * n + j] -= t;
-                }
-                let t = f * bb[rk];
-                bb[ri] -= t;
-            }
-        }
-        let mut x = vec![0.0; n];
-        for i in (0..n).rev() {
-            let ri = piv[i];
-            let mut s = bb[ri];
-            for j in (i + 1)..n {
-                s -= a[ri * n + j] * x[j];
-            }
-            x[i] = s / a[ri * n + i];
-        }
-        x
-    }
-
-    #[test]
-    fn refactor_default_never_uses_dynamic_and_is_unchanged() {
-        // The public `refactor` must, by default, keep the exact frozen-only
-        // behaviour: on a matrix the frozen order can factor, the result is
-        // identical to refactor_frozen; and `allow_dynamic` is off unless set.
-        let mut m = SparseMatrix::new(3);
-        m.add(0, 0, 4.0);
-        m.add(0, 1, 1.0);
-        m.add(1, 0, 1.0);
-        m.add(1, 1, 3.0);
-        m.add(1, 2, 1.0);
-        m.add(2, 1, 1.0);
-        m.add(2, 2, 5.0);
-        let b = [1.0, 2.0, 3.0];
-
-        let mut a = m.factorize_symbolic();
-        assert!(!a.allow_dynamic, "dynamic must default OFF");
-        assert!(a.refactor(&m));
-        let mut xa = b.to_vec();
-        let mut scratch_a = vec![0.0; xa.len()];
-        a.solve(&mut xa, &mut scratch_a);
-
-        let mut f = m.factorize_symbolic();
-        assert!(f.refactor_frozen(&m));
-        let mut xf = b.to_vec();
-        let mut scratch_f = vec![0.0; xf.len()];
-        f.solve(&mut xf, &mut scratch_f);
-
-        // Byte-for-byte identical: refactor (default) == refactor_frozen.
-        assert_eq!(
-            xa.to_bits_vec(),
-            xf.to_bits_vec(),
-            "default refactor diverged from frozen"
-        );
-    }
-
-    trait Bits {
-        fn to_bits_vec(&self) -> Vec<u64>;
-    }
-    impl Bits for Vec<f64> {
-        fn to_bits_vec(&self) -> Vec<u64> {
-            self.iter().map(|v| v.to_bits()).collect()
-        }
-    }
-
-    #[test]
-    fn dynamic_solves_larger_stiff_diode_like_system() {
-        // A larger system mixing strong couplings with several tiny (diode-OFF
-        // ~1e-12) diagonals: the kind of stiffness that traps a fixed ordering.
-        // The dynamic path must solve it to a tight residual versus a dense
-        // partial-pivot reference.
+        // Strong couplings with several diode-OFF-scale (1e-12) diagonals.
         let n = 12;
         let mut ent: Vec<(usize, usize, f64)> = Vec::new();
-        // a tridiagonal-ish backbone with some long-range coupling
         for i in 0..n {
-            let diag = if i % 4 == 2 {
-                1e-12
-            } else {
-                2.0 + (i as f64) * 0.1
-            };
-            ent.push((i, i, diag));
+            ent.push((
+                i,
+                i,
+                if i % 4 == 2 {
+                    1e-12
+                } else {
+                    2.0 + (i as f64) * 0.1
+                },
+            ));
             if i > 0 {
                 ent.push((i, i - 1, -0.7));
                 ent.push((i - 1, i, -0.6));
             }
         }
-        // some off-band entries to defeat a banded fixed order
-        ent.push((0, n - 1, 0.5));
-        ent.push((n - 1, 0, 0.4));
-        ent.push((3, 8, 0.9));
-        ent.push((8, 3, 0.8));
-        let mut m = SparseMatrix::new(n);
-        for &(r, c, v) in &ent {
-            m.add(r, c, v);
-        }
+        ent.extend([(0, n - 1, 0.5), (n - 1, 0, 0.4), (3, 8, 0.9), (8, 3, 0.8)]);
         let b: Vec<f64> = (0..n).map(|i| 1.0 + 0.3 * i as f64).collect();
-        let xref = dense_solve(n, &ent, &b);
-        let xd = solve_dynamic(&m, &b);
-        for (a, c) in xref.iter().zip(xd.iter()) {
-            assert!((a - c).abs() < 1e-6, "ref {xref:?} vs dynamic {xd:?}");
+        let xd = solve_with(&matrix(n, &ent), &b, true);
+        assert_close(&xd, &dense_solve(n, &ent, &b), 1e-6);
+        assert!(residual(&ent, &xd, &b) < 1e-8);
+    }
+
+    /// Every unknown carrying only its gmin diagonal (the ghost-row shape a
+    /// high as-built NodeId manufactures) drains in linear time.
+    #[test]
+    fn gmin_only_unknowns_are_drained_without_quadratic_symbolic_scan() {
+        const N: usize = 20_000;
+        let mut m = SparseMatrix::new(N);
+        for i in 0..N {
+            m.add(i, i, 1e-12);
         }
-        let res = residual(n, &ent, &xd, &b);
-        assert!(res < 1e-8, "dynamic residual {res}");
-    }
-
-    fn residual(n: usize, ent: &[(usize, usize, f64)], x: &[f64], b: &[f64]) -> f64 {
-        let mut r = b.to_vec();
-        for &(rr, c, v) in ent {
-            r[rr] -= v * x[c];
-        }
-        let _ = n;
-        r.iter().map(|v| v * v).sum::<f64>().sqrt()
-    }
-
-    #[test]
-    fn solves_2x2() {
-        let mut m = SparseMatrix::new(2);
-        m.add(0, 0, 2.0);
-        m.add(0, 1, 1.0);
-        m.add(1, 0, 1.0);
-        m.add(1, 1, 3.0);
-        let x = solve_with(&m, &[3.0, 5.0]);
-        assert!((x[0] - 0.8).abs() < 1e-12, "{x:?}");
-        assert!((x[1] - 1.4).abs() < 1e-12, "{x:?}");
-    }
-
-    #[test]
-    fn solves_diagonal() {
-        let mut m = SparseMatrix::new(3);
-        m.add(0, 0, 4.0);
-        m.add(1, 1, 2.0);
-        m.add(2, 2, 8.0);
-        let x = solve_with(&m, &[8.0, 6.0, 16.0]);
-        assert!((x[0] - 2.0).abs() < 1e-12);
-        assert!((x[1] - 3.0).abs() < 1e-12);
-        assert!((x[2] - 2.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn zero_diagonal_needs_pivoting() {
-        // MNA-like: row 0 has no diagonal (a voltage-source branch row).
-        let mut m = SparseMatrix::new(2);
-        m.add(0, 1, 1.0); // v_node = ...
-        m.add(1, 0, 1.0);
-        m.add(1, 1, 1.0);
-        let x = solve_with(&m, &[2.0, 3.0]);
-        // x1 = 2; x0 + x1 = 3 -> x0 = 1.
-        assert!((x[0] - 1.0).abs() < 1e-12, "{x:?}");
-        assert!((x[1] - 2.0).abs() < 1e-12, "{x:?}");
-    }
-
-    #[test]
-    fn solves_tridiagonal() {
-        let n = 5;
-        let mut m = SparseMatrix::new(n);
-        for i in 0..n {
-            m.add(i, i, 2.0);
-            if i > 0 {
-                m.add(i, i - 1, -1.0);
-            }
-            if i + 1 < n {
-                m.add(i, i + 1, -1.0);
-            }
-        }
-        let b: Vec<f64> = (0..n)
-            .map(|i| 2.0 - (i > 0) as i32 as f64 - (i + 1 < n) as i32 as f64)
-            .collect();
-        let x = solve_with(&m, &b);
-        for xi in x {
-            assert!((xi - 1.0).abs() < 1e-9, "got {xi}");
-        }
-    }
-
-    #[test]
-    fn mna_voltage_source_block() {
-        // 3 unknowns: node v (0), source branch i (1) tying v to 5 V, and a
-        // load resistor from v to ground folded into the node diagonal.
-        // Equations:
-        //   row0 (KCL at v): g*v + i = 0
-        //   row1 (branch):   v       = 5
-        let mut m = SparseMatrix::new(2);
-        let gload = 1.0 / 1000.0;
-        m.add(0, 0, gload);
-        m.add(0, 1, 1.0);
-        m.add(1, 0, 1.0);
-        let x = solve_with(&m, &[0.0, 5.0]);
-        assert!((x[0] - 5.0).abs() < 1e-9, "v = {}", x[0]);
-        assert!((x[1] + gload * 5.0).abs() < 1e-9, "i = {}", x[1]);
-    }
-
-    #[test]
-    fn reuses_ordering_with_new_values() {
-        let mut m = SparseMatrix::new(2);
-        m.add(0, 0, 1.0);
-        m.add(1, 1, 1.0);
-        let mut sym = m.factorize_symbolic();
-
-        m.clear_values();
-        m.add(0, 0, 4.0);
-        m.add(1, 1, 2.0);
-        assert!(sym.refactor(&m));
-        let mut x = vec![8.0, 6.0];
-        let mut scratch = vec![0.0; x.len()];
-        sym.solve(&mut x, &mut scratch);
-        assert!((x[0] - 2.0).abs() < 1e-12);
-        assert!((x[1] - 3.0).abs() < 1e-12);
+        let mut symbolic = m.factorize_symbolic();
+        assert_eq!(symbolic.perm.len(), N);
+        assert!(symbolic.refactor(&m));
+        let mut x = vec![0.0; N];
+        symbolic.solve(&mut x, &mut vec![0.0; N]);
+        assert!(x.iter().all(|v| *v == 0.0));
     }
 }

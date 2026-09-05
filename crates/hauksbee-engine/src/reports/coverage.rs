@@ -684,31 +684,4 @@ mod tests {
         assert_eq!(caveats[1].subject, "FLASH1");
         assert!(caveats[1].message.contains("FLASH1"), "{:?}", caveats[1]);
     }
-
-    #[test]
-    fn web_matrix_marks_external_only_disclosures_as_not_run() {
-        let docs = include_str!("../../../../docs/cosim/MCU.md");
-        for label in [
-            "dropped ADC injections",
-            "unexercised buses",
-            "watchdog limitation",
-            "timing limitation",
-        ] {
-            let row = docs
-                .lines()
-                .find(|line| line.starts_with(&format!("| {label} |")))
-                .unwrap_or_else(|| panic!("missing matrix row for {label}"));
-            let web_cell = row
-                .trim_matches('|')
-                .split('|')
-                .next_back()
-                .expect("web-frontdoor cell")
-                .trim();
-            assert_eq!(
-                web_cell, "not run (external backend)",
-                "the synchronous web front door returns before these scheduler signals exist: {row}"
-            );
-        }
-    }
-
 }

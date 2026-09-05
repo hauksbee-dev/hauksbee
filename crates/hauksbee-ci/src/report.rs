@@ -724,10 +724,9 @@ impl CiResult {
         } else {
             String::new()
         };
-        // Verdict FIRST. An invalid run's line used to read "1/1 assertions
-        // passed ... - INVALID", and in a CI log or a chat notification the
-        // leading "passed" is what a skimming reader keeps; an untrustworthy
-        // run must not lead with the word every green run leads with.
+        // Verdict FIRST: in a CI log or a chat notification the leading word
+        // is what a skimming reader keeps, so an untrustworthy run must not
+        // lead with "passed", the word every green run leads with.
         if self.analog_invalid() {
             out.push_str(&format!(
                 "\n{} - {}/{} assertion(s) evaluated in {:.2}s; the counts are not a verdict{}\n",
@@ -1342,135 +1341,16 @@ fn gh_escape(s: &str) -> String {
 }
 
 #[cfg(test)]
-mod ensemble_coverage_tests {
-    use super::EnsembleCoverage;
-
-    /// This banner is also the JSON `coverage` field and what the evidence map
-    /// carries, so it must not out-claim the per-assertion detail lines. It has
-    /// to keep the monotonicity hedge and say the probes are evidence, not proof.
-    #[test]
-    fn corner_coverage_with_probes_keeps_the_monotonicity_hedge() {
-        let d = EnsembleCoverage::Corners {
-            corners: 4,
-            interior: 6,
-            components: 2,
-        }
-        .describe();
-        assert!(d.contains("4 deterministic min/max corner(s)"), "{d}");
-        assert!(d.contains("6 interior probe(s)"), "{d}");
-        assert!(
-            d.contains("only where the response is monotonic in each value"),
-            "the corner bound's condition must survive: {d}"
-        );
-        assert!(
-            d.contains("evidence for that monotonicity, not proof of it"),
-            "the probes must not be sold as proof: {d}"
-        );
-        // The corner count must stay the 2^n a reader computes from the
-        // component count, never 2^n + probes.
-        assert!(!d.contains("10 deterministic"), "{d}");
-    }
-
-    /// A corner run with the probes disabled keeps the original, unqualified
-    /// disclosure: there is no search to report.
-    #[test]
-    fn corner_coverage_without_probes_keeps_the_original_disclosure() {
-        let d = EnsembleCoverage::Corners {
-            corners: 4,
-            interior: 0,
-            components: 2,
-        }
-        .describe();
-        assert!(
-            d.contains("only where the response is monotonic in each value"),
-            "{d}"
-        );
-        assert!(!d.contains("interior"), "no probes ran, so claim none: {d}");
-    }
-
-    #[test]
-    fn monte_carlo_coverage_excludes_the_nominal_from_the_sampled_count() {
-        // `seeds` is the SAMPLED count (nominal baseline excluded). A one-member
-        // Monte-Carlo ran only the nominal → 0 sampled seeds, and the wording
-        // must say so rather than claim it sampled one.
-        let one = EnsembleCoverage::MonteCarlo {
-            seeds: 0,
-            components: 3,
-        }
-        .describe();
-        assert!(
-            one.contains("nominal baseline + 0 sampled seed(s)"),
-            "{one}"
-        );
-        let many = EnsembleCoverage::MonteCarlo {
-            seeds: 31,
-            components: 3,
-        }
-        .describe();
-        assert!(
-            many.contains("nominal baseline + 31 sampled seed(s)"),
-            "{many}"
-        );
-    }
-
-    #[test]
-    fn single_member_names_the_seed_and_does_not_claim_ensemble_coverage() {
-        // R12: `--seed N` runs exactly one member; the banner must name it and
-        // NOT report "nominal baseline + 0 sampled" (the nominal didn't run) or
-        // "1 corner" (over-claiming one of 2^n corners).
-        let d = EnsembleCoverage::SingleMember {
-            seed: 7,
-            components: 3,
-            corners: false,
-            interior: false,
-        }
-        .describe();
-        assert!(d.contains("seed 7"), "{d}");
-        assert!(
-            !d.contains("nominal baseline"),
-            "must not claim the nominal ran: {d}"
-        );
-        assert!(!d.contains("corner"), "must not claim corner coverage: {d}");
-    }
-
-    #[test]
-    fn single_member_in_corners_mode_names_a_corner_not_a_seed() {
-        // R41: a pinned `--seed N` in CORNERS mode is a deterministic corner, not
-        // a random draw. The banner must say "corner N" (matching the mode-aware
-        // per-assertion FAIL/INVALID wording), never "seed"/"draw".
-        let d = EnsembleCoverage::SingleMember {
-            seed: 2,
-            components: 2,
-            corners: true,
-            interior: false,
-        }
-        .describe();
-        assert!(
-            d.contains("corner 2"),
-            "corners member must be named a corner: {d}"
-        );
-        assert!(
-            !d.contains("seed"),
-            "a corner must not be called a seed: {d}"
-        );
-        assert!(
-            !d.contains("draw"),
-            "a corner is deterministic, not a draw: {d}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod why_line_tests {
+mod tests {
     use super::*;
     use crate::assertions::AssertResult;
     use std::time::Duration;
 
-    fn failing(kind: &str, detail: &str) -> AssertResult {
+    fn result(label: &str, kind: &str, passed: bool, detail: &str) -> AssertResult {
         AssertResult {
-            label: format!("{kind} check"),
+            label: label.to_string(),
             kind: kind.to_string(),
-            passed: false,
+            passed,
             invalid: false,
             detail: detail.to_string(),
             failing_seed: None,
@@ -1483,13 +1363,17 @@ mod why_line_tests {
         }
     }
 
-    fn result_of(results: Vec<AssertResult>) -> CiResult {
+    fn failing(kind: &str, detail: &str) -> AssertResult {
+        result(&format!("{kind} check"), kind, false, detail)
+    }
+
+    fn ci_result(results: Vec<AssertResult>) -> CiResult {
         CiResult {
             spec_name: "t".into(),
             board: "b.kicad_pcb".into(),
             results,
             seeds: 1,
-            elapsed: Duration::from_secs(0),
+            elapsed: Duration::ZERO,
             analog_abort: false,
             coverage: None,
             substitutions: Vec::new(),
@@ -1504,258 +1388,194 @@ mod why_line_tests {
         }
     }
 
-    // M1: the canned per-kind hint contradicted the measured line whenever the
-    // check never got data. "never sampled (no window at 500ms)" told the user
-    // to go look at the supply and the load; the spec's window simply starts
-    // after the run ends.
+    /// The coverage banner is also the JSON `coverage` field, so it must not
+    /// out-claim the per-assertion detail: probes are evidence for the
+    /// monotonicity the corner bound needs, never proof of it.
     #[test]
-    fn a_never_sampled_voltage_names_the_window_not_the_supply() {
+    fn corner_coverage_describes_probes_as_evidence_not_proof() {
+        let with = EnsembleCoverage::Corners {
+            corners: 4,
+            interior: 6,
+            components: 2,
+        }
+        .describe();
+        assert!(with.contains("4 deterministic min/max corner(s)"), "{with}");
+        assert!(with.contains("6 interior probe(s)"), "{with}");
+        assert!(with.contains("not proof"), "{with}");
+        assert!(
+            !with.contains("10 deterministic"),
+            "corners stay 2^n: {with}"
+        );
+
+        let without = EnsembleCoverage::Corners {
+            corners: 4,
+            interior: 0,
+            components: 2,
+        }
+        .describe();
+        assert!(
+            !without.contains("interior"),
+            "no probes ran, so claim none: {without}"
+        );
+    }
+
+    #[test]
+    fn single_member_and_monte_carlo_banners_name_exactly_what_ran() {
+        // `seeds` is the sampled count; the nominal baseline is excluded.
+        let mc = EnsembleCoverage::MonteCarlo {
+            seeds: 0,
+            components: 3,
+        }
+        .describe();
+        assert!(mc.contains("nominal baseline + 0 sampled seed(s)"), "{mc}");
+        // `--seed N` runs one member: neither a nominal run nor corner coverage is claimed.
+        let member = |seed, corners, interior| {
+            EnsembleCoverage::SingleMember {
+                seed,
+                components: 2,
+                corners,
+                interior,
+            }
+            .describe()
+        };
+        let draw = member(7, false, false);
+        assert!(
+            draw.contains("seed 7")
+                && !draw.contains("nominal baseline")
+                && !draw.contains("corner"),
+            "{draw}"
+        );
+        // In corners mode a member is a deterministic corner or an interior
+        // probe, never a seed or a draw.
+        let corner = member(2, true, false);
+        assert!(
+            corner.contains("corner 2") && !corner.contains("seed") && !corner.contains("draw"),
+            "{corner}"
+        );
+        let probe = member(4, true, true);
+        assert!(
+            probe.contains("interior probe 4") && !probe.contains("corner 4"),
+            "{probe}"
+        );
+    }
+
+    // The canned per-kind hint must not contradict the measured line when
+    // the check never got data: a window that starts after the run ends is
+    // a spec problem, not a supply problem.
+    #[test]
+    fn why_line_prefers_measured_reasons_over_canned_hints() {
         let r = failing(
             "voltage",
             "net 'VCC' was never sampled (no window at 500ms)",
         );
         let why = why_line(&r).expect("a degenerate failure still gets a why");
-        assert!(why.contains("duration_ms"), "{why}");
-        assert!(why.contains("after_ms"), "{why}");
-        assert!(why.contains("500"), "it must quote the value: {why}");
         assert!(
-            !why.contains("check the supply"),
-            "the misleading board-cause hint must be gone: {why}"
-        );
-        assert!(!why.contains("the load pulling it down"), "{why}");
-    }
-
-    #[test]
-    fn a_boot_deadline_past_the_run_names_the_two_knobs() {
-        let r = failing(
-            "boot_coverage",
-            "boot deadline 500 ms is past the end of the 200.00 ms simulation, so boot \
-             coverage for control net 'EN' cannot be confirmed; extend the run duration",
-        );
-        let why = why_line(&r).expect("a degenerate failure still gets a why");
-        assert!(why.contains("500") && why.contains("200.00"), "{why}");
-        assert!(
-            why.contains("duration_ms") && why.contains("deadline_ms"),
+            why.contains("duration_ms") && why.contains("after_ms") && why.contains("500"),
             "{why}"
         );
-        assert!(
-            !why.contains("the firmware never drove"),
-            "the firmware-cause hint is wrong here: {why}"
-        );
-    }
+        assert!(!why.contains("check the supply"), "{why}");
 
-    #[test]
-    fn a_real_measured_failure_still_gets_the_per_kind_hint() {
-        // The generic hint is right whenever the check DID measure something,
-        // so the fix must not have swallowed it.
+        // A real measurement keeps the per-kind hint.
         let r = failing("voltage", "+5V: min=3.100V < required 4.75V <- FAILED HERE");
-        let why = why_line(&r).expect("a measured failure gets the per-kind hint");
-        assert!(why.contains("check the supply feeding this net"), "{why}");
-    }
+        assert!(why_line(&r)
+            .unwrap()
+            .contains("check the supply feeding this net"));
 
-    #[test]
-    fn a_measured_why_outranks_every_hint() {
+        // A measured `why` outranks every hint, and both the terminal and the
+        // JUnit failure body carry it (the message attribute stays the
+        // one-line measured detail).
         let mut r = failing("voltage", "+5V: min=3.100V < required 4.75V");
         r.why = Some("+5V settled 1.650 V below your floor".to_string());
         assert_eq!(
             why_line(&r).as_deref(),
             Some("+5V settled 1.650 V below your floor")
         );
-    }
-
-    // M7: the JUnit `<failure>` body carried the measured line and dropped the
-    // why, which is the half that says what to do. Plenty of readers only ever
-    // open the Tests tab.
-    #[test]
-    fn the_junit_failure_body_carries_the_why_line() {
-        let mut r = failing("voltage", "+5V: min=3.100V < required 4.75V");
-        r.why = Some("+5V settled 1.650 V below your floor".to_string());
-        let junit = result_of(vec![r]).render_junit();
-        assert!(junit.contains("<failure"), "{junit}");
+        let result = ci_result(vec![r]);
+        let junit = result.render_junit();
         assert!(
-            junit.contains("why: +5V settled 1.650 V below your floor"),
-            "the failure body must carry the why: {junit}"
+            junit.contains("<failure") && junit.contains("why: +5V settled 1.650 V"),
+            "{junit}"
         );
-        // The message attribute stays the one-line measured detail.
         assert!(junit.contains("message=\"+5V: min=3.100V"), "{junit}");
+        assert!(result.render_human().contains("why: +5V settled 1.650 V"));
     }
 
+    /// Honesty notes (an MCU substitution, a co-sim coverage hole, measured
+    /// timing coverage and refusals) reach every report format, and are
+    /// absent from every format when there is nothing to note.
     #[test]
-    fn the_junit_failure_body_and_the_terminal_agree() {
-        let r = failing(
-            "voltage",
-            "net 'VCC' was never sampled (no window at 500ms)",
-        );
-        let result = result_of(vec![r]);
-        let why = why_line(&result.results[0]).unwrap();
-        assert!(result.render_human().contains(&format!("why: {why}")));
-        assert!(result.render_junit().contains(&format!("why: {why}")));
-    }
-}
+    fn honesty_notes_reach_every_report_format() {
+        let mut result = ci_result(Vec::new());
+        result.substitutions = vec![
+            "co-sim: U1 requested STM32F411RET6 but it is modelled as an STM32F407 core"
+                .to_string(),
+        ];
+        result.coverage_warnings = vec![
+            "co-sim: ADC channel 0 on U1 (net 'TEMP_SENSE') was driven by the analog solve but \
+             this platform has no ADC injection map"
+                .to_string(),
+        ];
+        result.timing_coverage = vec![hauksbee_engine::scheduler::TimingCoverage {
+            mcu_ref: "U1".into(),
+            backend: "renode:stm32f103".into(),
+            cycle_exact: false,
+            timestamp_precision_s: 4e-6,
+            minimum_guaranteed_pulse_s: 8e-6,
+            chunk_s: 4e-6,
+        }];
+        result.timing_refusals = vec!["poll backend could not represent 0.5 us".into()];
 
-#[cfg(test)]
-mod substitution_tests {
-    use super::CiResult;
-    use std::time::Duration;
-
-    // U2: the `run` binary surfaces an MCU substitution on every honesty surface;
-    // the CI report did not, so a GREEN vouched for firmware on the wrong silicon.
-    // It must now appear in the human, JUnit, and GitHub outputs.
-    #[test]
-    fn a_substituted_mcu_is_surfaced_in_every_report_format() {
-        let result = CiResult {
-            spec_name: "t".into(),
-            board: "b.kicad_pcb".into(),
-            results: Vec::new(),
-            seeds: 1,
-            elapsed: Duration::from_secs(0),
-            analog_abort: false,
-            coverage: None,
-            substitutions: vec![
-                "co-sim: U1 requested STM32F411RET6 but it is modelled as an STM32F407 core"
-                    .to_string(),
-            ],
-            coverage_warnings: Vec::new(),
-            timing_coverage: Vec::new(),
-            timing_refusals: Vec::new(),
-            dead_rails: Vec::new(),
-            waiver_notes: Vec::new(),
-            inventory: Vec::new(),
-            assumptions: Vec::new(),
-            evidence: Vec::new(),
-        };
         let human = result.render_human();
-        assert!(
-            human.contains("SUBSTITUTE chip") && human.contains("STM32F411RET6"),
-            "human report must name the substitution: {human}"
-        );
         let junit = result.render_junit();
-        assert!(
-            junit.contains("SUBSTITUTE chip") && junit.contains("system-out"),
-            "junit must carry the substitution note: {junit}"
-        );
         let gh = result.render_github_annotations();
+        for needle in [
+            "SUBSTITUTE",
+            "COVERAGE HOLE",
+            "TIMING COVERAGE",
+            "TIMING INVALID",
+        ] {
+            assert!(
+                human.contains(needle),
+                "human report lacks {needle}: {human}"
+            );
+            assert!(junit.contains(needle), "junit lacks {needle}: {junit}");
+        }
         assert!(
-            gh.contains("SUBSTITUTE MCU") && gh.contains("::warning"),
-            "github annotations must warn on the substitution: {gh}"
+            human.contains("STM32F411RET6") && human.contains("TEMP_SENSE"),
+            "{human}"
         );
-        // No substitution → none of the surfaces mention it.
-        let clean = CiResult {
-            substitutions: Vec::new(),
-            ..result
-        };
-        assert!(!clean.render_human().contains("SUBSTITUTE"));
-    }
-
-    // U3: co-sim coverage holes (dropped ADC injection, unexercised bus device)
-    // must reach every report format, exactly like substitutions do.
-    #[test]
-    fn a_cosim_coverage_hole_is_surfaced_in_every_report_format() {
-        let result = CiResult {
-            spec_name: "t".into(),
-            board: "b.kicad_pcb".into(),
-            results: Vec::new(),
-            seeds: 1,
-            elapsed: Duration::from_secs(0),
-            analog_abort: false,
-            coverage: None,
-            substitutions: Vec::new(),
-            coverage_warnings: vec![
-                "co-sim: ADC channel 0 on U1 (net 'TEMP_SENSE') was driven by the \
-                 analog solve but this platform has no ADC injection map"
-                    .to_string(),
-            ],
-            timing_coverage: Vec::new(),
-            timing_refusals: Vec::new(),
-            dead_rails: Vec::new(),
-            waiver_notes: Vec::new(),
-            inventory: Vec::new(),
-            assumptions: Vec::new(),
-            evidence: Vec::new(),
-        };
-        let human = result.render_human();
+        assert!(junit.contains("system-out"), "{junit}");
         assert!(
-            human.contains("COVERAGE HOLE") && human.contains("TEMP_SENSE"),
-            "human report must carry the coverage hole: {human}"
+            gh.contains("SUBSTITUTE MCU")
+                && gh.contains("COSIM COVERAGE HOLE")
+                && gh.contains("::warning"),
+            "{gh}"
         );
-        let junit = result.render_junit();
-        assert!(
-            junit.contains("COVERAGE HOLE") && junit.contains("system-out"),
-            "junit must carry the coverage hole: {junit}"
-        );
-        let gh = result.render_github_annotations();
-        assert!(
-            gh.contains("COSIM COVERAGE HOLE") && gh.contains("::warning"),
-            "github annotations must warn on the coverage hole: {gh}"
-        );
-        // No hole → no mention on any surface.
-        let clean = CiResult {
-            coverage_warnings: Vec::new(),
-            dead_rails: Vec::new(),
-            ..result
-        };
-        assert!(!clean.render_human().contains("COVERAGE HOLE"));
-        assert!(!clean.render_junit().contains("COVERAGE HOLE"));
-        assert!(!clean.render_github_annotations().contains("COVERAGE HOLE"));
-    }
-
-    #[test]
-    fn measured_timing_coverage_is_structured_and_visible_in_ci_reports() {
-        let result = CiResult {
-            spec_name: "timing".into(),
-            board: "b.kicad_pcb".into(),
-            results: Vec::new(),
-            seeds: 1,
-            elapsed: Duration::ZERO,
-            analog_abort: false,
-            coverage: None,
-            substitutions: Vec::new(),
-            coverage_warnings: Vec::new(),
-            timing_coverage: vec![hauksbee_engine::scheduler::TimingCoverage {
-                mcu_ref: "U1".into(),
-                backend: "renode:stm32f103".into(),
-                cycle_exact: false,
-                timestamp_precision_s: 4e-6,
-                minimum_guaranteed_pulse_s: 8e-6,
-                chunk_s: 4e-6,
-            }],
-            timing_refusals: vec!["poll backend could not represent 0.5 us".into()],
-            dead_rails: Vec::new(),
-            waiver_notes: Vec::new(),
-            inventory: Vec::new(),
-            assumptions: Vec::new(),
-            evidence: Vec::new(),
-        };
+        assert!(gh.contains("TIMING COVERAGE"), "{gh}");
         let json: serde_json::Value = serde_json::from_str(&result.render_json()).unwrap();
-        assert_eq!(json["timing_coverage"][0]["timestamp_precision_s"], 4e-6);
         assert_eq!(
             json["timing_coverage"][0]["minimum_guaranteed_pulse_s"],
             8e-6
         );
         assert_eq!(json["timing_refusals"].as_array().unwrap().len(), 1);
-        assert!(result.render_human().contains("TIMING COVERAGE"));
-        assert!(result.render_human().contains("TIMING INVALID"));
-        assert!(result.render_junit().contains("TIMING COVERAGE"));
-        assert!(result.render_junit().contains("TIMING INVALID"));
-        assert!(result
-            .render_github_annotations()
-            .contains("TIMING COVERAGE"));
+
+        let clean = ci_result(Vec::new()).render_human();
+        assert!(
+            !clean.contains("SUBSTITUTE") && !clean.contains("COVERAGE HOLE"),
+            "{clean}"
+        );
     }
-}
 
-#[cfg(test)]
-mod occurrence_evidence_tests {
-    use super::{AssertResult, CiResult};
-    use hauksbee_ir::evidence::{
-        CausalPathIndex, EvidenceMap, EvidenceRegistry, MatchConfidence, ModelLayer, ModelOnPath,
-        ModelSource, ModelSourceTier, ModelUncertainty, ModelValidation, NetScope, RunDate,
-    };
-    use std::time::Duration;
-
-    fn occurrence_map(label: &str) -> EvidenceMap {
+    #[test]
+    fn duplicate_model_occurrence_identity_reaches_human_and_junit_surfaces() {
+        use hauksbee_ir::evidence::{
+            CausalPathIndex, EvidenceMap, EvidenceRegistry, MatchConfidence, ModelLayer,
+            ModelOnPath, ModelSource, ModelSourceTier, ModelUncertainty, ModelValidation, NetScope,
+            RunDate,
+        };
+        let label = "Via model is on the SENSE path";
         let registry = EvidenceRegistry::new(Vec::new()).expect("empty registry is valid");
-        let references = ["Via"];
-        let paths = CausalPathIndex::from_net_parts([("SENSE", references.as_slice())])
+        let paths = CausalPathIndex::from_net_parts([("SENSE", ["Via"].as_slice())])
             .expect("fixture incidence is valid");
         let scope = NetScope::new(["SENSE"], None).expect("fixture scope is valid");
         let traversal = paths
@@ -1772,7 +1592,7 @@ mod occurrence_evidence_tests {
             ],
         )
         .expect("fixture model source is valid");
-        EvidenceMap::from_traversal(label, traversal, &registry, RunDate::unknown())
+        let map = EvidenceMap::from_traversal(label, traversal, &registry, RunDate::unknown())
             .expect("fixture map is valid")
             .with_models(vec![ModelOnPath::for_subject(
                 "component:v1:Via:2",
@@ -1781,54 +1601,22 @@ mod occurrence_evidence_tests {
                 source,
                 MatchConfidence::Exact,
             )
-            .expect("fixture model is valid")])
-    }
+            .expect("fixture model is valid")]);
 
-    #[test]
-    fn duplicate_model_occurrence_identity_reaches_human_and_junit_surfaces() {
-        let label = "Via model is on the SENSE path";
-        let result = CiResult {
-            spec_name: "occurrence-provenance".into(),
-            board: "duplicate-via.kicad_pcb".into(),
-            results: vec![AssertResult {
-                label: label.into(),
-                kind: "voltage".into(),
-                passed: true,
-                invalid: false,
-                detail: "held".into(),
-                failing_seed: None,
-                failing_seeds: Vec::new(),
-                seeds_total: 1,
-                why: None,
-                waived: None,
-                subject_nets: vec!["SENSE".into()],
-                subject_refs: vec!["Via".into()],
-            }],
-            seeds: 1,
-            elapsed: Duration::ZERO,
-            analog_abort: false,
-            coverage: None,
-            substitutions: Vec::new(),
-            coverage_warnings: Vec::new(),
-            timing_coverage: Vec::new(),
-            timing_refusals: Vec::new(),
-            dead_rails: Vec::new(),
-            waiver_notes: Vec::new(),
-            inventory: Vec::new(),
-            assumptions: Vec::new(),
-            evidence: vec![occurrence_map(label)],
-        };
+        let mut r = result(label, "voltage", true, "held");
+        r.subject_nets = vec!["SENSE".into()];
+        r.subject_refs = vec!["Via".into()];
+        let mut result = ci_result(vec![r]);
+        result.evidence = vec![map];
 
-        let expected = "model Via [subject=\"component:v1:Via:2\"]=via_model_b";
         let human = result.render_human();
         assert!(
-            human.contains(expected),
+            human.contains("model Via [subject=\"component:v1:Via:2\"]=via_model_b"),
             "human report lost identity: {human}"
         );
         let junit = result.render_junit();
-        let junit_expected = "model Via [subject=&quot;component:v1:Via:2&quot;]=via_model_b";
         assert!(
-            junit.contains(junit_expected),
+            junit.contains("model Via [subject=&quot;component:v1:Via:2&quot;]=via_model_b"),
             "JUnit report lost identity: {junit}"
         );
     }

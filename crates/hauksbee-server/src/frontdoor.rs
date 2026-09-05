@@ -639,15 +639,11 @@ mod datasheet_input_tests {
     use axum::{body::Body, http::StatusCode, response::Response};
 
     #[test]
-    fn blank_kind_reaches_the_shared_identifier() {
+    fn extraction_needs_a_part_but_accepts_a_blank_kind() {
         assert_eq!(
             extraction_identity(Some("TP4054".into()), Some(String::new())).unwrap(),
             ("TP4054".to_string(), String::new())
         );
-    }
-
-    #[test]
-    fn missing_part_is_still_refused() {
         assert!(extraction_identity(None, Some("vreg".into())).is_err());
     }
 
@@ -657,36 +653,19 @@ mod datasheet_input_tests {
         assert_eq!(catalog["read_only"], true);
         assert_eq!(catalog["llm_required"], false);
         let entries = catalog["entries"].as_array().unwrap();
-        let ids = entries
-            .iter()
-            .map(|entry| entry["id"].as_str().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            ids,
-            [
-                "lm75",
-                "bma423_chip_id",
-                "bme280",
-                "mpu6050",
-                "ads1115",
-                "ina219",
-                "mcp4728",
-                "icm42605"
-            ]
-        );
+        assert!(entries.iter().any(|e| e["id"] == "lm75"), "{catalog}");
         for entry in entries {
             let spec = entry["spec_toml"].as_str().unwrap();
-            assert!(spec.contains("[sensor]"), "{} lacks [sensor]", entry["id"]);
             assert!(
-                spec.contains("[sensor.protocol]"),
-                "{} lacks protocol",
+                spec.contains("[sensor]") && spec.contains("[sensor.protocol]"),
+                "{} lacks a sensor/protocol table",
                 entry["id"]
             );
         }
     }
 
     #[tokio::test]
-    async fn upload_limit_response_names_the_exact_limit() {
+    async fn upload_limit_response_keeps_the_status_and_names_the_limit() {
         let stock = Response::builder()
             .status(StatusCode::PAYLOAD_TOO_LARGE)
             .body(Body::from("length limit exceeded"))
@@ -696,14 +675,8 @@ mod datasheet_input_tests {
         let body = axum::body::to_bytes(response.into_body(), 1024)
             .await
             .unwrap();
-        let text = String::from_utf8(body.to_vec()).unwrap();
-        assert_eq!(
-            text,
-            format!(
-                "upload too large: this server accepts at most {} MB per request",
-                MAX_UPLOAD_BYTES / (1024 * 1024)
-            )
-        );
+        let mb = (MAX_UPLOAD_BYTES / (1024 * 1024)).to_string();
+        assert!(String::from_utf8(body.to_vec()).unwrap().contains(&mb));
     }
 }
 

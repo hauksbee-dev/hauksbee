@@ -445,23 +445,15 @@ impl MatchRules {
 
 #[cfg(test)]
 mod tests {
-    use super::{pattern_constrainedness, CompiledEntry, ComponentQuery};
+    use super::{pattern_constrainedness as c, CompiledEntry, ComponentQuery};
     use crate::schema::{ComponentKind, MatchRules, ModelEntry};
 
-    #[test]
-    fn footprint_re_matches_case_insensitively() {
-        // Round-26: a rule `footprint_re = "sot-23"` must fire against a board
-        // footprint `Package_TO_SOT_SMD:SOT-23`. A case-SENSITIVE compile silently
-        // skipped the entry, dropping the part to a generic fallback. Author the
-        // rule in lower case, query in the board's mixed case: it must still match.
-        let entry = ModelEntry {
-            id: "sot23-test".to_string(),
-            kind: ComponentKind::BjtNpn,
+    fn entry(kind: ComponentKind, rules: MatchRules) -> CompiledEntry {
+        CompiledEntry::compile(ModelEntry {
+            id: "t".to_string(),
+            kind,
             description: String::new(),
-            r#match: MatchRules {
-                footprint_re: Some("sot-23".to_string()),
-                ..Default::default()
-            },
+            r#match: rules,
             params: Default::default(),
             pins: Default::default(),
             envelope: Default::default(),
@@ -474,180 +466,71 @@ mod tests {
             peripheral_power: None,
             coverage: Default::default(),
             passive_class: None,
-        };
-        let compiled = CompiledEntry::compile(entry).expect("compiles");
-        let q = ComponentQuery {
+        })
+        .expect("compiles")
+    }
+
+    #[test]
+    fn footprint_re_matches_case_insensitively() {
+        let compiled = entry(
+            ComponentKind::BjtNpn,
+            MatchRules {
+                footprint_re: Some("sot-23".to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(compiled.matches(&ComponentQuery {
             footprint: Some("Package_TO_SOT_SMD:SOT-23".to_string()),
             ..Default::default()
-        };
-        assert!(
-            compiled.matches(&q),
-            "footprint regex must match case-insensitively"
-        );
+        }));
     }
 
     #[test]
     fn named_source_property_can_disambiguate_a_generic_board_value() {
-        let mut properties = std::collections::BTreeMap::new();
-        properties.insert("KiLib Generator".to_string(), "1812L150-24MR".to_string());
-        let entry = ModelEntry {
-            id: "exact-source-property".to_string(),
-            kind: ComponentKind::Passive,
-            description: String::new(),
-            r#match: MatchRules {
+        let properties = [("KiLib Generator".to_string(), "1812L150-24MR".to_string())].into();
+        let compiled = entry(
+            ComponentKind::Passive,
+            MatchRules {
                 value_re: Some("^Polyfuse 1\\.8A$".to_string()),
                 properties,
                 ..Default::default()
             },
-            params: Default::default(),
-            pins: Default::default(),
-            envelope: Default::default(),
-            ratings: Default::default(),
-            straps: Vec::new(),
-            behavioral: Default::default(),
-            logic: Default::default(),
-            current_program: None,
-            peripheral: None,
-            peripheral_power: None,
-            coverage: Default::default(),
-            passive_class: Some(crate::schema::PassiveClass::Fuse),
-        };
-        let compiled = CompiledEntry::compile(entry).expect("compiles");
-        let exact = ComponentQuery {
+        );
+        let with = |url: &str| ComponentQuery {
             value: Some("Polyfuse 1.8A".to_string()),
-            properties: vec![(
-                "KiLib_Generator".to_string(),
-                "https://supplier.invalid/1812L150-24MR/123".to_string(),
-            )],
+            properties: vec![("KiLib_Generator".to_string(), url.to_string())],
             ..Default::default()
         };
-        assert!(compiled.matches(&exact));
-
-        let wrong_part = ComponentQuery {
-            properties: vec![(
-                "KiLib_Generator".to_string(),
-                "https://supplier.invalid/1812L110-24MR/456".to_string(),
-            )],
-            ..exact.clone()
-        };
-        assert!(!compiled.matches(&wrong_part));
-
-        let no_property = ComponentQuery {
+        assert!(compiled.matches(&with("https://supplier.invalid/1812L150-24MR/123")));
+        assert!(!compiled.matches(&with("https://supplier.invalid/1812L110-24MR/456")));
+        assert!(!compiled.matches(&ComponentQuery {
             properties: Vec::new(),
-            ..exact
-        };
-        assert!(!compiled.matches(&no_property));
+            ..with("")
+        }));
     }
 
     #[test]
-    fn exact_literal_outranks_character_class_family() {
-        // The 1N400x case: the dedicated override must score above the family.
-        assert!(
-            pattern_constrainedness("(?i)^1N4004$") > pattern_constrainedness("(?i)^1N400[1-7]$")
-        );
+    fn exact_overrides_outrank_the_families_they_carve_out_of() {
+        assert!(c("(?i)^1N4004$") > c("(?i)^1N400[1-7]$"));
+        assert!(c("^INA186$") > c("(?i)^INA186"));
+        assert!(c("^1N4148$") > c("^1N4148[A-Z0-9-]*$"));
+        assert!(c("^ZZ904$") > c("^(ZZ901|ZZ902|ZZ903|ZZ904|ZZ905)$"));
+        assert!(c("^BC847$") > c("^(BC846|BC847|BC848)$"));
+        assert!(c("^1N4148$") > c("^1N4148(W)?$"));
+        assert!(c("^ABC$") > c("^ABC(D|E)?$"));
+        assert!(c("^ABC$") > c("^AB.$"));
     }
 
     #[test]
-    fn anchored_exact_outranks_unanchored_prefix() {
-        // ^INA186$ vs (?i)^INA186; the anchored exact is more constrained.
-        assert!(pattern_constrainedness("^INA186$") > pattern_constrainedness("(?i)^INA186"));
-    }
-
-    #[test]
-    fn alternation_scores_its_loosest_branch() {
-        // ^BAT5[0-9]$|^BAT43$ is only as specific as its looser arm.
-        let alt = pattern_constrainedness("(?i)^BAT5[0-9]$|^BAT43$");
-        assert_eq!(alt, pattern_constrainedness("^BAT5[0-9]$"));
-        assert!(pattern_constrainedness("(?i)^BAT54$") > alt);
-    }
-
-    #[test]
-    fn inline_flags_and_groups_score_nothing() {
-        assert_eq!(
-            pattern_constrainedness("(?i)AB"),
-            pattern_constrainedness("AB")
-        );
-        assert_eq!(
-            pattern_constrainedness("(AB)"),
-            pattern_constrainedness("AB")
-        );
-    }
-
-    #[test]
-    fn optional_quantifier_lowers_specificity_below_the_exact_override() {
-        // R32: an optional-quantified token (`[A-Z0-9-]*`, `a?`) matches zero
-        // characters and constrains nothing, so it must NOT inflate the score.
-        // If the class scored +1 and the `*` retracted nothing, the family
-        // pattern would outscore the exact `^1N4148$` override it carves out of,
-        // win the same-layer regex tie-break, and silently bind the generic
-        // params. The exact literal wins deterministically.
-        assert!(
-            pattern_constrainedness("^1N4148$") > pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
-            "the exact override must out-score the optional-tail family"
-        );
-        // An optional region is strictly looser than the same required region.
-        assert!(
-            pattern_constrainedness("^1N4148[A-Z0-9-]$")
-                > pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
-            "a required class char out-scores the same class made optional"
-        );
-        // `+` requires at least one occurrence, so it still constrains, a `+`
-        // family is not docked below its `*` sibling to nothing.
-        assert!(
-            pattern_constrainedness("^1N4148[A-Z0-9-]+$")
-                > pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
-            "`+` (one-or-more) constrains more than `*` (zero-or-more)"
-        );
-        // Wildcards still score nothing.
-        assert!(pattern_constrainedness("^ABC$") > pattern_constrainedness("^AB.$"));
-    }
-
-    #[test]
-    fn grouped_alternation_does_not_defeat_the_exact_override() {
-        // R42: an alternation nested inside a group `(A|B|C)` was never split, so
-        // each internal `|` and every arm's literals were summed, inflating a
-        // grouped-alternation FAMILY far above the exact override it carves out of,
-        // so the broad family won the same-layer regex tie-break and bound the
-        // wrong params. The group is now scored as its loosest arm, docked one unit
-        // (it matches a superset of any single arm), so the exact override wins.
-        assert!(
-            pattern_constrainedness("^ZZ904$")
-                > pattern_constrainedness("^(ZZ901|ZZ902|ZZ903|ZZ904|ZZ905)$"),
-            "the exact override must out-score the grouped-alternation family"
-        );
-        // The gross inflation is gone: the family no longer exceeds the exact.
-        assert!(
-            pattern_constrainedness("^(BC846|BC847|BC848)$") < pattern_constrainedness("^BC847$"),
-            "a grouped family must not out-score the exact arm it carves out of"
-        );
-        // A single-branch group is NOT an alternation and is not docked.
-        assert_eq!(
-            pattern_constrainedness("(AB)"),
-            pattern_constrainedness("AB")
-        );
-        // A top-level alternation is still scored as its loosest arm (no group).
-        assert_eq!(
-            pattern_constrainedness("^AB$|^ABCD$"),
-            pattern_constrainedness("^AB$")
-        );
-    }
-
-    #[test]
-    fn optional_group_does_not_defeat_the_exact_override() {
-        // R44: a quantified single-branch group `(W)?` matches zero chars, so the
-        // `?` must retract the WHOLE group. Before, the group added 2 and the `?`
-        // docked only 1, so `^1N4148(W)?$` (15) out-scored the exact `^1N4148$` (14)
-        // override it carves out of; the inversion regex_specificity prevents.
-        assert!(
-            pattern_constrainedness("^1N4148$") > pattern_constrainedness("^1N4148(W)?$"),
-            "the exact override must out-score the optional-group family"
-        );
-        // A REQUIRED group still counts (no quantifier): `(W)` == the bare literal.
-        assert_eq!(
-            pattern_constrainedness("^1N4148W$"),
-            pattern_constrainedness("^1N4148(W)$")
-        );
-        // An optional grouped ALTERNATION is also fully retracted by the `?`.
-        assert!(pattern_constrainedness("^ABC$") > pattern_constrainedness("^ABC(D|E)?$"));
+    fn quantifiers_alternations_and_groups_score_by_what_they_constrain() {
+        assert!(c("^1N4148[A-Z0-9-]$") > c("^1N4148[A-Z0-9-]*$"));
+        assert!(c("^1N4148[A-Z0-9-]+$") > c("^1N4148[A-Z0-9-]*$"));
+        let alt = c("(?i)^BAT5[0-9]$|^BAT43$");
+        assert_eq!(alt, c("^BAT5[0-9]$"));
+        assert!(c("(?i)^BAT54$") > alt);
+        assert_eq!(c("^AB$|^ABCD$"), c("^AB$"));
+        assert_eq!(c("(?i)AB"), c("AB"));
+        assert_eq!(c("(AB)"), c("AB"));
+        assert_eq!(c("^1N4148W$"), c("^1N4148(W)$"));
     }
 }

@@ -235,6 +235,14 @@ enum Command {
     #[command(verbatim_doc_comment)]
     Models(ModelsArgs),
 
+    /// Watch a board, `.board`, or hauksbee-ci spec and re-run the right check
+    /// on every file change. Ctrl-C exits with the last run's code.
+    ///
+    /// Example:
+    ///   hauksbee watch my_board.kicad_pcb --plain
+    #[command(verbatim_doc_comment)]
+    Watch(WatchArgs),
+
     /// Install an external co-sim dependency.
     ///
     /// `install esp-qemu` downloads Espressif's official prebuilt QEMU fork
@@ -271,6 +279,19 @@ enum InstallCommand {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+}
+
+#[derive(Parser)]
+struct WatchArgs {
+    /// Board, `.board`, or hauksbee-ci spec (`.toml`) to watch.
+    #[arg(value_name = "TARGET")]
+    target: PathBuf,
+    /// Stream plain-language reports (default: the expert report).
+    #[arg(long, visible_alias = "explain")]
+    plain: bool,
+    /// Run the check once and exit.
+    #[arg(long)]
+    once: bool,
 }
 
 #[derive(Parser)]
@@ -1540,6 +1561,9 @@ fn main() -> anyhow::Result<()> {
                 args.api_key_env,
             ),
         },
+        Command::Watch(args) => {
+            hauksbee_engine::commands::watch::run(args.target, args.plain, args.once)
+        }
         Command::Install(args) => match args.command {
             InstallCommand::EspQemu { yes } => hauksbee_engine::commands::install::esp_qemu(yes),
             InstallCommand::Renode { yes } => hauksbee_engine::commands::install::renode(yes),

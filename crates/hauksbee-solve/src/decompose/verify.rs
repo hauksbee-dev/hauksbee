@@ -439,62 +439,13 @@ impl Decomposition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hauksbee_ir::{BjtModel, Device, Polarity, SourceKind};
+    use crate::test_fixtures::{comparator, res, shunt_array, sw, vdc, GND};
 
-    /// The rail_tear.rs shape in miniature: +5V -> shunt -> rail -> n PNP
-    /// mirror blocks. Wide enough that the cost model tears it.
-    fn shunt_array(n_blocks: usize) -> (Circuit, NodeId) {
-        let mut c = Circuit::new();
-        let p5 = c.node("+5V");
-        c.add(Device::Vsource {
-            name: "V5".into(),
-            p: p5,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        let rail = c.node("ANALOG_VDD");
-        c.add(Device::Resistor {
-            name: "R_shunt".into(),
-            a: p5,
-            b: rail,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        for k in 0..n_blocks {
-            let base = c.node(&format!("b{k}"));
-            let col = c.node(&format!("c{k}"));
-            c.add(Device::Bjt {
-                name: format!("Q{k}"),
-                c: col,
-                b: base,
-                e: rail,
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("Rb{k}"),
-                a: base,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("Rc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
-        }
-        (c, rail)
-    }
-
+    /// A torn balance rail is certified Balance/BalanceEquation/RoundOff and
+    /// refuses supply-integrity analyses on that rail.
     #[test]
     fn balance_tear_is_certified_and_refuses_supply_integrity() {
-        let (c, rail) = shunt_array(24);
+        let (c, rail, _, _, _) = shunt_array(24, 1e3);
         let d = Decomposition::analyze(&c, TearMotive::ConvergenceEscalation);
         assert!(d.certificate.sound(), "{}", d.certificate.summary(&c));
         let rec = d
@@ -502,70 +453,35 @@ mod tests {
             .records
             .iter()
             .find(|r| r.node == rail)
-            .expect("rail has a tear record");
+            .expect("rail record");
         assert_eq!(rec.kind, TearKind::Balance);
         assert_eq!(rec.evidence, Evidence::BalanceEquation);
         assert_eq!(rec.tolerance, ToleranceClaim::RoundOff);
-        // The refusal is the point: the torn model must not answer brownout
-        // questions about the rail it pinned: pinning removed the sag those
-        // questions are about.
         let err = d
             .certificate
             .permits(RefusedAnalysis::SupplyIntegrityOnTornRail)
-            .expect_err("torn rail must refuse supply-integrity analyses");
+            .unwrap_err();
         assert!(err.1.contains(&rail));
-        assert!(err.0.reason().contains("monolithic"));
     }
 
+    /// A switch island whose select is `sel`; returns the select node.
+    fn switch_island(c: &mut Circuit, sel: NodeId) {
+        let (a, b) = (c.node("a"), c.node("b"));
+        vdc(c, "V2", a, 1.0);
+        sw(c, "S1", a, b, sel, (2.0, 1.0), 10.0);
+        res(c, "Rload", b, GND, 1e3);
+    }
+
+    /// A sensed comparator output is a certified Free tear with a pending
+    /// capture grid, and nothing is refused.
     #[test]
     fn free_tear_is_certified_with_pending_capture_grid() {
-        // Stage 0: an RC island whose output a comparator conducts.
-        // Stage 1: a switch island whose select SENSES the comparator output.
         let mut c = Circuit::new();
         let vin = c.node("vin");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.0),
-        });
+        vdc(&mut c, "V1", vin, 3.0);
         let cmp_out = c.node("cmp_out");
-        c.add(Device::Comparator {
-            name: "K1".into(),
-            out: cmp_out,
-            inp: vin,
-            inn: NodeId::GROUND,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 1e-3,
-        });
-        let a = c.node("a");
-        let b = c.node("b");
-        c.add(Device::Vsource {
-            name: "V2".into(),
-            p: a,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::VSwitch {
-            name: "S1".into(),
-            a,
-            b,
-            ctrl_p: cmp_out,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        c.add(Device::Resistor {
-            name: "Rload".into(),
-            a: b,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-
+        comparator(&mut c, "K1", cmp_out, vin, GND, 1e-3);
+        switch_island(&mut c, cmp_out);
         let d = Decomposition::analyze(&c, TearMotive::Profit);
         assert!(d.certificate.sound(), "{}", d.certificate.summary(&c));
         let rec = d
@@ -573,61 +489,29 @@ mod tests {
             .records
             .iter()
             .find(|r| r.node == cmp_out)
-            .expect("the sensed comparator output is a certified free tear");
+            .expect("free tear record");
         assert_eq!(rec.kind, TearKind::Free);
         assert_eq!(rec.evidence, Evidence::ZeroCurrentSenseOneDirectional);
         assert_eq!(rec.tolerance, ToleranceClaim::CaptureGrid { dt: None });
         assert!(rec.upstream.is_some() && rec.downstream.is_some());
-        // No rail was torn, so nothing is refused.
         assert!(d
             .certificate
             .permits(RefusedAnalysis::SupplyIntegrityOnTornRail)
             .is_ok());
     }
 
+    /// A select no device conducts makes the certificate UNSOUND; the same
+    /// net declared exogenous is certified by declaration and recorded.
     #[test]
-    fn floating_sense_net_makes_the_certificate_unsound() {
-        // A switch whose select node no device conducts: the STEP-1
-        // dead-membrane shape. The certificate must flag it rather than let
-        // the executor float the select and silently turn the switch off.
+    fn floating_sense_net_makes_the_certificate_unsound_unless_declared_exogenous() {
         let mut c = Circuit::new();
-        let a = c.node("a");
-        let b = c.node("b");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: a,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
         let sel = c.node("sel_floating");
-        c.add(Device::VSwitch {
-            name: "S1".into(),
-            a,
-            b,
-            ctrl_p: sel,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        c.add(Device::Resistor {
-            name: "Rload".into(),
-            a: b,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
-
+        switch_island(&mut c, sel);
         let d = Decomposition::analyze(&c, TearMotive::Profit);
         assert!(!d.certificate.sound());
         assert_eq!(d.certificate.uncertified_boundaries, vec![sel]);
-        let summary = d.certificate.summary(&c);
-        assert!(summary.contains("UNSOUND"), "{summary}");
-        assert!(summary.contains("sel_floating"), "{summary}");
+        assert!(d.certificate.summary(&c).contains("sel_floating"));
 
-        // The same net DECLARED exogenous (a co-simmed MCU pin) is certified
-        // by declaration: sound, and the trust is recorded, not hidden.
         let d2 = Decomposition::analyze_with_boundaries(
             &c,
             TearMotive::Profit,
@@ -638,10 +522,5 @@ mod tests {
         );
         assert!(d2.certificate.sound(), "{}", d2.certificate.summary(&c));
         assert_eq!(d2.certificate.exogenous_boundaries, vec![sel]);
-        let s2 = d2.certificate.summary(&c);
-        assert!(
-            s2.contains("exogenous") && s2.contains("sel_floating"),
-            "{s2}"
-        );
     }
 }

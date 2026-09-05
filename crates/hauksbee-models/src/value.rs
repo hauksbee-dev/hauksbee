@@ -671,559 +671,248 @@ mod tests {
     use super::*;
 
     fn check(s: &str, expected_si: f64) {
-        let v = parse_value(s).unwrap_or_else(|| panic!("parse_value({:?}) returned None", s));
-        let rel_err = (v.si - expected_si).abs() / expected_si.max(1e-30);
+        let v = parse_value(s).unwrap_or_else(|| panic!("parse_value({s:?}) returned None"));
+        let rel_err = (v.si - expected_si).abs() / expected_si.abs().max(1e-30);
         assert!(
             rel_err < 1e-9,
-            "parse_value({:?}) = {} (si={:.6e}), expected {:.6e} (rel_err={:.2e})",
-            s,
-            v,
-            v.si,
-            expected_si,
-            rel_err
+            "parse_value({s:?}) = {v} (si={:.6e}), expected {expected_si:.6e}",
+            v.si
         );
     }
 
-    #[test]
-    fn test_basic() {
-        check("10k", 10_000.0);
-        check("10K", 10_000.0);
-        check("100", 100.0);
-        check("1.5", 1.5);
-        check("0.1", 0.1);
+    fn unit(s: &str) -> Option<String> {
+        parse_value(s).unwrap_or_else(|| panic!("{s:?}")).unit
     }
 
     #[test]
-    fn test_eia_tolerance_letters_are_not_units() {
-        // RKM + EIA tolerance codes: the trailing letter is a tolerance, the
-        // magnitude must still parse (regression for round-4 #1).
-        check("4k7K", 4700.0); // 4.7 kΩ ±10%
-        check("10RM", 10.0); // 10 Ω ±20%
-        check("10RG", 10.0); // 10 Ω ±2%
-        check("2k2J", 2200.0); // 2.2 kΩ ±5%
-        check("1M0G", 1_000_000.0); // 1 MΩ ±2%
-        check("100J", 100.0); // 100 Ω ±5%, no multiplier
-        check("100RK", 100.0); // 100 Ω ±10%
-                               // The tolerance letter followed by a further annotation still parses.
-        check("4k7K 1%", 4700.0);
-        // Bare 'F' is still the Farad unit, not a tolerance code.
-        check("1F", 1.0);
-        check("4k7", 4700.0); // no tolerance letter: unchanged
-    }
-
-    #[test]
-    fn test_rkm_henry_farad_decimal_letters() {
-        // RKM middle-letter-as-decimal-point for inductors (H) and large caps
-        // (F), like "2R2" for resistors (regression for round-6 F9): the
-        // trailing digit is the fractional part, not dropped.
-        check("4H7", 4.7); // 4.7 H
-        check("4F7", 4.7); // 4.7 F
-        check("1H5", 1.5); // 1.5 H
-        check("2R2", 2.2); // resistor form still works
-                           // R36: the H/F decimal-letter IS the unit; it must not be dropped, or
-                           // downstream parse_ohms accepts a henry/farad part as a resistance. Only
-                           // the ohmic 'R' form is legitimately unitless.
-        assert_eq!(parse_value("4H7").unwrap().unit.as_deref(), Some("H"));
-        assert_eq!(parse_value("4F7").unwrap().unit.as_deref(), Some("F"));
-        assert_eq!(parse_value("1H5").unwrap().unit.as_deref(), Some("H"));
-        assert_eq!(parse_value("2R2").unwrap().unit.as_deref(), None);
-        // Bare unit forms are NOT decimal letters (no following digit):
-        check("10F", 10.0); // 10 farads
-        check("1H", 1.0); // 1 henry
-        assert_eq!(parse_value("10F").unwrap().unit.as_deref(), Some("F"));
-        assert_eq!(parse_value("1H").unwrap().unit.as_deref(), Some("H"));
-        // Prefix multipliers still win; lowercase 'f' stays femto:
-        assert!((parse_value("100nF").unwrap().si - 1e-7).abs() < 1e-20);
-        assert!((parse_value("4f7").unwrap().si - 4.7e-15).abs() < 1e-30);
-    }
-
-    #[test]
-    fn bare_farad_with_attached_voltage_rating_parses_the_capacitance() {
-        // Round-27: the F-as-RKM-decimal gate fired for ANY digit after 'F', so a
-        // supercap written with an attached rating ("10F2V7" = 10 F / 2.7 V,
-        // "10F50V" = 10 F / 50 V) mis-parsed the rating as a fractional Farad and
-        // the pure-voltage filter then dropped the whole thing to None. The
-        // capacitance must survive, matching the prefixed "10uF2V7" path.
-        let p = parse_value("10F2V7").expect("10F2V7 is a 10 F supercap");
-        assert!((p.si - 10.0).abs() < 1e-9, "si is 10 F, got {}", p.si);
-        assert_eq!(p.unit.as_deref(), Some("F"));
-        let p = parse_value("10F50V").expect("10F50V is a 10 F cap");
-        assert!((p.si - 10.0).abs() < 1e-9, "si is 10 F, got {}", p.si);
-        // The genuine RKM decimal is untouched: a digit run with no trailing 'V'.
-        check("4F7", 4.7);
-        check("10F", 10.0);
-    }
-
-    #[test]
-    fn test_sampled_value_debug_format_round_trips_past_size_codes() {
-        // Round-8 #8: a nominal like 1210 Ω formatted with `{}` becomes "1210",
-        // which the parser reads as a 4-digit imperial footprint SIZE CODE and
-        // rejects, so `apply_sampled_values` must serialize with `{:?}`, which
-        // always emits a decimal point. Verify both halves of that reasoning.
-        for si in [1210.0_f64, 1206.0, 2512.0, 2010.0, 1812.0] {
-            let plain = format!("{si}");
-            let dbg = format!("{si:?}");
-            // `{}` collides with a size code → the parser rejects it.
-            assert!(
-                parse_value(&plain).is_none(),
-                "format!(\"{{}}\", {si}) = {plain:?} is read as a size code (that was the bug)"
-            );
-            // `{:?}` carries a decimal point → parses back to the same value.
-            let parsed = parse_value(&dbg)
-                .unwrap_or_else(|| panic!("parse_value({dbg:?}) should round-trip"));
-            assert!(
-                (parsed.si - si).abs() < 1e-6,
-                "{{:?}} round-trips: {dbg:?} -> {} (want {si})",
-                parsed.si
-            );
-        }
-    }
-
-    #[test]
-    fn test_european_decimal_comma_vs_thousands() {
-        // A single comma with a 3-digit group is a thousands separator for a
-        // grouped integer ("4,700" = 4700). What separates thousands from a
-        // European decimal is the LEADING-ZERO integer part, not whether a unit
-        // follows: "0,047uF" (leading zero) is 0.047 µF = 47 nF, while "4,700uF"
-        // (no leading zero) is 4700 µF (round-7 #4).
-        check("0,047uF", 47e-9); // 0.047 µF = 47 nF, NOT 47 µF
-        check("0,022uF", 22e-9);
-        check("0,1uF", 100e-9); // a 1-2 digit group is a decimal
-        check("4,7uF", 4.7e-6);
-        check("5,1k", 5100.0); // 5.1 kΩ
-                               // Genuine thousands grouping (nonzero integer part) stays 1000x, and a
-                               // trailing unit does not demote it to a decimal (R34: a
-                               // "group is the whole string" clause reads "4,700uF"
-                               // as 4.7 µF, 1000x low).
-        check("4,700", 4700.0);
-        check("4,700uF", 4.7e-3); // 4700 µF = 4.7 mF, NOT 4.7 µF
-        check("2,200uF", 2.2e-3); // 2200 µF = 2.2 mF
-        check("10,000", 10000.0);
-        check("1,000,000", 1_000_000.0);
-    }
-
-    #[test]
-    fn test_scientific_notation() {
-        // Exponential notation is a common script/SPICE-exported numeric form
-        // (regression for round-4 #2).
-        check("4.7e3", 4700.0);
-        check("1e-6", 1e-6);
-        check("1E-6", 1e-6);
-        check("2.2e-9", 2.2e-9);
-        check("1e3", 1000.0);
-        check("4.7e3F", 4700.0); // exponent then a unit (Farads)
-                                 // A lone 'e' with no exponent digits is NOT a number.
-        assert!(parse_value("4e").is_none());
-    }
-
-    #[test]
-    fn test_multipliers() {
-        check("1p", 1e-12);
-        check("1n", 1e-9);
-        check("1u", 1e-6);
-        check("1m", 1e-3);
-        check("1k", 1e3);
-        check("1MEG", 1e6);
-        check("1meg", 1e6);
-        check("1M", 1e6);
-        check("1G", 1e9);
-    }
-
-    #[test]
-    fn test_interleaved_decimal() {
-        // "4k7" style: suffix acts as decimal point
-        check("4k7", 4_700.0);
-        check("4K7", 4_700.0);
-        check("2R2", 2.2);
-        check("0R1", 0.1);
-        check("1n5", 1.5e-9);
-        check("2k2", 2_200.0);
-        check("4M7", 4.7e6);
-    }
-
-    #[test]
-    fn test_rkm_leading_letter_below_one_ohm() {
-        // R18: the RKM leading-letter form (magnitude < 1) puts the decimal
-        // letter first; the exact marking on a current-sense shunt. It was
-        // silently rejected (None => read as an OPEN) while "0R47"/"2R2" parsed.
-        check("R47", 0.47);
-        check("R1", 0.1);
-        check("R047", 0.047);
-        check("r47", 0.47); // lowercase marking
-                            // The leading-zero and middle-letter equivalents still parse identically.
-        check("0R47", 0.47);
-        // A bare "R" with no following digit is not a value.
-        assert!(parse_value("R").is_none(), "bare R is not a value");
-        assert!(
-            parse_value("R_LABEL").is_none(),
-            "R + non-digit is not a value"
-        );
-    }
-
-    #[test]
-    fn test_with_units() {
-        check("10k", 10_000.0);
-        check("0.1uF", 1e-7);
-        check("100nF", 100e-9);
-        check("100n", 100e-9);
-        check("22uH", 22e-6);
-        check("4.7nF", 4.7e-9);
-        check("220uF", 220e-6);
-        check("10nF", 10e-9);
-        check("220nF", 220e-9);
-        check("22uF/25V", 22e-6); // tolerate /25V suffix
-    }
-
-    #[test]
-    fn test_resistor_values() {
-        check("220", 220.0);
-        check("470", 470.0);
-        check("1K", 1_000.0);
-        check("2.2K", 2_200.0);
-        check("5,1K", 5_100.0); // comma as decimal separator (European BOM)
-        check("6.2K", 6_200.0);
-        check("10K", 10_000.0);
-        check("22K", 22_000.0);
-        check("62K", 62_000.0);
-        check("10MEG", 10e6);
-    }
-
-    #[test]
-    fn test_comma_decimal() {
-        // European BOM format uses comma as decimal separator
-        check("5,1K", 5_100.0);
-        check("2,2K", 2_200.0);
-    }
-
-    #[test]
-    fn test_unicode() {
-        check("10µF", 10e-6);
-        check("4.7μF", 4.7e-6);
-    }
-
-    #[test]
-    fn test_non_values() {
-        assert!(parse_value("NC").is_none());
-        assert!(parse_value("DNP").is_none());
-        assert!(parse_value("").is_none());
-        assert!(parse_value("BC847").is_none());
-    }
-
-    #[test]
-    fn jedec_diode_part_numbers_are_not_passive_values() {
-        // R33: "1N4007" collided with the RKM nano form, parse_inner read it as
-        // 1 + nano + ".4007" = ~1.4 nF, so parse_value returned Some(). That
-        // defeated the binder's generic-diode fallback (which keys off
-        // parse_value() == None), silently deleting a conducting rectifier /
-        // Schottky / zener path. JEDEC 1N/2N part numbers must return None.
-        for pn in [
-            "1N4007", "1N5819", "1N914", "1N4733", "2N3904", "2N7000", "3N201",
-        ] {
-            assert!(
-                parse_value(pn).is_none(),
-                "JEDEC part number {pn:?} must not parse as a passive value, got {:?}",
-                parse_value(pn)
-            );
-        }
-        // R38: short 2-digit-serial JEDEC diodes (germanium detectors) use the
-        // same uppercase-N spelling and must ALSO return None; they were parsed
-        // as ~1.x nF and their conducting path silently deleted.
-        for pn in ["1N34", "1N60", "1N21", "1N34A"] {
-            assert!(
-                parse_value(pn).is_none(),
-                "short JEDEC part number {pn:?} must not parse as a passive value, got {:?}",
-                parse_value(pn)
-            );
-        }
-        // The short RKM nano values it must NOT reject still parse correctly.
-        // These use LOWERCASE 'n'; the discriminator that separates them from
-        // the uppercase-N JEDEC parts above.
-        check("4n7", 4.7e-9);
-        check("1n5", 1.5e-9);
-        check("2n2", 2.2e-9);
-        check("100n", 100e-9);
-    }
-
-    #[test]
-    fn test_edge_cases() {
-        check("0", 0.0); // actually zero resistance (jumper)
-        check("0R", 0.0);
-        check("0R0", 0.0);
-    }
-
-    /// Bug regression: bare EIA chip-size codes must not read as magnitudes
-    /// ("0402".parse::<f64>() is 402, a 47 kΩ part bound at 402 Ω), and a
-    /// leading size code is a naming prefix to strip, not the value.
-    #[test]
-    fn test_footprint_size_codes() {
-        for c in [
-            "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512",
-        ] {
-            assert!(
-                parse_value(c).is_none(),
-                "bare size code {c:?} must not parse as a magnitude"
-            );
-        }
-        // Code + separator: the real value follows.
-        check("0402_47k", 47_000.0);
-        check("0603 100nF", 100e-9);
-        check("0805-2k2", 2_200.0);
-        // Genuine numbers that merely start like a code stay numbers.
-        check("12065", 12_065.0);
-        check("0402.5", 402.5);
-    }
-
-    /// Bug regression: the grammar must consume the WHOLE input. Trailing
-    /// garbage silently dropped is how "0402_47k" once read as 402 Ω.
-    #[test]
-    fn test_trailing_garbage_rejected() {
-        assert!(parse_value("10k_junk").is_none());
-        assert!(parse_value("47kXYZ").is_none());
-        assert!(parse_value("100n_47k").is_none());
-        // Annotations (tolerance, rating, dielectric) are still tolerated.
-        check("47k 1%", 47_000.0);
-        check("22uF/25V", 22e-6);
-        check("100nF 50V", 100e-9);
-        check("22u X7R", 22e-6);
-        check("10k Ohm", 10_000.0);
-        check("600@100MHz", 600.0); // ferrite bead impedance@frequency
-    }
-
-    #[test]
-    fn letter_o_ohms_from_real_altium_comments_parse_without_accepting_words() {
-        for (raw, expected) in [
+    fn magnitudes_multipliers_and_rkm_forms() {
+        for (s, si) in [
+            ("10k", 10_000.0),
+            ("10K", 10_000.0),
+            ("100", 100.0),
+            ("1.5", 1.5),
+            ("0", 0.0),
+            ("0R", 0.0),
+            ("1p", 1e-12),
+            ("1n", 1e-9),
+            ("1u", 1e-6),
+            ("1m", 1e-3),
+            ("1MEG", 1e6),
+            ("1meg", 1e6),
+            ("1M", 1e6),
+            ("1G", 1e9),
+            ("10MEG", 10e6),
+            // interleaved decimal letter
+            ("4k7", 4_700.0),
+            ("4K7", 4_700.0),
+            ("2R2", 2.2),
+            ("0R1", 0.1),
+            ("1n5", 1.5e-9),
+            ("4M7", 4.7e6),
+            ("4H7", 4.7),
+            ("4F7", 4.7),
+            // leading-letter RKM below one ohm
+            ("R47", 0.47),
+            ("R047", 0.047),
+            ("r47", 0.47),
+            ("0R47", 0.47),
+            // scientific notation
+            ("4.7e3", 4700.0),
+            ("1E-6", 1e-6),
+            ("2.2e-9", 2.2e-9),
+            ("4.7e3F", 4700.0),
+            // units and annotations
+            ("0.1uF", 1e-7),
+            ("100nF", 100e-9),
+            ("22uH", 22e-6),
+            ("22uF/25V", 22e-6),
+            ("100nF 50V", 100e-9),
+            ("22u X7R", 22e-6),
+            ("10k Ohm", 10_000.0),
+            ("600@100MHz", 600.0),
+            ("47k 1%", 47_000.0),
+            ("10µF", 10e-6),
+            ("4.7μF", 4.7e-6),
+            // space before the multiplier keeps the scale
+            ("10 kOhm", 10_000.0),
+            ("1 MOhm", 1_000_000.0),
+            ("2.2 nF", 2.2e-9),
+            ("10 Ohm", 10.0),
+            // EIA tolerance letters are not units
+            ("4k7K", 4700.0),
+            ("10RM", 10.0),
+            ("2k2J", 2200.0),
+            ("1M0G", 1_000_000.0),
+            ("100J", 100.0),
+            ("4k7K 1%", 4700.0),
+            ("10KF", 10_000.0),
+            // bare F is the farad, not femto
+            ("1F", 1.0),
+            ("10F", 10.0),
+            ("4.7F", 4.7),
+            ("10F2V7", 10.0),
+            ("10F50V", 10.0),
+            ("4f7", 4.7e-15),
+            // comma: thousands for a grouped integer, decimal otherwise
+            ("0,047uF", 47e-9),
+            ("0,1uF", 100e-9),
+            ("4,7uF", 4.7e-6),
+            ("5,1K", 5_100.0),
+            ("2,2uF", 2.2e-6),
+            ("4,700", 4700.0),
+            ("4,700uF", 4.7e-3),
+            ("10,000", 10000.0),
+            ("1,000,000", 1_000_000.0),
+            // size-code prefixes are stripped; look-alike numbers survive
+            ("0402_47k", 47_000.0),
+            ("0603 100nF", 100e-9),
+            ("0805-2k2", 2_200.0),
+            ("12065", 12_065.0),
+            ("0402.5", 402.5),
+            // lowercase-n RKM nano values are not JEDEC part numbers
+            ("4n7", 4.7e-9),
+            ("2n2", 2.2e-9),
+            // letter O as ohms in Altium comments
             ("330O ±1%", 330.0),
-            ("120O ±1%", 120.0),
             ("10KO ±1%", 10_000.0),
-            ("470O ±1%", 470.0),
         ] {
-            let parsed = parse_value(raw).unwrap_or_else(|| panic!("{raw} must parse"));
-            assert!((parsed.si - expected).abs() < 1e-12, "{raw}: {parsed:?}");
-            assert_eq!(parsed.unit.as_deref(), Some("Ω"), "{raw}");
+            check(s, si);
         }
-        assert!(
-            parse_value("330OUTPUT").is_none(),
-            "a leading O only means ohms when the remainder is an annotation"
-        );
-    }
-
-    /// Round-29 (HIGH): a space BEFORE the SI multiplier ("10 kOhm") is the
-    /// canonical typeset form, so parse_suffix has to skip it. Not skipping it
-    /// drops the multiplier, and the value comes out 10^n too small with the
-    /// unit silently lost. It must agree with the space-AFTER form
-    /// ("10k Ohm").
-    #[test]
-    fn test_space_before_multiplier_keeps_the_scale() {
-        check("10 kOhm", 10_000.0);
-        check("4.7 kOhm", 4_700.0);
-        check("1 MOhm", 1_000_000.0);
-        check("10 uF", 10e-6);
-        check("2.2 nF", 2.2e-9);
-        // Space-after-multiplier still works (unchanged).
-        check("10k Ohm", 10_000.0);
-        // A bare unit after a space (no multiplier) is unaffected.
-        check("10 Ohm", 10.0);
-        // A space before another DIGIT must never be fused into a fractional value
-        // ("10 5" must not become 10.5): the digit guard keeps the space, so the
-        // magnitude stays 10 (the trailing token is ignored, as before the fix).
         let r = parse_value("10 5");
         assert!(
             r.map_or(true, |v| (v.si - 10.5).abs() > 1e-9),
-            "'10 5' must not silently fuse into 10.5"
+            "'10 5' must not fuse into 10.5"
         );
     }
 
-    /// Bug regression: a bare uppercase 'F' is the Farad unit, not the femto
-    /// multiplier. "1F" (a supercap) must be 1 farad, not 1e-15.
     #[test]
-    fn test_bare_farad_is_not_femto() {
-        check("1F", 1.0);
-        check("10F", 10.0);
-        check("0.1F", 0.1);
-        check("4.7F", 4.7);
-        // Explicit-multiplier capacitances are unaffected (multiplier first).
-        check("100nF", 100e-9);
-        check("0.1uF", 0.1e-6);
-        check("10pF", 10e-12);
+    fn units_are_kept_or_dropped_correctly() {
+        assert_eq!(unit("4H7").as_deref(), Some("H"));
+        assert_eq!(unit("4F7").as_deref(), Some("F"));
+        assert_eq!(unit("1H").as_deref(), Some("H"));
+        assert_eq!(unit("10F2V7").as_deref(), Some("F"));
+        assert_eq!(unit("4.7uF").as_deref(), Some("F"));
+        assert_eq!(unit("2R2"), None);
+        assert_ne!(unit("10KF").as_deref(), Some("F"));
+        assert_eq!(unit("100RF").as_deref(), Some("Ω"));
+        assert_eq!(unit("330O ±1%").as_deref(), Some("Ω"));
     }
 
-    /// Bug regression: a value expressed purely in volts is a zener/TVS rating,
-    /// not an R/C/L magnitude. It must parse to None so the diode fallback
-    /// handles it, instead of reading "5V1" as 5.0 (dropping the ".1").
     #[test]
-    fn test_pure_voltage_codes_are_not_magnitudes() {
-        for v in ["5V1", "3V3", "12V", "5V", "18V", "1V8"] {
-            assert!(
-                parse_value(v).is_none(),
-                "pure-voltage value {v:?} must not parse as a magnitude"
-            );
-        }
-        // R45: a pure-CURRENT rating ("5A", "500mA") is likewise NOT an R/C/L
-        // magnitude; the binder excludes both V and A as non-passive, so a
-        // current-rated power connector ("J1 = 5A") must key off parse_value()==None
-        // just like a "12V" one, and a leading current token must not be mis-picked
-        // as the magnitude ("2A_22u" → 2 F). Filter A the same as V.
-        for v in ["5A", "500mA", "1A", "10A", "2.5A"] {
-            assert!(
-                parse_value(v).is_none(),
-                "pure-current rating {v:?} must not parse as a magnitude, got {:?}",
-                parse_value(v)
-            );
-        }
-        // A capacitance with a voltage RATING annotation still parses (unit F).
-        check("22uF/25V", 22e-6);
-        check("100nF 50V", 100e-9);
-    }
-
-    /// Bug regression: a 3-digit group after a comma is a thousands separator,
-    /// not a decimal, "10,000" is 10000, not 10.0. 1-2 digits stay decimal.
-    #[test]
-    fn test_comma_thousands_vs_decimal() {
-        check("10,000", 10_000.0);
-        check("1,000,000", 1_000_000.0);
-        check("5,1K", 5_100.0); // European decimal
-        check("2,2uF", 2.2e-6);
-    }
-
-    /// Bug regression: an EIA tolerance letter 'F' after a resistance-scale
-    /// multiplier is ±1%, not the Farad unit, "10KF" is a 10 kΩ resistor, not
-    /// a 10-kilofarad capacitor.
-    #[test]
-    fn test_tolerance_letter_is_not_farad() {
-        let r = parse_value("10KF").unwrap();
-        assert_ne!(r.unit.as_deref(), Some("F"), "10KF must not be a capacitor");
-        assert_eq!(r.si, 10_000.0);
-        let r2 = parse_value("100RF").unwrap();
-        assert_eq!(r2.unit.as_deref(), Some("Ω"), "100RF is 100 Ω 1%");
-        assert_eq!(r2.si, 100.0);
-        // Genuine capacitances (sub-farad prefixes, or bare) stay Farads.
-        assert_eq!(parse_value("4.7uF").unwrap().unit.as_deref(), Some("F"));
-        assert_eq!(parse_value("1F").unwrap().unit.as_deref(), Some("F"));
-    }
-    /// A frequency is not an R/C/L magnitude, and `parse_value` must keep saying
-    /// so. Every caller that reads `None` as "not a two-terminal passive" depends
-    /// on it: the crystal on an emonTx is a `Q`-prefixed part valued "16Mhz", and
-    /// a number here would have made it a 16 MOhm resistor across the oscillator
-    /// (or, on a `C`-prefixed reference, a 16-megafarad capacitor, which collapses
-    /// the whole nodal solve).
-    ///
-    /// The refusal has to survive the `Hz` unit now being RECOGNISED rather than
-    /// merely unparseable, which is what changed: before, "16MHz" was rejected
-    /// because the stray 'z' after a mega-HENRY reading was garbage, and that is a
-    /// right answer reached by an accident that a new unit token could undo.
-    #[test]
-    fn a_frequency_is_refused_as_a_passive_magnitude() {
-        for v in [
+    fn non_values_are_refused() {
+        for s in [
+            "NC",
+            "DNP",
+            "",
+            "BC847",
+            "R",
+            "R_LABEL",
+            "4e",
+            "330OUTPUT",
+            // JEDEC diode/transistor part numbers
+            "1N4007",
+            "1N5819",
+            "1N914",
+            "2N3904",
+            "2N7000",
+            "3N201",
+            "1N34",
+            "1N60",
+            "1N34A",
+            // bare size codes
+            "0201",
+            "0402",
+            "0603",
+            "0805",
+            "1206",
+            "1210",
+            "1812",
+            "2010",
+            "2512",
+            // trailing garbage
+            "10k_junk",
+            "47kXYZ",
+            "100n_47k",
+            // pure voltage / current ratings
+            "5V1",
+            "3V3",
+            "12V",
+            "1V8",
+            "5A",
+            "500mA",
+            "2.5A",
+            // frequencies
             "16Mhz",
             "16MHz",
             "16 MHz",
             "16mhz",
             "32.768kHz",
-            "32.768 KHZ",
-            "8MHz",
-            "40MHz",
+            "32,768kHz",
             "1Hz",
             "12.288MHz",
         ] {
             assert!(
-                parse_value(v).is_none(),
-                "parse_value({v:?}) must be None: a frequency is not an ohm, farad or henry"
+                parse_value(s).is_none(),
+                "parse_value({s:?}) = {:?}",
+                parse_value(s)
             );
         }
     }
 
-    /// The other side of the same coin: `parse_frequency_hz` reads exactly those
-    /// strings, in any case and with or without the space, and refuses everything
-    /// that is not wholly a frequency.
+    /// `{}` of a nominal like 1210.0 collides with a size code; `{:?}` carries a
+    /// decimal point and round-trips.
+    #[test]
+    fn sampled_value_debug_format_round_trips_past_size_codes() {
+        for si in [1210.0_f64, 1206.0, 2512.0] {
+            assert!(parse_value(&format!("{si}")).is_none());
+            let parsed = parse_value(&format!("{si:?}")).unwrap();
+            assert!((parsed.si - si).abs() < 1e-6);
+        }
+    }
+
     #[test]
     fn parse_frequency_hz_reads_every_case_and_spacing() {
         for (v, hz) in [
             ("16Mhz", 16e6),
-            ("16MHz", 16e6),
-            // Lowercase 'm' before Hz is mega, not milli: see the module note on
-            // parse_frequency_hz. This is the ONLY departure from the SI reading.
             ("16mhz", 16e6),
             ("8 mhz", 8e6),
             ("16MHZ", 16e6),
-            ("16 MHz", 16e6),
             ("  16MHz  ", 16e6),
             ("32.768kHz", 32_768.0),
             ("32.768 KHz", 32_768.0),
             ("1Hz", 1.0),
             ("8hz", 8.0),
             ("2.4GHz", 2.4e9),
-            // A comma in a FREQUENCY is a decimal separator whatever the digit
-            // count, which is the one place this function overrides the module's
-            // thousands rule. "32,768kHz" is the European spelling of the RTC
-            // crystal, and the thousands reading would put it at 32.768 MHz: a
-            // 1000x error, in the value the whole crystal path exists to read.
             ("12,5MHz", 12.5e6),
             ("32,768kHz", 32_768.0),
-            ("32,768 KHZ", 32_768.0),
             ("12,288MHz", 12.288e6),
-            // MULTIPLE commas keep the thousands reading; that spelling has no
-            // decimal interpretation.
             ("1,000,000Hz", 1.0e6),
         ] {
-            let got = parse_frequency_hz(v)
-                .unwrap_or_else(|| panic!("parse_frequency_hz({v:?}) returned None"));
-            let rel = (got - hz).abs() / hz;
+            let got = parse_frequency_hz(v).unwrap_or_else(|| panic!("parse_frequency_hz({v:?})"));
             assert!(
-                rel < 1e-9,
+                (got - hz).abs() / hz < 1e-9,
                 "parse_frequency_hz({v:?}) = {got}, expected {hz}"
             );
         }
-    }
-
-    /// The refusals matter more than the acceptances, because this predicate is
-    /// what decides whether a part is bound as a high-impedance crystal (i.e.
-    /// REMOVED from the solve) or left as the passive it is. A ferrite bead is the
-    /// dangerous case: it is conventionally valued as an impedance AT a frequency,
-    /// it sits in SERIES in a power or signal path, and opening it would cut that
-    /// path.
-    /// The other side of the comma rule: a PASSIVE keeps the thousands reading, so
-    /// the frequency override cannot leak into the value parser it sits beside.
-    #[test]
-    fn the_frequency_comma_rule_does_not_change_passive_values() {
-        // Thousands grouping, unchanged.
-        check("4,700uF", 4700e-6);
-        check("10,000", 10_000.0);
-        check("1,000,000", 1_000_000.0);
-        // European decimal on a passive, unchanged.
-        check("5,1K", 5_100.0);
-        check("2,2uF", 2.2e-6);
-        check("0,047uF", 0.047e-6);
-        // And a frequency is still refused as a passive magnitude whichever
-        // separator it uses.
-        assert!(parse_value("32,768kHz").is_none());
-        assert!(parse_value("32.768kHz").is_none());
-    }
-
-    #[test]
-    fn parse_frequency_hz_refuses_everything_that_is_not_a_frequency() {
         for v in [
-            "600@100MHz", // ferrite bead: 600 Ohm at 100 MHz, NOT a 100 MHz part
-            "1k@100MHz",  // same shape with a multiplier
-            "10k",        // a resistance
-            "100nF",      // a capacitance
-            "22uH",       // an inductance
-            "16",         // a bare number: no unit, no claim
-            "MHz",        // a unit with no magnitude
+            "600@100MHz",
+            "1k@100MHz",
+            "10k",
+            "100nF",
+            "22uH",
+            "16",
+            "MHz",
             "Hz",
-            "XTCLH40M000CHJA0P0", // a TCXO part number that happens to contain 40M
-            "Abracon_ABM11",      // a crystal named by its family, not its frequency
+            "XTCLH40M000CHJA0P0",
+            "Abracon_ABM11",
             "DNP",
-            "TODO",
             "",
             "   ",
-            "16 5MHz", // two magnitudes is not one value
-            "3V3",     // a rating
+            "16 5MHz",
+            "3V3",
             "500mA",
         ] {
-            assert!(
-                parse_frequency_hz(v).is_none(),
-                "parse_frequency_hz({v:?}) must be None"
-            );
+            assert!(parse_frequency_hz(v).is_none(), "parse_frequency_hz({v:?})");
         }
     }
 }

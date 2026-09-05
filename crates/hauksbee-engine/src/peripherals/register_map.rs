@@ -1144,99 +1144,6 @@ const = [0x00]
 style = "i2c_pointer"
 "#;
 
-    /// Read the LM75 temperature register over a bus and return (msb, lsb).
-    fn read_temp_i2c(bus: &mut I2cBus) -> (u8, u8) {
-        bus.dispatch(I2cEvent::Start {
-            addr: 0x48,
-            read: false,
-        });
-        bus.dispatch(I2cEvent::Write {
-            addr: 0x48,
-            data: 0x00,
-        });
-        bus.dispatch(I2cEvent::Start {
-            addr: 0x48,
-            read: true,
-        });
-        let msb = bus.dispatch(I2cEvent::Read { addr: 0x48 }).unwrap();
-        let lsb = bus.dispatch(I2cEvent::Read { addr: 0x48 }).unwrap();
-        bus.dispatch(I2cEvent::Stop { addr: 0x48 });
-        (msb, lsb)
-    }
-
-    /// PROOF: a declarative LM75 is byte-identical to the hand-coded `Lm75`
-    /// across a temperature sweep, through the real I2C bus dispatch path. The
-    /// bytes come from the generic interpreter reading the spec; it never
-    /// touches `Lm75`.
-    #[test]
-    fn declarative_lm75_is_byte_identical_to_handcoded() {
-        for &t in &[
-            -40.0, -10.0, -0.5, 0.0, 0.125, 12.5, 22.0, 25.0, 36.6, 80.0, 100.0, 124.875,
-        ] {
-            // Hand-coded reference.
-            let mut hand = I2cBus::new("I2C").with_slave(Box::new(Lm75::new(0x48, t)));
-            let hand_bytes = read_temp_i2c(&mut hand);
-
-            // Declarative interpreter (genuinely spec-driven).
-            let mut sensor = RegisterMapSensor::from_toml(LM75_SPEC).unwrap();
-            sensor.set_input("temperature_c", t);
-            let mut decl = I2cBus::new("I2C").with_slave(Box::new(sensor));
-            let decl_bytes = read_temp_i2c(&mut decl);
-
-            assert_eq!(
-                decl_bytes, hand_bytes,
-                "declarative LM75 bytes {decl_bytes:?} != hand-coded {hand_bytes:?} at {t} °C"
-            );
-        }
-    }
-
-    /// A spec-driven LM75 must report its modeled temperature through
-    /// `I2cSlave::temperature_mc` (the QEMU tmp105 push path), matching the
-    /// hand-coded `Lm75` and the value the firmware would decode. Before the fix
-    /// RegisterMapSensor fell through to the trait default `None`, so a co-sim on
-    /// QEMU read the emulated device's stale power-on default instead of the
-    /// modeled temperature.
-    #[test]
-    fn temperature_mc_reports_modeled_temperature() {
-        for &t in &[-40.0, -0.5, 0.0, 25.0, 36.6, 100.0] {
-            let mut sensor = RegisterMapSensor::from_toml(LM75_SPEC).unwrap();
-            sensor.set_input("temperature_c", t);
-            let hand = Lm75::new(0x48, t);
-            assert_eq!(
-                I2cSlave::temperature_mc(&sensor),
-                hand.temperature_mc(),
-                "spec-driven temperature_mc must match hand-coded Lm75 at {t} °C"
-            );
-            assert_eq!(
-                I2cSlave::temperature_mc(&sensor),
-                Some((t * 1000.0).round() as i32),
-                "temperature_mc must be the modeled °C in milli-degrees at {t} °C"
-            );
-        }
-    }
-
-    /// A RegisterMapSensor with no `q7.1_be` register is not a temperature
-    /// sensor and must stay `None`, QEMU must not push a bogus temperature into
-    /// a device that models something else.
-    #[test]
-    fn temperature_mc_is_none_for_non_temperature_sensor() {
-        const WHOAMI_ONLY: &str = r#"
-[sensor]
-name = "IDPART"
-bus = "i2c"
-i2c_address = 0x10
-
-[[sensor.register]]
-addr = 0x00
-const = [0xAB]
-
-[sensor.protocol]
-style = "i2c_pointer"
-"#;
-        let sensor = RegisterMapSensor::from_toml(WHOAMI_ONLY).unwrap();
-        assert_eq!(I2cSlave::temperature_mc(&sensor), None);
-    }
-
     const SPI_IMU_SPEC: &str = r#"
 [sensor]
 name = "MINIMU"
@@ -1262,130 +1169,28 @@ rw_read_is_high = true
 addr_mask = 0x7f
 "#;
 
-    /// PROOF: a small declarative SPI sensor returns the WHO_AM_I constant and a
-    /// driven i16 data register correctly through `RegisterMapSensor as
-    /// SpiSlave`.
-    #[test]
-    fn declarative_spi_sensor_reads_who_am_i_and_data() {
-        let mut sensor = RegisterMapSensor::from_toml(SPI_IMU_SPEC).unwrap();
-        sensor.set_input("gyro_x", 1234.0);
-        let mut bus = SpiBus::new("SPI", Box::new(sensor));
-
-        // WHO_AM_I (0x0f) read: cmd = 0x80 | 0x0f, then one data byte.
-        let _status = bus.transfer(0x80 | 0x0f);
-        let who = bus.transfer(0x00);
-        assert_eq!(who, 0x42, "WHO_AM_I should be 0x42");
-
-        // CS deassert between transactions.
-        bus.slave_mut::<RegisterMapSensor>().unwrap().deselect();
-
-        // Data register 0x22 read: i16 little-endian for 1234 = 0x04D2 ->
-        // bytes [0xD2, 0x04].
-        let _status = bus.transfer(0x80 | 0x22);
-        let lo = bus.transfer(0x00);
-        let hi = bus.transfer(0x00);
-        let value = i16::from_le_bytes([lo, hi]);
-        assert_eq!(value, 1234, "data register should decode to 1234");
-        assert_eq!([lo, hi], [0xD2, 0x04]);
-    }
-
-    /// PROOF of the `miso_preview` contract the bit-banged SPI responder rests
-    /// on: at EVERY byte position of a transaction, command byte, in-register
-    /// streaming, the auto-increment hop past a register's end, and across a
-    /// CS deassert; the preview equals the byte the very next `transfer`
-    /// returns, and previewing repeatedly does not advance the stream.
-    #[test]
-    fn miso_preview_matches_transfer_stream_byte_for_byte() {
-        let mut sensor = RegisterMapSensor::from_toml(SPI_IMU_SPEC).unwrap();
-        sensor.set_input("gyro_x", 1234.0);
-
-        // WHO_AM_I read burst that runs past the 1-byte register (exercising
-        // the auto-increment preview), then a fresh transaction after CS.
-        for mosi in [0x80 | 0x0f, 0x00, 0x00, 0x00, 0x00] {
-            let preview = sensor.miso_preview();
-            let again = sensor.miso_preview();
-            assert_eq!(preview, again, "preview must be non-advancing");
-            let actual = SpiSlave::transfer(&mut sensor, mosi);
-            assert_eq!(
-                preview,
-                Some(actual),
-                "preview must equal the next transfer's return (mosi 0x{mosi:02x})"
-            );
-        }
-        SpiSlave::deselect(&mut sensor);
-        for mosi in [0x80 | 0x22, 0x00, 0x00] {
-            let preview = sensor.miso_preview();
-            let actual = SpiSlave::transfer(&mut sensor, mosi);
-            assert_eq!(preview, Some(actual));
-        }
-    }
-
-    // A BMP280-like SPI spec whose chip-ID register is declared at its RAW
-    // datasheet address 0xD0 (NOT the hand-masked 0x50). The firmware reads it
-    // with command byte 0xD0 (read bit 7 set | addr 0x50).
-    const BMP280_RAW_ADDR_SPEC: &str = r#"
+    /// A BMP280-like SPI spec with its chip-ID at the RAW datasheet address
+    /// (0xD0), or the pre-masked 0x50; both must read via command byte 0xD0.
+    fn bmp280_spi_spec(addr: u8) -> String {
+        format!(
+            r#"
 [sensor]
 name = "BMP280"
 bus = "spi"
 
 [[sensor.register]]
-addr = 0xD0
+addr = {addr:#x}
 const = [0x58]
 
 [sensor.protocol]
 style = "spi_reg"
 rw_read_is_high = true
 addr_mask = 0x7f
-"#;
-
-    // Same sensor but declared with the PRE-MASKED address 0x50 (the hand-
-    // masked style). Must resolve identically, backward compatibility.
-    const BMP280_PREMASKED_SPEC: &str = r#"
-[sensor]
-name = "BMP280"
-bus = "spi"
-
-[[sensor.register]]
-addr = 0x50
-const = [0x58]
-
-[sensor.protocol]
-style = "spi_reg"
-rw_read_is_high = true
-addr_mask = 0x7f
-"#;
-
-    /// PROOF of the fix: a spec declaring the chip-ID at the RAW datasheet
-    /// address 0xD0, read via command byte 0xD0, returns 0x58 (not 0xFF). The
-    /// interpreter masks the R/W bit off internally so the natural datasheet
-    /// address resolves. A second assertion proves the pre-masked 0x50 spec read
-    /// via the same 0xD0 command ALSO returns 0x58 (backward compatible).
-    #[test]
-    fn spi_raw_datasheet_addr_resolves_and_is_backward_compatible() {
-        // Raw datasheet address 0xD0.
-        let sensor = RegisterMapSensor::from_toml(BMP280_RAW_ADDR_SPEC).unwrap();
-        let mut bus = SpiBus::new("SPI", Box::new(sensor));
-        let _status = bus.transfer(0xD0); // read bit set | masked addr 0x50
-        let id = bus.transfer(0x00);
-        assert_eq!(id, 0x58, "raw-addr (0xD0) chip-ID read should return 0x58");
-
-        // Pre-masked address 0x50, same command byte must yield the same byte.
-        let sensor = RegisterMapSensor::from_toml(BMP280_PREMASKED_SPEC).unwrap();
-        let mut bus = SpiBus::new("SPI", Box::new(sensor));
-        let _status = bus.transfer(0xD0);
-        let id = bus.transfer(0x00);
-        assert_eq!(
-            id, 0x58,
-            "pre-masked (0x50) chip-ID read should also return 0x58"
-        );
+"#
+        )
     }
 
-    /// Two SPI registers that collide to the same post-mask address (0x50 and
-    /// 0xD0 both mask to 0x50) are genuinely indistinguishable on the 7-bit SPI
-    /// address field, so the spec must be rejected by validation.
-    #[test]
-    fn spi_post_mask_address_collision_is_rejected() {
-        let colliding = r#"
+    const COLLIDING_SPI_SPEC: &str = r#"
 [sensor]
 name = "BMP280"
 bus = "spi"
@@ -1403,137 +1208,172 @@ style = "spi_reg"
 rw_read_is_high = true
 addr_mask = 0x7f
 "#;
-        let res = RegisterMapSensor::from_toml(colliding);
-        assert!(
-            res.is_err(),
-            "SPI registers colliding post-mask (0x50 & 0xD0) must be rejected"
-        );
+
+    fn sensor(spec: &str) -> RegisterMapSensor {
+        RegisterMapSensor::from_toml(spec).unwrap()
     }
 
-    /// Finding 1 regression guard: the public `register_bytes` helper must honor
-    /// the same raw-address contract as `transfer`. A spec declaring the chip-ID
-    /// at the RAW datasheet address 0xD0 is stored under the post-mask key 0x50;
-    /// `register_bytes(0xD0)` must normalize the raw address and return the const
-    /// (0x58), not miss the lookup and return the 0xFF idle byte.
-    #[test]
-    fn register_bytes_normalizes_raw_spi_addr() {
-        let sensor = RegisterMapSensor::from_toml(BMP280_RAW_ADDR_SPEC).unwrap();
-        // Raw datasheet address passed directly to the public helper.
-        assert_eq!(
-            sensor.register_bytes(0xD0),
-            vec![0x58],
-            "register_bytes(0xD0) on a raw-0xD0 SPI spec must normalize and return the const"
-        );
-        // The pre-masked address must of course also resolve.
-        assert_eq!(
-            sensor.register_bytes(0x50),
-            vec![0x58],
-            "register_bytes(0x50) (pre-masked) must resolve to the same register"
-        );
+    fn i2c_bus(sensor: RegisterMapSensor) -> I2cBus {
+        I2cBus::new("I2C").with_slave(Box::new(sensor))
     }
 
-    /// Finding 2 regression guard: `from_spec` is public and unchecked. Feeding
-    /// it a spec whose two registers collide post-mask (0x50 and 0xD0 both mask
-    /// to 0x50) must PANIC rather than silently overwrite one in the map. We
-    /// build the SensorSpec via raw TOML deserialization (bypassing
-    /// `SensorSpec::from_toml`'s validate()) to exercise the unchecked boundary.
-    #[test]
-    #[should_panic(expected = "collides with an existing register")]
-    fn from_spec_panics_on_post_mask_collision() {
-        let colliding = r#"
-[sensor]
-name = "BMP280"
-bus = "spi"
-
-[[sensor.register]]
-addr = 0x50
-const = [0x58]
-
-[[sensor.register]]
-addr = 0xD0
-const = [0x59]
-
-[sensor.protocol]
-style = "spi_reg"
-rw_read_is_high = true
-addr_mask = 0x7f
-"#;
-        // Deserialize WITHOUT validating, to reach the unchecked from_spec path.
-        let spec: SensorSpec = toml::from_str(colliding).unwrap();
-        let _ = RegisterMapSensor::from_spec(spec);
+    /// One pointer-framed write transaction: START, `bytes`, STOP.
+    fn i2c_write(bus: &mut I2cBus, addr: u8, bytes: &[u8]) {
+        bus.dispatch(I2cEvent::Start { addr, read: false });
+        for &data in bytes {
+            bus.dispatch(I2cEvent::Write { addr, data });
+        }
+        bus.dispatch(I2cEvent::Stop { addr });
     }
 
-    /// The interpreter must not be a thin wrapper: feeding a negative i16 value
-    /// exercises the two's-complement packing path the spec dictates.
-    #[test]
-    fn spi_negative_i16_packs_correctly() {
-        let mut sensor = RegisterMapSensor::from_toml(SPI_IMU_SPEC).unwrap();
-        sensor.set_input("gyro_x", -2.0);
-        let mut bus = SpiBus::new("SPI", Box::new(sensor));
-        let _ = bus.transfer(0x80 | 0x22);
-        let lo = bus.transfer(0x00);
-        let hi = bus.transfer(0x00);
-        assert_eq!(i16::from_le_bytes([lo, hi]), -2);
-    }
-
-    // ── §6 sensor-coverage fixtures: BME280 + MPU6050 ────────────────────────
-    //
-    // The sensor-coverage rule: each new sensor lands with a fixture that reads
-    // a known register value through the bound bus and asserts the decoded
-    // physical quantity. These load the SHIPPED specs (testdata/sensor-specs/*.toml)
-    // so the fixture proves the exact spec that ships, drive them through the real
-    // `I2cBus` dispatch path (no injection, no hand-coded model), and assert the
-    // decoded physical output against datasheet worked-example numbers.
-
-    /// The canonical shipped BME280 spec (single source of truth for the model).
-    const BME280_SPEC: &str = include_str!("../../../../testdata/sensor-specs/bme280.toml");
-    /// The canonical shipped MPU6050 spec.
-    const MPU6050_SPEC: &str = include_str!("../../../../testdata/sensor-specs/mpu6050.toml");
-
-    /// Pointered burst read of `n` bytes starting at register `reg` from the I2C
-    /// slave at 7-bit `addr`, through the real bus dispatch path.
+    /// Pointered burst read of `n` bytes starting at register `reg`.
     fn i2c_read_burst(bus: &mut I2cBus, addr: u8, reg: u8, n: usize) -> Vec<u8> {
         bus.dispatch(I2cEvent::Start { addr, read: false });
         bus.dispatch(I2cEvent::Write { addr, data: reg });
         bus.dispatch(I2cEvent::Start { addr, read: true });
-        let mut out = Vec::with_capacity(n);
-        for _ in 0..n {
-            out.push(bus.dispatch(I2cEvent::Read { addr }).unwrap());
-        }
+        let out = (0..n)
+            .map(|_| bus.dispatch(I2cEvent::Read { addr }).unwrap())
+            .collect();
         bus.dispatch(I2cEvent::Stop { addr });
         out
     }
 
-    // ── Bosch BME280/BMP280 integer compensation (datasheet §4.2.3, §8.2) ─────
-    // Direct ports of the datasheet reference C. `wrapping_*` reproduces C's
-    // modular int32 semantics exactly (the routines are designed not to wrap for
-    // valid inputs, so this is faithful, not lossy). These run in the FIXTURE,
-    // they are the raw→physical consumer the model deliberately does not embed.
+    fn i2c_write_u16(bus: &mut I2cBus, addr: u8, reg: u8, value: u16) {
+        i2c_write(bus, addr, &[reg, (value >> 8) as u8, (value & 0xFF) as u8]);
+    }
 
-    /// Returns `(t_fine, T)` where `T` is temperature in 0.01 °C.
+    fn i2c_read_u16(bus: &mut I2cBus, addr: u8, reg: u8) -> u16 {
+        let d = i2c_read_burst(bus, addr, reg, 2);
+        u16::from_be_bytes([d[0], d[1]])
+    }
+
+    fn spi_read(bus: &mut SpiBus, command: u8, n: usize) -> Vec<u8> {
+        let _status = bus.transfer(command);
+        (0..n).map(|_| bus.transfer(0x00)).collect()
+    }
+
+    /// A declarative LM75 is byte-identical to the hand-coded `Lm75` across a
+    /// temperature sweep and reports the same `temperature_mc`; a spec with no
+    /// temperature register reports none.
+    #[test]
+    fn declarative_lm75_matches_handcoded_bytes_and_temperature_mc() {
+        for &t in &[
+            -40.0, -10.0, -0.5, 0.0, 0.125, 12.5, 25.0, 36.6, 100.0, 124.875,
+        ] {
+            let mut hand = I2cBus::new("I2C").with_slave(Box::new(Lm75::new(0x48, t)));
+            let mut decl = sensor(LM75_SPEC);
+            decl.set_input("temperature_c", t);
+            assert_eq!(
+                I2cSlave::temperature_mc(&decl),
+                Lm75::new(0x48, t).temperature_mc()
+            );
+            assert_eq!(
+                I2cSlave::temperature_mc(&decl),
+                Some((t * 1000.0).round() as i32)
+            );
+            let mut decl = i2c_bus(decl);
+            assert_eq!(
+                i2c_read_burst(&mut decl, 0x48, 0x00, 2),
+                i2c_read_burst(&mut hand, 0x48, 0x00, 2),
+                "at {t} °C"
+            );
+        }
+        let whoami_only = sensor(
+            "[sensor]\nname = \"IDPART\"\nbus = \"i2c\"\ni2c_address = 0x10\n\
+             [[sensor.register]]\naddr = 0x00\nconst = [0xAB]\n\
+             [sensor.protocol]\nstyle = \"i2c_pointer\"\n",
+        );
+        assert_eq!(I2cSlave::temperature_mc(&whoami_only), None);
+    }
+
+    #[test]
+    fn declarative_spi_sensor_reads_who_am_i_and_signed_data() {
+        let mut s = sensor(SPI_IMU_SPEC);
+        s.set_input("gyro_x", 1234.0);
+        let mut bus = SpiBus::new("SPI", Box::new(s));
+        assert_eq!(spi_read(&mut bus, 0x80 | 0x0f, 1), vec![0x42]);
+        bus.slave_mut::<RegisterMapSensor>().unwrap().deselect();
+        let d = spi_read(&mut bus, 0x80 | 0x22, 2);
+        assert_eq!(d, vec![0xD2, 0x04]);
+        assert_eq!(i16::from_le_bytes([d[0], d[1]]), 1234);
+
+        let mut s = sensor(SPI_IMU_SPEC);
+        s.set_input("gyro_x", -2.0);
+        let mut bus = SpiBus::new("SPI", Box::new(s));
+        let d = spi_read(&mut bus, 0x80 | 0x22, 2);
+        assert_eq!(i16::from_le_bytes([d[0], d[1]]), -2);
+    }
+
+    /// `miso_preview` equals the byte the very next `transfer` returns at
+    /// every byte position (command, streaming, auto-increment hop, across a
+    /// CS deassert) and never advances the stream.
+    #[test]
+    fn miso_preview_matches_transfer_stream_byte_for_byte() {
+        let mut s = sensor(SPI_IMU_SPEC);
+        s.set_input("gyro_x", 1234.0);
+        for mosi in [0x80 | 0x0f, 0x00, 0x00, 0x00, 0x00] {
+            let preview = s.miso_preview();
+            assert_eq!(preview, s.miso_preview(), "preview must be non-advancing");
+            assert_eq!(
+                preview,
+                Some(SpiSlave::transfer(&mut s, mosi)),
+                "mosi 0x{mosi:02x}"
+            );
+        }
+        SpiSlave::deselect(&mut s);
+        for mosi in [0x80 | 0x22, 0x00, 0x00] {
+            let preview = s.miso_preview();
+            assert_eq!(preview, Some(SpiSlave::transfer(&mut s, mosi)));
+        }
+    }
+
+    /// A raw datasheet address (0xD0) and its pre-masked form (0x50) resolve
+    /// identically through `transfer` and `register_bytes`; two registers
+    /// colliding post-mask are rejected by validation and panic in the
+    /// unchecked `from_spec` path.
+    #[test]
+    fn spi_raw_datasheet_addresses_normalize_and_collisions_are_refused() {
+        for addr in [0xD0, 0x50] {
+            let s = sensor(&bmp280_spi_spec(addr));
+            assert_eq!(s.register_bytes(0xD0), vec![0x58]);
+            assert_eq!(s.register_bytes(0x50), vec![0x58]);
+            let mut bus = SpiBus::new("SPI", Box::new(s));
+            assert_eq!(
+                spi_read(&mut bus, 0xD0, 1),
+                vec![0x58],
+                "spec addr {addr:#x}"
+            );
+        }
+        assert!(RegisterMapSensor::from_toml(COLLIDING_SPI_SPEC).is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "collides with an existing register")]
+    fn from_spec_panics_on_post_mask_collision() {
+        let spec: SensorSpec = toml::from_str(COLLIDING_SPI_SPEC).unwrap();
+        let _ = RegisterMapSensor::from_spec(spec);
+    }
+
+    // ── Shipped sensor specs against datasheet worked examples ───────────────
+
+    const BME280_SPEC: &str = include_str!("../../../../testdata/sensor-specs/bme280.toml");
+    const MPU6050_SPEC: &str = include_str!("../../../../testdata/sensor-specs/mpu6050.toml");
+    const ADS1115_SPEC: &str = include_str!("../../../../testdata/sensor-specs/ads1115.toml");
+    const INA219_SPEC: &str = include_str!("../../../../testdata/sensor-specs/ina219.toml");
+    const MCP4728_SPEC: &str = include_str!("../../../../testdata/sensor-specs/mcp4728.toml");
+
+    // Direct ports of the Bosch datasheet reference C (§4.2.3, §8.2);
+    // `wrapping_*` reproduces C's modular int32 semantics.
     fn bme280_compensate_t(adc_t: i32, t1: i32, t2: i32, t3: i32) -> (i32, i32) {
         let var1 = (((adc_t >> 3) - (t1 << 1)).wrapping_mul(t2)) >> 11;
         let d = (adc_t >> 4) - t1;
         let var2 = ((d.wrapping_mul(d) >> 12).wrapping_mul(t3)) >> 14;
         let t_fine = var1 + var2;
-        let t = (t_fine * 5 + 128) >> 8;
-        (t_fine, t)
+        (t_fine, (t_fine * 5 + 128) >> 8)
     }
 
-    /// Returns pressure in Pa (int32 routine).
-    fn bme280_compensate_p(
-        adc_p: i32,
-        t_fine: i32,
-        p1: i32,
-        p2: i32,
-        p3: i32,
-        p4: i32,
-        p5: i32,
-        p6: i32,
-        p7: i32,
-        p8: i32,
-        p9: i32,
-    ) -> u32 {
+    fn bme280_compensate_p(adc_p: i32, t_fine: i32, p: [i32; 9]) -> u32 {
+        let [p1, p2, p3, p4, p5, p6, p7, p8, p9] = p;
         let mut var1 = (t_fine >> 1) - 64000;
         let mut var2 = ((var1 >> 2).wrapping_mul(var1 >> 2) >> 11).wrapping_mul(p6);
         var2 = var2 + (var1.wrapping_mul(p5) << 1);
@@ -1558,167 +1398,95 @@ addr_mask = 0x7f
         ((p as i32) + ((w1 + w2 + p7) >> 4)) as u32
     }
 
-    /// Returns humidity in Q22.10 %RH (divide by 1024 for %RH).
-    fn bme280_compensate_h(
-        adc_h: i32,
-        t_fine: i32,
-        h1: i32,
-        h2: i32,
-        h3: i32,
-        h4: i32,
-        h5: i32,
-        h6: i32,
-    ) -> u32 {
+    fn bme280_compensate_h(adc_h: i32, t_fine: i32, h: [i32; 6]) -> u32 {
+        let [h1, h2, h3, h4, h5, h6] = h;
         let v0 = t_fine - 76800;
         let term_a = (((adc_h << 14) - (h4 << 20) - h5.wrapping_mul(v0)) + 16384) >> 15;
         let y1 = v0.wrapping_mul(h6) >> 10;
         let y2 = (v0.wrapping_mul(h3) >> 11) + 32768;
         let y3 = y1.wrapping_mul(y2) >> 10;
         let y4 = (y3 + 2_097_152).wrapping_mul(h2) + 8192;
-        let big = y4 >> 14;
-        let mut v = term_a.wrapping_mul(big);
+        let mut v = term_a.wrapping_mul(y4 >> 14);
         v = v - ((((v >> 15).wrapping_mul(v >> 15) >> 7).wrapping_mul(h1)) >> 4);
-        let v = v.clamp(0, 419_430_400);
-        (v >> 12) as u32
+        (v.clamp(0, 419_430_400) >> 12) as u32
     }
 
-    /// FIXTURE: BME280 chip-ID gate reads 0x60 through the bound I2C bus, and a
-    /// burst read of the raw data registers decodes, via the datasheet Bosch
-    /// compensation, to the datasheet Appendix worked-example physical values.
-    ///
-    /// Authority: the trimming + raw ADC inputs are the Bosch datasheet Appendix
-    /// (§8.2) worked example; the compensated temperature 25.08 °C is the exact
-    /// datasheet-published result. The pressure 100656 Pa is the int32 routine's
-    /// result on the same inputs (the int64 Q24.8 routine gives 100653.25 Pa; the
-    /// ~3 Pa gap is documented int32 precision loss). Humidity uses realistic
-    /// BME280 trimming (dig_H4=317, others per the spec) → 54.45 %RH.
+    /// The shipped BME280 spec: chip-ID 0x60, trimming coefficients that
+    /// round-trip to the datasheet Appendix values, and raw data that
+    /// compensates to 25.08 °C, 100656 Pa and ≈54.45 %RH.
     #[test]
     fn declarative_bme280_decodes_datasheet_worked_example() {
-        let sensor = RegisterMapSensor::from_toml(BME280_SPEC).unwrap();
         let addr = 0x76;
-        let mut bus = I2cBus::new("I2C").with_slave(Box::new(sensor));
+        let mut bus = i2c_bus(sensor(BME280_SPEC));
+        assert_eq!(i2c_read_burst(&mut bus, addr, 0xD0, 1), vec![0x60]);
 
-        // Identity gate (datasheet §5.4.1): CHIP_ID 0xD0 == 0x60 (BME280).
-        let id = i2c_read_burst(&mut bus, addr, 0xD0, 1);
-        assert_eq!(id, vec![0x60], "BME280 chip-ID must be 0x60");
-
-        // Calibration blocks: 26 bytes from 0x88, 7 bytes from 0xE1.
         let cal1 = i2c_read_burst(&mut bus, addr, 0x88, 26);
         let cal2 = i2c_read_burst(&mut bus, addr, 0xE1, 7);
         let le16 = |b: &[u8], i: usize| i16::from_le_bytes([b[i], b[i + 1]]) as i32;
         let leu16 = |b: &[u8], i: usize| u16::from_le_bytes([b[i], b[i + 1]]) as i32;
         let (t1, t2, t3) = (leu16(&cal1, 0), le16(&cal1, 2), le16(&cal1, 4));
-        let p1 = leu16(&cal1, 6);
-        let (p2, p3, p4) = (le16(&cal1, 8), le16(&cal1, 10), le16(&cal1, 12));
-        let (p5, p6, p7) = (le16(&cal1, 14), le16(&cal1, 16), le16(&cal1, 18));
-        let (p8, p9) = (le16(&cal1, 20), le16(&cal1, 22));
-        let h1 = cal1[25] as i32; // 0xA1
-        let h2 = le16(&cal2, 0); // 0xE1/0xE2
-        let h3 = cal2[2] as i32; // 0xE3
-                                 // dig_H4/H5 nibble packing (datasheet §4.2.2):
-        let h4 = ((cal2[3] as i8 as i32) << 4) | (cal2[4] & 0x0F) as i32;
-        let h5 = ((cal2[5] as i8 as i32) << 4) | ((cal2[4] >> 4) as i32);
-        let h6 = cal2[6] as i8 as i32;
-        // Full coefficient round-trip through the bus. Covering EVERY pressure
-        // coefficient here (not just p1) is deliberate: a wrong two's-complement
-        // byte in the spec (e.g. dig_P2/dig_P8) would otherwise only surface as a
-        // small pressure error downstream; this pins each to its datasheet value.
-        assert_eq!(
-            (t1, t2, t3),
-            (27504, 26435, -1000),
-            "temperature trimming must round-trip to the datasheet values"
-        );
-        assert_eq!(
-            (p1, p2, p3, p4, p5, p6, p7, p8, p9),
-            (36477, -10685, 3024, 2855, 140, -7, 15500, -14600, 6000),
-            "pressure trimming must round-trip to the datasheet values"
-        );
-        assert_eq!(
-            (h1, h2, h3, h4, h5, h6),
-            (75, 362, 0, 317, 0, 30),
-            "humidity trimming (incl. H4/H5 nibble packing) must round-trip"
-        );
+        let p = [
+            leu16(&cal1, 6),
+            le16(&cal1, 8),
+            le16(&cal1, 10),
+            le16(&cal1, 12),
+            le16(&cal1, 14),
+            le16(&cal1, 16),
+            le16(&cal1, 18),
+            le16(&cal1, 20),
+            le16(&cal1, 22),
+        ];
+        let h = [
+            cal1[25] as i32,
+            le16(&cal2, 0),
+            cal2[2] as i32,
+            ((cal2[3] as i8 as i32) << 4) | (cal2[4] & 0x0F) as i32,
+            ((cal2[5] as i8 as i32) << 4) | ((cal2[4] >> 4) as i32),
+            cal2[6] as i8 as i32,
+        ];
+        assert_eq!((t1, t2, t3), (27504, 26435, -1000));
+        assert_eq!(p, [36477, -10685, 3024, 2855, 140, -7, 15500, -14600, 6000]);
+        assert_eq!(h, [75, 362, 0, 317, 0, 30]);
 
-        // Raw data burst: 8 bytes from 0xF7 = press[3] temp[3] hum[2].
         let d = i2c_read_burst(&mut bus, addr, 0xF7, 8);
-        assert_eq!(
-            &d[0..3],
-            &[0x65, 0x5A, 0xC0],
-            "press bytes must be the u20_be_xlsb packing of 415148"
-        );
-        assert_eq!(
-            &d[3..6],
-            &[0x7E, 0xED, 0x00],
-            "temp bytes must be the u20_be_xlsb packing of 519888"
-        );
+        assert_eq!(&d[0..3], &[0x65, 0x5A, 0xC0]);
+        assert_eq!(&d[3..6], &[0x7E, 0xED, 0x00]);
         let adc_p = ((d[0] as i32) << 12) | ((d[1] as i32) << 4) | ((d[2] as i32) >> 4);
         let adc_t = ((d[3] as i32) << 12) | ((d[4] as i32) << 4) | ((d[5] as i32) >> 4);
         let adc_h = ((d[6] as i32) << 8) | (d[7] as i32);
         assert_eq!((adc_p, adc_t, adc_h), (415148, 519888, 30000));
 
-        // Compensate (the firmware/test consumer path).
         let (t_fine, t) = bme280_compensate_t(adc_t, t1, t2, t3);
-        assert_eq!(t_fine, 128422, "t_fine (datasheet Appendix) must be 128422");
-        assert_eq!(
-            t, 2508,
-            "temperature must be 25.08 °C (datasheet published)"
-        );
-
-        let pa = bme280_compensate_p(adc_p, t_fine, p1, p2, p3, p4, p5, p6, p7, p8, p9);
-        assert_eq!(pa, 100656, "pressure must be 100656 Pa (int32 routine)");
-
-        let h_q = bme280_compensate_h(adc_h, t_fine, h1, h2, h3, h4, h5, h6);
-        assert_eq!(h_q, 55759, "humidity must be 55759 (Q22.10)");
+        assert_eq!((t_fine, t), (128422, 2508));
+        assert_eq!(bme280_compensate_p(adc_p, t_fine, p), 100656);
+        let h_q = bme280_compensate_h(adc_h, t_fine, h);
+        assert_eq!(h_q, 55759);
         let rh = h_q as f64 / 1024.0;
-        assert!((54.0..55.0).contains(&rh), "humidity ≈ 54.45 %RH, got {rh}");
+        assert!((54.0..55.0).contains(&rh), "{rh}");
     }
 
-    /// FIXTURE: MPU6050 WHO_AM_I reads 0x68 through the bound I2C bus, and a
-    /// burst read of the data registers decodes, via the linear scale factors,
-    /// to the driven physical quantities (accel Z = +1 g, gyro X = 250 °/s,
-    /// temp = 25 °C). Here the whole forward map is expressible as evalexpr
-    /// value expressions (`expr * scale + offset`), so no encoding addition is
-    /// needed; the fixture proves the round trip physical → raw → physical.
     #[test]
     fn declarative_mpu6050_decodes_driven_quantities() {
-        let mut sensor = RegisterMapSensor::from_toml(MPU6050_SPEC).unwrap();
-        sensor.set_input("accel_z_g", 1.0);
-        sensor.set_input("gyro_x_dps", 250.0);
-        sensor.set_input("temp_c", 25.0);
+        let mut s = sensor(MPU6050_SPEC);
+        s.set_input("accel_z_g", 1.0);
+        s.set_input("gyro_x_dps", 250.0);
+        s.set_input("temp_c", 25.0);
         let addr = 0x68;
-        let mut bus = I2cBus::new("I2C").with_slave(Box::new(sensor));
-
-        // Identity gate (register map §4.32): WHO_AM_I 0x75 == 0x68.
-        let who = i2c_read_burst(&mut bus, addr, 0x75, 1);
-        assert_eq!(who, vec![0x68], "MPU6050 WHO_AM_I must be 0x68");
-
-        // Data burst: 14 bytes from 0x3B = accel XYZ (6) temp (2) gyro XYZ (6).
+        let mut bus = i2c_bus(s);
+        assert_eq!(i2c_read_burst(&mut bus, addr, 0x75, 1), vec![0x68]);
         let d = i2c_read_burst(&mut bus, addr, 0x3B, 14);
-        let be = |b: &[u8], i: usize| i16::from_be_bytes([b[i], b[i + 1]]);
-        let ax = be(&d, 0);
-        let ay = be(&d, 2);
-        let az = be(&d, 4);
-        let temp_raw = be(&d, 6);
-        let gx = be(&d, 8);
-
-        // ±2 g full scale → 16384 LSB/g. Z = +1 g → 0x4000.
-        assert_eq!(az, 16384, "accel Z = +1 g must be 16384 LSB");
-        assert_eq!([d[4], d[5]], [0x40, 0x00], "accel Z bytes big-endian");
-        assert_eq!((ax, ay), (0, 0), "accel X/Y at rest = 0");
-        // ±250 °/s → 131 LSB/(°/s). X = 250 °/s → 32750.
-        assert_eq!(gx, 32750, "gyro X = 250 °/s must be 32750 LSB");
-        // Temp: T = raw/340 + 36.53.
-        let temp_c = temp_raw as f64 / 340.0 + 36.53;
-        assert!(
-            (temp_c - 25.0).abs() < 0.05,
-            "decoded temperature must be ≈ 25 °C, got {temp_c}"
-        );
+        let be = |i: usize| i16::from_be_bytes([d[i], d[i + 1]]);
+        assert_eq!((be(0), be(2)), (0, 0), "accel X/Y at rest");
+        assert_eq!(be(4), 16384, "accel Z = +1 g at 16384 LSB/g");
+        assert_eq!(be(8), 32750, "gyro X = 250 °/s at 131 LSB/(°/s)");
+        let temp_c = be(6) as f64 / 340.0 + 36.53;
+        assert!((temp_c - 25.0).abs() < 0.05, "{temp_c}");
     }
 
-    // ── Write-side interpreter (05 §3.2) ──────────────────────────────────────
+    // ── Write side ───────────────────────────────────────────────────────────
 
-    /// A minimal pointer-framed R/W device: a config write register whose `pga`
-    /// field selects the full-scale range of the data register's read law.
+    /// A config write register whose `pga` field selects the data register's
+    /// full-scale range.
     const WRITE_COUPLING_SPEC: &str = r#"
 [sensor]
 name = "MINIADC"
@@ -1748,78 +1516,43 @@ expr = "a0 * 32768 / if(pga == 1.0, 4.096, 2.048)"
 style = "i2c_pointer"
 "#;
 
-    /// Write→read coupling through the real bus dispatch: a config write
-    /// changes what the data register reads, and the store/fields are
-    /// observable. Payload past the register width and payload for an
-    /// undeclared register are counted, not silently eaten.
     #[test]
     fn pointer_write_commits_store_and_couples_read() {
-        let sensor = RegisterMapSensor::from_toml(WRITE_COUPLING_SPEC).unwrap();
         let addr = 0x48;
-        let mut bus = I2cBus::new("I2C").with_slave(Box::new(sensor));
-
-        // Defaults: pga field seeded by extraction from the config default
-        // (0x0400 -> pga = 2), so the data register uses FSR 2.048:
-        // 1.0 * 32768 / 2.048 = 16000.
-        let d = i2c_read_burst(&mut bus, addr, 0x00, 2);
-        assert_eq!(i16::from_be_bytes([d[0], d[1]]), 16000);
-
-        // Write config = 0x0200 (pga = 001 -> 4.096): [ptr=0x01, 0x02, 0x00].
-        for ev in [
-            I2cEvent::Start { addr, read: false },
-            I2cEvent::Write { addr, data: 0x01 },
-            I2cEvent::Write { addr, data: 0x02 },
-            I2cEvent::Write { addr, data: 0x00 },
-            I2cEvent::Stop { addr },
-        ] {
-            bus.dispatch(ev);
-        }
-        {
-            let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
-            assert_eq!(s.store("config"), Some(0x0200 as f64), "store committed");
-            assert_eq!(s.store("pga"), Some(1.0), "field extracted");
-            assert_eq!(s.ignored_write_bytes(), 0, "nothing ignored yet");
-        }
-        // The SAME read now decodes at FSR 4.096: 1.0 * 32768 / 4.096 = 8000.
-        let d = i2c_read_burst(&mut bus, addr, 0x00, 2);
+        let mut bus = i2c_bus(sensor(WRITE_COUPLING_SPEC));
         assert_eq!(
-            i16::from_be_bytes([d[0], d[1]]),
-            8000,
-            "write→read coupling"
+            i2c_read_u16(&mut bus, addr, 0x00) as i16,
+            16000,
+            "FSR 2.048 by default"
         );
 
-        // Payload past the width (a 3rd byte) and payload for an undeclared
-        // register (0x00 is read-only here) are accepted but counted.
-        for ev in [
-            I2cEvent::Start { addr, read: false },
-            I2cEvent::Write { addr, data: 0x01 },
-            I2cEvent::Write { addr, data: 0x02 },
-            I2cEvent::Write { addr, data: 0x00 },
-            I2cEvent::Write { addr, data: 0xAA }, // past the u16 width
-            I2cEvent::Stop { addr },
-        ] {
-            bus.dispatch(ev);
+        i2c_write_u16(&mut bus, addr, 0x01, 0x0200);
+        {
+            let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
+            assert_eq!(s.store("config"), Some(0x0200 as f64));
+            assert_eq!(s.store("pga"), Some(1.0));
+            assert_eq!(s.ignored_write_bytes(), 0);
         }
-        for ev in [
-            I2cEvent::Start { addr, read: false },
-            I2cEvent::Write { addr, data: 0x00 },
-            I2cEvent::Write { addr, data: 0x55 }, // payload for a non-writable reg
-            I2cEvent::Stop { addr },
-        ] {
-            bus.dispatch(ev);
-        }
-        let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
         assert_eq!(
-            s.ignored_write_bytes(),
-            2,
-            "over-width + non-writable counted"
+            i2c_read_u16(&mut bus, addr, 0x00) as i16,
+            8000,
+            "FSR 4.096 after the write"
+        );
+
+        // Payload past the u16 width and payload for a read-only register are
+        // accepted but counted.
+        i2c_write(&mut bus, addr, &[0x01, 0x02, 0x00, 0xAA]);
+        i2c_write(&mut bus, addr, &[0x00, 0x55]);
+        assert_eq!(
+            bus.slave::<RegisterMapSensor>(addr)
+                .unwrap()
+                .ignored_write_bytes(),
+            2
         );
     }
 
-    /// A minimal command-framed 2-channel DAC exercising every moving part of
-    /// the command machinery: match, greedy 2-byte groups, auto channel
-    /// increment with START reset, field extraction, pre-update-snapshot
-    /// semantics, and the output law.
+    /// A command-framed 2-channel DAC: match, greedy 2-byte groups, auto
+    /// channel increment with START reset, field extraction and output laws.
     const MINI_DAC_SPEC: &str = r#"
 [sensor]
 name = "MINIDAC"
@@ -1867,11 +1600,9 @@ expr = "if(pd == 0.0, code / 4096 * 4.096, 0.0)"
 style = "i2c_pointer"
 "#;
 
-    // A command-framed device whose command completes in a SINGLE byte
-    // (group_bytes = 1): the command byte IS the group. Regression for round-4
-    // #4: with drain running only from the Active arm on the next write, the
-    // group never drains and a Start/Write/Stop produces no state change at all.
-    const ONE_BYTE_CMD_SPEC: &str = r#"
+    #[test]
+    fn single_byte_write_command_drains_on_the_completing_byte() {
+        const ONE_BYTE_CMD_SPEC: &str = r#"
 [sensor]
 name = "ONEBYTE"
 bus = "i2c"
@@ -1898,62 +1629,26 @@ x = "val"
 [sensor.protocol]
 style = "i2c_pointer"
 "#;
-
-    #[test]
-    fn single_byte_write_command_drains_on_the_completing_byte() {
-        let sensor = RegisterMapSensor::from_toml(ONE_BYTE_CMD_SPEC).unwrap();
-        let addr = 0x30;
-        let mut bus = I2cBus::new("U").with_slave(Box::new(sensor));
-        for ev in [
-            I2cEvent::Start { addr, read: false },
-            I2cEvent::Write { addr, data: 0xAA }, // the whole 1-byte command
-            I2cEvent::Stop { addr },
-        ] {
-            bus.dispatch(ev);
-        }
-        let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
-        assert_eq!(
-            s.channel_state("x", 0),
-            Some(170.0),
-            "a group_bytes=1 command must apply on its single byte, not be dropped"
-        );
+        let mut bus = i2c_bus(sensor(ONE_BYTE_CMD_SPEC));
+        i2c_write(&mut bus, 0x30, &[0xAA]);
+        let s = bus.slave::<RegisterMapSensor>(0x30).unwrap();
+        assert_eq!(s.channel_state("x", 0), Some(170.0));
     }
 
     #[test]
     fn command_write_updates_channels_and_output_laws() {
-        let sensor = RegisterMapSensor::from_toml(MINI_DAC_SPEC).unwrap();
         let addr = 0x60;
-        let mut bus = I2cBus::new("U").with_slave(Box::new(sensor));
-
-        // One transaction, two pairs: channel 0 gets 2048, channel 1 gets
-        // 1024 with PD = 01 (powered down).
-        for ev in [
-            I2cEvent::Start { addr, read: false },
-            I2cEvent::Write { addr, data: 0x08 }, // [00 PD=00 D11..8=0x8]
-            I2cEvent::Write { addr, data: 0x00 }, // D7..0
-            I2cEvent::Write { addr, data: 0x14 }, // [00 PD=01 D11..8=0x4]
-            I2cEvent::Write { addr, data: 0x00 },
-            I2cEvent::Stop { addr },
-        ] {
-            bus.dispatch(ev);
-        }
+        let mut bus = i2c_bus(sensor(MINI_DAC_SPEC));
+        // Channel 0 code 2048; channel 1 code 1024 with PD = 01.
+        i2c_write(&mut bus, addr, &[0x08, 0x00, 0x14, 0x00]);
         let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
         assert_eq!(s.channel_state("code", 0), Some(2048.0));
         assert_eq!(s.channel_state("code", 1), Some(1024.0));
         assert_eq!(s.channel_state("pd", 1), Some(1.0));
-        // Output laws: ch0 = 2048/4096*4.096 = 2.048 V; ch1 powered down = 0 V.
         assert!((s.output_volts("vout_a").unwrap() - 2.048).abs() < 1e-9);
         assert_eq!(s.output_volts("vout_b"), Some(0.0));
 
-        // A new START resets the auto cursor to channel 0.
-        for ev in [
-            I2cEvent::Start { addr, read: false },
-            I2cEvent::Write { addr, data: 0x01 },
-            I2cEvent::Write { addr, data: 0x00 }, // code 256 -> channel 0 again
-            I2cEvent::Stop { addr },
-        ] {
-            bus.dispatch(ev);
-        }
+        i2c_write(&mut bus, addr, &[0x01, 0x00]);
         let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
         assert_eq!(
             s.channel_state("code", 0),
@@ -1966,23 +1661,14 @@ style = "i2c_pointer"
             "channel 1 untouched"
         );
 
-        // An undeclared command family (first byte 0x80: matches nothing) is
-        // accepted-and-ignored but counted.
-        for ev in [
-            I2cEvent::Start { addr, read: false },
-            I2cEvent::Write { addr, data: 0x80 },
-            I2cEvent::Write { addr, data: 0xFF },
-            I2cEvent::Stop { addr },
-        ] {
-            bus.dispatch(ev);
-        }
+        i2c_write(&mut bus, addr, &[0x80, 0xFF]);
         let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
         assert_eq!(s.ignored_write_bytes(), 2, "unmodeled command counted");
-        assert_eq!(s.channel_state("code", 0), Some(256.0), "state untouched");
+        assert_eq!(s.channel_state("code", 0), Some(256.0));
     }
 
-    /// The ctx-bearing on_stop drives a bound PinDriver with the output law's
-    /// voltage; the full 05 §3.1 path with a real stamped circuit.
+    /// The STOP is recorded at dispatch and delivered on the scheduler-cadence
+    /// flush, where the output law lands on the bound driver.
     #[test]
     fn on_stop_drives_bound_output_net() {
         use crate::peripherals::TickCtx;
@@ -1992,30 +1678,11 @@ style = "i2c_pointer"
         let net = circuit.node("VOUT_A");
         let driver = PinDriver::stamp(&mut circuit, net, "VOUT_A", "minidac_a", 1.0);
         let vsource = driver.vsource;
+        let mut s = sensor(MINI_DAC_SPEC);
+        assert!(s.attach_output_driver_for_channel(0, driver));
+        let mut bus = i2c_bus(s);
+        i2c_write(&mut bus, 0x60, &[0x08, 0x00]);
 
-        let mut sensor = RegisterMapSensor::from_toml(MINI_DAC_SPEC).unwrap();
-        assert!(sensor.attach_output_driver_for_channel(0, driver));
-        let mut bus = I2cBus::new("U").with_slave(Box::new(sensor));
-
-        for ev in [
-            I2cEvent::Start {
-                addr: 0x60,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: 0x08,
-            }, // code 2048 -> 2.048 V
-            I2cEvent::Write {
-                addr: 0x60,
-                data: 0x00,
-            },
-            I2cEvent::Stop { addr: 0x60 },
-        ] {
-            bus.dispatch(ev);
-        }
-        // The STOP was recorded, not delivered (no ctx inside dispatch); the
-        // driver still commands its stamp-time 0 V.
         let src_volts = |c: &Circuit| match c.devices[vsource.0 as usize] {
             Device::Vsource {
                 kind: SourceKind::Dc(v),
@@ -2024,9 +1691,6 @@ style = "i2c_pointer"
             _ => panic!("driver vsource"),
         };
         assert_eq!(src_volts(&circuit), 0.0, "not driven before flush");
-
-        // The scheduler-cadence flush delivers on_stop(ctx): the law's voltage
-        // lands on the driver source.
         let volts = vec![0.0; 4];
         let mut ctx = TickCtx {
             circuit: &mut circuit,
@@ -2035,142 +1699,59 @@ style = "i2c_pointer"
             dt: 1e-3,
         };
         bus.flush_stops(&mut ctx);
-        assert!(
-            (src_volts(&circuit) - 2.048).abs() < 1e-9,
-            "driven after flush"
-        );
+        assert!((src_volts(&circuit) - 2.048).abs() < 1e-9);
     }
 
-    // ── §6.1 write-side sensors: ADS1115 + INA219 ─────────────────────────────
-    //
-    // Per 05 §6.1 items 3-4: both need the write side. The fixtures load the
-    // SHIPPED specs, drive them through the real I2cBus dispatch path, and
-    // anchor every expected register value to a datasheet-published number
-    // (cited inline).
-
-    /// The canonical shipped ADS1115 spec.
-    const ADS1115_SPEC: &str = include_str!("../../../../testdata/sensor-specs/ads1115.toml");
-    /// The canonical shipped INA219 spec.
-    const INA219_SPEC: &str = include_str!("../../../../testdata/sensor-specs/ina219.toml");
-
-    /// Pointer-framed 16-bit register write: [ptr, hi, lo] in one transaction.
-    fn i2c_write_u16(bus: &mut I2cBus, addr: u8, reg: u8, value: u16) {
-        for ev in [
-            I2cEvent::Start { addr, read: false },
-            I2cEvent::Write { addr, data: reg },
-            I2cEvent::Write {
-                addr,
-                data: (value >> 8) as u8,
-            },
-            I2cEvent::Write {
-                addr,
-                data: (value & 0xFF) as u8,
-            },
-            I2cEvent::Stop { addr },
-        ] {
-            bus.dispatch(ev);
-        }
-    }
-
-    /// Pointer-framed 16-bit register read (big-endian, like both TI parts).
-    fn i2c_read_u16(bus: &mut I2cBus, addr: u8, reg: u8) -> u16 {
-        let d = i2c_read_burst(bus, addr, reg, 2);
-        u16::from_be_bytes([d[0], d[1]])
-    }
-
-    /// FIXTURE: ADS1115 config write selects mux/PGA and the conversion read
-    /// reflects the driven input; the write→read coupling that is the point
-    /// of §6.1 item 3.
-    ///
-    /// Authority (TI SBAS444): POR config 0x8583 (§8.6.4) is MUX=000
-    /// (AIN0-AIN1) at PGA=010 (±2.048 V FSR, 62.5 uV/LSB, Table 1). Writing
-    /// 0xC383 selects MUX=100 (AIN0 vs GND, Table 8) at PGA=001 (±4.096 V,
-    /// 125 uV/LSB, Table 1): 1.024 V / 125 uV = code 8192 (0x2000). Full-scale
-    /// clipping saturates at 0x7FFF (§8.3.3).
+    /// TI SBAS444: POR config 0x8583 is AIN0-AIN1 at ±2.048 V; 0xC383 selects
+    /// AIN0/GND at ±4.096 V (125 uV/LSB); full scale clips at 0x7FFF.
     #[test]
     fn declarative_ads1115_config_write_selects_mux_and_pga() {
-        let mut sensor = RegisterMapSensor::from_toml(ADS1115_SPEC).unwrap();
-        sensor.set_input("a0", 0.5);
-        sensor.set_input("a1", 0.3);
+        let mut s = sensor(ADS1115_SPEC);
+        s.set_input("a0", 0.5);
+        s.set_input("a1", 0.3);
         let addr = 0x48;
-        let mut bus = I2cBus::new("I2C").with_slave(Box::new(sensor));
-
-        // POR (no write yet): differential AIN0-AIN1 at ±2.048 V.
-        // (0.5 - 0.3) * 32768 / 2.048 = 3200.
-        assert_eq!(
-            i2c_read_u16(&mut bus, addr, 0x00) as i16,
-            3200,
-            "POR config (0x8583) must read AIN0-AIN1 at ±2.048 V FSR"
-        );
-        // POR config readback is byte-exact (§8.6.4).
+        let mut bus = i2c_bus(s);
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x00) as i16, 3200);
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x01), 0x8583);
 
-        // Firmware-style single-shot config: OS=1 MUX=100(AIN0/GND)
-        // PGA=001(±4.096) MODE=1 DR=100 COMP_QUE=11 -> 0xC383.
         i2c_write_u16(&mut bus, addr, 0x01, 0xC383);
-        assert_eq!(
-            i2c_read_u16(&mut bus, addr, 0x01),
-            0xC383,
-            "config readback is the written value (OS=1: conversion 'done')"
-        );
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x01), 0xC383);
         {
             let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
-            assert_eq!(s.store("mux"), Some(4.0), "mux field extracted");
-            assert_eq!(s.store("pga"), Some(1.0), "pga field extracted");
+            assert_eq!(s.store("mux"), Some(4.0));
+            assert_eq!(s.store("pga"), Some(1.0));
         }
-
-        // AIN0 = 1.024 V at ±4.096 V FSR -> 8192 (Table 1: 125 uV/LSB).
         bus.slave_mut_t::<RegisterMapSensor>(addr)
             .unwrap()
             .set_input("a0", 1.024);
-        assert_eq!(
-            i2c_read_u16(&mut bus, addr, 0x00),
-            0x2000,
-            "1.024 V at 125 uV/LSB must read 0x2000 (datasheet Table 1 LSB)"
-        );
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x00), 0x2000);
 
-        // Negative differential and full-scale clipping.
-        i2c_write_u16(&mut bus, addr, 0x01, 0x8583); // back to POR mux/pga
+        i2c_write_u16(&mut bus, addr, 0x01, 0x8583);
         {
             let s = bus.slave_mut_t::<RegisterMapSensor>(addr).unwrap();
             s.set_input("a0", 0.0);
             s.set_input("a1", 0.5);
         }
-        assert_eq!(
-            i2c_read_u16(&mut bus, addr, 0x00) as i16,
-            -8000,
-            "AIN0-AIN1 = -0.5 V at 62.5 uV/LSB must read -8000"
-        );
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x00) as i16, -8000);
         bus.slave_mut_t::<RegisterMapSensor>(addr)
             .unwrap()
             .set_input("a0", 5.0);
-        assert_eq!(
-            i2c_read_u16(&mut bus, addr, 0x00),
-            0x7FFF,
-            "over-range input clips at +full-scale (§8.3.3)"
-        );
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x00), 0x7FFF);
     }
 
-    /// FIXTURE: INA219 calibration write feeds the current/power math; the
-    /// §6.1 item-4 coupling, anchored to the datasheet §8.5.1 worked example
-    /// (TI SBOS448): R_SHUNT = 0.1 Ω, Current_LSB = 100 uA -> Cal = 0x1000;
-    /// at I = 2 A, VBUS = 12 V: shunt 20000, bus 0x5DC2, current 20000
-    /// (= 2.0 A), power 12000 (= 24 W at 2 mW/bit).
+    /// TI SBOS448 §8.5.1: R_SHUNT = 0.1 Ω, Cal = 0x1000; at 2 A / 12 V the
+    /// shunt reads 20000, bus 0x5DC2, current 20000 and power 12000, and
+    /// current/power stay zero until calibration is written.
     #[test]
     fn declarative_ina219_calibration_write_feeds_current_and_power() {
-        let mut sensor = RegisterMapSensor::from_toml(INA219_SPEC).unwrap();
-        sensor.set_input("shunt_v", 0.2); // 2 A through 0.1 Ω
-        sensor.set_input("bus_v", 12.0);
+        let mut s = sensor(INA219_SPEC);
+        s.set_input("shunt_v", 0.2);
+        s.set_input("bus_v", 12.0);
         let addr = 0x40;
-        let mut bus = I2cBus::new("I2C").with_slave(Box::new(sensor));
-
-        // POR config readback (§8.6.3.1).
+        let mut bus = i2c_bus(s);
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x00), 0x399F);
-        // Shunt and bus registers read regardless of calibration:
-        // 0.2 V / 10 uV = 20000; (12 V / 4 mV) << 3 | CNVR = 0x5DC2.
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x01) as i16, 20000);
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x02), 0x5DC2);
-        // §8.5.1: current and power REMAIN ZERO until calibration is written.
         assert_eq!(
             i2c_read_u16(&mut bus, addr, 0x04),
             0,
@@ -2178,46 +1759,27 @@ style = "i2c_pointer"
         );
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x03), 0, "power 0 before cal");
 
-        // Program the worked-example calibration 0x1000 (= 4096).
         i2c_write_u16(&mut bus, addr, 0x05, 0x1000);
-        assert_eq!(
-            i2c_read_u16(&mut bus, addr, 0x04),
-            20000,
-            "current_reg = 20000 * 4096 / 4096 (Eq. 4) = 2.0 A at 100 uA/bit"
-        );
-        assert_eq!(
-            i2c_read_u16(&mut bus, addr, 0x03),
-            12000,
-            "power_reg = 20000 * 3000 / 5000 (Eq. 5) = 24 W at 2 mW/bit"
-        );
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x04), 20000);
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x03), 12000);
 
-        // FS0 (cal bit 0) is read-only zero (§8.6.3.7): writing 0x1001 lands
-        // as 0x1000 and the math is unchanged.
         i2c_write_u16(&mut bus, addr, 0x05, 0x1001);
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x05), 0x1000, "FS0 forced low");
         assert_eq!(i2c_read_u16(&mut bus, addr, 0x04), 20000);
     }
 
-    // ── THE PROOF (05 §3.2): the MCP4728 as a data instance of the schema ────
-    //
-    // These are the hand-coded `Mcp4728` model's unit tests, ported verbatim,
-    // same bytes in, same assert values, against the SHIPPED spec
-    // (testdata/sensor-specs/mcp4728.toml). The bespoke Rust died only once these
-    // passed unweakened (plus the engine-level mcp4728_cosim and the LOAD_DAC
-    // regression in tarski_firmware_cosim).
+    // ── The MCP4728 as a data instance of the schema ─────────────────────────
 
-    /// The canonical shipped MCP4728 spec (also embedded by the scheduler).
-    const MCP4728_SPEC: &str = include_str!("../../../../testdata/sensor-specs/mcp4728.toml");
-
-    /// A spec-driven MCP4728 at `addr` with the board config the hand-coded
-    /// `Mcp4728::new` used (internal VREF 2.048 V, gain 2; the spec defaults).
-    fn mcp4728_at(addr: u8) -> RegisterMapSensor {
-        let mut s = RegisterMapSensor::from_toml(MCP4728_SPEC).unwrap();
-        s.set_i2c_address(addr);
-        s
+    fn mcp4728_bus(addrs: &[u8]) -> I2cBus {
+        let mut bus = I2cBus::new("U");
+        for &addr in addrs {
+            let mut s = sensor(MCP4728_SPEC);
+            s.set_i2c_address(addr);
+            bus = bus.with_slave(Box::new(s));
+        }
+        bus
     }
 
-    /// 12-bit code of `channel` (the hand-coded model's `code()` accessor).
     fn dac_code(bus: &I2cBus, addr: u8, channel: usize) -> u16 {
         bus.slave::<RegisterMapSensor>(addr)
             .unwrap()
@@ -2225,7 +1787,6 @@ style = "i2c_pointer"
             .unwrap() as u16
     }
 
-    /// Output voltage law of `channel` (the hand-coded model's `vout()`).
     fn dac_vout(bus: &I2cBus, addr: u8, channel: usize) -> f64 {
         let name = ["vout_a", "vout_b", "vout_c", "vout_d"][channel];
         bus.slave::<RegisterMapSensor>(addr)
@@ -2234,127 +1795,47 @@ style = "i2c_pointer"
             .unwrap()
     }
 
-    /// Emit the EXACT byte pair the firmware sends for a Fast Write of a 12-bit
-    /// code on one channel: byte_1 = (value >> 8) & 0x0F, byte_2 = value & 0xFF
-    /// (device.cpp:182-183). PD bits are 0 (normal mode), top two bits 0.
-    fn firmware_fast_write_pair(value: u16) -> (u8, u8) {
+    /// The exact byte pair the firmware sends for a Fast Write of `value`.
+    fn fast_write_pair(value: u16) -> [u8; 2] {
         let v = value & 0x0FFF;
-        (((v >> 8) & 0x0F) as u8, (v & 0xFF) as u8)
+        [((v >> 8) & 0x0F) as u8, (v & 0xFF) as u8]
     }
 
+    /// A Multi/Sequential-Write data pair: Vref=internal, PD=00, gain 2.
+    fn write_pair(code: u16) -> [u8; 2] {
+        [
+            (1u8 << 7) | (1 << 4) | (((code >> 8) & 0x0F) as u8),
+            (code & 0xFF) as u8,
+        ]
+    }
+
+    /// Fast Write sets VOUT = code * 0.001 V across the code range (internal
+    /// VREF 2.048 V, gain 2), auto-increments channels within one transaction,
+    /// reads back, and leaves other instances on the bus untouched.
     #[test]
-    fn mcp4728_firmware_fast_write_sets_vout() {
-        // The firmware writes channel 0 of the device at 0x60 to code 2048.
-        // With the board config (VREF 2.048, gain 2) that is exactly 2.048 V.
-        let mut bus = I2cBus::new("U1101").with_slave(Box::new(mcp4728_at(0x60)));
-        let (b1, b2) = firmware_fast_write_pair(2048);
-        for ev in [
-            I2cEvent::Start {
-                addr: 0x60,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: b1,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: b2,
-            },
-            I2cEvent::Stop { addr: 0x60 },
-        ] {
-            bus.dispatch(ev);
-        }
-        assert_eq!(dac_code(&bus, 0x60, 0), 2048, "channel 0 latched code 2048");
-        // VOUT = code * 0.001 V exactly (2048 -> 2.048 V).
-        assert!(
-            (dac_vout(&bus, 0x60, 0) - 2.048).abs() < 1e-9,
-            "VOUT should be 2.048 V, got {}",
-            dac_vout(&bus, 0x60, 0)
-        );
-        // The whole code range maps VOUT = code * 0.001 V.
-        for &code in &[0u16, 1, 1000, 4095] {
-            let mut b = I2cBus::new("U").with_slave(Box::new(mcp4728_at(0x60)));
-            let (h, l) = firmware_fast_write_pair(code);
-            for ev in [
-                I2cEvent::Start {
-                    addr: 0x60,
-                    read: false,
-                },
-                I2cEvent::Write {
-                    addr: 0x60,
-                    data: h,
-                },
-                I2cEvent::Write {
-                    addr: 0x60,
-                    data: l,
-                },
-                I2cEvent::Stop { addr: 0x60 },
-            ] {
-                b.dispatch(ev);
-            }
-            let want = code as f64 * 0.001;
-            let got = dac_vout(&b, 0x60, 0);
+    fn mcp4728_fast_write_sets_vout_auto_increments_and_reads_back() {
+        for &code in &[0u16, 1, 1000, 2048, 4095] {
+            let mut bus = mcp4728_bus(&[0x60]);
+            i2c_write(&mut bus, 0x60, &fast_write_pair(code));
+            assert_eq!(dac_code(&bus, 0x60, 0), code);
             assert!(
-                (got - want).abs() < 1e-9,
-                "code {code}: VOUT {got} != {want}"
+                (dac_vout(&bus, 0x60, 0) - code as f64 * 0.001).abs() < 1e-9,
+                "code {code}"
             );
         }
-    }
 
-    #[test]
-    fn mcp4728_fast_write_auto_increments_channels() {
-        // One Fast Write transaction with four pairs lands on channels A..D.
-        let mut bus = I2cBus::new("U").with_slave(Box::new(mcp4728_at(0x60)));
+        let mut bus = mcp4728_bus(&[0x60, 0x61, 0x62]);
         let codes = [100u16, 2048, 3000, 4095];
-        let mut evs = vec![I2cEvent::Start {
-            addr: 0x60,
-            read: false,
-        }];
-        for &c in &codes {
-            let (h, l) = firmware_fast_write_pair(c);
-            evs.push(I2cEvent::Write {
-                addr: 0x60,
-                data: h,
-            });
-            evs.push(I2cEvent::Write {
-                addr: 0x60,
-                data: l,
-            });
-        }
-        evs.push(I2cEvent::Stop { addr: 0x60 });
-        for ev in evs {
-            bus.dispatch(ev);
-        }
+        let bytes: Vec<u8> = codes.iter().flat_map(|&c| fast_write_pair(c)).collect();
+        i2c_write(&mut bus, 0x60, &bytes);
         for (ch, &c) in codes.iter().enumerate() {
-            assert_eq!(dac_code(&bus, 0x60, ch), c, "channel {ch} code");
-            assert!((dac_vout(&bus, 0x60, ch) - c as f64 * 0.001).abs() < 1e-9);
+            assert_eq!(dac_code(&bus, 0x60, ch), c, "channel {ch}");
         }
-    }
+        assert_eq!(dac_code(&bus, 0x61, 0), 0, "0x61 untouched");
+        assert_eq!(dac_code(&bus, 0x62, 0), 0, "0x62 untouched");
 
-    #[test]
-    fn mcp4728_readback_recovers_code() {
-        let mut bus = I2cBus::new("U").with_slave(Box::new(mcp4728_at(0x60)));
-        let (h, l) = firmware_fast_write_pair(2730);
-        for ev in [
-            I2cEvent::Start {
-                addr: 0x60,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: h,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: l,
-            },
-            I2cEvent::Stop { addr: 0x60 },
-        ] {
-            bus.dispatch(ev);
-        }
-        // Read the frame back: channel A input register is the first triple;
-        // byte 1 carries D11..D8 in its low nibble, byte 2 carries D7..D0.
+        // Read the frame back: byte 1 of the channel A triple carries D11..D8
+        // in its low nibble, byte 2 carries D7..D0.
         bus.dispatch(I2cEvent::Start {
             addr: 0x60,
             read: true,
@@ -2363,162 +1844,30 @@ style = "i2c_pointer"
         let hi = bus.dispatch(I2cEvent::Read { addr: 0x60 }).unwrap();
         let lo = bus.dispatch(I2cEvent::Read { addr: 0x60 }).unwrap();
         bus.dispatch(I2cEvent::Stop { addr: 0x60 });
-        let recovered = (((hi & 0x0F) as u16) << 8) | lo as u16;
-        assert_eq!(recovered, 2730, "readback recovers the programmed code");
+        assert_eq!((((hi & 0x0F) as u16) << 8) | lo as u16, 100);
     }
 
+    /// Multi-Write (C2C1C0 = 010, W1W0 = 01) names its channel in the command
+    /// byte; Sequential Write (W1W0 = 10) sends one command byte then
+    /// auto-incrementing data pairs.
     #[test]
-    fn mcp4728_three_instances_are_independent() {
-        // Three DACs at 0x60/0x61/0x62 on one bus. Writing 0x60 must not touch
-        // 0x61 or 0x62.
-        let mut bus = I2cBus::new("U")
-            .with_slave(Box::new(mcp4728_at(0x60)))
-            .with_slave(Box::new(mcp4728_at(0x61)))
-            .with_slave(Box::new(mcp4728_at(0x62)));
-        let (h, l) = firmware_fast_write_pair(4000);
-        for ev in [
-            I2cEvent::Start {
-                addr: 0x60,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: h,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: l,
-            },
-            I2cEvent::Stop { addr: 0x60 },
-        ] {
-            bus.dispatch(ev);
-        }
-        assert_eq!(dac_code(&bus, 0x60, 0), 4000);
-        assert_eq!(dac_code(&bus, 0x61, 0), 0, "0x61 untouched");
-        assert_eq!(dac_code(&bus, 0x62, 0), 0, "0x62 untouched");
-        assert!(dac_vout(&bus, 0x61, 0).abs() < 1e-12);
-    }
+    fn mcp4728_multi_and_sequential_write_decode_channels() {
+        let mut bus = mcp4728_bus(&[0x60]);
+        let [dhi, dlo] = write_pair(1500);
+        i2c_write(&mut bus, 0x60, &[0b0100_1100, dhi, dlo]);
+        assert_eq!(dac_code(&bus, 0x60, 2), 1500, "channel C via Multi-Write");
+        assert!((dac_vout(&bus, 0x60, 2) - 1.500).abs() < 1e-9);
 
-    #[test]
-    fn mcp4728_multi_write_command_decodes_channel() {
-        // Multi-Write (C2C1C0 = 010), channel C (DAC1 DAC0 = 10), code 1500,
-        // Vref=internal(1), PD=0, Gx=gain2(1). Byte layout:
-        //   cmd  = 0b0100_1100  (010 | W1W0=01 | DAC=10 | UDAC=0)
-        //   dhi  = [Vref PD1 PD0 Gx D11..D8] = 1 00 1 (1500>>8=0x5) -> 0b1001_0101
-        //   dlo  = 1500 & 0xFF = 0xDC
-        let mut bus = I2cBus::new("U").with_slave(Box::new(mcp4728_at(0x60)));
-        let cmd = 0b0100_1100u8;
-        // dhi = [Vref=1, PD=00, Gx=1, D11..D8]. PD bits are 0 (left implicit).
-        let dhi = (1u8 << 7) | (1 << 4) | (((1500u16 >> 8) & 0x0F) as u8);
-        let dlo = (1500u16 & 0xFF) as u8;
-        for ev in [
-            I2cEvent::Start {
-                addr: 0x60,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: cmd,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: dhi,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: dlo,
-            },
-            I2cEvent::Stop { addr: 0x60 },
-        ] {
-            bus.dispatch(ev);
-        }
+        let mut bus = mcp4728_bus(&[0x60]);
+        let mut bytes = vec![0x50];
+        bytes.extend([100u16, 200, 300, 400].iter().flat_map(|&c| write_pair(c)));
+        i2c_write(&mut bus, 0x60, &bytes);
         assert_eq!(
-            dac_code(&bus, 0x60, 2),
-            1500,
-            "channel C programmed via Multi-Write"
+            (0..4)
+                .map(|ch| dac_code(&bus, 0x60, ch))
+                .collect::<Vec<_>>(),
+            [100, 200, 300, 400]
         );
-        assert!(
-            (dac_vout(&bus, 0x60, 2) - 1.500).abs() < 1e-9,
-            "VOUT C = 1.5 V"
-        );
-    }
-
-    #[test]
-    fn mcp4728_sequential_write_auto_increments_channels() {
-        // Sequential Write: ONE command byte (start channel A), then four data
-        // pairs that auto-increment A->B->C->D. cmd = 010 | W1W0=10 | DAC=00 |
-        // UDAC=0 = 0b0101_0000 = 0x50. Each data hi = [Vref=1 PD=00 Gx=1 D11..D8].
-        // Codes 100/200/300/400 -> A..D. This sequence is mis-framed by a
-        // 3-byte-per-group decode; it must land each code in its own channel.
-        let mut bus = I2cBus::new("U").with_slave(Box::new(mcp4728_at(0x60)));
-        let pair = |code: u16| -> [u8; 2] {
-            let hi = (1u8 << 7) | (1 << 4) | (((code >> 8) & 0x0F) as u8);
-            [hi, (code & 0xFF) as u8]
-        };
-        let mut evs = vec![
-            I2cEvent::Start {
-                addr: 0x60,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x60,
-                data: 0x50,
-            },
-        ];
-        for code in [100u16, 200, 300, 400] {
-            for b in pair(code) {
-                evs.push(I2cEvent::Write {
-                    addr: 0x60,
-                    data: b,
-                });
-            }
-        }
-        evs.push(I2cEvent::Stop { addr: 0x60 });
-        for ev in evs {
-            bus.dispatch(ev);
-        }
-        assert_eq!(
-            [
-                dac_code(&bus, 0x60, 0),
-                dac_code(&bus, 0x60, 1),
-                dac_code(&bus, 0x60, 2),
-                dac_code(&bus, 0x60, 3)
-            ],
-            [100, 200, 300, 400],
-            "Sequential Write lands each code in its own auto-incremented channel"
-        );
-        assert!(
-            (dac_vout(&bus, 0x60, 3) - 0.400).abs() < 1e-9,
-            "VOUT D = 0.4 V"
-        );
-    }
-
-    /// FIXTURE (SPI address-byte convention): the SAME BME280 register map over
-    /// SPI resolves the chip-ID at its RAW datasheet address 0xD0. The command
-    /// byte folds the R/W flag into bit 7 (0xD0 = read | addr 0x50); the
-    /// interpreter masks it off both the command and the stored key, so the raw
-    /// datasheet address is what the spec declares. Documents item-2's SPI note.
-    #[test]
-    fn declarative_bme280_spi_chip_id() {
-        // Minimal SPI variant of the BME280 register map (same addresses).
-        let spi = r#"
-[sensor]
-name = "BME280"
-bus  = "spi"
-
-[[sensor.register]]
-addr  = 0xD0
-const = [0x60]
-
-[sensor.protocol]
-style           = "spi_reg"
-rw_read_is_high = true
-addr_mask       = 0x7f
-"#;
-        let sensor = RegisterMapSensor::from_toml(spi).unwrap();
-        let mut bus = SpiBus::new("SPI", Box::new(sensor));
-        let _status = bus.transfer(0xD0); // read bit 7 set | masked addr 0x50
-        let id = bus.transfer(0x00);
-        assert_eq!(id, 0x60, "BME280 SPI chip-ID at raw 0xD0 must read 0x60");
+        assert!((dac_vout(&bus, 0x60, 3) - 0.400).abs() < 1e-9);
     }
 }

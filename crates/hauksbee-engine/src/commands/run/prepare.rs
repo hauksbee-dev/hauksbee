@@ -14,7 +14,8 @@ use crate::result::{JsonFinding, JsonInputEvidence, Refusal, EXIT_INVALID_FOR_AN
 use crate::schematic_ties::SchematicTies;
 
 use super::{
-    ci_check_selected, ci_surface_is_model_dependent, input_kind_name, valid_digest, warn_sibling_boards, Notes, RunConfig, SelectedSurface,
+    ci_check_selected, ci_surface_is_model_dependent, input_kind_name, valid_digest,
+    warn_sibling_boards, Notes, RunConfig, SelectedSurface,
 };
 
 pub(crate) struct RunInputs {

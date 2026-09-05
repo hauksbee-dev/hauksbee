@@ -1,0 +1,30 @@
+name: False positive
+description: A check fired on a board that is actually fine.
+labels: ["bug", "false-positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        These matter more than most bugs. A hardware tool that cries wolf gets
+        switched off, and a switched-off tool catches nothing.
+  - type: input
+    id: check
+    attributes:
+      label: Which check fired
+      description: The finding's name or the text it printed.
+    validations:
+      required: true
+  - type: textarea
+    id: why_fine
+    attributes:
+      label: Why the board is actually fine
+      description: What the check missed. Circuit context, a datasheet page, or the intended behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: board
+    attributes:
+      label: Board file
+      description: Needed to add this to the regression corpus so it cannot come back.
+    validations:
+      required: true

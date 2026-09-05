@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use hauksbee_ir::parse_spice_number;
 
 /// A single SPICE `.model` or `.subckt` card as loaded from a user file.
 #[derive(Debug, Clone)]
@@ -176,10 +177,6 @@ fn parse_dot_subckt(decl_line: &str, all_lines: &[String]) -> Option<SpiceCard> 
         }
     }
 
-    // Count ports for subckt (approximate; the solver may need more detail)
-    let pin_count = ports.len();
-    let _ = pin_count;
-
     Some(SpiceCard {
         name,
         kind: SpiceCardKind::Subckt,
@@ -204,103 +201,6 @@ fn parse_kv_params(s: &str) -> BTreeMap<String, f64> {
         }
     }
     map
-}
-
-/// Parse a SPICE number, which may use SPICE multiplier suffixes optionally
-/// followed by a unit (`4pF`, `2.2uF`, `1MegOhm`). Returns `None` if the string
-/// has no numeric mantissa.
-///
-/// This mirrors the authoritative loader in `hauksbee-ir::spice`: split the
-/// leading numeric mantissa (with optional exponent) from the trailing suffix,
-/// then resolve the scale by the LONGEST matching prefix of the suffix and
-/// ignore any trailing unit. Matching on `ends_with` was wrong: a trailing unit
-/// letter (`F` for farad) collided with a scale letter (`f` = femto), so `4pF`
-/// took the femto branch, then failed to parse `"4p"` as a mantissa and returned
-/// `None`, silently dropping the value, disagreeing with hauksbee-ir which
-/// reads it as 4 pF.
-fn parse_spice_number(s: &str) -> Option<f64> {
-    let t = s.trim();
-    if t.is_empty() {
-        return None;
-    }
-    let bytes = t.as_bytes();
-    let mut i = 0;
-    if bytes[i] == b'+' || bytes[i] == b'-' {
-        i += 1;
-    }
-    let mut seen_digit = false;
-    let mut seen_dot = false;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'0'..=b'9' => {
-                seen_digit = true;
-                i += 1;
-            }
-            b'.' if !seen_dot => {
-                seen_dot = true;
-                i += 1;
-            }
-            b'e' | b'E' => {
-                // Exponent: e[+/-]digits, only when actually followed by digits.
-                let mut j = i + 1;
-                if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
-                    j += 1;
-                }
-                if j < bytes.len() && bytes[j].is_ascii_digit() {
-                    i = j + 1;
-                    while i < bytes.len() && bytes[i].is_ascii_digit() {
-                        i += 1;
-                    }
-                }
-                break;
-            }
-            _ => break,
-        }
-    }
-    if !seen_digit {
-        return None;
-    }
-    let value: f64 = t[..i].parse().ok()?;
-    let suffix = t[i..].to_ascii_lowercase();
-    Some(value * scale_suffix(&suffix))
-}
-
-/// Engineering-suffix multiplier. Order matters: `meg`/`mil` before `m`. Any
-/// trailing unit after the scale letter (e.g. the `f` in `pf`, the `ohm` in
-/// `kohm`) is ignored.
-fn scale_suffix(suffix: &str) -> f64 {
-    let s = suffix;
-    if s.is_empty() {
-        1.0
-    } else if s.starts_with("meg") {
-        1e6
-    } else if s.starts_with("mil") {
-        25.4e-6
-    } else if s.starts_with('t') {
-        1e12
-    } else if s.starts_with('g') {
-        1e9
-    } else if s.starts_with('k') {
-        1e3
-    } else if s.starts_with('m') {
-        1e-3
-    } else if s.starts_with('u') {
-        1e-6
-    } else if s.starts_with('n') {
-        1e-9
-    } else if s.starts_with('p') {
-        1e-12
-    } else if s.starts_with('f') {
-        1e-15
-    } else {
-        // No `a`=atto branch: atto is NOT in the SPICE3/ngspice scale set
-        // (T/G/Meg/K/mil/m/u/n/p/f) and 'a' collides with the ampere unit, a
-        // current-valued model param "IBV=5A" must read 5 A, not 5e-18. This
-        // matches hauksbee-ir::spice::scale_suffix exactly (the authoritative
-        // loader this function mirrors). An unrecognised trailing unit with no
-        // scale letter (bare "V"/"A"/"Ohm") stands as written.
-        1.0
-    }
 }
 
 #[cfg(test)]
@@ -380,38 +280,8 @@ R2 A B 2k
 
     #[test]
     fn scale_suffix_with_trailing_unit_is_not_dropped() {
-        // An `ends_with` parser collides the femto scale letter with a trailing
-        // farad unit: "4pF" takes the femto branch, then fails to parse "4p" as
-        // a mantissa, returns None and drops CJO entirely.
-        // The scale must be read from the FRONT of the suffix, the unit ignored.
-        let cases: [(&str, f64); 13] = [
-            ("4pF", 4e-12),
-            ("2.2uF", 2.2e-6),
-            ("100nF", 100e-9),
-            ("1MegOhm", 1e6),
-            ("4.7kOhm", 4.7e3),
-            ("15mV", 15e-3),
-            ("4F", 4e-15), // bare femto, no unit, unchanged from before
-            ("2.52N", 2.52e-9),
-            ("80", 80.0),
-            ("1e-14", 1e-14),
-            // R17: a trailing ampere unit must NOT be read as the atto scale.
-            // Atto is not in the SPICE3/ngspice scale set and 'a' collides with
-            // amperes; a current param "IBV=5A" is 5 A, not 5e-18. Matches the
-            // authoritative hauksbee-ir loader this function mirrors.
-            ("5A", 5.0),
-            ("2.2A", 2.2),
-            ("100mA", 100e-3), // m=milli, A ignored
-        ];
-        for (input, expected) in cases {
-            let got = parse_spice_number(input).unwrap_or_else(|| panic!("{input} parsed to None"));
-            let tol = (expected.abs() * 1e-9).max(1e-24);
-            assert!(
-                (got - expected).abs() <= tol,
-                "{input}: got {got}, expected {expected}"
-            );
-        }
-        // And end-to-end through a model card: CJO=4P survives.
+        // A unit after the scale letter (`4pF`, `1MegOhm`, `100mA`) is ignored
+        // and a bare ampere unit is not read as atto: CJO=4P survives.
         let card = &parse_spice_text(SAMPLE_MODEL).unwrap()[0];
         let cjo = *card
             .params

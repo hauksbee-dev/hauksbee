@@ -511,350 +511,99 @@ pub(crate) fn pinned_nodes(circuit: &Circuit, n_nodes: usize) -> Vec<bool> {
 mod tests {
     use super::*;
     use crate::decompose::conduction::ConductionGraph;
-    use hauksbee_ir::{BjtModel, Polarity, SourceKind};
+    use crate::test_fixtures::{cap, pnp_blocks, res, shunt_array, vdc, GND};
 
-    /// A shunt-fed PNP mirror array, the `rail_tear.rs` shape: +5V -> 1k shunt
-    /// -> ANALOG_VDD rail -> n emitter-coupled blocks of (BJT + load R).
-    fn shunt_array(n_blocks: usize) -> (Circuit, NodeId) {
-        let mut c = Circuit::new();
-        let p5 = c.node("+5V");
-        c.add(Device::Vsource {
-            name: "V5".into(),
-            p: p5,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        let rail = c.node("ANALOG_VDD");
-        c.add(Device::Resistor {
-            name: "R_shunt".into(),
-            a: p5,
-            b: rail,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        for k in 0..n_blocks {
-            let base = c.node(&format!("b{k}"));
-            let col = c.node(&format!("c{k}"));
-            c.add(Device::Bjt {
-                name: format!("Q{k}"),
-                c: col,
-                b: base,
-                e: rail,
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("Rb{k}"),
-                a: base,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("Rc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
-        }
-        (c, rail)
+    fn tears(c: &Circuit, motive: TearMotive) -> Vec<BalanceTearCandidate> {
+        let g = ConductionGraph::analyze(c);
+        detect_balance_tears(c, &g, motive, &RailPolicy::default())
     }
 
+    /// A 24-block array tears profitably (the SIGN of the decision is what the
+    /// toy pins); a ground bypass cap on the rail no longer refuses.
     #[test]
-    fn wide_array_tears_profitably() {
-        let (c, rail) = shunt_array(24);
-        let g = ConductionGraph::analyze(&c);
-        let tears = detect_balance_tears(&c, &g, TearMotive::Profit, &RailPolicy::default());
-        assert_eq!(tears.len(), 1, "{tears:?}");
-        let t = &tears[0];
-        assert_eq!(t.rail, rail);
-        assert_eq!(t.block_sizes.len(), 24, "{:?}", t.block_sizes);
-        match t.decision {
-            TearDecision::Tear { est_speedup } => {
-                // At toy scale (3-device blocks) the modeled win is slim: the
-                // outer loop's 3x re-solve nearly cancels the fragmentation
-                // gain, which is honest (per-block overhead dominates small
-                // blocks). The margin grows with block size; what this fixture
-                // pins is the SIGN of the decision, not its magnitude.
-                assert!(est_speedup > 1.0, "24 equal blocks must win: {est_speedup}")
-            }
-            ref other => panic!("expected Tear, got {other:?}"),
-        }
+    fn wide_array_tears_profitably_even_with_a_bypass_cap() {
+        let (mut c, rail, _, _, _) = shunt_array(24, 1e3);
+        let t = tears(&c, TearMotive::Profit);
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!(t[0].rail, rail);
+        assert_eq!(t[0].block_sizes.len(), 24, "{:?}", t[0].block_sizes);
+        assert!(
+            matches!(t[0].decision, TearDecision::Tear { est_speedup } if est_speedup > 1.0),
+            "{:?}",
+            t[0].decision
+        );
+
+        cap(&mut c, "Cbypass", rail, GND, 100e-9);
+        let t = tears(&c, TearMotive::Profit);
+        assert_eq!(t.len(), 1);
+        assert!(t[0].rail == rail && t[0].torn(), "{:?}", t[0].decision);
     }
 
-    /// A block-size cap is emergent, not configured: an "array" that is one
-    /// giant block plus a couple of trivial ones does not fragment, so the
-    /// cost model refuses without any size threshold.
+    /// One giant block plus a trivial one does not fragment, so the cost model
+    /// refuses; convergence escalation overrides the cost gate.
     #[test]
     fn unfragmented_core_refuses_on_cost() {
-        let (mut c, rail) = shunt_array(2);
-        // Fuse the two blocks into one giant block with base-to-base bridges,
-        // leaving the rail's island effectively monolithic after the tear.
-        let b0 = c.node("b0");
-        let b1 = c.node("b1");
-        c.add(Device::Resistor {
-            name: "Rbridge".into(),
-            a: b0,
-            b: b1,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let g = ConductionGraph::analyze(&c);
-        let tears = detect_balance_tears(&c, &g, TearMotive::Profit, &RailPolicy::default());
-        assert_eq!(tears.len(), 1);
-        assert_eq!(tears[0].rail, rail);
+        let (mut c, rail, _, _, blocks) = shunt_array(2, 1e3);
+        res(&mut c, "Rbridge", blocks[0].0, blocks[1].0, 1e3);
+        let t = tears(&c, TearMotive::Profit);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].rail, rail);
         assert!(
-            matches!(tears[0].decision, TearDecision::RefusedUnprofitable { .. }),
-            "one fused block cannot win the outer loop: {:?}",
-            tears[0].decision
+            matches!(t[0].decision, TearDecision::RefusedUnprofitable { .. }),
+            "{:?}",
+            t[0].decision
         );
-        // ... but convergence escalation overrides the cost gate.
-        let esc = detect_balance_tears(
-            &c,
-            &g,
-            TearMotive::ConvergenceEscalation,
-            &RailPolicy::default(),
-        );
+        let esc = tears(&c, TearMotive::ConvergenceEscalation);
         assert!(esc[0].torn(), "{:?}", esc[0].decision);
     }
 
-    /// The bypass-cap shape a naive detector refuses: with boundary-only
-    /// islands carrying the cap's current into the balance books
-    /// (`partition.rs`), the rail tears. The numerical proof that this is
-    /// exact, and not merely permitted, is the staged executor's
-    /// `bypass_cap_on_torn_rail_matches_monolith` gate.
-    #[test]
-    fn ground_bypass_cap_no_longer_refuses() {
-        let (mut c, rail) = shunt_array(24);
-        c.add(Device::Capacitor {
-            name: "Cbypass".into(),
-            a: rail,
-            b: NodeId::GROUND,
-            farads: 100e-9,
-            ic: None,
-        });
-        let g = ConductionGraph::analyze(&c);
-        let tears = detect_balance_tears(&c, &g, TearMotive::Profit, &RailPolicy::default());
-        assert_eq!(tears.len(), 1);
-        assert_eq!(tears[0].rail, rail);
-        assert!(
-            tears[0].torn(),
-            "the cap no longer strands, so the wide array wins: {:?}",
-            tears[0].decision
-        );
-    }
-
-    /// The flagship's founding shape (analysis-probe finding 1): a supply
-    /// CASCADE, source -> R1 -> MID -> R2 -> INNER, with the big array on
-    /// INNER and a couple of loads on MID. Single-hop detection never
-    /// reaches INNER; transitive discovery must. The balance executor carries
-    /// the inter-rail shunt term, so BOTH rails tear: they share a conduction
-    /// island, so they are decided jointly, and the joint cost on this fixture
-    /// (26 small blocks vs one fused core) clears the outer-loop overhead. The
-    /// parent does not defer.
+    /// source -> R1 -> MID (two loads) -> R2 -> INNER (24-block array):
+    /// transitive discovery reaches INNER, and both rails tear jointly.
     #[test]
     fn stacked_cascade_reaches_and_tears_the_inner_rail() {
         let mut c = Circuit::new();
         let src = c.node("+5V_SRC");
-        c.add(Device::Vsource {
-            name: "VS".into(),
-            p: src,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        let mid = c.node("MID");
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: src,
-            b: mid,
-            ohms: 500.0,
-            tc1: None,
-        });
-        let inner = c.node("INNER");
-        c.add(Device::Resistor {
-            name: "R2".into(),
-            a: mid,
-            b: inner,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        // Two small loads keep MID above the structural fanout floor.
-        for k in 0..2 {
-            let b = c.node(&format!("mb{k}"));
-            let col = c.node(&format!("mc{k}"));
-            c.add(Device::Bjt {
-                name: format!("MQ{k}"),
-                c: col,
-                b,
-                e: mid,
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("MRb{k}"),
-                a: b,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("MRc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-        }
-        // The array on INNER is what makes the cascade worth walking.
-        for k in 0..24 {
-            let b = c.node(&format!("ib{k}"));
-            let col = c.node(&format!("ic{k}"));
-            c.add(Device::Bjt {
-                name: format!("IQ{k}"),
-                c: col,
-                b,
-                e: inner,
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("IRb{k}"),
-                a: b,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("IRc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-        }
-
-        let g = ConductionGraph::analyze(&c);
-        let tears = detect_balance_tears(&c, &g, TearMotive::Profit, &RailPolicy::default());
-        let inner_cand = tears
+        vdc(&mut c, "VS", src, 5.0);
+        let (mid, inner) = (c.node("MID"), c.node("INNER"));
+        res(&mut c, "R1", src, mid, 500.0);
+        res(&mut c, "R2", mid, inner, 1e3);
+        pnp_blocks(&mut c, "m", mid, 2, GND, 100e3, 100e3);
+        pnp_blocks(&mut c, "i", inner, 24, GND, 100e3, 100e3);
+        let t = tears(&c, TearMotive::Profit);
+        let inner_cand = t
             .iter()
             .find(|t| t.rail == inner)
-            .expect("transitive discovery must reach INNER");
+            .expect("transitive discovery reaches INNER");
         assert!(
             matches!(inner_cand.decision, TearDecision::Tear { .. }),
-            "the deep array rail must tear: {tears:?}"
+            "{t:?}"
         );
-        assert_eq!(inner_cand.feed, mid, "INNER is fed from MID");
-        let mid_cand = tears
+        assert_eq!(inner_cand.feed, mid);
+        let mid_cand = t
             .iter()
             .find(|t| t.rail == mid)
             .expect("MID is a candidate too");
         assert!(
             matches!(mid_cand.decision, TearDecision::Tear { .. }),
-            "the parent tears too now that the executor carries the inter-rail term: {tears:?}"
+            "{t:?}"
         );
-        assert_eq!(mid_cand.feed, src, "MID is fed from the source");
+        assert_eq!(mid_cand.feed, src);
     }
 
-    /// A rail pinned by its own ideal source is not a candidate at all.
+    /// A rail pinned by its own ideal source is not a candidate; two plausible
+    /// shunt feeds refuse as ambiguous even under escalation.
     #[test]
-    fn source_pinned_rail_is_not_a_candidate() {
-        let (mut c, rail) = shunt_array(8);
-        c.add(Device::Vsource {
-            name: "Vhard".into(),
-            p: rail,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(5.0),
-        });
-        let g = ConductionGraph::analyze(&c);
-        let tears = detect_balance_tears(&c, &g, TearMotive::Profit, &RailPolicy::default());
-        assert!(tears.is_empty(), "{tears:?}");
-    }
+    fn pinned_and_ambiguously_fed_rails_are_not_torn() {
+        let (mut c, rail, _, _, _) = shunt_array(8, 1e3);
+        vdc(&mut c, "Vhard", rail, 5.0);
+        assert!(tears(&c, TearMotive::Profit).is_empty());
 
-    /// Two plausible shunt feeds into one rail: the scalar balance assumes a
-    /// single feed, so the detector must refuse rather than pick one
-    /// (section 3.4 refusal-completeness: every assumption gets a violating
-    /// fixture).
-    #[test]
-    fn two_feeds_refuse_ambiguous() {
-        let (mut c, rail) = {
-            let mut c = Circuit::new();
-            let p5 = c.node("+5V");
-            c.add(Device::Vsource {
-                name: "V5".into(),
-                p: p5,
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(5.0),
-            });
-            let rail = c.node("ANALOG_VDD");
-            c.add(Device::Resistor {
-                name: "R_shunt_a".into(),
-                a: p5,
-                b: rail,
-                ohms: 1e3,
-                tc1: None,
-            });
-            (c, rail)
-        };
-        // Second pinned feed path into the same rail.
+        let (mut c, rail, _, _, _) = shunt_array(8, 1e3);
         let p3 = c.node("+3V3");
-        c.add(Device::Vsource {
-            name: "V3".into(),
-            p: p3,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.3),
-        });
-        c.add(Device::Resistor {
-            name: "R_shunt_b".into(),
-            a: p3,
-            b: rail,
-            ohms: 1e3,
-            tc1: None,
-        });
-        let model = BjtModel {
-            polarity: Polarity::P,
-            ..BjtModel::default()
-        };
-        for k in 0..8 {
-            let base = c.node(&format!("b{k}"));
-            let col = c.node(&format!("c{k}"));
-            c.add(Device::Bjt {
-                name: format!("Q{k}"),
-                c: col,
-                b: base,
-                e: rail,
-                model: model.clone(),
-            });
-            c.add(Device::Resistor {
-                name: format!("Rb{k}"),
-                a: base,
-                b: NodeId::GROUND,
-                ohms: 100e3,
-                tc1: None,
-            });
-            c.add(Device::Resistor {
-                name: format!("Rc{k}"),
-                a: col,
-                b: NodeId::GROUND,
-                ohms: 10e3,
-                tc1: None,
-            });
-        }
-        let g = ConductionGraph::analyze(&c);
-        // Even under escalation (structural guards never relax), two feeds
-        // must refuse.
-        let tears = detect_balance_tears(
-            &c,
-            &g,
-            TearMotive::ConvergenceEscalation,
-            &RailPolicy::default(),
-        );
-        let cand = tears.iter().find(|t| t.rail == rail).expect("candidate");
+        vdc(&mut c, "V3", p3, 3.3);
+        res(&mut c, "R_shunt_b", p3, rail, 1e3);
+        let t = tears(&c, TearMotive::ConvergenceEscalation);
+        let cand = t.iter().find(|t| t.rail == rail).expect("candidate");
         assert_eq!(
             cand.decision,
             TearDecision::RefusedAmbiguousFeed { feeds: 2 }

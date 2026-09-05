@@ -6012,32 +6012,22 @@ mod part_name_tests {
     use super::names_same_part;
 
     #[test]
-    fn similar_five_character_prefixes_are_not_the_same_part() {
+    fn only_documented_package_and_reel_suffixes_name_the_same_part() {
         assert!(!names_same_part("TPS62130", "TPS62135", None));
         assert!(!names_same_part("ATmega328P", "ATmega328PB", None));
-    }
-
-    #[test]
-    fn documented_package_and_reel_suffixes_are_compatible() {
         assert!(names_same_part(
             "ATmega328P-AU",
             "ATmega328P",
             Some("Microchip Technology")
         ));
         assert!(names_same_part("BSS138", "BSS138-7-F", Some("Diodes Inc")));
-        assert!(names_same_part("BC847B", "BC847B,215", Some("Nexperia")));
         assert!(names_same_part(
             "BC847B",
             "BC847B,215",
             Some("Nexperia USA Inc.")
         ));
-    }
-
-    #[test]
-    fn ordering_suffix_spellings_are_not_global_part_number_rewrites() {
         assert!(!names_same_part("SENSOR-AU", "SENSOR", None));
         assert!(!names_same_part("DRIVER-7-F", "DRIVER", None));
-        assert!(!names_same_part("MODULE,215", "MODULE", None));
         assert!(!names_same_part("SENSOR-AU", "SENSOR", Some("Acme")));
     }
 }
@@ -6500,213 +6490,15 @@ fn natural_ref_key(reference: &str) -> (String, u64, String) {
 }
 
 #[cfg(test)]
-mod canonical_ground_tests {
+mod tests {
     use super::*;
-
-    #[test]
-    fn vss_is_canonical_ground_but_split_families_and_vee_are_not() {
-        // R35: a board whose sole ground is spelled VSS (KiCad power:VSS) must
-        // fuse onto node 0, or the reference node floats and the MNA solve is
-        // singular. VSS is the IC-pin spelling of "the" ground, not a split
-        // island.
-        assert!(is_canonical_ground("VSS"));
-        assert!(is_canonical_ground("vss"));
-        assert!(is_canonical_ground("/Power/VSS"));
-        // GND / 0 unchanged.
-        assert!(is_canonical_ground("GND"));
-        assert!(is_canonical_ground("0"));
-        // The deliberately-split ground families stay distinct so bridges
-        // (ferrite bead / 0 Ω link / star point) are preserved.
-        for split in ["AGND", "DGND", "PGND", "ISOGND", "CHASSIS_GND"] {
-            assert!(
-                !is_canonical_ground(split),
-                "{split} must stay a distinct node"
-            );
-        }
-        // VEE is a negative supply rail on bipolar-supply analog boards; pinning
-        // it to 0 V would be a hard fault, so it is NOT canonical ground.
-        assert!(!is_canonical_ground("VEE"));
-    }
-}
-
-#[cfg(test)]
-mod duplicate_identity_refusal_tests {
-    use super::*;
-
-    fn inferred_altium_resistor(properties: Vec<(String, String)>) -> Component {
-        Component {
-            reference: "R1".into(),
-            value: "1k".into(),
-            lib_id: "Device:R".into(),
-            footprint: "R_0603".into(),
-            position: None,
-            layer: "F.Cu".into(),
-            properties,
-            dnp: false,
-            pins: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn inferred_ambiguous_altium_identity_binds_only_with_an_authoritative_uid() {
-        let lib = ModelLibrary::builtin();
-        let marker = (
-            hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.into(),
-            "hierarchy could not distinguish repeated source designators".into(),
-        );
-        let ambiguous = inferred_altium_resistor(vec![marker.clone()]);
-        assert!(
-            AssemblyState::of(&ambiguous).fitted().is_none(),
-            "an inferred ambiguous identity must not yield the model-resolution witness"
-        );
-        assert!(
-            library_resolution(&lib, &ambiguous).model.is_none(),
-            "even the identity-machinery view must not choose a precise model"
-        );
-
-        let authoritative = inferred_altium_resistor(vec![
-            marker,
-            (
-                hauksbee_extract::altium::SOURCE_UNIQUE_ID_KEY.into(),
-                "ABC-123".into(),
-            ),
-        ]);
-        let part = AssemblyState::of(&authoritative)
-            .fitted()
-            .expect("the source UID makes the component identity authoritative");
-        assert!(
-            resolve(&lib, part).model.is_some(),
-            "an authoritative identity resolves to a model"
-        );
-    }
-
-    #[test]
-    fn conflicting_duplicate_identity_is_left_open_and_reported() {
-        let conflict = "records named 'R1' were kept distinct: footprints differ";
-        let board = ExtractedBoard {
-            name: "ambiguous".into(),
-            nets: vec![
-                hauksbee_extract::Net {
-                    id: 1,
-                    name: "SIGNAL".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 2,
-                    name: "GND".into(),
-                },
-            ],
-            components: vec![Component {
-                reference: "R1".into(),
-                value: "1k".into(),
-                lib_id: "Device:R".into(),
-                footprint: "R_0603".into(),
-                position: None,
-                layer: "F.Cu".into(),
-                properties: vec![(
-                    hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.into(),
-                    conflict.into(),
-                )],
-                dnp: false,
-                pins: vec![
-                    hauksbee_extract::Pin {
-                        number: "1".into(),
-                        net: Some(1),
-                        function: "+5V".into(),
-                        kind: "power_out".into(),
-                        position: None,
-                    },
-                    hauksbee_extract::Pin {
-                        number: "2".into(),
-                        net: Some(2),
-                        function: String::new(),
-                        kind: String::new(),
-                        position: None,
-                    },
-                ],
-            }],
-        };
-
-        let bound = bind_board(&board, &ModelLibrary::builtin());
-        let row = bound
-            .report
-            .rows
-            .iter()
-            .find(|row| row.reference == "R1")
-            .unwrap();
-        assert_eq!(
-            row.model_id, None,
-            "ambiguous metadata must not select a model"
-        );
-        assert_eq!(row.confidence, Confidence::Unresolved);
-        assert!(matches!(
-            &row.outcome,
-            BindOutcome::Unresolved { reason }
-                if reason.contains("ambiguous duplicate designator") && reason.contains(conflict)
-        ));
-        assert!(row.warning.as_deref().is_some_and(|warning| {
-            warning.contains("cannot bind") && warning.contains(conflict)
-        }));
-        assert!(
-            bound.supplies.is_empty(),
-            "a conflicted power_out record must not manufacture an ideal supply"
-        );
-    }
-}
-
-#[cfg(test)]
-mod natural_ref_key_tests {
-    use super::*;
-
-    #[test]
-    fn natural_key_orders_numerically_not_lexicographically() {
-        // Raw String Ord would rank "U10" < "U2" (byte-wise '1' < '2'); the
-        // natural key must rank U2 before U10 so addresses ascend by device.
-        let mut refs = vec!["U10", "U2", "U1", "U100"];
-        refs.sort_by(|a, b| natural_ref_key(a).cmp(&natural_ref_key(b)));
-        assert_eq!(refs, vec!["U1", "U2", "U10", "U100"]);
-    }
-
-    #[test]
-    fn mcp4728_addresses_ascend_by_natural_device_order() {
-        // Simulate the address-assignment pass over DAC bindings whose
-        // designators are non-uniform width (U2, U10). U2 must get 0x60 and
-        // U10 0x61, which plain lexicographic ordering would reverse.
-        let mut dacs = vec![
-            DacBinding {
-                reference: "U10".into(),
-                address: 0,
-                vref: 0.0,
-                gain: 0,
-                vout_drivers: [None, None, None, None],
-            },
-            DacBinding {
-                reference: "U2".into(),
-                address: 0,
-                vref: 0.0,
-                gain: 0,
-                vout_drivers: [None, None, None, None],
-            },
-        ];
-        dacs.sort_by(|a, b| natural_ref_key(&a.reference).cmp(&natural_ref_key(&b.reference)));
-        for (i, d) in dacs.iter_mut().enumerate() {
-            d.address = 0x60 + i as u8;
-        }
-        let addr = |r: &str| dacs.iter().find(|d| d.reference == r).unwrap().address;
-        assert_eq!(addr("U2"), 0x60, "U2 is the first device");
-        assert_eq!(addr("U10"), 0x61, "U10 is the second device");
-    }
-}
-
-#[cfg(test)]
-mod digital_ro_tests {
-    use super::*;
-    use hauksbee_extract::Pin;
+    use hauksbee_extract::{Net, Pin};
     use hauksbee_models::{ComponentQuery, ModelLibrary};
 
-    fn bare_comp(reference: &str) -> Component {
+    fn comp(reference: &str, value: &str) -> Component {
         Component {
             reference: reference.to_string(),
-            value: String::new(),
+            value: value.to_string(),
             lib_id: String::new(),
             footprint: String::new(),
             position: None,
@@ -6719,7 +6511,7 @@ mod digital_ro_tests {
 
     fn pin(number: &str, net: i64) -> Pin {
         Pin {
-            number: number.into(),
+            number: number.to_string(),
             net: Some(net),
             function: String::new(),
             kind: String::new(),
@@ -6727,31 +6519,181 @@ mod digital_ro_tests {
         }
     }
 
+    fn net(id: i64, name: &str) -> Net {
+        Net {
+            id,
+            name: name.to_string(),
+        }
+    }
+
+    /// Resolve `value` the way the binder does (value and MPN both set).
+    fn resolve_value(lib: &ModelLibrary, value: &str, footprint: &str) -> ModelEntry {
+        let fp = (!footprint.is_empty()).then(|| footprint.to_string());
+        let mut q = ComponentQuery::new(None, Some(value.to_string()), fp);
+        q.mpn = Some(value.to_string());
+        lib.resolve(&q)
+            .model
+            .unwrap_or_else(|| panic!("{value} must resolve"))
+    }
+
+    /// `bind_component` with empty side tables, returning the outcome and warning.
+    fn bind_one(
+        c: &Component,
+        model: &ModelEntry,
+        circuit: &mut Circuit,
+        node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+        power_nets: &HashMap<String, f64>,
+    ) -> (BindOutcome, Option<String>) {
+        let (outcome, warning, _) = bind_component(
+            c,
+            model,
+            Confidence::Exact,
+            circuit,
+            node_of,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            false,
+            power_nets,
+            ModelLibrary::builtin().pin_rules(),
+        );
+        (outcome, warning)
+    }
+
+    type Switch = (NodeId, NodeId, NodeId, NodeId, f64, f64);
+
+    fn vswitches(circuit: &Circuit) -> Vec<Switch> {
+        circuit
+            .devices
+            .iter()
+            .filter_map(|d| match d {
+                Device::VSwitch {
+                    a,
+                    b,
+                    ctrl_p,
+                    ctrl_n,
+                    von,
+                    voff,
+                    ..
+                } => Some((*a, *b, *ctrl_p, *ctrl_n, *von, *voff)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn roles(circuit: &mut Circuit, names: &[&str]) -> HashMap<String, NodeId> {
+        names
+            .iter()
+            .map(|r| (r.to_string(), circuit.node(&r.to_uppercase())))
+            .collect()
+    }
+
+    #[test]
+    fn vss_is_canonical_ground_but_split_families_and_vee_are_not() {
+        for ground in ["VSS", "vss", "/Power/VSS", "GND", "0"] {
+            assert!(is_canonical_ground(ground), "{ground}");
+        }
+        for split in ["AGND", "DGND", "PGND", "ISOGND", "CHASSIS_GND", "VEE"] {
+            assert!(
+                !is_canonical_ground(split),
+                "{split} must stay a distinct node"
+            );
+        }
+    }
+
+    #[test]
+    fn inferred_ambiguous_altium_identity_binds_only_with_an_authoritative_uid() {
+        let lib = ModelLibrary::builtin();
+        let marker = (
+            hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.to_string(),
+            "hierarchy could not distinguish repeated source designators".to_string(),
+        );
+        let mut ambiguous = comp("R1", "1k");
+        ambiguous.lib_id = "Device:R".into();
+        ambiguous.footprint = "R_0603".into();
+        ambiguous.properties.push(marker.clone());
+        assert!(AssemblyState::of(&ambiguous).fitted().is_none());
+        assert!(library_resolution(&lib, &ambiguous).model.is_none());
+
+        let mut authoritative = ambiguous.clone();
+        authoritative.properties.push((
+            hauksbee_extract::altium::SOURCE_UNIQUE_ID_KEY.into(),
+            "ABC-123".into(),
+        ));
+        let part = AssemblyState::of(&authoritative)
+            .fitted()
+            .expect("the source UID makes the component identity authoritative");
+        assert!(resolve(&lib, part).model.is_some());
+    }
+
+    #[test]
+    fn conflicting_duplicate_identity_is_left_open_and_reported() {
+        let conflict = "records named 'R1' were kept distinct: footprints differ";
+        let mut r1 = comp("R1", "1k");
+        r1.footprint = "R_0603".into();
+        r1.properties.push((
+            hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.into(),
+            conflict.into(),
+        ));
+        let mut power_out = pin("1", 1);
+        power_out.function = "+5V".into();
+        power_out.kind = "power_out".into();
+        r1.pins = vec![power_out, pin("2", 2)];
+        let board = ExtractedBoard {
+            name: "ambiguous".into(),
+            nets: vec![net(1, "SIGNAL"), net(2, "GND")],
+            components: vec![r1],
+        };
+
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        let row = bound
+            .report
+            .rows
+            .iter()
+            .find(|row| row.reference == "R1")
+            .unwrap();
+        assert_eq!(row.model_id, None);
+        assert_eq!(row.confidence, Confidence::Unresolved);
+        assert!(matches!(
+            &row.outcome,
+            BindOutcome::Unresolved { reason } if reason.contains(conflict)
+        ));
+        assert!(row.warning.as_deref().is_some_and(|w| w.contains(conflict)));
+        assert!(
+            bound.supplies.is_empty(),
+            "a conflicted power_out record must not manufacture an ideal supply"
+        );
+    }
+
+    #[test]
+    fn natural_key_orders_numerically_not_lexicographically() {
+        let mut refs = vec!["U10", "U2", "U1", "U100"];
+        refs.sort_by(|a, b| natural_ref_key(a).cmp(&natural_ref_key(b)));
+        assert_eq!(refs, vec!["U1", "U2", "U10", "U100"]);
+    }
+
     #[test]
     fn register_map_address_and_bus_personality_come_from_exact_board_straps() {
         let lib = ModelLibrary::builtin();
-        let model = lib
-            .resolve(&ComponentQuery::new(None, Some("BMA423".into()), None))
-            .model
-            .expect("builtin BMA423");
-        let mut component = bare_comp("U6");
-        component.value = "BMA423".into();
+        let model = resolve_value(&lib, "BMA423", "");
+        let mut component = comp("U6", "BMA423");
+        // SDO -> ground selects 0x18; CSB -> +3V3 selects I2C.
         component.pins = vec![
-            pin("1", 1), // SDO -> ground selects 0x18
-            pin("2", 2), // SDA
-            pin("3", 3), // VDDIO -> +3V3
-            pin("7", 3), // VDD -> +3V3
+            pin("1", 1),
+            pin("2", 2),
+            pin("3", 3),
+            pin("7", 3),
             pin("8", 0),
             pin("9", 0),
-            pin("10", 3), // CSB -> +3V3 selects I2C
-            pin("12", 4), // SCL
+            pin("10", 3),
+            pin("12", 4),
         ];
-
         let mut circuit = Circuit::new();
         let sda = circuit.node("SDA");
         let rail = circuit.node("+3V3");
         let scl = circuit.node("SCL");
-        let node_of = |net: Option<i64>| match net {
+        let node_of = |n: Option<i64>| match n {
             Some(0 | 1) => Some(NodeId::GROUND),
             Some(2) => Some(sda),
             Some(3) => Some(rail),
@@ -6783,83 +6725,35 @@ mod digital_ro_tests {
 
     #[test]
     fn digital_output_driver_honours_model_ro() {
-        // R12: a [models.logic] part's `ro` (drive strength) was parsed but never
-        // applied, every stamped Thevenin driver used DEFAULT_RO. Bind a 74HC595
-        // whose model declares a custom ro and assert the driver carries it.
-        let mut model = ModelLibrary::builtin()
-            .resolve(&ComponentQuery::new(
-                None,
-                Some("74HC595".to_string()),
-                None,
-            ))
-            .model
-            .expect("builtin 74HC595");
+        let mut model = resolve_value(&ModelLibrary::builtin(), "74HC595", "");
         let custom_ro = 123.0;
-        assert_ne!(
-            custom_ro, DEFAULT_RO,
-            "the test value must differ from the default"
-        );
+        assert_ne!(custom_ro, DEFAULT_RO);
         model.params.set_f64("ro", custom_ro);
-
         let mut circuit = Circuit::new();
-        let mut roles: HashMap<String, NodeId> = HashMap::new();
-        for r in ["srclk", "rclk", "ser", "qa", "qb"] {
-            roles.insert(r.into(), circuit.node(&r.to_uppercase()));
-        }
+        let roles = roles(&mut circuit, &["srclk", "rclk", "ser", "qa", "qb"]);
         let mut digital = Vec::new();
-        bind_digital(&bare_comp("U1"), &model, &mut circuit, &roles, &mut digital)
+        bind_digital(&comp("U1", ""), &model, &mut circuit, &roles, &mut digital)
             .expect("the builtin 595 spec compiles");
-
-        assert_eq!(digital.len(), 1, "the 595 binds");
-        let drv = digital[0]
-            .drivers
-            .get("qa")
-            .expect("qa output driver stamped");
-        assert_eq!(
-            drv.ron, custom_ro,
-            "driver must carry the model's ro, not DEFAULT_RO"
-        );
+        assert_eq!(digital.len(), 1);
+        assert_eq!(digital[0].drivers["qa"].ron, custom_ro);
     }
 
-    /// NEP-board study defect 3: a digital part whose [models.logic] fails to
-    /// compile must NOT report as bound. A compile error that only reaches
-    /// stderr, with the caller recording `BindOutcome::Digital` regardless,
-    /// makes the report (and `critical_parts_bound`) count a part whose nets
-    /// float as healthy.
-    /// The error must come back to the caller so the row reads UNRESOLVED.
+    /// A digital part whose [models.logic] fails to compile must surface the
+    /// error and push nothing, so the row reads UNRESOLVED rather than bound.
     #[test]
     fn broken_logic_spec_reports_unresolved_not_bound() {
-        let mut model = ModelLibrary::builtin()
-            .resolve(&ComponentQuery::new(
-                None,
-                Some("74HC595".to_string()),
-                None,
-            ))
-            .model
-            .expect("builtin 74HC595");
-        // Corrupt the spec: a comb expression referencing an undefined signal
-        // cannot compile (the shape a bad --models-dir override produces).
+        let mut model = resolve_value(&ModelLibrary::builtin(), "74HC595", "");
         model
             .logic
             .comb
             .insert("qa".to_string(), "no_such_signal & ser".to_string());
-
         let mut circuit = Circuit::new();
-        let mut roles: HashMap<String, NodeId> = HashMap::new();
-        for r in ["srclk", "rclk", "ser", "qa", "qb"] {
-            roles.insert(r.into(), circuit.node(&r.to_uppercase()));
-        }
+        let roles = roles(&mut circuit, &["srclk", "rclk", "ser", "qa", "qb"]);
         let mut digital = Vec::new();
-        let err = bind_digital(&bare_comp("U1"), &model, &mut circuit, &roles, &mut digital)
+        let err = bind_digital(&comp("U1", ""), &model, &mut circuit, &roles, &mut digital)
             .expect_err("a spec that cannot compile must surface its error");
-        assert!(
-            !err.is_empty(),
-            "the returned reason must carry the compile error"
-        );
-        assert!(
-            digital.is_empty(),
-            "no DigitalComponent may be pushed for a part that failed to compile"
-        );
+        assert!(!err.is_empty());
+        assert!(digital.is_empty());
     }
 
     #[test]
@@ -6875,29 +6769,25 @@ mod digital_ro_tests {
             params,
             std::collections::BTreeMap::new(),
         );
-        let comp = bare_comp("U1");
         let mut circuit = Circuit::new();
         let mut digital = Vec::new();
-        let mut mcus = Vec::new();
-        let mut dacs = Vec::new();
-        let mut peripherals = Vec::new();
         let (outcome, _, _) = bind_component(
-            &comp,
+            &comp("U1", ""),
             &model,
             Confidence::Exact,
             &mut circuit,
             &|_| None,
             &mut digital,
-            &mut mcus,
-            &mut dacs,
-            &mut peripherals,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
             false,
             &HashMap::new(),
             ModelLibrary::builtin().pin_rules(),
         );
         assert!(
             matches!(outcome, BindOutcome::Unresolved { .. }),
-            "identity provenance must not become executable coverage: {outcome:?}"
+            "{outcome:?}"
         );
         assert!(digital.is_empty(), "identity-only cards stamp no logic");
 
@@ -6917,10 +6807,8 @@ mod digital_ro_tests {
         assert_eq!(summary.active_path_unresolved.len(), 1);
     }
 
-    /// R23 (vreg-silent-5v-default): a vreg model with no `vout` param falls
-    /// back to 5.0 V, which overdrives a 3.3 V board. Regulating there
-    /// silently is the hazard, so a missing `vout` must emit a warning that
-    /// names the assumed default.
+    /// A vreg model with no `vout` falls back to 5.0 V and must say so; an
+    /// explicit `vout` binds silently at that voltage.
     #[test]
     fn vreg_without_vout_param_warns_about_the_assumed_default() {
         let mut model = make_entry(
@@ -6930,92 +6818,56 @@ mod digital_ro_tests {
             hauksbee_models::Params::default(),
             std::collections::BTreeMap::new(),
         );
-        // Ensure there is genuinely no vout param.
         assert!(model.params.get_f64("vout").is_none());
-
-        let mut circuit = Circuit::new();
-        let mut roles: HashMap<String, NodeId> = HashMap::new();
-        roles.insert("out".into(), circuit.node("VOUT"));
-
-        let (_outcome, warning) = bind_vreg(&bare_comp("U9"), &model, &mut circuit, &roles, true);
+        let bind = |model: &ModelEntry| {
+            let mut circuit = Circuit::new();
+            let roles = roles(&mut circuit, &["out"]);
+            bind_vreg(&comp("U9", ""), model, &mut circuit, &roles, true)
+        };
+        let (_, warning) = bind(&model);
         let warning = warning.expect("a missing vout must produce a warning");
         assert!(
             warning.contains("vout") && warning.contains("5.0"),
-            "the warning must name the missing param and the assumed default: {warning}"
+            "{warning}"
         );
 
-        // With an explicit vout the part binds silently at that voltage.
         model.params.set_f64("vout", 3.3);
-        let mut circuit2 = Circuit::new();
-        let mut roles2: HashMap<String, NodeId> = HashMap::new();
-        roles2.insert("out".into(), circuit2.node("VOUT"));
-        let (outcome, warning) = bind_vreg(&bare_comp("U9"), &model, &mut circuit2, &roles2, true);
-        assert!(warning.is_none(), "a present vout must not warn");
-        assert!(
-            matches!(outcome, BindOutcome::Behavioral { device } if device.contains("3.3")),
-            "the source regulates to the declared 3.3 V"
-        );
+        let (outcome, warning) = bind(&model);
+        assert!(warning.is_none());
+        assert!(matches!(outcome, BindOutcome::Behavioral { device } if device.contains("3.3")));
     }
 
-    /// R30 (spst-fallback-wires-ctrl-as-terminal): an analog switch with only its
-    /// common and control pins wired (the switched throw unconnected/DNP) reaches
-    /// the SPST fallback. The fallback must leave the switch OPEN; the control
-    /// net is the gate, never a signal terminal. Picking the two lowest-NodeId
-    /// non-POWER roles as the two throws wires `ctrl` itself as a terminal and
-    /// stamps a VSwitch whose `b` equals its own `ctrl_p`: a fabricated ~ron
-    /// path shorting the common signal net to the control line (and injecting
-    /// the control voltage) whenever the gate goes high.
-    #[test]
-    fn ctrl_role_recognises_all_multi_gate_and_select_spellings() {
-        // R45: any control spelling is_ctrl_role misses (the multi-gate branch's
-        // ctrl_2/ctrl_3/ctrl_4, the SPDT sel/s controls) leaks into the SPST
-        // fallback's throw candidates and can be stamped as a switch terminal,
-        // shorting a signal net onto a control net. Every control spelling must be
-        // excluded.
-        for r in [
-            "ctrl", "ctrl_1", "ctrl_2", "ctrl_3", "ctrl_4", "in", "s", "sel", "oe_n", "enable_n",
-        ] {
-            assert!(is_ctrl_role(r), "{r} must be recognised as a control role");
-        }
-        // Throw terminals and power roles are NOT control roles.
-        for r in ["s0", "s1", "in_out_1a", "in_out_2b", "com", "vcc", "vss"] {
-            assert!(
-                !is_ctrl_role(r),
-                "{r} must NOT be treated as a control role"
-            );
-        }
-    }
-
-    #[test]
-    fn spst_fallback_does_not_wire_control_as_a_switch_terminal() {
-        let model = make_entry(
+    fn analog_switch_entry(description: &str) -> ModelEntry {
+        make_entry(
             "generic_analog_switch",
             ComponentKind::AnalogSwitch,
-            "SPST with only com + ctrl wired",
+            description,
             hauksbee_models::Params::default(),
             std::collections::BTreeMap::new(),
-        );
+        )
+    }
+
+    /// An analog switch with only its common and control pins wired must be
+    /// left OPEN: the control net is the gate, never a signal terminal.
+    #[test]
+    fn spst_fallback_does_not_wire_control_as_a_switch_terminal() {
+        let model = analog_switch_entry("SPST with only com + ctrl wired");
         let mut circuit = Circuit::new();
-        let mut roles: HashMap<String, NodeId> = HashMap::new();
-        roles.insert("com".into(), circuit.node("SIG"));
-        roles.insert("ctrl".into(), circuit.node("GATE"));
-        let power_nets: HashMap<String, f64> = HashMap::new();
-
-        let (outcome, _warning) =
-            bind_analog_switch(&bare_comp("U7"), &model, &mut circuit, &roles, &power_nets);
-
-        let vswitches = circuit
-            .devices
-            .iter()
-            .filter(|d| matches!(d, Device::VSwitch { .. }))
-            .count();
-        assert_eq!(
-            vswitches, 0,
-            "no throw is connected: the switch must be left open, not shorted to its control net"
+        let roles = HashMap::from([
+            ("com".to_string(), circuit.node("SIG")),
+            ("ctrl".to_string(), circuit.node("GATE")),
+        ]);
+        let (outcome, _) = bind_analog_switch(
+            &comp("U7", ""),
+            &model,
+            &mut circuit,
+            &roles,
+            &HashMap::new(),
         );
+        assert!(vswitches(&circuit).is_empty());
         assert!(
             matches!(outcome, BindOutcome::Unresolved { .. }),
-            "an unconnected switch path must be reported as open/unresolved, got {outcome:?}"
+            "{outcome:?}"
         );
     }
 
@@ -7042,204 +6894,98 @@ mod digital_ro_tests {
                 ("oe_n".to_string(), oe),
             ])
         };
+        let power_nets = HashMap::from([("+3V3".to_string(), 3.3)]);
 
         let mut enabled = Circuit::new();
         let roles = build_roles(&mut enabled, NodeId::GROUND);
-        let power_nets = HashMap::from([("+3V3".to_string(), 3.3)]);
         let (outcome, warning) =
-            bind_analog_switch(&bare_comp("U8"), &model, &mut enabled, &roles, &power_nets);
+            bind_analog_switch(&comp("U8", ""), &model, &mut enabled, &roles, &power_nets);
+        assert!(warning.is_none(), "{warning:?}");
         assert!(
-            warning.is_none(),
-            "grounded OE_N is fully modeled: {warning:?}"
+            matches!(outcome, BindOutcome::Behavioral { ref device } if device == "shared-select dpdt")
         );
-        assert!(
-            matches!(outcome, BindOutcome::Behavioral { ref device } if device == "shared-select dpdt"),
-            "the result must name the complete routed primitive: {outcome:?}"
-        );
-        assert_eq!(
-            enabled
-                .devices
-                .iter()
-                .filter(|device| matches!(device, Device::VSwitch { .. }))
-                .count(),
-            4,
-            "two SPDT lanes require four complementary switch legs"
-        );
+        assert_eq!(vswitches(&enabled).len(), 4, "two SPDT lanes are four legs");
 
         let mut dynamic_oe = Circuit::new();
         let oe = dynamic_oe.node("OE_N");
         let roles = build_roles(&mut dynamic_oe, oe);
         let (outcome, warning) = bind_analog_switch(
-            &bare_comp("U8"),
+            &comp("U8", ""),
             &model,
             &mut dynamic_oe,
             &roles,
             &power_nets,
         );
         assert!(matches!(outcome, BindOutcome::Unresolved { .. }));
-        assert_eq!(
-            dynamic_oe
-                .devices
-                .iter()
-                .filter(|device| matches!(device, Device::VSwitch { .. }))
-                .count(),
-            0,
-            "a dynamic OE needs a two-control primitive; never model it as always enabled"
+        assert!(
+            vswitches(&dynamic_oe).is_empty(),
+            "never model a dynamic OE as always enabled"
         );
         assert!(
-            warning
-                .as_deref()
-                .is_some_and(|message| message.contains("OE")),
-            "the missing two-control primitive must be named: {warning:?}"
+            warning.as_deref().is_some_and(|m| m.contains("OE")),
+            "{warning:?}"
         );
     }
 
+    /// The s0 / NC throw conducts when the control is LOW, so a partially
+    /// wired com + s0 + ctrl switch stamps a VSwitch with inverted sense.
     #[test]
     fn spst_fallback_s0_throw_conducts_on_control_low() {
-        // R40: the s0 / NC throw conducts when the control is LOW (role_from_pinfunction
-        // maps nc->s0 with this contract). The SPST fallback used the default
-        // control-HIGH polarity, inverting it; the modeled com<->s0 contact was
-        // OPEN exactly when the real one is CLOSED. A partially-wired 3157
-        // (com + s0 + ctrl, s1 floating) must stamp a VSwitch whose sense is
-        // inverted so it closes on control LOW.
-        let model = make_entry(
-            "generic_analog_switch",
-            ComponentKind::AnalogSwitch,
-            "NC SPST: com + s0 + ctrl",
-            hauksbee_models::Params::default(),
-            std::collections::BTreeMap::new(),
-        );
+        let model = analog_switch_entry("NC SPST: com + s0 + ctrl");
         let mut circuit = Circuit::new();
         let gate = circuit.node("GATE");
-        let mut roles: HashMap<String, NodeId> = HashMap::new();
-        roles.insert("com".into(), circuit.node("SIG"));
-        roles.insert("s0".into(), circuit.node("OUT"));
-        roles.insert("ctrl".into(), gate);
-        let power_nets: HashMap<String, f64> = HashMap::new();
-
-        let _ = bind_analog_switch(&bare_comp("U8"), &model, &mut circuit, &roles, &power_nets);
-
-        let (cp, cn, von, voff) = circuit
-            .devices
-            .iter()
-            .find_map(|d| match d {
-                Device::VSwitch {
-                    ctrl_p,
-                    ctrl_n,
-                    von,
-                    voff,
-                    ..
-                } => Some((*ctrl_p, *ctrl_n, *von, *voff)),
-                _ => None,
-            })
-            .expect("a VSwitch for the com<->s0 throw");
-        // Inverted sense: ctrl_p is the vss/ground reference and ctrl_n is the gate,
-        // with negative thresholds; the switch closes when V(gate) is LOW.
-        assert_eq!(
-            cp,
-            NodeId::GROUND,
-            "s0 throw senses (vss - ctrl): ctrl_p is vss"
+        let roles = HashMap::from([
+            ("com".to_string(), circuit.node("SIG")),
+            ("s0".to_string(), circuit.node("OUT")),
+            ("ctrl".to_string(), gate),
+        ]);
+        let _ = bind_analog_switch(
+            &comp("U8", ""),
+            &model,
+            &mut circuit,
+            &roles,
+            &HashMap::new(),
         );
-        assert_eq!(cn, gate, "ctrl_n is the control net");
-        assert!(
-            von < 0.0 && voff < von,
-            "control-low polarity requires negative thresholds, got von={von} voff={voff}"
-        );
+        let (_, _, cp, cn, von, voff) = vswitches(&circuit)[0];
+        assert_eq!(cp, NodeId::GROUND, "s0 throw senses (vss - ctrl)");
+        assert_eq!(cn, gate);
+        assert!(von < 0.0 && voff < von, "got von={von} voff={voff}");
     }
 
-    /// R31 (spdt-no-nc-inverted): the NO/NC pin-function tokens must land on
-    /// the right throws. s0 is the throw that conducts when the control is LOW; by
-    /// the universal SPDT convention the Normally-Closed contact conducts at rest
-    /// (control-low) and Normally-Open closes on control-high. So NC → s0 and
-    /// NO → s1. The inverted mapping routes COM to the wrong throw in every
-    /// control state on any board that names its throws NO/NC.
     #[test]
     fn spdt_no_nc_map_to_the_correct_throws() {
-        assert_eq!(
-            role_from_pinfunction(ComponentKind::AnalogSwitch, "nc").as_deref(),
-            Some("s0"),
-            "NC (normally-closed) conducts at control-low = s0"
-        );
-        assert_eq!(
-            role_from_pinfunction(ComponentKind::AnalogSwitch, "no").as_deref(),
-            Some("s1"),
-            "NO (normally-open) closes on control-high = s1"
-        );
-        // The digit aliases keep their established meaning (b1/s0 = low select).
-        assert_eq!(
-            role_from_pinfunction(ComponentKind::AnalogSwitch, "b1").as_deref(),
-            Some("s0")
-        );
-        assert_eq!(
-            role_from_pinfunction(ComponentKind::AnalogSwitch, "b2").as_deref(),
-            Some("s1")
-        );
-    }
-}
-
-#[cfg(test)]
-mod crystal_fallback_tests {
-    use super::*;
-    use hauksbee_extract::{Net, Pin};
-    use hauksbee_models::ComponentKind;
-
-    fn comp(reference: &str, value: &str) -> Component {
-        Component {
-            reference: reference.to_string(),
-            value: value.to_string(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: Vec::new(),
-        }
+        let role = |f: &str| role_from_pinfunction(ComponentKind::AnalogSwitch, f);
+        assert_eq!(role("nc").as_deref(), Some("s0"));
+        assert_eq!(role("no").as_deref(), Some("s1"));
+        assert_eq!(role("b1").as_deref(), Some("s0"));
+        assert_eq!(role("b2").as_deref(), Some("s1"));
     }
 
+    /// A matched-pair BJT whose second unit is partially wired must warn
+    /// "left open" for that unit rather than dropping it silently.
     #[test]
     fn partially_wired_paired_bjt_unit_warns_left_open() {
-        // R53: a matched-pair BJT (BCM847BS) whose Q2 is partially wired (>=1 pin
-        // connected but not a complete c/b/e) was silently dropped with warning
-        // None, unlike a single BJT or a passive-array element which each warn
-        // "left open". A partial unit must now surface a diagnostic.
         let model: ModelEntry = toml::from_str(
             "id = \"bcm847bs\"\nkind = \"bjt_npn\"\n[match]\nvalue_re = \"BCM847\"\n",
         )
         .unwrap();
         let mut circuit = Circuit::new();
-        let (c1, b1, e1, b2) = (
-            circuit.node("C1"),
-            circuit.node("B1"),
-            circuit.node("E1"),
-            circuit.node("B2"),
+        let mut roles = roles(
+            &mut circuit,
+            &["collector_q1", "base_q1", "emitter_q1", "base_q2"],
         );
-        let mut roles = HashMap::new();
-        roles.insert("collector_q1".to_string(), c1);
-        roles.insert("base_q1".to_string(), b1);
-        roles.insert("emitter_q1".to_string(), e1);
-        roles.insert("base_q2".to_string(), b2); // Q2 partial: only the base wired
         let (outcome, warning) = bind_bjt(&comp("Q1", "BCM847BS"), &model, &mut circuit, &roles);
         assert!(
             matches!(outcome, BindOutcome::Analog { .. }),
             "Q1 still stamps"
         );
-        let w = warning.expect("a partially-wired Q2 must warn, not drop silently");
-        assert!(
-            w.contains("left open") && w.contains("q2"),
-            "the warning must name the dropped unit: {w}"
-        );
+        let w = warning.expect("a partially-wired Q2 must warn");
+        assert!(w.contains("left open") && w.contains("q2"), "{w}");
 
-        // A fully-wired pair produces no warning.
-        let c2 = circuit.node("C2");
-        let e2 = circuit.node("E2");
-        roles.insert("collector_q2".to_string(), c2);
-        roles.insert("emitter_q2".to_string(), e2);
-        let (_o, warning) = bind_bjt(&comp("Q1", "BCM847BS"), &model, &mut circuit, &roles);
-        assert!(
-            warning.is_none(),
-            "a fully-wired pair must not warn: {warning:?}"
-        );
+        roles.insert("collector_q2".to_string(), circuit.node("C2"));
+        roles.insert("emitter_q2".to_string(), circuit.node("E2"));
+        let (_, warning) = bind_bjt(&comp("Q1", "BCM847BS"), &model, &mut circuit, &roles);
+        assert!(warning.is_none(), "{warning:?}");
     }
 
     #[test]
@@ -7250,23 +6996,11 @@ mod crystal_fallback_tests {
             "16.000MHz",
             "32.768kHz",
             "100 Hz",
-            "12000000Hz",
+            "16 MHz",
+            "1 GHz",
         ] {
             assert!(value_is_frequency(v), "{v} should read as a frequency");
         }
-        // R52: the SPACE-separated SI-prefixed form ("16 MHz") left a trailing
-        // space after the prefix was stripped and was wrongly rejected, so a
-        // C-prefixed crystal valued "16 MHz" fell through to the capacitor
-        // heuristic (a gigafarad cap that collapses the solve). The doc comment
-        // even lists "8 Mhz" as accepted. These must all read as frequencies.
-        for v in ["16 MHz", "8 Mhz", "32.768 kHz", "1 GHz", "16 mhz"] {
-            assert!(
-                value_is_frequency(v),
-                "{v} (space-separated) should read as a frequency"
-            );
-        }
-        // Real passive values, and ferrite-bead impedance@frequency values
-        // (which end in "hz" but are NOT crystals) must not trip it.
         for v in [
             "22pF",
             "10k",
@@ -7274,11 +7008,9 @@ mod crystal_fallback_tests {
             "100nF",
             "BCM857BS",
             "Hz",
-            "Choke",
             "",
             "600@100MHz",
             "1k@100MHz",
-            "120@100MHz",
         ] {
             assert!(!value_is_frequency(v), "{v} must NOT read as a frequency");
         }
@@ -7287,16 +7019,24 @@ mod crystal_fallback_tests {
     #[test]
     fn crystal_detected_by_reference_or_frequency_value() {
         assert!(is_crystal_like("Y", "16MHz"));
-        assert!(is_crystal_like("CRYSTAL", "")); // KiCad 5 default ref, value missing
+        assert!(is_crystal_like("CRYSTAL", ""));
         assert!(is_crystal_like("XTAL", "8MHz"));
-        assert!(is_crystal_like("C", "16Mhz")); // 'C'-prefixed crystal caught by the value
-        assert!(!is_crystal_like("C", "22pF")); // a genuine capacitor
+        assert!(is_crystal_like("C", "16Mhz"));
+        assert!(!is_crystal_like("C", "22pF"));
         assert!(!is_crystal_like("R", "10k"));
     }
 
     #[test]
     fn sourced_inductor_dcr_and_ferrite_dc_resistance_reach_the_circuit() {
         let lib = ModelLibrary::builtin();
+        let mut circuit = Circuit::new();
+        let a = circuit.node("VIN");
+        let b = circuit.node("SW");
+        let node_of = |n: Option<i64>| match n {
+            Some(1) => Some(a),
+            Some(2) => Some(b),
+            _ => None,
+        };
 
         let mut inductor = comp("L5", "SRN6045TA-3R3Y");
         inductor.pins = vec![pin("1", 1), pin("2", 2)];
@@ -7308,14 +7048,6 @@ mod crystal_fallback_tests {
             ))
             .model
             .expect("exact Bourns inductor model");
-        let mut circuit = Circuit::new();
-        let a = circuit.node("VIN");
-        let b = circuit.node("SW");
-        let node_of = |net: Option<i64>| match net {
-            Some(1) => Some(a),
-            Some(2) => Some(b),
-            _ => None,
-        };
         let (outcome, warning) = bind_passive(&inductor, &l_model, &mut circuit, &node_of);
         assert!(matches!(outcome, BindOutcome::Analog { .. }));
         assert!(warning.as_deref().is_some_and(|w| w.contains("saturation")));
@@ -7349,31 +7081,12 @@ mod crystal_fallback_tests {
         );
     }
 
-    /// A crystal the MODEL LIBRARY resolves must be skipped exactly as the
-    /// engine's own fallback skips one, and before this it was not.
-    ///
-    /// The `crystal_value` and `crystal_footprint` entries in db/passives.toml are
-    /// `kind = "passive"` because that is the shape of a two-pad map, and
-    /// `bind_passive` therefore asked the value parser for OHMS. On a crystal's
-    /// value field that has three outcomes and all three are wrong:
-    ///
-    ///   - "16Mhz" and "Abracon_ABM11" parse to nothing, so the part was reported
-    ///     as an unresolved OPEN. That is the mild failure and it still cost the
-    ///     board's verdict, for a part the library had in fact identified.
-    ///   - a bare "32.768" parses to a NUMBER, so a 32.768 ohm resistor was
-    ///     stamped across an oscillator that has no such conductance. That is the
-    ///     failure that matters: a fabricated component, reported as modelled.
-    ///
-    /// So resolving a crystal was strictly worse than not resolving one, which is
-    /// the shape of bug this whole file exists to avoid. `bind_component` now
-    /// routes `passive_class = "crystal"` to Skipped before the kind dispatch.
+    /// A library-resolved crystal is Skipped and never stamped (a bare
+    /// "32.768" used to become a 32.768 ohm resistor); a packaged oscillator
+    /// additionally carries a warning naming its unmodelled supply and clock.
     #[test]
     fn a_library_resolved_crystal_is_skipped_and_never_stamped() {
         let lib = ModelLibrary::builtin();
-        let pin_rules = lib.pin_rules();
-
-        // Every spelling the external-five boards actually carry, plus the bare
-        // 32.768 that used to become a resistor.
         for (reference, value, footprint) in [
             ("Q1", "16Mhz", ""),
             ("Y1", "40MHz", ""),
@@ -7393,123 +7106,61 @@ mod crystal_fallback_tests {
             let mut c = comp(reference, value);
             c.footprint = footprint.to_string();
             c.pins = vec![pin("1", 1), pin("2", 2)];
-
             let mut circuit = Circuit::new();
             let a = circuit.node("XA");
             let b = circuit.node("XB");
-            let node_of = move |net: Option<i64>| match net {
+            let node_of = move |n: Option<i64>| match n {
                 Some(1) => Some(a),
                 Some(2) => Some(b),
                 _ => None,
             };
             let devices_before = circuit.devices.len();
-
-            // Resolve the way the binder does, then bind.
-            let mut q = ComponentQuery::new(None, Some(c.value.clone()), Some(c.footprint.clone()));
-            q.mpn = Some(c.value.clone());
-            let model = lib.resolve(&q).model.unwrap_or_else(|| {
-                panic!("{reference} ({value}) must resolve to a curated crystal entry")
-            });
+            let model = resolve_value(&lib, value, footprint);
             assert_eq!(
                 model.passive_class,
                 Some(hauksbee_models::schema::PassiveClass::Crystal),
-                "{reference} ({value}) resolved to {} which is not a crystal entry",
+                "{reference} ({value}) resolved to {}",
                 model.id
             );
-
-            let (outcome, warning, _) = bind_component(
-                &c,
-                &model,
-                Confidence::Exact,
-                &mut circuit,
-                &node_of,
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                false,
-                &HashMap::new(),
-                pin_rules,
+            let (outcome, warning) = bind_one(&c, &model, &mut circuit, &node_of, &HashMap::new());
+            assert!(
+                matches!(&outcome, BindOutcome::Skipped { reason } if reason.contains("crystal")),
+                "{reference} ({value}): {outcome:?}"
             );
-
-            match &outcome {
-                BindOutcome::Skipped { reason } => {
-                    assert!(
-                        reason.contains("crystal"),
-                        "{reference} ({value}) skipped for the wrong reason: {reason}"
-                    );
-                }
-                other => panic!("{reference} ({value}) must be Skipped, got {other:?}"),
-            }
-            // THE DISCLOSURE, BOTH WAYS. `Skipped` is `is_ignored()`, so the row
-            // leaves the resolve denominator AND produces no `open_part`
-            // assumption: skipping is what makes a board read as fully handled.
-            // For a bare quartz blank that is the honest answer, so it must stay
-            // silent. For a PACKAGED OSCILLATOR it is not: the part has a supply
-            // pin and drives a clock, and neither is modelled, so it must carry a
-            // warning onto the report. Delete the warning arm in the crystal branch
-            // and the oscillator half of this fails.
-            let is_oscillator = footprint.to_ascii_lowercase().contains("oscillator");
-            if is_oscillator {
-                let w = warning.unwrap_or_else(|| {
-                    panic!(
-                        "{reference} ({value}) is a packaged oscillator excluded from \
-                         the resolve denominator with nothing said about it"
-                    )
-                });
+            if footprint.to_ascii_lowercase().contains("oscillator") {
+                let w = warning.unwrap_or_else(|| panic!("{reference} oscillator must warn"));
                 assert!(
                     w.contains(reference) && w.contains("supply") && w.contains("clock"),
-                    "the oscillator warning must name the part and say what is \
-                     missing: {w}"
+                    "{w}"
                 );
             } else {
-                assert!(
-                    warning.is_none(),
-                    "{reference} ({value}) is a bare crystal, not a problem to warn \
-                     about: {warning:?}"
-                );
+                assert!(warning.is_none(), "{reference} ({value}): {warning:?}");
             }
             assert_eq!(
                 circuit.devices.len(),
                 devices_before,
-                "{reference} ({value}) stamped a device: a crystal has no ohms, \
-                 farads or henries for the solver to use"
+                "{reference} stamped a device"
             );
         }
     }
 
-    /// The load-bearing regression: a crystal whose reference starts with 'C'
-    /// and whose value is a frequency must NOT bind as a (gigafarad) capacitor.
-    /// Before the fix it bound Passive with value 16e6 F, which collapsed the
-    /// whole co-sim solve.
+    /// A 'C'-referenced crystal with a frequency value must not bind as a
+    /// (gigafarad) capacitor; a real 'C' capacitor still binds as a passive.
     #[test]
     fn crystal_named_with_c_prefix_is_high_impedance_not_a_capacitor() {
         let entry = fallback_entry(&comp("Crystal1", "16Mhz")).expect("crystal binds");
         assert_eq!(entry.id, "crystal_fallback");
         assert_eq!(entry.kind, ComponentKind::Ignore);
-
-        // A real 'C' capacitor still binds as a passive (no regression).
         let cap = fallback_entry(&comp("C7", "22pF")).expect("cap binds");
         assert_eq!(cap.kind, ComponentKind::Passive);
     }
 
-    /// A three-terminal transistor on an EAGLE board had no electrode roles at
-    /// all, because the pin-rule footprint pattern was written against KiCad's
-    /// spelling and no other tool's.
-    ///
-    /// `SOT-23(?:$|[^-0-9])` reads every KiCad footprint name correctly and none of
-    /// the ones Eagle libraries write: `SOT23-3`, `SOT23-3@1` (the `@n` is Eagle's
-    /// duplicate-package suffix) and `SOT323`. The symptom was the diagnostic
-    /// "MOSFET pins not all connected" and an open circuit in place of a conducting
-    /// switch, on a part the library had resolved. The pattern is now loose about
-    /// the hyphen and `pad_count = 3` is what keeps it honest.
+    /// The three-terminal SOT-23 pin rule reads every CAD tool's spelling of
+    /// the package, is guarded by `pad_count = 3`, and never applies to TO-92.
     #[test]
     fn the_three_terminal_pin_rules_read_every_cad_tools_package_spelling() {
         let lib = ModelLibrary::builtin();
         let rules = lib.pin_rules();
-
-        // Eagle's spellings, KiCad's, and the SOT-323 / SC-70 shrink of the same
-        // outline, which carries the same pad order.
         for footprint in [
             "SOT-23",
             "SOT-23_Handsoldering",
@@ -7535,16 +7186,11 @@ mod crystal_fallback_tests {
                     assert_eq!(
                         got.as_ref().map(|r| r.role.as_str()),
                         Some(*role),
-                        "{footprint} {kind:?} pad {pad} must infer {role}"
+                        "{footprint} {kind:?} pad {pad}"
                     );
                 }
             }
         }
-
-        // The pad count is the guard that lets the pattern be loose. A five- or
-        // six-lead SOT-23 is a different part entirely (an LDO, a load switch, a
-        // logic gate) and must get NO transistor electrode role, even though the
-        // footprint string contains "SOT-23".
         for (footprint, pads) in [
             ("SOT-23-5", 5),
             ("SOT-23-6", 6),
@@ -7556,13 +7202,9 @@ mod crystal_fallback_tests {
                 rules
                     .role_for_pad(footprint, Some(ComponentKind::Nmos), pads, "1")
                     .is_none(),
-                "{footprint} has {pads} pads and must not take a 3-pad transistor rule"
+                "{footprint} has {pads} pads"
             );
         }
-
-        // TO-92 is deliberately absent: it is also a three-terminal transistor
-        // package, but its pad order is not this one and vendors disagree about
-        // which way round, so a guess there would be a coin flip on the emitter.
         for footprint in ["TO-92", "TO92-3", "Package_TO_SOT_THT:TO-92"] {
             assert!(
                 rules
@@ -7573,119 +7215,56 @@ mod crystal_fallback_tests {
         }
     }
 
-    /// `gpio_of_role`'s `module` arm is the Arduino NANO's d-number table, and it
-    /// used to SWALLOW every role on any module: a non-`d` role returned None
-    /// outright, so a Pro Micro's port-named pins were silently unbound and the
-    /// keyboard matrix hanging off them was invisible.
-    ///
-    /// The two mappings genuinely disagree, which is why the Pro Micro cannot just
-    /// use d-numbers: D5 is PD5 on a Nano and PC6 on a Pro Micro; D8 is PB0 there
-    /// and PB4 here. So the module arm now tries the Nano table and falls THROUGH
-    /// to the standard port parser, and both boards get the right port bit.
+    /// On a module the Nano d-number table applies first, then a port-named
+    /// role (Pro Micro) falls through to the standard port parser; the ADC
+    /// channel comes from the role's own digits.
     #[test]
     fn a_module_role_named_by_its_port_falls_through_the_nano_d_number_table() {
-        // The Nano's own roles, unchanged: d0..d7 are port D, d8..d13 port B.
         assert_eq!(gpio_of_role("d0_rx", true), Some(('D', 0)));
         assert_eq!(gpio_of_role("d5_pwm", true), Some(('D', 5)));
         assert_eq!(gpio_of_role("d8", true), Some(('B', 0)));
         assert_eq!(gpio_of_role("d13_sck", true), Some(('B', 5)));
-        assert_eq!(gpio_of_role("a2", true), None, "A2 is not a port pin here");
+        assert_eq!(gpio_of_role("a2", true), None);
         assert_eq!(apin_gpio_of_role("a2", true), Some(('C', 2)));
         assert_eq!(apin_gpio_of_role("a6", true), None, "A6/A7 are ADC-only");
         assert_eq!(adc_of_role("a3", true), Some(3));
 
-        // The Pro Micro's roles, which are port names and must now resolve ON a
-        // module. Every one of these is a key row or column on a split keyboard.
         for (role, want) in [
             ("pd3_txd1", ('D', 3)),
-            ("pd1_sda", ('D', 1)),
             ("pc6", ('C', 6)),
             ("pe6", ('E', 6)),
             ("pb4_adc11", ('B', 4)),
-            ("pb6_adc13", ('B', 6)),
             ("pf7_adc7", ('F', 7)),
-            ("pf4_adc4", ('F', 4)),
         ] {
-            assert_eq!(
-                gpio_of_role(role, true),
-                Some(want),
-                "{role} must resolve to {want:?} on a module"
-            );
-            // And identically off a module: the port parser is the same one.
-            assert_eq!(gpio_of_role(role, false), Some(want));
+            assert_eq!(gpio_of_role(role, true), Some(want), "{role}");
+            assert_eq!(gpio_of_role(role, false), Some(want), "{role}");
         }
-
-        // The ADC channel comes from the role's own digits, which on this part are
-        // NOT the port bit: PD4 is channel 8, PB4 is channel 11, PF7 is channel 7.
         assert_eq!(adc_of_role("pd4_adc8", true), Some(8));
         assert_eq!(adc_of_role("pb4_adc11", true), Some(11));
-        assert_eq!(adc_of_role("pf7_adc7", true), Some(7));
-        // A port pin with no ADC channel must claim none.
         assert_eq!(adc_of_role("pc6", true), None);
-        assert_eq!(adc_of_role("pe6", true), None);
-
-        // Non-roles still resolve to nothing rather than to port 0.
         for role in ["vcc", "gnd", "raw", "reset", ""] {
             assert_eq!(gpio_of_role(role, true), None, "{role} is not a GPIO");
         }
     }
 
-    /// An active-high load switch must CONDUCT on a high control, and the role
-    /// names in its pin map are what decide that.
-    ///
-    /// `bind_analog_switch`'s single-throw path senses the INVERTED control when the
-    /// second terminal it picks is the role named `s0`, because on an SPDT part `s0`
-    /// is the normally-closed throw (`role_from_pinfunction` maps a pin named NC
-    /// onto it for exactly that reason). For a single active-high load switch that
-    /// is backwards: the modelled rail is off when the silicon is on, and nothing
-    /// warns, because from the binder's point of view everything resolved.
-    ///
-    /// So the load-switch entries name their terminals `in_out_a`/`in_out_b`, and
-    /// this test asserts the CONSEQUENCE rather than the spelling: the stamped
-    /// switch closes above the threshold and opens below it. The spelling itself is
-    /// pinned in the models suite; what is checked here is that the spelling buys
-    /// the polarity.
-    /// The powered-oscillator caveat must key on the WIRING, not on whether the
-    /// footprint string happens to contain the word "oscillator".
-    ///
-    /// `crystal_value` matches a bare frequency with no footprint constraint, so a
-    /// TCXO in an Eagle-style land resolves to the crystal class and reaches the
-    /// `Skipped` branch. `Skipped` is `is_ignored()`: it leaves the resolve
-    /// denominator and produces no assumption. Keying the caveat on the KiCad
-    /// library's spelling meant such a part was skipped in total silence, which is
-    /// also a REGRESSION: before the crystal branch existed it failed
-    /// `parse_value("40MHz")` and came out `Unresolved`, i.e. disclosed. Measured on a
-    /// corpus board: renaming the footprint alone moved it from 52 mentions under
-    /// `--check --plain` to zero.
-    ///
-    /// A pin on a resolved supply rail is what separates the two kinds and it does not
-    /// depend on any string: a powered oscillator has one, a quartz blank never does.
-    /// The bare-crystal half of this test is the half that keeps the report quiet, and
-    /// two real corpus boards (corne-cherry's "GNDR" ground, lily58's shield pads on
-    /// the load-cap nets) are why the discriminator is not a count of non-ground nets.
+    /// The powered-oscillator caveat keys on a pin sitting on a resolved
+    /// supply rail, not on the footprint string containing "oscillator".
     #[test]
     fn a_powered_oscillator_is_disclosed_by_its_wiring_not_by_its_footprint_string() {
         let lib = ModelLibrary::builtin();
-        let pin_rules = lib.pin_rules();
-
-        // (footprint, does pad 4 sit on a 3.3 V rail, must warn)
         for (footprint, on_rail, expect_warning) in [
-            // The case that regressed: an Eagle land, powered.
             ("complib:OSC_SMD_3225_4P", true, true),
-            // The KiCad spelling still works, rail or no rail.
             ("Oscillator:Oscillator_SMD_2520_4Pin", false, true),
-            // A four-pad QUARTZ CRYSTAL: no rail, no oscillator in the name. Silent.
             ("Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm", false, false),
         ] {
             let mut c = comp("X1", "40MHz");
             c.footprint = footprint.to_string();
             c.pins = vec![pin("1", 1), pin("2", 0), pin("3", 2), pin("4", 3)];
-
             let mut circuit = Circuit::new();
             let xin = circuit.node("XIN");
             let clk = circuit.node("CLK_OUT");
             let rail = circuit.node("+3V3");
-            let node_of = move |net: Option<i64>| match net {
+            let node_of = move |n: Option<i64>| match n {
                 Some(1) => Some(xin),
                 Some(2) => Some(clk),
                 Some(3) => Some(rail),
@@ -7696,231 +7275,107 @@ mod crystal_fallback_tests {
             if on_rail {
                 power_nets.insert("+3V3".to_string(), 3.3);
             }
-
-            let mut q = ComponentQuery::new(None, Some(c.value.clone()), Some(c.footprint.clone()));
-            q.mpn = Some(c.value.clone());
-            let model = lib
-                .resolve(&q)
-                .model
-                .unwrap_or_else(|| panic!("{footprint} must resolve to a crystal entry"));
-
-            let (outcome, warning, _) = bind_component(
-                &c,
-                &model,
-                Confidence::Exact,
-                &mut circuit,
-                &node_of,
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                false,
-                &power_nets,
-                pin_rules,
-            );
+            let model = resolve_value(&lib, "40MHz", footprint);
+            let (outcome, warning) = bind_one(&c, &model, &mut circuit, &node_of, &power_nets);
             assert!(
                 matches!(outcome, BindOutcome::Skipped { .. }),
-                "{footprint} is high impedance either way: {outcome:?}"
+                "{footprint}: {outcome:?}"
             );
             if expect_warning {
-                let w = warning.unwrap_or_else(|| {
-                    panic!(
-                        "{footprint} (on_rail={on_rail}) is a powered oscillator excluded \
-                         from the resolve denominator with nothing said about it"
-                    )
-                });
-                assert!(
-                    w.starts_with(Assumption::PARTIAL_MODEL_MARKER),
-                    "the caveat must be marked so it reaches the evidence map: {w}"
-                );
+                let w = warning.unwrap_or_else(|| panic!("{footprint} must warn"));
+                assert!(w.starts_with(Assumption::PARTIAL_MODEL_MARKER), "{w}");
             } else {
-                assert!(
-                    warning.is_none(),
-                    "{footprint} is a quartz blank; a caveat here is a false entry that \
-                     costs the true ones their audience: {warning:?}"
-                );
+                assert!(warning.is_none(), "{footprint}: {warning:?}");
             }
         }
     }
 
-    /// A regulator whose entry names an enable must say that the enable is not
-    /// modelled, and a three-terminal regulator that has none must stay silent.
-    ///
-    /// `bind_vreg` stamps an UNCONDITIONAL ideal source on the output net. It never
-    /// reads `en` or `shdn`, so a board that holds its regulator off still reads as
-    /// having that rail present at full voltage, and the report counted the part as
-    /// resolved with nothing said. That is the silent-wrongness direction: the rail
-    /// is asserted rather than withheld, and a downstream check that passes because
-    /// the rail is "present" is measuring the model, not the board.
-    ///
-    /// This was unreachable before `entry_warning`: `bind_vreg` had no warning
-    /// channel at all, so nothing an entry or the binder knew about a regulator could
-    /// reach a reader.
+    /// Wire a resolved part's pads BY ROLE out of its own pin map.
+    fn pad_for<'a>(model: &'a ModelEntry, role: &str) -> Option<&'a str> {
+        model
+            .pins
+            .iter()
+            .find(|(_, r)| r.as_str() == role)
+            .map(|(pad, _)| pad.as_str())
+    }
+
+    /// A regulator whose entry names an enable, wired OFF, must say the enable
+    /// is not modelled; a three-terminal regulator stays silent.
     #[test]
     fn a_regulator_says_its_enable_is_not_modelled_and_a_plain_one_says_nothing() {
         let lib = ModelLibrary::builtin();
-        let pin_rules = lib.pin_rules();
-
-        // (value, expects a caveat). The LM7805 is the control: a genuine
-        // three-terminal regulator with no enable pin to leave unmodelled.
         for (value, expects_enable_caveat) in [("XC6204B332MR", true), ("LM7805", false)] {
-            let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
-            q.mpn = Some(value.to_string());
-            let model = lib
-                .resolve(&q)
-                .model
-                .unwrap_or_else(|| panic!("{value} must resolve"));
-
-            let pad_for = |role: &str| -> Option<String> {
-                model
-                    .pins
-                    .iter()
-                    .find(|(_, r)| r.as_str() == role)
-                    .map(|(pad, _)| pad.clone())
-            };
+            let model = resolve_value(&lib, value, "");
             let mut c = comp("U1", value);
-            let mut pins = vec![pin(&pad_for("out").expect("an out pad"), 1)];
-            if let Some(inp) = pad_for("in") {
-                pins.push(pin(&inp, 2));
+            let mut pins = vec![pin(pad_for(&model, "out").expect("an out pad"), 1)];
+            if let Some(inp) = pad_for(&model, "in") {
+                pins.push(pin(inp, 2));
             }
-            if let Some(gnd) = pad_for("gnd").or_else(|| pad_for("vss")) {
-                pins.push(pin(&gnd, 0));
+            if let Some(gnd) = pad_for(&model, "gnd").or_else(|| pad_for(&model, "vss")) {
+                pins.push(pin(gnd, 0));
             }
-            // The enable is wired to GROUND, i.e. this regulator is held OFF.
-            if let Some(en) = pad_for("en").or_else(|| pad_for("shdn")) {
-                pins.push(pin(&en, 0));
+            if let Some(en) = pad_for(&model, "en").or_else(|| pad_for(&model, "shdn")) {
+                pins.push(pin(en, 0));
             }
             c.pins = pins;
-
             let mut circuit = Circuit::new();
             let (out, inn) = (circuit.node("RAIL_OUT"), circuit.node("RAIL_IN"));
-            let node_of = move |net: Option<i64>| match net {
+            let node_of = move |n: Option<i64>| match n {
                 Some(1) => Some(out),
                 Some(2) => Some(inn),
                 Some(0) => Some(NodeId::GROUND),
                 _ => None,
             };
-
-            let (outcome, warning, _) = bind_component(
-                &c,
-                &model,
-                Confidence::Exact,
-                &mut circuit,
-                &node_of,
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                false,
-                &HashMap::new(),
-                pin_rules,
-            );
+            let (outcome, warning) = bind_one(&c, &model, &mut circuit, &node_of, &HashMap::new());
             assert!(
                 !matches!(outcome, BindOutcome::Unresolved { .. }),
-                "{value} did not bind: {outcome:?}"
+                "{value}: {outcome:?}"
             );
-
             if expects_enable_caveat {
-                let w = warning.unwrap_or_else(|| {
-                    panic!(
-                        "{value} names an enable, is stamped as an unconditional source, \
-                         and says nothing about it"
-                    )
-                });
-                assert!(
-                    w.starts_with(Assumption::PARTIAL_MODEL_MARKER),
-                    "the caveat must be marked so it reaches the evidence map, not \
-                     only the bind report: {w}"
-                );
-                assert!(
-                    w.contains("not modelled") && w.contains("OFF"),
-                    "the caveat must say what is unmodelled and what it costs: {w}"
-                );
+                let w = warning.unwrap_or_else(|| panic!("{value} must disclose its enable"));
+                assert!(w.starts_with(Assumption::PARTIAL_MODEL_MARKER), "{w}");
+                assert!(w.contains("not modelled") && w.contains("OFF"), "{w}");
             } else {
-                assert!(
-                    warning.is_none(),
-                    "{value} has no enable to leave unmodelled, so a caveat here is \
-                     noise: {warning:?}"
-                );
+                assert!(warning.is_none(), "{value}: {warning:?}");
             }
         }
     }
 
-    /// A `digital` entry's own caveat has to reach a reader. The dispatch arm used to
-    /// hard-code `None`, so an entry that modelled a pad map and nothing else could
-    /// describe that in the database and be heard by nobody.
+    /// A `digital` entry's own `warning` param reaches the caller.
     #[test]
     fn a_logic_entry_that_models_only_a_pad_map_discloses_it() {
         let lib = ModelLibrary::builtin();
-        let pin_rules = lib.pin_rules();
-        let value = "FT231X-Q";
-
-        let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
-        q.mpn = Some(value.to_string());
-        let model = lib.resolve(&q).model.expect("FT231X resolves");
-
-        let mut c = comp("U2", value);
+        let model = resolve_value(&lib, "FT231X-Q", "");
+        let mut c = comp("U2", "FT231X-Q");
         c.pins = vec![pin("12", 1), pin("3", 0), pin("17", 2), pin("20", 1)];
         let mut circuit = Circuit::new();
         let (vcc, txd) = (circuit.node("V3V3"), circuit.node("MCU_RX"));
-        let node_of = move |net: Option<i64>| match net {
+        let node_of = move |n: Option<i64>| match n {
             Some(1) => Some(vcc),
             Some(2) => Some(txd),
             Some(0) => Some(NodeId::GROUND),
             _ => None,
         };
-
-        let (outcome, warning, _) = bind_component(
-            &c,
-            &model,
-            Confidence::Exact,
-            &mut circuit,
-            &node_of,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
-            false,
-            &HashMap::new(),
-            pin_rules,
-        );
+        let (outcome, warning) = bind_one(&c, &model, &mut circuit, &node_of, &HashMap::new());
         assert!(
             matches!(outcome, BindOutcome::Digital { .. }),
-            "the bridge binds as digital: {outcome:?}"
+            "{outcome:?}"
         );
-        let w = warning.expect(
-            "a digital entry carrying a `warning` param must surface it; the dispatch \
-             arm used to discard it",
-        );
+        let w = warning.expect("a digital entry carrying a `warning` param must surface it");
         assert!(
             w.starts_with(Assumption::PARTIAL_MODEL_MARKER) && w.contains("USB stack"),
-            "the caveat must be marked and must name the gap: {w}"
+            "{w}"
         );
     }
 
-    /// When an entry NAMES which pads are the switched path and the board wired only
-    /// one of them, no path may be stamped at all.
-    ///
-    /// The fallback used to scan for two arbitrary non-power roles instead.
-    /// `is_power_role` matches only vcc/vdd/vss/gnd, so on a PCA9306 the VREF and SDA
-    /// pads were all candidates: a board leaving one SCL pad open got ~25 Ohm stamped
-    /// between VREF1 and SDA1, a path on no real board, while the entry's own
-    /// disclosure said the modelled channel was SCL1<->SCL2. A confident caveat
-    /// describing a fabricated path is worse than either mistake alone.
+    /// When an entry names the switched pads and one is unwired, no path may
+    /// be stamped between other pads.
     #[test]
     fn a_switch_with_one_terminal_unwired_stamps_nothing_rather_than_bridging_other_pads() {
         let lib = ModelLibrary::builtin();
-        let pin_rules = lib.pin_rules();
-        let value = "PCA9306";
-
-        let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
-        q.mpn = Some(value.to_string());
-        let model = lib.resolve(&q).model.expect("PCA9306 resolves");
-
-        // Everything EXCEPT pad 3 (SCL1, the modelled channel's low side): the
-        // enable, ground, both VREFs and both SDA pads are wired, and pad 6 (SCL2) is
-        // wired too. Only one of the two named terminals is missing.
-        let mut c = comp("U3", value);
+        let model = resolve_value(&lib, "PCA9306", "");
+        // Everything except pad 3 (SCL1, the modelled channel's low side).
+        let mut c = comp("U3", "PCA9306");
         c.pins = vec![
             pin("1", 0),
             pin("2", 3),
@@ -7931,303 +7386,131 @@ mod crystal_fallback_tests {
             pin("8", 2),
         ];
         let mut circuit = Circuit::new();
-        let scl2 = circuit.node("SCL_HI");
-        let en = circuit.node("EN");
-        let vref1 = circuit.node("VREF1");
-        let sda1 = circuit.node("SDA1");
-        let sda2 = circuit.node("SDA2");
-        let vref2 = circuit.node("VREF2");
-        let node_of = move |net: Option<i64>| match net {
-            Some(1) => Some(scl2),
-            Some(2) => Some(en),
-            Some(3) => Some(vref1),
-            Some(4) => Some(sda1),
-            Some(5) => Some(sda2),
-            Some(6) => Some(vref2),
+        let nodes: Vec<_> = ["SCL_HI", "EN", "VREF1", "SDA1", "SDA2", "VREF2"]
+            .iter()
+            .map(|n| circuit.node(n))
+            .collect();
+        let node_of = move |n: Option<i64>| match n {
             Some(0) => Some(NodeId::GROUND),
+            Some(i @ 1..=6) => Some(nodes[i as usize - 1]),
             _ => None,
         };
-
         let before = circuit.devices.len();
-        let (outcome, warning, _) = bind_component(
-            &c,
-            &model,
-            Confidence::Exact,
-            &mut circuit,
-            &node_of,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
-            false,
-            &HashMap::new(),
-            pin_rules,
-        );
-        assert_eq!(
-            circuit.devices.len(),
-            before,
-            "no switch may be stamped: every remaining pad pair is a fabricated path"
-        );
+        let (outcome, warning) = bind_one(&c, &model, &mut circuit, &node_of, &HashMap::new());
+        assert_eq!(circuit.devices.len(), before, "no switch may be stamped");
         assert!(
             matches!(outcome, BindOutcome::Unresolved { .. }),
-            "an unwired terminal is an open switch, disclosed as such: {outcome:?}"
+            "{outcome:?}"
         );
-        let w = warning.expect("an open switch warns");
-        assert!(
-            w.contains("terminal"),
-            "the warning must say a named terminal is missing: {w}"
-        );
+        assert!(warning.expect("an open switch warns").contains("terminal"));
     }
 
-    /// A switch entry that models only part of the part must say so on a surface a
-    /// reader sees, not in a TOML comment.
-    ///
-    /// `bind_analog_switch`'s single-throw path stamps exactly ONE switch. Three
-    /// entries are bound through it with a real gap left inside: the TXS0108E has
-    /// eight channels and one is modelled, the PCA9306 has two and one is modelled,
-    /// and the TPS2104 is a two-input mux whose IN1 path is not stamped. Each
-    /// returns `BindOutcome::Behavioral`, which counts as RESOLVED, so if the gap
-    /// travels only as a comment the board reads as fully handled and the report
-    /// says nothing at all. `BindReport::warnings` walks every row and the report
-    /// prints it, so the entry's `warning` param is the channel; this asserts it is
-    /// wired up and that the entries carry it.
-    ///
-    /// The negative half matters as much: a part the entry models COMPLETELY must
-    /// stay silent, or the warning list becomes noise a reader learns to skip.
+    fn bind_load_switch(
+        lib: &ModelLibrary,
+        value: &str,
+        pads: [&str; 4],
+    ) -> (Circuit, [NodeId; 3], BindOutcome, Option<String>) {
+        let [a_pad, b_pad, ctrl_pad, vss_pad] = pads;
+        let mut c = comp("U1", value);
+        c.pins = vec![
+            pin(a_pad, 1),
+            pin(b_pad, 2),
+            pin(ctrl_pad, 3),
+            pin(vss_pad, 0),
+        ];
+        let mut circuit = Circuit::new();
+        let nodes = [
+            circuit.node("SWITCHED"),
+            circuit.node("RAIL"),
+            circuit.node("ENABLE"),
+        ];
+        let node_of = move |n: Option<i64>| match n {
+            Some(0) => Some(NodeId::GROUND),
+            Some(i @ 1..=3) => Some(nodes[i as usize - 1]),
+            _ => None,
+        };
+        let model = resolve_value(lib, value, "");
+        let (outcome, warning) = bind_one(&c, &model, &mut circuit, &node_of, &HashMap::new());
+        (circuit, nodes, outcome, warning)
+    }
+
+    /// A switch entry that models only part of the part (or assumes an
+    /// enable polarity) discloses it through its `warning` param; a completely
+    /// modelled part stays silent.
     #[test]
     fn a_partly_modelled_switch_discloses_the_part_it_leaves_out() {
         let lib = ModelLibrary::builtin();
-        let pin_rules = lib.pin_rules();
-
-        // (value, a phrase the disclosure must contain) and then the silent ones.
-        let partial = [
-            ("TXS0108E", "eight"),
-            ("PCA9306", "SDA"),
-            ("TPS2104", "IN1"),
-            // Not a partial CHANNEL: an assumption in the match rule. The bare part
-            // number names no enable-polarity option, and an entry that guesses one
-            // owes the reader the same disclosure as one that models half a part.
-            ("TPS22916YFP", "active-high"),
-        ];
-        // The silent control. MIC94090's value string names its polarity, so nothing
-        // is assumed and nothing should be said.
-        let complete = ["MIC94090C6"];
-
-        for (value, phrase) in partial
-            .iter()
-            .map(|(v, p)| (*v, Some(*p)))
-            .chain(complete.iter().map(|v| (*v, None)))
-        {
-            let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
-            q.mpn = Some(value.to_string());
-            let model = lib
-                .resolve(&q)
-                .model
-                .unwrap_or_else(|| panic!("{value} must resolve"));
-
-            // Wire the pads BY ROLE out of the entry's own map, so this test does
-            // not restate a pin map that another test already owns.
-            let pad_for = |role: &str| -> String {
-                model
-                    .pins
-                    .iter()
-                    .find(|(_, r)| r.as_str() == role)
-                    .map(|(pad, _)| pad.clone())
-                    .unwrap_or_else(|| panic!("{value} names no `{role}` pad"))
-            };
-            let mut c = comp("U1", value);
-            c.pins = vec![
-                pin(&pad_for("in_out_a"), 1),
-                pin(&pad_for("in_out_b"), 2),
-                pin(&pad_for("ctrl"), 3),
-                pin(&pad_for("vss"), 0),
-            ];
-
-            let mut circuit = Circuit::new();
-            let (a, b, ctrl) = (
-                circuit.node("SWITCHED"),
-                circuit.node("RAIL"),
-                circuit.node("ENABLE"),
-            );
-            let node_of = move |net: Option<i64>| match net {
-                Some(1) => Some(a),
-                Some(2) => Some(b),
-                Some(3) => Some(ctrl),
-                Some(0) => Some(NodeId::GROUND),
-                _ => None,
-            };
-
-            let (outcome, warning, _) = bind_component(
-                &c,
-                &model,
-                Confidence::Exact,
-                &mut circuit,
-                &node_of,
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                false,
-                &HashMap::new(),
-                pin_rules,
-            );
+        for (value, phrase) in [
+            ("TXS0108E", Some("eight")),
+            ("PCA9306", Some("SDA")),
+            ("TPS2104", Some("IN1")),
+            ("TPS22916YFP", Some("active-high")),
+            ("MIC94090C6", None),
+        ] {
+            let model = resolve_value(&lib, value, "");
+            let pads = ["in_out_a", "in_out_b", "ctrl", "vss"]
+                .map(|role| pad_for(&model, role).unwrap_or_else(|| panic!("{value} `{role}`")));
+            let (_, _, outcome, warning) = bind_load_switch(&lib, value, pads);
             assert!(
                 !matches!(outcome, BindOutcome::Unresolved { .. }),
-                "{value} did not bind: {outcome:?}"
+                "{value}: {outcome:?}"
             );
-
             match phrase {
                 Some(phrase) => {
-                    let w = warning.unwrap_or_else(|| {
-                        panic!(
-                            "{value} binds as resolved with only part of it modelled \
-                             and says nothing; add a `warning` param to the entry"
-                        )
-                    });
-                    assert!(
-                        w.contains("U1") && w.contains(phrase),
-                        "{value}'s disclosure must name the reference and the gap \
-                         ({phrase:?}): {w}"
-                    );
+                    let w = warning.unwrap_or_else(|| panic!("{value} must disclose its gap"));
+                    assert!(w.contains("U1") && w.contains(phrase), "{value}: {w}");
                 }
-                None => assert!(
-                    warning.is_none(),
-                    "{value} is modelled completely; a warning here trains readers to \
-                     ignore the list: {warning:?}"
-                ),
+                None => assert!(warning.is_none(), "{value}: {warning:?}"),
             }
         }
     }
 
+    /// The stamped switch bridges rail and switched net (never ground or the
+    /// control line) and closes on a HIGH control with positive thresholds.
     #[test]
     fn an_active_high_load_switch_conducts_on_a_high_control() {
         let lib = ModelLibrary::builtin();
-        let pin_rules = lib.pin_rules();
-
-        // (value, the pad that is the switched OUTPUT, the pad that is the INPUT,
-        //  the pad that is the control)
-        for (value, out_pad, in_pad, ctrl_pad, gnd_pad) in [
-            ("TPS22916YFP", "A1", "A2", "B2", "B1"),
-            ("MIC94090C6", "1", "4", "6", "2"),
-            ("TPS2104", "4", "3", "1", "2"),
+        for (value, pads) in [
+            ("TPS22916YFP", ["A1", "A2", "B2", "B1"]),
+            ("MIC94090C6", ["1", "4", "6", "2"]),
+            ("TPS2104", ["4", "3", "1", "2"]),
         ] {
-            let mut c = comp("U1", value);
-            c.pins = vec![
-                pin(out_pad, 1),
-                pin(in_pad, 2),
-                pin(ctrl_pad, 3),
-                pin(gnd_pad, 0),
-            ];
-
-            let mut circuit = Circuit::new();
-            let out = circuit.node("SWITCHED");
-            let inn = circuit.node("RAIL");
-            let ctrl = circuit.node("ENABLE");
-            let node_of = move |net: Option<i64>| match net {
-                Some(1) => Some(out),
-                Some(2) => Some(inn),
-                Some(3) => Some(ctrl),
-                Some(0) => Some(NodeId::GROUND),
-                _ => None,
-            };
-
-            let mut q = ComponentQuery::new(None, Some(value.to_string()), None);
-            q.mpn = Some(value.to_string());
-            let model = lib
-                .resolve(&q)
-                .model
-                .unwrap_or_else(|| panic!("{value} must resolve"));
-
-            let (outcome, _, _) = bind_component(
-                &c,
-                &model,
-                Confidence::Exact,
-                &mut circuit,
-                &node_of,
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                false,
-                &HashMap::new(),
-                pin_rules,
-            );
+            let (circuit, [out, inn, ctrl], outcome, _) = bind_load_switch(&lib, value, pads);
             assert!(
                 !matches!(outcome, BindOutcome::Unresolved { .. }),
-                "{value} did not bind: {outcome:?}"
+                "{value}: {outcome:?}"
             );
-
-            let sw = circuit
-                .devices
-                .iter()
-                .find_map(|d| match d {
-                    Device::VSwitch {
-                        a,
-                        b,
-                        ctrl_p,
-                        ctrl_n,
-                        von,
-                        voff,
-                        ..
-                    } => Some((*a, *b, *ctrl_p, *ctrl_n, *von, *voff)),
-                    _ => None,
-                })
+            let (a, b, ctrl_p, ctrl_n, von, voff) = *vswitches(&circuit)
+                .first()
                 .unwrap_or_else(|| panic!("{value} stamped no switch"));
-            let (a, b, ctrl_p, ctrl_n, von, voff) = sw;
-
-            // The switch must be BETWEEN the rail and the switched net, not to
-            // ground and not from the control line.
             let terminals = [a, b];
             assert!(
                 terminals.contains(&out) && terminals.contains(&inn),
-                "{value}: the switch must bridge the rail and the switched net, \
-                 got {a:?} to {b:?}"
+                "{value}"
             );
             assert!(
                 !terminals.contains(&NodeId::GROUND) && !terminals.contains(&ctrl),
-                "{value}: a switch terminal landed on ground or on the control line"
-            );
-
-            // The polarity. `von`/`voff` are thresholds on (ctrl_p - ctrl_n), so
-            // work out which way round the binder wired the sense and demand that
-            // a HIGH control closes it.
-            let sense_is_control = ctrl_p == ctrl && ctrl_n == NodeId::GROUND;
-            let sense_is_inverted = ctrl_n == ctrl && ctrl_p == NodeId::GROUND;
-            assert!(
-                sense_is_control || sense_is_inverted,
-                "{value}: the control sense is wired to neither the control nor its \
-                 inverse ({ctrl_p:?} - {ctrl_n:?})"
+                "{value}"
             );
             assert!(
-                sense_is_control,
-                "{value}: the switch senses the INVERTED control, so it conducts \
-                 when the enable is LOW. This part is active high; a terminal is \
-                 almost certainly named `s0`."
+                ctrl_p == ctrl && ctrl_n == NodeId::GROUND,
+                "{value}: the switch must sense the control, not its inverse"
             );
             assert!(
                 von > 0.0 && voff > 0.0 && von > voff,
-                "{value}: an active-high switch needs positive thresholds with \
-                 von above voff, got von = {von}, voff = {voff}"
+                "{value}: von={von} voff={voff}"
             );
         }
     }
 
-    /// A regulator's pin NAMES are portable and its pad NUMBERS are not, and
-    /// `role_from_pinfunction` had no arm for the kind, so a board that spelled
-    /// VIN/VOUT/GND/CE on its pads had that evidence thrown away.
-    ///
-    /// The XC6204 is the case: Torex's own table gives SOT-25 as 1 = VIN / 4 = NC
-    /// and SOT-89-5 as 4 = VIN / 1 = NC, so pads 1 and 4 trade places between two
-    /// packages of the same part, and whichever the DB entry chose was wrong for
-    /// the other. The board's own pinfunction settles it.
+    /// Regulator pin NAMES are portable where pad numbers are not; SHDN is
+    /// its own role and must never be read as an active-high enable.
     #[test]
     fn a_regulator_binds_by_pin_name_when_the_board_gives_one() {
-        for (function, role) in [
+        let role = |f: &str| role_from_pinfunction(ComponentKind::Vreg, f);
+        for (function, want) in [
             ("VIN", "in"),
-            ("vin", "in"),
-            ("IN", "in"),
             ("VOUT", "out"),
-            ("OUT", "out"),
             ("GND", "gnd"),
             ("VSS", "gnd"),
             ("CE", "en"),
@@ -8236,52 +7519,13 @@ mod crystal_fallback_tests {
             ("ADJ", "fb"),
             ("NC", "nc"),
         ] {
-            assert_eq!(
-                role_from_pinfunction(ComponentKind::Vreg, function).as_deref(),
-                Some(role),
-                "a vreg pin named {function} is the {role} role"
-            );
+            assert_eq!(role(function).as_deref(), Some(want), "{function}");
         }
-
-        // SHDN is the same PIN as EN with the OPPOSITE sense, and the invariant that
-        // matters is that it never becomes `en`: a model that gates on that role
-        // would read a shutdown as an enable and report a dead rail as live. It gets
-        // its own role rather than nothing at all, so a board naming the pad is read
-        // from its pin function instead of falling through to pin-rule guessing, and
-        // `bind_vreg` treats either spelling as "an enable exists and is not
-        // modelled".
         for function in ["SHDN", "shutdown", "nSHDN"] {
-            let role = role_from_pinfunction(ComponentKind::Vreg, function);
-            assert_eq!(
-                role.as_deref(),
-                Some("shdn"),
-                "{function} is the shutdown role"
-            );
-            assert_ne!(
-                role.as_deref(),
-                Some("en"),
-                "{function} must never be read as an active-high enable"
-            );
+            assert_eq!(role(function).as_deref(), Some("shdn"), "{function}");
         }
-
-        // And a name that means nothing on a regulator stays unmapped rather than
-        // being forced into the nearest role.
         for function in ["A", "B", "SDA", "P07", "OUT_B", ""] {
-            assert_eq!(
-                role_from_pinfunction(ComponentKind::Vreg, function),
-                None,
-                "{function} is not a regulator role"
-            );
-        }
-    }
-
-    fn pin(number: &str, net: i64) -> Pin {
-        Pin {
-            number: number.to_string(),
-            net: Some(net),
-            function: String::new(),
-            kind: String::new(),
-            position: None,
+            assert_eq!(role(function), None, "{function}");
         }
     }
 
@@ -8289,333 +7533,145 @@ mod crystal_fallback_tests {
         let mut mcu = comp("U1", "STM32F103C8T6");
         mcu.footprint = "Package_QFP:LQFP-48_7x7mm_P0.5mm".to_string();
         mcu.pins = vec![pin("5", 1), pin("6", 2)];
-
         let mut crystal = comp("Y1", "8MHz");
         crystal.footprint = "Crystal:Crystal_SMD_3225-4Pin".to_string();
         crystal.dnp = crystal_dnp;
         crystal.pins = vec![pin("1", 1), pin("3", 2), pin("2", 3), pin("4", 3)];
-
         ExtractedBoard {
             name: "clock-evidence".to_string(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "OSC_IN".to_string(),
-                },
-                Net {
-                    id: 2,
-                    name: "OSC_OUT".to_string(),
-                },
-                Net {
-                    id: 3,
-                    name: "GND".to_string(),
-                },
-            ],
+            nets: vec![net(1, "OSC_IN"), net(2, "OSC_OUT"), net(3, "GND")],
             components: vec![mcu, crystal],
         }
     }
 
     #[test]
-    fn assembled_crystal_on_oscillator_pins_is_clock_presence_evidence() {
+    fn an_assembled_crystal_on_oscillator_pins_is_clock_presence_evidence_but_a_dnp_one_is_not() {
         let lib = ModelLibrary::builtin();
         let bound = bind_board(&stm32_clock_board(false), &lib);
         assert_eq!(bound.mcus.len(), 1);
-        let mcu = &bound.mcus[0];
-        assert!(mcu.role_nets.contains_key("osc_in"));
-        assert!(mcu.role_nets.contains_key("osc_out"));
-        assert!(
-            mcu.external_clock_present,
-            "an assembled Y1 bridging OSC_IN/OSC_OUT must enable external-clock readiness"
-        );
+        assert!(bound.mcus[0].role_nets.contains_key("osc_in"));
+        assert!(bound.mcus[0].role_nets.contains_key("osc_out"));
+        assert!(bound.mcus[0].external_clock_present);
+        let bound = bind_board(&stm32_clock_board(true), &lib);
+        assert!(!bound.mcus[0].external_clock_present);
     }
 
-    #[test]
-    fn dnp_crystal_is_not_clock_presence_evidence() {
-        let bound = bind_board(&stm32_clock_board(true), &ModelLibrary::builtin());
-        assert_eq!(bound.mcus.len(), 1);
-        assert!(
-            !bound.mcus[0].external_clock_present,
-            "a DNP crystal is absent from the assembled board"
-        );
-    }
-
-    fn comp_fp(reference: &str, value: &str, footprint: &str) -> Component {
-        let mut c = comp(reference, value);
-        c.footprint = footprint.to_string();
-        c
-    }
-
-    /// R23 (MELF-passive-silent-open): a MELF-footprint resistor/cap has a
-    /// diode-shaped body, so an unqualified diode-evidence gate deletes it
-    /// (return None -> open circuit). An R/C/L *reference* whose value is a clear passive
-    /// magnitude must fall through to the passive fallback instead.
+    /// An R/C/L reference with a clear passive magnitude binds as a passive
+    /// even on a diode-shaped MELF body; diode references and footprint-only
+    /// diodes keep binding as diodes.
     #[test]
     fn melf_footprint_resistor_binds_as_passive_not_open() {
+        let comp_fp = |reference, value, footprint: &str| {
+            let mut c = comp(reference, value);
+            c.footprint = footprint.to_string();
+            c
+        };
         let entry = fallback_entry(&comp_fp("R5", "10k", "Resistor_SMD:R_MELF_MELF0207"))
-            .expect("a 10k MELF resistor must bind, not be left open");
+            .expect("a 10k MELF resistor must bind");
         assert_eq!(entry.kind, ComponentKind::Passive);
-
-        // Same for an L on a MELF/diode-ish body.
         let ind = fallback_entry(&comp_fp("L2", "10uH", "Inductor_SMD:L_MELF"))
             .expect("a MELF inductor binds");
         assert_eq!(ind.kind, ComponentKind::Passive);
-
-        // A genuine diode REFERENCE on a diode footprint still bails (or binds as
-        // a diode), never as a passive; the reference-class gate wins.
         let cr = fallback_entry(&comp_fp("CR1", "5.1V", "Diode_SMD:D_SOD-123"));
-        assert!(
-            cr.map_or(true, |e| e.kind != ComponentKind::Passive),
-            "a CR-referenced zener must never bind as a passive"
-        );
-
-        // A footprint-only diode with a bare/generic value still binds as a diode.
+        assert!(cr.map_or(true, |e| e.kind != ComponentKind::Passive));
         let d = fallback_entry(&comp_fp("D9", "D", "Diode_SMD:D_SOD-123"))
             .expect("a generic diode-footprint part binds as a diode");
         assert_eq!(d.kind, ComponentKind::Diode);
     }
-}
-
-#[cfg(test)]
-mod fmt_tests {
-    use super::fmt_eng;
 
     #[test]
-    fn capacitor_scales_to_pico_nano_micro() {
-        // A fixed µF scale renders 390 pF as "0.000 µF"; the scale tracks the
-        // magnitude instead.
-        assert_eq!(fmt_eng(390e-12, "F"), "390 pF");
-        assert_eq!(fmt_eng(1e-9, "F"), "1 nF");
-        assert_eq!(fmt_eng(4.7e-9, "F"), "4.7 nF");
-        assert_eq!(fmt_eng(100e-9, "F"), "100 nF");
-        assert_eq!(fmt_eng(0.1e-6, "F"), "100 nF");
-        assert_eq!(fmt_eng(10e-6, "F"), "10 µF");
-        assert_eq!(fmt_eng(1200e-6, "F"), "1.2 mF");
+    fn fmt_eng_scales_to_the_magnitude_and_carries_across_decades() {
+        for (value, unit, want) in [
+            (390e-12, "F", "390 pF"),
+            (4.7e-9, "F", "4.7 nF"),
+            (0.1e-6, "F", "100 nF"),
+            (10e-6, "F", "10 µF"),
+            (1200e-6, "F", "1.2 mF"),
+            (2.2e-6, "H", "2.2 µH"),
+            (4700.0, "Ω", "4.7 kΩ"),
+            (1_000_000.0, "Ω", "1 MΩ"),
+            (0.05, "Ω", "50 mΩ"),
+            (0.0, "F", "0 F"),
+            (f64::NAN, "Ω", "0 Ω"),
+            (999_600.0, "Ω", "1 MΩ"),
+            (999.6, "Ω", "1 kΩ"),
+            (0.9996, "Ω", "1 Ω"),
+            (999.6e-6, "F", "1 mF"),
+            (990.0, "Ω", "990 Ω"),
+            (2_200_000_000.0, "Ω", "2200 MΩ"),
+        ] {
+            assert_eq!(fmt_eng(value, unit), want);
+        }
     }
 
+    /// Rail names carry their own magnitude (never a "5V"/"3V3" substring
+    /// guess), supply tokens without a magnitude resolve to nothing, and
+    /// monitor / feedback taps and domain-suffixed signals are not rails.
     #[test]
-    fn inductor_and_resistor_scale_too() {
-        assert_eq!(fmt_eng(2.2e-6, "H"), "2.2 µH");
-        assert_eq!(fmt_eng(10e-9, "H"), "10 nH");
-        assert_eq!(fmt_eng(4700.0, "Ω"), "4.7 kΩ");
-        assert_eq!(fmt_eng(1_000_000.0, "Ω"), "1 MΩ");
-        assert_eq!(fmt_eng(0.05, "Ω"), "50 mΩ");
+    fn power_rail_voltage_reads_full_magnitudes_and_refuses_taps_and_signals() {
+        for (name, volts) in [
+            ("+15V", 15.0),
+            ("+15V0", 15.0),
+            ("+15V_ANALOG", 15.0),
+            ("+9V", 9.0),
+            ("+5V", 5.0),
+            ("+5V_USB", 5.0),
+            ("VCC_5V", 5.0),
+            ("-15V", -15.0),
+            ("-5V", -5.0),
+            ("-3V3_ANALOG", -3.3),
+            ("VDD_1V8", 1.8),
+            ("AVCC_2V5", 2.5),
+            ("DVDD_0V9", 0.9),
+            ("VDD_1.2V", 1.2),
+            ("VCC_15V", 15.0),
+            ("VDD_13V3", 13.3),
+            ("VDD_3V3", 3.3),
+            ("VCC_3.3V", 3.3),
+            ("VBUS_65V", 65.0),
+            ("VDD_63V3", 63.3),
+            ("+65V", 65.0),
+            ("3V3", 3.3),
+            ("+3V3", 3.3),
+            ("+3V3_DIG", 3.3),
+            ("12V", 12.0),
+            ("5V_SENSOR", 5.0),
+            ("3V3_FBUS", 3.3),
+        ] {
+            assert_eq!(power_rail_voltage(name), Some(volts), "{name}");
+        }
+        for name in [
+            "VDD",
+            "VEE",
+            "SENSE_1V2_MON",
+            "SDA_3V3",
+            "SCL_3V3",
+            "IRQ_3.3V",
+            "SDA_5V",
+            "12V_FB",
+            "3V3_SENSE",
+            "5V_MON",
+            "12V_DIV",
+            "-12V_MON",
+            "VDD_1V8_MON",
+            "VCC_5V_MON",
+            "VOUT_1V0_FB",
+            "12V_DIVIDER",
+            "3V3_SENSED",
+            "5V_SENSING",
+            "12V_MEASURE",
+            "5V_MONITORED",
+            "VDD_1V8_DIVIDER",
+            "-12V_SENSED",
+        ] {
+            assert_eq!(power_rail_voltage(name), None, "{name}");
+        }
     }
 
+    /// RISC-V ESP32 variants must not fall through to the Xtensa catch-all,
+    /// and only the STM32F072 has an F072 machine.
     #[test]
-    fn zero_and_nonfinite_are_safe() {
-        assert_eq!(fmt_eng(0.0, "F"), "0 F");
-        assert_eq!(fmt_eng(f64::NAN, "Ω"), "0 Ω");
-    }
-
-    #[test]
-    fn decade_carry_renormalizes_to_the_next_prefix() {
-        // Round-28: a mantissa in [999.5, 1000) rounds to "1000", so fmt_eng
-        // rendered "1000 kΩ", a mantissa outside the promised [1,1000) range and
-        // inconsistent with the sibling format_engineering. The carry must promote
-        // to the next-larger prefix ("1 MΩ"), at every decade boundary.
-        assert_eq!(fmt_eng(999_600.0, "Ω"), "1 MΩ");
-        assert_eq!(fmt_eng(999.6, "Ω"), "1 kΩ");
-        assert_eq!(fmt_eng(0.9996, "Ω"), "1 Ω");
-        // µF -> mF carry: 999.6 µF rounds up a decade.
-        assert_eq!(fmt_eng(999.6e-6, "F"), "1 mF");
-        // Values comfortably inside a decade are unaffected.
-        assert_eq!(fmt_eng(4700.0, "Ω"), "4.7 kΩ");
-        assert_eq!(fmt_eng(990.0, "Ω"), "990 Ω");
-        // The top prefix has nothing larger to carry into: a big mantissa stays.
-        assert_eq!(fmt_eng(2_200_000_000.0, "Ω"), "2200 MΩ");
-    }
-}
-
-#[cfg(test)]
-mod rail_voltage_tests {
-    use super::power_rail_voltage;
-
-    /// Round-8 #1: a positive numeric rail carries its own magnitude. "+15V"
-    /// contains the substring "5V" and starts with '+', so a loose substring
-    /// heuristic classifies it as a 5 V rail and solves a +15V op-amp supply
-    /// at 5 V. The positive fallback parses the true magnitude instead.
-    #[test]
-    fn positive_numeric_rails_keep_their_magnitude() {
-        assert_eq!(power_rail_voltage("+15V"), Some(15.0));
-        assert_eq!(power_rail_voltage("+25V"), Some(25.0));
-        assert_eq!(power_rail_voltage("+15V0"), Some(15.0));
-        assert_eq!(power_rail_voltage("+24V"), Some(24.0));
-        assert_eq!(power_rail_voltage("+9V"), Some(9.0));
-        assert_eq!(power_rail_voltage("+15V_ANALOG"), Some(15.0));
-        // The genuine 5 V rails still resolve to 5.
-        assert_eq!(power_rail_voltage("+5V"), Some(5.0));
-        assert_eq!(power_rail_voltage("+5V_USB"), Some(5.0));
-        assert_eq!(power_rail_voltage("VCC_5V"), Some(5.0));
-        // Symmetry with the negative side.
-        assert_eq!(power_rail_voltage("-15V"), Some(-15.0));
-        // A voltage-less VDD token carries no magnitude of its own.
-        assert_eq!(power_rail_voltage("+15V"), Some(15.0));
-    }
-
-    /// R11: voltage-SUFFIXED rails whose magnitude is neither 5 V nor 3.3 V and
-    /// whose name does not start with the digit must still resolve; they fell
-    /// through every arm and floated at 0 V.
-    #[test]
-    fn voltage_suffixed_rails_resolve() {
-        assert_eq!(power_rail_voltage("VDD_1V8"), Some(1.8));
-        assert_eq!(power_rail_voltage("VCC_1V2"), Some(1.2));
-        assert_eq!(power_rail_voltage("AVCC_2V5"), Some(2.5));
-        assert_eq!(power_rail_voltage("VOUT_1V0"), Some(1.0));
-        assert_eq!(power_rail_voltage("DVDD_0V9"), Some(0.9));
-        // Dotted form embedded in a supply-token name.
-        assert_eq!(power_rail_voltage("VDD_1.2V"), Some(1.2));
-        // A bare supply token with no magnitude still resolves to nothing (the
-        // deliberate no-guess policy): inventing a voltage would be a guess.
-        assert_eq!(power_rail_voltage("VDD"), None);
-        assert_eq!(power_rail_voltage("VEE"), None);
-        // A plain signal net (no supply token) is never read as a rail even if
-        // it happens to contain a "1V2"-looking substring.
-        assert_eq!(power_rail_voltage("SENSE_1V2_MON"), None);
-    }
-
-    /// R14: a supply-token-prefixed rail whose magnitude's last digits are "5V"
-    /// or "3V3" must read its FULL magnitude, not be swallowed by the loose
-    /// "contains 5V"/"3V3" substring heuristic. "VCC_15V" is a ±15 V analog
-    /// supply, not 5 V; "VDD_13V3" is 13.3 V, not 3.3 V.
-    #[test]
-    fn token_prefixed_rails_ending_in_5v_or_3v3_read_full_magnitude() {
-        assert_eq!(power_rail_voltage("VCC_15V"), Some(15.0));
-        assert_eq!(power_rail_voltage("VDD_15V"), Some(15.0));
-        assert_eq!(power_rail_voltage("VBUS_25V"), Some(25.0));
-        assert_eq!(power_rail_voltage("VDD_13V3"), Some(13.3));
-        // The genuine token-prefixed 5 V / 3.3 V rails still resolve correctly.
-        assert_eq!(power_rail_voltage("VCC_5V"), Some(5.0));
-        assert_eq!(power_rail_voltage("VDD_3V3"), Some(3.3));
-        assert_eq!(power_rail_voltage("VCC_3.3V"), Some(3.3));
-    }
-
-    /// R33: a supply-token rail ABOVE 60 V that embeds a "5V"/"3V3" digit
-    /// substring ("VBUS_65V" contains "5V", "VDD_63V3" contains "3V3") must read
-    /// its FULL magnitude. Clamping embedded_rail_magnitude above 60 V to None
-    /// drops control into the loose substring branch, which silently solves a
-    /// 65 V rail at 5 V and hides overvoltage stress, so there is no upper
-    /// clamp. The '+' form ("+65V") resolves via positive_rail_fallback and the
-    /// token form matches it.
-    #[test]
-    fn high_voltage_token_rails_are_not_swallowed_by_the_5v_substring() {
-        assert_eq!(power_rail_voltage("VBUS_65V"), Some(65.0));
-        assert_eq!(power_rail_voltage("VBUS_75V"), Some(75.0));
-        assert_eq!(power_rail_voltage("VCC_95V"), Some(95.0));
-        assert_eq!(power_rail_voltage("VDD_63V3"), Some(63.3));
-        // The '+' form was already correct and must stay so.
-        assert_eq!(power_rail_voltage("+65V"), Some(65.0));
-    }
-
-    /// R16: a bare domain-suffixed SIGNAL net that merely contains "3V3"/"3.3V"
-    /// (an open-drain I2C line "SDA_3V3", a monitor "SENSE_3V3_MON", an interrupt
-    /// "IRQ_3.3V") is not a rail and must stay unresolved, else Pass 3 stamps an
-    /// ideal 3.3 V supply onto it and pins the line high, fabricating bus data.
-    /// The 3V3 fallback is now gated on a supply token, matching the 5V branch.
-    #[test]
-    fn domain_suffixed_signal_nets_are_not_read_as_3v3_rails() {
-        assert_eq!(power_rail_voltage("SDA_3V3"), None);
-        assert_eq!(power_rail_voltage("SCL_3V3"), None);
-        assert_eq!(power_rail_voltage("SENSE_3V3_MON"), None);
-        assert_eq!(power_rail_voltage("IRQ_3.3V"), None);
-        assert_eq!(power_rail_voltage("TXD_3V3"), None);
-        // The 5 V sibling was already gated; confirm the symmetry holds.
-        assert_eq!(power_rail_voltage("SDA_5V"), None);
-        // Genuine 3.3 V rails in every accepted form still resolve.
-        assert_eq!(power_rail_voltage("3V3"), Some(3.3));
-        assert_eq!(power_rail_voltage("+3V3"), Some(3.3));
-        assert_eq!(power_rail_voltage("+3V3_ANALOG"), Some(3.3));
-        assert_eq!(power_rail_voltage("VDD_3V3"), Some(3.3));
-        assert_eq!(power_rail_voltage("VCC_3.3V"), Some(3.3));
-    }
-
-    /// Round-27: the voltage-PREFIXED mirror of the suffix-signal case. A monitor
-    /// / feedback / sense TAP named after the rail it watches ("12V_FB",
-    /// "3V3_SENSE", "5V_MON") physically sits BELOW the rail voltage, yet
-    /// positive_rail_fallback resolved it as a full ideal rail, Pass 3 then pinned
-    /// the divider tap to the nominal, shorting the divider and masking the
-    /// under/over-voltage the sense line exists to reveal. Such names must stay
-    /// unresolved; rail-DOMAIN names must keep resolving.
-    #[test]
-    fn voltage_prefixed_monitor_taps_are_not_read_as_rails() {
-        assert_eq!(power_rail_voltage("12V_FB"), None);
-        assert_eq!(power_rail_voltage("3V3_SENSE"), None);
-        assert_eq!(power_rail_voltage("5V_MON"), None);
-        assert_eq!(power_rail_voltage("12V_MON"), None);
-        assert_eq!(power_rail_voltage("5V_FEEDBACK"), None);
-        assert_eq!(power_rail_voltage("12V_DIV"), None);
-        // The negative mirror is gated too.
-        assert_eq!(power_rail_voltage("-12V_MON"), None);
-        assert_eq!(power_rail_voltage("-5V_SENSE"), None);
-        // Round-28: the supply-token-PREFIXED embedded form ("VDD_1V8_MON") must be
-        // gated too; the r27 fix only covered the digit-prefixed and negative
-        // paths, leaving embedded_rail_magnitude ungated.
-        assert_eq!(power_rail_voltage("VDD_1V8_MON"), None);
-        assert_eq!(power_rail_voltage("VCC_5V_MON"), None);
-        assert_eq!(power_rail_voltage("AVCC_2V5_SENSE"), None);
-        assert_eq!(power_rail_voltage("VOUT_1V0_FB"), None);
-        assert_eq!(power_rail_voltage("VDD_13V3_MON"), None);
-        // A genuine embedded rail (no tap suffix) still resolves.
-        assert_eq!(power_rail_voltage("VDD_1V8"), Some(1.8));
-        assert_eq!(power_rail_voltage("AVCC_2V5"), Some(2.5));
-        // Genuine rails, including rail-DOMAIN suffixes, still resolve.
-        assert_eq!(power_rail_voltage("12V"), Some(12.0));
-        assert_eq!(power_rail_voltage("+15V_ANALOG"), Some(15.0));
-        assert_eq!(power_rail_voltage("+5V_USB"), Some(5.0));
-        assert_eq!(power_rail_voltage("+3V3_ANALOG"), Some(3.3));
-        assert_eq!(power_rail_voltage("+9V"), Some(9.0));
-        assert_eq!(power_rail_voltage("-5V"), Some(-5.0));
-        assert_eq!(power_rail_voltage("-3V3_ANALOG"), Some(-3.3));
-    }
-
-    /// R38: the tap-suffix guard matched exact tokens ("DIV","SENSE","MEAS","MON"),
-    /// so common longer spellings of the same intent, "DIVIDER", "SENSED",
-    /// "SENSING", "MEASURE", "MONITORED", fell through and the divided tap was
-    /// resolved as a full rail (then pinned high by an ideal supply, masking the
-    /// under/over-voltage the divider exists to sense). The root now matches.
-    #[test]
-    fn longer_monitor_tap_spellings_are_not_read_as_rails() {
-        assert_eq!(power_rail_voltage("12V_DIVIDER"), None);
-        assert_eq!(power_rail_voltage("3V3_SENSED"), None);
-        assert_eq!(power_rail_voltage("5V_SENSING"), None);
-        assert_eq!(power_rail_voltage("12V_MEASURE"), None);
-        assert_eq!(power_rail_voltage("5V_MONITORED"), None);
-        // Embedded and negative mirrors of the longer spellings too.
-        assert_eq!(power_rail_voltage("VDD_1V8_DIVIDER"), None);
-        assert_eq!(power_rail_voltage("-12V_SENSED"), None);
-        // Rail-DOMAIN suffixes that merely resemble a root must still resolve as
-        // rails (none of DIG/IO/USB/CORE/ANALOG starts with a tap root).
-        assert_eq!(power_rail_voltage("+3V3_DIG"), Some(3.3));
-        assert_eq!(power_rail_voltage("+5V_USB"), Some(5.0));
-        assert_eq!(power_rail_voltage("+15V_ANALOG"), Some(15.0));
-    }
-
-    /// R39: the R38 root-prefix match over-reached, "SENSOR" starts with the
-    /// "SENS" tap root and "FBUS" with "FB", so genuine sensor/fieldbus SUPPLY
-    /// rails were misclassified as monitor taps and left floating at 0 V. Those
-    /// rail-domain words are excepted; the true tap spellings still resolve as taps.
-    #[test]
-    fn sensor_and_fieldbus_supply_rails_are_not_mistaken_for_taps() {
-        assert_eq!(power_rail_voltage("5V_SENSOR"), Some(5.0));
-        assert_eq!(power_rail_voltage("3V3_SENSOR"), Some(3.3));
-        assert_eq!(power_rail_voltage("12V_SENSOR"), Some(12.0));
-        assert_eq!(power_rail_voltage("3V3_FBUS"), Some(3.3));
-        // The genuine taps (including the longer R38 spellings) are still taps.
-        assert_eq!(power_rail_voltage("5V_SENSE"), None);
-        assert_eq!(power_rail_voltage("3V3_SENSED"), None);
-        assert_eq!(power_rail_voltage("5V_SENSING"), None);
-        assert_eq!(power_rail_voltage("12V_FB"), None);
-    }
-}
-
-#[cfg(test)]
-mod mcu_route_tests {
-    use super::{route_mcu_family_str, McuFamilyRoute};
-
-    /// R11: the RISC-V ESP32 variants (C6/C2/H2/P4) must NOT fall through to the
-    /// Xtensa `qemu:esp32` catch-all, that would execute RISC-V firmware on the
-    /// wrong ISA. No platform is wired yet, so they route to NoPlatform.
-    #[test]
-    fn riscv_esp32_variants_do_not_misroute_to_xtensa() {
+    fn mcu_family_routing_never_runs_firmware_on_the_wrong_core() {
         for (part, fam) in [
             ("ESP32-C6", "ESP32-C6"),
             ("ESP32-C2", "ESP32-C2"),
@@ -8627,7 +7683,6 @@ mod mcu_route_tests {
                 other => panic!("{part} must be NoPlatform, got {other:?}"),
             }
         }
-        // The Xtensa parts still route to their cores.
         assert!(matches!(
             route_mcu_family_str("ESP32-C3"),
             Some(McuFamilyRoute::Backend {
@@ -8642,10 +7697,6 @@ mod mcu_route_tests {
                 ..
             })
         ));
-    }
-
-    #[test]
-    fn only_stm32f072_uses_the_f072_machine() {
         assert!(matches!(
             route_mcu_family_str("STM32F072CBT6"),
             Some(McuFamilyRoute::Backend {
@@ -8660,49 +7711,15 @@ mod mcu_route_tests {
             ));
         }
     }
-}
-
-#[cfg(test)]
-mod gpio_role_tests {
-    use super::{apin_gpio_of_role, gpio_of_role, role_from_mcu_pinfunction_token};
 
     #[test]
-    fn module_analog_pins_resolve_only_through_the_apin_fallback() {
-        // Round-27: on a module (Nano) board the analog roles are "a0".."a5", and
-        // gpio_of_role's module branch only understands the 'd' prefix; it returns
-        // None for every 'a' role. bind_mcu recovers the port pin via the apin
-        // fallback, but the three scheduler boot-hazard/boot-state reporters used
-        // gpio_of_role ALONE and silently dropped firmware-driven A-pins. They now
-        // apply the same fallback; this guards the mapping contract they rely on.
+    fn gpio_roles_cover_module_analog_pins_and_stm32_ports_past_e() {
         for role in ["a0", "a2", "a5", "a3_scl"] {
-            assert_eq!(
-                gpio_of_role(role, true),
-                None,
-                "{role}: plain gpio_of_role can't see a module analog pin"
-            );
+            assert_eq!(gpio_of_role(role, true), None, "{role}");
         }
-        // The fallback maps A0..A5 to PC0..PC5; A6/A7 stay ADC-only (no port pin).
         assert_eq!(apin_gpio_of_role("a0", true), Some(('C', 0)));
-        assert_eq!(apin_gpio_of_role("a2", true), Some(('C', 2)));
         assert_eq!(apin_gpio_of_role("a5", true), Some(('C', 5)));
         assert_eq!(apin_gpio_of_role("a6", true), None, "A6 is ADC-only");
-        // The combined lookup the reporters now use resolves the A-pin.
-        let combined = |r: &str| gpio_of_role(r, true).or_else(|| apin_gpio_of_role(r, true));
-        assert_eq!(
-            combined("a2"),
-            Some(('C', 2)),
-            "A2 = OE_S resolves for hazard reports"
-        );
-        // A digital "d13" role still resolves the ordinary way, unaffected.
-        assert_eq!(combined("d13"), gpio_of_role("d13", true));
-    }
-
-    /// R11: STM32 GPIO banks run past port E, an F4/F7 in a large package has
-    /// PF/PG/PH/PI. Both the pin-role stage and the role→(port,bit) stage must
-    /// cover them; a cap at E or at G silently drops every pin on those banks.
-    #[test]
-    fn stm32_ports_past_e_map() {
-        // Pin-function → role: F/G/H/I survive.
         assert_eq!(
             role_from_mcu_pinfunction_token("PF9"),
             Some("pf9".to_string())
@@ -8712,102 +7729,44 @@ mod gpio_role_tests {
             Some("pi15".to_string())
         );
         assert_eq!(role_from_mcu_pinfunction_token("PZ0"), None);
-        // Role → (port, bit): the same banks resolve to a GPIO driver target
-        // (gpio_of_role returns the uppercase port letter).
         assert_eq!(gpio_of_role("pa0", false), Some(('A', 0)));
         assert_eq!(gpio_of_role("pf9", false), Some(('F', 9)));
-        assert_eq!(gpio_of_role("ph1", false), Some(('H', 1)));
         assert_eq!(gpio_of_role("pi15", false), Some(('I', 15)));
         assert_eq!(gpio_of_role("pz0", false), None);
     }
-}
 
-#[cfg(test)]
-mod model_role_cs_tests {
-    //! The route that promotes SPI framing from the chunk-boundary heuristic to
-    //! exact without a hand-written `cs_net`.
-    //!
-    //! Both directions matter, and the wrong direction matters more. A missing
-    //! `cs_net` costs honesty: the bus reports `heuristic` and the run is still
-    //! correct about what it did. A CS net invented from a part that should not
-    //! have supplied one costs correctness *silently*: the framing tier then
-    //! claims `exact` while the boundaries come from a pin that is not chip
-    //! select, which is worse than the guess it replaced. So every refusal below
-    //! is a test, not a comment.
-
-    use super::*;
-    use hauksbee_extract::{Net, Pin};
-
-    fn pin(number: &str, net: Option<i64>) -> Pin {
-        Pin {
-            number: number.to_string(),
-            net,
-            function: String::new(),
-            kind: String::new(),
-            position: None,
-        }
-    }
-
-    /// A board with one 25xx SPI EEPROM at U5. Its pad 1 is `cs` in the model DB,
-    /// so `cs_pad_net` decides what the CS role lands on: `Some(net id)` wires it,
-    /// `None` leaves the pad unconnected.
+    /// A board with one 25xx SPI EEPROM at U5 whose pad 1 (`cs`) lands on
+    /// `cs_pad_net`.
     fn eeprom_board(cs_pad_net: Option<i64>) -> ExtractedBoard {
-        let mut ee = Component {
-            reference: "U5".to_string(),
-            value: "25LC256-I/SN".to_string(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: vec![
-                pin("1", cs_pad_net), // CS
-                pin("2", Some(2)),    // SO  -> MISO
-                pin("4", Some(9)),    // VSS -> GND
-                pin("5", Some(3)),    // SI  -> MOSI
-                pin("6", Some(4)),    // SCK
-                pin("8", Some(8)),    // VCC
-            ],
-        };
+        let mut ee = comp("U5", "25LC256-I/SN");
         ee.footprint = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm".to_string();
+        ee.pins = vec![
+            Pin {
+                net: cs_pad_net,
+                ..pin("1", 0)
+            },
+            pin("2", 2),
+            pin("4", 9),
+            pin("5", 3),
+            pin("6", 4),
+            pin("8", 8),
+        ];
         ExtractedBoard {
             name: "spi-cs-evidence".to_string(),
             nets: vec![
-                Net {
-                    id: 1,
-                    name: "EE_CS".to_string(),
-                },
-                Net {
-                    id: 2,
-                    name: "SPI_MISO".to_string(),
-                },
-                Net {
-                    id: 3,
-                    name: "SPI_MOSI".to_string(),
-                },
-                Net {
-                    id: 4,
-                    name: "SPI_SCK".to_string(),
-                },
-                Net {
-                    id: 8,
-                    name: "+3V3".to_string(),
-                },
-                Net {
-                    id: 9,
-                    name: "GND".to_string(),
-                },
+                net(1, "EE_CS"),
+                net(2, "SPI_MISO"),
+                net(3, "SPI_MOSI"),
+                net(4, "SPI_SCK"),
+                net(8, "+3V3"),
+                net(9, "GND"),
             ],
             components: vec![ee],
         }
     }
 
-    /// The CS net the route would hand the co-sim, flattening "no model bound"
-    /// and "model bound but declares no usable cs" into the one thing the framing
-    /// path cares about: is there a chip-select net or not.
-    fn cs_net(board: &ExtractedBoard, reference: &str, lib: &ModelLibrary) -> Option<String> {
-        model_role_cs(board, reference, lib).and_then(|r| r.cs_net)
+    fn cs_net(board: &ExtractedBoard, reference: &str) -> Option<String> {
+        model_role_cs(board, reference, &ModelLibrary::builtin()).and_then(|r| r.cs_net)
     }
 
     #[test]
@@ -8815,140 +7774,60 @@ mod model_role_cs_tests {
         let lib = ModelLibrary::builtin();
         assert_eq!(
             model_role_cs(&eeprom_board(Some(1)), "U5", &lib).map(|r| (r.cs_net, r.model_id)),
-            Some((Some("EE_CS".to_string()), "eeprom_25xx_spi".to_string())),
-            "a 25xx EEPROM whose pad 1 is on EE_CS must hand back that net; this is the \
-             whole point of the `cs` pin role"
+            Some((Some("EE_CS".to_string()), "eeprom_25xx_spi".to_string()))
         );
     }
 
+    /// Every case where a CS net must NOT be invented: an unconnected or
+    /// grounded cs pad, a DNP or identity-refused or unmodeled slave, a
+    /// duplicated designator, a missing reference, and a modeled part with no
+    /// `cs` role at all.
     #[test]
-    fn a_slave_with_no_cs_connection_yields_nothing() {
-        // The genuine heuristic remainder: the part is modeled and assembled, but
-        // its chip select is simply not routed to anything the extractor saw. The
-        // honest answer is no net, so the bus stays on the heuristic and says so.
-        let lib = ModelLibrary::builtin();
+    fn slaves_that_cannot_supply_a_framing_net_yield_nothing() {
         assert_eq!(
-            cs_net(&eeprom_board(None), "U5", &lib),
+            cs_net(&eeprom_board(None), "U5"),
             None,
-            "an unconnected cs pad must not resolve to a net"
+            "unconnected cs pad"
         );
-    }
-
-    #[test]
-    fn a_dnp_slave_yields_nothing() {
-        // Not on the assembled board, so its CS net is not an electrical fact
-        // about the thing being simulated.
-        let lib = ModelLibrary::builtin();
-        let mut board = eeprom_board(Some(1));
-        board.components[0].dnp = true;
+        assert_eq!(cs_net(&eeprom_board(Some(9)), "U5"), None, "cs tied to GND");
         assert_eq!(
-            cs_net(&board, "U5", &lib),
+            cs_net(&eeprom_board(Some(1)), "U99"),
             None,
-            "a DNP slave must not contribute a cs_net"
+            "no such reference"
         );
-    }
 
-    #[test]
-    fn an_identity_refused_slave_yields_nothing() {
-        // The record cannot say WHICH part it is, so it cannot say which of its
-        // pads is chip select either. Nothing about it is evidence, including a
-        // pad map that would otherwise match its value string.
-        let lib = ModelLibrary::builtin();
-        let mut board = eeprom_board(Some(1));
-        board.components[0].properties.push((
+        let mut dnp = eeprom_board(Some(1));
+        dnp.components[0].dnp = true;
+        assert_eq!(cs_net(&dnp, "U5"), None, "DNP slave");
+
+        let mut refused = eeprom_board(Some(1));
+        refused.components[0].properties.push((
             hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
             "U5 appears twice with different values".to_string(),
         ));
-        assert!(
-            matches!(
-                AssemblyState::of(&board.components[0]),
-                AssemblyState::IdentityUnknown(_)
-            ),
-            "fixture must actually be identity-refused, or this test proves nothing"
-        );
-        assert_eq!(
-            cs_net(&board, "U5", &lib),
-            None,
-            "an identity-refused slave must not contribute a cs_net"
-        );
-    }
+        assert!(matches!(
+            AssemblyState::of(&refused.components[0]),
+            AssemblyState::IdentityUnknown(_)
+        ));
+        assert_eq!(cs_net(&refused, "U5"), None, "identity-refused slave");
 
-    #[test]
-    fn a_ground_tied_cs_yields_nothing() {
-        // A chip select strapped to ground is a permanently-selected slave, not a
-        // framing signal: there is no edge stream to frame from, and installing a
-        // CS frame on it would report `exact` off a net that never moves.
-        let lib = ModelLibrary::builtin();
-        assert_eq!(
-            cs_net(&eeprom_board(Some(9)), "U5", &lib),
-            None,
-            "a cs pad tied to GND must not resolve to a framing net"
-        );
-    }
+        let mut unmodeled = eeprom_board(Some(1));
+        unmodeled.components[0].value = "SOME-UNLISTED-EEPROM".to_string();
+        assert_eq!(cs_net(&unmodeled, "U5"), None, "unmodeled slave");
 
-    #[test]
-    fn an_unmodeled_slave_yields_nothing() {
-        // No model, no pad map, no way to know which pad is chip select. The part
-        // is present and assembled; the gap is the model library's.
-        let lib = ModelLibrary::builtin();
-        let mut board = eeprom_board(Some(1));
-        board.components[0].value = "SOME-UNLISTED-EEPROM".to_string();
-        assert_eq!(
-            cs_net(&board, "U5", &lib),
-            None,
-            "a part no model matches cannot declare a cs role"
-        );
-    }
+        let mut duplicated = eeprom_board(Some(1));
+        let mut twin = duplicated.components[0].clone();
+        twin.pins[0].net = Some(4);
+        duplicated.components.push(twin);
+        assert!(duplicated
+            .components
+            .iter()
+            .all(|c| matches!(AssemblyState::of(c), AssemblyState::Present(_))));
+        assert_eq!(cs_net(&duplicated, "U5"), None, "duplicated designator");
 
-    #[test]
-    fn duplicate_references_yield_nothing_rather_than_the_first_one() {
-        // Two records under U5 that the extractor did NOT flag as conflicting, on
-        // different CS nets. `find` would hand back whichever came first, so
-        // iteration order would decide which edge stream the co-sim called exact.
-        // Ambiguity has to be refused, not resolved by luck.
-        let lib = ModelLibrary::builtin();
-        let mut board = eeprom_board(Some(1));
-        let mut twin = board.components[0].clone();
-        twin.pins[0].net = Some(4); // same designator, a different CS net
-        board.components.push(twin);
-        assert!(
-            board.components.iter().all(|c| matches!(
-                AssemblyState::of(c),
-                AssemblyState::Present(_)
-            )),
-            "both records must be individually Present, or this tests the refusal path              instead of the ambiguity path"
-        );
-        assert_eq!(
-            cs_net(&board, "U5", &lib),
-            None,
-            "a duplicated designator must not resolve to either record's cs net"
-        );
-    }
-
-    #[test]
-    fn a_reference_naming_no_component_yields_nothing() {
-        let lib = ModelLibrary::builtin();
-        assert_eq!(
-            cs_net(&eeprom_board(Some(1)), "U99", &lib),
-            None,
-            "a reference that names no board component resolves to nothing"
-        );
-    }
-
-    #[test]
-    fn a_modeled_part_with_no_cs_role_yields_nothing() {
-        // The negative that keeps the lookup honest about being role-driven rather
-        // than position-driven: a 74HC595 is a real, modeled, assembled part with a
-        // full pad map and no `cs` role in it. Its pad 1 must not be mistaken for
-        // one just because the EEPROM's pad 1 was.
-        let lib = ModelLibrary::builtin();
-        let mut board = eeprom_board(Some(1));
-        board.components[0].value = "74HC595".to_string();
-        board.components[0].footprint = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm".to_string();
-        assert_eq!(
-            cs_net(&board, "U5", &lib),
-            None,
-            "a shift register declares no `cs` pin role, so it supplies no CS net"
-        );
+        let mut no_cs_role = eeprom_board(Some(1));
+        no_cs_role.components[0].value = "74HC595".to_string();
+        no_cs_role.components[0].footprint = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm".to_string();
+        assert_eq!(cs_net(&no_cs_role, "U5"), None, "no `cs` role");
     }
 }

@@ -9,6 +9,8 @@ mod analytic;
 mod behavioral_sources;
 #[path = "bjt_physics_torn.rs"]
 mod bjt_physics_torn;
+#[path = "board_benchmark_inputs.rs"]
+mod board_benchmark_inputs;
 #[path = "breakpoints.rs"]
 mod breakpoints;
 #[path = "bughunt_regression.rs"]
@@ -33,6 +35,8 @@ mod linesearch_fixture;
 mod mosfet_rds_on;
 #[path = "newton_bypass.rs"]
 mod newton_bypass;
+#[path = "ngspice.rs"]
+mod ngspice;
 #[path = "nonconvergence_blame.rs"]
 mod nonconvergence_blame;
 #[path = "opamp_dynamics.rs"]
@@ -41,6 +45,12 @@ mod opamp_dynamics;
 mod opamp_follower_rail;
 #[path = "parallel_determinism.rs"]
 mod parallel_determinism;
+#[path = "parallel_speedup.rs"]
+mod parallel_speedup;
+#[path = "perf.rs"]
+mod perf;
+#[path = "perf_gate.rs"]
+mod perf_gate;
 #[path = "planned_assembly.rs"]
 mod planned_assembly;
 #[path = "power_ramp.rs"]

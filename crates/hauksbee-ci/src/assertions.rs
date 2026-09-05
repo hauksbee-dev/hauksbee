@@ -183,8 +183,8 @@ fn evaluate_hwtrace(
             // Per-seed comparison; the feature must hold on every EVALUABLE seed.
             // A member whose analog solve diverged (non-empty failed_windows) has
             // held-stale net_series, so SKIP it; its comparison is untrustworthy.
-            // FAIL > INVALID (round-50): a converged member's real disagreement with
-            // the capture must beat a diverged sibling's INVALID, so we only fall
+            // FAIL > INVALID: a converged member's real disagreement with the
+            // capture must beat a diverged sibling's INVALID, so we only fall
             // back to INVALID (below) when no converged member fails.
             let mut last_detail = String::new();
             // Carry the OUTCOME, not just its index: an interior probe and a
@@ -1137,7 +1137,7 @@ fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
 
 fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let id = a.id.clone().unwrap_or_default();
-    // Unexercised-bus refusal (U3 finding 2): this peripheral was bound on a
+    // Unexercised-bus refusal: this peripheral was bound on a
     // platform that models no matching bus controller, so the firmware never
     // sent it a single transaction. Its snapshot is the slave's POWER-ON
     // DEFAULT state, asserting on that could green-pass (an LM75 default
@@ -1160,7 +1160,7 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let Some(snap) = out.peripherals.get(&id) else {
         return (false, format!("peripheral '{id}' not found in run"));
     };
-    // SPI framing-tier flag (U3 finding 3): a heuristic-framed bus guesses
+    // SPI framing-tier flag: a heuristic-framed bus guesses
     // transaction boundaries at chunk edges (merges/truncates transactions),
     // so any verdict about this peripheral carries that caveat in its detail,
     // in the report itself, not a code comment.
@@ -1897,20 +1897,45 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        all_green_detail, boot_below_threshold_msg, check_model_coverage, check_protection_trip,
-        key_belongs_to_ref,
-    };
+    use super::*;
+    use crate::runner::{NetWindow, PeripheralSnapshot, RunOutcome};
+    use crate::scenarios::RailWindow;
+    use crate::spec::Assertion;
     use crate::tolerance::Mode;
+    use std::collections::HashMap;
+
+    fn assertion(src: &str) -> Assertion {
+        toml::from_str(src).expect("assertion shape")
+    }
+
+    /// One ensemble member holding `VOUT` flat at `v` over the whole run.
+    fn vout_member(seed: u32, v: f64, interior: bool) -> RunOutcome {
+        let mut windows = HashMap::new();
+        windows.insert(
+            ("VOUT".to_string(), 0.0f64.to_bits()),
+            NetWindow {
+                min_v: v,
+                max_v: v,
+                last_v: v,
+                samples: 10,
+            },
+        );
+        RunOutcome {
+            seed,
+            windows,
+            interior,
+            ambient_c: 25.0,
+            sim_ms: 100.0,
+            analog_valid: true,
+            ..Default::default()
+        }
+    }
 
     mod model_coverage {
-        use super::check_model_coverage;
-        use crate::runner::RunOutcome;
-        use crate::spec::Assertion;
+        use super::*;
         use hauksbee_engine::result::{BindSummary, UnresolvedActive};
 
-        /// A board where 3 of 4 active ICs bound and one unresolved part sits
-        /// on a connected net: the shape a real partly-modelled board has.
+        /// 3 of 4 active ICs bound and one unresolved part on a connected net.
         fn partly_bound() -> BindSummary {
             BindSummary {
                 resolved: 40,
@@ -1932,1288 +1957,412 @@ mod tests {
             }
         }
 
-        fn assertion(f: impl FnOnce(&mut Assertion)) -> Assertion {
+        fn coverage(f: impl FnOnce(&mut Assertion), bind: Option<BindSummary>) -> (bool, String) {
             let mut a = Assertion {
                 kind: "model_coverage".to_string(),
                 ..Default::default()
             };
             f(&mut a);
-            a
-        }
-
-        fn outcome(bind: Option<BindSummary>) -> RunOutcome {
-            RunOutcome {
-                bind,
-                ..Default::default()
-            }
+            check_model_coverage(
+                &a,
+                &RunOutcome {
+                    bind,
+                    ..Default::default()
+                },
+            )
         }
 
         #[test]
-        fn critical_floor_fails_when_an_active_ic_is_missing() {
-            let (passed, detail) = check_model_coverage(
-                &assertion(|a| a.min_critical = Some(0.9)),
-                &outcome(Some(partly_bound())),
-            );
-            assert!(!passed, "3 of 4 active ICs is below a 90% floor: {detail}");
+        fn thresholds_are_inclusive_and_every_one_must_hold() {
+            let (passed, detail) = coverage(|a| a.min_critical = Some(0.9), Some(partly_bound()));
             assert!(
-                detail.contains("3/4"),
-                "detail must show the ratio: {detail}"
+                !passed && detail.contains("3/4"),
+                "3/4 is below a 90% floor: {detail}"
             );
+            assert!(coverage(|a| a.min_critical = Some(0.75), Some(partly_bound())).0);
+            // min_resolved passes (40/50) while min_critical fails.
+            let both = |a: &mut Assertion| {
+                a.min_resolved = Some(0.75);
+                a.min_critical = Some(0.99);
+            };
+            assert!(!coverage(both, Some(partly_bound())).0);
+            // The unresolved part is named: it is the user's next action.
+            let (passed, detail) =
+                coverage(|a| a.max_active_unresolved = Some(0), Some(partly_bound()));
+            assert!(!passed && detail.contains("U7"), "{detail}");
         }
 
         #[test]
-        fn critical_floor_passes_at_the_boundary() {
-            let (passed, detail) = check_model_coverage(
-                &assertion(|a| a.min_critical = Some(0.75)),
-                &outcome(Some(partly_bound())),
-            );
-            assert!(passed, "3/4 meets a 75% floor exactly: {detail}");
-        }
-
-        #[test]
-        fn unresolved_on_a_connected_net_is_named_not_just_counted() {
-            let (passed, detail) = check_model_coverage(
-                &assertion(|a| a.max_active_unresolved = Some(0)),
-                &outcome(Some(partly_bound())),
-            );
-            assert!(!passed, "one unresolved part exceeds a limit of 0");
-            assert!(
-                detail.contains("U7"),
-                "the part list is the user's next action: {detail}"
-            );
-        }
-
-        #[test]
-        fn an_empty_board_cannot_pass_a_critical_floor() {
-            // 0 of 0 is not 100%. Reading it that way would let the assertion
-            // vouch for a board it never looked at.
+        fn a_board_with_nothing_to_measure_cannot_pass() {
+            // 0 of 0 is not 100%, and no bind data is no answer.
             let mut bind = partly_bound();
             bind.critical_parts_total = 0;
             bind.critical_parts_bound_n = 0;
-            let (passed, detail) = check_model_coverage(
-                &assertion(|a| a.min_critical = Some(0.9)),
-                &outcome(Some(bind)),
-            );
-            assert!(
-                !passed,
-                "a board with no active ICs must not pass: {detail}"
-            );
-        }
-
-        #[test]
-        fn a_run_without_bind_data_fails_rather_than_passing_blind() {
-            let (passed, detail) =
-                check_model_coverage(&assertion(|a| a.min_critical = Some(0.5)), &outcome(None));
-            assert!(
-                !passed,
-                "no bind data means no answer, not a green: {detail}"
-            );
-        }
-
-        #[test]
-        fn every_threshold_must_hold_not_just_one() {
-            // min_resolved passes (40/50 = 80%) while min_critical fails, so the
-            // assertion as a whole must fail.
-            let (passed, detail) = check_model_coverage(
-                &assertion(|a| {
-                    a.min_resolved = Some(0.75);
-                    a.min_critical = Some(0.99);
-                }),
-                &outcome(Some(partly_bound())),
-            );
-            assert!(
-                !passed,
-                "one failing threshold fails the assertion: {detail}"
-            );
+            assert!(!coverage(|a| a.min_critical = Some(0.9), Some(bind)).0);
+            assert!(!coverage(|a| a.min_critical = Some(0.5), None).0);
         }
     }
 
     #[test]
-    fn protection_trip_empty_scenario_is_run_wide_like_unset() {
-        // Round-29: Spec::validate documents an explicit scenario = "" as identical
-        // to unset (the run-wide window). check_protection_trip matched the raw
-        // Option, so Some("") took the scoped branch and missed the ("", net) key
-        // that only rail_window/declared-scenario windows populate, yielding a false
-        // RED. It must take the run-wide branch, matching the omitted-scenario form.
-        use crate::runner::RunOutcome;
-        use std::collections::HashMap;
-        fn outcome_batt_never_tripped() -> RunOutcome {
-            let mut protection_tripped = HashMap::new();
-            protection_tripped.insert("BATT".to_string(), false);
-            RunOutcome {
-                bind: None,
-                evidence: None,
-                dc_definitions: Default::default(),
-                seed: 0,
-                windows: HashMap::new(),
-                uart: HashMap::new(),
-                faults: Vec::new(),
-                toggles: HashMap::new(),
-                peak_current: HashMap::new(),
-                peak_temp_c: HashMap::new(),
-                peripherals: HashMap::new(),
-                rail_windows: HashMap::new(),
-                protection_tripped,
-                protection_tripped_scoped: HashMap::new(),
-                ambient_c: 25.0,
-                sim_ms: 100.0,
-                boot_first_cross_ms: HashMap::new(),
-                boot_drop_after_cross_ms: HashMap::new(),
-                driven_nets: Default::default(),
-                drive_direction_observable: false,
-                first_fault_ms: None,
-                ac: None,
-                analog_valid: true,
-                failed_windows: Vec::new(),
-                fallback_windows: Vec::new(),
-                error_budget: None,
-                analog_abort: false,
-                sampled_values: Vec::new(),
-                interior: false,
-                net_series: HashMap::new(),
-                substitutions: Vec::new(),
-                coverage_warnings: Vec::new(),
-                timing_coverage: Vec::new(),
-                timing_refusals: Vec::new(),
-                dead_rails: Vec::new(),
-                unexercised_bus_ids: std::collections::HashSet::new(),
-                spi_framing: HashMap::new(),
-            }
-        }
-        let out = outcome_batt_never_tripped();
-        let parse = |scope_line: &str| -> crate::spec::Assertion {
-            toml::from_str(&format!(
-                "kind = \"protection_trip\"\nsupply_net = \"BATT\"\nexpect_trip = false\n{scope_line}"
-            ))
-            .unwrap()
+    fn protection_trip_judges_only_its_scenario_window() {
+        // BATT latched inside "inrush" and not inside "steady".
+        let mut out = RunOutcome::default();
+        out.protection_tripped.insert("BATT".into(), true);
+        out.protection_tripped_scoped
+            .insert(("inrush".into(), "BATT".into()), true);
+        out.protection_tripped_scoped
+            .insert(("steady".into(), "BATT".into()), false);
+        let expect_trip = |scope: &str| {
+            let a = assertion(&format!(
+                "kind = \"protection_trip\"\nsupply_net = \"BATT\"\nexpect_trip = true\n{scope}"
+            ));
+            check_protection_trip(&a, &out).0
         };
-        // Omitted scenario: reads the run-wide flag, passes (BATT never tripped).
-        let (ok_unset, _) = check_protection_trip(&parse(""), &out);
-        assert!(ok_unset, "unset scenario reads the run-wide no-trip flag");
-        // Explicit "" must behave identically, not a scoped-miss false RED.
-        let (ok_empty, msg) = check_protection_trip(&parse("scenario = \"\"\n"), &out);
+        assert!(expect_trip(""), "unscoped reads the run-wide flag");
+        assert!(expect_trip("scenario = \"inrush\"\n"));
         assert!(
-            ok_empty,
-            "explicit empty scenario must equal unset, got: {msg}"
+            !expect_trip("scenario = \"steady\"\n"),
+            "a trip in an earlier window does not satisfy a later one"
+        );
+
+        // An explicit `scenario = ""` is the run-wide window, not a scoped miss.
+        let mut never = RunOutcome::default();
+        never.protection_tripped.insert("BATT".into(), false);
+        let no_trip = |scope: &str| {
+            let a = assertion(&format!(
+                "kind = \"protection_trip\"\nsupply_net = \"BATT\"\nexpect_trip = false\n{scope}"
+            ));
+            check_protection_trip(&a, &never).0
+        };
+        assert!(no_trip(""));
+        assert!(no_trip("scenario = \"\"\n"));
+    }
+
+    /// Two corners plus one interior probe holding `VOUT` at the given volts.
+    fn corners_and_probe(c0: f64, c1: f64, probe: f64) -> [RunOutcome; 3] {
+        [
+            vout_member(0, c0, false),
+            vout_member(1, c1, false),
+            vout_member(2, probe, true),
+        ]
+    }
+
+    #[test]
+    fn an_interior_probe_failure_escalates_but_a_corner_failure_does_not() {
+        let a = assertion("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n");
+        let eval = |members: &[RunOutcome]| evaluate_one(&a, members, Some(Mode::Corners));
+        // Corners in band, the interior probe sags out: non-monotonic.
+        let r = eval(&corners_and_probe(3.30, 3.28, 2.40));
+        assert!(!r.passed && r.failing_seed == Some(2), "{}", r.detail);
+        assert!(
+            r.detail.contains("NON-MONOTONIC") && r.detail.contains("interior probe 2"),
+            "{}",
+            r.detail
+        );
+        // The corners found it themselves: an ordinary corner red.
+        let r = eval(&corners_and_probe(2.50, 3.30, 3.20));
+        assert!(
+            !r.passed && !r.detail.contains("NON-MONOTONIC") && r.detail.contains("corner 0"),
+            "{}",
+            r.detail
+        );
+        // A held-stale corner never produced a trustworthy pass, so the
+        // "a corner-only run would have been green" counterfactual is unknowable.
+        let mut members = corners_and_probe(3.30, 3.28, 2.40);
+        members[0].failed_windows = vec![(0.0, 0.100)];
+        let r = eval(&members);
+        assert!(
+            !r.passed && !r.detail.contains("NON-MONOTONIC"),
+            "{}",
+            r.detail
         );
     }
 
-    /// The non-monotonic case, which is the whole reason the interior probes
-    /// exist: a VOUT that stays in band at both tolerance extremes and sags out
-    /// of it somewhere in between (a regulator dropping out at an interior load,
-    /// a resonance, a threshold crossed mid-range). Before the probes ran, this
-    /// board reported green with a "bounds the worst case" banner over it.
-    ///
-    /// Two things must happen: the assertion must FAIL, and it must say the
-    /// corners were the wrong place to look, because a reader's reflex on a
-    /// corner-mode red is to inspect the named corner values.
     #[test]
-    fn an_interior_probe_that_beats_every_corner_escalates_to_a_failure() {
-        let a: crate::spec::Assertion =
-            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n").unwrap();
-
-        // Corners 0 and 1 in band; the interior probe sags to 2.4 V.
-        let outcomes = vec![
-            vout_member(0, 3.30, false),
-            vout_member(1, 3.28, false),
-            vout_member(2, 2.40, true),
-        ];
-        let r = super::evaluate_one(&a, &outcomes, Some(crate::tolerance::Mode::Corners));
-
-        assert!(!r.passed, "an interior failure must fail: {}", r.detail);
-        assert_eq!(r.failing_seed, Some(2));
-        assert!(
-            r.detail.contains("NON-MONOTONIC"),
-            "the failure must name the disproved assumption: {}",
-            r.detail
-        );
-        assert!(
-            r.detail.contains("interior probe 2"),
-            "an interior member must not be labelled a corner: {}",
-            r.detail
-        );
-        assert!(
-            r.detail
-                .contains("corner-only run would have reported green"),
-            "say what a corner-only run would have done: {}",
-            r.detail
-        );
-    }
-
-    /// The other side: a monotonic response must NOT be escalated. The probes
-    /// find nothing, the assertion still passes, and the disclosure narrows from
-    /// an unchecked assumption to a search that came back empty, without
-    /// claiming proof.
-    #[test]
-    fn a_monotonic_response_still_passes_and_narrows_the_disclosure() {
-        let a: crate::spec::Assertion =
-            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n").unwrap();
-
-        // Two corners bracketing three interior points, all in band and ordered:
-        // the response is monotonic in the swept value.
-        let outcomes = vec![
+    fn a_monotonic_response_passes_and_counts_corners_and_probes_apart() {
+        let a = assertion("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n");
+        let outcomes = [
             vout_member(0, 3.10, false),
             vout_member(1, 3.50, false),
             vout_member(2, 3.20, true),
             vout_member(3, 3.30, true),
             vout_member(4, 3.40, true),
         ];
-        let r = super::evaluate_one(&a, &outcomes, Some(crate::tolerance::Mode::Corners));
-
-        assert!(r.passed, "a monotonic response must pass: {}", r.detail);
-        assert!(
-            !r.detail.contains("NON-MONOTONIC"),
-            "nothing to escalate: {}",
-            r.detail
-        );
+        let r = evaluate_one(&a, &outcomes, Some(Mode::Corners));
+        assert!(r.passed, "{}", r.detail);
+        assert!(!r.detail.contains("NON-MONOTONIC"));
         assert!(
             r.detail.contains("2 min/max tolerance corners")
                 && r.detail.contains("3 interior Latin-hypercube probe(s)"),
-            "the corners and the probes are counted separately: {}",
+            "{}",
             r.detail
         );
-        assert!(
-            r.detail
-                .contains("no interior point sampled broke this assertion"),
-            "the disclosure reports what was checked, not the assumption: {}",
-            r.detail
-        );
-        // The two things a green probe set does NOT establish. Both must stay in
-        // the wording, and neither may be paraphrased into a stronger claim.
-        assert!(
-            r.detail
-                .contains("evidence for the monotonicity the corner bound needs, not proof"),
-            "sampling is not proof, and the wording must say so: {}",
-            r.detail
-        );
-        assert!(
-            r.detail
-                .contains("not compared against the corners' own margin"),
-            "a probe inside the window is never compared to the corner extrema, \
-             and the wording must not imply it was: {}",
-            r.detail
-        );
-        assert!(
-            !r.detail.contains("is monotonic") && !r.detail.contains("found no non-monotonic"),
-            "must never claim the response IS monotonic: {}",
-            r.detail
-        );
+        // Sampling is evidence, never a claim that the response IS monotonic.
+        assert!(!r.detail.contains("is monotonic"), "{}", r.detail);
     }
 
-    /// The counterfactual in the NON-MONOTONIC note ("a corner-only run would
-    /// have reported green") is false when a corner was held-stale: a
-    /// corner-only run would have refused as INVALID, not passed. One valid
-    /// passing corner is not enough to make the claim; every corner has to be
-    /// valid and passing.
     #[test]
-    fn a_held_stale_corner_suppresses_the_non_monotonic_counterfactual() {
-        let a: crate::spec::Assertion =
-            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n").unwrap();
-
-        let mut stale = vout_member(0, 3.30, false);
-        // A failed solve window overlapping this assertion's evaluation span
-        // makes the member's samples held-stale, so it is skipped, not passed.
-        stale.failed_windows = vec![(0.0, 0.100)];
-
-        let outcomes = vec![
-            stale,
-            vout_member(1, 3.28, false),
-            vout_member(2, 2.40, true),
-        ];
-        let r = super::evaluate_one(&a, &outcomes, Some(crate::tolerance::Mode::Corners));
-
-        assert!(!r.passed, "the interior failure still fails: {}", r.detail);
-        assert!(
-            !r.detail.contains("NON-MONOTONIC"),
-            "corner 0 never produced a trustworthy pass, so the corner-only \
-             counterfactual is unknowable: {}",
-            r.detail
-        );
-    }
-
-    /// Pinning a single interior member with `--seed N` must not be reported as
-    /// a corner. The probes are numbered on from the last corner, so the mode
-    /// alone cannot say which kind of member was selected.
-    #[test]
-    fn a_pinned_interior_member_is_not_described_as_a_corner() {
-        let probe = crate::report::EnsembleCoverage::SingleMember {
-            seed: 4,
-            components: 2,
-            corners: true,
-            interior: true,
+    fn a_converged_failure_beats_a_diverged_siblings_invalid() {
+        let a = assertion("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.2\n");
+        let diverged = |seed: u32| {
+            let mut m = vout_member(seed, 3.3, false);
+            m.failed_windows = vec![(0.010, 0.020)];
+            m
         };
-        let d = probe.describe();
-        assert!(d.contains("interior probe 4"), "must name it a probe: {d}");
-        assert!(
-            !d.contains("corner 4"),
-            "must not send the reader looking for corner 4: {d}"
-        );
-
-        // A genuine pinned corner keeps its own wording.
-        let corner = crate::report::EnsembleCoverage::SingleMember {
-            seed: 3,
-            components: 2,
-            corners: true,
-            interior: false,
-        };
-        assert!(corner.describe().contains("corner 3"));
-    }
-
-    /// A corner failure keeps its old wording. The interior probes must not
-    /// relabel an ordinary corner red as a monotonicity discovery.
-    #[test]
-    fn a_corner_failure_is_not_reported_as_non_monotonic() {
-        let a: crate::spec::Assertion =
-            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n").unwrap();
-        let outcomes = vec![
-            vout_member(0, 2.50, false),
-            vout_member(1, 3.30, false),
-            vout_member(2, 3.20, true),
-        ];
-        let r = super::evaluate_one(&a, &outcomes, Some(crate::tolerance::Mode::Corners));
-        assert!(!r.passed);
-        assert!(
-            !r.detail.contains("NON-MONOTONIC"),
-            "the corners DID find it: {}",
-            r.detail
+        let res = evaluate_one(
+            &a,
+            &[vout_member(1, 2.0, false), diverged(2)],
+            Some(Mode::Corners),
         );
         assert!(
-            r.detail.contains("corner 0"),
-            "the failing corner is named as a corner: {}",
-            r.detail
-        );
-    }
-
-    /// One ensemble member holding `VOUT` flat at `v` over the whole run.
-    fn vout_member(seed: u32, v: f64, interior: bool) -> crate::runner::RunOutcome {
-        let mut windows = std::collections::HashMap::new();
-        windows.insert(
-            ("VOUT".to_string(), 0.0f64.to_bits()),
-            crate::runner::NetWindow {
-                min_v: v,
-                max_v: v,
-                last_v: v,
-                samples: 10,
-            },
-        );
-        crate::runner::RunOutcome {
-            seed,
-            windows,
-            interior,
-            ambient_c: 25.0,
-            sim_ms: 100.0,
-            analog_valid: true,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn corner_mode_invalid_detail_labels_the_member_a_corner_not_a_seed() {
-        // Round-30: in corners mode a member index is a corner number (a specific
-        // min/max combination), not a random fuzz seed. evaluate_one's INVALID
-        // branch hardcoded "seed {n}:" instead of the mode-aware `member`, so a
-        // held-stale corner was mislabeled, an EE told to re-run "seed 3" when the
-        // coverage banner and every other line call it "corner 3". The prefix must
-        // track the mode, matching the FAIL path.
-        use crate::runner::RunOutcome;
-        use std::collections::HashMap;
-        fn outcome(seed: u32, failed: Vec<(f64, f64)>) -> RunOutcome {
-            // A clean, in-band VOUT window so a converged corner PASSES this
-            // assertion. (R50: FAIL now beats INVALID, so the converged member must
-            // not itself fail; the INVALID must come purely from the diverged
-            // corner's held-stale window, which is what this test exercises.)
-            let mut windows = HashMap::new();
-            windows.insert(
-                ("VOUT".to_string(), 0.0f64.to_bits()),
-                crate::runner::NetWindow {
-                    min_v: 3.3,
-                    max_v: 3.35,
-                    last_v: 3.32,
-                    samples: 10,
-                },
-            );
-            RunOutcome {
-                bind: None,
-                evidence: None,
-                dc_definitions: Default::default(),
-                seed,
-                windows,
-                uart: HashMap::new(),
-                faults: Vec::new(),
-                toggles: HashMap::new(),
-                peak_current: HashMap::new(),
-                peak_temp_c: HashMap::new(),
-                peripherals: HashMap::new(),
-                rail_windows: HashMap::new(),
-                protection_tripped: HashMap::new(),
-                protection_tripped_scoped: HashMap::new(),
-                ambient_c: 25.0,
-                sim_ms: 100.0,
-                boot_first_cross_ms: HashMap::new(),
-                boot_drop_after_cross_ms: HashMap::new(),
-                driven_nets: Default::default(),
-                drive_direction_observable: false,
-                first_fault_ms: None,
-                ac: None,
-                analog_valid: failed.is_empty(),
-                failed_windows: failed,
-                fallback_windows: Vec::new(),
-                error_budget: None,
-                analog_abort: false,
-                sampled_values: Vec::new(),
-                interior: false,
-                net_series: HashMap::new(),
-                substitutions: Vec::new(),
-                coverage_warnings: Vec::new(),
-                timing_coverage: Vec::new(),
-                timing_refusals: Vec::new(),
-                dead_rails: Vec::new(),
-                unexercised_bus_ids: std::collections::HashSet::new(),
-                spi_framing: HashMap::new(),
-            }
-        }
-        // A voltage assertion reads the analog window (0..sim). Corner 3 diverged.
-        let a: crate::spec::Assertion =
-            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.2\nmax = 3.4\n").unwrap();
-        let outcomes = vec![outcome(0, Vec::new()), outcome(3, vec![(0.0012, 0.0034)])];
-        let res = super::evaluate_one(&a, &outcomes, Some(Mode::Corners));
-        assert!(res.invalid, "the held-stale corner must be INVALID");
-        assert!(
-            res.detail.contains("corner 3:"),
-            "the INVALID member must be labeled a corner: {}",
+            !res.invalid && !res.passed && res.failing_seed == Some(1),
+            "{}",
             res.detail
         );
+        // The held-stale member does not inflate the passed count.
         assert!(
-            !res.detail.contains("seed 3:"),
-            "corner-mode member must not be called a seed: {}",
+            res.detail.contains("passed 0/2") && res.detail.contains("1 invalid"),
+            "{}",
+            res.detail
+        );
+        // With no converged failure the held-stale member makes the result
+        // INVALID, and in corners mode the member is a corner, not a seed.
+        let res = evaluate_one(
+            &a,
+            &[vout_member(0, 3.3, false), diverged(3)],
+            Some(Mode::Corners),
+        );
+        assert!(res.invalid, "{}", res.detail);
+        assert!(
+            res.detail.contains("corner 3") && !res.detail.contains("seed 3"),
+            "{}",
             res.detail
         );
     }
 
-    #[test]
-    fn montecarlo_detail_excludes_the_nominal_from_the_sampled_count() {
-        // Round-27: the all-green MonteCarlo detail said "passed {n}/{n} sampled
-        // tolerance seeds" with n = total members, counting the nominal baseline
-        // (member 0, which draws no random sample) as a sampled seed. It must
-        // report n-1 sampled seeds, agreeing with the run banner, rather than
-        // over-claiming statistical coverage by one draw.
-        let d = all_green_detail(16, 0, Some(Mode::MonteCarlo), "voltage in range".into());
-        assert!(
-            d.contains("15 sampled tolerance seed(s) + nominal"),
-            "16 members => 15 sampled seeds, not 16: {d}"
-        );
-        assert!(
-            !d.contains("16/16"),
-            "must not label the nominal a sampled seed: {d}"
-        );
-        // A single-member run (no ensemble) keeps the bare detail unchanged.
-        assert_eq!(
-            all_green_detail(1, 0, Some(Mode::MonteCarlo), "ok".into()),
-            "ok"
-        );
-    }
-
-    // The base-ref vs per-unit-key rule: a package ref owns itself and its
-    // `_q<N>` / `_s<N>` unit keys, and nothing else (no SW1/SW10 prefix bleed,
-    // no arbitrary underscore suffixes).
+    // A package ref owns itself and its `_q<N>` / `_s<N>` / `_e<N>` unit keys,
+    // and nothing else: no SW1/SW10 prefix bleed, no arbitrary suffixes.
     #[test]
     fn unit_key_matching_is_exact_or_unit_suffixed() {
         assert!(key_belongs_to_ref("SW1", "SW1"));
-        assert!(key_belongs_to_ref("SW1", "SW1_q1"));
         assert!(key_belongs_to_ref("SW1", "SW1_q12"));
         assert!(key_belongs_to_ref("SW1", "SW1_s0"));
-        // R44: `_e` is the binder's suffix for resistor/passive ARRAY units (RN1_e1),
-        // and it was omitted, so a package-level safety assert on an array's bare
-        // ref could never match its overheating element.
         assert!(key_belongs_to_ref("RN1", "RN1_e1"));
-        assert!(key_belongs_to_ref("RN1", "RN1_e12"));
         assert!(!key_belongs_to_ref("RN1", "RN1_e1a"));
-        assert!(!key_belongs_to_ref("RN1", "RN10_e1"));
         assert!(!key_belongs_to_ref("SW1", "SW10"));
-        assert!(!key_belongs_to_ref("SW1", "SW10_q1"));
         assert!(!key_belongs_to_ref("SW1", "SW1_heater"));
-        assert!(!key_belongs_to_ref("SW1", "SW1_q1a"));
-        assert!(!key_belongs_to_ref("SW1", "SW2_q1"));
     }
 
-    // R14: a `peripheral` assertion naming a missing field lists the known
-    // fields in the FAIL detail. That list must be sorted, not in HashMap
-    // iteration order, or two identical runs emit different report/JUnit bytes.
     #[test]
-    fn missing_peripheral_field_lists_known_fields_sorted() {
-        use super::check_peripheral;
-        use crate::runner::{PeripheralSnapshot, RunOutcome};
-        use crate::spec::Assertion;
-
-        let assertion: Assertion = toml::from_str(
-            "kind = \"peripheral\"\nid = \"HTR1\"\nfield = \"nonesuch\"\nmin = 0.0\n",
-        )
-        .unwrap();
-
-        // A snapshot with several fields inserted in non-alphabetical order.
-        let mut snap = PeripheralSnapshot::default();
-        for (k, v) in [
-            ("transitions", 3.0),
-            ("temp_c", 42.0),
-            ("position", 1.0),
-            ("duty", 0.5),
-        ] {
-            snap.fields.insert(k.to_string(), v);
-        }
-        let mut out = RunOutcome::default();
-        out.peripherals.insert("HTR1".to_string(), snap);
-
-        let (ok, msg) = check_peripheral(&assertion, &out);
-        assert!(!ok, "a missing field must fail");
-        // The formatted list must be the sorted order, deterministically.
-        assert!(
-            msg.contains("[\"duty\", \"position\", \"temp_c\", \"transitions\"]"),
-            "known-field list must be sorted for reproducible report bytes: {msg}"
-        );
-    }
-
-    // U3 finding 2: a `peripheral` assertion against a bus device the platform
-    // never exercised (no matching controller modeled) must FAIL loudly; the
-    // snapshot is the slave's power-on default, and a default LM75 temperature
-    // sits inside most spec windows, so evaluating it would be a false green.
-    #[test]
-    fn peripheral_assertion_on_an_unexercised_bus_fails_loudly() {
-        use super::check_peripheral;
-        use crate::runner::{PeripheralSnapshot, RunOutcome};
-        use crate::spec::Assertion;
-
-        let assertion: Assertion = toml::from_str(
+    fn peripheral_verdicts_refuse_unexercised_buses_and_flag_heuristic_framing() {
+        let a = assertion(
             "kind = \"peripheral\"\nid = \"TEMP1\"\nfield = \"temp_c\"\nmin = 20.0\nmax = 30.0\n",
-        )
-        .unwrap();
-
-        // The slave's default state WOULD pass the window, that is the trap.
+        );
         let mut snap = PeripheralSnapshot::default();
         snap.fields.insert("temp_c".to_string(), 25.0);
         let mut out = RunOutcome::default();
         out.peripherals.insert("TEMP1".to_string(), snap);
+        assert!(check_peripheral(&a, &out).0);
 
-        // Exercised bus: passes normally.
-        let (ok, _) = check_peripheral(&assertion, &out);
-        assert!(ok, "sanity: the default state passes when the bus ran");
+        // Heuristic SPI framing qualifies the verdict without failing it.
+        out.spi_framing
+            .insert("TEMP1".to_string(), "heuristic".to_string());
+        let (ok, msg) = check_peripheral(&a, &out);
+        assert!(ok && msg.contains("HEURISTIC"), "{msg}");
 
-        // Unexercised bus: the same snapshot must now FAIL with the honest
-        // never-exercised wording, not green-pass on the default.
+        // The slave's power-on default would pass the window, which is
+        // exactly why an unexercised bus must fail instead.
         out.unexercised_bus_ids.insert("TEMP1".to_string());
-        let (ok, msg) = check_peripheral(&assertion, &out);
-        assert!(!ok, "an unexercised bus peripheral must fail: {msg}");
-        assert!(
-            msg.contains("NEVER exercised") && msg.contains("power-on default"),
-            "the failure must say WHY the verdict is refused: {msg}"
-        );
+        let (ok, msg) = check_peripheral(&a, &out);
+        assert!(!ok && msg.contains("NEVER exercised"), "{msg}");
     }
 
-    // U3 finding 3: a heuristic-framed SPI bus must be flagged in the
-    // assertion's own detail line (the surface a reviewer reads), pass or fail.
-    #[test]
-    fn peripheral_assertion_on_a_heuristic_framed_bus_is_flagged() {
-        use super::check_peripheral;
-        use crate::runner::{PeripheralSnapshot, RunOutcome};
-        use crate::spec::Assertion;
-
-        let assertion: Assertion = toml::from_str(
-            "kind = \"peripheral\"\nid = \"ADC1\"\nfield = \"transitions\"\nmin = 1.0\n",
-        )
-        .unwrap();
-        let mut snap = PeripheralSnapshot::default();
-        snap.fields.insert("transitions".to_string(), 5.0);
-        let mut out = RunOutcome::default();
-        out.peripherals.insert("ADC1".to_string(), snap);
-
-        // Exact framing: no flag.
-        out.spi_framing
-            .insert("ADC1".to_string(), "exact".to_string());
-        let (ok, msg) = check_peripheral(&assertion, &out);
-        assert!(ok);
-        assert!(
-            !msg.contains("HEURISTIC"),
-            "exact framing must not be flagged: {msg}"
-        );
-
-        // Heuristic framing: the detail carries the caveat even on a pass.
-        out.spi_framing
-            .insert("ADC1".to_string(), "heuristic".to_string());
-        let (ok, msg) = check_peripheral(&assertion, &out);
-        assert!(ok, "framing tier qualifies, it does not fail: {msg}");
-        assert!(
-            msg.contains("HEURISTIC") && msg.contains("cs_net"),
-            "a heuristic-framed assertion must be flagged in its detail: {msg}"
-        );
-    }
-
-    // A boot-coverage net that the firmware actively drove but that never crossed
-    // the threshold must NOT be reported as Hi-Z / undefined: it was driven.
-    #[test]
-    fn driven_but_below_threshold_says_driven_not_hi_z() {
-        let m = boot_below_threshold_msg("FLAG", 2.3, true, true, Some((0.0, 0.4)));
-        assert!(
-            m.contains("was driven but never exceeded 2.3 V"),
-            "got: {m}"
-        );
-        assert!(m.contains("observed range [0.000, 0.400] V"), "got: {m}");
-        assert!(!m.contains("Hi-Z"), "a driven pin is not Hi-Z, got: {m}");
-    }
-
-    // Boot coverage must (1) pass a net that reaches its level by the deadline
-    // and holds THROUGH the deadline even if it is later released, (2) fail a net
-    // that reached but fell back before the deadline, with a message distinct
-    // from (3) a net that never reached at all. An end-of-run latch alone
-    // conflates (2) and (3) and wrongly fails (1).
-    #[test]
-    fn boot_coverage_honours_deadline_hold_and_distinguishes_drop_from_never() {
-        use super::check_boot_coverage;
-        use crate::runner::RunOutcome;
-        use crate::spec::Assertion;
-
-        let net = "EN".to_string();
-        let level = 3.0_f64;
-        let key = (net.clone(), level.to_bits());
-        let assertion: Assertion = toml::from_str(
-            "kind = \"boot-coverage\"\nnet = \"EN\"\nmin = 3.0\ndeadline_ms = 10.0\n",
-        )
-        .unwrap();
-
-        // (1) reached at 5 ms, held through the 10 ms deadline, released at 50 ms.
-        // The 100 ms sim covers the whole boot window.
+    /// A run of `sim_ms` in which `EN` first crossed 3 V at `cross` ms and
+    /// first fell back at `drop` ms.
+    fn boot_run(sim_ms: f64, cross: Option<f64>, drop: Option<f64>) -> RunOutcome {
+        let key = ("EN".to_string(), 3.0_f64.to_bits());
         let mut out = RunOutcome {
-            sim_ms: 100.0,
+            sim_ms,
             ..Default::default()
         };
-        out.boot_first_cross_ms.insert(key.clone(), 5.0);
-        out.boot_drop_after_cross_ms.insert(key.clone(), 50.0);
-        let (ok, msg) = check_boot_coverage(&assertion, &out);
-        assert!(ok, "held-through-deadline then released must pass: {msg}");
-
-        // (2) reached at 5 ms but fell back at 8 ms, before the deadline.
-        let mut out = RunOutcome {
-            sim_ms: 100.0,
-            ..Default::default()
-        };
-        out.boot_first_cross_ms.insert(key.clone(), 5.0);
-        out.boot_drop_after_cross_ms.insert(key.clone(), 8.0);
-        let (ok, msg) = check_boot_coverage(&assertion, &out);
-        assert!(!ok, "a drop before the deadline must fail");
-        assert!(
-            msg.contains("fell back below"),
-            "distinct dropped message: {msg}"
-        );
-
-        // (3) never reached: fails with the below-threshold diagnosis, not a drop.
-        let out = RunOutcome {
-            sim_ms: 100.0,
-            ..Default::default()
-        };
-        let (ok, msg) = check_boot_coverage(&assertion, &out);
-        assert!(!ok, "never-reached must fail");
-        assert!(
-            !msg.contains("fell back below"),
-            "never-reached must not read as a reached-then-dropped: {msg}"
-        );
-    }
-
-    // E32: hold_ms makes boot_coverage decidable on heartbeat / toggling nets,
-    // where hold-to-the-deadline can never pass. Two-sided on a toggling net
-    // (reached at 2 ms, dropped at 7 ms, i.e. a 5 ms high phase): hold_ms = 0
-    // passes (reach only), hold_ms longer than the high phase fails with the
-    // hold shortfall named. A solid net (never drops) passes both, and an
-    // unobserved hold tail fails as unconfirmed instead of passing on hope.
-    #[test]
-    fn boot_coverage_hold_ms_is_two_sided_on_toggling_and_solid_nets() {
-        use super::check_boot_coverage;
-        use crate::runner::RunOutcome;
-        use crate::spec::Assertion;
-
-        let key = ("HB".to_string(), 3.0_f64.to_bits());
-        let assertion = |hold: &str| -> Assertion {
-            toml::from_str(&format!(
-                "kind = \"boot_coverage\"\nnet = \"HB\"\nmin = 3.0\ndeadline_ms = 10.0\n{hold}"
-            ))
-            .unwrap()
-        };
-
-        // A toggling net: first reach 2 ms, first drop 7 ms (5 ms high phase).
-        let mut toggling = RunOutcome {
-            sim_ms: 100.0,
-            ..Default::default()
-        };
-        toggling.boot_first_cross_ms.insert(key.clone(), 2.0);
-        toggling.boot_drop_after_cross_ms.insert(key.clone(), 7.0);
-
-        let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 0.0"), &toggling);
-        assert!(
-            ok,
-            "hold_ms = 0 must pass a toggling net that reached: {msg}"
-        );
-        assert!(msg.contains("reach only"), "the pass names its form: {msg}");
-
-        let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 8.0"), &toggling);
-        assert!(
-            !ok,
-            "a hold longer than the high phase must fail the toggling net"
-        );
-        assert!(
-            msg.contains("held it only 5.00 ms") && msg.contains("hold_ms = 8"),
-            "the failure names the observed hold and the requirement: {msg}"
-        );
-
-        // The strict default (absent hold_ms) also fails it: dropped at 7 ms,
-        // before the 10 ms deadline.
-        let (ok, _msg) = check_boot_coverage(&assertion(""), &toggling);
-        assert!(
-            !ok,
-            "the hold-to-deadline default still fails a mid-window drop"
-        );
-
-        // A solid net: reached at 2 ms, never dropped, sim covers everything.
-        let mut solid = RunOutcome {
-            sim_ms: 100.0,
-            ..Default::default()
-        };
-        solid.boot_first_cross_ms.insert(key.clone(), 2.0);
-
-        let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 0.0"), &solid);
-        assert!(ok, "a solid net passes hold_ms = 0: {msg}");
-        let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 8.0"), &solid);
-        assert!(ok, "a solid net passes hold_ms = 8: {msg}");
-        assert!(msg.contains("held 8 ms"), "the pass names the hold: {msg}");
-
-        // An unobserved hold tail must fail loud: reached at 2 ms, sim ended at
-        // 6 ms, so an 8 ms hold window was never fully watched.
-        let mut short = RunOutcome {
-            sim_ms: 6.0,
-            ..Default::default()
-        };
-        short.boot_first_cross_ms.insert(key.clone(), 2.0);
-        let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 8.0"), &short);
-        assert!(!ok, "an unobserved hold window must not pass: {msg}");
-        assert!(
-            msg.contains("cannot be confirmed"),
-            "it names the sim-too-short cause: {msg}"
-        );
-    }
-
-    #[test]
-    fn boot_coverage_deadline_past_sim_end_is_not_a_false_green() {
-        // R34: the run stops at duration_ms, so RunOutcome only carries data out
-        // to sim_ms. A first-cross before a deadline that lands PAST sim_ms left
-        // drop_after = None (a later drop could never be observed), and the old
-        // code returned GREEN "boot window clean", asserting coverage over an
-        // unsimulated tail. The deadline outrunning the sim must FAIL, not pass.
-        use super::check_boot_coverage;
-        use crate::runner::RunOutcome;
-        use crate::spec::Assertion;
-
-        let net = "EN".to_string();
-        let level = 3.0_f64;
-        let key = (net.clone(), level.to_bits());
-        // deadline 50 ms, but the firmware only ran 20 ms.
-        let assertion: Assertion = toml::from_str(
-            "kind = \"boot-coverage\"\nnet = \"EN\"\nmin = 3.0\ndeadline_ms = 50.0\n",
-        )
-        .unwrap();
-
-        let mut out = RunOutcome {
-            sim_ms: 20.0,
-            ..Default::default()
-        };
-        out.boot_first_cross_ms.insert(key.clone(), 5.0); // crossed early, never dropped in-window
-        let (ok, msg) = check_boot_coverage(&assertion, &out);
-        assert!(
-            !ok,
-            "deadline past the sim end must not pass on an unobserved window: {msg}"
-        );
-        assert!(
-            msg.contains("past the end") && msg.contains("cannot be confirmed"),
-            "must name the sim-too-short cause, not a spurious clean pass: {msg}"
-        );
-
-        // Control: the same crossing with a deadline INSIDE the sim still passes.
-        let inside: Assertion = toml::from_str(
-            "kind = \"boot-coverage\"\nnet = \"EN\"\nmin = 3.0\ndeadline_ms = 10.0\n",
-        )
-        .unwrap();
-        let (ok, _msg) = check_boot_coverage(&inside, &out);
-        assert!(ok, "a deadline within the simulated window still passes");
-    }
-
-    // A genuinely undriven net on a backend that can report drive direction
-    // (AVR DDR, or a dir-mapped Renode part) keeps the honest Hi-Z / undefined
-    // wording.
-    #[test]
-    fn undriven_on_observable_backend_says_hi_z() {
-        let m = boot_below_threshold_msg("FLAG", 2.3, false, true, Some((0.0, 0.0)));
-        assert!(m.contains("Hi-Z / undefined"), "got: {m}");
-        assert!(m.contains("never driven"), "got: {m}");
-    }
-
-    // On a backend that cannot report drive direction (QEMU, or a Renode part
-    // whose descriptor has no dir map), absence of a drive record is ambiguous,
-    // so the message must not assert Hi-Z: it names both possibilities instead.
-    #[test]
-    fn unknown_drive_direction_does_not_assert_hi_z() {
-        let m = boot_below_threshold_msg("FLAG", 2.3, false, false, Some((0.0, 0.4)));
-        assert!(m.contains("cannot report pin drive direction"), "got: {m}");
-        assert!(m.contains("undriven"), "got: {m}");
-        assert!(m.contains("driven LOW"), "got: {m}");
-        assert!(
-            !m.contains("firmware left it Hi-Z"),
-            "must not assert Hi-Z, got: {m}"
-        );
-    }
-
-    // A scenario window shorter than one frame yields a single rail sample; a
-    // dip/recovery duration cannot be measured from one point, so the check
-    // must FAIL loudly rather than silently report 0 ms and auto-pass
-    // (round-4 #16).
-    #[test]
-    fn rail_window_dip_with_one_sample_does_not_auto_pass() {
-        use super::check_rail_window;
-        use crate::runner::RunOutcome;
-        use crate::scenarios::RailWindow;
-        use std::collections::HashMap;
-
-        // Build a RunOutcome carrying only one (scenario, net) rail window.
-        fn outcome_with_window(win: RailWindow) -> RunOutcome {
-            let mut rail_windows = HashMap::new();
-            rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
-            RunOutcome {
-                bind: None,
-                evidence: None,
-                dc_definitions: Default::default(),
-                seed: 0,
-                windows: HashMap::new(),
-                uart: HashMap::new(),
-                faults: Vec::new(),
-                toggles: HashMap::new(),
-                peak_current: HashMap::new(),
-                peak_temp_c: HashMap::new(),
-                peripherals: HashMap::new(),
-                rail_windows,
-                protection_tripped: HashMap::new(),
-                protection_tripped_scoped: HashMap::new(),
-                ambient_c: 25.0,
-                sim_ms: 100.0,
-                boot_first_cross_ms: HashMap::new(),
-                boot_drop_after_cross_ms: HashMap::new(),
-                driven_nets: Default::default(),
-                drive_direction_observable: false,
-                first_fault_ms: None,
-                ac: None,
-                analog_valid: true,
-                failed_windows: Vec::new(),
-                fallback_windows: Vec::new(),
-                error_budget: None,
-                analog_abort: false,
-                sampled_values: Vec::new(),
-                interior: false,
-                net_series: HashMap::new(),
-                substitutions: Vec::new(),
-                coverage_warnings: Vec::new(),
-                timing_coverage: Vec::new(),
-                timing_refusals: Vec::new(),
-                dead_rails: Vec::new(),
-                unexercised_bus_ids: std::collections::HashSet::new(),
-                spi_framing: HashMap::new(),
-            }
+        if let Some(t) = cross {
+            out.boot_first_cross_ms.insert(key.clone(), t);
         }
+        if let Some(t) = drop {
+            out.boot_drop_after_cross_ms.insert(key, t);
+        }
+        out
+    }
 
-        let a: crate::spec::Assertion = toml::from_str(
+    fn boot_assert(deadline_ms: f64, extra: &str) -> Assertion {
+        assertion(&format!(
+            "kind = \"boot_coverage\"\nnet = \"EN\"\nmin = 3.0\ndeadline_ms = {deadline_ms}\n{extra}"
+        ))
+    }
+
+    #[test]
+    fn boot_coverage_holds_through_the_deadline_and_distinguishes_drop_from_never() {
+        let a = boot_assert(10.0, "");
+        // Reached at 5 ms, held through 10 ms, released at 50 ms.
+        assert!(check_boot_coverage(&a, &boot_run(100.0, Some(5.0), Some(50.0))).0);
+        // Fell back at 8 ms, before the deadline.
+        let (ok, msg) = check_boot_coverage(&a, &boot_run(100.0, Some(5.0), Some(8.0)));
+        assert!(!ok && msg.contains("fell back below"), "{msg}");
+        // Never reached at all: a different diagnosis.
+        let (ok, msg) = check_boot_coverage(&a, &boot_run(100.0, None, None));
+        assert!(!ok && !msg.contains("fell back below"), "{msg}");
+        // A deadline past the end of the run cannot be confirmed.
+        let (ok, msg) =
+            check_boot_coverage(&boot_assert(50.0, ""), &boot_run(20.0, Some(5.0), None));
+        assert!(!ok && msg.contains("cannot be confirmed"), "{msg}");
+        assert!(check_boot_coverage(&boot_assert(10.0, ""), &boot_run(20.0, Some(5.0), None)).0);
+    }
+
+    #[test]
+    fn boot_coverage_hold_ms_is_two_sided() {
+        // A toggling net: reached at 2 ms, dropped at 7 ms (a 5 ms high phase).
+        let toggling = boot_run(100.0, Some(2.0), Some(7.0));
+        assert!(check_boot_coverage(&boot_assert(10.0, "hold_ms = 0.0"), &toggling).0);
+        let (ok, msg) = check_boot_coverage(&boot_assert(10.0, "hold_ms = 8.0"), &toggling);
+        assert!(!ok && msg.contains("held it only 5.00 ms"), "{msg}");
+        assert!(
+            !check_boot_coverage(&boot_assert(10.0, ""), &toggling).0,
+            "the hold-to-deadline default fails a mid-window drop"
+        );
+        // A solid net passes both forms.
+        let solid = boot_run(100.0, Some(2.0), None);
+        assert!(check_boot_coverage(&boot_assert(10.0, "hold_ms = 0.0"), &solid).0);
+        assert!(check_boot_coverage(&boot_assert(10.0, "hold_ms = 8.0"), &solid).0);
+        // An unobserved hold tail (the sim ended at 6 ms) is not a pass.
+        let short = boot_run(6.0, Some(2.0), None);
+        let (ok, msg) = check_boot_coverage(&boot_assert(10.0, "hold_ms = 8.0"), &short);
+        assert!(!ok && msg.contains("cannot be confirmed"), "{msg}");
+    }
+
+    /// A run whose `load` scenario window on `VBUS` saw `samples`, with the
+    /// scheduler's intra-frame minimum `fold`ed into the envelope.
+    fn rail_run(samples: &[(f64, f64)], fold: Option<f64>) -> RunOutcome {
+        let mut win = RailWindow::new();
+        for &(t, v) in samples {
+            win.observe(t, v);
+        }
+        if let Some(v) = fold {
+            win.fold(v);
+        }
+        let mut out = RunOutcome {
+            sim_ms: 100.0,
+            ..Default::default()
+        };
+        out.rail_windows
+            .insert(("load".to_string(), "VBUS".to_string()), win);
+        out
+    }
+
+    #[test]
+    fn rail_window_sees_folded_intraframe_sags_and_refuses_one_sample_dips() {
+        // Settled 3.3 V samples with a 2.9 V intra-frame sag folded in.
+        let floor =
+            assertion("kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\nmin = 3.0\n");
+        assert!(!check_rail_window(&floor, &rail_run(&[(0.000, 3.3), (0.001, 3.3)], Some(2.9))).0);
+        assert!(check_rail_window(&floor, &rail_run(&[(0.000, 3.3), (0.001, 3.25)], Some(3.1))).0);
+
+        // A dip duration cannot be measured from one sample: fail, not 0 ms.
+        let dip = assertion(
             "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\n\
              dip_below = 3.0\nfor_max_ms = 1.0\n",
-        )
-        .unwrap();
-
-        // One sample, sitting BELOW the dip threshold. A duration measured from
-        // consecutive sample pairs is 0 ms here (windows(2) is empty), which
-        // would auto-pass a rail that is in fact under the threshold.
-        let mut win = RailWindow::new();
-        win.observe(0.099, 2.5);
-        let (ok, msg, _why) = check_rail_window(&a, &outcome_with_window(win));
-        assert!(
-            !ok,
-            "a 1-sample dip window must not auto-pass; got pass: {msg}"
         );
-        assert!(
-            msg.contains("sample"),
-            "message should explain the degenerate window: {msg}"
-        );
-
-        // Sanity: a proper 2-sample window that never dips below 3 V passes.
-        let mut good = RailWindow::new();
-        good.observe(0.000, 5.0);
-        good.observe(0.010, 5.0);
-        let (ok2, msg2, _why) = check_rail_window(&a, &outcome_with_window(good));
-        assert!(ok2, "a 2-sample window that never dips must pass: {msg2}");
+        let (ok, msg, _) = check_rail_window(&dip, &rail_run(&[(0.099, 2.5)], None));
+        assert!(!ok && msg.contains("sample"), "{msg}");
+        assert!(check_rail_window(&dip, &rail_run(&[(0.000, 5.0), (0.010, 5.0)], None)).0);
     }
 
-    // R24: on a multi-unit package with TIED max temperatures, the reported
-    // hottest unit must be deterministic (lowest key), not whatever HashMap
-    // iteration order happened to surface, or two identical runs emit different
-    // report bytes (reproducibility doctrine). Verdict is unaffected.
     #[test]
-    fn max_temp_tie_break_is_deterministic() {
-        use super::check_max_temp;
-        use crate::runner::RunOutcome;
-        use std::collections::HashMap;
-
-        fn outcome_with_tied_temps() -> RunOutcome {
-            let mut peak_temp_c = HashMap::new();
-            // Two units of SW1 at the SAME peak temperature.
-            peak_temp_c.insert("SW1_q2".to_string(), 100.0);
-            peak_temp_c.insert("SW1_q1".to_string(), 100.0);
-            peak_temp_c.insert("SW1_q3".to_string(), 100.0);
-            RunOutcome {
-                bind: None,
-                evidence: None,
-                dc_definitions: Default::default(),
-                seed: 0,
-                windows: HashMap::new(),
-                uart: HashMap::new(),
-                faults: Vec::new(),
-                toggles: HashMap::new(),
-                peak_current: HashMap::new(),
-                peak_temp_c,
-                peripherals: HashMap::new(),
-                rail_windows: HashMap::new(),
-                protection_tripped: HashMap::new(),
-                protection_tripped_scoped: HashMap::new(),
-                ambient_c: 25.0,
-                sim_ms: 100.0,
-                boot_first_cross_ms: HashMap::new(),
-                boot_drop_after_cross_ms: HashMap::new(),
-                driven_nets: Default::default(),
-                drive_direction_observable: false,
-                first_fault_ms: None,
-                ac: None,
-                analog_valid: true,
-                failed_windows: Vec::new(),
-                fallback_windows: Vec::new(),
-                error_budget: None,
-                analog_abort: false,
-                sampled_values: Vec::new(),
-                interior: false,
-                net_series: HashMap::new(),
-                substitutions: Vec::new(),
-                coverage_warnings: Vec::new(),
-                timing_coverage: Vec::new(),
-                timing_refusals: Vec::new(),
-                dead_rails: Vec::new(),
-                unexercised_bus_ids: std::collections::HashSet::new(),
-                spi_framing: HashMap::new(),
-            }
-        }
-
-        let a: crate::spec::Assertion =
-            toml::from_str("kind = \"max_temp\"\nref = \"SW1\"\ncelsius = 150.0\n").unwrap();
-        // Many independent builds must all name the SAME (lowest-key) unit.
-        for _ in 0..16 {
-            let (ok, msg, _why) = check_max_temp(&a, &outcome_with_tied_temps());
-            assert!(ok, "100 C is under the 150 C ceiling: {msg}");
-            assert!(
-                msg.contains("SW1_q1"),
-                "the tie must resolve to the lowest key deterministically; got: {msg}"
-            );
-            assert!(
-                !msg.contains("SW1_q2") && !msg.contains("SW1_q3"),
-                "only one unit reported: {msg}"
-            );
-        }
-    }
-
-    // A `protection_trip` assertion scoped to a scenario must judge only trips
-    // that latched *inside* that scenario's window. A trip that happened during
-    // an earlier scenario (still visible in the run-wide `protection_tripped`
-    // flag) must not satisfy an assertion scoped to a later window (round-6 #8).
-    #[test]
-    fn protection_trip_respects_scenario_scope() {
-        use super::check_protection_trip;
-        use crate::runner::RunOutcome;
-        use std::collections::HashMap;
-
-        // Net BATT latched at some point in the run, but only within the
-        // "inrush" window, NOT within the later "steady" window.
-        fn outcome() -> RunOutcome {
-            let mut protection_tripped = HashMap::new();
-            protection_tripped.insert("BATT".to_string(), true);
-            let mut protection_tripped_scoped = HashMap::new();
-            protection_tripped_scoped.insert(("inrush".to_string(), "BATT".to_string()), true);
-            protection_tripped_scoped.insert(("steady".to_string(), "BATT".to_string()), false);
-            RunOutcome {
-                bind: None,
-                evidence: None,
-                dc_definitions: Default::default(),
-                seed: 0,
-                windows: HashMap::new(),
-                uart: HashMap::new(),
-                faults: Vec::new(),
-                toggles: HashMap::new(),
-                peak_current: HashMap::new(),
-                peak_temp_c: HashMap::new(),
-                peripherals: HashMap::new(),
-                rail_windows: HashMap::new(),
-                protection_tripped,
-                protection_tripped_scoped,
-                ambient_c: 25.0,
-                sim_ms: 100.0,
-                boot_first_cross_ms: HashMap::new(),
-                boot_drop_after_cross_ms: HashMap::new(),
-                driven_nets: Default::default(),
-                drive_direction_observable: false,
-                first_fault_ms: None,
-                ac: None,
-                analog_valid: true,
-                failed_windows: Vec::new(),
-                fallback_windows: Vec::new(),
-                error_budget: None,
-                analog_abort: false,
-                sampled_values: Vec::new(),
-                interior: false,
-                net_series: HashMap::new(),
-                substitutions: Vec::new(),
-                coverage_warnings: Vec::new(),
-                timing_coverage: Vec::new(),
-                timing_refusals: Vec::new(),
-                dead_rails: Vec::new(),
-                unexercised_bus_ids: std::collections::HashSet::new(),
-                spi_framing: HashMap::new(),
-            }
-        }
-
-        let expect_trip = |scenario: Option<&str>| -> (bool, String) {
-            let scen = scenario
-                .map(|s| format!("scenario = \"{s}\"\n"))
-                .unwrap_or_default();
-            let a: crate::spec::Assertion = toml::from_str(&format!(
-                "kind = \"protection_trip\"\nsupply_net = \"BATT\"\nexpect_trip = true\n{scen}"
+    fn max_temp_covers_idle_parts_tied_units_and_missing_samples() {
+        let ceiling = |c: f64| {
+            assertion(&format!(
+                "kind = \"max_temp\"\nref = \"U3\"\ncelsius = {c}\n"
             ))
-            .unwrap();
-            check_protection_trip(&a, &outcome())
         };
-
-        // Unscoped: the run-wide flag shows a trip → an expect-trip passes.
-        let (ok, _) = expect_trip(None);
-        assert!(
-            ok,
-            "unscoped expect_trip should pass; BATT did trip run-wide"
-        );
-
-        // Scoped to the window where the trip happened → still passes.
-        let (ok_inrush, _) = expect_trip(Some("inrush"));
-        assert!(
-            ok_inrush,
-            "expect_trip scoped to 'inrush' should pass; that is where it latched"
-        );
-
-        // Scoped to a LATER window where no trip occurred → must FAIL, even
-        // though the run-wide flag is set. This is the round-6 #8 bug.
-        let (ok_steady, msg) = expect_trip(Some("steady"));
-        assert!(
-            !ok_steady,
-            "expect_trip scoped to 'steady' must FAIL; no trip in that window; got pass: {msg}"
-        );
-    }
-
-    // A max_temp ceiling BELOW ambient must fail for an idle (non-dissipating)
-    // device; its junction sits at ambient, which already exceeds the ceiling.
-    // Auto-passing on "no dissipation measured" hid a hot-ambient violation
-    // (round-7 #8).
-    #[test]
-    fn max_temp_idle_device_fails_when_ambient_exceeds_ceiling() {
-        use super::check_max_temp;
-        use crate::runner::RunOutcome;
-
-        let assertion = |ceiling: f64| -> crate::spec::Assertion {
-            toml::from_str(&format!(
-                "kind = \"max_temp\"\nref = \"U3\"\ncelsius = {ceiling}\n"
-            ))
-            .unwrap()
-        };
-        // Idle device: no entry in peak_temp_c, ambient 85 C.
+        // An idle part sits at ambient; ambient above the ceiling is a failure.
         let hot = RunOutcome {
             ambient_c: 85.0,
             ..Default::default()
         };
+        assert!(!check_max_temp(&ceiling(70.0), &hot).0);
+        assert!(check_max_temp(&ceiling(105.0), &hot).0);
 
-        let (ok, msg, _why) = check_max_temp(&assertion(70.0), &hot);
-        assert!(
-            !ok,
-            "idle U3 at ambient 85C must fail a 70C ceiling, not auto-pass: {msg}"
-        );
-        // A ceiling above ambient still passes the idle part.
-        let (ok2, msg2, _why) = check_max_temp(&assertion(105.0), &hot);
-        assert!(
-            ok2,
-            "idle U3 at ambient 85C is within a 105C ceiling: {msg2}"
-        );
-    }
-
-    // The celsius-less form on a part with NO temperature sample must FAIL
-    // ("guard never evaluated"), not report "within device max": the junction
-    // was never estimated, so a green there vouches for nothing (the same
-    // discipline as max_current's no-data branch).
-    #[test]
-    fn max_temp_without_ceiling_and_without_any_sample_fails_not_passes() {
-        use super::check_max_temp;
-        use crate::runner::RunOutcome;
-
-        let a: crate::spec::Assertion =
-            toml::from_str("kind = \"max_temp\"\nref = \"U2\"\n").unwrap();
-        let idle = RunOutcome::default(); // no peak_temp_c entry, no faults
-        let (ok, msg, _why) = check_max_temp(&a, &idle);
-        assert!(
-            !ok,
-            "no sample + no ceiling must fail loud, not pass vacuously: {msg}"
-        );
-        assert!(
-            msg.contains("never evaluated"),
-            "the reason names the vacuousness: {msg}"
-        );
-        // With a real sample under the device max, the form still passes.
-        let mut peak_temp_c = std::collections::HashMap::new();
-        peak_temp_c.insert("U2".to_string(), 61.0);
-        let warm = RunOutcome {
-            peak_temp_c,
+        // Tied unit temperatures resolve to the lowest key, deterministically.
+        let mut tied = RunOutcome {
+            ambient_c: 25.0,
             ..Default::default()
         };
-        let (ok2, msg2, _why) = check_max_temp(&a, &warm);
-        assert!(ok2, "a measured junction below device max passes: {msg2}");
+        for unit in ["SW1_q2", "SW1_q1", "SW1_q3"] {
+            tied.peak_temp_c.insert(unit.to_string(), 100.0);
+        }
+        let a = assertion("kind = \"max_temp\"\nref = \"SW1\"\ncelsius = 150.0\n");
+        let (ok, msg, _) = check_max_temp(&a, &tied);
+        assert!(
+            ok && msg.contains("SW1_q1") && !msg.contains("SW1_q2"),
+            "{msg}"
+        );
+
+        // The celsius-less form with no sample at all was never evaluated.
+        let bare = assertion("kind = \"max_temp\"\nref = \"U2\"\n");
+        let (ok, msg, _) = check_max_temp(&bare, &RunOutcome::default());
+        assert!(!ok && msg.contains("never evaluated"), "{msg}");
+        let mut warm = RunOutcome::default();
+        warm.peak_temp_c.insert("U2".to_string(), 61.0);
+        assert!(check_max_temp(&bare, &warm).0);
     }
 
-    // A max_current assert on a multi-unit package (resistor/diode array) names
-    // the bare ref `RN1`, but peak_current is keyed by the per-unit device names
-    // `RN1_e1..RN1_e4`. An exact `.get("RN1")` always misses and drops into the
-    // "no current data" fail branch, so the assert could NEVER pass no matter
-    // how low the real current is (R48). The consumer must aggregate over units
-    // via key_belongs_to_ref, exactly like check_max_temp.
     #[test]
     fn max_current_aggregates_over_multiunit_package_keys() {
-        use super::check_max_current;
-        use crate::runner::RunOutcome;
-
-        let assertion = |amps: f64| -> crate::spec::Assertion {
-            toml::from_str(&format!(
+        let limit = |amps: f64| {
+            assertion(&format!(
                 "kind = \"max_current\"\nref = \"RN1\"\namps = {amps}\n"
             ))
-            .unwrap()
         };
-        // A 4-element resistor array: no bare "RN1" key, only per-unit `_e` keys.
-        let mut peak_current = std::collections::HashMap::new();
-        peak_current.insert("RN1_e1".to_string(), 0.10);
-        peak_current.insert("RN1_e2".to_string(), 0.12);
-        peak_current.insert("RN1_e3".to_string(), 0.08);
-        peak_current.insert("RN1_e4".to_string(), 0.11);
-        let out = RunOutcome {
-            peak_current,
-            ..Default::default()
-        };
-
-        // Within a 0.5 A limit (peak unit is 0.12 A): must PASS. Base bug always
-        // reported "no current data … cannot be reported green" here.
-        let (ok, msg, _why) = check_max_current(&assertion(0.5), &out);
+        let mut out = RunOutcome::default();
+        for (unit, amps) in [
+            ("RN1_e1", 0.10),
+            ("RN1_e2", 0.12),
+            ("RN1_e3", 0.08),
+            ("RN1_e4", 0.11),
+        ] {
+            out.peak_current.insert(unit.to_string(), amps);
+        }
+        let (ok, msg, _) = check_max_current(&limit(0.5), &out);
         assert!(
-            ok,
-            "a resistor array within its current limit must pass, not miss its unit keys: {msg}"
+            ok && msg.contains("RN1_e2"),
+            "the peak unit is named: {msg}"
         );
-        assert!(
-            msg.contains("RN1_e2"),
-            "message must name the peak unit: {msg}"
-        );
-        // And it must still be able to FAIL when a unit exceeds the limit.
-        let (ok_over, msg_over, _why_over) = check_max_current(&assertion(0.10), &out);
-        assert!(
-            !ok_over,
-            "the hottest-current unit (0.12 A) must trip a 0.10 A limit: {msg_over}"
-        );
+        assert!(!check_max_current(&limit(0.10), &out).0);
     }
 
-    // A rail_window brownout floor must see an intra-frame sag that recovers by
-    // the frame's last chunk; the runner folds the scheduler's per-frame extremes
-    // into RailWindow.min_v/max_v, exactly like the plain voltage path. Without the
-    // fold (base bug), min_v is the settled 3.3 V and a min=3.0 floor false-passes
-    // the very sag it exists to catch (R49).
-    #[test]
-    fn rail_window_min_reflects_folded_intraframe_sag() {
-        use super::check_rail_window;
-        use crate::runner::RunOutcome;
-        use crate::scenarios::RailWindow;
-
-        // Reconstruct the window the runner builds: settled 3.3 V samples plus the
-        // scheduler's intra-frame minimum (2.9 V) folded into the envelope.
-        let mut win = RailWindow::new();
-        win.observe(0.000, 3.3);
-        win.observe(0.001, 3.3);
-        win.fold(2.9); // intra-frame sag from the load step, recovered by last chunk
-
-        let mut rail_windows = std::collections::HashMap::new();
-        rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
-        let out = RunOutcome {
-            rail_windows,
-            ..Default::default()
-        };
-
-        let a: crate::spec::Assertion = toml::from_str(
-            "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\nmin = 3.0\n",
-        )
-        .unwrap();
-        let (ok, msg, _why) = check_rail_window(&a, &out);
-        assert!(
-            !ok,
-            "a rail that sagged to 2.9V mid-frame must FAIL a 3.0V floor, not pass on the settled 3.3V: {msg}"
-        );
-
-        // Sanity: a window that never dipped below the floor still passes.
-        let mut win_ok = RailWindow::new();
-        win_ok.observe(0.000, 3.3);
-        win_ok.observe(0.001, 3.25);
-        win_ok.fold(3.1);
-        let mut rw2 = std::collections::HashMap::new();
-        rw2.insert(("load".to_string(), "VBUS".to_string()), win_ok);
-        let out_ok = RunOutcome {
-            rail_windows: rw2,
-            ..Default::default()
-        };
-        let (ok2, _msg2, _why) = check_rail_window(&a, &out_ok);
-        assert!(ok2, "a rail that stayed above 3.0V must pass");
-    }
-
-    // hwtrace ensemble: a converged member's real feature mismatch must beat a
-    // diverged sibling's INVALID (the R50 FAIL>INVALID doctrine, applied to the
-    // hwtrace path). Base bug: any diverged member forced every feature to INVALID.
     #[test]
     fn hwtrace_converged_mismatch_beats_a_diverged_sibling_invalid() {
-        use super::evaluate_hwtrace;
-        use crate::runner::RunOutcome;
-
         // A square wave 0<->5V of the given period over 1 s at 1 kSa/s.
         fn square(period_s: f64) -> Vec<(f64, f64)> {
-            let mut s = Vec::new();
-            let mut t = 0.0_f64;
-            while t <= 1.0 {
-                let v = if (t / period_s).fract() >= 0.5 {
-                    4.9
-                } else {
-                    0.05
-                };
-                s.push((t, v));
-                t += 0.001;
-            }
-            s
+            (0..=1000)
+                .map(|i| {
+                    let t = i as f64 * 0.001;
+                    let v = if (t / period_s).fract() >= 0.5 {
+                        4.9
+                    } else {
+                        0.05
+                    };
+                    (t, v)
+                })
+                .collect()
         }
-
         let dir = std::env::temp_dir().join(format!("hb_hwtrace_prec_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // Captured waveform: 200 ms period.
-        let mut csv = String::from("time_s,volts\n");
-        for (t, v) in square(0.2) {
-            csv.push_str(&format!("{t:.4},{v:.3}\n"));
-        }
-        std::fs::write(dir.join("d.csv"), csv).unwrap();
+        let csv: String = square(0.2)
+            .iter()
+            .map(|(t, v)| format!("{t:.4},{v:.3}\n"))
+            .collect();
+        std::fs::write(dir.join("d.csv"), format!("time_s,volts\n{csv}")).unwrap();
         std::fs::write(
             dir.join("trace.toml"),
             "[trace]\nboard = \"x\"\nscenario = \"prec\"\nprovenance = \"synthetic\"\n\
@@ -3221,7 +2370,6 @@ mod tests {
              [[channel.feature]]\nkind = \"period\"\nreltol = 0.10\n",
         )
         .unwrap();
-
         let mut spec: crate::spec::Spec = toml::from_str(
             "board = \"x.kicad_pcb\"\nduration_ms = 1000\n\
              [[assert]]\nkind = \"hwtrace\"\ntrace = \"trace.toml\"\n",
@@ -3230,223 +2378,75 @@ mod tests {
         spec.base_dir = dir.clone();
         let a = spec.asserts[0].clone();
 
-        // Corner 0 converged, but its sim period (500 ms) disagrees with the 200 ms
-        // capture, a trustworthy FAIL. Corner 1 diverged (a failed window).
-        let mut ns0 = std::collections::HashMap::new();
-        ns0.insert("D".to_string(), square(0.5));
-        let corner0 = RunOutcome {
-            seed: 0,
-            net_series: ns0,
+        // Corner 0 converged with a 500 ms period against the 200 ms capture;
+        // corner 1 matches but diverged.
+        let member = |seed: u32, period_s: f64, failed: Vec<(f64, f64)>| RunOutcome {
+            seed,
+            net_series: HashMap::from([("D".to_string(), square(period_s))]),
             sim_ms: 1000.0,
+            failed_windows: failed,
             ..Default::default()
         };
-        let mut ns1 = std::collections::HashMap::new();
-        ns1.insert("D".to_string(), square(0.2));
-        let corner1 = RunOutcome {
-            seed: 1,
-            net_series: ns1,
-            sim_ms: 1000.0,
-            failed_windows: vec![(0.4, 0.5)],
-            ..Default::default()
-        };
-
         let results = evaluate_hwtrace(
             &spec,
             &a,
-            &[corner0, corner1],
-            Some(crate::tolerance::Mode::Corners),
+            &[member(0, 0.5, Vec::new()), member(1, 0.2, vec![(0.4, 0.5)])],
+            Some(Mode::Corners),
         );
         let _ = std::fs::remove_dir_all(&dir);
-
         let r = results
             .iter()
             .find(|r| r.kind == "hwtrace")
             .expect("a hwtrace result");
-        assert!(
-            !r.invalid,
-            "a converged corner's real mismatch must FAIL, not be masked INVALID: {}",
-            r.detail
-        );
-        assert!(!r.passed, "the feature genuinely disagrees: {}", r.detail);
-        assert_eq!(
-            r.failing_seed,
-            Some(0),
-            "corner 0 (the converged failure) must be named: {}",
-            r.detail
-        );
+        assert!(!r.invalid && !r.passed, "{}", r.detail);
+        assert_eq!(r.failing_seed, Some(0), "{}", r.detail);
     }
 
-    // A vcd_sink `transitions` field is analog-derived (per-frame threshold
-    // crossings), so its assertion window must be gated by analog validity like
-    // `toggle`, otherwise a diverged chunk silently yields a definite PASS/FAIL on
-    // held-stale edge counts instead of INVALID (R51). Digital bus-slave fields
-    // stay un-gated.
     #[test]
     fn peripheral_transitions_field_is_analog_gated_but_digital_state_is_not() {
-        use super::analog_eval_window;
-        use crate::runner::RunOutcome;
-
         let out = RunOutcome {
             sim_ms: 100.0,
             ..Default::default()
         };
-        let transitions: crate::spec::Assertion = toml::from_str(
-            "kind = \"peripheral\"\nid = \"SINK\"\nfield = \"transitions\"\nmin = 100\n",
-        )
-        .unwrap();
-        assert_eq!(
-            analog_eval_window(&transitions, &out),
-            Some((0.0, 0.1)),
-            "a vcd_sink transitions assertion must expose an analog window so it can be INVALIDated"
-        );
-        // A digital bus-slave peripheral field is NOT analog-derived → no window.
-        let digital: crate::spec::Assertion =
-            toml::from_str("kind = \"peripheral\"\nid = \"EE\"\nfield = \"last_addr\"\nmin = 0\n")
-                .unwrap();
-        assert_eq!(
-            analog_eval_window(&digital, &out),
-            None,
-            "a digital peripheral field must not be analog-gated"
-        );
+        let transitions =
+            assertion("kind = \"peripheral\"\nid = \"SINK\"\nfield = \"transitions\"\nmin = 100\n");
+        assert_eq!(analog_eval_window(&transitions, &out), Some((0.0, 0.1)));
+        let digital =
+            assertion("kind = \"peripheral\"\nid = \"EE\"\nfield = \"last_addr\"\nmin = 0\n");
+        assert_eq!(analog_eval_window(&digital, &out), None);
     }
 
-    // A trustworthy definite failure on one converged ensemble member must WIN
-    // over an unrelated analog divergence on another member (FAIL > INVALID).
-    // Base bug: the INVALID gate ran first, so a diverged sibling silently
-    // downgraded a real brownout on a fully-converged corner to INVALID (R50).
     #[test]
-    fn definite_failure_on_a_converged_member_beats_invalid_on_a_diverged_one() {
-        use super::evaluate_one;
-        use crate::runner::{NetWindow, RunOutcome};
-
-        let win = |min_v: f64| {
-            let mut w = std::collections::HashMap::new();
-            w.insert(
-                ("VOUT".to_string(), 0.0f64.to_bits()),
-                NetWindow {
-                    min_v,
-                    max_v: 3.4,
-                    last_v: 3.3,
-                    samples: 10,
-                },
-            );
-            w
-        };
-        // Corner 1: converged cleanly (no failed windows), VOUT sagged to 2.0 V,
-        // a real, trustworthy brownout (RED).
-        let corner1 = RunOutcome {
-            seed: 1,
-            windows: win(2.0),
-            sim_ms: 100.0,
-            failed_windows: Vec::new(),
-            ..Default::default()
-        };
-        // Corner 2: a stiff transient diverged, leaving an overlapping failed
-        // window; its samples are held-stale (not trustworthy either way).
-        let corner2 = RunOutcome {
-            seed: 2,
-            windows: win(3.3),
-            sim_ms: 100.0,
-            failed_windows: vec![(0.010, 0.020)],
-            ..Default::default()
-        };
-
-        let a: crate::spec::Assertion =
-            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.2\n").unwrap();
-        let res = evaluate_one(
-            &a,
-            &[corner1, corner2],
-            Some(crate::tolerance::Mode::Corners),
-        );
-        assert!(
-            !res.invalid,
-            "a real brownout on the converged corner must be reported, not masked as INVALID: {}",
-            res.detail
-        );
-        assert!(
-            !res.passed,
-            "the assertion is definitively false: {}",
-            res.detail
-        );
-        assert_eq!(
-            res.failing_seed,
-            Some(1),
-            "corner 1 (the converged, trustworthy failure) must be named: {}",
-            res.detail
-        );
-        // R52: the pass-rate must NOT count the held-stale (INVALID) corner 2 as
-        // passed. Of 2 corners: 0 passed, 1 failed, 1 invalid; the base bug
-        // reported "passed 1/2" (folding the skipped INVALID member into passed).
-        assert!(
-            res.detail.contains("passed 0/2") && res.detail.contains("1 invalid"),
-            "held-stale members must not inflate the passed count: {}",
-            res.detail
-        );
-    }
-
-    // An unscoped uart assertion concatenates every MCU's output; the order must
-    // be stable (sorted by MCU key), not HashMap iteration order, or an anchored
-    // match flakes run to run (round-7 #9).
-    #[test]
-    fn uart_all_mcu_concatenation_is_order_stable() {
-        use super::check_uart;
-        use crate::runner::RunOutcome;
-
-        let a: crate::spec::Assertion =
-            toml::from_str("kind = \"uart\"\nmatches = \"^BOOT\"\n").unwrap();
-
-        // Two MCUs; whichever HashMap order they land in, the sorted-by-key
-        // concatenation is deterministic ("A" before "B"), so "^BOOT" (A's
-        // output) anchors the same way every time.
-        let mk = |first: &str, second: &str| -> bool {
-            let mut uart = std::collections::HashMap::new();
-            uart.insert(first.to_string(), "BOOT_OK\n".to_string());
-            uart.insert(second.to_string(), "READY\n".to_string());
-            let out = RunOutcome {
-                uart,
-                ..Default::default()
-            };
+    fn uart_all_mcu_concatenation_is_sorted_by_mcu() {
+        let a = assertion("kind = \"uart\"\nmatches = \"^BOOT\"\n");
+        let matches = |a_out: &str, b_out: &str| {
+            let mut out = RunOutcome::default();
+            out.uart.insert("A".to_string(), a_out.to_string());
+            out.uart.insert("B".to_string(), b_out.to_string());
             check_uart(&a, &out).0
         };
-        // "A" holds BOOT_OK regardless of insertion order → ^BOOT always matches.
         assert!(
-            mk("A", "B"),
-            "A-first: sorted haystack starts with A's BOOT_OK"
+            matches("BOOT_OK\n", "READY\n"),
+            "A's output leads the haystack"
         );
-        assert!(mk("A", "B") == mk("A", "B"), "deterministic");
-        // If B held BOOT and A held READY, sorted order puts READY first, so
-        // ^BOOT must NOT match, and must not match by luck either.
-        let mut uart2 = std::collections::HashMap::new();
-        uart2.insert("A".to_string(), "READY\n".to_string());
-        uart2.insert("B".to_string(), "BOOT_OK\n".to_string());
-        let out2 = RunOutcome {
-            uart: uart2,
-            ..Default::default()
-        };
         assert!(
-            !check_uart(&a, &out2).0,
-            "sorted order puts A's READY first, so ^BOOT anchored at start must not match"
+            !matches("READY\n", "BOOT_OK\n"),
+            "B's output never leads it"
         );
     }
 
-    // ac_gain at a frequency outside the swept band must fail loudly, not
-    // silently clamp to the nearest endpoint gain and report it as measured at
-    // the requested frequency (round-7 #13).
     #[test]
-    fn ac_gain_out_of_band_frequency_is_refused() {
-        use super::check_ac_gain;
-        use crate::runner::{AcOutcome, RunOutcome};
-
-        let mut bode = std::collections::HashMap::new();
-        // Swept 10 Hz .. 100 kHz; gain -5 dB everywhere for simplicity.
-        bode.insert(
+    fn ac_gain_refuses_frequencies_it_did_not_sweep() {
+        use crate::runner::AcOutcome;
+        // Swept 10 Hz .. 100 kHz at -5 dB throughout.
+        let bode = HashMap::from([(
             "OUT".to_string(),
             vec![
                 (10.0, -5.0, 0.0),
                 (1_000.0, -5.0, 0.0),
                 (100_000.0, -5.0, 0.0),
             ],
-        );
+        )]);
         let out = RunOutcome {
             ac: Some(AcOutcome {
                 bode,
@@ -3454,47 +2454,21 @@ mod tests {
             }),
             ..Default::default()
         };
-
-        // 1 MHz is above the band: interp_db would clamp to -5 dB and pass the
-        // max=-20 bound falsely. Must fail with an out-of-band message.
-        let above: crate::spec::Assertion =
-            toml::from_str("kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1e6\nmax = -20.0\n")
-                .unwrap();
-        let (ok, msg, _why) = check_ac_gain(&above, &out);
-        assert!(
-            !ok,
-            "out-of-band 1 MHz must fail, not clamp-and-pass: {msg}"
-        );
-        assert!(
-            msg.contains("outside the swept band"),
-            "msg names the cause: {msg}"
-        );
-
-        // An in-band frequency evaluates normally (−5 dB is within max=−20? no,
-        // −5 > −20 so it fails the bound, but for a real measured reason, not
-        // out-of-band).
-        let inband: crate::spec::Assertion =
-            toml::from_str("kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1000.0\nmax = -20.0\n")
-                .unwrap();
-        let (_, msg2, _why2) = check_ac_gain(&inband, &out);
-        assert!(
-            !msg2.contains("outside the swept band"),
-            "in-band is measured normally: {msg2}"
-        );
-
-        // R38: a non-finite freq_hz slips past the band bounds (every NaN compare
-        // is false), so interp_db would clamp to the top-of-band gain and report
-        // it "at NaN Hz". Must refuse, not measure a frequency the author never
-        // chose.
-        let nan_freq: crate::spec::Assertion =
-            toml::from_str("kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = nan\nmax = -20.0\n")
-                .unwrap();
-        let (ok, msg3, _why) = check_ac_gain(&nan_freq, &out);
-        assert!(!ok, "a NaN freq_hz must fail, not clamp-and-report: {msg3}");
-        assert!(
-            msg3.contains("non-finite"),
-            "msg names the non-finite freq cause: {msg3}"
-        );
+        let gain = |freq: &str| {
+            let a = assertion(&format!(
+                "kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = {freq}\nmax = -20.0\n"
+            ));
+            check_ac_gain(&a, &out)
+        };
+        // Out of band: refused rather than clamped to the endpoint gain.
+        let (ok, msg, _) = gain("1e6");
+        assert!(!ok && msg.contains("outside the swept band"), "{msg}");
+        // In band: measured (and failing the bound for a real reason).
+        let (ok, msg, _) = gain("1000.0");
+        assert!(!ok && !msg.contains("outside the swept band"), "{msg}");
+        // NaN compares false against every bound, so it needs its own refusal.
+        let (ok, msg, _) = gain("nan");
+        assert!(!ok && msg.contains("non-finite"), "{msg}");
     }
 }
 

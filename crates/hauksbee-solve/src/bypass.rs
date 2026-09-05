@@ -351,310 +351,207 @@ pub(crate) fn stamp_all_bypass(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::options::SolverOptions;
+    use crate::options::{NewtonBypass, SolverOptions};
     use crate::stamp::{reserve_pattern, stamp_all, IntegCoeffs};
     use crate::system::ReactiveState;
+    use crate::test_fixtures::{bjt, cap, comparator, diode, res, stamp_ctx, sw, trapz, vdc, GND};
     use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, SourceKind};
 
-    /// A mixed nonlinear board: source, resistors, cap, diode (with charge),
-    /// BJT, MOSFET, switch, comparator, every stamp class the walk visits.
-    fn mixed_board() -> Circuit {
+    /// Source, resistors, cap, charge-carrying diode, BJT, MOSFET, switch,
+    /// comparator: every stamp class the walk visits. Returns `(circuit, n1)`.
+    fn mixed_board() -> (Circuit, NodeId) {
         let mut c = Circuit::new();
-        let vin = c.node("vin");
-        let n1 = c.node("n1");
-        let n2 = c.node("n2");
-        let n3 = c.node("n3");
-        let n4 = c.node("n4");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.0),
-        });
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: vin,
-            b: n1,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: "C1".into(),
-            a: n1,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: None,
-        });
-        c.add(Device::Diode {
-            name: "D1".into(),
-            a: n1,
-            k: n2,
-            model: DiodeModel {
+        let (vin, n1, n2, n3, n4) = (
+            c.node("vin"),
+            c.node("n1"),
+            c.node("n2"),
+            c.node("n3"),
+            c.node("n4"),
+        );
+        vdc(&mut c, "V1", vin, 3.0);
+        res(&mut c, "R1", vin, n1, 1e3);
+        cap(&mut c, "C1", n1, GND, 1e-9);
+        diode(
+            &mut c,
+            "D1",
+            n1,
+            n2,
+            DiodeModel {
                 cjo: 4e-12,
                 tt: 10e-9,
                 ..DiodeModel::default()
             },
-        });
-        c.add(Device::Resistor {
-            name: "R2".into(),
-            a: n2,
-            b: NodeId::GROUND,
-            ohms: 2e3,
-            tc1: None,
-        });
-        c.add(Device::Bjt {
-            name: "Q1".into(),
-            c: vin,
-            b: n2,
-            e: n3,
-            model: BjtModel::default(),
-        });
-        c.add(Device::Resistor {
-            name: "RE".into(),
-            a: n3,
-            b: NodeId::GROUND,
-            ohms: 100.0,
-            tc1: None,
-        });
+        );
+        res(&mut c, "R2", n2, GND, 2e3);
+        bjt(&mut c, "Q1", vin, n2, n3, &BjtModel::default());
+        res(&mut c, "RE", n3, GND, 100.0);
         c.add(Device::Mosfet {
             name: "M1".into(),
             d: n1,
             g: n2,
-            s: NodeId::GROUND,
+            s: GND,
             b: None,
             model: Default::default(),
         });
-        c.add(Device::VSwitch {
-            name: "S1".into(),
-            a: n1,
-            b: n4,
-            ctrl_p: n2,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 10.0,
-            roff: 1e9,
-        });
-        c.add(Device::Comparator {
-            name: "K1".into(),
-            out: n4,
-            inp: n1,
-            inn: n2,
-            out_lo: 0.0,
-            out_hi: 5.0,
-            hysteresis: 0.05,
-        });
-        c
+        sw(&mut c, "S1", n1, n4, n2, (2.0, 1.0), 10.0);
+        comparator(&mut c, "K1", n4, n1, n2, 0.05);
+        (c, n1)
     }
 
-    fn ctx<'a>(
-        c: &'a Circuit,
-        layout: &'a Layout,
-        opts: &'a SolverOptions,
-        x: &'a [f64],
-        x_prev: &'a [f64],
-        state: &'a ReactiveState,
-        coeffs: IntegCoeffs,
-        spdt: &'a std::collections::HashMap<DeviceId, DeviceId>,
-    ) -> StampCtx<'a> {
-        StampCtx {
-            circuit: c,
-            layout,
-            opts,
-            x,
-            x_prev,
-            time: 1e-6,
-            coeffs,
-            state,
-            dc: false,
-            use_ic: false,
-            gmin: 1e-12,
-            src_scale: 1.0,
-            branch_reg: 0.0,
-            cmp_freeze: None,
-            switch_freeze: None,
-            switch_latch: None,
-            spdt_sibling: spdt,
-            junction_eval: None,
+    struct Rig {
+        c: Circuit,
+        n1: NodeId,
+        layout: Layout,
+        m: SparseMatrix,
+        state: ReactiveState,
+        opts: SolverOptions,
+        x: Vec<f64>,
+    }
+
+    impl Rig {
+        fn new(x_of: impl Fn(usize) -> f64) -> Rig {
+            let (c, n1) = mixed_board();
+            let layout = Layout::new(&c);
+            let mut m = SparseMatrix::new(layout.size);
+            reserve_pattern(&c, &layout, &mut m);
+            let x = (0..layout.size).map(x_of).collect();
+            let state = ReactiveState::new(c.devices.len());
+            Rig {
+                c,
+                n1,
+                layout,
+                m,
+                state,
+                opts: SolverOptions::default(),
+                x,
+            }
+        }
+
+        /// One bypass-armed assembly; returns the rows and RHS.
+        fn assemble(
+            &mut self,
+            st: &mut BypassState,
+            force: bool,
+        ) -> (Vec<Vec<(usize, f64)>>, Vec<f64>) {
+            let mut ctx = stamp_ctx(
+                &self.c,
+                &self.layout,
+                &self.opts,
+                &self.x,
+                &self.state,
+                trapz(1e-7),
+            );
+            ctx.time = 1e-6;
+            ctx.gmin = 1e-12;
+            self.m.clear_values();
+            let mut rhs = vec![0.0f64; self.layout.size];
+            stamp_all_bypass(&ctx, st, &mut self.m, &mut rhs, force);
+            (
+                (0..self.layout.size)
+                    .map(|i| self.m.row(i).to_vec())
+                    .collect(),
+                rhs,
+            )
+        }
+
+        fn interpreted(&mut self) -> (Vec<Vec<(usize, f64)>>, Vec<f64>) {
+            let mut ctx = stamp_ctx(
+                &self.c,
+                &self.layout,
+                &self.opts,
+                &self.x,
+                &self.state,
+                trapz(1e-7),
+            );
+            ctx.time = 1e-6;
+            ctx.gmin = 1e-12;
+            self.m.clear_values();
+            let mut rhs = vec![0.0f64; self.layout.size];
+            stamp_all(&ctx, &mut self.m, &mut rhs);
+            (
+                (0..self.layout.size)
+                    .map(|i| self.m.row(i).to_vec())
+                    .collect(),
+                rhs,
+            )
         }
     }
 
-    /// A bypass-armed assembly in which nothing qualifies to skip (fresh
-    /// generation / force_eval) must be BIT-IDENTICAL to the interpreted
-    /// walk: the RecordingSink's slot-resolved `add_at` is the same `+=` as
-    /// `SparseMatrix::add`.
+    fn assert_bit_identical(
+        a: &(Vec<Vec<(usize, f64)>>, Vec<f64>),
+        b: &(Vec<Vec<(usize, f64)>>, Vec<f64>),
+    ) {
+        assert_eq!(a.0, b.0, "rows differ");
+        for (i, (x, y)) in a.1.iter().zip(b.1.iter()).enumerate() {
+            assert_eq!(x.to_bits(), y.to_bits(), "rhs {i} differs");
+        }
+    }
+
+    /// A fresh bypass assembly is bit-identical to the interpreted walk; an
+    /// unmoved iterate replays bit-identically; a moved terminal re-evaluates
+    /// only its readers; a new generation re-evaluates everything; a NaN
+    /// iterate never replays.
     #[test]
-    fn fresh_bypass_assembly_is_bit_identical_to_interpreted() {
-        let c = mixed_board();
-        let layout = Layout::new(&c);
-        let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&c, &layout, &mut m);
-        let n = layout.size;
-        let x: Vec<f64> = (0..n)
-            .map(|i| ((i as f64) * 0.61).sin() * 2.0 + 0.4)
-            .collect();
-        let mut state = ReactiveState::new(c.devices.len());
-        for (i, v) in state.x1.iter_mut().enumerate() {
+    fn bypass_replays_exactly_and_invalidates_correctly() {
+        let mut rig = Rig::new(|i| ((i as f64) * 0.61).sin() * 2.0 + 0.4);
+        for (i, v) in rig.state.x1.iter_mut().enumerate() {
             *v = 0.2 * (i as f64 + 1.0);
         }
-        let opts = SolverOptions::default();
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
-        let spdt = std::collections::HashMap::new();
-        let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
-
-        let mut m_ref = m.clone();
-        m_ref.clear_values();
-        let mut rhs_ref = vec![0.0f64; n];
-        stamp_all(&cx, &mut m_ref, &mut rhs_ref);
-
-        let mut st = BypassState::build(&c, &layout);
+        let reference = rig.interpreted();
+        let mut st = BypassState::build(&rig.c, &rig.layout);
         st.begin_solve();
-        m.clear_values();
-        let mut rhs = vec![0.0f64; n];
-        stamp_all_bypass(&cx, &mut st, &mut m, &mut rhs, true);
-
-        for i in 0..n {
-            assert_eq!(m.row(i), m_ref.row(i), "row {i} not bit-identical");
-            assert_eq!(
-                rhs[i].to_bits(),
-                rhs_ref[i].to_bits(),
-                "rhs {i} not bit-identical"
-            );
-        }
+        let fresh = rig.assemble(&mut st, true);
+        assert_bit_identical(&fresh, &reference);
         assert_eq!(
             st.counters(),
             (3, 0),
             "diode+bjt+mosfet evaluated, none skipped"
         );
-    }
 
-    /// With an unmoved iterate on iteration ≥3, the bypassable devices replay
-    /// and the assembled system is bit-identical to a fresh stamp at the same
-    /// point (the record IS that stamp).
-    #[test]
-    fn unmoved_iterate_replays_bit_identically() {
-        let c = mixed_board();
-        let layout = Layout::new(&c);
-        let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&c, &layout, &mut m);
-        let n = layout.size;
-        let x: Vec<f64> = (0..n)
-            .map(|i| ((i as f64) * 0.37).cos() * 1.5 + 0.2)
-            .collect();
-        let state = ReactiveState::new(c.devices.len());
-        let opts = SolverOptions::default();
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
-        let spdt = std::collections::HashMap::new();
-        let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
+        let replayed = rig.assemble(&mut st, false);
+        assert_bit_identical(&replayed, &fresh);
+        assert_eq!(st.counters(), (3, 3));
 
-        let mut st = BypassState::build(&c, &layout);
-        st.begin_solve();
-        // Iteration 1 (forced eval, records).
-        m.clear_values();
-        let mut rhs1 = vec![0.0f64; n];
-        stamp_all_bypass(&cx, &mut st, &mut m, &mut rhs1, true);
-        let ref_rows: Vec<Vec<(usize, f64)>> = (0..n).map(|i| m.row(i).to_vec()).collect();
-        // Iteration 3 (same x: everything replays).
-        m.clear_values();
-        let mut rhs3 = vec![0.0f64; n];
-        stamp_all_bypass(&cx, &mut st, &mut m, &mut rhs3, false);
-        for i in 0..n {
-            assert_eq!(m.row(i), &ref_rows[i][..], "replayed row {i} differs");
-            assert_eq!(
-                rhs3[i].to_bits(),
-                rhs1[i].to_bits(),
-                "replayed rhs {i} differs"
-            );
-        }
-        let (evals, skips) = st.counters();
-        assert_eq!(
-            (evals, skips),
-            (3, 3),
-            "second assembly must replay all three"
-        );
-    }
-
-    /// A moved terminal re-evaluates exactly the devices that read it; a
-    /// fresh generation (new solve) re-evaluates everything.
-    #[test]
-    fn movement_and_generation_invalidate() {
-        let c = mixed_board();
-        let layout = Layout::new(&c);
-        let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&c, &layout, &mut m);
-        let n = layout.size;
-        let mut x: Vec<f64> = (0..n).map(|i| 0.3 + 0.05 * i as f64).collect();
-        let state = ReactiveState::new(c.devices.len());
-        let opts = SolverOptions::default();
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
-        let spdt = std::collections::HashMap::new();
-
-        let mut st = BypassState::build(&c, &layout);
-        st.begin_solve();
-        {
-            let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
-            m.clear_values();
-            let mut rhs = vec![0.0f64; n];
-            stamp_all_bypass(&cx, &mut st, &mut m, &mut rhs, true);
-        }
-        // Move n1 (the diode anode / MOSFET drain) well past bypasstol; the
-        // BJT reads vin/n2/n3 only and keeps replaying.
-        let n1 = (0..c.node_count())
-            .find(|&i| c.node_name(hauksbee_ir::NodeId(i as u32)) == "n1")
-            .expect("n1 exists");
-        let n1_idx = layout
-            .node(hauksbee_ir::NodeId(n1 as u32))
-            .expect("n1 unknown");
-        x[n1_idx] += 0.5;
-        {
-            let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
-            m.clear_values();
-            let mut rhs = vec![0.0f64; n];
-            stamp_all_bypass(&cx, &mut st, &mut m, &mut rhs, false);
-        }
-        let (evals, _skips) = st.counters();
+        let n1_idx = rig.layout.node(rig.n1).unwrap();
+        rig.x[n1_idx] += 0.5;
+        rig.assemble(&mut st, false);
+        let (evals, _) = st.counters();
         assert!(
             evals > 3 && evals < 6,
-            "moving one node must re-evaluate its readers only (evals={evals})"
+            "moving one node re-evaluates its readers only (evals={evals})"
         );
-        // New solve: generation bump forces everything fresh even unmoved.
         st.begin_solve();
-        {
-            let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
-            m.clear_values();
-            let mut rhs = vec![0.0f64; n];
-            stamp_all_bypass(&cx, &mut st, &mut m, &mut rhs, false);
-        }
-        let (evals2, skips2) = st.counters();
+        rig.assemble(&mut st, false);
         assert_eq!(
-            evals2 - evals,
+            st.counters().0 - evals,
             3,
-            "generation bump must re-evaluate all three"
+            "generation bump re-evaluates all three"
         );
-        let _ = skips2;
+
+        let mut rig = Rig::new(|_| 0.4);
+        let mut st = BypassState::build(&rig.c, &rig.layout);
+        st.begin_solve();
+        rig.assemble(&mut st, true);
+        rig.x.iter_mut().for_each(|v| *v = f64::NAN);
+        rig.assemble(&mut st, false);
+        assert_eq!(
+            st.counters(),
+            (6, 0),
+            "a NaN iterate must not replay any cache"
+        );
     }
 
-    /// End-to-end at the `newton_solve` level: a stiff diode/BJT board whose
-    /// cold per-step solve takes >2 iterations must (a) actually skip
-    /// evaluations with bypass armed, and (b) converge to the same root as
-    /// the no-bypass reference within Newton tolerance.
+    /// At the `newton_solve` level on a stiff diode/BJT board: bypass actually
+    /// skips evaluations and converges to the no-bypass root within tolerance.
     #[test]
     fn newton_solve_with_bypass_skips_and_matches() {
         use crate::newton::{newton_solve, Workspace};
         let mut c = Circuit::new();
-        let vin = c.node("vin");
-        let mid = c.node("mid");
-        let out = c.node("out");
-        // Sine drive: the DC point (offset 3.5 V) seeds the solve, then the
-        // transient-shaped solve lands a quarter period later at 5.5 V, so
-        // Newton must walk both junctions up a real swing from a warm seed.
+        let (vin, mid, out) = (c.node("vin"), c.node("mid"), c.node("out"));
         c.add(Device::Vsource {
             name: "V1".into(),
             p: vin,
-            n: NodeId::GROUND,
+            n: GND,
             kind: SourceKind::Sin {
                 offset: 3.5,
                 amplitude: 2.0,
@@ -664,118 +561,46 @@ mod tests {
                 phase: 0.0,
             },
         });
-        // Independent junction branches off the rail: each is the classic
-        // R + junction divider whose cold Newton walks in pnjlim-limited
-        // steps (several iterations), and they settle at different rates, so
-        // the tail iterations have quiescent devices to skip.
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: vin,
-            b: mid,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Diode {
-            name: "D1".into(),
-            a: mid,
-            k: NodeId::GROUND,
-            model: DiodeModel::default(),
-        });
-        c.add(Device::Resistor {
-            name: "R2".into(),
-            a: vin,
-            b: out,
-            ohms: 4.7e3,
-            tc1: None,
-        });
-        c.add(Device::Bjt {
-            name: "Q1".into(),
-            c: out,
-            b: out,
-            e: NodeId::GROUND,
-            model: BjtModel::default(),
-        });
+        res(&mut c, "R1", vin, mid, 1e3);
+        diode(&mut c, "D1", mid, GND, DiodeModel::default());
+        res(&mut c, "R2", vin, out, 4.7e3);
+        bjt(&mut c, "Q1", out, out, GND, &BjtModel::default());
 
         let coeffs =
             IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
-        let run = |bypass: crate::options::NewtonBypass| {
+        let run = |bypass: NewtonBypass| {
             let mut opts = SolverOptions::default();
             opts.newton_bypass = bypass;
-            // The flagship substrate bypass targets runs with the Armijo
-            // line search armed; exercise the same interplay here.
             opts.ladder =
                 crate::options::RobustnessLadder::none().with(crate::options::Strategy::LineSearch);
             let mut ws = Workspace::new(&c);
             let state = ReactiveState::new(c.devices.len());
-            // DC operating point at the sine's offset (bypass never runs on
-            // DC solves), then a transient-shaped solve after the source has
-            // moved a realistic per-step amount (~0.5 V): a warm-basin walk
-            // that takes several real iterations. (A whole-quarter-period
-            // 2 V jump 2-cycles the bare Newton, real marches never move a
-            // source that far in one step, dt control forbids it.)
             crate::newton::dc_operating_point(&mut ws, &c, &opts).expect("dc converges");
             let r = newton_solve(
                 &mut ws, &c, &opts, 4.3e-7, 1e-7, coeffs, &state, false, false, opts.gmin, 1.0,
             );
-            assert!(r.converged, "solve must converge (iters {})", r.iters);
             assert!(
-                r.iters > 2,
-                "fixture must need >2 iterations, got {}",
+                r.converged && r.iters > 2,
+                "converged={} iters={}",
+                r.converged,
                 r.iters
             );
-            (ws.x.clone(), ws.bypass_counters(), r.iters)
+            (ws.x.clone(), ws.bypass_counters())
         };
-        let (x_ref, (e0, s0), _) = run(crate::options::NewtonBypass::Off);
-        assert_eq!((e0, s0), (0, 0), "bypass Off must never build the cache");
-        let (x_byp, (evals, skips), _) = run(crate::options::NewtonBypass::On);
-        assert!(evals > 0, "bypass On must evaluate");
-        assert!(skips > 0, "fixture must actually skip some evaluations");
+        let (x_ref, counters_off) = run(NewtonBypass::Off);
+        assert_eq!(counters_off, (0, 0), "bypass Off never builds the cache");
+        let (x_byp, (evals, skips)) = run(NewtonBypass::On);
+        assert!(evals > 0 && skips > 0, "evals={evals} skips={skips}");
         let opts = SolverOptions::default();
         for i in 0..x_ref.len() {
             let tol =
                 opts.reltol * x_ref[i].abs().max(x_byp[i].abs()) + opts.vntol.max(opts.abstol);
             assert!(
                 (x_ref[i] - x_byp[i]).abs() <= tol,
-                "unknown {i}: bypass root {} vs reference {} exceeds tolerance",
+                "unknown {i}: {} vs {}",
                 x_byp[i],
                 x_ref[i]
             );
         }
-    }
-
-    /// A NaN iterate must never replay (the negated-`<=` movement test).
-    #[test]
-    fn nan_iterate_never_bypasses() {
-        let c = mixed_board();
-        let layout = Layout::new(&c);
-        let mut m = SparseMatrix::new(layout.size);
-        reserve_pattern(&c, &layout, &mut m);
-        let n = layout.size;
-        let mut x: Vec<f64> = vec![0.4; n];
-        let state = ReactiveState::new(c.devices.len());
-        let opts = SolverOptions::default();
-        let coeffs =
-            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
-        let spdt = std::collections::HashMap::new();
-        let mut st = BypassState::build(&c, &layout);
-        st.begin_solve();
-        {
-            let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
-            m.clear_values();
-            let mut rhs = vec![0.0f64; n];
-            stamp_all_bypass(&cx, &mut st, &mut m, &mut rhs, true);
-        }
-        for v in x.iter_mut() {
-            *v = f64::NAN;
-        }
-        {
-            let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
-            m.clear_values();
-            let mut rhs = vec![0.0f64; n];
-            stamp_all_bypass(&cx, &mut st, &mut m, &mut rhs, false);
-        }
-        let (evals, skips) = st.counters();
-        assert_eq!(skips, 0, "a NaN iterate must not replay any cache");
-        assert_eq!(evals, 6);
     }
 }

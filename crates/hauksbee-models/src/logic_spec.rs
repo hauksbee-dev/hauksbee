@@ -1562,287 +1562,6 @@ outputs = ["q", "qb"]
 "qb" = 0
 "#;
 
-    #[test]
-    fn hc595_spec_validates() {
-        let logic = parse_logic(HC595);
-        let v = logic.validate().expect("595 spec is valid");
-        assert!(v.warnings.is_empty(), "no cycles in the 595");
-        assert_eq!(v.comb.len(), 9, "one parsed expr per output");
-        // Evaluation order is outputs-declaration order.
-        assert_eq!(v.comb[0].0, "qa");
-        assert_eq!(v.comb[8].0, "qh_serial");
-        // The tristate range expands over declaration order.
-        assert_eq!(
-            logic.expand_tristate_group("qa..qh").unwrap(),
-            vec!["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
-        );
-    }
-
-    #[test]
-    fn nor_latch_cycle_is_a_warning_not_an_error() {
-        let logic = parse_logic(NOR_LATCH);
-        let v = logic.validate().expect("latch spec is valid");
-        assert_eq!(v.warnings.len(), 1, "cycle warning raised");
-        assert!(v.cyclic_outputs.contains("q"));
-        assert!(v.cyclic_outputs.contains("qb"));
-    }
-
-    #[test]
-    fn expression_grammar_parses_gate_shapes() {
-        // 74HC02-style digit-led pin names and NOR.
-        let e = parse_logic_expr("!(1a | 1b)").unwrap();
-        assert_eq!(
-            e,
-            LogicExpr::Not(Box::new(LogicExpr::Or(
-                Box::new(LogicExpr::Name("1a".into())),
-                Box::new(LogicExpr::Name("1b".into()))
-            )))
-        );
-        // Precedence: ! > & > ^ > |.
-        let e = parse_logic_expr("a & b ^ c | d").unwrap();
-        assert_eq!(
-            e,
-            LogicExpr::Or(
-                Box::new(LogicExpr::Xor(
-                    Box::new(LogicExpr::And(
-                        Box::new(LogicExpr::Name("a".into())),
-                        Box::new(LogicExpr::Name("b".into()))
-                    )),
-                    Box::new(LogicExpr::Name("c".into()))
-                )),
-                Box::new(LogicExpr::Name("d".into()))
-            )
-        );
-        // && / || aliases, literals, bit refs.
-        assert_eq!(
-            parse_logic_expr("x && 1 || y[3]").unwrap(),
-            LogicExpr::Or(
-                Box::new(LogicExpr::And(
-                    Box::new(LogicExpr::Name("x".into())),
-                    Box::new(LogicExpr::Const(true))
-                )),
-                Box::new(LogicExpr::Bit("y".into(), 3))
-            )
-        );
-    }
-
-    #[test]
-    fn rejects_undeclared_name_in_comb() {
-        let mut logic = parse_logic(NOR_LATCH);
-        logic
-            .comb
-            .insert("q".into(), "!(set | qb | phantom)".into());
-        let e = logic.validate().unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::UndeclaredName { ref name, .. } if name == "phantom"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_register_used_as_scalar() {
-        let mut logic = parse_logic(HC595);
-        logic.comb.insert("qa".into(), "store".into());
-        let e = logic.validate().unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::RegisterAsScalar { ref register, .. } if register == "store"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_bit_index_out_of_range() {
-        let mut logic = parse_logic(HC595);
-        logic.comb.insert("qa".into(), "store[8]".into());
-        let e = logic.validate().unwrap_err();
-        assert!(
-            matches!(
-                e,
-                LogicSpecError::BitIndexOutOfRange {
-                    index: 8,
-                    bits: 8,
-                    ..
-                }
-            ),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_clock_pin_in_comb() {
-        let mut logic = parse_logic(HC595);
-        logic
-            .comb
-            .insert("qh_serial".into(), "srclk & shift[7]".into());
-        let e = logic.validate().unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::ClockAlsoComb { ref pin, .. } if pin == "srclk"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_unassigned_output() {
-        let mut logic = parse_logic(NOR_LATCH);
-        logic.outputs.push("q_extra".into());
-        let e = logic.validate().unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::UnassignedOutput { ref name } if name == "q_extra"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_tristate_without_declared_enable() {
-        let mut logic = parse_logic(HC595);
-        logic.tristate.insert(
-            "qa".into(),
-            TristateSpec {
-                enable: "nonexistent_oe".into(),
-                active: Level::Low,
-            },
-        );
-        let e = logic.validate().unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::TristateEnableUndeclared { ref enable, .. } if enable == "nonexistent_oe"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_reversed_tristate_range() {
-        let mut logic = parse_logic(HC595);
-        logic.tristate.insert(
-            "qh..qa".into(),
-            TristateSpec {
-                enable: "oe_n".into(),
-                active: Level::Low,
-            },
-        );
-        let e = logic.validate().unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::TristateRangeInvalid { .. }),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_register_wider_than_u64() {
-        let mut logic = parse_logic(HC595);
-        logic.registers[0].bits = 65;
-        let e = logic.validate().unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::RegisterTooWide { bits: 65, .. }),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_load_width_mismatch() {
-        let toml_src = r#"
-inputs  = ["pl_n", "clk", "a", "b"]
-outputs = ["qh"]
-[[register]]
-name = "reg"
-bits = 8
-clock = { pin = "clk", edge = "rising" }
-op = "shift_left"
-data_in = "a"
-load = { pin = "pl_n", active = "low", data = ["a", "b"] }
-[comb]
-"qh" = "reg[7]"
-"#;
-        let e = parse_logic(toml_src).validate().unwrap_err();
-        assert!(
-            matches!(
-                e,
-                LogicSpecError::LoadWidthMismatch {
-                    bits: 8,
-                    got: 2,
-                    ..
-                }
-            ),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_register_load_width_mismatch() {
-        let mut logic = parse_logic(HC595);
-        logic.registers[1].bits = 4;
-        // store[4..7] comb refs now also out of range; trim them so the
-        // data_in width check is what fires.
-        for k in ["qe", "qf", "qg", "qh"] {
-            logic.comb.insert(k.into(), "store[0]".into());
-        }
-        let e = logic.validate().unwrap_err();
-        assert!(
-            matches!(
-                e,
-                LogicSpecError::DataInWidthMismatch {
-                    bits: 4,
-                    from_bits: 8,
-                    ..
-                }
-            ),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn rejects_dead_register() {
-        let toml_src = r#"
-inputs  = ["d"]
-outputs = ["q"]
-[[register]]
-name = "ff"
-bits = 1
-[comb]
-"q" = "ff[0]"
-"#;
-        let e = parse_logic(toml_src).validate().unwrap_err();
-        assert!(matches!(e, LogicSpecError::DeadRegister { .. }), "got: {e}");
-    }
-
-    #[test]
-    fn accepts_74hc74_shape_with_two_resets() {
-        let toml_src = r#"
-inputs  = ["d", "clk", "pre_n", "clr_n"]
-outputs = ["q", "q_n"]
-[[register]]
-name = "ff"
-bits = 1
-clock = { pin = "clk", edge = "rising" }
-reset = [
-  { pin = "clr_n", active = "low", value = 0 },
-  { pin = "pre_n", active = "low", value = 1 },
-]
-op = "load"
-data_in = "d"
-[comb]
-"q" = "ff[0]"
-"q_n" = "!ff[0]"
-"#;
-        let logic = parse_logic(toml_src);
-        assert_eq!(
-            logic.registers[0].resets.len(),
-            2,
-            "both async controls parsed"
-        );
-        logic.validate().expect("74HC74 shape validates");
-    }
-
-    #[test]
-    fn duplicate_names_rejected_across_kinds() {
-        let mut logic = parse_logic(HC595);
-        logic.inputs.push("store".into());
-        let e = logic.validate().unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::DuplicateName { .. }),
-            "got: {e}"
-        );
-    }
-
     /// A 28C256-shaped parallel EEPROM: 32K x 8, bidirectional bus expressed
     /// as tri-stated outputs sampled by data_in, CE-gated WE-rising write.
     const EEPROM_28C256: &str = r#"
@@ -1885,164 +1604,256 @@ disable = [
 ]
 "#;
 
+    /// Mutate a parsed spec and return the validation error it produces.
+    fn err_after(src: &str, edit: impl FnOnce(&mut Logic)) -> LogicSpecError {
+        let mut logic = parse_logic(src);
+        edit(&mut logic);
+        logic.validate().unwrap_err()
+    }
+
+    fn mem_err(edit: impl FnOnce(&mut Logic)) -> LogicSpecError {
+        let mut logic = parse_logic(EEPROM_28C256);
+        edit(&mut logic);
+        logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err()
+    }
+
+    fn sdp(logic: &mut Logic) -> &mut SoftwareDataProtectionSpec {
+        logic.memories[0].software_data_protection.as_mut().unwrap()
+    }
+
+    #[test]
+    fn hc595_spec_validates_with_and_without_the_memory_feature() {
+        let logic = parse_logic(HC595);
+        let v = logic.validate().unwrap();
+        assert!(v.warnings.is_empty());
+        assert_eq!(v.comb.len(), 9);
+        assert_eq!(v.comb[0].0, "qa");
+        assert_eq!(v.comb[8].0, "qh_serial");
+        assert_eq!(
+            logic.expand_tristate_group("qa..qh").unwrap(),
+            vec!["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
+        );
+        logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap();
+    }
+
+    #[test]
+    fn nor_latch_cycle_is_a_warning_not_an_error() {
+        let v = parse_logic(NOR_LATCH).validate().unwrap();
+        assert_eq!(v.warnings.len(), 1);
+        assert!(v.cyclic_outputs.contains("q") && v.cyclic_outputs.contains("qb"));
+    }
+
+    #[test]
+    fn expression_grammar_parses_gate_shapes() {
+        use LogicExpr::*;
+        let name = |s: &str| Box::new(Name(s.into()));
+        assert_eq!(
+            parse_logic_expr("!(1a | 1b)").unwrap(),
+            Not(Box::new(Or(name("1a"), name("1b"))))
+        );
+        assert_eq!(
+            parse_logic_expr("a & b ^ c | d").unwrap(),
+            Or(
+                Box::new(Xor(Box::new(And(name("a"), name("b"))), name("c"))),
+                name("d")
+            )
+        );
+        assert_eq!(
+            parse_logic_expr("x && 1 || y[3]").unwrap(),
+            Or(
+                Box::new(And(name("x"), Box::new(Const(true)))),
+                Box::new(Bit("y".into(), 3))
+            )
+        );
+    }
+
+    #[test]
+    fn structural_rules_reject_the_right_defect() {
+        use LogicSpecError::*;
+        let e = err_after(NOR_LATCH, |l| {
+            l.comb.insert("q".into(), "!(set | qb | phantom)".into());
+        });
+        assert!(
+            matches!(e, UndeclaredName { ref name, .. } if name == "phantom"),
+            "{e}"
+        );
+
+        let e = err_after(HC595, |l| {
+            l.comb.insert("qa".into(), "store".into());
+        });
+        assert!(
+            matches!(e, RegisterAsScalar { ref register, .. } if register == "store"),
+            "{e}"
+        );
+
+        let e = err_after(HC595, |l| {
+            l.comb.insert("qa".into(), "store[8]".into());
+        });
+        assert!(
+            matches!(
+                e,
+                BitIndexOutOfRange {
+                    index: 8,
+                    bits: 8,
+                    ..
+                }
+            ),
+            "{e}"
+        );
+
+        let e = err_after(HC595, |l| {
+            l.comb.insert("qh_serial".into(), "srclk & shift[7]".into());
+        });
+        assert!(
+            matches!(e, ClockAlsoComb { ref pin, .. } if pin == "srclk"),
+            "{e}"
+        );
+
+        let e = err_after(NOR_LATCH, |l| l.outputs.push("q_extra".into()));
+        assert!(
+            matches!(e, UnassignedOutput { ref name } if name == "q_extra"),
+            "{e}"
+        );
+
+        let e = err_after(HC595, |l| l.inputs.push("store".into()));
+        assert!(matches!(e, DuplicateName { .. }), "{e}");
+
+        let e = err_after(HC595, |l| l.registers[0].bits = 65);
+        assert!(matches!(e, RegisterTooWide { bits: 65, .. }), "{e}");
+
+        let e = err_after(HC595, |l| {
+            l.registers[1].bits = 4;
+            for k in ["qe", "qf", "qg", "qh"] {
+                l.comb.insert(k.into(), "store[0]".into());
+            }
+        });
+        assert!(
+            matches!(
+                e,
+                DataInWidthMismatch {
+                    bits: 4,
+                    from_bits: 8,
+                    ..
+                }
+            ),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn tristate_rules() {
+        use LogicSpecError::*;
+        let e = err_after(HC595, |l| {
+            l.tristate.insert(
+                "qa".into(),
+                TristateSpec {
+                    enable: "nonexistent_oe".into(),
+                    active: Level::Low,
+                },
+            );
+        });
+        assert!(
+            matches!(e, TristateEnableUndeclared { ref enable, .. } if enable == "nonexistent_oe"),
+            "{e}"
+        );
+
+        let e = err_after(HC595, |l| {
+            l.tristate.insert(
+                "qh..qa".into(),
+                TristateSpec {
+                    enable: "oe_n".into(),
+                    active: Level::Low,
+                },
+            );
+        });
+        assert!(matches!(e, TristateRangeInvalid { .. }), "{e}");
+    }
+
+    #[test]
+    fn register_load_and_liveness_rules() {
+        let e = parse_logic(
+            r#"
+inputs  = ["pl_n", "clk", "a", "b"]
+outputs = ["qh"]
+[[register]]
+name = "reg"
+bits = 8
+clock = { pin = "clk", edge = "rising" }
+op = "shift_left"
+data_in = "a"
+load = { pin = "pl_n", active = "low", data = ["a", "b"] }
+[comb]
+"qh" = "reg[7]"
+"#,
+        )
+        .validate()
+        .unwrap_err();
+        assert!(
+            matches!(
+                e,
+                LogicSpecError::LoadWidthMismatch {
+                    bits: 8,
+                    got: 2,
+                    ..
+                }
+            ),
+            "{e}"
+        );
+
+        let e = parse_logic("inputs = [\"d\"]\noutputs = [\"q\"]\n[[register]]\nname = \"ff\"\nbits = 1\n[comb]\n\"q\" = \"ff[0]\"\n")
+            .validate()
+            .unwrap_err();
+        assert!(matches!(e, LogicSpecError::DeadRegister { .. }), "{e}");
+
+        let logic = parse_logic(
+            r#"
+inputs  = ["d", "clk", "pre_n", "clr_n"]
+outputs = ["q", "q_n"]
+[[register]]
+name = "ff"
+bits = 1
+clock = { pin = "clk", edge = "rising" }
+reset = [
+  { pin = "clr_n", active = "low", value = 0 },
+  { pin = "pre_n", active = "low", value = 1 },
+]
+op = "load"
+data_in = "d"
+[comb]
+"q" = "ff[0]"
+"q_n" = "!ff[0]"
+"#,
+        );
+        assert_eq!(logic.registers[0].resets.len(), 2);
+        logic.validate().expect("74HC74 shape validates");
+    }
+
     #[test]
     fn memory_spec_validates_only_under_the_memory_feature() {
         let logic = parse_logic(EEPROM_28C256);
-        // Plain validate (an engine that never declared memory support) must
-        // refuse loudly, never bind a part whose bus it will not drive.
         let e = logic.validate().unwrap_err();
         assert!(
             matches!(e, LogicSpecError::MemoryNotSupported { ref name } if name == "cell"),
-            "got: {e}"
+            "{e}"
         );
-        // A memory-capable engine passes the feature and gets the arrays.
+
         let v = logic
             .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .expect("28C256 shape validates under the memory feature");
+            .unwrap();
         assert_eq!(v.memories.len(), 1);
         assert_eq!(v.memories[0].words, 32768);
         assert_eq!(v.memories[0].data_out.len(), 8);
-        let sdp = v.memories[0]
-            .software_data_protection
-            .as_ref()
-            .expect("28C256 SDP declaration survives validation");
-        assert_eq!(sdp.enable.len(), 3);
-        assert_eq!(sdp.disable.len(), 6);
-        // The bus outputs are memory-driven, so no comb ASTs exist for them.
+        let sdp = v.memories[0].software_data_protection.as_ref().unwrap();
+        assert_eq!((sdp.enable.len(), sdp.disable.len()), (3, 6));
         assert!(v.comb.is_empty());
-    }
 
-    #[test]
-    fn software_data_protection_rejects_out_of_range_commands() {
-        let mut logic = parse_logic(EEPROM_28C256);
-        logic.memories[0]
-            .software_data_protection
-            .as_mut()
-            .unwrap()
-            .enable[0]
-            .address = 32768;
-        let e = logic
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::MemoryCommandAddressOutOfRange {
-                ref name,
-                sequence: "enable",
-                address: 32768,
-                words: 32768,
-            } if name == "cell"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn software_data_protection_rejects_values_wider_than_the_bus() {
-        let mut logic = parse_logic(EEPROM_28C256);
-        logic.memories[0]
-            .software_data_protection
-            .as_mut()
-            .unwrap()
-            .disable[5]
-            .value = 0x120;
-        let e = logic
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::MemoryCommandValueTooWide {
-                ref name,
-                sequence: "disable",
-                value: 0x120,
-                bits: 8,
-            } if name == "cell"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn software_data_protection_requires_a_writable_memory_and_both_sequences() {
-        let mut rom = parse_logic(EEPROM_28C256);
-        rom.memories[0].write = None;
-        rom.memories[0].data_in.clear();
-        let e = rom
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::MemoryProtectionWithoutWrite { ref name } if name == "cell"),
-            "got: {e}"
-        );
-
-        let mut empty = parse_logic(EEPROM_28C256);
-        empty.memories[0]
-            .software_data_protection
-            .as_mut()
-            .unwrap()
-            .disable
-            .clear();
-        let e = empty
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::MemoryCommandSequenceEmpty {
-                ref name,
-                sequence: "disable",
-            } if name == "cell"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn memory_page_size_must_be_an_aligned_power_of_two() {
-        for page_words in [0, 63, 65536] {
-            let mut logic = parse_logic(EEPROM_28C256);
-            logic.memories[0].page_words = Some(page_words);
-            let e = logic
-                .validate_with_features(&[Logic::FEATURE_MEMORY])
-                .unwrap_err();
-            assert!(
-                matches!(e, LogicSpecError::MemoryPageWordsInvalid {
-                    ref name,
-                    page_words: got,
-                    words: 32768,
-                } if name == "cell" && got == page_words),
-                "page_words={page_words}: got {e}"
-            );
-        }
-    }
-
-    #[test]
-    fn memory_page_timing_must_be_positive_and_have_a_page() {
-        for seconds in [0.0, -1.0, f64::NAN] {
-            let mut logic = parse_logic(EEPROM_28C256);
-            logic.memories[0].byte_load_timeout_s = Some(seconds);
-            let e = logic
-                .validate_with_features(&[Logic::FEATURE_MEMORY])
-                .unwrap_err();
-            assert!(
-                matches!(e, LogicSpecError::MemoryByteLoadTimeoutInvalid { ref name, .. }
-                    if name == "cell"),
-                "byte_load_timeout_s={seconds:?}: got {e}"
-            );
-        }
-
-        let mut no_page = parse_logic(EEPROM_28C256);
-        no_page.memories[0].page_words = None;
-        let e = no_page
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::MemoryPageTimingWithoutPage { ref name }
-                if name == "cell"),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn memory_structural_defects_beat_the_feature_gate() {
-        // A wrong address width errors as itself even WITHOUT the feature, so
-        // spec authors debug the real defect, not the gate.
-        let mut logic = parse_logic(EEPROM_28C256);
-        logic.memories[0].address.pop();
-        let e = logic.validate().unwrap_err();
+        let e = err_after(EEPROM_28C256, |l| {
+            l.memories[0].address.pop();
+        });
         assert!(
             matches!(
                 e,
@@ -2052,117 +1863,131 @@ disable = [
                     ..
                 }
             ),
-            "got: {e}"
+            "structural defects beat the feature gate: {e}"
         );
     }
 
     #[test]
-    fn memory_data_widths_must_match_word_bits() {
-        let mut logic = parse_logic(EEPROM_28C256);
-        logic.memories[0].data_out.pop();
-        let e = logic
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
+    fn software_data_protection_rules() {
+        use LogicSpecError::*;
+        let e = mem_err(|l| sdp(l).enable[0].address = 32768);
         assert!(
             matches!(
                 e,
-                LogicSpecError::MemoryDataWidthMismatch {
+                MemoryCommandAddressOutOfRange {
+                    sequence: "enable",
+                    address: 32768,
+                    words: 32768,
+                    ..
+                }
+            ),
+            "{e}"
+        );
+        let e = mem_err(|l| sdp(l).disable[5].value = 0x120);
+        assert!(
+            matches!(
+                e,
+                MemoryCommandValueTooWide {
+                    sequence: "disable",
+                    value: 0x120,
+                    bits: 8,
+                    ..
+                }
+            ),
+            "{e}"
+        );
+        let e = mem_err(|l| {
+            l.memories[0].write = None;
+            l.memories[0].data_in.clear();
+        });
+        assert!(matches!(e, MemoryProtectionWithoutWrite { .. }), "{e}");
+        let e = mem_err(|l| sdp(l).disable.clear());
+        assert!(
+            matches!(
+                e,
+                MemoryCommandSequenceEmpty {
+                    sequence: "disable",
+                    ..
+                }
+            ),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn memory_page_and_timing_rules() {
+        use LogicSpecError::*;
+        for page_words in [0, 63, 65536] {
+            let e = mem_err(|l| l.memories[0].page_words = Some(page_words));
+            assert!(
+                matches!(e, MemoryPageWordsInvalid { page_words: got, words: 32768, .. } if got == page_words),
+                "page_words={page_words}: {e}"
+            );
+        }
+        for seconds in [0.0, -1.0, f64::NAN] {
+            let e = mem_err(|l| l.memories[0].byte_load_timeout_s = Some(seconds));
+            assert!(
+                matches!(e, MemoryByteLoadTimeoutInvalid { .. }),
+                "{seconds:?}: {e}"
+            );
+        }
+        let e = mem_err(|l| l.memories[0].page_words = None);
+        assert!(matches!(e, MemoryPageTimingWithoutPage { .. }), "{e}");
+    }
+
+    #[test]
+    fn memory_bus_and_namespace_rules() {
+        use LogicSpecError::*;
+        let e = mem_err(|l| {
+            l.memories[0].data_out.pop();
+        });
+        assert!(
+            matches!(
+                e,
+                MemoryDataWidthMismatch {
                     field: "data_out",
                     bits: 8,
                     got: 7,
                     ..
                 }
             ),
-            "got: {e}"
+            "{e}"
         );
-    }
 
-    #[test]
-    fn memory_read_gates_must_name_declared_inputs() {
-        let mut logic = parse_logic(EEPROM_28C256);
-        logic.memories[0].read_gates[1].pin = "missing_oe".into();
-        let e = logic
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
+        let e = mem_err(|l| l.memories[0].read_gates[1].pin = "missing_oe".into());
         assert!(
-            matches!(e, LogicSpecError::UndeclaredPin { ref context, ref pin }
-                if context == "memory 'cell' read gate" && pin == "missing_oe"),
-            "got: {e}"
+            matches!(e, UndeclaredPin { ref pin, .. } if pin == "missing_oe"),
+            "{e}"
         );
-    }
 
-    #[test]
-    fn rom_shape_forbids_data_in_without_write() {
-        let mut logic = parse_logic(EEPROM_28C256);
-        logic.memories[0].write = None;
-        let e = logic
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::MemoryDataInWithoutWrite { .. }),
-            "got: {e}"
-        );
-        // Dropping data_in too makes it a legal ROM.
+        let e = mem_err(|l| l.memories[0].write = None);
+        assert!(matches!(e, MemoryDataInWithoutWrite { .. }), "{e}");
         let mut rom = parse_logic(EEPROM_28C256);
         rom.memories[0].write = None;
         rom.memories[0].data_in.clear();
         rom.memories[0].software_data_protection = None;
         rom.validate_with_features(&[Logic::FEATURE_MEMORY])
             .expect("27C-style ROM shape validates");
-    }
 
-    #[test]
-    fn memory_output_cannot_also_be_comb_assigned() {
-        let mut logic = parse_logic(EEPROM_28C256);
-        logic.comb.insert("io0".into(), "a0".into());
-        let e = logic
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
+        let e = mem_err(|l| {
+            l.comb.insert("io0".into(), "a0".into());
+        });
         assert!(
-            matches!(e, LogicSpecError::MemoryOutputAlsoComb { ref name } if name == "io0"),
-            "got: {e}"
+            matches!(e, MemoryOutputAlsoComb { ref name } if name == "io0"),
+            "{e}"
         );
-    }
 
-    #[test]
-    fn memory_shares_the_one_namespace() {
-        let mut logic = parse_logic(EEPROM_28C256);
-        logic.memories[0].name = "io0".into();
-        let e = logic
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::DuplicateName { .. }),
-            "got: {e}"
-        );
-    }
+        let e = mem_err(|l| l.memories[0].name = "io0".into());
+        assert!(matches!(e, DuplicateName { .. }), "{e}");
 
-    #[test]
-    fn memory_size_cap_refuses_absurd_allocations() {
-        let mut logic = parse_logic(EEPROM_28C256);
-        logic.memories[0].words = 1 << 40;
-        logic.memories[0].address = (0..40).map(|i| format!("a{i}")).collect();
-        logic.inputs = (0..40)
-            .map(|i| format!("a{i}"))
-            .chain(["ce_n".into(), "oe_n".into(), "we_n".into()])
-            .collect();
-        let e = logic
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .unwrap_err();
-        assert!(
-            matches!(e, LogicSpecError::MemoryTooLarge { .. }),
-            "got: {e}"
-        );
-    }
-
-    #[test]
-    fn memory_ignores_do_not_regress_existing_specs() {
-        // The HC595 spec has no memory: it must validate identically with and
-        // without the feature declared.
-        let logic = parse_logic(HC595);
-        logic.validate().expect("plain validate unaffected");
-        logic
-            .validate_with_features(&[Logic::FEATURE_MEMORY])
-            .expect("feature declaration is not a requirement");
+        let e = mem_err(|l| {
+            l.memories[0].words = 1 << 40;
+            l.memories[0].address = (0..40).map(|i| format!("a{i}")).collect();
+            l.inputs = (0..40)
+                .map(|i| format!("a{i}"))
+                .chain(["ce_n".into(), "oe_n".into(), "we_n".into()])
+                .collect();
+        });
+        assert!(matches!(e, MemoryTooLarge { .. }), "{e}");
     }
 }

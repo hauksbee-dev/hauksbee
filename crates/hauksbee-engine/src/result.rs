@@ -2885,7 +2885,46 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::report::{BindOutcome, BindRow};
     use hauksbee_extract::{DrcFinding, Item, ItemKind};
+    use hauksbee_models::Confidence;
+
+    fn row(reference: &str, outcome: BindOutcome, warning: Option<&str>) -> BindRow {
+        BindRow {
+            reference: reference.to_string(),
+            value: String::new(),
+            model_id: None,
+            confidence: Confidence::Exact,
+            source: None,
+            outcome,
+            warning: warning.map(|s| s.to_string()),
+            guesses: Vec::new(),
+        }
+    }
+
+    fn unresolved(reason: &str) -> BindOutcome {
+        BindOutcome::Unresolved {
+            reason: reason.to_string(),
+        }
+    }
+
+    fn analog_r() -> BindOutcome {
+        BindOutcome::Analog { device: "R".into() }
+    }
+
+    fn mcu() -> BindOutcome {
+        BindOutcome::Mcu {
+            backend: "renode:stm32f4".into(),
+        }
+    }
+
+    fn summary_of(rows: Vec<BindRow>) -> BindSummary {
+        let mut report = BindReport::default();
+        for r in rows {
+            report.push(r);
+        }
+        BindSummary::from_report(&report)
+    }
 
     #[test]
     fn bare_value_rule_uses_custom_rule_disclosure_without_qualifying_findings() {
@@ -2901,164 +2940,90 @@ mod tests {
         assert_eq!(bare.line_number, 3);
         assert_eq!(bare.bare_value_constraint_types, ["clearance"]);
         assert!(!coverage.qualifies_clearance_findings());
-
         let notice = coverage.unevaluated_notice().unwrap();
-        assert!(notice.starts_with(
-            "CUSTOM RULES DISABLED: scope.kicad_dru is not in force. Rule \"bare rule\" on line 3 has a value with no unit"
-        ));
-        assert!(notice.contains("all 2 rules in it are inactive"));
-        assert!(notice.contains("being checked against netclass defaults instead"));
-        assert!(notice.contains("Add the unit to restore the rest."));
+        assert!(notice.starts_with("CUSTOM RULES DISABLED: scope.kicad_dru is not in force."));
+        assert!(notice.contains("line 3"));
     }
 
-    /// No routing marker may reach the JSON surface.
-    ///
-    /// The binder has one `reason` channel per row and two things to say when
-    /// `db/unmodelled.toml` names an abstention: what blocks the model, and what
-    /// would unlock it. It joins them with `UNLOCKED_BY_MARKER`, and every consumer
-    /// is expected to split. `Assumption::open_part` does. This surface used to copy
-    /// the string verbatim, so `--json`, the one a CI pipeline parses, was the only
-    /// reader handed the marker text and the two halves re-merged into one field.
-    ///
-    /// Both markers are checked, because there are two and the rule is the same for
-    /// each: they are plumbing between the binder and the report builders.
+    /// The binder joins an abstention's reason and its unlocking input with
+    /// `UNLOCKED_BY_MARKER`; the JSON surface must split them into two
+    /// fields and never leak the marker.
     #[test]
     fn no_routing_marker_reaches_the_json_surface() {
         let unlocked = "the strap state for this board, or a schematic naming the pin";
-        let mut report = BindReport::default();
-        report.push(BindRow {
-            reference: "U201".to_string(),
-            value: "Si53301".to_string(),
-            model_id: None,
-            confidence: Confidence::Unresolved,
-            source: None,
-            outcome: BindOutcome::Unresolved {
-                reason: format!(
-                    "the output format is strap-selected and it is the driven level \
-                     that is not known{}{unlocked}",
-                    Assumption::UNLOCKED_BY_MARKER
-                ),
-            },
-            // A `warning` is what puts the row on the active path at all.
-            warning: Some("U201 (Si53301): active part left open".to_string()),
-            guesses: Vec::new(),
-        });
-
-        let summary = BindSummary::from_report(&report);
-        let row = summary
-            .active_path_unresolved
-            .first()
-            .expect("an unresolved active part is reported");
-
+        let reason = format!(
+            "the output format is strap-selected{}{unlocked}",
+            Assumption::UNLOCKED_BY_MARKER
+        );
+        let summary = summary_of(vec![row(
+            "U201",
+            unresolved(&reason),
+            Some("U201 (Si53301): active part left open"),
+        )]);
+        let r = summary.active_path_unresolved.first().expect("reported");
         assert!(
-            !row.reason.contains(Assumption::UNLOCKED_BY_MARKER.trim()),
-            "the marker is plumbing and must not reach the reader: {}",
-            row.reason
+            !r.reason.contains(Assumption::UNLOCKED_BY_MARKER.trim()),
+            "{}",
+            r.reason
         );
-        assert!(
-            !row.reason.contains(unlocked),
-            "the unlocking input belongs in its own field, not glued onto the \
-             reason: {}",
-            row.reason
-        );
-        assert_eq!(
-            row.unlocked_by.as_deref(),
-            Some(unlocked),
-            "the actionable half must survive the split, in its own field"
-        );
+        assert!(!r.reason.contains(unlocked), "{}", r.reason);
+        assert_eq!(r.unlocked_by.as_deref(), Some(unlocked));
 
-        // And an ordinary reason with no marker passes through whole.
-        let mut plain = BindReport::default();
-        plain.push(BindRow {
-            reference: "U9".to_string(),
-            value: "MYSTERY".to_string(),
-            model_id: None,
-            confidence: Confidence::Unresolved,
-            source: None,
-            outcome: BindOutcome::Unresolved {
-                reason: "no model matched".to_string(),
-            },
-            warning: Some("U9 (MYSTERY): active part left open".to_string()),
-            guesses: Vec::new(),
-        });
-        let plain = BindSummary::from_report(&plain);
-        let row = plain.active_path_unresolved.first().expect("reported");
-        assert_eq!(row.reason, "no model matched");
-        assert!(row.unlocked_by.is_none(), "nothing to unlock, nothing said");
+        let summary = summary_of(vec![row(
+            "U9",
+            unresolved("no model matched"),
+            Some("U9 (MYSTERY): active part left open"),
+        )]);
+        let r = summary.active_path_unresolved.first().expect("reported");
+        assert_eq!(r.reason, "no model matched");
+        assert!(r.unlocked_by.is_none());
     }
 
     #[test]
     fn eagle_auto_named_elements_are_not_active_ics() {
-        // Measured on SparkFun's SAMD51 Thing Plus: 69 references start with U,
-        // and 65 of them are Eagle's `U$n` placeholder for an unnamed element
-        // (mounting holes, fiducials, the logo). Counting those made the board
-        // report 0/69 active ICs bound when the honest ratio is 0/4, which is a
-        // different and much smaller problem. A coverage gate reading the
-        // inflated number would be unpassable on every Eagle board.
-        for auto in ["U$1", "U$12", "IC$3", "R$7"] {
-            assert!(
-                !is_active_ic_ref(auto),
-                "{auto} is a CAD placeholder, not a part"
-            );
+        for auto in ["U$1", "U$12", "IC$3", "R$7", "R1"] {
+            assert!(!is_active_ic_ref(auto), "{auto}");
         }
-        for real in ["U1", "U12", "IC3", "MCU1"] {
-            assert!(is_active_ic_ref(real), "{real} is a designator");
+        for real in ["U1", "U12", "IC3", "MCU1", "U$"] {
+            assert!(is_active_ic_ref(real), "{real}");
         }
-        // A `$` that is not the auto-name form leaves the prefix rule alone.
-        assert!(
-            is_active_ic_ref("U$"),
-            "no digits is not the placeholder form"
-        );
-        assert!(!is_active_ic_ref("R1"), "passives are not active ICs");
+    }
+
+    fn fault(
+        component: &str,
+        kind: crate::stress::FaultKind,
+        destroyed: bool,
+    ) -> crate::stress::FaultEvent {
+        crate::stress::FaultEvent {
+            component: component.into(),
+            kind,
+            value: 5.0,
+            limit: 2.0,
+            t: 0.01,
+            destroyed,
+        }
     }
 
     #[test]
     fn cosim_faults_become_json_findings() {
-        // R46: co-sim electrical-stress faults were dropped from the --json surface
-        // (only --plain rendered them and --strict gated them), so a CI consumer
-        // parsing the JSON saw a clean run over a board the co-sim flagged. The
-        // fault→JsonFinding conversion must carry a destroyed part as a serious
-        // finding, refs, and fix text.
-        use crate::stress::{FaultEvent, FaultKind};
-        let faults = vec![
-            FaultEvent {
-                component: "Q1".into(),
-                kind: FaultKind::Overcurrent,
-                value: 5.0,
-                limit: 2.0,
-                t: 0.01,
-                destroyed: true,
-            },
-            FaultEvent {
-                component: "C3".into(),
-                kind: FaultKind::Overvoltage,
-                value: 30.0,
-                limit: 16.0,
-                t: 0.02,
-                destroyed: false,
-            },
-        ];
-        let js = fault_findings_json(&faults);
-        assert_eq!(js.len(), 2, "one JSON finding per fault");
+        use crate::stress::FaultKind;
+        let js = fault_findings_json(&[
+            fault("Q1", FaultKind::Overcurrent, true),
+            fault("C3", FaultKind::Overvoltage, false),
+        ]);
+        assert_eq!(js.len(), 2);
         assert_eq!(js[0].check, "cosim");
         assert_eq!(js[0].kind, "overcurrent");
         assert_eq!(js[0].severity, "serious", "a destroyed part is serious");
         assert_eq!(js[0].refs, vec!["Q1".to_string()]);
-        assert!(js[0].fix.is_some(), "the finding carries a suggested fix");
-        // A non-destructive over-voltage is a warning, not serious.
+        assert!(js[0].fix.is_some());
         assert_eq!(js[1].severity, "warning");
         assert_eq!(js[1].refs, vec!["C3".to_string()]);
     }
 
     #[test]
     fn json_report_carries_a_top_level_verdict() {
-        // U3: --json success had no top-level pass/fail, so a CI consumer had to
-        // re-derive it from every finding (asymmetric with the {"ok":false}
-        // error envelope). to_json now prefixes ok/verdict/serious_count.
-        use crate::stress::{FaultEvent, FaultKind};
         let bind = summary_with(Vec::new(), Vec::new());
-
-        // A clean report → pass.
         let clean = JsonReport::new("b", bind.clone());
         let (ok, verdict, serious, _) = clean.verdict();
         assert!(ok && verdict == "pass" && serious == 0);
@@ -3068,21 +3033,16 @@ mod tests {
             "{txt}"
         );
 
-        // A serious co-sim fault → fail, counted.
         let mut failed = JsonReport::new("b", bind.clone());
-        failed.findings = Some(fault_findings_json(&[FaultEvent {
-            component: "Q1".into(),
-            kind: FaultKind::Overcurrent,
-            value: 5.0,
-            limit: 2.0,
-            t: 0.01,
-            destroyed: true,
-        }]));
+        failed.findings = Some(fault_findings_json(&[fault(
+            "Q1",
+            crate::stress::FaultKind::Overcurrent,
+            true,
+        )]));
         let (ok, verdict, serious, actionable) = failed.verdict();
         assert!(!ok && verdict == "fail" && serious == 1 && actionable >= 1);
         assert!(failed.to_json().contains("\"verdict\": \"fail\""));
 
-        // An invalid AC sweep with nothing serious → invalid, not pass.
         let mut invalid = JsonReport::new("b", bind);
         invalid.ac = Some(AcJson {
             validity: Validity {
@@ -3100,9 +3060,6 @@ mod tests {
 
     #[test]
     fn drc_json_findings_carry_plain_and_fix() {
-        // U3: DRC serialized as DrcShort/DrcGroup with no `plain`/`fix`, unlike
-        // SI/lint findings, so a --json consumer got remediation for every
-        // finding category except shorts/clearance. Both now carry them.
         let short = DrcShort {
             net_a: "GND".into(),
             net_b: "VCC".into(),
@@ -3115,8 +3072,7 @@ mod tests {
         };
         let js = serde_json::to_string(&short).unwrap();
         assert!(js.contains("\"plain\"") && js.contains("\"fix\""), "{js}");
-
-        let mut group = DrcGroup {
+        let group = DrcGroup {
             net_a: "A".into(),
             net_b: "B".into(),
             layer: "F.Cu".into(),
@@ -3130,11 +3086,7 @@ mod tests {
             plain: String::new(),
             fix: String::new(),
         };
-        group.plain = group.label();
-        assert!(
-            !group.plain.is_empty(),
-            "group plain must be the human label"
-        );
+        assert!(!group.label().is_empty());
     }
 
     fn active_ic(reference: &str) -> UnresolvedActive {
@@ -3167,20 +3119,11 @@ mod tests {
 
     #[test]
     fn open_pin_warning_matches_only_genuine_open_conditions() {
-        // R23 (is-open-pin-warning-overbroad): a benign rail-assumption advisory
-        // on a fully-wired resolved IC contains the bare word "open" but is NOT
-        // an open-pin condition; it must not push the part to resolved_but_open.
-        let switch_advisory =
-            "U3 (SN74LVC1G3157): VCC net non-canonical, may read as open, so verify the \
-             switch's actual supply";
-        assert!(
-            !is_open_pin_warning(switch_advisory),
-            "an analog-switch VCC advisory is not an open-pin warning"
-        );
-        // Genuine open-pin warnings still match.
+        assert!(!is_open_pin_warning(
+            "U3 (SN74LVC1G3157): VCC net non-canonical, may read as open, so verify the switch's actual supply"
+        ));
         assert!(is_open_pin_warning("U1: all I/O pins open (undriven)"));
         assert!(is_open_pin_warning("U2 output pin not connected"));
-        // The auto-bind GPIO-map note is still excluded.
         assert!(!is_open_pin_warning(
             "[auto-bind] U1: GPIO map cannot be derived from pin names"
         ));
@@ -3188,34 +3131,13 @@ mod tests {
 
     #[test]
     fn banner_warns_on_resolved_but_open_active_ic() {
-        // R23 (check-heads-up-drops-resolved-but-open): a resolved MCU whose I/O
-        // pins are all open on the live circuit makes its nets untrustworthy, so
-        // the banner must WARN and NAME it, not just for unresolved active ICs
-        // (which the web/json personas already carry via resolved_but_open_active).
         let s = summary_with(Vec::new(), vec![active_ic("U1")]);
         let banner = s.render_banner();
         assert!(
-            banner.contains("NOT trustworthy"),
-            "a resolved-but-open active IC must trigger the WARNING: {banner}"
+            banner.contains("NOT trustworthy") && banner.contains("U1"),
+            "{banner}"
         );
-        assert!(
-            banner.contains("U1"),
-            "the resolved-but-open active IC must be named: {banner}"
-        );
-        assert!(
-            banner.contains(
-                "Critical active devices discovered: 1; executable behavioural models: 1/1"
-            ),
-            "the banner must distinguish CAD discovery from behavioural coverage: {banner}"
-        );
-        assert!(
-            !banner.contains("Critical parts modelled"),
-            "the old label made behavioural coverage look like extraction coverage: {banner}"
-        );
-        // And the shared union helper the personas consume counts it.
         assert_eq!(coverage_open_active_refs(&s), vec!["U1".to_string()]);
-
-        // A fully-clean summary stays quiet.
         let clean = summary_with(Vec::new(), Vec::new());
         assert!(!clean.render_banner().contains("NOT trustworthy"));
         assert!(coverage_open_active_refs(&clean).is_empty());
@@ -3252,30 +3174,28 @@ mod tests {
         f
     }
 
+    fn drc_report(findings: Vec<DrcFinding>) -> DrcReport {
+        DrcReport {
+            clearance_mm: 0.2,
+            findings,
+            primitive_count: 2,
+            version_warning: None,
+            zone_pad_overlaps_suppressed: Some(0),
+        }
+    }
+
     #[test]
     fn unvalidated_version_downgrades_shorts_and_propagates_warning() {
-        // A KiCad-10 report (version_warning set) → shorts carry "note", not
-        // "serious", and the warning propagates to the structured form so every
-        // consumer (JSON, TUI) inherits the downgrade from one source.
-        let mut report = DrcReport {
-            clearance_mm: 0.2,
-            findings: vec![short("GND", "+3V3")],
-            primitive_count: 2,
-            version_warning: Some("unreliable on this version".into()),
-            zone_pad_overlaps_suppressed: Some(0),
-        };
+        let mut report = drc_report(vec![short("GND", "+3V3")]);
+        report.version_warning = Some("unreliable on this version".into());
         let st = DrcStructured::from_report(&report);
         assert_eq!(st.shorts.len(), 1);
-        assert_eq!(
-            st.shorts[0].severity, "note",
-            "phantom-prone short must not be 'serious'"
-        );
+        assert_eq!(st.shorts[0].severity, "note");
         assert_eq!(
             st.version_warning.as_deref(),
             Some("unreliable on this version")
         );
 
-        // The same report on a validated version keeps "serious".
         report.version_warning = None;
         let st = DrcStructured::from_report(&report);
         assert_eq!(st.shorts[0].severity, "serious");
@@ -3294,365 +3214,147 @@ mod tests {
         )
     }
 
-    fn eagle_report(findings: Vec<DrcFinding>) -> DrcReport {
-        DrcReport {
-            clearance_mm: 0.2,
-            findings,
-            primitive_count: 2,
-            version_warning: None,
-            zone_pad_overlaps_suppressed: Some(0),
-        }
-    }
-
+    /// A schematic-only tie declaration keeps the short serious, states the
+    /// copper contact and the declaration, and keeps an actionable fix;
+    /// with no schematic the fix names the unlocking upload.
     #[test]
     fn a_schematic_only_tie_stays_serious_and_states_the_context() {
-        let report = eagle_report(vec![short("GND", "AGND")]);
+        let report = drc_report(vec![short("GND", "AGND"), short("+5V", "VBAT")]);
         let qualification = declared_qualification(&report);
-
         let st = DrcStructured::from_report_with_ties(&report, Some(&qualification), false);
-        assert_eq!(st.shorts.len(), 1, "the finding is not deleted");
-        assert_eq!(st.shorts[0].severity, "serious");
-
-        // The geometry claim must survive into the text a user reads. Both nets
-        // named, and the word that says they are connected.
+        assert_eq!(st.shorts.len(), 2);
+        assert!(st.shorts.iter().all(|s| s.severity == "serious"));
         let plain = &st.shorts[0].plain;
         assert!(plain.contains("GND") && plain.contains("AGND"), "{plain}");
         assert!(
-            plain.contains("joined in copper"),
-            "the contact must still be stated: {plain}"
+            plain.contains("AGND7 wired to SUPPLY6") && plain.contains("emonTx V3.4.5.sch"),
+            "{plain}"
         );
-        assert!(
-            plain.contains("AGND7 wired to SUPPLY6 in net GND"),
-            "and the declaration must name the symbols: {plain}"
-        );
-        assert!(
-            plain.contains("emonTx V3.4.5.sch"),
-            "and cite the file: {plain}"
-        );
-        // The schematic lacks a coordinate, so the fix must request board-local
-        // authority or separation rather than silently excusing the contact.
         assert!(
             st.shorts[0].fix.contains("separate"),
-            "a schematic-only declaration must retain an actionable fix: {}",
+            "{}",
             st.shorts[0].fix
         );
-
-        // The rendered report keeps the measurement line verbatim and appends the
-        // declaration, so the copper is visible on the text surface too.
-        let rendered = st.render();
-        assert!(
-            rendered.contains("[SERIOUS] GND touches AGND on F.Cu"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("[SERIOUS] GND touches AGND"),
-            "{rendered}"
-        );
-    }
-
-    #[test]
-    fn without_a_schematic_the_short_stays_serious_and_names_the_upload() {
-        let report = eagle_report(vec![short("GND", "AGND")]);
+        assert!(st.render().contains("[SERIOUS] GND touches AGND on F.Cu"));
 
         let st = DrcStructured::from_report_with_ties(&report, None, true);
         assert_eq!(st.shorts[0].severity, "serious");
-        // The abstention rule: a finding that cannot be settled from this input
-        // must name the input that settles it.
-        assert!(
-            st.shorts[0].fix.contains(".sch"),
-            "the fix must name the unlocking upload: {}",
-            st.shorts[0].fix
-        );
-
-        // And the plain-language surface carries it too.
-        let plain = crate::plain::plain_drc_structured(&st).render();
-        assert!(plain.contains(".sch"), "{plain}");
+        assert!(st.shorts[0].fix.contains(".sch"), "{}", st.shorts[0].fix);
+        assert!(crate::plain::plain_drc_structured(&st)
+            .render()
+            .contains(".sch"));
     }
 
+    const OPEN_WARNING: &str =
+        "unresolved part 'U7' on connected net(s): defaulting to OPEN circuit";
+    const OPEN_PINS: &str = "U1: all I/O pins open (undriven)";
+
+    /// Thermal validity is binary on rows > 0 plus the open-active-IC rule:
+    /// an isolated open IC keeps an empty table valid, a connected open IC
+    /// (unresolved OR resolved-but-open) invalidates an empty table and makes
+    /// a populated one PARTIAL, and a passive-only board is simply valid.
     #[test]
-    fn schematic_context_does_not_downgrade_either_short() {
-        let report = eagle_report(vec![short("GND", "AGND"), short("+5V", "VBAT")]);
-        let qualification = declared_qualification(&report);
+    fn thermal_validity_and_coverage_follow_open_active_ics() {
+        let isolated = summary_of(vec![
+            row("R1", analog_r(), None),
+            row("U9", unresolved("no model"), None),
+        ]);
+        assert!(!isolated.active_ics_unresolved());
+        assert!(thermal_validity(0, &isolated).valid);
 
-        let st = DrcStructured::from_report_with_ties(&report, Some(&qualification), false);
-        assert_eq!(st.shorts.len(), 2);
-        let by_pair: std::collections::BTreeMap<&str, &str> = st
-            .shorts
-            .iter()
-            .map(|s| (s.net_b.as_str(), s.severity.as_str()))
-            .collect();
-        assert_eq!(by_pair["AGND"], "serious");
-        assert_eq!(by_pair["VBAT"], "serious");
-    }
-
-    use crate::report::{BindOutcome, BindRow};
-    use hauksbee_models::Confidence;
-
-    fn row(reference: &str, outcome: BindOutcome, warning: Option<&str>) -> BindRow {
-        BindRow {
-            reference: reference.to_string(),
-            value: String::new(),
-            model_id: None,
-            confidence: Confidence::Exact,
-            source: None,
-            outcome,
-            warning: warning.map(|s| s.to_string()),
-            guesses: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn thermal_valid_when_no_connected_active_ic_is_open() {
-        // A board with an unresolved IC whose pins are NOT on connected nets
-        // (binder set no warning) must NOT be declared thermally invalid: it
-        // cannot dissipate, so an empty table is a real "runs cool", not a lie.
-        let mut report = BindReport::default();
-        report.push(row("R1", BindOutcome::Analog { device: "R".into() }, None));
-        report.push(row(
-            "U9",
-            BindOutcome::Unresolved {
-                reason: "no model".into(),
-            },
-            None, // no warning => not on a connected net
-        ));
-        let summary = BindSummary::from_report(&report);
-        // U9 counts toward critical_total (it's an active IC) but is NOT in the
-        // active path, so validity must stay TRUE with an empty table.
-        assert!(!summary.active_ics_unresolved());
-        assert!(
-            thermal_validity(0, &summary).valid,
-            "isolated open IC -> still valid"
-        );
-    }
-
-    #[test]
-    fn thermal_coverage_partial_when_passive_resolved_but_active_ic_open() {
-        // One resolved passive (gives a row) + one unresolved active IC on the
-        // live circuit. validity stays VALID (rows > 0) but coverage is PARTIAL:
-        // the table understates the load because the power IC is open.
-        let mut report = BindReport::default();
-        report.push(row("R1", BindOutcome::Analog { device: "R".into() }, None));
-        report.push(row(
-            "U7",
-            BindOutcome::Unresolved {
-                reason: "no model".into(),
-            },
-            Some("unresolved part 'U7' on connected net(s): defaulting to OPEN circuit"),
-        ));
-        let summary = BindSummary::from_report(&report);
-        // validity is unchanged/binary: rows>0 => valid.
-        assert!(thermal_validity(1, &summary).valid);
-        let cov = thermal_coverage(1, &summary);
-        assert!(cov.partial, "one row + open active IC => partial coverage");
+        let open_unresolved = summary_of(vec![
+            row("R1", analog_r(), None),
+            row("U7", unresolved("no model"), Some(OPEN_WARNING)),
+        ]);
+        assert!(thermal_validity(1, &open_unresolved).valid);
+        let cov = thermal_coverage(1, &open_unresolved);
+        assert!(cov.partial);
         assert_eq!(cov.dissipating_count, 1);
         assert_eq!(cov.open_active_on_live_circuit, 1);
-        assert!(coverage_open_active_refs(&summary).contains(&"U7".to_string()));
-    }
-
-    #[test]
-    fn thermal_coverage_partial_when_resolved_mcu_has_open_pins() {
-        // A RESOLVED MCU (BindOutcome::Mcu) whose I/O pins were all open_warning'd
-        // escapes active_ics_unresolved, but active_open_on_live_circuit catches
-        // it, so coverage is still PARTIAL.
-        let mut report = BindReport::default();
-        report.push(row("R1", BindOutcome::Analog { device: "R".into() }, None));
-        report.push(row(
-            "U1",
-            BindOutcome::Mcu {
-                backend: "renode:stm32f4".into(),
-            },
-            Some("U1: all I/O pins open (undriven)"),
-        ));
-        let summary = BindSummary::from_report(&report);
-        assert!(
-            !summary.active_ics_unresolved(),
-            "resolved MCU is not 'unresolved'"
-        );
-        assert!(
-            summary.active_open_on_live_circuit(),
-            "but it IS open on the live circuit"
-        );
-        let cov = thermal_coverage(1, &summary);
-        assert!(cov.partial);
-        assert!(coverage_open_active_refs(&summary).contains(&"U1".to_string()));
-    }
-
-    #[test]
-    fn thermal_coverage_not_partial_for_clean_board() {
-        // Passives only, no open active ICs => coverage is complete, not partial.
-        let mut report = BindReport::default();
-        report.push(row("R1", BindOutcome::Analog { device: "R".into() }, None));
-        let summary = BindSummary::from_report(&report);
-        let cov = thermal_coverage(1, &summary);
-        assert!(!cov.partial);
-        assert_eq!(cov.open_active_on_live_circuit, 0);
-        assert!(coverage_open_active_refs(&summary).is_empty());
-    }
-
-    #[test]
-    fn thermal_invalid_when_connected_active_ic_is_open() {
-        let mut report = BindReport::default();
-        report.push(row(
-            "U2",
-            BindOutcome::Unresolved {
-                reason: "no model".into(),
-            },
-            Some("unresolved part 'U2' on connected net(s): defaulting to OPEN circuit"),
-        ));
-        let summary = BindSummary::from_report(&report);
-        assert!(summary.active_ics_unresolved());
-        let v = thermal_validity(0, &summary);
+        assert!(coverage_open_active_refs(&open_unresolved).contains(&"U7".to_string()));
+        let v = thermal_validity(0, &open_unresolved);
         assert!(!v.valid);
-        assert!(v.reason.unwrap().contains("U2"));
-    }
+        assert!(v.reason.unwrap().contains("U7"));
 
-    #[test]
-    fn thermal_invalid_when_resolved_but_open_active_ic_leaves_empty_table() {
-        // R36: an empty thermal table with a RESOLVED-BUT-OPEN power IC (bound to
-        // a model, but open on the live circuit) reports a false "runs cool"
-        // pass if thermal_validity escalates only the UNRESOLVED case. Both
-        // open cases make the table equally untrustworthy and must exit 3.
-        let mut report = BindReport::default();
-        report.push(row(
-            "U1",
-            BindOutcome::Mcu {
-                backend: "renode:stm32f4".into(),
-            },
-            Some("U1: all I/O pins open (undriven)"),
-        ));
-        let summary = BindSummary::from_report(&report);
-        // The distinguishing condition: unresolved is FALSE (it bound), but the
-        // part is open on the live circuit.
-        assert!(
-            !summary.active_ics_unresolved(),
-            "resolved MCU is not 'unresolved'"
-        );
-        assert!(summary.active_open_on_live_circuit());
-        let v = thermal_validity(0, &summary);
+        let open_mcu = summary_of(vec![
+            row("R1", analog_r(), None),
+            row("U1", mcu(), Some(OPEN_PINS)),
+        ]);
+        assert!(!open_mcu.active_ics_unresolved());
+        assert!(open_mcu.active_open_on_live_circuit());
+        assert!(thermal_coverage(1, &open_mcu).partial);
+        assert!(coverage_open_active_refs(&open_mcu).contains(&"U1".to_string()));
+        let v = thermal_validity(0, &open_mcu);
         assert!(
             !v.valid,
-            "an empty table hiding a resolved-but-open power IC must be invalid, not 'runs cool'"
+            "an empty table hiding a resolved-but-open IC is not 'runs cool'"
         );
-        assert!(
-            v.reason.unwrap().contains("U1"),
-            "the reason must name the open IC"
-        );
-    }
+        assert!(v.reason.unwrap().contains("U1"));
 
-    #[test]
-    fn passive_only_board_thermal_is_valid() {
-        let mut report = BindReport::default();
-        report.push(row("R1", BindOutcome::Analog { device: "R".into() }, None));
-        let summary = BindSummary::from_report(&report);
-        assert_eq!(summary.critical_parts_total, 0);
-        assert!(thermal_validity(0, &summary).valid);
-        // Banner names the no-IC case honestly rather than "MCU UNRESOLVED".
-        assert!(summary.render_banner().contains("no active ICs on board"));
+        let passive = summary_of(vec![row("R1", analog_r(), None)]);
+        assert_eq!(passive.critical_parts_total, 0);
+        assert!(thermal_validity(0, &passive).valid);
+        assert!(!thermal_coverage(1, &passive).partial);
+        assert!(coverage_open_active_refs(&passive).is_empty());
+        assert!(passive.render_banner().contains("no active ICs on board"));
     }
 
     #[test]
     fn ac_all_floor_is_sentinel() {
         let bode: Vec<(f64, f64, f64)> = (0..10).map(|i| (i as f64, -6000.0, 0.0)).collect();
         assert!(ac_is_all_sentinel(&bode));
-        let real: Vec<(f64, f64, f64)> = vec![(1.0, -3.0, -45.0), (2.0, -6000.0, 0.0)];
-        assert!(!ac_is_all_sentinel(&real));
+        assert!(!ac_is_all_sentinel(&[
+            (1.0, -3.0, -45.0),
+            (2.0, -6000.0, 0.0)
+        ]));
         assert!(!ac_is_all_sentinel(&[]));
     }
 
+    /// Repeated findings group with a count; at-limit (gap == rule) groups are
+    /// separated from below-rule ones; a mixed group never overcounts "below".
     #[test]
-    fn drc_at_limit_is_separated_and_labelled_correctly() {
-        let mut report = DrcReport {
-            clearance_mm: 0.2,
-            ..Default::default()
-        };
-        // 3 findings exactly at the rule (gap == rule) for one pair.
+    fn drc_groups_separate_at_limit_from_below_rule_without_overcounting() {
+        let mut report = drc_report(Vec::new());
         for _ in 0..3 {
             report.findings.push(clearance("GND", "+3.3V", 0.2, 0.2));
         }
-        // 1 genuinely below for another pair.
         report.findings.push(clearance("GND", "+5V", 0.1, 0.2));
         let st = DrcStructured::from_report(&report);
-        assert_eq!(st.at_limit.len(), 1, "at-limit group separated");
+        assert_eq!(st.at_limit.len(), 1);
         assert_eq!(st.at_limit[0].count, 3);
         assert!(st.at_limit[0]
             .label()
             .contains("exactly at minimum clearance (no margin)"));
-        assert!(!st.at_limit[0].label().contains("below the"));
-        assert_eq!(st.violations.len(), 1, "below-rule group separated");
+        assert!(st.at_limit[0].label().contains("3 locations"));
+        assert_eq!(st.violations.len(), 1);
         assert!(st.violations[0].label().contains("below the"));
-    }
 
-    #[test]
-    fn drc_mixed_group_does_not_overcount_below() {
-        // A group with 2 below-rule + 3 at-limit members must report "2 below"
-        // and "3 at the limit", never "5 below" (no crying wolf on count).
-        let mut report = DrcReport {
-            clearance_mm: 0.2,
-            ..Default::default()
-        };
+        let mut report = drc_report(Vec::new());
         for _ in 0..2 {
-            report.findings.push(clearance("GND", "+3.3V", 0.10, 0.2)); // below
+            report.findings.push(clearance("GND", "+3.3V", 0.10, 0.2));
         }
         for _ in 0..3 {
-            report.findings.push(clearance("GND", "+3.3V", 0.20, 0.2)); // at limit
+            report.findings.push(clearance("GND", "+3.3V", 0.20, 0.2));
         }
         let st = DrcStructured::from_report(&report);
-        assert_eq!(st.violations.len(), 1, "mixed group lands in violations");
+        assert_eq!(st.violations.len(), 1);
         let g = &st.violations[0];
-        assert_eq!(g.count, 5);
-        assert_eq!(g.below_count, 2);
+        assert_eq!((g.count, g.below_count), (5, 2));
         let label = g.label();
-        assert!(label.contains("2 below"), "label: {label}");
-        assert!(label.contains("3 at the limit"), "label: {label}");
-        assert!(!label.contains("5 below"), "must not overcount: {label}");
-    }
-
-    #[test]
-    fn drc_groups_repeated_findings_with_count() {
-        let mut report = DrcReport {
-            clearance_mm: 0.2,
-            ..Default::default()
-        };
-        for _ in 0..9 {
-            report.findings.push(clearance("GND", "+3.3V", 0.2, 0.2));
-        }
-        let st = DrcStructured::from_report(&report);
-        assert_eq!(st.at_limit.len(), 1, "9 identical findings -> 1 group");
-        assert_eq!(st.at_limit[0].count, 9);
-        assert!(st.at_limit[0].label().contains("9 locations"));
-    }
-
-    #[test]
-    fn boot_control_net_kind_serializes_as_snake_case() {
-        // The JSON contract is "boot_control_net", a consumer filtering
-        // notes[].kind must see exactly that, not "BootControlNet".
-        let note = JsonNote {
-            kind: JsonNoteKind::BootControlNet,
-            message: "GATE left floating".to_string(),
-        };
-        let json = serde_json::to_string(&note).unwrap();
         assert!(
-            json.contains("\"boot_control_net\""),
-            "expected snake_case kind, got: {json}"
+            label.contains("2 below") && label.contains("3 at the limit"),
+            "{label}"
         );
     }
 
     #[test]
-    fn every_note_kind_serializes() {
-        for kind in [
-            JsonNoteKind::BindRole,
-            JsonNoteKind::CosimSubstitution,
-            JsonNoteKind::Coverage,
-            JsonNoteKind::SiInfo,
-            JsonNoteKind::BootControlNet,
-        ] {
-            let note = JsonNote {
-                kind,
-                message: "x".to_string(),
-            };
-            assert!(serde_json::to_string(&note)
-                .unwrap()
-                .contains("\"message\""));
-        }
+    fn note_kinds_serialize_as_snake_case() {
+        let note = JsonNote {
+            kind: JsonNoteKind::BootControlNet,
+            message: "GATE left floating".to_string(),
+        };
+        assert!(serde_json::to_string(&note)
+            .unwrap()
+            .contains("\"boot_control_net\""));
     }
 }

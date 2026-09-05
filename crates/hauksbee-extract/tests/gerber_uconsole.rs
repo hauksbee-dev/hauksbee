@@ -1,0 +1,270 @@
+//! Real-world regression: the ClockworkPi uConsole mainboard reverse-extracted
+//! from its published Allegro `.art` gerbers + Allegro `smt_loc.txt`
+//! pick-and-place. No native CAD exists for this board, so this is the proof
+//! that the gerber path unlocks a whole class of hardware hauksbee otherwise
+//! could not ingest.
+//!
+//! The board exercises the awkward parts of the format: an older RS-274X
+//! dialect (bare `FSA` with no zero char, `FS`+`MO` combined in one extended
+//! block) that the upstream parser rejects until normalised, a *gerber-format*
+//! drill film (holes drawn as flashes, not Excellon), Allegro role-named
+//! layers (`top`/`gnd02`/`pwr04`/`gnd05`/`bottom`), and a `!`-delimited
+//! pick-and-place in mils. See docs/ingest/GERBER.md.
+//!
+//! Reported NOT RUN when the boards are absent, which on a public checkout they
+//! always are: ClockworkPi publishes these with no licence statement, so
+//! corpus.toml marks them `license_confirmed = false` and the default fetch
+//! skips them. `HAUKSBEE_REQUIRE_CORPUS=1` therefore cannot be what makes them
+//! mandatory, or the nightly gate is red by construction on a corpus that was
+//! fetched exactly as documented. `HAUKSBEE_REQUIRE_UCONSOLE_CORPUS=1` is, for a
+//! run that passed `--include-unconfirmed` and decided for itself.
+
+use std::path::PathBuf;
+
+use hauksbee_extract::gerber::from_gerber_dir;
+
+/// Whether an absent uConsole set should FAIL rather than report NOT RUN. See
+/// the module note: these boards are outside the default fetch on purpose.
+fn require_uconsole() -> bool {
+    std::env::var("HAUKSBEE_REQUIRE_UCONSOLE_CORPUS").is_ok()
+}
+
+/// Through the shared resolver, which accepts both the hand-built `famous/<id>`
+/// layout and the `<id>` layout scripts/fetch-corpus.sh produces. Joining the
+/// path directly is what made these tests skip silently for anyone who used the
+/// documented fetch.
+fn corpus(rel: &str) -> Option<PathBuf> {
+    hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), rel)
+}
+
+fn uconsole_dir() -> Option<PathBuf> {
+    corpus("famous/uconsole_gerber")
+}
+
+fn cm4_dir() -> Option<PathBuf> {
+    corpus("famous/uconsole_cm4_adapter_gerber")
+}
+
+#[test]
+fn uconsole_mainboard_reconstructs() {
+    let Some(dir) = uconsole_dir() else {
+        assert!(
+            !require_uconsole(),
+            "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_gerber is absent"
+        );
+        eprintln!(
+            "NOT RUN  uConsole mainboard: not in the default fetch (licence \
+             unconfirmed). Fetch with --include-unconfirmed and set \
+             HAUKSBEE_REQUIRE_UCONSOLE_CORPUS=1 to make this mandatory."
+        );
+        return;
+    };
+
+    let g = from_gerber_dir(&dir).expect("uConsole gerbers must reverse-extract");
+    let s = &g.stats;
+
+    eprintln!(
+        "uConsole: {} layers, {} holes, {} nets, {} components, {} flashes ({} assigned)",
+        s.n_layers, s.n_holes, s.n_nets, s.n_components, s.total_flashes, s.assigned_flashes
+    );
+
+    // Five copper films shipped (top, gnd02, pwr04, gnd05, bottom).
+    assert_eq!(s.n_layers, 5, "expected the 5 published copper films");
+    // A handheld mainboard: hundreds of placed parts, hundreds of nets, a big
+    // ground net. These are loose floors so cosmetic geometry changes don't
+    // break the test, but a real regression (e.g. the FS normaliser breaking)
+    // would collapse them to ~0.
+    assert!(
+        s.n_components > 180,
+        "components placed: {}",
+        s.n_components
+    );
+    // Net count is asserted separately: see uconsole_net_count_matches_the_board.
+    assert!(s.n_holes > 800, "plated holes: {}", s.n_holes);
+    assert!(s.gnd_detected, "a GND-class net should be labelled");
+
+    // Bind rate: most placed components must land on at least one net.
+    let bound = g
+        .board
+        .components
+        .iter()
+        .filter(|c| c.pins.iter().any(|p| p.net.is_some()))
+        .count();
+    let rate = bound as f64 / g.board.components.len().max(1) as f64;
+    assert!(rate > 0.9, "component bind rate only {:.0}%", rate * 100.0);
+
+    // The dominant net should be ground, and it should be large.
+    let gnd = g.board.net_by_name("GND").expect("GND net present");
+    let gnd_pads = g
+        .board
+        .components
+        .iter()
+        .flat_map(|c| &c.pins)
+        .filter(|p| p.net == Some(gnd.id))
+        .count();
+    assert!(gnd_pads > 500, "GND only has {gnd_pads} pads");
+}
+
+/// The gerber trace-current surface (Round 5): per-net copper geometry is
+/// reconstructed from the gerber primitives so a trace-current check can run on
+/// a board that ships no CAD. The decisive correctness property is the same as
+/// the native-CAD trace_current module: the high-current planes are reported
+/// `Poured` (their true cross-section is not a discrete-segment width, so they
+/// are honestly out of reach), while real routed signal traces carry a finite,
+/// sane width. A check that mistook a plane's pad-entry stub for the conductor
+/// would be a confident false positive on a famous board; the `Poured`
+/// exemption prevents it.
+#[test]
+fn uconsole_per_net_copper_is_reconstructed_and_planes_are_poured() {
+    use hauksbee_extract::gerber::connect::GerberCopperKind;
+
+    let Some(dir) = uconsole_dir() else {
+        assert!(
+            !require_uconsole(),
+            "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_gerber is absent"
+        );
+        eprintln!("NOT RUN  uConsole per-net copper: not in the default fetch");
+        return;
+    };
+
+    let g = from_gerber_dir(&dir).expect("uConsole gerbers must reverse-extract");
+    let nc = &g.stats.net_copper;
+    assert_eq!(nc.len(), g.stats.n_nets, "one copper row per net");
+
+    // The GND plane is the dominant pour: it must be classified Poured (out of
+    // the discrete-width check's reach), not flagged as a thin trace.
+    let gnd = nc
+        .iter()
+        .find(|c| c.name == "GND")
+        .expect("GND net present in copper table");
+    assert_eq!(
+        gnd.kind,
+        GerberCopperKind::Poured,
+        "the ground plane must be Poured (out of reach), not a discrete trace"
+    );
+    assert!(gnd.region_count > 0, "GND should carry pour regions");
+
+    // Real routed signal traces exist and carry a finite, sane width: the board
+    // has many `Traces` nets, and the narrowest discrete track is a plausible
+    // fine-pitch signal width (not a degenerate zero, not absurdly wide).
+    let routed: Vec<_> = nc
+        .iter()
+        .filter(|c| c.kind == GerberCopperKind::Traces && c.min_track_width_mm.is_some())
+        .collect();
+    assert!(
+        routed.len() > 50,
+        "expected many routed signal nets, got {}",
+        routed.len()
+    );
+    let narrowest = routed
+        .iter()
+        .filter_map(|c| c.min_track_width_mm)
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        (0.05..0.6).contains(&narrowest),
+        "narrowest routed track {narrowest:.3} mm is out of the plausible signal range"
+    );
+
+    // The ampacity physics is the same one the native-CAD trace_current uses, so
+    // a 0.122 mm 1 oz trace at 10 C rise rates ~0.5 A (cross-checked by hand /
+    // standard trace-width calculators). This is just the engine, not a finding:
+    // no cited current is attributed to a reconstructed net (gerbers carry no
+    // names or BOM-bound identity here), so the check correctly fires nothing.
+    let amp = hauksbee_extract::ipc2221_ampacity(0.122, 1.0, 10.0, true);
+    assert!((amp - 0.52).abs() < 0.1, "0.122 mm ampacity was {amp:.2} A");
+}
+
+/// The uConsole/DevTerm CM4 adapter (Round 5 addition): a second Allegro-dialect
+/// board, 4-layer, with a gerber-format drill. No P&P ships in the zip, so no
+/// components bind (the documented honest limit); the connectivity and per-net
+/// copper still reconstruct, and the planes are correctly Poured.
+#[test]
+fn cm4_adapter_reconstructs_and_planes_are_poured() {
+    use hauksbee_extract::gerber::connect::GerberCopperKind;
+
+    let Some(dir) = cm4_dir() else {
+        assert!(
+            !require_uconsole(),
+            "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_cm4_adapter_gerber is absent"
+        );
+        eprintln!("NOT RUN  CM4 adapter: not in the default fetch");
+        return;
+    };
+
+    let g = from_gerber_dir(&dir).expect("CM4 adapter gerbers must reverse-extract");
+    let s = &g.stats;
+    eprintln!(
+        "CM4 adapter: {} layers, {} holes, {} nets, GND={}",
+        s.n_layers, s.n_holes, s.n_nets, s.gnd_detected
+    );
+    assert_eq!(s.n_layers, 4, "TOP, GND02, PWR03, BOTTOM");
+    assert!(
+        s.n_holes > 500,
+        "gerber-format drill must stitch, got {}",
+        s.n_holes
+    );
+    assert!(s.n_nets > 100, "nets reconstructed: {}", s.n_nets);
+    assert!(s.gnd_detected, "a GND-class net should be labelled");
+    assert_eq!(s.n_components, 0, "no P&P ships in the adapter zip");
+
+    // The routed traces must carry plausible widths. How many plane films
+    // surface as Poured nets is asserted separately, in
+    // cm4_adapter_plane_films_surface_as_poured_nets.
+    let narrowest = s
+        .net_copper
+        .iter()
+        .filter(|c| c.kind == GerberCopperKind::Traces)
+        .filter_map(|c| c.min_track_width_mm)
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        narrowest.is_finite() && (0.05..0.6).contains(&narrowest),
+        "narrowest routed track {narrowest:.3} mm out of plausible range"
+    );
+}
+
+/// The net count the uConsole mainboard should reconstruct to.
+///
+/// Reconstruction currently yields 225 against the 250 this board carries, so
+/// roughly a tenth of its nets are still being merged into their neighbours.
+/// Everything else about the board reads correctly: 5 copper films, 1095 plated
+/// holes, 223 of its placed components bound, and a labelled ground.
+///
+/// Ignored rather than lowered to 225, which would assert that the current
+/// answer is the right one. Fixing the reconstruction turns this green.
+#[test]
+#[ignore = "known gap: 225 of ~250 nets reconstructed"]
+fn uconsole_net_count_matches_the_board() {
+    let Some(dir) = uconsole_dir() else {
+        return;
+    };
+    let g = from_gerber_dir(&dir).expect("uConsole gerbers must reverse-extract");
+    assert!(
+        g.stats.n_nets > 250,
+        "nets reconstructed: {}",
+        g.stats.n_nets
+    );
+}
+
+/// The CM4 adapter's plane films (GND02 / PWR03) should surface as Poured nets.
+///
+/// Two do, against the six-plus expected for a 4-layer board with two dedicated
+/// plane films. The layer count, the 818 plated holes and the ground label are
+/// all correct, so the films parse; they are not all being classified as pours.
+///
+/// Ignored rather than lowered, for the same reason as the net-count gap above.
+#[test]
+#[ignore = "known gap: 2 poured plane nets, expected more than 5"]
+fn cm4_adapter_plane_films_surface_as_poured_nets() {
+    use hauksbee_extract::gerber::connect::GerberCopperKind;
+    let Some(dir) = cm4_dir() else {
+        return;
+    };
+    let g = from_gerber_dir(&dir).expect("CM4 adapter gerbers must reverse-extract");
+    let poured = g
+        .stats
+        .net_copper
+        .iter()
+        .filter(|c| c.kind == GerberCopperKind::Poured)
+        .count();
+    assert!(poured > 5, "plane nets should be Poured, got {poured}");
+}

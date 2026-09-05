@@ -1055,10 +1055,6 @@ mod tests {
         }
     }
 
-    fn model_from_toml(src: &str) -> hauksbee_models::ModelEntry {
-        toml::from_str(src).expect("valid model toml")
-    }
-
     /// A one-entry library holding `toml`, written to a temp dir keyed on `tag`.
     fn lib_from(tag: &str, toml_src: &str) -> ModelLibrary {
         let dir =
@@ -1102,6 +1098,38 @@ semantics = "regulated_current"
 current_in_roles = ["in"]
 current_out_roles = ["out"]
 max_operating_current_a = 0.4
+equation = "inverse_resistance"
+k_volts = 1000.0
+"#;
+
+    /// The same charger with its programming equation retagged as a
+    /// protection threshold.
+    const PROTECTION_TOML: &str = r#"
+[[models]]
+id = "test_protected"
+kind = "vreg"
+description = "test part whose PROG pin sets an OCP threshold, not a load"
+
+[models.match]
+value_re = "(?i)^TESTCHARGER$"
+
+[models.params]
+vout = 4.2
+dropout_v = 0.3
+iq_a = 0.001
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "prog"
+"4" = "out"
+
+[models.ratings]
+max_current_a = 0.8
+
+[models.current_program]
+pin = "prog"
+semantics = "protection_limit"
 equation = "inverse_resistance"
 k_volts = 1000.0
 "#;
@@ -1152,6 +1180,31 @@ sense_full_scale_v = 0.05
         }
     }
 
+    /// A two-terminal part on an 0603 resistor footprint between nets `a` and `b`.
+    fn two_pin(reference: &str, value: &str, a: i64, b: i64) -> Component {
+        comp(
+            reference,
+            value,
+            "Resistor_SMD:R_0603",
+            vec![pin("1", a), pin("2", b)],
+        )
+    }
+
+    /// A TESTCHARGER U-reference with pins in/gnd/prog/out on the given nets.
+    fn charger(reference: &str, nets: [i64; 4]) -> Component {
+        comp(
+            reference,
+            "TESTCHARGER",
+            "",
+            vec![
+                pin("1", nets[0]),
+                pin("2", nets[1]),
+                pin("3", nets[2]),
+                pin("4", nets[3]),
+            ],
+        )
+    }
+
     fn net(id: i64, name: &str) -> Net {
         Net {
             id,
@@ -1159,19 +1212,22 @@ sense_full_scale_v = 0.05
         }
     }
 
+    fn board(name: &str, nets: Vec<Net>, components: Vec<Component>) -> ExtractedBoard {
+        ExtractedBoard {
+            name: name.into(),
+            nets,
+            components,
+        }
+    }
+
     /// Nets: 1 = +5V (in), 2 = GND, 3 = PROG, 4 = VBAT (out), 5 = the node
     /// between the programming resistor and its solder link.
     fn charger_board(prog_network: Vec<Component>) -> ExtractedBoard {
-        let mut components = vec![comp(
-            "U1",
-            "TESTCHARGER",
-            String::new().as_str(),
-            vec![pin("1", 1), pin("2", 2), pin("3", 3), pin("4", 4)],
-        )];
+        let mut components = vec![charger("U1", [1, 2, 3, 4])];
         components.extend(prog_network);
-        ExtractedBoard {
-            name: "charger".into(),
-            nets: vec![
+        board(
+            "charger",
+            vec![
                 net(1, "+5V"),
                 net(2, "GND"),
                 net(3, "PROG"),
@@ -1179,248 +1235,107 @@ sense_full_scale_v = 0.05
                 net(5, "PROG_LINK"),
             ],
             components,
-        }
+        )
     }
 
-    #[test]
-    fn a_programmed_charger_is_attributed_its_programmed_current_not_its_ceiling() {
-        // The Olimex ESP32-EVB topology exactly: PROG -> 4.99k -> closed solder
-        // jumper -> GND. I = 1000 / 4990 = 200 mA, a fifth of the 1 A ceiling,
-        // and the ratio is the difference between a clean board and two High
-        // findings on correctly-sized rails.
-        let board = charger_board(vec![
-            comp(
-                "R10",
-                "4.99k/1%/R0603",
-                "Resistor_SMD:R_0603",
-                vec![pin("1", 3), pin("2", 5)],
-            ),
+    fn prog_4k99_via_jumper(jumper: &str) -> Vec<Component> {
+        vec![
+            two_pin("R10", "4.99k/1%/R0603", 3, 5),
             comp(
                 "E1",
-                "Closed",
-                "OLIMEX_Jumpers-FP:SJ_Closed",
+                jumper,
+                &format!("OLIMEX_Jumpers-FP:SJ_{jumper}"),
                 vec![pin("1", 5), pin("2", 2)],
             ),
-        ]);
-        let lib = lib_from("programmed", CHARGER_TOML);
-        let got = attribute_currents(&board, &lib);
-        assert!(
-            got.undetermined.is_empty(),
-            "the resistor is readable, so nothing should be undetermined: {:?}",
-            got.undetermined
-                .iter()
-                .map(|u| u.reference.clone())
-                .collect::<Vec<_>>()
-        );
+        ]
+    }
+
+    fn undetermined_refs(got: &Attributions) -> Vec<String> {
+        got.undetermined
+            .iter()
+            .map(|u| u.reference.clone())
+            .collect()
+    }
+
+    /// PROG -> 4.99k -> closed jumper -> GND programs 1000/4990 A on both
+    /// rails (a fifth of the ceiling), never the programming pin itself.
+    #[test]
+    fn a_programmed_charger_is_attributed_its_programmed_current_not_its_ceiling() {
+        let board = charger_board(prog_4k99_via_jumper("Closed"));
+        let got = attribute_currents(&board, &lib_from("programmed", CHARGER_TOML));
+        assert!(got.undetermined.is_empty(), "{:?}", undetermined_refs(&got));
         for rail in ["+5V", "VBAT"] {
-            let (current, citation) = got
-                .cited
-                .get(rail)
-                .unwrap_or_else(|| panic!("{rail} should carry the programmed current"));
-            // 1000 V / 4990 ohm, not a rounded 200 mA: the equation is what is
-            // being tested, so the expectation is the equation.
+            let (current, citation) = got.cited.get(rail).unwrap_or_else(|| panic!("{rail}"));
             assert!(
                 (*current - 1000.0 / 4990.0).abs() < 1e-9,
-                "{rail}: expected the programmed {} A, got {current}",
-                1000.0 / 4990.0
+                "{rail}: {current}"
             );
             assert!(
                 citation.contains("R10") && citation.contains("4990"),
-                "the citation must name the resistor a reader can check: {citation}"
+                "{citation}"
             );
         }
-        assert!(
-            !got.cited.contains_key("PROG"),
-            "the programming pin itself carries no rail current"
-        );
+        assert!(!got.cited.contains_key("PROG"));
     }
 
-    /// Two-sided IdentityUnknown contract: the same programmed charger with a
-    /// refused identity attributes nothing anywhere (an unknown part must not
-    /// become a fitted 200 mA charger), and the skip is recorded by name so
-    /// the report can say the rails went unexamined.
+    /// A refused identity attributes nothing and is recorded by name.
     #[test]
     fn an_identity_refused_part_is_skipped_and_named_not_attributed() {
-        let mut board = charger_board(vec![
-            comp(
-                "R10",
-                "4.99k/1%/R0603",
-                "Resistor_SMD:R_0603",
-                vec![pin("1", 3), pin("2", 5)],
-            ),
-            comp(
-                "E1",
-                "Closed",
-                "OLIMEX_Jumpers-FP:SJ_Closed",
-                vec![pin("1", 5), pin("2", 2)],
-            ),
-        ]);
+        let mut board = charger_board(prog_4k99_via_jumper("Closed"));
         board.components[0].properties.push((
             hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
             "two populated records with different values".to_string(),
         ));
-        let lib = lib_from("identity_refused", CHARGER_TOML);
-        let got = attribute_currents(&board, &lib);
+        let got = attribute_currents(&board, &lib_from("identity_refused", CHARGER_TOML));
         assert!(
             got.cited.is_empty(),
-            "a refused identity must attribute nothing: {:?}",
+            "{:?}",
             got.cited.keys().collect::<Vec<_>>()
         );
-        assert_eq!(
-            got.skipped_identity.len(),
-            1,
-            "the skip must be on the record: {:?}",
-            got.skipped_identity
-        );
+        assert_eq!(got.skipped_identity.len(), 1, "{:?}", got.skipped_identity);
         let (reference, reason) = &got.skipped_identity[0];
         assert_eq!(reference, "U1");
-        assert!(
-            reason.contains("duplicate designator"),
-            "the reason must be the refusal itself: {reason}"
-        );
+        assert!(reason.contains("duplicate designator"), "{reason}");
     }
 
-    /// The same charger with its programming equation retagged as a protection
-    /// threshold. The resistor is present and readable, so the only thing
-    /// standing between the board and an invented 200 mA steady-state load is
-    /// the `protection_limit` semantics gate.
-    const PROTECTION_TOML: &str = r#"
-[[models]]
-id = "test_protected"
-kind = "vreg"
-description = "test part whose PROG pin sets an OCP threshold, not a load"
-
-[models.match]
-value_re = "(?i)^TESTCHARGER$"
-
-[models.params]
-vout = 4.2
-dropout_v = 0.3
-iq_a = 0.001
-
-[models.pins]
-"1" = "in"
-"2" = "gnd"
-"3" = "prog"
-"4" = "out"
-
-[models.ratings]
-max_current_a = 0.8
-
-[models.current_program]
-pin = "prog"
-semantics = "protection_limit"
-equation = "inverse_resistance"
-k_volts = 1000.0
-"#;
-
+    /// Under `protection_limit` semantics the same readable network attributes
+    /// nothing and is not an undetermined hole either.
     #[test]
     fn a_protection_limit_program_contributes_no_ampacity_load() {
-        // Fully populated, unambiguous programming network: PROG -> 4.99k ->
-        // GND. Under `regulated_current` semantics this exact topology
-        // attributes ~200 mA to both rails (the test above proves it). Under
-        // `protection_limit` it must attribute nothing, and it must not appear
-        // as an undetermined hole either: a trip threshold is a capability,
-        // not a missing load measurement.
-        let board = charger_board(vec![comp(
-            "R10",
-            "4.99k",
-            "Resistor_SMD:R_0603",
-            vec![pin("1", 3), pin("2", 2)],
-        )]);
-        let lib = lib_from("protection_limit", PROTECTION_TOML);
-        let got = attribute_currents(&board, &lib);
-        assert!(
-            got.cited.is_empty(),
-            "a protection threshold must never seed steady-state ampacity: {:?}",
-            got.cited
-        );
-        assert!(
-            got.undetermined.is_empty(),
-            "a protection threshold is not an undetermined load either: {:?}",
-            got.undetermined
-                .iter()
-                .map(|u| u.reference.clone())
-                .collect::<Vec<_>>()
-        );
+        let board = charger_board(vec![two_pin("R10", "4.99k", 3, 2)]);
+        let got = attribute_currents(&board, &lib_from("protection_limit", PROTECTION_TOML));
+        assert!(got.cited.is_empty(), "{:?}", got.cited);
+        assert!(got.undetermined.is_empty(), "{:?}", undetermined_refs(&got));
     }
 
+    /// With the jumper open the charger is unprogrammed: no ceiling fallback,
+    /// and the gap is recorded with its role and ceiling.
     #[test]
     fn an_open_link_in_the_programming_path_attributes_nothing_and_names_the_gap() {
-        // Same board with the jumper open: the charger is not programmed at all,
-        // so there is no current to attribute. The ceiling must NOT step in as a
-        // fallback, and the hole must be visible rather than silent.
-        let board = charger_board(vec![
-            comp(
-                "R10",
-                "4.99k",
-                "Resistor_SMD:R_0603",
-                vec![pin("1", 3), pin("2", 5)],
-            ),
-            comp(
-                "E1",
-                "Open",
-                "OLIMEX_Jumpers-FP:SJ_Open",
-                vec![pin("1", 5), pin("2", 2)],
-            ),
-        ]);
-        let lib = lib_from("open_link", CHARGER_TOML);
-        let got = attribute_currents(&board, &lib);
-        assert!(
-            got.cited.is_empty(),
-            "an unprogrammed charger must not have its ceiling charged to a rail: {:?}",
-            got.cited
-        );
-        assert_eq!(got.undetermined.len(), 1, "the gap must be recorded");
+        let board = charger_board(prog_4k99_via_jumper("Open"));
+        let got = attribute_currents(&board, &lib_from("open_link", CHARGER_TOML));
+        assert!(got.cited.is_empty(), "{:?}", got.cited);
+        assert_eq!(got.undetermined.len(), 1);
         let u = &got.undetermined[0];
-        assert_eq!(u.reference, "U1");
-        assert_eq!(u.role, "prog");
-        assert_eq!(u.ceiling_a, Some(0.4));
+        assert_eq!(
+            (u.reference.as_str(), u.role.as_str(), u.ceiling_a),
+            ("U1", "prog", Some(0.4))
+        );
     }
 
+    /// Both populated branches conduct: (200 || 2) + 1 ohm, whatever order
+    /// the parts are listed in, with every contributing part cited.
     #[test]
     fn converging_program_paths_use_the_populated_equivalent_resistance() {
-        // Both populated branches conduct simultaneously. Their first two
-        // series legs are 200 ohm and 2 ohm, in parallel, followed by 1 ohm:
-        // R_eq = (200 || 2) + 1 = 2.980198... ohm. Selecting only the shortest
-        // path would silently understate an inverse-law current.
         let branch = |slow_first: bool| {
-            let mut first_hop = vec![
-                comp(
-                    "R1",
-                    "100R",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 3), pin("2", 6)],
-                ),
-                comp(
-                    "R2",
-                    "1R",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 3), pin("2", 7)],
-                ),
-            ];
+            let mut first_hop = vec![two_pin("R1", "100R", 3, 6), two_pin("R2", "1R", 3, 7)];
             if !slow_first {
                 first_hop.reverse();
             }
             first_hop.extend([
-                comp(
-                    "R3",
-                    "100R",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 6), pin("2", 8)],
-                ),
-                comp(
-                    "R4",
-                    "1R",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 7), pin("2", 8)],
-                ),
-                comp(
-                    "R5",
-                    "1R",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 8), pin("2", 2)],
-                ),
+                two_pin("R3", "100R", 6, 8),
+                two_pin("R4", "1R", 7, 8),
+                two_pin("R5", "1R", 8, 2),
             ]);
             let mut board = charger_board(first_hop);
             board.nets.extend([
@@ -1430,7 +1345,6 @@ k_volts = 1000.0
             ]);
             board
         };
-
         for slow_first in [true, false] {
             let (ohms, path) = program_resistance_to_ground(&branch(slow_first), 3, 4, Some(0))
                 .expect("the programming path is readable");
@@ -1439,40 +1353,21 @@ k_volts = 1000.0
                 (ohms - expected).abs() < 1e-9,
                 "got {ohms} ohm via {path:?}"
             );
-            assert_eq!(
-                path,
-                ["R1", "R2", "R3", "R4", "R5"],
-                "the citation must retain every populated contributing branch"
-            );
+            assert_eq!(path, ["R1", "R2", "R3", "R4", "R5"]);
         }
-    }
 
-    #[test]
-    fn parallel_program_resistors_are_solved_as_parallel_not_one_path() {
         let board = charger_board(vec![
-            comp(
-                "R10A",
-                "10k",
-                "Resistor_SMD:R_0603",
-                vec![pin("1", 3), pin("2", 2)],
-            ),
-            comp(
-                "R10B",
-                "10k",
-                "Resistor_SMD:R_0603",
-                vec![pin("1", 3), pin("2", 2)],
-            ),
+            two_pin("R10A", "10k", 3, 2),
+            two_pin("R10B", "10k", 3, 2),
         ]);
         let (ohms, path) = program_resistance_to_ground(&board, 3, 4, Some(0)).unwrap();
         assert!((ohms - 5_000.0).abs() < 1e-9, "got {ohms} via {path:?}");
         assert_eq!(path, ["R10A", "R10B"]);
     }
 
+    /// Repeated physical pad records are one electrical terminal each.
     #[test]
     fn repeated_physical_pad_records_still_form_two_electrical_terminals() {
-        // Layout readers preserve physical pad records: a through/multilayer
-        // pad can therefore repeat one electrical pin. Electrical topology must
-        // count the two unique numbered terminals rather than `pins.len()`.
         let board = charger_board(vec![comp(
             "R10",
             "10k",
@@ -1485,197 +1380,92 @@ k_volts = 1000.0
         assert!(got.undetermined.is_empty());
     }
 
+    /// Every programming network the check must refuse rather than read as a
+    /// precise resistance: ambiguous or inferred identities, capacitors,
+    /// fuses, non-passive designators on passive footprints, thermistors, a
+    /// multi-terminal part touching PROG, an over-wide parallel network, and
+    /// an out-of-domain (10 A) resistor.
     #[test]
-    fn an_ambiguous_duplicate_resistor_never_programs_a_precise_current() {
-        let mut resistor = comp(
-            "R10",
-            "4.99k",
-            "Resistor_SMD:R_0603",
-            vec![pin("1", 3), pin("2", 2)],
-        );
-        resistor.properties.push((
+    fn unreadable_programming_networks_are_undetermined_not_guessed() {
+        let mut ambiguous = two_pin("R10", "4.99k", 3, 2);
+        ambiguous.properties.push((
             hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.into(),
             "records named 'R10' disagree on value".into(),
         ));
-        let board = charger_board(vec![resistor]);
-        let got = attribute_currents(&board, &lib_from("ambiguous_program", CHARGER_TOML));
-
-        assert!(
-            got.cited.is_empty(),
-            "conflicting source identity cannot support a datasheet-precise current: {:?}",
-            got.cited
-        );
-        assert_eq!(got.undetermined.len(), 1);
-        assert_eq!(got.undetermined[0].reference, "U1");
-    }
-
-    #[test]
-    fn an_inferred_ambiguous_resistor_never_programs_a_precise_current() {
-        let mut resistor = comp(
-            "R10",
-            "4.99k",
-            "Resistor_SMD:R_0603",
-            vec![pin("1", 3), pin("2", 2)],
-        );
-        resistor.properties.push((
+        let mut inferred = two_pin("R10", "4.99k", 3, 2);
+        inferred.properties.push((
             hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.into(),
             "same hierarchy, no authoritative source UID".into(),
         ));
-        let board = charger_board(vec![resistor]);
-        let got = attribute_currents(&board, &lib_from("inferred_program", CHARGER_TOML));
-
-        assert!(
-            got.cited.is_empty(),
-            "inferred physical identity cannot support a datasheet-precise current: {:?}",
-            got.cited
-        );
-        assert_eq!(got.undetermined.len(), 1);
-        assert_eq!(got.undetermined[0].reference, "U1");
-    }
-
-    #[test]
-    fn a_capacitor_is_not_read_as_a_programming_resistor() {
-        // A filter cap from PROG to ground is not the programming element, and
-        // reading it as one would produce a current from a farad value.
-        for (index, value) in ["100nF", "100n", "10u"].into_iter().enumerate() {
-            let board = charger_board(vec![comp(
-                "C7",
-                value,
-                "Capacitor_SMD:C_0402",
-                vec![pin("1", 3), pin("2", 2)],
-            )]);
-            let lib = lib_from(&format!("cap_{index}"), CHARGER_TOML);
-            let got = attribute_currents(&board, &lib);
-            assert!(
-                got.cited.is_empty(),
-                "a {value} cap programs nothing: {:?}",
-                got.cited
-            );
-            assert_eq!(got.undetermined.len(), 1);
-        }
-    }
-
-    #[test]
-    fn a_numeric_fuse_is_not_read_as_a_programming_resistor() {
-        let board = charger_board(vec![comp(
-            "F1",
-            "1",
-            // Wrong/misleading footprint metadata must not override an explicit
-            // fuse designator and turn a 1 A fuse value into one ohm.
-            "Resistor_SMD:R_0603",
-            vec![pin("1", 3), pin("2", 2)],
-        )]);
-        let got = attribute_currents(&board, &lib_from("numeric_fuse", CHARGER_TOML));
-        assert!(got.cited.is_empty());
-        assert_eq!(got.undetermined.len(), 1);
-    }
-
-    #[test]
-    fn non_passive_reference_prefixes_override_misleading_passive_footprints() {
-        for (reference, footprint) in [
-            ("RLY1", "Resistor_SMD:R_0603"),
-            ("RF1", "Resistor_SMD:R_0603"),
-            ("CON1", "Capacitor_SMD:C_0603"),
-            ("CR1", "Capacitor_SMD:C_0603"),
-        ] {
-            let board = charger_board(vec![comp(
-                reference,
-                "1",
-                footprint,
-                vec![pin("1", 3), pin("2", 2)],
-            )]);
-            let got = attribute_currents(
-                &board,
-                &lib_from(&format!("reference_{reference}"), CHARGER_TOML),
-            );
-            assert!(
-                got.cited.is_empty(),
-                "{reference} must not become a resistor"
-            );
-            assert_eq!(got.undetermined.len(), 1, "{reference}");
-        }
-    }
-
-    #[test]
-    fn a_multi_terminal_part_touching_prog_refuses_the_network() {
-        let board = charger_board(vec![
-            comp(
-                "R10",
-                "10k",
-                "Resistor_SMD:R_0603",
-                vec![pin("1", 3), pin("2", 2)],
-            ),
-            // A three-terminal trim pot in parallel can halve the effective
-            // resistance. Ignoring it would under-report regulated current.
-            comp(
-                "RV1",
-                "10k",
-                "Potentiometer_THT:Potentiometer",
-                vec![pin("1", 3), pin("2", 2), pin("3", 2)],
-            ),
-        ]);
-        let got = attribute_currents(&board, &lib_from("trim_pot", CHARGER_TOML));
-        assert!(got.cited.is_empty());
-        assert_eq!(got.undetermined.len(), 1);
-    }
-
-    #[test]
-    fn an_overwide_parallel_program_network_refuses_before_dense_solving() {
-        let branches = (0..65)
-            .map(|index| {
-                comp(
-                    &format!("R{index}"),
-                    "10k",
-                    "Resistor_SMD:R_0603",
+        let mut cases: Vec<(&str, Vec<Component>)> = vec![
+            ("ambiguous", vec![ambiguous]),
+            ("inferred", vec![inferred]),
+            (
+                "cap_nf",
+                vec![comp(
+                    "C7",
+                    "100nF",
+                    "Capacitor_SMD:C_0402",
                     vec![pin("1", 3), pin("2", 2)],
-                )
-            })
-            .collect();
-        let got = attribute_currents(&charger_board(branches), &lib_from("wide", CHARGER_TOML));
-        assert!(got.cited.is_empty(), "oversized topology must fail closed");
-        assert_eq!(got.undetermined.len(), 1);
+                )],
+            ),
+            (
+                "cap_u",
+                vec![comp(
+                    "C7",
+                    "10u",
+                    "Capacitor_SMD:C_0402",
+                    vec![pin("1", 3), pin("2", 2)],
+                )],
+            ),
+            ("fuse", vec![two_pin("F1", "1", 3, 2)]),
+            ("relay", vec![two_pin("RLY1", "1", 3, 2)]),
+            ("rf", vec![two_pin("RF1", "1", 3, 2)]),
+            (
+                "con",
+                vec![comp(
+                    "CON1",
+                    "1",
+                    "Capacitor_SMD:C_0603",
+                    vec![pin("1", 3), pin("2", 2)],
+                )],
+            ),
+            ("thermistor", vec![two_pin("RT1", "10k", 3, 2)]),
+            (
+                "trim_pot",
+                vec![
+                    two_pin("R10", "10k", 3, 2),
+                    comp(
+                        "RV1",
+                        "10k",
+                        "Potentiometer_THT:Potentiometer",
+                        vec![pin("1", 3), pin("2", 2), pin("3", 2)],
+                    ),
+                ],
+            ),
+            ("out_of_domain", vec![two_pin("R10", "100R", 3, 2)]),
+        ];
+        cases.push((
+            "wide",
+            (0..65)
+                .map(|i| two_pin(&format!("R{i}"), "10k", 3, 2))
+                .collect(),
+        ));
+        for (tag, network) in cases {
+            let got = attribute_currents(&charger_board(network), &lib_from(tag, CHARGER_TOML));
+            assert!(got.cited.is_empty(), "{tag}: {:?}", got.cited);
+            assert_eq!(got.undetermined.len(), 1, "{tag}");
+            assert_eq!(got.undetermined[0].reference, "U1", "{tag}");
+        }
     }
 
+    /// Two chargers on one input rail sum there; cascaded stages count the
+    /// middle rail's through-current once.
     #[test]
-    fn a_thermistor_in_a_program_network_is_not_assumed_to_be_fixed_resistance() {
-        let board = charger_board(vec![comp(
-            "RT1",
-            "10k",
-            "Resistor_SMD:R_0603",
-            vec![pin("1", 3), pin("2", 2)],
-        )]);
-        let got = attribute_currents(&board, &lib_from("thermistor", CHARGER_TOML));
-        assert!(got.cited.is_empty());
-        assert_eq!(got.undetermined.len(), 1);
-    }
-
-    #[test]
-    fn an_out_of_domain_program_resistor_is_undetermined_not_clamped() {
-        // A 100 ohm resistor would put the equation at 10 A. Normal operation
-        // is specified only to 400 mA, while 800 mA is an absolute stress limit;
-        // the latter must never become a promised output current.
-        let board = charger_board(vec![comp(
-            "R10",
-            "100R",
-            "Resistor_SMD:R_0603",
-            vec![pin("1", 3), pin("2", 2)],
-        )]);
-        let lib = lib_from("out_of_domain", CHARGER_TOML);
-        let got = attribute_currents(&board, &lib);
-        assert!(
-            got.cited.is_empty(),
-            "the normal-operating endpoint is a domain boundary, not evidence of saturation: {:?}",
-            got.cited
-        );
-        assert_eq!(got.undetermined.len(), 1);
-        assert_eq!(got.undetermined[0].reference, "U1");
-    }
-
-    #[test]
-    fn simultaneous_regulated_chargers_sum_on_the_shared_input_rail() {
-        let board = ExtractedBoard {
-            name: "two_chargers".into(),
-            nets: vec![
+    fn regulated_stages_sum_on_shared_rails_and_do_not_double_count_cascades() {
+        let two = board(
+            "two_chargers",
+            vec![
                 net(1, "+5V"),
                 net(2, "GND"),
                 net(3, "PROG_A"),
@@ -1683,34 +1473,14 @@ k_volts = 1000.0
                 net(5, "PROG_B"),
                 net(6, "BAT_B"),
             ],
-            components: vec![
-                comp(
-                    "U1",
-                    "TESTCHARGER",
-                    "",
-                    vec![pin("1", 1), pin("2", 2), pin("3", 3), pin("4", 4)],
-                ),
-                comp(
-                    "R1",
-                    "10k",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 3), pin("2", 2)],
-                ),
-                comp(
-                    "U2",
-                    "TESTCHARGER",
-                    "",
-                    vec![pin("1", 1), pin("2", 2), pin("3", 5), pin("4", 6)],
-                ),
-                comp(
-                    "R2",
-                    "10k",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 5), pin("2", 2)],
-                ),
+            vec![
+                charger("U1", [1, 2, 3, 4]),
+                two_pin("R1", "10k", 3, 2),
+                charger("U2", [1, 2, 5, 6]),
+                two_pin("R2", "10k", 5, 2),
             ],
-        };
-        let got = attribute_currents(&board, &lib_from("two_chargers", CHARGER_TOML));
+        );
+        let got = attribute_currents(&two, &lib_from("two_chargers", CHARGER_TOML));
         let (input_current, citation) = got.cited.get("+5V").expect("shared input");
         assert!((*input_current - 0.2).abs() < 1e-12, "{input_current}");
         assert!(
@@ -1719,13 +1489,10 @@ k_volts = 1000.0
         );
         assert!((got.cited["BAT_A"].0 - 0.1).abs() < 1e-12);
         assert!((got.cited["BAT_B"].0 - 0.1).abs() < 1e-12);
-    }
 
-    #[test]
-    fn cascaded_regulated_stages_do_not_double_count_the_middle_rail() {
-        let board = ExtractedBoard {
-            name: "cascaded_chargers".into(),
-            nets: vec![
+        let cascaded = board(
+            "cascaded_chargers",
+            vec![
                 net(1, "SOURCE"),
                 net(2, "GND"),
                 net(3, "PROG_A"),
@@ -1733,125 +1500,65 @@ k_volts = 1000.0
                 net(5, "PROG_B"),
                 net(6, "SINK"),
             ],
-            components: vec![
-                comp(
-                    "U1",
-                    "TESTCHARGER",
-                    "",
-                    vec![pin("1", 1), pin("2", 2), pin("3", 3), pin("4", 4)],
-                ),
-                comp(
-                    "R1",
-                    "10k",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 3), pin("2", 2)],
-                ),
-                comp(
-                    "U2",
-                    "TESTCHARGER",
-                    "",
-                    vec![pin("1", 4), pin("2", 2), pin("3", 5), pin("4", 6)],
-                ),
-                comp(
-                    "R2",
-                    "10k",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 5), pin("2", 2)],
-                ),
+            vec![
+                charger("U1", [1, 2, 3, 4]),
+                two_pin("R1", "10k", 3, 2),
+                charger("U2", [4, 2, 5, 6]),
+                two_pin("R2", "10k", 5, 2),
             ],
-        };
-        let got = attribute_currents(&board, &lib_from("cascaded", CHARGER_TOML));
+        );
+        let got = attribute_currents(&cascaded, &lib_from("cascaded", CHARGER_TOML));
         assert!((got.cited["SOURCE"].0 - 0.1).abs() < 1e-12);
         assert!((got.cited["SINK"].0 - 0.1).abs() < 1e-12);
         assert!(
             (got.cited["MIDDLE"].0 - 0.1).abs() < 1e-12,
-            "one 0.1 A through-current must not be counted at both ends: {:?}",
+            "{:?}",
             got.cited["MIDDLE"]
         );
-        assert!(got.cited["MIDDLE"].1.contains("U1"));
-        assert!(got.cited["MIDDLE"].1.contains("U2"));
+        assert!(got.cited["MIDDLE"].1.contains("U1") && got.cited["MIDDLE"].1.contains("U2"));
     }
 
+    /// Builtin OCP-threshold programs (AP22615A ILIM, LTC4020 input limit)
+    /// are capabilities, not loads: nothing is charged to any rail.
     #[test]
-    fn a_programmed_load_switch_threshold_is_not_a_fictional_load() {
-        // AP22615A: ILIM = 6800 / RLIM is an OCP threshold, not a commanded
-        // steady current. A lightly loaded switched rail must not be charged
-        // 1 A merely because its protection is set there.
-        let board = ExtractedBoard {
-            name: "load_switch".into(),
-            nets: vec![
-                net(1, "+5V"),
-                net(2, "GND"),
-                net(3, "ISET"),
-                net(4, "SWITCHED_5V"),
-                net(5, "ENABLE"),
-                net(6, "FAULT_N"),
-            ],
-            components: vec![
-                comp(
-                    "U1",
-                    "AP22615A",
-                    "Package_TO_SOT_SMD:TSOT-26",
-                    vec![
-                        pin("1", 4),
-                        pin("2", 2),
-                        pin("3", 6),
-                        pin("4", 5),
-                        pin("5", 3),
-                        pin("6", 1),
-                    ],
-                ),
-                comp(
-                    "RSET",
-                    "6.8k",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 3), pin("2", 2)],
-                ),
-            ],
+    fn builtin_protection_thresholds_are_not_fictional_loads() {
+        let load_switch = |rset: &str| {
+            board(
+                "load_switch",
+                vec![
+                    net(1, "+5V"),
+                    net(2, "GND"),
+                    net(3, "ISET"),
+                    net(4, "SWITCHED_5V"),
+                    net(5, "ENABLE"),
+                    net(6, "FAULT_N"),
+                ],
+                vec![
+                    comp(
+                        "U1",
+                        "AP22615A",
+                        "Package_TO_SOT_SMD:TSOT-26",
+                        vec![
+                            pin("1", 4),
+                            pin("2", 2),
+                            pin("3", 6),
+                            pin("4", 5),
+                            pin("5", 3),
+                            pin("6", 1),
+                        ],
+                    ),
+                    two_pin("RSET", rset, 3, 2),
+                ],
+            )
         };
+        for rset in ["6.8k", "1.94k"] {
+            let got = attribute_currents(&load_switch(rset), &ModelLibrary::builtin());
+            assert!(got.cited.is_empty(), "RSET {rset}: {:?}", got.cited);
+        }
 
-        let got = attribute_currents(&board, &ModelLibrary::builtin());
-        assert!(
-            got.cited.is_empty(),
-            "an OCP setting is not a load: {:?}",
-            got.cited
-        );
-    }
-
-    #[test]
-    fn ap22615_minimum_rlim_still_does_not_create_a_steady_load() {
-        let board = ExtractedBoard {
-            name: "load_switch_max".into(),
-            nets: vec![net(1, "+5V"), net(2, "GND"), net(3, "ISET"), net(4, "OUT")],
-            components: vec![
-                comp(
-                    "U1",
-                    "AP22615A",
-                    "Package_TO_SOT_SMD:TSOT-26",
-                    vec![pin("1", 4), pin("2", 2), pin("5", 3), pin("6", 1)],
-                ),
-                comp(
-                    "RSET",
-                    "1.94k",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 3), pin("2", 2)],
-                ),
-            ],
-        };
-
-        let got = attribute_currents(&board, &ModelLibrary::builtin());
-        assert!(
-            got.cited.is_empty(),
-            "an OCP setting is not a load: {:?}",
-            got.cited
-        );
-    }
-
-    #[test]
-    fn ltc4020_input_limit_is_not_charged_to_kelvin_or_power_nets() {
-        let board = ExtractedBoard {
-            name: "ltc4020_program".into(),
-            nets: vec![
+        let ltc4020 = board(
+            "ltc4020_program",
+            vec![
                 net(1, "VIN"),
                 net(2, "GND"),
                 net(3, "SENSE_TOP"),
@@ -1859,7 +1566,7 @@ k_volts = 1000.0
                 net(5, "ILIMIT"),
                 net(6, "BAT"),
             ],
-            components: vec![
+            vec![
                 comp(
                     "U2",
                     "LTC4020",
@@ -1872,12 +1579,7 @@ k_volts = 1000.0
                         pin("36", 1),
                     ],
                 ),
-                comp(
-                    "R8",
-                    "7.15k",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 5), pin("2", 2)],
-                ),
+                two_pin("R8", "7.15k", 5, 2),
                 comp(
                     "R49",
                     "0.01",
@@ -1891,14 +1593,9 @@ k_volts = 1000.0
                     vec![pin("1", 4), pin("2", 2)],
                 ),
             ],
-        };
-
-        let got = attribute_currents(&board, &ModelLibrary::builtin());
-        assert!(
-            got.cited.is_empty(),
-            "a current-limit setting proves neither load current nor Kelvin-stub current: {:?}",
-            got.cited
         );
+        let got = attribute_currents(&ltc4020, &ModelLibrary::builtin());
+        assert!(got.cited.is_empty(), "{:?}", got.cited);
     }
 
     #[test]
@@ -1918,12 +1615,7 @@ k_volts = 1000.0
                         pin("6", 6),
                     ],
                 ),
-                comp(
-                    "R1",
-                    "10k",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 3), pin("2", 2)],
-                ),
+                two_pin("R1", "10k", 3, 2),
                 comp(
                     "R2",
                     "0.01",
@@ -1938,16 +1630,11 @@ k_volts = 1000.0
                 ),
             ];
             if extra_branch {
-                components.push(comp(
-                    "R4",
-                    "0.001",
-                    "Resistor_SMD:R_0603",
-                    vec![pin("1", 5), pin("2", 7)],
-                ));
+                components.push(two_pin("R4", "0.001", 5, 7));
             }
-            ExtractedBoard {
-                name: "sense_regulator".into(),
-                nets: vec![
+            board(
+                "sense_regulator",
+                vec![
                     net(1, "VIN"),
                     net(2, "GND"),
                     net(3, "PROG"),
@@ -1957,7 +1644,7 @@ k_volts = 1000.0
                     net(7, "FILTER_NODE"),
                 ],
                 components,
-            }
+            )
         };
         let lib = lib_from("sense_regulator", SENSE_REGULATOR_TOML);
 
@@ -1969,20 +1656,7 @@ k_volts = 1000.0
             assert!(citation.contains("R2+R3") && citation.contains("equal"));
         }
         for kelvin in ["KELVIN_A", "KELVIN_B", "GND"] {
-            assert!(
-                !valid.cited.contains_key(kelvin),
-                "Kelvin/reference net {kelvin} does not carry the regulated branch current"
-            );
-        }
-
-        for (label, board) in [
-            ("mismatched shunts", make_board("0.02", false, false)),
-            ("wrong far-side role", make_board("0.01", true, false)),
-            ("extra resistive branch", make_board("0.01", false, true)),
-        ] {
-            let got = attribute_currents(&board, &lib);
-            assert!(got.cited.is_empty(), "{label}: {:?}", got.cited);
-            assert_eq!(got.undetermined.len(), 1, "{label}");
+            assert!(!valid.cited.contains_key(kelvin), "{kelvin}");
         }
 
         let mut multi_terminal_sense = make_board("0.01", false, false);
@@ -1992,20 +1666,25 @@ k_volts = 1000.0
             "Potentiometer_THT:Potentiometer",
             vec![pin("1", 5), pin("2", 1), pin("3", 7)],
         ));
-        let got = attribute_currents(&multi_terminal_sense, &lib);
-        assert!(got.cited.is_empty());
-        assert_eq!(
-            got.undetermined.len(),
-            1,
-            "a multi-terminal device touching a Kelvin net must make the law undetermined"
-        );
+        for (label, board) in [
+            ("mismatched shunts", make_board("0.02", false, false)),
+            ("wrong far-side role", make_board("0.01", true, false)),
+            ("extra resistive branch", make_board("0.01", false, true)),
+            (
+                "multi-terminal device on a Kelvin net",
+                multi_terminal_sense,
+            ),
+        ] {
+            let got = attribute_currents(&board, &lib);
+            assert!(got.cited.is_empty(), "{label}: {:?}", got.cited);
+            assert_eq!(got.undetermined.len(), 1, "{label}");
+        }
     }
 
+    /// The checked-in Watchy board: U3's PROG network holds R3 = 10 kOhm, so
+    /// the TP4054 law attributes 100 mA to both charger rails.
     #[test]
     fn checked_in_watchy_programs_tp4054_to_one_hundred_milliamps() {
-        // This is the actual drag-and-drop example, not a reduced fixture. U3's
-        // PROG network contains R3 = 10 kOhm, so the current official TP4054
-        // law must attribute 100 mA to both charger rails.
         let text = include_str!("../../../hauksbee-ci/examples/boards/watchy.kicad_pcb");
         let board = ExtractedBoard::from_kicad_pcb(text).expect("Watchy extracts");
         let got = attribute_currents(&board, &ModelLibrary::builtin());
@@ -2014,25 +1693,16 @@ k_volts = 1000.0
             .iter()
             .filter(|(_, (_, citation))| citation.contains("U3 (tp4054)"))
             .collect();
-
-        assert_eq!(
-            charger_rails.len(),
-            2,
-            "the input and battery rails must both be attributable: {charger_rails:?}"
-        );
+        assert_eq!(charger_rails.len(), 2, "{charger_rails:?}");
         for (rail, (current, citation)) in charger_rails {
-            assert!(
-                (*current - 0.1).abs() < 1e-12,
-                "{rail}: R3=10k should program 100 mA, got {current}"
-            );
+            assert!((*current - 0.1).abs() < 1e-12, "{rail}: {current}");
             assert!(citation.contains("R3") && citation.contains("10000"));
         }
     }
 
+    /// A fixed LDO's current rating is a capability, never a cited load.
     #[test]
     fn a_regulator_rating_is_capability_not_proof_of_board_load() {
-        // An LDO capable of 1 A can feed a 2 mA load. Without a load assertion,
-        // its rating cannot become an actual-current citation for ampacity.
         let toml_src = r#"
 [[models]]
 id = "test_ldo"
@@ -2055,31 +1725,27 @@ iq_a = 0.001
 [models.ratings]
 max_current_a = 1.0
 "#;
-        let board = ExtractedBoard {
-            name: "ldo".into(),
-            nets: vec![net(1, "+5V"), net(2, "GND"), net(3, "+3V3")],
-            components: vec![comp(
+        let board = board(
+            "ldo",
+            vec![net(1, "+5V"), net(2, "GND"), net(3, "+3V3")],
+            vec![comp(
                 "U2",
                 "TESTLDO",
-                String::new().as_str(),
+                "",
                 vec![pin("1", 1), pin("2", 2), pin("3", 3)],
             )],
-        };
-        let lib = lib_from("plain_ldo", toml_src);
-        let got = attribute_currents(&board, &lib);
-        assert!(got.undetermined.is_empty());
-        assert!(
-            got.cited.is_empty(),
-            "a capability is not a load: {:?}",
-            got.cited
         );
+        let got = attribute_currents(&board, &lib_from("plain_ldo", toml_src));
+        assert!(got.undetermined.is_empty());
+        assert!(got.cited.is_empty(), "{:?}", got.cited);
     }
 
+    /// Source/sink roles are data in `current_program`; control pins with
+    /// familiar names are never charged, a missing declared role refuses the
+    /// whole path, and one logical pad on two nets refuses too.
     #[test]
-    fn programmed_power_path_uses_explicit_roles_not_name_heuristics() {
-        // A 5-pin LDO: source/sink roles are data in current_program. Control
-        // roles cannot receive current just because their names look familiar.
-        let model = model_from_toml(
+    fn programmed_power_path_uses_explicit_roles_and_refuses_incomplete_pads() {
+        let model: hauksbee_models::ModelEntry = toml::from_str(
             r#"
                 id = "lp2985_3v3"
                 kind = "vreg"
@@ -2098,109 +1764,60 @@ max_current_a = 1.0
                 equation = "inverse_resistance"
                 k_volts = 1000.0
             "#,
-        );
+        )
+        .expect("valid model toml");
         let program = model.current_program.as_ref().unwrap();
-        let comp = hauksbee_extract::Component {
-            reference: "U1".into(),
-            value: "LP2985-3.3".into(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: vec![],
-            dnp: false,
-            pins: vec![
-                pin("1", 10), // in  -> VIN
-                pin("2", 11), // gnd -> GND
-                pin("3", 12), // en  -> EN
-                pin("4", 13), // noise_bypass -> BYP
-                pin("5", 14), // out -> +3V3
+        let ldo = comp(
+            "U1",
+            "LP2985-3.3",
+            "",
+            vec![
+                pin("1", 10),
+                pin("2", 11),
+                pin("3", 12),
+                pin("4", 13),
+                pin("5", 14),
             ],
-        };
-        let board = ExtractedBoard {
-            name: "t".into(),
-            nets: vec![
-                Net {
-                    id: 10,
-                    name: "VIN".into(),
-                },
-                Net {
-                    id: 11,
-                    name: "GND".into(),
-                },
-                Net {
-                    id: 12,
-                    name: "EN".into(),
-                },
-                Net {
-                    id: 13,
-                    name: "BYP".into(),
-                },
-                Net {
-                    id: 14,
-                    name: "+3V3".into(),
-                },
+        );
+        let board = board(
+            "t",
+            vec![
+                net(10, "VIN"),
+                net(11, "GND"),
+                net(12, "EN"),
+                net(13, "BYP"),
+                net(14, "+3V3"),
             ],
-            components: vec![comp.clone()],
-        };
-        let nets = power_nets_of(&board, &comp, &model, program);
+            vec![ldo.clone()],
+        );
+        let nets = power_nets_of(&board, &ldo, &model, program);
         assert_eq!(
             nets,
             vec![10, 14],
             "only explicitly declared rails carry current"
         );
-        assert!(!nets.contains(&11), "GND excluded");
-        assert!(
-            !nets.contains(&12),
-            "EN must not be charged the rail current"
-        );
-        assert!(
-            !nets.contains(&13),
-            "bypass must not be charged the rail current"
-        );
-    }
 
-    #[test]
-    fn programmed_power_path_refuses_a_missing_declared_role() {
-        let component = comp(
+        let lib = lib_from("incomplete_pads", CHARGER_TOML);
+        let board = charger_board(Vec::new());
+        let missing_out = comp(
             "U1",
             "TESTCHARGER",
             "",
             vec![pin("1", 1), pin("2", 2), pin("3", 3)],
         );
-        let lib = lib_from("missing_declared_role", CHARGER_TOML);
-        let part = AssemblyState::of(&component).fitted().unwrap();
-        let model = resolve(&lib, part).model.unwrap();
-        let program = model.current_program.as_ref().unwrap();
-        let board = charger_board(Vec::new());
-        assert!(
-            programmed_power_rails(&board, part, &model, program).is_none(),
-            "missing OUT must refuse the entire current path, not retain VIN"
-        );
-    }
-
-    #[test]
-    fn programmed_power_path_refuses_conflicting_repeated_role_pads() {
-        let component = comp(
-            "U1",
-            "TESTCHARGER",
-            "",
-            vec![
-                pin("1", 1),
-                pin("1", 5),
-                pin("2", 2),
-                pin("3", 3),
-                pin("4", 4),
-            ],
-        );
-        let lib = lib_from("conflicting_role_pads", CHARGER_TOML);
-        let part = AssemblyState::of(&component).fitted().unwrap();
-        let model = resolve(&lib, part).model.unwrap();
-        let program = model.current_program.as_ref().unwrap();
-        let board = charger_board(Vec::new());
-        assert!(
-            programmed_power_rails(&board, part, &model, program).is_none(),
-            "one logical input pad cannot be on two non-zero nets"
-        );
+        let mut conflicting = charger("U1", [1, 2, 3, 4]);
+        conflicting.pins.insert(1, pin("1", 5));
+        for (label, component) in [
+            ("missing OUT", missing_out),
+            ("conflicting pads", conflicting),
+        ] {
+            let part = AssemblyState::of(&component).fitted().unwrap();
+            let model = resolve(&lib, part).model.unwrap();
+            let program = model.current_program.as_ref().unwrap();
+            assert!(
+                programmed_power_rails(&board, part, &model, program).is_none(),
+                "{label}"
+            );
+        }
     }
 }

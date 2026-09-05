@@ -249,9 +249,9 @@ fn exception_message(v: &JsValue) -> String {
 mod log_bounds_tests {
     use super::*;
 
-    /// Both arms carry `logs`, so read it without caring which we got.
-    fn logs_of(out: Result<Value, Value>) -> Vec<Value> {
-        let v = match out {
+    /// The captured `logs` of a script, whichever arm it returned on.
+    fn run_script(src: &str) -> Vec<Value> {
+        let v = match run(src, Duration::from_secs(30)) {
             Ok(v) | Err(v) => v,
         };
         v.get("logs")
@@ -260,19 +260,9 @@ mod log_bounds_tests {
             .unwrap_or_default()
     }
 
-    fn run_script(src: &str) -> Vec<Value> {
-        logs_of(run(src, Duration::from_secs(30)))
-    }
-
-    /// A script that logs in a loop must not grow memory without bound.
-    ///
-    /// `rt.set_memory_limit` bounds the QuickJS heap, and the captured log does
-    /// not live there: each line is copied into Rust and the JS string is freed
-    /// straight after, so the interpreter stays flat while the Vec grows. A
-    /// security review reproduced 2.6 GB resident in five seconds from one line
-    /// of script, still climbing, which at the 120 s timeout is roughly 8 GB.
-    /// One `tools/call` did it, and an MCP server is driven by a model relaying
-    /// content it did not write.
+    /// The captured log lives in Rust, outside the QuickJS heap limit, so a
+    /// logging loop would grow memory without bound (measured: gigabytes in
+    /// seconds from one line of script) unless the line count is capped.
     #[test]
     fn a_logging_loop_cannot_grow_the_log_without_bound() {
         let logs = run_script(
@@ -285,28 +275,19 @@ mod log_bounds_tests {
         );
     }
 
-    /// One enormous line is truncated rather than kept whole, and the truncation
-    /// says so. Dropping it silently would let a script think it logged.
+    /// One enormous line is truncated visibly (dropping it silently would let
+    /// a script think it logged), and the cut lands on a char boundary so a
+    /// multibyte glyph cannot panic the server.
     #[test]
-    fn one_huge_line_is_truncated_and_says_so() {
+    fn a_huge_line_is_truncated_visibly_and_on_a_char_boundary() {
         let logs = run_script("console.log('z'.repeat(500000)); return 1;");
         let first = logs.first().and_then(|v| v.as_str()).unwrap_or("");
-        assert!(
-            first.len() < 500_000,
-            "the line was kept whole at {} bytes",
-            first.len()
-        );
+        assert!(first.len() < 500_000, "kept whole at {} bytes", first.len());
         assert!(
             first.contains("more bytes discarded"),
             "truncation must be visible, got: {}",
             &first[..first.len().min(120)]
         );
-    }
-
-    /// Truncation must cut on a char boundary. A script can log anything, and
-    /// slicing a multibyte glyph in half panics the server.
-    #[test]
-    fn truncating_a_multibyte_line_does_not_panic() {
         let logs = run_script("console.log('\u{1F50C}'.repeat(100000)); return 1;");
         assert!(!logs.is_empty(), "a multibyte overlong line must survive");
     }

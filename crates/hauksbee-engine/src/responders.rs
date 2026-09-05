@@ -1500,12 +1500,12 @@ impl InputResponder for SoftI2cResponder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::peripherals::register_map::RegisterMapSensor;
+    use crate::peripherals::spi::SpiSlave;
 
-    /// A responder that records every edge it sees and answers with a fixed
-    /// drive, for registry-dispatch proofs.
+    /// A responder that answers every edge on its pins with a fixed drive.
     struct Probe {
         pins: Vec<(char, u8)>,
-        seen: Vec<((char, u8), bool)>,
         answer: Vec<InputDrive>,
     }
 
@@ -1513,30 +1513,30 @@ mod tests {
         fn watched_pins(&self) -> Vec<(char, u8)> {
             self.pins.clone()
         }
-        fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
-            self.seen.push((pin, high));
+        fn on_edge(&mut self, _pin: (char, u8), _high: bool) -> Vec<InputDrive> {
             self.answer.clone()
         }
     }
 
-    #[test]
-    fn registry_dispatches_only_to_watchers() {
-        let mut reg = ResponderRegistry::new();
-        reg.register(Box::new(Probe {
-            pins: vec![('B', 5)],
-            seen: Vec::new(),
-            answer: vec![InputDrive::drive(('B', 4), true)],
-        }));
-        reg.register(Box::new(Probe {
-            pins: vec![('D', 2)],
-            seen: Vec::new(),
-            answer: Vec::new(),
-        }));
+    fn probe(pin: (char, u8), answer: Vec<InputDrive>) -> Box<Probe> {
+        Box::new(Probe {
+            pins: vec![pin],
+            answer,
+        })
+    }
 
-        // An edge on a watched pin answers; an unwatched pin answers nothing.
+    #[test]
+    fn registry_dispatches_only_to_watchers_and_concatenates_in_registration_order() {
+        let mut reg = ResponderRegistry::new();
+        reg.register(probe(('B', 5), vec![InputDrive::drive(('B', 4), true)]));
+        reg.register(probe(('D', 2), Vec::new()));
+        reg.register(probe(('B', 5), vec![InputDrive::drive(('C', 1), false)]));
         assert_eq!(
             reg.dispatch(('B', 5), true),
-            vec![InputDrive::drive(('B', 4), true)]
+            vec![
+                InputDrive::drive(('B', 4), true),
+                InputDrive::drive(('C', 1), false),
+            ]
         );
         assert!(reg.dispatch(('C', 0), true).is_empty());
         assert!(reg.dispatch(('D', 2), false).is_empty());
@@ -1546,47 +1546,121 @@ mod tests {
     fn registry_releases_only_after_every_shared_responder_releases() {
         let shared = ('B', 4);
         let mut reg = ResponderRegistry::new();
-        reg.register(Box::new(Probe {
-            pins: vec![('B', 5)],
-            seen: Vec::new(),
-            answer: vec![InputDrive::drive(shared, false)],
-        }));
-        reg.register(Box::new(Probe {
-            pins: vec![('D', 2)],
-            seen: Vec::new(),
-            answer: vec![InputDrive::drive(shared, false)],
-        }));
-
+        reg.register(probe(('B', 5), vec![InputDrive::drive(shared, false)]));
+        reg.register(probe(('D', 2), vec![InputDrive::drive(shared, false)]));
         assert_eq!(
             reg.dispatch(('B', 5), true),
             vec![InputDrive::drive(shared, false)]
         );
         assert!(reg.dispatch(('D', 2), true).is_empty());
 
-        reg.responders[0] = Box::new(Probe {
-            pins: vec![('B', 5)],
-            seen: Vec::new(),
-            answer: vec![InputDrive::release(shared)],
-        });
+        reg.responders[0] = probe(('B', 5), vec![InputDrive::release(shared)]);
         assert!(
             reg.dispatch(('B', 5), false).is_empty(),
             "the other source still owns the pin"
         );
-
-        reg.responders[1] = Box::new(Probe {
-            pins: vec![('D', 2)],
-            seen: Vec::new(),
-            answer: vec![InputDrive::release(shared)],
-        });
+        reg.responders[1] = probe(('D', 2), vec![InputDrive::release(shared)]);
         assert_eq!(
             reg.dispatch(('D', 2), false),
             vec![InputDrive::release(shared)]
         );
     }
 
-    #[test]
-    fn parallel_memory_answers_and_writes_inside_one_firmware_chunk() {
-        const SPEC: &str = r#"
+    // ── Parallel memory responder ────────────────────────────────────────────
+
+    const LEVELS: LogicLevels = LogicLevels {
+        voh: 4.4,
+        vol: 0.1,
+        vih: 2.0,
+        vil: 0.8,
+        ro: 50.0,
+    };
+
+    fn mcu(pin: (char, u8)) -> ParallelSignal {
+        ParallelSignal::Mcu(pin)
+    }
+
+    fn ground() -> ParallelSignal {
+        ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)
+    }
+
+    fn write(
+        strobe: (char, u8),
+        edge: Edge,
+        gates: Vec<(ParallelSignal, Level)>,
+    ) -> ParallelMemoryWrite {
+        ParallelMemoryWrite::new(mcu(strobe), edge, gates)
+    }
+
+    fn data_pins(n: u8) -> Vec<(char, u8)> {
+        (0..n).map(|bit| ('C', bit)).collect()
+    }
+
+    /// Compile `spec` and build a responder over its single memory port.
+    /// Returns the responder, a handle on the port for inspection, and the
+    /// shared runtime.
+    #[allow(clippy::type_complexity)]
+    fn memory_responder(
+        spec: &str,
+        address: Vec<ParallelSignal>,
+        writes: Vec<ParallelMemoryWrite>,
+        read_gates: Vec<(ParallelSignal, Level)>,
+        data_in: Vec<ParallelSignal>,
+        data_out: Vec<(char, u8)>,
+    ) -> (
+        ParallelMemoryResponder,
+        crate::logic::ParallelMemoryPort,
+        Arc<Mutex<ParallelMemoryRuntime>>,
+    ) {
+        let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(spec).unwrap();
+        let logic = crate::logic::LogicComponent::compile("memory", &parsed).unwrap();
+        let port = logic.memory_ports().pop().expect("one memory");
+        let inspect = port.clone();
+        let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
+        let responder = ParallelMemoryResponder::new(
+            "U1.cell".into(),
+            port,
+            LEVELS,
+            1_000_000,
+            Arc::new(Mutex::new(vec![0.0; 2])),
+            address,
+            writes,
+            read_gates,
+            data_in,
+            data_out,
+            Vec::new(),
+            Arc::clone(&runtime),
+        );
+        (responder, inspect, runtime)
+    }
+
+    fn bus_byte(drives: &[InputDrive]) -> u8 {
+        drives.iter().enumerate().fold(0u8, |value, (bit, update)| {
+            value | (u8::from(update.level.expect("drive")) << bit)
+        })
+    }
+
+    fn one_bit_spec(write: &str, write_gates: &str, read_gates: &str, inputs: &str) -> String {
+        format!(
+            r#"
+inputs = [{inputs}]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["gnd"]
+write = {write}
+write_gates = [{write_gates}]
+read_gates = [{read_gates}]
+data_in = ["gnd"]
+data_out = ["io0"]
+"#
+        )
+    }
+
+    const EIGHT_BIT_SPEC: &str = r#"
 inputs = ["a0", "a1", "ce_n", "oe_n", "we_n"]
 outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
 [[memory]]
@@ -1606,357 +1680,259 @@ read_gates = [
 data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
 data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
 "#;
-        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).unwrap();
-        let logic = crate::logic::LogicComponent::compile("eeprom", &spec).unwrap();
-        let port = logic.memory_ports().pop().expect("one memory");
 
+    /// An AT28-style page-mode EEPROM with WE- and CE-controlled write cycles.
+    fn at28_spec(words: usize, page_words: usize, address_pins: usize) -> String {
+        let address: Vec<String> = (0..address_pins).map(|i| format!("\"a{i}\"")).collect();
+        format!(
+            r#"
+inputs = [{}, "ce_n", "oe_n", "we_n"]
+outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+[[memory]]
+name = "cell"
+words = {words}
+bits = 8
+page_words = {page_words}
+byte_load_timeout_s = 0.00015
+program_time_s = 0.010
+init = 0xff
+address = [{}]
+write_cycles = [
+  {{ pin = "we_n", edge = "rising", gates = [
+    {{ pin = "ce_n", active = "low" }},
+    {{ pin = "oe_n", active = "high" }},
+  ] }},
+  {{ pin = "ce_n", edge = "rising", gates = [
+    {{ pin = "we_n", active = "low" }},
+    {{ pin = "oe_n", active = "high" }},
+  ] }},
+]
+read_gates = [
+  {{ pin = "ce_n", active = "low" }},
+  {{ pin = "oe_n", active = "low" }},
+  {{ pin = "we_n", active = "high" }},
+]
+data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+"#,
+            address.join(", "),
+            address.join(", "),
+        )
+    }
+
+    const CE: (char, u8) = ('D', 0);
+    const OE: (char, u8) = ('D', 1);
+    const WE: (char, u8) = ('D', 2);
+
+    fn at28_writes() -> Vec<ParallelMemoryWrite> {
+        vec![
+            write(
+                WE,
+                Edge::Rising,
+                vec![(mcu(CE), Level::Low), (mcu(OE), Level::High)],
+            ),
+            write(
+                CE,
+                Edge::Rising,
+                vec![(mcu(WE), Level::Low), (mcu(OE), Level::High)],
+            ),
+        ]
+    }
+
+    fn at28_read_gates() -> Vec<(ParallelSignal, Level)> {
+        vec![
+            (mcu(CE), Level::Low),
+            (mcu(OE), Level::Low),
+            (mcu(WE), Level::High),
+        ]
+    }
+
+    #[test]
+    fn parallel_memory_answers_and_writes_inside_one_firmware_chunk() {
         let a0 = ('B', 0);
         let a1 = ('B', 1);
-        let ce = ('D', 0);
-        let oe = ('D', 1);
-        let we = ('D', 2);
-        let data: Vec<(char, u8)> = (0..8).map(|bit| ('C', bit)).collect();
-        let mut responder = ParallelMemoryResponder::new(
-            "U1.cell".into(),
-            port,
-            LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 2.0,
-                vil: 0.8,
-                ro: 50.0,
-            },
-            1_000_000,
-            Arc::new(Mutex::new(vec![0.0; 2])),
-            vec![ParallelSignal::Mcu(a0), ParallelSignal::Mcu(a1)],
-            vec![ParallelMemoryWrite::new(
-                ParallelSignal::Mcu(we),
-                Edge::Rising,
-                vec![(ParallelSignal::Mcu(ce), Level::Low)],
-            )],
-            vec![
-                (ParallelSignal::Mcu(ce), Level::Low),
-                (ParallelSignal::Mcu(oe), Level::Low),
-                (ParallelSignal::Mcu(we), Level::High),
-            ],
-            data.iter().copied().map(ParallelSignal::Mcu).collect(),
+        let data = data_pins(8);
+        let (responder, _, _) = memory_responder(
+            EIGHT_BIT_SPEC,
+            vec![mcu(a0), mcu(a1)],
+            vec![write(WE, Edge::Rising, vec![(mcu(CE), Level::Low)])],
+            at28_read_gates(),
+            data.iter().copied().map(mcu).collect(),
             data.clone(),
-            Vec::new(),
-            Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
-        )
-        .with_initial_pin_levels(HashMap::from([(a0, true)]));
+        );
+        let mut responder = responder.with_initial_pin_levels(HashMap::from([(a0, true)]));
 
         // Idle controls, address 1, and an externally-driven 0x5a bus.
-        responder.on_edge(ce, false);
-        responder.on_edge(oe, true);
-        responder.on_edge(we, true);
+        responder.on_edge(CE, false);
+        responder.on_edge(OE, true);
+        responder.on_edge(WE, true);
         responder.on_edge(a1, false);
         for (bit, &pin) in data.iter().enumerate() {
             responder.on_edge(pin, 0x5a & (1 << bit) != 0);
         }
-
-        // A complete 1 us pulse may rise and fall before the analogue chunk
-        // ends; the synchronous responder still commits on the rising edge.
-        responder.on_edge(we, false);
-        responder.on_edge(we, true);
-        let drives = responder.on_edge(oe, false);
-        let got = drives.iter().enumerate().fold(0u8, |value, (bit, update)| {
-            value | (u8::from(update.level.expect("drive")) << bit)
-        });
-        assert_eq!(got, 0x5a);
-
-        let releases = responder.on_edge(oe, true);
+        // A complete pulse inside one analogue chunk still commits on the edge.
+        responder.on_edge(WE, false);
+        responder.on_edge(WE, true);
+        assert_eq!(bus_byte(&responder.on_edge(OE, false)), 0x5a);
         assert_eq!(
-            releases,
+            responder.on_edge(OE, true),
             data.iter()
                 .copied()
                 .map(InputDrive::release)
                 .collect::<Vec<_>>(),
-            "OE high must explicitly release the persistent simavr input drives"
+            "OE high must explicitly release the persistent input drives"
         );
 
         // CE inactive suppresses both bus drive and write qualification.
-        let _ = responder.on_edge(ce, true);
+        let _ = responder.on_edge(CE, true);
         for &pin in &data {
             responder.on_edge(pin, false);
         }
-        responder.on_edge(we, false);
-        responder.on_edge(we, true);
-        responder.on_edge(ce, false);
-        let drives = responder.on_edge(oe, false);
-        let got = drives.iter().enumerate().fold(0u8, |value, (bit, update)| {
-            value | (u8::from(update.level.expect("drive")) << bit)
-        });
-        assert_eq!(got, 0x5a, "CE-high write pulse must not overwrite memory");
+        responder.on_edge(WE, false);
+        responder.on_edge(WE, true);
+        responder.on_edge(CE, false);
+        assert_eq!(
+            bus_byte(&responder.on_edge(OE, false)),
+            0x5a,
+            "CE-high write must not land"
+        );
     }
 
+    /// A PORT-latch change while the pin is still an input is not a physical
+    /// strobe edge; the first real DDR-induced edge must not be suppressed by
+    /// a synthetic previous state.
     #[test]
     fn pulled_strobe_uses_effective_level_and_first_real_edge() {
         for (initial_high, edge, port_high) in
             [(false, Edge::Rising, true), (true, Edge::Falling, false)]
         {
-            let spec = format!(
-                r#"
-inputs = ["gnd", "strobe"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = {{ pin = "strobe", edge = "{}" }}
-read_gates = []
-data_in = ["gnd"]
-data_out = ["io0"]
-"#,
-                match edge {
-                    Edge::Rising => "rising",
-                    Edge::Falling => "falling",
-                }
+            let edge_name = match edge {
+                Edge::Rising => "rising",
+                Edge::Falling => "falling",
+            };
+            let spec = one_bit_spec(
+                &format!("{{ pin = \"strobe\", edge = \"{edge_name}\" }}"),
+                "",
+                "",
+                "\"gnd\", \"strobe\"",
             );
-            let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(&spec).unwrap();
-            let logic = crate::logic::LogicComponent::compile("pulled-strobe", &parsed).unwrap();
-            let port = logic.memory_ports().pop().unwrap();
             let strobe = ('B', 0);
-            let mut responder = ParallelMemoryResponder::new(
-                "U1.cell".into(),
-                port,
-                LogicLevels {
-                    voh: 4.4,
-                    vol: 0.1,
-                    vih: 2.0,
-                    vil: 0.8,
-                    ro: 50.0,
-                },
-                1_000_000,
-                Arc::new(Mutex::new(vec![0.0])),
-                vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
-                vec![ParallelMemoryWrite::new(
-                    ParallelSignal::Mcu(strobe),
-                    edge,
-                    Vec::new(),
-                )],
+            let (responder, port, _) = memory_responder(
+                &spec,
+                vec![ground()],
+                vec![write(strobe, edge, Vec::new())],
                 Vec::new(),
-                vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
+                vec![ground()],
                 vec![('C', 0)],
-                Vec::new(),
-                Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
-            )
-            .with_initial_pin_levels(HashMap::from([(strobe, initial_high)]));
-
+            );
+            let mut responder =
+                responder.with_initial_pin_levels(HashMap::from([(strobe, initial_high)]));
             let _ = responder.on_edges_at(&[(strobe, port_high)], 1);
             assert_eq!(
-                responder.port.read(0),
+                port.read(0),
                 Some(1),
-                "a PORT-latch write while input must not create a physical strobe edge"
+                "PORT latch while input is not a strobe"
             );
             let _ = responder.on_direction_at(strobe, true, port_high, 2);
             assert_eq!(
-                responder.port.read(0),
+                port.read(0),
                 Some(0),
-                "the first real DDR-induced {:?} edge must not be suppressed by a synthetic prev state",
-                edge
+                "first real DDR-induced {edge:?} edge writes"
             );
         }
     }
 
     #[test]
     fn unpulled_port_latch_is_not_a_physical_edge_before_ddr_output() {
-        let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(
-            r#"
-inputs = ["gnd", "strobe"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "strobe", edge = "rising" }
-read_gates = []
-data_in = ["gnd"]
-data_out = ["io0"]
-"#,
-        )
-        .unwrap();
-        let logic = crate::logic::LogicComponent::compile("unpulled-strobe", &parsed).unwrap();
-        let port = logic.memory_ports().pop().unwrap();
-        let strobe = ('B', 0);
-        let mut responder = ParallelMemoryResponder::new(
-            "U1.cell".into(),
-            port,
-            LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 2.0,
-                vil: 0.8,
-                ro: 50.0,
-            },
-            1_000_000,
-            Arc::new(Mutex::new(vec![0.0])),
-            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
-            vec![ParallelMemoryWrite::new(
-                ParallelSignal::Mcu(strobe),
-                Edge::Rising,
-                Vec::new(),
-            )],
-            Vec::new(),
-            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
-            vec![('C', 0)],
-            Vec::new(),
-            Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
+        let spec = one_bit_spec(
+            "{ pin = \"strobe\", edge = \"rising\" }",
+            "",
+            "",
+            "\"gnd\", \"strobe\"",
         );
-
+        let strobe = ('B', 0);
+        let (mut responder, port, _) = memory_responder(
+            &spec,
+            vec![ground()],
+            vec![write(strobe, Edge::Rising, Vec::new())],
+            Vec::new(),
+            vec![ground()],
+            vec![('C', 0)],
+        );
         let _ = responder.on_edges_at(&[(strobe, true)], 1);
         assert_eq!(
-            responder.port.read(0),
+            port.read(0),
             Some(1),
-            "changing only the PORT latch while DDR is input must not write"
+            "PORT latch while DDR is input must not write"
         );
         let _ = responder.on_direction_at(strobe, true, true, 2);
         assert_eq!(
-            responder.port.read(0),
+            port.read(0),
             Some(1),
-            "the first drive from an unknown floating level establishes state without inventing an edge"
+            "first drive from a floating level invents no edge"
         );
         let _ = responder.on_edges_at(&[(strobe, false)], 3);
         let _ = responder.on_edges_at(&[(strobe, true)], 4);
-        assert_eq!(
-            responder.port.read(0),
-            Some(0),
-            "a later physical low-to-high PORT transition must remain visible"
-        );
+        assert_eq!(port.read(0), Some(0), "a later physical transition writes");
     }
 
     #[test]
     fn unpulled_input_latch_cannot_qualify_another_pins_write() {
-        let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(
-            r#"
-inputs = ["gnd", "gate", "strobe"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "strobe", edge = "rising" }
-write_gates = [{ pin = "gate", active = "high" }]
-read_gates = []
-data_in = ["gnd"]
-data_out = ["io0"]
-"#,
-        )
-        .unwrap();
-        let logic = crate::logic::LogicComponent::compile("unpulled-gate", &parsed).unwrap();
-        let port = logic.memory_ports().pop().unwrap();
+        let spec = one_bit_spec(
+            "{ pin = \"strobe\", edge = \"rising\" }",
+            "{ pin = \"gate\", active = \"high\" }",
+            "",
+            "\"gnd\", \"gate\", \"strobe\"",
+        );
         let gate = ('B', 0);
         let strobe = ('B', 1);
-        let mut responder = ParallelMemoryResponder::new(
-            "U1.cell".into(),
-            port,
-            LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 2.0,
-                vil: 0.8,
-                ro: 50.0,
-            },
-            1_000_000,
-            Arc::new(Mutex::new(vec![0.0])),
-            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
-            vec![ParallelMemoryWrite::new(
-                ParallelSignal::Mcu(strobe),
-                Edge::Rising,
-                vec![(ParallelSignal::Mcu(gate), Level::High)],
-            )],
+        let (mut responder, port, _) = memory_responder(
+            &spec,
+            vec![ground()],
+            vec![write(strobe, Edge::Rising, vec![(mcu(gate), Level::High)])],
             Vec::new(),
-            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
+            vec![ground()],
             vec![('C', 0)],
-            Vec::new(),
-            Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
         );
-
         let _ = responder.on_edges_at(&[(gate, true)], 1);
         let _ = responder.on_direction_at(strobe, true, false, 2);
         let _ = responder.on_edges_at(&[(strobe, true)], 3);
         assert_eq!(
-            responder.port.read(0),
+            port.read(0),
             Some(1),
-            "an unpulled input's PORT latch is not its physical gate level"
+            "an unpulled input's PORT latch is not its gate level"
         );
     }
 
     #[test]
     fn first_ddr_drive_reevaluates_read_without_inventing_a_write_edge() {
-        let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(
-            r#"
-inputs = ["gnd", "read_en"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "read_en", edge = "rising" }
-write_gates = [{ pin = "gnd", active = "high" }]
-read_gates = [{ pin = "read_en", active = "high" }]
-data_in = ["gnd"]
-data_out = ["io0"]
-"#,
-        )
-        .unwrap();
-        let logic = crate::logic::LogicComponent::compile("ddr-read", &parsed).unwrap();
-        let port = logic.memory_ports().pop().unwrap();
-        let read_en = ('B', 0);
-        let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
-        let mut responder = ParallelMemoryResponder::new(
-            "U1.cell".into(),
-            port,
-            LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 2.0,
-                vil: 0.8,
-                ro: 50.0,
-            },
-            1_000_000,
-            Arc::new(Mutex::new(vec![0.0])),
-            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
-            vec![ParallelMemoryWrite::new(
-                ParallelSignal::Mcu(read_en),
-                Edge::Rising,
-                vec![(
-                    ParallelSignal::Node(hauksbee_ir::NodeId::GROUND),
-                    Level::High,
-                )],
-            )],
-            vec![(ParallelSignal::Mcu(read_en), Level::High)],
-            vec![ParallelSignal::Node(hauksbee_ir::NodeId::GROUND)],
-            vec![('C', 0)],
-            Vec::new(),
-            Arc::clone(&runtime),
+        let spec = one_bit_spec(
+            "{ pin = \"read_en\", edge = \"rising\" }",
+            "{ pin = \"gnd\", active = \"high\" }",
+            "{ pin = \"read_en\", active = \"high\" }",
+            "\"gnd\", \"read_en\"",
         );
-
+        let read_en = ('B', 0);
+        let (mut responder, port, runtime) = memory_responder(
+            &spec,
+            vec![ground()],
+            vec![write(read_en, Edge::Rising, vec![(ground(), Level::High)])],
+            vec![(mcu(read_en), Level::High)],
+            vec![ground()],
+            vec![('C', 0)],
+        );
         assert_eq!(
             responder.on_direction_at(read_en, true, true, 1),
             vec![InputDrive::drive(('C', 0), true)],
-            "the first known output level must immediately establish a combinational read"
+            "the first known output level must immediately establish a read"
         );
-        assert_eq!(
-            responder.port.read(0),
-            Some(1),
-            "no write edge was invented"
-        );
+        assert_eq!(port.read(0), Some(1), "no write edge was invented");
         assert!(runtime.lock().unwrap().read_enabled);
     }
 
     #[test]
     fn unknown_address_releases_a_previously_driven_bus() {
-        let parsed: hauksbee_models::logic_spec::Logic = toml::from_str(
-            r#"
+        const SPEC: &str = r#"
 inputs = ["a0", "read_en"]
 outputs = ["io0"]
 [[memory]]
@@ -1970,39 +1946,17 @@ write_gates = []
 read_gates = [{ pin = "read_en", active = "high" }]
 data_in = ["a0"]
 data_out = ["io0"]
-"#,
-        )
-        .unwrap();
-        let logic = crate::logic::LogicComponent::compile("unknown-address", &parsed).unwrap();
-        let port = logic.memory_ports().pop().unwrap();
+"#;
         let address = ('B', 0);
         let read_en = ('B', 1);
-        let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
-        let mut responder = ParallelMemoryResponder::new(
-            "U1.cell".into(),
-            port,
-            LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 2.0,
-                vil: 0.8,
-                ro: 50.0,
-            },
-            1_000_000,
-            Arc::new(Mutex::new(vec![0.0])),
-            vec![ParallelSignal::Mcu(address)],
-            vec![ParallelMemoryWrite::new(
-                ParallelSignal::Mcu(read_en),
-                Edge::Rising,
-                Vec::new(),
-            )],
-            vec![(ParallelSignal::Mcu(read_en), Level::High)],
-            vec![ParallelSignal::Mcu(address)],
+        let (mut responder, _, runtime) = memory_responder(
+            SPEC,
+            vec![mcu(address)],
+            vec![write(read_en, Edge::Rising, Vec::new())],
+            vec![(mcu(read_en), Level::High)],
+            vec![mcu(address)],
             vec![('C', 0)],
-            Vec::new(),
-            Arc::clone(&runtime),
         );
-
         responder.on_directions_at(&[(address, true, false), (read_en, true, true)], 1);
         assert!(runtime.lock().unwrap().read_enabled);
         assert_eq!(
@@ -2012,247 +1966,93 @@ data_out = ["io0"]
         assert!(!runtime.lock().unwrap().read_enabled);
     }
 
+    /// Firmware disables /OE at the same cycle /WE rises on a fresh page's
+    /// first write; the equal-cycle edge pair must neither lose the write nor
+    /// close the page after one byte.
     #[test]
     fn same_cycle_oe_release_after_write_does_not_close_fresh_eeprom_page() {
-        const SPEC: &str = r#"
-inputs = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "ce_n", "oe_n", "we_n"]
-outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
-[[memory]]
-name = "cell"
-words = 128
-bits = 8
-page_words = 64
-byte_load_timeout_s = 0.00015
-program_time_s = 0.010
-init = 0xff
-address = ["a0", "a1", "a2", "a3", "a4", "a5", "a6"]
-write_cycles = [
-  { pin = "we_n", edge = "rising", gates = [
-    { pin = "ce_n", active = "low" },
-    { pin = "oe_n", active = "high" },
-  ] },
-  { pin = "ce_n", edge = "rising", gates = [
-    { pin = "we_n", active = "low" },
-    { pin = "oe_n", active = "high" },
-  ] },
-]
-read_gates = [
-  { pin = "ce_n", active = "low" },
-  { pin = "oe_n", active = "low" },
-  { pin = "we_n", active = "high" },
-]
-data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
-data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
-"#;
-        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).unwrap();
-        let logic = crate::logic::LogicComponent::compile("at28c256", &spec).unwrap();
-        let port = logic.memory_ports().pop().expect("one memory");
-        let inspect = port.clone();
-
         let address: Vec<(char, u8)> = (0..7).map(|bit| ('B', bit)).collect();
-        let data: Vec<(char, u8)> = (0..8).map(|bit| ('C', bit)).collect();
-        let ce = ('D', 0);
-        let oe = ('D', 1);
-        let we = ('D', 2);
-        let mut responder = ParallelMemoryResponder::new(
-            "U1.cell".into(),
-            port,
-            LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 2.0,
-                vil: 0.8,
-                ro: 50.0,
-            },
-            1_000_000,
-            Arc::new(Mutex::new(vec![])),
-            address.iter().copied().map(ParallelSignal::Mcu).collect(),
-            vec![
-                ParallelMemoryWrite::new(
-                    ParallelSignal::Mcu(we),
-                    Edge::Rising,
-                    vec![
-                        (ParallelSignal::Mcu(ce), Level::Low),
-                        (ParallelSignal::Mcu(oe), Level::High),
-                    ],
-                ),
-                ParallelMemoryWrite::new(
-                    ParallelSignal::Mcu(ce),
-                    Edge::Rising,
-                    vec![
-                        (ParallelSignal::Mcu(we), Level::Low),
-                        (ParallelSignal::Mcu(oe), Level::High),
-                    ],
-                ),
-            ],
-            vec![
-                (ParallelSignal::Mcu(ce), Level::Low),
-                (ParallelSignal::Mcu(oe), Level::Low),
-                (ParallelSignal::Mcu(we), Level::High),
-            ],
-            data.iter().copied().map(ParallelSignal::Mcu).collect(),
+        let data = data_pins(8);
+        let (mut responder, inspect, _) = memory_responder(
+            &at28_spec(128, 64, 7),
+            address.iter().copied().map(mcu).collect(),
+            at28_writes(),
+            at28_read_gates(),
+            data.iter().copied().map(mcu).collect(),
             data.clone(),
-            Vec::new(),
-            Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
         );
-        let driven = address
+        let driven: Vec<_> = address
             .iter()
             .chain(&data)
             .copied()
-            .chain([ce, oe, we])
+            .chain([CE, OE, WE])
             .map(|pin| (pin, true, false))
-            .collect::<Vec<_>>();
+            .collect();
         responder.on_directions_at(&driven, 0);
 
         let mut registry = ResponderRegistry::new();
         registry.register(Box::new(responder));
-        let set_bus =
-            |registry: &mut ResponderRegistry, address_value: usize, data_value: u8, cycle: u64| {
-                for (bit, &pin) in address.iter().enumerate() {
-                    registry.dispatch_at(pin, address_value & (1 << bit) != 0, cycle);
-                }
-                for (bit, &pin) in data.iter().enumerate() {
-                    registry.dispatch_at(pin, data_value & (1 << bit) != 0, cycle);
-                }
-            };
+        let set_bus = |registry: &mut ResponderRegistry, addr: usize, byte: u8, cycle: u64| {
+            for (bit, &pin) in address.iter().enumerate() {
+                registry.dispatch_at(pin, addr & (1 << bit) != 0, cycle);
+            }
+            for (bit, &pin) in data.iter().enumerate() {
+                registry.dispatch_at(pin, byte & (1 << bit) != 0, cycle);
+            }
+        };
 
-        // The previous page's data poll left /OE asserted. At the next page's
-        // first write, firmware disables /OE at the same simulated cycle as
-        // /WE rises. An emulator can report those equal-cycle GPIO edges in
-        // either order; the transient intermediate state must neither lose the
-        // 0x40 write nor turn it into a one-byte program operation.
-        registry.dispatch_at(ce, true, 900);
-        registry.dispatch_at(we, true, 900);
-        registry.dispatch_at(oe, false, 900);
-        registry.dispatch_at(ce, false, 900);
+        registry.dispatch_at(CE, true, 900);
+        registry.dispatch_at(WE, true, 900);
+        registry.dispatch_at(OE, false, 900);
+        registry.dispatch_at(CE, false, 900);
         set_bus(&mut registry, 0x40, 0x11, 950);
-        registry.dispatch_at(we, false, 1_000);
-        registry.dispatch_batch_at(&[(we, true), (oe, true)], 1_001);
-
+        registry.dispatch_at(WE, false, 1_000);
+        registry.dispatch_batch_at(&[(WE, true), (OE, true)], 1_001);
         set_bus(&mut registry, 0x41, 0x22, 1_050);
-        registry.dispatch_at(we, false, 1_100);
-        registry.dispatch_at(we, true, 1_101);
+        registry.dispatch_at(WE, false, 1_100);
+        registry.dispatch_at(WE, true, 1_101);
 
-        // A real read begins programming the two-byte page. Both bytes must be
-        // present after tWC; the historical bug swallowed 0x41 as busy data.
-        registry.dispatch_at(oe, false, 1_200);
+        registry.dispatch_at(OE, false, 1_200);
         assert_eq!(inspect.read_at(0x40, 11_101, 1_000_000), Some(0x11));
-        assert_eq!(
-            inspect.read_at(0x41, 11_101, 1_000_000),
-            Some(0x22),
-            "equal-cycle /WE and /OE edges must not close a fresh page after its first byte"
-        );
+        assert_eq!(inspect.read_at(0x41, 11_101, 1_000_000), Some(0x22));
     }
 
     #[test]
     fn shipped_at28_we_rise_into_read_drives_bus_without_a_later_edge() {
-        const SPEC: &str = r#"
-inputs = ["a0", "ce_n", "oe_n", "we_n"]
-outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 8
-page_words = 2
-byte_load_timeout_s = 0.00015
-program_time_s = 0.010
-init = 0xff
-address = ["a0"]
-write_cycles = [
-  { pin = "we_n", edge = "rising", gates = [
-    { pin = "ce_n", active = "low" },
-    { pin = "oe_n", active = "high" },
-  ] },
-  { pin = "ce_n", edge = "rising", gates = [
-    { pin = "we_n", active = "low" },
-    { pin = "oe_n", active = "high" },
-  ] },
-]
-read_gates = [
-  { pin = "ce_n", active = "low" },
-  { pin = "oe_n", active = "low" },
-  { pin = "we_n", active = "high" },
-]
-data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
-data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
-"#;
-        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).unwrap();
-        let logic = crate::logic::LogicComponent::compile("at28c256", &spec).unwrap();
-        let port = logic.memory_ports().pop().expect("one memory");
-
         let address = ('B', 0);
-        let data: Vec<(char, u8)> = (0..8).map(|bit| ('C', bit)).collect();
-        let ce = ('D', 0);
-        let oe = ('D', 1);
-        let we = ('D', 2);
-        let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
-        let mut responder = ParallelMemoryResponder::new(
-            "U1.cell".into(),
-            port,
-            LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 2.0,
-                vil: 0.8,
-                ro: 50.0,
-            },
-            1_000_000,
-            Arc::new(Mutex::new(vec![])),
-            vec![ParallelSignal::Mcu(address)],
-            vec![
-                ParallelMemoryWrite::new(
-                    ParallelSignal::Mcu(we),
-                    Edge::Rising,
-                    vec![
-                        (ParallelSignal::Mcu(ce), Level::Low),
-                        (ParallelSignal::Mcu(oe), Level::High),
-                    ],
-                ),
-                ParallelMemoryWrite::new(
-                    ParallelSignal::Mcu(ce),
-                    Edge::Rising,
-                    vec![
-                        (ParallelSignal::Mcu(we), Level::Low),
-                        (ParallelSignal::Mcu(oe), Level::High),
-                    ],
-                ),
-            ],
-            vec![
-                (ParallelSignal::Mcu(ce), Level::Low),
-                (ParallelSignal::Mcu(oe), Level::Low),
-                (ParallelSignal::Mcu(we), Level::High),
-            ],
-            data.iter().copied().map(ParallelSignal::Mcu).collect(),
+        let data = data_pins(8);
+        let (mut responder, _, runtime) = memory_responder(
+            &at28_spec(2, 2, 1),
+            vec![mcu(address)],
+            at28_writes(),
+            at28_read_gates(),
+            data.iter().copied().map(mcu).collect(),
             data.clone(),
-            Vec::new(),
-            Arc::clone(&runtime),
         );
-        let driven = std::iter::once(address)
+        let driven: Vec<_> = std::iter::once(address)
             .chain(data.iter().copied())
-            .chain([ce, oe, we])
+            .chain([CE, OE, WE])
             .map(|pin| (pin, true, false))
-            .collect::<Vec<_>>();
+            .collect();
         responder.on_directions_at(&driven, 0);
 
-        responder.on_edge_at(ce, false, 10);
-        responder.on_edge_at(oe, false, 10);
-        responder.on_edge_at(we, false, 20);
-        let drives = responder.on_edge_at(we, true, 21);
-
+        responder.on_edge_at(CE, false, 10);
+        responder.on_edge_at(OE, false, 10);
+        responder.on_edge_at(WE, false, 20);
+        let drives = responder.on_edge_at(WE, true, 21);
         assert_eq!(
             drives,
             data.iter()
                 .copied()
                 .map(|pin| InputDrive::drive(pin, true))
                 .collect::<Vec<_>>(),
-            "a lone /WE rising edge enters a genuine read and must drive erased 0xff immediately"
+            "a lone /WE rising edge enters a read and drives erased 0xff immediately"
         );
         assert!(
             runtime
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .read_enabled,
-            "read visibility cannot wait for a companion GPIO edge that may never arrive"
+                .read_enabled
         );
     }
 
@@ -2281,70 +2081,49 @@ read_gates = [
 data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
 data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
 "#;
-        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).unwrap();
-        let logic = crate::logic::LogicComponent::compile("protected-memory", &spec).unwrap();
-        let port = logic.memory_ports().pop().expect("one memory");
-        let inspect = port.clone();
-
         let address = ('B', 0);
-        let data: Vec<(char, u8)> = (0..8).map(|bit| ('C', bit)).collect();
-        let ce = ('D', 0);
-        let oe = ('D', 1);
+        let data = data_pins(8);
         let wp = ('D', 2);
         let we = ('D', 3);
-        let mut responder = ParallelMemoryResponder::new(
-            "U1.cell".into(),
-            port,
-            LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 2.0,
-                vil: 0.8,
-                ro: 50.0,
-            },
-            1_000_000,
-            Arc::new(Mutex::new(vec![])),
-            vec![ParallelSignal::Mcu(address)],
-            vec![ParallelMemoryWrite::new(
-                ParallelSignal::Mcu(we),
+        let (mut responder, inspect, _) = memory_responder(
+            SPEC,
+            vec![mcu(address)],
+            vec![write(
+                we,
                 Edge::Rising,
                 vec![
-                    (ParallelSignal::Mcu(ce), Level::Low),
-                    (ParallelSignal::Mcu(oe), Level::High),
-                    (ParallelSignal::Mcu(wp), Level::High),
+                    (mcu(CE), Level::Low),
+                    (mcu(OE), Level::High),
+                    (mcu(wp), Level::High),
                 ],
             )],
             vec![
-                (ParallelSignal::Mcu(ce), Level::Low),
-                (ParallelSignal::Mcu(oe), Level::Low),
-                (ParallelSignal::Mcu(we), Level::High),
+                (mcu(CE), Level::Low),
+                (mcu(OE), Level::Low),
+                (mcu(we), Level::High),
             ],
-            data.iter().copied().map(ParallelSignal::Mcu).collect(),
+            data.iter().copied().map(mcu).collect(),
             data,
-            Vec::new(),
-            Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
         );
-
-        responder.on_edge_at(ce, false, 10);
-        responder.on_edge_at(oe, false, 10);
+        responder.on_edge_at(CE, false, 10);
+        responder.on_edge_at(OE, false, 10);
         responder.on_edge_at(wp, false, 10);
         responder.on_edge_at(we, false, 20);
         for bit in 0..8 {
             responder.on_edge_at(('C', bit), 0x5a & (1 << bit) != 0, 20);
         }
         responder.on_edge_at(we, true, 21);
-        responder.on_edge_at(oe, true, 21);
+        responder.on_edge_at(OE, true, 21);
         responder.on_edge_at(wp, true, 21);
-
         assert_eq!(
             inspect.read(0),
             Some(0xff),
-            "a write edge blocked by /WP and /OE cannot be retroactively qualified"
+            "a blocked write edge is not retroactively qualified"
         );
     }
 
-    // A write edge may also be the only edge that enables a generic memory's
-    // output. Keep that distinct from the AT28-specific equal-cycle ambiguity.
+    /// A write edge may also be the only edge that enables a generic memory's
+    /// output.
     #[test]
     fn qualified_write_can_enable_an_immediate_generic_memory_read() {
         const SPEC: &str = r#"
@@ -2365,72 +2144,33 @@ read_gates = [
 data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
 data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
 "#;
-        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).unwrap();
-        let logic = crate::logic::LogicComponent::compile("generic-memory", &spec).unwrap();
-        let port = logic.memory_ports().pop().expect("one memory");
-
         let address = ('B', 0);
-        let ce = ('D', 0);
         let we = ('D', 1);
-        let data: Vec<(char, u8)> = (0..8).map(|bit| ('C', bit)).collect();
-        let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
-        let mut responder = ParallelMemoryResponder::new(
-            "U1.cell".into(),
-            port,
-            LogicLevels {
-                voh: 4.4,
-                vol: 0.1,
-                vih: 2.0,
-                vil: 0.8,
-                ro: 50.0,
-            },
-            1_000_000,
-            Arc::new(Mutex::new(vec![])),
-            vec![ParallelSignal::Mcu(address)],
-            vec![ParallelMemoryWrite::new(
-                ParallelSignal::Mcu(we),
-                Edge::Rising,
-                vec![(ParallelSignal::Mcu(ce), Level::Low)],
-            )],
-            vec![
-                (ParallelSignal::Mcu(ce), Level::Low),
-                (ParallelSignal::Mcu(we), Level::High),
-            ],
-            data.iter().copied().map(ParallelSignal::Mcu).collect(),
+        let data = data_pins(8);
+        let (mut responder, _, runtime) = memory_responder(
+            SPEC,
+            vec![mcu(address)],
+            vec![write(we, Edge::Rising, vec![(mcu(CE), Level::Low)])],
+            vec![(mcu(CE), Level::Low), (mcu(we), Level::High)],
+            data.iter().copied().map(mcu).collect(),
             data.clone(),
-            Vec::new(),
-            Arc::clone(&runtime),
         );
-
-        responder.on_edge_at(ce, false, 10);
+        responder.on_edge_at(CE, false, 10);
         responder.on_edge_at(address, true, 10);
         for (bit, &pin) in data.iter().enumerate() {
             responder.on_edge_at(pin, 0xa5 & (1 << bit) != 0, 10);
         }
         responder.on_edge_at(we, false, 20);
-        let drives = responder.on_edge_at(we, true, 21);
-
-        let got = drives.iter().enumerate().fold(0u8, |value, (bit, update)| {
-            value
-                | (u8::from(
-                    update
-                        .level
-                        .expect("write edge must drive the readable bus"),
-                ) << bit)
-        });
-        assert_eq!(got, 0xa5);
+        assert_eq!(bus_byte(&responder.on_edge_at(we, true, 21)), 0xa5);
         assert!(
             runtime
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .read_enabled,
-            "the write edge is also the only read-enable transition"
+                .read_enabled
         );
     }
 
     // ── Bit-banged SPI ───────────────────────────────────────────────────────
-    use crate::peripherals::register_map::RegisterMapSensor;
-    use crate::peripherals::spi::SpiSlave;
 
     const PINS: BitBangSpiPins = BitBangSpiPins {
         sclk: ('B', 1),
@@ -2464,14 +2204,14 @@ rw_read_is_high = true
 addr_mask = 0x7f
 "#;
 
-    /// A bit-level SPI master driving the responder the way firmware drives
-    /// the real pins: set MOSI, raise SCLK, "digitalRead" MISO (the level the
-    /// responder last drove), lower SCLK. Mirrors the mode-0 bit-bang loop of
-    /// the firmware fixture.
+    /// A bit-level SPI master clocking the declared mode the way firmware
+    /// would: idle clock at CPOL, MOSI changed on the shift edge, MISO
+    /// (the level the responder last drove) sampled on the sample edge.
     struct SpiMaster {
         resp: BitBangSpiResponder,
-        /// The MISO input-pin level as the MCU would see it (last drive wins).
         miso: bool,
+        cpol: bool,
+        cpha: bool,
     }
 
     impl SpiMaster {
@@ -2483,6 +2223,10 @@ addr_mask = 0x7f
                 }
             }
         }
+        fn idle(&mut self) {
+            self.edge(PINS.sclk, self.cpol);
+            self.edge(PINS.cs_n, true);
+        }
         fn select(&mut self) {
             self.edge(PINS.cs_n, false);
         }
@@ -2492,106 +2236,117 @@ addr_mask = 0x7f
         fn xfer(&mut self, mosi: u8) -> u8 {
             let mut got = 0u8;
             for i in (0..8).rev() {
-                self.edge(PINS.mosi, (mosi >> i) & 1 != 0);
-                self.edge(PINS.sclk, true);
-                got = (got << 1) | u8::from(self.miso);
-                self.edge(PINS.sclk, false);
+                let bit = (mosi >> i) & 1 != 0;
+                if !self.cpha {
+                    self.edge(PINS.mosi, bit);
+                    self.edge(PINS.sclk, !self.cpol);
+                    got = (got << 1) | u8::from(self.miso);
+                    self.edge(PINS.sclk, self.cpol);
+                } else {
+                    self.edge(PINS.sclk, !self.cpol);
+                    self.edge(PINS.mosi, bit);
+                    self.edge(PINS.sclk, self.cpol);
+                    got = (got << 1) | u8::from(self.miso);
+                }
             }
             got
         }
+        fn read_who_am_i_and_gyro(&mut self) {
+            self.select();
+            let _status = self.xfer(0x80 | 0x0f);
+            let who = self.xfer(0x00);
+            self.deselect();
+            assert_eq!(who, 0x42, "WHO_AM_I over bit-banged SPI");
+            assert!(!self.resp.faulted());
+            self.select();
+            let _status = self.xfer(0x80 | 0x22);
+            let lo = self.xfer(0x00);
+            let hi = self.xfer(0x00);
+            self.deselect();
+            assert_eq!(i16::from_le_bytes([lo, hi]), 1234);
+            assert!(!self.resp.faulted());
+        }
     }
 
-    fn spi_master() -> (SpiMaster, Arc<Mutex<SpiBus>>) {
-        let mut sensor = RegisterMapSensor::from_toml(SPI_SPEC).unwrap();
+    fn spi_master(mode: u8) -> SpiMaster {
+        let spec = if mode == 0 {
+            SPI_SPEC.to_string()
+        } else {
+            format!("{SPI_SPEC}spi_mode = {mode}\n")
+        };
+        let mut sensor = RegisterMapSensor::from_toml(&spec).unwrap();
         sensor.set_input("gyro_x", 1234.0);
         let bus = Arc::new(Mutex::new(SpiBus::new("U2", Box::new(sensor))));
-        let resp = BitBangSpiResponder::new(bus.clone(), PINS);
-        (SpiMaster { resp, miso: false }, bus)
+        SpiMaster {
+            resp: BitBangSpiResponder::new(bus, PINS),
+            miso: false,
+            cpol: mode & 0b10 != 0,
+            cpha: mode & 0b01 != 0,
+        }
     }
 
-    /// PROOF: a full bit-banged mode-0 read transaction against the byte-level
-    /// RegisterMapSensor answers WHO_AM_I and a burst data read bit-exactly,
-    /// across two CS-framed transactions.
+    /// Full read transactions against the byte-level RegisterMapSensor answer
+    /// WHO_AM_I and a burst data read bit-exactly in modes 0, 1 and 3.
     #[test]
-    fn bitbang_spi_reads_who_am_i_and_data() {
-        let (mut m, _bus) = spi_master();
-
-        // CS idles high from firmware init: a rising "edge" while deselected.
-        m.edge(PINS.cs_n, true);
-
-        m.select();
-        let _status = m.xfer(0x80 | 0x0f);
-        let who = m.xfer(0x00);
-        m.deselect();
-        assert_eq!(who, 0x42, "WHO_AM_I over bit-banged SPI");
-        assert!(!m.resp.faulted());
-
-        m.select();
-        let _status = m.xfer(0x80 | 0x22);
-        let lo = m.xfer(0x00);
-        let hi = m.xfer(0x00);
-        m.deselect();
-        assert_eq!(i16::from_le_bytes([lo, hi]), 1234);
-        assert!(!m.resp.faulted());
+    fn bitbang_spi_reads_registers_in_every_declared_mode() {
+        for mode in [0, 1, 3] {
+            let mut m = spi_master(mode);
+            m.idle();
+            m.read_who_am_i_and_gyro();
+        }
     }
 
-    /// SCLK high at CS assert is not mode 0: the responder must refuse loudly
-    /// (fault flag; MISO never answers) instead of clocking garbage.
+    /// SCLK at the wrong idle level for the declared CPOL at CS assert faults
+    /// (mode 0 with SCLK high; mode 2 with SCLK low), and a faulted responder
+    /// never drives MISO.
     #[test]
-    fn bitbang_spi_refuses_non_mode0_clock_polarity() {
-        let (mut m, _bus) = spi_master();
-        m.edge(PINS.sclk, true); // idle-high clock (mode 2/3 shape)
+    fn bitbang_spi_refuses_the_wrong_idle_clock_polarity() {
+        let mut m = spi_master(0);
+        m.edge(PINS.sclk, true);
         m.edge(PINS.cs_n, false);
         assert!(m.resp.faulted(), "CS assert with SCLK high must fault");
-        // A subsequent clocked byte answers nothing (MISO stays at its init
-        // level) rather than a wrong value.
         m.edge(PINS.sclk, false);
-        let got = m.xfer(0x80 | 0x0f);
-        assert_eq!(got, 0x00, "a faulted responder must not drive MISO");
-    }
-
-    /// CPHA=1 (mode 1) idles SCLK LOW exactly like mode 0, so the CS-assert
-    /// polarity guard cannot catch it, but a mode-1 master changes MOSI on the
-    /// leading edge, i.e. while SCLK is HIGH. The per-edge responder sees that
-    /// ordering and must fault rather than silently mistime the byte.
-    #[test]
-    fn bitbang_spi_refuses_cpha1_clock_phase() {
-        let (mut m, _bus) = spi_master();
-        m.edge(PINS.cs_n, true); // idle
-        m.select(); // CS low, SCLK low: passes the polarity guard
-        assert!(
-            !m.resp.faulted(),
-            "mode 1 idles SCLK low; not caught at CS assert"
+        assert_eq!(
+            m.xfer(0x80 | 0x0f),
+            0x00,
+            "a faulted responder must not drive MISO"
         );
 
-        // Mode-1 shift phase: raise SCLK (leading edge), THEN drive the bit.
+        let mut m = spi_master(2);
+        m.edge(PINS.sclk, false);
+        m.select();
+        assert!(m.resp.faulted(), "mode 2 idles SCLK high");
+    }
+
+    /// A mode-0 spec driven with CPHA=1 timing (MOSI changing while SCLK is
+    /// high) faults; a same-level MOSI re-drive while high does not.
+    #[test]
+    fn bitbang_spi_refuses_undeclared_cpha1_but_tolerates_idempotent_mosi() {
+        let mut m = spi_master(0);
+        m.idle();
+        m.select();
+        assert!(!m.resp.faulted());
         m.edge(PINS.sclk, true);
-        m.edge(PINS.mosi, true); // MOSI changes while SCLK high -> CPHA=1 tell
+        m.edge(PINS.mosi, true);
         assert!(
             m.resp.faulted(),
-            "MOSI transition during a SCLK-high window must fault as mode 1/3"
+            "MOSI transition during SCLK-high must fault as mode 1/3"
         );
-    }
 
-    /// A well-behaved mode-0 master that happens to re-drive MOSI to the SAME
-    /// level while SCLK is high must NOT fault (no transition, no phase signal).
-    #[test]
-    fn bitbang_spi_tolerates_idempotent_mosi_while_high() {
-        let (mut m, _bus) = spi_master();
-        m.edge(PINS.cs_n, true);
+        let mut m = spi_master(0);
+        m.idle();
         m.select();
-        m.edge(PINS.mosi, true); // set bit while SCLK low (legal mode-0 setup)
-        m.edge(PINS.sclk, true); // sample
-        m.edge(PINS.mosi, true); // redundant same-level write while high: no edge
+        m.edge(PINS.mosi, true);
+        m.edge(PINS.sclk, true);
+        m.edge(PINS.mosi, true);
         assert!(
             !m.resp.faulted(),
-            "an idempotent MOSI write (no level change) is not a phase signal"
+            "an idempotent MOSI write is not a phase signal"
         );
     }
 
-    /// A slave with no `miso_preview` that replies nonzero: the bridge
-    /// presented LOW bits the firmware already consumed, so it must fault
-    /// rather than continue as if the read were good.
+    /// A slave with no `miso_preview` that replies nonzero has already
+    /// presented wrong bits, so the responder must fault.
     #[test]
     fn bitbang_spi_faults_on_previewless_nonzero_reply() {
         struct Opaque;
@@ -2607,151 +2362,16 @@ addr_mask = 0x7f
             }
         }
         let bus = Arc::new(Mutex::new(SpiBus::new("U9", Box::new(Opaque))));
-        let resp = BitBangSpiResponder::new(bus, PINS);
-        let mut m = SpiMaster { resp, miso: false };
-        m.edge(PINS.cs_n, true);
+        let mut m = SpiMaster {
+            resp: BitBangSpiResponder::new(bus, PINS),
+            miso: false,
+            cpol: false,
+            cpha: false,
+        };
+        m.idle();
         m.select();
         let _ = m.xfer(0x03);
-        assert!(
-            m.resp.faulted(),
-            "nonzero reply with no preview must fault the responder"
-        );
-    }
-
-    // ── Bit-banged SPI: the non-zero modes ───────────────────────────────────
-
-    /// The mode-0 SPI_SPEC with an explicit `spi_mode`, so a fixture can build
-    /// the same sensor for any declared clock mode.
-    fn spec_for_mode(mode: u8) -> String {
-        format!("{SPI_SPEC}spi_mode = {mode}\n")
-    }
-
-    /// A mode-parametric bit-level SPI master: it derives CPOL/CPHA from the
-    /// declared mode and drives the responder the way a firmware clocking THAT
-    /// mode would, idle clock at CPOL, MOSI changed on the shift edge, MISO
-    /// sampled on the sample edge. The generalization of the mode-0-only
-    /// [`SpiMaster`] above.
-    struct ModeMaster {
-        resp: BitBangSpiResponder,
-        miso: bool,
-        cpol: bool,
-        cpha: bool,
-    }
-
-    impl ModeMaster {
-        fn edge(&mut self, pin: (char, u8), high: bool) {
-            for update in self.resp.on_edge(pin, high) {
-                assert_eq!(update.pin, PINS.miso, "responder must only update MISO");
-                if let Some(level) = update.level {
-                    self.miso = level;
-                }
-            }
-        }
-        /// Park SCLK at the declared idle (CPOL) level before selecting.
-        fn idle(&mut self) {
-            self.edge(PINS.sclk, self.cpol);
-        }
-        fn select(&mut self) {
-            self.edge(PINS.cs_n, false);
-        }
-        fn deselect(&mut self) {
-            self.edge(PINS.cs_n, true);
-        }
-        /// Clock one MSB-first byte in the declared mode, returning the MISO byte.
-        fn xfer(&mut self, mosi: u8) -> u8 {
-            let mut got = 0u8;
-            for i in (0..8).rev() {
-                let bit = (mosi >> i) & 1 != 0;
-                if !self.cpha {
-                    // CPHA=0: set MOSI at idle, sample on the leading edge (read
-                    // MISO there), shift on the trailing edge.
-                    self.edge(PINS.mosi, bit);
-                    self.edge(PINS.sclk, !self.cpol); // leading (sample)
-                    got = (got << 1) | u8::from(self.miso);
-                    self.edge(PINS.sclk, self.cpol); // trailing (shift)
-                } else {
-                    // CPHA=1: shift on the leading edge (the slave drives MISO
-                    // there; the master drives MOSI there too), sample on the
-                    // trailing edge.
-                    self.edge(PINS.sclk, !self.cpol); // leading (shift)
-                    self.edge(PINS.mosi, bit);
-                    self.edge(PINS.sclk, self.cpol); // trailing (sample)
-                    got = (got << 1) | u8::from(self.miso);
-                }
-            }
-            got
-        }
-    }
-
-    fn mode_master(mode: u8) -> (ModeMaster, Arc<Mutex<SpiBus>>) {
-        let mut sensor = RegisterMapSensor::from_toml(&spec_for_mode(mode)).unwrap();
-        sensor.set_input("gyro_x", 1234.0);
-        let bus = Arc::new(Mutex::new(SpiBus::new("U2", Box::new(sensor))));
-        let resp = BitBangSpiResponder::new(bus.clone(), PINS);
-        (
-            ModeMaster {
-                resp,
-                miso: false,
-                cpol: mode & 0b10 != 0,
-                cpha: mode & 0b01 != 0,
-            },
-            bus,
-        )
-    }
-
-    /// PROOF: a full mode-3 (CPOL=1, CPHA=1) read, idle clock HIGH, shift on the
-    /// falling (leading) edge, sample on the rising (trailing) edge, answers
-    /// WHO_AM_I and the i16 gyro value bit-exactly and never faults. Proves the
-    /// declared mode drives the timing end to end.
-    #[test]
-    fn bitbang_spi_mode3_end_to_end_read() {
-        let (mut m, _bus) = mode_master(3);
-        m.idle(); // clock idles high in mode 3
-        m.select();
-        let _status = m.xfer(0x80 | 0x0f);
-        let who = m.xfer(0x00);
-        m.deselect();
-        assert_eq!(who, 0x42, "WHO_AM_I over mode-3 bit-banged SPI");
-        assert!(!m.resp.faulted());
-
-        m.select();
-        let _status = m.xfer(0x80 | 0x22);
-        let lo = m.xfer(0x00);
-        let hi = m.xfer(0x00);
-        m.deselect();
-        assert_eq!(i16::from_le_bytes([lo, hi]), 1234, "gyro over mode 3");
-        assert!(!m.resp.faulted());
-    }
-
-    /// PROOF: a mode-1 (CPOL=0, CPHA=1) read succeeds, CPHA=1 is MODELED
-    /// (bit 7 driven on the first leading edge, sample on the trailing edge),
-    /// not faulted, WHEN the spec declares it. Contrast with
-    /// `bitbang_spi_refuses_cpha1_clock_phase`, where a mode-0 spec meets CPHA=1
-    /// clocking and must still fault.
-    #[test]
-    fn bitbang_spi_mode1_end_to_end_read() {
-        let (mut m, _bus) = mode_master(1);
-        m.idle(); // clock idles low in mode 1
-        m.select();
-        assert!(!m.resp.faulted(), "mode 1 must not fault at CS assert");
-        let _status = m.xfer(0x80 | 0x0f);
-        let who = m.xfer(0x00);
-        m.deselect();
-        assert_eq!(who, 0x42, "WHO_AM_I over mode-1 bit-banged SPI");
-        assert!(!m.resp.faulted(), "CPHA=1 must be modeled when declared");
-    }
-
-    /// A mode-2 (CPOL=1, CPHA=0) device idles SCLK HIGH; a CS assert with SCLK
-    /// LOW is the wrong idle level for the declared CPOL and must fault.
-    #[test]
-    fn bitbang_spi_mode2_wrong_idle_faults() {
-        let (mut m, _bus) = mode_master(2);
-        m.edge(PINS.sclk, false); // force SCLK low: wrong idle for CPOL=1
-        m.select();
-        assert!(
-            m.resp.faulted(),
-            "mode 2 idles SCLK high; a CS assert with SCLK low must fault"
-        );
+        assert!(m.resp.faulted());
     }
 
     // ── Soft I2C ─────────────────────────────────────────────────────────────
@@ -2783,127 +2403,8 @@ expr = "val"
 style = "i2c_pointer"
 "#;
 
-    /// A bit-level soft-I2C master driving the responder the way the fixture
-    /// firmware drives the real pins: push-pull SDA for master bits, sampling
-    /// the responder's SDA drive (last drive wins) for ACKs and read bytes.
-    struct I2cMaster {
-        resp: SoftI2cResponder,
-        /// The SDA input-pin level as the MCU would read it.
-        sda_in: bool,
-    }
-
-    impl I2cMaster {
-        fn edge(&mut self, pin: (char, u8), high: bool) {
-            for update in self.resp.on_edge(pin, high) {
-                assert_eq!(update.pin, SDA, "responder must only update SDA");
-                self.sda_in = update.level.unwrap_or(true);
-            }
-        }
-        fn init(&mut self) {
-            // Firmware init: both lines driven high (bus idle).
-            self.edge(SDA, true);
-            self.edge(SCL, true);
-        }
-        fn start(&mut self) {
-            // SDA falls while SCL high, then SCL falls.
-            self.edge(SDA, true);
-            self.edge(SCL, true);
-            self.edge(SDA, false);
-            self.edge(SCL, false);
-        }
-        fn stop(&mut self) {
-            self.edge(SDA, false);
-            self.edge(SCL, true);
-            self.edge(SDA, true);
-        }
-        /// Write one byte; returns the slave's ACK (true = acked).
-        fn write_byte(&mut self, byte: u8) -> bool {
-            for i in (0..8).rev() {
-                self.edge(SDA, (byte >> i) & 1 != 0);
-                self.edge(SCL, true);
-                self.edge(SCL, false);
-            }
-            // ACK clock: the slave drove SDA at the falling edge above; the
-            // master samples while SCL is high.
-            self.edge(SCL, true);
-            let ack = !self.sda_in;
-            self.edge(SCL, false);
-            ack
-        }
-        /// Read one byte, answering with `ack` (true = ACK = more bytes).
-        fn read_byte(&mut self, ack: bool) -> u8 {
-            let mut byte = 0u8;
-            for _ in 0..8 {
-                self.edge(SCL, true);
-                byte = (byte << 1) | u8::from(self.sda_in);
-                self.edge(SCL, false);
-            }
-            // Master ACK/NACK (push-pull), sampled by the slave on the rising
-            // edge.
-            self.edge(SDA, !ack);
-            self.edge(SCL, true);
-            self.edge(SCL, false);
-            byte
-        }
-    }
-
-    fn i2c_master(val: f64) -> (I2cMaster, Arc<Mutex<I2cBus>>) {
-        let mut sensor = RegisterMapSensor::from_toml(I2C_SPEC).unwrap();
-        sensor.set_input("val", val);
-        let bus = Arc::new(Mutex::new(I2cBus::new("U3").with_slave(Box::new(sensor))));
-        let resp = SoftI2cResponder::new(bus.clone(), SCL, SDA);
-        (I2cMaster { resp, sda_in: true }, bus)
-    }
-
-    /// PROOF: the classic pointered register read, START, addr+W (acked),
-    /// pointer byte, repeated START, addr+R (acked), data bytes with a master
-    /// ACK between and a NACK to end, STOP, recovered entirely from pin
-    /// edges and answered by the byte-level RegisterMapSensor.
-    #[test]
-    fn soft_i2c_reads_registers_via_repeated_start() {
-        let (mut m, _bus) = i2c_master(1234.0);
-        m.init();
-
-        // WHO_AM_I (0x75), single-byte read.
-        m.start();
-        assert!(m.write_byte(0x68 << 1), "address+W must ACK");
-        assert!(m.write_byte(0x75), "pointer byte must ACK");
-        m.start(); // repeated START
-        assert!(m.write_byte((0x68 << 1) | 1), "address+R must ACK");
-        let who = m.read_byte(false);
-        m.stop();
-        assert_eq!(who, 0x68, "WHO_AM_I over soft I2C");
-
-        // Two-byte i16_be register (0x41) = 1234.
-        m.start();
-        assert!(m.write_byte(0x68 << 1));
-        assert!(m.write_byte(0x41));
-        m.start();
-        assert!(m.write_byte((0x68 << 1) | 1));
-        let hi = m.read_byte(true);
-        let lo = m.read_byte(false);
-        m.stop();
-        assert_eq!(i16::from_be_bytes([hi, lo]), 1234);
-    }
-
-    /// An address no attached slave models is NACKed; the honest no-answer,
-    /// never a fake ACK, and a following good transaction still works.
-    #[test]
-    fn soft_i2c_nacks_unknown_address() {
-        let (mut m, _bus) = i2c_master(0.0);
-        m.init();
-
-        m.start();
-        assert!(!m.write_byte(0x21 << 1), "unmodeled address must NACK");
-        m.stop();
-
-        m.start();
-        assert!(m.write_byte(0x68 << 1), "modeled address still ACKs");
-        m.stop();
-    }
-
     /// A DAC-style spec: a fast_write command latches the code and the output
-    /// law drives VOUT; the write-side device whose STOP delivery matters.
+    /// law drives VOUT.
     const I2C_DAC_SPEC: &str = r#"
 [sensor]
 name = "MINIDAC"
@@ -2935,15 +2436,126 @@ expr = "code / 4096 * 4.096"
 style = "i2c_pointer"
 "#;
 
-    /// PROOF: a physical STOP closes the WHOLE repeated-START chain, not just
-    /// the last-addressed leg. Firmware writes the DAC at 0x60 (ACKed, code
-    /// latched), then a repeated START re-addresses 0x50, unmodeled, NACKed,
-    /// and only then STOPs. The DAC must still get its transaction end: its
-    /// output law lands on the bound net at the chunk-boundary flush. Before
-    /// the fix both layers tracked only the most-recent address, so the ACKed
-    /// write silently never reached the net. Contrast with
-    /// `soft_i2c_reads_registers_via_repeated_start`, whose chain re-addresses
-    /// the SAME slave and never saw the bug.
+    /// A bit-level soft-I2C master: push-pull SDA for master bits, sampling
+    /// the responder's SDA drive (last drive wins) for ACKs and read bytes.
+    struct I2cMaster {
+        resp: SoftI2cResponder,
+        sda_in: bool,
+    }
+
+    impl I2cMaster {
+        fn new(bus: Arc<Mutex<I2cBus>>) -> Self {
+            let mut m = I2cMaster {
+                resp: SoftI2cResponder::new(bus, SCL, SDA),
+                sda_in: true,
+            };
+            m.edge(SDA, true);
+            m.edge(SCL, true);
+            m
+        }
+        fn edge(&mut self, pin: (char, u8), high: bool) {
+            for update in self.resp.on_edge(pin, high) {
+                assert_eq!(update.pin, SDA, "responder must only update SDA");
+                self.sda_in = update.level.unwrap_or(true);
+            }
+        }
+        fn start(&mut self) {
+            self.edge(SDA, true);
+            self.edge(SCL, true);
+            self.edge(SDA, false);
+            self.edge(SCL, false);
+        }
+        fn stop(&mut self) {
+            self.edge(SDA, false);
+            self.edge(SCL, true);
+            self.edge(SDA, true);
+        }
+        /// Write one byte; returns the slave's ACK.
+        fn write_byte(&mut self, byte: u8) -> bool {
+            for i in (0..8).rev() {
+                self.edge(SDA, (byte >> i) & 1 != 0);
+                self.edge(SCL, true);
+                self.edge(SCL, false);
+            }
+            self.edge(SCL, true);
+            let ack = !self.sda_in;
+            self.edge(SCL, false);
+            ack
+        }
+        /// Read one byte, answering with `ack` (true = more bytes).
+        fn read_byte(&mut self, ack: bool) -> u8 {
+            let mut byte = 0u8;
+            for _ in 0..8 {
+                self.edge(SCL, true);
+                byte = (byte << 1) | u8::from(self.sda_in);
+                self.edge(SCL, false);
+            }
+            self.edge(SDA, !ack);
+            self.edge(SCL, true);
+            self.edge(SCL, false);
+            byte
+        }
+    }
+
+    fn i2c_master(val: f64) -> I2cMaster {
+        let mut sensor = RegisterMapSensor::from_toml(I2C_SPEC).unwrap();
+        sensor.set_input("val", val);
+        I2cMaster::new(Arc::new(Mutex::new(
+            I2cBus::new("U3").with_slave(Box::new(sensor)),
+        )))
+    }
+
+    #[test]
+    fn soft_i2c_reads_registers_via_repeated_start() {
+        let mut m = i2c_master(1234.0);
+        m.start();
+        assert!(m.write_byte(0x68 << 1), "address+W must ACK");
+        assert!(m.write_byte(0x75), "pointer byte must ACK");
+        m.start();
+        assert!(m.write_byte((0x68 << 1) | 1), "address+R must ACK");
+        let who = m.read_byte(false);
+        m.stop();
+        assert_eq!(who, 0x68);
+
+        m.start();
+        assert!(m.write_byte(0x68 << 1));
+        assert!(m.write_byte(0x41));
+        m.start();
+        assert!(m.write_byte((0x68 << 1) | 1));
+        let hi = m.read_byte(true);
+        let lo = m.read_byte(false);
+        m.stop();
+        assert_eq!(i16::from_be_bytes([hi, lo]), 1234);
+    }
+
+    #[test]
+    fn soft_i2c_nacks_unknown_address_and_resyncs_on_mid_byte_start() {
+        let mut m = i2c_master(0.0);
+        m.start();
+        assert!(!m.write_byte(0x21 << 1), "unmodeled address must NACK");
+        m.stop();
+        m.start();
+        assert!(m.write_byte(0x68 << 1), "modeled address still ACKs");
+        m.stop();
+
+        // Abandon an address byte three bits in with a new START.
+        m.start();
+        for bit in [true, false, true] {
+            m.edge(SDA, bit);
+            m.edge(SCL, true);
+            m.edge(SCL, false);
+        }
+        m.edge(SDA, true);
+        m.edge(SCL, true);
+        m.edge(SDA, false);
+        m.edge(SCL, false);
+        assert!(m.write_byte(0x68 << 1), "post-resync address must ACK");
+        m.stop();
+    }
+
+    /// A physical STOP closes the WHOLE repeated-START chain: a DAC write
+    /// followed by a repeated START to an unmodeled address still reaches the
+    /// net at the chunk-boundary flush.
     #[test]
     fn soft_i2c_stop_reaches_first_leg_after_address_change() {
         use crate::drivers::PinDriver;
@@ -2954,23 +2566,15 @@ style = "i2c_pointer"
         let net = circuit.node("VOUT");
         let driver = PinDriver::stamp(&mut circuit, net, "VOUT", "minidac", 1.0);
         let vsource = driver.vsource;
-
         let mut sensor = RegisterMapSensor::from_toml(I2C_DAC_SPEC).unwrap();
         assert!(sensor.attach_output_driver_for_channel(0, driver));
         let bus = Arc::new(Mutex::new(I2cBus::new("U4").with_slave(Box::new(sensor))));
-        let mut m = I2cMaster {
-            resp: SoftI2cResponder::new(bus.clone(), SCL, SDA),
-            sda_in: true,
-        };
-        m.init();
+        let mut m = I2cMaster::new(bus.clone());
 
-        // Leg 1: fast_write code 2048 (0x08 0x00) -> 2.048 V once committed.
         m.start();
         assert!(m.write_byte(0x60 << 1), "DAC address+W must ACK");
         assert!(m.write_byte(0x08));
         assert!(m.write_byte(0x00));
-        // Leg 2: repeated START to a DIFFERENT, unmodeled address (NACKed),
-        // the last-addressed slot no longer names the DAC.
         m.start();
         assert!(
             !m.write_byte((0x50 << 1) | 1),
@@ -2994,55 +2598,6 @@ style = "i2c_pointer"
             dt: 1e-3,
         };
         bus.lock().unwrap().flush_stops(&mut ctx);
-        assert!(
-            (src_volts(&circuit) - 2.048).abs() < 1e-9,
-            "first-leg DAC write must reach the net after the STOP"
-        );
-    }
-
-    /// A START mid-byte resyncs the engine (the asynchronous START detection
-    /// real slaves perform) instead of erroring or staying desynced.
-    #[test]
-    fn soft_i2c_resyncs_on_mid_byte_start() {
-        let (mut m, _bus) = i2c_master(0.0);
-        m.init();
-
-        // Begin an address byte, abandon it three bits in with a new START.
-        m.start();
-        for bit in [true, false, true] {
-            m.edge(SDA, bit);
-            m.edge(SCL, true);
-            m.edge(SCL, false);
-        }
-        m.edge(SDA, true); // setup for the framing violation
-        m.edge(SCL, true);
-        m.edge(SDA, false); // SDA falls while SCL high: START
-        m.edge(SCL, false);
-
-        // The fresh address byte must be captured cleanly.
-        assert!(m.write_byte(0x68 << 1), "post-resync address must ACK");
-        m.stop();
-    }
-
-    #[test]
-    fn shared_pin_concatenates_in_registration_order() {
-        let mut reg = ResponderRegistry::new();
-        reg.register(Box::new(Probe {
-            pins: vec![('B', 5)],
-            seen: Vec::new(),
-            answer: vec![InputDrive::drive(('B', 4), true)],
-        }));
-        reg.register(Box::new(Probe {
-            pins: vec![('B', 5)],
-            seen: Vec::new(),
-            answer: vec![InputDrive::drive(('C', 1), false)],
-        }));
-        assert_eq!(
-            reg.dispatch(('B', 5), false),
-            vec![
-                InputDrive::drive(('B', 4), true),
-                InputDrive::drive(('C', 1), false),
-            ]
-        );
+        assert!((src_volts(&circuit) - 2.048).abs() < 1e-9);
     }
 }

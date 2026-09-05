@@ -884,193 +884,102 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn parse(src: &str) -> Behavioral {
+        toml::from_str(src).expect("parse")
+    }
+
+    fn flags(b: &Behavioral, needle: &str) {
+        let errs = validate_behavioral(b);
+        assert!(
+            errs.iter().any(|e| e.contains(needle)),
+            "expected {needle:?}: {errs:?}"
+        );
+    }
+
+    fn clean(b: &Behavioral) {
+        assert!(
+            validate_behavioral(b).is_empty(),
+            "{:?}",
+            validate_behavioral(b)
+        );
+    }
+
+    fn fsm(transitions: Vec<Transition>, initial: &str) -> Behavioral {
+        Behavioral {
+            fsm: Some(Fsm {
+                states: vec!["off".into(), "on".into()],
+                initial: Some(initial.into()),
+                transitions,
+                state_pins: BTreeMap::new(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn transition(to: &str, min_dwell_s: Option<f64>, guard_dwell_s: Option<f64>) -> Transition {
+        Transition {
+            from: "off".into(),
+            to: to.into(),
+            guard: "v_en > 1.0".into(),
+            min_dwell_s,
+            guard_dwell_s,
+        }
+    }
+
     #[test]
-    fn empty_behavioral_is_empty() {
+    fn pin_pull_and_open_drain_fields_must_be_finite() {
         let b = Behavioral::default();
         assert!(b.is_empty());
-        assert!(validate_behavioral(&b).is_empty());
+        clean(&b);
+
+        flags(&parse("[pins.shphld]\npull_to = \"vsys\"\n"), "pull_ohms");
+        flags(
+            &parse("[pins.shphld]\npull_to = \"vsys\"\npull_ohms = inf\n"),
+            "pull_ohms",
+        );
+        flags(
+            &parse("[pins.shphld]\npull_to_volts = nan\npull_ohms = 100000.0\n"),
+            "pull_to_volts",
+        );
+        flags(
+            &parse("[pins.stat]\nopen_drain = true\nod_ohms = 10.0\nod_to_volts = inf\n"),
+            "od_to_volts",
+        );
+        clean(&parse(
+            "[pins.vneg]\npull_to_volts = -5.0\npull_ohms = 1000.0\n",
+        ));
+
+        let b = parse("[pins.shphld]\npull_to = \"vsys\"\npull_ohms = 100000.0\n");
+        let back: Behavioral = toml::from_str(&toml::to_string(&b).unwrap()).unwrap();
+        assert_eq!(b, back);
     }
 
     #[test]
-    fn pull_without_ohms_is_flagged() {
-        let mut b = Behavioral::default();
-        b.pins.insert(
-            "shphld".into(),
-            BehavioralPin {
-                pull_to: Some("vsys".into()),
-                ..Default::default()
-            },
-        );
-        let errs = validate_behavioral(&b);
-        assert!(errs.iter().any(|e| e.contains("pull_ohms")), "{errs:?}");
-    }
+    fn fsm_states_dwells_and_state_pin_drives_are_validated() {
+        let b = fsm(vec![transition("on", Some(f64::NAN), None)], "off");
+        flags(&b, "min_dwell_s");
+        clean(&fsm(vec![transition("on", Some(0.05), None)], "off"));
 
-    #[test]
-    fn fsm_transition_nonfinite_min_dwell_is_rejected() {
-        // R52: the engine applies min_dwell_s as `if t_in_state < min { continue }`;
-        // a NaN makes that false, silently skipping the dwell gate so the
-        // transition fires immediately instead of waiting the intended delay.
-        let mut b = Behavioral::default();
-        b.fsm = Some(Fsm {
-            states: vec!["off".into(), "on".into()],
-            initial: Some("off".into()),
-            transitions: vec![Transition {
-                from: "off".into(),
-                to: "on".into(),
-                guard: "v_en > 1.0".into(),
-                min_dwell_s: Some(f64::NAN),
-                guard_dwell_s: None,
-            }],
-            state_pins: BTreeMap::new(),
-        });
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("min_dwell_s")),
-            "a NaN min_dwell_s must be rejected: {:?}",
-            validate_behavioral(&b)
-        );
-        // A finite non-negative dwell still validates clean.
-        if let Some(fsm) = &mut b.fsm {
-            fsm.transitions[0].min_dwell_s = Some(0.05);
-        }
-        assert!(
-            validate_behavioral(&b).is_empty(),
-            "a valid min_dwell_s must pass: {:?}",
-            validate_behavioral(&b)
-        );
-    }
+        let b = fsm(vec![transition("nowhere", None, None)], "idle");
+        flags(&b, "initial");
+        flags(&b, "nowhere");
 
-    #[test]
-    fn nonfinite_pull_and_od_target_voltages_are_rejected() {
-        // R49: pull_to_volts / od_to_volts are stamped verbatim as DC sources, so
-        // a `nan`/`inf` literal poisons the whole MNA solve with no fault. Only
-        // finiteness is checked (a negative rail is legal), like the pull_ohms
-        // sibling. Base bug: these two voltage fields were never validated.
-        let mut b = Behavioral::default();
-        b.pins.insert(
-            "shphld".into(),
-            BehavioralPin {
-                pull_to_volts: Some(f64::NAN),
-                pull_ohms: Some(100_000.0),
-                ..Default::default()
-            },
-        );
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("pull_to_volts")),
-            "a NaN pull_to_volts must be rejected: {:?}",
-            validate_behavioral(&b)
-        );
-
-        let mut b = Behavioral::default();
-        b.pins.insert(
-            "stat".into(),
-            BehavioralPin {
-                open_drain: true,
-                od_ohms: Some(10.0),
-                od_to_volts: Some(f64::INFINITY),
-                ..Default::default()
-            },
-        );
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("od_to_volts")),
-            "an inf od_to_volts must be rejected: {:?}",
-            validate_behavioral(&b)
-        );
-
-        // A finite (even negative) rail voltage still validates clean.
-        let mut b = Behavioral::default();
-        b.pins.insert(
-            "vneg".into(),
-            BehavioralPin {
-                pull_to_volts: Some(-5.0),
-                pull_ohms: Some(1_000.0),
-                ..Default::default()
-            },
-        );
-        assert!(
-            validate_behavioral(&b).is_empty(),
-            "a finite negative rail is legal: {:?}",
-            validate_behavioral(&b)
-        );
-    }
-
-    #[test]
-    fn state_pin_drive_fields_are_validated() {
-        // R49: a per-state override's drive_volts/drive_ohms are stamped verbatim
-        // (NaN DC source / negative source resistance) with no flooring. Validate
-        // them like the pull/od siblings. Base bug: state_pins only checked names.
-        let mk = |drive_volts: Option<f64>, drive_ohms: Option<f64>| {
-            let mut sp: BTreeMap<String, BTreeMap<String, StatePinBehaviour>> = BTreeMap::new();
-            let mut pins = BTreeMap::new();
-            pins.insert(
+        let drive = |drive_volts: f64, drive_ohms: f64| {
+            let mut b = fsm(Vec::new(), "on");
+            let pins = BTreeMap::from([(
                 "out".to_string(),
                 StatePinBehaviour {
-                    drive_volts,
-                    drive_ohms,
+                    drive_volts: Some(drive_volts),
+                    drive_ohms: Some(drive_ohms),
                     ..Default::default()
                 },
-            );
-            sp.insert("on".to_string(), pins);
-            Behavioral {
-                fsm: Some(Fsm {
-                    states: vec!["on".into()],
-                    initial: Some("on".into()),
-                    transitions: Vec::new(),
-                    state_pins: sp,
-                }),
-                ..Default::default()
-            }
+            )]);
+            b.fsm.as_mut().unwrap().state_pins.insert("on".into(), pins);
+            b
         };
-        // Negative source resistance.
-        let b = mk(Some(3.3), Some(-50.0));
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("drive_ohms")),
-            "negative drive_ohms must be rejected: {:?}",
-            validate_behavioral(&b)
-        );
-        // NaN drive voltage.
-        let b = mk(Some(f64::NAN), Some(50.0));
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("drive_volts")),
-            "NaN drive_volts must be rejected: {:?}",
-            validate_behavioral(&b)
-        );
-        // A well-formed push-pull override validates clean.
-        let b = mk(Some(3.3), Some(50.0));
-        assert!(
-            validate_behavioral(&b).is_empty(),
-            "a valid drive override must pass: {:?}",
-            validate_behavioral(&b)
-        );
-    }
-
-    #[test]
-    fn fsm_unknown_state_flagged() {
-        let mut b = Behavioral::default();
-        b.fsm = Some(Fsm {
-            states: vec!["off".into(), "on".into()],
-            initial: Some("idle".into()),
-            transitions: vec![Transition {
-                from: "off".into(),
-                to: "nowhere".into(),
-                guard: "v_en > 1.0".into(),
-                min_dwell_s: None,
-                guard_dwell_s: None,
-            }],
-            state_pins: BTreeMap::new(),
-        });
-        let errs = validate_behavioral(&b);
-        assert!(errs.iter().any(|e| e.contains("initial")), "{errs:?}");
-        assert!(errs.iter().any(|e| e.contains("nowhere")), "{errs:?}");
+        flags(&drive(3.3, -50.0), "drive_ohms");
+        flags(&drive(f64::NAN, 50.0), "drive_volts");
+        clean(&drive(3.3, 50.0));
     }
 
     #[test]
@@ -1097,23 +1006,12 @@ mod tests {
                 .into_iter()
                 .collect(),
         });
-        assert!(
-            validate_behavioral(&b).is_empty(),
-            "valid state-controlled series path must pass: {:?}",
-            validate_behavioral(&b)
-        );
+        clean(&b);
 
         b.series_paths[0].state_ohms.insert("unknown".into(), 0.1);
         b.fsm.as_mut().unwrap().transitions[0].guard_dwell_s = Some(f64::NAN);
-        let errors = validate_behavioral(&b);
-        assert!(
-            errors.iter().any(|e| e.contains("unknown state")),
-            "{errors:?}"
-        );
-        assert!(
-            errors.iter().any(|e| e.contains("guard_dwell_s")),
-            "{errors:?}"
-        );
+        flags(&b, "unknown state");
+        flags(&b, "guard_dwell_s");
     }
 
     #[test]
@@ -1134,201 +1032,81 @@ mod tests {
                 jitter_s: 0.001,
             }],
         });
-        assert!(
-            validate_behavioral(&b).is_empty(),
-            "valid model-owned current profile must pass: {:?}",
-            validate_behavioral(&b)
-        );
-
+        clean(&b);
         b.profiled_loads[0].segments[0].level_a = -1.0;
         b.profiled_loads[0].segments[0].jitter_s = 0.100;
-        let errors = validate_behavioral(&b);
-        assert!(errors.iter().any(|e| e.contains("level_a")), "{errors:?}");
-        assert!(errors.iter().any(|e| e.contains("jitter_s")), "{errors:?}");
+        flags(&b, "level_a");
+        flags(&b, "jitter_s");
+    }
+
+    fn converter(program: &str) -> Behavioral {
+        parse(&format!(
+            "[converter]\ntopology = \"buck_boost\"\nout_pin = \"bat\"\nin_pin = \"pvin\"\n\
+             vout_setpoint = 14.4\nefficiency = 0.92\n[converter.iin_program]\nprog_ref = \"R8\"\n{program}\n"
+        ))
     }
 
     #[test]
-    fn converter_parses_with_sense_program() {
-        let toml = r#"
-[converter]
-topology = "buck_boost"
-out_pin = "bat"
-in_pin = "pvin"
-vout_setpoint = 14.4
-efficiency = 0.92
-
-[converter.iin_program]
-rsense_refs = ["R49", "R50"]
-prog_ref = "R8"
-vprog_ref = 1.19
-prog_ref_ohms = 100000.0
-v_sense_full = 0.05
-"#;
-        let b: Behavioral = toml::from_str(toml).expect("parse");
+    fn iin_program_constants_must_be_positive_finite() {
+        let b = converter("rsense_refs = [\"R49\", \"R50\"]\nvprog_ref = 1.19\nprog_ref_ohms = 100000.0\nv_sense_full = 0.05");
         let c = b.converter.as_ref().unwrap();
         assert_eq!(c.topology, Topology::BuckBoost);
-        let sp = c.iin_program.as_ref().unwrap();
-        assert_eq!(sp.prog_ref.as_deref(), Some("R8"));
-        assert!(
-            validate_behavioral(&b).is_empty(),
-            "{:?}",
-            validate_behavioral(&b)
+        assert_eq!(
+            c.iin_program.as_ref().unwrap().prog_ref.as_deref(),
+            Some("R8")
         );
+        clean(&b);
+
+        let base = "vprog_ref = 1.19\nprog_ref_ohms = 100000.0\n";
+        flags(
+            &converter(&format!("{base}v_sense_full = -0.05")),
+            "v_sense_full",
+        );
+        flags(
+            &converter(&format!("{base}v_sense_full = 0.0")),
+            "v_sense_full",
+        );
+        flags(
+            &converter("vprog_ref = -1.19\nprog_ref_ohms = 100000.0\nv_sense_full = 0.05"),
+            "vprog_ref",
+        );
+        flags(
+            &converter("vprog_ref = 1.19\nprog_ref_ohms = inf\nv_sense_full = 0.05"),
+            "prog_ref_ohms",
+        );
+        flags(
+            &converter(&format!("{base}v_sense_full = 0.05\nrsense_ohms = -0.005")),
+            "rsense_ohms",
+        );
+        flags(
+            &converter(&format!(
+                "{base}v_sense_full = 0.05\nrsense_ohms = 0.005\nprog_ohms = 0.0"
+            )),
+            "prog_ohms",
+        );
+        clean(&converter(&format!(
+            "{base}v_sense_full = 0.05\nrsense_ohms = 0.005"
+        )));
     }
 
     #[test]
-    fn iin_program_rejects_nonpositive_vsense_full_and_vprog_ref() {
-        // A sign-typo v_sense_full (or vprog_ref) drives the programmed
-        // input-current limit to 0, so update_converter folds v_cmd to 0 and the
-        // regulated rail silently reads 0 V for the whole run with no fault. It
-        // must be rejected at validation, like the literal iout_limit_a/
-        // iin_limit_a limits. Base bug: only prog_ref_ohms was validated.
-        let base = |v_sense_full: f64, vprog_ref: f64| {
-            format!(
-                r#"
-[converter]
-topology = "buck_boost"
-out_pin = "bat"
-in_pin = "pvin"
-vout_setpoint = 14.4
-efficiency = 0.92
-
-[converter.iin_program]
-rsense_refs = ["R49", "R50"]
-prog_ref = "R8"
-vprog_ref = {vprog_ref}
-prog_ref_ohms = 100000.0
-v_sense_full = {v_sense_full}
-"#
-            )
+    fn converter_setpoint_efficiency_and_limits_must_be_positive_finite() {
+        let conv = |extra: &str| {
+            parse(&format!(
+                "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\n{extra}\n"
+            ))
         };
-        // Sign-typo v_sense_full.
-        let b: Behavioral = toml::from_str(&base(-0.05, 1.19)).expect("parse");
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("v_sense_full")),
-            "negative v_sense_full must be rejected: {:?}",
-            validate_behavioral(&b)
+        flags(&conv("vout_setpoint = nan"), "vout_setpoint");
+        flags(&conv("vout_setpoint = 5.0\nefficiency = nan"), "efficiency");
+        flags(
+            &conv("vout_setpoint = 5.0\niout_limit_a = -1.0"),
+            "iout_limit_a",
         );
-        // Zero v_sense_full.
-        let b: Behavioral = toml::from_str(&base(0.0, 1.19)).expect("parse");
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("v_sense_full")),
-            "zero v_sense_full must be rejected: {:?}",
-            validate_behavioral(&b)
+        flags(
+            &conv("vout_setpoint = 5.0\niin_limit_a = nan"),
+            "iin_limit_a",
         );
-        // Sign-typo vprog_ref.
-        let b: Behavioral = toml::from_str(&base(0.05, -1.19)).expect("parse");
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("vprog_ref")),
-            "negative vprog_ref must be rejected: {:?}",
-            validate_behavioral(&b)
-        );
-        // The legitimate positive pair still validates clean.
-        let b: Behavioral = toml::from_str(&base(0.05, 1.19)).expect("parse");
-        assert!(
-            validate_behavioral(&b).is_empty(),
-            "valid programmed limits must pass: {:?}",
-            validate_behavioral(&b)
-        );
-    }
-
-    #[test]
-    fn iin_program_rejects_nonfinite_prog_ref_ohms() {
-        // R50: prog_ref_ohms was validated with only `<= 0.0`, so an `inf`
-        // overflow typo passed. The engine's prog_ref.max(1.0)=inf then yields
-        // v_sense = vprog_ref*prog/inf = 0, zeroing the input-current limit and
-        // folding the regulated rail to 0 V for the whole run with no fault.
-        let spec = |prog_ref_ohms: &str| {
-            format!(
-                r#"
-[converter]
-topology = "buck_boost"
-out_pin = "bat"
-in_pin = "pvin"
-vout_setpoint = 14.4
-efficiency = 0.92
-
-[converter.iin_program]
-rsense_refs = ["R49", "R50"]
-prog_ref = "R8"
-vprog_ref = 1.19
-prog_ref_ohms = {prog_ref_ohms}
-v_sense_full = 0.05
-"#
-            )
-        };
-        let b: Behavioral = toml::from_str(&spec("inf")).expect("parse");
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("prog_ref_ohms")),
-            "an inf prog_ref_ohms must be rejected: {:?}",
-            validate_behavioral(&b)
-        );
-        // A finite positive value still validates clean.
-        let b: Behavioral = toml::from_str(&spec("100000.0")).expect("parse");
-        assert!(
-            validate_behavioral(&b).is_empty(),
-            "a finite positive prog_ref_ohms must pass: {:?}",
-            validate_behavioral(&b)
-        );
-    }
-
-    #[test]
-    fn iin_program_rejects_nonpositive_rsense_and_prog_ohms() {
-        // R55: the literal shunt/program resistances escaped the positive-finite
-        // gate that validates every sibling. The engine floors rsense with
-        // `.max(1e-6)`, so a sign-typo `rsense_ohms = -0.005` becomes 1e-6 and the
-        // input-current limit balloons to ~50 kA; the fold-back never engages.
-        let spec = |extra: &str| {
-            format!(
-                r#"
-[converter]
-topology = "buck_boost"
-out_pin = "bat"
-in_pin = "pvin"
-vout_setpoint = 14.4
-efficiency = 0.92
-
-[converter.iin_program]
-prog_ref = "R8"
-vprog_ref = 1.19
-prog_ref_ohms = 100000.0
-v_sense_full = 0.05
-{extra}
-"#
-            )
-        };
-        let b: Behavioral = toml::from_str(&spec("rsense_ohms = -0.005")).expect("parse");
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("rsense_ohms")),
-            "a negative rsense_ohms must be rejected: {:?}",
-            validate_behavioral(&b)
-        );
-        let b: Behavioral =
-            toml::from_str(&spec("rsense_ohms = 0.005\nprog_ohms = 0.0")).expect("parse");
-        assert!(
-            validate_behavioral(&b)
-                .iter()
-                .any(|e| e.contains("prog_ohms")),
-            "a zero prog_ohms must be rejected: {:?}",
-            validate_behavioral(&b)
-        );
-        // A valid literal shunt still passes.
-        let b: Behavioral = toml::from_str(&spec("rsense_ohms = 0.005")).expect("parse");
-        assert!(
-            validate_behavioral(&b).is_empty(),
-            "a valid rsense_ohms must pass: {:?}",
-            validate_behavioral(&b)
-        );
+        clean(&conv("vout_setpoint = 5.0\niout_limit_a = 1.0"));
     }
 
     #[test]
@@ -1343,104 +1121,6 @@ v_sense_full = 0.05
             r_ohms: None,
             only_in_state: None,
         });
-        let errs = validate_behavioral(&b);
-        assert!(errs.iter().any(|e| e.contains("sink")), "{errs:?}");
-    }
-
-    #[test]
-    fn non_finite_converter_and_pin_values_are_rejected() {
-        // R44: `nan`/`inf` are legal TOML floats and every `<= 0.0`/range compare is
-        // false for them, so they slipped the gate, then a NaN vout_setpoint reaches
-        // the engine's `v_cmd.clamp(0.0, vout_setpoint)` and PANICS (clamp with a NaN
-        // max), and a NaN efficiency propagates a NaN input current. Reject up front.
-        let nan_vout: Behavioral = toml::from_str(
-            "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint = nan\n",
-        )
-        .expect("parse");
-        assert!(
-            validate_behavioral(&nan_vout)
-                .iter()
-                .any(|e| e.contains("vout_setpoint")),
-            "a NaN vout_setpoint must be rejected: {:?}",
-            validate_behavioral(&nan_vout)
-        );
-
-        let nan_eff: Behavioral = toml::from_str(
-            "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint = 5.0\nefficiency = nan\n",
-        )
-        .expect("parse");
-        assert!(
-            validate_behavioral(&nan_eff)
-                .iter()
-                .any(|e| e.contains("efficiency")),
-            "a NaN efficiency must be rejected: {:?}",
-            validate_behavioral(&nan_eff)
-        );
-
-        let inf_pull: Behavioral =
-            toml::from_str("[pins.shphld]\npull_to = \"vsys\"\npull_ohms = inf\n").expect("parse");
-        assert!(
-            validate_behavioral(&inf_pull)
-                .iter()
-                .any(|e| e.contains("pull_ohms")),
-            "an inf pull_ohms must be rejected: {:?}",
-            validate_behavioral(&inf_pull)
-        );
-    }
-
-    #[test]
-    fn converter_current_limits_must_be_positive_finite() {
-        // R46: a negative iout_limit_a (a sign typo) is treated as a real CC
-        // threshold the output current always exceeds, folding v_cmd to 0 V; the
-        // regulated rail reads 0 V for the whole run with no fault. A NaN limit
-        // silently disables the CC loop. Both must be rejected, like vout_setpoint.
-        let neg: Behavioral = toml::from_str(
-            "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint=5.0\niout_limit_a = -1.0\n",
-        )
-        .expect("parse");
-        assert!(
-            validate_behavioral(&neg)
-                .iter()
-                .any(|e| e.contains("iout_limit_a")),
-            "a negative iout_limit_a must be rejected: {:?}",
-            validate_behavioral(&neg)
-        );
-        let nan_iin: Behavioral = toml::from_str(
-            "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint=5.0\niin_limit_a = nan\n",
-        )
-        .expect("parse");
-        assert!(
-            validate_behavioral(&nan_iin)
-                .iter()
-                .any(|e| e.contains("iin_limit_a")),
-            "a NaN iin_limit_a must be rejected: {:?}",
-            validate_behavioral(&nan_iin)
-        );
-        // A valid positive limit still passes.
-        let ok: Behavioral = toml::from_str(
-            "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint=5.0\niout_limit_a = 1.0\n",
-        )
-        .expect("parse");
-        assert!(
-            validate_behavioral(&ok).is_empty(),
-            "a positive limit must pass: {:?}",
-            validate_behavioral(&ok)
-        );
-    }
-
-    #[test]
-    fn roundtrip_serialize() {
-        let mut b = Behavioral::default();
-        b.pins.insert(
-            "shphld".into(),
-            BehavioralPin {
-                pull_to: Some("vsys".into()),
-                pull_ohms: Some(100_000.0),
-                ..Default::default()
-            },
-        );
-        let s = toml::to_string(&b).unwrap();
-        let back: Behavioral = toml::from_str(&s).unwrap();
-        assert_eq!(b, back);
+        flags(&b, "sink");
     }
 }

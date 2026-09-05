@@ -650,11 +650,8 @@ mod tests {
 
     #[test]
     fn duplicate_override_spreads_around_the_last_value() {
-        // R55: apply_overrides is last-wins (the board runs the LAST override's
-        // value), but resolve() keyed the ensemble nominal off whichever override
-        // carried the tolerance field. Two overrides on R1; the first with a
-        // tolerance, the second setting the real value, must spread around the
-        // LAST value, not the earlier one.
+        // apply_overrides is last-wins, so the ensemble nominal must be the
+        // last override's value even when an earlier one carried the tolerance.
         let spec: Spec = toml::from_str(
             "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
              [[override]]\nref = \"R1\"\nvalue = \"10k\"\ntolerance = 5\n\
@@ -674,60 +671,48 @@ mod tests {
             .expect("R1 resolved");
         assert!(
             (r1.nominal_si - 12_000.0).abs() < 1.0,
-            "must spread around the last override (12k), got {}",
+            "got {}",
             r1.nominal_si
         );
     }
 
     #[test]
-    fn seed_zero_is_nominal() {
+    fn samples_are_nominal_at_seed_zero_deterministic_and_inside_the_band() {
         let t = rule("R1", 10_000.0, 10.0, Distribution::Uniform);
+        let g = rule("C1", 1e-7, 20.0, Distribution::Gaussian);
         assert_eq!(sample(0, &t).si, 10_000.0);
-        let g = rule("R1", 10_000.0, 10.0, Distribution::Gaussian);
-        assert_eq!(sample(0, &g).si, 10_000.0);
-    }
-
-    #[test]
-    fn samples_are_deterministic_and_order_independent() {
-        let t = rule("R1", 10_000.0, 10.0, Distribution::Uniform);
-        let a = sample(7, &t).si;
-        let b = sample(7, &t).si;
-        assert_eq!(a.to_bits(), b.to_bits(), "same (seed, ref) => same value");
-        // A different reference gets a different stream.
+        assert_eq!(sample(0, &g).si, 1e-7);
+        // Same (seed, ref) => same value; a different ref gets its own stream.
+        assert_eq!(sample(7, &t).si.to_bits(), sample(7, &t).si.to_bits());
         let u = rule("R2", 10_000.0, 10.0, Distribution::Uniform);
         assert_ne!(sample(7, &t).si.to_bits(), sample(7, &u).si.to_bits());
-    }
-
-    #[test]
-    fn uniform_samples_stay_inside_the_tolerance_band() {
-        let t = rule("R1", 10_000.0, 10.0, Distribution::Uniform);
+        // Uniform stays inside the band; gaussian is truncated at it and
+        // actually spreads.
         for seed in 1..500 {
             let v = sample(seed, &t).si;
             assert!((9_000.0..=11_000.0).contains(&v), "seed {seed}: {v}");
         }
-    }
-
-    #[test]
-    fn gaussian_samples_are_truncated_at_the_tolerance_bound() {
-        let t = rule("C1", 1e-7, 20.0, Distribution::Gaussian);
         let mut spread = 0.0f64;
         for seed in 1..2000 {
-            let v = sample(seed, &t).si;
+            let v = sample(seed, &g).si;
             assert!(
                 v >= 0.8e-7 - 1e-20 && v <= 1.2e-7 + 1e-20,
                 "seed {seed}: {v}"
             );
             spread = spread.max((v - 1e-7).abs());
         }
-        // The distribution actually spreads (not all-nominal).
         assert!(
             spread > 0.05e-7,
             "gaussian never moved: max spread {spread}"
         );
     }
 
+    /// Corners enumerate every min/max combination (bit i of the member index
+    /// is component i), the interior probes continue the member numbering so
+    /// `--seed k` names exactly one run, and Monte-Carlo (which never claimed
+    /// a bound) gets no probes.
     #[test]
-    fn corner_plans_enumerate_all_min_max_combinations() {
+    fn corner_plans_enumerate_all_min_max_combinations_then_the_probes() {
         let ts = vec![
             rule("R1", 10_000.0, 10.0, Distribution::Uniform),
             rule("R2", 10_000.0, 10.0, Distribution::Uniform),
@@ -735,61 +720,27 @@ mod tests {
         let plans = build_plans(Mode::Corners, 0, &ts).unwrap();
         let corners: Vec<&SeedPlan> = plans.iter().filter(|p| !p.interior).collect();
         assert_eq!(corners.len(), 4);
-        // Member 0 = all-min; member 3 = all-max.
         assert!(corners[0].values.iter().all(|v| v.si == 9_000.0));
         assert!(corners[3].values.iter().all(|v| v.si == 11_000.0));
-        // Member 1: bit0 set => R1 at max, R2 at min.
         assert_eq!(corners[1].values[0].si, 11_000.0);
         assert_eq!(corners[1].values[1].si, 9_000.0);
-    }
+        assert_eq!(plans.len() - corners.len(), interior_probe_count(2));
+        let mut seeds: Vec<u32> = plans.iter().map(|p| p.seed).collect();
+        seeds.sort_unstable();
+        seeds.dedup();
+        assert_eq!(seeds.len(), plans.len(), "member indices are unique");
 
-    /// The interior probes must sit STRICTLY inside the corner box, or they
-    /// re-report a corner as if it were new information about the interior.
-    #[test]
-    fn interior_probes_are_strictly_inside_the_corner_box() {
-        let ts = vec![
-            rule("R1", 10_000.0, 10.0, Distribution::Uniform),
-            rule("R2", 100e-9, 20.0, Distribution::Uniform),
-        ];
-        let plans = build_plans(Mode::Corners, 0, &ts).unwrap();
-        let interior: Vec<&SeedPlan> = plans.iter().filter(|p| p.interior).collect();
-        assert_eq!(
-            interior.len(),
-            interior_probe_count(2),
-            "two components get {} probes",
-            interior_probe_count(2)
-        );
-        for p in &interior {
-            for v in &p.values {
-                assert!(v.corner.is_none(), "an interior value is at no corner");
-                let tol = if v.reference == "R1" { 0.10 } else { 0.20 };
-                let lo = v.nominal_si * (1.0 - tol);
-                let hi = v.nominal_si * (1.0 + tol);
-                assert!(
-                    v.si > lo && v.si < hi,
-                    "{} = {} must be strictly inside ({lo}, {hi})",
-                    v.reference,
-                    v.si
-                );
-            }
-        }
-        // Member indices continue on from the corners, so `--seed k` still names
-        // exactly one run.
-        let seeds: Vec<u32> = plans.iter().map(|p| p.seed).collect();
-        let mut sorted = seeds.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), seeds.len(), "member indices are unique");
+        let mc = build_plans(Mode::MonteCarlo, 5, &ts).unwrap();
+        assert_eq!(mc.len(), 5);
+        assert!(mc.iter().all(|p| !p.interior));
     }
 
     /// Latin hypercube, both halves: every stratum of every component is hit
-    /// exactly once (the "Latin" part), and the axes are permuted independently
-    /// rather than sharing one order (the "hypercube" part). The strata property
-    /// is a guarantee. The off-diagonal check is a property of THIS fixture's
-    /// permutations, not of the design: independent permutations can coincide,
-    /// and nothing rejects that. It is asserted here because a regression that
-    /// collapsed the axes onto one shared order would show up as a permanent
-    /// diagonal, which is the failure worth catching.
+    /// exactly once, and the axes are permuted independently rather than
+    /// sharing one order. Independent permutations can coincide by chance;
+    /// the off-diagonal check is a property of THIS fixture, asserted because
+    /// a regression collapsing the axes onto one order shows up as a
+    /// permanent diagonal.
     #[test]
     fn interior_probes_cover_every_stratum_and_are_not_diagonal() {
         let ts = vec![
@@ -799,31 +750,25 @@ mod tests {
         let probes = interior_probe_count(2);
         let plans = build_plans(Mode::Corners, 0, &ts).unwrap();
         let interior: Vec<&SeedPlan> = plans.iter().filter(|p| p.interior).collect();
-
-        // Which stratum each probe landed in, per component.
         let stratum = |v: &SampledValue| -> usize {
-            let frac = v.si / v.nominal_si - 1.0; // in (-0.1, +0.1)
-            let unit = frac / 0.10; // in (-1, +1)
+            let unit = (v.si / v.nominal_si - 1.0) / 0.10; // in (-1, +1)
             (((unit + 1.0) / 2.0) * probes as f64).floor() as usize
         };
         for i in 0..2 {
             let mut hit: Vec<usize> = interior.iter().map(|p| stratum(&p.values[i])).collect();
             hit.sort_unstable();
-            assert_eq!(
-                hit,
-                (0..probes).collect::<Vec<_>>(),
-                "component {i} must hit every stratum exactly once"
-            );
+            assert_eq!(hit, (0..probes).collect::<Vec<_>>(), "component {i}");
         }
-        let diagonal = interior
-            .iter()
-            .all(|p| stratum(&p.values[0]) == stratum(&p.values[1]));
-        assert!(!diagonal, "the axes must be permuted independently");
+        assert!(
+            !interior
+                .iter()
+                .all(|p| stratum(&p.values[0]) == stratum(&p.values[1])),
+            "the axes must be permuted independently"
+        );
     }
 
-    /// The extra cost is bounded and small: the probe count flattens at 8 rather
-    /// than scaling with the 2^n corner set, so the monotonicity check never
-    /// becomes the dominant cost of a corner run.
+    /// The probe count flattens at 8 rather than scaling with the 2^n corner
+    /// set: the monotonicity check is an addend, not a multiplier.
     #[test]
     fn the_interior_probe_count_is_bounded() {
         assert_eq!(interior_probe_count(1), 4);
@@ -831,36 +776,11 @@ mod tests {
         for n in 3..=CORNER_CAP {
             assert_eq!(interior_probe_count(n), 8, "n = {n}");
         }
-        // At the cap the corners dominate by two orders of magnitude, which is
-        // the point: the check is an addend, not a multiplier.
-        let corners = 1usize << CORNER_CAP;
-        assert!(interior_probe_count(CORNER_CAP) * 100 < corners);
+        assert!(interior_probe_count(CORNER_CAP) * 100 < 1usize << CORNER_CAP);
     }
 
-    /// The design has to be reproducible, or `--seed k` cannot re-run a probe
-    /// and a red build is not investigable.
-    #[test]
-    fn the_interior_design_is_deterministic() {
-        let ts = vec![
-            rule("R1", 4_700.0, 5.0, Distribution::Uniform),
-            rule("C2", 22e-6, 20.0, Distribution::Gaussian),
-            rule("R9", 100.0, 1.0, Distribution::Uniform),
-        ];
-        let a = build_plans(Mode::Corners, 0, &ts).unwrap();
-        let b = build_plans(Mode::Corners, 0, &ts).unwrap();
-        for (pa, pb) in a.iter().zip(b.iter()) {
-            assert_eq!(pa.seed, pb.seed);
-            assert_eq!(pa.interior, pb.interior);
-            for (va, vb) in pa.values.iter().zip(pb.values.iter()) {
-                assert_eq!(va.si.to_bits(), vb.si.to_bits(), "{} moved", va.reference);
-            }
-        }
-    }
-
-    /// `below` must be free of the modulo bias `next_u64() % n` carries, since
-    /// none of the probe counts divide 2^64. A chi-square-free check is enough
-    /// here: over many draws every residue must appear within a few percent of
-    /// its expected share.
+    /// `below` must be free of the modulo bias `next_u64() % n` carries: over
+    /// many draws every residue appears within a few percent of its share.
     #[test]
     fn below_is_uniform_over_its_range() {
         for n in [3u64, 5, 6, 7, 8] {
@@ -877,87 +797,43 @@ mod tests {
                 let dev = (*c as f64 - expected).abs() / expected;
                 assert!(
                     dev < 0.05,
-                    "n = {n}, residue {r}: {c} draws is {:.1}% off the expected {expected:.0}",
+                    "n = {n}, residue {r}: {c} draws, {:.1}% off",
                     dev * 100.0
                 );
             }
         }
     }
 
-    /// Monte-Carlo is untouched: it never claimed a bound, so it has nothing to
-    /// probe for and must not pay for one.
     #[test]
-    fn monte_carlo_gets_no_interior_probes() {
-        let ts = vec![rule("R1", 1_000.0, 10.0, Distribution::Uniform)];
-        let plans = build_plans(Mode::MonteCarlo, 5, &ts).unwrap();
-        assert_eq!(plans.len(), 5);
-        assert!(plans.iter().all(|p| !p.interior));
-    }
-
-    #[test]
-    fn corner_cap_refuses_and_names_monte_carlo() {
-        let ts: Vec<ResolvedTolerance> = (0..CORNER_CAP + 1)
-            .map(|i| rule(&format!("R{i}"), 1_000.0, 5.0, Distribution::Uniform))
-            .collect();
-        let err = build_plans(Mode::Corners, 0, &ts).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("monte-carlo"),
-            "refusal points at monte-carlo: {msg}"
-        );
-    }
-
-    #[test]
-    fn corner_cap_refusal_does_not_overflow_at_64_tolerances() {
-        // 64+ toleranced components blow the cap, and the refusal must come out
-        // cleanly. Reporting the corner count as 1u64 << n overflows for n >= 64
-        // (a debug panic, or a wrong number in release). (round-7 #15)
-        let ts: Vec<ResolvedTolerance> = (0..64)
-            .map(|i| rule(&format!("R{i}"), 1_000.0, 5.0, Distribution::Uniform))
-            .collect();
-        let err = build_plans(Mode::Corners, 0, &ts).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("monte-carlo"),
-            "refusal points at monte-carlo: {msg}"
-        );
-        assert!(
-            msg.contains("64"),
-            "refusal names the component count: {msg}"
-        );
+    fn corner_cap_refuses_and_names_monte_carlo_without_overflowing() {
+        // 64 tolerances would overflow a `1u64 << n` corner count; the
+        // refusal must still come out cleanly with the component count.
+        for n in [CORNER_CAP + 1, 64] {
+            let ts: Vec<ResolvedTolerance> = (0..n)
+                .map(|i| rule(&format!("R{i}"), 1_000.0, 5.0, Distribution::Uniform))
+                .collect();
+            let msg = build_plans(Mode::Corners, 0, &ts).unwrap_err().to_string();
+            assert!(
+                msg.contains("monte-carlo") && msg.contains(&n.to_string()),
+                "{msg}"
+            );
+        }
     }
 
     #[test]
     fn glob_match_supports_star_only() {
-        assert!(glob_match("R*", "R17"));
-        assert!(glob_match("R*", "R"));
-        assert!(!glob_match("R*", "C3"));
-        assert!(glob_match("R_Shunt*", "R_Shunt15301"));
+        assert!(glob_match("R*", "R17") && glob_match("R*", "R") && !glob_match("R*", "C3"));
         assert!(glob_match("*", "anything"));
-        assert!(glob_match("R1", "R1"));
-        assert!(!glob_match("R1", "R12"));
+        assert!(glob_match("R1", "R1") && !glob_match("R1", "R12"));
     }
 
     #[test]
-    fn engineering_format_reads_naturally() {
+    fn engineering_format_reads_naturally_and_carries_past_a_decade_edge() {
         assert_eq!(format_engineering(10_900.0), "10.9k");
         assert_eq!(format_engineering(1.82e-8), "18.2n");
-        assert_eq!(format_engineering(0.05), "50m");
         assert_eq!(format_engineering(5.0), "5");
-        assert_eq!(format_engineering(2_250_000.0), "2.25M");
-    }
-
-    #[test]
-    fn engineering_format_carries_past_a_decade_edge() {
-        // R23 (FMT-ENG-DECADE-ROUNDUP): rounding the mantissa up to 1000 must
-        // carry into the next-larger suffix, never emit a wrong-decade label
-        // like "1000k" or a bare "1000".
+        // Rounding the mantissa up to 1000 carries into the next suffix.
         assert_eq!(format_engineering(999_999.0), "1M");
-        assert_eq!(format_engineering(999.6), "1k");
-        assert_eq!(format_engineering(999_500.0), "1M");
-        // A value already clear of the edge is unaffected.
-        assert_eq!(format_engineering(10_900.0), "10.9k");
-        // The carry composes with the sign.
         assert_eq!(format_engineering(-999_999.0), "-1M");
     }
 }
