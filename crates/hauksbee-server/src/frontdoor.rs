@@ -878,6 +878,21 @@ async fn analyze_handler(
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if content_type.starts_with("multipart/form-data") {
+        return json_body(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            serde_json::json!({
+                "ok": false,
+                "error": "/api/analyze takes the raw board file as the request body with the \
+                          file name in the X-Board-Filename header; send multipart/form-data \
+                          to /api/analyze-with-firmware instead",
+            }),
+        );
+    }
     json_ok((analyze)(board_filename(&headers), &body, None, None))
 }
 

@@ -1,9 +1,15 @@
-import type { RefusalContract } from '../lib/refusal-contract'
-
 // Analysis-report types, mirrors hauksbee-engine frontdoor.rs (WebReport et al)
 // exactly. This is the JSON `/api/analyze` and `/api/analyze-with-firmware`
 // return, and what `/api/startup` embeds under `report` when a board was
 // preloaded via `hauksbee run <board> --serve`.
+
+/** The C5.3 contract emitted by every invalid-for-analysis result. */
+export interface RefusalContract {
+  claim: string
+  missing_prerequisite: string
+  valid_partial_conclusions: string[]
+  next_action: string
+}
 
 export interface WebFinding {
   /** "serious" | "warning" | "note" */
@@ -430,37 +436,22 @@ export interface ModelSaveResult {
   note?: string
 }
 
-/** One check queued from a board surface (a net or component click on the
- *  report map or the live sim) for the checks builder to append verbatim.
- *  `seq` orders and de-duplicates consumption across remounts. */
-export interface QueuedCheck {
-  seq: number
-  kind: string
-  net?: string
-  ref?: string
-}
+/** What a board surface (a net or component click on the report map or the
+ *  live sim) asks the checks builder for. Each stays typed rather than
+ *  collapsing into "a row": a stimulus or a supply changes the experiment,
+ *  while a check judges it, and a register-map device needs a human-authored
+ *  spec before it can run. Nothing here is guessed from a part name. */
+export type BoardRequest =
+  | { type: 'check'; kind: string; net?: string; ref?: string }
+  | { type: 'peripheral'; id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }
+  | { type: 'sensor'; id: string; ref?: string; modelId?: string | null }
+  /** An ideal scenario supply: the checks runner rebuilds the circuit with it
+   *  on the next run; it is not a live post-solve voltage force. */
+  | { type: 'supply'; net: string; volts?: number }
 
-/** One interaction queued from a board trace/component into the visual co-sim
- * builder. This is deliberately separate from an assertion: a stimulus changes
- * the experiment, while a check judges it. Keeping the two typed prevents a UI
- * click from silently turning an input into evidence. */
-export interface QueuedPeripheral {
-  seq: number
-  id?: string
-  kind: 'stimulus' | 'pushbutton' | 'toggle'
-  net?: string
-  ref?: string
-}
-
-/** A register-map device queued from a clicked board component. The browser
- * never invents its protocol: the builder still requires a validated sensor
- * spec selected or pasted by the user before the scenario can run. */
-export interface QueuedSensor {
-  seq: number
-  id: string
-  ref?: string
-  modelId?: string | null
-}
+/** A request in the queue; `seq` orders and de-duplicates consumption across
+ *  remounts. */
+export type QueuedRequest = BoardRequest & { seq: number }
 
 /** Exact register-map bytes queued for immediate attachment to the current
  * live session. This is separate from QueuedSensor: the latter opens an
@@ -481,4 +472,61 @@ export interface QueuedSupply {
   seq: number
   net: string
   volts?: number
+}
+
+/** One optional co-sim backend or oracle, from `GET /api/deps` (the engine's
+ *  own discovery, the same resolvers a real run uses). */
+export interface DepInfo {
+  id: string
+  name: string
+  present: boolean
+  path: string | null
+  version: string | null
+  unlocks: string
+  installable: boolean
+  cost: string
+  manual: string
+  detail: string | null
+  /** Present only on a dependency that sends the user's data off this machine;
+   *  rendered as its own line rather than folded into `unlocks`. */
+  sends_data_offhost?: string | null
+}
+
+/** One bundled register-map behaviour, from `GET /api/sensor-specs`. */
+export interface SensorCatalogEntry {
+  id: string
+  name: string
+  bus: 'i2c' | 'spi'
+  scope: string
+  spec_toml: string
+}
+
+/** One assertion's verdict from a hauksbee-ci run. */
+export interface CheckResult {
+  label: string
+  kind: string
+  passed: boolean
+  invalid: boolean
+  detail: string
+  evidence?: EvidenceMap
+}
+
+/** What `POST /api/check` answers with. Errors arrive in the body, so a
+ *  non-2xx status is still parsed rather than replaced with a status line. */
+export interface RunResponse {
+  ok: boolean
+  error?: string
+  passed?: boolean
+  exit_code?: number
+  analog_abort?: boolean
+  refusal?: RefusalContract
+  coverage?: string | null
+  substitutions?: string[]
+  coverage_warnings?: string[]
+  inventory?: ArtifactProvenance[]
+  assumptions?: EvidenceAssumption[]
+  evidence?: EvidenceMap[]
+  timing_coverage?: WebTimingCoverage[]
+  timing_refusals?: string[]
+  results?: CheckResult[]
 }

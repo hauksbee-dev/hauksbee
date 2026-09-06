@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebOpenPart } from '../types/report'
-import { errorText, postJson } from '../lib/api'
+import { api, errorText } from '../lib/api'
 
 // Write a part by hand, in hauksbee's native TOML, with the real validator
 // answering as you type.
@@ -130,7 +130,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
       : 'Preparing the conservative evidence-first scaffold …')
     void (async () => {
       try {
-        const result = await postJson<{ ok?: boolean; toml?: string; error?: string }>('/api/models/draft', {
+        const result = await api.modelsDraft({
           board_label: boardLabel ?? 'uploaded board',
           reference: suggested.reference,
           value: suggested.value,
@@ -181,9 +181,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
           if (epoch === checkEpoch.current) setCheck({ ...next, body: checkedBody, format: checkedFormat })
         }
         try {
-          const j = await postJson<{ ok?: boolean; summary?: string; error?: string }>(
-            '/api/models/check', { toml: checkedBody, format: checkedFormat },
-          )
+          const j = await api.modelsCheck({ toml: checkedBody, format: checkedFormat })
           settle(j.ok
             ? { phase: 'ok', summary: j.summary ?? 'valid' }
             : { phase: 'bad', error: j.error ?? 'the check did not say why' })
@@ -224,9 +222,7 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
   const save = useCallback(async () => {
     setSaveMsg(null)
     try {
-      const j = await postJson<{ ok?: boolean; path?: string; error?: string }>('/api/models/save', {
-        part: part.trim() || 'model', kind: '', toml: body,
-      })
+      const j = await api.modelsSave({ part: part.trim() || 'model', kind: '', toml: body })
       if (j.ok === false) setSaveMsg(j.error ?? 'the save failed and did not say why')
       else {
         setSaveMsg(`Saved to ${j.path ?? 'your model directory'}. Re-analyzing this board now.`)

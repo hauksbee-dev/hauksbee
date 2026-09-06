@@ -132,6 +132,17 @@ fn looks_like_power_name(net: &str) -> bool {
     .any(|tag| n.contains(tag))
 }
 
+/// Does a supply net's name say a cell feeds it (`VBAT`, `BAT+`, `VCELL`,
+/// `BATT`)? Such a rail is scaffolded as a `battery` source, since the spec
+/// refuses an honest `kind = "battery"` without a chemistry and the user
+/// should not have to discover the required fields one rerun at a time.
+fn looks_like_battery_net(net: &str) -> bool {
+    let n = net.to_ascii_uppercase();
+    ["VBAT", "BAT+", "BATT", "VCELL", "CELL+"]
+        .iter()
+        .any(|tag| n.contains(tag))
+}
+
 fn board_stem(board: &Path) -> String {
     board
         .file_stem()
@@ -386,15 +397,29 @@ fn render_spec_at_with_run_hint(
     if !unpowered.is_empty() {
         s.push_str(
             "\n# These nets name a supply but not a voltage, so nothing can work out\n\
-             # what to feed them and they will sit at 0 V. Fill in the voltage and\n\
-             # uncomment each one, or every analog result is solved around a dead rail.\n",
+             # what to feed them and they will sit at 0 V. Fill in each one and\n\
+             # uncomment it, or every analog result is solved around a dead rail.\n",
         );
         for net in &unpowered {
-            let _ = writeln!(
-                s,
-                "# [[supply]]\n# net = \"{net}\"\n# kind = \"ideal\"\n\
-                 # volts =                     # what does this rail run at?"
-            );
+            if looks_like_battery_net(net) {
+                // A cell holder is a source with a chemistry, not an ideal
+                // number: the pack sags under load and walks down with charge,
+                // which is what a battery-powered board's boot assertions test.
+                let _ = writeln!(
+                    s,
+                    "# [[supply]]\n# net = \"{net}\"\n# kind = \"battery\"              # the name says a cell feeds this net\n\
+                     # chemistry = \"liion\"         # liion | alkaline | nimh | lifepo4\n\
+                     # cells = 1                    # cells in series\n\
+                     # capacity_mah = 2000"
+                );
+            } else {
+                let _ = writeln!(
+                    s,
+                    "# [[supply]]\n# net = \"{net}\"\n# kind = \"bench\"\n\
+                     # volts =                     # what does this rail run at?\n\
+                     # current_limit_a = {BENCH_LIMIT_A:.1}"
+                );
+            }
         }
     }
 

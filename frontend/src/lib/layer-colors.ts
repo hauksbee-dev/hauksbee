@@ -1,115 +1,65 @@
-// KiCad-inspired layer palettes, one per theme. Colors are CSS strings used
-// in canvas fillStyle/strokeStyle.
-//
-// The dark palette is tuned for the navy instrument ground and is the
-// original identity; its values must not drift (the dark theme is pixel
-// stable). The light palette is a real re-tune, not an inversion: each layer
-// keeps its KiCad hue family (F.Cu red, B.Cu blue, inner gold/green/purple/
-// cyan) but drops luminance so copper reads as ink on the light substrate,
-// and glows become slightly saturated halos rather than bright blooms.
+// KiCad-inspired layer palettes, one per theme, as CSS strings for canvas
+// fillStyle/strokeStyle. The dark palette is tuned for the navy instrument
+// ground and is the original identity; its values must not drift (the dark
+// theme is pixel stable). The light palette is a real re-tune, not an
+// inversion: copper reads as ink on the light substrate.
 
 import { isLightTheme } from './theme-tokens'
 
-interface LayerStyle {
+export interface LayerStyle {
   color: string
-  /** For copper layers a slightly brighter glow color */
+  /** For copper layers a slightly brighter (dark) or tighter (light) glow. */
   glow?: string
-  zIndex: number
   visible: boolean
 }
 
-const darkPalette: Record<string, LayerStyle> = {
-  // Copper
-  'F.Cu':    { color: '#c84040', glow: '#ff6060', zIndex: 40, visible: true },
-  'B.Cu':    { color: '#4080c8', glow: '#60a0ff', zIndex: 38, visible: true },
-  'In1.Cu':  { color: '#c8a030', glow: '#ffd060', zIndex: 37, visible: true },
-  'In2.Cu':  { color: '#20b080', glow: '#30e0a0', zIndex: 36, visible: true },
-  'In3.Cu':  { color: '#b060c0', glow: '#e080ff', zIndex: 35, visible: true },
-  'In4.Cu':  { color: '#20a0c0', glow: '#30c8e8', zIndex: 34, visible: true },
-
-  // Silkscreen
-  'F.SilkS':  { color: '#c8c8c8', zIndex: 50, visible: true },
-  'B.SilkS':  { color: '#9090c0', zIndex: 48, visible: true },
-  'F.Silkscreen': { color: '#c8c8c8', zIndex: 50, visible: true },
-  'B.Silkscreen': { color: '#9090c0', zIndex: 48, visible: true },
-
-  // Fab (use faint, mostly for outline guides)
-  'F.Fab':   { color: '#506070', zIndex: 20, visible: true },
-  'B.Fab':   { color: '#507090', zIndex: 18, visible: true },
-
-  // Courtyard
-  'F.CrtYd': { color: '#404040', zIndex: 10, visible: false },
-  'B.CrtYd': { color: '#404040', zIndex:  9, visible: false },
-  'F.Courtyard': { color: '#404040', zIndex: 10, visible: false },
-  'B.Courtyard': { color: '#404040', zIndex:  9, visible: false },
-
-  // Paste / Mask, not usually visible
-  'F.Paste': { color: '#606060', zIndex:  5, visible: false },
-  'B.Paste': { color: '#606060', zIndex:  4, visible: false },
-  'F.Mask':  { color: '#308040', zIndex:  3, visible: false },
-  'B.Mask':  { color: '#306880', zIndex:  2, visible: false },
-
-  // Board edge
-  'Edge.Cuts': { color: '#e8c040', glow: '#ffe060', zIndex: 60, visible: true },
-
-  // User/drawings
-  'Dwgs.User':  { color: '#888888', zIndex: 15, visible: true },
-  'User.Drawings': { color: '#888888', zIndex: 15, visible: true },
-  'Cmts.User':  { color: '#606060', zIndex: 14, visible: false },
-  'User.Comments': { color: '#606060', zIndex: 14, visible: false },
-  'Eco1.User':  { color: '#506050', zIndex: 12, visible: false },
-  'Eco2.User':  { color: '#505060', zIndex: 11, visible: false },
-  'Margin':     { color: '#606050', zIndex:  8, visible: false },
-}
-
-// Light palette: same layers, same z-order and visibility, colors dropped to
-// ~35-50% luminance so every layer holds at least ~3:1 against the #ece7dd
-// substrate. Inner layers stay four clearly separate hues (gold, green,
-// purple, teal) so a 6-layer board is still readable at a glance.
-const lightPalette: Record<string, LayerStyle> = {
-  'F.Cu':    { color: '#b32929', glow: '#8f1f1f', zIndex: 40, visible: true },
-  'B.Cu':    { color: '#2a5db3', glow: '#20488f', zIndex: 38, visible: true },
-  'In1.Cu':  { color: '#9a7414', glow: '#7a5c0f', zIndex: 37, visible: true },
-  'In2.Cu':  { color: '#0f7d5c', glow: '#0a6248', zIndex: 36, visible: true },
-  'In3.Cu':  { color: '#8a3f9e', glow: '#6e3280', zIndex: 35, visible: true },
-  'In4.Cu':  { color: '#0f7a99', glow: '#0a607a', zIndex: 34, visible: true },
-
-  // Silkscreen: white paint on a dark board becomes dark ink on a light one.
-  // Back silk keeps its slate-violet cast so front/back stay tellable apart.
-  'F.SilkS':  { color: '#454b54', zIndex: 50, visible: true },
-  'B.SilkS':  { color: '#5b5f94', zIndex: 48, visible: true },
-  'F.Silkscreen': { color: '#454b54', zIndex: 50, visible: true },
-  'B.Silkscreen': { color: '#5b5f94', zIndex: 48, visible: true },
-
-  // Fab outlines stay the quietest drawn layer: barely-there cool grays.
-  'F.Fab':   { color: '#aab3bc', zIndex: 20, visible: true },
-  'B.Fab':   { color: '#a3b1c4', zIndex: 18, visible: true },
-
-  'F.CrtYd': { color: '#c9c4b8', zIndex: 10, visible: false },
-  'B.CrtYd': { color: '#c9c4b8', zIndex:  9, visible: false },
-  'F.Courtyard': { color: '#c9c4b8', zIndex: 10, visible: false },
-  'B.Courtyard': { color: '#c9c4b8', zIndex:  9, visible: false },
-
-  'F.Paste': { color: '#b5afa2', zIndex:  5, visible: false },
-  'B.Paste': { color: '#b5afa2', zIndex:  4, visible: false },
-  'F.Mask':  { color: '#7fae8d', zIndex:  3, visible: false },
-  'B.Mask':  { color: '#7fa2ae', zIndex:  2, visible: false },
-
-  // Board edge: goldenrod dropped to ink weight; it must outline, not shout.
-  'Edge.Cuts': { color: '#8a6d0b', glow: '#6e5709', zIndex: 60, visible: true },
-
-  'Dwgs.User':  { color: '#8a8a8a', zIndex: 15, visible: true },
-  'User.Drawings': { color: '#8a8a8a', zIndex: 15, visible: true },
-  'Cmts.User':  { color: '#b0aca2', zIndex: 14, visible: false },
-  'User.Comments': { color: '#b0aca2', zIndex: 14, visible: false },
-  'Eco1.User':  { color: '#9aa596', zIndex: 12, visible: false },
-  'Eco2.User':  { color: '#9a96a5', zIndex: 11, visible: false },
-  'Margin':     { color: '#a5a196', zIndex:  8, visible: false },
+/** Every KiCad layer the renderer knows: [dark colour, dark glow, light
+ *  colour, light glow, drawn by default]. Both themes share visibility.
+ *  The light palette drops each layer to ~35-50% luminance so it holds at
+ *  least ~3:1 against the #ece7dd substrate while keeping its KiCad hue
+ *  family, and its glows are same-hue halos rather than blooms. */
+const LAYERS: Record<string, [string, string | undefined, string, string | undefined, boolean]> = {
+  // Copper: F.Cu red, B.Cu blue, inner gold/green/purple/teal so a 6-layer
+  // board is still readable at a glance.
+  'F.Cu': ['#c84040', '#ff6060', '#b32929', '#8f1f1f', true],
+  'B.Cu': ['#4080c8', '#60a0ff', '#2a5db3', '#20488f', true],
+  'In1.Cu': ['#c8a030', '#ffd060', '#9a7414', '#7a5c0f', true],
+  'In2.Cu': ['#20b080', '#30e0a0', '#0f7d5c', '#0a6248', true],
+  'In3.Cu': ['#b060c0', '#e080ff', '#8a3f9e', '#6e3280', true],
+  'In4.Cu': ['#20a0c0', '#30c8e8', '#0f7a99', '#0a607a', true],
+  // Silkscreen: white paint on a dark board becomes dark ink on a light one;
+  // back silk keeps its slate-violet cast so front/back stay tellable apart.
+  'F.SilkS': ['#c8c8c8', undefined, '#454b54', undefined, true],
+  'B.SilkS': ['#9090c0', undefined, '#5b5f94', undefined, true],
+  'F.Silkscreen': ['#c8c8c8', undefined, '#454b54', undefined, true],
+  'B.Silkscreen': ['#9090c0', undefined, '#5b5f94', undefined, true],
+  // Fab outlines stay the quietest drawn layer.
+  'F.Fab': ['#506070', undefined, '#aab3bc', undefined, true],
+  'B.Fab': ['#507090', undefined, '#a3b1c4', undefined, true],
+  'F.CrtYd': ['#404040', undefined, '#c9c4b8', undefined, false],
+  'B.CrtYd': ['#404040', undefined, '#c9c4b8', undefined, false],
+  'F.Courtyard': ['#404040', undefined, '#c9c4b8', undefined, false],
+  'B.Courtyard': ['#404040', undefined, '#c9c4b8', undefined, false],
+  'F.Paste': ['#606060', undefined, '#b5afa2', undefined, false],
+  'B.Paste': ['#606060', undefined, '#b5afa2', undefined, false],
+  'F.Mask': ['#308040', undefined, '#7fae8d', undefined, false],
+  'B.Mask': ['#306880', undefined, '#7fa2ae', undefined, false],
+  // Board edge: goldenrod, dropped to ink weight on paper (outline, not shout).
+  'Edge.Cuts': ['#e8c040', '#ffe060', '#8a6d0b', '#6e5709', true],
+  'Dwgs.User': ['#888888', undefined, '#8a8a8a', undefined, true],
+  'User.Drawings': ['#888888', undefined, '#8a8a8a', undefined, true],
+  'Cmts.User': ['#606060', undefined, '#b0aca2', undefined, false],
+  'User.Comments': ['#606060', undefined, '#b0aca2', undefined, false],
+  'Eco1.User': ['#506050', undefined, '#9aa596', undefined, false],
+  'Eco2.User': ['#505060', undefined, '#9a96a5', undefined, false],
+  'Margin': ['#606050', undefined, '#a5a196', undefined, false],
 }
 
 export function getLayerStyle(layer: string): LayerStyle {
-  const palette = isLightTheme() ? lightPalette : darkPalette
-  return palette[layer] ?? { color: isLightTheme() ? '#8f8f8f' : '#666666', zIndex: 1, visible: true }
+  const light = isLightTheme()
+  const row = LAYERS[layer]
+  if (!row) return { color: light ? '#8f8f8f' : '#666666', visible: true }
+  return light ? { color: row[2], glow: row[3], visible: row[4] } : { color: row[0], glow: row[1], visible: row[4] }
 }
 
 export function isCopperLayer(layer: string): boolean {

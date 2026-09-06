@@ -49,6 +49,38 @@ const TONE: Record<'ok' | 'warn' | 'err', { bg: string; border: string; color: s
   err: { bg: 'var(--err-bg)', border: 'var(--err-border)', color: 'var(--err-strong)' },
 }
 
+/** The row's 26 px action: quiet by default, copper for the primary, red for
+ *  the destructive confirmation. */
+function SmallButton({ tone = 'quiet', testId, onClick, disabled, title, label, children }: {
+  tone?: 'quiet' | 'primary' | 'danger'
+  testId?: string
+  onClick: () => void
+  disabled?: boolean
+  title?: string
+  /** Accessible name, when the visible text alone is ambiguous ("Rename"). */
+  label?: string
+  children: React.ReactNode
+}) {
+  const danger = tone === 'danger'
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={label}
+      className={`${danger ? '' : tone === 'primary' ? 'hb-btn-primary' : 'hb-btn'} hb-press inline-flex items-center gap-1 px-2.5 text-[11px] shrink-0 rounded-lg cursor-pointer`}
+      style={{
+        height: 26,
+        ...(danger ? { background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' } : {}),
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
 export function SessionRail({ state, onResume }: {
   state: SessionsState
   onResume: (id: string) => void
@@ -245,23 +277,8 @@ function SessionRowView({ row, now, isCurrent, onOpen, onRename, onDelete }: {
             }}
             aria-label="Session name"
           />
-          <button
-            type="button"
-            data-testid="session-rename-save"
-            onClick={() => { onRename(draft); setEditing(false) }}
-            className="hb-btn-primary hb-press px-2.5 text-[11px] shrink-0"
-            style={{ height: 26 }}
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            onClick={() => { setDraft(row.name); setEditing(false) }}
-            className="hb-btn hb-press px-2.5 text-[11px] shrink-0"
-            style={{ height: 26 }}
-          >
-            Cancel
-          </button>
+          <SmallButton tone="primary" testId="session-rename-save" onClick={() => { onRename(draft); setEditing(false) }}>Save</SmallButton>
+          <SmallButton onClick={() => { setDraft(row.name); setEditing(false) }}>Cancel</SmallButton>
         </div>
       ) : (
         <>
@@ -313,62 +330,27 @@ function SessionRowView({ row, now, isCurrent, onOpen, onRename, onDelete }: {
           )}
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {!isCurrent && (
-              <button
-                type="button"
-                data-testid="session-open"
+              <SmallButton
+                testId="session-open"
                 onClick={onOpen}
                 disabled={!row.hasReport}
                 title={row.hasReport ? undefined : 'This session has no stored report to open'}
-                className="hb-btn hb-press px-2.5 text-[11px] shrink-0"
-                style={{ height: 26 }}
               >
                 Open
-              </button>
+              </SmallButton>
             )}
-            <button
-              type="button"
-              data-testid="session-rename"
-              onClick={() => { setDraft(row.name); setEditing(true) }}
-              aria-label={`Rename ${row.name}`}
-              className="hb-btn hb-press inline-flex items-center gap-1 px-2 text-[11px] shrink-0"
-              style={{ height: 26 }}
-            >
+            <SmallButton testId="session-rename" label={`Rename ${row.name}`} onClick={() => { setDraft(row.name); setEditing(true) }}>
               <PencilIcon size={11} /> Rename
-            </button>
+            </SmallButton>
             {confirming ? (
               <>
-                <button
-                  type="button"
-                  data-testid="session-delete-confirm"
-                  onClick={onDelete}
-                  className="hb-press px-2 text-[11px] rounded-lg cursor-pointer shrink-0"
-                  style={{
-                    height: 26, background: 'var(--err-bg)',
-                    border: '1px solid var(--err-border)', color: 'var(--err-strong)',
-                  }}
-                >
-                  Delete for good
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirming(false)}
-                  className="hb-btn hb-press px-2 text-[11px] shrink-0"
-                  style={{ height: 26 }}
-                >
-                  Keep
-                </button>
+                <SmallButton tone="danger" testId="session-delete-confirm" onClick={onDelete}>Delete for good</SmallButton>
+                <SmallButton onClick={() => setConfirming(false)}>Keep</SmallButton>
               </>
             ) : (
-              <button
-                type="button"
-                data-testid="session-delete"
-                onClick={() => setConfirming(true)}
-                aria-label={`Delete ${row.name}`}
-                className="hb-btn hb-press inline-flex items-center gap-1 px-2 text-[11px] shrink-0"
-                style={{ height: 26 }}
-              >
+              <SmallButton testId="session-delete" label={`Delete ${row.name}`} onClick={() => setConfirming(true)}>
                 <TrashIcon size={11} /> Delete
-              </button>
+              </SmallButton>
             )}
           </div>
         </>

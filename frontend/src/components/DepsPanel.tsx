@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { readSseStream } from '../lib/sse'
-import { errorText, getJson } from '../lib/api'
+import { api, errorText } from '../lib/api'
+import type { DepInfo } from '../types/report'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 
 // The dependency panel (landing page): which optional co-sim backends and
@@ -9,24 +9,6 @@ import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 // OWN discovery, the same resolvers a real run uses); installs stream live
 // progress from POST /api/deps/install/<id> as Server-Sent Events. The manual
 // terminal command is always shown too, so nobody is trapped in the browser.
-
-interface DepInfo {
-  id: string
-  name: string
-  present: boolean
-  path: string | null
-  version: string | null
-  unlocks: string
-  installable: boolean
-  cost: string
-  manual: string
-  detail: string | null
-  /** Present only on a dependency that sends the user's data off this machine.
-   *  Every other entry here is a local binary with no privacy consequence, so
-   *  this must be rendered as its own line rather than folded into `unlocks`,
-   *  where it would read as a feature. */
-  sends_data_offhost?: string | null
-}
 
 type InstallState =
   | { phase: 'idle' }
@@ -44,7 +26,7 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
 
   const fetchDeps = useCallback(async () => {
     try {
-      const json = await getJson<{ deps?: DepInfo[] }>('/api/deps')
+      const json = await api.deps()
       if (!Array.isArray(json.deps)) throw new Error('it returned an unexpected shape')
       setFetchState({ phase: 'ready', deps: json.deps })
     } catch (e) {
@@ -68,13 +50,8 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
       void fetchDeps()
     }
     try {
-      const res = await fetch(`/api/deps/install/${encodeURIComponent(id)}`, { method: 'POST' })
-      if (!res.ok || !res.body) {
-        end(false, `the server refused the install (${res.status} ${res.statusText})`)
-        return
-      }
       let ended = false
-      await readSseStream(res.body, ({ event, data }) => {
+      await api.depsInstall(id, ({ event, data }) => {
         if (event === 'log') append(data)
         else if (event === 'done') { ended = true; end(true, 'Installed and verified.') }
         else if (event === 'error') { ended = true; end(false, data) }

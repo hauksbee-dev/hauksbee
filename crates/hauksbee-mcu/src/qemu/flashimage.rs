@@ -56,6 +56,32 @@ pub(crate) fn bootloader_offset(machine: &str) -> u64 {
     }
 }
 
+thread_local! {
+    static QUIET_PANICS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f`, catching a panic without letting the default hook print the
+/// "thread panicked at espflash/..." banner. The refusal the caller builds is
+/// the user-facing message; the library's internal `unreachable!` is noise.
+/// The wrapping hook is installed once and consults a thread-local flag, so
+/// panics on other threads (a Tokio worker serving a different request) are
+/// still reported normally.
+fn quietly<T>(f: impl FnOnce() -> T) -> std::thread::Result<T> {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !QUIET_PANICS.with(|q| q.get()) {
+                previous(info);
+            }
+        }));
+    });
+    QUIET_PANICS.with(|q| q.set(true));
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    QUIET_PANICS.with(|q| q.set(false));
+    out
+}
+
 /// Build a bootable, QEMU-sized merged flash image from the app ELF at
 /// `elf_path`, returning the temp file holding it. The caller must keep the
 /// returned handle alive as long as QEMU runs from it.
@@ -87,9 +113,9 @@ pub(crate) fn merged_image_from_elf(
     // build trees can contain exactly that intermediate ELF. A library panic
     // must not strand a browser launch request or tear down its Tokio worker;
     // translate it into the same actionable refusal as any other bad input.
-    let image = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let image = match quietly(|| {
         IdfBootloaderFormat::new(&elf_data, &flash_data, None, None, None, None)
-    })) {
+    }) {
         Ok(result) => result.with_context(|| {
             format!(
                 "converting {} into an ESP32 app image (is it the app ELF your \

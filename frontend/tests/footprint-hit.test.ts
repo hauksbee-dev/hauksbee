@@ -5,8 +5,9 @@
 
 import { test, expect } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { parseKicadPcb, footprintHitBoxes, pickFootprintBox } from '../src/lib/kicad-parser'
+import { parseKicadPcb } from '../src/lib/kicad-parser'
 import type { Footprint } from '../src/lib/kicad-parser'
+import { footprintHitBoxes, pickFootprintBox } from '../src/lib/board-geometry'
 
 const board = parseKicadPcb(readFileSync('public/samples/watchy.kicad_pcb', 'utf8'))
 const boxes = footprintHitBoxes(board)

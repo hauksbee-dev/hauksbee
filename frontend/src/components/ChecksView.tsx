@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { QueuedCheck, QueuedPeripheral, QueuedSensor, QueuedSupply, WebReport } from '../types/report'
+import type { CheckResult, QueuedRequest, RunResponse, SensorCatalogEntry, WebReport } from '../types/report'
 import type { ActionResultMsg } from '../types/protocol'
 import type { SelectedComponent } from './SelectionCard'
 import { PlusIcon } from './Icons'
@@ -7,22 +7,19 @@ import { specStemFor, workflowExportAvailable, workflowYaml } from '../lib/ci-wo
 import { EmptyState } from '../motion'
 import { buildCheckUpload, buildPortableCheckSpec } from '../lib/board-upload'
 import { sessionIdFor } from '../lib/session-store'
-import { errorText, getJson } from '../lib/api'
+import { api, errorText } from '../lib/api'
 import {
-  buildToml, CHECK_KINDS, emptyCheck, emptyPeripheral, emptySensor,
-  peripheralIssues, peripheralPrefix, rowIssues, sensorIssues, tomlString,
+  assertToml, buildToml, CHECK_KINDS, emptyCheck, emptyPeripheral, emptySensor,
+  peripheralIssues, peripheralToml, rowIssues, sensorIssues, sensorToml, supplyToml,
 } from '../lib/check-spec'
 import type {
   BuilderState, CheckRow, PeripheralRow, RowIssue, SensorRow, SupplyRow,
 } from '../lib/check-spec'
-import { Field, RawModeSummary, RemoveButton } from './checks/pieces'
-import type { CheckResult } from './checks/pieces'
+import { BuilderSection, Field, RawModeSummary, RemoveButton } from './checks/pieces'
 import { InteractionBuilder } from './checks/InteractionBuilder'
 import { SensorBuilder } from './checks/SensorBuilder'
-import type { SensorCatalogEntry } from './checks/SensorBuilder'
 import { AssertionGroups, hasNoGroups } from './checks/AssertionGroups'
 import { SpecPane } from './checks/SpecPane'
-import type { RunResponse } from './checks/RunResults'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -74,31 +71,6 @@ function forget<T>(map: Map<number, T>, rowId: number): Map<number, T> {
   return next
 }
 
-/**
- * Consume what a board surface queued (a net/component click on the report map
- * or in the live sim). Builder mode appends ordinary rows; raw mode appends the
- * equivalent TOML text, so nothing queued is ever silently dropped.
- */
-function useQueuedRows<T extends { seq: number }>(
-  pending: T[],
-  rawMode: boolean,
-  consumed: (upToSeq: number) => void,
-  setRawText: (update: (previous: string) => string) => void,
-  apply: (items: T[]) => void,
-  appendRaw: (items: T[]) => string,
-) {
-  // `apply` and `appendRaw` are fresh closures per render but read only refs
-  // and setters, so keying the effect on them would re-run it every render.
-  const latest = useRef({ apply, appendRaw })
-  latest.current = { apply, appendRaw }
-  useEffect(() => {
-    if (pending.length === 0) return
-    if (rawMode) setRawText(previous => previous + latest.current.appendRaw(pending))
-    else latest.current.apply(pending)
-    consumed(pending[pending.length - 1].seq)
-  }, [pending, rawMode, consumed, setRawText])
-}
-
 export function ChecksView({
   report,
   boardFile,
@@ -106,14 +78,8 @@ export function ChecksView({
   schematicFile,
   selectedNet,
   selectedComponent,
-  pendingChecks,
-  pendingPeripherals,
-  pendingSensors,
-  pendingSupplies,
+  pending,
   onPendingConsumed,
-  onPendingPeripheralConsumed,
-  onPendingSensorConsumed,
-  onPendingSupplyConsumed,
   liveRegisterMapAvailable = false,
   onAttachRegisterMapLive,
   liveActionResult,
@@ -128,21 +94,12 @@ export function ChecksView({
   selectedNet: string | null
   /** Component last clicked on the board render, offered as ref checks. */
   selectedComponent: SelectedComponent | null
-  /** Checks queued from a board surface (report map or live sim), appended
-   *  here as ordinary prefilled rows so the spec TOML is exactly what a
-   *  hand-built check produces. */
-  pendingChecks: QueuedCheck[]
-  /** Scenario controls queued by clicking board copper. */
-  pendingPeripherals: QueuedPeripheral[]
-  /** Register-map devices queued from a clicked component. */
-  pendingSensors: QueuedSensor[]
-  /** Ideal supplies queued from clicked copper. */
-  pendingSupplies: QueuedSupply[]
-  /** Every pending check up to (and including) seq has been applied. */
+  /** What a board surface (report map or live sim) queued: appended here as
+   *  ordinary prefilled rows so the spec TOML is exactly what a hand-built
+   *  row produces. */
+  pending: QueuedRequest[]
+  /** Every pending request up to (and including) seq has been applied. */
   onPendingConsumed: (upToSeq: number) => void
-  onPendingPeripheralConsumed: (upToSeq: number) => void
-  onPendingSensorConsumed: (upToSeq: number) => void
-  onPendingSupplyConsumed: (upToSeq: number) => void
   /** True only when the analyzed board owns the current live session. */
   liveRegisterMapAvailable?: boolean
   /** Explicit user action after local row validation; never automatic on
@@ -225,7 +182,7 @@ export function ChecksView({
 
   useEffect(() => {
     const abort = new AbortController()
-    void getJson<{ entries?: SensorCatalogEntry[] }>('/api/sensor-specs', { signal: abort.signal })
+    void api.sensorSpecs(abort.signal)
       .then(value => {
         if (!Array.isArray(value.entries)) throw new Error('sensor catalog has no entries')
         setSensorCatalog(value.entries)
@@ -321,80 +278,49 @@ export function ChecksView({
     }
   }
 
-  useQueuedRows(
-    pendingChecks,
-    rawMode,
-    onPendingConsumed,
-    setRawText,
-    items => setChecks(cs => [
-      ...cs,
-      ...items.map(c => {
-        const row = emptyCheck(nextId.current++, c.kind, c.net ?? '')
-        if (c.ref) row.ref = c.ref
-        return row
-      }),
-    ]),
-    items => items.map(c => {
-      let s = `\n[[assert]]\nkind = ${tomlString(c.kind)}\n`
-      if (c.net) s += `net = ${tomlString(c.net)}\n`
-      if (c.ref) s += `ref = ${tomlString(c.ref)}\n`
-      return s
-    }).join(''),
-  )
-
-  useQueuedRows(
-    pendingPeripherals,
-    rawMode,
-    onPendingPeripheralConsumed,
-    setRawText,
-    items => setPeripherals(rows => [
-      ...rows,
-      ...items.map(p => {
-        const row = emptyPeripheral(nextPeripheralId.current++, p.kind, p.net ?? '')
-        if (p.id) row.id = p.id
-        return row
-      }),
-    ]),
-    items => items.map(p => {
-      const id = p.id ?? `${peripheralPrefix(p.kind)}${nextPeripheralId.current++}`
-      let s = `\n[[peripheral]]\nid = ${tomlString(id)}\ntype = ${tomlString(p.kind)}\n`
-      if (p.net) s += `net = ${tomlString(p.net)}\n`
-      s += p.kind === 'stimulus' ? 'waveform = "dc"\noffset = 0\n' : 'to = "GND"\ninitial = 0\n'
-      return s
-    }).join(''),
-  )
-
-  // Register-map behavior is never guessed from the part name. A component
-  // click opens a named row, then the user supplies the exact local spec bytes
-  // before Run becomes available. Raw mode preserves the same incomplete row
-  // as an explicit TODO rather than inventing a protocol.
-  useQueuedRows(
-    pendingSensors,
-    rawMode,
-    onPendingSensorConsumed,
-    setRawText,
-    items => setSensors(rows => [
-      ...rows,
-      ...items.map(s => emptySensor(nextSensorId.current++, s.id, s.ref ?? '', s.modelId ?? '')),
-    ]),
-    items => items.map(s =>
-      `\n# TODO: paste a validated register-map spec for ${s.ref ?? s.id}\n[[sensor]]\nid = ${tomlString(s.id)}\nspec = ""\n`,
-    ).join(''),
-  )
-
-  useQueuedRows(
-    pendingSupplies,
-    rawMode,
-    onPendingSupplyConsumed,
-    setRawText,
-    items => setSupplies(rows => [
-      ...rows,
-      ...items.map(s => ({ net: s.net, volts: String(s.volts ?? 3.3) })),
-    ]),
-    items => items.map(s =>
-      `\n[[supply]]\nnet = ${tomlString(s.net)}\nkind = "ideal"\nvolts = ${s.volts ?? 3.3}\n`,
-    ).join(''),
-  )
+  // Consume what a board surface queued (a net/component click on the report
+  // map or in the live sim). Each request becomes the SAME row the builder
+  // would make by hand; builder mode appends the row, raw mode appends that
+  // row's TOML, so nothing queued is ever silently dropped and the two modes
+  // cannot compose it differently. A register-map device is never guessed
+  // from the part name: the row opens named, and the user supplies the exact
+  // spec bytes before Run becomes available (raw mode keeps the same
+  // incomplete row as an explicit TODO).
+  useEffect(() => {
+    if (pending.length === 0) return
+    const checkRows: CheckRow[] = [], peripheralRows: PeripheralRow[] = []
+    const sensorRows: SensorRow[] = [], supplyRows: SupplyRow[] = []
+    let raw = ''
+    for (const r of pending) {
+      if (r.type === 'check') {
+        const row = emptyCheck(nextId.current++, r.kind, r.net ?? '')
+        row.ref = r.ref ?? ''
+        checkRows.push(row)
+        raw += assertToml(row)
+      } else if (r.type === 'peripheral') {
+        const row = emptyPeripheral(nextPeripheralId.current++, r.kind, r.net ?? '')
+        if (r.id) row.id = r.id
+        peripheralRows.push(row)
+        raw += peripheralToml(row)
+      } else if (r.type === 'sensor') {
+        const row = emptySensor(nextSensorId.current++, r.id, r.ref ?? '', r.modelId ?? '')
+        sensorRows.push(row)
+        raw += `\n# TODO: paste a validated register-map spec for ${r.ref ?? r.id}${sensorToml(row)}`
+      } else {
+        const row = { net: r.net, volts: String(r.volts ?? 3.3) }
+        supplyRows.push(row)
+        raw += supplyToml(row)
+      }
+    }
+    if (rawMode) setRawText(previous => previous + raw)
+    else {
+      if (checkRows.length) setChecks(cs => [...cs, ...checkRows])
+      if (peripheralRows.length) setPeripherals(rows => [...rows, ...peripheralRows])
+      if (sensorRows.length) setSensors(rows => [...rows, ...sensorRows])
+      if (supplyRows.length) setSupplies(rows => [...rows, ...supplyRows])
+    }
+    onPendingConsumed(pending[pending.length - 1].seq)
+  }, [pending, rawMode, onPendingConsumed])
 
   const runChecks = useCallback(async () => {
     if (!boardFile) return
@@ -427,14 +353,8 @@ export function ChecksView({
     const tomlAtRun = effectiveToml
     const fail = (error: string) => setRun({ response: { ok: false, error }, toml: tomlAtRun })
     try {
-      const fd = buildCheckUpload(boardFile, firmwareFile, schematicFile, tomlAtRun)
-      const res = await fetch('/api/check', { method: 'POST', body: fd })
-      const text = await res.text()
-      try {
-        setRun({ response: JSON.parse(text) as RunResponse, toml: tomlAtRun })
-      } catch {
-        fail(text.trim().slice(0, 400) || `${res.status} ${res.statusText}`)
-      }
+      const response = await api.check(buildCheckUpload(boardFile, firmwareFile, schematicFile, tomlAtRun))
+      setRun({ response, toml: tomlAtRun })
     } catch (e) {
       fail(errorText(e))
     } finally {
@@ -585,15 +505,10 @@ export function ChecksView({
                     field with slack), then the row wraps; `remove` is last in
                     reading order but never last in line, so it stays inside
                     the card at every width. */}
-                <section className="hb-card px-4 py-3.5 mb-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <h2 className="text-[11px] font-bold tracking-widest uppercase" style={{ margin: 0, color: 'var(--silk-faint)' }}>
-                      Power supplies
-                    </h2>
-                    <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-                      detected from the board, adjust if wrong
-                    </span>
-                  </div>
+                <BuilderSection
+                  title="Power supplies"
+                  actions={<span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>detected from the board, adjust if wrong</span>}
+                >
                   {supplies.map((s, i) => {
                     const patch = (next: Partial<SupplyRow>) =>
                       setSupplies(ss => ss.map((x, j) => (j === i ? { ...x, ...next } : x)))
@@ -623,7 +538,7 @@ export function ChecksView({
                   >
                     <PlusIcon size={12} /> add a supply
                   </button>
-                </section>
+                </BuilderSection>
 
                 <InteractionBuilder
                   peripherals={peripherals}

@@ -1,0 +1,42 @@
+# HC-SR04 ultrasonic ranging module, as seen from a host board: a 4-pin header
+# (VCC, TRIG, ECHO, GND). Written for the e2e measurement pass to show what
+# the envelope check reports once the module has an operating envelope.
+#
+# Source: the ubiquitous HC-SR04 "Ultrasonic Ranging Module" datasheet
+# (ElecFreaks / Cytron), electrical parameters table: working voltage DC 5 V,
+# working current 15 mA. The module's on-board MAX232-style charge pump and
+# the transducer driver do not start reliably below ~4.5 V; 3.3 V feeds give
+# no echo or wildly short ranges. ECHO is a 5 V push-pull output.
+[[models]]
+id = "hc_sr04_module"
+kind = "digital"
+description = "HC-SR04 ultrasonic ranging module header (VCC/TRIG/ECHO/GND); 5 V operating envelope and ECHO logic levels"
+
+[models.match]
+value_re = "(?i)^HC[-_ ]?SR04(P)?$"
+
+[models.params]
+voh = 4.5      # ECHO high: driven from the module's 5 V rail
+vol = 0.4
+vih = 3.0      # TRIG: a 10 us >= 3 V pulse triggers (works from 3.3 V logic)
+vil = 1.0
+supply_static_ua = 15000.0   # 15 mA working current
+supply_pin = "1"
+gnd_pin = "4"
+
+[models.pins]
+"1" = "vcc"
+"2" = "trig"
+"3" = "echo"
+"4" = "gnd"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+severity = "serious"
+basis = "HC-SR04 datasheet, electrical parameters: working voltage DC 5 V; module does not range below ~4.5 V"
+
+[models.ratings]
+max_voltage_v = 5.5

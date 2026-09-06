@@ -65,9 +65,11 @@ test('the board hook checks metadata before routing and streams the File body', 
   expect(handle.indexOf('const refusal = precheckBoardFile(f)'))
     .toBeLessThan(handle.indexOf('acceptBoard(f)'))
 
-  const analyzeStart = source.indexOf('const analyze = useCallback(async (')
-  const analyzeEnd = source.indexOf('\n  }, [beginRun, clearRunState])', analyzeStart)
-  const analyze = source.slice(analyzeStart, analyzeEnd)
+  // The upload itself lives in the one API client: the File goes as its own
+  // body (streamed off disk), never pulled into the heap first.
+  const client = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8')
+  const analyzeStart = client.indexOf('analyze: async (')
+  const analyze = client.slice(analyzeStart, client.indexOf('\n  },', analyzeStart))
   expect(analyze).toContain('body: board,')
   expect(analyze).not.toContain('body: await board.arrayBuffer()')
 })

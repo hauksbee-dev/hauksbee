@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ExtractReady, ModelCard, ModelSaveResult, WebOpenPart } from '../types/report'
 import { CheckIcon, WarningIcon } from './Icons'
-import { readSseStream } from '../lib/sse'
-import { errorText, getJson, postJson } from '../lib/api'
+import { api, errorText } from '../lib/api'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 import { ReviewCard } from './extract/ReviewCard'
 
@@ -65,7 +64,7 @@ export function DatasheetExtract({
   useEffect(() => {
     if (draftable.length === 0) return
     let cancelled = false
-    void getJson<ExtractReady>('/api/models/extract/ready')
+    void api.extractReady()
       .then(info => { if (!cancelled) setReady({ phase: 'ready', info }) })
       // An older server, or one started without the tool hooks: say so rather
       // than offering a button that cannot work.
@@ -107,13 +106,8 @@ export function DatasheetExtract({
     form.append('model', model)
     form.append('reference', active.reference)
     try {
-      const res = await fetch('/api/models/extract', { method: 'POST', body: form })
-      if (!res.ok || !res.body) {
-        setFlow({ step: 'failed', message: `the server refused the extraction (${res.status} ${res.statusText})`, log })
-        return
-      }
       let settled = false
-      await readSseStream(res.body, ({ event, data }) => {
+      await api.extract(form, ({ event, data }) => {
         if (event === 'log') append(data)
         else if (event === 'card') {
           try {
@@ -144,9 +138,7 @@ export function DatasheetExtract({
     setSaving(true)
     setSaveError(null)
     try {
-      const result = await postJson<ModelSaveResult>('/api/models/save', {
-        part: saveAs, kind: flow.card.kind, toml,
-      })
+      const result = await api.modelsSave({ part: saveAs, kind: flow.card.kind, toml })
       if (result.ok) {
         setFlow({ step: 'saved', card: flow.card, result })
         onSaved?.()

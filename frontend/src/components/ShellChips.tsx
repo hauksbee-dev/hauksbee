@@ -1,5 +1,5 @@
 import type { WebReport } from '../types/report'
-import { reportVerdictTone } from '../lib/report-verdict'
+import { reportVerdictTone } from '../lib/report-view'
 import type { SimShellStatus } from '../SimView'
 import type { ChecksSummary } from './ChecksView'
 import type { AppView } from './Sidebar'

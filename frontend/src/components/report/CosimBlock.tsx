@@ -1,15 +1,13 @@
-import type { WebCosimSection } from '../../types/report'
-import { fallbackWindowLine, timingCoverageLine } from '../../lib/cosim-coverage'
-import { summarizeErrorBudget } from '../../lib/error-budget'
+import type { CosimView } from '../../lib/report-view'
 import { displayNet } from '../../lib/net-name'
-import { FindingCard, NoteBlock } from './Findings'
+import { FindingCard, NoteBlock, SectionHeading } from './Findings'
 
 /** A collapsible strip of one-line qualifications about the run. */
 function Detail({ title, tone = 'quiet', testId, lines }: {
   title: string
   tone?: 'quiet' | 'warn'
   testId?: string
-  lines: React.ReactNode[]
+  lines: string[]
 }) {
   if (lines.length === 0) return null
   const warn = tone === 'warn'
@@ -25,35 +23,26 @@ function Detail({ title, tone = 'quiet', testId, lines }: {
       <summary className="cursor-pointer font-semibold" style={{ color: warn ? 'var(--warn-strong)' : 'var(--silk)' }}>
         {title}
       </summary>
-      <div className="mt-1.5" data-testid={testId}>{lines}</div>
+      <div className="mt-1.5" data-testid={testId}>{lines.map((line, i) => <div key={i}>{line}</div>)}</div>
     </details>
   )
 }
 
-export function CosimBlock({ cosim: c, timingRefusals, liveAvailable, onDriveLive, simMounted }: {
-  cosim: WebCosimSection
-  timingRefusals: string[]
+const cell = { borderBottom: '1px solid var(--rule)' }
+
+export function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }: {
+  cosim: CosimView
   liveAvailable: boolean
   onDriveLive: () => void
   simMounted: boolean
 }) {
   return (
     <section className="mt-7" data-testid="cosim-section">
-      <h2 className="text-[11px] font-bold tracking-widest uppercase mb-1" style={{ color: 'var(--silk-faint)' }}>
-        Firmware co-sim
-      </h2>
+      <SectionHeading title="Firmware co-sim" verdict={c.ran ? c.ranLine : undefined} />
       {c.ran ? (
         <>
-          <div className="text-sm mb-2" style={{ color: 'var(--silk-dim)' }}>
-            Ran the firmware for {(c.seconds_simulated || 0).toFixed(3)}s on the board's microcontroller.
-          </div>
-          <Detail
-            title="Timing coverage"
-            lines={(c.timing_coverage ?? []).map(row => (
-              <div key={`${row.mcu_ref}:${row.backend}`}>{timingCoverageLine(row)}</div>
-            ))}
-          />
-          {timingRefusals.length > 0 && (
+          <Detail title="Timing coverage" lines={c.timingLines} />
+          {c.timingRefusals.length > 0 && (
             <div
               className="rounded-lg px-4 py-2.5 mb-2"
               style={{ border: '1px solid var(--err-border)', borderLeft: '4px solid var(--err)', background: 'var(--err-bg)' }}
@@ -61,67 +50,44 @@ export function CosimBlock({ cosim: c, timingRefusals, liveAvailable, onDriveLiv
               <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--err-strong)' }}>
                 TIMING INVALID
               </span>
-              {timingRefusals.map((line, i) => <div key={i} className="text-sm mt-1">{line}</div>)}
+              {c.timingRefusals.map((line, i) => <div key={i} className="text-sm mt-1">{line}</div>)}
             </div>
           )}
-          <Detail
-            title="Fallback-qualified windows"
-            tone="warn"
-            lines={(c.fallback_windows ?? []).map((window, i) => <div key={i}>{fallbackWindowLine(window)}</div>)}
-          />
-          <Detail
-            title="Numerical qualification"
-            testId="cosim-error-budget"
-            lines={c.error_budget ? summarizeErrorBudget(c.error_budget).map(row => <div key={row}>{row}</div>) : []}
-          />
-          {(!c.findings || c.findings.length === 0) && (
-            <NoteBlock>No electrical-stress faults during the run.</NoteBlock>
-          )}
-          {(c.findings || []).map((f, i) => <FindingCard key={i} finding={f} />)}
-          {c.uart_output && (
+          <Detail title="Fallback-qualified windows" tone="warn" lines={c.fallbackLines} />
+          <Detail title="Numerical qualification" testId="cosim-error-budget" lines={c.budgetLines} />
+          {c.groups.length === 0 && <NoteBlock>No electrical-stress faults during the run.</NoteBlock>}
+          {c.groups.map((g, i) => <FindingCard key={i} group={g} />)}
+          {c.uart && (
             <>
-              <div className="text-sm mb-1">
-                <b style={{ color: 'var(--silk-dim)', fontWeight: 600 }}>UART output:</b>
-              </div>
+              <div className="text-sm mb-1"><b style={{ color: 'var(--silk-dim)', fontWeight: 600 }}>UART output:</b></div>
               <pre
                 className="rounded-lg px-3 py-2.5 mb-2 text-xs overflow-x-auto whitespace-pre-wrap"
                 style={{
-                  background: 'var(--instrument)',
-                  border: '1px solid var(--instrument-edge)',
-                  color: 'var(--instrument-text)',
-                  fontFamily: 'var(--font-mono)',
+                  background: 'var(--instrument)', border: '1px solid var(--instrument-edge)',
+                  color: 'var(--instrument-text)', fontFamily: 'var(--font-mono)',
                 }}
               >
-                {c.uart_output}
+                {c.uart}
               </pre>
             </>
           )}
-          {c.gpio_nets && c.gpio_nets.length > 0 && (
+          {c.gpio.length > 0 && (
             <table className="w-full text-xs mt-1" style={{ borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
                   {['Net', 'Volts', 'Activity'].map(h => (
-                    <th
-                      key={h}
-                      className="text-left px-2 py-1 font-semibold"
-                      style={{ color: 'var(--silk-dim)', borderBottom: '1px solid var(--hairline)' }}
-                    >
+                    <th key={h} className="text-left px-2 py-1 font-semibold" style={{ color: 'var(--silk-dim)', borderBottom: '1px solid var(--hairline)' }}>
                       {h}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {c.gpio_nets.map((g, i) => (
+                {c.gpio.map((g, i) => (
                   <tr key={i}>
-                    <td className="px-2 py-1" style={{ borderBottom: '1px solid var(--rule)' }}>{displayNet(g.name)}</td>
-                    <td className="px-2 py-1 tnum" style={{ borderBottom: '1px solid var(--rule)', fontFamily: 'var(--font-mono)' }}>
-                      {(g.volts || 0).toFixed(3)}
-                    </td>
-                    <td
-                      className="px-2 py-1"
-                      style={{ borderBottom: '1px solid var(--rule)', color: g.driven ? 'var(--ok)' : 'var(--silk-faint)' }}
-                    >
+                    <td className="px-2 py-1" style={cell}>{displayNet(g.name)}</td>
+                    <td className="px-2 py-1 tnum" style={{ ...cell, fontFamily: 'var(--font-mono)' }}>{(g.volts || 0).toFixed(3)}</td>
+                    <td className="px-2 py-1" style={{ ...cell, color: g.driven ? 'var(--ok)' : 'var(--silk-faint)' }}>
                       {g.driven ? 'driven' : 'idle'}
                     </td>
                   </tr>
@@ -158,12 +124,7 @@ export function CosimBlock({ cosim: c, timingRefusals, liveAvailable, onDriveLiv
           </div>
         </>
       ) : (
-        (c.findings && c.findings.length > 0
-          ? c.findings
-          : [{ level: 'note', what: 'Co-sim not available for this board.', why: '', fix: '' }]
-        ).map((f, i) => (
-          <NoteBlock key={i} tag="Co-sim not available">{`${f.what} ${f.why}`.trim()}</NoteBlock>
-        ))
+        c.notRanLines.map((line, i) => <NoteBlock key={i} tag="Co-sim not available">{line}</NoteBlock>)
       )}
     </section>
   )

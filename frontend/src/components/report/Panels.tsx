@@ -1,8 +1,6 @@
-import type {
-  ArtifactProvenance, EvidenceAssumption, EvidenceMap, ModelCoverageComponent,
-  ModelCoverageSnapshot, WebImportDiagnostics,
-} from '../../types/report'
-import { summarizeEvidence } from '../../lib/evidence'
+import type { ModelCoverageComponent, ModelCoverageSnapshot, WebImportDiagnostics } from '../../types/report'
+import { plural, stageWords } from '../../lib/report-view'
+import type { ReportView } from '../../lib/report-view'
 import { displayNet } from '../../lib/net-name'
 import type { LocateFn } from './Findings'
 
@@ -71,7 +69,7 @@ export function ImportDiagnosticsPanel({
       warn={caveated > 0}
       summary={<>
         {diagnostics.recovered} recovered · {diagnostics.partial} partial · {diagnostics.unplaced} unplaced
-        {diagnostics.missing_or_refused > 0 ? ` · ${diagnostics.missing_or_refused} missing/refused limit${diagnostics.missing_or_refused === 1 ? '' : 's'}` : ''}
+        {diagnostics.missing_or_refused > 0 ? ` · ${plural(diagnostics.missing_or_refused, 'missing/refused limit')}` : ''}
       </>}
     >
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
@@ -122,7 +120,7 @@ export function ImportDiagnosticsPanel({
                 {selectedNet === issue.net && (
                   <div data-testid="import-net-inspection" className="mt-2" style={{ color: 'var(--silk-dim)' }}>
                     {locatedOnNet.length > 0
-                      ? `Highlighted ${locatedOnNet.length} located imported object${locatedOnNet.length === 1 ? '' : 's'} on this net.`
+                      ? `Highlighted ${plural(locatedOnNet.length, 'located imported object')} on this net.`
                       : 'No placeable object was recovered for this net. The reader supplied no coordinate to highlight.'}
                   </div>
                 )}
@@ -228,8 +226,8 @@ export function ModelCoveragePanel({ coverage, onSelect, onAuthor }: {
               style={{ color: component.actionable_behavior_gap ? 'var(--warn-strong)' : 'var(--ok)' }}
             >
               {cell(component, '', { color: 'inherit' }, undefined, <>
-                {component.stage.replaceAll('_', ' ')}
-                {(component.missing?.length ?? 0) > 0 ? ` · ${component.missing!.length} gap${component.missing!.length === 1 ? '' : 's'}` : ''}
+                {stageWords(component.stage)}
+                {component.missing?.length ? ` · ${plural(component.missing.length, 'gap')}` : ''}
               </>)}
               {component.actionable_behavior_gap && (
                 <button
@@ -247,7 +245,7 @@ export function ModelCoveragePanel({ coverage, onSelect, onAuthor }: {
       </div>
       {gaps.length > 0 && (
         <PanelFootnote>
-          {gaps.length} component{gaps.length === 1 ? '' : 's'} need more behaviour for a fuller claim.
+          {plural(gaps.length, 'component')} need more behaviour for a fuller claim.
           This list is deterministic and does not require an LLM; datasheet drafting below is optional.
         </PanelFootnote>
       )}
@@ -255,13 +253,7 @@ export function ModelCoveragePanel({ coverage, onSelect, onAuthor }: {
   )
 }
 
-export function EvidencePanel({ inventory, assumptions, evidence }: {
-  inventory: readonly ArtifactProvenance[]
-  assumptions: readonly EvidenceAssumption[]
-  evidence: readonly EvidenceMap[]
-}) {
-  const summary = summarizeEvidence(evidence)
-  const caveated = evidence.filter(map => map.status !== 'clean')
+export function EvidencePanel({ evidence: { inventory, assumptions, summary, caveated } }: { evidence: ReportView['evidence'] }) {
   return (
     <ReportPanel
       testId="evidence-panel"

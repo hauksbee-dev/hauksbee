@@ -72,6 +72,9 @@ export interface CheckRow {
   recover_within_ms: string
 }
 
+/** A row's value fields: everything but its identity and kind. */
+export type CheckKey = Exclude<keyof CheckRow, 'id' | 'kind'>
+
 export interface BuilderState {
   name: string
   duration: string
@@ -115,33 +118,117 @@ export function emptyPeripheral(rowId: number, kind: PeripheralRow['kind'], net 
   }
 }
 
-export const emptyCheck = (id: number, kind: string, net = ''): CheckRow => ({
-  id, kind, net,
-  ref: '', min: '', max: '', after_ms: '', deadline_ms: '', contains: '',
-  freq_hz: '', tolerance: '', min_toggles: '', amps: '', celsius: '',
-  dip_below: '', for_max_ms: '', recover_to: '', recover_within_ms: '',
-})
-
-/** The check-kind vocabulary: plain words first, the TOML kind in small print. */
-export const CHECK_KINDS: { kind: string; label: string; group: string; hint: string }[] = [
-  { kind: 'voltage', label: 'A net must sit at a voltage', group: 'Voltages', hint: 'min/max volts, optionally after a settle time' },
-  { kind: 'rail_window', label: 'A rail may only dip briefly', group: 'Voltages', hint: 'bound brownout depth, duration and recovery' },
-  { kind: 'no_faults', label: 'Nothing over-stressed', group: 'Stress', hint: 'no component beyond its ratings at any point' },
-  { kind: 'max_current', label: 'A part must stay under a current', group: 'Currents', hint: 'ceiling in amps for one component' },
-  { kind: 'max_temp', label: 'A part must stay cool', group: 'Temperatures', hint: 'junction temperature ceiling (or the part’s own rating)' },
-  { kind: 'uart', label: 'The firmware must print', group: 'Firmware', hint: 'serial output contains a string' },
-  { kind: 'toggle', label: 'A net must blink', group: 'Activity', hint: 'toggle frequency or a minimum toggle count' },
-  { kind: 'boot-coverage', label: 'Firmware must drive a net by a deadline', group: 'Firmware', hint: 'a gate/enable must be actively driven after reset' },
+const CHECK_KEYS: CheckKey[] = [
+  'net', 'ref', 'min', 'max', 'after_ms', 'deadline_ms', 'contains', 'freq_hz', 'tolerance',
+  'min_toggles', 'amps', 'celsius', 'dip_below', 'for_max_ms', 'recover_to', 'recover_within_ms',
 ]
+
+export function emptyCheck(id: number, kind: string, net = ''): CheckRow {
+  const row = { id, kind } as CheckRow
+  for (const key of CHECK_KEYS) row[key] = key === 'net' ? net : ''
+  return row
+}
+
+/** One input on a check row, beyond the shared net/ref picker. */
+export interface CheckField {
+  key: CheckKey
+  label: string
+  /** What the value wants, in px; a narrow column caps it. */
+  width?: number
+  placeholder?: string
+  /** A quoted TOML string rather than a number. */
+  text?: boolean
+}
+
+/** An either/or requirement: at least one of `any` must be filled, else
+ *  `message`. `when` limits the rule to rows where that field is filled. */
+interface CheckNeed {
+  any: CheckKey[]
+  message: string
+  when?: CheckKey
+}
+
+/** One [[assert]] kind: plain words first, the TOML kind in small print, and
+ *  the schema the composer, the round-trip parser, the preflight and the row
+ *  form all read, so the four cannot drift. */
+export interface CheckKind {
+  kind: string
+  label: string
+  group: string
+  hint: string
+  /** What the check is about: a net or a part (ref). Required when present. */
+  subject?: 'net' | 'ref'
+  fields: CheckField[]
+  needs: CheckNeed[]
+}
+
+const V = (key: CheckKey, label: string, width = 64): CheckField => ({ key, label, width })
+
+export const CHECK_KINDS: CheckKind[] = [
+  {
+    kind: 'voltage', label: 'A net must sit at a voltage', group: 'Voltages',
+    hint: 'min/max volts, optionally after a settle time', subject: 'net',
+    fields: [V('min', 'min V'), V('max', 'max V'), V('after_ms', 'after ms')],
+    needs: [{ any: ['min', 'max'], message: 'needs a min V and/or a max V' }],
+  },
+  {
+    kind: 'rail_window', label: 'A rail may only dip briefly', group: 'Voltages',
+    hint: 'bound brownout depth, duration and recovery', subject: 'net',
+    fields: [V('dip_below', 'dip below V'), V('for_max_ms', 'for max ms'), V('recover_to', 'recover to V'), V('recover_within_ms', 'within ms')],
+    needs: [
+      { any: ['dip_below'], message: 'dip below V is empty' },
+      { any: ['for_max_ms', 'recover_within_ms'], message: 'needs a for max ms or a recovery window (within ms)', when: 'dip_below' },
+      { any: ['recover_to'], message: 'recover to V is empty (needed with within ms)', when: 'recover_within_ms' },
+    ],
+  },
+  {
+    kind: 'no_faults', label: 'Nothing over-stressed', group: 'Stress',
+    hint: 'no component beyond its ratings at any point', fields: [], needs: [],
+  },
+  {
+    kind: 'max_current', label: 'A part must stay under a current', group: 'Currents',
+    hint: 'ceiling in amps for one component', subject: 'ref',
+    fields: [V('amps', 'max A')],
+    needs: [{ any: ['amps'], message: 'max A is empty' }],
+  },
+  {
+    kind: 'max_temp', label: 'A part must stay cool', group: 'Temperatures',
+    hint: 'junction temperature ceiling (or the part’s own rating)', subject: 'ref',
+    // max °C may stay blank (falls back to the part's own rating).
+    fields: [V('celsius', 'max °C (blank = part rating)', 70)],
+    needs: [],
+  },
+  {
+    kind: 'uart', label: 'The firmware must print', group: 'Firmware',
+    hint: 'serial output contains a string',
+    fields: [{ key: 'contains', label: 'must print', width: 220, placeholder: 'hello', text: true }],
+    needs: [{ any: ['contains'], message: '"must print" is empty' }],
+  },
+  {
+    kind: 'toggle', label: 'A net must blink', group: 'Activity',
+    hint: 'toggle frequency or a minimum toggle count', subject: 'net',
+    fields: [V('freq_hz', 'freq Hz'), V('tolerance', '±tol', 56), V('min_toggles', 'or min toggles')],
+    needs: [{ any: ['freq_hz', 'min_toggles'], message: 'needs a freq Hz or a min toggles' }],
+  },
+  {
+    kind: 'boot-coverage', label: 'Firmware must drive a net by a deadline', group: 'Firmware',
+    hint: 'a gate/enable must be actively driven after reset', subject: 'net',
+    fields: [V('min', 'reach V'), V('deadline_ms', 'within ms')],
+    needs: [{ any: ['min'], message: 'reach V is empty' }, { any: ['deadline_ms'], message: 'within ms is empty' }],
+  },
+]
+
+export const checkKind = (kind: string): CheckKind | undefined => CHECK_KINDS.find(k => k.kind === kind)
 
 /** The display groups, in a stable order (only groups with rows render). */
 export const GROUP_ORDER = ['Voltages', 'Currents', 'Temperatures', 'Stress', 'Firmware', 'Activity']
 
-// Kinds that carry a net / a component ref. Shared by the TOML composer, the
-// raw parser's round-trip check, and the per-kind field pickers so the three
-// cannot drift apart.
-export const NET_KINDS = ['voltage', 'toggle', 'boot-coverage', 'rail_window']
-export const REF_KINDS = ['max_current', 'max_temp']
+/** The TOML keys an [[assert]] of this kind may carry: the composer writes
+ *  exactly these, so the parser refuses anything else (it would survive the
+ *  parse but vanish from the round-tripped spec). */
+function assertKeys(k: CheckKind): Set<string> {
+  return new Set(['kind', ...(k.subject ? [k.subject] : []), ...k.fields.map(f => f.key)])
+}
 
 export function tomlString(v: string): string {
   return JSON.stringify(v)
@@ -154,6 +241,56 @@ function numOr(v: string): string | null {
   return Number.isFinite(Number(t)) ? t : null
 }
 
+/** One [[supply]] block, or nothing for a row with no net. */
+export function supplyToml(s: SupplyRow): string {
+  if (!s.net.trim()) return ''
+  return `\n[[supply]]\nnet = ${tomlString(s.net.trim())}\nkind = "ideal"\nvolts = ${numOr(s.volts) ?? '5.0'}\n`
+}
+
+export function peripheralToml(p: PeripheralRow): string {
+  let out = `\n[[peripheral]]\nid = ${tomlString(p.id.trim())}\ntype = ${tomlString(p.kind)}\nnet = ${tomlString(p.net.trim())}\n`
+  if (p.kind === 'stimulus') {
+    out += `waveform = ${tomlString(p.waveform)}\noffset = ${numOr(p.offset) ?? '0'}\n`
+    if (p.waveform !== 'dc') out += `amplitude = ${numOr(p.amplitude) ?? '1'}\nfreq_hz = ${numOr(p.freq_hz) ?? '1000'}\n`
+  } else {
+    if (p.to.trim()) out += `to = ${tomlString(p.to.trim())}\n`
+    if (p.kind === 'pushbutton' && numOr(p.bounce_ms)) out += `bounce_ms = ${numOr(p.bounce_ms)}\n`
+    if (numOr(p.initial)) out += `initial = ${numOr(p.initial)}\n`
+  }
+  for (const event of p.events) out += `[[peripheral.event]]\nt_ms = ${numOr(event.t_ms) ?? '0'}\nvalue = ${numOr(event.value) ?? '0'}\n`
+  return out
+}
+
+/** The spec bytes are kept inline (JSON string escaping is valid TOML
+ *  basic-string escaping) so a downloaded check is self-contained. */
+export function sensorToml(sensor: SensorRow): string {
+  let out = `\n[[sensor]]\nid = ${tomlString(sensor.id.trim())}\nspec = ${tomlString(sensor.spec)}\n`
+  if (sensor.controller.trim()) out += `controller = ${tomlString(sensor.controller.trim())}\n`
+  if (sensor.csNet.trim()) out += `cs_net = ${tomlString(sensor.csNet.trim())}\n`
+  const inputs = sensor.inputs.filter(input => input.name.trim() && numOr(input.value))
+  if (inputs.length > 0) {
+    out += `[sensor.inputs]\n`
+    for (const input of inputs) out += `${tomlString(input.name.trim())} = ${numOr(input.value)}\n`
+  }
+  return out
+}
+
+/** One [[assert]] block: the kind's subject, then its schema fields in order,
+ *  each only when filled (strings quoted, numbers only when finite). */
+export function assertToml(c: CheckRow): string {
+  const k = checkKind(c.kind)
+  let out = `\n[[assert]]\nkind = ${tomlString(c.kind)}\n`
+  if (!k) return out
+  if (k.subject && c[k.subject].trim()) out += `${k.subject} = ${tomlString(c[k.subject].trim())}\n`
+  for (const f of k.fields) {
+    const t = c[f.key].trim()
+    if (!t) continue
+    if (f.text) out += `${f.key} = ${tomlString(t)}\n`
+    else if (numOr(t)) out += `${f.key} = ${numOr(t)}\n`
+  }
+  return out
+}
+
 /** Compose the spec BODY (no board/firmware keys; the server injects those
  *  from the uploaded files). */
 export function buildToml(
@@ -164,67 +301,12 @@ export function buildToml(
   checks: CheckRow[],
   sensors: SensorRow[] = [],
 ): string {
-  let out = `name = ${tomlString(name)}\n`
   const dur = numOr(duration)
-  if (dur) out += `duration_ms = ${dur}\n`
-  for (const s of supplies) {
-    if (!s.net.trim()) continue
-    out += `\n[[supply]]\nnet = ${tomlString(s.net.trim())}\nkind = "ideal"\nvolts = ${numOr(s.volts) ?? '5.0'}\n`
-  }
-  for (const p of peripherals) {
-    out += `\n[[peripheral]]\nid = ${tomlString(p.id.trim())}\ntype = ${tomlString(p.kind)}\nnet = ${tomlString(p.net.trim())}\n`
-    if (p.kind === 'stimulus') {
-      out += `waveform = ${tomlString(p.waveform)}\n`
-      out += `offset = ${numOr(p.offset) ?? '0'}\n`
-      if (p.waveform !== 'dc') out += `amplitude = ${numOr(p.amplitude) ?? '1'}\n`
-      if (p.waveform === 'sine' || p.waveform === 'noise') out += `freq_hz = ${numOr(p.freq_hz) ?? '1000'}\n`
-    } else {
-      if (p.to.trim()) out += `to = ${tomlString(p.to.trim())}\n`
-      if (p.kind === 'pushbutton' && numOr(p.bounce_ms)) out += `bounce_ms = ${numOr(p.bounce_ms)}\n`
-      if (numOr(p.initial)) out += `initial = ${numOr(p.initial)}\n`
-    }
-    for (const event of p.events) {
-      out += `[[peripheral.event]]\nt_ms = ${numOr(event.t_ms) ?? '0'}\nvalue = ${numOr(event.value) ?? '0'}\n`
-    }
-  }
-  for (const sensor of sensors) {
-    out += `\n[[sensor]]\nid = ${tomlString(sensor.id.trim())}\n`
-    // JSON string escaping is valid TOML basic-string escaping and avoids the
-    // delimiter collision of a pasted spec containing triple quotes.
-    out += `spec = ${tomlString(sensor.spec)}\n`
-    if (sensor.controller.trim()) out += `controller = ${tomlString(sensor.controller.trim())}\n`
-    if (sensor.csNet.trim()) out += `cs_net = ${tomlString(sensor.csNet.trim())}\n`
-    const inputs = sensor.inputs.filter(input => input.name.trim() && numOr(input.value))
-    if (inputs.length > 0) {
-      out += `[sensor.inputs]\n`
-      for (const input of inputs) out += `${tomlString(input.name.trim())} = ${numOr(input.value)}\n`
-    }
-  }
-  for (const c of checks) {
-    out += `\n[[assert]]\nkind = ${tomlString(c.kind)}\n`
-    const put = (key: string, v: string, quote = false) => {
-      const t = v.trim()
-      if (!t) return
-      out += quote ? `${key} = ${tomlString(t)}\n` : (numOr(v) ? `${key} = ${numOr(v)}\n` : '')
-    }
-    if (NET_KINDS.includes(c.kind)) put('net', c.net, true)
-    if (REF_KINDS.includes(c.kind)) put('ref', c.ref, true)
-    if (c.kind === 'uart') put('contains', c.contains, true)
-    put('min', c.min)
-    put('max', c.max)
-    put('after_ms', c.after_ms)
-    put('deadline_ms', c.deadline_ms)
-    put('freq_hz', c.freq_hz)
-    put('tolerance', c.tolerance)
-    put('min_toggles', c.min_toggles)
-    put('amps', c.amps)
-    put('celsius', c.celsius)
-    put('dip_below', c.dip_below)
-    put('for_max_ms', c.for_max_ms)
-    put('recover_to', c.recover_to)
-    put('recover_within_ms', c.recover_within_ms)
-  }
-  return out
+  return `name = ${tomlString(name)}\n${dur ? `duration_ms = ${dur}\n` : ''}`
+    + supplies.map(supplyToml).join('')
+    + peripherals.map(peripheralToml).join('')
+    + sensors.map(sensorToml).join('')
+    + checks.map(assertToml).join('')
 }
 
 // Fields the builder round-trips on a [[supply]] / an [[assert]]. Anything
@@ -238,11 +320,6 @@ const PERIPHERAL_FIELDS = new Set([
 ])
 const PERIPHERAL_EVENT_FIELDS = new Set(['t_ms', 'value'])
 const SENSOR_FIELDS = new Set(['id', 'spec', 'controller', 'cs_net', 'inputs'])
-const ASSERT_FIELDS = new Set([
-  'kind', 'net', 'ref', 'min', 'max', 'after_ms', 'deadline_ms', 'contains',
-  'freq_hz', 'tolerance', 'min_toggles', 'amps', 'celsius', 'dip_below',
-  'for_max_ms', 'recover_to', 'recover_within_ms',
-])
 
 /** Best-effort: load a raw TOML back into builder rows. Returns null when the
  *  spec uses vocabulary the builder doesn't cover (an unknown top-level key,
@@ -305,24 +382,12 @@ export function tomlToBuilder(raw: string): BuilderState | null {
   const checks: CheckRow[] = []
   let id = 1
   for (const a of (doc.assert as Record<string, unknown>[] | undefined) ?? []) {
-    const kind = String(a.kind ?? '')
-    if (!CHECK_KINDS.some(k => k.kind === kind)) return null
-    // Refuse any field the composer would not re-emit for this kind: it would
-    // survive the parse but vanish from the round-tripped spec.
-    for (const key of Object.keys(a)) {
-      if (!ASSERT_FIELDS.has(key)) return null
-      if (key === 'net' && !NET_KINDS.includes(kind)) return null
-      if (key === 'ref' && !REF_KINDS.includes(kind)) return null
-      if (key === 'contains' && kind !== 'uart') return null
-    }
-    const row = emptyCheck(id++, kind)
-    const grab = (key: keyof CheckRow) => {
-      const v = a[key]
-      if (v !== undefined) (row[key] as string) = String(v)
-    }
-    grab('net'); grab('ref'); grab('min'); grab('max'); grab('after_ms'); grab('deadline_ms')
-    grab('contains'); grab('freq_hz'); grab('tolerance'); grab('min_toggles'); grab('amps')
-    grab('celsius'); grab('dip_below'); grab('for_max_ms'); grab('recover_to'); grab('recover_within_ms')
+    const k = checkKind(String(a.kind ?? ''))
+    if (!k) return null
+    const allowed = assertKeys(k)
+    if (Object.keys(a).some(key => !allowed.has(key))) return null
+    const row = emptyCheck(id++, k.kind)
+    for (const key of CHECK_KEYS) if (a[key] !== undefined) row[key] = String(a[key])
     checks.push(row)
   }
   return {
@@ -335,11 +400,12 @@ export function tomlToBuilder(raw: string): BuilderState | null {
   }
 }
 
-/** One builder-row validation problem: which UI field, said in the UI's own
- *  words (never TOML key names; the raw pane owns that vocabulary). */
+/** One builder-row validation problem: which UI fields could satisfy it,
+ *  said in the UI's own words (never TOML key names; the raw pane owns that
+ *  vocabulary). */
 export interface RowIssue {
-  /** CheckRow field whose input gets the highlight. */
-  field: keyof CheckRow
+  /** Every input whose value would settle the requirement; all get the highlight. */
+  fields: CheckKey[]
   message: string
 }
 
@@ -347,51 +413,16 @@ export interface RowIssue {
  *  but speaking in the builder's field labels. Only fields actually missing
  *  are named, so "ref present, amps empty" says just "max A is empty". */
 export function rowIssues(c: CheckRow): RowIssue[] {
-  const blank = (v: string) => v.trim() === ''
+  const k = checkKind(c.kind)
+  if (!k) return []
+  const blank = (key: CheckKey) => c[key].trim() === ''
   const issues: RowIssue[] = []
-  const needNet = () => { if (blank(c.net)) issues.push({ field: 'net', message: 'net is empty' }) }
-  switch (c.kind) {
-    case 'voltage':
-      needNet()
-      if (blank(c.min) && blank(c.max)) {
-        issues.push({ field: 'min', message: 'needs a min V and/or a max V' })
-      }
-      break
-    case 'uart':
-      if (blank(c.contains)) issues.push({ field: 'contains', message: '"must print" is empty' })
-      break
-    case 'toggle':
-      needNet()
-      if (blank(c.freq_hz) && blank(c.min_toggles)) {
-        issues.push({ field: 'freq_hz', message: 'needs a freq Hz or a min toggles' })
-      }
-      break
-    case 'boot-coverage':
-      needNet()
-      if (blank(c.min)) issues.push({ field: 'min', message: 'reach V is empty' })
-      if (blank(c.deadline_ms)) issues.push({ field: 'deadline_ms', message: 'within ms is empty' })
-      break
-    case 'max_current':
-      if (blank(c.ref)) issues.push({ field: 'ref', message: 'part (ref) is empty' })
-      if (blank(c.amps)) issues.push({ field: 'amps', message: 'max A is empty' })
-      break
-    case 'max_temp':
-      // max °C may stay blank (falls back to the part's own rating).
-      if (blank(c.ref)) issues.push({ field: 'ref', message: 'part (ref) is empty' })
-      break
-    case 'rail_window':
-      needNet()
-      if (blank(c.dip_below)) {
-        issues.push({ field: 'dip_below', message: 'dip below V is empty' })
-      } else if (blank(c.for_max_ms) && blank(c.recover_within_ms)) {
-        issues.push({ field: 'for_max_ms', message: 'needs a for max ms or a recovery window (within ms)' })
-      }
-      if (!blank(c.recover_within_ms) && blank(c.recover_to)) {
-        issues.push({ field: 'recover_to', message: 'recover to V is empty (needed with within ms)' })
-      }
-      break
-    default:
-      break
+  if (k.subject && blank(k.subject)) {
+    issues.push({ fields: [k.subject], message: k.subject === 'net' ? 'net is empty' : 'part (ref) is empty' })
+  }
+  for (const need of k.needs) {
+    if (need.when && blank(need.when)) continue
+    if (need.any.every(blank)) issues.push({ fields: need.any, message: need.message })
   }
   return issues
 }

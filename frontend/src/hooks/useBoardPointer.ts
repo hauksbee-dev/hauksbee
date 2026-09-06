@@ -1,11 +1,14 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { maxScaleFor, panCamera, screenToWorld, zoomCamera } from '../lib/camera'
 import type { Camera } from '../lib/camera'
-import type { BoardHitTest, FootprintInfo } from './useBoardHitTest'
+import type { ParsedBoard } from '../lib/kicad-parser'
+import { describeFootprint, footprintAt, footprintHitBoxes, labelAt, nearestNet } from '../lib/board-geometry'
+import type { FootprintInfo } from '../lib/board-geometry'
 
-// Pointer and touch on the board canvas: pan, pinch, and the one hit-test that
-// resolves a click or a tap. Mouse and touch share `selectAt`, so the two
-// selection paths cannot drift apart.
+// Pointer and touch on the board canvas: pan, pinch, hover, and the one
+// hit-test that resolves a click or a tap. Mouse and touch share `selectAt`,
+// and hover resolves the cursor the SAME way, so the three cannot drift apart.
+// The geometry itself lives in lib/board-geometry, shared with the renderer.
 
 export interface BoardPointerHandlers {
   onMouseDown: (e: React.MouseEvent) => void
@@ -20,15 +23,17 @@ export interface BoardPointerHandlers {
 }
 
 export function useBoardPointer({
-  canvasRef, camRef, fitScaleRef, userMovedCamera, setCamera, hit,
+  board, showLabels, canvasRef, camRef, fitScaleRef, userMovedCamera, setCamera,
   hoveredNet, hoveredRef, probePos, onClaimWheel, onNetClick, onFootprintClick,
 }: {
+  board: ParsedBoard | null
+  /** Labels are only a hit target while they are drawn. */
+  showLabels: boolean
   canvasRef: React.RefObject<HTMLCanvasElement | null>
   camRef: React.RefObject<Camera>
   fitScaleRef: React.RefObject<number>
   userMovedCamera: React.RefObject<boolean>
   setCamera: (next: Camera) => void
-  hit: BoardHitTest
   /** Read by the render loop, so hover state lives in refs, not state. */
   hoveredNet: React.RefObject<string | null>
   hoveredRef: React.RefObject<string | null>
@@ -48,6 +53,28 @@ export function useBoardPointer({
   // pan (travelled). Null once a second finger lands: a pinch is never a tap.
   const touchStart = useRef<{ x: number; y: number } | null>(null)
 
+  // Computed once per board: a 3,000-part flagship must not rebuild the part
+  // extents on every click.
+  const boxes = useMemo(() => (board ? footprintHitBoxes(board) : []), [board])
+
+  // Reach is given in SCREEN pixels: hover keeps a tight radius so the readout
+  // tracks exactly what is under the cursor; a click passes a coarser one,
+  // because clicking is a blunter gesture.
+  const netNear = useCallback((x: number, y: number, reachPx: number, includePads = true) =>
+    board ? nearestNet(board, x, y, reachPx / camRef.current.scale, includePads) : null, [board, camRef])
+  /** The part under a point (body, pad, origin), else the part whose LABEL is
+   *  under the screen point: the label is part of the part's visual identity,
+   *  and is tested in SCREEN space because its size is screen-fixed. A label
+   *  hit reports the net nearest the part's origin, since the click itself
+   *  landed on text. */
+  const partAt = useCallback((x: number, y: number, sx: number, sy: number): FootprintInfo | null => {
+    if (!board) return null
+    const body = footprintAt(board, boxes, x, y, 5 / camRef.current.scale)
+    if (body) return { ...describeFootprint(body), padNet: netNear(x, y, 8) }
+    const byLabel = showLabels ? labelAt(board, camRef.current, sx, sy) : null
+    return byLabel ? { ...describeFootprint(byLabel), padNet: netNear(byLabel.at.x, byLabel.at.y, 12) } : null
+  }, [board, boxes, camRef, netNear, showLabels])
+
   const canvasPoint = useCallback((clientX: number, clientY: number) => {
     const rect = canvasRef.current!.getBoundingClientRect()
     return { sx: clientX - rect.left, sy: clientY - rect.top }
@@ -56,8 +83,7 @@ export function useBoardPointer({
   const pan = useCallback((clientX: number, clientY: number) => {
     const dx = clientX - lastPoint.current.x
     const dy = clientY - lastPoint.current.y
-    const travelled = Math.abs(dx) + Math.abs(dy) > 2
-    if (travelled) {
+    if (Math.abs(dx) + Math.abs(dy) > 2) {
       movedSinceDown.current = true
       userMovedCamera.current = true
     }
@@ -66,39 +92,22 @@ export function useBoardPointer({
   }, [camRef, setCamera, userMovedCamera])
 
   /**
-   * Resolve a tap/click that did not travel, and fire the consumer callbacks.
-   *
-   * Layered and EXCLUSIVE: firing footprint and net together collapses every
-   * part click into a net selection, which makes "click a part, see its bound
-   * model" unreachable.
+   * Resolve a tap/click that did not travel. Layered and EXCLUSIVE, because
+   * firing footprint and net together collapses every part click into a net
+   * selection and makes "click a part, see its bound model" unreachable:
    *   1. a routed TRACE within tight reach wins: the click was on bare copper;
-   *   2. otherwise a footprint hit wins, carrying the nearest pad's net along
-   *      (on an unrouted board pads are the only copper, so a part click must
-   *      still surface its net);
+   *   2. otherwise a footprint (body, pad, origin or label) wins, carrying the
+   *      nearest pad's net along;
    *   3. otherwise the nearest pad net within coarse reach, or null to clear.
    */
   const selectAt = useCallback((sx: number, sy: number) => {
     const { x, y } = screenToWorld(camRef.current, sx, sy)
-    const traceNet = hit.nearestNet(x, y, 5, false)
-    if (traceNet) {
-      onNetClick?.(traceNet)
-      return
-    }
-    const fp = hit.footprintAt(x, y)
-    if (fp && onFootprintClick) {
-      onFootprintClick({ ...fp, padNet: hit.nearestNet(x, y, 8) })
-      return
-    }
-    // The reference LABEL is part of the part's visual identity, so clicking it
-    // selects the part; the test is in SCREEN space because the label's size is
-    // screen-fixed, not board-fixed.
-    const labelFp = hit.labelAt(sx, sy)
-    if (labelFp && onFootprintClick) {
-      onFootprintClick({ ...labelFp, padNet: hit.nearestNet(labelFp.x, labelFp.y, 12) })
-      return
-    }
-    onNetClick?.(hit.nearestNet(x, y, 8))
-  }, [camRef, hit, onFootprintClick, onNetClick])
+    const traceNet = netNear(x, y, 5, false)
+    if (traceNet) { onNetClick?.(traceNet); return }
+    const fp = partAt(x, y, sx, sy)
+    if (fp && onFootprintClick) { onFootprintClick(fp); return }
+    onNetClick?.(netNear(x, y, 8))
+  }, [camRef, netNear, partAt, onFootprintClick, onNetClick])
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
@@ -109,27 +118,23 @@ export function useBoardPointer({
   }, [onClaimWheel])
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
-    if (dragging.current) {
-      pan(e.clientX, e.clientY)
-      return
-    }
+    if (dragging.current) { pan(e.clientX, e.clientY); return }
     const { sx, sy } = canvasPoint(e.clientX, e.clientY)
     const { x, y } = screenToWorld(camRef.current, sx, sy)
     probePos.current = { boardX: x, boardY: y }
     // Hover resolves the cursor the SAME way `selectAt` does. Testing only
-    // traces and pads would leave parts unlit, so the board would read as
-    // though only the copper were live.
-    const traceNet = hit.nearestNet(x, y, 5, false)
+    // traces and pads would leave parts unlit.
+    const traceNet = netNear(x, y, 5, false)
     if (traceNet) {
       hoveredNet.current = traceNet
       hoveredRef.current = null
       return
     }
-    hoveredRef.current = (hit.footprintAt(x, y) ?? hit.labelAt(sx, sy))?.ref ?? null
+    hoveredRef.current = partAt(x, y, sx, sy)?.ref ?? null
     // The pad's net still feeds the probe tooltip, so reading a voltage off a
     // part's pin keeps working.
-    hoveredNet.current = hit.nearestNet(x, y, 8)
-  }, [camRef, canvasPoint, hit, hoveredNet, hoveredRef, pan, probePos])
+    hoveredNet.current = netNear(x, y, 8)
+  }, [camRef, canvasPoint, netNear, partAt, hoveredNet, hoveredRef, pan, probePos])
 
   const onMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
@@ -163,22 +168,18 @@ export function useBoardPointer({
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
     e.preventDefault()
-    if (e.touches.length === 1 && dragging.current) {
-      pan(e.touches[0].clientX, e.touches[0].clientY)
-      return
-    }
+    if (e.touches.length === 1 && dragging.current) { pan(e.touches[0].clientX, e.touches[0].clientY); return }
     if (e.touches.length !== 2) return
     const dist = fingerSpread(e)
     // True pinch semantics: the zoom factor IS the ratio of finger spreads, so
     // the board tracks the fingers exactly (no tuning constant involved).
     if (lastTouchDist.current > 0) {
       userMovedCamera.current = true
-      const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2
-      const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2
-      const { sx, sy } = canvasPoint(cx, cy)
-      setCamera(zoomCamera(
-        camRef.current, dist / lastTouchDist.current, sx, sy, maxScaleFor(fitScaleRef.current),
-      ))
+      const { sx, sy } = canvasPoint(
+        (e.touches[0].clientX + e.touches[1].clientX) / 2,
+        (e.touches[0].clientY + e.touches[1].clientY) / 2,
+      )
+      setCamera(zoomCamera(camRef.current, dist / lastTouchDist.current, sx, sy, maxScaleFor(fitScaleRef.current)))
     }
     lastTouchDist.current = dist
   }, [camRef, canvasPoint, fitScaleRef, pan, setCamera, userMovedCamera])
@@ -196,8 +197,5 @@ export function useBoardPointer({
     selectAt(sx, sy)
   }, [canvasPoint, selectAt])
 
-  return {
-    onMouseDown, onMouseMove, onMouseUp, onMouseLeave,
-    onTouchStart, onTouchMove, onTouchEnd, dragging,
-  }
+  return { onMouseDown, onMouseMove, onMouseUp, onMouseLeave, onTouchStart, onTouchMove, onTouchEnd, dragging }
 }

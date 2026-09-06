@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { CloseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
 import { netReadoutText, type NetReading } from '../lib/net-state'
-import type { ModelCoverageComponent } from '../types/report'
+import type { ModelCoverageComponent, BoardRequest } from '../types/report'
 
 // The unified selection card: what a click on the board surface reports, in
 // the same card language on the report map and the live sim. A net shows its
@@ -31,7 +31,7 @@ interface AssertOffer {
 
 function OfferButton({ offer, onQueue }: {
   offer: AssertOffer
-  onQueue: (check: { kind: string; net?: string; ref?: string }) => void
+  onQueue: (request: BoardRequest) => void
 }) {
   const [queued, setQueued] = useState(false)
   // The confirmation flash resets on its own; clear the timer if the card
@@ -46,7 +46,7 @@ function OfferButton({ offer, onQueue }: {
       type="button"
       data-testid={`assert-${offer.kind}`}
       onClick={() => {
-        onQueue({ kind: offer.kind, net: offer.net, ref: offer.ref })
+        onQueue({ type: 'check', kind: offer.kind, net: offer.net, ref: offer.ref })
         setQueued(true)
       }}
       className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
@@ -58,7 +58,7 @@ function OfferButton({ offer, onQueue }: {
 
 export function SelectionCard({
   net, liveVolts, reading, component, boundKind, modelCoverage, netModels = [],
-  onQueueCheck, onQueuePeripheral, onQueueSensor, onQueueSupply, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet,
+  onQueue, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet,
 }: {
   /** Selected net, when the click landed on copper. */
   net: string | null
@@ -78,15 +78,10 @@ export function SelectionCard({
   modelCoverage?: ModelCoverageComponent | null
   /** Modelled devices touching a selected trace/net. */
   netModels?: ModelCoverageComponent[]
-  onQueueCheck?: (check: { kind: string; net?: string; ref?: string }) => void
-  /** Add a physical interaction to the visual co-sim builder. This changes the
-   *  experiment and is intentionally presented separately from assertions. */
-  onQueuePeripheral?: (peripheral: { id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }) => void
-  /** Start a validated register-map bus-device scenario for this component.
-   * The follow-on builder requires explicit spec bytes; clicking never guesses
-   * a datasheet protocol from a part name. */
-  onQueueSensor?: (sensor: { id: string; ref?: string; modelId?: string | null }) => void
-  onQueueSupply?: (supply: { net: string; volts?: number }) => void
+  /** Hand a check, an interaction, a supply or a register-map device to the
+   *  checks builder (see `BoardRequest`). Absent where there is no builder
+   *  (the standalone demo), which hides every such offer. */
+  onQueue?: (request: BoardRequest) => void
   /** Say whether the action only prepares a replayable scenario or also
    *  mutates the connected live solver immediately. */
   peripheralMode?: 'scenario' | 'live-and-scenario'
@@ -310,12 +305,12 @@ export function SelectionCard({
         </button>
       )}
 
-      {net && onQueuePeripheral && (
+      {net && onQueue && (
         <div className="flex flex-col gap-1.5">
           <button
             type="button"
             data-testid="selection-add-stimulus"
-            onClick={() => onQueuePeripheral({ kind: 'stimulus', net })}
+            onClick={() => onQueue({ type: 'peripheral', kind: 'stimulus', net })}
             className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
           >
             {peripheralMode === 'live-and-scenario'
@@ -325,7 +320,7 @@ export function SelectionCard({
           <button
             type="button"
             data-testid="selection-add-button"
-            onClick={() => onQueuePeripheral({ kind: 'pushbutton', net })}
+            onClick={() => onQueue({ type: 'peripheral', kind: 'pushbutton', net })}
             className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
           >
             {peripheralMode === 'live-and-scenario'
@@ -335,11 +330,11 @@ export function SelectionCard({
         </div>
       )}
 
-      {net && onQueueSupply && (
+      {net && onQueue && (
         <button
           type="button"
           data-testid="selection-add-supply"
-          onClick={() => onQueueSupply({ net, volts: 3.3 })}
+          onClick={() => onQueue({ type: 'supply', net, volts: 3.3 })}
           className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
         >
           {peripheralMode === 'live-and-scenario'
@@ -359,11 +354,11 @@ export function SelectionCard({
         </button>
       )}
 
-      {component && onQueueSensor && needsRegisterMapWork && !modelOwnsRegisterMap && (
+      {component && onQueue && needsRegisterMapWork && !modelOwnsRegisterMap && (
         <button
           type="button"
           data-testid="selection-add-sensor"
-          onClick={() => onQueueSensor({ id: component.ref, ref: component.ref, modelId: modelCoverage?.model_id })}
+          onClick={() => onQueue({ type: 'sensor', id: component.ref, ref: component.ref, modelId: modelCoverage?.model_id })}
           className="hb-chip hb-press px-2.5 py-1.5 text-[12px] text-left"
         >
           + Open its register-map behavior builder
@@ -382,9 +377,9 @@ export function SelectionCard({
         </div>
       )}
 
-      {onQueueCheck && offers.length > 0 && (
+      {onQueue && offers.length > 0 && (
         <div className="flex flex-col gap-1.5 mt-0.5">
-          {offers.map(o => <OfferButton key={o.kind + (o.net ?? '')} offer={o} onQueue={onQueueCheck} />)}
+          {offers.map(o => <OfferButton key={o.kind + (o.net ?? '')} offer={o} onQueue={onQueue} />)}
           <div className="text-[10px]" style={{ color: 'var(--silk-faint)' }}>
             lands in the checks builder
           </div>

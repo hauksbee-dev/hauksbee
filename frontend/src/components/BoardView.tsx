@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ModelCoverageComponent } from '../types/report'
-import { uncoveredTimingRefusals } from '../lib/cosim-coverage'
+import type { BoardRequest, ModelCoverageComponent } from '../types/report'
+import { coverageFor, modelsOnNet, padNetsOf, plural, reportView, stageWords } from '../lib/report-view'
 import type { BoardSession } from '../hooks/useBoardSession'
 import { WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
@@ -13,8 +13,6 @@ import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-f
 import { StaggerItem } from '../motion'
 import { ExportMenu } from './ExportMenu'
 import type { SpecSnapshot } from '../hooks/useSessions'
-import { reportVerdictHeadline, reportVerdictPalette } from '../lib/report-verdict'
-import { refusalLines } from '../lib/refusal-contract'
 import { Callout, CopyButton, UploadBanners } from './ui'
 import { NoteBlock, SectionBlock } from './report/Findings'
 import { EvidencePanel, ImportDiagnosticsPanel, ModelCoveragePanel } from './report/Panels'
@@ -50,14 +48,12 @@ function DropBoardAgain({ testId, label, height }: { testId: string; label: stri
 }
 
 export function BoardView({
-  session, onQueueCheck, onQueuePeripheral, onQueueSensor, onQueueSupply, onOpenChecks,
+  session, onQueue, onOpenChecks,
   onDriveLive, simMounted, engineVersion, spec, checks, sessionName,
 }: {
   session: BoardSession
-  onQueueCheck: (check: { kind: string; net?: string; ref?: string }) => void
-  onQueuePeripheral?: (peripheral: { id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }) => void
-  onQueueSensor?: (sensor: { id: string; ref?: string; modelId?: string | null }) => void
-  onQueueSupply?: (supply: { net: string; volts?: number }) => void
+  /** A click on the map asked the checks builder for something. */
+  onQueue: (request: BoardRequest) => void
   onOpenChecks: () => void
   onDriveLive: () => void
   simMounted: boolean
@@ -92,6 +88,7 @@ export function BoardView({
   const authoringRef = useRef<HTMLDivElement>(null)
   const focusSeq = useRef(0)
   const mapRef = useRef<HTMLDivElement>(null)
+  const v = useMemo(() => reportView(r), [r])
 
   useEffect(() => {
     if (authoringSignal === 0) return
@@ -104,13 +101,7 @@ export function BoardView({
     setFocusPoint({ x, y, label, seq: focusSeq.current })
     mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [])
-  const importMarkers = useMemo(() => {
-    if (!importOverlay) return []
-    return (r.import_diagnostics?.objects ?? []).flatMap(object =>
-      object.x !== undefined && object.y !== undefined
-        ? [{ x: object.x, y: object.y, status: object.status, nets: object.nets ?? [] }]
-        : [])
-  }, [importOverlay, r.import_diagnostics])
+  const importMarkers = useMemo(() => (importOverlay ? v.importMarkers : []), [importOverlay, v])
   const inspectImportNet = useCallback((net: string) => {
     setImportOverlay(true)
     setSelectedNet(net)
@@ -158,12 +149,7 @@ export function BoardView({
     )
   }
 
-  const bindOpen = !!(r.bind?.active_path_unresolved?.length)
   const runCommand = `hauksbee run ${boardLabel ?? r.file_name} --serve`
-  const { border: verdictBorder, background: verdictBg } = reportVerdictPalette(r)
-  const hasEvidence = (r.inventory?.length ?? 0) > 0
-    || (r.assumptions?.length ?? 0) > 0
-    || (r.evidence?.length ?? 0) > 0
 
   return (
     <div className="h-full overflow-y-auto view-enter" data-testid="report">
@@ -197,13 +183,11 @@ export function BoardView({
           <div
             data-testid="report-verdict"
             className="rounded-xl px-4 py-3.5"
-            style={{ border: `1px solid ${verdictBorder}`, background: verdictBg, fontSize: 15.5 }}
+            style={{ border: `1px solid ${v.palette.border}`, background: v.palette.background, fontSize: 15.5 }}
           >
-            {reportVerdictHeadline(r)}
+            {v.headline}
             <div className="text-xs mt-1.5 tnum" data-testid="report-inventory" style={{ color: 'var(--silk-dim)' }}>
-              {(r.board_name || r.file_name)} · {r.num_components}{' '}
-              {r.num_components === 1 ? 'part' : 'parts'} · {r.num_nets}{' '}
-              {r.num_nets === 1 ? 'net' : 'nets'}
+              {v.title} · {plural(r.num_components, 'part')} · {plural(r.num_nets, 'net')}
             </div>
           </div>
         </StaggerItem>
@@ -277,13 +261,13 @@ export function BoardView({
         {/* Bind-honesty line. The verdict above is the page's one accent
             surface; this keeps its amber and its place above the fold, but as a
             single row under the verdict rather than a second shouting box. */}
-        {bindOpen && (
+        {v.bindOpen && (
           <div className="mt-2 flex items-start gap-2 px-1 text-sm" style={{ color: 'var(--warn-strong)' }}>
             <span className="shrink-0" style={{ display: 'inline-flex', marginTop: 3 }}>
               <WarningIcon size={14} />
             </span>
             <span style={{ color: 'var(--silk-dim)' }}>
-              <span style={{ color: 'var(--warn-strong)' }}>{r.bind!.active_path_unresolved!.join(', ')}</span>{' '}
+              <span style={{ color: 'var(--warn-strong)' }}>{v.unresolved.join(', ')}</span>{' '}
               could not be bound or are left open on the live circuit. Analog / AC / thermal
               results on their nets are not trustworthy.
             </span>
@@ -294,7 +278,7 @@ export function BoardView({
           <ModelCoveragePanel
             coverage={r.model_coverage}
             onSelect={component => {
-              const padNets = [...new Set(component.pins.flatMap(pin => pin.net ? [pin.net] : []))]
+              const padNets = padNetsOf(component)
               setSelectedNet(null)
               setSelectedComponent({
                 ref: component.reference,
@@ -304,7 +288,7 @@ export function BoardView({
                 padNets,
               })
               const located = component.pins.find(pin => pin.position_mm)?.position_mm
-              if (located) locate(located[0], located[1], `${component.reference}: ${component.stage.replaceAll('_', ' ')}`)
+              if (located) locate(located[0], located[1], `${component.reference}: ${stageWords(component.stage)}`)
             }}
             onAuthor={author}
           />
@@ -345,13 +329,10 @@ export function BoardView({
           </>
         )}
 
-        {/* Top-level honesty notes. The bind-role note restates exactly what
-            the amber unresolved-parts line above already says (the JSON carries
-            both for CLI parity), so render it once, keeping the stronger one. */}
+        {/* Top-level honesty notes (minus the one the amber line above already
+            says; see reportView). */}
         <div className="mt-3">
-          {(r.notes || []).filter(n => !(bindOpen && n.kind === 'bind_role')).map((n, i) => (
-            <NoteBlock key={i}>{n.message}</NoteBlock>
-          ))}
+          {v.notes.map((n, i) => <NoteBlock key={i}>{n.message}</NoteBlock>)}
         </div>
 
         {r.import_diagnostics && (
@@ -365,13 +346,7 @@ export function BoardView({
           />
         )}
 
-        {hasEvidence && (
-          <EvidencePanel
-            inventory={r.inventory ?? []}
-            assumptions={r.assumptions ?? []}
-            evidence={r.evidence ?? []}
-          />
-        )}
+        {v.evidence.has && <EvidencePanel evidence={v.evidence} />}
 
         {/* Board map: the real renderer (pads, outline, pan/zoom, layers)
             whenever the uploaded file is KiCad layout text; the dot map only
@@ -422,16 +397,9 @@ export function BoardView({
                       net={selectedNet}
                       component={selectedComponent}
                       boundKind={selectedComponent ? r.component_kinds?.[selectedComponent.ref] ?? null : null}
-                      modelCoverage={selectedComponent
-                        ? r.model_coverage?.components.find(c => c.reference === selectedComponent.ref) ?? null
-                        : null}
-                      netModels={selectedNet
-                        ? (r.model_coverage?.components ?? []).filter(c => c.pins.some(pin => pin.net === selectedNet))
-                        : []}
-                      onQueueCheck={check => { onQueueCheck(check); onOpenChecks() }}
-                      onQueuePeripheral={onQueuePeripheral && (p => { onQueuePeripheral(p); onOpenChecks() })}
-                      onQueueSensor={onQueueSensor && (s => { onQueueSensor(s); onOpenChecks() })}
-                      onQueueSupply={onQueueSupply && (s => { onQueueSupply(s); onOpenChecks() })}
+                      modelCoverage={coverageFor(r.model_coverage, selectedComponent?.ref)}
+                      netModels={modelsOnNet(r.model_coverage, selectedNet)}
+                      onQueue={request => { onQueue(request); onOpenChecks() }}
                       onAuthorModel={author}
                       onClose={() => { setSelectedNet(null); setSelectedComponent(null) }}
                       onPickNet={setSelectedNet}
@@ -462,13 +430,13 @@ export function BoardView({
             report with fourteen sections must become readable in a quarter of a
             second, not walk down the page. The index starts at 1 because the
             verdict above is index 0, so the whole report reads as one arrival. */}
-        {r.sections.map((s, i) => (
+        {v.sections.map((s, i) => (
           <StaggerItem key={i} index={i + 1}>
             <SectionBlock section={s} onLocate={boardUrl ? locate : undefined} />
           </StaggerItem>
         ))}
 
-        {r.refusal && (
+        {v.refusalRows && (
           <section
             className="mt-7 rounded-lg px-4 py-3"
             data-testid="analysis-refusal-contract"
@@ -477,7 +445,7 @@ export function BoardView({
             <h2 className="text-[11px] font-bold tracking-widest uppercase mb-2" style={{ color: 'var(--warn-strong)' }}>
               Analysis could not make this claim
             </h2>
-            {refusalLines(r.refusal).map(([label, value]) => (
+            {v.refusalRows.map(([label, value]) => (
               <div key={label} className="text-sm mt-1" style={{ color: 'var(--silk)' }}>
                 <b style={{ color: 'var(--silk-dim)', fontWeight: 600 }}>{label}:</b>{' '}{value}
               </div>
@@ -485,10 +453,9 @@ export function BoardView({
           </section>
         )}
 
-        {r.cosim && (
+        {v.cosim && (
           <CosimBlock
-            cosim={r.cosim}
-            timingRefusals={uncoveredTimingRefusals(r.cosim.timing_refusals, r.refusal)}
+            cosim={v.cosim}
             liveAvailable={liveMode !== 'none'}
             onDriveLive={onDriveLive}
             simMounted={simMounted}
