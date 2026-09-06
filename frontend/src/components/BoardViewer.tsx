@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { parseKicadPcb, buildNetIndex } from '../lib/kicad-parser'
+import { parseKicadPcb } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
+import { segmentsByNet } from '../lib/board-geometry'
+import type { FootprintInfo } from '../lib/board-geometry'
 import { makeCamera, fitScaleFor, zoomCamera, wheelZoomFactor, maxScaleFor, MIN_SCALE } from '../lib/camera'
 import type { Camera } from '../lib/camera'
 import { renderStaticBoard, renderDynamicOverlay } from '../lib/board-renderer'
@@ -10,9 +12,8 @@ import { onThemeChange } from '../lib/theme-tokens'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
 import { FitIcon, ExpandIcon, CollapseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
+import { fetchFile, isAbort } from '../lib/api'
 import { LayersControl, useLayerControls } from './board/LayersPanel'
-import { useBoardHitTest } from '../hooks/useBoardHitTest'
-import type { FootprintInfo } from '../hooks/useBoardHitTest'
 import { useBoardPointer } from '../hooks/useBoardPointer'
 
 /** Pixels from the top of the viewer to clear the floating toolbar. The toolbar
@@ -166,7 +167,7 @@ export function BoardViewer({
   const probePos = useRef<{ boardX: number; boardY: number } | null>(null)
   const animTimeRef = useRef(0)
 
-  const netIndex = useMemo(() => board ? buildNetIndex(board) : null, [board])
+  const netIndex = useMemo(() => board ? segmentsByNet(board) : null, [board])
   // Real (named) nets only: the KiCad net table's synthetic id-0 "" bucket is
   // not a net, and counting it disagreed with the report's own net count.
   const namedNetCount = useMemo(
@@ -207,11 +208,8 @@ export function BoardViewer({
     setLoading(true)
     setError(null)
     setBoard(null)
-    fetch(boardFile, { signal: ctrl.signal })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.url}`)
-        return r.text()
-      })
+    fetchFile(boardFile, ctrl.signal)
+      .then(f => f.text())
       .then(text => {
         if (cancelled) return
         const parsed = parseKicadPcb(text)
@@ -229,7 +227,7 @@ export function BoardViewer({
         }
       })
       .catch((e: Error) => {
-        if (cancelled || e.name === 'AbortError') return
+        if (cancelled || isAbort(e)) return
         setError(e.message)
         setLoading(false)
       })
@@ -290,8 +288,6 @@ export function BoardViewer({
     ro.observe(container)
     return () => ro.disconnect()
   }, [board, setCamera])
-
-  const hit = useBoardHitTest(board, camRef, showLabels)
 
   // ── Animation loop ──
   // Per-frame data reaches the loop through refs, NOT effect deps: putting
@@ -472,7 +468,7 @@ export function BoardViewer({
         return best
       })()
       if (flowNet && netIndex?.has(flowNet)) {
-        const segs = netIndex.get(flowNet)!.segments
+        const segs = netIndex.get(flowNet)!
         if (segs.length > 0) {
           for (let i = 0; i < PARTICLE_COUNT; i++) {
             const key = `${flowNet}:${i}`
@@ -584,12 +580,13 @@ export function BoardViewer({
   }, [wheelMode, zoomFocused])
 
   const pointer = useBoardPointer({
+    board,
+    showLabels,
     canvasRef,
     camRef,
     fitScaleRef,
     userMovedCamera,
     setCamera,
-    hit,
     hoveredNet,
     hoveredRef,
     probePos,

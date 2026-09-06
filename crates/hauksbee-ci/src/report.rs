@@ -386,10 +386,37 @@ impl CiResult {
             return None;
         }
         let invalid = self.invalid_count();
+        // An assertion is INVALID for one of three reasons, each with its own
+        // fix: an unresolved part undermined its evidence (write or bind a
+        // model), a timing measurement was refused (change the backend or the
+        // assertion), or the analog solve diverged under it (fix the named
+        // net). The footer must send the reader to the right one; "inspect the
+        // failed window" is wrong advice when no window failed.
+        let count = |prefix: &str| {
+            self.results
+                .iter()
+                .filter(|r| r.invalid && r.detail.starts_with(prefix))
+                .count()
+        };
+        let evidence = count("INVALID evidence:");
+        let timing = count("INVALID: timing coverage refusal:");
         let missing = if self.analog_abort {
             format!(
                 "a converged analog solve through the run; the consecutive-failure abort tripped and {invalid} assertion(s) were marked INVALID"
             )
+        } else if evidence + timing == invalid {
+            let mut parts = Vec::new();
+            if evidence > 0 {
+                parts.push(format!(
+                    "a model for every part the assertions rest on; {evidence} assertion(s) depend on an unresolved (open) part"
+                ));
+            }
+            if timing > 0 {
+                parts.push(format!(
+                    "a backend that can measure the requested timing; {timing} assertion(s) were refused"
+                ));
+            }
+            parts.join("; ")
         } else {
             format!(
                 "a converged analog solve across every assertion window; {invalid} assertion(s) overlapped held-stale analog spans"
@@ -413,10 +440,22 @@ impl CiResult {
             .iter()
             .find(|r| r.invalid)
             .map(|r| {
-                format!(
-                    "inspect INVALID assertion '{}' and its failed-window detail, fix the first named net/device, then rerun the same spec",
-                    r.label
-                )
+                if r.detail.starts_with("INVALID evidence:") {
+                    format!(
+                        "give the open part(s) named under INVALID assertion '{}' a model (hauksbee models new, or a [[supply]] for a battery net), then rerun the same spec",
+                        r.label
+                    )
+                } else if r.detail.starts_with("INVALID: timing coverage refusal:") {
+                    format!(
+                        "read the timing refusal under INVALID assertion '{}'; run on a backend that measures it, or drop the timing claim, then rerun the same spec",
+                        r.label
+                    )
+                } else {
+                    format!(
+                        "inspect INVALID assertion '{}' and its failed-window detail, fix the first named net/device, then rerun the same spec",
+                        r.label
+                    )
+                }
             })
             .unwrap_or_else(|| {
                 "inspect the first analog non-convergence diagnosis in the job log, fix its named net/device, then rerun the same spec"

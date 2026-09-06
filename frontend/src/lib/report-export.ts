@@ -13,11 +13,9 @@
 // so the file the user downloads is the theme they were looking at, and this
 // module cannot drift from index.css the way a second copy of the tokens would.
 
-import type { WebReport, WebSection } from '../types/report'
-import { groupFindings } from './findings'
-import { refusalLines } from './refusal-contract'
-import { reportVerdictHeadline, reportVerdictPalette } from './report-verdict'
-import { fallbackWindowLine, timingCoverageLine, uncoveredTimingRefusals } from './cosim-coverage'
+import type { WebReport } from '../types/report'
+import { plural, reportView } from './report-view'
+import type { CosimView, FindingGroup, ReportView, SectionView } from './report-view'
 
 interface ReportExportInput {
   report: WebReport
@@ -139,6 +137,26 @@ function card(accent: string, tagColor: string, tag: string, body: string, why?:
   </div>`
 }
 
+/** A finding group as a card, listing the items either as one headline or,
+ *  for a collapsed group, as a bulleted list under the shared cause. */
+function findingCard(g: FindingGroup, listItems: boolean): string {
+  const n = g.items.length
+  return card(
+    LEVEL_ACCENT[g.level] ?? 'var(--note-accent)',
+    LEVEL_TEXT[g.level] ?? 'var(--note)',
+    n > 1 && listItems ? `${esc(g.level)} &middot; ${n} similar` : esc(g.level),
+    n > 1
+      ? listItems
+        ? `<div class="what">${n} similar findings, same cause, listed once below.</div>
+         <ul>${g.items.map(i => `<li>${esc(i.what)}</li>`).join('')}</ul>`
+        : `<div class="what">${g.items.map(i => esc(i.what)).join('; ')}</div>`
+      : `<div class="what">${esc(g.items[0].what)}</div>`,
+    g.why, g.fix,
+  )
+}
+
+const lines = (rows: string[]) => rows.map(line => `<div>${esc(line)}</div>`).join('')
+
 /** A horizontally scrollable table, or nothing when there are no rows. */
 function table(headers: string[], rows: string): string {
   if (!rows) return ''
@@ -157,32 +175,21 @@ function stamp(ms: number | null): string {
     String(Math.abs(d.getTimezoneOffset()) % 60).padStart(2, '0')})`
 }
 
-function sectionHtml(s: WebSection): string {
-  const groups = groupFindings(s.findings)
-  const cards = groups.map(g => card(
-    LEVEL_ACCENT[g.level] ?? 'var(--note-accent)',
-    LEVEL_TEXT[g.level] ?? 'var(--note)',
-    g.items.length > 1 ? `${esc(g.level)} &middot; ${g.items.length} similar` : esc(g.level),
-    g.items.length > 1
-      ? `<div class="what">${g.items.length} similar findings, same cause, listed once below.</div>
-         <ul>${g.items.map(i => `<li>${esc(i.what)}</li>`).join('')}</ul>`
-      : `<div class="what">${esc(g.items[0].what)}</div>`,
-    g.why, g.fix,
-  )).join('')
-  const headsUp = (s.heads_up ?? []).map(h => card(
+function sectionHtml(s: SectionView): string {
+  const headsUp = s.headsUp.map(h => card(
     'var(--copper)', 'var(--copper)', 'Heads up', `<div class="what">${esc(h.what)}</div>`, h.why, h.fix,
   )).join('')
   return `<section>
     <h2>${esc(s.title)}</h2>
     <p class="verdict-line">${esc(s.verdict)}</p>
-    ${cards}${headsUp}
+    ${s.groups.map(g => findingCard(g, true)).join('')}${headsUp}
   </section>`
 }
 
 /** The bind table: which active ICs bound to a model and which are open. This
  *  is the report's honesty layer, so it is a table rather than a sentence: a
  *  reader deciding whether to trust an analog number needs to see the list. */
-function bindHtml(report: WebReport): string {
+function bindHtml(report: WebReport, unresolved: string[]): string {
   const b = report.bind
   if (!b) return ''
   const parts = b.open_parts ?? []
@@ -194,7 +201,6 @@ function bindHtml(report: WebReport): string {
       <td>${p.bound ? 'bound, left open' : 'no model'}</td>
       <td>${esc(p.consequence)}</td>
     </tr>`).join('')
-  const unresolved = b.active_path_unresolved ?? []
   return `<section>
     <h2>Model binding</h2>
     <p class="verdict-line">
@@ -211,14 +217,8 @@ function bindHtml(report: WebReport): string {
 /** Human evidence projection. The JSON export carries every provenance field;
  * this page keeps the trust decision readable by showing the status totals,
  * every non-clean assertion, and the canonical four-sentence assumption chain. */
-function evidenceHtml(report: WebReport): string {
-  const maps = report.evidence ?? []
-  const assumptions = report.assumptions ?? []
-  const inventory = report.inventory ?? []
-  if (maps.length === 0 && assumptions.length === 0 && inventory.length === 0) return ''
-
-  const count = (status: string) => maps.filter(map => map.status === status).length
-  const caveated = maps.filter(map => map.status !== 'clean')
+function evidenceHtml({ has, maps, summary, caveated, assumptions, inventory }: ReportView['evidence']): string {
+  if (!has) return ''
   const rows = caveated.map(map => `<tr>
       <td>${esc(map.assertion)}</td>
       <td class="mono">${esc(map.status)}</td>
@@ -243,8 +243,8 @@ function evidenceHtml(report: WebReport): string {
   return `<section>
     <h2>Evidence &amp; limitations</h2>
     <p class="verdict-line">
-      ${maps.length} ${maps.length === 1 ? 'assertion' : 'assertions'} mapped:
-      ${count('clean')} clean, ${count('qualified')} qualified, ${count('undermined')} undermined.
+      ${plural(maps.length, 'assertion')} mapped:
+      ${summary.clean} clean, ${summary.qualified} qualified, ${summary.undermined} undermined.
       The machine-readable JSON retains the full artifact, model, parameter and error-budget fields.
     </p>
     ${table(['Assertion', 'Status', 'Rests on'], rows)}
@@ -300,56 +300,45 @@ function importDiagnosticsHtml(report: WebReport): string {
   </section>`
 }
 
-function cosimHtml(report: WebReport): string {
-  const c = report.cosim
+function cosimHtml(c: CosimView | null): string {
   if (!c) return ''
   if (!c.ran) {
-    const why = (c.findings ?? []).map(f => `${f.what} ${f.why}`.trim()).join(' ')
     return `<section><h2>Firmware co-sim</h2>
-      <p class="verdict-line">Co-sim did not run. ${esc(why || 'No co-sim was available for this board.')}</p>
+      <p class="verdict-line">Co-sim did not run. ${esc(c.notRanLines.join(' '))}</p>
     </section>`
   }
-  const findings = groupFindings(c.findings ?? []).map(g => card(
-    LEVEL_ACCENT[g.level] ?? 'var(--note-accent)',
-    LEVEL_TEXT[g.level] ?? 'var(--note)',
-    esc(g.level),
-    `<div class="what">${g.items.map(i => esc(i.what)).join('; ')}</div>`,
-    g.why, g.fix,
-  )).join('')
-  const gpio = (c.gpio_nets ?? []).map(g => `<tr>
+  const gpio = c.gpio.map(g => `<tr>
       <td class="mono">${esc(g.name)}</td>
       <td class="mono num">${(g.volts || 0).toFixed(3)}</td>
       <td>${g.driven ? 'driven' : 'idle'}</td>
     </tr>`).join('')
-  const timingCoverage = (c.timing_coverage ?? []).map(row => `<div>${esc(timingCoverageLine(row))}</div>`).join('')
-  const timingRefusals = uncoveredTimingRefusals(c.timing_refusals, report.refusal)
-    .map(line => `<div>${esc(line)}</div>`)
-    .join('')
-  const fallbackWindows = (c.fallback_windows ?? []).map(window => `<div>${esc(fallbackWindowLine(window))}</div>`).join('')
+  const strip = (title: string, rows: string[], accent?: string) => rows.length === 0
+    ? ''
+    : `<h3>${title}</h3><div class="card"${accent ? ` style="border-left-color:${accent}"` : ''}>${lines(rows)}</div>`
   return `<section>
     <h2>Firmware co-sim</h2>
     <p class="verdict-line">
-      Ran the firmware for ${(c.seconds_simulated || 0).toFixed(3)}s on the board's microcontroller.
-      ${c.analog_valid ? '' : ' The analog solve did not stay valid for the whole run.'}
+      ${esc(c.ranLine)}
+      ${c.analogValid ? '' : ' The analog solve did not stay valid for the whole run.'}
     </p>
-    ${findings}
-    ${timingCoverage ? `<h3>Timing coverage</h3><div class="card">${timingCoverage}</div>` : ''}
-    ${timingRefusals ? `<h3>TIMING INVALID</h3><div class="card" style="border-left-color:var(--err)">${timingRefusals}</div>` : ''}
-    ${fallbackWindows ? `<h3>Fallback-qualified windows</h3><div class="card" style="border-left-color:var(--warn)">${fallbackWindows}</div>` : ''}
-    ${c.uart_output ? `<h3>UART output</h3><pre class="instrument">${esc(c.uart_output)}</pre>` : ''}
+    ${c.groups.map(g => findingCard(g, false)).join('')}
+    ${strip('Timing coverage', c.timingLines)}
+    ${strip('TIMING INVALID', c.timingRefusals, 'var(--err)')}
+    ${strip('Fallback-qualified windows', c.fallbackLines, 'var(--warn)')}
+    ${c.uart ? `<h3>UART output</h3><pre class="instrument">${esc(c.uart)}</pre>` : ''}
     ${gpio ? `<h3>GPIO nets</h3>${table(['Net', 'Volts', 'Activity'], gpio)}` : ''}
   </section>`
 }
 
-function refusalHtml(report: WebReport): string {
-  if (!report.refusal) return ''
-  const rows = refusalLines(report.refusal)
+function refusalHtml(rows: [string, string][] | null): string {
+  if (!rows) return ''
+  const body = rows
     .map(([label, value]) => `<div class="gloss"><b>${esc(label)}:</b> ${esc(value)}</div>`)
     .join('\n      ')
   return `<section>
     <h2>Analysis refusal</h2>
     <div class="card" style="border-left-color:var(--warn)">
-      ${rows}
+      ${body}
     </div>
   </section>`
 }
@@ -358,29 +347,26 @@ function refusalHtml(report: WebReport): string {
  *  styles are inline, there is no script, and no image is referenced. */
 export function buildReportHtml(input: ReportExportInput): string {
   const { report: r, spec, checks } = input
+  const v = reportView(r)
   const t = resolveTokens()
   const light = (t.canvas || '').toLowerCase().startsWith('#f')
 
-  const { border: verdictBorder, background: verdictBg } = reportVerdictPalette(r)
-  const bindOpen = !!r.bind?.active_path_unresolved?.length
-
   const version = input.engineVersion ?? input.appVersion
-  const title = `hauksbee report: ${r.board_name || r.file_name}`
+  const title = `hauksbee report: ${v.title}`
 
   // The provenance block, with the duplicates left out. `board_name`, the
   // uploaded file's name and the session's name are the same string in the
   // ordinary case, and three rows of `watchy.kicad_pcb` reads as a rendering
   // fault rather than as identity. Each row appears only when it says something
   // the row above did not.
-  const boardTitle = r.board_name || r.file_name
+  const boardTitle = v.title
   const meta: [string, string][] = [['Board', boardTitle]]
   if (r.file_name && r.file_name !== boardTitle) meta.push(['File', r.file_name])
   if (input.boardLabel && input.boardLabel !== boardTitle && input.boardLabel !== r.file_name) {
     meta.push(['Uploaded as', input.boardLabel])
   }
   meta.push(
-    ['Size', `${r.num_components} ${r.num_components === 1 ? 'part' : 'parts'}, ${
-      r.num_nets} ${r.num_nets === 1 ? 'net' : 'nets'}`],
+    ['Size', v.sizeLine],
     ['Firmware', input.firmwareName ?? 'none staged'],
     ['Analyzed', stamp(input.analyzedAt)],
     ['Exported', stamp(null)],
@@ -429,7 +415,7 @@ h2{
 h3{font-size:13px;font-weight:600;color:var(--silk-dim);margin:1.25rem 0 .35rem}
 p{margin:.35rem 0;text-wrap:pretty;overflow-wrap:anywhere}
 .verdict{
-  border:1px solid ${verdictBorder}; background:${verdictBg};
+  border:1px solid ${v.palette.border}; background:${v.palette.background};
   border-radius:12px; padding:.9rem 1rem; margin-top:1.25rem; font-size:15.5px;
 }
 .verdict .counts{
@@ -496,11 +482,11 @@ footer code{font-family:var(--font-mono)}
 <div class="page">
 <header class="top">
   <p class="wordmark">HAUKSBEE</p>
-  <h1>${esc(r.board_name || r.file_name)}</h1>
+  <h1>${esc(v.title)}</h1>
   <div class="verdict">
-    ${esc(reportVerdictHeadline(r))}
+    ${esc(v.headline)}
     <div class="counts">
-      ${r.serious} serious &middot; ${r.total} ${r.total === 1 ? 'finding' : 'findings'} total
+      ${r.serious} serious &middot; ${plural(r.total, 'finding')} total
       ${checksLine ? `&middot; checks: ${esc(checksLine)}` : ''}
     </div>
   </div>
@@ -509,24 +495,19 @@ footer code{font-family:var(--font-mono)}
   </dl>
 </header>
 
-${refusalHtml(r)}
+${refusalHtml(v.refusalRows)}
 
-${(r.notes ?? [])
-  // The bind-role note restates what the Model binding section below says in
-  // full; the JSON carries both for CLI parity, and the app renders only the
-  // stronger one. So does this.
-  .filter(n => !(bindOpen && n.kind === 'bind_role'))
-  .map(n => `<div class="note-row"><b>Note:</b> ${esc(n.message)}</div>`).join('\n')}
+${v.notes.map(n => `<div class="note-row"><b>Note:</b> ${esc(n.message)}</div>`).join('\n')}
 
-${bindHtml(r)}
+${bindHtml(r, v.unresolved)}
 
 ${importDiagnosticsHtml(r)}
 
-${evidenceHtml(r)}
+${evidenceHtml(v.evidence)}
 
-${(r.sections ?? []).map(sectionHtml).join('\n')}
+${v.sections.map(sectionHtml).join('\n')}
 
-${cosimHtml(r)}
+${cosimHtml(v.cosim)}
 
 ${spec
   ? `<section>

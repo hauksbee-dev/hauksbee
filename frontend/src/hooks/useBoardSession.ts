@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { buildBoardUpload } from '../lib/board-upload'
-import type { LiveLaunchResponse, LiveStatus, WebReport } from '../types/report'
+import type { WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
 import { analysisFailureMessage, precheckBoardFile } from '../lib/upload-guard'
 import { inspectZip, zipIsFirmwareOnly } from '../lib/zip-inspect'
-import { errorText, getJson, isAbort, readJson } from '../lib/api'
+import { api, errorText, fetchFile, isAbort } from '../lib/api'
 
 // The board session: one uploaded (or preloaded) board, its report, its staged
 // firmware, and the live-sim affordance for it. The app shell needs this shared
@@ -157,7 +157,7 @@ export function useBoardSession(opts: {
   // the header chips and the nav item stay honest about what /ws is serving.
   const [serverLive, setServerLive] = useState<ServerLive | null>(null)
   const refreshLiveStatus = useCallback(() => {
-    void getJson<LiveStatus>('/api/live/status')
+    void api.liveStatus()
       .then(st => setServerLive({ active: st.active === true, boardName: st.board_name ?? null }))
       // No status endpoint (older server): leave unknown rather than lying.
       .catch(() => setServerLive(null))
@@ -247,28 +247,8 @@ export function useBoardSession(opts: {
     } catch {
       if (isCurrent()) setBoardUrl(null)
     }
-    // Carried out of the try so the catch can name the status it failed on.
-    let status: number | undefined
     try {
-      let res: Response
-      if (firmware || schematic) {
-        const fd = buildBoardUpload(board, firmware, schematic)
-        res = await fetch('/api/analyze-with-firmware', { method: 'POST', body: fd, signal })
-      } else {
-        res = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'X-Board-Filename': board.name, 'Content-Type': 'application/octet-stream' },
-          // The File itself, NOT `await board.arrayBuffer()`: a Blob body is
-          // streamed off disk by the browser, where arrayBuffer() would pull a
-          // 300 MB upload into the JS heap on the main thread first. The wire
-          // bytes are identical either way.
-          body: board,
-          signal,
-        })
-      }
-      status = res.status
-      if (!res.ok) throw new Error((await res.text()).trim().slice(0, 400) || `${res.status} ${res.statusText}`)
-      const parsed = await readJson<WebReport>(res)
+      const parsed = await api.analyze(board, firmware, schematic, signal)
       if (isCurrent()) {
         setReport(parsed)
         setAnalyzedAt(Date.now())
@@ -278,6 +258,7 @@ export function useBoardSession(opts: {
       if (isAbort(e)) return
       // A body-limit refusal, a dropped connection and a real analysis failure
       // are three different problems with three different next steps.
+      const status = (e as { status?: number }).status
       if (isCurrent()) setUploadError(analysisFailureMessage(e, { status, size: board.size }))
     } finally {
       if (isCurrent()) setBusy(null)
@@ -286,45 +267,22 @@ export function useBoardSession(opts: {
 
   const looksLikeFirmware = (name: string) => /\.(elf|hex)$/i.test(name)
 
-  const handleFirmware = useCallback((f: File) => {
-    // One upload at a time: a swap mid-analysis would race the report it
-    // replaces.
+  // Stage (or unstage) a companion and re-run the board with it. A companion
+  // is a real change to what was analysed, not a form field: the standing
+  // report describes a co-sim of the image being swapped or removed, so the
+  // board is re-run so the two agree. One upload at a time: a swap
+  // mid-analysis would race the report it replaces. Unstaging something that
+  // was never staged is a no-op.
+  const restage = useCallback((next: { firmware?: File | null; schematic?: File | null }) => {
     if (busy) return
-    setFirmwareFile(f)
-    if (lastBoardFile.current) void analyze(lastBoardFile.current, f, schematicFile)
-  }, [analyze, busy, schematicFile])
-
-  const handleSchematic = useCallback((file: File) => {
-    if (busy) return
-    setSchematicFile(file)
-    if (lastBoardFile.current) void analyze(lastBoardFile.current, firmwareFile, file)
-  }, [analyze, busy, firmwareFile])
-
-  const reanalyzeCurrent = useCallback(() => {
-    if (busy || !lastBoardFile.current) return
-    void analyze(lastBoardFile.current, firmwareFile, schematicFile)
+    const firmware = next.firmware === undefined ? firmwareFile : next.firmware
+    const schematic = next.schematic === undefined ? schematicFile : next.schematic
+    if (firmware === firmwareFile && schematic === schematicFile) return
+    if (next.firmware !== undefined) setFirmwareFile(firmware)
+    if (next.schematic !== undefined) setSchematicFile(schematic)
+    if (lastBoardFile.current) void analyze(lastBoardFile.current, firmware, schematic)
   }, [analyze, busy, firmwareFile, schematicFile])
-
-  const clearFirmware = useCallback(() => {
-    // Removing the firmware is a real change to what was analysed, not just a
-    // change to a form field: the standing report describes a co-sim of the
-    // image being removed. Re-run the board bare so the two agree.
-    if (busy) return
-    setFirmwareFile(prev => {
-      if (!prev) return prev
-      if (lastBoardFile.current) void analyze(lastBoardFile.current, null, schematicFile)
-      return null
-    })
-  }, [analyze, busy, schematicFile])
-
-  const clearSchematic = useCallback(() => {
-    if (busy) return
-    setSchematicFile(previous => {
-      if (!previous) return previous
-      if (lastBoardFile.current) void analyze(lastBoardFile.current, firmwareFile, null)
-      return null
-    })
-  }, [analyze, busy, firmwareFile])
+  const handleFirmware = useCallback((f: File) => restage({ firmware: f }), [restage])
 
   /** Accept `f` as the board and run it. Split out of `handleBoard` so the
    *  zip-classification path (which has to await a read) reaches the same
@@ -445,17 +403,8 @@ export function useBoardSession(opts: {
       firmware: sample.firmware?.split('/').pop() ?? null,
     })
     try {
-      const bres = await fetch(sample.board, { signal })
-      if (!bres.ok) throw new Error(`could not fetch ${sample.board}: ${bres.status}`)
-      const bname = sample.board.split('/').pop() ?? 'sample.kicad_pcb'
-      const board = new File([await bres.blob()], bname)
-      let fw: File | null = null
-      if (sample.firmware) {
-        const fres = await fetch(sample.firmware, { signal })
-        if (!fres.ok) throw new Error(`could not fetch ${sample.firmware}: ${fres.status}`)
-        const fname = sample.firmware.split('/').pop() ?? 'firmware.hex'
-        fw = new File([await fres.blob()], fname)
-      }
+      const board = await fetchFile(sample.board, signal, 'sample.kicad_pcb')
+      const fw = sample.firmware ? await fetchFile(sample.firmware, signal, 'firmware.hex') : null
       // The flow was reset while the sample files were downloading: hand
       // nothing over (a newer run owns the board/firmware slots now).
       if (!isCurrent()) return
@@ -477,9 +426,7 @@ export function useBoardSession(opts: {
   const performLaunch = useCallback(async (board: File, onReady: () => void) => {
     setLaunch({ phase: 'launching' })
     try {
-      const fd = buildBoardUpload(board, firmwareFile, schematicFile)
-      const res = await fetch('/api/live/launch', { method: 'POST', body: fd })
-      const parsed = await readJson<LiveLaunchResponse>(res)
+      const parsed = await api.liveLaunch(buildBoardUpload(board, firmwareFile, schematicFile))
       if (!parsed.ok) throw new Error(parsed.error || 'the live launch failed')
       setLiveBoard(parsed.board_name ?? board.name)
       setServerLive({ active: true, boardName: parsed.board_name ?? board.name })
@@ -511,7 +458,7 @@ export function useBoardSession(opts: {
       return
     }
     try {
-      const st = await fetch('/api/live/status').then(r => r.json()) as LiveStatus
+      const st = await api.liveStatus()
       if (st.active) {
         setServerLive({ active: true, boardName: st.board_name ?? null })
         pendingReady.current = onReady
@@ -607,10 +554,12 @@ export function useBoardSession(opts: {
     setSelectedComponent: selectComponent,
     handleBoard,
     handleFirmware,
-    handleSchematic,
-    clearFirmware,
-    clearSchematic,
-    reanalyzeCurrent,
+    handleSchematic: file => restage({ schematic: file }),
+    clearFirmware: () => restage({ firmware: null }),
+    clearSchematic: () => restage({ schematic: null }),
+    // Re-run the exact current board and companions (e.g. after a model save)
+    // without making the user upload the board again.
+    reanalyzeCurrent: () => { if (!busy && lastBoardFile.current) void analyze(lastBoardFile.current, firmwareFile, schematicFile) },
     runSample: (s: SampleSpec) => void runSample(s),
     resetFlow,
     restoreReport,

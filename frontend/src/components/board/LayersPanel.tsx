@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ParsedBoard } from '../../lib/kicad-parser'
+import { allStrokes } from '../../lib/kicad-parser'
 import { boardTheme, getLayerStyle } from '../../lib/layer-colors'
 import { LayersIcon } from '../Icons'
 import { SwitchTrack } from '../ui'
@@ -37,23 +38,10 @@ const LAYER_ORDER = [
 /** The panel's rows, derived from what the parsed board actually contains:
  *  real copper/silk/fab layers only, never a fixed template. */
 function layersPresent(board: ParsedBoard): string[] {
-  const found = new Set<string>()
-  const add = (items: readonly { layer: string }[]) => {
-    for (const item of items) found.add(item.layer)
-  }
-  add(board.segments)
-  add(board.arcs)
-  add(board.gr_lines)
-  add(board.gr_arcs)
-  add(board.gr_circles)
-  add(board.gr_rects)
-  add(board.gr_polys)
-  for (const fp of board.footprints) {
-    add(fp.fp_lines)
-    add(fp.fp_arcs)
-    add(fp.fp_circles)
-    add(fp.fp_rects)
-  }
+  const found = new Set([
+    ...board.segments, ...board.arcs, ...allStrokes(board.graphics),
+    ...board.footprints.flatMap(fp => allStrokes(fp.graphics)),
+  ].map(item => item.layer))
   return LAYER_ORDER.filter(l => found.has(l) && getLayerStyle(l).visible)
 }
 

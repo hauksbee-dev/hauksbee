@@ -1,38 +1,35 @@
-import type { WebFinding, WebHeadsUp, WebSection } from '../../types/report'
-import { groupFindings } from '../../lib/findings'
-import type { FindingGroup } from '../../lib/findings'
+import type { WebHeadsUp } from '../../types/report'
+import type { FindingGroup, SectionView } from '../../lib/report-view'
 
-// A report section and the cards in it. One card shape serves the three kinds
-// of note a section can carry (a single finding, a collapsed group of similar
-// ones, a heads-up), because they differ only in what goes above the
+// A report section and the cards in it. One card shape serves every kind of
+// note a section can carry (a finding, a collapsed group of similar ones, a
+// heads-up, a top-level note): they differ only in what goes above the
 // why/what-to-do pair.
 
 /** Pan-the-map callback for findings that carry board coordinates. */
 export type LocateFn = (x: number, y: number, label: string) => void
 
-const LEVEL_ACCENT: Record<string, string> = {
-  serious: 'var(--err)',
-  warning: 'var(--warn)',
-  note: 'var(--note-accent)',
-}
-
-const LEVEL_TEXT: Record<string, string> = {
-  serious: 'var(--err-strong)',
-  warning: 'var(--warn-strong)',
-  note: 'var(--note)',
-}
+const LEVEL_ACCENT: Record<string, string> = { serious: 'var(--err)', warning: 'var(--warn)', note: 'var(--note-accent)' }
+const LEVEL_TEXT: Record<string, string> = { serious: 'var(--err-strong)', warning: 'var(--warn-strong)', note: 'var(--note)' }
 
 /** The card every finding-shaped note sits in: a left accent bar in the
- *  level's colour, a small-caps tag, and the body. */
-function NoteCard({ level, tag, accent, tagColor, testId, onClick, children }: {
+ *  level's colour, a small-caps tag, the body, then the why/what-to-do pair
+ *  (each half only when the engine supplied it). */
+function NoteCard({ level, tag, accent, tagColor, testId, onClick, why, fix, labelColor = 'var(--silk-dim)', children }: {
   level?: string
   tag: React.ReactNode
   accent?: string
   tagColor?: string
   testId?: string
   onClick?: () => void
+  why?: string
+  fix?: string
+  labelColor?: string
   children: React.ReactNode
 }) {
+  const gloss = (label: string, text?: string) => text && (
+    <div className="text-sm my-0.5"><b style={{ color: labelColor, fontWeight: 600 }}>{label}:</b> {text}</div>
+  )
   return (
     <div
       data-testid={testId}
@@ -45,37 +42,13 @@ function NoteCard({ level, tag, accent, tagColor, testId, onClick, children }: {
         cursor: onClick ? 'pointer' : undefined,
       }}
     >
-      <span
-        className="text-[10px] font-bold tracking-widest uppercase"
-        style={{ color: tagColor ?? LEVEL_TEXT[level ?? ''] ?? 'var(--note)' }}
-      >
+      <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: tagColor ?? LEVEL_TEXT[level ?? ''] ?? 'var(--note)' }}>
         {tag}
       </span>
       {children}
+      {gloss('Why it matters', why)}
+      {gloss('What to do', fix)}
     </div>
-  )
-}
-
-/** The why / what-to-do pair under a finding's headline. Each half renders
- *  only when the engine supplied it (self-contained notes carry just `what`). */
-function Gloss({ why, fix, labelColor = 'var(--silk-dim)' }: {
-  why?: string
-  fix?: string
-  labelColor?: string
-}) {
-  return (
-    <>
-      {why && (
-        <div className="text-sm my-0.5">
-          <b style={{ color: labelColor, fontWeight: 600 }}>Why it matters:</b> {why}
-        </div>
-      )}
-      {fix && (
-        <div className="text-sm my-0.5">
-          <b style={{ color: labelColor, fontWeight: 600 }}>What to do:</b> {fix}
-        </div>
-      )}
-    </>
   )
 }
 
@@ -106,37 +79,33 @@ function LocateButton({ what, x, y, onLocate, stopPropagation = false }: {
   )
 }
 
-export function FindingCard({ finding: f, onLocate }: { finding: WebFinding; onLocate?: LocateFn }) {
-  const locatable = onLocate !== undefined && f.x !== undefined && f.y !== undefined
-  return (
-    <NoteCard
-      testId="finding-card"
-      level={f.level}
-      tag={f.level}
-      onClick={locatable ? () => onLocate!(f.x!, f.y!, f.what) : undefined}
-    >
-      <LocateButton what={f.what} x={f.x} y={f.y} onLocate={onLocate} stopPropagation />
-      <div className="font-semibold text-sm mt-1 mb-1.5">{f.what}</div>
-      <Gloss why={f.why} fix={f.fix} />
-    </NoteCard>
-  )
-}
-
-/** A collapsed group of same-shaped findings: the shared level and explanation
- *  are shown once, and the individual items live inside an expandable list so a
- *  long run (128 clearance warnings, say) never walls the page yet hides
- *  nothing. */
-function GroupedFindingCard({ group: g, onLocate }: { group: FindingGroup; onLocate?: LocateFn }) {
+/** One group of findings: a single card when the group has one item, else a
+ *  collapsed card whose items live inside an expandable list so a long run
+ *  (128 clearance warnings, say) never walls the page yet hides nothing. */
+export function FindingCard({ group: g, onLocate }: { group: FindingGroup; onLocate?: LocateFn }) {
   const n = g.items.length
+  if (n === 1) {
+    const [it] = g.items
+    const locatable = onLocate !== undefined && it.x !== undefined && it.y !== undefined
+    return (
+      <NoteCard
+        testId="finding-card"
+        level={g.level}
+        tag={g.level}
+        why={g.why}
+        fix={g.fix}
+        onClick={locatable ? () => onLocate!(it.x!, it.y!, it.what) : undefined}
+      >
+        <LocateButton what={it.what} x={it.x} y={it.y} onLocate={onLocate} stopPropagation />
+        <div className="font-semibold text-sm mt-1 mb-1.5">{it.what}</div>
+      </NoteCard>
+    )
+  }
   return (
-    <NoteCard testId="grouped-finding" level={g.level} tag={`${g.level} · ${n} similar`}>
-      <div className="font-semibold text-sm mt-1 mb-1.5">
-        {n} similar findings, same cause, listed once below.
-      </div>
+    <NoteCard testId="grouped-finding" level={g.level} tag={`${g.level} · ${n} similar`} why={g.why} fix={g.fix}>
+      <div className="font-semibold text-sm mt-1 mb-1.5">{n} similar findings, same cause, listed once below.</div>
       <details className="mb-1.5">
-        <summary className="text-sm cursor-pointer" style={{ color: 'var(--silk-dim)' }}>
-          Show all {n}
-        </summary>
+        <summary className="text-sm cursor-pointer" style={{ color: 'var(--silk-dim)' }}>Show all {n}</summary>
         <ul className="mt-1.5 pl-4 text-sm" style={{ color: 'var(--silk)', listStyleType: 'disc' }}>
           {g.items.map((it, i) => (
             <li key={i} className="my-0.5">
@@ -146,16 +115,14 @@ function GroupedFindingCard({ group: g, onLocate }: { group: FindingGroup; onLoc
           ))}
         </ul>
       </details>
-      <Gloss why={g.why} fix={g.fix} />
     </NoteCard>
   )
 }
 
 function HeadsUpCard({ note: h }: { note: WebHeadsUp }) {
   return (
-    <NoteCard accent="var(--copper)" tagColor="var(--copper)" tag="Heads up">
+    <NoteCard accent="var(--copper)" tagColor="var(--copper)" tag="Heads up" why={h.why} fix={h.fix} labelColor="var(--copper-hi)">
       <div className="text-sm mt-0.5" style={{ color: 'var(--silk)' }}>{h.what}</div>
-      <Gloss why={h.why} fix={h.fix} labelColor="var(--copper-hi)" />
     </NoteCard>
   )
 }
@@ -170,25 +137,22 @@ export function NoteBlock({ children, tag = 'Note' }: { children: React.ReactNod
   )
 }
 
-export function SectionBlock({ section: s, onLocate }: { section: WebSection; onLocate?: LocateFn }) {
+/** A report section's heading: small caps, with the verdict line under it. */
+export function SectionHeading({ title, verdict, color = 'var(--silk-faint)' }: { title: string; verdict?: string; color?: string }) {
+  return (
+    <>
+      <h2 className="text-[11px] font-bold tracking-widest uppercase mb-1" style={{ color }}>{title}</h2>
+      {verdict && <div className="text-sm mb-2" style={{ color: 'var(--silk-dim)' }}>{verdict}</div>}
+    </>
+  )
+}
+
+export function SectionBlock({ section: s, onLocate }: { section: SectionView; onLocate?: LocateFn }) {
   return (
     <section className="mt-7">
-      <h2 className="text-[11px] font-bold tracking-widest uppercase mb-1" style={{ color: 'var(--silk-faint)' }}>
-        {s.title}
-      </h2>
-      <div className="text-sm mb-2" style={{ color: 'var(--silk-dim)' }}>{s.verdict}</div>
-      {groupFindings(s.findings).map((g, i) =>
-        g.items.length === 1
-          ? (
-            <FindingCard
-              key={i}
-              finding={{ level: g.level, what: g.items[0].what, why: g.why, fix: g.fix, x: g.items[0].x, y: g.items[0].y }}
-              onLocate={onLocate}
-            />
-          )
-          : <GroupedFindingCard key={i} group={g} onLocate={onLocate} />,
-      )}
-      {(s.heads_up || []).map((h, i) => <HeadsUpCard key={i} note={h} />)}
+      <SectionHeading title={s.title} verdict={s.verdict} />
+      {s.groups.map((g, i) => <FindingCard key={i} group={g} onLocate={onLocate} />)}
+      {s.headsUp.map((h, i) => <HeadsUpCard key={i} note={h} />)}
     </section>
   )
 }

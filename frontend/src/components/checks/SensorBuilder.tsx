@@ -1,15 +1,8 @@
 import { parse as parseToml } from 'smol-toml'
 import type { ActionResultMsg } from '../../types/protocol'
+import type { SensorCatalogEntry } from '../../types/report'
 import type { SensorInputRow, SensorRow } from '../../lib/check-spec'
 import { AddInlineButton, BuilderSection, Field, RemoveButton, RowCard, RowIssues } from './pieces'
-
-export interface SensorCatalogEntry {
-  id: string
-  name: string
-  bus: 'i2c' | 'spi'
-  scope: string
-  spec_toml: string
-}
 
 /** Firmware-visible peripherals are data, not a hard-coded dropdown of
  *  whatever parts Hauksbee happened to ship. A local validated sensor spec is

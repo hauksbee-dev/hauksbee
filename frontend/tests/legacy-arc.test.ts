@@ -20,13 +20,13 @@ const LEGACY_ROUNDED_RECT = `
 describe('legacy KiCad 5 gr_arc', () => {
   it('closes the outline instead of leaving a point at the origin', () => {
     const board = parseKicadPcb(LEGACY_ROUNDED_RECT)
-    expect(board.gr_arcs.length).toBe(4)
+    expect(board.graphics.arcs.length).toBe(4)
 
     // The defect this pins: an absent `mid` used to default to (0, 0), so every
     // legacy arc dragged the outline to the origin, the Edge.Cuts loop never
     // closed, and the 3D view fell back to a bounding box. Any pre-6 board a
     // user dropped in rendered as a blank slab.
-    for (const a of board.gr_arcs) {
+    for (const a of board.graphics.arcs) {
       for (const p of [a.start, a.mid, a.end]) {
         expect(Math.hypot(p.x, p.y)).toBeGreaterThan(1)
       }
@@ -35,17 +35,17 @@ describe('legacy KiCad 5 gr_arc', () => {
     // Closure is the real property, and it holds without hardcoding a single
     // converted coordinate: every arc endpoint must coincide with a neighbouring
     // segment's endpoint, which is only true if the sweep direction is right.
-    const lineEnds = board.gr_lines.flatMap((l) => [l.start, l.end])
+    const lineEnds = board.graphics.lines.flatMap((l) => [l.start, l.end])
     const nearest = (p: { x: number; y: number }, pool: { x: number; y: number }[]) =>
       Math.min(...pool.map((q) => Math.hypot(p.x - q.x, p.y - q.y)))
-    for (const a of board.gr_arcs) {
-      const others = board.gr_arcs.filter((o) => o !== a).flatMap((o) => [o.start, o.end])
+    for (const a of board.graphics.arcs) {
+      const others = board.graphics.arcs.filter((o) => o !== a).flatMap((o) => [o.start, o.end])
       expect(nearest(a.start, [...lineEnds, ...others])).toBeLessThan(0.002)
       expect(nearest(a.end, [...lineEnds, ...others])).toBeLessThan(0.002)
     }
 
     // The midpoint sits on the arc, at the radius, not on the chord.
-    for (const a of board.gr_arcs) {
+    for (const a of board.graphics.arcs) {
       const cx = (a.start.x + a.end.x) / 2
       const cy = (a.start.y + a.end.y) / 2
       expect(Math.hypot(a.mid.x - cx, a.mid.y - cy)).toBeGreaterThan(0.05)
@@ -58,7 +58,7 @@ describe('legacy KiCad 5 gr_arc', () => {
   (gr_arc (start 1 2) (mid 3 4) (end 5 6) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))
 )
 `)
-    expect(board.gr_arcs[0]).toMatchObject({
+    expect(board.graphics.arcs[0]).toMatchObject({
       start: { x: 1, y: 2 },
       mid: { x: 3, y: 4 },
       end: { x: 5, y: 6 },

@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { chromium } from 'playwright'
 import type { BoardSession } from '../src/hooks/useBoardSession'
 import type { WebReport } from '../src/types/report'
-import { reportVerdictHeadline, reportVerdictTone } from '../src/lib/report-verdict'
+import { reportVerdictHeadline, reportVerdictTone } from '../src/lib/report-view'
 import { visibleImportMarkers } from '../src/lib/board-renderer'
 
 // The real frontdoor report lives in the repository's demo/ tree; a checkout
@@ -83,7 +83,7 @@ test.skipIf(!hasFrontdoorReport)('the browser renders every structured timing qu
   const { BoardView } = await import('../src/components/BoardView')
   const html = renderToStaticMarkup(<BoardView
     session={session(realFrontdoorReport())}
-    onQueueCheck={() => {}}
+    onQueue={() => {}}
     onOpenChecks={() => {}}
     onDriveLive={() => {}}
     simMounted={false}
@@ -165,7 +165,7 @@ test.skipIf(!hasFrontdoorReport)('model coverage is a clickable human workflow, 
   }
   const html = renderToStaticMarkup(<BoardView
     session={session(report)}
-    onQueueCheck={() => {}}
+    onQueue={() => {}}
     onOpenChecks={() => {}}
     onDriveLive={() => {}}
     simMounted={false}
@@ -187,9 +187,7 @@ test('a live trace click offers a scope probe and repeatable checks together', a
     net="+3V3"
     component={null}
     onAddProbe={() => {}}
-    onQueueCheck={() => {}}
-    onQueuePeripheral={() => {}}
-    onQueueSupply={() => {}}
+    onQueue={() => {}}
     onClose={() => {}}
   />)
   expect(html).toContain('data-testid="selection-add-probe"')
@@ -203,8 +201,7 @@ test('a live trace click offers a scope probe and repeatable checks together', a
   const liveHtml = renderToStaticMarkup(<SelectionCard
     net="+3V3"
     component={null}
-    onQueuePeripheral={() => {}}
-    onQueueSupply={() => {}}
+    onQueue={() => {}}
     peripheralMode="live-and-scenario"
     onClose={() => {}}
   />)
@@ -265,7 +262,7 @@ test('a component with a bus-model gap offers explicit register-map attachment',
       source: { tier: 'vendor', layer: 'builtin', origin: 'digital', validation: 'datasheet-checked' },
       implements: ['pin_roles'], missing: ['i2c_spi_register_map'], pins: [],
     }}
-    onQueueSensor={() => {}}
+    onQueue={() => {}}
     onClose={() => {}}
   />)
   expect(html).toContain('data-testid="selection-add-sensor"')
@@ -281,7 +278,7 @@ test('a component with a bus-model gap offers explicit register-map attachment',
       source: { tier: 'vendor', layer: 'builtin', origin: 'digital', validation: 'datasheet-checked' },
       implements: ['register_map_subset', 'chip_id_read'], missing: ['full_register_map'], pins: [],
     }}
-    onQueueSensor={() => {}}
+    onQueue={() => {}}
     onClose={() => {}}
   />)
   expect(modelOwned).toContain('data-testid="selection-register-map-owned"')
@@ -325,7 +322,7 @@ test.skipIf(!hasFrontdoorReport)('a report-only restored session does not offer 
   }
   const html = renderToStaticMarkup(<BoardView
     session={restored}
-    onQueueCheck={() => {}}
+    onQueue={() => {}}
     onOpenChecks={() => {}}
     onDriveLive={() => {}}
     simMounted={false}
@@ -363,7 +360,7 @@ test.skipIf(!hasFrontdoorReport)('import diagnostics expose recovered, partial, 
   }
   const html = renderToStaticMarkup(<BoardView
     session={session(report)}
-    onQueueCheck={() => {}}
+    onQueue={() => {}}
     onOpenChecks={() => {}}
     onDriveLive={() => {}}
     simMounted={false}
@@ -412,7 +409,7 @@ test('a parser refusal renders only its localized excerpt and suggested fix', as
   }
   const html = renderToStaticMarkup(<BoardView
     session={session(failed)}
-    onQueueCheck={() => {}}
+    onQueue={() => {}}
     onOpenChecks={() => {}}
     onDriveLive={() => {}}
     simMounted={false}

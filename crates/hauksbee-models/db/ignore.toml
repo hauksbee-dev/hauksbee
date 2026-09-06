@@ -231,6 +231,14 @@ description = "Battery-holder clip / coin-cell terminal: the cell is not on the 
 # a scenario spec supplies it as a rail instead.
 value_re = "(?i)^KEYSTONE[_ ]?[0-9]+$"
 
+[[models]]
+id = "battery_holder"
+kind = "ignore"
+description = "Battery holder or cell footprint: the cell is a source the board does not carry; a spec or the CI scaffold supplies VBAT as a battery rail"
+
+[models.match]
+footprint_re = "(?i)^Battery[:_]|BatteryHolder|BatteryCase|Battery_Holder|18650|CR20[0-9]{2}|CR24[0-9]{2}|CR12[0-9]{2}|AA_|AAA_|Cell_Holder"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Not-assembled positions.
 #

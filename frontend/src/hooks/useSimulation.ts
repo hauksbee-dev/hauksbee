@@ -1,14 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useContext } from 'react'
-import type { ServerMessage, SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, BacklogMsg, ClientMessage, ActionResultMsg } from '../types/protocol'
+import type { SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, BacklogMsg, ClientMessage, ActionResultMsg } from '../types/protocol'
 import { SimSourceContext } from '../demo/simSource'
-
-// Connect to the same origin that served the page, so the viewer works on any
-// `hauksbee run --port <PORT>` (and over https). In `vite dev` the dev server
-// proxies `/ws` to the backend (see vite.config.ts), so window.location.host is
-// correct there too. Override with VITE_WS_URL only for unusual split setups.
-const WS_URL =
-  import.meta.env.VITE_WS_URL ??
-  `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
+import { openLiveSocket } from '../lib/api'
+import type { LiveSocket } from '../lib/api'
 
 export interface SimulationState {
   connected: boolean
@@ -64,7 +58,7 @@ function useLiveSimulation(): SimulationState {
   const [backlog, setBacklog] = useState<BacklogMsg | null>(null)
   const [serverError, setServerError] = useState<string | null>(null)
   const [actionResults, setActionResults] = useState<ActionResultMsg[]>([])
-  const wsRef = useRef<WebSocket | null>(null)
+  const wsRef = useRef<LiveSocket | null>(null)
 
   // Coalesce high-rate messages to one React commit per animation frame. At
   // play speed the server emits SimFrame + Status 30x/s; pushing each into
@@ -83,38 +77,17 @@ function useLiveSimulation(): SimulationState {
     })
   }, [])
 
-  const send = useCallback((msg: ClientMessage) => {
-    const ws = wsRef.current
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(msg))
-      // Deliberately NO optimistic clear on Reset: the server broadcasts its
-      // refreshed backlog when it actually processes one, and that is what
-      // lifts the banner. Clearing on send would hide the only explanation
-      // of a session whose loop is dead and can never process the Reset.
-    }
-  }, [])
+  // Deliberately NO optimistic clear on Reset: the server broadcasts its
+  // refreshed backlog when it actually processes one, and that is what lifts
+  // the banner. Clearing on send would hide the only explanation of a session
+  // whose loop is dead and can never process the Reset.
+  const send = useCallback((msg: ClientMessage) => wsRef.current?.send(msg), [])
 
   useEffect(() => {
-    let alive = true
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-
-    function connect() {
-      if (!alive) return
-
-      const ws = new WebSocket(WS_URL)
-      wsRef.current = ws
-
-      ws.onopen = () => {
-        if (!alive) { ws.close(); return }
-        setConnected(true)
-        // Server sends BoardInfo automatically on connect -- no GetBoardInfo needed
-      }
-
-      ws.onmessage = (ev: MessageEvent) => {
-        if (!alive) return
-        let msg: ServerMessage
-        try { msg = JSON.parse(ev.data as string) as ServerMessage }
-        catch { return }
+    const ws = openLiveSocket({
+      // The server sends BoardInfo on connect; no GetBoardInfo needed.
+      onOpen: () => setConnected(true),
+      onMessage: msg => {
         switch (msg.type) {
           case 'BoardInfo': setBoardInfo(msg); break
           // Always a fresh object (even when empty) so the consumer's
@@ -153,10 +126,8 @@ function useLiveSimulation(): SimulationState {
             setActionResults(previous => [...previous.slice(-49), msg])
             break
         }
-      }
-
-      ws.onclose = () => {
-        if (!alive) return
+      },
+      onClose: () => {
         // Drop anything queued for the rAF flush so a pending frame cannot
         // resurrect state after the disconnect clears it.
         pendingFrame.current = null
@@ -166,22 +137,11 @@ function useLiveSimulation(): SimulationState {
         setFrame(null)
         setStatus(null)
         setActionResults([])
-        reconnectTimer = setTimeout(connect, 2000)
-      }
-
-      ws.onerror = () => {
-        ws.close()
-      }
-    }
-
-    connect()
-
-    return () => {
-      alive = false
-      if (reconnectTimer) clearTimeout(reconnectTimer)
-      wsRef.current?.close()
-    }
-  }, [])
+      },
+    })
+    wsRef.current = ws
+    return () => ws.close()
+  }, [scheduleFlush])
 
   return { connected, boardInfo, frame, status, probeData, backlog, serverError, actionResults, send }
 }

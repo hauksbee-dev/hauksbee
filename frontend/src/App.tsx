@@ -18,8 +18,8 @@ import type { SpecSnapshot } from './hooks/useSessions'
 import type { SavedSession } from './lib/session-store'
 import { BOARD_ACCEPT_ATTR } from './lib/board-formats'
 import { BoardTargetIcon, PlayIcon } from './components/Icons'
-import { getJson } from './lib/api'
-import type { QueuedLiveRegisterMap, Startup, WebReport } from './types/report'
+import { api } from './lib/api'
+import type { BoardRequest, QueuedLiveRegisterMap, QueuedRequest, WebReport } from './types/report'
 import type { ActionResultMsg } from './types/protocol'
 
 // One web experience behind an app shell. The app asks the server how it was
@@ -54,7 +54,7 @@ export default function App() {
 
   useEffect(() => {
     let alive = true
-    void getJson<Startup>('/api/startup')
+    void api.startup()
       .then(startup => ({
         report: startup.preloaded ? startup.report : null,
         boardName: startup.preloaded ? startup.board_name : null,
@@ -138,20 +138,17 @@ function Shell({ boot }: { boot: Boot }) {
 
   const seqRef = useRef(0)
   const nextSeq = useCallback(() => ++seqRef.current, [])
-  const queuedChecks = useQueue<{ seq: number; kind: string; net?: string; ref?: string }>(nextSeq)
-  const queuedPeripherals = useQueue<{ seq: number; id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }>(nextSeq)
-  const queuedSensors = useQueue<{ seq: number; id: string; ref?: string; modelId?: string | null }>(nextSeq)
-  const queuedSupplies = useQueue<{ seq: number; net: string; volts?: number }>(nextSeq)
+  const requests = useQueue<QueuedRequest>(nextSeq)
   const queuedLiveRegisterMaps = useQueue<QueuedLiveRegisterMap>(nextSeq)
 
-  const queueSensor = queuedSensors.push
-  const openSensorBuilder = useCallback((sensor: { id: string; ref?: string; modelId?: string | null }) => {
-    queueSensor(sensor)
+  const pushRequest = requests.push
+  const queueRequest = useCallback((request: BoardRequest) => {
+    pushRequest(request)
     // A register map cannot be guessed from the clicked part. Unlike a simple
     // live switch or supply, this action always has a required human-authored
     // next step, so take the user directly to the exact-byte builder.
-    setView('checks')
-  }, [queueSensor])
+    if (request.type === 'sensor') setView('checks')
+  }, [pushRequest])
 
   const { report } = session
   const reportOk = report?.ok === true
@@ -255,20 +252,14 @@ function Shell({ boot }: { boot: Boot }) {
   // that no longer exists. Both go the moment a new run starts, not when its
   // report happens to land.
   const runEpoch = session.runEpoch
-  const clearQueues = queuedChecks.clear
-  const clearPeripherals = queuedPeripherals.clear
-  const clearSensors = queuedSensors.clear
-  const clearSupplies = queuedSupplies.clear
+  const clearRequests = requests.clear
   const clearRegisterMaps = queuedLiveRegisterMaps.clear
   useEffect(() => {
-    clearQueues()
-    clearPeripherals()
-    clearSensors()
-    clearSupplies()
+    clearRequests()
     clearRegisterMaps()
     setLiveActionResult(null)
     setChecksSummary(null)
-  }, [runEpoch, clearQueues, clearPeripherals, clearSensors, clearSupplies, clearRegisterMaps])
+  }, [runEpoch, clearRequests, clearRegisterMaps])
 
   // The live session's identity, as the session itself reports it (BoardInfo
   // over /ws when the sim view is connected, /api/live/status otherwise).
@@ -429,10 +420,7 @@ function Shell({ boot }: { boot: Boot }) {
             {report ? (
               <BoardView
                 session={session}
-                onQueueCheck={queuedChecks.push}
-                onQueuePeripheral={queuedPeripherals.push}
-                onQueueSensor={openSensorBuilder}
-                onQueueSupply={queuedSupplies.push}
+                onQueue={queueRequest}
                 onOpenChecks={() => setView('checks')}
                 onDriveLive={driveLive}
                 simMounted={simMounted}
@@ -465,14 +453,8 @@ function Shell({ boot }: { boot: Boot }) {
                 schematicFile={session.schematicFile}
                 selectedNet={session.selectedNet}
                 selectedComponent={session.selectedComponent}
-                pendingChecks={queuedChecks.items}
-                pendingPeripherals={queuedPeripherals.items}
-                pendingSensors={queuedSensors.items}
-                pendingSupplies={queuedSupplies.items}
-                onPendingConsumed={queuedChecks.consume}
-                onPendingPeripheralConsumed={queuedPeripherals.consume}
-                onPendingSensorConsumed={queuedSensors.consume}
-                onPendingSupplyConsumed={queuedSupplies.consume}
+                pending={requests.items}
+                onPendingConsumed={requests.consume}
                 liveRegisterMapAvailable={simMounted && sessionMatchesCurrent}
                 onAttachRegisterMapLive={queuedLiveRegisterMaps.push}
                 liveActionResult={liveActionResult}
@@ -485,10 +467,7 @@ function Shell({ boot }: { boot: Boot }) {
           {simMounted && (
             <div style={{ display: view === 'sim' ? 'block' : 'none', height: '100%' }}>
               <SimView
-                onQueueCheck={queuedChecks.push}
-                onQueuePeripheral={queuedPeripherals.push}
-                onQueueSensor={openSensorBuilder}
-                onQueueSupply={queuedSupplies.push}
+                onQueue={queueRequest}
                 pendingLiveRegisterMaps={queuedLiveRegisterMaps.items}
                 onLiveRegisterMapsConsumed={queuedLiveRegisterMaps.consume}
                 onLiveActionResult={setLiveActionResult}

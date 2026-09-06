@@ -21,19 +21,12 @@ import {
   CpuIcon, SlidersIcon, PowerIcon, ProbeIcon, BoltIcon, TerminalIcon, LayersIcon,
 } from './components/Icons'
 import type { ActionResultMsg } from './types/protocol'
-import type { ModelCoverageSnapshot, QueuedLiveRegisterMap } from './types/report'
+import type { BoardRequest, ModelCoverageSnapshot, QueuedLiveRegisterMap } from './types/report'
 import { envelopesFromHistory, envelopeSource, readNet } from './lib/net-state'
+import { coverageFor, modelsOnNet } from './lib/report-view'
+import { peripheralPrefix } from './lib/check-spec'
 import { Callout } from './components/ui'
-
-interface FootprintInfo {
-  ref: string
-  value: string
-  lib_id: string
-  x: number
-  y: number
-  padNet?: string | null
-  padNets?: string[]
-}
+import type { FootprintInfo } from './lib/board-geometry'
 
 /** What the sim view reports up to the shell: run state, fault count, and,
  *  crucially, the SESSION's identity (the board /ws says it is streaming), so
@@ -54,17 +47,13 @@ export interface SimShellStatus {
 // keeps it mounted (hidden) so the session's fault log and scope survive
 // navigation. The accumulated session state lives in hooks/useSimSession.
 export default function SimView({
-  onQueueCheck, onQueuePeripheral, onQueueSensor, onQueueSupply,
+  onQueue,
   pendingLiveRegisterMaps = [], onLiveRegisterMapsConsumed, onLiveActionResult,
   onStatus, expectedBoard, sessionMatchesCurrent, onRelaunch, modelCoverage,
 }: {
-  /** Queue a check into the checks builder from a click on the live board.
-   *  Absent on the standalone demo server. */
-  onQueueCheck?: (check: { kind: string; net?: string; ref?: string }) => void
-  /** Queue a real scenario interaction (not an assertion) for a clicked net. */
-  onQueuePeripheral?: (peripheral: { id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }) => void
-  onQueueSensor?: (sensor: { id: string; ref?: string; modelId?: string | null }) => void
-  onQueueSupply?: (supply: { net: string; volts?: number }) => void
+  /** Hand a click on the live board to the checks builder. Absent on the
+   *  standalone demo server. */
+  onQueue?: (request: BoardRequest) => void
   pendingLiveRegisterMaps?: QueuedLiveRegisterMap[]
   onLiveRegisterMapsConsumed?: (upToSeq: number) => void
   /** Engine-confirmed receipts, forwarded to the scenario row that originated
@@ -116,31 +105,30 @@ export default function SimView({
     setSelectedFp(null)
   }, [sessionEpoch])
 
-  const queueAndAttachPeripheral = useCallback((peripheral: {
-    kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string
-  }) => {
-    if (!peripheral.net) return
-    liveInteractionSeq.current += 1
-    const stem = peripheral.net.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 28) || 'NET'
-    const prefix = peripheral.kind === 'stimulus' ? 'STIM' : peripheral.kind === 'pushbutton' ? 'BTN' : 'SW'
-    const id = `${prefix}_${stem}_${liveInteractionSeq.current}`
-    // Keep the replayable experiment and the immediate circuit mutation tied
-    // to one stable id. The server refuses any unsupported/unknown net.
-    onQueuePeripheral?.({ ...peripheral, id })
-    send({
-      type: 'AttachPeripheral', id, kind: peripheral.kind, net: peripheral.net,
-      to: peripheral.kind === 'stimulus' ? undefined : 'GND',
-      offset: peripheral.kind === 'stimulus' ? 0 : undefined,
-      bounce_ms: peripheral.kind === 'pushbutton' ? 5 : undefined,
-      initial: 0,
-    })
-  }, [onQueuePeripheral, send])
-
-  const queueAndSetSupply = useCallback((supply: { net: string; volts?: number }) => {
-    const volts = supply.volts ?? 3.3
-    onQueueSupply?.({ ...supply, volts })
-    send({ type: 'SetPowerSupply', net: supply.net, supply: { kind: 'ideal', volts } })
-  }, [onQueueSupply, send])
+  // A live click both changes the running circuit NOW and saves the same
+  // change into the replayable scenario, under one stable id, so immediate
+  // exploration and deterministic replay never drift into two experiments.
+  // The server refuses any unsupported/unknown net.
+  const queueAndApply = useCallback((request: BoardRequest) => {
+    if (request.type === 'peripheral') {
+      if (!request.net) return
+      liveInteractionSeq.current += 1
+      const stem = request.net.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 28) || 'NET'
+      const id = `${peripheralPrefix(request.kind)}_${stem}_${liveInteractionSeq.current}`
+      onQueue?.({ ...request, id })
+      send({
+        type: 'AttachPeripheral', id, kind: request.kind, net: request.net,
+        to: request.kind === 'stimulus' ? undefined : 'GND',
+        offset: request.kind === 'stimulus' ? 0 : undefined,
+        bounce_ms: request.kind === 'pushbutton' ? 5 : undefined,
+        initial: 0,
+      })
+    } else if (request.type === 'supply') {
+      const volts = request.volts ?? 3.3
+      onQueue?.({ ...request, volts })
+      send({ type: 'SetPowerSupply', net: request.net, supply: { kind: 'ideal', volts } })
+    } else onQueue?.(request)
+  }, [onQueue, send])
 
   // The scenario builder owns register-map authoring and validation. Once the
   // user explicitly presses "attach live", consume those exact bytes here on
@@ -326,16 +314,9 @@ export default function SimView({
                   reading={selectedNet && !selectedFp ? readNet(frame, selectedNet, netEnvelopes) : undefined}
                   component={selectedFp}
                   boundKind={selectedFp ? boardInfo?.component_kinds?.[selectedFp.ref] ?? null : null}
-                  modelCoverage={selectedFp
-                    ? modelCoverage?.components.find(c => c.reference === selectedFp.ref) ?? null
-                    : null}
-                  netModels={selectedNet && !selectedFp
-                    ? (modelCoverage?.components ?? []).filter(c => c.pins.some(pin => pin.net === selectedNet))
-                    : []}
-                  onQueueCheck={onQueueCheck}
-                  onQueuePeripheral={queueAndAttachPeripheral}
-                  onQueueSensor={onQueueSensor}
-                  onQueueSupply={queueAndSetSupply}
+                  modelCoverage={coverageFor(modelCoverage, selectedFp?.ref)}
+                  netModels={selectedFp ? [] : modelsOnNet(modelCoverage, selectedNet)}
+                  onQueue={onQueue && queueAndApply}
                   peripheralMode="live-and-scenario"
                   onAddProbe={addProbe}
                   onClose={() => { setSelectedFp(null); setSelectedNet(null) }}

@@ -1,35 +1,7 @@
-import type { ArtifactProvenance, EvidenceAssumption, EvidenceMap } from '../../types/report'
-import { refusalLines, type RefusalContract } from '../../lib/refusal-contract'
+import type { RunResponse } from '../../types/report'
+import { refusalLines } from '../../lib/report-view'
 import { ArriveOnce } from '../../motion'
 import { AssertionEvidence } from './pieces'
-import type { CheckResult } from './pieces'
-
-/** What POST /api/check answers with. Errors arrive in the body, so a non-2xx
- *  status is still parsed rather than replaced with a status line. */
-export interface RunResponse {
-  ok: boolean
-  error?: string
-  passed?: boolean
-  exit_code?: number
-  analog_abort?: boolean
-  refusal?: RefusalContract
-  coverage?: string | null
-  substitutions?: string[]
-  coverage_warnings?: string[]
-  inventory?: ArtifactProvenance[]
-  assumptions?: EvidenceAssumption[]
-  evidence?: EvidenceMap[]
-  timing_coverage?: Array<{
-    mcu_ref: string
-    backend: string
-    cycle_exact: boolean
-    timestamp_precision_s: number
-    minimum_guaranteed_pulse_s: number
-    chunk_s: number
-  }>
-  timing_refusals?: string[]
-  results?: CheckResult[]
-}
 
 type Overall = 'passed' | 'invalid' | 'failed'
 

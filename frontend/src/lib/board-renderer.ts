@@ -1,36 +1,21 @@
-// Board renderer: draws a ParsedBoard onto HTML canvases.
-// All draw calls go through the Camera transform.
+// Board renderer: draws a ParsedBoard onto HTML canvases through the Camera.
 //
-// Rendering is split into two passes so a large board stays interactive:
+// Two passes so a large board stays interactive:
 //   renderStaticBoard: everything that only depends on the camera (copper,
-//     graphics, pads, vias, labels). Drawn into an offscreen canvas that the
-//     viewer blits every animation frame and re-renders only when the camera
-//     settles (see BoardViewer's static cache).
+//     graphics, pads, vias, labels). Drawn into an offscreen canvas the viewer
+//     blits every animation frame and re-renders only when the camera settles.
 //   renderDynamicOverlay: everything that changes per frame (voltage tints,
 //     net highlights, fault pulses, particles, probe tooltip, component
 //     glows). Small working sets, so it can run at full frame rate.
 
 import type { Camera } from './camera'
 import { worldToScreen } from './camera'
-import type { ParsedBoard, Pad, Point } from './kicad-parser'
+import type { Graphics, Pad, ParsedBoard, Point, Segment, TrackArc, Via } from './kicad-parser'
+import { allStrokes } from './kicad-parser'
+import { boxesByRef, labelAnchor, LABEL_MIN_PX } from './board-geometry'
+import type { FootprintBox } from './board-geometry'
+import type { ImportMarker } from './report-view'
 import { getLayerStyle, isCopperLayer, boardTheme } from './layer-colors'
-import { footprintHitBoxes } from './kicad-parser'
-import type { FootprintBox } from './kicad-parser'
-
-// The fault overlay paints each faulted part's drawn extent, which is the same
-// geometry the click hit-test uses. Cached per board because the overlay pass
-// runs every animation frame and the boxes never change for a given board.
-const faultBoxCache = new WeakMap<object, Map<string, FootprintBox>>()
-function faultBoxesFor(board: ParsedBoard): Map<string, FootprintBox> {
-  let byRef = faultBoxCache.get(board)
-  if (!byRef) {
-    byRef = new Map(footprintHitBoxes(board).map((b) => [b.fp.ref, b]))
-    faultBoxCache.set(board, byRef)
-  }
-  return byRef
-}
-
-// ────────────────────── Layer ordering ───────────────────────────────
 
 const LAYER_ORDER = [
   'B.Cu', 'In4.Cu', 'In3.Cu', 'In2.Cu', 'In1.Cu', 'F.Cu',
@@ -46,30 +31,24 @@ const LAYER_ORDER = [
 // 3,000-component board that alone pushes a full render into hundreds of ms.
 const GLOW_PRIMITIVE_LIMIT = 1500
 
-/** Total drawable primitives, used to decide whether glow effects are payable. */
 function countPrimitives(board: ParsedBoard): number {
-  let n = board.segments.length + board.arcs.length + board.vias.length +
-    board.gr_lines.length + board.gr_arcs.length + board.gr_circles.length +
-    board.gr_rects.length + board.gr_polys.length
-  for (const fp of board.footprints) {
-    n += fp.pads.length + fp.fp_lines.length + fp.fp_arcs.length +
-      fp.fp_circles.length + fp.fp_rects.length
-  }
+  let n = board.segments.length + board.arcs.length + board.vias.length + allStrokes(board.graphics).length
+  for (const fp of board.footprints) n += fp.pads.length + allStrokes(fp.graphics).length
   return n
 }
 
-// ────────────────────── Canvas helpers ───────────────────────────────
+// ── Canvas helpers ───────────────────────────────────────────────────────────
 
-function ws(cam: Camera, x: number, y: number): [number, number] {
-  const { sx, sy } = worldToScreen(cam, x, y)
+type Ctx = CanvasRenderingContext2D
+
+function ws(cam: Camera, p: Point): [number, number] {
+  const { sx, sy } = worldToScreen(cam, p.x, p.y)
   return [sx, sy]
 }
 
-function lineWidth(cam: Camera, mm: number): number {
-  return Math.max(0.5, mm * cam.scale)
-}
+const lineWidth = (cam: Camera, mm: number) => Math.max(0.5, mm * cam.scale)
 
-function setStroke(ctx: CanvasRenderingContext2D, color: string, glowColor: string | undefined, lw: number) {
+function setStroke(ctx: Ctx, color: string, glowColor: string | undefined, lw: number) {
   ctx.strokeStyle = color
   ctx.lineWidth = lw
   ctx.lineCap = 'round'
@@ -77,80 +56,44 @@ function setStroke(ctx: CanvasRenderingContext2D, color: string, glowColor: stri
   if (glowColor && lw > 1.0) {
     ctx.shadowColor = glowColor
     ctx.shadowBlur = Math.min(lw * 2.5, 14)
-  } else {
-    ctx.shadowBlur = 0
-  }
+  } else ctx.shadowBlur = 0
 }
 
 /** True when the screen-space segment cannot touch the canvas (with margin). */
-function segOffscreen(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number): boolean {
-  const m = 20
-  const w = ctx.canvas.width, h = ctx.canvas.height
-  return (
-    (x1 < -m && x2 < -m) || (x1 > w + m && x2 > w + m) ||
-    (y1 < -m && y2 < -m) || (y1 > h + m && y2 > h + m)
-  )
+function segOffscreen(ctx: Ctx, x1: number, y1: number, x2: number, y2: number): boolean {
+  const m = 20, w = ctx.canvas.width, h = ctx.canvas.height
+  return (x1 < -m && x2 < -m) || (x1 > w + m && x2 > w + m) || (y1 < -m && y2 < -m) || (y1 > h + m && y2 > h + m)
 }
 
-// ────────────────────── Three-point arc ──────────────────────────────
-// KiCad arcs are defined by start, mid (on-arc), end.
-// We reconstruct the circumscribed circle.
+function offscreenCircle(ctx: Ctx, sx: number, sy: number, r: number): boolean {
+  return sx + r < 0 || sx - r > ctx.canvas.width || sy + r < 0 || sy - r > ctx.canvas.height
+}
 
+/** Fill or stroke the current path. */
+function finish(ctx: Ctx, color: string, fill: boolean | undefined) {
+  if (fill) { ctx.fillStyle = color; ctx.fill() } else ctx.stroke()
+}
+
+/** KiCad arcs are start / mid (on the arc) / end: reconstruct the circle. */
 function arcFromThreePoints(p1: Point, p2: Point, p3: Point): { cx: number; cy: number; r: number; startAngle: number; endAngle: number; ccw: boolean } | null {
-  const ax = p1.x, ay = p1.y
-  const bx = p2.x, by = p2.y
-  const cx2 = p3.x, cy2 = p3.y
-
-  const D = 2 * (ax * (by - cy2) + bx * (cy2 - ay) + cx2 * (ay - by))
+  const D = 2 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y))
   if (Math.abs(D) < 1e-10) return null
-
-  const ux = ((ax * ax + ay * ay) * (by - cy2) + (bx * bx + by * by) * (cy2 - ay) + (cx2 * cx2 + cy2 * cy2) * (ay - by)) / D
-  const uy = ((ax * ax + ay * ay) * (cx2 - bx) + (bx * bx + by * by) * (ax - cx2) + (cx2 * cx2 + cy2 * cy2) * (bx - ax)) / D
-
-  const r = Math.sqrt((ax - ux) ** 2 + (ay - uy) ** 2)
-  const startAngle = Math.atan2(ay - uy, ax - ux)
-  const endAngle = Math.atan2(cy2 - uy, cx2 - ux)
-
-  // Determine direction using the midpoint
-  const midAngle = Math.atan2(by - uy, bx - ux)
-  // Normalise angles to [0, 2π]
-  function norm(a: number) { return ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) }
-  const sa = norm(startAngle), ma = norm(midAngle), ea = norm(endAngle)
-  // CCW if ma is between sa and ea in the CCW sense
+  const q1 = p1.x * p1.x + p1.y * p1.y, q2 = p2.x * p2.x + p2.y * p2.y, q3 = p3.x * p3.x + p3.y * p3.y
+  const ux = (q1 * (p2.y - p3.y) + q2 * (p3.y - p1.y) + q3 * (p1.y - p2.y)) / D
+  const uy = (q1 * (p3.x - p2.x) + q2 * (p1.x - p3.x) + q3 * (p2.x - p1.x)) / D
+  const startAngle = Math.atan2(p1.y - uy, p1.x - ux)
+  const endAngle = Math.atan2(p3.y - uy, p3.x - ux)
+  const norm = (a: number) => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+  const sa = norm(startAngle), ma = norm(Math.atan2(p2.y - uy, p2.x - ux)), ea = norm(endAngle)
+  // CCW if the midpoint sits between start and end in the CCW sense.
   const ccw = (sa <= ma && ma <= ea) || (ea < sa && (ma >= sa || ma <= ea))
-
-  return { cx: ux, cy: uy, r, startAngle, endAngle, ccw }
-}
-
-function drawArc(ctx: CanvasRenderingContext2D, cam: Camera, start: Point, mid: Point, end: Point, color: string, glow: string | undefined, width: number) {
-  const arc = arcFromThreePoints(start, mid, end)
-  if (!arc) {
-    // Degenerate: draw a line
-    const [sx, sy] = ws(cam, start.x, start.y)
-    const [ex, ey] = ws(cam, end.x, end.y)
-    ctx.beginPath()
-    setStroke(ctx, color, glow, lineWidth(cam, width))
-    ctx.moveTo(sx, sy)
-    ctx.lineTo(ex, ey)
-    ctx.stroke()
-    return
-  }
-  const [cxs, cys] = ws(cam, arc.cx, arc.cy)
-  const rs = arc.r * cam.scale
-  ctx.beginPath()
-  setStroke(ctx, color, glow, lineWidth(cam, width))
-  ctx.arc(cxs, cys, rs, arc.startAngle, arc.endAngle, arc.ccw)
-  ctx.stroke()
+  return { cx: ux, cy: uy, r: Math.hypot(p1.x - ux, p1.y - uy), startAngle, endAngle, ccw }
 }
 
 /** A straight stroke between two board points, culled when it cannot touch
  *  the canvas. */
-function drawLine(
-  ctx: CanvasRenderingContext2D, cam: Camera,
-  start: Point, end: Point, color: string, glow: string | undefined, width: number,
-) {
-  const [x1, y1] = ws(cam, start.x, start.y)
-  const [x2, y2] = ws(cam, end.x, end.y)
+function drawLine(ctx: Ctx, cam: Camera, start: Point, end: Point, color: string, glow: string | undefined, width: number) {
+  const [x1, y1] = ws(cam, start), [x2, y2] = ws(cam, end)
   if (segOffscreen(ctx, x1, y1, x2, y2)) return
   ctx.beginPath()
   setStroke(ctx, color, glow, lineWidth(cam, width))
@@ -159,30 +102,59 @@ function drawLine(
   ctx.stroke()
 }
 
-/** A circle given by its centre and a point on its edge, as KiCad writes it. */
-function drawCircle(
-  ctx: CanvasRenderingContext2D, cam: Camera,
-  center: Point, edge: Point, color: string, glow: string | undefined, width: number, fill = false,
-) {
-  const [csx, csy] = ws(cam, center.x, center.y)
-  const r = Math.hypot(edge.x - center.x, edge.y - center.y) * cam.scale
-  if (r < 0.5) return
-  setStroke(ctx, color, glow, lineWidth(cam, width))
+function drawArc(ctx: Ctx, cam: Camera, a: { start: Point; mid: Point; end: Point; width: number }, color: string, glow: string | undefined) {
+  const arc = arcFromThreePoints(a.start, a.mid, a.end)
+  if (!arc) { drawLine(ctx, cam, a.start, a.end, color, glow, a.width); return }
+  const [cx, cy] = ws(cam, { x: arc.cx, y: arc.cy })
   ctx.beginPath()
-  ctx.arc(csx, csy, r, 0, Math.PI * 2)
-  if (fill) { ctx.fillStyle = color; ctx.fill() }
-  else ctx.stroke()
+  setStroke(ctx, color, glow, lineWidth(cam, a.width))
+  ctx.arc(cx, cy, arc.r * cam.scale, arc.startAngle, arc.endAngle, arc.ccw)
+  ctx.stroke()
+}
+
+/** A copper track: a segment or an arc, whichever it is. */
+function drawTrack(ctx: Ctx, cam: Camera, t: Segment | TrackArc, color: string, glow: string | undefined) {
+  if ('mid' in t) drawArc(ctx, cam, t, color, glow)
+  else drawLine(ctx, cam, t.start, t.end, color, glow, t.width)
+}
+
+/** Every stroke of a graphics set that sits on `layer`. */
+function drawGraphics(ctx: Ctx, cam: Camera, g: Graphics, layer: string, color: string, glow: string | undefined) {
+  for (const l of g.lines) if (l.layer === layer) drawLine(ctx, cam, l.start, l.end, color, glow, l.width)
+  for (const a of g.arcs) if (a.layer === layer) drawArc(ctx, cam, a, color, glow)
+  for (const c of g.circles) {
+    if (c.layer !== layer) continue
+    const [sx, sy] = ws(cam, c.center)
+    const r = Math.hypot(c.end.x - c.center.x, c.end.y - c.center.y) * cam.scale
+    if (r < 0.5) continue
+    setStroke(ctx, color, glow, lineWidth(cam, c.width))
+    ctx.beginPath()
+    ctx.arc(sx, sy, r, 0, Math.PI * 2)
+    finish(ctx, color, c.fill)
+  }
+  for (const r of g.rects) {
+    if (r.layer !== layer) continue
+    const [x1, y1] = ws(cam, r.start), [x2, y2] = ws(cam, r.end)
+    setStroke(ctx, color, glow, lineWidth(cam, r.width))
+    ctx.beginPath()
+    ctx.rect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1))
+    finish(ctx, color, r.fill)
+  }
+  for (const p of g.polys) {
+    if (p.layer !== layer || p.pts.length < 2) continue
+    ctx.beginPath()
+    p.pts.forEach((pt, i) => { const [x, y] = ws(cam, pt); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y) })
+    ctx.closePath()
+    setStroke(ctx, color, glow, lineWidth(cam, p.width))
+    finish(ctx, color, p.fill)
+  }
 }
 
 /** A via: annulus in `ring`, then its drill. */
-function drawVia(
-  ctx: CanvasRenderingContext2D, cam: Camera,
-  via: { at: Point; size: number; drill: number }, ring: string, glow?: string,
-) {
-  const [sx, sy] = ws(cam, via.at.x, via.at.y)
+function drawVia(ctx: Ctx, cam: Camera, via: Via, ring: string, glow?: string) {
+  const [sx, sy] = ws(cam, via.at)
   const r = (via.size / 2) * cam.scale
-  if (r < 0.5) return
-  if (sx + r < 0 || sx - r > ctx.canvas.width || sy + r < 0 || sy - r > ctx.canvas.height) return
+  if (r < 0.5 || offscreenCircle(ctx, sx, sy, r)) return
   ctx.beginPath()
   ctx.fillStyle = ring
   if (glow) { ctx.shadowColor = glow; ctx.shadowBlur = 6 }
@@ -197,95 +169,39 @@ function drawVia(
 
 /** A footprint's drawn extent as a padded screen rectangle. */
 function boxRect(cam: Camera, box: FootprintBox, pad = 3): [number, number, number, number] {
-  const [x1, y1] = ws(cam, box.x1, box.y1)
-  const [x2, y2] = ws(cam, box.x2, box.y2)
-  return [
-    Math.min(x1, x2) - pad, Math.min(y1, y2) - pad,
-    Math.abs(x2 - x1) + pad * 2, Math.abs(y2 - y1) + pad * 2,
-  ]
+  const [x1, y1] = ws(cam, { x: box.x1, y: box.y1 }), [x2, y2] = ws(cam, { x: box.x2, y: box.y2 })
+  return [Math.min(x1, x2) - pad, Math.min(y1, y2) - pad, Math.abs(x2 - x1) + pad * 2, Math.abs(y2 - y1) + pad * 2]
 }
 
-/** An axis-aligned rectangle given by two opposite corners. */
-function drawRect(
-  ctx: CanvasRenderingContext2D, cam: Camera,
-  start: Point, end: Point, color: string, glow: string | undefined, width: number, fill = false,
-) {
-  const [x1, y1] = ws(cam, start.x, start.y)
-  const [x2, y2] = ws(cam, end.x, end.y)
-  setStroke(ctx, color, glow, lineWidth(cam, width))
-  ctx.beginPath()
-  ctx.rect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1))
-  if (fill) { ctx.fillStyle = color; ctx.fill() }
-  else ctx.stroke()
-}
-
-// ────────────────────── Pad drawing ──────────────────────────────────
-
-function drawPad(ctx: CanvasRenderingContext2D, cam: Camera, pad: Pad, color: string, glowColor: string | undefined, alpha = 1) {
-  const [sx, sy] = ws(cam, pad.at.x, pad.at.y)
-  const w = pad.size.w * cam.scale
-  const h = pad.size.h * cam.scale
-  const minDim = Math.min(w, h)
-  if (minDim < 0.5) return
-  // Cull: cheap screen-space reject before any canvas state changes
-  const reach = Math.max(w, h)
-  if (sx + reach < 0 || sx - reach > ctx.canvas.width || sy + reach < 0 || sy - reach > ctx.canvas.height) return
-
+function drawPad(ctx: Ctx, cam: Camera, pad: Pad, color: string, glowColor: string | undefined) {
+  const [sx, sy] = ws(cam, pad.at)
+  const w = pad.size.w * cam.scale, h = pad.size.h * cam.scale
+  if (Math.min(w, h) < 0.5 || offscreenCircle(ctx, sx, sy, Math.max(w, h))) return
   ctx.save()
-  ctx.globalAlpha = alpha
   ctx.fillStyle = color
-  if (glowColor) {
-    ctx.shadowColor = glowColor
-    ctx.shadowBlur = Math.min(w * 0.6, 8)
-  }
+  if (glowColor) { ctx.shadowColor = glowColor; ctx.shadowBlur = Math.min(w * 0.6, 8) }
   ctx.translate(sx, sy)
   ctx.rotate((pad.angle * Math.PI) / 180)
-
   ctx.beginPath()
   switch (pad.shape) {
-    case 'circle': {
-      const r = w / 2
-      ctx.arc(0, 0, r, 0, Math.PI * 2)
-      break
-    }
-    case 'rect':
-      ctx.rect(-w / 2, -h / 2, w, h)
-      break
-    case 'oval':
-    case 'roundrect': {
-      const r = Math.min(w, h) / 2
-      ctx.roundRect(-w / 2, -h / 2, w, h, r)
-      break
-    }
-    default:
-      ctx.rect(-w / 2, -h / 2, w, h)
+    case 'circle': ctx.arc(0, 0, w / 2, 0, Math.PI * 2); break
+    case 'oval': case 'roundrect': ctx.roundRect(-w / 2, -h / 2, w, h, Math.min(w, h) / 2); break
+    default: ctx.rect(-w / 2, -h / 2, w, h)
   }
-
   ctx.fill()
-
-  // Draw drill hole for through-hole pads
-  if (pad.type === 'thru_hole' || pad.type === 'np_thru_hole') {
-    const drill = pad.drill
-    if (drill) {
-      ctx.shadowBlur = 0
-      ctx.fillStyle = boardTheme().viaDrill
-      ctx.beginPath()
-      if (drill.oval && drill.dx && drill.dy) {
-        const dw = drill.dx * cam.scale
-        const dh = drill.dy * cam.scale
-        ctx.ellipse(0, 0, dw / 2, dh / 2, 0, 0, Math.PI * 2)
-      } else {
-        const dr = (drill.diameter / 2) * cam.scale
-        ctx.arc(0, 0, Math.max(dr, 0.5), 0, Math.PI * 2)
-      }
-      ctx.fill()
-    }
+  const drill = pad.drill
+  if (drill && (pad.type === 'thru_hole' || pad.type === 'np_thru_hole')) {
+    ctx.shadowBlur = 0
+    ctx.fillStyle = boardTheme().viaDrill
+    ctx.beginPath()
+    if (drill.oval && drill.dx && drill.dy) ctx.ellipse(0, 0, (drill.dx * cam.scale) / 2, (drill.dy * cam.scale) / 2, 0, 0, Math.PI * 2)
+    else ctx.arc(0, 0, Math.max((drill.diameter / 2) * cam.scale, 0.5), 0, Math.PI * 2)
+    ctx.fill()
   }
-
   ctx.restore()
 }
 
-// ────────────────────── Static pass ──────────────────────────────────
+// ── Static pass ──────────────────────────────────────────────────────────────
 
 /** View options the Layers panel controls. Everything defaults to the layer
  *  palette's own visibility, so callers without a panel change nothing. */
@@ -298,141 +214,61 @@ export interface RenderOptions {
   showLabels?: boolean
 }
 
-function layerOn(layer: string, opts?: RenderOptions): boolean {
-  const base = getLayerStyle(layer).visible
-  return opts?.layerVisible ? opts.layerVisible(layer) : base
-}
+const layerOn = (layer: string, opts?: RenderOptions) => (opts?.layerVisible ? opts.layerVisible(layer) : getLayerStyle(layer).visible)
 
-/**
- * Draw everything that depends only on the camera: board graphics, copper in
- * its base layer colours, pads, vias, and reference labels. No per-frame
- * state (voltages, highlights, faults) touches this pass, so the result can
- * be cached and blitted.
- */
-export function renderStaticBoard(
-  ctx: CanvasRenderingContext2D,
-  board: ParsedBoard,
-  cam: Camera,
-  opts?: RenderOptions,
-) {
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+/** Draw everything that depends only on the camera: board graphics, copper in
+ *  its base layer colours, pads, vias, and reference labels. */
+export function renderStaticBoard(ctx: Ctx, board: ParsedBoard, cam: Camera, opts?: RenderOptions) {
+  const W = ctx.canvas.width, H = ctx.canvas.height
   const theme = boardTheme()
-
-  // Background
+  ctx.clearRect(0, 0, W, H)
   ctx.fillStyle = theme.bg
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
-
-  // Subtle radial vignette so the board area stands out against the flat background
-  {
-    const W = ctx.canvas.width
-    const H = ctx.canvas.height
-    const grad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.65)
-    grad.addColorStop(0, theme.vignette0)
-    grad.addColorStop(1, theme.vignette1)
-    ctx.fillStyle = grad
-    ctx.fillRect(0, 0, W, H)
-  }
+  ctx.fillRect(0, 0, W, H)
+  // Subtle radial vignette so the board area stands out against the flat background.
+  const grad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.65)
+  grad.addColorStop(0, theme.vignette0)
+  grad.addColorStop(1, theme.vignette1)
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, W, H)
 
   const glowOk = countPrimitives(board) <= GLOW_PRIMITIVE_LIMIT
 
-  // ── Board graphics, grouped by layer ──
   for (const layer of LAYER_ORDER) {
-    const style = getLayerStyle(layer)
     if (!layerOn(layer, opts)) continue
-
-    const color = style.color
-    const glow = glowOk ? style.glow : undefined
-
-    // Board-level graphics on this layer
-    for (const l of board.gr_lines) {
-      if (l.layer === layer) drawLine(ctx, cam, l.start, l.end, color, glow, l.width)
-    }
-    for (const a of board.gr_arcs) {
-      if (a.layer === layer) drawArc(ctx, cam, a.start, a.mid, a.end, color, glow, a.width)
-    }
-    for (const c of board.gr_circles) {
-      if (c.layer === layer) drawCircle(ctx, cam, c.center, c.end, color, glow, c.width, c.fill)
-    }
-    for (const r of board.gr_rects) {
-      if (r.layer === layer) drawRect(ctx, cam, r.start, r.end, color, glow, r.width, r.fill)
-    }
-
-    // gr_polys
-    for (const p of board.gr_polys) {
-      if (p.layer !== layer || p.pts.length < 2) continue
-      ctx.beginPath()
-      const [fx, fy] = ws(cam, p.pts[0].x, p.pts[0].y)
-      ctx.moveTo(fx, fy)
-      for (let i = 1; i < p.pts.length; i++) {
-        const [px, py] = ws(cam, p.pts[i].x, p.pts[i].y)
-        ctx.lineTo(px, py)
-      }
-      ctx.closePath()
-      setStroke(ctx, color, glow, lineWidth(cam, p.width))
-      if (p.fill) { ctx.fillStyle = color; ctx.fill() }
-      else ctx.stroke()
-    }
-
-    // Footprint graphics on this layer
-    for (const fp of board.footprints) {
-      for (const l of fp.fp_lines) {
-        if (l.layer === layer) drawLine(ctx, cam, l.start, l.end, color, glow, l.width)
-      }
-      for (const a of fp.fp_arcs) {
-        if (a.layer === layer) drawArc(ctx, cam, a.start, a.mid, a.end, color, glow, a.width)
-      }
-      for (const c of fp.fp_circles) {
-        if (c.layer === layer) drawCircle(ctx, cam, c.center, c.end, color, glow, c.width)
-      }
-      for (const r of fp.fp_rects) {
-        if (r.layer === layer) drawRect(ctx, cam, r.start, r.end, color, glow, r.width)
-      }
-    }
-
-    // Tracks / segments on this copper layer, base colour. Live voltage tints
-    // are painted over these by the dynamic pass.
+    const { color, glow: layerGlow } = getLayerStyle(layer)
+    const glow = glowOk ? layerGlow : undefined
+    drawGraphics(ctx, cam, board.graphics, layer, color, glow)
+    for (const fp of board.footprints) drawGraphics(ctx, cam, fp.graphics, layer, color, glow)
+    // Copper in its base colour; live voltage tints are painted over by the
+    // dynamic pass.
     if (isCopperLayer(layer)) {
-      for (const s of board.segments) {
-        if (s.layer === layer) drawLine(ctx, cam, s.start, s.end, color, glow, s.width)
-      }
-      for (const a of board.arcs) {
-        if (a.layer === layer) drawArc(ctx, cam, a.start, a.mid, a.end, color, glow, a.width)
-      }
+      for (const t of [...board.segments, ...board.arcs]) if (t.layer === layer) drawTrack(ctx, cam, t, color, glow)
     }
   }
 
-  // ── Vias ──
   ctx.shadowBlur = 0
   for (const v of board.vias) drawVia(ctx, cam, v, theme.via)
 
-  // ── Pads ──
   if (opts?.showPads !== false) {
     const padGlow = glowOk ? theme.padGlow : undefined
-    for (const fp of board.footprints) {
-      for (const pad of fp.pads) {
-        drawPad(ctx, cam, pad, theme.pad, padGlow)
-      }
-    }
+    for (const fp of board.footprints) for (const pad of fp.pads) drawPad(ctx, cam, pad, theme.pad, padGlow)
   }
 
-  // ── Reference labels, Google-Maps style ──
-  // A label appears only once its footprint is large enough ON SCREEN to hang
-  // a readable name on, and fades in as it grows: zoomed out the board is
-  // clean copper (no 3,443-label smear), zoomed in every part is named. The
-  // screen-size rule is self-limiting, so no explicit density cap is needed.
+  // Reference labels, Google-Maps style: a label appears only once its
+  // footprint is large enough ON SCREEN to hang a readable name on, and fades
+  // in as it grows. Zoomed out the board is clean copper (no 3,443-label
+  // smear), zoomed in every part is named.
   if (opts?.showLabels === false) return
   ctx.save()
   ctx.textAlign = 'center'
   ctx.textBaseline = 'bottom'
   ctx.shadowColor = theme.labelShadow
   ctx.shadowBlur = 3
-  const cw = ctx.canvas.width
-  const chh = ctx.canvas.height
   for (const fp of board.footprints) {
     const anchor = labelAnchor(fp, cam)
     if (!anchor) continue
     const { cx, topY, fontPx, extentPx } = anchor
-    if (cx < -60 || cx > cw + 60 || topY < -20 || topY > chh + 20) continue
+    if (cx < -60 || cx > W + 60 || topY < -20 || topY > H + 20) continue
     ctx.globalAlpha = Math.min(1, (extentPx - LABEL_MIN_PX) / 18) * 0.9
     ctx.font = `${fontPx}px ui-monospace, monospace`
     ctx.fillStyle = theme.label
@@ -442,51 +278,11 @@ export function renderStaticBoard(
   ctx.restore()
 }
 
-// ────────────────────── Dynamic pass ─────────────────────────────────
-// Renders per-frame data on the overlay canvas above the (blitted) static
-// board: voltage tints, highlights, faults, particles, probe tooltip.
-
-/** Minimum ON-SCREEN footprint extent (px) before its reference label is
- *  drawn. */
-export const LABEL_MIN_PX = 26
-
-/** Where a footprint's reference label sits on screen, and how big, or null
- *  when the part is too small at this zoom to carry one. Exported so the
- *  viewer's label hit-test lands exactly where the renderer paints the text. */
-export function labelAnchor(
-  fp: ParsedBoard['footprints'][number],
-  cam: Camera,
-): { cx: number; topY: number; fontPx: number; extentPx: number } | null {
-  if (fp.pads.length === 0) return null
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  for (const pad of fp.pads) {
-    minX = Math.min(minX, pad.at.x - pad.size.w / 2)
-    maxX = Math.max(maxX, pad.at.x + pad.size.w / 2)
-    minY = Math.min(minY, pad.at.y - pad.size.h / 2)
-    maxY = Math.max(maxY, pad.at.y + pad.size.h / 2)
-  }
-  const extentPx = Math.max(maxX - minX, maxY - minY) * cam.scale
-  if (extentPx < LABEL_MIN_PX) return null
-  const [sx1, sy1] = ws(cam, minX, minY)
-  const [sx2, sy2] = ws(cam, maxX, maxY)
-  return {
-    cx: (sx1 + sx2) / 2,
-    topY: Math.min(sy1, sy2),
-    fontPx: Math.min(13, Math.max(9, extentPx * 0.18)),
-    extentPx,
-  }
-}
-
-interface ImportMarker {
-  x: number
-  y: number
-  status: 'recovered' | 'partial'
-  nets: string[]
-}
+// ── Dynamic pass ─────────────────────────────────────────────────────────────
 
 /** Apply the same net selection to import markers as to the copper beneath
- * them. With no selected net the coverage overlay shows every located object;
- * with one selected it shows only objects whose recovered pins name that net. */
+ *  them. With no selected net the coverage overlay shows every located object;
+ *  with one selected it shows only objects whose recovered pins name that net. */
 export function visibleImportMarkers(markers: ImportMarker[], highlightNets: Set<string>): ImportMarker[] {
   if (highlightNets.size === 0) return markers
   return markers.filter(point => point.nets.some(net => highlightNets.has(net)))
@@ -497,27 +293,20 @@ export interface OverlayData {
   highlightNets: Set<string>
   /** A "show on board" marker (board mm): pulsing ring + optional label. */
   marker?: { x: number; y: number; label?: string } | null
-  /** Import completeness markers. Only objects with real source coordinates
-   *  appear here; unplaced/missing objects remain in the diagnostics list. */
+  /** Import completeness markers: only objects with real source coordinates. */
   importMarkers?: ImportMarker[]
   /** Dim the non-highlighted board when a highlight is active */
   dimOthers?: boolean
-  /** Signal flow particles: netName → list of positions (t∈[0,1]) along each segment */
+  /** Signal flow particles: netName → positions (t∈[0,1]) along each segment */
   particles: Map<string, number[]>
-  /** Probe tooltip */
   probe?: { x: number; y: number; label: string; value: string }
-  /** Active net voltages for colour tinting */
   netVoltages?: Map<string, number>
-  /** Component state glows: ref -> state map */
   componentStates?: Record<string, Record<string, number>>
-  /** Component kinds: ref -> kind string */
   componentKinds?: Record<string, string>
   /** References of faulted components for pulsing red highlight */
   faultedRefs?: Set<string>
-  /** The footprint under the cursor. Drawn with the same highlight ink as a
-   *  hovered net, over the same extent the click hit-test uses, so hovering a
-   *  part and clicking it agree about what the cursor is on. Steady, not
-   *  pulsing: it tracks the pointer, and a pulse would fight the motion. */
+  /** The footprint under the cursor: the same highlight ink as a hovered net,
+   *  over the same extent the click hit-test uses. Steady, not pulsing. */
   hoverRefs?: Set<string>
   /** Animation time in seconds (for pulsing effects) */
   animTime?: number
@@ -537,123 +326,78 @@ function heatColor(t: number): string {
   return `rgb(${r},${g},${b})`
 }
 
-/**
- * Compute a tinted copper colour from a net voltage.
- * 0 V     = base layer colour (pass-through)
- * +5 V    = warm (the theme's rail-amber blended with base)
- * negative= cool (the theme's blue blended with base)
- * Smooth lerp; only applied to nets present in netVoltages.
- */
+/** Copper tinted by net voltage: 0 V is the base layer colour, positive
+ *  blends toward the theme's rail-amber, negative toward its blue. */
 function voltageTintColor(baseColor: string, voltage: number, maxV = 5): string {
-  const t = Math.max(-1, Math.min(1, voltage / maxV))  // -1..1
-
-  // Parse base color (assumes #rrggbb format)
-  const br = parseInt(baseColor.slice(1, 3), 16)
-  const bg = parseInt(baseColor.slice(3, 5), 16)
-  const bb = parseInt(baseColor.slice(5, 7), 16)
-
+  const t = Math.max(-1, Math.min(1, voltage / maxV))
+  if (t === 0) return baseColor
   const theme = boardTheme()
-  let tr: number, tg: number, tb: number, strength: number
-  if (t > 0) {
-    // Warm amber for high voltage (3.3V / 5V rails)
-    tr = theme.voltWarm.r; tg = theme.voltWarm.g; tb = theme.voltWarm.b
-    strength = t * 0.72
-  } else if (t < 0) {
-    // Cool blue: negative voltage
-    tr = theme.voltCool.r; tg = theme.voltCool.g; tb = theme.voltCool.b
-    strength = (-t) * 0.72
-  } else {
-    return baseColor
-  }
-
-  const r = Math.round(br + (tr - br) * strength)
-  const g = Math.round(bg + (tg - bg) * strength)
-  const b = Math.round(bb + (tb - bb) * strength)
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
+  const target = t > 0 ? theme.voltWarm : theme.voltCool
+  const strength = Math.abs(t) * 0.72
+  const mix = (base: number, to: number) => Math.round(base + (to - base) * strength).toString(16).padStart(2, '0')
+  return `#${mix(parseInt(baseColor.slice(1, 3), 16), target.r)}${mix(parseInt(baseColor.slice(3, 5), 16), target.g)}${mix(parseInt(baseColor.slice(5, 7), 16), target.b)}`
 }
 
-export function renderDynamicOverlay(
-  ctx: CanvasRenderingContext2D,
-  board: ParsedBoard,
-  cam: Camera,
-  overlay: OverlayData,
-) {
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
-  const theme = boardTheme()
+/** A rounded, glowing label box, for the probe tooltip and the marker. */
+function labelBox(ctx: Ctx, x: number, y: number, w: number, h: number, bg: string, border: string, radius: number) {
+  ctx.fillStyle = bg
+  ctx.strokeStyle = border
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, radius)
+  ctx.fill()
+  ctx.stroke()
+}
 
+export function renderDynamicOverlay(ctx: Ctx, board: ParsedBoard, cam: Camera, overlay: OverlayData) {
+  const W = ctx.canvas.width, H = ctx.canvas.height
+  ctx.clearRect(0, 0, W, H)
+  const theme = boardTheme()
   const { highlightNets, dimOthers, netVoltages, faultedRefs, animTime = 0, renderOpts } = overlay
   const activityOn = overlay.showActivity !== false
   const hasHighlight = highlightNets.size > 0
-  // Glow is affordable here when the ACTIVE set is small; count as we draw.
   const glowOk = board.segments.length + board.arcs.length <= GLOW_PRIMITIVE_LIMIT
+  const tracks = [...board.segments, ...board.arcs]
 
-  // ── Dim veil when a net is highlighted ──
-  // The static pass cannot dim per-primitive (it is cached), so a translucent
-  // veil over the whole blit stands in for dimming everything else, and the
-  // highlighted copper is drawn bright on top. The alpha is deliberately
-  // moderate: at 0.72 the rest of the board effectively vanished and all
-  // orientation context was lost; the highlight only needs contrast, not a
-  // blackout.
+  // Dim veil when a net is highlighted: the static pass cannot dim
+  // per-primitive (it is cached), so a translucent veil stands in and the
+  // highlighted copper is drawn bright on top. Moderate alpha on purpose: the
+  // highlight needs contrast, not a blackout.
   if (hasHighlight && dimOthers) {
     ctx.fillStyle = theme.dimVeil
-    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+    ctx.fillRect(0, 0, W, H)
   }
 
-  // ── Voltage-tinted copper over the static base ──
+  // Voltage-tinted copper over the static base.
   if (activityOn && netVoltages && netVoltages.size > 0 && !hasHighlight) {
     for (const layer of LAYER_ORDER) {
-      if (!isCopperLayer(layer)) continue
-      const style = getLayerStyle(layer)
-      if (!layerOn(layer, renderOpts)) continue
-      for (const s of board.segments) {
-        if (s.layer !== layer || !s.netName) continue
-        const v = netVoltages.get(s.netName)
+      if (!isCopperLayer(layer) || !layerOn(layer, renderOpts)) continue
+      const base = getLayerStyle(layer).color
+      for (const t of tracks) {
+        if (t.layer !== layer || !t.netName) continue
+        const v = netVoltages.get(t.netName)
         if (v === undefined || Math.abs(v) < 0.05) continue
-        const glow = glowOk ? (v > 0 ? theme.voltWarmGlow : theme.voltCoolGlow) : undefined
-        drawLine(ctx, cam, s.start, s.end, voltageTintColor(style.color, v), glow, s.width)
-      }
-      for (const a of board.arcs) {
-        if (a.layer !== layer || !a.netName) continue
-        const v = netVoltages.get(a.netName)
-        if (v === undefined || Math.abs(v) < 0.05) continue
-        const glow = glowOk ? (v > 0 ? theme.voltWarmGlow : theme.voltCoolGlow) : undefined
-        drawArc(ctx, cam, a.start, a.mid, a.end, voltageTintColor(style.color, v), glow, a.width)
+        drawTrack(ctx, cam, t, voltageTintColor(base, v), glowOk ? (v > 0 ? theme.voltWarmGlow : theme.voltCoolGlow) : undefined)
       }
     }
     ctx.shadowBlur = 0
   }
 
-  // ── Highlighted nets: copper, arcs, vias, pads drawn bright ──
+  // Highlighted nets: copper, vias, pads drawn bright.
   if (hasHighlight) {
-    for (const s of board.segments) {
-      if (!s.netName || !highlightNets.has(s.netName)) continue
-      drawLine(ctx, cam, s.start, s.end, theme.highlight, theme.highlightGlow, s.width)
-    }
-    for (const a of board.arcs) {
-      if (!a.netName || !highlightNets.has(a.netName)) continue
-      drawArc(ctx, cam, a.start, a.mid, a.end, theme.highlight, theme.highlightGlow, a.width)
-    }
+    for (const t of tracks) if (t.netName && highlightNets.has(t.netName)) drawTrack(ctx, cam, t, theme.highlight, theme.highlightGlow)
     ctx.shadowBlur = 0
-    for (const v of board.vias) {
-      if (v.netName && highlightNets.has(v.netName)) {
-        drawVia(ctx, cam, v, theme.highlightVia, theme.highlightGlow)
-      }
-    }
+    for (const v of board.vias) if (v.netName && highlightNets.has(v.netName)) drawVia(ctx, cam, v, theme.highlightVia, theme.highlightGlow)
     for (const fp of board.footprints) {
-      for (const pad of fp.pads) {
-        if (!pad.netName || !highlightNets.has(pad.netName)) continue
-        drawPad(ctx, cam, pad, theme.highlightPad, theme.highlightPadGlow)
-      }
+      for (const pad of fp.pads) if (pad.netName && highlightNets.has(pad.netName)) drawPad(ctx, cam, pad, theme.highlightPad, theme.highlightPadGlow)
     }
   }
 
-  // ── Hovered footprint: the part answers the cursor ──
-  // Uses `faultBoxesFor`, the same extent the click hit-test resolves against,
-  // so what lights up is exactly what a click would select. Drawn before the
-  // fault pass so a faulted part under the cursor still reads as faulted.
+  // Hovered footprint: the part answers the cursor, over the same extent the
+  // click hit-test resolves against. Drawn before the fault pass so a faulted
+  // part under the cursor still reads as faulted.
   const hoverRefs = overlay.hoverRefs
   if (hoverRefs && hoverRefs.size > 0) {
-    const boxes = faultBoxesFor(board)
+    const boxes = boxesByRef(board)
     for (const fp of board.footprints) {
       if (!hoverRefs.has(fp.ref)) continue
       const box = boxes.get(fp.ref)
@@ -665,19 +409,16 @@ export function renderDynamicOverlay(
         ctx.strokeRect(...boxRect(cam, box))
         ctx.shadowBlur = 0
       }
-      for (const p of fp.pads) {
-        drawPad(ctx, cam, p, theme.highlightPad, theme.highlightPadGlow)
-      }
+      for (const p of fp.pads) drawPad(ctx, cam, p, theme.highlightPad, theme.highlightPadGlow)
     }
   }
 
-  // ── Faulted footprints: the part itself turns red ──
-  // Painting the part's own extent (body plus pads) is the message with no
-  // indirection, where a floating ring leaves the reader hunting for what it
-  // circled. The pulse rides alpha only, so the shape stays stable.
+  // Faulted footprints: the part itself turns red. Painting its own extent
+  // (body plus pads) is the message with no indirection; the pulse rides
+  // alpha only, so the shape stays stable.
   if (faultedRefs && faultedRefs.size > 0) {
     const faultPulse = 0.35 + 0.65 * Math.abs(Math.sin(animTime * Math.PI * 4))
-    const boxes = faultBoxesFor(board)
+    const boxes = boxesByRef(board)
     for (const fp of board.footprints) {
       if (!faultedRefs.has(fp.ref)) continue
       const box = boxes.get(fp.ref)
@@ -693,65 +434,47 @@ export function renderDynamicOverlay(
         ctx.shadowBlur = 0
       }
       const padColor = theme.faultPad(faultPulse)
-      for (const p of fp.pads) {
-        drawPad(ctx, cam, p, padColor, theme.faultPadGlow)
-      }
+      for (const p of fp.pads) drawPad(ctx, cam, p, padColor, theme.faultPadGlow)
     }
   }
 
-  // ── Component state glows ──
+  // Component state glows. Radial gradients are not free: cull offscreen
+  // parts and cap the total so a 3,000-part board dissipating everywhere does
+  // not pay thousands per frame.
   if (activityOn && overlay.componentStates && overlay.componentKinds) {
-    // The gradient fills are pretty but not free; a 3,000-component board with
-    // every part dissipating would otherwise pay thousands of radial gradients
-    // per frame. Cull offscreen parts and cap the total.
     let drawn = 0
-    const GLOW_CAP = 400
     for (const fp of board.footprints) {
-      if (drawn >= GLOW_CAP) break
+      if (drawn >= 400) break
       const states = overlay.componentStates[fp.ref]
       const kind = overlay.componentKinds[fp.ref]
       if (!states && !kind) continue
-
-      const [fpX, fpY] = ws(cam, fp.at.x, fp.at.y)
+      const [fpX, fpY] = ws(cam, fp.at)
       const radius = Math.max(20, 12 * cam.scale)
-      if (fpX + radius < 0 || fpX - radius > ctx.canvas.width || fpY + radius < 0 || fpY - radius > ctx.canvas.height) continue
-
+      if (offscreenCircle(ctx, fpX, fpY, radius)) continue
       const running = states?.['running'] ?? 0
       const dissipation = states?.['dissipation_mw'] ?? 0
-
-      if (kind === 'mcu' && running > 0) {
-        // Faint cyan glow for running MCU
-        const grad = ctx.createRadialGradient(fpX, fpY, 0, fpX, fpY, radius)
-        grad.addColorStop(0, theme.mcuGlow0)
-        grad.addColorStop(0.6, theme.mcuGlow1)
-        grad.addColorStop(1, theme.mcuGlow2)
-        ctx.fillStyle = grad
-        ctx.beginPath()
-        ctx.arc(fpX, fpY, radius, 0, Math.PI * 2)
-        ctx.fill()
-        drawn++
-      } else if (dissipation > 0) {
-        // Heat color glow for dissipation
+      let stops: [number, string][] | null = null
+      if (kind === 'mcu' && running > 0) stops = [[0, theme.mcuGlow0], [0.6, theme.mcuGlow1], [1, theme.mcuGlow2]]
+      else if (dissipation > 0) {
         const t = Math.min(1, dissipation / 500)
-        const color = heatColor(t)
-        const grad = ctx.createRadialGradient(fpX, fpY, 0, fpX, fpY, radius)
-        grad.addColorStop(0, color.replace('rgb', 'rgba').replace(')', `,${0.25 * t + 0.05})`))
-        grad.addColorStop(1, 'rgba(0,0,0,0)')
-        ctx.fillStyle = grad
-        ctx.beginPath()
-        ctx.arc(fpX, fpY, radius, 0, Math.PI * 2)
-        ctx.fill()
-        drawn++
+        stops = [[0, heatColor(t).replace('rgb', 'rgba').replace(')', `,${0.25 * t + 0.05})`)], [1, 'rgba(0,0,0,0)']]
       }
+      if (!stops) continue
+      const grad = ctx.createRadialGradient(fpX, fpY, 0, fpX, fpY, radius)
+      for (const [at, color] of stops) grad.addColorStop(at, color)
+      ctx.fillStyle = grad
+      ctx.beginPath()
+      ctx.arc(fpX, fpY, radius, 0, Math.PI * 2)
+      ctx.fill()
+      drawn++
     }
   }
 
-  // ── Net highlight glow pulses ──
+  // Net highlight glow pulses.
   for (const netName of overlay.highlightNets) {
     for (const s of board.segments) {
       if (s.netName !== netName) continue
-      const [x1, y1] = ws(cam, s.start.x, s.start.y)
-      const [x2, y2] = ws(cam, s.end.x, s.end.y)
+      const [x1, y1] = ws(cam, s.start), [x2, y2] = ws(cam, s.end)
       if (segOffscreen(ctx, x1, y1, x2, y2)) continue
       ctx.beginPath()
       ctx.strokeStyle = theme.netGlowStroke
@@ -766,91 +489,75 @@ export function renderDynamicOverlay(
     ctx.shadowBlur = 0
   }
 
-  // ── Signal flow particles ──
+  // Signal flow particles.
   ctx.shadowBlur = 0
-  for (const [netName, positions] of activityOn ? overlay.particles : new Map<string, number[]>()) {
-    for (const s of board.segments) {
-      if (s.netName !== netName) continue
-      for (const t of positions) {
-        const px = s.start.x + (s.end.x - s.start.x) * t
-        const py = s.start.y + (s.end.y - s.start.y) * t
-        const [sx, sy] = ws(cam, px, py)
-        const r = Math.max(2, s.width * cam.scale * 0.6)
-        ctx.beginPath()
-        ctx.fillStyle = theme.particle
-        ctx.shadowColor = theme.particleGlow
-        ctx.shadowBlur = r * 2
-        ctx.arc(sx, sy, r, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.shadowBlur = 0
+  if (activityOn) {
+    for (const [netName, positions] of overlay.particles) {
+      for (const s of board.segments) {
+        if (s.netName !== netName) continue
+        for (const t of positions) {
+          const [sx, sy] = ws(cam, { x: s.start.x + (s.end.x - s.start.x) * t, y: s.start.y + (s.end.y - s.start.y) * t })
+          const r = Math.max(2, s.width * cam.scale * 0.6)
+          ctx.beginPath()
+          ctx.fillStyle = theme.particle
+          ctx.shadowColor = theme.particleGlow
+          ctx.shadowBlur = r * 2
+          ctx.arc(sx, sy, r, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.shadowBlur = 0
+        }
       }
     }
   }
 
-  // ── Probe tooltip ──
+  // Probe tooltip.
   if (overlay.probe) {
-    const { x, y, label, value } = overlay.probe
-    const [sx, sy] = ws(cam, x, y)
-    const padding = 8
-    const fontSize = 12
+    const { label, value } = overlay.probe
+    const [sx, sy] = ws(cam, overlay.probe)
+    const padding = 8, fontSize = 12
     ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`
-    const labelW = ctx.measureText(label).width
-    const valueW = ctx.measureText(value).width
-    const boxW = Math.max(labelW, valueW) + padding * 2
+    const boxW = Math.max(ctx.measureText(label).width, ctx.measureText(value).width) + padding * 2
     const boxH = fontSize * 2 + padding * 2 + 4
-
-    const bx = sx + 12
-    const by = sy - boxH - 8
-
-    ctx.fillStyle = theme.probeBg
-    ctx.strokeStyle = theme.probeBorder
+    const bx = sx + 12, by = sy - boxH - 8
     ctx.lineWidth = 1.5
     ctx.shadowColor = theme.probeBorder
     ctx.shadowBlur = 8
-    ctx.beginPath()
-    ctx.roundRect(bx, by, boxW, boxH, 6)
-    ctx.fill()
-    ctx.stroke()
+    labelBox(ctx, bx, by, boxW, boxH, theme.probeBg, theme.probeBorder, 6)
     ctx.shadowBlur = 0
-
     ctx.fillStyle = theme.probeLabel
     ctx.fillText(label, bx + padding, by + padding + fontSize)
     ctx.fillStyle = theme.probeValue
     ctx.fillText(value, bx + padding, by + padding + fontSize * 2 + 4)
-
-    // Crosshair dot
     ctx.beginPath()
     ctx.arc(sx, sy, 4, 0, Math.PI * 2)
-    ctx.fillStyle = theme.probeValue
     ctx.fill()
   }
 
-  // ── Import completeness: located recovered/partial objects only ──
+  // Import completeness: located recovered/partial objects only.
   if (overlay.importMarkers?.length) {
     ctx.save()
     for (const point of visibleImportMarkers(overlay.importMarkers, overlay.highlightNets)) {
-      const [sx, sy] = ws(cam, point.x, point.y)
-      if (sx < -10 || sy < -10 || sx > ctx.canvas.width + 10 || sy > ctx.canvas.height + 10) continue
-      const color = point.status === 'recovered' ? '#22c55e' : '#f59e0b'
+      const [sx, sy] = ws(cam, point)
+      if (offscreenCircle(ctx, sx, sy, 10)) continue
+      const recovered = point.status === 'recovered'
+      const color = recovered ? '#22c55e' : '#f59e0b'
       ctx.beginPath()
-      ctx.arc(sx, sy, point.status === 'recovered' ? 5 : 7, 0, Math.PI * 2)
+      ctx.arc(sx, sy, recovered ? 5 : 7, 0, Math.PI * 2)
       ctx.fillStyle = `${color}66`
       ctx.strokeStyle = color
-      ctx.lineWidth = point.status === 'recovered' ? 1.5 : 2
+      ctx.lineWidth = recovered ? 1.5 : 2
       ctx.fill()
       ctx.stroke()
     }
     ctx.restore()
   }
 
-  // ── "Show on board" marker: pulsing ring + crosshair at a finding's spot ──
+  // "Show on board" marker: pulsing ring + crosshair at a finding's spot.
   if (overlay.marker) {
-    const { x, y, label } = overlay.marker
-    const [sx, sy] = ws(cam, x, y)
-    const t = overlay.animTime ?? 0
-    const pulse = 0.5 + 0.5 * Math.sin(t * 4)
+    const { label } = overlay.marker
+    const [sx, sy] = ws(cam, overlay.marker)
+    const pulse = 0.5 + 0.5 * Math.sin(animTime * 4)
     const ringR = 14 + pulse * 6
-
     ctx.save()
     ctx.strokeStyle = theme.markerStroke
     ctx.lineWidth = 2
@@ -862,31 +569,21 @@ export function renderDynamicOverlay(
     ctx.stroke()
     ctx.globalAlpha = 1
     ctx.shadowBlur = 0
-
-    // Crosshair
     ctx.beginPath()
-    ctx.moveTo(sx - 8, sy)
-    ctx.lineTo(sx + 8, sy)
-    ctx.moveTo(sx, sy - 8)
-    ctx.lineTo(sx, sy + 8)
+    ctx.moveTo(sx - 8, sy); ctx.lineTo(sx + 8, sy)
+    ctx.moveTo(sx, sy - 8); ctx.lineTo(sx, sy + 8)
     ctx.lineWidth = 1.5
     ctx.stroke()
-
     if (label) {
       const fontSize = 11
       ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`
       // Clamp the label to a readable width; the finding card has the rest.
       const shown = label.length > 60 ? `${label.slice(0, 57)}...` : label
       const w = ctx.measureText(shown).width + 14
-      const bx = Math.min(Math.max(6, sx - w / 2), ctx.canvas.width - w - 6)
+      const bx = Math.min(Math.max(6, sx - w / 2), W - w - 6)
       const by = sy + ringR + 8
-      ctx.fillStyle = theme.markerLabelBg
-      ctx.strokeStyle = theme.markerLabelBorder
       ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.roundRect(bx, by, w, fontSize + 12, 5)
-      ctx.fill()
-      ctx.stroke()
+      labelBox(ctx, bx, by, w, fontSize + 12, theme.markerLabelBg, theme.markerLabelBorder, 5)
       ctx.fillStyle = theme.markerLabelText
       ctx.fillText(shown, bx + 7, by + fontSize + 4)
     }

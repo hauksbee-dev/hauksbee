@@ -8,8 +8,7 @@ Object.assign(globalThis, {
 })
 
 const { checksStorageKey } = await import('../src/components/ChecksView')
-const { boardBytesMatchExpected, canReanalyzeSavedSession, expectedBoardSha256 } = await import('../src/hooks/useSessions')
-const { sessionIdFor } = await import('../src/lib/session-store')
+const { boardBytesMatchExpected, canReanalyzeSavedSession, expectedBoardSha256, sessionIdFor } = await import('../src/lib/session-store')
 const { isModelCheckCurrent } = await import('../src/components/WritePart')
 
 function report(hash?: string): WebReport {

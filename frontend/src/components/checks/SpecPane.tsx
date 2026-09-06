@@ -3,7 +3,7 @@ import { downloadText } from '../../lib/report-export'
 import { tomlToBuilder } from '../../lib/check-spec'
 import type { BuilderState } from '../../lib/check-spec'
 import { RunResults } from './RunResults'
-import type { RunResponse } from './RunResults'
+import type { RunResponse } from '../../types/report'
 
 // The right-hand column: the spec TOML as it currently stands, the run/download
 // actions, the run's verdict, and the GitHub CI setup. What this pane shows IS

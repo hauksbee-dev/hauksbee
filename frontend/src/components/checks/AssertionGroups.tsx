@@ -1,41 +1,10 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import type { ArtifactProvenance, EvidenceAssumption } from '../../types/report'
-import { CHECK_KINDS, GROUP_ORDER, NET_KINDS, REF_KINDS } from '../../lib/check-spec'
+import type { ArtifactProvenance, CheckResult, EvidenceAssumption } from '../../types/report'
+import { CHECK_KINDS, GROUP_ORDER, checkKind } from '../../lib/check-spec'
 import type { CheckRow, RowIssue } from '../../lib/check-spec'
 import { ARRIVE, LEAVE, StaggerItem, ValueSettle } from '../../motion'
 import { PlusIcon } from '../Icons'
 import { AssertionEvidence, Field, ResultChip } from './pieces'
-import type { CheckResult } from './pieces'
-
-/** The per-kind inputs a row shows, beyond the shared net/ref picker. Each
- *  entry is [label, field, width, the field whose issue highlights it]. */
-const KIND_FIELDS: Record<string, Array<[string, keyof CheckRow, number, keyof CheckRow | null]>> = {
-  voltage: [
-    ['min V', 'min', 64, 'min'],
-    ['max V', 'max', 64, 'min'],
-    ['after ms', 'after_ms', 64, null],
-  ],
-  uart: [['must print', 'contains', 220, 'contains']],
-  toggle: [
-    ['freq Hz', 'freq_hz', 64, 'freq_hz'],
-    ['±tol', 'tolerance', 56, null],
-    ['or min toggles', 'min_toggles', 64, 'freq_hz'],
-  ],
-  'boot-coverage': [
-    ['reach V', 'min', 64, 'min'],
-    ['within ms', 'deadline_ms', 64, 'deadline_ms'],
-  ],
-  max_current: [['max A', 'amps', 64, 'amps']],
-  max_temp: [['max °C (blank = part rating)', 'celsius', 70, null]],
-  rail_window: [
-    ['dip below V', 'dip_below', 64, 'dip_below'],
-    ['for max ms', 'for_max_ms', 64, 'for_max_ms'],
-    ['recover to V', 'recover_to', 64, 'recover_to'],
-    ['within ms', 'recover_within_ms', 64, 'for_max_ms'],
-  ],
-}
-
-const PLACEHOLDER: Partial<Record<keyof CheckRow, string>> = { contains: 'hello', ref: 'U1' }
 
 /** The assertions, grouped by kind. The groups stagger in once on mount (a
  *  restored board's saved spec arriving), which is the only time this list is
@@ -58,7 +27,7 @@ export function AssertionGroups({
     .map(group => ({
       group,
       kinds: CHECK_KINDS.filter(k => k.group === group),
-      rows: checks.filter(c => CHECK_KINDS.find(k => k.kind === c.kind)?.group === group),
+      rows: checks.filter(c => checkKind(c.kind)?.group === group),
     }))
     .filter(g => g.rows.length > 0)
 
@@ -100,13 +69,12 @@ export function AssertionGroups({
                 its slot open while the reader waits to see the result. */}
             <AnimatePresence initial={false}>
               {rows.map(c => {
-                const meta = CHECK_KINDS.find(k => k.kind === c.kind)
+                const meta = checkKind(c.kind)
                 const rowResult = resultForRow(c.id)
                 const issues = validation.get(c.id) ?? []
-                // Combined either/or requirements highlight every input that
-                // could satisfy them (min OR max, freq OR toggles).
-                const bad = (field: keyof CheckRow | null) =>
-                  field !== null && issues.some(i => i.field === field)
+                // An either/or requirement highlights every input that could
+                // satisfy it (min OR max, freq OR toggles).
+                const bad = (field: keyof CheckRow) => issues.some(i => (i.fields as string[]).includes(field))
                 return (
                   <motion.div
                     key={c.id}
@@ -139,27 +107,27 @@ export function AssertionGroups({
                       </button>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
-                      {NET_KINDS.includes(c.kind) && (
+                      {meta?.subject === 'net' && (
                         <Field
                           label="net" value={c.net} width={170} list="net-options" invalid={bad('net')}
                           onChange={v => onUpdate(c.id, { net: v })}
                         />
                       )}
-                      {REF_KINDS.includes(c.kind) && (
+                      {meta?.subject === 'ref' && (
                         <Field
-                          label="part (ref)" value={c.ref} width={90} placeholder={PLACEHOLDER.ref}
+                          label="part (ref)" value={c.ref} width={90} placeholder="U1"
                           invalid={bad('ref')} onChange={v => onUpdate(c.id, { ref: v })}
                         />
                       )}
-                      {(KIND_FIELDS[c.kind] ?? []).map(([label, field, width, issueField]) => (
+                      {meta?.fields.map(f => (
                         <Field
-                          key={field}
-                          label={label}
-                          value={c[field] as string}
-                          width={width}
-                          placeholder={PLACEHOLDER[field]}
-                          invalid={bad(issueField)}
-                          onChange={v => onUpdate(c.id, { [field]: v })}
+                          key={f.key}
+                          label={f.label}
+                          value={c[f.key]}
+                          width={f.width}
+                          placeholder={f.placeholder}
+                          invalid={bad(f.key)}
+                          onChange={v => onUpdate(c.id, { [f.key]: v })}
                         />
                       ))}
                     </div>
@@ -205,6 +173,4 @@ export function AssertionGroups({
 }
 
 /** True when no check kind in the spec belongs to a rendered group. */
-export function hasNoGroups(checks: CheckRow[]): boolean {
-  return !checks.some(c => CHECK_KINDS.some(k => k.kind === c.kind))
-}
+export const hasNoGroups = (checks: CheckRow[]): boolean => !checks.some(c => checkKind(c.kind))

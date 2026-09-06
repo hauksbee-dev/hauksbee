@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
-import type { ArtifactProvenance, EvidenceAssumption, EvidenceMap } from '../../types/report'
-import { assumptionsForEvidence, describeModelSource } from '../../lib/evidence'
-import { summarizeErrorBudget } from '../../lib/error-budget'
-import { CHECK_KINDS, tomlToBuilder } from '../../lib/check-spec'
+import type { ArtifactProvenance, CheckResult, EvidenceAssumption } from '../../types/report'
+import { assumptionsForEvidence, describeModelSource } from '../../lib/report-view'
+import { summarizeErrorBudget } from '../../lib/report-view'
+import { checkKind, tomlToBuilder } from '../../lib/check-spec'
 import { VerdictBadge } from '../../motion'
 
 // The small pieces the Checks view repeats: a labelled input, the PASS/FAIL
@@ -44,15 +44,6 @@ export function Field({ label, value, onChange, width = 90, placeholder, invalid
       />
     </label>
   )
-}
-
-export interface CheckResult {
-  label: string
-  kind: string
-  passed: boolean
-  invalid: boolean
-  detail: string
-  evidence?: EvidenceMap
 }
 
 /** Inline PASS / FAIL / INVALID chip riding on a check row after a run. */
@@ -174,7 +165,7 @@ export function RawModeSummary({ rawText }: { rawText: string }) {
           )}
           <ul className="mt-2 pl-4" style={{ listStyleType: 'disc' }}>
             {parsed.checks.map((c, i) => {
-              const meta = CHECK_KINDS.find(k => k.kind === c.kind)
+              const meta = checkKind(c.kind)
               const subject = c.net ? ` on ${c.net}` : c.ref ? ` for ${c.ref}` : ''
               return (
                 <li key={i} className="my-0.5">

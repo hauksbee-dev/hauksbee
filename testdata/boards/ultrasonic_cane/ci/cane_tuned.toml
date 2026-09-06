@@ -1,0 +1,33 @@
+# Tuned from the `hauksbee-ci init` scaffold: VBAT powered, firmware attached, boot gate watched.
+name = "cane power-up (tuned)"
+board = "../cane.kicad_pcb"
+mcu = "atmega328p"
+firmware = "/tmp/hb-e2e/testdata/firmware/boot_gate_a/boot_gate.hex"
+duration_ms = 200
+
+[[supply]]
+net = "+5V_USB"
+kind = "usb"
+usb = "5v1.5a"
+
+[[supply]]
+net = "VBAT"
+kind = "battery"
+chemistry = "liion"
+volts = 3.7
+
+[[assert]]
+kind = "no_faults"
+
+[[assert]]
+kind = "boot_coverage"
+net = "MOTOR_GATE"
+min = 3.5
+deadline_ms = 100.0
+
+[[assert]]
+kind = "voltage"
+net = "+3V3"
+min = 3.13
+max = 3.46
+after_ms = 50

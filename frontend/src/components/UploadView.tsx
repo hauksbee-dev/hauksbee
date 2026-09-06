@@ -9,7 +9,7 @@ import { SchematicJack } from './SchematicJack'
 import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
 import { UploadBanners } from './ui'
 import { motion, useReducedMotion } from 'motion/react'
-import { CELL, INSTANT } from '../motion/tokens'
+import { CELL, INSTANT } from '../motion'
 
 // The Board view before a board exists: the drop-a-board intake. One elevated
 // card holds the drop area + primary action (the single focal point); firmware
@@ -302,7 +302,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
                   // The press tracking is the substance here, not the movement:
                   // it releases when the pointer leaves the card mid-press, when
                   // the window loses focus, and on a keyboard Space-hold, none
-                  // of which :active gets right. See ../motion/PressCard.
+                  // of which :active gets right. See PressCard in ../motion.
                   <PressCard
                     key={s.label}
                     data-testid={`sample-${s.label.toLowerCase().replace(/[^a-z]+/g, '-')}`}
