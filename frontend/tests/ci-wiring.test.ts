@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { APP_VERSION, RELEASE_COMMIT } from './release-globals'
 
 const frontend = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repository = join(frontend, '..')
@@ -45,10 +46,6 @@ describe('frontend release gates', () => {
   })
 
   test('the generated workflow can publish its default Checks report', async () => {
-    Object.assign(globalThis, {
-      __APP_VERSION__: '0.1.0',
-      __RELEASE_COMMIT__: '0123456789abcdef0123456789abcdef01234567',
-    })
     const { specStemFor, workflowYaml } = await import('../src/lib/ci-workflow')
     const generated = workflowYaml('power-up')
     expect(generated).toContain('permissions:\n  contents: read\n  checks: write')
@@ -57,12 +54,12 @@ describe('frontend release gates', () => {
     expect(generated.match(/persist-credentials: false/g)).toHaveLength(1)
     expect(generated).toContain("publish-report: ${{ github.event_name != 'pull_request'")
     expect(generated).toContain(
-      'uses: hauksbee-dev/hauksbee/integrations/github-action@0123456789abcdef0123456789abcdef01234567',
+      `uses: hauksbee-dev/hauksbee/integrations/github-action@${RELEASE_COMMIT}`,
     )
     expect(generated).not.toContain('secrets.')
-    expect(generated).toContain('hauksbee-ref: 0123456789abcdef0123456789abcdef01234567')
-    expect(generated).toContain('hauksbee-version: v0.1.0')
-    expect(generated).not.toContain('ref: v0.1.0')
+    expect(generated).toContain(`hauksbee-ref: ${RELEASE_COMMIT}`)
+    expect(generated).toContain(`hauksbee-version: v${APP_VERSION}`)
+    expect(generated).not.toContain(`ref: v${APP_VERSION}`)
     for (const inputPath of ['**/*.xml', '**/*.zip', '**/*.tgz', '**/*.tar.gz', '**/*.tar']) {
       expect(generated).toContain(`"${inputPath}"`)
     }

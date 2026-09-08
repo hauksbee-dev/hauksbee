@@ -47,6 +47,8 @@ mod cli_doctor;
 mod cli_eagle_tie_contract;
 #[path = "cli_firmware_guard.rs"]
 mod cli_firmware_guard;
+#[path = "cli_manifest_contract.rs"]
+mod cli_manifest_contract;
 #[path = "cli_models_cmds.rs"]
 mod cli_models_cmds;
 #[path = "cli_models_lint.rs"]
@@ -149,6 +151,8 @@ mod refusal_contract;
 mod renode_cosim_coverage_honesty;
 #[path = "renode_riscv_arm_cosim.rs"]
 mod renode_riscv_arm_cosim;
+#[path = "run_manifest_contract.rs"]
+mod run_manifest_contract;
 #[path = "run_report_schema_drift.rs"]
 mod run_report_schema_drift;
 #[path = "sample_boards.rs"]

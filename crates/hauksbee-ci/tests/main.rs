@@ -39,6 +39,8 @@ mod hwtrace;
 mod init_scaffold;
 #[path = "inkplate_class_demo.rs"]
 mod inkplate_class_demo;
+#[path = "manifest_cli_contract.rs"]
+mod manifest_cli_contract;
 #[path = "mcu_descriptor_dir.rs"]
 mod mcu_descriptor_dir;
 #[path = "multiunit_keying.rs"]

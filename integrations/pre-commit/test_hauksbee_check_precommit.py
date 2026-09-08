@@ -35,13 +35,26 @@ class _Proc:
 
 
 def _quiet_main(argv, runner=None):
-    """Run hook.main with stdout/stderr captured, returning (code, out, err)."""
+    """Run hook.main with stdout/stderr captured, returning (code, out, err).
+
+    An injected runner never launches anything, so which binary the lookup
+    picked does not matter to those cases; it is stubbed out so they read the
+    same on a developer machine with hauksbee installed and on a CI runner
+    with none, where the real lookup returns None and main exits 1 before it
+    ever reaches the runner.
+    """
     out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        if runner is None:
-            code = hook.main(argv)
-        else:
-            code = hook.main(argv, runner=runner)
+    saved = hook.find_hauksbee
+    if runner is not None:
+        hook.find_hauksbee = lambda explicit=None: "/nonexistent/hauksbee"
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            if runner is None:
+                code = hook.main(argv)
+            else:
+                code = hook.main(argv, runner=runner)
+    finally:
+        hook.find_hauksbee = saved
     return code, out.getvalue(), err.getvalue()
 
 
