@@ -25,7 +25,6 @@
 //! torn solution is O(n_loads * gmin) below the monolithic one: small enough
 //! to pass a sloppy eyeball, large enough to fail the 1e-6 gate, and
 //! maddening to rediscover (it was found by bisecting the residual books
-//! line by line against the monolith's row; see the how-and-why doc). The
 //! surplus term is added back inside [`settle_rails`] so every executor gets
 //! the correction whether or not its author has read this paragraph.
 //!
@@ -50,8 +49,6 @@
 //! result; the report exists precisely so non-convergence cannot be
 //! invisible.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 use crate::{SolveError, SolveResult};
 use hauksbee_ir::NodeId;

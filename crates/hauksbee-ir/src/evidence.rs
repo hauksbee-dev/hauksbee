@@ -58,7 +58,6 @@
 //! integration seam; the IR contract test rejects both vacuous and saturated
 //! mappings before a production consumer is wired.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/evidence.md
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

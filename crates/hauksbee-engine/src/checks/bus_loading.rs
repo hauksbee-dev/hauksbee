@@ -1,5 +1,4 @@
 //! I2C bus-loading lint: pull-ups PRESENT but mis-sized for the bus.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! The extract-layer `MissingI2cPullup` check answers "is there a pull-up at
 //! all". This check answers the next question, the wishlist's "bus loading"

@@ -23,7 +23,6 @@
 //! needs. Addresses are physical (the ESP32 GPIO matrix is not behind an MMU
 //! remap for these registers, so the gdbstub's address space reaches them).
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 use anyhow::{bail, Context, Result};
 use std::io::{Read, Write};

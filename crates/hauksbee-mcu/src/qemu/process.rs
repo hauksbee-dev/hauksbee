@@ -25,7 +25,6 @@
 //! boot an ESP32 image). [`is_esp_fork`] verifies the binary advertises an
 //! `esp32` machine before it is accepted.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -98,8 +97,6 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
         // 3. Hauksbee's exact-source GPIO-patched build first, then ordinary
         //    unpacked locations. The backend still probes the live QOM object;
         //    path priority alone never claims the patch is present.
-        //    `.hauksbee-qemu-esp` is the current name; `.galvani-qemu-esp` is
-        //    kept as a fallback for installs predating the galvani->hauksbee
         //    rename, so an existing unpacked fork keeps resolving.
         candidates.extend(home_candidates(&home, &file));
     }
@@ -142,7 +139,6 @@ fn home_candidates(home: &std::path::Path, file: &str) -> Vec<PathBuf> {
     vec![
         home.join(".hauksbee-qemu-esp-patched/qemu/bin").join(file),
         home.join(".hauksbee-qemu-esp/qemu/bin").join(file),
-        home.join(".galvani-qemu-esp/qemu/bin").join(file),
     ]
 }
 
@@ -440,7 +436,6 @@ mod discovery_tests {
                         .join(".hauksbee-qemu-esp-patched/qemu/bin")
                         .join(file),
                     home.path().join(".hauksbee-qemu-esp/qemu/bin").join(file),
-                    home.path().join(".galvani-qemu-esp/qemu/bin").join(file),
                 ],
                 "reviewed patched build first, then current and legacy upstream installs"
             );

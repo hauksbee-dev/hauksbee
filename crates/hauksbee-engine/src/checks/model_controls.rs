@@ -9,7 +9,6 @@
 //! only member is that control pad. It does not guess bias polarity, firmware
 //! mode, or behavior for models that did not opt in.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 
 use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};

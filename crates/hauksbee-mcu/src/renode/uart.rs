@@ -7,7 +7,6 @@
 //! injected into the UART receiver. The trailing `false` disables Renode's
 //! terminal config handshake so the stream is raw bytes both ways.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 
 use anyhow::{Context, Result};
 use std::net::TcpStream;

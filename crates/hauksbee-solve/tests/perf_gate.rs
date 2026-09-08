@@ -370,7 +370,7 @@ fn perf_gate() {
          tests/rail_tear.rs / tests/planned_assembly.rs are the hard ones. You have \
          exactly two honest options:\n\
          \n  1. FIX THE REGRESSION. Profile it: scripts/bench.sh, then a flame graph \
-         per docs/dev-plans/perf/README.md (samply on macOS, cargo flamegraph on Linux).\n\
+         per (samply on macOS, cargo flamegraph on Linux).\n\
          \n  2. If the change is a legitimate, understood cost (or a real speedup), UPDATE \
          THE BASELINE in\n     {}\n     in a COMMIT WHOSE MESSAGE EXPLAINS THE DELTA (the \
          honest-baseline rule, 08 §4). Recapture with:\n       HAUKSBEE_PERF_CLASS={} cargo \

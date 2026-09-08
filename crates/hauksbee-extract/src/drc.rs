@@ -4361,7 +4361,7 @@ pub mod eagle_drc {
         // get no arbitration from the rank, and their overlap is reported.
         //
         // This is a coarse rule and its error rate is measured, not guessed. The
-        // emonTx revision family (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`)
+        // emonTx revision family (`docs/evidence/CORPUS.md`)
         // supplies six layer-instances whose shipped gerbers say whether the two
         // nets actually share copper, and the rule is right about four: it flags
         // the three layers where they do, and over-reports two top layers where

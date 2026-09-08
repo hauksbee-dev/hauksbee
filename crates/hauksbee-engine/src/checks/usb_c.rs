@@ -1,5 +1,4 @@
 //! USB Type-C CC attach classifier (generic, reusable infrastructure).
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A USB Type-C *source* (charger / DFP) decides whether to apply VBUS by
 //! asserting a pull-up termination (Rp, modelled per spec as a current source)

@@ -9,7 +9,7 @@ import { visibleImportMarkers } from '../src/lib/board-renderer'
 
 function realFrontdoorReport(): WebReport {
   const startup = JSON.parse(readFileSync(
-    new URL('../../demo/sessions/blinky/report-nominal.json', import.meta.url),
+    new URL('./fixtures-blinky-report-nominal.json', import.meta.url),
     'utf8',
   )) as { report: WebReport }
   const report = startup.report

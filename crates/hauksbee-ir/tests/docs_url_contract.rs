@@ -12,8 +12,8 @@
 //! reference in the workspace's crate sources, renders it through
 //! [`hauksbee_ir::docs_url`], and asserts the contract maps that exact repo
 //! path to that exact route. A failure means either (a) a user-facing string
-//! points at a doc page the site does not publish (excluded prefixes like
-//! `docs/dev-plans` included), or (b) the page's published route diverges
+//! points at a doc page the site does not publish, or (b) the page's
+//! published route diverges
 //! from the plain lowercase rule, in which case the call site must change,
 //! not the helper.
 

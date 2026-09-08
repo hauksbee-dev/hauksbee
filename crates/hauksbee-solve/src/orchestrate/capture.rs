@@ -52,8 +52,6 @@
 //! the outcome as `bootstrapped`). Rest estimates only seed round 0; their
 //! error is measured out by the round-1 sag like every other assumption here.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 use std::collections::{HashMap, HashSet};
 

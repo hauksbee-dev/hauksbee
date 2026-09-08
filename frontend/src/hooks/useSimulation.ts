@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useContext } from 'react'
 import type { ServerMessage, SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, BacklogMsg, ClientMessage, ActionResultMsg } from '../types/protocol'
-import { SimSourceContext } from '../demo/simSource'
+import { SimSourceContext } from './simSource'
 
 // Connect to the same origin that served the page, so the viewer works on any
 // `hauksbee run --port <PORT>` (and over https). In `vite dev` the dev server

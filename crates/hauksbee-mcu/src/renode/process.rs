@@ -13,7 +13,6 @@
 //! A spawned instance is launched headless (`--disable-xwt --hide-log -p`) with
 //! a Monitor TCP port, and torn down on drop.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};

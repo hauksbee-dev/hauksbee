@@ -1,5 +1,5 @@
 import { createContext } from 'react'
-import type { SimulationState } from '../hooks/useSimulation'
+import type { SimulationState } from './useSimulation'
 
 // The SimSource seam: everything downstream of useSimulation (board view,
 // scope, panels) reads one SimulationState, so swapping how that state is
@@ -8,8 +8,8 @@ import type { SimulationState } from '../hooks/useSimulation'
 // own timers/sockets that must live inside React's lifecycle.
 //
 // Contract: the provided hook's identity must be fixed for the lifetime of
-// the consuming component (the demo shell keys SimView by scenario, so a
-// scenario switch remounts rather than swapping hooks under a live mount).
+// the consuming component: a source switch must remount rather than swap
+// hooks under a live mount.
 export type SimulationHook = () => SimulationState
 
 /** Null means "no override": useSimulation falls back to the live WebSocket

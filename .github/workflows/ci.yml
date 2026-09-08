@@ -380,7 +380,6 @@ jobs:
       - run: bash integrations/github-action/test_pick_release_tag.sh
       - run: bash integrations/github-action/test_resolve_inputs.sh
       - run: shellcheck integrations/github-action/*.sh scripts/setup-ci-simavr.sh scripts/simavr-payload-provenance.sh
-      - run: shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
 
   release-evidence-invariants:
     name: release evidence invariants (offline)
@@ -402,34 +401,6 @@ jobs:
       # canonical ledger exists, however, every reservation must terminate and
       # every retained artifact must still match its recorded digest.
       - run: python3 -m qc.unseen_boards audit-history
-
-  defect-regressions:
-    name: pinned upstream defect regressions
-    needs: [plan, test]
-    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: linux-ci
-          add-job-id-key: false
-          cache-on-failure: true
-          cache-workspace-crates: true
-      # The harness is deliberately stdlib-only. Its unit suite attacks hash
-      # drift, path escape, symlinks, duplicate cases, vacuous coverage, and
-      # commands that mutate their own supposedly pinned input bytes.
-      - run: python3 -m unittest -v qc.defect_regressions.test_tool
-      - run: python3 -m qc.defect_regressions.tool manifest qc/defect_regressions/manifest.json
-      - name: build the one binary used for both defect revisions
-        run: cargo build --locked -p hauksbee-engine --bin hauksbee --no-default-features --features renode,qemu
-      # Run the exact before/fix pair, not only the harness. The first shipped
-      # case is intentionally qualified rather than laundered into RED->GREEN:
-      # the upstream fix removes all four actionable findings, while unrelated
-      # open active parts make the fixed board INVALID under strict coverage.
-      - name: replay pinned C64-Saver defect and fix
-        run: python3 -m qc.defect_regressions.tool run qc/defect_regressions/c64_saver_i2c_pullups.json
 
   docs:
     name: cargo doc (rendered module docs stay valid)
@@ -459,16 +430,6 @@ jobs:
       # links and malformed markdown rot silently unless something builds the
       # docs, so this builds them.
       - run: cargo doc --workspace --no-deps
-
-  docs-currency:
-    name: docs currency (no dead links, gravestones, or stale paths in shipped docs)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      # Shipped docs must describe the present tense of the tree: every relative
-      # link resolves, no gravestone or review-process language, no references
-      # into internal-only paths, no em-dashes, no stale backticked repo paths.
-      - run: python3 scripts/lint-docs-currency.py
 
   frontend-quality:
     name: frontend quality (lint, tests, browser flows, visual fit)

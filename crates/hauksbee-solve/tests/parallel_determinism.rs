@@ -1,4 +1,4 @@
-//! S4 DETERMINISM GATE (docs/dev-plans/03-solver-performance.md §3.5).
+//! S4 DETERMINISM GATE.
 //!
 //! The parallel island sweep is an explicit double-buffered Jacobi exchange:
 //! every island reads a frozen previous-generation buffer and writes owned

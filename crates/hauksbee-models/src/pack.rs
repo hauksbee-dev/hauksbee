@@ -41,7 +41,6 @@
 //! packs (two packs shipping the same model id) are reported loudly at load,
 //! naming both packs, never silently resolved. See [`crate::ModelLibrary`].
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-models/pack.md.
 
 use std::path::{Path, PathBuf};
 

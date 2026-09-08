@@ -38,7 +38,7 @@ or fix ref.
 Reports belong in the committed evidence trail, not in ignored `work/`:
 
 ```text
-qc/evidence/blind-trials/<id>-<date>.md
+qc/results/blind-trials/<id>-<date>.md
 ```
 
 Use an ISO date such as `2026-08-18`, and commit the report with the rest of

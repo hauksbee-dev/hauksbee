@@ -1,5 +1,5 @@
 //! Shared fixture builders for the S2 graded-board benchmark harness
-//! (`docs/dev-plans/03-solver-performance.md` §9).
+//!.
 //!
 //! This file is the single source of truth for the two benchmark topologies.
 //! It is not a library module: keeping it out of `lib.rs` avoids shipping test

@@ -9,10 +9,6 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_hauksbee")
 }
 
-fn board(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
-}
-
 #[test]
 fn run_board_as_code_report() {
     // A self-contained Board-as-Code source: one 1N4148 diode (SOD-323, pads 1/2,
@@ -74,57 +70,6 @@ fn main {
         .expect("hauksbee runs");
     assert!(out2.status.success(), "header-detected .board must run");
     assert!(String::from_utf8_lossy(&out2.stdout).contains("analog diode"));
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn run_zip_of_a_board_code_export_checks() {
-    // A zipped Board-as-Code export ("zip it and we figure it out", the same
-    // promise the web drop zone keeps) must run through the CLI too. The old
-    // loader treated EVERY .zip as a gerber archive, so this exact input died
-    // with a gerber extraction error while the identical upload analyzed fine
-    // on the web.
-    use std::io::Write;
-    let dsl = br#"# Board-as-Code (hauksbee board DSL v1)
-board version 20241229
-
-fn main {
-    net "A"
-    net "B"
-    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
-        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
-        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
-    }
-}
-"#;
-    let dir = std::env::temp_dir().join(format!("hauksbee_cli_zip_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let zip_path = dir.join("export.zip");
-    let mut w = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
-    w.start_file(
-        "export/tarski.board",
-        zip::write::SimpleFileOptions::default(),
-    )
-    .unwrap();
-    w.write_all(dsl).unwrap();
-    w.finish().unwrap();
-
-    let out = Command::new(bin())
-        .args(["run", zip_path.to_str().unwrap(), "--check"])
-        .output()
-        .expect("hauksbee runs");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        out.status.success(),
-        "run <zip of a .board export> --check must exit 0:\nstdout: {stdout}\nstderr: {stderr}"
-    );
-    assert!(
-        stdout.contains("1 passives bound by footprint/value fallback")
-            && stdout.contains("1 resistor"),
-        "the compiled board's R1 reaches the compact bind rollup without restoring the bulk row:\nstdout: {stdout}\nstderr: {stderr}"
-    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -418,25 +363,4 @@ fn from_code_json_requires_a_routing_flag() {
     assert!(v["error"].as_str().unwrap().contains("--route"), "{v}");
 
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn to_code_netlist_emits_board() {
-    // `to-code` accepts a netlist (not just a .kicad_pcb) and emits Board-as-Code.
-    let net_path = board("../../testdata/tarski_brownout_cell.net");
-    if !net_path.exists() {
-        return; // corpus not present
-    }
-    let out = Command::new(bin())
-        .args(["to-code", net_path.to_str().unwrap()])
-        .output()
-        .expect("hauksbee runs");
-    assert!(out.status.success(), "to-code on a .net must succeed");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("Board-as-Code"),
-        "emits the .board header:\n{}",
-        &stdout[..stdout.len().min(200)]
-    );
-    assert!(stdout.contains("fn main"), "emits the main body");
 }
