@@ -71,7 +71,7 @@ contains = [
   "[PASS] +5V in [4.75, 5.25] V after 50ms",
   "GREEN",
 ]
-matches = ["^2/2 assertions passed in [0-9.]+s - GREEN$"]
+matches = ["^GREEN - 2/2 assertions passed in [0-9.]+s$"]
 # A scaffold must not generate a spec the tool then complains about. The
 # scaffold writes an ideal supply on the rail and a voltage assertion on the
 # same rail, which is exactly the shape the coverage check warns is unfalsifiable,
