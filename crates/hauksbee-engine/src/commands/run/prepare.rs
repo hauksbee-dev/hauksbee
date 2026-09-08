@@ -13,6 +13,7 @@ use crate::board_input::InputKind;
 use crate::result::{JsonFinding, JsonInputEvidence, Refusal, EXIT_INVALID_FOR_ANALYSIS};
 use crate::schematic_ties::SchematicTies;
 
+use super::manifest::capture_manifest;
 use super::{
     ci_check_selected, ci_surface_is_model_dependent, input_kind_name, valid_digest,
     warn_sibling_boards, Notes, RunConfig, SelectedSurface,
@@ -237,6 +238,12 @@ pub(crate) fn prepare_run_inputs(
     // the terminal. The native emulator loaders segfault (exit 139) on a missing
     // file instead of erroring; this turns a one-character typo into a clean,
     // actionable message naming the absolute path that was tried.
+    //
+    // Captured before that resolution rewrites it, because the manifest records
+    // the firmware the run was ASKED for: a PlatformIO project directory that
+    // resolves to a built .elf must replay as the project, not as one artifact
+    // of a build that may no longer exist.
+    let firmware_source = cfg.firmware.clone();
     if let Some(fw) = &cfg.firmware {
         // A PlatformIO project directory, a built .pio tree, or a zip of either
         // resolves to its compiled image first; a bare .elf/.hex passes through.
@@ -489,6 +496,20 @@ pub(crate) fn prepare_run_inputs(
                 ties.ties.len()
             );
         }
+    }
+    if let Some(path) = &cfg.emit_manifest {
+        let manifest = capture_manifest(
+            &cfg,
+            firmware_source.as_deref(),
+            schematic,
+            schematic_ties.as_ref(),
+        )?;
+        manifest.write_new(path)?;
+        eprintln!(
+            "wrote immutable run manifest {} to {}",
+            manifest.manifest_id,
+            path.display()
+        );
     }
 
     // --junit/--sarif: evaluate the selected surface with the same waiver and

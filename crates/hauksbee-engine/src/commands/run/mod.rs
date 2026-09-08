@@ -7,6 +7,7 @@ use crate::result::Refusal;
 
 mod cosim;
 mod cosim_gates;
+mod manifest;
 mod prepare;
 mod serve_flow;
 mod simulation;
@@ -100,6 +101,11 @@ pub struct RunConfig {
     pub junit: Option<std::path::PathBuf>,
     /// Write this invocation's selected checks as SARIF 2.1.0 (CI artifact).
     pub sarif: Option<std::path::PathBuf>,
+    /// Canonical immutable reproduction manifest requested by the CLI.
+    pub emit_manifest: Option<std::path::PathBuf>,
+    /// Normalized argv (tool name, then exact arguments) with
+    /// `--emit-manifest` removed so replay cannot clobber its evidence.
+    pub manifest_command: Vec<String>,
 }
 
 pub(crate) fn input_kind_name(kind: crate::board_input::InputKind) -> &'static str {
@@ -244,6 +250,7 @@ fn begin_ci_artifact_run(cfg: &RunConfig, surface: SelectedSurface) -> anyhow::R
         cfg.placement.as_deref(),
         cfg.firmware.as_deref(),
         cfg.asbuilt.as_deref(),
+        cfg.emit_manifest.as_deref(),
         cfg.ac_csv.as_deref(),
         cfg.probe_csv.as_deref(),
     ];
