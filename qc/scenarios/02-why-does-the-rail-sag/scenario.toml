@@ -75,7 +75,7 @@ contains = [
   "FAILED HERE",
   "why: +5V sagged to 4.755 V in the window, 0.095 V below your 4.85 V floor",
 ]
-matches = ["^0/1 assertions passed in [0-9.]+s - RED$"]
+matches = ["^RED - 0/1 assertions passed in [0-9.]+s$"]
 # A diagnosis, not a stack trace.
 not_matches = ["panicked at", "unwrap\\(\\)", "\\ba a\\b"]
 
@@ -99,7 +99,7 @@ contains = [
   # diagnosis said it would.
   "min=4.918V (>= 4.85V)",
 ]
-matches = ["^1/1 assertions passed in [0-9.]+s - GREEN$"]
+matches = ["^GREEN - 1/1 assertions passed in [0-9.]+s$"]
 not_contains = ["[FAIL]", "RED"]
 
 # The same question, asked past the port's rating: a 600 mA burst on a 500 mA
