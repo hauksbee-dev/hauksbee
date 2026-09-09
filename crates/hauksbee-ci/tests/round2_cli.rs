@@ -214,7 +214,7 @@ fn init_out_accepts_a_directory_or_a_file_path() {
     // into `hauksbee-ci run <path>` must get a run.
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("checks/blinky.toml"),
+        stdout.contains(&bare_spec.display().to_string()),
         "the guidance names the file that was written, got: {stdout}"
     );
 

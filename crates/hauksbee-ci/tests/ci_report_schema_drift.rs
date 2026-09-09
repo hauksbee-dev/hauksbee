@@ -128,7 +128,8 @@ fn schema_file_matches_report_types() {
         return;
     }
     let on_disk = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("missing {}: {e}; regenerate with: {REGEN}", path.display()));
+        .unwrap_or_else(|e| panic!("missing {}: {e}; regenerate with: {REGEN}", path.display()))
+        .replace("\r\n", "\n");
     assert_eq!(
         on_disk, expected,
         "crates/hauksbee-ci/schemas/hauksbee-ci-report.schema.json drifted from the \

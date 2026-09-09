@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { buildBoardUpload } from '../lib/board-upload'
+import { buildBoardUpload, emptySupplemental, type SupplementalDesignFiles } from '../lib/board-upload'
 import type { WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
 import { analysisFailureMessage, precheckBoardFile } from '../lib/upload-guard'
@@ -64,6 +64,8 @@ export interface BoardSession {
   dismissNotice: () => void
   firmwareFile: File | null
   schematicFile: File | null
+  /** The manufacturing and as-built inputs staged alongside the board. */
+  supplementalFiles: SupplementalDesignFiles
   /** The uploaded board File (null when the server preloaded the board). */
   boardFile: File | null
   /** Best display name for the current board. */
@@ -94,6 +96,11 @@ export interface BoardSession {
   handleBoard: (f: File) => void
   handleFirmware: (f: File) => void
   handleSchematic: (f: File) => void
+  handleBom: (f: File | null) => void
+  handlePlacement: (f: File | null) => void
+  handleVariant: (f: File | null) => void
+  handleAsbuilt: (f: File | null) => void
+  handleModels: (files: File[]) => void
   /** Unstage the firmware WITHOUT touching the board, and re-analyse the board
    *  on its own so the report stops describing a co-sim that is no longer
    *  loaded. No-op when nothing is staged. */
@@ -132,6 +139,15 @@ export function useBoardSession(opts: {
   const [uploadNotice, setUploadNotice] = useState<string | null>(null)
   const [firmwareFile, setFirmwareFile] = useState<File | null>(null)
   const [schematicFile, setSchematicFile] = useState<File | null>(null)
+  const [supplementalFiles, setSupplementalFiles] = useState<SupplementalDesignFiles>(emptySupplemental)
+  // `analyze` is memoised on the run plumbing alone, so the staged
+  // manufacturing inputs are read through a ref rather than widening every
+  // dependency list that reaches it.
+  const supplementalRef = useRef<SupplementalDesignFiles>(supplementalFiles)
+  const clearSupplemental = useCallback(() => {
+    supplementalRef.current = emptySupplemental()
+    setSupplementalFiles(supplementalRef.current)
+  }, [])
   const [boardFile, setBoardFile] = useState<File | null>(null)
   const [analyzedAt, setAnalyzedAt] = useState<number | null>(preloadedReport ? Date.now() : null)
   const lastBoardFile = useRef<File | null>(null)
@@ -248,7 +264,7 @@ export function useBoardSession(opts: {
       if (isCurrent()) setBoardUrl(null)
     }
     try {
-      const parsed = await api.analyze(board, firmware, schematic, signal)
+      const parsed = await api.analyze(board, firmware, schematic, signal, supplementalRef.current)
       if (isCurrent()) {
         setReport(parsed)
         setAnalyzedAt(Date.now())
@@ -284,6 +300,31 @@ export function useBoardSession(opts: {
   }, [analyze, busy, firmwareFile, schematicFile])
   const handleFirmware = useCallback((f: File) => restage({ firmware: f }), [restage])
 
+  // A manufacturing input is a real change to what was analysed, exactly like
+  // a companion image: stage it and re-run the board so the standing report
+  // and the inputs behind it never disagree.
+  const updateSupplemental = useCallback((next: SupplementalDesignFiles) => {
+    if (busy) return
+    supplementalRef.current = next
+    setSupplementalFiles(next)
+    if (lastBoardFile.current) void analyze(lastBoardFile.current, firmwareFile, schematicFile)
+  }, [analyze, busy, firmwareFile, schematicFile])
+  const handleBom = useCallback((f: File | null) => {
+    updateSupplemental({ ...supplementalRef.current, bom: f })
+  }, [updateSupplemental])
+  const handlePlacement = useCallback((f: File | null) => {
+    updateSupplemental({ ...supplementalRef.current, placement: f })
+  }, [updateSupplemental])
+  const handleVariant = useCallback((f: File | null) => {
+    updateSupplemental({ ...supplementalRef.current, variant: f })
+  }, [updateSupplemental])
+  const handleAsbuilt = useCallback((f: File | null) => {
+    updateSupplemental({ ...supplementalRef.current, asbuilt: f })
+  }, [updateSupplemental])
+  const handleModels = useCallback((files: File[]) => {
+    updateSupplemental({ ...supplementalRef.current, models: files })
+  }, [updateSupplemental])
+
   /** Accept `f` as the board and run it. Split out of `handleBoard` so the
    *  zip-classification path (which has to await a read) reaches the same
    *  code, rather than a second copy of it that can drift. */
@@ -297,13 +338,14 @@ export function useBoardSession(opts: {
     if (switchingBoards) {
       setFirmwareFile(null)
       setSchematicFile(null)
+      clearSupplemental()
       setSelectedNet(null)
       setSelectedComponentRaw(null)
       void analyze(f, null, null)
     } else {
       void analyze(f, firmwareFile, schematicFile)
     }
-  }, [analyze, firmwareFile, schematicFile])
+  }, [analyze, clearSupplemental, firmwareFile, schematicFile])
 
   const handleBoard = useCallback((f: File) => {
     if (busy) return
@@ -362,11 +404,12 @@ export function useBoardSession(opts: {
     setBusy(null)
     setFirmwareFile(null)
     setSchematicFile(null)
+    clearSupplemental()
     setBoardUrl(prev => {
       if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
       return null
     })
-  }, [clearRunState])
+  }, [clearRunState, clearSupplemental])
 
   /** "Analyze another board": resolve the finished flow back to the drop zone. */
   const resetFlow = teardown
@@ -396,6 +439,7 @@ export function useBoardSession(opts: {
     // first, and a fetch that fails must not leave the previous board's report
     // on screen under the new error.
     clearRunState()
+    clearSupplemental()
     setSelectedNet(null)
     setSelectedComponentRaw(null)
     setBusy({
@@ -419,14 +463,14 @@ export function useBoardSession(opts: {
         setBusy(null)
       }
     }
-  }, [analyze, beginRun, busy, clearRunState])
+  }, [analyze, beginRun, busy, clearRunState, clearSupplemental])
 
   // The actual POST to /api/live/launch (no questions asked). Every path
   // resolves the phase; never a spinner forever.
   const performLaunch = useCallback(async (board: File, onReady: () => void) => {
     setLaunch({ phase: 'launching' })
     try {
-      const parsed = await api.liveLaunch(buildBoardUpload(board, firmwareFile, schematicFile))
+      const parsed = await api.liveLaunch(buildBoardUpload(board, firmwareFile, schematicFile, supplementalRef.current))
       if (!parsed.ok) throw new Error(parsed.error || 'the live launch failed')
       setLiveBoard(parsed.board_name ?? board.name)
       setServerLive({ active: true, boardName: parsed.board_name ?? board.name })
@@ -525,6 +569,7 @@ export function useBoardSession(opts: {
     dismissNotice: () => setUploadNotice(null),
     firmwareFile,
     schematicFile,
+    supplementalFiles,
     boardFile,
     // A failed analysis must not crown its (possibly garbage) filename as the
     // header's board title: the title names a board this app can speak about,
@@ -555,6 +600,11 @@ export function useBoardSession(opts: {
     handleBoard,
     handleFirmware,
     handleSchematic: file => restage({ schematic: file }),
+    handleBom,
+    handlePlacement,
+    handleVariant,
+    handleAsbuilt,
+    handleModels,
     clearFirmware: () => restage({ firmware: null }),
     clearSchematic: () => restage({ schematic: null }),
     // Re-run the exact current board and companions (e.g. after a model save)

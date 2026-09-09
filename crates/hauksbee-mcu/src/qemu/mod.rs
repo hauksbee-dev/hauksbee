@@ -726,11 +726,16 @@ impl QemuBackend {
             .collect();
         let in_shadow = config.banks.iter().map(|b| (b.letter, 0u32)).collect();
 
+        let mut core = PollState::new("QEMU", Some(uart));
+        // The machine was started FROM the flash image, so the guest is already
+        // booted by the time this returns; nothing loads firmware later.
+        core.firmware_loaded = true;
+
         Ok(QemuBackend {
             config,
             qmp,
             gdb,
-            core: PollState::new("QEMU", Some(uart)),
+            core,
             process,
             _flash_temp: flash_temp,
             last_out,

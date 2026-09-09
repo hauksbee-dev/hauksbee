@@ -62,8 +62,12 @@ fn relative_path_arguments_are_made_independent_of_the_replay_cwd() {
         std::path::PathBuf::from("models"),
     ];
     let got = absolutize_argv_paths(argv, base, &paths);
-    assert_eq!(got[2], "/project/boards/main.kicad_pcb");
-    assert_eq!(got[3], "--models-dir=/project/models");
+    // The joined form carries the host separator, so the expectation is
+    // built the same way rather than spelled as a POSIX literal.
+    let board = base.join("boards/main.kicad_pcb").display().to_string();
+    let models = base.join("models").display().to_string();
+    assert_eq!(got[2], board);
+    assert_eq!(got[3], format!("--models-dir={models}"));
     assert_eq!(got[4], "--report");
 }
 
@@ -110,8 +114,8 @@ fn canonical_manifest_records_the_complete_reproduction_contract() {
     assert_eq!(decoded["schema_version"], MANIFEST_SCHEMA_VERSION);
     assert_eq!(decoded["tool"]["name"], "hauksbee");
     assert_eq!(decoded["tool"]["git_revision"], "0123456789ab");
-    assert_eq!(decoded["components"]["solver"], "0.1.0");
-    assert_eq!(decoded["components"]["models"], "0.1.0");
+    assert_eq!(decoded["components"]["solver"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(decoded["components"]["models"], env!("CARGO_PKG_VERSION"));
     assert!(decoded["plugins"].is_array());
     assert_eq!(decoded["build"]["target_os"], std::env::consts::OS);
     assert_eq!(decoded["build"]["target_arch"], std::env::consts::ARCH);

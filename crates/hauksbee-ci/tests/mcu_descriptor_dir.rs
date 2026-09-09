@@ -10,9 +10,12 @@
 //! descriptor (which has i2c1) would load and no such warning could appear.
 //!
 //! Runs only with Renode + the thermostat fixtures present; skips cleanly
-//! otherwise. Sets no env var itself, but serializes against nothing: it is
-//! the only test in this file precisely because the runner publishes the dir
-//! through the process-global env for the run's duration.
+//! otherwise. It sets no env var itself, but the runner publishes the dir
+//! through the process-global env for the run's duration, so it takes
+//! `support::descriptor_env_lock` like every other descriptor-resolving test
+//! in this binary.
+
+mod support;
 
 use std::path::PathBuf;
 
@@ -26,6 +29,7 @@ fn repo(rel: &str) -> PathBuf {
 
 #[test]
 fn a_spec_descriptor_dir_serves_the_overridden_descriptor() {
+    let _guard = support::descriptor_env_lock();
     if !hauksbee_mcu::renode::is_available() {
         eprintln!("SKIP: Renode not installed");
         return;
@@ -58,8 +62,8 @@ fn a_spec_descriptor_dir_serves_the_overridden_descriptor() {
         format!(
             r#"
 name        = "spec-declared descriptor dir"
-board       = "{}"
-firmware    = "{}"
+board       = {}
+firmware    = {}
 duration_ms = 150
 frame_ms    = 5.0
 
@@ -100,8 +104,8 @@ field = "temperature_c"
 min   = 20.0
 max   = 45.0
 "#,
-            board.canonicalize().unwrap().display(),
-            fw.canonicalize().unwrap().display(),
+            support::toml_path(&board.canonicalize().unwrap()),
+            support::toml_path(&fw.canonicalize().unwrap()),
         ),
     )
     .expect("write spec");

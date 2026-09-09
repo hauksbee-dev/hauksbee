@@ -20,17 +20,16 @@
 //!      `peripheral` assertion against it must FAIL with the never-exercised
 //!      wording, and the coverage warning must reach every report format.
 //!
-//! Test 2 sets `HAUKSBEE_MCU_DIR` (process-global), so it lives alone in this
-//! file's second test and test 1 runs the descriptor-untouched path FIRST via
-//! a serial mutex. Both skip cleanly without Renode or the firmware fixtures.
+//! Test 2 sets `HAUKSBEE_MCU_DIR`, which is process-global, so both tests take
+//! `support::descriptor_env_lock` and so does every other test in this binary
+//! that resolves a descriptor. Both skip cleanly without Renode or the
+//! firmware fixtures.
+
+mod support;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use hauksbee_ci::{run, RunConfig};
-
-/// Serialize the two tests: test 2 mutates `HAUKSBEE_MCU_DIR` process-wide.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn repo(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -51,7 +50,7 @@ fn write_spec(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
 
 #[test]
 fn dropped_adc_injection_reaches_every_ci_report_format() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = support::descriptor_env_lock();
     if !renode_available() {
         eprintln!("SKIP: Renode not installed");
         return;
@@ -70,8 +69,8 @@ fn dropped_adc_injection_reaches_every_ci_report_format() {
         &format!(
             r#"
 name        = "ADC coverage honesty (dropped injection)"
-board       = "{}"
-firmware    = "{}"
+board       = {}
+firmware    = {}
 duration_ms = 200
 frame_ms    = 5.0
 
@@ -87,8 +86,8 @@ volts = 3.3
 kind     = "uart"
 contains = "hello from stm32"
 "#,
-            board.canonicalize().unwrap().display(),
-            fw.canonicalize().unwrap().display(),
+            support::toml_path(&board.canonicalize().unwrap()),
+            support::toml_path(&fw.canonicalize().unwrap()),
         ),
     );
 
@@ -126,7 +125,7 @@ contains = "hello from stm32"
 
 #[test]
 fn unexercised_bus_sensor_warns_and_fails_its_peripheral_assertion() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = support::descriptor_env_lock();
     if !renode_available() {
         eprintln!("SKIP: Renode not installed");
         return;
@@ -158,8 +157,8 @@ fn unexercised_bus_sensor_warns_and_fails_its_peripheral_assertion() {
         &format!(
             r#"
 name        = "Unexercised I2C sensor must fail loudly"
-board       = "{}"
-firmware    = "{}"
+board       = {}
+firmware    = {}
 duration_ms = 150
 frame_ms    = 5.0
 
@@ -207,8 +206,8 @@ field = "temperature_c"
 min   = 35.0
 max   = 45.0
 "#,
-            board.canonicalize().unwrap().display(),
-            fw.canonicalize().unwrap().display(),
+            support::toml_path(&board.canonicalize().unwrap()),
+            support::toml_path(&fw.canonicalize().unwrap()),
         ),
     );
 

@@ -1,16 +1,8 @@
-# PR/push CI for hauksbee.
+# PR/push CI for hauksbee: format, lints, tests, and the GPL-free build shape.
 #
-# Every check the old sixteen-job layout ran still runs; they are grouped so
-# the workspace is compiled as few times as possible. A job compiles the
-# workspace at most once per feature shape, and the shapes are:
-#   rust        default features (avr + renode + qemu), debug: fmt, clippy, tests, docs
-#   no-default  the GPL-free renode+qemu shape and the bare engine
-#   release-qc  a release build driving the scenario suite and the speed gate
-#   frontend    lint, unit tests, browser flows, visual fit (no Rust)
-#   lint        pure Python and shell checks (no Rust)
-#
-# The macOS and Windows legs run nightly (nightly.yml), as does the
-# board-corpus gate (corpus-gate.yml).
+# The board-corpus gate runs nightly instead (corpus-gate.yml): it fetches a
+# hundred-odd boards from their upstream projects, which is too slow to put in
+# front of every push.
 
 name: ci
 
@@ -18,8 +10,18 @@ on:
   push:
     branches: ["main"]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run the native macOS and Windows candidate gates
+        required: true
+        type: boolean
+        default: true
 
 concurrency:
+  # A full candidate dispatch supersedes the automatic push run for the same
+  # ref. That validates Linux once before native runners instead of paying for
+  # two complete prerequisite passes.
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
@@ -28,21 +30,423 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Keep compiler warnings fatal in the test pass now that Clippy no longer
+  # recompiles test-only targets merely to enforce their warning boundary.
+  RUSTFLAGS: -D warnings
+  # A failing test should print its assertion, not spend a minute on backtraces.
   RUST_BACKTRACE: 1
-  # Incremental artifacts are dead weight in CI: nothing reuses them and they
-  # bloat the cache.
-  CARGO_INCREMENTAL: 0
+
+# Rust cache policy:
+# - linux-ci is intentionally shared by the serial Rust gates;
+# - workspace crates are retained, so the same Hauksbee graph is not rebuilt
+#   from zero for clippy, no-default, docs, and both full-test shards;
+# - the first Rust job runs the last failed test before broad compilation, so a
+#   known regression fails early and its successful build seeds later gates.
 
 jobs:
-  rust:
-    name: rust (fmt, clippy, tests, docs)
+  plan:
+    name: choose required validation tier
     runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.plan.outputs.rust }}
+      frontend: ${{ steps.plan.outputs.frontend }}
+      vscode: ${{ steps.plan.outputs.vscode }}
+      speed: ${{ steps.plan.outputs.speed }}
+      full: ${{ steps.plan.outputs.full }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 2
+      - id: plan
+        name: classify the exact diff conservatively
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          FULL: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
+        run: |
+          if [[ "$FULL" == "true" ]]; then
+            python3 scripts/ci_change_plan.py --full --github-output "$GITHUB_OUTPUT"
+          else
+            if [[ -n "$BASE_SHA" ]] && ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$BASE_SHA" || true
+            fi
+            python3 scripts/ci_change_plan.py \
+              --base "$BASE_SHA" --head "$GITHUB_SHA" \
+              --github-output "$GITHUB_OUTPUT"
+          fi
+
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # No toolchain pinned here on purpose: rust-toolchain.toml decides, so
+      # CI and a laptop format with the same rustfmt and cannot disagree.
+      - run: cargo fmt --all --check
+      - name: enforce runtime dependency licence boundary
+        run: python3 scripts/test-runtime-dependency-licenses.py
+      # Publishability gate: `cargo package` ships only files under a crate's
+      # own directory, so a production include_str!/include_bytes! reaching
+      # outside it compiles from a git checkout and from nowhere else. The
+      # full `cargo package --verify` build cannot run until every workspace
+      # dependency is on crates.io (it resolves against the registry), and
+      # --no-verify never parses Rust source, so neither catches the class;
+      # this script resolves every production include across the publish set
+      # and fails naming file:line. Crate asset mirrors are refreshed by
+      # scripts/sync-crate-assets.sh and pinned byte-identical to their
+      # authoritative copies by each crate's tests/packaged_asset_sync.rs.
+      - name: enforce publish-set includes stay inside their crates
+        run: python3 scripts/check-package-includes.py
+      - name: prove change-aware CI remains fail-closed
+        run: python3 scripts/test_ci_change_plan.py
+      - name: prove bundled integration tests retain every source file
+        run: python3 scripts/test-integration-test-bundles.py
+
+  clippy:
+    name: cargo clippy
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      - name: cache the immutable simavr build prerequisite
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.hauksbee-simavr
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+      - name: install the immutable simavr build prerequisite
+        run: scripts/setup-ci-simavr.sh
+      # Run recent failures before the broad workspace lint. The full shards
+      # below still rerun them as part of release coverage.
+      - name: rerun recent failed tests first
+        run: |
+          cargo test --locked -p hauksbee-models --lib relevance_selection_ -- --nocapture
+          cargo test --locked -p hauksbee-mcu --lib hostserial::tests::pty_peer_close_after_probe_cannot_deliver_output_to_the_guard -- --exact --nocapture
+          cargo test --locked -p hauksbee-ci --test spec_and_assertions -- --nocapture
+      # The allow-list of known findings lives in Cargo.toml's
+      # [workspace.lints.clippy]. Anything outside it fails here.
+      # Tests are compiled and executed by the test jobs with warnings denied;
+      # asking Clippy to compile hundreds of integration executables here made
+      # the same test graph pay a second compiler/link pass. Clippy owns shipped
+      # targets; cargo test owns test targets.
+      - run: cargo clippy --workspace --lib --bins --examples -- -D warnings
+
+  no-default-engine:
+    name: engine without default features
+    needs: [plan, clippy]
+    if: always() && needs.plan.outputs.rust == 'true' && needs.clippy.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      # Keep the core static-analysis build honest. This catches accidental
+      # simulator-only dependencies and runs the same behavioral tests, including
+      # the real watch-loop contract, in the smallest supported feature shape.
+      # Clippy checks the no-default production cfg arms, while cargo test below
+      # compiles and executes every test target with compiler warnings denied.
+      # Running `cargo check` immediately before these compiled the
+      # identical feature graph twice without adding a distinct assertion.
+      - run: cargo clippy -p hauksbee-engine --no-default-features --lib --bins --examples -- -D warnings
+      - run: cargo test -p hauksbee-engine --no-default-features --all-targets
+
+  test:
+    name: cargo test (${{ matrix.os }} / ${{ matrix.suite }})
+    needs: [plan, no-default-engine]
+    if: always() && needs.plan.outputs.rust == 'true' && needs.no-default-engine.result == 'success'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # A single Linux workspace build exhausts the standard runner while
+          # linking every integration-test binary. Split those binaries across
+          # two fresh runners; dependencies are still compiled from the same
+          # lockfile and each public package remains covered.
+          - os: ubuntu-latest
+            suite: foundations
+            packages: >-
+              -p hauksbee-ir -p hauksbee-solve -p hauksbee-extract
+              -p hauksbee-models -p hauksbee-testkit -p hauksbee-mcu
+              -p hauksbee-ci
+          - os: ubuntu-latest
+            suite: application
+            packages: >-
+              -p hauksbee-frontdoor-api -p hauksbee-server
+              -p hauksbee-engine -p hauksbee-mcp
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      - name: cache the immutable simavr build prerequisite
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.hauksbee-simavr
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+      - name: install the immutable simavr build prerequisite
+        run: scripts/setup-ci-simavr.sh
+      # No corpus here: these are the tests that run from the fixtures bundled
+      # in testdata/. Corpus-dependent tests report as ignored, and the nightly
+      # gate runs them for real with HAUKSBEE_REQUIRE_CORPUS=1.
+      - name: cargo test (${{ matrix.suite }})
+        shell: bash
+        run: |
+          packages="${{ matrix.packages }}"
+          if [[ "${{ matrix.suite }}" == "foundations" ]] && \
+             cargo metadata --no-deps --format-version 1 | \
+               jq -e '.packages | any(.name == "hauksbee-tarski")' >/dev/null; then
+            packages="$packages -p hauksbee-tarski"
+          fi
+          cargo test $packages
+
+  macos:
+    name: native macOS workspace candidate gate
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
+    runs-on: macos-latest
     timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: macos-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      - name: cache the immutable simavr build prerequisite
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.hauksbee-simavr
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+      - name: install the immutable simavr build prerequisite
+        run: scripts/setup-ci-simavr.sh
+      - name: cargo test (native macOS workspace)
+        run: cargo test --workspace
+
+  windows:
+    name: native Windows tests, release binary, and drag-and-drop front door
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
+    runs-on: windows-latest
+    # Measured end-to-end: ~30 min of setup and pinned-simulator installs,
+    # ~43 min of serialized native tests, then the firmware-flow gates with
+    # their warmup builds, the front-door build, the release-profile
+    # binaries (~35 min, not covered by the dev-profile cache), and the
+    # drag-and-drop proof land near 140 minutes cold. 180 guards hangs
+    # without killing an honest pass.
+    timeout-minutes: 180
+    env:
+      # The Windows artifact is permissive-only. If avr leaks into the feature
+      # graph, build.rs must fail rather than finding an accidental runner copy.
+      SIMAVR_INCLUDE_DIR: C:\nonexistent\simavr-must-not-be-linked
+      SIMAVR_LIB_DIR: C:\nonexistent\simavr-must-not-be-linked
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: offline Windows release-contract tests
+        run: python scripts/test-windows-port-contract.py
+      - name: native Windows Job Object timeout regression
+        shell: powershell
+        run: .\scripts\test-windows-process-tree.ps1
+      - name: install checksum-pinned Windows simulator backends
+        shell: pwsh
+        run: .\scripts\install-sims-windows.ps1
+      - name: refuse modified installed simulator payloads
+        shell: powershell
+        run: .\scripts\test-windows-simulator-integrity.ps1
+      # `--test-threads=1` is Windows-runner load management, not a smaller
+      # test set: every test still runs, one at a time. Several of these tests
+      # spawn a whole emulator (Renode's .NET host, QEMU) as a child process,
+      # and on this 4-core runner two Renode instances running concurrently is
+      # exactly the configuration that killed one of them mid-run (both TCP
+      # bridges reset with os error 10054, sensor_attach's cold leg in the
+      # v0.1.0-beta.1 release run) while the same co-sims pass one at a time.
+      # corpus-gate.yml serializes its emulator suites for the same reason.
+      - name: native engine, CI, and emulator-lifecycle tests
+        run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu -- --test-threads=1
+      - name: require three real firmware-through-emulator flows
+        shell: pwsh
+        run: |
+          .\scripts\run-required-integrations-windows.ps1 `
+            -ExpectedSha "${{ github.sha }}" `
+            -EvidenceOut "output\windows-frontdoor\required-integrations-windows-x86_64.json"
+      - name: build the embedded browser front door
+        working-directory: frontend
+        env:
+          HAUKSBEE_RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install chromium
+          bun run build
+      - name: build the exact permissive Windows release binaries
+        env:
+          HAUKSBEE_SOURCE_COMMIT: ${{ github.sha }}
+        run: cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
+      - name: prove the release shape and real drag-and-drop journey
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $doctor = & target\release\hauksbee.exe doctor | Out-String
+          if ($doctor -notmatch '(?m)^avr\s+disabled\b') {
+            throw "Windows release unexpectedly contains the AVR backend:`n$doctor"
+          }
+          New-Item -ItemType Directory -Path output\windows-frontdoor -Force | Out-Null
+          $server = Start-Process -FilePath target\release\hauksbee.exe `
+            -ArgumentList @("serve", "--port", "8417", "--no-open") `
+            -PassThru `
+            -RedirectStandardOutput output\windows-frontdoor\server.stdout.log `
+            -RedirectStandardError output\windows-frontdoor\server.stderr.log
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              try {
+                Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8417/ | Out-Null
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $ready) { throw "the Windows release server never became ready" }
+            $board = (Resolve-Path examples\board-as-code\starter.board).Path
+            $env:HB_E2E_BASE = "http://127.0.0.1:8417"
+            $env:HB_BOARD_FILES = ConvertTo-Json -Compress @($board) # starter.board
+            $env:HB_RELEASE_COHORT = "smoke"
+            $env:HB_E2E_OUT = (Resolve-Path output\windows-frontdoor).Path
+            bun frontend/tests/e2e/drag-drop-release.ts
+          } finally {
+            if (-not $server.HasExited) {
+              taskkill /T /F /PID $server.Id | Out-Null
+            }
+            $server.WaitForExit()
+          }
+      - name: Windows front-door evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-frontdoor-evidence
+          path: output/windows-frontdoor
+          if-no-files-found: error
+
+  diagrams:
+    name: diagram geometry lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # draw.io renders overlapping boxes, spilling labels, and dangling edges
+      # without complaint, and the export is what readers see. The linter
+      # checks the .drawio sources geometrically so those defects fail here
+      # instead of shipping into the docs.
+      - run: python3 scripts/lint-diagrams.py
+
+  integrations:
+    name: integrations (KiCad plugin, pre-commit hook)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # These two ship to users and nothing here ran them, so a break in either
+      # reached the person installing it before it reached us. Both suites are
+      # pure Python with no pcbnew/wx import, so they run anywhere.
+      - run: python3 integrations/kicad-plugin/test_hauksbee_ci_core.py
+      - run: python3 integrations/pre-commit/test_hauksbee_check_precommit.py
+      - run: python3 integrations/pre-commit/test_hauksbee_ci_precommit.py
+      # Repository privacy is a release invariant: the distribution mirror and
+      # developer tree must never be made public by the launch automation.
+      - run: python3 scripts/test-private-release-policy.py
+      # The action's one decision with a wrong answer available: which build of
+      # hauksbee-ci a run actually used.
+      - run: bash integrations/github-action/test_pick_release_tag.sh
+      - run: bash integrations/github-action/test_resolve_inputs.sh
+      - run: shellcheck integrations/github-action/*.sh scripts/setup-ci-simavr.sh scripts/simavr-payload-provenance.sh
+      - run: shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
+
+  release-evidence-invariants:
+    name: release evidence invariants (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Pure stdlib tests: no corpus fetch, browser, server, or network. These
+      # prove that a renamed board cannot become unseen again, ledger prefix
+      # edits are detected, archives stay inside their declared source, and a
+      # browser artifact cannot be attached to a different reservation.
+      - run: python3 -m unittest qc.tests.test_unseen_boards
+      # A zero-exit integration test that printed SKIP is not release evidence.
+      # Keep the runner's evidence parser under the ordinary offline CI tier.
+      - run: python3 scripts/test_required_integrations.py
+      # The default bundle must bind Cargo, its installed simavr files, and its
+      # corresponding-source notice to one immutable upstream revision.
+      - run: python3 scripts/test-simavr-provenance.py
+      # A repository with no release run is allowed on an ordinary PR. If the
+      # canonical ledger exists, however, every reservation must terminate and
+      # every retained artifact must still match its recorded digest.
+      - run: python3 -m qc.unseen_boards audit-history
+
+  defect-regressions:
+    name: pinned upstream defect regressions
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      # The harness is deliberately stdlib-only. Its unit suite attacks hash
+      # drift, path escape, symlinks, duplicate cases, vacuous coverage, and
+      # commands that mutate their own supposedly pinned input bytes.
+      - run: python3 -m unittest -v qc.defect_regressions.test_tool
+      - run: python3 -m qc.defect_regressions.tool manifest qc/defect_regressions/manifest.json
+      - name: build the one binary used for both defect revisions
+        run: cargo build --locked -p hauksbee-engine --bin hauksbee --no-default-features --features renode,qemu
+      # Run the exact before/fix pair, not only the harness. The first shipped
+      # case is intentionally qualified rather than laundered into RED->GREEN:
+      # the upstream fix removes all four actionable findings, while unrelated
+      # open active parts make the fixed board INVALID under strict coverage.
+      - name: replay pinned C64-Saver defect and fix
+        run: python3 -m qc.defect_regressions.tool run qc/defect_regressions/c64_saver_i2c_pullups.json
+
+  docs:
+    name: cargo doc (rendered module docs stay valid)
+    needs: [plan, clippy]
+    if: always() && needs.plan.outputs.rust == 'true' && needs.clippy.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       RUSTDOCFLAGS: -D warnings
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
       - name: cache the immutable simavr build prerequisite
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -50,134 +454,40 @@ jobs:
           key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
-      - run: cargo fmt --all --check
-      - name: enforce runtime dependency licence boundary
-        run: python3 scripts/test-runtime-dependency-licenses.py
-      # Publishability gate: a production include_str!/include_bytes! reaching
-      # outside its crate compiles from a git checkout and from nowhere else.
-      - name: enforce publish-set includes stay inside their crates
-        run: python3 scripts/check-package-includes.py
-      # The allow-list of known findings lives in Cargo.toml's
-      # [workspace.lints.clippy]. Anything outside it fails here.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      # No corpus here: these are the tests that run from the fixtures bundled
-      # in testdata/. Corpus-dependent tests skip, and the nightly gate runs
-      # them for real with HAUKSBEE_REQUIRE_CORPUS=1.
-      - run: cargo test --workspace
-      # The //! module headers are rustdoc input; broken intra-doc links rot
-      # silently unless something builds the docs.
+      # The //! module headers are rustdoc input, rendered by `cargo doc` and
+      # published on docs.rs if the crates ever ship there. Broken intra-doc
+      # links and malformed markdown rot silently unless something builds the
+      # docs, so this builds them.
       - run: cargo doc --workspace --no-deps
 
-  no-default:
-    name: GPL-free shape, bare engine, VS Code loader, defect regressions
+  docs-currency:
+    name: docs currency (no dead links, gravestones, or stale paths in shipped docs)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      # GPL-freeness guard: a clean shape ignores these; a leaky shape panics
-      # in hauksbee-mcu/build.rs. A red here means a feature-graph regression
-      # re-enabled avr. Fix the graph, never weaken this check.
-      SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
-      SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      - name: cargo check --workspace --no-default-features --features renode,qemu
-        run: |
-          if ! cargo check --workspace --no-default-features --features renode,qemu; then
-            echo "::error title=GPL-free shape broken::--no-default-features --features renode,qemu failed."
-            echo "Either it stopped compiling, or it pulled in the GPL avr/libsimavr backend." >&2
-            exit 1
-          fi
-      # The smallest supported feature shape of the engine: catches accidental
-      # simulator-only dependencies and runs the behavioural tests there.
-      - run: cargo check -p hauksbee-engine --no-default-features
-      - run: cargo clippy -p hauksbee-engine --no-default-features --all-targets -- -D warnings
-      - run: cargo test -p hauksbee-engine --no-default-features --all-targets
-      # The permissive binaries the VS Code parity tests and the pinned defect
-      # regressions drive.
-      - run: cargo build --locked -p hauksbee-engine -p hauksbee-ci --no-default-features --features renode,qemu
-      - name: VS Code extension build and tests
-        working-directory: editors/vscode-hauksbee-board
-        run: |
-          bun install --frozen-lockfile
-          bun run build
-          bun test src/
-      # The defect-regression harness is stdlib-only; its unit suite attacks
-      # hash drift, path escape, symlinks, duplicate cases and vacuous coverage.
-      - run: python3 -m unittest -v qc.defect_regressions.test_tool
-      - run: python3 -m qc.defect_regressions.tool manifest qc/defect_regressions/manifest.json
-      # Replay the exact before/fix pair with the binary built above.
-      - name: replay pinned C64-Saver defect and fix
-        run: python3 -m qc.defect_regressions.tool run qc/defect_regressions/c64_saver_i2c_pullups.json
+      # Shipped docs must describe the present tense of the tree: every relative
+      # link resolves, no gravestone or review-process language, no references
+      # into internal-only paths, no em-dashes, no stale backticked repo paths.
+      - run: python3 scripts/lint-docs-currency.py
 
-  release-qc:
-    name: release build, scenario QC, speed gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: release
-      - name: cache the immutable simavr build prerequisite
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.hauksbee-simavr
-          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
-      - name: install the immutable simavr build prerequisite
-        run: scripts/setup-ci-simavr.sh
-      - name: install ngspice (the oracle the speed claim is measured against)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ngspice
-          ngspice --version | head -2
-      # The scenario suite measures a release build: its flows are sub-second
-      # in release and trip their own wall-clock ceilings in debug.
-      - name: build the binaries the suite drives
-        run: cargo build --release --bin hauksbee --bin hauksbee-ci
-      # Checks the session, not the unit: the verdict wording a person reads,
-      # the exit code a pipeline branches on, whether a diagnosis names the
-      # number it measured.
-      - name: qc/run.sh
-        run: qc/run.sh
-      - name: scenario transcripts
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: scenario-qc-report
-          path: qc/results
-          if-no-files-found: ignore
-      # README and docs/about/COMPARISON.md market a speed advantage over
-      # ngspice; this is what defends that claim on every push. Release build:
-      # a debug-profile ratio is not a claim anyone ships. A red here means the
-      # solver regressed or the marketed number no longer holds; in the second
-      # case the DOCS change, never the floors.
-      - name: cargo test --release --test speed_gate
-        env:
-          HAUKSBEE_REQUIRE_NGSPICE: "1"
-        run: |
-          if ! cargo test --release -p hauksbee-solve --test speed_gate -- --nocapture; then
-            echo "::error title=Speed claim not defended::The faster-than-ngspice gate failed."
-            echo "Either the solver regressed, or the marketed speed/accuracy numbers no" >&2
-            echo "longer hold. If the latter, change the docs, not the recorded floors." >&2
-            exit 1
-          fi
-      - name: upload the measured results table
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: speed-gate-results
-          path: docs/about/speed-gate-results.md
-          if-no-files-found: warn
-
-  frontend:
+  frontend-quality:
     name: frontend quality (lint, tests, browser flows, visual fit)
+    needs: plan
+    if: needs.plan.outputs.frontend == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    env:
+      HAUKSBEE_RELEASE_COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # A layout defect is invisible to every other job here: tsc and eslint are
+      # happy with a button hanging off its card, and cargo test never renders
+      # anything. This measures the real thing in a real browser at five
+      # viewports (360, 768, 1440, plus 320 and 1920x600 as the stress ratios):
+      # page-level horizontal scroll, children escaping their container, clipped
+      # single-line text, broken or stretched images, and sticky chrome sitting
+      # on top of a control.
       - name: install frontend deps
         working-directory: frontend
         run: bun install --frozen-lockfile
@@ -200,12 +510,17 @@ jobs:
         env:
           HB_EXPECT_WORKFLOW_EXPORT: "1"
         run: bun run test:e2e
-      # No engine build here: the lint replays recorded `hauksbee serve`
-      # responses from tests/visual-lint/fixtures/ through fixture-server.ts.
+      # No engine build in this job. The lint serves frontend/dist with
+      # tests/visual-lint/fixture-server.ts, which replays real `hauksbee serve`
+      # responses from tests/visual-lint/fixtures/ (re-record them with
+      # capture-fixtures.ts). Building the Rust workspace for one report would
+      # make a three-minute job a twenty-minute one.
       - name: visual lint
         working-directory: frontend
         env:
-          # The landing site is a separate repository with its own gate.
+          # This repository owns the product app. The landing site is a separate
+          # repository/release surface and must retain its own final-state gate;
+          # do not silently treat an absent sibling checkout as site evidence.
           HB_LINT_SITE: "0"
         run: bun run visual-lint
       - name: browser-test screenshots
@@ -216,34 +531,160 @@ jobs:
           path: frontend/test-results
           if-no-files-found: ignore
 
-  lint:
-    name: diagrams, integrations, release invariants, docs currency
+  vscode-extension:
+    name: VS Code extension (build and tests)
+    needs: [plan, no-default-engine]
+    if: always() && needs.plan.outputs.vscode == 'true' && (needs.no-default-engine.result == 'success' || needs.no-default-engine.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      # draw.io renders overlapping boxes and dangling edges without complaint;
-      # the linter checks the .drawio sources geometrically.
-      - run: python3 scripts/lint-diagrams.py
-      # The KiCad plugin and pre-commit hooks ship to users; both suites are
-      # pure Python with no pcbnew/wx import.
-      - run: python3 integrations/kicad-plugin/test_hauksbee_ci_core.py
-      - run: python3 integrations/pre-commit/test_hauksbee_check_precommit.py
-      - run: python3 integrations/pre-commit/test_hauksbee_ci_precommit.py
-      # Repository privacy is a release invariant: the distribution mirror and
-      # developer tree must never be made public by the launch automation.
-      - run: python3 scripts/test-private-release-policy.py
-      - run: bash integrations/github-action/test_pick_release_tag.sh
-      - run: bash integrations/github-action/test_resolve_inputs.sh
-      - run: shellcheck integrations/github-action/*.sh scripts/setup-ci-simavr.sh scripts/simavr-payload-provenance.sh
-      - run: shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
-      # Release evidence invariants, offline: a renamed board cannot become
-      # unseen again, a SKIP-printing integration is not evidence, and the
-      # default bundle binds Cargo, simavr and the source notice to one
-      # upstream revision.
-      - run: python3 -m unittest qc.tests.test_unseen_boards
-      - run: python3 scripts/test_required_integrations.py
-      - run: python3 scripts/test-simavr-provenance.py
-      - run: python3 -m qc.unseen_boards audit-history
-      # Shipped docs must describe the present tense of the tree.
-      - run: python3 scripts/lint-docs-currency.py
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # The parity suite deliberately skips when no checkout-local loader is
+      # available; build the permissive loader here so CI exercises that gate.
+      - name: build loader used by parity tests
+        run: cargo build --locked -p hauksbee-ci --no-default-features --features renode,qemu
+      - name: install extension dependencies
+        working-directory: editors/vscode-hauksbee-board
+        run: bun install --frozen-lockfile
+      - name: build extension
+        working-directory: editors/vscode-hauksbee-board
+        run: bun run build
+      - name: extension unit tests
+        working-directory: editors/vscode-hauksbee-board
+        run: bun test src/
+
+  scenario-qc:
+    name: scenario QC (ten real-user sessions, end to end)
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.full == 'true' && needs.test.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      - name: cache the immutable simavr build prerequisite
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.hauksbee-simavr
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+      - name: install the immutable simavr build prerequisite
+        run: scripts/setup-ci-simavr.sh
+      # No build job exists to borrow artifacts from, and the suite has to
+      # measure a release build: the flows it times are sub-second in release
+      # and slow enough in debug to trip its own wall-clock ceilings.
+      - name: build the binaries the suite drives
+        run: cargo build --release --bin hauksbee --bin hauksbee-ci
+      # Every other job here checks a unit, a report, or a rendered page. This
+      # one checks the session: the verdict wording a person reads, the exit
+      # code a pipeline branches on, whether a diagnosis names the number it
+      # measured, whether a bad input lands somewhere the user can act from.
+      # Those can each be correct while the whole flow is unusable, and nothing
+      # else in this file would notice.
+      - name: qc/run.sh
+        run: qc/run.sh
+      # The transcript is the point on a failure: it carries every command, exit
+      # code and stream, so a red here is diagnosable without a local repro.
+      - name: scenario transcripts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scenario-qc-report
+          path: qc/results
+          if-no-files-found: ignore
+
+  gpl-free-check:
+    name: cargo check (GPL-free renode+qemu shape)
+    needs: [plan, clippy]
+    if: always() && needs.plan.outputs.rust == 'true' && needs.clippy.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # GPL-freeness guard: a clean shape ignores these; a leaky shape panics.
+      SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
+      SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      # This is a licensing ASSERTION, not a compile check. simavr discovery is
+      # pointed at a nonexistent path: if the renode+qemu shape is truly
+      # avr-free, hauksbee-mcu/build.rs early-returns and ignores it. If `avr`
+      # leaks back into the graph, build.rs panics and this job fails, telling
+      # us the "GPL-free" release would in fact be GPL-encumbered.
+      #
+      # A red here means a feature-graph regression re-enabled avr. Fix the
+      # graph, never weaken this check.
+      # See docs/about/release-and-licensing.md.
+      - name: cargo check --workspace --no-default-features --features renode,qemu
+        run: |
+          if ! cargo check --workspace --no-default-features --features renode,qemu; then
+            echo "::error title=GPL-free shape broken::--no-default-features --features renode,qemu failed."
+            echo "Either it stopped compiling, or it pulled in the GPL avr/libsimavr backend." >&2
+            echo "See docs/about/release-and-licensing.md." >&2
+            exit 1
+          fi
+
+  speed-gate:
+    name: speed gate (faster-than-ngspice claim)
+    needs: plan
+    if: needs.plan.outputs.speed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux-ci
+          add-job-id-key: false
+          cache-on-failure: true
+          cache-workspace-crates: true
+      # The oracle. Without it the gate SKIPS, and a skipped gate defends
+      # nothing, so HAUKSBEE_REQUIRE_NGSPICE below turns a missing or broken
+      # install into a red build rather than a quiet green.
+      - name: install ngspice (the oracle the speed claim is measured against)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ngspice
+          ngspice --version | head -2
+      # README and docs/about/COMPARISON.md market a speed advantage over
+      # ngspice. This job is what makes that claim defended on every push
+      # instead of resting on #[ignore]d benches that print and assert nothing.
+      # Release build: a debug-profile ratio is not a claim anyone ships.
+      #
+      # A red here means either the solver regressed or the marketed number no
+      # longer holds. In the second case the DOCS change, never the floors.
+      - name: cargo test --release --test speed_gate
+        env:
+          HAUKSBEE_REQUIRE_NGSPICE: "1"
+        run: |
+          if ! cargo test --release -p hauksbee-solve --test speed_gate -- --nocapture; then
+            echo "::error title=Speed claim not defended::The faster-than-ngspice gate failed."
+            echo "Either the solver regressed, or the marketed speed/accuracy numbers no" >&2
+            echo "longer hold. If the latter, change the docs, not the recorded floors." >&2
+            exit 1
+          fi
+      # The measured table the docs cite. Kept as an artifact so a reviewer can
+      # read the actual numbers from the run that gated the commit.
+      - name: upload the measured results table
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: speed-gate-results
+          path: docs/about/speed-gate-results.md
+          if-no-files-found: warn

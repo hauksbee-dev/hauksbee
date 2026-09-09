@@ -17,8 +17,8 @@ use axum::routing::get;
 use axum::Router;
 use engine::Engine;
 use frontdoor::{
-    CheckRunner, FirmwareAnalyzer, LiveLauncher, SchematicAnalyzer, SchematicCheckRunner,
-    SchematicLiveLauncher, ToolHooks,
+    CheckRunner, DesignAnalyzer, DesignCheckRunner, DesignLiveLauncher, FirmwareAnalyzer,
+    LiveLauncher, SchematicAnalyzer, SchematicCheckRunner, SchematicLiveLauncher, ToolHooks,
 };
 use protocol::BoardInfo;
 use protocol::{ClientMessage, ServerMessage, SessionBacklog, SimFrame, Status};
@@ -277,6 +277,36 @@ impl Server {
             tools,
             launch,
             startup_json,
+            ..Default::default()
+        });
+        axum::serve(listener, router).await?;
+        Ok(())
+    }
+
+    /// Complete design-input counterpart used by the shipped app. The
+    /// preloaded session and subsequent browser uploads share one route set.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn serve_app_on_with_design(
+        &self,
+        listener: tokio::net::TcpListener,
+        static_dir: Option<&Path>,
+        board_file: Option<(String, String)>,
+        analyze: DesignAnalyzer,
+        check: Option<DesignCheckRunner>,
+        tools: Option<ToolHooks>,
+        launch: Option<DesignLiveLauncher>,
+        startup_json: String,
+    ) -> anyhow::Result<()> {
+        let router = unified_router(RouterParts {
+            hub: Some(self.hub.clone()),
+            static_dir: static_dir.map(Path::to_path_buf),
+            board_file,
+            design_analyze: Some(analyze),
+            design_check: check,
+            tools,
+            design_launch: launch,
+            startup_json,
+            ..Default::default()
         });
         axum::serve(listener, router).await?;
         Ok(())
@@ -289,6 +319,9 @@ impl Server {
 /// fill (or replace) the hub's session server-side; a deployment without the
 /// callback keeps the CLI-hint fallback in the frontend. `startup_json` is
 /// what the frontend fetches from `/api/startup` to choose its landing state.
+/// The `design_*` callbacks are the widest upload shape (board plus every
+/// manufacturing companion); the narrower ones adapt onto the schematic shape
+/// at mount time, so no route has two implementations to keep in step.
 #[derive(Default)]
 struct RouterParts {
     hub: Option<Arc<LiveHub>>,
@@ -298,6 +331,9 @@ struct RouterParts {
     check: Option<SchematicCheckRunner>,
     tools: Option<ToolHooks>,
     launch: Option<SchematicLiveLauncher>,
+    design_analyze: Option<DesignAnalyzer>,
+    design_check: Option<DesignCheckRunner>,
+    design_launch: Option<DesignLiveLauncher>,
     startup_json: String,
 }
 
@@ -311,6 +347,9 @@ fn unified_router(parts: RouterParts) -> Router {
         check,
         tools,
         launch,
+        design_analyze,
+        design_check,
+        design_launch,
         startup_json,
     } = parts;
     // The board-file probe is answered whether or not a hub exists: the
@@ -330,13 +369,22 @@ fn unified_router(parts: RouterParts) -> Router {
     if let (Some(hub), Some(launch)) = (&hub, launch) {
         router = router.merge(frontdoor::live_routes_with_schematic(hub.clone(), launch));
     }
+    if let (Some(hub), Some(launch)) = (&hub, design_launch) {
+        router = router.merge(frontdoor::live_routes_with_design(hub.clone(), launch));
+    }
     if let Some(analyze) = analyze {
         router = router.merge(frontdoor::api_routes_with_schematic(analyze));
+    }
+    if let Some(analyze) = design_analyze {
+        router = router.merge(frontdoor::api_routes_with_design(analyze));
     }
     // The web checks panel's backend (`POST /api/check`): present whenever the
     // embedding binary supplied a runner (the hauksbee-ci shell-out).
     if let Some(check) = check {
         router = router.merge(frontdoor::check_route_with_schematic(check));
+    }
+    if let Some(check) = design_check {
+        router = router.merge(frontdoor::check_route_with_design(check));
     }
     // The dependency panel's backend (`GET /api/deps`, `POST
     // /api/deps/install/{id}`) and the datasheet-extraction backend
@@ -460,12 +508,37 @@ pub async fn serve_frontdoor_on_with_schematic(
     let router = unified_router(RouterParts {
         hub: Some(LiveHub::new()),
         static_dir: static_dir.map(Path::to_path_buf),
-        board_file: None,
         analyze: Some(analyze),
         check,
         tools,
         launch,
         startup_json,
+        ..Default::default()
+    });
+    axum::serve(listener, router).await?;
+    Ok(())
+}
+
+/// Standalone front door whose report, Checks, and Live Sim routes all accept
+/// the complete design-input bundle.
+pub async fn serve_frontdoor_on_with_design(
+    listener: tokio::net::TcpListener,
+    static_dir: Option<&Path>,
+    analyze: DesignAnalyzer,
+    check: Option<DesignCheckRunner>,
+    tools: Option<ToolHooks>,
+    launch: Option<DesignLiveLauncher>,
+    startup_json: String,
+) -> anyhow::Result<()> {
+    let router = unified_router(RouterParts {
+        hub: Some(LiveHub::new()),
+        static_dir: static_dir.map(Path::to_path_buf),
+        design_analyze: Some(analyze),
+        design_check: check,
+        tools,
+        design_launch: launch,
+        startup_json,
+        ..Default::default()
     });
     axum::serve(listener, router).await?;
     Ok(())

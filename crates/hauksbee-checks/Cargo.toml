@@ -16,11 +16,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = "0.8"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
-hauksbee-bind = { version = "0.1.0", path = "../hauksbee-bind" }
-hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
-hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
-hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
-hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
+hauksbee-bind = { version = "0.1.0-beta.4", path = "../hauksbee-bind" }
+hauksbee-extract = { version = "0.1.0-beta.4", path = "../hauksbee-extract" }
+hauksbee-models = { version = "0.1.0-beta.4", path = "../hauksbee-models" }
+hauksbee-ir = { version = "0.1.0-beta.4", path = "../hauksbee-ir" }
+hauksbee-solve = { version = "0.1.0-beta.4", path = "../hauksbee-solve" }
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }

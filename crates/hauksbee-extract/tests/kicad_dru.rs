@@ -2,12 +2,36 @@ use hauksbee_extract::{
     clearance_rules_from_kicad_pro, parse_kicad_dru, ExtractedBoard, KicadDruConstraintKind,
 };
 
+const DOORBELL_DRU: &str = include_str!("fixtures/kicad_dru_doorbell.kicad_dru");
 const PRECEDENCE_BOARD: &str = include_str!("fixtures/kicad_dru_precedence.kicad_pcb");
 const PRECEDENCE_PROJECT: &str = include_str!("fixtures/kicad_dru_precedence.kicad_pro");
 const PRECEDENCE_DRU: &str = include_str!("fixtures/kicad_dru_precedence.kicad_dru");
 const PRECEDENCE_RESTRICTIVE_LAST_DRU: &str =
     include_str!("fixtures/kicad_dru_precedence_restrictive_last.kicad_dru");
 const BARE_SCOPE_DRU: &str = include_str!("fixtures/kicad_dru_bare_scope.kicad_dru");
+
+#[test]
+fn parses_doorbells_actual_custom_rules() {
+    let parsed = parse_kicad_dru(DOORBELL_DRU).expect("doorbell DRU parses");
+    assert_eq!(parsed.version, 1);
+    assert_eq!(parsed.rules.len(), 4);
+    assert_eq!(parsed.global_clearance_mm(), Some(0.127));
+    assert!(parsed.unsupported_constraint_counts.is_empty());
+
+    let conditional = parsed
+        .rules
+        .iter()
+        .find(|rule| rule.name.starts_with("PTH hole-to-copper"))
+        .expect("PTH rule present");
+    assert_eq!(
+        conditional.condition.as_deref(),
+        Some("A.Pad_Type == 'Through Hole Pad'")
+    );
+    assert!(conditional
+        .constraints
+        .iter()
+        .any(|constraint| constraint.kind == KicadDruConstraintKind::HoleClearance));
+}
 
 #[test]
 fn converts_explicit_mil_inch_and_mm_units() {

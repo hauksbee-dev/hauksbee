@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { APP_VERSION, RELEASE_COMMIT } from './release-globals'
 
 const frontend = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repository = join(frontend, '..')
@@ -35,11 +34,67 @@ describe('frontend release gates', () => {
     expect(workflow).toContain('run: bun run test:e2e')
   })
 
+  test('ordinary pushes stay cheap while exact candidates keep native gates', () => {
+    expect(workflow).toContain('workflow_dispatch:')
+    expect(workflow).not.toContain('schedule:')
+    expect(workflow).toContain("needs.plan.outputs.full == 'true'")
+    expect(workflow).toContain('python3 scripts/test_ci_change_plan.py')
+    expect(workflow).toContain('cache-on-failure: true')
+    const rustCaches = workflow.split(
+      'uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6',
+    ).slice(1)
+    expect(rustCaches.length).toBeGreaterThan(0)
+    for (const cache of rustCaches) {
+      const inputs = cache.slice(0, cache.indexOf('\n      - '))
+      expect(inputs).toContain('cache-workspace-crates: true')
+      expect(inputs).toContain('shared-key:')
+    }
+    const cargoManifest = readFileSync(join(repository, 'Cargo.toml'), 'utf8')
+    expect(cargoManifest).toContain('[workspace.metadata.ci]')
+    expect(cargoManifest).toContain('workspace-cache-epoch = 1')
+
+    const lastFailure = workflow.indexOf(
+      'cargo test --locked -p hauksbee-ci --test spec_and_assertions -- --nocapture',
+    )
+    const broadClippy = workflow.indexOf(
+      'cargo clippy --workspace --lib --bins --examples -- -D warnings',
+    )
+    expect(lastFailure).toBeGreaterThan(-1)
+    expect(lastFailure).toBeLessThan(broadClippy)
+
+    const noDefaultStart = workflow.indexOf('  no-default-engine:')
+    const testsStart = workflow.indexOf('  test:', noDefaultStart)
+    const noDefault = workflow.slice(noDefaultStart, testsStart)
+    expect(noDefault).not.toContain(
+      'cargo check -p hauksbee-engine --no-default-features',
+    )
+    expect(noDefault).toContain(
+      'cargo clippy -p hauksbee-engine --no-default-features --lib --bins --examples -- -D warnings',
+    )
+    expect(noDefault).toContain(
+      'cargo test -p hauksbee-engine --no-default-features --all-targets',
+    )
+    expect(workflow).not.toContain('cargo clippy --workspace --all-targets')
+    expect(workflow).not.toContain(
+      'cargo clippy -p hauksbee-engine --no-default-features --all-targets',
+    )
+    for (const job of ['macos', 'windows']) {
+      const start = workflow.indexOf(`  ${job}:`)
+      expect(start).toBeGreaterThan(-1)
+      const rest = workflow.slice(start + 3)
+      const nextJob = rest.search(/^ {2}[a-z][a-z0-9-]*:\n/m)
+      const block = nextJob === -1 ? rest : rest.slice(0, nextJob)
+      expect(block).toContain('needs: [plan, test]')
+      expect(block).toContain("needs.plan.outputs.full == 'true'")
+      expect(block).toContain("needs.test.result == 'success'")
+    }
+  })
+
   test('every CI frontend build binds generated workflows to its exact source commit', () => {
     const frontendBuildSteps = workflow.match(
       /- name: (?:build the embedded browser front door|build the frontend)[\s\S]*?run: (?:\|\n[\s\S]*?)?\s*bun run build/g,
     ) ?? []
-    expect(frontendBuildSteps.length).toBeGreaterThan(0)
+    expect(frontendBuildSteps).toHaveLength(2)
     for (const step of frontendBuildSteps) {
       expect(step).toContain('HAUKSBEE_RELEASE_COMMIT: ${{ github.sha }}')
     }
@@ -54,12 +109,16 @@ describe('frontend release gates', () => {
     expect(generated.match(/persist-credentials: false/g)).toHaveLength(1)
     expect(generated).toContain("publish-report: ${{ github.event_name != 'pull_request'")
     expect(generated).toContain(
-      `uses: hauksbee-dev/hauksbee/integrations/github-action@${RELEASE_COMMIT}`,
+      'uses: hauksbee-dev/hauksbee/integrations/github-action@0123456789abcdef0123456789abcdef01234567',
     )
-    expect(generated).not.toContain('secrets.')
-    expect(generated).toContain(`hauksbee-ref: ${RELEASE_COMMIT}`)
-    expect(generated).toContain(`hauksbee-version: v${APP_VERSION}`)
-    expect(generated).not.toContain(`ref: v${APP_VERSION}`)
+    // The beta repository is private, so the action refuses to start without a
+    // credential. Exactly one secret may appear, and it is the one the setup
+    // panel and the Action README tell the user to create.
+    expect(generated).toContain('hauksbee-token: ${{ secrets.HAUKSBEE_BETA_TOKEN }}')
+    expect(generated.match(/secrets\./g)).toHaveLength(1)
+    expect(generated).toContain('hauksbee-ref: 0123456789abcdef0123456789abcdef01234567')
+    expect(generated).toContain('hauksbee-version: v0.1.0-beta.4')
+    expect(generated).not.toContain('ref: v0.1.0-beta.4')
     for (const inputPath of ['**/*.xml', '**/*.zip', '**/*.tgz', '**/*.tar.gz', '**/*.tar']) {
       expect(generated).toContain(`"${inputPath}"`)
     }
@@ -97,9 +156,7 @@ describe('frontend release gates', () => {
     expect(installer).toContain('Version: $SIMAVR_TAG')
     expect(installer).toContain('refusing to overwrite or trust an unidentified library')
     expect(installer).not.toContain('git clone --depth 1 --branch "$SIMAVR_TAG"')
-    // The jobs that compile the default (avr) feature shape: the debug job
-    // and the release build the scenario suite and speed gate drive.
-    for (const job of ['rust', 'release-qc']) {
+    for (const job of ['clippy', 'test', 'macos', 'docs', 'scenario-qc']) {
       const start = workflow.indexOf(`  ${job}:`)
       expect(start).toBeGreaterThan(-1)
       const rest = workflow.slice(start + 3)

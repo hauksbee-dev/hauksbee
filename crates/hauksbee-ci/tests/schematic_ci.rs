@@ -8,6 +8,8 @@
 //! right fixture for the powerful guarantee here: **schematic-stage CI and
 //! layout-stage CI return the same verdict where both exist.**
 
+mod support;
+
 use std::path::PathBuf;
 
 use hauksbee_ci::{run, RunConfig};
@@ -68,10 +70,10 @@ fn write_tmp(name: &str, body: &str) -> PathBuf {
 
 /// The shared assertion body, parameterised on the board path. Identical for
 /// the schematic and the PCB so the only variable is which stage we run at.
-fn spec_body(board: &str) -> String {
+fn spec_body(board: &std::path::Path) -> String {
     format!(
         r#"name = "pic_programmer agreement"
-board = "{board}"
+board = {board}
 duration_ms = 1
 
 [[supply]]
@@ -87,7 +89,8 @@ max = 5.01
 
 [[assert]]
 kind = "no_faults"
-"#
+"#,
+        board = support::toml_path(board),
     )
 }
 
@@ -131,8 +134,8 @@ fn schematic_and_pcb_agree() {
         return;
     }
 
-    let sch_spec = write_tmp("agree_sch.toml", &spec_body(&sch.display().to_string()));
-    let pcb_spec = write_tmp("agree_pcb.toml", &spec_body(&pcb.display().to_string()));
+    let sch_spec = write_tmp("agree_sch.toml", &spec_body(&sch));
+    let pcb_spec = write_tmp("agree_pcb.toml", &spec_body(&pcb));
 
     let sch_res = run(&RunConfig {
         spec: sch_spec,
@@ -180,8 +183,8 @@ fn pointing_at_subsheet_is_a_clear_error() {
     let spec = write_tmp(
         "subsheet.toml",
         &format!(
-            "name=\"sub\"\nboard=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"no_faults\"\n",
-            sub.display()
+            "name=\"sub\"\nboard={}\nduration_ms=1\n[[assert]]\nkind=\"no_faults\"\n",
+            support::toml_path(&sub)
         ),
     );
     let err = run(&RunConfig {
@@ -215,8 +218,8 @@ fn hierarchy_subsheet_components_are_loaded() {
     let spec = write_tmp(
         "subsheet_load.toml",
         &format!(
-            "name=\"load\"\nboard=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"{}\"\namps=100.0\n",
-            sch.display(),
+            "name=\"load\"\nboard={}\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"{}\"\namps=100.0\n",
+            support::toml_path(&sch),
             SUBSHEET_REF,
         ),
     );

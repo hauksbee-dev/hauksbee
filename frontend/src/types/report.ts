@@ -340,6 +340,8 @@ export interface WebReport {
   /** reference -> bound model kind ("mcu", "bjt_npn", ...); what a component
    *  click on the board map reports as the part's bound model. */
   component_kinds?: Record<string, string>
+  /** Component-scoped assertion kinds the bound circuit can evaluate. */
+  component_assertions?: Record<string, string[]>
   /** Binder-detected supplies (rail net → nominal volts) for the checks
    *  builder's prefill. */
   supplies?: WebSupply[]
@@ -434,6 +436,34 @@ export interface ModelSaveResult {
   error?: string
   path?: string
   note?: string
+  /** Why a saved model left coverage where it was, when it did. */
+  coverage_note?: string | null
+}
+
+/** The assertion values the board-side constraint modal can edit before a
+ *  check is queued. Every one is the raw string the field held, so an empty
+ *  box stays absent rather than becoming a guessed number. */
+export interface CheckConstraints {
+  min?: string
+  max?: string
+  after_ms?: string
+  deadline_ms?: string
+  contains?: string
+  freq_hz?: string
+  tolerance?: string
+  min_toggles?: string
+  amps?: string
+  celsius?: string
+  /** Which side of the window the row bounds: 'dip' or 'spike'. */
+  rail_polarity?: string
+  dip_below?: string
+  for_max_ms?: string
+  recover_to?: string
+  recover_within_ms?: string
+  spike_above?: string
+  spike_for_max_ms?: string
+  settle_to?: string
+  settle_within_ms?: string
 }
 
 /** What a board surface (a net or component click on the report map or the
@@ -442,7 +472,7 @@ export interface ModelSaveResult {
  *  while a check judges it, and a register-map device needs a human-authored
  *  spec before it can run. Nothing here is guessed from a part name. */
 export type BoardRequest =
-  | { type: 'check'; kind: string; net?: string; ref?: string }
+  | ({ type: 'check'; kind: string; net?: string; ref?: string } & CheckConstraints)
   | { type: 'peripheral'; id?: string; kind: 'stimulus' | 'pushbutton' | 'toggle'; net?: string; ref?: string }
   | { type: 'sensor'; id: string; ref?: string; modelId?: string | null }
   /** An ideal scenario supply: the checks runner rebuilds the circuit with it

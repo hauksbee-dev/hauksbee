@@ -66,6 +66,17 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# A parent process can export a PSModulePath that names only its own module
+# directories (pwsh 7 and CI runners both do). Windows PowerShell 5.1 inherits
+# it and then cannot auto-load its built-in modules: Get-FileHash and
+# Expand-Archive stop resolving. Anchor this engine's module directories ahead
+# of whatever the environment supplied.
+$engineModulePaths = @(Join-Path $PSHOME "Modules")
+if ($PSVersionTable.PSEdition -eq "Desktop") {
+    $engineModulePaths += Join-Path $env:ProgramFiles "WindowsPowerShell\Modules"
+}
+$env:PSModulePath = (@($engineModulePaths) + @($env:PSModulePath -split ';' | Where-Object { $_ })) -join ';'
+
 if ($Version -and $Version -notmatch '^v[0-9A-Za-z._-]+$') {
     throw "-Version must name one explicit v* release tag."
 }
@@ -224,7 +235,7 @@ function Invoke-TokenFreeVersionProbe([string]$Path) {
 
 function Assert-BinaryVersion([string]$Path, [string]$Name, [string]$ExpectedVersion) {
     $probe = Invoke-TokenFreeVersionProbe $Path
-    $escapedName = [regex]::Escape($Name -replace '\.exe$', '')
+    $escapedName = [regex]::Escape(($Name -replace '\.exe$', ''))
     $escapedVersion = [regex]::Escape($ExpectedVersion)
     $escapedCommit = [regex]::Escape($ResolvedCommit)
     if ($probe.ExitCode -ne 0 -or $probe.Output -notmatch "(?m)^$escapedName $escapedVersion \(git $escapedCommit\)$") {

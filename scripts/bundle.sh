@@ -8,7 +8,10 @@
 #                                 ~/.hauksbee/models override mechanism and docs)
 #   integrations/                 the GitHub Action, KiCad plugin, pre-commit hook
 #   examples/                     the hauksbee-ci specs + boards (runnable demos)
-#   scripts/                      install.sh / doctor.sh / ci.sh
+#   scripts/                      install.sh / doctor.sh / ci.sh /
+#                                 install-sims.sh / common.sh /
+#                                 simavr-payload-provenance.sh /
+#                                 simulator-provenance.py
 #   LICENSE, NOTICE               hauksbee's own Apache-2.0 terms + attribution
 #   LICENSE-BINARY.txt            what THIS binary is licensed under, and why
 #   VERSION, README-BUNDLE.txt    provenance + how to install
@@ -51,9 +54,11 @@
 # keeps the permissive shape honest.
 #
 # Web UI: on a build (not --no-build) this first builds frontend/dist and then
-# appends the `embed-web` feature, so the resulting binary embeds the web app
-# and `hauksbee serve` works from a bare install. embed-web only adds rust-embed
-# (permissive), so it has no bearing on the GPL guard. Needs bun or npm on PATH;
+# appends the `serve,embed-web` features, so the resulting binary includes the
+# web front door and embeds its UI; `hauksbee serve` works from a bare install
+# even for the permissive no-default-features shape. embed-web only adds
+# rust-embed (permissive), so it has no bearing on the GPL guard. Needs bun or
+# npm on PATH;
 # without a JS toolchain and no existing dist/, the bundle builds without a UI.
 #
 # macOS signing: on a Darwin host, when HAUKSBEE_SIGN_IDENTITY is set, each
@@ -98,7 +103,7 @@ while [ $# -gt 0 ]; do
 done
 
 # ── shape -> feature flags + asset name suffix ───────────────────────────────
-# Two shapes ship on every release. `default` includes the avr backend and is
+# The beta ships one shape: `permissive`. `default` adds the avr backend and is
 # therefore a GPL-3.0 binary; `permissive` drops it and stays Apache-2.0.
 case "$SHAPE" in
   default)
@@ -189,8 +194,9 @@ if [ "$DO_BUILD" -eq 1 ]; then
   have "$CARGO" || die "cargo not found. Install Rust or pass --no-build."
 
   # Build the web front door so the release bundle self-contains the UI. The
-  # embed-web feature (appended below) compiles frontend/dist INTO the binary,
-  # so `hauksbee serve` works from a bare installed binary with no checkout.
+  # serve + embed-web (appended below) compile the front door and frontend/dist
+  # INTO the binary, so `hauksbee serve` works from a bare installed binary
+  # with no checkout.
   # Release bytes must come from the checked-in Bun lock. Gated on DO_BUILD
   # (the --no-build path ships the already-built binaries as-is and never
   # rebuilds the frontend).
@@ -201,15 +207,15 @@ if [ "$DO_BUILD" -eq 1 ]; then
     die "bun not found; a release bundle must rebuild frontend/dist from the checked-in bun.lock"
   fi
 
-  # Self-contain the web app: append embed-web so the built binary serves the UI
-  # without a checkout. A release bundle always wants this. rust-embed needs
+  # Self-contain the web app: append serve,embed-web so the built binary serves
+  # the UI without a checkout. A release bundle always wants this. rust-embed needs
   # frontend/dist to exist at COMPILE time, so only enable it when dist is
   # actually present; a missing dist would otherwise hard-fail the build. Append
   # (never replace) so it composes onto whatever features were requested, e.g.
-  # the release workflow's `renode,qemu` -> `renode,qemu,embed-web`.
+  # the permissive shape's `renode,qemu` -> `renode,qemu,serve,embed-web`.
   if [ -d "$HAUKSBEE_ROOT/frontend/dist" ]; then
-    if [ -n "$FEATURES" ]; then FEATURES="$FEATURES,embed-web"; else FEATURES="embed-web"; fi
-    log "Self-contained web UI: embed-web enabled (features: ${FEATURES})"
+    if [ -n "$FEATURES" ]; then FEATURES="$FEATURES,serve,embed-web"; else FEATURES="serve,embed-web"; fi
+    log "Self-contained web UI: serve + embed-web enabled (features: ${FEATURES})"
   else
     warn "frontend/dist not found; building WITHOUT embed-web."
     warn "The bare binary will have no web UI until it is built from a checkout."
@@ -372,31 +378,43 @@ install -m 0644 \
 mkdir -p "$ROOTDIR/examples"
 cp -R "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/." "$ROOTDIR/examples/ci-specs"
 [ -d "$HAUKSBEE_ROOT/examples" ] && cp -R "$HAUKSBEE_ROOT/examples/." "$ROOTDIR/examples/"
-mkdir -p "$ROOTDIR/examples/firmware"
-install -m 0644 "$HAUKSBEE_ROOT/testdata/firmware/boot_gate_a/boot_gate.hex" \
-  "$ROOTDIR/examples/firmware/boot_gate.hex"
-# The checkout-relative tracked spec points at testdata/. The bundle retains a
-# package-local copy so its documented example and runtime gate are self-contained.
-sed 's#firmware = "../../../testdata/firmware/boot_gate_a/boot_gate.hex"#firmware = "../firmware/boot_gate.hex"#' \
-  "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boot_gate_pass.toml" \
-  > "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
-perl -pi -e 's#hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_pass\.toml#hauksbee-ci run examples/ci-specs/boot_gate_pass.toml#' \
-  "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
+# The AVR boot-gate demo belongs only in a bundle whose binary carries the avr
+# backend. The permissive shape has none, so staging the fixture and rewriting
+# the spec there would ship a headline example that cannot run. Leave both out
+# instead; scripts/bundle-windows.ps1 already drops the spec from its zip.
+if [ "$SHAPE" = default ]; then
+  mkdir -p "$ROOTDIR/examples/firmware"
+  install -m 0644 "$HAUKSBEE_ROOT/testdata/firmware/boot_gate_a/boot_gate.hex" \
+    "$ROOTDIR/examples/firmware/boot_gate.hex"
+  # The checkout-relative tracked spec points at testdata/. The bundle retains a
+  # package-local copy so its documented example and runtime gate are self-contained.
+  sed 's#firmware = "../../../testdata/firmware/boot_gate_a/boot_gate.hex"#firmware = "../firmware/boot_gate.hex"#' \
+    "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boot_gate_pass.toml" \
+    > "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
+  perl -pi -e 's#hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_pass\.toml#hauksbee-ci run examples/ci-specs/boot_gate_pass.toml#' \
+    "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
+else
+  # The checkout-relative spec rode in with the `cp -R` of the whole examples
+  # directory above. Its firmware path escapes the tarball and no avr backend
+  # exists to run it, so drop it rather than ship a spec that fails on arrival.
+  rm -f "$ROOTDIR/examples/ci-specs/boot_gate_pass.toml"
+fi
 # Drop python bytecode caches so the bundle is reproducible.
 find "$ROOTDIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$ROOTDIR" -name '*.pyc' -delete 2>/dev/null || true
 
 # ── flagship-board gate ──────────────────────────────────────────────────────
-# The flagship board is private (see scripts/build-public-mirror.sh, whose
-# BOARD_EXCLUDE / BOARD_GLOB lists this mirrors). Its hauksbee-ci example specs
+# The flagship board is private and never enters a distributed source tree,
+# but its hauksbee-ci example specs
 # live in crates/hauksbee-ci/examples/ and would otherwise ride into every
-# bundle with the rest of the examples. The two known specs are dropped by
+# bundle with the rest of the examples. The three known specs are dropped by
 # name; anything ELSE named after the board, anywhere in the staged tree, is a
 # hard failure rather than a silent drop, because a new board-named file
 # appearing in the staging set means the enumeration is stale and a human has
 # to look.
 rm -f "$ROOTDIR/examples/ci-specs/tarski_brownout.toml" \
-      "$ROOTDIR/examples/ci-specs/tarski_brownout_repaired.toml"
+      "$ROOTDIR/examples/ci-specs/tarski_brownout_repaired.toml" \
+      "$ROOTDIR/examples/ci-specs/tarski_stage0_powerup.toml"
 
 # ── corpus-dependent example specs ───────────────────────────────────────────
 # These three specs point their `board =` at ../../../../board-corpus/, which
@@ -541,6 +559,23 @@ is Apache-2.0 and carries no GPL code. Read LICENSE-BINARY.txt;
 the download without the -permissive suffix adds AVR co-sim and is GPL-3.0."
 fi
 
+# The examples note has to match what was actually staged: the permissive shape
+# packages no AVR fixture and no boot_gate_pass.toml, so promising a runnable
+# self-contained example there would be a lie the user discovers on first run.
+if [ "$SHAPE" = default ]; then
+  EXAMPLES_NOTE="NOTE: boot_gate_pass.toml and its tiny AVR fixture are package-local and
+self-contained. Other firmware-bearing specs (blinky, boot_gate_fail, and the
+lm75 thermostat variants) still reference firmware in the repository's large
+testdata tree; run those from a checkout. They remain canonical examples to copy."
+else
+  EXAMPLES_NOTE="NOTE: this download has no avr backend, so its AVR examples are absent rather
+than broken: boot_gate_pass.toml and its fixture are not packaged here. To run
+the AVR specs (boot_gate_pass, boot_gate_fail, blinky, and the lm75 thermostat
+variants), take a repository checkout, build simavr with
+scripts/install-sims.sh --avr, and build hauksbee from source. They remain
+canonical examples to copy."
+fi
+
 cat > "$ROOTDIR/README-BUNDLE.txt" <<EOF
 hauksbee ${VERSION} (${TARGET})
 built from git ${GIT_SHA_SHORT}
@@ -575,10 +610,7 @@ The binaries are self-contained (model db compiled in). Optional firmware
 backends (qemu, renode) are detected at runtime; run scripts/doctor.sh to see
 what is present.
 
-NOTE: boot_gate_pass.toml and its tiny AVR fixture are package-local and
-self-contained. Other firmware-bearing specs (blinky, boot_gate_fail, and the
-lm75 thermostat variants) still reference firmware in the repository's large
-testdata tree; run those from a checkout. They remain canonical examples to copy.
+${EXAMPLES_NOTE}
 EOF
 
 log "Writing tarball"

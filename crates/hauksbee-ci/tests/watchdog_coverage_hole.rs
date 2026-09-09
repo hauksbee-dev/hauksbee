@@ -23,6 +23,8 @@
 
 #![cfg(feature = "avr")]
 
+mod support;
+
 use std::path::PathBuf;
 
 use hauksbee_ci::{run, RunConfig};
@@ -48,8 +50,8 @@ fn spec_for(firmware: &str, name: &str) -> PathBuf {
     let body = format!(
         r#"
 name        = "reboot coverage ({name})"
-board       = "{}"
-firmware    = "{}"
+board       = {}
+firmware    = {}
 duration_ms = 200
 frame_ms    = 5.0
 
@@ -61,14 +63,16 @@ volts = 5.0
 [[assert]]
 kind = "no_faults"
 "#,
-        repo("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb")
-            .canonicalize()
-            .unwrap()
-            .display(),
-        repo(&format!("testdata/firmware/avr_watchdog/{firmware}"))
-            .canonicalize()
-            .unwrap()
-            .display(),
+        support::toml_path(
+            &repo("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb")
+                .canonicalize()
+                .unwrap(),
+        ),
+        support::toml_path(
+            &repo(&format!("testdata/firmware/avr_watchdog/{firmware}"))
+                .canonicalize()
+                .unwrap(),
+        ),
     );
     let p = dir.join("watchdog.toml");
     std::fs::write(&p, body).expect("write spec");

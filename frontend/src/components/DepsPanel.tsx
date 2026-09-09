@@ -100,7 +100,7 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
 
       {fetchState.phase === 'loading' && (
         <BusyLine className="justify-center mt-6" color="var(--silk-dim)">
-          Probing the co-sim backends and oracles on this machine ...
+          Checking local dependency paths ...
         </BusyLine>
       )}
 
@@ -200,7 +200,7 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                     {d.path}
                   </div>
                 )}
-                {!d.present && d.detail && (
+                {d.detail && (
                   <div className="text-[11px] mt-0.5 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
                     {d.detail}
                   </div>

@@ -283,6 +283,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             "docs/dev-plans/public-release-cleanup-plan.md",
             "docs/dev-plans/tasks.md",
             "frontend/capture/cards.ts",
+            "scripts/build-private-beta-snapshot.sh",
             "scripts/make-public.sh",
         }
         for entry in manifest["surfaces"]:
@@ -899,6 +900,16 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         tag = bundle.index('export HAUKSBEE_RELEASE_TAG="v$VERSION"')
         self.assertLess(version, tag)
 
+    def test_binary_bundle_drops_every_private_flagship_example(self) -> None:
+        bundle = (ROOT / "scripts/bundle.sh").read_text()
+        for name in (
+            "tarski_brownout.toml",
+            "tarski_brownout_repaired.toml",
+            "tarski_stage0_powerup.toml",
+        ):
+            self.assertIn(f'examples/ci-specs/{name}', bundle)
+        self.assertIn("BOARD_LEAK", bundle)
+
     def test_trusted_workflow_run_report_can_read_its_artifact(self) -> None:
         readme = (ROOT / "integrations/github-action/README.md").read_text()
         report = readme[readme.index("# hauksbee-ci-report.yml") :]
@@ -1005,6 +1016,56 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             checkout_count,
             "every release build checkout must erase even its read credential before dependencies run",
         )
+
+    def test_macos_release_imports_ephemeral_signing_credentials_and_cleans_up(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        import_start = workflow.index("- name: Import macOS Developer ID credentials")
+        import_end = workflow.index("- name: Install Rust toolchain", import_start)
+        import_step = workflow[import_start:import_end]
+        cleanup_start = workflow.index("- name: Clean up macOS signing keychain")
+        cleanup_end = workflow.index("\n  build-windows:", cleanup_start)
+        cleanup_step = workflow[cleanup_start:cleanup_end]
+        for secret in (
+            "HAUKSBEE_SIGN_IDENTITY",
+            "HAUKSBEE_SIGNING_CERTIFICATE_BASE64",
+            "HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD",
+            "HAUKSBEE_NOTARY_APPLE_ID",
+            "HAUKSBEE_NOTARY_TEAM_ID",
+            "HAUKSBEE_NOTARY_PASSWORD",
+        ):
+            with self.subTest(secret=secret):
+                self.assertIn(f"secrets.{secret}", import_step)
+        for contract in (
+            "security create-keychain",
+            "security unlock-keychain",
+            "base64 -D",
+            "security import",
+            "security set-key-partition-list",
+            "security find-identity -v -p codesigning",
+            "HAUKSBEE_SIGNING_KEYCHAIN=",
+            "HAUKSBEE_SIGNING_STATE_DIR=",
+        ):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, import_step)
+        self.assertIn("if: ${{ always() && runner.os == 'macOS' }}", cleanup_step)
+        for contract in (
+            "security list-keychains -d user -s",
+            "security delete-keychain",
+            "unlink",
+        ):
+            with self.subTest(cleanup=contract):
+                self.assertIn(contract, cleanup_step)
+
+        signing_doc = (ROOT / "app/macos/SIGNING.md").read_text()
+        for secret in (
+            "HAUKSBEE_SIGN_IDENTITY",
+            "HAUKSBEE_SIGNING_CERTIFICATE_BASE64",
+            "HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD",
+            "HAUKSBEE_NOTARY_APPLE_ID",
+            "HAUKSBEE_NOTARY_TEAM_ID",
+            "HAUKSBEE_NOTARY_PASSWORD",
+        ):
+            self.assertIn(secret, signing_doc)
 
     def test_shipped_installer_examples_use_the_public_one_liner(self) -> None:
         one_liner = (
@@ -1116,9 +1177,19 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("id: slim", workflow)
         self.assertIn("SLIM_IMAGE=${{ env.IMAGE }}@${{ steps.slim.outputs.digest }}", workflow)
         self.assertNotIn("SLIM_IMAGE=${{ env.IMAGE }}:slim-", workflow)
-        self.assertIn('digest_tag="container-digests-${GITHUB_REF_NAME}"', workflow)
+        # Derived from the verified version, not the git ref, so a manual
+        # reconcile run of an existing tag records under the original name.
+        self.assertIn('digest_tag="container-digests-v${VERSION}"', workflow)
+        self.assertNotIn('digest_tag="container-digests-${GITHUB_REF_NAME}"', workflow)
         self.assertNotIn('digest_tag="${GITHUB_REF_NAME}-docker-digests"', workflow)
         self.assertIn('gh release create "$digest_tag" "$manifest" --repo "$GH_REPO"', workflow)
+        # The workflow token may not mint refs at explicit commits (403 from
+        # both a bare-SHA target_commitish and a git/refs create), so the
+        # record's release is created with no target and the source binding
+        # is carried by the verified manifest instead.
+        self.assertNotIn('--target "$SOURCE_SHA"', workflow)
+        self.assertNotIn('-f ref="refs/tags/$digest_tag"', workflow)
+        self.assertIn('recorded_source="$(awk', workflow)
         self.assertIn("--prerelease --latest=false", workflow)
         self.assertIn('gh release edit "$digest_tag" --draft=false --repo "$GH_REPO"', workflow)
         self.assertIn('gh release verify-asset "$digest_tag" "$manifest" --repo "$GH_REPO"', workflow)
@@ -1268,6 +1339,9 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         promotion = workflow[promote:]
         self.assertIn('"$SLIM_REF"', promotion)
         self.assertIn('"$FULL_REF"', promotion)
+        self.assertIn('if [[ "$VERSION" == *-* ]]; then', promotion)
+        self.assertIn('--tag "${IMAGE}:slim-${VERSION}"', promotion)
+        self.assertIn('--tag "${IMAGE}:full-${VERSION}"', promotion)
         self.assertNotIn("SLIM_DIGEST", promotion)
         self.assertNotIn("FULL_DIGEST", promotion)
         for notice in ("RENODE-LICENSE", "QEMU-COPYING", "FREEROUTING-LICENSE"):
@@ -1294,8 +1368,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         *,
         phase: str = "before",
         token: str | None = "container-token",
-        repo_visibility: str = "private",
-        package_visibility: str = "private",
+        repo_visibility: str = "public",
+        package_visibility: str = "public",
     ) -> tuple[subprocess.CompletedProcess[str], str]:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
@@ -1383,7 +1457,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("privacy-bootstrap", docs)
         self.assertIn("no Hauksbee binaries or source", docs)
 
-    def test_container_publication_preflight_is_private_and_read_only(self) -> None:
+    def test_container_publication_preflight_is_public_and_read_only(self) -> None:
         for phase in ("before", "after"):
             with self.subTest(phase=phase):
                 result, calls = self.run_container_preflight(phase=phase)
@@ -1396,11 +1470,23 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                     ],
                 )
 
+        # A just-bootstrapped package is private until a maintainer flips it;
+        # the pre-push check must tolerate that while the post-push check
+        # refuses to call the publication done.
+        bootstrap_window, _calls = self.run_container_preflight(
+            phase="before", package_visibility="private"
+        )
+        self.assertEqual(
+            bootstrap_window.returncode,
+            0,
+            bootstrap_window.stdout + bootstrap_window.stderr,
+        )
+
         for kwargs, phrase in (
             ({"token": None}, "GH_TOKEN"),
-            ({"repo_visibility": "public"}, "repository"),
+            ({"repo_visibility": "private"}, "repository"),
             ({"repo_visibility": "inaccessible"}, "repository"),
-            ({"package_visibility": "public"}, "package"),
+            ({"phase": "after", "package_visibility": "private"}, "package"),
             ({"package_visibility": "missing"}, "package"),
             ({"package_visibility": "inaccessible"}, "package"),
         ):
@@ -1433,6 +1519,17 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("hauksbee-ci-pcm-v", workflow[build:upload])
         self.assertIn("hauksbee-ci-pcm-v*.zip", workflow[upload:publish])
         self.assertIn("hauksbee-ci-pcm-v*.zip.sha256", workflow[upload:publish])
+
+    def test_semver_beta_tags_publish_only_as_prereleases(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        publish = workflow.index("Stage immutable GitHub Release draft")
+        verify = workflow.index("Verify GitHub's immutable release attestations")
+        release_step = workflow[publish:verify]
+        self.assertIn("prerelease: ${{ contains(github.ref_name, '-') }}", release_step)
+        self.assertIn(
+            "make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}",
+            release_step,
+        )
 
     def test_consumers_keep_optional_credentials_out_of_argv(self) -> None:
         # The optional-token path in the installer must still feed the header
@@ -1467,14 +1564,18 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("Hauksbee and libsimavr", slim)
         self.assertIn("Hauksbee and libsimavr", full)
 
-        # Public state: the default Docker path pulls anonymously; the
-        # private-mirror fallback keeps its credential-hygiene guidance.
+        # No beta release publishes images, so the doc must say a pull needs
+        # the reader's own authenticated candidate build, and its login
+        # guidance must keep the credential off argv (the bare `docker login`
+        # prompt, never --password).
         docker_doc = (ROOT / "docs/ci/DOCKER.md").read_text()
-        self.assertIn("The images are public", docker_doc)
+        self.assertIn("Authenticate against the registry", docker_doc)
         self.assertIn("docker login ghcr.io", docker_doc)
+        self.assertNotIn("docker login --password", docker_doc)
 
         recipes = (ROOT / "docs/ci/RECIPES.md").read_text()
-        self.assertIn("pulls it anonymously", recipes)
+        self.assertIn("nothing to pull\nanonymously", recipes)
+        self.assertIn("protected secret store", recipes)
         for credential_contract in (
             "DOCKER_AUTH_CONFIG",
             "registryCredentialsId",
@@ -1504,7 +1605,9 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertIn("release-quality-rust:", workflow)
         self.assertIn(
-            "needs: [build, build-windows, required-integrations, release-quality-rust, release-quality-shapes, release-quality-release-binaries, release-quality-offline]",
+            "needs: [build, build-windows, required-integrations, release-quality-rust,\n"
+            "            release-quality-shapes, release-quality-release-binaries,\n"
+            "            release-quality-offline, release-quality-residue]",
             workflow,
         )
         for gate in (
@@ -1677,8 +1780,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
                         printf '%s\\n' "$FAKE_GH_VISIBILITY"
                         ;;
                       "repos/hauksbee-dev/hauksbee/immutable-releases .enabled")
-                        [ "$FAKE_IMMUTABLE_RELEASES" = true ] || exit 1
-                        printf '%s\\n' true
+                        printf '%s\\n' "$FAKE_IMMUTABLE_RELEASES"
                         ;;
                       *) exit 64 ;;
                     esac

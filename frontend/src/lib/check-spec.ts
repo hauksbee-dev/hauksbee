@@ -66,14 +66,35 @@ export interface CheckRow {
   min_toggles: string
   amps: string
   celsius: string
+  /** Which side of the rail window this row bounds: 'dip' or 'spike'. A row
+   *  is one-sided, so only that side's four fields are edited and emitted. */
+  rail_polarity: string
   dip_below: string
   for_max_ms: string
   recover_to: string
   recover_within_ms: string
+  spike_above: string
+  spike_for_max_ms: string
+  settle_to: string
+  settle_within_ms: string
 }
 
 /** A row's value fields: everything but its identity and kind. */
 export type CheckKey = Exclude<keyof CheckRow, 'id' | 'kind'>
+
+/** One check with no row identity: what the in-place editor and the modal
+ *  hand around before (or without) a builder row existing. */
+export type ConstraintDraft = Omit<CheckRow, 'id'>
+
+/** Rows saved before the polarity selector existed carry no mode. A populated
+ *  over-voltage field is unambiguously a spike; otherwise keep the original
+ *  dip behaviour. */
+export function railPolarity(c: Pick<ConstraintDraft, 'rail_polarity' | 'spike_above'>): 'dip' | 'spike' {
+  if (c.rail_polarity === 'spike' || c.rail_polarity === 'dip') return c.rail_polarity
+  return (c.spike_above ?? '').trim() ? 'spike' : 'dip'
+}
+const isDip = (c: ConstraintDraft) => railPolarity(c) === 'dip'
+const isSpike = (c: ConstraintDraft) => railPolarity(c) === 'spike'
 
 export interface BuilderState {
   name: string
@@ -121,11 +142,43 @@ export function emptyPeripheral(rowId: number, kind: PeripheralRow['kind'], net 
 const CHECK_KEYS: CheckKey[] = [
   'net', 'ref', 'min', 'max', 'after_ms', 'deadline_ms', 'contains', 'freq_hz', 'tolerance',
   'min_toggles', 'amps', 'celsius', 'dip_below', 'for_max_ms', 'recover_to', 'recover_within_ms',
+  'spike_above', 'spike_for_max_ms', 'settle_to', 'settle_within_ms',
 ]
 
 export function emptyCheck(id: number, kind: string, net = ''): CheckRow {
-  const row = { id, kind } as CheckRow
+  const row = { id, kind, rail_polarity: 'dip' } as CheckRow
   for (const key of CHECK_KEYS) row[key] = key === 'net' ? net : ''
+  return row
+}
+
+/** The same row without an identity, for the shared editor and the modal. */
+export function emptyConstraint(kind: string, net = '', ref = ''): ConstraintDraft {
+  const { id: _id, ...draft } = emptyCheck(0, kind, net)
+  draft.ref = ref
+  return draft
+}
+
+/** The value fields a queued check may carry, beyond its kind and subject:
+ *  what the in-place editor settled before the row reached the builder. */
+export const CONSTRAINT_KEYS = CHECK_KEYS.filter(key => key !== 'net' && key !== 'ref')
+
+/** Every scalar field on a row, for repairing browser-saved state. */
+const CHECK_STRING_FIELDS: CheckKey[] = ['rail_polarity', ...CHECK_KEYS]
+
+/** Upgrade browser-saved rows from earlier releases before any validator or
+ *  editor sees them. An unknown kind is dropped and a missing scalar becomes
+ *  an empty input, rather than an exception or an invented constraint. */
+export function normalizeSavedCheck(value: unknown, fallbackId: number): CheckRow | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const saved = value as Partial<CheckRow>
+  const kind = typeof saved.kind === 'string' ? saved.kind : ''
+  if (!checkKind(kind)) return null
+  const id = typeof saved.id === 'number' && Number.isFinite(saved.id) ? saved.id : fallbackId
+  const row = { ...emptyCheck(id, kind), ...saved } as CheckRow
+  for (const field of CHECK_STRING_FIELDS) {
+    if (typeof row[field] !== 'string') row[field] = ''
+  }
+  row.rail_polarity = railPolarity(row)
   return row
 }
 
@@ -138,6 +191,22 @@ export interface CheckField {
   placeholder?: string
   /** A quoted TOML string rather than a number. */
   text?: boolean
+  /** A fixed choice rather than a free input. */
+  options?: readonly { value: string; label: string }[]
+  /** Test id for the control, when the generated one is not the contract. */
+  testId?: string
+  /** What the control shows, when a stored row may not carry the field (an
+   *  older save) and the displayed value has to be derived instead. */
+  value?: (c: ConstraintDraft) => string
+  /** A mode selector the editor owns: never a spec key, so it is neither
+   *  emitted nor accepted on the way back in. */
+  ui?: boolean
+  /** Rendered, validated and emitted only while this holds. A row with two
+   *  mutually exclusive shapes carries both sets and shows one. */
+  active?: (c: ConstraintDraft) => boolean
+  /** What else to blank when this field is set: a mode switch owns the fields
+   *  the other mode filled, so a stale opposite side can never be emitted. */
+  clears?: (value: string) => Partial<ConstraintDraft>
 }
 
 /** An either/or requirement: at least one of `any` must be filled, else
@@ -146,6 +215,8 @@ interface CheckNeed {
   any: CheckKey[]
   message: string
   when?: CheckKey
+  /** Only checked while this holds (see `CheckField.active`). */
+  active?: (c: ConstraintDraft) => boolean
 }
 
 /** One [[assert]] kind: plain words first, the TOML kind in small print, and
@@ -160,6 +231,11 @@ export interface CheckKind {
   subject?: 'net' | 'ref'
   fields: CheckField[]
   needs: CheckNeed[]
+  /** Refuse a round-trip to the builder for an [[assert]] this shape cannot
+   *  hold without losing keys (the raw pane keeps it verbatim instead). */
+  refuses?: (a: Record<string, unknown>) => boolean
+  /** Settle the row's UI-only fields from what the spec actually carried. */
+  hydrate?: (row: CheckRow) => void
 }
 
 const V = (key: CheckKey, label: string, width = 64): CheckField => ({ key, label, width })
@@ -172,14 +248,48 @@ export const CHECK_KINDS: CheckKind[] = [
     needs: [{ any: ['min', 'max'], message: 'needs a min V and/or a max V' }],
   },
   {
-    kind: 'rail_window', label: 'A rail may only dip briefly', group: 'Voltages',
-    hint: 'bound brownout depth, duration and recovery', subject: 'net',
-    fields: [V('dip_below', 'dip below V'), V('for_max_ms', 'for max ms'), V('recover_to', 'recover to V'), V('recover_within_ms', 'within ms')],
-    needs: [
-      { any: ['dip_below'], message: 'dip below V is empty' },
-      { any: ['for_max_ms', 'recover_within_ms'], message: 'needs a for max ms or a recovery window (within ms)', when: 'dip_below' },
-      { any: ['recover_to'], message: 'recover to V is empty (needed with within ms)', when: 'recover_within_ms' },
+    kind: 'rail_window', label: 'A rail excursion must stay within bounds', group: 'Voltages',
+    hint: 'choose dip-below or spike-above, then set duration and recovery', subject: 'net',
+    fields: [
+      {
+        key: 'rail_polarity', label: 'excursion', width: 110, ui: true,
+        testId: 'rail-polarity', value: railPolarity,
+        options: [{ value: 'dip', label: 'dip below' }, { value: 'spike', label: 'spike above' }],
+        clears: value => value === 'spike'
+          ? { dip_below: '', for_max_ms: '', recover_to: '', recover_within_ms: '' }
+          : { spike_above: '', spike_for_max_ms: '', settle_to: '', settle_within_ms: '' },
+      },
+      { ...V('dip_below', 'dip below V'), active: isDip },
+      { ...V('for_max_ms', 'for max ms'), active: isDip },
+      { ...V('recover_to', 'recover to V'), active: isDip },
+      { ...V('recover_within_ms', 'within ms'), active: isDip },
+      { ...V('spike_above', 'spike above V', 78), active: isSpike },
+      { ...V('spike_for_max_ms', 'for max ms'), active: isSpike },
+      { ...V('settle_to', 'settle to V'), active: isSpike },
+      { ...V('settle_within_ms', 'within ms'), active: isSpike },
     ],
+    needs: [
+      { any: ['dip_below'], message: 'dip below V is empty', active: isDip },
+      { any: ['for_max_ms', 'recover_within_ms'], message: 'needs a for max ms or a recovery window (within ms)', when: 'dip_below', active: isDip },
+      { any: ['recover_to'], message: 'recover to V is empty (needed with within ms)', when: 'recover_within_ms', active: isDip },
+      { any: ['recover_within_ms'], message: 'within ms is empty (needed with recover to V)', when: 'recover_to', active: isDip },
+      { any: ['spike_above'], message: 'spike above V is empty', active: isSpike },
+      { any: ['spike_for_max_ms', 'settle_within_ms'], message: 'needs a for max ms or a settling window (within ms)', when: 'spike_above', active: isSpike },
+      { any: ['settle_to'], message: 'settle to V is empty (needed with within ms)', when: 'settle_within_ms', active: isSpike },
+      { any: ['settle_within_ms'], message: 'within ms is empty (needed with settle to V)', when: 'settle_to', active: isSpike },
+    ],
+    // A visual row has one polarity and therefore one set of keys. A spec
+    // carrying both sides (or a spike duration with no threshold) stays in the
+    // raw pane rather than losing fields on a builder round-trip.
+    refuses: a => {
+      const has = (keys: string[]) => keys.some(key => a[key] !== undefined)
+      if (has(['dip_below', 'for_max_ms', 'recover_to', 'recover_within_ms'])
+        && has(['spike_above', 'spike_for_max_ms', 'settle_to', 'settle_within_ms'])) return true
+      return has(['spike_for_max_ms', 'settle_to', 'settle_within_ms']) && a.spike_above === undefined
+    },
+    // A parsed row starts on the default polarity, so the mode comes from the
+    // key the spec actually carried rather than from that default.
+    hydrate: row => { row.rail_polarity = row.spike_above.trim() ? 'spike' : 'dip' },
   },
   {
     kind: 'no_faults', label: 'Nothing over-stressed', group: 'Stress',
@@ -227,7 +337,11 @@ export const GROUP_ORDER = ['Voltages', 'Currents', 'Temperatures', 'Stress', 'F
  *  exactly these, so the parser refuses anything else (it would survive the
  *  parse but vanish from the round-tripped spec). */
 function assertKeys(k: CheckKind): Set<string> {
-  return new Set(['kind', ...(k.subject ? [k.subject] : []), ...k.fields.map(f => f.key)])
+  return new Set([
+    'kind',
+    ...(k.subject ? [k.subject] : []),
+    ...k.fields.filter(f => !f.ui).map(f => f.key),
+  ])
 }
 
 export function tomlString(v: string): string {
@@ -283,6 +397,7 @@ export function assertToml(c: CheckRow): string {
   if (!k) return out
   if (k.subject && c[k.subject].trim()) out += `${k.subject} = ${tomlString(c[k.subject].trim())}\n`
   for (const f of k.fields) {
+    if (f.ui || (f.active && !f.active(c))) continue
     const t = c[f.key].trim()
     if (!t) continue
     if (f.text) out += `${f.key} = ${tomlString(t)}\n`
@@ -386,8 +501,10 @@ export function tomlToBuilder(raw: string): BuilderState | null {
     if (!k) return null
     const allowed = assertKeys(k)
     if (Object.keys(a).some(key => !allowed.has(key))) return null
+    if (k.refuses?.(a)) return null
     const row = emptyCheck(id++, k.kind)
     for (const key of CHECK_KEYS) if (a[key] !== undefined) row[key] = String(a[key])
+    k.hydrate?.(row)
     checks.push(row)
   }
   return {
@@ -412,19 +529,41 @@ export interface RowIssue {
 /** Builder-mode preflight, mirroring hauksbee-ci's per-assertion requirements
  *  but speaking in the builder's field labels. Only fields actually missing
  *  are named, so "ref present, amps empty" says just "max A is empty". */
-export function rowIssues(c: CheckRow): RowIssue[] {
+export function rowIssues(c: ConstraintDraft): RowIssue[] {
   const k = checkKind(c.kind)
   if (!k) return []
-  const blank = (key: CheckKey) => c[key].trim() === ''
+  // A row saved by an older frontend may not carry a field introduced later.
+  // Treat a missing one exactly like an empty input, so the preflight stays
+  // fail-closed instead of throwing on a partial draft.
+  const blank = (key: CheckKey) => (c[key] ?? '').trim() === ''
   const issues: RowIssue[] = []
   if (k.subject && blank(k.subject)) {
     issues.push({ fields: [k.subject], message: k.subject === 'net' ? 'net is empty' : 'part (ref) is empty' })
   }
   for (const need of k.needs) {
+    if (need.active && !need.active(c)) continue
     if (need.when && blank(need.when)) continue
     if (need.any.every(blank)) issues.push({ fields: need.any, message: need.message })
   }
   return issues
+}
+
+/** What the bound circuit can actually measure for a part. A current or
+ *  temperature check on a part with no such model is refused here rather than
+ *  by the engine after a run. */
+export function componentCapabilityIssues(
+  c: ConstraintDraft,
+  componentAssertions: Record<string, string[]> | undefined,
+): RowIssue[] {
+  const ref = (c.ref ?? '').trim()
+  if (!['max_current', 'max_temp'].includes(c.kind) || !ref) return []
+  if ((componentAssertions?.[ref] ?? []).includes(c.kind)) return []
+  return [{
+    fields: ['ref'],
+    message: c.kind === 'max_current'
+      ? `${ref} has no measurable through-current; choose a resistor or diode in that path`
+      : `${ref} has no thermal model, so its junction temperature cannot be evaluated`,
+  }]
 }
 
 /** Everything wrong with one register-map row, in the builder's words. */

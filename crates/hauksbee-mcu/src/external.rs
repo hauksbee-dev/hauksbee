@@ -73,7 +73,20 @@ impl EmulatorProcess {
     /// alive would hang the caller.
     pub(crate) fn exit_reason(&mut self) -> Option<String> {
         match self.child.try_wait() {
-            Ok(Some(status)) => Some(format!("exit status {status}")),
+            // The status alone says a process died, not why. Where stderr was
+            // captured, its tail is the emulator's own account and belongs in
+            // the reason the caller reports.
+            Ok(Some(status)) => Some(match self.stderr_output() {
+                tail if tail.is_empty() => format!("exit status {status}"),
+                tail => format!(
+                    "exit status {status}; stderr tail: {}",
+                    tail.lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                ),
+            }),
             Ok(None) => None,
             Err(e) => Some(format!("wait failed: {e}")),
         }
@@ -493,12 +506,21 @@ impl PollState {
 
 /// The [`Mcu`] methods every poll-based backend answers identically from its
 /// [`PollState`] field, spelled once. Invoked inside each backend's `impl Mcu`.
+/// A backend whose run failures carry extra diagnosis (Renode folds its exit
+/// status and stderr tail into the error) passes `own_run_micros` and writes
+/// that one method itself; everything else is shared either way.
 macro_rules! poll_state_mcu_methods {
     ($core:ident) => {
         fn run_micros(&mut self, us: u64) -> Result<()> {
             self.run_seconds(us as f64 / 1_000_000.0)
         }
 
+        poll_state_mcu_methods!(@shared $core);
+    };
+    ($core:ident, own_run_micros) => {
+        poll_state_mcu_methods!(@shared $core);
+    };
+    (@shared $core:ident) => {
         fn frequency(&self) -> u64 {
             self.config.frequency_hz
         }

@@ -4,6 +4,8 @@ import { useSimSession } from './hooks/useSimSession'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './components/BoardViewer'
 import { TransportBar } from './components/TransportBar'
 import { SelectionCard } from './components/SelectionCard'
+import { ConstraintModal } from './components/ConstraintModal'
+import type { ConstraintDraft } from './components/ConstraintEditor'
 import { NetPanel } from './components/NetPanel'
 import { SerialConsole } from './components/SerialConsole'
 import { SolverControlsPanel } from './components/SolverControlsPanel'
@@ -47,13 +49,16 @@ export interface SimShellStatus {
 // keeps it mounted (hidden) so the session's fault log and scope survive
 // navigation. The accumulated session state lives in hooks/useSimSession.
 export default function SimView({
-  onQueue,
+  onQueue, onOpenChecks,
   pendingLiveRegisterMaps = [], onLiveRegisterMapsConsumed, onLiveActionResult,
   onStatus, expectedBoard, sessionMatchesCurrent, onRelaunch, modelCoverage,
+  componentAssertions,
 }: {
   /** Hand a click on the live board to the checks builder. Absent on the
    *  standalone demo server. */
   onQueue?: (request: BoardRequest) => void
+  /** Open the shared full Checks view from the constraint modal. */
+  onOpenChecks?: () => void
   pendingLiveRegisterMaps?: QueuedLiveRegisterMap[]
   onLiveRegisterMapsConsumed?: (upToSeq: number) => void
   /** Engine-confirmed receipts, forwarded to the scenario row that originated
@@ -73,6 +78,9 @@ export default function SimView({
    *  wire can run standalone, so this is optional; when present the component
    *  card keeps the same model-honesty detail while the board is moving. */
   modelCoverage?: ModelCoverageSnapshot | null
+  /** Exact assertion support retained from the analysis that launched this
+   *  session. Missing data fails closed in the selection card. */
+  componentAssertions?: Record<string, string[]> | null
 } = {}) {
   const {
     connected, boardInfo, frame: liveFrame, status, send, replay, backlog,
@@ -88,6 +96,7 @@ export default function SimView({
   const cards = useRailCards()
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
+  const [constraintDraft, setConstraintDraft] = useState<(Partial<ConstraintDraft> & Pick<ConstraintDraft, 'kind'>) | null>(null)
   // A 316 px instrument rail consumes the entire work surface on a phone.
   // Start it collapsed there so Drive it live still lands on the board; the
   // labelled 18 px toggle keeps every instrument one tap away.
@@ -110,7 +119,11 @@ export default function SimView({
   // exploration and deterministic replay never drift into two experiments.
   // The server refuses any unsupported/unknown net.
   const queueAndApply = useCallback((request: BoardRequest) => {
-    if (request.type === 'peripheral') {
+    // A check is never appended straight from a click: the card only knows the
+    // kind and the net, so the exact assertion is edited in place first.
+    if (request.type === 'check') {
+      setConstraintDraft(request)
+    } else if (request.type === 'peripheral') {
       if (!request.net) return
       liveInteractionSeq.current += 1
       const stem = request.net.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 28) || 'NET'
@@ -314,6 +327,7 @@ export default function SimView({
                   reading={selectedNet && !selectedFp ? readNet(frame, selectedNet, netEnvelopes) : undefined}
                   component={selectedFp}
                   boundKind={selectedFp ? boardInfo?.component_kinds?.[selectedFp.ref] ?? null : null}
+                  assertionCapabilities={selectedFp ? componentAssertions?.[selectedFp.ref] ?? [] : []}
                   modelCoverage={coverageFor(modelCoverage, selectedFp?.ref)}
                   netModels={selectedFp ? [] : modelsOnNet(modelCoverage, selectedNet)}
                   onQueue={onQueue && queueAndApply}
@@ -324,6 +338,23 @@ export default function SimView({
                 />
               </div>
             </div>
+          )}
+
+          {constraintDraft && onQueue && (
+            <ConstraintModal
+              initial={constraintDraft}
+              onSave={draft => onQueue({
+                ...draft,
+                type: 'check',
+                net: draft.net || undefined,
+                ref: draft.ref || undefined,
+              })}
+              onClose={() => setConstraintDraft(null)}
+              onOpenChecks={() => {
+                setConstraintDraft(null)
+                onOpenChecks?.()
+              }}
+            />
           )}
 
           {/* Board overlay hints. While an input has focus the keyboard

@@ -2,7 +2,8 @@
 #
 # Trigger: push a tag like `v0.1.0` (same tag that drives release.yml), or run
 # manually. Tag pushes publish stable version tags after immutable verification;
-# manual runs build and verify source-SHA candidate images only. Both paths
+# a manual run of an existing tag rebuilds its candidates and reconciles that
+# tag's immutable digest record and versioned image tags. Both paths
 # produce two multi-arch (linux/amd64 + linux/arm64) images:
 #
 #   ghcr.io/hauksbee-dev/hauksbee:slim     prebuilt binaries + model db + simavr;
@@ -30,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing version tag whose source is built into candidate-only images; stable tags are published only by a tag-push run."
+        description: "Existing version tag to rebuild and reconcile: candidates are re-verified, then the tag's immutable digest record and versioned image tags are published if missing. Floating :latest tags move only on a tag push."
         required: true
 
 env:
@@ -153,8 +154,9 @@ jobs:
 
       # A package does not exist until its first push. Probe the repository and
       # any existing package first; when the package is absent or unreadable,
-      # push only a zero-layer, non-runnable marker. The strict check after it
-      # must observe private visibility before a Hauksbee image can be built.
+      # push only a zero-layer, non-runnable marker. The strict check after the
+      # push then verifies the package ends up public: consumers pull these
+      # images anonymously, so a private package is an unusable publication.
       - name: Probe private container publication
         id: private-package
         shell: bash
@@ -246,17 +248,17 @@ jobs:
             docker pull --platform "$platform" "$SLIM_IMAGE"
             docker run --rm --platform "$platform" \
               -e EXPECTED_VERSION -e EXPECTED_SHA -e PLATFORM="$platform" \
-              --entrypoint /bin/sh "$SLIM_IMAGE" -eu -c '
+              --entrypoint /bin/sh "$SLIM_IMAGE" -eux -c '
                 hauksbee --version | grep -F "hauksbee $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
                 hauksbee-ci --version | grep -F "hauksbee-ci $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
                 output="$(mktemp)"
                 hauksbee run /opt/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb \
                   --firmware /opt/hauksbee/testdata/firmware/boot_gate_a/boot_gate.hex --headless --plain --seconds 0.05 \
-                  >"$output" 2>&1
-                ! grep -Eq "SKIP:|compiled out|not installed|not found|zero net toggles|0 active nets" "$output"
-                grep -Eq "UART|toggle|active net|firmware" "$output"
+                  >"$output" 2>&1 || { cat "$output"; exit 21; }
+                ! grep -Eq "SKIP:|compiled out|not installed|not found|zero net toggles|0 active nets" "$output" || { cat "$output"; exit 22; }
+                grep -Eq "UART|toggle|active net|firmware" "$output" || { cat "$output"; exit 23; }
                 cd /opt/hauksbee/crates/hauksbee-ci/examples
-                hauksbee-ci run boot_gate_pass.toml | grep -E "1/1 assertions passed|GREEN" >/dev/null
+                hauksbee-ci run boot_gate_pass.toml | grep -E "1/1 assertions passed|GREEN" >/dev/null || { hauksbee-ci run boot_gate_pass.toml || true; exit 26; }
                 test -s /usr/share/doc/hauksbee/SOURCE-OFFER.txt
                 test -s /usr/share/doc/hauksbee/source/hauksbee-source.tar.gz
                 test -s /usr/share/doc/hauksbee/source/simavr-source.tar.gz
@@ -270,17 +272,17 @@ jobs:
             docker pull --platform "$platform" "$FULL_IMAGE"
             docker run --rm --platform "$platform" \
               -e EXPECTED_VERSION -e EXPECTED_SHA -e PLATFORM="$platform" \
-              --entrypoint /bin/sh "$FULL_IMAGE" -eu -c '
+              --entrypoint /bin/sh "$FULL_IMAGE" -eux -c '
               hauksbee --version | grep -F "hauksbee $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
               hauksbee-ci --version | grep -F "hauksbee-ci $EXPECTED_VERSION (git $EXPECTED_SHA)" >/dev/null
               output="$(mktemp)"
               hauksbee run /opt/hauksbee/crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb \
                 --firmware /opt/hauksbee/testdata/firmware/boot_gate_a/boot_gate.hex --headless --plain --seconds 0.05 \
-                >"$output" 2>&1
-              ! grep -Eq "SKIP:|compiled out|not installed|not found|zero net toggles|0 active nets" "$output"
-              grep -Eq "UART|toggle|active net|firmware" "$output"
+                >"$output" 2>&1 || { cat "$output"; exit 21; }
+              ! grep -Eq "SKIP:|compiled out|not installed|not found|zero net toggles|0 active nets" "$output" || { cat "$output"; exit 22; }
+              grep -Eq "UART|toggle|active net|firmware" "$output" || { cat "$output"; exit 23; }
               cd /opt/hauksbee/crates/hauksbee-ci/examples
-              hauksbee-ci run boot_gate_pass.toml | grep -E "1/1 assertions passed|GREEN" >/dev/null
+              hauksbee-ci run boot_gate_pass.toml | grep -E "1/1 assertions passed|GREEN" >/dev/null || { hauksbee-ci run boot_gate_pass.toml || true; exit 26; }
               renode --version >/dev/null
               /opt/qemu/bin/qemu-system-xtensa --version >/dev/null
               /opt/qemu/bin/qemu-system-riscv32 --version >/dev/null
@@ -288,31 +290,41 @@ jobs:
                 stm32="$(mktemp)"
                 timeout 90 hauksbee run /opt/hauksbee/external-smoke/stm32.kicad_pcb \
                   --firmware /opt/hauksbee/external-smoke/stm32.elf --headless --plain --seconds 0.25 \
-                  >"$stm32" 2>&1
-                ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$stm32"
-                grep -Eq "UART|toggle|active net|firmware" "$stm32"
+                  >"$stm32" 2>&1 || { cat "$stm32"; exit 21; }
+                ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$stm32" || { cat "$stm32"; exit 22; }
+                grep -Eq "UART|toggle|active net|firmware" "$stm32" || { cat "$stm32"; exit 23; }
 
                 esp32="$(mktemp)"
                 timeout 120 hauksbee run /opt/hauksbee/external-smoke/esp32.kicad_pcb \
                   --firmware /opt/hauksbee/external-smoke/esp32-flash.bin --headless --plain --seconds 0.25 \
-                  >"$esp32" 2>&1
-                ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$esp32"
-                grep -Eq "UART|toggle|active net|firmware" "$esp32"
+                  >"$esp32" 2>&1 || { cat "$esp32"; exit 21; }
+                ! grep -Eq "SKIP:|not installed|not found|zero net toggles|0 active nets" "$esp32" || { cat "$esp32"; exit 22; }
+                grep -Eq "UART|toggle|active net|firmware" "$esp32" || { cat "$esp32"; exit 23; }
 
                 route_log="$(mktemp)"
                 timeout 90 hauksbee from-code /opt/hauksbee/external-smoke/blinky.board \
                   --out /tmp/blinky-routed.kicad_pcb --route --route-passes 2 \
-                  >"$route_log" 2>&1
-                grep -F "freerouting handoff" "$route_log" >/dev/null
-                grep -F "merged" "$route_log" >/dev/null
+                  >"$route_log" 2>&1 || { cat "$route_log"; exit 21; }
+                grep -F "freerouting handoff" "$route_log" >/dev/null || { cat "$route_log"; exit 24; }
+                grep -F "merged" "$route_log" >/dev/null || { cat "$route_log"; exit 24; }
                 test -s /tmp/blinky-routed.kicad_pcb
               fi
               set +e
-              timeout 15 java -jar /opt/freerouting.jar --help >/tmp/freerouting-smoke.log 2>&1
+              # 60s covers the arm64 leg, where the JVM runs under qemu-user
+              # emulation and cold start alone can blow the old 15s allowance
+              # before the banner is logged. Native amd64 prints it in ~2s.
+              timeout 60 java -jar /opt/freerouting.jar --help >/tmp/freerouting-smoke.log 2>&1
               freerouting_status=$?
               set -e
-              { [ "$freerouting_status" -eq 0 ] || [ "$freerouting_status" -eq 124 ]; }
-              grep -F "Freerouting v1.9.0" /tmp/freerouting-smoke.log >/dev/null
+              # freerouting 1.9.0 has no headless --help: it logs its version,
+              # then tries to open its GUI and dies with a HeadlessException
+              # (exit 1) inside a container. Launch-to-version is what this
+              # smoke proves; real routing is proven by the from-code --route
+              # run above. Accept a clean exit, the 124 timeout kill, or the
+              # documented headless exit 1, requiring the HeadlessException
+              # marker in that last case so any other crash still fails.
+              { [ "$freerouting_status" -eq 0 ] || [ "$freerouting_status" -eq 124 ] || { [ "$freerouting_status" -eq 1 ] && grep -q "HeadlessException" /tmp/freerouting-smoke.log; }; } || { cat /tmp/freerouting-smoke.log; exit 25; }
+              grep -F "Freerouting v1.9.0" /tmp/freerouting-smoke.log >/dev/null || { cat /tmp/freerouting-smoke.log; exit 25; }
               test -s /usr/share/doc/hauksbee/third-party/RENODE-LICENSE
               test -s /usr/share/doc/hauksbee/third-party/QEMU-COPYING
               test -s /usr/share/doc/hauksbee/third-party/FREEROUTING-LICENSE
@@ -325,6 +337,11 @@ jobs:
             '
             test "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "$FULL_IMAGE")" \
               = "GPL-3.0-only AND GPL-2.0-only AND MIT"
+            # The runner's legacy image store keeps exactly one platform per
+            # digest reference, so the next iteration's pull of these same
+            # digests dies with "cannot overwrite digest" unless this
+            # platform's images are dropped first.
+            docker rmi -f "$SLIM_IMAGE" "$FULL_IMAGE" >/dev/null
           done
 
       - name: Check private container publication after push
@@ -337,7 +354,12 @@ jobs:
   publish-digests:
     name: publish immutable image digest record
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    # Tag pushes record and promote as part of the release train. A manual
+    # dispatch of an existing tag is the reconcile path for a tag whose
+    # original run could not publish its record: the build job has already
+    # checked out that exact tag, proven tag/source/workspace-version parity,
+    # and verified the candidate images this job records.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -368,11 +390,18 @@ jobs:
           manifest="hauksbee-${VERSION}-docker-digests.txt"
           # This auxiliary tag must not match either workflow's `v*` release
           # trigger, or publishing provenance recursively launches another
-          # binary/container release run.
-          digest_tag="container-digests-${GITHUB_REF_NAME}"
-          gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled \
+          # binary/container release run. Derived from the verified version
+          # rather than the git ref so a manual reconcile run of an existing
+          # tag records under the same name as the original tag push.
+          digest_tag="container-digests-v${VERSION}"
+          # GITHUB_TOKEN cannot read the repo-level immutable-releases policy
+          # endpoint (admin-only; it answers 403 to the workflow token), so
+          # enforcement is proven on the release train itself: the published
+          # binary release this record describes must already be immutable,
+          # and the record's own immutability is asserted again after publish.
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v${VERSION}" --jq .immutable \
             | grep -qx true || {
-              echo "repository does not enforce immutable releases" >&2
+              echo "release v${VERSION} is not immutable; enable immutable releases before recording container digests" >&2
               exit 1
             }
           find . -maxdepth 1 -type f -name "$manifest" -delete
@@ -405,9 +434,14 @@ jobs:
             printf 'source %s\nslim %s@%s\nfull %s@%s\n' \
               "$SOURCE_SHA" "$IMAGE" "$SLIM_DIGEST" "$IMAGE" "$FULL_DIGEST" > "$manifest"
             # A separate prerelease keeps the stable binary release immutable
-            # while making verified OCI digests durable and discoverable.
+            # while making verified OCI digests durable and discoverable. The
+            # workflow token may not mint refs at explicit commits (the API
+            # answers 403 Resource not accessible by integration to both a
+            # bare-SHA target_commitish and a direct git/refs create), so no
+            # target is passed: GitHub creates the record's tag itself on
+            # publish. The source binding lives in the verified manifest, not
+            # in where this auxiliary tag points.
             gh release create "$digest_tag" "$manifest" --repo "$GH_REPO" \
-              --target "$SOURCE_SHA" \
               --title "Hauksbee ${VERSION} container digests" \
               --notes "Verified slim/full GHCR digests for source commit $SOURCE_SHA." \
               --prerelease --latest=false --draft
@@ -431,6 +465,12 @@ jobs:
           if [ "$is_draft" = true ]; then
             gh release edit "$digest_tag" --draft=false --repo "$GH_REPO"
           fi
+          # The published record must itself be immutable, or it is no record.
+          gh api "repos/$GH_REPO/releases/tags/$digest_tag" --jq .immutable \
+            | grep -qx true || {
+              echo "digest record $digest_tag published mutable; repository must enforce immutable releases" >&2
+              exit 1
+            }
           for attempt in $(seq 1 12); do
             if gh release verify-asset "$digest_tag" "$manifest" --repo "$GH_REPO"; then break; fi
             [ "$attempt" -lt 12 ] || {
@@ -453,9 +493,19 @@ jobs:
           SLIM_REF: ${{ steps.record.outputs.slim_ref }}
           FULL_REF: ${{ steps.record.outputs.full_ref }}
         run: |
-          docker buildx imagetools create \
-            --tag "${IMAGE}:slim" --tag "${IMAGE}:slim-${VERSION}" --tag "${IMAGE}:latest" \
-            "$SLIM_REF"
-          docker buildx imagetools create \
-            --tag "${IMAGE}:full" --tag "${IMAGE}:full-${VERSION}" --tag "${IMAGE}:full-latest" \
-            "$FULL_REF"
+          if [[ "$VERSION" == *-* ]]; then
+            docker buildx imagetools create --tag "${IMAGE}:slim-${VERSION}" "$SLIM_REF"
+            docker buildx imagetools create --tag "${IMAGE}:full-${VERSION}" "$FULL_REF"
+          elif [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            docker buildx imagetools create \
+              --tag "${IMAGE}:slim" --tag "${IMAGE}:slim-${VERSION}" --tag "${IMAGE}:latest" \
+              "$SLIM_REF"
+            docker buildx imagetools create \
+              --tag "${IMAGE}:full" --tag "${IMAGE}:full-${VERSION}" --tag "${IMAGE}:full-latest" \
+              "$FULL_REF"
+          else
+            # Reconcile runs move only the versioned tags; the floating
+            # :latest family advances solely on an actual tag push.
+            docker buildx imagetools create --tag "${IMAGE}:slim-${VERSION}" "$SLIM_REF"
+            docker buildx imagetools create --tag "${IMAGE}:full-${VERSION}" "$FULL_REF"
+          fi

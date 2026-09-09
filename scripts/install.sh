@@ -69,7 +69,7 @@ if [ "$DO_BUILD" -eq 1 ]; then
   if ! have clang; then
     die "clang not found, and the default build needs it (bindgen over the simavr headers).
     Install it (Xcode CLT on macOS: xcode-select --install; Debian/Ubuntu: apt install clang libclang-dev),
-    or build without the avr backend: cargo build --release --no-default-features --features renode,qemu"
+    or build without the avr backend: cargo build --release --no-default-features --features renode,qemu,serve,embed-web"
   fi
   _simavr_prefix="/usr/local"
   [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && _simavr_prefix="/opt/homebrew"
@@ -78,7 +78,7 @@ if [ "$DO_BUILD" -eq 1 ]; then
     die "libsimavr.a not found (looked for $_simavr_lib), and the default build links it.
     Either install it first:   scripts/install-sims.sh --avr
     or point at an existing install:   SIMAVR_INCLUDE_DIR=<prefix>/include SIMAVR_LIB_DIR=<prefix>/lib scripts/install.sh
-    or build without the avr backend:  cargo build --release --no-default-features --features renode,qemu"
+    or build without the avr backend:  cargo build --release --no-default-features --features renode,qemu,serve,embed-web"
   fi
 
   # Build the web front door bundle first. `hauksbee serve` serves
@@ -116,8 +116,8 @@ if [ "$DO_BUILD" -eq 1 ]; then
   "$HAUKSBEE_ROOT/scripts/simavr-payload-provenance.sh" verify "$_simavr_prefix" \
     || die "simavr payload bytes under $_simavr_prefix do not match their recorded provenance"
   export SIMAVR_COMMIT
-  EMBED_ARGS=(--features embed-web)
-  log "Building hauksbee + hauksbee-ci + hauksbee-mcp (release, embed-web)"
+  EMBED_ARGS=(--features "serve,embed-web")
+  log "Building hauksbee + hauksbee-ci + hauksbee-mcp (release, serve + embed-web)"
   # `${arr[@]+...}` guards empty-array expansion under `set -u` on bash 3.2
   # (the macOS default), where a bare `"${arr[@]}"` on an empty array errors.
   ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --locked --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp ${EMBED_ARGS[@]+"${EMBED_ARGS[@]}"} )

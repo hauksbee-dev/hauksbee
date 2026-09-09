@@ -136,7 +136,13 @@ impl RenodeProcess {
             .args(["--disable-xwt", "--hide-log", "-p", "-P"])
             .arg(monitor_port.to_string());
         Ok(RenodeProcess {
-            inner: EmulatorProcess::spawn("Renode", &mut cmd, false)?,
+            // Capture stderr: Renode has no clean shutdown path in our
+            // lifecycle, so the only first-hand account of a mid-run death
+            // (an unhandled .NET exception, a missing runtime dependency) is
+            // what it wrote there. Discarding it once made a Windows CI
+            // failure undiagnosable: both TCP sockets reset mid-chunk and
+            // nothing anywhere said why.
+            inner: EmulatorProcess::spawn("Renode", &mut cmd, true)?,
             monitor_port,
         })
     }

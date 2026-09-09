@@ -274,6 +274,11 @@ pub struct Spec {
     /// against layout position, side, rotation, package and identity.
     #[serde(default)]
     pub placement: Option<PathBuf>,
+    /// Optional highest-priority model-library directory, resolved relative to
+    /// the spec. The browser stages selected model TOMLs here so Checks binds
+    /// against the same model context as report analysis and Live Sim.
+    #[serde(default)]
+    pub models_dir: Option<PathBuf>,
     /// Optional assembly-variant TOML (`name`, `fit`, `no_fit`). Its exact
     /// bytes and decisions are inventoried separately from the BOM.
     #[serde(default)]
@@ -1096,8 +1101,9 @@ pub struct Assertion {
     /// contains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.
     /// `no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.
     /// `max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral
-    /// state check. `rail_window`: rail dip/recovery bounds over a scenario
-    /// window. `protection_trip`: battery protection trips (or must not).
+    /// state check. `rail_window`: rail dip/recovery and spike/settling bounds
+    /// over a scenario window. `protection_trip`: battery protection trips (or
+    /// must not).
     /// `boot_coverage`: a control net is driven to `min` volts within
     /// `deadline_ms` of reset and held per `hold_ms` (the kebab-case
     /// `boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:
@@ -1202,6 +1208,26 @@ pub struct Assertion {
     /// milliseconds of first dipping below `dip_below`.
     #[serde(default)]
     pub recover_within_ms: Option<f64>,
+    /// rail_window: the rail is considered "spiking" while it is strictly
+    /// above this voltage. Combine with `spike_for_max_ms` to bound total
+    /// overvoltage duration, and with `settle_to` / `settle_within_ms` to bound
+    /// settling.
+    #[serde(default)]
+    pub spike_above: Option<f64>,
+    /// rail_window: the rail must not stay above `spike_above` for longer than
+    /// this many milliseconds (total, summed over the window).
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub spike_for_max_ms: Option<f64>,
+    /// rail_window: the voltage the rail must return to (at or below) for
+    /// "settled".
+    #[serde(default)]
+    pub settle_to: Option<f64>,
+    /// rail_window: the rail must settle (reach `settle_to`) within this many
+    /// milliseconds of first spiking above `spike_above`.
+    #[serde(default)]
+    #[schemars(range(min = 0.0))]
+    pub settle_within_ms: Option<f64>,
     /// protection_trip: the supply net whose battery protection is checked.
     #[serde(default)]
     pub supply_net: Option<String>,
@@ -1392,6 +1418,10 @@ impl Spec {
 
     pub fn placement_path(&self) -> Option<PathBuf> {
         self.resolve(&self.placement)
+    }
+
+    pub fn models_dir_path(&self) -> Option<PathBuf> {
+        self.resolve(&self.models_dir)
     }
 
     pub fn variant_path(&self) -> Option<PathBuf> {
@@ -2125,6 +2155,26 @@ impl Assertion {
                 format!("{kind} assertion `{field}` must be a finite number"),
             )?;
         }
+        for (field, val) in [
+            ("spike_above", self.spike_above),
+            ("spike_for_max_ms", self.spike_for_max_ms),
+            ("settle_to", self.settle_to),
+            ("settle_within_ms", self.settle_within_ms),
+        ] {
+            need(
+                val.is_none_or(f64::is_finite),
+                format!("{kind} assertion `{field}` must be a finite number"),
+            )?;
+        }
+        for (field, val) in [
+            ("spike_for_max_ms", self.spike_for_max_ms),
+            ("settle_within_ms", self.settle_within_ms),
+        ] {
+            need(
+                val.is_none_or(|v| v >= 0.0),
+                format!("{kind} assertion `{field}` must be non-negative"),
+            )?;
+        }
         match kind {
             "voltage" => {
                 need(self.net.is_some(), "voltage assertion needs a `net`".into())?;
@@ -2221,10 +2271,39 @@ impl Assertion {
                     self.net.is_some(),
                     "rail_window assertion needs a `net`".into(),
                 )?;
+                // Reject partnerless overvoltage fields before the generic
+                // "needs a check" error so a typo cannot silently no-op and
+                // the diagnostic names the field that needs completion.
+                need(
+                    self.settle_within_ms.is_none()
+                        || (self.spike_above.is_some() && self.settle_to.is_some()),
+                    "rail_window `settle_within_ms` needs both `spike_above` and `settle_to`"
+                        .into(),
+                )?;
+                need(
+                    self.settle_to.is_none()
+                        || (self.spike_above.is_some() && self.settle_within_ms.is_some()),
+                    "rail_window `settle_to` needs both `spike_above` and `settle_within_ms`"
+                        .into(),
+                )?;
+                need(
+                    self.spike_for_max_ms.is_none() || self.spike_above.is_some(),
+                    "rail_window `spike_for_max_ms` needs `spike_above` or it is never evaluated"
+                        .into(),
+                )?;
+                let spike_partnered =
+                    self.spike_for_max_ms.is_some() || self.settle_within_ms.is_some();
+                need(
+                    self.spike_above.is_none() || spike_partnered,
+                    "rail_window `spike_above` needs `spike_for_max_ms` or `settle_within_ms` or it is never evaluated"
+                        .into(),
+                )?;
                 let dip_partnered = self.for_max_ms.is_some() || self.recover_within_ms.is_some();
                 need(
-                    has_bound || (self.dip_below.is_some() && dip_partnered),
-                    format!("rail_window on '{net}' needs at least one of: `min`, `max`, or `dip_below` with `for_max_ms`/`recover_within_ms`"),
+                    has_bound
+                        || (self.dip_below.is_some() && dip_partnered)
+                        || (self.spike_above.is_some() && spike_partnered),
+                    format!("rail_window on '{net}' needs at least one of: `min`, `max`, `dip_below` with `for_max_ms`/`recover_within_ms`, or `spike_above` with `spike_for_max_ms`/`settle_within_ms`"),
                 )?;
                 need(
                     self.recover_within_ms.is_none()
@@ -2245,11 +2324,18 @@ impl Assertion {
                 )?;
                 // Same silent-no-op class for `dip_below`: check_rail_window only
                 // reads it inside guards that require `for_max_ms` or
-                // `recover_within_ms` as a partner.
+                // `recover_within_ms` as a partner. A bare `dip_below` alongside a
+                // `min`/`max` (which satisfies the check above) is therefore never
+                // evaluated; the author's dip threshold does nothing. Require it
+                // to carry a partner that actually consumes it.
                 need(
                     self.dip_below.is_none() || dip_partnered,
                     "rail_window `dip_below` needs `for_max_ms` or `recover_within_ms` or it is never evaluated"
                         .into(),
+                )?;
+                need(
+                    !matches!((self.spike_above, self.settle_to), (Some(spike), Some(settle)) if settle > spike),
+                    "rail_window `settle_to` must be <= `spike_above`".into(),
                 )?;
             }
             "protection_trip" => {
@@ -2427,6 +2513,16 @@ impl Assertion {
                     (self.dip_below, self.recover_to, self.recover_within_ms)
                 {
                     parts.push(format!("recover to {r}V within {ms} ms of dipping <{d}V"));
+                }
+                if let (Some(s), Some(ms)) = (self.spike_above, self.spike_for_max_ms) {
+                    parts.push(format!("spike >{s}V for <= {ms} ms"));
+                }
+                if let (Some(s), Some(settle), Some(ms)) =
+                    (self.spike_above, self.settle_to, self.settle_within_ms)
+                {
+                    parts.push(format!(
+                        "settle to <= {settle}V within {ms} ms of spiking >{s}V"
+                    ));
                 }
                 let scope = self
                     .scenario
@@ -2692,6 +2788,323 @@ mod tests {
         assert!(
             err.contains("`duration_ms` is a top-level key; move it above the [mcu] table"),
             "{err}"
+        );
+    }
+
+    // `frame_ms` must sit at the top level, BEFORE the [[assert]] table, or TOML
+    // captures it as a field of the assert.
+    fn spec_src(frame_ms: &str) -> String {
+        format!(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = {frame_ms}
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 3.0
+"#
+        )
+    }
+    #[test]
+    fn toggle_with_both_freq_and_count_is_rejected() {
+        // Round-29: check_toggle evaluates min_toggles and ignores freq_hz when
+        // both are set, yet the label reports the ~N Hz frequency form, a spec
+        // that silently checks a count while claiming a frequency. The two forms
+        // are mutually exclusive; validation must reject both-at-once up front.
+        let src = r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 0.1
+
+[[assert]]
+kind = "toggle"
+net = "D13"
+freq_hz = 5
+min_toggles = 1
+"#;
+        let err = spec_from(src)
+            .validate()
+            .expect_err("toggle with both freq_hz and min_toggles must fail");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("both") && m.contains("freq_hz")),
+            "expected a both-fields validation error, got {err:?}"
+        );
+        // Each form ALONE is still accepted.
+        for one in ["freq_hz = 5", "min_toggles = 1"] {
+            let src = format!(
+                "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=0.1\n\n[[assert]]\nkind=\"toggle\"\nnet=\"D13\"\n{one}\n"
+            );
+            assert!(
+                spec_from(&src).validate().is_ok(),
+                "one field is valid: {one}"
+            );
+        }
+    }
+    #[test]
+    fn non_positive_frame_ms_is_rejected() {
+        // Round-26: a zero/negative frame_ms was silently clamped to 1 µs downstream,
+        // running ~1000x more frames than any real cadence and hanging the check with
+        // no explanation. Validation must name it up front rather than clamp silently.
+        for bad in ["0", "-0.5"] {
+            let src = spec_src(bad);
+            let err = spec_from(&src)
+                .validate()
+                .expect_err("non-positive frame_ms must fail validation");
+            assert!(
+                matches!(&err, SpecError::Invalid(m) if m.contains("frame_ms")),
+                "expected a frame_ms validation error, got {err:?}"
+            );
+        }
+    }
+    #[test]
+    fn positive_frame_ms_passes_validation() {
+        assert!(
+            spec_from(&spec_src("0.1")).validate().is_ok(),
+            "a positive frame_ms is a valid cadence"
+        );
+    }
+    #[test]
+    fn non_finite_time_fields_are_rejected() {
+        // R33: TOML accepts `inf`/`nan`. `duration_ms = inf` passed the `<= 0`
+        // check and made the frame loop `t < inf` spin forever (a silent CI hang);
+        // `nan` ran zero frames so every assertion failed "never sampled". Both
+        // duration_ms and frame_ms must reject non-finite values.
+        let base = |dur: &str, frame: &str| {
+            format!(
+                r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = {dur}
+frame_ms = {frame}
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 3.0
+"#
+            )
+        };
+        for (dur, frame, field) in [
+            ("inf", "1", "duration_ms"),
+            ("nan", "1", "duration_ms"),
+            ("10", "inf", "frame_ms"),
+            ("10", "nan", "frame_ms"),
+        ] {
+            let err = spec_from(&base(dur, frame))
+                .validate()
+                .expect_err("a non-finite time field must fail validation");
+            assert!(
+                matches!(&err, SpecError::Invalid(m) if m.contains(field)),
+                "expected a {field} validation error for {dur}/{frame}, got {err:?}"
+            );
+        }
+    }
+    #[test]
+    fn nan_after_ms_is_rejected_not_panicked() {
+        // R33: a NaN `after_ms` made the threshold-bucket sort's `partial_cmp`
+        // return None, so `.unwrap()` PANICKED, a crash instead of the crate's
+        // fail-loud SpecError. Assertion::validate now rejects a non-finite window.
+        let spec = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 3.0
+after_ms = nan
+"#,
+        );
+        let err = spec
+            .validate()
+            .expect_err("a NaN after_ms must fail validation, not panic later");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("after_ms")),
+            "expected an after_ms validation error, got {err:?}"
+        );
+    }
+    #[test]
+    fn rail_window_recover_to_without_recover_within_ms_is_rejected() {
+        // R35: check_rail_window only evaluates a recovery when all three of
+        // dip_below/recover_to/recover_within_ms are present. A spec that sets a
+        // recovery intent (dip_below + recover_to) but omits recover_within_ms
+        // must be REJECTED, even when a min/max is also present. Accepting it
+        // would let the recovery clause silently never run, a false GREEN on the
+        // recovery dimension.
+        let spec = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[[assert]]
+kind = "rail_window"
+net = "VBUS"
+min = 3.0
+dip_below = 3.1
+recover_to = 3.3
+"#,
+        );
+        let err = spec
+            .validate()
+            .expect_err("a recover_to with no recover_within_ms must fail, not silently no-op");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("recover_to") && m.contains("recover_within_ms")),
+            "expected a recover_to/recover_within_ms validation error, got {err:?}"
+        );
+
+        // The complete recovery spec still validates.
+        let ok = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[[assert]]
+kind = "rail_window"
+net = "VBUS"
+dip_below = 3.1
+recover_to = 3.3
+recover_within_ms = 5.0
+"#,
+        );
+        assert!(ok.validate().is_ok(), "a complete recovery spec must pass");
+    }
+    #[test]
+    fn rail_window_dip_below_without_a_partner_is_rejected() {
+        // R36: the dip_below sibling of the R35 recover_to gap. check_rail_window
+        // only reads dip_below inside guards that require for_max_ms or
+        // recover_within_ms, so a bare dip_below alongside a min/max (which
+        // satisfies has_check) silently does nothing, a rail at 3.1 V passes
+        // GREEN against a dip_below=3.2 the author wrote. Validation must reject
+        // the partnerless dip_below.
+        let spec = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[[assert]]
+kind = "rail_window"
+net = "VBUS"
+min = 3.0
+dip_below = 3.2
+"#,
+        );
+        let err = spec
+            .validate()
+            .expect_err("a dip_below with no for_max_ms/recover_within_ms must fail, not no-op");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("dip_below") && (m.contains("for_max_ms") || m.contains("recover_within_ms"))),
+            "expected a dip_below partner validation error, got {err:?}"
+        );
+
+        // dip_below WITH a for_max_ms partner still validates.
+        let ok = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[[assert]]
+kind = "rail_window"
+net = "VBUS"
+dip_below = 3.2
+for_max_ms = 2.0
+"#,
+        );
+        assert!(
+            ok.validate().is_ok(),
+            "dip_below with a for_max_ms partner must pass"
+        );
+    }
+    #[test]
+    fn rail_window_spike_schema_requires_consuming_partners() {
+        let base = |fields: &str| {
+            spec_from(&format!(
+                "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[assert]]\nkind=\"rail_window\"\nnet=\"VBUS\"\n{fields}"
+            ))
+        };
+
+        for (fields, needle) in [
+            ("spike_above=3.6", "spike_above"),
+            ("spike_for_max_ms=2.0", "spike_for_max_ms"),
+            ("settle_to=3.4", "settle_to"),
+            ("settle_within_ms=10.0", "settle_within_ms"),
+        ] {
+            let err = base(fields)
+                .validate()
+                .expect_err("a partnerless overvoltage field must be rejected");
+            assert!(
+                err.to_string().contains(needle),
+                "error for {fields} should name {needle}: {err}"
+            );
+        }
+
+        let valid =
+            base("spike_above=3.6\nspike_for_max_ms=2.0\nsettle_to=3.4\nsettle_within_ms=10.0");
+        assert!(
+            valid.validate().is_ok(),
+            "a complete spike/settling assertion must validate"
+        );
+    }
+    #[test]
+    fn rail_window_spike_duration_and_settling_validation_is_fail_loud() {
+        let base = |fields: &str| {
+            spec_from(&format!(
+                "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[assert]]\nkind=\"rail_window\"\nnet=\"VBUS\"\nspike_above=3.6\n{fields}"
+            ))
+        };
+        let err = base("spike_for_max_ms=-1.0")
+            .validate()
+            .expect_err("a negative spike duration must be rejected");
+        assert!(err.to_string().contains("non-negative"), "got {err}");
+
+        let err = base("settle_to=3.8\nsettle_within_ms=10.0")
+            .validate()
+            .expect_err("settling above the spike threshold must be rejected");
+        assert!(err.to_string().contains("settle_to"), "got {err}");
+
+        let err = base("settle_to=3.4\nsettle_within_ms=nan")
+            .validate()
+            .expect_err("a non-finite settling duration must be rejected");
+        assert!(err.to_string().contains("settle_within_ms"), "got {err}");
+    }
+    #[test]
+    fn vcd_sink_with_singular_net_is_rejected() {
+        // R42: attach_peripherals reads a vcd_sink's logged signals ONLY from
+        // `p.nets`. A singular `net = "CLK"` (the natural mistake, every other
+        // control uses `net`) validated clean and then logged an EMPTY waveform
+        // with no diagnostic. vcd_sink must require `nets`.
+        let assert_block = "\n[[assert]]\nkind=\"voltage\"\nnet=\"VCC\"\nmin=3.0\n";
+        let bad = spec_from(&format!(
+            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[peripheral]]\nid=\"scope\"\ntype=\"vcd_sink\"\nnet=\"CLK\"\nvcd_path=\"w.vcd\"\n{assert_block}"
+        ));
+        let err = bad
+            .validate()
+            .expect_err("a vcd_sink with a singular `net` must fail, not log an empty VCD");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("nets")),
+            "the error must point the user at `nets`, got {err:?}"
+        );
+        // The correct plural `nets` form validates.
+        let ok = spec_from(&format!(
+            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[peripheral]]\nid=\"scope\"\ntype=\"vcd_sink\"\nnets=[\"CLK\"]\nvcd_path=\"w.vcd\"\n{assert_block}"
+        ));
+        assert!(
+            ok.validate().is_ok(),
+            "a vcd_sink with `nets = [...]` must pass: {:?}",
+            ok.validate()
         );
     }
 }

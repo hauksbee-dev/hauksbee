@@ -6,10 +6,10 @@ mode="${1:-}"
 prefix="${2:-}"
 record="$prefix/.hauksbee-simavr-payload.sha256"
 
-[ -n "$mode" ] && [ -n "$prefix" ] || {
+if [ -z "$mode" ] || [ -z "$prefix" ]; then
   echo "usage: $0 record|verify PREFIX" >&2
   exit 2
-}
+fi
 
 digest() {
   if command -v shasum >/dev/null 2>&1; then
@@ -20,10 +20,10 @@ digest() {
 }
 
 archive="$prefix/lib/libsimavr.a"
-[ -d "$prefix/include/simavr" ] && [ -f "$archive" ] || {
+if [ ! -d "$prefix/include/simavr" ] || [ ! -f "$archive" ]; then
   echo "simavr payload is incomplete under $prefix" >&2
   exit 1
-}
+fi
 expected="$(
   find "$prefix/include/simavr" -type f -name '*.h' -print \
     | LC_ALL=C sort \
@@ -39,10 +39,10 @@ case "$mode" in
     printf '%s\n' "$expected" > "$record"
     ;;
   verify)
-    [ -f "$record" ] && [ "$(cat "$record")" = "$expected" ] || {
+    if [ ! -f "$record" ] || [ "$(cat "$record")" != "$expected" ]; then
       echo "simavr payload digest mismatch under $prefix" >&2
       exit 1
-    }
+    fi
     ;;
   *)
     echo "unknown mode: $mode" >&2

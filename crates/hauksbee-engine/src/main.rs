@@ -373,7 +373,7 @@ struct ModelsNewArgs {
     /// the model file inside that pack and defaults to `models/<id>.toml`.
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
-    /// Create a model-pack skeleton at this directory (pack.toml plus
+    /// Create a model-pack skeleton at this directory (`pack.toml` plus
     /// `models/<id>.toml`). Existing files are never overwritten. The generated
     /// pack intentionally omits its license until the author supplies one.
     #[arg(long, value_name = "DIR", conflicts_with = "out")]

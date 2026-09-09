@@ -100,9 +100,15 @@ jobs:
   resolve-source:
     name: capture exact release source
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reading ci run/job conclusions for the same-SHA reuse check below.
+      actions: read
     outputs:
       source_sha: ${{ steps.source.outputs.source_sha }}
       version: ${{ steps.source.outputs.version }}
+      ci_reuse: ${{ steps.reuse.outputs.ci_reuse }}
+      ci_run_id: ${{ steps.reuse.outputs.ci_run_id }}
     steps:
       - name: Refuse tag publication from a non-canonical repository
         if: ${{ github.event_name != 'workflow_dispatch' }}
@@ -144,28 +150,66 @@ jobs:
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # Same-SHA deduplication: when a fully green candidate ci run has
+      # already validated this exact commit, re-running the identical checks
+      # in release-quality buys nothing. Reuse is claimed ONLY when a
+      # successful ci run at source_sha has every job green (an incremental
+      # run reports its scoped-out jobs as skipped, so it can never qualify)
+      # and includes both native candidate gates by name. Anything less and
+      # release-quality runs in full exactly as before; either way the
+      # release-only contracts ci does not run still execute (in
+      # release-quality-residue or release-quality). No check is lost on
+      # either path.
+      - name: Detect a fully green candidate ci run at the release source
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          reuse=""
+          run_id=""
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SOURCE_SHA&status=success&per_page=10" --jq '.workflow_runs[].id'); do
+            jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=100")"
+            bad="$(printf '%s' "$jobs" | jq '[.jobs[] | select(.conclusion != "success")] | length')"
+            mac="$(printf '%s' "$jobs" | jq '[.jobs[] | select(.name == "native macOS workspace candidate gate")] | length')"
+            win="$(printf '%s' "$jobs" | jq '[.jobs[] | select(.name == "native Windows tests, release binary, and drag-and-drop front door")] | length')"
+            if [ "$bad" = 0 ] && [ "$mac" = 1 ] && [ "$win" = 1 ]; then
+              reuse=true
+              run_id="$id"
+              break
+            fi
+          done
+          echo "ci_reuse=$reuse" >> "$GITHUB_OUTPUT"
+          echo "ci_run_id=$run_id" >> "$GITHUB_OUTPUT"
+          if [ -n "$reuse" ]; then
+            echo "release-quality is covered by fully green ci run $run_id at $SOURCE_SHA; only the release-only residue contracts will run"
+          else
+            echo "no fully green candidate ci run found at $SOURCE_SHA; release-quality runs in full"
+          fi
+
   build:
-    # One leg per platform AND per licence shape, so the two release builds of
-    # a platform run side by side instead of back to back. The default shape
-    # (avr included, GPL-3.0 binary) is the one the macOS app wraps; the
-    # permissive shape (renode+qemu only) never sees libsimavr.
-    name: build ${{ matrix.label }} (${{ matrix.shape }})
+    name: build ${{ matrix.label }}
     needs: resolve-source
     strategy:
       fail-fast: false
       matrix:
-        shape: [default, permissive]
-        label: [linux-x86_64, linux-aarch64, darwin-arm64, darwin-x86_64]
         include:
-          - label: linux-x86_64
-            os: ubuntu-latest
-          - label: linux-aarch64
-            os: ubuntu-24.04-arm     # native arm64 GitHub-hosted runner
-          - label: darwin-arm64
-            os: macos-latest         # Apple Silicon
-          - label: darwin-x86_64
-            os: macos-15-intel       # Intel
+          - os: ubuntu-latest
+            label: linux-x86_64
+          - os: ubuntu-24.04-arm     # native arm64 GitHub-hosted runner
+            label: linux-aarch64
+          - os: macos-latest         # Apple Silicon
+            label: darwin-arm64
+          - os: macos-15-intel       # Intel
+            label: darwin-x86_64
     runs-on: ${{ matrix.os }}
+    env:
+      # The `secrets` context is not available in step-level `if:` expressions,
+      # so the macOS signing mode is derived once here. '1' means the repo has
+      # signing material and every signing/notarisation gate below enforces;
+      # '0' means the darwin legs ship unsigned tarballs and no app zip.
+      HAUKSBEE_MACOS_SIGNING_CONFIGURED: ${{ secrets.HAUKSBEE_SIGN_IDENTITY != '' && '1' || '0' }}
     steps:
       # Checkout into a subdirectory; the build steps cd into it explicitly. The
       # forge-* crates are vendored inside this repo, so no sibling is needed.
@@ -174,15 +218,134 @@ jobs:
         with:
           # Tag-push events are bound to the immutable event SHA. Only an
           # explicit manual dispatch resolves the requested existing tag.
+          # Preserve the local tag ref: later checks bind that tag to the
+          # immutable event SHA. Passing github.sha here fetches only a detached
+          # depth-one commit, so refs/tags/<version> cannot be verified.
           ref: ${{ needs.resolve-source.outputs.source_sha }}
           path: hauksbee
           persist-credentials: false
+
+      # Release macOS assets must be signed with the real Developer ID
+      # certificate. GitHub-hosted runners do not retain a maintainer's login
+      # keychain, so import the PKCS#12 certificate into a throw-away keychain
+      # before any build step. This is deliberately workflow-only: local
+      # bundle.sh/build-app.sh invocations remain unsigned unless a developer
+      # explicitly supplies HAUKSBEE_SIGN_IDENTITY.
+      - name: Import macOS Developer ID credentials (release only)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
+          HAUKSBEE_SIGNING_CERTIFICATE_BASE64: ${{ secrets.HAUKSBEE_SIGNING_CERTIFICATE_BASE64 }}
+          HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD }}
+          HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
+          HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
+          HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          required=(
+            HAUKSBEE_SIGN_IDENTITY
+            HAUKSBEE_SIGNING_CERTIFICATE_BASE64
+            HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD
+            HAUKSBEE_NOTARY_APPLE_ID
+            HAUKSBEE_NOTARY_TEAM_ID
+            HAUKSBEE_NOTARY_PASSWORD
+          )
+          configured=0
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] && configured=$((configured+1))
+          done
+          if (( configured == 0 )); then
+            # No signing material is configured at all. This leg ships
+            # UNSIGNED: every signing/notarisation gate below keys off the
+            # same secrets and stands down with this import, and the app zip
+            # is not built, so the published-app-zips-are-signed claim stays
+            # structural. The moment the six secrets exist this branch stops
+            # matching and every gate enforces again, unchanged.
+            echo "::notice title=Unsigned darwin release leg::none of the six macOS signing secrets are configured; darwin binaries ship unsigned and no app zip is produced."
+            exit 0
+          fi
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error title=Missing macOS release credential::$name must be configured as a protected repository or environment secret."
+              exit 1
+            fi
+          done
+          if [[ "$HAUKSBEE_SIGN_IDENTITY" == *$'\n'* ]]; then
+            echo "::error title=Invalid signing identity::HAUKSBEE_SIGN_IDENTITY must be one certificate identity line."
+            exit 1
+          fi
+
+          state_dir="$RUNNER_TEMP/hauksbee-signing"
+          keychain="$state_dir/developer-id-signing.keychain-db"
+          p12="$state_dir/developer-id-signing.p12"
+          mkdir -p "$state_dir"
+          chmod 700 "$state_dir"
+          # The original search list is restored by the always-run cleanup
+          # step. Do not print it: runner usernames and paths are unnecessary
+          # release output.
+          security list-keychains -d user > "$state_dir/original-keychains"
+          chmod 600 "$state_dir/original-keychains"
+
+          keychain_password="$(uuidgen | tr -d '\n')"
+          [[ -n "$keychain_password" ]] || {
+            echo "::error title=Keychain setup failed::uuidgen returned no temporary password."
+            exit 1
+          }
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+
+          # macOS uses -D for base64 decoding (GNU runners use --decode; this
+          # step intentionally runs only on macOS). The decoded file is never
+          # added to GITHUB_ENV or an artifact and is removed in cleanup.
+          printf '%s' "$HAUKSBEE_SIGNING_CERTIFICATE_BASE64" | base64 -D > "$p12"
+          chmod 600 "$p12"
+          [[ -s "$p12" ]] || {
+            echo "::error title=Invalid signing certificate::the base64 P12 decoded to an empty file."
+            exit 1
+          }
+          security import "$p12" \
+            -k "$keychain" \
+            -P "$HAUKSBEE_SIGNING_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain"
+
+          original_keychains=()
+          while IFS= read -r line; do
+            line="${line#\"}"
+            line="${line%\"}"
+            [[ -n "$line" ]] && original_keychains+=("$line")
+          done < "$state_dir/original-keychains"
+          security list-keychains -d user -s "$keychain" "${original_keychains[@]}"
+
+          # Fail before the expensive build if the imported P12 does not carry
+          # the exact identity requested by the release secrets.
+          identities="$(security find-identity -v -p codesigning "$keychain")"
+          if ! grep -F -- "$HAUKSBEE_SIGN_IDENTITY" <<< "$identities" >/dev/null; then
+            echo "::error title=Signing identity not found::the imported P12 does not contain HAUKSBEE_SIGN_IDENTITY."
+            exit 1
+          fi
+
+          # Only non-secret paths cross the step boundary. The signing scripts
+          # discover the imported identity through the user's keychain search
+          # list; the cleanup step uses this state directory to restore it.
+          {
+            printf 'HAUKSBEE_SIGNING_KEYCHAIN=%s\n' "$keychain"
+            printf 'HAUKSBEE_SIGNING_STATE_DIR=%s\n' "$state_dir"
+          } >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-08-03
 
       # bundle.sh builds frontend/dist and embeds it into the binary (embed-web)
-      # so `hauksbee serve` works from a bare install.
+      # so `hauksbee serve` works from a bare install. That needs a JS toolchain;
+      # bun covers all four matrix runners (linux x64/arm64, macOS x64/arm64).
+      # Without this step bundle.sh would find no bun/npm, skip the frontend
+      # build, and (absent a committed dist/) ship a binary with no web UI.
       - name: Install bun (for the embedded web UI)
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
@@ -194,30 +357,32 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             hauksbee/target
-          key: release-${{ matrix.label }}-${{ matrix.shape }}-${{ hashFiles('hauksbee/Cargo.lock', 'hauksbee/scripts/install-sims.sh', 'hauksbee/scripts/simavr-payload-provenance.sh', 'hauksbee/crates/hauksbee-mcu/build.rs') }}
+          key: release-${{ matrix.label }}-${{ hashFiles('hauksbee/Cargo.lock', 'hauksbee/scripts/install-sims.sh', 'hauksbee/scripts/simavr-payload-provenance.sh', 'hauksbee/crates/hauksbee-mcu/build.rs') }}
 
       # ── system deps for the DEFAULT shape only ─────────────────────────────
-      # The default shape links libsimavr and runs bindgen over its headers,
-      # which needs libelf, zlib, a C toolchain and libclang.
+      # The permissive shape needs nothing beyond Rust. The default shape links
+      # libsimavr and runs bindgen over its headers, which needs libelf, zlib,
+      # a C toolchain and libclang. The permissive build later in this job is
+      # unaffected by anything installed here: it never looks for simavr.
       - name: Install AVR build dependencies (Linux)
-        if: matrix.shape == 'default' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential git pkg-config libelf-dev zlib1g-dev clang libclang-dev
+            build-essential git pkg-config libelf-dev libzstd-dev zlib1g-dev clang libclang-dev
 
       - name: Install AVR build dependencies (macOS)
-        if: matrix.shape == 'default' && runner.os == 'macOS'
+        if: runner.os == 'macOS'
         run: |
           # install-sims.sh --avr brews libelf itself; pkg-config is what
           # hauksbee-mcu/build.rs probes with, and zlib.pc ships in the SDK.
           brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
 
-      # Build libsimavr into a WRITABLE prefix under $HOME and hand the build
-      # its exact location through SIMAVR_INCLUDE_DIR / SIMAVR_LIB_DIR. This is
-      # the same script users run: scripts/install-sims.sh --avr.
+      # Build libsimavr into a WRITABLE prefix under $HOME (no sudo, identical
+      # on every runner) and hand the build its exact location through
+      # SIMAVR_INCLUDE_DIR / SIMAVR_LIB_DIR, which hauksbee-mcu/build.rs reads.
+      # This is the same script users run: scripts/install-sims.sh --avr.
       - name: Build and install libsimavr (GPL-3.0, for the default shape)
-        if: matrix.shape == 'default'
         shell: bash
         run: |
           cd hauksbee
@@ -263,20 +428,25 @@ jobs:
           echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
-      # ── the DEFAULT download (avr included, GPL-3.0 binary) ────────────────
-      # No GPL guard env on this leg, deliberately: this build is SUPPOSED to
-      # link libsimavr, and the verify step below fails the release if it did
-      # not. On macOS legs bundle.sh signs the tarball binaries and notarises
-      # them; notarisation is required at launch, same as the app gate.
+      # ── shape 1 of 2: the DEFAULT download (avr included, GPL-3.0 binary) ──
+      # No GPL guard env here, deliberately: this build is SUPPOSED to link
+      # libsimavr, and the nm step below fails the release if it did not.
+      # Built first so target/release holds the default binaries when
+      # build-app.sh (--no-build) picks them up for Hauksbee.app.
       - name: Build default bundle (avr+renode+qemu; GPL-3.0 binary)
-        if: matrix.shape == 'default'
         shell: bash
         env:
+          # macOS legs only (bundle.sh signs on Darwin hosts and is a no-op
+          # elsewhere): sign the tarball binaries and notarise them with the
+          # same secrets the app step below uses. Bare Mach-Os take no staple;
+          # Gatekeeper checks their notarisation ticket online. Notarisation is
+          # required at launch, same as the app gate: from the launch release
+          # onward these secrets must be present and the submission must pass.
           HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
           HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
           HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
           HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
-          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ runner.os == 'macOS' && '1' || '0' }}
+          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ (runner.os == 'macOS' && secrets.HAUKSBEE_SIGN_IDENTITY != '') && '1' || '0' }}
         run: |
           cd hauksbee
           scripts/bundle.sh --shape default \
@@ -286,19 +456,26 @@ jobs:
 
       # The double-clickable macOS front door. Reuses the DEFAULT-shape binaries
       # bundle.sh just built (--no-build), wraps them in Hauksbee.app with the
-      # compiled Swift launcher, and zips it as `hauksbee-<version>-<label>-app.zip`
-      # per docs/about/release-and-licensing.md section 3. The gate step after
-      # this one refuses to let an unsigned or un-notarised app zip reach the
-      # release (see app/macos/SIGNING.md).
-      - name: Build Hauksbee.app (macOS, default shape)
-        if: matrix.shape == 'default' && runner.os == 'macOS'
+      # compiled Swift launcher, and zips it as
+      # `hauksbee-<version>-<label>-app.zip` per the section-3 naming contract in
+      # docs/about/release-and-licensing.md. The app therefore carries the same
+      # GPL-3.0 binary as the default tarball, and can do AVR co-sim. Signing +
+      # notarisation credentials come from the secrets below (see
+      # app/macos/SIGNING.md); the gate step after this one refuses to let an
+      # unsigned or un-notarised app zip reach the release, so a release that
+      # publishes an app zip has, by construction, published a signed and
+      # notarised app.
+      # Skipped entirely when the signing secrets are absent: an app zip
+      # only ever ships signed and notarised.
+      - name: Build Hauksbee.app (macOS only)
+        if: runner.os == 'macOS' && env.HAUKSBEE_MACOS_SIGNING_CONFIGURED == '1'
         shell: bash
         env:
           HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
           HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
           HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
           HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
-          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ runner.os == 'macOS' && '1' || '0' }}
+          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ (runner.os == 'macOS' && secrets.HAUKSBEE_SIGN_IDENTITY != '') && '1' || '0' }}
         run: |
           chmod +x hauksbee/app/macos/build-app.sh
           cd hauksbee
@@ -307,8 +484,13 @@ jobs:
             --target "${{ matrix.label }}" \
             --out dist
 
-      - name: Gate the app zip on signing + notarisation (macOS, default shape)
-        if: matrix.shape == 'default' && runner.os == 'macOS'
+      # Gate: an app zip may only ship if the app inside it is signed AND
+      # notarised. The public claim is "signed and notarised", and this step is
+      # what makes that claim structural rather than aspirational: unsigned or
+      # un-stapled builds fail the job here, before any upload step can see the
+      # zip. If this fails, wire up the signing secrets per app/macos/SIGNING.md.
+      - name: Gate the app zip on signing + notarisation (macOS only)
+        if: runner.os == 'macOS' && env.HAUKSBEE_MACOS_SIGNING_CONFIGURED == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -332,21 +514,26 @@ jobs:
           fi
           exit "$fail"
 
-      # ── the PERMISSIVE download (no avr, no GPL) ────────────────────────────
+      # ── shape 2 of 2: the PERMISSIVE download (no avr, no GPL) ─────────────
+      # Runs after the app step, because it overwrites target/release with
+      # avr-free binaries.
       - name: Build permissive bundle (renode+qemu; refuses to link GPL simavr)
-        if: matrix.shape == 'permissive'
         shell: bash
         env:
-          # The GPL guard: if `avr` is genuinely excluded, hauksbee-mcu/build.rs
-          # early-returns and ignores these paths; if it leaks in, build.rs
-          # panics HERE, before any GPL code is linked.
+          # The GPL guard (see header), permissive shape ONLY. If `avr` is
+          # genuinely excluded, hauksbee-mcu/build.rs early-returns and ignores
+          # these paths. If it leaks in, build.rs panics HERE, before any GPL
+          # code is linked, so we can never build a GPL-encumbered binary and
+          # then label it permissive.
           SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
           SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
+          # Same darwin signing + notarisation contract as the default bundle
+          # step above; bundle.sh ignores these on non-macOS runners.
           HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
           HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
           HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
           HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
-          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ runner.os == 'macOS' && '1' || '0' }}
+          HAUKSBEE_REQUIRE_NOTARIZATION: ${{ (runner.os == 'macOS' && secrets.HAUKSBEE_SIGN_IDENTITY != '') && '1' || '0' }}
         run: |
           cd hauksbee
           if ! scripts/bundle.sh --shape permissive \
@@ -359,120 +546,147 @@ jobs:
             exit 1
           fi
 
-      # ── prove the label, do not assert it ──────────────────────────────────
-      # bundle.sh already refused to package the shape unless it matched its
-      # label. This step is the independent second opinion, run on what is
-      # about to be uploaded. It asks the binary itself (`hauksbee doctor`
-      # reports avr as builtin or disabled), because release binaries are
-      # stripped and `nm` would pass vacuously.
-      - name: Verify the shape (behaviour + label)
+      # ── prove both labels, do not assert them ──────────────────────────────
+      # scripts/bundle.sh already refused to package either shape unless it
+      # matched its label, so both directions are enforced before a tarball
+      # exists. This step is the independent second opinion, run on what is
+      # actually about to be uploaded rather than on what was in target/release.
+      #
+      # It asks the binaries themselves, not their symbol tables: release
+      # binaries are stripped at link time (`strip = true` in
+      # [profile.release]), so `nm` finds zero simavr symbols in BOTH shapes and
+      # would pass vacuously. `hauksbee doctor` reports which backends the build
+      # can actually reach:
+      #   default    avr <TAB> builtin  <TAB> simavr linked into this binary; source commit <sha>
+      #   permissive avr <TAB> disabled <TAB> compiled out; ...
+      # That line is compiled-in behaviour, not a claim in a text file, and it
+      # cannot say "builtin" unless libsimavr really was linked.
+      - name: Verify the two shapes (behaviour + labels)
         shell: bash
+        env:
+          HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
         run: |
           set -uo pipefail
           cd hauksbee/dist
           V="${{ steps.ver.outputs.version }}"
           L="${{ matrix.label }}"
-          S="${{ matrix.shape }}"
           work="$(mktemp -d)"
-          if [ "$S" = default ]; then
-            tar -xzf "hauksbee-$V-$L.tar.gz" -C "$work"
-            d="$work/hauksbee-$V-$L"
-          else
-            tar -xzf "hauksbee-$V-$L-permissive.tar.gz" -C "$work"
-            d="$work/hauksbee-$V-$L-permissive"
-          fi
+          tar -xzf "hauksbee-$V-$L.tar.gz"            -C "$work"
+          tar -xzf "hauksbee-$V-$L-permissive.tar.gz" -C "$work"
+          def="$work/hauksbee-$V-$L"
+          perm="$work/hauksbee-$V-$L-permissive"
+
           fail=0
 
           # `doctor` exits non-zero when an EXTERNAL backend (renode, qemu) is
-          # missing, which it is on a bare runner; only the avr line matters.
-          doctor="$("$d/bin/hauksbee" doctor 2>&1 || true)"
-          printf '%s\n' "--- $S doctor ---" "$doctor"
-          if [ "$S" = default ]; then
-            if ! printf '%s' "$doctor" | grep -qE '^avr[[:space:]]+builtin'; then
-              echo "::error title=Default shape is not what it claims::the default binary does not report avr as builtin; libsimavr did not link, so the GPL-3.0/AVR-included label is wrong."
-              fail=1
-            fi
-            grep -q 'UNDER GPL-3.0' "$d/LICENSE-BINARY.txt" \
-              || { echo "::error::default tarball LICENSE-BINARY.txt does not state GPL-3.0"; fail=1; }
-            # GPL-3.0 section 4 wants the licence text travelling with the binary.
-            test -s "$d/LICENSE-GPL-3.0.txt" \
-              || { echo "::error::default tarball is missing LICENSE-GPL-3.0.txt"; fail=1; }
-          else
-            if ! printf '%s' "$doctor" | grep -qE '^avr[[:space:]]+disabled'; then
-              echo "::error title=GPL leak::the permissive binary does not report avr as compiled out; it may be linking GPL libsimavr under an Apache-2.0 label."
-              fail=1
-            fi
-            grep -q 'UNDER APACHE-2.0' "$d/LICENSE-BINARY.txt" \
-              || { echo "::error::permissive tarball LICENSE-BINARY.txt does not state Apache-2.0"; fail=1; }
-          fi
-          test -s "$d/LICENSE" && test -s "$d/NOTICE" \
-            || { echo "::error::$d is missing LICENSE or NOTICE"; fail=1; }
-          # hauksbee-mcp ships in every bundle, both shapes.
-          test -x "$d/bin/hauksbee-mcp" \
-            || { echo "::error::$d is missing bin/hauksbee-mcp"; fail=1; }
+          # missing, which it is on a bare runner. We only care about the avr
+          # line, so capture the output and ignore the status.
+          def_doctor="$("$def/bin/hauksbee" doctor 2>&1 || true)"
+          perm_doctor="$("$perm/bin/hauksbee" doctor 2>&1 || true)"
+          printf '%s\n' "--- default doctor ---"    "$def_doctor"
+          printf '%s\n' "--- permissive doctor ---" "$perm_doctor"
 
-          # Run tracked firmware through the extracted binary: this catches
-          # archive, loader, dynamic-library, embedded-data and runtime-path
-          # defects in the actual artifact about to be published.
-          if [ "$S" = default ]; then
-            bash ../scripts/test-release-artifact-runtime.sh "$d/bin/hauksbee" || fail=1
-          else
-            bash ../scripts/test-release-artifact-runtime.sh "$d/bin/hauksbee" permissive || fail=1
+          if ! printf '%s' "$def_doctor" | grep -qE '^avr[[:space:]]+builtin'; then
+            echo "::error title=Default shape is not what it claims::the default binary does not report avr as builtin; libsimavr did not link, so the GPL-3.0/AVR-included label is wrong."
+            fail=1
+          fi
+          if ! printf '%s' "$perm_doctor" | grep -qE '^avr[[:space:]]+disabled'; then
+            echo "::error title=GPL leak::the permissive binary does not report avr as compiled out; it may be linking GPL libsimavr under an Apache-2.0 label."
+            fail=1
           fi
 
-          # Version parity: every binary must attest this tag's exact source commit.
+          # The written labels must be present and must not have been swapped.
+          grep -q 'UNDER GPL-3.0'    "$def/LICENSE-BINARY.txt" \
+            || { echo "::error::default tarball LICENSE-BINARY.txt does not state GPL-3.0"; fail=1; }
+          grep -q 'UNDER APACHE-2.0' "$perm/LICENSE-BINARY.txt" \
+            || { echo "::error::permissive tarball LICENSE-BINARY.txt does not state Apache-2.0"; fail=1; }
+          # GPL-3.0 section 4 wants the licence text travelling with the binary.
+          test -s "$def/LICENSE-GPL-3.0.txt" \
+            || { echo "::error::default tarball is missing LICENSE-GPL-3.0.txt"; fail=1; }
+          for d in "$def" "$perm"; do
+            test -s "$d/LICENSE" && test -s "$d/NOTICE" \
+              || { echo "::error::$d is missing LICENSE or NOTICE"; fail=1; }
+            # hauksbee-mcp ships in every bundle, both shapes.
+            test -x "$d/bin/hauksbee-mcp" \
+              || { echo "::error::$d is missing bin/hauksbee-mcp"; fail=1; }
+          done
+
+          # Run tracked firmware through the extracted default binary. Cargo's
+          # emulator tests prove the source harness; this catches archive,
+          # loader, dynamic-library, embedded-data and runtime-path defects in
+          # the actual artifact about to be published.
+          bash ../scripts/test-release-artifact-runtime.sh "$def/bin/hauksbee" \
+            || fail=1
+          bash ../scripts/test-release-artifact-runtime.sh "$perm/bin/hauksbee" permissive \
+            || fail=1
+
+          # Version parity: every binary in both shapes must attest this tag's
+          # exact source commit. Publisher signatures cannot detect a stale
+          # target directory assembled consistently into a signed archive.
           expected_version="${{ steps.ver.outputs.version }}"
           expected_sha="${{ steps.ver.outputs.source_sha }}"
-          for b in hauksbee hauksbee-ci hauksbee-mcp; do
-            actual="$("$d/bin/$b" --version)"
-            expected="$b $expected_version (git $expected_sha)"
-            printf '%s: %s\n' "$d/bin/$b" "$actual"
-            if [ "$actual" != "$expected" ]; then
-              echo "::error title=Version mismatch::$d/bin/$b reports '$actual', expected '$expected'."
-              fail=1
-            fi
-          done
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            # Every binary inside a darwin tarball must carry a valid Developer
-            # ID signature. Notarisation of bare Mach-Os cannot be checked by
-            # stapler; Gatekeeper verifies the ticket online at first run.
+          for d in "$def" "$perm"; do
             for b in hauksbee hauksbee-ci hauksbee-mcp; do
-              if ! codesign --verify --strict --verbose=2 "$d/bin/$b"; then
-                echo "::error title=Unsigned tarball binary::$d/bin/$b failed codesign --verify --strict. Set HAUKSBEE_SIGN_IDENTITY per app/macos/SIGNING.md; an unsigned darwin tarball must not be released."
+              actual="$("$d/bin/$b" --version)"
+              expected="$b $expected_version (git $expected_sha)"
+              printf '%s: %s\n' "$d/bin/$b" "$actual"
+              if [ "$actual" != "$expected" ]; then
+                echo "::error title=Version mismatch::$d/bin/$b reports '$actual', expected '$expected'."
                 fail=1
               fi
             done
-            if [ "$S" = default ]; then
-              appwork="$(mktemp -d)"
-              ditto -x -k "hauksbee-$V-$L-app.zip" "$appwork"
-              APPRES="$appwork/Hauksbee.app/Contents/Resources"
+          done
+          # Signature checks run only when signing material exists; an
+          # unsigned leg ships no app zip and its tarballs are unsigned by
+          # declaration, not by accident.
+          if [ "${{ runner.os }}" = "macOS" ] && [ -n "${HAUKSBEE_SIGN_IDENTITY:-}" ]; then
+            # Every binary inside BOTH darwin tarballs must carry a valid
+            # Developer ID signature; an unsigned darwin tarball must not be
+            # released. Notarisation of these bare Mach-Os cannot be checked
+            # by stapler (no bundle to staple); Gatekeeper verifies the ticket
+            # online at first run. Notarisation is required at launch, same as
+            # the app gate above: the bundle steps submit via notarytool and
+            # fail on rejection when the notary secrets are present.
+            for d in "$def" "$perm"; do
               for b in hauksbee hauksbee-ci hauksbee-mcp; do
-                app_ver="$("$APPRES/bin/$b" --version)"
-                expected="$b $expected_version (git $expected_sha)"
-                echo "app $b: $app_ver"
-                if [ "$app_ver" != "$expected" ]; then
-                  echo "::error title=Version mismatch::the app bundle's $b reports '$app_ver', expected '$expected'."
+                if ! codesign --verify --strict --verbose=2 "$d/bin/$b"; then
+                  echo "::error title=Unsigned tarball binary::$d/bin/$b failed codesign --verify --strict. Set HAUKSBEE_SIGN_IDENTITY per app/macos/SIGNING.md; an unsigned darwin tarball must not be released."
                   fail=1
                 fi
               done
-              test -x "$APPRES/bin/hauksbee-mcp" \
-                || { echo "::error::the app zip is missing Contents/Resources/bin/hauksbee-mcp"; fail=1; }
-              # The licence set must travel inside the app too.
-              for f in LICENSE NOTICE LICENSE-BINARY.txt LICENSE-GPL-3.0.txt; do
-                test -s "$APPRES/$f" \
-                  || { echo "::error::the app zip is missing Contents/Resources/$f"; fail=1; }
-              done
-            fi
+            done
+            appwork="$(mktemp -d)"
+            ditto -x -k "hauksbee-$V-$L-app.zip" "$appwork"
+            APPRES="$appwork/Hauksbee.app/Contents/Resources"
+            for b in hauksbee hauksbee-ci hauksbee-mcp; do
+              app_ver="$("$APPRES/bin/$b" --version)"
+              expected="$b $expected_version (git $expected_sha)"
+              echo "app $b: $app_ver"
+              if [ "$app_ver" != "$expected" ]; then
+                echo "::error title=Version mismatch::the app bundle's $b reports '$app_ver', expected '$expected'."
+                fail=1
+              fi
+            done
+            test -x "$APPRES/bin/hauksbee-mcp" \
+              || { echo "::error::the app zip is missing Contents/Resources/bin/hauksbee-mcp"; fail=1; }
+            # The licence set must travel inside the app too.
+            for f in LICENSE NOTICE LICENSE-BINARY.txt LICENSE-GPL-3.0.txt; do
+              test -s "$APPRES/$f" \
+                || { echo "::error::the app zip is missing Contents/Resources/$f"; fail=1; }
+            done
           fi
 
           exit "$fail"
 
-      # The default shape links libelf STATICALLY (hauksbee-mcu/build.rs). A
-      # NEEDED libelf.so.1 entry means that static link silently regressed and
-      # the shipped binary exits 127 on any distro without libelf1. Linux only:
-      # readelf/ELF do not exist on the darwin legs.
-      - name: Assert no dynamic libelf in the default binaries (Linux, default shape)
-        if: matrix.shape == 'default' && runner.os == 'Linux'
+      # The default shape links libelf STATICALLY (hauksbee-mcu/build.rs; the
+      # archives come from libelf-dev/libzstd-dev/zlib1g-dev installed above). A NEEDED
+      # libelf.so.1 entry means that static link silently regressed, and the
+      # shipped binary exits 127 on any distro without libelf1
+      # (debian:bookworm-slim, ubuntu:24.04 minimal). Ask the ELF headers of
+      # the exact binaries about to be uploaded; a build-time claim is not
+      # evidence. Linux only: readelf/ELF do not exist on the darwin legs.
+      - name: Assert no dynamic libelf in the default binaries (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -496,10 +710,13 @@ jobs:
           done
           exit "$fail"
 
-      # The documented KiCad install-from-file path is a release asset. Build it
-      # once (every leg shares the same platform-independent Python sources).
+      # The documented KiCad install-from-file path is a release asset, not a
+      # maintainer-only local recipe. Build it once (all matrix legs share the
+      # same platform-independent Python sources), checksum it using the same
+      # basename-relative format as every other release artifact, and stage it
+      # beside the bundles for the existing verification and upload gates.
       - name: Build KiCad PCM archive
-        if: matrix.label == 'linux-x86_64' && matrix.shape == 'default'
+        if: matrix.label == 'linux-x86_64'
         shell: bash
         run: |
           set -euo pipefail
@@ -531,7 +748,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: hauksbee-${{ matrix.label }}-${{ matrix.shape }}
+          name: hauksbee-${{ matrix.label }}
           path: |
             hauksbee/dist/*.tar.gz
             hauksbee/dist/hauksbee-*-app.zip
@@ -539,6 +756,40 @@ jobs:
             hauksbee/dist/hauksbee-ci-pcm-v*.zip.sha256
             hauksbee/dist/*.sha256
           if-no-files-found: error
+
+      # The runner is disposable, but still restore its keychain search list
+      # and delete the imported certificate before this matrix leg exits. This
+      # runs after success, failure, cancellation, and an early credential
+      # preflight failure alike.
+      - name: Clean up macOS signing keychain
+        if: ${{ always() && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state_dir="${HAUKSBEE_SIGNING_STATE_DIR:-$RUNNER_TEMP/hauksbee-signing}"
+          keychain="${HAUKSBEE_SIGNING_KEYCHAIN:-$state_dir/developer-id-signing.keychain-db}"
+          original_keychains=()
+          if [[ -f "$state_dir/original-keychains" ]]; then
+            while IFS= read -r line; do
+              line="${line#\"}"
+              line="${line%\"}"
+              [[ -n "$line" ]] && original_keychains+=("$line")
+            done < "$state_dir/original-keychains"
+            if ((${#original_keychains[@]} > 0)); then
+              security list-keychains -d user -s "${original_keychains[@]}"
+            fi
+          fi
+          if [[ -f "$keychain" ]]; then
+            security delete-keychain "$keychain"
+          fi
+          for secret_file in \
+            "$state_dir/developer-id-signing.p12" \
+            "$state_dir/original-keychains"; do
+            if [[ -e "$secret_file" ]]; then
+              unlink "$secret_file"
+            fi
+          done
+          rmdir "$state_dir" 2>/dev/null || true
 
   build-windows:
     name: build windows-x86_64 (permissive)
@@ -592,6 +843,44 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
           "source_sha=$sourceSha" >> $env:GITHUB_OUTPUT
+      - name: Prove installer contract against a stub bundle
+        shell: pwsh
+        working-directory: hauksbee
+        env:
+          STUB_VERSION: ${{ steps.ver.outputs.version }}
+          STUB_COMMIT: ${{ steps.ver.outputs.source_sha }}
+        run: |
+          # The contract suite needs only binaries that answer --version with
+          # the release identity, so it can prove the whole installer flow in
+          # about a minute, before the expensive build spends hours. A real
+          # regression in these scripts fails here, not after the build.
+          $work = Join-Path $env:RUNNER_TEMP "stub-bundle"
+          $base = "hauksbee-$env:STUB_VERSION-windows-x86_64-permissive"
+          $bin = Join-Path (Join-Path $work $base) "bin"
+          New-Item -ItemType Directory -Path $bin -Force | Out-Null
+          $src = Join-Path $work "probe.rs"
+          $probe = @(
+            'use std::env;',
+            'fn main() {',
+            '    let path = env::current_exe().expect("current executable");',
+            '    let name = path.file_stem().expect("stem").to_string_lossy().into_owned();',
+            '    let args: Vec<_> = env::args_os().skip(1).collect();',
+            '    if args != ["--version"] { std::process::exit(2); }',
+            ('    println!("{} ' + $env:STUB_VERSION + ' (git ' + $env:STUB_COMMIT + ')", name);'),
+            '}'
+          )
+          Set-Content -Path $src -Value ($probe -join "`n")
+          & rustc -O $src -o (Join-Path $work "probe.exe")
+          if ($LASTEXITCODE -ne 0) { throw "stub probe compile failed" }
+          foreach ($b in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
+            Copy-Item (Join-Path $work "probe.exe") (Join-Path $bin $b)
+          }
+          $zip = Join-Path $work "$base.zip"
+          Compress-Archive -LiteralPath (Join-Path $work $base) -DestinationPath $zip
+          $sum = "$zip.sha256"
+          $digest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText($sum, "$digest  $base.zip`r`n")
+          .\scripts\test-windows-installer.ps1 -Zip $zip -Checksum $sum -Version $env:STUB_VERSION -ExpectedCommit $env:STUB_COMMIT
       - name: Install checksum-pinned Windows simulator backends
         shell: pwsh
         working-directory: hauksbee
@@ -608,10 +897,18 @@ jobs:
         shell: powershell
         working-directory: hauksbee
         run: .\scripts\test-windows-process-tree.ps1
+      # `--test-threads=1` is Windows-runner load management, not a smaller
+      # test set: every test still runs, one at a time. Several of these tests
+      # spawn a whole emulator (Renode's .NET host, QEMU) as a child process,
+      # and on this 4-core runner two Renode instances running concurrently is
+      # exactly the configuration that killed one of them mid-run (both TCP
+      # bridges reset with os error 10054, sensor_attach's cold leg) while the
+      # same co-sims pass one at a time. corpus-gate.yml serializes its
+      # emulator suites for the same reason.
       - name: Verify native engine, CI, and emulator lifecycle
         shell: powershell
         working-directory: hauksbee
-        run: cargo test --locked -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu
+        run: cargo test --locked -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu -- --test-threads=1
       - name: Require and retain real Windows firmware integrations
         shell: pwsh
         working-directory: hauksbee
@@ -631,12 +928,32 @@ jobs:
         env:
           HAUKSBEE_SOURCE_COMMIT: ${{ steps.ver.outputs.source_sha }}
           HAUKSBEE_RELEASE_TAG: v${{ steps.ver.outputs.version }}
-        run: cargo build --locked --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
+        run: cargo build --locked --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,serve,embed-web
       - name: Package and verify permissive Windows zip
         shell: pwsh
         working-directory: hauksbee
+        env:
+          # Windows release assets are signed and verified whenever the PFX
+          # secrets exist; without them the zip ships unsigned and this step
+          # says so. Store the PFX as base64 (one-line or whitespace-wrapped)
+          # and keep its password in a separate repository/environment secret.
+          # The packager consumes these only when the explicit requirement
+          # switch below is present; ordinary local bundles stay unsigned.
+          HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64 }}
+          HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD }}
+          # Optional override for the RFC 3161 timestamp service. When absent,
+          # scripts/bundle-windows.ps1 uses timestamp.digicert.com.
+          HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL }}
         run: |
-          .\scripts\bundle-windows.ps1 -Version "${{ steps.ver.outputs.version }}" -ExpectedCommit "${{ steps.ver.outputs.source_sha }}" -Out dist
+          $signingRequired = -not [string]::IsNullOrWhiteSpace($env:HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64)
+          if (-not $signingRequired) {
+            Write-Host "PFX secrets absent; packaging unsigned Windows binaries. Signing and its verification enforce automatically once HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64/_PASSWORD exist."
+          }
+          .\scripts\bundle-windows.ps1 `
+            -Version "${{ steps.ver.outputs.version }}" `
+            -ExpectedCommit "${{ steps.ver.outputs.source_sha }}" `
+            -Out "dist" `
+            -RequireAuthenticodeSignature:$signingRequired
           $V = "${{ steps.ver.outputs.version }}"
           $zip = "dist\hauksbee-$V-windows-x86_64-permissive.zip"
           $sum = "$zip.sha256"
@@ -650,9 +967,56 @@ jobs:
           foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
             if (-not (Test-Path (Join-Path $root "bin\$binary"))) { throw "$binary missing from Windows bundle" }
           }
+          if ($signingRequired) {
+            $signToolCommand = Get-Command signtool.exe -ErrorAction SilentlyContinue
+            $signToolPath = if ($null -ne $signToolCommand) {
+              $signToolCommand.Path
+            } else {
+              $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+              Get-ChildItem -LiteralPath $kitsRoot -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^10\.0\.[0-9.]+$' } |
+                Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName "x64\signtool.exe" } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+                Select-Object -First 1
+            }
+            if ([string]::IsNullOrWhiteSpace($signToolPath)) { throw "signtool.exe is unavailable; refusing to publish an unverified Windows bundle" }
+            foreach ($binary in @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")) {
+              $binaryPath = Join-Path $root "bin\$binary"
+              & $signToolPath verify /q /pa /all $binaryPath | Out-Host
+              if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed for packaged $binary" }
+            }
+          }
           if (-not (Test-Path (Join-Path $root "LICENSE-BINARY.txt"))) { throw "LICENSE-BINARY.txt missing" }
           $doctor = & (Join-Path $root "bin\hauksbee.exe") doctor | Out-String
           if ($doctor -notmatch '(?m)^avr\s+disabled\b') { throw "packaged Windows binary is not permissive" }
+          # The packaged binary must carry both the `serve` command and the
+          # compiled frontend. A release that passes static solver checks but
+          # cannot start its front door is launch-dead for every bare install.
+          $servePort = 8418
+          $serveStdout = Join-Path $env:RUNNER_TEMP "hauksbee-windows-serve.stdout.log"
+          $serveStderr = Join-Path $env:RUNNER_TEMP "hauksbee-windows-serve.stderr.log"
+          $server = Start-Process -FilePath (Join-Path $root "bin\hauksbee.exe") `
+            -ArgumentList @("serve", "--port", "$servePort", "--no-open") `
+            -PassThru -RedirectStandardOutput $serveStdout -RedirectStandardError $serveStderr
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              try {
+                $response = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$servePort/"
+                if ($response.StatusCode -eq 200) { $ready = $true; break }
+              } catch { }
+              if ($server.HasExited) { break }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $ready) {
+              $stderrText = if (Test-Path $serveStderr) { Get-Content $serveStderr -Raw } else { "" }
+              throw "packaged Windows hauksbee serve never became ready: $stderrText"
+            }
+          } finally {
+            if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+            $server.WaitForExit()
+          }
           $runOutput = & (Join-Path $root "bin\hauksbee.exe") run `
             (Join-Path $root "examples\ci-specs\boards\power_resistor.kicad_pcb") `
             --headless --plain 2>&1 | Out-String
@@ -708,9 +1072,33 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-08-03
 
+      # The pinned Espressif QEMU binaries are dynamically linked against
+      # pixman, SDL2 and libslirp, none of which a bare ubuntu-24.04 runner
+      # carries; without them install-sims.sh cannot even run `-machine help`
+      # to verify the fork.
+      - name: Install Linux simulator runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libglib2.0-0t64 libpixman-1-0 libsdl2-2.0-0 libslirp0
+
       - name: Install macOS simulator runtime dependencies
         if: runner.os == 'macOS'
-        run: brew install glib pixman libslirp libgcrypt
+        # otool -L on all four pinned Espressif QEMU binaries shows exactly
+        # three Homebrew dylibs: pixman, libgcrypt and SDL2. SDL2 was missing
+        # here, and the quiet fork probe turned dyld's failure into "not the
+        # fork". The binaries also hard-code /opt/homebrew paths (Espressif
+        # builds them on arm64), so on the Intel runner, whose Homebrew prefix
+        # is /usr/local, link the expected keg paths to the real ones. glib
+        # and libslirp stay for Renode's runtime.
+        run: |
+          brew install glib pixman libslirp libgcrypt sdl2
+          if [ "$(brew --prefix)" != "/opt/homebrew" ]; then
+            sudo mkdir -p /opt/homebrew/opt
+            for keg in pixman libgcrypt sdl2; do
+              sudo ln -sfn "$(brew --prefix)/opt/$keg" "/opt/homebrew/opt/$keg"
+            done
+          fi
 
       # Renode's pinned Intel DMG is the real 1.16.1 Mono build; unlike the
       # Apple-Silicon portable-dotnet asset it deliberately uses system Mono.
@@ -749,13 +1137,18 @@ jobs:
           path: hauksbee/required-integrations-${{ matrix.label }}.json
           if-no-files-found: error
 
-  # The exact-SHA release quality gate. The same steps the one serial job used
-  # to run, split into four jobs that run at once so the gate's wall-clock is
-  # its slowest leg rather than the sum of every leg. Each Rust job compiles
-  # one feature shape.
+  # The quality gate runs as four independent jobs rather than one long one:
+  # nothing here depends on another leg's output, so the Rust workspace, the
+  # two minority feature shapes, the release binaries and the offline
+  # contracts all start at once. The publish job below requires every one.
   release-quality-rust:
     name: exact-SHA quality gate (fmt, clippy, tests, docs)
     needs: resolve-source
+    # Skipped only when resolve-source proved a fully green candidate ci run
+    # already executed these same checks at this exact commit;
+    # release-quality-residue then runs the release-only contracts ci does
+    # not cover. The publish job requires exactly one of the two paths.
+    if: needs.resolve-source.outputs.ci_reuse != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact release source
@@ -775,7 +1168,7 @@ jobs:
       - name: Install release-quality prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev libelf-dev ngspice pkg-config zlib1g-dev shellcheck
+          sudo apt-get install -y clang libclang-dev libelf-dev libzstd-dev ngspice pkg-config zlib1g-dev shellcheck
           bash scripts/setup-ci-simavr.sh
       - name: Rust format, licence, lint, tests and docs
         run: |
@@ -784,11 +1177,17 @@ jobs:
           python3 scripts/test-runtime-dependency-licenses.py
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace
+          cargo test --locked --workspace --features avr
           RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
 
   release-quality-shapes:
     name: exact-SHA quality gate (bare engine and GPL-free shapes)
     needs: resolve-source
+    # Skipped only when resolve-source proved a fully green candidate ci run
+    # already executed these same checks at this exact commit;
+    # release-quality-residue then runs the release-only contracts ci does
+    # not cover. The publish job requires exactly one of the two paths.
+    if: needs.resolve-source.outputs.ci_reuse != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact release source
@@ -808,7 +1207,7 @@ jobs:
       - name: Install release-quality prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev libelf-dev ngspice pkg-config zlib1g-dev shellcheck
+          sudo apt-get install -y clang libclang-dev libelf-dev libzstd-dev ngspice pkg-config zlib1g-dev shellcheck
           bash scripts/setup-ci-simavr.sh
       - name: Both feature shapes
         run: |
@@ -823,6 +1222,11 @@ jobs:
   release-quality-release-binaries:
     name: exact-SHA quality gate (release binaries, scenario QC, speed gate)
     needs: resolve-source
+    # Skipped only when resolve-source proved a fully green candidate ci run
+    # already executed these same checks at this exact commit;
+    # release-quality-residue then runs the release-only contracts ci does
+    # not cover. The publish job requires exactly one of the two paths.
+    if: needs.resolve-source.outputs.ci_reuse != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact release source
@@ -842,7 +1246,7 @@ jobs:
       - name: Install release-quality prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev libelf-dev ngspice pkg-config zlib1g-dev shellcheck
+          sudo apt-get install -y clang libclang-dev libelf-dev libzstd-dev ngspice pkg-config zlib1g-dev shellcheck
           bash scripts/setup-ci-simavr.sh
       - name: Speed gate against ngspice
         run: |
@@ -870,6 +1274,11 @@ jobs:
   release-quality-offline:
     name: exact-SHA quality gate (policy, integrations, docs, product app)
     needs: resolve-source
+    # Skipped only when resolve-source proved a fully green candidate ci run
+    # already executed these same checks at this exact commit;
+    # release-quality-residue then runs the release-only contracts ci does
+    # not cover. The publish job requires exactly one of the two paths.
+    if: needs.resolve-source.outputs.ci_reuse != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact release source
@@ -912,15 +1321,68 @@ jobs:
           HB_EXPECT_WORKFLOW_EXPORT=1 bun run test:e2e
           HB_LINT_SITE=0 bun run visual-lint
 
+  release-quality-residue:
+    name: release-only contracts not covered by the reused ci run
+    needs: resolve-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: needs.resolve-source.outputs.ci_reuse == 'true'
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-source.outputs.source_sha }}
+          persist-credentials: false
+      - name: Bind residue gate to the immutable release event
+        env:
+          EXPECTED_SHA: ${{ needs.resolve-source.outputs.source_sha }}
+        run: |
+          head="$(git rev-parse HEAD)"
+          [ "$head" = "$EXPECTED_SHA" ]
+      # Everything else in release-quality is executed, command for command,
+      # by the fully green candidate ci run that resolve-source verified:
+      # fmt, runtime-dependency licences, clippy, the sharded workspace tests
+      # plus the native macOS workspace pass (the avr shape is in default
+      # features, so both quality-gate test invocations resolve to the
+      # default graph), engine no-default clippy+tests, the poisoned
+      # GPL-free check, docs with -D warnings, the ngspice-required speed
+      # gate, diagram lint, the integrations suites, the Windows port
+      # contract, and the full frontend gate. What remains here is the
+      # release-only residue ci does not run, plus a --locked resolution
+      # proof the ci jobs (which build unlocked) cannot give.
+      - name: Release-only contracts
+        run: |
+          cargo metadata --locked --format-version 1 >/dev/null
+          python3 scripts/check-private-release-surfaces.py .
+          python3 scripts/test_required_integrations.py
+          python3 scripts/test-simavr-provenance.py
+          shellcheck integrations/github-action/*.sh scripts/setup-ci-simavr.sh scripts/simavr-payload-provenance.sh scripts/get-hauksbee.sh
+
   release:
     name: publish release
-    needs: [build, build-windows, required-integrations, release-quality-rust, release-quality-shapes, release-quality-release-binaries, release-quality-offline]
+    needs: [build, build-windows, required-integrations, release-quality-rust,
+            release-quality-shapes, release-quality-release-binaries,
+            release-quality-offline, release-quality-residue]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # The post-publish step proves GitHub attested the immutable release.
+      # Listing attestations on a private repository requires this read grant,
+      # and an explicit permissions block zeroes every permission it omits.
+      attestations: read
     # Only publish a Release for an actual tag push; workflow_dispatch just
-    # produces downloadable build artifacts (above).
-    if: startsWith(github.ref, 'refs/tags/')
+    # produces downloadable build artifacts (above). always() is required so
+    # the one deliberately skipped quality job cannot cascade a skip into
+    # publication; every needed result is therefore checked explicitly, and
+    # exactly one of the two quality paths must have succeeded (the full
+    # gate, or the ci-reuse residue).
+    if: >-
+      always() && startsWith(github.ref, 'refs/tags/') &&
+      needs.build.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      needs.required-integrations.result == 'success' &&
+      ((needs.release-quality.result == 'success' && needs.release-quality-residue.result == 'skipped') ||
+       (needs.release-quality.result == 'skipped' && needs.release-quality-residue.result == 'success'))
     steps:
       - name: Checkout (for the slug preflight)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -1064,6 +1526,10 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true
+          # SemVer prerelease tags (for example v0.1.0-beta.1) must remain
+          # visibly pre-release and must not replace the latest stable pointer.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           target_commitish: ${{ github.sha }}
           body: |
             Source commit: `${{ github.sha }}`
@@ -1110,7 +1576,9 @@ jobs:
 #   hauksbee-<ver>-<label>.tar.gz              + .sha256   default, GPL-3.0
 #   hauksbee-<ver>-<label>-permissive.tar.gz   + .sha256   permissive, Apache-2.0
 #   hauksbee-<ver>-<label>-app.zip             + .sha256   macOS legs only,
-#                                                          wraps the default shape
+#                                                          wraps the default shape;
+#                                                          omitted when the repo
+#                                                          has no signing secrets
 #   hauksbee-ci-pcm-v<ver>.zip                  + .sha256   one platform-neutral
 #                                                          KiCad PCM archive
 #   hauksbee-<ver>-windows-x86_64-permissive.zip + .sha256 Windows x64,

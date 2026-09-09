@@ -45,6 +45,7 @@ pub mod plain;
 pub mod reports;
 pub mod result;
 pub mod run_manifest;
+pub mod web_design;
 pub mod web_dist;
 pub mod webcheck;
 pub mod webextract;

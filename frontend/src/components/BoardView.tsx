@@ -5,8 +5,9 @@ import type { BoardSession } from '../hooks/useBoardSession'
 import { WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { SelectionCard } from './SelectionCard'
-import { FirmwareJack } from './FirmwareJack'
-import { SchematicJack } from './SchematicJack'
+import { AdditionalEvidencePanel } from './AdditionalEvidencePanel'
+import { ConstraintModal } from './ConstraintModal'
+import type { ConstraintDraft } from './ConstraintEditor'
 import { DatasheetExtract } from './DatasheetExtract'
 import { WritePart } from './WritePart'
 import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-formats'
@@ -67,8 +68,9 @@ export function BoardView({
   const r = session.report!
   const {
     boardUrl, selectedNet, selectedComponent, setSelectedNet, setSelectedComponent,
-    busy, uploadError, uploadNotice, dismissNotice, firmwareFile, schematicFile, handleFirmware,
-    clearFirmware, handleSchematic, clearSchematic, boardFile, boardLabel, liveMode, onEmptyBoard, restoredFrom,
+    busy, uploadError, uploadNotice, dismissNotice, firmwareFile, schematicFile, supplementalFiles, handleFirmware,
+    clearFirmware, handleSchematic, clearSchematic, handleBom, handlePlacement, handleVariant, handleAsbuilt, handleModels,
+    boardFile, boardLabel, liveMode, onEmptyBoard, restoredFrom,
   } = session
 
   // Every hook lives ABOVE the unreadable-file branch below: a session that
@@ -83,6 +85,7 @@ export function BoardView({
   // it is a "let me look at this properly" gesture, not a setting.
   const [mapFullscreen, setMapFullscreen] = useState(false)
   const [importOverlay, setImportOverlay] = useState(false)
+  const [constraintDraft, setConstraintDraft] = useState<(Partial<ConstraintDraft> & Pick<ConstraintDraft, 'kind'>) | null>(null)
   const [authoringComponent, setAuthoringComponent] = useState<ModelCoverageComponent | null>(null)
   const [authoringSignal, setAuthoringSignal] = useState(0)
   const authoringRef = useRef<HTMLDivElement>(null)
@@ -258,6 +261,34 @@ export function BoardView({
           </div>
         )}
 
+        {/* Keep the evidence contract beside the verdict and next action. The
+            report can offer the existing firmware/schematic slots, while the
+            inputs that only the CLI accepts are named without pretending the
+            browser can upload them. */}
+        <AdditionalEvidencePanel
+          placement="report"
+          firmware={firmwareFile}
+          schematic={schematicFile}
+          bom={supplementalFiles.bom}
+          placementFile={supplementalFiles.placement}
+          variant={supplementalFiles.variant}
+          asbuilt={supplementalFiles.asbuilt}
+          models={supplementalFiles.models}
+          onFirmware={handleFirmware}
+          onClearFirmware={clearFirmware}
+          onSchematic={handleSchematic}
+          onClearSchematic={clearSchematic}
+          onBom={handleBom}
+          onPlacement={handlePlacement}
+          onVariant={handleVariant}
+          onAsbuilt={handleAsbuilt}
+          onModels={handleModels}
+          locked={!!busy}
+          boardName={boardLabel ?? r.file_name}
+          cosimRan={r.cosim?.ran}
+          showWebControls={!!boardFile && !restoredFrom}
+        />
+
         {/* Bind-honesty line. The verdict above is the page's one accent
             surface; this keeps its amber and its place above the fold, but as a
             single row under the verdict rather than a second shouting box. */}
@@ -397,9 +428,13 @@ export function BoardView({
                       net={selectedNet}
                       component={selectedComponent}
                       boundKind={selectedComponent ? r.component_kinds?.[selectedComponent.ref] ?? null : null}
+                      assertionCapabilities={selectedComponent ? r.component_assertions?.[selectedComponent.ref] ?? [] : []}
                       modelCoverage={coverageFor(r.model_coverage, selectedComponent?.ref)}
                       netModels={modelsOnNet(r.model_coverage, selectedNet)}
-                      onQueue={request => { onQueue(request); onOpenChecks() }}
+                      onQueue={request => {
+                        if (request.type === 'check') setConstraintDraft(request)
+                        else { onQueue(request); onOpenChecks() }
+                      }}
                       onAuthorModel={author}
                       onClose={() => { setSelectedNet(null); setSelectedComponent(null) }}
                       onPickNet={setSelectedNet}
@@ -462,25 +497,21 @@ export function BoardView({
           />
         )}
 
-        {/* The board file is still in hand, so firmware can be added or
-            swapped without starting the board over. */}
-        {boardFile && !busy && (
-          <div className="mt-5">
-            <FirmwareJack
-              firmware={firmwareFile}
-              placement="report"
-              onFile={handleFirmware}
-              onClear={clearFirmware}
-              locked={!!busy}
-              cosimRan={r.cosim?.ran}
-            />
-            <SchematicJack
-              schematic={schematicFile}
-              onFile={handleSchematic}
-              onClear={clearSchematic}
-              locked={!!busy}
-            />
-          </div>
+        {constraintDraft && (
+          <ConstraintModal
+            initial={constraintDraft}
+            onSave={draft => onQueue({
+              ...draft,
+              type: 'check',
+              net: draft.net || undefined,
+              ref: draft.ref || undefined,
+            })}
+            onClose={() => setConstraintDraft(null)}
+            onOpenChecks={() => {
+              setConstraintDraft(null)
+              onOpenChecks()
+            }}
+          />
         )}
       </div>
     </div>

@@ -6,9 +6,9 @@
 //! schema instead of silently drifting from it. Same coupling pattern as
 //! `hauksbee-ir/tests/compat_drift.rs` for the SPICE compatibility doc.
 //!
-//! * `schema_file_matches_spec_type`: the checked-in file equals what the
-//!   types generate, byte for byte. Regenerate after editing `Spec` (or any
-//!   type it contains) with:
+//! * `schema_file_matches_spec_type`: after normalizing checkout line endings,
+//!   the checked-in file equals what the types generate, byte for byte.
+//!   Regenerate after editing `Spec` (or any type it contains) with:
 //!       UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test schema_drift
 //! * `generated_schema_is_strict_and_documented`: the generator actually
 //!   carries the properties the editor experience depends on (doc comments as
@@ -64,9 +64,21 @@ fn generated_schema() -> String {
     required.push(json!("assert"));
     required.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
 
-    let mut text = serde_json::to_string_pretty(&schema).expect("schema serializes");
+    let text = serde_json::to_string_pretty(&schema).expect("schema serializes");
+    // rustdoc preserves CRLF from a Windows checkout in derived field
+    // descriptions. Canonicalize the encoded newlines so one checked-in schema
+    // is byte-identical on every supported host.
+    let mut text = canonical_schema_newlines(text);
     text.push('\n');
     text
+}
+
+fn canonical_schema_newlines(text: String) -> String {
+    // Git for Windows can materialize the checked-in JSON with physical CRLF
+    // line endings. Separately, rustdoc can preserve CRLF from Rust source as
+    // the encoded characters `\r\n` inside generated descriptions. Normalize
+    // both representations while leaving all other schema bytes significant.
+    text.replace("\r\n", "\n").replace(r"\r\n", r"\n")
 }
 
 fn schema_path() -> PathBuf {
@@ -90,6 +102,7 @@ fn schema_file_matches_spec_type() {
             path.display()
         )
     });
+    let current = canonical_schema_newlines(current);
     assert!(
         current == want,
         "editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json is out of \
@@ -149,4 +162,19 @@ fn generated_schema_is_strict_and_documented() {
         assert!(required.iter().any(|v| v == f), "`{f}` must be required");
     }
     assert_eq!(props["assert"]["minItems"], json!(1));
+}
+
+#[test]
+fn generated_schema_is_independent_of_checkout_line_endings() {
+    let encoded = r#"{"description":"first\r\nsecond"}"#.to_string();
+    assert_eq!(
+        canonical_schema_newlines(encoded),
+        r#"{"description":"first\nsecond"}"#
+    );
+    let physical = "{\r\n  \"description\": \"first\"\r\n}\r\n".to_string();
+    assert_eq!(
+        canonical_schema_newlines(physical),
+        "{\n  \"description\": \"first\"\n}\n"
+    );
+    assert!(!generated_schema().contains(r"\r\n"));
 }

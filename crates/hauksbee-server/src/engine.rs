@@ -7,6 +7,7 @@
 //! existing callers. What remains locally is the demo implementation: an
 //! emulated AVR proving the server/MCU/frontend stack without a real board.
 
+#[cfg(feature = "avr")]
 use crate::protocol::{BoardInfo, SimFrame, SolverControls};
 pub use hauksbee_frontdoor_api::engine::Engine;
 

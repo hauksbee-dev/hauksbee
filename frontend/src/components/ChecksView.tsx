@@ -6,11 +6,13 @@ import { PlusIcon } from './Icons'
 import { specStemFor, workflowExportAvailable, workflowYaml } from '../lib/ci-workflow'
 import { EmptyState } from '../motion'
 import { buildCheckUpload, buildPortableCheckSpec } from '../lib/board-upload'
+import type { SupplementalDesignFiles } from '../lib/board-upload'
 import { sessionIdFor } from '../lib/session-store'
 import { api, errorText } from '../lib/api'
 import {
-  assertToml, buildToml, CHECK_KINDS, emptyCheck, emptyPeripheral, emptySensor,
-  peripheralIssues, peripheralToml, rowIssues, sensorIssues, sensorToml, supplyToml,
+  assertToml, buildToml, CHECK_KINDS, componentCapabilityIssues, CONSTRAINT_KEYS,
+  emptyCheck, emptyPeripheral, emptySensor, normalizeSavedCheck, peripheralIssues,
+  peripheralToml, railPolarity, rowIssues, sensorIssues, sensorToml, supplyToml,
 } from '../lib/check-spec'
 import type {
   BuilderState, CheckRow, PeripheralRow, RowIssue, SensorRow, SupplyRow,
@@ -51,6 +53,61 @@ interface SavedChecksState {
   checks?: CheckRow[]
   rawMode?: boolean
   rawText?: string
+  includeFirmware?: boolean
+}
+
+/** Stable enough identity for a staged browser File during one session. A
+ *  same-name replacement must stale a previous run even when the slot stays
+ *  filled; the bytes themselves are authenticated by the upload path when the
+ *  next run is sent. */
+function fileIdentity(file: File | null): string | null {
+  return file ? `${file.name}\u0000${file.size}\u0000${file.lastModified}` : null
+}
+
+function supplementalIdentity(files: SupplementalDesignFiles): string {
+  return [files.bom, files.placement, files.variant, files.asbuilt, ...files.models]
+    .map(fileIdentity)
+    .join('\u0001')
+}
+
+/** The firmware decision is part of the run contract, not a builder-only
+ *  setting. Keep it visible while raw TOML owns the pane too, so a non-AVR
+ *  build can always choose the static-only path before pressing Run. */
+function FirmwareRunChoice({ firmware, include, avrAvailable, running, onChange }: {
+  firmware: File
+  include: boolean
+  avrAvailable: boolean
+  running: boolean
+  onChange: (include: boolean) => void
+}) {
+  return (
+    <section
+      className="hb-card px-4 py-3.5 mb-4"
+      data-testid="firmware-run-choice"
+      style={{ borderColor: !avrAvailable && include ? 'var(--warn-border)' : 'var(--hairline)' }}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="inline-flex items-center gap-2 text-[12px] cursor-pointer" style={{ color: 'var(--silk)' }}>
+          <input
+            data-testid="include-staged-firmware"
+            type="checkbox"
+            checked={include}
+            disabled={running}
+            onChange={event => onChange(event.currentTarget.checked)}
+          />
+          <span>{include ? 'Include staged firmware in this run' : 'Run checks without firmware'}</span>
+        </label>
+        <span className="text-[11px]" style={{ color: include ? 'var(--copper-hi)' : 'var(--silk-faint)' }}>
+          {include ? 'firmware co-simulation requested' : 'static board checks only'}
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-relaxed" style={{ color: !avrAvailable ? 'var(--warn-strong)' : 'var(--silk-dim)' }}>
+        <span style={{ fontFamily: 'var(--font-mono)' }}>{firmware.name}</span> is staged. Supply, voltage, and button checks do not need an MCU backend. UART, blink,
+        boot, and any combined firmware co-simulation do; this build reports that backend as {!avrAvailable ? 'unavailable' : 'available'}.
+        {!avrAvailable && include && ' Turn the choice off to run the static checks without firmware.'}
+      </p>
+    </section>
+  )
 }
 
 /** Storage key for a board's saved checks. The file name alone collides for
@@ -76,6 +133,8 @@ export function ChecksView({
   boardFile,
   firmwareFile,
   schematicFile,
+  supplementalFiles,
+  avrAvailable = true,
   selectedNet,
   selectedComponent,
   pending,
@@ -90,6 +149,10 @@ export function ChecksView({
   boardFile: File | null
   firmwareFile: File | null
   schematicFile: File | null
+  /** The manufacturing and as-built inputs staged with the board. */
+  supplementalFiles: SupplementalDesignFiles
+  /** Whether this build has the MCU backend needed for firmware co-simulation. */
+  avrAvailable?: boolean
   /** Net last clicked on the board render, offered as a one-click check. */
   selectedNet: string | null
   /** Component last clicked on the board render, offered as ref checks. */
@@ -137,8 +200,13 @@ export function ChecksView({
     }
   }, [storageKey])
   const savedArray = <T,>(rows: T[] | undefined): T[] => (Array.isArray(rows) ? rows : [])
-  const initialChecks = savedArray(saved?.checks).length
-    ? savedArray(saved?.checks)
+  // Rows saved by an earlier release are repaired (and unknown kinds dropped)
+  // before any validator, composer or editor sees them.
+  const normalizedSavedChecks = savedArray(saved?.checks)
+    .map((check, index) => normalizeSavedCheck(check, index + 1))
+    .filter((check): check is CheckRow => check !== null)
+  const initialChecks = normalizedSavedChecks.length
+    ? normalizedSavedChecks
     : [emptyCheck(1, 'no_faults')]
 
   const [specName, setSpecName] = useState(saved?.specName || `${report.board_name || report.file_name} checks`)
@@ -151,13 +219,27 @@ export function ChecksView({
   const [peripherals, setPeripherals] = useState<PeripheralRow[]>(() => savedArray(saved?.peripherals))
   const [sensors, setSensors] = useState<SensorRow[]>(() => savedArray(saved?.sensors))
   const [checks, setChecks] = useState<CheckRow[]>(initialChecks)
+  // Firmware is staged on the board session, but including it in a check run
+  // is an explicit choice. Preserve the old default on AVR-capable builds;
+  // permissive/non-AVR builds start on the static-only path.
+  const [includeFirmware, setIncludeFirmware] = useState(
+    () => !!firmwareFile && avrAvailable && (saved?.includeFirmware ?? true),
+  )
+  const previousFirmware = useRef<File | null>(firmwareFile)
   const [rawMode, setRawMode] = useState(!!(saved?.rawMode && typeof saved.rawText === 'string'))
   const [rawText, setRawText] = useState(typeof saved?.rawText === 'string' ? saved.rawText : '')
   const [addOpen, setAddOpen] = useState(false)
   const [running, setRunning] = useState(false)
   // The last run's response, plus the exact spec text it ran, so results can
   // be flagged stale the moment the spec diverges.
-  const [run, setRun] = useState<{ response: RunResponse; toml: string } | null>(null)
+  const [run, setRun] = useState<{
+    response: RunResponse
+    toml: string
+    firmwareIdentity: string | null
+    boardIdentity: string | null
+    schematicIdentity: string | null
+    supplementalIdentity: string
+  } | null>(null)
   // Builder-mode preflight results, per row. Set when a run is attempted with
   // holes; a row's entry clears the moment that row is edited so the highlight
   // never nags about fixed input.
@@ -200,14 +282,33 @@ export function ChecksView({
     [specName, duration, supplies, peripherals, checks, sensors],
   )
   const effectiveToml = rawMode ? rawText : builtToml
-  const stale = run !== null && run.toml !== effectiveToml
+  const firmwareForRun = includeFirmware ? firmwareFile : null
+  // A result is only about the spec AND the exact files it ran against.
+  const stale = run !== null && (
+    run.toml !== effectiveToml
+    || run.firmwareIdentity !== fileIdentity(firmwareForRun)
+    || run.boardIdentity !== fileIdentity(boardFile)
+    || run.schematicIdentity !== fileIdentity(schematicFile)
+    || run.supplementalIdentity !== supplementalIdentity(supplementalFiles)
+  )
+
+  // A newly staged image gets the build's safe default. Removing it always
+  // turns the choice off, so an old firmware-backed result cannot look current.
+  useEffect(() => {
+    if (previousFirmware.current !== firmwareFile) {
+      previousFirmware.current = firmwareFile
+      setIncludeFirmware(!!firmwareFile && avrAvailable)
+    } else if (!firmwareFile) {
+      setIncludeFirmware(false)
+    }
+  }, [firmwareFile, avrAvailable])
 
   // Auto-save (the "things auto load in future" contract).
   useEffect(() => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText }))
+      localStorage.setItem(storageKey, JSON.stringify({ specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText, includeFirmware }))
     } catch { /* storage full/blocked: the session still works */ }
-  }, [storageKey, specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText])
+  }, [storageKey, specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText, includeFirmware])
 
   // Report the run summary to the shell's chips; a stale or failed run
   // reports nothing rather than a number that no longer matches the spec.
@@ -295,6 +396,13 @@ export function ChecksView({
       if (r.type === 'check') {
         const row = emptyCheck(nextId.current++, r.kind, r.net ?? '')
         row.ref = r.ref ?? ''
+        // The board modal edits the exact assertion before queueing it, so
+        // every value it settled is carried into the row rather than reset.
+        for (const key of CONSTRAINT_KEYS) {
+          const value = r[key]
+          if (value !== undefined) row[key] = value
+        }
+        row.rail_polarity = railPolarity(row)
         checkRows.push(row)
         raw += assertToml(row)
       } else if (r.type === 'peripheral') {
@@ -341,26 +449,51 @@ export function ChecksView({
       const sensorProblems = collect(sensors, s => s.rowId, sensorIssues)
       const problems = new Map<number, RowIssue[]>()
       for (const c of checks) {
-        const issues = rowIssues(c)
+        const issues = [...rowIssues(c), ...componentCapabilityIssues(c, report.component_assertions)]
         if (issues.length > 0) problems.set(c.id, issues)
       }
       setPeripheralValidation(peripheralProblems)
       setSensorValidation(sensorProblems)
       setValidation(problems)
-      if (problems.size > 0 || peripheralProblems.size > 0 || sensorProblems.size > 0) return
+      if (problems.size > 0 || peripheralProblems.size > 0 || sensorProblems.size > 0) {
+        // A local preflight result supersedes a stale server error. Put the
+        // explanation on the row it judges, then move focus to the first field
+        // that needs attention, so nobody has to translate a TOML key from a
+        // banner on the other side of the page.
+        setRun(null)
+        onSummary(null)
+        requestAnimationFrame(() => {
+          const firstInvalid = document.querySelector<HTMLElement>('.checks-flush [aria-invalid="true"]')
+          firstInvalid?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          firstInvalid?.focus({ preventScroll: true })
+        })
+        return
+      }
     }
     setRunning(true)
     const tomlAtRun = effectiveToml
-    const fail = (error: string) => setRun({ response: { ok: false, error }, toml: tomlAtRun })
+    const firmwareAtRun = firmwareForRun
+    const ran = {
+      toml: tomlAtRun,
+      firmwareIdentity: fileIdentity(firmwareAtRun),
+      boardIdentity: fileIdentity(boardFile),
+      schematicIdentity: fileIdentity(schematicFile),
+      supplementalIdentity: supplementalIdentity(supplementalFiles),
+    }
     try {
-      const response = await api.check(buildCheckUpload(boardFile, firmwareFile, schematicFile, tomlAtRun))
-      setRun({ response, toml: tomlAtRun })
+      const response = await api.check(
+        buildCheckUpload(boardFile, firmwareAtRun, schematicFile, tomlAtRun, supplementalFiles),
+      )
+      setRun({ response, ...ran })
     } catch (e) {
-      fail(errorText(e))
+      setRun({ response: { ok: false, error: errorText(e) }, ...ran })
     } finally {
       setRunning(false)
     }
-  }, [boardFile, firmwareFile, schematicFile, effectiveToml, rawMode, checks, peripherals, sensors])
+  }, [
+    boardFile, firmwareForRun, schematicFile, supplementalFiles, effectiveToml,
+    rawMode, checks, peripherals, sensors, onSummary, report.component_assertions,
+  ])
 
   const specStem = specStemFor(report.file_name)
   const specFileName = `${specStem}.toml`
@@ -374,8 +507,10 @@ export function ChecksView({
   // writes it, the Export menu offers it and the saved session stores it. Four
   // readers of a per-render function are four chances to disagree.
   const specText = useMemo(
-    () => buildPortableCheckSpec(report.file_name, firmwareFile, schematicFile, effectiveToml),
-    [effectiveToml, firmwareFile, schematicFile, report.file_name],
+    () => buildPortableCheckSpec(
+      report.file_name, firmwareForRun, schematicFile, effectiveToml, includeFirmware, supplementalFiles,
+    ),
+    [effectiveToml, firmwareForRun, schematicFile, supplementalFiles, report.file_name, includeFirmware],
   )
 
   // Hand the spec up to the shell, so the Export menu and the saved session
@@ -423,6 +558,11 @@ export function ChecksView({
     return i >= 0 && i < results.length ? results[i] : null
   }
 
+  /** What the bound circuit says this part can be checked for. Missing data
+   *  fails closed: an offer that cannot be evaluated is not made. */
+  const componentCan = (ref: string, kind: string) =>
+    (report.component_assertions?.[ref] ?? []).includes(kind)
+
   /** The copper offer chips above the builder, from the board selection. */
   const quickAdd = (testid: string, label: React.ReactNode, onClick: () => void) => (
     <button
@@ -467,15 +607,26 @@ export function ChecksView({
             )}
             {selectedComponent && !rawMode && (
               <div className="mb-3 flex flex-wrap gap-2">
-                {quickAdd('quick-add-ref-current',
+                {componentCan(selectedComponent.ref, 'max_current') && quickAdd('quick-add-ref-current',
                   <>+ “{selectedComponent.ref}” must stay under a current (clicked on the map)</>,
                   () => addCheck('max_current', '', selectedComponent.ref))}
-                {quickAdd('quick-add-ref-temp', <>+ “{selectedComponent.ref}” must stay cool</>,
+                {componentCan(selectedComponent.ref, 'max_temp') && quickAdd('quick-add-ref-temp',
+                  <>+ “{selectedComponent.ref}” must stay cool</>,
                   () => addCheck('max_temp', '', selectedComponent.ref))}
                 {quickAdd('quick-add-ref-sensor',
                   <>+ Attach register-map behavior to “{selectedComponent.ref}”</>,
                   () => addSensor(selectedComponent.ref, selectedComponent.ref))}
               </div>
+            )}
+
+            {firmwareFile && (
+              <FirmwareRunChoice
+                firmware={firmwareFile}
+                include={includeFirmware}
+                avrAvailable={avrAvailable}
+                running={running}
+                onChange={setIncludeFirmware}
+              />
             )}
 
             {rawMode ? (
@@ -496,7 +647,8 @@ export function ChecksView({
                   <Field label="run length (ms)" value={duration} width={70} onChange={setDuration} />
                   <span className="text-[12px]" style={{ color: 'var(--silk-faint)' }}>
                     {firmwareFile
-                      ? <>firmware: <span style={{ color: 'var(--ok)', fontFamily: 'var(--font-mono)' }}>{firmwareFile.name}</span> (co-simulated)</>
+                      ? <>firmware: <span style={{ color: includeFirmware ? 'var(--ok)' : 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}>{firmwareFile.name}</span>{' '}
+                        ({includeFirmware ? 'included in this run' : 'staged, excluded from this run'})</>
                       : 'no firmware loaded: add it on the Board view to check UART/blink/boot'}
                   </span>
                 </div>

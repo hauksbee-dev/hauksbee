@@ -27,6 +27,8 @@
 
 use std::path::PathBuf;
 
+mod support;
+
 use hauksbee_ci::{run, RunConfig};
 
 /// The directory the corpus boards sit directly under, whichever layout this
@@ -114,7 +116,7 @@ fn lumenpnp_motor_gate_boot_states_are_safe() {
         .join(", ");
     let body = format!(
         r#"name = "lumenpnp boot-state fuzz (MOSFET gates undefined)"
-board = "{}"
+board = {}
 duration_ms = 1
 [[supply]]
 net = "VDC"
@@ -147,7 +149,7 @@ max = 3.4
 [[assert]]
 kind = "no_faults"
 "#,
-        board.display()
+        support::toml_path(&board)
     );
     let result = run_body("lumenpnp_gates.toml", &body);
     assert!(
@@ -174,7 +176,7 @@ fn olimex_evb_relay_boot_states_are_safe() {
     }
     let body = format!(
         r#"name = "Olimex ESP32-EVB boot-state fuzz (relay NPN bases undefined)"
-board = "{}"
+board = {}
 duration_ms = 1
 [[supply]]
 net = "+3.3V"
@@ -209,7 +211,7 @@ max = 5.1
 [[assert]]
 kind = "no_faults"
 "#,
-        board.display()
+        support::toml_path(&board)
     );
     let result = run_body("olimex_relay.toml", &body);
     assert!(
@@ -245,7 +247,7 @@ fn mnt_reform_supervisor_boot_states_raise_no_fault() {
     }
     let body = format!(
         r#"name = "MNT Reform mobo3.0 boot-state fuzz (LPC supervisor enables undefined)"
-board = "{}"
+board = {}
 duration_ms = 1
 [[supply]]
 net = "VIN"
@@ -281,7 +283,7 @@ levels = [0.0, 3.3]
 [[assert]]
 kind = "no_faults"
 "#,
-        board.display()
+        support::toml_path(&board)
     );
     let result = run_body("reform_supervisor.toml", &body);
     assert!(

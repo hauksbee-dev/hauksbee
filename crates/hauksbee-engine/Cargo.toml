@@ -46,7 +46,6 @@ name = "hauksbee_engine"
 path = "src/lib.rs"
 
 [dependencies]
-notify = "8"
 anyhow = { workspace = true }
 # serve's launcher-orphan watchdog probes its parent pid with kill(pid, 0)
 # (commands/serve.rs::exit_when_parent_dies); unix-only use.
@@ -65,21 +64,31 @@ same-file = "1.0"
 # cosim (scheduler, peripherals, HauksbeeEngine) and checks (static lints)
 # side by side, then this crate (reports, front door, CLI). Every path the
 # downstream crates used before the split is re-exported from lib.rs.
-hauksbee-bind = { version = "0.1.0", path = "../hauksbee-bind" }
-hauksbee-cosim = { version = "0.1.0", path = "../hauksbee-cosim", default-features = false }
-hauksbee-checks = { version = "0.1.0", path = "../hauksbee-checks" }
-hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
-hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
-hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
-hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
-hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false }
-hauksbee-frontdoor-api = { version = "0.1.0", path = "../hauksbee-frontdoor-api" }
-hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-features = false, optional = true }
+hauksbee-bind = { version = "0.1.0-beta.4", path = "../hauksbee-bind" }
+hauksbee-cosim = { version = "0.1.0-beta.4", path = "../hauksbee-cosim", default-features = false }
+hauksbee-checks = { version = "0.1.0-beta.4", path = "../hauksbee-checks" }
+hauksbee-extract = { version = "0.1.0-beta.4", path = "../hauksbee-extract" }
+hauksbee-models = { version = "0.1.0-beta.4", path = "../hauksbee-models" }
+hauksbee-ir = { version = "0.1.0-beta.4", path = "../hauksbee-ir" }
+hauksbee-solve = { version = "0.1.0-beta.4", path = "../hauksbee-solve" }
+hauksbee-mcu = { version = "0.1.0-beta.4", path = "../hauksbee-mcu", default-features = false }
+hauksbee-frontdoor-api = { version = "0.1.0-beta.4", path = "../hauksbee-frontdoor-api" }
+hauksbee-server = { version = "0.1.0-beta.4", path = "../hauksbee-server", default-features = false, optional = true }
 forge-model = { workspace = true }
 forge-codegen = { workspace = true }
 forge-sexpr.workspace = true
 tempfile = { workspace = true }
-tokio = { version = "1.52.3", features = ["full"] }
+tokio = { version = "1.52.3", features = [
+    # `macros` is load-bearing for the smallest feature shape: the watch loop's
+    # `tokio::select!` needs it, and every default build got it for free via
+    # the server dependency's own tokio features. Only the no-default build
+    # ever noticed it missing.
+    "macros",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 rust-embed = { version = "8", optional = true }
 toml = "0.8"
@@ -87,9 +96,7 @@ toml = "0.8"
 # features only (macOS FSEvents; inotify/ReadDirectoryChanges are always compiled
 # on Linux/Windows); the recommended-watcher + watch-a-dir-and-filter pattern
 # needs nothing more.
-# Interactive TUI: the default human-facing surface when `hauksbee run <board>`
-# is invoked with no output flag on a TTY. Adapts ratatui + crossterm rather
-# than hand-rolling a terminal renderer.
+notify = "8"
 # Sandboxed arithmetic/boolean expression evaluator for behavioural-model laws
 # and FSM guards. Chosen over rhai: the laws here are pure arithmetic over a
 # bound context (pin voltages, active state, params) with no need for a scripting

@@ -231,6 +231,11 @@
           "type": "string"
         },
         {
+          "const": "as_built",
+          "description": "A unit-specific as-built overlay applied after model binding.",
+          "type": "string"
+        },
+        {
           "const": "spec",
           "description": "A CI spec / assertion file.",
           "type": "string"

@@ -28,13 +28,13 @@ sha2 = "0.11"
 toml = "0.8"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 tempfile = { workspace = true }
-hauksbee-bind = { version = "0.1.0", path = "../hauksbee-bind" }
-hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
-hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
-hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
-hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
-hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false }
-hauksbee-frontdoor-api = { version = "0.1.0", path = "../hauksbee-frontdoor-api" }
+hauksbee-bind = { version = "0.1.0-beta.4", path = "../hauksbee-bind" }
+hauksbee-extract = { version = "0.1.0-beta.4", path = "../hauksbee-extract" }
+hauksbee-models = { version = "0.1.0-beta.4", path = "../hauksbee-models" }
+hauksbee-ir = { version = "0.1.0-beta.4", path = "../hauksbee-ir" }
+hauksbee-solve = { version = "0.1.0-beta.4", path = "../hauksbee-solve" }
+hauksbee-mcu = { version = "0.1.0-beta.4", path = "../hauksbee-mcu", default-features = false }
+hauksbee-frontdoor-api = { version = "0.1.0-beta.4", path = "../hauksbee-frontdoor-api" }
 evalexpr = { version = "=11.3.1", default-features = false }
 
 [dev-dependencies]

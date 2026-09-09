@@ -23,6 +23,8 @@ import AppKit
 
 final class LauncherDelegate: NSObject, NSApplicationDelegate {
     private var server: Process?
+    private var serverURLFile: URL?
+    private var reopenPollPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Resources/bin, not MacOS/: the default macOS filesystem is
@@ -46,6 +48,17 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         // user's backgrounded `hauksbee serve` is never affected.
         var env = ProcessInfo.processInfo.environment
         env["HAUKSBEE_EXIT_WITH_PARENT"] = String(ProcessInfo.processInfo.processIdentifier)
+        // The server may fall forward from 3001 when that port is occupied.
+        // Give it a launcher-owned receipt file so a later Dock/Spotlight
+        // reopen can open the exact bound URL rather than guessing a port.
+        let urlReceipt = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hauksbee-app-url-\(UUID().uuidString).txt")
+        guard FileManager.default.createFile(atPath: urlReceipt.path, contents: Data()) else {
+            presentFailure("Could not create the app's local server receipt.")
+            return
+        }
+        serverURLFile = urlReceipt
+        env["HAUKSBEE_APP_URL_FILE"] = urlReceipt.path
         proc.environment = env
         // Not Pipes: nobody reads a launcher-held Pipe, so a chatty server
         // would eventually fill the 64 KB pipe buffer and block mid-write.
@@ -67,13 +80,52 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        launcherLog("reopen requested")
+        openCurrentFrontend()
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        guard let proc = server, proc.isRunning else { return }
-        // Detach the handler first so the child's exit does not re-enter
-        // terminate() while we are already terminating.
-        proc.terminationHandler = nil
-        proc.terminate() // SIGTERM
-        proc.waitUntilExit()
+        if let proc = server, proc.isRunning {
+            // Detach the handler first so the child's exit does not re-enter
+            // terminate() while we are already terminating.
+            proc.terminationHandler = nil
+            proc.terminate() // SIGTERM
+            proc.waitUntilExit()
+        }
+        removeServerURLFile()
+    }
+
+    private func openCurrentFrontend(remainingAttempts: Int = 20) {
+        guard let receipt = serverURLFile else { return }
+        if let value = try? String(contentsOf: receipt, encoding: .utf8),
+           let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+           url.scheme == "http",
+           url.host == "127.0.0.1",
+           url.port != nil {
+            reopenPollPending = false
+            let opened = NSWorkspace.shared.open(url)
+            launcherLog("reopen \(opened ? "opened" : "failed") \(url.absoluteString)")
+            return
+        }
+        // The first reopen can race the listener by a fraction of a second.
+        // Poll on the main queue without blocking the app event loop.
+        guard remainingAttempts > 0, !reopenPollPending else { return }
+        reopenPollPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.reopenPollPending = false
+            self?.openCurrentFrontend(remainingAttempts: remainingAttempts - 1)
+        }
+    }
+
+    private func removeServerURLFile() {
+        guard let receipt = serverURLFile else { return }
+        try? FileManager.default.removeItem(at: receipt)
+        serverURLFile = nil
     }
 
     /// ~/Library/Logs/Hauksbee/serve.log, truncated per launch so it records
@@ -95,7 +147,32 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func launcherLog(_ message: String) {
+        let fm = FileManager.default
+        guard let library = fm.urls(for: .libraryDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let dir = library.appendingPathComponent("Logs/Hauksbee", isDirectory: true)
+        let log = dir.appendingPathComponent("launcher.log")
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            if !fm.fileExists(atPath: log.path) {
+                fm.createFile(atPath: log.path, contents: Data())
+            }
+            let handle = try FileHandle(forWritingTo: log)
+            try handle.seekToEnd()
+            let line = "\(Date().timeIntervalSince1970) \(message)\n"
+            if let data = line.data(using: .utf8) {
+                try handle.write(contentsOf: data)
+            }
+            try handle.close()
+        } catch {
+            // Reopen still succeeds without a diagnostic log.
+        }
+    }
+
     private func presentFailure(_ message: String) {
+        removeServerURLFile()
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "Hauksbee could not start"

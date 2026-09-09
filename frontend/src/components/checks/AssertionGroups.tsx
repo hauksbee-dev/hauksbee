@@ -4,7 +4,8 @@ import { CHECK_KINDS, GROUP_ORDER, checkKind } from '../../lib/check-spec'
 import type { CheckRow, RowIssue } from '../../lib/check-spec'
 import { ARRIVE, LEAVE, StaggerItem, ValueSettle } from '../../motion'
 import { PlusIcon } from '../Icons'
-import { AssertionEvidence, Field, ResultChip } from './pieces'
+import { AssertionEvidence, ResultChip } from './pieces'
+import { ConstraintEditor } from '../ConstraintEditor'
 
 /** The assertions, grouped by kind. The groups stagger in once on mount (a
  *  restored board's saved spec arriving), which is the only time this list is
@@ -72,9 +73,6 @@ export function AssertionGroups({
                 const meta = checkKind(c.kind)
                 const rowResult = resultForRow(c.id)
                 const issues = validation.get(c.id) ?? []
-                // An either/or requirement highlights every input that could
-                // satisfy it (min OR max, freq OR toggles).
-                const bad = (field: keyof CheckRow) => issues.some(i => (i.fields as string[]).includes(field))
                 return (
                   <motion.div
                     key={c.id}
@@ -84,7 +82,14 @@ export function AssertionGroups({
                     exit={reduced ? { opacity: 0 } : { opacity: 0, height: 0, transition: LEAVE }}
                     transition={reduced ? { duration: 0 } : ARRIVE}
                     className="check-row py-2.5"
-                    style={{ overflow: 'hidden' }}
+                    style={{
+                      overflow: 'hidden',
+                      ...(issues.length > 0 ? {
+                        background: 'var(--err-bg)',
+                        boxShadow: 'inset 3px 0 0 var(--err)',
+                        paddingLeft: 10,
+                      } : {}),
+                    }}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="text-[13px] min-w-0 flex flex-wrap items-center gap-x-2" style={{ color: 'var(--silk)' }}>
@@ -106,30 +111,12 @@ export function AssertionGroups({
                         remove
                       </button>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
-                      {meta?.subject === 'net' && (
-                        <Field
-                          label="net" value={c.net} width={170} list="net-options" invalid={bad('net')}
-                          onChange={v => onUpdate(c.id, { net: v })}
-                        />
-                      )}
-                      {meta?.subject === 'ref' && (
-                        <Field
-                          label="part (ref)" value={c.ref} width={90} placeholder="U1"
-                          invalid={bad('ref')} onChange={v => onUpdate(c.id, { ref: v })}
-                        />
-                      )}
-                      {meta?.fields.map(f => (
-                        <Field
-                          key={f.key}
-                          label={f.label}
-                          value={c[f.key]}
-                          width={f.width}
-                          placeholder={f.placeholder}
-                          invalid={bad(f.key)}
-                          onChange={v => onUpdate(c.id, { [f.key]: v })}
-                        />
-                      ))}
+                    <div className="mt-2">
+                      <ConstraintEditor
+                        draft={c}
+                        issues={issues}
+                        onChange={patch => onUpdate(c.id, patch)}
+                      />
                     </div>
                     {/* The missing-values verdict, on the row it judges, in the
                         builder's own field names. */}
