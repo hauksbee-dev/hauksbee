@@ -225,7 +225,9 @@ export function WritePart({ onSaved, suggested, openSignal, boardLabel }: {
       const j = await api.modelsSave({ part: part.trim() || 'model', kind: '', toml: body })
       if (j.ok === false) setSaveMsg(j.error ?? 'the save failed and did not say why')
       else {
-        setSaveMsg(`Saved to ${j.path ?? 'your model directory'}. Re-analyzing this board now.`)
+        setSaveMsg(j.coverage_note
+          ? `Saved to ${j.path ?? 'your model directory'}. Coverage unchanged: ${j.coverage_note} Re-analyzing this board now.`
+          : `Saved to ${j.path ?? 'your model directory'}. Re-analyzing this board now.`)
         onSaved?.()
       }
     } catch (e) {

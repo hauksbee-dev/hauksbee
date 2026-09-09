@@ -451,6 +451,8 @@ function Shell({ boot }: { boot: Boot }) {
                 boardFile={session.boardFile}
                 firmwareFile={session.firmwareFile}
                 schematicFile={session.schematicFile}
+                supplementalFiles={session.supplementalFiles}
+                avrAvailable={avrAvailable}
                 selectedNet={session.selectedNet}
                 selectedComponent={session.selectedComponent}
                 pending={requests.items}
@@ -468,6 +470,7 @@ function Shell({ boot }: { boot: Boot }) {
             <div style={{ display: view === 'sim' ? 'block' : 'none', height: '100%' }}>
               <SimView
                 onQueue={queueRequest}
+                onOpenChecks={() => setView('checks')}
                 pendingLiveRegisterMaps={queuedLiveRegisterMaps.items}
                 onLiveRegisterMapsConsumed={queuedLiveRegisterMaps.consume}
                 onLiveActionResult={setLiveActionResult}
@@ -475,6 +478,7 @@ function Shell({ boot }: { boot: Boot }) {
                 expectedBoard={session.boardLabel}
                 sessionMatchesCurrent={sessionMatchesCurrent}
                 modelCoverage={report?.model_coverage ?? null}
+                componentAssertions={report?.component_assertions ?? null}
                 onRelaunch={reportOk && session.liveMode !== 'none' ? relaunchWithCurrent : undefined}
               />
             </div>

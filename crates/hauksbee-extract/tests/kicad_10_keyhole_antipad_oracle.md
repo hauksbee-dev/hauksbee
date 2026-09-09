@@ -30,7 +30,7 @@ The native command was:
 "/Applications/KiCad10/KiCad.app/Contents/MacOS/kicad-cli" pcb drc \
   --format json \
   --output "crates/hauksbee-extract/tests/vendettaesc_kicad_10_0_5_drc.json" \
-  "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/famous/hunt/vendettafc/VESC/VENDETTAESC.kicad_pcb"
+  "<board-corpus>/vendettafc/VESC/VENDETTAESC.kicad_pcb"
 ```
 
 Its result was:

@@ -1174,15 +1174,13 @@ impl Scheduler {
             let evidence_subject = mcu_subjects
                 .next()
                 .unwrap_or_else(|| binding.reference.trim().to_string());
-            // External emulator backends (renode/qemu) boot from a program
-            // image; with no firmware given there is nothing to run, so the
-            // MCU sits out and the board solves as a passive circuit (its pins
-            // stay high-impedance). This keeps firmware-less analyses (lint,
-            // DRC, stress, transient scenarios) working on boards whose MCU
-            // happens to have an external backend mapping. The in-process AVR
-            // core keeps its historical always-instantiated behaviour.
-            let external = backend_is_external(&binding.backend);
-            if external && firmware.is_none() {
+            // A firmware-less run is a board analysis, not a co-simulation.
+            // Leave every MCU backend out of the live scheduler (including
+            // in-process AVR), so a board can be analysed as a passive circuit
+            // even when this binary was built without the optional AVR
+            // backend. Firmware-backed runs still instantiate the selected
+            // backend below and retain their fail-closed feature checks.
+            if firmware.is_none() {
                 continue;
             }
             // Detect (and warn about) a chip substitution before the core is
@@ -6473,6 +6471,24 @@ mod tests {
     use super::*;
     use hauksbee_ir::SourceKind;
 
+    /// A small valid AVR image for tests that exercise firmware-coupled pin
+    /// replay. Firmware-less scheduler construction is deliberately passive;
+    /// these tests need a live core, so they opt into an actual image instead
+    /// of relying on the old implicit idle-core behaviour.
+    #[cfg(feature = "avr")]
+    fn avr_test_firmware() -> tempfile::NamedTempFile {
+        use std::io::Write as _;
+
+        let mut firmware = tempfile::Builder::new()
+            .suffix(".hex")
+            .tempfile()
+            .expect("temporary AVR firmware");
+        firmware
+            .write_all(include_bytes!("../../hauksbee-ci/assets/firmware/demo.hex"))
+            .expect("write AVR firmware");
+        firmware
+    }
+
     const POWERED_EEPROM_BOARD: &str = r#"(kicad_pcb (version 20240108) (generator pcbnew)
   (general (thickness 1.6))
   (paper "A4")
@@ -7484,6 +7500,10 @@ missing = ["measurement_registers"]
 
     /// Bind `board` and promote the given Nano pins to driven-low outputs,
     /// exactly as their first firmware edges would.
+    ///
+    /// The image is not optional. Firmware-less scheduler construction is
+    /// deliberately passive and installs no MCU at all, so a `None` here would
+    /// leave `sched.mcus` empty and every assertion below reading a bare board.
     #[cfg(feature = "avr")]
     fn nano_scheduler(board: &str, promote: &[(char, u8)]) -> Scheduler {
         let board = hauksbee_extract::ExtractedBoard::from_auto(board).expect("board");
@@ -7497,7 +7517,8 @@ missing = ["measurement_registers"]
             drv.set_enabled(&mut bound.circuit, true);
             drv.set_volts(&mut bound.circuit, 0.0);
         }
-        Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler")
+        let firmware = avr_test_firmware();
+        Scheduler::new(bound, Some(firmware.path()), SolverOptions::default()).expect("scheduler")
     }
 
     /// A firmware-shaped shiftOut(MSBFIRST, 0xA6) bit-bang latches a REAL

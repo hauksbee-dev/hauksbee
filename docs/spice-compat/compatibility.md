@@ -1,128 +1,77 @@
 # SPICE compatibility statement
 
-`hauksbee sim <deck.cir>` reads a netlist through one loader
-(`crates/hauksbee-ir/src/spice.rs`) and simulates the subset below. Anything
-outside it is refused with a line-numbered error that quotes the card
-(`[file ]line N: <reason>: \`<card>\``); nothing is silently misparsed or
-dropped. A malformed deck exits 2; a well-formed deck the solver cannot
-honestly answer (an `.ac` with no AC source) exits 3.
+*What "drop-in for the common cases" means, and how the promise stays honest.*
 
-```
-hauksbee sim deck.cir [--op | --tran | --ac | --dc] [--print V(out) I(V1) ...] [--out FILE] [--format csv|raw|both]
-hauksbee sim --example rlc_ringdown --tran
-```
+Hauksbee reads a `.cir` netlist through one loader
+(`crates/hauksbee-ir/src/spice.rs`) and simulates a **documented, enforced
+subset** of SPICE. The promise is narrow and testable:
 
-With no analysis flag, a `.tran` card runs a transient, else the operating
-point. Decks: `examples/decks/`.
+> **Drop-in for the documented subset. A loud, line-numbered refusal outside
+> it.**
 
-## Deck syntax
+Two mechanisms back this promise:
 
-- The first line is the title and is ignored. `*` starts a comment line; `;`
-  starts a trailing comment. `+` continues the previous card.
-- Names are case-insensitive; node `0` or `gnd` is ground. Duplicate element
-  names are refused.
-- SI suffixes `k meg u n p f m g t mil` on bare values. `{expr}` anywhere a
-  value is taken: arithmetic over `.param` names and the functions below;
-  no suffixes inside braces.
-- `.include` / `.inc <file>` splices a file (relative to the including file;
-  for a deck read from a string, the working directory). Cycles and nesting
-  beyond 50 are refused. **`.lib` is refused**; use `.include`.
+1. **Fidelity.** A differential corpus of 42 decks cross-checks the loader and
+   solver against ngspice with per-quantity tolerances.
+   [`results.md`](results.md) holds the living results table.
 
-## Element cards
+   Read that mechanism's reach precisely, because it is narrower than "every
+   supported card, on every push". It gates releases, not pushes: the
+   `release-quality` job in `.github/workflows/release.yml` installs ngspice and
+   runs `cargo test --workspace`, which executes `ngspice_corpus`
+   (`crates/hauksbee-solve/tests/ngspice.rs`). Anywhere without ngspice on
+   `PATH`, including an ordinary developer machine, that test prints a skip
+   notice instead, and the published numbers in `results.md` are transcribed
+   from a local run rather than emitted by the gate. Setting
+   `HAUKSBEE_REQUIRE_NGSPICE=1` turns a missing oracle into a hard failure,
+   which is what a runner that intends to gate on it should do.
 
-| Card | Form |
-|---|---|
-| `R` | `Rxxx a b value [tc=\|tc1=]` (0 ohm becomes 1 uOhm, a jumper) |
-| `C`, `L` | `Cxxx a b value [ic=]`, `Lxxx a b value [ic=]` (`ic` honoured under `uic`) |
-| `V`, `I` | `Vxxx p n [DC] value \| SIN(...) \| PULSE(...) \| PWL(...) [AC mag phase]` |
-| `D` | `Dxxx a k model` (model required, must be a `D` model) |
-| `Q` | `Qxxx c b e model` (`NPN`/`PNP`) |
-| `M` | `Mxxx d g s b model [L= W=]` (`NMOS`/`PMOS`, LEVEL 1 only) |
-| `S` | `Sxxx a b nc+ nc- model` (`SW`/`VSWITCH`) |
-| `E`, `G` | `Exxx n+ n- nc+ nc- gain`, `Gxxx n+ n- nc+ nc- gm` (linear only) |
-| `F`, `H` | `Fxxx n+ n- vname gain`, `Hxxx n+ n- vname transres`; `vname` must be an independent V source |
-| `K` | `Kxxx L1 L2 k`, `0 < k <= 1`, both names inductors |
-| `B` | `Bxxx n+ n- V={expr}` or `I={expr}` over `v(a)`, `v(a,b)`, `i(Vname)`, `time`, params |
-| `X` | `Xxxx nodes... NAME [params: k=v ...]`; flattened at load, port count must match |
+   Nor does it reach every supported card. Seven entries in the Supported tables
+   below have **no deck in the differential corpus at all**: the `S`
+   voltage-controlled switch, its `.model ... SW/VSWITCH`, `.temp`, `.include`,
+   `.lib`, `.plot`, and the `PWL` source function. Those rows are proven to
+   *parse*, by the drift test in mechanism 2, and are not proven to *agree
+   numerically with ngspice* by anything. Where a card's whole job is numeric,
+   the switch element and model especially, treat the absence of a deck as the
+   open question it is.
+2. **No drift.** The "Supported" and "Refused" tables below are *generated
+   from* `crates/hauksbee-ir/tests/compat_drift.rs`, and every row in them is
+   checked against the loader on every `cargo test`. Each row carries a minimal
+   snippet: a supported row's snippet must parse, and a refused row's snippet
+   must produce the documented error fragment. So the doc cannot claim a
+   capability the loader lacks, nor keep claiming a refusal the loader stopped
+   making, without turning the test red.
 
-Any other element letter (`T`, `J`, `Z`, `O`, `U`, `W`, `A`, ...) is
-`unknown element type`. An unknown or extra `key=value` after an element's
-positional fields is refused (`unexpected token ... (allowed options: ...)`).
+   The one thing that mechanism does *not* do is enumerate the loader. The row
+   list is maintained by hand in that test file, so a card the loader gains and
+   nobody adds a row for is simply absent from these tables rather than
+   flagged. The tables between the `GENERATED` markers are therefore not
+   hand-written but the *inventory behind them* is. Regenerate the tables with
+   `UPDATE_COMPAT=1 cargo test -p hauksbee-ir --test compat_drift`; edit the
+   inventory in `compat_drift.rs`.
 
-Source functions: `DC v` or a bare value; `SIN(offset amp freq [delay theta
-phase])` (`SINE` accepted); `PULSE(v1 v2 delay rise fall [width period])`
-(a missing width is infinite); `PWL(t1 v1 t2 v2 ...)`; `AC [mag] [phase]`
-anywhere on the card (bare `AC` is 1, 0). When a function follows a `DC`
-value the function wins.
+Refusals are always line-numbered `SpiceError`s (`Syntax`, `UnknownElement`,
+`MissingModel`, `BadNumber`, `Unsupported`) that carry the offending text.
+There is no silent misparse of a *recognized* card, and no silent drop of an
+*unrecognized* directive. The loader either honors or refuses, with a reason,
+any card or directive it understands. It also refuses any dot-directive it
+does not recognize. Two carve-outs, both deliberate, both worth knowing:
 
-B-source expressions accept `ln log10 log2 exp pow sqrt cbrt abs sin cos tan
-asin acos atan atan2 sinh cosh tanh asinh acosh atanh hypot min max if floor
-round ceil` and `**`. `log` is refused as ambiguous; `POLY`, `VALUE` and
-`TABLE` forms are refused on `E`/`G`/`F`/`H`/`B`; a `V=` output shorting its
-own port is refused.
+- A short allowlist of directives that change nothing when ignored (`.end`,
+  `.op`, `.title`, `.width`, `.save`), which the loader accepts as a no-op.
+  See §4.
+- **Unrecognized trailing `key=value` parameters on an element card or a
+  `.model` card are silently dropped.** This one is a real trap, so read §2's
+  temperature note before you trust a vendor deck.
 
-## `.model` cards
+---
 
-| Type | Parameters read |
-|---|---|
-| `D` | `is n rs cjo(cj0) vj(pb) m tt bv ibv xti eg` |
-| `NPN` / `PNP` | `is bf br vaf(va) var(vb) nf nr rb re rc cje cjc tf tr ikf(jbf) ikr(jbr) ise(c2) ne isc(c4) nc xti eg` |
-| `NMOS` / `PMOS` | `vto(vt0) kp lambda gamma phi tox cgso cgdo is cbd cbs pb mj rd rs l w`; `LEVEL` other than 1 is refused |
-| `SW` / `VSWITCH` | `vt vh ron roff` (defaults 0, 0, 1, 1e12) |
+## 1. Supported cards, exhaustively
 
-Parameters not in these lists are dropped when their value is alphabetic
-(`mfg=Vishay`) and refused when it looks numeric but does not parse
-(`VTO={VT0}` with no such param). Redefining a model with different
-parameters is refused; a device naming an undefined model, or a model of the
-wrong type, is refused. MOSFET notes: Shichman-Hodges DC with Meyer
-region-limit gate charge; gate oxide capacitance is zero unless `TOX` is
-given; `body_is` defaults to 0 (state `IS=` for body conduction);
-`RD`/`RS` are stamped as series resistors, so datasheet `Rds(on)` is
-`rd + rs + channel`. BJT per-junction `VJE/VJC/MJE/MJC` are not read
-(defaults 0.75 / 0.33).
-
-## Analyses and directives
-
-| Card | Form |
-|---|---|
-| `.op` | operating point (the default) |
-| `.tran` | `.tran tstep tstop [tstart] [tmax] [uic]` |
-| `.dc` | `.dc src start stop step [src2 start stop step]`; only an independent V/I source; one card per deck |
-| `.ac` | `.ac dec\|oct\|lin n fstart fstop`, `0 < fstart < fstop`; one card per deck |
-| `.print` / `.plot` | `.print op\|dc\|ac\|tran V(a) V(a,b) I(V1) ...`; `.plot` is `.print` |
-| `.ic` | `.ic V(node)=v ...`; requires `uic` on `.tran`, refused otherwise |
-| `.nodeset` | `.nodeset V(node)=v ...`; a Newton start guess, never enforced |
-| `.param` | `.param name=expr ...`; order-independent, cycles refused |
-| `.options` / `.option` | `reltol= abstol= vntol=`; other keys ignored |
-| `.temp` | one global temperature (no per-device `TEMP`) |
-| `.subckt NAME ports [params: k=v] ... .ends` | nestable; only `.model` and `.param` allowed inside the body |
-| `.end`, `.title`, `.width`, `.save` | accepted and ignored |
-
-`.tf`, `.noise`, `.disto`, `.pz`, `.sens`, `.four`, `.meas`/`.measure`
-refuse as `unsupported directive` (not implemented); any other
-dot-directive refuses as unrecognized.
-
-## Behaviour notes
-
-- Default `reltol=1e-3`; transient integration uses the solver's companion
-  models (BE, trapezoidal, Gear2); islands with controlled sources, coupled
-  inductors or nonlinear devices route to the MNA sub-solve.
-- `K` is lossless linear coupling only; no saturating core models. `k=1` is
-  legal.
-- B-source decks use damped Newton and refuse loudly on non-convergence.
-- Output: CSV by default (one column per probe); `--format raw` writes an
-  ngspice ASCII rawfile; `both` needs `--out`. Every node is retained.
-
-This page describes `spice.rs` as read on 2026-09-04 while the loader was
-being reduced; the former drift test (`compat_drift.rs`) no longer exists, so
-recheck the card set against the loader after that work lands.
-
-## Supported cards (generated)
-
-The tables below are generated by `crates/hauksbee-ir/tests/compat_drift.rs`,
-which loads every SUPPORTED row and proves every REFUSED row is refused with
-the documented message. Regenerate with
-`UPDATE_COMPAT=1 cargo test -p hauksbee-ir --test it compat_drift`.
+A snippet that parses through the loader on every `cargo test` proves every
+row below. Node `0`/`gnd` is ground. SI suffixes (`k meg u n p f m g t mil`)
+apply to bare values. `+` continues a line, and `*` starts a comment. The
+loader ignores the deck's first line, which is its title.
 
 <!-- BEGIN GENERATED: supported (source: crates/hauksbee-ir/tests/compat_drift.rs) -->
 <!-- Do not hand-edit between these markers: regenerate with
@@ -198,7 +147,137 @@ the documented message. Regenerate with
 | `{expr}` values | Curly-brace arithmetic over `.param` names anywhere a numeric value is taken (evalexpr, bare f64s). |
 <!-- END GENERATED: supported -->
 
-## Refused cards (generated)
+**Which of those rows the ngspice corpus does not reach.** Every row above is
+proven to parse. Seven are not cross-checked against ngspice by any deck, so
+their numeric behaviour rests on the implementation and its unit tests alone:
+
+| Uncovered row | Table | Why it matters |
+|---------------|-------|----------------|
+| `S` voltage switch | Element cards | Switching thresholds and `ron`/`roff` behaviour are purely numeric, so no deck means no numeric agreement evidence |
+| `.model ... SW/VSWITCH` | `.model` types | Supplies `vt vh ron roff` to the row above; untested for the same reason |
+| `.temp` | Directives | Sets one global temperature, which shifts every temperature-dependent model at once |
+| `.include` / `.inc` | Directives | Splicing is structural, but see the resolution trap in §4 |
+| `.lib <file> <section>` | Directives | As above |
+| `.plot` | Directives | Treated as `.print`; output-side only |
+| `PWL` | Source functions | A waveform primitive with no waveform comparison behind it |
+
+Adding a deck for any of them is a welcome contribution; `results.md` documents
+the deck-plus-expectation format.
+
+---
+
+## 2. Supported, with the caveat
+
+These cards work, but not identically to a full SPICE3 / ngspice front end.
+Each caveat is deliberate, and where it affects a waveform,
+[`results.md`](results.md) quantifies it.
+
+**`.model` parameters beyond the generated rows.** The row summaries in §1 are
+the full accepted set per model type, including the BJT high-current-knee and
+recombination parameters and the Berkeley aliases (`va`/`vb`, `jbf`/`jbr`,
+`c2`/`c4`) and the diode `ibv`. The BJT knee is exercised against ngspice in
+[`results.md`](results.md), so it is honored, not just parsed. Anything not in
+those rows falls under the silently-dropped rule above.
+
+- **MOSFETs are LEVEL-1 only: a switch model, not an analog model.** The DC
+  channel uses the Shichman-Hodges square law. `LEVEL=2/3/BSIM` cards are
+  **refused** (§3), not silently downgraded. The implemented physics targets
+  board-shaped switching, not analog precision:
+  - **Gate charge** uses Meyer's *region-limit* charges. Cgs falls Cox to
+    Cox/2 across threshold, and Cgd rises c_ov to c_ov+Cox/2 entering
+    triode. This keeps switching edges within **≈2 ns of ngspice** on the
+    switch decks (`mos_load_switch`, `pmos_load_switch`), rather than
+    matching Meyer's full two-voltage capacitances, which do not conserve
+    charge.
+  - **Subthreshold** current below `vth` is a smooth tail, a *documented
+    deviation*: ngspice's LEVEL-1 has exactly zero current there.
+  - **Gate oxide capacitance** is zero when the model omits `TOX` (ngspice
+    materializes a default `TOX`/`W`/`L`). State `TOX` on the card to get
+    intrinsic gate charge.
+  - **Analog accuracy (gain, subthreshold slope, short-channel effects) is a
+    known gap.** Use a switch, load switch, or synchronous rectifier deck.
+    Do not expect an amplifier small-signal match.
+  - **Datasheet `Rds(on)` is honored: supply it as `RD`/`RS`.** A power
+    FET's on-state resistance lives mostly in the drain/source ohmic
+    resistance, not the channel. Hauksbee reads `RD` and `RS` (SPICE ohmic
+    drain/source resistance) from both a `.model` card and the part
+    database, which splits each part's datasheet `Rds(on)` into `rd + rs`.
+    It stamps them as series resistors, with the transistor intrinsic moved
+    onto internal drain/source nodes, exactly the way ngspice level 1 wires
+    them. On-state `Rds(on)` is therefore `rd + rs + channel`, and it
+    tracks ngspice on the `mos_rds_on` cross-check deck. The default is
+    `rd = rs = 0` (ideal), so a model without them behaves unchanged.
+  - **A weakly-driven device still reads as high `Rds(on)`, and that is
+    physics, not a bug.** Beyond `RD`/`RS`, the gate *over*drive `Vgs −
+    Vth` sets the channel term. A hand-rolled LEVEL-1 model whose
+    `KP`/`W`/`L` is small, or a gate barely above `Vth`, is genuinely
+    resistive, and the operating point shows a large drain-source drop. If
+    a switch you expect to be "on" sits at several ohms, raise the
+    overdrive (`KP`, `W/L`, or `Vgs`), or state the part's `RD`/`RS`. The
+    solver then reports the model you gave it.
+- **Coupled inductors `K` model lossless linear mutual coupling only.**
+  `k=1` (a perfect transformer) is legal, and the loader solves it without
+  inverting the singular L-matrix. **Saturating cores are unsupported**: no
+  core (BH) model card parses. Transformer/flyback decks are the payoff
+  (`xfmr_1to2`, `xfmr_k1`, `flyback_diode`). A negative `k` is refused.
+  Swap a winding's terminals instead.
+- **BJT charge storage uses SPICE-default junction grading.** `cje/cjc/tf/tr`
+  and series `rb/re/rc` are honored, but per-junction `VJE/VJC`/`MJE/MJC`
+  overrides are not parsed. The values default to `0.75`/`0.33`, what an
+  ngspice card without them also gets.
+- **Diode model must resolve, like `Q`/`M`.** A `Dxxx a k model` whose named
+  `.model` is undefined is refused (`references undefined .model`). One
+  whose `.model` is not a diode (for example an `NPN`) is refused (`not a
+  diode model`) rather than silently inheriting foreign parameters. The
+  model token is required, so there is no bare `Dxxx a k` default-diode
+  form. This catches a typo'd model name instead of silently defaulting it,
+  and all three device classes (`D`/`Q`/`M`) refuse the same way. See §3.
+- **Behavioral `B` sources use a fixed expression subset.** `V={expr}` and
+  `I={expr}` work over `v(node)`, `v(a,b)`, `i(vsource)`, `time`, and
+  `.param` values, with the function set `ln log10 log2 exp pow sqrt cbrt
+  abs sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh atanh
+  hypot min max if floor round ceil` (and `**` for exponentiation). **No
+  `POLY`, `TABLE`, or `VALUE` forms, and no bare `log`** (write `ln` or
+  `log10`). The expression must be brace-wrapped. B-source decks arm a
+  damped (Armijo) Newton path and **refuse loudly on non-convergence**
+  rather than emit a bad waveform.
+- **`.plot` is treated as `.print`.** Output selection is honored. No ASCII
+  plot is drawn.
+- **Single global temperature, and a per-device `TEMP=` is dropped in
+  silence.** `.temp` sets one circuit temperature. There is no per-device
+  `TEMP`/`DTEMP`, and here is the part that can bite: an unrecognized trailing
+  `key=value` on an element or `.model` card is **discarded without a word**,
+  not refused. `R1 a 0 1k`, `R1 a 0 1k temp=125`, `R1 a 0 1k tc2=0.5` and
+  `R1 a 0 1k bogus=9` all load and all solve to the same answer. A vendor deck
+  that carries `TEMP=`, `DTEMP=` or `TC2=` on its devices therefore gets a
+  *different answer than the deck asks for*, with no diagnostic, and nothing in
+  the CLI surfaces the dropped keys today: there is no lint or verbose mode for
+  this. If your deck relies on per-device temperature or a quadratic
+  temperature coefficient, translate it by hand before trusting the result.
+
+  The one thing that *is* refused is a dropped value that looks numeric but
+  cannot be read, such as an unresolved brace expression
+  (`.model MX NMOS(LEVEL=1 VTO={VT0})` fails with a line number naming `VTO`).
+  Values that are plainly alphabetic are treated as metadata and dropped, which
+  is what makes `mfg=Vishay` harmless and `IS=abc` quietly fall back to the
+  default.
+- **`.ic` requires `uic`.** Initial conditions seed the power-on (`uic`)
+  transient start. Pinning nodes *during* the DC operating-point solve is
+  not implemented, so `.ic` without `uic` is refused (§3) rather than
+  silently downgraded.
+- **`.nodeset` is a guess, never enforced.** It influences which root
+  Newton finds. The converged voltage may differ from the seed.
+- **`.lib` requires an explicit section.** The bare one-argument `.lib <file>`
+  form is ambiguous and refused. Use `.include <file>` or `.lib <file>
+  <section>`.
+
+---
+
+## 3. Refused, loudly
+
+Everything the loader recognizes but does not implement refuses with a
+line-numbered error. The fragment column is a substring of the exact
+message the user sees. The drift test asserts this fragment.
 
 <!-- BEGIN GENERATED: refused (source: crates/hauksbee-ir/tests/compat_drift.rs) -->
 <!-- Do not hand-edit between these markers: regenerate with
@@ -239,3 +318,76 @@ the documented message. Regenerate with
 | `.meas` | Measurement statements are not implemented; refused rather than silently ignored. | `unsupported directive `.meas`` |
 | unknown `.`-directive | Any dot-directive the loader does not recognize refuses rather than silently dropping (never fall through to a wrong parse). | `unrecognized directive` |
 <!-- END GENERATED: refused -->
+
+Also refused as `unknown element type` (the loader has no card for them): any element
+letter outside `R C L V I D Q M S E G F H K B` and the `X` subckt call, including `W`,
+`A`, `N`, `P`, `Y`, etc.
+
+---
+
+## 4. Behavioral differences from ngspice
+
+A user migrating a deck must know these facts, beyond the per-card caveats
+above:
+
+- **Default tolerances.** `reltol=1e-3`, plus `abstol`/`vntol` floors,
+  overridable through `.options reltol= abstol= vntol=`. The loader accepts
+  other `.options` keys but ignores them.
+- **Integration.** Transient analysis uses the solver's companion-model
+  integration (BE, trapezoidal, and Gear2 are available and cross-checked
+  to agree). The matrix-exponential fast path runs only on islands it can
+  model exactly. Any island containing a controlled source, coupled
+  inductor, or nonlinear/behavioral device routes to the MNA sub-solve
+  instead, exact but slower, rather than being silently dropped.
+- **`uic` / `.ic` interaction.** With `uic`, `.ic V(node)=v` seeds the
+  power-on start directly. Without `uic`, `.ic` is refused, because the
+  loader has no DC-pinning machinery. Device-level capacitor `ic=` is
+  honored under `uic`.
+- **`.include` / `.lib` resolve against the working directory, not the deck.**
+  This one bites, so it is worth stating as behaviour rather than as a footnote.
+  `hauksbee sim` reads the deck into memory and parses the string, and a string
+  has no directory of its own, so a relative `.include` resolves against the
+  process working directory. A deck in `sub/` that includes `parts.inc` beside
+  itself therefore loads from `sub/` and fails from the parent:
+
+  ```
+  $ hauksbee sim sub/deck.cir
+  error: line 2: `.include` file `parts.inc` not found (tried: ./parts.inc): `.include parts.inc`
+  $ cd sub && hauksbee sim deck.cir     # the same deck, now found
+  ```
+
+  It refuses loudly and names what it tried, so nothing is silently mis-simulated,
+  but the fix is to `cd` to the deck's directory or make the include path
+  absolute. Library callers that want deck-relative inclusion have it:
+  `SpiceLoader::load_file` resolves against the including file's directory first
+  and the top deck's directory second.
+- **Node-name case handling.** SPICE names are case-insensitive. The loader
+  matches node and device names case-insensitively, so `V(OUT)` and a later
+  `R1 out 0` refer to the same node. A control/coupling reference that
+  matches two names differing only in case is refused as ambiguous rather
+  than silently bound.
+- **Oracle resampling / `TMAX`.** The ngspice cross-check resamples the
+  oracle onto hauksbee's timebase. Decks that need tight edge alignment cap
+  the step through `.tran`'s `tmax`, so both engines sample the same fast
+  transitions (see the note pattern in the deck `expect.toml` files and
+  [`results.md`](results.md)).
+- **`body_is` (MOSFET body diode) defaults to 0, not ngspice's `1e-14`.** A
+  deck that wants reverse body conduction must state `IS=` on the MOS model
+  card. The bit-identity bar against pre-existing decks forces this default.
+- **Unsupported *analysis directives* refuse loudly.** `.tf`, `.noise`,
+  `.disto`, `.pz`, `.sens`, `.four`, and `.meas` each refuse with
+  `SpiceError::Unsupported` and a per-card reason (`unsupported directive
+  `.meas`: measurement statements are not implemented; …`) rather than
+  being silently dropped. A deck that asked for one of these analyses will not
+  quietly produce nothing. Any *other* unrecognized dot-directive is refused
+  the same way (`unrecognized directive`), so nothing falls through to a
+  silent no-op. The only directives accepted and ignored are the ones whose
+  omission cannot change a computed value: `.end` (deck terminator), `.op`
+  (the default DC operating point), `.title` (deck name), and `.width` /
+  `.save` (output formatting and selection). Hauksbee retains every node.
+
+---
+
+*This statement documents exactly the subset
+`crates/hauksbee-ir/tests/compat_drift.rs` enforces. The fidelity numbers
+live in [`results.md`](results.md).*

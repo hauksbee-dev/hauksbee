@@ -35,11 +35,16 @@ fn repo() -> tempfile::TempDir {
 /// git's absolute path, for the case where the test blanks PATH to simulate a
 /// machine with no hauksbee-ci installed: git still has to be startable.
 fn git_binary() -> PathBuf {
-    let out = Command::new("sh")
-        .args(["-c", "command -v git"])
-        .output()
-        .expect("locate git");
-    PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
+    let path = std::env::var_os("PATH").expect("PATH is available");
+    let names: &[&str] = if cfg!(windows) {
+        &["git.exe", "git.cmd", "git.bat"]
+    } else {
+        &["git"]
+    };
+    std::env::split_paths(&path)
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+        .find(|candidate| candidate.is_file())
+        .expect("locate git on PATH")
 }
 
 fn git(dir: &Path, args: &[&str]) -> Output {
@@ -56,10 +61,13 @@ fn git(dir: &Path, args: &[&str]) -> Output {
 /// the way a user's shell would.
 fn commit(dir: &Path) -> Output {
     let bin_dir = bin().parent().unwrap().to_path_buf();
-    let path = match std::env::var_os("PATH") {
-        Some(p) => format!("{}:{}", bin_dir.display(), p.to_string_lossy()),
-        None => bin_dir.display().to_string(),
-    };
+    let mut paths = vec![bin_dir];
+    paths.extend(
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()),
+    );
+    let path = std::env::join_paths(paths).expect("compose PATH");
     Command::new("git")
         .args(["commit", "-m", "hardware change"])
         .current_dir(dir)
@@ -299,11 +307,13 @@ fn the_hook_honours_hauksbee_ci_specs() {
     git(dir, &["add", "-A"]);
 
     let bin_dir = bin().parent().unwrap().to_path_buf();
-    let path = format!(
-        "{}:{}",
-        bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
+    let mut paths = vec![bin_dir];
+    paths.extend(
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()),
     );
+    let path = std::env::join_paths(paths).expect("compose PATH");
     // Default discovery: the spec is invisible, so nothing gates.
     let ignored = Command::new("git")
         .args(["commit", "-m", "invisible"])

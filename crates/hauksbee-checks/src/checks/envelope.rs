@@ -1,8 +1,13 @@
-//! Sourced operating-envelope checks: every rail a bound model declares an
-//! operating range for is compared against the supply the board actually
-//! feeds it, and a pin driven outside its absolute-maximum rating is reported
-//! as a finding that names the model, the datasheet range and the offending
-//! net. Ranges come only from model cards, never from guesses.
+//! Sourced operating-envelope checks.
+//!
+//! The checker derives conservative DC rail intervals from declared supplies,
+//! modelled converter outputs, and assembly state, then compares connected pin
+//! roles with model-authored operating limits. Unknown rail authority remains
+//! unknown; it is never replaced by a nominal voltage merely to produce a
+//! verdict. Findings retain the limit, inferred range, model source, and any
+//! uncertainty that raised their severity.
+//!
+//! Design rationale: `docs/how-and-why/hauksbee-engine/checks.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

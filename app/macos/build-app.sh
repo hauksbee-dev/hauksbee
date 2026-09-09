@@ -119,7 +119,10 @@ if [ "$DO_BUILD" -eq 1 ]; then
   # embed-web enabling and the feature flags. Its tarball goes to a temp dir
   # we throw away; we only want the target/release binaries it leaves behind.
   BUNDLE_OUT="$(mktemp -d "${TMPDIR:-/tmp}/hauksbee-app-build.XXXXXX")"
-  trap 'rm -rf "$BUNDLE_OUT"' EXIT
+  cleanup_app_build() {
+    if have trash; then trash "$BUNDLE_OUT" >/dev/null 2>&1 || true; fi
+  }
+  trap cleanup_app_build EXIT
   log "Building binaries via scripts/bundle.sh"
   "$HAUKSBEE_ROOT/scripts/bundle.sh" --version "$VERSION" --out "$BUNDLE_OUT" \
     ${BUNDLE_FLAGS[@]+"${BUNDLE_FLAGS[@]}"}
@@ -139,7 +142,12 @@ else
 fi
 OUT_ABS="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/hauksbee-app.XXXXXX")"
-trap 'rm -rf "$STAGE" ${BUNDLE_OUT:+"$BUNDLE_OUT"}' EXIT
+cleanup_app_stage() {
+  if have trash; then
+    trash "$STAGE" ${BUNDLE_OUT:+"$BUNDLE_OUT"} >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_app_stage EXIT
 APP="$STAGE/Hauksbee.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bin"
 
@@ -151,6 +159,11 @@ log "Staging binaries"
 install -m 0755 "$SRC/hauksbee"     "$APP/Contents/Resources/bin/hauksbee"
 install -m 0755 "$SRC/hauksbee-ci"  "$APP/Contents/Resources/bin/hauksbee-ci"
 install -m 0755 "$SRC/hauksbee-mcp" "$APP/Contents/Resources/bin/hauksbee-mcp"
+log "Staging CLI installer"
+install -m 0755 "$HAUKSBEE_ROOT/app/macos/install-cli.sh" \
+  "$APP/Contents/Resources/install-cli.sh"
+install -m 0644 "$HAUKSBEE_ROOT/app/macos/CLI.md" \
+  "$APP/Contents/Resources/CLI.md"
 
 # Licence terms travel inside the app, same as inside the tarball. The default
 # app statically links GPL-3.0 libsimavr; the distinctly named local permissive
@@ -318,7 +331,12 @@ ZIP="$OUT_ABS/$NAME.zip"
 # between the two writes can never leave a fresh zip next to a stale checksum,
 # write the checksum in the same step that produced the zip, and verify the
 # pair before claiming success.
-rm -f "$ZIP" "$ZIP.sha256"
+for stale_artifact in "$ZIP" "$ZIP.sha256"; do
+  if [ -e "$stale_artifact" ]; then
+    have trash || die "trash is required to replace an existing app artifact safely"
+    trash "$stale_artifact"
+  fi
+done
 # ditto preserves the bundle structure and extended attributes the way
 # Archive Utility expects; a plain `zip -r` can produce a bundle Finder
 # quarantines more aggressively.

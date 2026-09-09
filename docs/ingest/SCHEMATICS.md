@@ -1,73 +1,268 @@
 # Schematic extraction (`.kicad_sch`)
 
-Hauksbee simulates a board from its schematic alone, before a layout exists.
-Point `hauksbee run` or a spec's `board` key at the **hierarchy root**
-`.kicad_sch`; sub-sheets are resolved by file (`Sheetfile`). Pointing at a
-sub-sheet is refused with a message naming the root.
+Hauksbee can simulate a board from its **schematic** alone, before any layout
+exists. This makes early-stage testing possible: you draw the circuit in
+eeschema, and Hauksbee derives the same netlist eeschema would, binds models,
+and runs the solver. No copper is required.
 
-The reader (`crates/hauksbee-extract/src/schematic.rs`) produces the same
-`ExtractedBoard` every other reader does, so binding, checks, the solver and
-co-sim are unchanged. Absent: geometry-dependent physics (copper parasitics,
-pad positions, DRC). Component positions for rendering come from symbol
-placements.
+The code lives in `hauksbee-extract/src/schematic.rs` and produces the same
+[`ExtractedBoard`] every other extractor produces, so the binder, solver, MCU
+co-sim and stress monitor stay unchanged. The only thing absent from a
+schematic-derived board is geometry-dependent physics (copper parasitics, pad
+positions). Component positions for rendering come from the schematic symbol
+placements instead.
 
-## How the netlist is derived
+## Why a layout is easy and a schematic is not
 
-A schematic stores no nets; they are computed geometrically, as eeschema does:
+A `.kicad_pcb` hands us connectivity for free: every pad already carries its
+net number. A schematic does not store nets at all. eeschema *computes* them
+geometrically every time, and so must we. The derivation runs in stages:
+geometry, then names, then hierarchy, then wire incidence and implicit power,
+with bus expansion layered on top.
 
-1. **Geometric connectivity.** Every pin, wire endpoint, junction, label and
-   sheet pin is placed in absolute coordinates (library symbols are y-up, the
-   canvas y-down; rotation is CCW on screen; `mirror x`/`mirror y` apply after
-   rotation). Coordinates snap to a 0.001 mm grid and coincident points are
-   unioned.
-2. **Named unification.** Local labels unify within a sheet; global labels
-   and power symbols unify across the design. A power symbol names its net
-   after its `Value` only when its pin is `power_in`; a `power_out` symbol
-   (`PWR_FLAG`) never names a net. A symbol is a power source when its library
-   symbol carries `(power)` or its reference starts `#PWR`. Net names are
-   unescaped (`VPP{slash}MCLR` -> `VPP/MCLR`) and render braces dropped
-   (`SCL_{2}` -> `SCL_2`) by `crates/hauksbee-extract/src/netname.rs`.
-3. **Hierarchy.** A child's `hierarchical_label "X"` is the parent's
-   `(sheet (pin "X"))`. A reused sub-sheet is expanded once per instance with
-   its own references from the `(instances ...)` block. Multi-unit parts fold
-   into one component.
-4. **Wire incidence.** Anything lying along a wire segment (not only at its
-   ends) is on that wire.
-5. **Implicit power pins.** A hidden `power_in` pin imposes its pin name as a
-   global net; visible `power_in` pins are wired normally.
-6. **Buses** carry no connectivity of their own; members travel by name. Bus
-   labels and sheet pins expand: vector `D[0..7]` -> `D0`..`D7`; group
-   `USB{DP DM}` -> `USB.DP`, `USB.DM`; anonymous group `{A B[0..1]}` -> `A`,
-   `B0`, `B1`; `(bus_alias ...)` definitions expand when referenced. A bus
-   crossing a sheet pin under a different name maps members positionally
-   (`DQ7` <-> `DPC7`).
+### 1. Geometric connectivity
 
-Unnamed nets take KiCad's `Net-(Ref-PadN)` form.
+Every symbol pin has a connection point in absolute schematic coordinates:
+the pin's position in its library symbol, transformed by the symbol
+instance's placement (translate, rotate, mirror). Wires, junctions,
+no-connects, labels and sheet pins all live at absolute coordinates too.
+Anything sharing a coordinate is electrically one node. We snap coordinates
+to a 0.001 mm grid (far finer than KiCad's 1.27 mm placement grid, fine
+enough to absorb textual rounding) and union-find every coincidence:
+
+- a wire's two endpoints are unioned;
+- a pin, a junction, or a label endpoint touching a wire endpoint joins that
+  wire's component.
+
+### 2. Coordinate transform (the subtle part)
+
+Two conventions have to be exactly right, or the netlist comes out
+plausible-but-wrong:
+
+- **Library symbols are drawn y-up; the schematic canvas is y-down.** We
+  negate the pin's local y before placement. Skip this, and every vertical
+  two-pin part (resistor, capacitor, diode) silently swaps its two pins.
+- **The placement angle rotates counter-clockwise on screen**, which on a
+  y-down canvas is the matrix `(x cosθ + y sinθ, −x sinθ + y cosθ)`.
+
+`mirror x` negates y, `mirror y` negates x, applied *after* rotation in the
+placed frame, matching eeschema's transform order (rotate the symbol, then
+flip it). The order matters only when a symbol is both rotated and mirrored:
+apply the mirror first and the two pins of such a part swap (e.g. a resistor
+placed at rot 90 + mirror x), which again yields a plausible-but-wrong
+netlist.
+
+### 3. Named unification
+
+Names then merge nodes that never touch geometrically:
+
+- **Local labels** unify nets carrying the same text *within one sheet*.
+- **Global labels** and **power symbols** unify across the whole design. A
+  power symbol names its net after its `Value` (`GND`, `+5V`, `VPP`), but
+  only when its pin is `power_in`. A power symbol with a `power_out` pin is
+  an ERC flag (`PWR_FLAG`): it marks a net as driven and must **not** name
+  it, or every flagged net collapses into one.
+- A symbol counts as a power source when its library symbol carries the
+  `(power)` flag *or* its reference uses the canonical `#PWR` prefix (some
+  older library symbols, e.g. a hand-drawn `VPP`, omit the flag but are
+  still power symbols).
+- Net names are normalised the way KiCad does: a literal `/` inside a label
+  is escaped as `{slash}` in the file, so `VPP/MCLR` and `VPP{slash}MCLR` are
+  the same net and must compare equal. The name that survives into the netlist
+  and every report is the **unescaped** one, `VPP/MCLR`, the spelling the
+  schematic shows; the escaped form never reaches a user-facing surface. Every
+  parser funnels through one function for this
+  (`crates/hauksbee-extract/src/netname.rs`), which also drops sub/superscript
+  render braces, so `SCL_{2}` in the file becomes `SCL_2` in a finding.
+
+### 4. Hierarchy
+
+We resolve sub-sheets by file (the `Sheetfile` property), recursing into each
+child. A child's `(hierarchical_label "X")` is the same net as the parent
+`(sheet (pin "X"))` it sits behind. We record both sides keyed by the sheet
+instance path and union them.
+
+A **reused** sub-sheet (the same file instantiated on several pages) is the
+reason symbols carry an `(instances (project .. (path "/uuid/uuid"
+(reference "R201"))))` block. Each instantiation gets its own designators.
+We expand every instance separately (its own geometry scope, its own
+references resolved from the path), so `ampli_ht` instantiated twice becomes
+RV201… and RV301… with identical topology, exactly matching KiCad's
+behaviour.
+
+Multi-unit parts (a quad gate drawn as four symbols sharing one reference)
+fold into one component with the union of every unit's pins, deduping the
+common unit-0 pins (VCC/GND) that appear on every gate.
+
+### 5. Wire incidence (anything on a wire is on the net)
+
+KiCad joins anything lying *along* a wire, not only at its two endpoints: a
+net label or a pin placed mid-span on a wire is electrically on that wire.
+This matters: in real boards almost every net label sits mid-span (eeschema
+drops the label a grid step inside the wire), so without an incidence pass
+nearly every label would float free of its wire and the netlist would
+shatter into single-pin fragments. After the geometric pass we union every
+anchored point that lies strictly inside a wire segment into that segment.
+Bus segments are skipped (see below).
+
+### 6. Implicit power pins
+
+A logic chip's GND/VCC pins are usually drawn as *hidden* `power_in` pins
+with no wire. KiCad auto-connects each such pin to the global power net named
+after the pin's own name (`GND`, `VCC`, `+3.3V`). We do the same: a hidden
+`power_in` pin on an ordinary device imposes its pin name as a global net.
+Visible `power_in` pins are wired normally and are not auto-named (two
+chips' visible supply pins sharing a pin name must not merge through the
+name alone).
+
+### Buses
+
+A bus is a thick wire that carries several member nets at once. Crucially, a
+bus is **electrically cosmetic**: members travel by *name*, not through the
+bus geometry. KiCad will not let you connect a pin to a bus without a label,
+and a wire entering a bus through a 45-degree *bus entry* carries its own
+member label (`D0`, `PC-A7`). So on a single sheet, bus members unify exactly
+like ordinary local labels, and the bus, its entries and its bus label add no
+connectivity of their own. We therefore record bus segments and entries but
+give them no union-find edges; if they carried edges, every member landing
+on the bus would short into one net.
+
+Bus *labels* and *pins* are still parsed and expanded into their members:
+
+- **Vector**: `D[0..7]` → `D0`, `D1`, … `D7` (ascending or descending; the
+  prefix keeps any punctuation, so `IRQ-[1..7]` → `IRQ-1` … `IRQ-7`).
+- **Group**: `USB{DP DM}` → `USB.DP`, `USB.DM` (named group members are
+  qualified with the prefix and a dot); an anonymous group `{A B[0..1]}` →
+  `A`, `B0`, `B1`. Vector tokens inside a group expand in place.
+
+Expansion matters at two places where connectivity actually crosses:
+
+- **Hierarchical sheet pins.** A bus passing through a
+  `(sheet (pin "ADDR[0..7]"))` connects member-wise to the child's
+  `(hierarchical_label "ADDR[0..7]")`: each member `ADDR0`…`ADDR7` crosses
+  the boundary on its own, never the literal `ADDR[0..7]`.
+- **A bus crossing a sheet pin under a different name.** A bus labelled
+  `DQ[0..31]` can feed a sheet pin named `DPC[0..31]`; KiCad maps the
+  members *positionally by index* (`DQ7` ↔ `DPC7`). We resolve this by
+  finding the bus the pin sits on (a flood over the sheet's bus segments to
+  the bus's label) and pairing the bus's member `i` with the pin's member
+  `i`.
+
+Bus aliases (`(bus_alias "NAME" (members …))`) are parsed, recorded per
+sheet, and **expanded when referenced**: a group bus `MEM{ADDR}` whose
+`ADDR` token is a bus alias expands to the alias's member list (each member
+itself expanded, so an alias member can be a vector like `A[7..0]`),
+qualified by the group prefix.
+
+### Net naming
+
+Named nets keep their label/power name. Unnamed nets get KiCad's
+`Net-(Ref-PadN)` form after their lowest-sorted member pin. (KiCad's exact
+choice of which pin names an anonymous net depends on annotation order, so
+for cross-validation we compare the *partition structure*, not the names.)
 
 ## Validation
 
-For a project with both a schematic and a layout, the derived netlist must
-induce the same partition of pins into nets as the layout. The diagnostic:
+The decisive test is cross-validation against the layout. For a corpus
+project shipping both a `.kicad_sch` hierarchy and a `.kicad_pcb`, the
+netlist we derive from the schematic must induce the **same partition** of
+component pins into nets as the layout does. Net names and ids differ; the
+partition must match exactly over the pins the two share.
+
+`tests/schematic.rs` runs this. Six real projects cross-validate **exactly**
+(zero split nets, zero merged nets, full component-set agreement over the
+shared pins; the PCB may carry mounting holes / fiducials the schematic
+never models):
+
+| Project | KiCad | Hierarchy | What it exercises | Result |
+|---|---|---|---|---|
+| `pic_programmer` | 10 (20260101) | 2 sheets | baseline hierarchy | 63/63 comps, 34 multi-pin nets |
+| `ecc83-pp` | 9 (20250114) | 2 sheets | tube preamp | 15/15 comps, 9 multi-pin nets |
+| `complex_hierarchy` | 9 (20250114) | reused sub-sheet ×2 | per-instance references | 68/68 comps, 50 multi-pin nets |
+| `interf_u` | 9 (20250114) | single sheet | vector buses, bus entries, hidden power pins | 24 comps, 110 multi-pin nets |
+| `kit-dev-coldfire` | 9 (20250114) | multi-sheet | bus sheet pins, parent-side named parts, rot+mirror placement | 160/160 comps, 209 multi-pin nets |
+| `video` | 9 (20250114) | multi-sheet | buses across sheet pins, incl. cross-named (`DQ` to `DPC`) positional mapping | 189/189 comps, 371 multi-pin nets |
+
+`complex_hierarchy` is the strongest hierarchy case: the same sub-sheet
+instantiated twice must expand to distinct designators yet identical
+topology. `video` is the strongest bus case: a 32-bit data bus crosses a
+sheet boundary under a different name and must map member-wise by index.
+
+The `sch_diag` example is the tool behind these tests:
+
+It takes a corpus-relative project directory and the project stem. Run against
+the Watchy board, which `scripts/fetch-corpus.sh` delivers by default and which
+ships both a `.kicad_sch` and a `.kicad_pcb`:
 
 ```
-cargo run -p hauksbee-extract --example sch_diag -- <project-dir> <project-stem>
+cargo run -p hauksbee-extract --example sch_diag -- watchy Watchy
 # SCH: 82 comps, 85 nets, 53 multi-pin nets
 # PCB: 82 comps, 84 nets, 53 multi-pin nets
-# shared pins: 266 / PCB nets that split in SCH: 0 / SCH nets that merge PCB nets: 0
+# shared pins: 266
+# PCB nets that split in SCH: 0
+# SCH nets that merge PCB nets: 0
 ```
 
-`DETAIL=1` / `MERGE=1` print the offending nets. A runnable schematic-stage
-spec ships at `crates/hauksbee-ci/examples/pic_programmer_schematic.toml`.
+Zero splits and zero merges over all 266 shared pins is the exact result: the
+netlist derived from the schematic induces the same partition as the layout. The
+one extra net on the schematic side is a net with no pin the layout also carries,
+which is why the comparison is over shared pins rather than net counts.
 
-## Coverage and limits
+`DETAIL=1` / `MERGE=1` print the offending nets when a board does not match.
 
-- KiCad 6 through 10 s-expression `.kicad_sch` are supported; the parser keys
-  off structure, not the version stamp.
-- **KiCad 5 legacy `.sch`** (non-s-expression) is not parsed. The layout of
-  such a project is still read by the PCB extractor.
-- **Net-tie footprints** have no schematic counterpart, so a board relying on
-  one shows the split that is correct for the schematic. A KiCad schematic
-  has no construct for a deliberate two-net join; the companion-schematic tie
-  path is Eagle-only ([SHORTS.md](../checks/SHORTS.md)).
-- Bus alias references (`{ALIAS}`) and group-member qualification are
-  implemented and fixture-tested, but not validated against a real layout.
+The six projects in the table above live under the KiCad demo tree
+(`corpus.toml` board id `kicad_demos`), which `scripts/fetch-corpus.sh` delivers by
+default. `tests/schematic.rs` resolves each under both names a corpus is delivered
+with, `kicad-demos-src/demos/<project>` in the hand-built tree and
+`kicad_demos/demos/<project>` from the fetch, so these cross-validations run on
+either. A project that resolves under neither prints a `corpus pair … missing` note
+rather than failing.
+
+The KiCad entry is fetched for format coverage and is deliberately NOT part of the
+silence gates' known-good set: these are reference designs to demonstrate KiCad, not
+products anyone manufactured, and the trace-ampacity check fires on
+`demos/pic_programmer`. `corpus.toml` records that, and the sweeps announce the
+exclusion per board. The cross-validations here are unaffected, because agreeing
+with itself about a file's topology is a claim about the reader and not about the
+hardware.
+
+## KiCad version coverage
+
+The s-expression `.kicad_sch` format (KiCad 6 through 10) is supported. The fetched
+corpus carries eight distinct version stamps across 260 s-expression schematics,
+spanning 20211123 (KiCad 6) to 20260306 (KiCad 10): 20211123, 20230121, 20230221,
+20231120, 20240602, 20241209, 20250114 and 20260306. The format stays stable across
+this range, and the parser keys off structure, not the version number. Re-measure
+with `grep -ho '(version [0-9]*)' $(find "$HAUKSBEE_CORPUS_DIR" -name '*.kicad_sch')`
+rather than trusting this list after the manifest changes.
+
+**KiCad 5 legacy `.sch`** is a different, non-s-expression format. This module
+does **not** parse it. A project whose only schematic is a legacy `.sch` still
+has its layout read by the PCB extractor, which carries the full netlist
+anyway; only the schematic path is out of scope. Adding the legacy parser is
+future work.
+
+## Known limitations
+
+- **Bus aliases referenced as `{ALIAS}` have no corpus coverage.** The
+  expansion is implemented (a `(bus_alias …)` definition is recorded per sheet
+  and substituted for its member list when a group bus references it, as in
+  `MEM{ADDR}`) and the `bus_alias_top` / `bus_alias_child` fixture pair covers
+  a `MEM{ADDR}` reference crossing a sheet boundary end-to-end. But **no board
+  in the corpus uses an alias reference**, so the cross-validation against real
+  layouts, the evidence that actually catches subtle expansion bugs, never
+  touches this path. A synthetic fixture proves the mechanism runs; it does not
+  prove the mechanism is right about a real design's intent.
+- **Group-bus member qualification has no corpus coverage either.** The
+  `PREFIX.member` form KiCad uses for named groups is implemented and unit
+  tested (`MEM{ADDR}` -> `MEM.A1`, `MEM.A0`), but **the corpus exercises only
+  vector buses**, so the same caveat applies.
+- **Net-tie footprints** (two pads tied only in copper) have no schematic
+  counterpart; a board relying on them would show a split that is correct
+  for the schematic. None of the exactly-validated projects use them. This is
+  also why the companion-schematic net-tie pathway is Eagle-only: KiCad has no
+  schematic construct declaring two named nets deliberately joined, and declares
+  its ties in the `.kicad_pcb` the DRC already reads. See
+  [`../checks/SHORTS.md`](../checks/SHORTS.md), "Declared ties read from the
+  schematic".
+- **Legacy KiCad 5 `.sch`** as above.

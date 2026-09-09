@@ -53,7 +53,7 @@
 //! (a `tcsetattr` on the master discards bytes already written). A close+reopen
 //! completed between probes is not observable, so every host process must
 //! configure its own serial fd before writing, as ordinary serial clients do.
-//! See `raw_via_slave` for the discard this avoids.
+//! See `raw_via_slave` for the failure that taught us.
 //!
 //! # Buffering, and what is honestly lost
 //!
@@ -73,7 +73,7 @@
 
 use anyhow::{bail, Context, Result};
 use std::collections::VecDeque;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
 /// How a host tool reaches the emulated UART.
@@ -116,6 +116,10 @@ pub const BACKLOG_CAP: usize = 64 * 1024;
 /// call. A peer that pipes a megabyte in one `write` must not stall the co-sim
 /// loop for the whole transfer; the remainder is read on the next frames, which
 /// is also what the emulated UART's baud rate would force anyway.
+/// How many drain-then-poll rounds the liveness probe tolerates before
+/// concluding that a peer which keeps the queue full is simply attached.
+const PEER_PROBE_DRAIN_ROUNDS: usize = 16;
+
 const READ_BUDGET: usize = 64 * 1024;
 
 /// Byte counters for a session, for the "was my tool actually talking to it"
@@ -140,10 +144,8 @@ pub struct HostSerialStats {
 enum Inner {
     #[cfg(unix)]
     Pty {
-        /// The pty master, owned: dropping it closes the fd (and hangs up any
-        /// attached peer). Nonblocking, so reads and writes report
-        /// `WouldBlock` rather than stalling the co-sim.
-        master: std::fs::File,
+        /// The pty master fd, owned: closed in `Drop`.
+        master: libc::c_int,
         /// The slave device path, kept for the re-raw pass on each attach.
         slave: std::ffi::CString,
     },
@@ -151,29 +153,6 @@ enum Inner {
         listener: TcpListener,
         peer: Option<TcpStream>,
     },
-}
-
-/// The byte stream both transports present once a peer may be there.
-trait ReadWrite: Read + Write {}
-impl<T: Read + Write> ReadWrite for T {}
-
-impl Inner {
-    /// The stream to read from / write to, if the transport has one open.
-    fn stream(&mut self) -> Option<&mut dyn ReadWrite> {
-        match self {
-            #[cfg(unix)]
-            Inner::Pty { master, .. } => Some(master),
-            Inner::Tcp { peer, .. } => peer.as_mut().map(|p| p as &mut dyn ReadWrite),
-        }
-    }
-
-    /// Forget a peer the stream reported gone. A pty keeps its master (the
-    /// next peer opens the same device); a TCP peer is a dead socket.
-    fn forget_peer(&mut self) {
-        if let Inner::Tcp { peer, .. } = self {
-            *peer = None;
-        }
-    }
 }
 
 /// A host-facing serial endpoint bridging a host tool and an emulated UART.
@@ -210,60 +189,87 @@ impl HostSerial {
 
     #[cfg(unix)]
     fn open_pty() -> Result<Self> {
-        use std::os::fd::{AsRawFd, FromRawFd};
-        // SAFETY: plain libc pty setup; every fd is checked before use, and the
-        // master is owned by a `File` from the moment it exists, so an early
-        // return on any later step closes it.
+        // SAFETY: plain libc pty setup; every fd is checked before use and the
+        // master is owned by the returned struct (closed in Drop).
         unsafe {
-            let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
-            if fd < 0 {
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            if master < 0 {
                 bail!(
                     "cannot allocate a pseudo-terminal for the host serial endpoint: {}. \
                      Use --serial-transport tcp instead.",
                     std::io::Error::last_os_error()
                 );
             }
-            let master = std::fs::File::from_raw_fd(fd);
-            if libc::grantpt(fd) != 0 || libc::unlockpt(fd) != 0 {
+            let guard = FdGuard(master);
+            if libc::grantpt(master) != 0 || libc::unlockpt(master) != 0 {
                 bail!(
                     "cannot unlock the pseudo-terminal: {}",
                     std::io::Error::last_os_error()
                 );
             }
-            let name_ptr = libc::ptsname(fd);
-            if name_ptr.is_null() {
-                bail!(
-                    "cannot read the pseudo-terminal's device path: {}",
-                    std::io::Error::last_os_error()
-                );
-            }
-            let slave = std::ffi::CStr::from_ptr(name_ptr).to_owned();
+            // `ptsname` writes into one static, per-process buffer: a second
+            // thread's call overwrites it in place, so two endpoints opened
+            // concurrently can swap slave paths and each attach to the
+            // other's pty. `ptsname_r` is not portably available; a lock held
+            // across the call AND the copy out of the buffer is the portable
+            // fix.
+            static PTSNAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let slave = {
+                let _guard = PTSNAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                let name_ptr = libc::ptsname(master);
+                if name_ptr.is_null() {
+                    bail!(
+                        "cannot read the pseudo-terminal's device path: {}",
+                        std::io::Error::last_os_error()
+                    );
+                }
+                std::ffi::CStr::from_ptr(name_ptr).to_owned()
+            };
             let endpoint = slave.to_string_lossy().into_owned();
 
-            let flags = libc::fcntl(fd, libc::F_GETFL);
-            if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            let flags = libc::fcntl(master, libc::F_GETFL);
+            if flags < 0 || libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
                 bail!(
                     "cannot set the pseudo-terminal master non-blocking: {}",
                     std::io::Error::last_os_error()
                 );
             }
 
-            // Arm the hung-up state (see the module doc's table) by opening
-            // the slave and closing it again, so "no peer" is distinguishable
-            // from "attached and silent". Nothing may `tcsetattr` the MASTER
+            // No pty fd may leak into a spawned child: an inherited slave fd
+            // keeps the slave side open after the real peer closes, which
+            // suppresses the hangup report and makes the liveness probe count
+            // a peer that is gone. FD_CLOEXEC here and O_CLOEXEC on the
+            // transient slave opens (the arming probe below and
+            // `raw_via_slave`) close that inheritance path atomically.
+            libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC);
+
+            // Arm the hung-up state so "no peer" is distinguishable from
+            // "attached and silent" (see the module doc's table), and take the
+            // opportunity to raw the discipline for the first peer.
+            // Arm the hung-up state (see the module doc's table) by opening the
+            // slave and closing it again. Nothing may `tcsetattr` the MASTER
             // afterwards: on Darwin that both clears the armed hangup and
             // discards pending input, which is why raw mode is applied per
             // attach through a slave fd in `refresh` instead of once here.
-            let probe = libc::open(slave.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            let probe = libc::open(
+                slave.as_ptr(),
+                libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+            );
             if probe >= 0 {
                 libc::close(probe);
             }
-            debug_assert_eq!(master.as_raw_fd(), fd);
-            Ok(Self::new(
-                Inner::Pty { master, slave },
-                HostSerialTransport::Pty,
+
+            std::mem::forget(guard);
+            Ok(Self {
+                inner: Inner::Pty { master, slave },
+                transport: HostSerialTransport::Pty,
                 endpoint,
-            ))
+                attached: false,
+                events: Vec::new(),
+                inbound: VecDeque::new(),
+                backlog: VecDeque::new(),
+                stats: HostSerialStats::default(),
+            })
         }
     }
 
@@ -285,24 +291,19 @@ impl HostSerial {
             .local_addr()
             .context("reading the host serial listener address")?
             .to_string();
-        let inner = Inner::Tcp {
-            listener,
-            peer: None,
-        };
-        Ok(Self::new(inner, HostSerialTransport::Tcp, endpoint))
-    }
-
-    fn new(inner: Inner, transport: HostSerialTransport, endpoint: String) -> Self {
-        Self {
-            inner,
-            transport,
+        Ok(Self {
+            inner: Inner::Tcp {
+                listener,
+                peer: None,
+            },
+            transport: HostSerialTransport::Tcp,
             endpoint,
             attached: false,
             events: Vec::new(),
             inbound: VecDeque::new(),
             backlog: VecDeque::new(),
             stats: HostSerialStats::default(),
-        }
+        })
     }
 
     /// Which transport this endpoint uses.
@@ -376,32 +377,74 @@ impl HostSerial {
     /// can turn a PTY's final readable byte into EOF.
     fn buffer_peer_input(&mut self) {
         let mut out = Vec::new();
-        let mut gone = false;
-        if let Some(stream) = self.inner.stream() {
-            let mut buf = [0u8; 4096];
-            while out.len() < READ_BUDGET {
-                let want = buf.len().min(READ_BUDGET - out.len());
-                match stream.read(&mut buf[..want]) {
-                    // A pty master reads 0 on Darwin's hangup (Linux reports
-                    // the same state as EIO); a TCP peer reads 0 at EOF. All
-                    // mean the peer closed the device.
-                    Ok(0) => {
-                        gone = true;
+        match &mut self.inner {
+            #[cfg(unix)]
+            Inner::Pty { master, .. } => {
+                let mut buf = [0u8; 4096];
+                loop {
+                    // SAFETY: read into a stack buffer we own, length bounded.
+                    let n = unsafe {
+                        libc::read(
+                            *master,
+                            buf.as_mut_ptr() as *mut libc::c_void,
+                            buf.len().min(READ_BUDGET - out.len()),
+                        )
+                    };
+                    if n > 0 {
+                        out.extend_from_slice(&buf[..n as usize]);
+                        if out.len() >= READ_BUDGET {
+                            break;
+                        }
+                        continue;
+                    }
+                    if n == 0 {
+                        // Darwin's hangup report. Linux uses EIO for the same
+                        // state; both mean the peer closed the device.
+                        self.mark_detached();
                         break;
                     }
-                    Ok(n) => out.extend_from_slice(&buf[..n]),
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-                    Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                    Err(_) => {
-                        gone = true;
-                        break;
+                    let err = std::io::Error::last_os_error();
+                    match err.raw_os_error() {
+                        Some(libc::EINTR) => continue,
+                        Some(libc::EAGAIN) => break,
+                        Some(libc::EIO) => {
+                            self.mark_detached();
+                            break;
+                        }
+                        _ => break,
                     }
                 }
             }
-        }
-        if gone {
-            self.inner.forget_peer();
-            self.mark_detached();
+            Inner::Tcp { peer, .. } => {
+                let mut drop_peer = false;
+                if let Some(stream) = peer {
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        match stream.read(&mut buf[..4096.min(READ_BUDGET - out.len())]) {
+                            Ok(0) => {
+                                drop_peer = true;
+                                break;
+                            }
+                            Ok(n) => {
+                                out.extend_from_slice(&buf[..n]);
+                                if out.len() >= READ_BUDGET {
+                                    break;
+                                }
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                            Err(_) => {
+                                drop_peer = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if drop_peer {
+                    *peer = None;
+                    self.mark_detached();
+                }
+            }
         }
         self.stats.to_mcu += out.len() as u64;
         self.inbound.extend(out);
@@ -439,42 +482,89 @@ impl HostSerial {
 
         #[cfg(unix)]
         if matches!(self.inner, Inner::Pty { .. }) {
-            // Drain inbound, then keep the PTY free of internal slave fds from
-            // the external-liveness probe through every master write below.
-            // That makes a successful write evidence of a real peer, never a
+            // The probe drains inbound itself, and the PTY stays free of
+            // internal slave fds from here through every master write below:
+            // a successful write is evidence of a real peer, never a
             // pseudo-peer owned by this endpoint.
-            self.buffer_peer_input();
-            let external_attached = match &self.inner {
-                Inner::Pty { master, .. } => pty_peer_attached(master),
-                Inner::Tcp { .. } => unreachable!(),
-            };
-            if !external_attached {
+            if !self.pty_externally_attached() {
                 self.mark_detached();
                 return;
             }
         }
 
         after_probe();
-        while !self.backlog.is_empty() {
+        loop {
             self.backlog.make_contiguous();
             let (front, _) = self.backlog.as_slices();
-            let Some(stream) = self.inner.stream() else {
+            if front.is_empty() {
                 break;
+            }
+            let written = match &mut self.inner {
+                #[cfg(unix)]
+                Inner::Pty { master, .. } => {
+                    // SAFETY: writing a slice we own, length from the slice.
+                    let n = unsafe {
+                        libc::write(*master, front.as_ptr() as *const libc::c_void, front.len())
+                    };
+                    if n > 0 {
+                        n as usize
+                    } else {
+                        if n == 0 {
+                            break;
+                        }
+                        let err = std::io::Error::last_os_error();
+                        match err.raw_os_error() {
+                            Some(libc::EINTR) => continue,
+                            Some(libc::EAGAIN) => break,
+                            Some(libc::EIO) => {
+                                self.mark_detached();
+                                break;
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+                Inner::Tcp { peer, .. } => {
+                    let mut drop_peer = false;
+                    let mut written = 0usize;
+                    if let Some(stream) = peer {
+                        match stream.write(front) {
+                            Ok(0) => drop_peer = true,
+                            Ok(n) => written = n,
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                            Err(_) => drop_peer = true,
+                        }
+                    }
+                    if drop_peer {
+                        *peer = None;
+                        self.mark_detached();
+                        break;
+                    }
+                    written
+                }
             };
-            match stream.write(front) {
-                Ok(n) if n > 0 => {
-                    self.backlog.drain(..n);
-                    self.stats.to_peer += n as u64;
-                }
-                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-                // Zero bytes accepted, or a hard error (EIO on a hung-up pty,
-                // a reset TCP socket): the peer is gone.
-                _ => {
-                    self.inner.forget_peer();
-                    self.mark_detached();
-                    break;
-                }
+            // A slave can close between the liveness probe above and this
+            // write. Linux may still accept the bytes while propagating the
+            // hangup, so a positive write alone is not evidence that an
+            // external peer owned them. Re-probe (draining first, so queued
+            // input cannot mask the hangup) before crediting output;
+            // retaining the backlog is the conservative outcome.
+            #[cfg(unix)]
+            if written > 0
+                && matches!(self.inner, Inner::Pty { .. })
+                && !self.pty_externally_attached()
+            {
+                self.mark_detached();
+                break;
+            }
+            if written == 0 {
+                break;
+            }
+            self.backlog.drain(..written);
+            self.stats.to_peer += written as u64;
+            if self.backlog.is_empty() {
+                break;
             }
         }
     }
@@ -517,11 +607,54 @@ impl HostSerial {
         }
     }
 
+    /// Whether an external peer holds the pty slave open. `POLLHUP` is the
+    /// no-peer state (see the module doc: `open` arms it deliberately so a
+    /// never-attached pty is not mistaken for an attached silent one), but
+    /// undrained input MASKS it: Darwin reports only `POLLIN` while bytes a
+    /// peer wrote before closing sit unread, so a bare poll would count a
+    /// dead peer as live and let firmware output earn delivery credit nobody
+    /// can read. Drain, then poll, and repeat while the drain finds bytes: a
+    /// peer that keeps producing new input is attached by definition.
+    #[cfg(unix)]
+    fn pty_externally_attached(&mut self) -> bool {
+        for _ in 0..PEER_PROBE_DRAIN_ROUNDS {
+            self.buffer_peer_input();
+            let master = match &self.inner {
+                Inner::Pty { master, .. } => *master,
+                Inner::Tcp { .. } => unreachable!("pty probe on a tcp endpoint"),
+            };
+            let mut p = libc::pollfd {
+                fd: master,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: single valid pollfd, zero timeout, no allocation.
+            unsafe {
+                libc::poll(&mut p, 1, 0);
+            }
+            if (p.revents & (libc::POLLHUP | libc::POLLNVAL)) != 0 {
+                return false;
+            }
+            if (p.revents & libc::POLLIN) == 0 {
+                return true;
+            }
+        }
+        // POLLIN persisted through every drain round: something is still
+        // writing, and a writer is an attached peer.
+        true
+    }
+
     /// Transport-specific attach-state update, queueing any transition.
     fn refresh(&mut self) {
+        #[cfg(unix)]
+        if matches!(self.inner, Inner::Pty { .. }) {
+            let now = self.pty_externally_attached();
+            self.apply_attach_state(now);
+            return;
+        }
         let now = match &mut self.inner {
             #[cfg(unix)]
-            Inner::Pty { master, .. } => pty_peer_attached(master),
+            Inner::Pty { .. } => unreachable!("handled above"),
             Inner::Tcp { listener, peer } => {
                 if peer.is_none() {
                     if let Ok((stream, _)) = listener.accept() {
@@ -533,6 +666,12 @@ impl HostSerial {
                 peer.is_some()
             }
         };
+        self.apply_attach_state(now);
+    }
+
+    /// Queue the attach or detach transition `now` implies, applying raw mode
+    /// and flushing the backlog on a fresh attach.
+    fn apply_attach_state(&mut self, now: bool) {
         if now && !self.attached {
             self.attached = true;
             self.stats.attach_count += 1;
@@ -556,6 +695,33 @@ impl HostSerial {
         if self.attached {
             self.attached = false;
             self.events.push(PeerEvent::Detached);
+        }
+    }
+}
+
+impl Drop for HostSerial {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Inner::Pty { master, .. } = &self.inner {
+            // SAFETY: the fd is owned by this struct and not used again.
+            unsafe {
+                libc::close(*master);
+            }
+        }
+    }
+}
+
+/// Closes an fd unless the caller forgets it: keeps the half-built pty from
+/// leaking when a later setup step fails.
+#[cfg(unix)]
+struct FdGuard(libc::c_int);
+
+#[cfg(unix)]
+impl Drop for FdGuard {
+    fn drop(&mut self) {
+        // SAFETY: the guard owns the fd until it is forgotten.
+        unsafe {
+            libc::close(self.0);
         }
     }
 }
@@ -603,7 +769,7 @@ fn raw_via_slave(slave: &std::ffi::CStr) {
     unsafe {
         let fd = libc::open(
             slave.as_ptr(),
-            libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK,
+            libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC,
         );
         if fd < 0 {
             return;
@@ -611,24 +777,6 @@ fn raw_via_slave(slave: &std::ffi::CStr) {
         set_raw(fd);
         libc::close(fd);
     }
-}
-
-/// Whether a peer holds the pty slave open. `POLLHUP` is the no-peer state (see
-/// the module doc: `open` arms it deliberately so a never-attached pty is not
-/// mistaken for an attached silent one).
-#[cfg(unix)]
-fn pty_peer_attached(master: &std::fs::File) -> bool {
-    use std::os::fd::AsRawFd;
-    let mut p = libc::pollfd {
-        fd: master.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    // SAFETY: single valid pollfd, zero timeout, no allocation.
-    unsafe {
-        libc::poll(&mut p, 1, 0);
-    }
-    (p.revents & (libc::POLLHUP | libc::POLLNVAL)) == 0
 }
 
 #[cfg(test)]
@@ -723,6 +871,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pty_checked_command_is_consumed_before_peer_close() {
+        // Hold spawns still while this test arranges and observes pty
+        // hangups; see children::SPAWN_PTY_EXCLUSION.
+        let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::OpenOptionsExt;
 
@@ -802,6 +955,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pty_reopen_before_poll_preserves_bytes_as_one_continuous_observation() {
+        // Hold spawns still while this test arranges and observes pty
+        // hangups; see children::SPAWN_PTY_EXCLUSION.
+        let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::os::fd::AsRawFd;
 
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
@@ -854,6 +1012,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pty_output_after_peer_close_stays_backlogged_for_the_next_peer() {
+        // Hold spawns still while this test arranges and observes pty
+        // hangups; see children::SPAWN_PTY_EXCLUSION.
+        let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
         let first = std::fs::OpenOptions::new()
             .read(true)
@@ -896,8 +1059,12 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[ignore = "depends on the host kernel's pty close semantics; passes on macOS"]
     fn pty_peer_close_after_probe_cannot_deliver_output_to_the_guard() {
+        // Hold spawns still while this test arranges and observes pty
+        // hangups; see children::SPAWN_PTY_EXCLUSION.
+        let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
         let mut peer = std::fs::OpenOptions::new()
             .read(true)

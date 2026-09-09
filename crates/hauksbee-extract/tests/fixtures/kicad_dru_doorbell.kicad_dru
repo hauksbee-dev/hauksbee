@@ -1,0 +1,17 @@
+(version 1)
+
+# Custom DRC rules grounded in JLCPCB's published manufacturing capabilities.
+# Keep this small fixture local to the test crate: the full blind-trial checkout
+# is generated data and is not present in clean/public source snapshots.
+(rule "fine-pitch routing clearance (JLCPCB 0.10mm capability)"
+	(constraint clearance (min 0.127mm)))
+
+(rule "via/NPTH hole-to-copper clearance (JLCPCB 0.2mm)"
+	(constraint hole_clearance (min 0.2mm)))
+
+(rule "PTH hole-to-copper clearance (JLCPCB 0.28mm)"
+	(condition "A.Pad_Type == 'Through Hole Pad'")
+	(constraint hole_clearance (min 0.28mm)))
+
+(rule "board-edge copper clearance (JLCPCB 0.3mm)"
+	(constraint edge_clearance (min 0.3mm)))

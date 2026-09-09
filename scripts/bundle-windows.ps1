@@ -16,7 +16,8 @@ param(
     [ValidatePattern('^[0-9a-f]{40}$')]
     [string]$ExpectedCommit,
     [string]$TargetDir = "target\release",
-    [string]$Out = "dist"
+    [string]$Out = "dist",
+    [switch]$RequireAuthenticodeSignature
 )
 
 Set-StrictMode -Version Latest
@@ -38,10 +39,82 @@ $outPath = if ([IO.Path]::IsPathRooted($Out)) {
 }
 $base = "hauksbee-$Version-windows-x86_64-permissive"
 $requiredBinaries = @("hauksbee.exe", "hauksbee-ci.exe", "hauksbee-mcp.exe")
+
+function Resolve-SignTool {
+    $command = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Path
+    }
+
+    $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+    if (Test-Path -LiteralPath $kitsRoot -PathType Container) {
+        $candidate = Get-ChildItem -LiteralPath $kitsRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^10\.0\.[0-9.]+$' } |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName "x64\signtool.exe" } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+        if ($null -ne $candidate) {
+            return $candidate
+        }
+    }
+    throw "Authenticode release signing requires signtool.exe (Windows SDK) on PATH or under '$kitsRoot'."
+}
+
+function Sign-And-VerifyBinaries([string]$BinDir, [string]$WorkDir) {
+    if (-not $RequireAuthenticodeSignature) {
+        return
+    }
+
+    $pfxBase64 = [Environment]::GetEnvironmentVariable("HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64")
+    $pfxPassword = [Environment]::GetEnvironmentVariable("HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD")
+    $timestampUrl = [Environment]::GetEnvironmentVariable("HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL")
+    if ([string]::IsNullOrWhiteSpace($pfxBase64)) {
+        throw "Release Authenticode signing is required, but HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64 is missing."
+    }
+    if ([string]::IsNullOrWhiteSpace($pfxPassword)) {
+        throw "Release Authenticode signing is required, but HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD is missing."
+    }
+    if ([string]::IsNullOrWhiteSpace($timestampUrl)) {
+        $timestampUrl = "http://timestamp.digicert.com"
+    }
+
+    $signTool = Resolve-SignTool
+    $pfxPath = Join-Path $WorkDir "hauksbee-signing.pfx"
+    try {
+        try {
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($pfxBase64))
+        } catch {
+            throw "HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64 is not valid base64: $($_.Exception.Message)"
+        }
+        if ((Get-Item -LiteralPath $pfxPath).Length -eq 0) {
+            throw "HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64 decoded to an empty PFX."
+        }
+
+        foreach ($binary in $requiredBinaries) {
+            $path = Join-Path $BinDir $binary
+            & $signTool sign /q /fd SHA256 /f $pfxPath /p $pfxPassword /tr $timestampUrl /td SHA256 /d "Hauksbee $Version" $path | Out-Host
+            $signExitCode = $LASTEXITCODE
+            if ($signExitCode -ne 0) {
+                throw "signtool failed to sign $binary (exit code $signExitCode)."
+            }
+            & $signTool verify /q /pa /all $path | Out-Host
+            $verifyExitCode = $LASTEXITCODE
+            if ($verifyExitCode -ne 0) {
+                throw "signtool failed to verify the Authenticode signature on $binary (exit code $verifyExitCode)."
+            }
+        }
+    } finally {
+        if (Test-Path -LiteralPath $pfxPath) {
+            Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Assert-BinaryVersion([string]$Path, [string]$Name, [string]$ExpectedVersion) {
     $output = (& $Path --version 2>&1 | Out-String).Trim()
     $exitCode = $LASTEXITCODE
-    $escapedName = [regex]::Escape($Name -replace '\.exe$', '')
+    $escapedName = [regex]::Escape(($Name -replace '\.exe$', ''))
     $escapedVersion = [regex]::Escape($ExpectedVersion)
     $escapedCommit = [regex]::Escape($ExpectedCommit)
     if ($exitCode -ne 0 -or $output -notmatch "(?m)^$escapedName $escapedVersion \(git $escapedCommit\)$") {
@@ -59,8 +132,9 @@ foreach ($binary in $requiredBinaries) {
 # Ask the binary that will be packaged. A filename is not evidence that the
 # GPL AVR backend stayed out of the Windows artifact.
 $doctor = & (Join-Path $targetPath "hauksbee.exe") doctor 2>&1 | Out-String
-# `doctor` exits nonzero when an external backend is absent, which is normal on
-# a bare release runner. The compile-time AVR line is the shape assertion.
+# `doctor` exits zero even when an external backend is absent (normal on a
+# bare release runner) and prints one tab-separated `name status detail` row
+# per backend. The compile-time AVR row is the shape assertion.
 if ($doctor -notmatch '(?m)^avr\s+disabled\b') {
     throw "Windows releases are permissive-only, but hauksbee doctor did not report 'avr disabled':`n$doctor"
 }
@@ -75,8 +149,22 @@ try {
     foreach ($binary in $requiredBinaries) {
         Copy-Item -LiteralPath (Join-Path $targetPath $binary) -Destination (Join-Path $binDir $binary)
     }
-    foreach ($item in @("db", "examples", "integrations")) {
-        Copy-Item -LiteralPath (Join-Path $repoRoot $item) -Destination (Join-Path $rootDir $item) -Recurse
+
+    # Ordinary local bundles remain unsigned. Release workflow calls this
+    # script with -RequireAuthenticodeSignature, which fails closed if the
+    # documented PFX/password secrets or signtool are unavailable. Signing the
+    # staged copies before Compress-Archive keeps the zip and its checksum
+    # bound to the verified Authenticode payloads.
+    Sign-And-VerifyBinaries $binDir $work
+
+    # Same payload layout as scripts/bundle.sh: the model database lives under
+    # crates/hauksbee-models/db in the tree and ships as db/ in the bundle.
+    foreach ($item in @(
+        @{ Source = "crates\hauksbee-models\db"; Name = "db" },
+        @{ Source = "examples"; Name = "examples" },
+        @{ Source = "integrations"; Name = "integrations" }
+    )) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot $item.Source) -Destination (Join-Path $rootDir $item.Name) -Recurse
     }
     $ciSpecs = Join-Path $rootDir "examples\ci-specs"
     New-Item -ItemType Directory -Path $ciSpecs -Force | Out-Null

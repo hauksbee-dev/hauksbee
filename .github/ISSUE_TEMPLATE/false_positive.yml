@@ -6,7 +6,9 @@ body:
     attributes:
       value: |
         These matter more than most bugs. A hardware tool that cries wolf gets
-        switched off, and a switched-off tool catches nothing.
+        switched off, and a switched-off tool catches nothing. Do not attach
+        proprietary board files; a redacted export or minimal reproduction is
+        welcome.
   - type: input
     id: check
     attributes:
@@ -25,6 +27,4 @@ body:
     id: board
     attributes:
       label: Board file
-      description: Needed to add this to the regression corpus so it cannot come back.
-    validations:
-      required: true
+      description: Optional. Attach a shareable minimal reproduction or redacted export; never attach confidential design data.

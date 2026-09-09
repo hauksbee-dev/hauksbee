@@ -25,9 +25,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CORPUS = os.path.join(ROOT, "ingest-corpus")
+REPO = os.path.abspath(os.path.join(ROOT, "..", "..", ".."))
 BIN = os.environ.get(
     "HAUKSBEE_BIN",
-    "/Users/hauksbee-user/Tarski/Tarski-Repos/hauksbee-dev/target/release/hauksbee",
+    os.path.join(REPO, "target", "release", "hauksbee"),
 )
 RESULTS = os.path.join(ROOT, "matrix-results.jsonl")
 

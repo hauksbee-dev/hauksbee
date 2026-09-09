@@ -717,7 +717,17 @@ impl Drop for DescriptorDirGuard {
 /// does interactively. For an explicit extra layer (the `--models-dir` flag)
 /// use [`run_spec_with_lib`].
 pub fn run_spec_seeded(spec: &Spec, only_seed: Option<u32>) -> Result<Vec<RunOutcome>, SpecError> {
-    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
+    let models_dir = spec.models_dir_path();
+    if let Some(path) = &models_dir {
+        if !path.is_dir() {
+            return Err(SpecError::Invalid(format!(
+                "models_dir '{}' is not a readable directory",
+                path.display()
+            )));
+        }
+    }
+    let extra: Vec<&std::path::Path> = models_dir.as_deref().into_iter().collect();
+    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
     run_spec_with_lib(spec, only_seed, &lib)
 }
 
@@ -3313,17 +3323,54 @@ mod tests {
         }];
         let refusals = assertion_timing_refusals(&spec, &coverage);
         assert_eq!(refusals.len(), 1);
+        assert!(refusals[0].contains("toggle"));
+        assert!(refusals[0].contains("timing.min_pulse_us"));
+    }
+
+    /// Serializes the DescriptorDirGuard tests: they mutate the process-global
+    /// `HAUKSBEE_MCU_DIR` env var, so parallel test threads must not interleave.
+    static MCU_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn spec_with_descriptor_dir(dir: Option<&str>) -> Spec {
+        let mcu = dir
+            .map(|d| format!("[mcu]\ndescriptor_dir = \"{d}\"\n"))
+            .unwrap_or_default();
+        let src = format!(
+            "board = \"b.kicad_pcb\"\nduration_ms = 10\n{mcu}\
+             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n"
+        );
+        let mut spec: Spec = toml::from_str(&src).expect("valid toml");
+        spec.base_dir = std::path::PathBuf::from("/repo/ci");
+        spec
+    }
+
+    #[test]
+    fn descriptor_dir_guard_sets_the_env_for_its_lifetime_and_restores() {
+        let _lock = MCU_DIR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("HAUKSBEE_MCU_DIR");
+        let spec = spec_with_descriptor_dir(Some("socs"));
+        {
+            let _guard = DescriptorDirGuard::apply(&spec);
+            let expected = std::path::PathBuf::from("/repo/ci").join("socs");
+            assert_eq!(
+                std::env::var_os("HAUKSBEE_MCU_DIR").map(std::path::PathBuf::from),
+                Some(expected),
+                "the spec's descriptor_dir (resolved against the spec dir) is published"
+            );
+        }
         assert!(
-            refusals[0].contains("toggle") && refusals[0].contains("timing.min_pulse_us"),
-            "{}",
-            refusals[0]
+            std::env::var_os("HAUKSBEE_MCU_DIR").is_none(),
+            "the guard restores the unset state on drop, so a later spec in the \
+             same invocation does not inherit it"
         );
     }
 
     /// The guard mutates the process-global `HAUKSBEE_MCU_DIR`, so every case
-    /// runs inside one test rather than racing across threads.
+    /// runs inside one test rather than racing across threads, and the test
+    /// takes the same lock as its neighbour so the two cannot interleave.
     #[test]
     fn descriptor_dir_guard_publishes_the_spec_dir_unless_the_operator_set_one() {
+        let _lock = MCU_DIR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let spec_with = |dir: Option<&str>| {
             let mcu = dir
                 .map(|d| format!("[mcu]\ndescriptor_dir = \"{d}\"\n"))
@@ -3390,7 +3437,86 @@ fn main {
     }
 
     #[test]
-    fn protection_trip_supply_net_is_merged_into_its_scenario_window() {
+    fn load_board_accepts_a_gerber_zip() {
+        // B5: a spec may point straight at the fab archive. Corpus-gated like
+        // the engine's gerber tests, including their licence rule: ClockworkPi
+        // publishes this adapter with no licence statement, so corpus.toml
+        // marks it `license_confirmed = false` and scripts/fetch-corpus.sh
+        // skips it by default. HAUKSBEE_REQUIRE_CORPUS therefore must not
+        // demand it (the nightly gate sets that flag and fetches the default
+        // set); only the explicit uConsole opt-in makes its absence a failure,
+        // exactly as in crates/hauksbee-extract/tests/gerber_uconsole.rs.
+        let Some(src) = hauksbee_testkit::corpus_board(
+            env!("CARGO_MANIFEST_DIR"),
+            "famous/uconsole_cm4_adapter_gerber",
+        ) else {
+            assert!(
+                std::env::var("HAUKSBEE_REQUIRE_UCONSOLE_CORPUS").is_err(),
+                "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_cm4_adapter_gerber is absent"
+            );
+            eprintln!(
+                "NOT RUN  CI gerber-zip test: uconsole_cm4_adapter_gerber is not in \
+                 the default fetch (licence unconfirmed). Fetch with \
+                 --include-unconfirmed and set HAUKSBEE_REQUIRE_UCONSOLE_CORPUS=1 \
+                 to make this mandatory."
+            );
+            return;
+        };
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("hauksbee-ci-gerb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip_path = dir.join("fab.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let p = entry.unwrap().path();
+            if p.is_file() {
+                w.start_file(
+                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+                w.write_all(&std::fs::read(&p).unwrap()).unwrap();
+            }
+        }
+        // A fabrication archive needs a part list before CI can bind or
+        // simulate it. Keep this loader test aligned with that fail-closed
+        // contract instead of relying on copper alone.
+        w.start_file(
+            "gerbers/positions.csv",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        w.write_all(
+            b"Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n\
+              U1,TEST,TEST,0,0,0,Top\n",
+        )
+        .unwrap();
+        w.finish().unwrap();
+        let board = load_board(&zip_path).expect("a gerber fab zip must load in CI");
+        assert_eq!(board.components.len(), 1, "placement part list survives");
+        assert!(!board.nets.is_empty(), "nets recovered from copper");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_board_missing_file_names_the_spec_key() {
+        // The spec-relative wording must survive the normalizer delegation.
+        let err = load_board(std::path::Path::new("/definitely/not/here.kicad_pcb"))
+            .expect_err("missing board errors");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("resolved from the spec's `board` key"),
+            "CI keeps its spec-relative error wording: {msg}"
+        );
+    }
+
+    #[test]
+    fn protection_trip_supply_net_is_added_to_its_scenario_window() {
+        // R46: a scenario window's `nets` was seeded only from the scenario's own
+        // supply and rail_window nets, so a protection_trip naming a BATTERY rail
+        // (that the scenario's load pulls from) had no (scenario, net) verdict key
+        // and check_protection_trip returned a false RED. The supply_net must be
+        // merged into the matching scenario window.
         let mut windows = vec![ScenarioWindow {
             id: "load".into(),
             start_s: 0.1,
@@ -3545,6 +3671,11 @@ fn main {
         assert!(check_component_refs(&spec, &["C10".to_string()]).is_ok());
     }
 
+    // ── qemu_bus_slave_warnings unit tests ───────────────────────────────────
+
+    /// One warning per bus slave and sensor, naming the id, the peripheral
+    /// kind and the backend; nothing for a non-bus peripheral, and nothing at
+    /// all when no QEMU backend is in play.
     #[test]
     fn qemu_backends_warn_once_per_bus_slave_naming_id_kind_and_backend() {
         let s = spec(

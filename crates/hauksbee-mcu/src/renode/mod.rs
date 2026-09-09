@@ -838,7 +838,7 @@ pub struct RenodeBackend {
     /// UART bridge, callbacks, wired-port hint and cycle counter shared with
     /// the other poll-based backend.
     core: PollState,
-    _process: RenodeProcess,
+    process: RenodeProcess,
 
     /// Last-read ODR per port letter, for edge synthesis. For a port with a
     /// dir map this stores the *output-masked* value (ODR & dir), so the diff
@@ -965,7 +965,7 @@ impl RenodeBackend {
             config,
             monitor,
             core: PollState::new("Renode", uart),
-            _process: process,
+            process,
             last_odr,
             last_dir: HashMap::new(),
             i2c_slave_addresses: Vec::new(),
@@ -1668,11 +1668,20 @@ impl Mcu for RenodeBackend {
 
     fn run_cycles(&mut self, n: u64) -> Result<u64> {
         let seconds = n as f64 / self.config.frequency_hz as f64;
-        self.run_seconds(seconds)?;
+        let run = self.run_seconds(seconds);
+        run.map_err(|e| self.with_death_reason(e))?;
         Ok(n)
     }
 
-    poll_state_mcu_methods!(core);
+    // Renode's own: a failed run folds the process's exit status and stderr
+    // tail into the error, which is the only evidence of why the emulator
+    // died. The shared macro cannot do that; every other method is identical.
+    fn run_micros(&mut self, us: u64) -> Result<()> {
+        let run = self.run_seconds(us as f64 / 1_000_000.0);
+        run.map_err(|e| self.with_death_reason(e))
+    }
+
+    poll_state_mcu_methods!(core, own_run_micros);
 
     fn set_digital_in(&mut self, pin: PinId, high: bool) {
         // Find the Renode peripheral for this logical port and drive the pin.
@@ -1841,6 +1850,18 @@ impl Mcu for RenodeBackend {
 }
 
 impl RenodeBackend {
+    /// If the Renode process has exited, wrap `e` with that fact (exit status
+    /// plus the tail of its captured stderr). A dead emulator surfaces to the
+    /// chunk loop as a socket error on whichever bridge was touched first
+    /// ("connection reset", "connection forcibly closed"), which names the
+    /// symptom and hides the cause; this names the cause.
+    fn with_death_reason(&mut self, e: anyhow::Error) -> anyhow::Error {
+        match self.process.exit_reason() {
+            Some(reason) => e.context(format!("Renode process died: {reason}")),
+            None => e,
+        }
+    }
+
     /// Advance virtual time by `seconds`, then exchange GPIO/UART state.
     fn run_seconds(&mut self, seconds: f64) -> Result<()> {
         if !self.core.firmware_loaded {

@@ -24,6 +24,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// One probed dependency, serialized verbatim as the `/api/deps` JSON.
@@ -33,13 +34,19 @@ pub struct DepStatus {
     pub id: &'static str,
     /// Human display name.
     pub name: &'static str,
-    /// True only when the engine's own resolver accepted it.
+    /// True when the engine's own resolver found the local dependency.
+    ///
+    /// For the optional LLM CLIs this is deliberately a discovery result, not
+    /// an authentication claim. Their sign-in state is checked only when the
+    /// user requests datasheet extraction (the Environment page must not run
+    /// login/version commands just to paint a status row).
     pub present: bool,
     /// Resolved binary path(s) when present.
     pub path: Option<String>,
-    /// Version string when present and cheap to read (qemu / ngspice /
-    /// kicad-cli answer `--version` instantly; Renode's .NET startup takes
-    /// seconds, so its version is deliberately not probed here).
+    /// A version string when the resolver already had one without an extra
+    /// status-only subprocess. Most rows intentionally leave this empty: a
+    /// dependency status page should answer "is it here?", not launch every
+    /// simulator's version command.
     pub version: Option<String>,
     /// What having it unlocks, in plain language.
     pub unlocks: &'static str,
@@ -64,32 +71,80 @@ pub struct DepStatus {
 }
 
 /// Probe every dependency. Each probe runs the engine's own discovery; none of
-/// this is a plain `which` that could disagree with a real run.
+/// this is a plain `which` that could disagree with a real run. Independent
+/// resolvers run in parallel so a slow local tool cannot hold up all the other
+/// rows. Version and authentication commands are intentionally deferred to the
+/// operation that needs them.
 pub fn probe_all() -> Vec<DepStatus> {
-    vec![
-        probe_renode(),
-        probe_esp_qemu(),
-        probe_ngspice(),
-        probe_kicad_cli(),
-        probe_avr(),
-        probe_codex(),
-        probe_claude_code(),
-    ]
+    std::thread::scope(|scope| {
+        let renode = scope.spawn(probe_renode);
+        let esp_qemu = scope.spawn(probe_esp_qemu);
+        let ngspice = scope.spawn(probe_ngspice);
+        let kicad_cli = scope.spawn(probe_kicad_cli);
+        let avr = scope.spawn(probe_avr);
+        let codex = scope.spawn(probe_codex);
+        let claude_code = scope.spawn(probe_claude_code);
+        vec![
+            renode.join().expect("Renode dependency probe panicked"),
+            esp_qemu
+                .join()
+                .expect("Espressif QEMU dependency probe panicked"),
+            ngspice.join().expect("ngspice dependency probe panicked"),
+            kicad_cli
+                .join()
+                .expect("kicad-cli dependency probe panicked"),
+            avr.join().expect("AVR dependency probe panicked"),
+            codex.join().expect("Codex dependency probe panicked"),
+            claude_code
+                .join()
+                .expect("Claude Code dependency probe panicked"),
+        ]
+    })
 }
 
-impl DepStatus {
-    /// An absent-by-default row for a local binary: installing it sends nothing
-    /// anywhere, so `sends_data_offhost` stays `None`.
-    fn local(
-        id: &'static str,
-        name: &'static str,
-        unlocks: &'static str,
-        cost: String,
-        manual: String,
-    ) -> Self {
-        DepStatus {
-            id,
-            name,
+/// Probe only the two extractors for `/api/models/extract/ready`.
+///
+/// The Environment page uses [`probe_all`] and intentionally does not run an
+/// authentication command. Readiness is different: before offering consent,
+/// it must fail closed if the Codex CLI is installed but not signed in. Keeping
+/// this narrow avoids making a model-readiness request wait for KiCad/QEMU.
+pub(crate) fn probe_extractors() -> Vec<DepStatus> {
+    let mut codex = probe_codex();
+    if let Some(path) = codex.path.clone() {
+        match codex_login_state(std::path::Path::new(&path)) {
+            CodexLogin::LoggedIn(how) => {
+                codex.detail = how;
+            }
+            CodexLogin::NotLoggedIn => {
+                codex.present = false;
+                codex.manual = "codex login".to_string();
+                codex.detail = Some(
+                    "codex is installed but not signed in, so an extraction would fail once \
+                     you had already asked for it. Run `codex login`. It signs in with a \
+                     ChatGPT account, so if you have one there is nothing else to pay."
+                        .to_string(),
+                );
+            }
+        }
+    }
+    vec![codex, probe_claude_code()]
+}
+
+/// Claude Code, the second datasheet-to-model extractor backend. Same shape
+/// and same privacy honesty as the codex probe: using it sends datasheet
+/// text to Anthropic, nothing runs unless the user asks, and it is never
+/// auto-installed. Presence means the `claude` CLI resolves on PATH. Its
+/// version and sign-in state are deliberately deferred until extraction, so a
+/// status page never starts the CLI just to display a row.
+fn probe_claude_code() -> DepStatus {
+    let unlocks = "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI";
+    let cost = "free if you already pay for Claude: the CLI signs in with that account".to_string();
+    let manual = "npm install -g @anthropic-ai/claude-code   # then: claude login".to_string();
+    let privacy = "Using this sends the datasheet's text to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.";
+    let Some(bin) = which_on_path("claude") else {
+        return DepStatus {
+            id: "claude-code",
+            name: "Claude Code (datasheet extraction)",
             present: false,
             path: None,
             version: None,
@@ -97,114 +152,95 @@ impl DepStatus {
             installable: false,
             cost,
             manual,
-            detail: None,
-            sends_data_offhost: None,
-        }
-    }
-
-    /// The resolver accepted it: record where and (when cheap) which version.
-    fn found(mut self, path: String, version: Option<String>) -> Self {
-        self.present = true;
-        self.path = Some(path);
-        self.version = version;
-        self
-    }
-
-    /// The resolver refused: carry its own message and whether we can fix it.
-    fn missing(mut self, detail: impl Into<String>, installable: bool) -> Self {
-        self.present = false;
-        self.detail = Some(detail.into());
-        self.installable = installable;
-        self
-    }
-}
-
-/// The shared shape of the two datasheet-extraction CLIs. They are listed with
-/// the co-simulation backends because they are discovered the same way and
-/// unlock a capability the same way, and they differ in one respect the UI must
-/// not smooth over: using one sends datasheet text to a vendor. So neither is
-/// ever auto-installable, neither runs without being asked, and both carry
-/// `sends_data_offhost` so no surface can present them as just another local
-/// tool.
-fn probe_extractor_cli(
-    id: &'static str,
-    name: &'static str,
-    bin_name: &str,
-    unlocks: &'static str,
-    cost: &str,
-    manual: &str,
-    privacy: &'static str,
-    absent_detail: &'static str,
-) -> (DepStatus, Option<PathBuf>) {
-    let mut row = DepStatus::local(id, name, unlocks, cost.to_string(), manual.to_string());
-    row.sends_data_offhost = Some(privacy);
-    match which_on_path(bin_name) {
-        Some(bin) => {
-            let version = codex_version(&bin);
-            (row.found(bin.display().to_string(), version), Some(bin))
-        }
-        None => (row.missing(absent_detail, false), None),
-    }
-}
-
-/// Claude Code, one of the two datasheet-to-model extractor backends. Presence
-/// means the `claude` CLI resolves on PATH and answers `--version`; sign-in
-/// state is the CLI's own business and failures surface as the extraction's
-/// typed error rather than a silent hang.
-fn probe_claude_code() -> DepStatus {
-    probe_extractor_cli(
-        "claude-code",
-        "Claude Code (datasheet extraction)",
-        "claude",
-        "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI",
-        "free if you already pay for Claude: the CLI signs in with that account",
-        "npm install -g @anthropic-ai/claude-code   # then: claude login",
-        "Using this sends the datasheet's text to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
-        "claude not found on PATH. This is optional: extraction also runs via                  codex or an API key, and a model can always be written by hand (one                  TOML file, see docs/extending/).",
-    )
-    .0
-}
-
-/// Codex, the other datasheet-to-model extractor.
-///
-/// Installed is not the same as usable: an installed-but-unauthenticated codex
-/// fails at the worst possible moment, after the user has picked a part, read
-/// the privacy notice, and said yes. So a signed-out codex reports `present:
-/// false` with `codex login` as the manual command.
-fn probe_codex() -> DepStatus {
-    let (row, bin) = probe_extractor_cli(
-        "codex",
-        "Codex (datasheet extraction)",
-        "codex",
-        "drafting a device model from a datasheet, for a part with no model (you review it \
-         before it is saved)",
-        // The cost line leads with the fact rather than the price: most people
-        // who would want datasheet extraction already pay for ChatGPT, and the
-        // only thing standing between them and it is not knowing.
-        "free if you already pay for ChatGPT: codex signs in with that account",
-        "npm install -g @openai/codex   # then: codex login",
-        "Using this sends the datasheet's text to OpenAI. Nothing is sent unless \
-         you ask for an extraction, and hauksbee never runs it on its own.",
-        "codex not found on PATH. This is optional: every other part of hauksbee \
-         works without it, and a model can always be written by hand (one TOML \
-         file, see docs/extending/).",
-    );
-    let Some(bin) = bin else { return row };
-    match codex_login_state(&bin) {
-        CodexLogin::LoggedIn(how) => DepStatus { detail: how, ..row },
-        CodexLogin::NotLoggedIn => DepStatus {
-            // Present means usable, and this is not: saying otherwise would
-            // send someone into an extraction that cannot run.
-            present: false,
-            manual: "codex login".to_string(),
             detail: Some(
-                "codex is installed but not signed in, so an extraction would fail once \
-                 you had already asked for it. Run `codex login`. It signs in with a \
-                 ChatGPT account, so if you have one there is nothing else to pay."
+                "claude not found on PATH. This is optional: extraction also runs via                  codex or an API key, and a model can always be written by hand (one                  TOML file, see docs/extending/)."
                     .to_string(),
             ),
-            ..row
-        },
+            sends_data_offhost: Some(privacy),
+        };
+    };
+    DepStatus {
+        id: "claude-code",
+        name: "Claude Code (datasheet extraction)",
+        present: true,
+        version: None,
+        path: Some(bin.display().to_string()),
+        unlocks,
+        installable: false,
+        cost,
+        manual,
+        detail: Some(
+            "claude CLI found; sign-in is checked only when datasheet extraction is requested."
+                .to_string(),
+        ),
+        sends_data_offhost: Some(privacy),
+    }
+}
+
+/// Codex, the optional datasheet-to-model extractor.
+///
+/// It is listed with the co-simulation backends because it is discovered the
+/// same way and unlocks a capability the same way. It differs in one respect
+/// that the UI must not smooth over: using it sends datasheet text to OpenAI.
+/// So it is never auto-installed, never runs without being asked, and carries
+/// `sends_data_offhost` so no surface can present it as just another local
+/// tool.
+fn probe_codex() -> DepStatus {
+    let unlocks =
+        "drafting a device model from a datasheet, for a part with no model (you review it \
+         before it is saved)";
+    // The cost line is the one most likely to change someone's mind, so it
+    // leads with the fact rather than the price: codex signs in with a ChatGPT
+    // account, and most people who would want datasheet extraction already pay
+    // for one. For them this is free, and the only thing standing between them
+    // and it is not knowing.
+    let cost = "free if you already pay for ChatGPT: codex signs in with that account".to_string();
+    let manual = "npm install -g @openai/codex   # then: codex login".to_string();
+    let privacy = "Using this sends the datasheet's text to OpenAI. Nothing is sent unless \
+                   you ask for an extraction, and hauksbee never runs it on its own.";
+
+    let Some(bin) = which_codex() else {
+        return DepStatus {
+            id: "codex",
+            name: "Codex (datasheet extraction)",
+            present: false,
+            path: None,
+            version: None,
+            unlocks,
+            // Deliberately never auto-installable: an account and a login are
+            // the user's to give, and a one-click button for a service that
+            // takes their data would be the wrong shape whatever it said.
+            installable: false,
+            cost,
+            manual,
+            detail: Some(
+                "codex not found on PATH. This is optional: every other part of hauksbee \
+                 works without it, and a model can always be written by hand (one TOML \
+                 file, see docs/extending/)."
+                    .to_string(),
+            ),
+            sends_data_offhost: Some(privacy),
+        };
+    };
+
+    DepStatus {
+        id: "codex",
+        name: "Codex (datasheet extraction)",
+        // The status page answers the cheap, local question. The readiness
+        // endpoint calls `probe_extractors` to turn this into a fail-closed
+        // authenticated status before consent is offered.
+        present: true,
+        version: None,
+        path: Some(bin.display().to_string()),
+        unlocks,
+        installable: false,
+        cost,
+        manual,
+        detail: Some(
+            "codex CLI found; login status is checked only when datasheet extraction is requested."
+                .to_string(),
+        ),
+        sends_data_offhost: Some(privacy),
     }
 }
 
@@ -216,33 +252,41 @@ enum CodexLogin {
 }
 
 /// Ask codex itself. Its own answer cannot drift from what an extraction hits.
-/// A non-zero exit is codex saying no; an error running it at all means we
-/// cannot tell, and the safe reading is the one that does not send the user
-/// into a failing extraction.
 fn codex_login_state(bin: &std::path::Path) -> CodexLogin {
-    let out = Command::new(bin).args(["login", "status"]).output();
+    let out = std::process::Command::new(bin)
+        .args(["login", "status"])
+        .output();
     match out {
         Ok(o) if o.status.success() => {
-            // codex writes "Logged in using ChatGPT" to stderr, not stdout, so
-            // both streams are read to keep the description.
+            // codex writes "Logged in using ChatGPT" to STDERR, not stdout.
+            // Reading stdout alone lost the description while still getting
+            // the state right from the exit code, so the row said "installed"
+            // and could not say how it was authenticated.
             let text = format!(
                 "{}{}",
                 String::from_utf8_lossy(&o.stdout),
                 String::from_utf8_lossy(&o.stderr)
             );
-            CodexLogin::LoggedIn(
-                text.lines()
-                    .map(str::trim)
-                    .find(|l| !l.is_empty())
-                    .map(str::to_string),
-            )
+            let line = text
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .map(str::to_string);
+            CodexLogin::LoggedIn(line)
         }
+        // A non-zero exit is codex saying no. An error running it at all means
+        // we cannot tell, and the safe reading is the one that does not send
+        // the user into a failing extraction.
         _ => CodexLogin::NotLoggedIn,
     }
 }
 
+fn which_codex() -> Option<std::path::PathBuf> {
+    which_on_path("codex")
+}
+
 /// Resolve one binary name on PATH (with the Windows .exe/.cmd variants).
-fn which_on_path(name: &str) -> Option<PathBuf> {
+fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         if cfg!(windows) {
@@ -261,20 +305,35 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// First non-empty line of `<bin> --version`, if it answers.
-fn codex_version(bin: &std::path::Path) -> Option<String> {
-    let out = Command::new(bin).arg("--version").output().ok()?;
-    let s = String::from_utf8_lossy(&out.stdout);
-    s.lines()
-        .next()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
+/// Keep the status response briefly so a page mount, a retry, and a post-install
+/// refresh do not all relaunch local resolver subprocesses. The cache is short
+/// enough that a manual install becomes visible without restarting the server;
+/// successful in-app installs invalidate it immediately.
+const DEPS_CACHE_TTL: Duration = Duration::from_secs(2);
+static DEPS_JSON_CACHE: OnceLock<Mutex<Option<(Instant, String)>>> = OnceLock::new();
+
+fn deps_cache() -> &'static Mutex<Option<(Instant, String)>> {
+    DEPS_JSON_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// Discard the status snapshot after an installer changes the filesystem.
+pub fn invalidate_deps_cache() {
+    let mut cache = deps_cache().lock().unwrap_or_else(|e| e.into_inner());
+    *cache = None;
 }
 
 /// The `/api/deps` response body: `{"deps":[...]}`.
 pub fn deps_json() -> String {
-    serde_json::to_string(&serde_json::json!({ "deps": probe_all() }))
-        .unwrap_or_else(|_| "{\"deps\":[]}".to_string())
+    let mut cache = deps_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, json)) = cache.as_ref() {
+        if at.elapsed() < DEPS_CACHE_TTL {
+            return json.clone();
+        }
+    }
+    let json = serde_json::to_string(&serde_json::json!({ "deps": probe_all() }))
+        .unwrap_or_else(|_| "{\"deps\":[]}".to_string());
+    *cache = Some((Instant::now(), json.clone()));
+    json
 }
 
 // ── individual probes ────────────────────────────────────────────────────────
@@ -283,71 +342,99 @@ fn host_is_installable_os() -> bool {
     matches!(std::env::consts::OS, "macos" | "linux" | "windows")
 }
 
-/// The detail line for a dependency this build cannot use whatever is on disk.
-#[cfg(not(all(feature = "renode", feature = "qemu")))]
-fn feature_absent(feature: &str, what: &str) -> String {
-    format!(
-        "this build of hauksbee was compiled without the `{feature}` feature, so it \
-         could not use {what} even if installed"
-    )
-}
-
 fn probe_renode() -> DepStatus {
+    let unlocks = "STM32, nRF52 and RISC-V firmware co-simulation";
     // Real numbers from the renode/renode release assets (v1.16.x): the
-    // portable download is 75-90 MB, unpacking to a few hundred MB on disk.
+    // portable download is 75-90 MB, and the unpacked install is a few
+    // hundred MB on disk.
     let cost = if host_is_installable_os() {
         "about a 120 MB download on Windows (about 80 MB on Unix), a few \
          hundred MB unpacked"
+            .to_string()
     } else {
-        "not auto-installable on this OS; install Renode manually (renode.io)"
+        "not auto-installable on this OS; install Renode manually (renode.io)".to_string()
     };
-    // The installer script is embedded (see `materialize_install_sims_script`),
-    // so the one-click install works from any binary and the manual line can
+    // The one-click install works from ANY binary now (the installer script is
+    // embedded; see `materialize_install_sims_script`), so the manual line can
     // always be the subcommand that runs the same flow.
-    let base = DepStatus::local(
-        "renode",
-        "Renode",
-        "STM32, nRF52 and RISC-V firmware co-simulation",
-        cost.to_string(),
-        "hauksbee install renode".to_string(),
-    );
+    let manual = "hauksbee install renode".to_string();
 
     #[cfg(feature = "renode")]
-    match hauksbee_mcu::renode::find_renode() {
-        Ok(p) => base.found(p.display().to_string(), None),
-        Err(e) => base.missing(e.to_string(), host_is_installable_os()),
+    {
+        match hauksbee_mcu::renode::find_renode() {
+            Ok(p) => DepStatus {
+                // A local binary: running it sends nothing anywhere.
+                sends_data_offhost: None,
+                id: "renode",
+                name: "Renode",
+                present: true,
+                path: Some(p.display().to_string()),
+                version: None,
+                unlocks,
+                installable: false,
+                cost,
+                manual,
+                detail: None,
+            },
+            Err(e) => DepStatus {
+                // A local binary: running it sends nothing anywhere.
+                sends_data_offhost: None,
+                id: "renode",
+                name: "Renode",
+                present: false,
+                path: None,
+                version: None,
+                unlocks,
+                installable: host_is_installable_os(),
+                cost,
+                manual,
+                detail: Some(e.to_string()),
+            },
+        }
     }
     #[cfg(not(feature = "renode"))]
-    base.missing(feature_absent("renode", "Renode"), false)
+    {
+        DepStatus {
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+            id: "renode",
+            name: "Renode",
+            present: false,
+            path: None,
+            version: None,
+            unlocks,
+            installable: false,
+            cost,
+            manual,
+            detail: Some(
+                "this build of hauksbee was compiled without the `renode` feature, so it \
+                 could not use Renode even if installed"
+                    .to_string(),
+            ),
+        }
+    }
 }
 
 fn probe_esp_qemu() -> DepStatus {
+    let unlocks = "ESP32, ESP32-S3 and ESP32-C3 firmware co-simulation";
     // Real numbers from the espressif/qemu release assets (esp-develop-9.2.x):
-    // the two per-arch tarballs total ~8 MB on macOS and ~35 MB on Linux. The
-    // checksum wording is conditional on purpose: the installer verifies
-    // against the release's own manifest when it can fetch it and falls back to
-    // TLS plus a post-install machine check when it cannot, so an unconditional
-    // "checksum-verified" would promise a guarantee one failed request
-    // downgrades.
+    // the two per-arch tarballs total ~8 MB on macOS and ~35 MB on Linux.
+    // The checksum wording is conditional on purpose. The installer verifies
+    // against the release's own manifest when it can fetch it, and falls back
+    // to TLS plus a post-install machine check when it cannot, so an
+    // unconditional "checksum-verified" would promise a guarantee that any
+    // single failed request downgrades.
     let cost = match std::env::consts::OS {
-        "macos" => {
-            "two small downloads, about 8 MB total (checksum-verified when the \
-             release manifest is reachable)"
-        }
-        "linux" => {
-            "two downloads, about 35 MB total (checksum-verified when the release \
-             manifest is reachable)"
-        }
-        "windows" => "two checksum-pinned Windows archives, about 190 MB total",
-        _ => "not auto-installable on this OS; see github.com/espressif/qemu/releases",
+        "macos" => "two small downloads, about 8 MB total (checksum-verified when the \
+                    release manifest is reachable)"
+            .to_string(),
+        "linux" => "two downloads, about 35 MB total (checksum-verified when the release \
+                    manifest is reachable)"
+            .to_string(),
+        "windows" => "two checksum-pinned Windows archives, about 190 MB total".to_string(),
+        _ => "not auto-installable on this OS; see github.com/espressif/qemu/releases".to_string(),
     };
-    let base = DepStatus::local(
-        "esp-qemu",
-        "Espressif QEMU",
-        "ESP32, ESP32-S3 and ESP32-C3 firmware co-simulation",
-        cost.to_string(),
-        "hauksbee install esp-qemu".to_string(),
-    );
+    let manual = "hauksbee install esp-qemu".to_string();
 
     #[cfg(feature = "qemu")]
     {
@@ -355,32 +442,80 @@ fn probe_esp_qemu() -> DepStatus {
         let xtensa = find_qemu(QemuArch::Xtensa);
         let riscv = find_qemu(QemuArch::Riscv32);
         match (&xtensa, &riscv) {
-            (Ok(x), Ok(r)) => {
-                base.found(format!("{}; {}", x.display(), r.display()), qemu_version(x))
-            }
+            (Ok(x), Ok(r)) => DepStatus {
+                // A local binary: running it sends nothing anywhere.
+                sends_data_offhost: None,
+                id: "esp-qemu",
+                name: "Espressif QEMU",
+                present: true,
+                path: Some(format!("{}; {}", x.display(), r.display())),
+                // The machine-help invocation in the resolver is enough to
+                // reject mainline QEMU. A second `--version` subprocess adds
+                // no readiness information, so leave cosmetic version blank.
+                version: None,
+                unlocks,
+                installable: false,
+                cost,
+                manual,
+                detail: None,
+            },
             _ => {
-                // Name which half is missing rather than a blanket "absent": a
-                // partial idf_tools install is a real state a user hits.
-                let detail = [
-                    ("qemu-system-xtensa", &xtensa),
-                    ("qemu-system-riscv32", &riscv),
-                ]
-                .iter()
-                .map(|(name, found)| match found {
-                    Ok(p) => format!("{name} found at {}", p.display()),
-                    Err(e) => format!("{name}: {}", first_line(&e.to_string())),
-                })
-                .collect::<Vec<_>>()
-                .join("; ");
-                base.missing(
-                    detail,
-                    cfg!(windows) || hauksbee_mcu::qemu::install::host_asset_triple().is_ok(),
-                )
+                // Name which half is missing rather than a blanket "absent":
+                // a partial idf_tools install is a real state a user hits.
+                let mut parts = Vec::new();
+                match &xtensa {
+                    Ok(p) => parts.push(format!("qemu-system-xtensa found at {}", p.display())),
+                    Err(e) => parts.push(format!(
+                        "qemu-system-xtensa: {}",
+                        first_line(&e.to_string())
+                    )),
+                }
+                match &riscv {
+                    Ok(p) => parts.push(format!("qemu-system-riscv32 found at {}", p.display())),
+                    Err(e) => parts.push(format!(
+                        "qemu-system-riscv32: {}",
+                        first_line(&e.to_string())
+                    )),
+                }
+                DepStatus {
+                    // A local binary: running it sends nothing anywhere.
+                    sends_data_offhost: None,
+                    id: "esp-qemu",
+                    name: "Espressif QEMU",
+                    present: false,
+                    path: None,
+                    version: None,
+                    unlocks,
+                    installable: cfg!(windows)
+                        || hauksbee_mcu::qemu::install::host_asset_triple().is_ok(),
+                    cost,
+                    manual,
+                    detail: Some(parts.join("; ")),
+                }
             }
         }
     }
     #[cfg(not(feature = "qemu"))]
-    base.missing(feature_absent("qemu", "the Espressif QEMU fork"), false)
+    {
+        DepStatus {
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+            id: "esp-qemu",
+            name: "Espressif QEMU",
+            present: false,
+            path: None,
+            version: None,
+            unlocks,
+            installable: false,
+            cost,
+            manual,
+            detail: Some(
+                "this build of hauksbee was compiled without the `qemu` feature, so it \
+                 could not use the Espressif QEMU fork even if installed"
+                    .to_string(),
+            ),
+        }
+    }
 }
 
 /// Locate ngspice the way the differential harness documents its lookup:
@@ -397,136 +532,175 @@ fn find_ngspice() -> Option<PathBuf> {
     } else {
         "ngspice"
     };
-    if let Some(found) = which_on_path(exe) {
-        return Some(found);
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let cand = dir.join(exe);
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
     }
-    [
+    for p in [
         "/opt/homebrew/bin/ngspice",
         "/usr/local/bin/ngspice",
         "/usr/bin/ngspice",
         "/opt/local/bin/ngspice",
         "C:\\Program Files\\ngspice\\bin\\ngspice_con.exe",
         "C:\\Program Files\\ngspice\\bin\\ngspice.exe",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|p| p.is_file())
+    ] {
+        let pb = PathBuf::from(p);
+        if pb.is_file() {
+            return Some(pb);
+        }
+    }
+    None
 }
 
 fn probe_ngspice() -> DepStatus {
+    let unlocks = "cross-checking hauksbee's analog solver against ngspice, the SPICE oracle";
     let manual = match std::env::consts::OS {
         "macos" => "brew install ngspice",
         "linux" => "sudo apt install ngspice   # or your distro's package",
         _ => "install ngspice from ngspice.sourceforge.io",
-    };
-    let base = DepStatus::local(
-        "ngspice",
-        "ngspice",
-        "cross-checking hauksbee's analog solver against ngspice, the SPICE oracle",
-        "a package-manager install".to_string(),
-        manual.to_string(),
-    );
+    }
+    .to_string();
     match find_ngspice() {
-        Some(p) => {
-            let version = ngspice_version(&p);
-            base.found(p.display().to_string(), version)
-        }
-        None => base.missing(
-            "ngspice not found ($NGSPICE, PATH, or a standard install location). \
-             It comes from your system package manager, not from here.",
-            false,
-        ),
+        Some(p) => DepStatus {
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+            id: "ngspice",
+            name: "ngspice",
+            present: true,
+            version: None,
+            path: Some(p.display().to_string()),
+            unlocks,
+            installable: false,
+            cost: "a package-manager install".to_string(),
+            manual,
+            detail: None,
+        },
+        None => DepStatus {
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+            id: "ngspice",
+            name: "ngspice",
+            present: false,
+            path: None,
+            version: None,
+            unlocks,
+            installable: false,
+            cost: "a package-manager install".to_string(),
+            manual,
+            detail: Some(
+                "ngspice not found ($NGSPICE, PATH, or a standard install location). \
+                 It comes from your system package manager, not from here."
+                    .to_string(),
+            ),
+        },
     }
 }
 
-/// The `ngspice-NN` token from `ngspice --version` output, if it answers.
-fn ngspice_version(bin: &std::path::Path) -> Option<String> {
-    let out = Command::new(bin).arg("--version").output().ok()?;
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    text.lines().find_map(|line| {
-        line.find("ngspice-").map(|pos| {
-            line[pos..]
-                .chars()
-                .take_while(|c| !c.is_whitespace() && *c != ':')
-                .collect()
-        })
-    })
-}
-
-/// First line of `<qemu binary> --version`, e.g.
-/// `QEMU emulator version 9.2.2 ...`.
-#[cfg(feature = "qemu")]
-fn qemu_version(bin: &std::path::Path) -> Option<String> {
-    let out = Command::new(bin).arg("--version").output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    text.lines().next().map(|l| l.trim().to_string())
+/// Locate a usable `kicad-cli`. Delegates to the DRC oracle's own finder so
+/// the dependency panel and the check that consumes kicad-cli can never
+/// disagree about whether it is installed or which one won.
+fn find_kicad_cli() -> Option<(String, String)> {
+    crate::reports::drc::find_kicad_cli()
 }
 
 fn probe_kicad_cli() -> DepStatus {
+    let unlocks = "cross-checking copper DRC findings against KiCad's own DRC (the layout \
+                   oracle), and SVG/Gerber export of re-laid-out boards";
     let manual = match std::env::consts::OS {
         "macos" => "brew install --cask kicad   # or download from kicad.org",
         "linux" => "sudo apt install kicad   # or download from kicad.org",
         _ => "download KiCad from kicad.org",
-    };
-    let base = DepStatus::local(
-        "kicad-cli",
-        "kicad-cli",
-        "cross-checking copper DRC findings against KiCad's own DRC (the layout \
-         oracle), and SVG/Gerber export of re-laid-out boards",
-        "part of the full KiCad suite; the KiCad download alone is over 1 GB".to_string(),
-        manual.to_string(),
-    );
-    // Delegates to the DRC oracle's own finder so the dependency panel and the
-    // check that consumes kicad-cli can never disagree about which one won.
-    match crate::reports::drc::find_kicad_cli() {
-        Some((path, ver)) => base.found(path, Some(ver)),
-        None => base.missing(
-            "kicad-cli not found (PATH, /Applications, or a standard install \
-             location). KiCad is a desktop application install, not something this \
-             server should download for you.",
-            false,
-        ),
+    }
+    .to_string();
+    let cost = "part of the full KiCad suite; the KiCad download alone is over 1 GB".to_string();
+    match find_kicad_cli() {
+        Some((path, ver)) => DepStatus {
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+            id: "kicad-cli",
+            name: "kicad-cli",
+            present: true,
+            path: Some(path),
+            version: Some(ver),
+            unlocks,
+            installable: false,
+            cost,
+            manual,
+            detail: None,
+        },
+        None => DepStatus {
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+            id: "kicad-cli",
+            name: "kicad-cli",
+            present: false,
+            path: None,
+            version: None,
+            unlocks,
+            installable: false,
+            cost,
+            manual,
+            detail: Some(
+                "kicad-cli not found (PATH, /Applications, or a standard install \
+                 location). KiCad is a desktop application install, not something this \
+                 server should download for you."
+                    .to_string(),
+            ),
+        },
     }
 }
 
-/// libsimavr is linked INTO the binary at build time (GPL-3.0, so it is
-/// system-linked, never vendored). There is nothing to install at runtime: it
-/// is present-or-not per build, which is why this row never gets an install
-/// button.
 fn probe_avr() -> DepStatus {
-    let name = "AVR (simavr)";
     let unlocks = "ATmega and ATtiny firmware co-simulation";
+    // libsimavr is linked INTO the binary at build time (GPL-3.0, so it is
+    // system-linked, never vendored). There is nothing to install at runtime:
+    // it is present-or-not per build, which is why this row never gets an
+    // install button.
     #[cfg(feature = "avr")]
     {
-        let mut row = DepStatus::local(
-            "avr",
-            name,
+        DepStatus {
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+            id: "avr",
+            name: "AVR (simavr)",
+            present: true,
+            path: None,
+            version: None,
             unlocks,
-            "linked into this binary at build time".to_string(),
-            String::new(),
-        );
-        row.present = true;
-        row.detail = Some("simavr is linked into this binary; no separate install".to_string());
-        row
+            installable: false,
+            cost: "linked into this binary at build time".to_string(),
+            manual: String::new(),
+            detail: Some("simavr is linked into this binary; no separate install".to_string()),
+        }
     }
     #[cfg(not(feature = "avr"))]
-    DepStatus::local(
-        "avr",
-        name,
-        unlocks,
-        "linked at build time only; a runtime install cannot add it".to_string(),
-        "scripts/install-sims.sh --avr, then rebuild hauksbee with the `avr` feature".to_string(),
-    )
-    .missing(
-        "this build of hauksbee was compiled without libsimavr. It is linked \
-         in-process at build time, so installing it now cannot help this binary; \
-         rebuild after installing simavr.",
-        false,
-    )
+    {
+        DepStatus {
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+            id: "avr",
+            name: "AVR (simavr)",
+            present: false,
+            path: None,
+            version: None,
+            unlocks,
+            installable: false,
+            cost: "linked at build time only; a runtime install cannot add it".to_string(),
+            manual: "scripts/install-sims.sh --avr, then rebuild hauksbee with the `avr` \
+                     feature"
+                .to_string(),
+            detail: Some(
+                "this build of hauksbee was compiled without libsimavr. It is linked \
+                 in-process at build time, so installing it now cannot help this binary; \
+                 rebuild after installing simavr."
+                    .to_string(),
+            ),
+        }
+    }
 }
 
 #[cfg(feature = "qemu")]
@@ -538,11 +712,12 @@ fn first_line(msg: &str) -> String {
 
 /// The installer script and the helper it sources, embedded at build time.
 ///
-/// The shipped .app carries no `scripts/` directory, so on a stranger's machine
-/// there is nothing on disk to find and the Environment page could offer no
-/// Renode Install button at all. Embedding the script keeps ONE maintained
-/// installer implementation while making it available from any binary, bundle
-/// or bare; an on-disk copy still wins so a user-patched script is honored.
+/// Why: the shipped .app carries no `scripts/` directory, so on a stranger's
+/// machine `find_install_sims_script` finds nothing and the Environment page
+/// could offer no Renode Install button at all (the cold-install audit's
+/// defect 3). Embedding the script keeps ONE maintained installer
+/// implementation while making it available from any binary, bundle or bare;
+/// an on-disk copy still wins so a user-patched script is honored.
 ///
 /// The include paths point INSIDE this crate (`assets/scripts/`) because
 /// `cargo package` ships only files under the crate directory; a
@@ -585,7 +760,7 @@ impl MaterializedInstaller {
 /// the embedded copy (plus the `common.sh` it sources) written to a temp dir.
 #[cfg(not(windows))]
 fn materialize_install_sims_script() -> Result<MaterializedInstaller, String> {
-    if let Some(p) = find_installer_script("install-sims.sh") {
+    if let Some(p) = find_install_sims_script() {
         return Ok(MaterializedInstaller {
             path: p,
             _owned_dir: None,
@@ -631,7 +806,7 @@ fn materialize_install_sims_script() -> Result<MaterializedInstaller, String> {
 
 #[cfg(windows)]
 fn materialize_install_sims_windows_script() -> Result<MaterializedInstaller, String> {
-    if let Some(p) = find_installer_script("install-sims-windows.ps1") {
+    if let Some(p) = find_named_installer("install-sims-windows.ps1") {
         return Ok(MaterializedInstaller {
             path: p,
             _owned_dir: None,
@@ -650,23 +825,53 @@ fn materialize_install_sims_windows_script() -> Result<MaterializedInstaller, St
     })
 }
 
-/// Locate `scripts/<name>`: the `HAUKSBEE_INSTALL_SIMS` override first (tests),
-/// then walking up from the executable (release bundles ship `scripts/` next to
-/// `bin/`), then from the build-time checkout (the same expression `web_dist`
-/// uses; the `is_file` test makes it a no-op on any other machine). It
-/// deliberately does not execute a same-named script merely because the process
-/// was launched from an arbitrary consumer directory.
-fn find_installer_script(name: &str) -> Option<PathBuf> {
+/// Locate `scripts/install-sims.sh`: env override first (tests), then walking
+/// up from the executable (release bundles ship `scripts/` next to `bin/`),
+/// then from the build-time checkout (source runs). It deliberately does not
+/// execute a same-named script merely because the process was launched from an
+/// arbitrary consumer directory.
+#[cfg(not(windows))]
+fn find_install_sims_script() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("HAUKSBEE_INSTALL_SIMS") {
+        let pb = PathBuf::from(p);
+        return pb.is_file().then_some(pb);
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+        }
+    }
+    // The build-machine checkout (same expression web_dist uses); the is_file
+    // check below makes this a no-op on any other machine.
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    for root in roots {
+        let mut cur: Option<&std::path::Path> = Some(root.as_path());
+        for _ in 0..6 {
+            let Some(dir) = cur else { break };
+            let cand = dir.join("scripts/install-sims.sh");
+            if cand.is_file() {
+                return Some(cand);
+            }
+            cur = dir.parent();
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn find_named_installer(name: &str) -> Option<PathBuf> {
     if let Ok(path) = std::env::var("HAUKSBEE_INSTALL_SIMS") {
         let path = PathBuf::from(path);
         return path.is_file().then_some(path);
     }
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
-    let roots = exe_dir
-        .into_iter()
-        .chain([PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")]);
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+        }
+    }
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
     for root in roots {
         let mut cur: Option<&std::path::Path> = Some(root.as_path());
         for _ in 0..6 {
@@ -727,7 +932,7 @@ pub fn install_dep(id: &str, progress: &mut dyn FnMut(&str)) -> Result<(), Strin
         "another install is already running; wait for it to finish and try again".to_string()
     })?;
 
-    match id {
+    let result = match id {
         "esp-qemu" => install_esp_qemu(progress),
         "renode" => install_renode(progress),
         "ngspice" => Err(format!(
@@ -746,7 +951,11 @@ pub fn install_dep(id: &str, progress: &mut dyn FnMut(&str)) -> Result<(), Strin
                 .to_string(),
         ),
         other => Err(format!("unknown dependency id '{other}'")),
+    };
+    if result.is_ok() {
+        invalidate_deps_cache();
     }
+    result
 }
 
 /// Espressif QEMU: use the native checksum-pinned PowerShell installer on
@@ -861,7 +1070,13 @@ fn run_streaming(
             use std::io::BufRead;
             let reader = std::io::BufReader::new(pipe);
             for line in reader.lines() {
-                let Ok(line) = line else { break };
+                let Ok(mut line) = line else { break };
+                // BufRead::lines strips the \n but keeps a Windows child's
+                // \r; without this every relayed line and error tail carries
+                // a stray carriage return on Windows.
+                if line.ends_with('\r') {
+                    line.pop();
+                }
                 if tx.send(line).is_err() {
                     break;
                 }
@@ -1061,6 +1276,67 @@ mod tests {
     }
 
     #[cfg(unix)]
+    struct PathGuard(Option<std::ffi::OsString>);
+
+    #[cfg(unix)]
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            if let Some(path) = self.0.take() {
+                std::env::set_var("PATH", path);
+            } else {
+                std::env::remove_var("PATH");
+            }
+        }
+    }
+
+    /// The Environment page must not execute either LLM CLI. A version/login
+    /// command is both slower and a surprising side effect for a read-only
+    /// status request; readiness owns the one Codex auth check instead.
+    #[cfg(unix)]
+    #[test]
+    fn fast_extractor_rows_do_not_spawn_cli_status_commands() {
+        let _serial = serial_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("called");
+        let marker_literal = marker.to_string_lossy().replace('\'', "'\\''");
+        let script = format!("#!/bin/sh\ntouch '{marker_literal}'\n");
+        use std::os::unix::fs::PermissionsExt;
+        for name in ["codex", "claude"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, &script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let _path_guard = PathGuard(std::env::var_os("PATH"));
+        std::env::set_var("PATH", dir.path());
+        let started = Instant::now();
+        let codex = probe_codex();
+        let claude = probe_claude_code();
+        let elapsed = started.elapsed();
+
+        assert!(codex.present);
+        assert!(claude.present);
+        assert!(codex.version.is_none());
+        assert!(claude.version.is_none());
+        assert!(codex
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("only when")));
+        assert!(claude
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("only when")));
+        assert!(
+            !marker.exists(),
+            "status probes must not execute either CLI"
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "discovery-only LLM probes took {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn an_unauthenticated_codex_is_not_reported_as_usable() {
         // Installed is not usable. Reporting presence here would send someone
@@ -1133,7 +1409,10 @@ echo "codex-cli 0.0.0""#,
         for id in ["ngspice", "kicad-cli"] {
             let err = install_dep(id, &mut |_| {}).expect_err("manual-only id");
             assert!(
-                err.contains("brew") || err.contains("apt") || err.contains("kicad.org"),
+                err.contains("brew")
+                    || err.contains("apt")
+                    || err.contains("kicad.org")
+                    || err.contains("ngspice.sourceforge.io"),
                 "{id} refusal must carry the manual command: {err}"
             );
         }
@@ -1149,11 +1428,19 @@ echo "codex-cli 0.0.0""#,
         assert!(InstallSlot::acquire().is_some(), "slot released on drop");
     }
 
-    /// A failing child's real output reaches the error, not just a bare
-    /// "exit status: 1".
+    /// A failing child's real output reaches the error, not just an exit code
+    /// (the cold-drive session that lost 15 minutes to a bare "exit status: 1"
+    /// is the regression here).
     #[test]
     fn failure_carries_the_output_tail() {
+        // One POSIX and one PowerShell script: shell_command picks the
+        // matching interpreter, and PowerShell parses neither `>&2` nor a
+        // bare `&`.
+        #[cfg(not(windows))]
         let cmd = shell_command("echo starting; echo 'the disk is full' >&2; exit 3");
+        #[cfg(windows)]
+        let cmd =
+            shell_command("echo starting; [Console]::Error.WriteLine('the disk is full'); exit 3");
         let mut lines = Vec::new();
         let err = run_streaming(
             cmd,
@@ -1244,7 +1531,10 @@ echo "codex-cli 0.0.0""#,
 
     #[test]
     fn success_streams_and_returns_ok() {
+        #[cfg(not(windows))]
         let cmd = shell_command("echo one; echo two >&2; exit 0");
+        #[cfg(windows)]
+        let cmd = shell_command("echo one; [Console]::Error.WriteLine('two'); exit 0");
         let mut lines = Vec::new();
         run_streaming(
             cmd,

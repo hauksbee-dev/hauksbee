@@ -405,15 +405,17 @@ RULES:
 4. Use only values stated in the datasheet; do not invent register addresses.
 
 DATASHEET TEXT (truncated):
----
+{datasheet_text_begin}
 {pdf_text}
----
+{datasheet_text_end}
 
 OUTPUT (TOML only, starting with [sensor]):
 "#,
         part = part,
         bus = bus,
         bus_specifics = bus_specifics,
+        datasheet_text_begin = DATASHEET_TEXT_BEGIN,
+        datasheet_text_end = DATASHEET_TEXT_END,
         pdf_text = truncate_to_chars(&pdf_text, 40_000),
     )
 }
@@ -494,7 +496,7 @@ pub struct Args {
     pub part: String,
     pub kind_str: String,
     pub out_dir: Option<PathBuf>,
-    /// Retry count for LLM calls (default 1)
+    /// Retry count for LLM calls (default 2, for at most three attempts)
     pub retries: usize,
     /// Model the extraction agent runs on. `None` takes
     /// `HAUKSBEE_CODEX_MODEL` (codex) / `HAUKSBEE_LLM_MODEL` (api), then
@@ -706,20 +708,20 @@ fn pdftotext(path: &Path, layout: bool) -> Result<String> {
 }
 
 /// The prompt's datasheet text. Without poppler (or a text layer) the
-/// extraction still runs: the agent backends read the PDF themselves, so the
-/// placeholder tells them to.
+/// extraction still runs: the agent backends read the copied PDF in their own
+/// scratch workspace, so a sentinel stands in for the text.
+///
+/// The sentinel carries no path. The original location is local metadata an
+/// API request must not leak, and the API backend cannot open the file anyway,
+/// which is why `api_source_available` refuses that combination outright.
 fn extract_pdf_text(path: &Path) -> Result<String> {
     if let Ok(text) = pdftotext(path, false) {
         if !text.trim().is_empty() {
             return Ok(truncate_to_chars(&text, 60_000));
         }
     }
-    eprintln!("[model-extract] pdftotext unavailable or produced no text; LLM backend will read the PDF directly");
-    Ok(format!(
-        "<pdf_path>{}</pdf_path>\n\
-         [Note: pdftotext not available. The LLM should read the PDF at the path above directly.]",
-        path.display()
-    ))
+    eprintln!("[model-extract] pdftotext unavailable or produced no text; local agent backends will read the copied PDF directly");
+    Ok(PDF_TEXT_UNAVAILABLE.to_string())
 }
 
 fn extract_pdf_pages_text(path: &Path) -> Result<Vec<PdfPageText>> {
@@ -1037,12 +1039,47 @@ fn number_word(n: usize) -> String {
 }
 
 fn which(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    let extensions =
+        command_extensions(cmd, cfg!(windows), std::env::var("PATHEXT").ok().as_deref());
+    std::env::split_paths(&path).any(|dir| {
+        extensions
+            .iter()
+            .map(|suffix| dir.join(format!("{cmd}{suffix}")))
+            .any(|candidate| executable_file(&candidate))
+    })
+}
+
+fn command_extensions(cmd: &str, windows: bool, pathext: Option<&str>) -> Vec<String> {
+    if !windows || std::path::Path::new(cmd).extension().is_some() {
+        return vec![String::new()];
+    }
+    pathext
+        .unwrap_or(".COM;.EXE;.BAT;.CMD")
+        .split(';')
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| extension.to_ascii_lowercase())
+        .collect()
+}
+
+fn executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn truncate_to_chars(s: &str, max: usize) -> String {
@@ -1050,6 +1087,37 @@ fn truncate_to_chars(s: &str, max: usize) -> String {
 }
 
 // ── Prompt construction ───────────────────────────────────────────────────────
+
+const DATASHEET_TEXT_BEGIN: &str = "<<<HAUKSBEE_DATASHEET_TEXT_BEGIN>>>";
+const DATASHEET_TEXT_END: &str = "<<<HAUKSBEE_DATASHEET_TEXT_END>>>";
+const PDF_TEXT_UNAVAILABLE: &str = "<<<HAUKSBEE_PDF_TEXT_UNAVAILABLE>>>";
+
+/// Whether the API backend has anything to work from: it cannot open the local
+/// PDF, so a prompt carrying the no-text sentinel would reach it with nothing
+/// but the sentinel itself.
+fn api_source_available(prompt: &str) -> bool {
+    !prompt.contains(PDF_TEXT_UNAVAILABLE)
+}
+
+/// Agent backends can read the sandboxed PDF, complete text dump, and selected
+/// page images directly. Repeating 40,000 characters of layout-lost PDF text in
+/// their instruction competes with those higher-fidelity sources: in measured
+/// runs it turned a successful table extraction into a one-word component-kind
+/// reply. The API backend has no local-file access, so it keeps the text.
+fn prompt_for_agent_backend(prompt: &str) -> String {
+    let Some((before, rest)) = prompt.split_once(DATASHEET_TEXT_BEGIN) else {
+        return prompt.to_string();
+    };
+    let Some((_embedded, after)) = rest.split_once(DATASHEET_TEXT_END) else {
+        return prompt.to_string();
+    };
+    format!(
+        "{before}{DATASHEET_TEXT_BEGIN}\n\
+         [Not embedded for this local agent backend. Read the attached page images first. \
+         If a needed fact is absent, open datasheet.txt or datasheet.pdf in the sandbox.]\n\
+         {DATASHEET_TEXT_END}{after}"
+    )
+}
 
 /// The kinds the schema deserializes. The extraction surface must speak the
 /// same closed vocabulary the validator enforces: a backend that invents
@@ -1113,9 +1181,9 @@ is a WRONG ANSWER.
 {example_cards}
 
 DATASHEET TEXT (truncated):
----
+{datasheet_text_begin}
 {pdf_text}
----
+{datasheet_text_end}
 
 Produce a TOML model entry that exactly conforms to the hauksbee-models schema.
 The entry must use [[models]] array syntax and include:
@@ -1294,6 +1362,8 @@ OUTPUT (TOML only, starting with [[models]]):
         part_upper = part.to_uppercase(),
         legal_kinds = legal_kinds().join(", "),
         kind = kind,
+        datasheet_text_begin = DATASHEET_TEXT_BEGIN,
+        datasheet_text_end = DATASHEET_TEXT_END,
         pdf_text = truncate_to_chars(&pdf_text, 40_000),
         required_params = required_params_for_kind(kind),
         pin_roles = pin_roles_for_kind(kind),
@@ -1687,6 +1757,16 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
             Some(_) => Backend::Api,
             None => Backend::Codex,
         });
+    // The API backend has no local-file access, so a prompt carrying the
+    // no-text sentinel would ship it nothing to read. Refuse before sending
+    // rather than spend the call.
+    if chosen == Backend::Api && !api_source_available(prompt) {
+        bail!(
+            "the API backend cannot read the local PDF and pdftotext is unavailable. \
+             Install Poppler/pdftotext, then retry; nothing was sent."
+        );
+    }
+
     let (tool, install) = match chosen {
         Backend::Api => {
             let request = ApiRequest::prepare(args)?;
@@ -1713,6 +1793,11 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
             chosen.name()
         );
     }
+
+    // An agent backend reads the sandboxed PDF, text dump and page renders
+    // itself, so the embedded text comes back out of its instruction.
+    let prompt = prompt_for_agent_backend(prompt);
+    let prompt = prompt.as_str();
 
     // The sandbox is a scratch copy, never the user's own directory. See
     // `Workspace`: the agent runs full-auto, so what it can reach is the whole
@@ -2455,11 +2540,18 @@ fn sanitise_filename(s: &str) -> String {
 }
 
 fn default_out_dir() -> PathBuf {
+    dirs_next().join(".hauksbee").join("models")
+}
+
+/// The user's home, by whichever name this OS gives it. An empty value is not
+/// a home; falling through to the temp dir keeps a model written to a
+/// well-defined place instead of `/.hauksbee`.
+fn dirs_next() -> PathBuf {
     std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".hauksbee")
-        .join("models")
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 #[cfg(test)]
@@ -2904,5 +2996,57 @@ addr_mask = 0x7f
         assert!(kinds.iter().all(|k| kind_is_legal(k)));
         assert!(kinds.iter().any(|k| k == "vreg"));
         assert!(!kind_is_legal("charger"));
+    }
+
+    #[test]
+    fn windows_command_discovery_uses_pathext_without_unix_which() {
+        assert_eq!(
+            command_extensions("pdftotext", true, Some(".EXE;.CMD")),
+            [".exe", ".cmd"]
+        );
+        assert_eq!(
+            command_extensions("pdftotext.exe", true, Some(".EXE;.CMD")),
+            [""]
+        );
+        assert_eq!(command_extensions("pdftotext", false, None), [""]);
+    }
+
+    #[test]
+    fn api_never_receives_a_local_pdf_path_fallback() {
+        assert!(!api_source_available(&format!(
+            "prompt {PDF_TEXT_UNAVAILABLE}"
+        )));
+        assert!(api_source_available("prompt with extracted datasheet text"));
+    }
+
+    #[test]
+    fn local_agent_prompt_does_not_embed_layout_lost_pdf_text() {
+        let marker = "RAW_TABLE_NOISE_THAT_MUST_NOT_REACH_THE_AGENT".repeat(1_000);
+        let model_prompt = build_prompt("TXB0101", "digital", &marker);
+        let local = prompt_for_agent_backend(&model_prompt);
+        assert!(!local.contains(&marker));
+        assert!(local.contains("Read the attached page images first"));
+        assert!(local.contains("datasheet.txt or datasheet.pdf"));
+        assert!(local.len() < model_prompt.len());
+
+        let sensor_prompt = build_sensor_prompt("TMP117", "i2c_sensor", &marker);
+        let local_sensor = prompt_for_agent_backend(&sensor_prompt);
+        assert!(!local_sensor.contains(&marker));
+        assert!(local_sensor.contains("datasheet.txt or datasheet.pdf"));
+
+        // Kind identification is a separate small call made before the
+        // workspace exists, so prompts without the bounded source markers are
+        // deliberately unchanged.
+        let identify = "identify this part from the first-page text";
+        assert_eq!(prompt_for_agent_backend(identify), identify);
+    }
+
+    #[test]
+    fn api_prompt_keeps_the_embedded_datasheet_source() {
+        let marker = "API_BACKEND_NEEDS_THIS_TEXT";
+        let prompt = build_prompt("TXB0101", "digital", marker);
+        assert!(prompt.contains(marker));
+        assert!(prompt.contains(DATASHEET_TEXT_BEGIN));
+        assert!(prompt.contains(DATASHEET_TEXT_END));
     }
 }

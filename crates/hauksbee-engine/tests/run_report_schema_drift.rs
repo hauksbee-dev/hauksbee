@@ -70,9 +70,18 @@ fn generated_schema() -> String {
             required.push(json!(key));
         }
     }
-    let mut text = serde_json::to_string_pretty(obj).expect("schema serializes");
+    let text = serde_json::to_string_pretty(obj).expect("schema serializes");
+    let mut text = canonical_schema_newlines(text);
     text.push('\n');
     text
+}
+
+fn canonical_schema_newlines(text: String) -> String {
+    // Git for Windows can materialize the checked-in JSON with physical CRLF
+    // line endings, and rustdoc can preserve CRLF from Rust source as the
+    // encoded characters `\r\n` inside derived descriptions. Normalize both
+    // so one checked-in schema is byte-identical on every supported host.
+    text.replace("\r\n", "\n").replace(r"\r\n", r"\n")
 }
 
 #[test]
@@ -86,6 +95,7 @@ fn schema_file_matches_report_type() {
     }
     let on_disk = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("missing {}: {e}; regenerate with: {REGEN}", path.display()));
+    let on_disk = canonical_schema_newlines(on_disk);
     assert_eq!(
         on_disk, expected,
         "schemas/hauksbee-run-report.schema.json drifted from JsonReport; regenerate with: {REGEN}"

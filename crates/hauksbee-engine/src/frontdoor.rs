@@ -18,9 +18,10 @@
 use serde::Serialize;
 
 use hauksbee_extract::ExtractedBoard;
+use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 
-use crate::binder::bind_board;
+use crate::binder::{bind_board, BoundBoard};
 use crate::engine::HauksbeeEngine;
 use crate::plain::{
     plain_drc_structured_with_rule_source, plain_netlint, plain_si, HeadsUp, PlainFinding,
@@ -555,6 +556,12 @@ pub struct WebReport {
     /// (the golden-parity test compares bytes). Additive; omitted when empty.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub component_kinds: std::collections::BTreeMap<String, String>,
+    /// reference -> assertion kinds the bound circuit can actually evaluate.
+    /// This is deliberately derived from the same stamped devices and stress
+    /// metadata as the CI runner's fail-closed trackability check. The browser
+    /// must not offer a component assertion merely because a reference exists.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub component_assertions: std::collections::BTreeMap<String, Vec<String>>,
     /// Binder-detected power supplies (rail net → nominal volts): the checks
     /// builder prefills `[[supply]]` rows from these; the same data
     /// `hauksbee-ci init` scaffolds from.
@@ -869,6 +876,7 @@ fn unreadable_with_import_failure(
         notes: Vec::new(),
         nets: Vec::new(),
         component_kinds: std::collections::BTreeMap::new(),
+        component_assertions: std::collections::BTreeMap::new(),
         supplies: Vec::new(),
         cosim: None,
         refusal: None,
@@ -877,6 +885,53 @@ fn unreadable_with_import_failure(
 
 fn unreadable(file_name: &str, error: String) -> WebReport {
     unreadable_with_import_failure(file_name, error, None)
+}
+
+fn ref_or_unit_matches(reference: &str, device_name: &str) -> bool {
+    device_name == reference
+        || device_name.strip_prefix(reference).is_some_and(|suffix| {
+            suffix.starts_with("_q") || suffix.starts_with("_s") || suffix.starts_with("_e")
+        })
+}
+
+/// Capabilities for component-scoped assertions, derived from the bound
+/// circuit rather than refdes/value heuristics. Keep this aligned with
+/// `hauksbee-ci::runner::check_trackable_assert_refs`.
+fn component_assertion_capabilities(
+    board: &ExtractedBoard,
+    bound: &BoundBoard,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    let current_devices: Vec<&str> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter_map(|device| match device {
+            Device::Resistor { name, .. } | Device::Diode { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    board
+        .components
+        .iter()
+        .filter_map(|component| {
+            let mut kinds = Vec::new();
+            if current_devices
+                .iter()
+                .any(|name| ref_or_unit_matches(&component.reference, name))
+            {
+                kinds.push("max_current".to_string());
+            }
+            if bound
+                .device_meta
+                .iter()
+                .any(|meta| ref_or_unit_matches(&component.reference, &meta.reference))
+            {
+                kinds.push("max_temp".to_string());
+            }
+            (!kinds.is_empty()).then(|| (component.reference.clone(), kinds))
+        })
+        .collect()
 }
 
 /// Serialize one normalizer refusal with the same localized import diagnosis
@@ -954,6 +1009,18 @@ fn analyze_normalized_with_ties(
     norm: &crate::board_input::NormalizedBoard,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> (WebReport, hauksbee_extract::DrcReport) {
+    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
+    analyze_normalized_with_context(file_name, norm, schematic_ties, &lib, None, &[])
+}
+
+fn analyze_normalized_with_context(
+    file_name: &str,
+    norm: &crate::board_input::NormalizedBoard,
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+    lib: &ModelLibrary,
+    prebound: Option<&crate::binder::BoundBoard>,
+    supporting_artifacts: &[hauksbee_ir::evidence::ArtifactProvenance],
+) -> (WebReport, hauksbee_extract::DrcReport) {
     let is_binary = norm.is_binary();
     let is_gerber = norm.is_gerber();
     let board = &norm.board;
@@ -961,8 +1028,6 @@ fn analyze_normalized_with_ties(
     // gerber board has no KiCad layout text: those checks get their bytes twin
     // (Altium) or nothing, stated in the report rather than silently green.
     let text_view: Option<&str> = norm.layout_text.as_deref();
-
-    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
 
     // DRC reads copper geometry from the raw input: the bytes twin
     // (`altium_drc`) for a binary board, the KiCad layout text otherwise. A
@@ -1019,7 +1084,14 @@ fn analyze_normalized_with_ties(
     // lint/SI section verdicts need the unmodelled-critical part list so the
     // web sections read INCONCLUSIVE, not "Looks healthy", over an unbound
     // main IC or power FET, the same contract as the CLI surfaces.
-    let bound = bind_board(board, &lib);
+    let fallback_bound;
+    let bound = match prebound {
+        Some(bound) => bound,
+        None => {
+            fallback_bound = bind_board(board, lib);
+            &fallback_bound
+        }
+    };
     let bind_summary = BindSummary::from_report(&bound.report);
     let verdict_blockers = crate::result::unmodelled_critical_refs(&bind_summary);
 
@@ -1027,7 +1099,7 @@ fn analyze_normalized_with_ties(
     // `engine_lint` chokepoint (connectivity + strap lint + MCU resource conflicts
     // + the unchecked-strap-bearing-MCU coverage note), so the web report never
     // prints "Looks healthy" over a strap-bearing MCU whose BOOT0 was unexamined.
-    let lint = crate::checks::engine_lint(board, &lib);
+    let lint = crate::checks::engine_lint(board, lib);
     let mut lint_plain = plain_netlint(&lint);
     lint_plain.unmodelled_critical = verdict_blockers.clone();
 
@@ -1036,7 +1108,7 @@ fn analyze_normalized_with_ties(
     // chokepoint so the web report carries the trace-ampacity + input-cap-ripple
     // findings too; the bare `si_checks` left the web "Signal integrity" section
     // silently missing an under-width power trace the CLI `--si` flags.
-    let si = crate::checks::engine_si(board, &lib, text_view);
+    let si = crate::checks::engine_si(board, lib, text_view);
     let mut si_plain = plain_si(&si);
     si_plain.unmodelled_critical = verdict_blockers.clone();
 
@@ -1147,6 +1219,22 @@ fn analyze_normalized_with_ties(
             }
         },
         _ => evidence,
+    };
+    let evidence = match supporting_artifacts
+        .iter()
+        .try_fold(evidence, |evidence, artifact| {
+            evidence.with_supporting_artifact(artifact.clone())
+        }) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            return (
+                unreadable(
+                    file_name,
+                    format!("could not record supplemental evidence: {error}"),
+                ),
+                drc,
+            )
+        }
     };
     let mut actual_findings = crate::result::lint_findings_json(&lint);
     actual_findings.extend(crate::result::si_findings_json(&si));
@@ -1326,6 +1414,7 @@ fn analyze_normalized_with_ties(
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
+        component_assertions: component_assertion_capabilities(board, &bound),
         supplies,
         cosim: None,
         refusal: None,
@@ -1413,7 +1502,44 @@ fn analyze_with_firmware_parts(
             );
         }
     };
-    let (mut report, drc) = analyze_normalized_with_ties(file_name, &norm, schematic_ties);
+    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
+    let static_bound = bind_board(&norm.board, &lib);
+    let cosim_bound = bind_board(&norm.board, &lib);
+    let evidence_bound = bind_board(&norm.board, &lib);
+    analyze_with_firmware_context(
+        file_name,
+        &norm,
+        fw_name,
+        fw_bytes,
+        schematic_ties,
+        &lib,
+        &static_bound,
+        cosim_bound,
+        &evidence_bound,
+        &[],
+    )
+}
+
+fn analyze_with_firmware_context(
+    file_name: &str,
+    norm: &crate::board_input::NormalizedBoard,
+    fw_name: &str,
+    fw_bytes: &[u8],
+    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
+    lib: &ModelLibrary,
+    static_bound: &crate::binder::BoundBoard,
+    cosim_bound: crate::binder::BoundBoard,
+    evidence_bound: &crate::binder::BoundBoard,
+    supporting_artifacts: &[hauksbee_ir::evidence::ArtifactProvenance],
+) -> (WebReport, WebCosimCoverage) {
+    let (mut report, drc) = analyze_normalized_with_context(
+        file_name,
+        norm,
+        schematic_ties,
+        lib,
+        Some(static_bound),
+        supporting_artifacts,
+    );
     let tie_qualification = schematic_ties.map(|ties| ties.qualify(&drc));
 
     // The firmware part may be a zip (a built tree, or a whole PlatformIO
@@ -1431,8 +1557,9 @@ fn analyze_with_firmware_parts(
             return (report, coverage);
         }
     };
-    let (mut cosim, cosim_evidence) = run_web_cosim(
+    let (mut cosim, cosim_evidence) = run_web_cosim_with_bound(
         &norm.board,
+        cosim_bound,
         file_name,
         &resolved.name,
         &resolved.bytes,
@@ -1448,13 +1575,11 @@ fn analyze_with_firmware_parts(
     // (serious beats invalid beats warning).
     let mut evidence_invalid = false;
     if let Some(captured) = cosim_evidence {
-        let lib = ModelLibrary::builtin();
-        let bound = bind_board(&norm.board, &lib);
         let mut notes = norm.notes.clone();
-        notes.extend(bound.power_coverage_gaps());
+        notes.extend(evidence_bound.power_coverage_gaps());
         let evidence_result = crate::evidence::BoardEvidence::from_bound(
             &norm.board,
-            &bound.report,
+            &evidence_bound.report,
             &notes,
             hauksbee_ir::evidence::RunDate::from_system_clock(),
         )
@@ -1467,6 +1592,13 @@ fn analyze_with_firmware_parts(
                 ties.contribution(qualification),
             ),
             _ => Ok(evidence),
+        })
+        .and_then(|evidence| {
+            supporting_artifacts
+                .iter()
+                .try_fold(evidence, |evidence, artifact| {
+                    evidence.with_supporting_artifact(artifact.clone())
+                })
         });
         if let Ok(mut evidence) = evidence_result {
             evidence = match evidence
@@ -1899,8 +2031,31 @@ fn coverage_findings_for_web(
         .collect()
 }
 
+#[cfg(test)]
 fn run_web_cosim(
     board: &ExtractedBoard,
+    board_file_name: &str,
+    fw_name: &str,
+    fw_bytes: &[u8],
+    drc: &hauksbee_extract::DrcReport,
+    tie_qualification: Option<&hauksbee_extract::DrcTieQualification>,
+) -> (WebCosimSection, Option<WebCosimEvidence>) {
+    let lib = ModelLibrary::builtin();
+    let bound = bind_board(board, &lib);
+    run_web_cosim_with_bound(
+        board,
+        bound,
+        board_file_name,
+        fw_name,
+        fw_bytes,
+        drc,
+        tie_qualification,
+    )
+}
+
+fn run_web_cosim_with_bound(
+    board: &ExtractedBoard,
+    bound: crate::binder::BoundBoard,
     board_file_name: &str,
     fw_name: &str,
     fw_bytes: &[u8],
@@ -1921,8 +2076,6 @@ fn run_web_cosim(
 
     // No MCU => firmware drives nothing. Inspect the bound board before paying
     // for a temp file / engine build, and say so plainly.
-    let lib = ModelLibrary::builtin();
-    let bound = bind_board(board, &lib);
     if bound.mcus.is_empty() {
         return (cosim_unavailable(
             "No microcontroller was found on this board; the firmware co-sim needs an MCU to run on.",
@@ -2541,6 +2694,64 @@ pub fn analyze_with_firmware_json_with_ties(
     })
 }
 
+/// Analyze the complete browser design bundle with the same manufacturing and
+/// model context used by Live Sim. Supplemental parse/apply errors are returned
+/// as the ordinary web error document, never silently ignored.
+pub fn analyze_design_json(upload: hauksbee_frontdoor_api::frontdoor::DesignUpload) -> String {
+    let error_json = |name: &str, message: String| {
+        serde_json::to_string(&unreadable(name, message)).unwrap_or_else(|error| {
+            format!("{{\"ok\":false,\"error\":\"failed to serialize report: {error}\"}}")
+        })
+    };
+    let name = upload.board.name.clone();
+    let prepared = match crate::web_design::prepare(upload) {
+        Ok(prepared) => prepared,
+        Err(error) => return error_json(&name, error),
+    };
+    let static_bound = match prepared.bind() {
+        Ok(bound) => bound,
+        Err(error) => return error_json(&name, error),
+    };
+    let report = match prepared.upload.firmware.as_ref() {
+        Some(firmware) => {
+            let cosim_bound = match prepared.bind() {
+                Ok(bound) => bound,
+                Err(error) => return error_json(&name, error),
+            };
+            let evidence_bound = match prepared.bind() {
+                Ok(bound) => bound,
+                Err(error) => return error_json(&name, error),
+            };
+            analyze_with_firmware_context(
+                &name,
+                &prepared.norm,
+                &firmware.name,
+                &firmware.bytes,
+                prepared.ties.as_ref(),
+                &prepared.lib,
+                &static_bound,
+                cosim_bound,
+                &evidence_bound,
+                &prepared.supporting_artifacts,
+            )
+            .0
+        }
+        None => {
+            analyze_normalized_with_context(
+                &name,
+                &prepared.norm,
+                prepared.ties.as_ref(),
+                &prepared.lib,
+                Some(&static_bound),
+                &prepared.supporting_artifacts,
+            )
+            .0
+        }
+    };
+    serde_json::to_string(&report)
+        .unwrap_or_else(|error| error_json(&name, format!("failed to serialize report: {error}")))
+}
+
 /// The web co-sim GPIO activity table: the `limit` most-active nets, ranked by
 /// TOGGLE COUNT descending, then VOLTAGE RANGE descending, then name; the exact
 /// three-key "top movers first" contract the CLI toggle table and JSON
@@ -2624,10 +2835,20 @@ fn main {
             .unwrap_or_default()
             .join("famous/uconsole_cm4_adapter_gerber");
         if !dir.exists() {
-            if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-                panic!("corpus required but uconsole_cm4_adapter_gerber missing");
-            }
-            eprintln!("skipping gerber-zip web test (corpus absent)");
+            // Corpus-gated like the extract crate's gerber tests, including
+            // their licence rule: ClockworkPi publishes this adapter with no
+            // licence statement, so corpus.toml marks it
+            // `license_confirmed = false` and the default fetch skips it.
+            // HAUKSBEE_REQUIRE_CORPUS (which the nightly gate sets) therefore
+            // must not demand it; only the explicit uConsole opt-in does.
+            assert!(
+                std::env::var("HAUKSBEE_REQUIRE_UCONSOLE_CORPUS").is_err(),
+                "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_cm4_adapter_gerber is absent"
+            );
+            eprintln!(
+                "NOT RUN  gerber-zip web test: uconsole_cm4_adapter_gerber is \
+                 not in the default fetch (licence unconfirmed)"
+            );
             return None;
         }
         let files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&dir)
@@ -2661,6 +2882,68 @@ fn main {
             .findings
             .iter()
             .any(|f| f.why.to_lowercase().contains("microcontroller"))
+    }
+
+    #[test]
+    fn web_report_exposes_only_bound_component_assertion_capabilities() {
+        let report = analyze("boot_gate.kicad_pcb", SHORTED);
+        assert!(report.ok, "analysis failed: {:?}", report.error);
+        assert!(
+            report
+                .component_assertions
+                .get("R1")
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "max_current")),
+            "a stamped resistor must expose measurable current: {:?}",
+            report.component_assertions
+        );
+        assert!(
+            !report
+                .component_assertions
+                .get("U1")
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "max_current")),
+            "an MCU must not be offered a through-current assertion: {:?}",
+            report.component_assertions
+        );
+    }
+
+    #[test]
+    fn complete_browser_bundle_is_recorded_in_report_inventory() {
+        use hauksbee_frontdoor_api::frontdoor::{DesignUpload, NamedUpload};
+
+        let named = |name: &str, bytes: &[u8]| NamedUpload {
+            name: name.into(),
+            bytes: bytes.to_vec(),
+        };
+        let json = analyze_design_json(DesignUpload {
+            board: named(
+                "button_pullup.kicad_pcb",
+                include_bytes!("../../../testdata/boards/button_pullup.kicad_pcb"),
+            ),
+            firmware: None,
+            schematic: None,
+            bom: Some(named("bom.csv", b"Designator,Value\nR1,10k\n")),
+            placement: Some(named(
+                "placement.csv",
+                b"Designator,Mid X,Mid Y,Rotation,Layer\nR1,100,100,0,top\n",
+            )),
+            variant: Some(named("production.variant.toml", b"name = \"production\"\n")),
+            asbuilt: Some(named("unit.asbuilt.toml", b"")),
+            models: vec![named(
+                "passives.toml",
+                include_bytes!("../../hauksbee-models/db/passives.toml"),
+            )],
+        });
+        let value: serde_json::Value = serde_json::from_str(&json).expect("report JSON");
+        assert_eq!(value["ok"], true, "{json}");
+        let roles: std::collections::BTreeSet<_> = value["inventory"]
+            .as_array()
+            .expect("inventory")
+            .iter()
+            .filter_map(|artifact| artifact["role"].as_str())
+            .collect();
+        for role in ["bom", "placement", "variant", "as_built", "model_pack"] {
+            assert!(roles.contains(role), "missing {role} in {roles:?}: {json}");
+        }
     }
 
     #[test]
@@ -3250,6 +3533,7 @@ fn main {
             "import_diagnostics",
             "import_failure",
             "model_coverage",
+            "component_assertions",
             "clearance_rule_source",
             "triage",
         ] {
@@ -3276,6 +3560,162 @@ fn main {
         drc["title"] = golden_drc["title"].clone();
         drc["verdict"] = golden_drc["verdict"].clone();
         assert_eq!(value, golden_value);
+    }
+
+    #[test]
+    fn zipped_board_export_with_firmware_reaches_cosim() {
+        // B6 regression: RE-READING the original upload bytes with only the
+        // text/binary sniffers fails co-sim with "could not re-read the board"
+        // on a zipped .board export that produced a clean static report.
+        // Normalizing once must give a REAL co-sim outcome: here
+        // the DSL board has no MCU, so the honest "no microcontroller" note.
+        use std::io::Write;
+        let dsl = br#"# Board-as-Code (hauksbee board DSL v1)
+board version 20241229
+
+fn main {
+    net "A"
+    net "B"
+    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
+        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
+        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
+    }
+}
+"#;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        w.start_file(
+            "export/tarski.board",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        w.write_all(dsl).unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        let r = analyze_with_firmware("tarski-export.zip", &bytes, "fw.elf", BOOT_GATE_FW);
+        assert!(r.ok, "static analysis succeeds: {:?}", r.error);
+        let cosim = r
+            .cosim
+            .expect("cosim section present once firmware was supplied");
+        assert!(
+            !cosim
+                .findings
+                .iter()
+                .any(|f| f.why.contains("re-read") || f.why.contains("Could not re-read")),
+            "the re-read failure mode must be gone: {:?}",
+            cosim.findings
+        );
+        assert!(
+            !cosim.ran,
+            "the DSL board has no MCU, so the co-sim cannot run"
+        );
+        assert!(
+            cosim
+                .findings
+                .iter()
+                .any(|f| f.why.to_lowercase().contains("microcontroller")),
+            "the honest no-MCU note must be the reason: {:?}",
+            cosim.findings
+        );
+    }
+
+    /// B6, gerber arm: a gerber zip plus firmware must reach a real co-sim
+    /// outcome too (usually the honest "no MCU found", since a fab archive
+    /// names no parts). Corpus-gated like [`analyze_gerber_zip_reverse_extracts`].
+    #[test]
+    fn gerber_zip_with_firmware_reaches_cosim() {
+        use std::io::Write;
+        let Some(dir) = hauksbee_testkit::corpus_board(
+            env!("CARGO_MANIFEST_DIR"),
+            "famous/uconsole_cm4_adapter_gerber",
+        ) else {
+            assert!(
+                std::env::var("HAUKSBEE_REQUIRE_UCONSOLE_CORPUS").is_err(),
+                "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_cm4_adapter_gerber is absent"
+            );
+            eprintln!(
+                "NOT RUN  gerber-zip cosim test: uconsole_cm4_adapter_gerber is \
+                 not in the default fetch (licence unconfirmed)"
+            );
+            return;
+        };
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.is_file() {
+                w.start_file(
+                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+                w.write_all(&std::fs::read(&p).unwrap()).unwrap();
+            }
+        }
+        let bytes = w.finish().unwrap().into_inner();
+        let r = analyze_with_firmware("cm4_adapter_gerbers.zip", &bytes, "fw.elf", BOOT_GATE_FW);
+        assert!(r.ok, "gerber zip static analysis succeeds: {:?}", r.error);
+        let cosim = r
+            .cosim
+            .expect("cosim section present once firmware was supplied");
+        assert!(
+            !cosim
+                .findings
+                .iter()
+                .any(|f| f.why.contains("re-read") || f.why.contains("Could not re-read")),
+            "the re-read failure mode must be gone: {:?}",
+            cosim.findings
+        );
+        // A fab archive carries no part identities, so the expected honest
+        // outcome is "no MCU"; a run would also be acceptable if reverse
+        // extraction ever learns to name one.
+        if !cosim.ran {
+            assert!(
+                cosim
+                    .findings
+                    .iter()
+                    .any(|f| f.why.to_lowercase().contains("microcontroller")),
+                "a not-run co-sim must carry the honest reason: {:?}",
+                cosim.findings
+            );
+        }
+    }
+
+    #[test]
+    fn analyze_json_is_valid_json() {
+        let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["ok"], true);
+        assert!(v["sections"].as_array().unwrap().len() >= 3);
+    }
+
+    #[test]
+    fn frontdoor_json_carries_defaulted_clearance_source_and_qualified_text() {
+        let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            value["clearance_rule_source"]["source"], "defaulted",
+            "the single-file web path cannot silently imply project rules: {json}"
+        );
+        assert!(value["clearance_rule_source"]["value_mm"].is_number());
+        let drc = value["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|section| {
+                section["title"]
+                    .as_str()
+                    .is_some_and(|title| title.starts_with("Copper spacing"))
+            })
+            .unwrap();
+        assert!(drc["title"].as_str().unwrap().contains("not your rules"));
+        let verdict = drc["verdict"].as_str().unwrap();
+        assert!(verdict.contains("not your rules"), "{verdict}");
+        assert!(verdict.contains("Upload the matching .kicad_pro alongside"));
+        assert!(value["triage"]["do_not_order"].is_array());
+        assert!(value["triage"]["inspect"].is_array());
+        assert!(value["triage"]["checked_ok"].is_array());
+        assert!(value["triage"]["not_covered"]
+            .as_str()
+            .unwrap()
+            .contains("DEFAULT rules, not your rules"));
     }
 
     #[test]

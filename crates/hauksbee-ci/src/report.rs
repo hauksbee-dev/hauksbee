@@ -939,9 +939,9 @@ impl CiResult {
     }
 
     /// GitHub Actions annotations: `::error` / `::warning` / `::notice`
-    /// workflow commands so failures surface inline in the Checks UI. Emitted
-    /// to stderr when `GITHUB_ACTIONS` is set: GitHub reads workflow commands
-    /// from either stream, and stdout belongs to `--json`.
+    /// workflow commands so failures surface inline in the Checks UI. The CLI
+    /// writes them to stderr when `GITHUB_ACTIONS` is set so `--json` stdout
+    /// remains pure NDJSON.
     ///
     /// The budget matters: GitHub shows at most 10 annotations per type per
     /// step and silently drops the rest, so this surface spends them on
@@ -1249,7 +1249,7 @@ fn failure_hint(kind: &str) -> Option<String> {
             and the load pulling it down ({url}, \"voltage\")."
         ),
         "rail_window" => format!(
-            "the rail dipped/recovered outside the window; check the \
+            "the rail dipped/spiked or recovered/settled outside the window; check the \
             scenario's load step and the decoupling on this net ({url}, \
             \"rail_window\")."
         ),

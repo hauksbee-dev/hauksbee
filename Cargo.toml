@@ -23,8 +23,15 @@ members = [
 # dependencies below. See vendor/kicad-forge/VENDORED.md.
 exclude = ["vendor/kicad-forge"]
 
+[workspace.metadata.ci]
+# Increment only when the retained target-cache shape changes. This value is
+# part of rust-cache's manifest hash but not its restore prefix, so a new cache
+# generation can reuse the previous dependency build before saving the richer
+# workspace-crate cache.
+workspace-cache-epoch = 1
+
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-beta.4"
 edition = "2021"
 license = "Apache-2.0"
 # Every crate inherits these, so the shared metadata is stated once and cannot
@@ -125,9 +132,6 @@ rayon = "1"
 # Temp-file handling for the web firmware drop zone: uploaded ELF/HEX bytes are
 # written to a NamedTempFile so the path-based MCU loader can read them.
 tempfile = "3"
-# Interactive terminal UI (the default human-facing surface for `hauksbee run`).
-# ratatui + crossterm are the battle-tested standard; we adapt them rather than
-# hand-rolling a terminal renderer.
 
 # Thin LTO with parallel codegen: a release build finishes in a fraction of the
 # time fat LTO + one codegen unit took, for a few percent of binary size.
@@ -141,12 +145,17 @@ debug = false
 [profile.dev]
 # Unoptimised workspace crates build in half the time of opt-level 1, and the
 # engine suite runs no slower because its wall-clock is emulator process time.
-# The solver is the one crate whose tests are arithmetic-bound (8x slower
-# unoptimised), so it keeps opt-level 1 below. Dependencies stay at 2.
+# The exception is the arithmetic-bound solve path (8x slower unoptimised), so
+# the solver and the IR its inner loop runs on keep opt-level 1 below;
+# `speed_gate` measures against ngspice and fails if either drops back to 0.
+# Dependencies stay at 2.
 opt-level = 0
 debug = "line-tables-only"
 
 [profile.dev.package.hauksbee-solve]
+opt-level = 1
+
+[profile.dev.package.hauksbee-ir]
 opt-level = 1
 
 [profile.dev.package."*"]

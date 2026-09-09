@@ -8,7 +8,7 @@ import type {
   RunResponse, SensorCatalogEntry, Startup, WebReport,
 } from '../types/report'
 import type { ClientMessage, ServerMessage } from '../types/protocol'
-import { buildBoardUpload } from './board-upload'
+import { buildBoardUpload, type SupplementalDesignFiles } from './board-upload'
 
 /** What to show a user for a thrown value of unknown type. */
 export const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -119,9 +119,19 @@ export const api = {
    *  `arrayBuffer()` would pull a 300 MB upload into the heap first. The
    *  companion form is the multipart route. The status is attached to a
    *  refusal so the caller can name it. */
-  analyze: async (board: File, firmware: File | null, schematic: File | null, signal: AbortSignal): Promise<WebReport> => {
-    const res = firmware || schematic
-      ? await fetch('/api/analyze-with-firmware', { method: 'POST', body: buildBoardUpload(board, firmware, schematic), signal })
+  analyze: async (
+    board: File,
+    firmware: File | null,
+    schematic: File | null,
+    signal: AbortSignal,
+    supplemental?: SupplementalDesignFiles,
+  ): Promise<WebReport> => {
+    const hasSupplemental = !!supplemental && (
+      !!supplemental.bom || !!supplemental.placement || !!supplemental.variant
+      || !!supplemental.asbuilt || supplemental.models.length > 0
+    )
+    const res = firmware || schematic || hasSupplemental
+      ? await fetch('/api/analyze-with-firmware', { method: 'POST', body: buildBoardUpload(board, firmware, schematic, supplemental), signal })
       : await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'X-Board-Filename': board.name, 'Content-Type': 'application/octet-stream' },

@@ -22,6 +22,31 @@ pub type FirmwareAnalyzer = Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> St
 pub type SchematicAnalyzer =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>) -> String + Send + Sync>;
 
+/// One named file supplied through the local web app.
+#[derive(Debug, Clone)]
+pub struct NamedUpload {
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// The complete design-input bundle shared by browser analysis, Checks, and
+/// Live Sim. Keeping this contract in one type prevents a surface from quietly
+/// dropping manufacturing identity or model context accepted by another.
+#[derive(Debug, Clone)]
+pub struct DesignUpload {
+    pub board: NamedUpload,
+    pub firmware: Option<NamedUpload>,
+    pub schematic: Option<NamedUpload>,
+    pub bom: Option<NamedUpload>,
+    pub placement: Option<NamedUpload>,
+    pub variant: Option<NamedUpload>,
+    pub asbuilt: Option<NamedUpload>,
+    pub models: Vec<NamedUpload>,
+}
+
+/// Analyze the complete browser design-input bundle.
+pub type DesignAnalyzer = Arc<dyn Fn(DesignUpload) -> String + Send + Sync>;
+
 /// Run checks composed by a web builder.
 pub type CheckRunner =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, &str) -> String + Send + Sync>;
@@ -30,6 +55,9 @@ pub type CheckRunner =
 pub type SchematicCheckRunner = Arc<
     dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>, &str) -> String + Send + Sync,
 >;
+
+/// Run browser-composed checks against the complete design-input bundle.
+pub type DesignCheckRunner = Arc<dyn Fn(DesignUpload, &str) -> String + Send + Sync>;
 
 /// Everything a successful live-launch callback hands to the serving runtime.
 pub struct LiveLaunch {
@@ -51,6 +79,9 @@ pub type SchematicLiveLauncher = Arc<
         + Send
         + Sync,
 >;
+
+/// Launch Live Sim from the same complete bundle used by report and Checks.
+pub type DesignLiveLauncher = Arc<dyn Fn(DesignUpload) -> Result<LiveLaunch, String> + Send + Sync>;
 
 /// Report optional-dependency status as JSON.
 pub type DepsStatus = Arc<dyn Fn() -> String + Send + Sync>;

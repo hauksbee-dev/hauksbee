@@ -28,6 +28,8 @@
 
 use std::path::PathBuf;
 
+mod support;
+
 use hauksbee_ci::{run, RunConfig};
 
 fn board() -> PathBuf {
@@ -53,7 +55,7 @@ fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
 fn inkplate_class_battery_cold_boot_trips_protection() {
     let body = format!(
         r#"name = "Inkplate-class: LiPo cold-boot WiFi inrush trips protection"
-board = "{board}"
+board = {board}
 duration_ms = 60
 frame_ms = 0.2
 
@@ -97,7 +99,7 @@ net = "+3.3V"
 dip_below = 3.0
 for_max_ms = 1.0
 "#,
-        board = board().display()
+        board = support::toml_path(&board())
     );
     let result = run_body("battery.toml", &body);
     eprintln!("BATTERY side:\n{}", result.render_human());
@@ -146,7 +148,7 @@ for_max_ms = 1.0
 fn scoped_protection_trip_passes_without_a_matching_rail_window() {
     let body = format!(
         r#"name = "R17: scoped protection_trip, no rail_window"
-board = "{board}"
+board = {board}
 duration_ms = 60
 frame_ms = 0.2
 
@@ -179,7 +181,7 @@ supply_net = "+3.3V"
 expect_trip = true
 scenario = "coldboot"
 "#,
-        board = board().display()
+        board = support::toml_path(&board())
     );
     let result = run_body("scoped_trip.toml", &body);
     eprintln!("SCOPED-TRIP side:\n{}", result.render_human());
@@ -208,7 +210,7 @@ scenario = "coldboot"
 fn inkplate_class_usb_supplemented_survives() {
     let body = format!(
         r#"name = "Inkplate-class: USB-supplemented cold boot survives"
-board = "{board}"
+board = {board}
 duration_ms = 60
 frame_ms = 0.2
 
@@ -244,7 +246,7 @@ min = 3.0
 [[assert]]
 kind = "no_faults"
 "#,
-        board = board().display()
+        board = support::toml_path(&board())
     );
     let result = run_body("usb.toml", &body);
     eprintln!("USB side:\n{}", result.render_human());

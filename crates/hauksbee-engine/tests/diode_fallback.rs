@@ -2,11 +2,10 @@
 //! 1N4148 model, not bind OPEN.
 //!
 //! The KiCad stock "Device:D" symbol carries value "D" with no MPN, so the
-//! model db cannot resolve it. On the Tarski board the ~94 D_stretch/D_inject/
-//! D_hyst pulse-stretcher diodes are exactly this case; leaving them OPEN
-//! silently deletes the comparator->spike charge path. The binder now falls
-//! back to a generic 1N4148 (datasheet-grounded params) for such parts, the
-//! same way it falls back to generic R/C/L for unresolved passives.
+//! model db cannot resolve it. Leaving such a part OPEN silently deletes its
+//! conduction path. The binder falls back to a generic 1N4148
+//! (datasheet-grounded params), the same way it falls back to generic R/C/L
+//! for unresolved passives.
 
 mod common;
 
@@ -91,11 +90,36 @@ fn value_d_diode_binds_conducting_1n4148() {
     );
 }
 
-/// On the real Tarski netlist, the D_stretch/D_inject/D_hyst diodes must now
-/// bind as conducting devices rather than landing in the OPEN/unresolved bucket.
+/// A bank of generic diodes must all bind as conducting devices rather than
+/// landing in the OPEN/unresolved bucket. The fixture is generated here so the
+/// release test remains self-contained.
 #[test]
-fn tarski_stretcher_diodes_bind_conducting() {
-    let board = common::tarski_board();
+fn many_generic_diodes_bind_conducting() {
+    let mut components = String::new();
+    let mut nets = String::new();
+    for i in 0..32 {
+        let reference = format!("D_BANK{i}");
+        components.push_str(&format!(
+            r#"(comp (ref "{reference}")
+      (value "D")
+      (footprint "Diode_SMD:D_SOD-323")
+      (libsource (lib "Device") (part "D") (description "Diode")))"#
+        ));
+        nets.push_str(&format!(
+            r#"(net (code "{}") (name "A{i}")
+      (node (ref "{reference}") (pin "2") (pinfunction "A") (pintype "passive")))
+    (net (code "{}") (name "K{i}")
+      (node (ref "{reference}") (pin "1") (pinfunction "K") (pintype "passive")))"#,
+            i * 2 + 1,
+            i * 2 + 2
+        ));
+    }
+    let netlist = format!(
+        r#"(export (version "E")
+  (components {components})
+  (nets {nets}))"#
+    );
+    let board = ExtractedBoard::from_auto(&netlist).expect("parse generated diode bank");
     let lib = ModelLibrary::builtin();
     let bound = bind_board(&board, &lib);
 
@@ -104,20 +128,14 @@ fn tarski_stretcher_diodes_bind_conducting() {
         .devices
         .iter()
         .filter_map(|d| match d {
-            Device::Diode { name, model, .. } if name.starts_with("D_") => {
+            Device::Diode { name, model, .. } if name.starts_with("D_BANK") => {
                 Some((name.clone(), *model))
             }
             _ => None,
         })
         .collect();
 
-    // The board has many wired D_ diodes; every one that is wired at both ends
-    // must now be a conducting 1N4148, not open.
-    assert!(
-        d_diodes.len() >= 30,
-        "expected the wired D_ stretcher/inject diodes to bind, got {}",
-        d_diodes.len()
-    );
+    assert_eq!(d_diodes.len(), 32, "every wired generic diode binds");
     for (name, model) in &d_diodes {
         assert!(
             (model.is - 4.352e-9).abs() < 1e-12,

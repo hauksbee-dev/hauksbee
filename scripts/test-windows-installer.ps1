@@ -43,49 +43,105 @@ function Start-MockRelease(
         $listener.Prefixes.Add($Prefix)
         $listener.Start()
         try {
-            for ($served = 0; $served -lt 4; $served++) {
-                $context = $listener.GetContext()
-                $request = $context.Request
-                $response = $context.Response
-                if ($request.Headers["Authorization"] -ne "Bearer installer-contract-token") {
-                    $response.StatusCode = 401
+            # Serve until Invoke-InstallerCase stops this job. An exact request
+            # budget turns any extra request into a dead listener, and one
+            # aborted connection must not kill the rest of the flow: http.sys
+            # throws from the response write or close when a client tears the
+            # connection down right after receiving a release-sized body.
+            $consecutiveFailures = 0
+            while ($listener.IsListening) {
+                try {
+                    $context = $listener.GetContext()
+                    $request = $context.Request
+                    $response = $context.Response
+                    if ($request.Url.AbsolutePath -eq "/__shutdown") {
+                        $response.StatusCode = 204
+                        $response.ContentLength64 = 0
+                        $response.Close()
+                        break
+                    }
+                    if ($request.Headers["Authorization"] -ne "Bearer installer-contract-token") {
+                        $response.StatusCode = 401
+                        $response.Close()
+                        continue
+                    }
+                    switch -Regex ($request.Url.AbsolutePath) {
+                        "/releases/tags/" {
+                            $body = [Text.Encoding]::UTF8.GetBytes((@{
+                                tag_name = $Tag
+                                immutable = $true
+                                assets = @(
+                                    @{ name = $ZipName; url = "$ApiBase/releases/assets/1"; digest = "sha256:$ZipDigest" },
+                                    @{ name = $SumName; url = "$ApiBase/releases/assets/2"; digest = "sha256:$SumDigest" }
+                                )
+                            } | ConvertTo-Json -Depth 4 -Compress))
+                            $response.ContentType = "application/json"
+                        }
+                        "/releases/assets/1$" { $body = [IO.File]::ReadAllBytes($ZipPath) }
+                        "/releases/assets/2$" { $body = [IO.File]::ReadAllBytes($SumPath) }
+                        "/commits/" {
+                            $body = [Text.Encoding]::UTF8.GetBytes((@{ sha = $Commit } | ConvertTo-Json -Compress))
+                            $response.ContentType = "application/json"
+                        }
+                        default {
+                            $response.StatusCode = 404
+                            $body = [byte[]]::new(0)
+                        }
+                    }
+                    $response.ContentLength64 = $body.Length
+                    $response.OutputStream.Write($body, 0, $body.Length)
                     $response.Close()
-                    continue
+                    Write-Output "mock: served $($request.Url.AbsolutePath)"
+                    $consecutiveFailures = 0
+                } catch {
+                    # One aborted connection is expected teardown noise, but a
+                    # listener that can no longer acquire contexts must not
+                    # hot-spin a core for the rest of a multi-hour job.
+                    Write-Output "mock: request handling failed: $_"
+                    $consecutiveFailures++
+                    if ($consecutiveFailures -ge 50) {
+                        Write-Output "mock: giving up after $consecutiveFailures consecutive failures"
+                        break
+                    }
+                    Start-Sleep -Milliseconds 100
                 }
-                switch -Regex ($request.Url.AbsolutePath) {
-                    "/releases/tags/" {
-                        $body = [Text.Encoding]::UTF8.GetBytes((@{
-                            tag_name = $Tag
-                            immutable = $true
-                            assets = @(
-                                @{ name = $ZipName; url = "$ApiBase/releases/assets/1"; digest = "sha256:$ZipDigest" },
-                                @{ name = $SumName; url = "$ApiBase/releases/assets/2"; digest = "sha256:$SumDigest" }
-                            )
-                        } | ConvertTo-Json -Depth 4 -Compress))
-                        $response.ContentType = "application/json"
-                    }
-                    "/releases/assets/1$" { $body = [IO.File]::ReadAllBytes($ZipPath) }
-                    "/releases/assets/2$" { $body = [IO.File]::ReadAllBytes($SumPath) }
-                    "/commits/" {
-                        $body = [Text.Encoding]::UTF8.GetBytes((@{ sha = $Commit } | ConvertTo-Json -Compress))
-                        $response.ContentType = "application/json"
-                    }
-                    default {
-                        $response.StatusCode = 404
-                        $body = [byte[]]::new(0)
-                    }
-                }
-                $response.ContentLength64 = $body.Length
-                $response.OutputStream.Write($body, 0, $body.Length)
-                $response.Close()
             }
         } finally {
             $listener.Stop()
             $listener.Close()
         }
     } -ArgumentList $prefix, $apiBase, "v$Version", $ServedCommit, $ZipFile, $ChecksumFile, $zipName, $checksumName, $zipDigest, $sumDigest
-    Start-Sleep -Milliseconds 300
-    return @{ Job = $job; ApiBase = $apiBase }
+    # Wait until the listener actually accepts, not a fixed grace period: on a
+    # loaded runner Start-Job can take longer than any constant to come up.
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    while ($true) {
+        $ready = [Net.Sockets.TcpClient]::new()
+        try {
+            $ready.Connect([Net.IPAddress]::Loopback, $port)
+            $ready.Dispose()
+            break
+        } catch {
+            $ready.Dispose()
+            if ($job.State -in @("Failed", "Completed", "Stopped")) {
+                throw "the mock release server job stopped before listening: $($job.State)"
+            }
+            if ([DateTime]::UtcNow -gt $deadline) { throw "the mock release server never started listening on port $port" }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    return @{ Job = $job; ApiBase = $apiBase; Prefix = $prefix }
+}
+
+function Stop-MockRelease($Server) {
+    # Ask the serving loop to exit so the job can complete on its own:
+    # Stop-Job against a job blocked inside a synchronous GetContext is not a
+    # bounded operation, and this teardown runs inside a paid multi-hour gate.
+    try {
+        $null = Invoke-WebRequest -Uri "$($Server.Prefix)__shutdown" -UseBasicParsing -TimeoutSec 5
+    } catch {
+    }
+    $null = Wait-Job $Server.Job -Timeout 10 -ErrorAction SilentlyContinue
+    Stop-Job $Server.Job -ErrorAction SilentlyContinue
 }
 
 function Invoke-InstallerCase(
@@ -109,6 +165,15 @@ function Invoke-InstallerCase(
         $child = Start-Process -FilePath $PowerShell -ArgumentList @(
             "-NoProfile", "-File", $installer, "-Version", "v$Version", "-ExpectedCommit", $ExpectedCommit, "-Prefix", $Prefix
         ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        if ($child.ExitCode -ne 0) {
+            Write-Host "--- installer child ($PowerShell) exited $($child.ExitCode); stdout:"
+            if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout | ForEach-Object { Write-Host "    $_" } }
+            Write-Host "--- installer child ($PowerShell) stderr:"
+            if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr | ForEach-Object { Write-Host "    $_" } }
+            Write-Host "--- mock release server output:"
+            Stop-MockRelease $server
+            Receive-Job $server.Job -ErrorAction Continue 2>&1 | ForEach-Object { Write-Host "    $_" }
+        }
         return $child.ExitCode
     } finally {
         Remove-Item Env:HAUKSBEE_API_BASE -ErrorAction SilentlyContinue
@@ -116,7 +181,7 @@ function Invoke-InstallerCase(
         Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
         Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
         Remove-Item Env:HAUKSBEE_TEST_FAIL_INSTALL_SWAP -ErrorAction SilentlyContinue
-        Stop-Job $server.Job -ErrorAction SilentlyContinue
+        Stop-MockRelease $server
         Remove-Job $server.Job -Force -ErrorAction SilentlyContinue
     }
 }

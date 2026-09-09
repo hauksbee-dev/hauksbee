@@ -25,7 +25,7 @@
         <mxCell id="reports" value="Reports and checks&#10;DRC  lint  SI  thermal  AC  co-sim assertions" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="40" y="640" width="460" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="web" value="Web front door and live viewer&#10;drop a board, read a report, build checks&#10;2D/3D render, probes, scope" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="web" value="Web front door and live viewer&#10;drop a board, read a report, build checks&#10;2D render, probes, scope" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="620" y="640" width="380" height="72" as="geometry"/>
         </mxCell>
         <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="in" target="extract"><mxGeometry relative="1" as="geometry"/></mxCell>

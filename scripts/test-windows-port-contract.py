@@ -23,6 +23,31 @@ def read(path: str) -> str:
 
 
 class WindowsPortContract(unittest.TestCase):
+    def test_renode_version_check_accepts_pinned_build_suffix(self) -> None:
+        installer = read("scripts/install-sims-windows.ps1")
+        self.assertIn('$escapedVersion = [regex]::Escape($RenodeVersion)', installer)
+        self.assertIn('${escapedVersion}(?:[.\\s]|$)', installer)
+        version_check = installer[
+            installer.index("function Assert-RenodeVersion") :
+            installer.index("function Assert-QemuVersion")
+        ]
+        self.assertNotIn("$LASTEXITCODE", version_check)
+
+    def test_qemu_identity_checks_are_output_and_payload_bound(self) -> None:
+        installer = read("scripts/install-sims-windows.ps1")
+        version_check = installer[
+            installer.index("function Assert-QemuVersion") :
+            installer.index("function New-VerifiedSnapshot")
+        ]
+        self.assertIn("$QemuAssetVersion", version_check)
+        self.assertIn("(?m)^esp32", version_check)
+        self.assertNotIn("$LASTEXITCODE", version_check)
+
+    def test_verified_simulator_snapshots_preserve_zip_extension(self) -> None:
+        installer = read("scripts/install-sims-windows.ps1")
+        self.assertIn('$Asset.Name.EndsWith(".zip"', installer)
+        self.assertIn('$snapshot = "$snapshot.zip"', installer)
+
     def test_ci_runs_native_engine_ci_and_mcu_tests_with_warnings_denied(self) -> None:
         ci = read(".github/workflows/ci.yml")
         self.assertRegex(ci, r"runs-on:\s*windows-latest")
@@ -47,6 +72,48 @@ class WindowsPortContract(unittest.TestCase):
         self.assertRegex(release, r"scripts[\\/]bundle-windows\.ps1")
         self.assertIn("hauksbee-$V-windows-x86_64-permissive.zip", release)
         self.assertIn("LICENSE-BINARY.txt", release)
+
+    def test_windows_release_requires_authenticode_before_and_after_compression(self) -> None:
+        release = read(".github/workflows/release.yml")
+        bundle = read("scripts/bundle-windows.ps1")
+
+        # The release job must opt into the fail-closed path and provide the
+        # certificate material only through masked environment secrets.
+        package_step = release[
+            release.index("- name: Package and verify permissive Windows zip") :
+            release.index("- name: Upload Windows build artifact")
+        ]
+        self.assertIn("-RequireAuthenticodeSignature", package_step)
+        for secret in (
+            "HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64",
+            "HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD",
+            "HAUKSBEE_WINDOWS_SIGNING_TIMESTAMP_URL",
+        ):
+            self.assertIn(f"secrets.{secret}", package_step)
+        self.assertIn("signtool.exe", package_step)
+        self.assertIn("verify /q /pa /all", package_step)
+
+        # The packager leaves ordinary local calls unsigned, but its explicit
+        # release switch requires both credentials and a verifiable signature
+        # on every staged executable before Compress-Archive runs.
+        self.assertIn("if (-not $RequireAuthenticodeSignature)", bundle)
+        for secret in (
+            "HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64",
+            "HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD",
+        ):
+            self.assertIn(secret, bundle)
+        self.assertIn("/fd SHA256", bundle)
+        self.assertIn("/tr $timestampUrl", bundle)
+        self.assertIn("/td SHA256", bundle)
+        self.assertIn("verify /q /pa /all", bundle)
+        self.assertIn("Resolve-SignTool", bundle)
+        self.assertLess(
+            bundle.index("    Sign-And-VerifyBinaries $binDir $work"),
+            bundle.index("Compress-Archive -LiteralPath"),
+            "the zip must be assembled only after Authenticode signing and verification",
+        )
+        self.assertIn("HAUKSBEE_WINDOWS_SIGNING_PFX_BASE64 is missing", bundle)
+        self.assertIn("HAUKSBEE_WINDOWS_SIGNING_PFX_PASSWORD is missing", bundle)
 
     def test_windows_bundle_contains_every_release_binary_and_checksum(self) -> None:
         bundle = read("scripts/bundle-windows.ps1")

@@ -776,7 +776,7 @@ fn no_data(reason: String) -> (bool, String, Option<String>) {
 }
 
 /// rail_window: judge a rail's behaviour over a scenario window: min/max bounds,
-/// dip duration below a threshold, and recovery time.
+/// dip/spike duration, and recovery/settling time.
 fn check_rail_window(
     a: &crate::spec::Assertion,
     out: &RunOutcome,
@@ -792,6 +792,10 @@ fn check_rail_window(
         return no_data(format!("net '{net}' had no samples in the window"));
     }
 
+    // Same marking discipline as check_voltage: the failing clause carries
+    // `<- FAILED HERE`, the passing clauses stay un-annotated, and the why
+    // names the observed excess (volts of sag/spike, ms over a duration or
+    // recovery/settling budget).
     let mut v = Verdict::new();
     if let Some(lo) = a.min {
         v.clause(
@@ -856,6 +860,41 @@ fn check_rail_window(
                     "{net} took {rec_ms:.2} ms to climb back to {r} V after dipping below \
                      {d} V, {:.2} ms past your recovery deadline",
                     rec_ms - within_ms
+                ),
+            );
+        }
+    }
+    if let (Some(sp), Some(for_ms)) = (a.spike_above, a.spike_for_max_ms) {
+        if win.samples.len() < 2 {
+            v.fail(too_few(format!("spike>{sp}V")), None);
+        } else {
+            let spike_ms = win.spike_duration_s(sp) * 1000.0;
+            v.clause(
+                spike_ms <= for_ms + 1e-6,
+                format!("spike>{sp}V for {spike_ms:.2}ms (<= {for_ms}ms)"),
+                format!("spike>{sp}V for {spike_ms:.2}ms > allowed {for_ms}ms"),
+                format!(
+                    "{net} stayed above {sp} V for {spike_ms:.2} ms, {:.2} ms longer than your budget",
+                    spike_ms - for_ms
+                ),
+            );
+        }
+    }
+    if let (Some(sp), Some(settle), Some(within_ms)) =
+        (a.spike_above, a.settle_to, a.settle_within_ms)
+    {
+        if win.samples.len() < 2 {
+            v.fail(too_few(format!("settle-to-{settle}V")), None);
+        } else {
+            let settle_ms = win.settling_s(sp, settle) * 1000.0;
+            v.clause(
+                settle_ms <= within_ms + 1e-6,
+                format!("settle-to-{settle}V in {settle_ms:.2}ms (<= {within_ms}ms)"),
+                format!("settle-to-{settle}V in {settle_ms:.2}ms > allowed {within_ms}ms"),
+                format!(
+                    "{net} took {settle_ms:.2} ms to settle to {settle} V after spiking above \
+                     {sp} V, {:.2} ms past your settling deadline",
+                    settle_ms - within_ms
                 ),
             );
         }
@@ -2174,6 +2213,41 @@ mod tests {
     }
 
     #[test]
+    fn rail_window_spike_with_one_sample_does_not_auto_pass() {
+        use super::check_rail_window;
+        use crate::runner::RunOutcome;
+        use crate::scenarios::RailWindow;
+
+        let mut win = RailWindow::new();
+        win.observe(0.099, 4.2);
+        let mut rail_windows = std::collections::HashMap::new();
+        rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
+        let out = RunOutcome {
+            rail_windows,
+            ..Default::default()
+        };
+        let a: crate::spec::Assertion = toml::from_str(
+            r#"kind = "rail_window"
+net = "VBUS"
+scenario = "load"
+spike_above = 3.5
+spike_for_max_ms = 1.0
+"#,
+        )
+        .unwrap();
+        let (ok, msg, _why) = check_rail_window(&a, &out);
+        assert!(!ok, "a 1-sample spike window must not auto-pass: {msg}");
+        assert!(
+            msg.contains("too few"),
+            "message should explain the degenerate window: {msg}"
+        );
+    }
+
+    // R24: on a multi-unit package with TIED max temperatures, the reported
+    // hottest unit must be deterministic (lowest key), not whatever HashMap
+    // iteration order happened to surface, or two identical runs emit different
+    // report bytes (reproducibility doctrine). Verdict is unaffected.
+    #[test]
     fn max_temp_covers_idle_parts_tied_units_and_missing_samples() {
         let ceiling = |c: f64| {
             assertion(&format!(
@@ -2236,6 +2310,187 @@ mod tests {
         assert!(!check_max_current(&limit(0.10), &out).0);
     }
 
+    // A rail_window brownout floor must see an intra-frame sag that recovers by
+    // the frame's last chunk; the runner folds the scheduler's per-frame extremes
+    // into RailWindow.min_v/max_v, exactly like the plain voltage path. Without the
+    // fold (base bug), min_v is the settled 3.3 V and a min=3.0 floor false-passes
+    // the very sag it exists to catch (R49).
+    #[test]
+    fn rail_window_min_reflects_folded_intraframe_sag() {
+        use super::check_rail_window;
+        use crate::runner::RunOutcome;
+        use crate::scenarios::RailWindow;
+
+        // Reconstruct the window the runner builds: settled 3.3 V samples plus the
+        // scheduler's intra-frame minimum (2.9 V) folded into the envelope.
+        let mut win = RailWindow::new();
+        win.observe(0.000, 3.3);
+        win.observe(0.001, 3.3);
+        win.fold(2.9); // intra-frame sag from the load step, recovered by last chunk
+
+        let mut rail_windows = std::collections::HashMap::new();
+        rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
+        let out = RunOutcome {
+            rail_windows,
+            ..Default::default()
+        };
+
+        let a: crate::spec::Assertion = toml::from_str(
+            "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\nmin = 3.0\n",
+        )
+        .unwrap();
+        let (ok, msg, _why) = check_rail_window(&a, &out);
+        assert!(
+            !ok,
+            "a rail that sagged to 2.9V mid-frame must FAIL a 3.0V floor, not pass on the settled 3.3V: {msg}"
+        );
+
+        // Sanity: a window that never dipped below the floor still passes.
+        let mut win_ok = RailWindow::new();
+        win_ok.observe(0.000, 3.3);
+        win_ok.observe(0.001, 3.25);
+        win_ok.fold(3.1);
+        let mut rw2 = std::collections::HashMap::new();
+        rw2.insert(("load".to_string(), "VBUS".to_string()), win_ok);
+        let out_ok = RunOutcome {
+            rail_windows: rw2,
+            ..Default::default()
+        };
+        let (ok2, _msg2, _why) = check_rail_window(&a, &out_ok);
+        assert!(ok2, "a rail that stayed above 3.0V must pass");
+    }
+
+    #[test]
+    fn rail_window_max_reflects_folded_intraframe_spike() {
+        use super::check_rail_window;
+        use crate::runner::RunOutcome;
+        use crate::scenarios::RailWindow;
+
+        let mut win = RailWindow::new();
+        win.observe(0.000, 3.3);
+        win.observe(0.001, 3.3);
+        win.fold(4.2); // intra-frame spike, settled by the last chunk
+        let mut rail_windows = std::collections::HashMap::new();
+        rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
+        let out = RunOutcome {
+            rail_windows,
+            ..Default::default()
+        };
+        let a: crate::spec::Assertion = toml::from_str(
+            r#"kind = "rail_window"
+net = "VBUS"
+scenario = "load"
+max = 4.0
+"#,
+        )
+        .unwrap();
+        let (ok, msg, _why) = check_rail_window(&a, &out);
+        assert!(!ok, "a folded 4.2V spike must fail a 4.0V ceiling: {msg}");
+
+        // The sampled spike-duration path intentionally remains settled-frame
+        // based: the same folded extreme does not create a synthetic spike time.
+        let mut win_ok = RailWindow::new();
+        win_ok.observe(0.000, 3.3);
+        win_ok.observe(0.001, 3.3);
+        win_ok.fold(4.2);
+        let mut rw2 = std::collections::HashMap::new();
+        rw2.insert(("load".to_string(), "VBUS".to_string()), win_ok);
+        let out_ok = RunOutcome {
+            rail_windows: rw2,
+            ..Default::default()
+        };
+        let a_spike: crate::spec::Assertion = toml::from_str(
+            r#"kind = "rail_window"
+net = "VBUS"
+scenario = "load"
+spike_above = 3.5
+spike_for_max_ms = 1.0
+"#,
+        )
+        .unwrap();
+        let (ok_spike, msg_spike, _why_spike) = check_rail_window(&a_spike, &out_ok);
+        assert!(
+            ok_spike,
+            "folded intra-frame extrema must not invent sampled spike duration: {msg_spike}"
+        );
+    }
+
+    #[test]
+    fn rail_window_spike_and_settling_assertions_render_and_fail_loud() {
+        use super::check_rail_window;
+        use crate::runner::RunOutcome;
+        use crate::scenarios::RailWindow;
+
+        let outcome_for = |points: &[(f64, f64)]| {
+            let mut win = RailWindow::new();
+            for &(t, v) in points {
+                win.observe(t, v);
+            }
+            let mut rail_windows = std::collections::HashMap::new();
+            rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
+            RunOutcome {
+                rail_windows,
+                ..Default::default()
+            }
+        };
+        let a: crate::spec::Assertion = toml::from_str(
+            r#"kind = "rail_window"
+net = "VBUS"
+scenario = "load"
+spike_above = 3.5
+spike_for_max_ms = 2.5
+settle_to = 3.4
+settle_within_ms = 2.5
+"#,
+        )
+        .unwrap();
+        let points = [(0.000, 3.3), (0.001, 3.8), (0.002, 3.8), (0.003, 3.3)];
+        let (ok, msg, why) = check_rail_window(&a, &outcome_for(&points));
+        assert!(ok, "a finite spike and settling window should pass: {msg}");
+        assert!(
+            msg.contains("spike>") && msg.contains("settle-to-"),
+            "rendered detail: {msg}"
+        );
+        assert!(
+            why.is_none(),
+            "passing overvoltage checks should have no why: {why:?}"
+        );
+
+        let a_tight: crate::spec::Assertion = toml::from_str(
+            r#"kind = "rail_window"
+net = "VBUS"
+scenario = "load"
+spike_above = 3.5
+settle_to = 3.4
+settle_within_ms = 1.0
+"#,
+        )
+        .unwrap();
+        let (ok_tight, msg_tight, why_tight) = check_rail_window(&a_tight, &outcome_for(&points));
+        assert!(
+            !ok_tight,
+            "a 2 ms settling time must fail a 1 ms bound: {msg_tight}"
+        );
+        assert!(msg_tight.contains("FAILED HERE"));
+        assert!(why_tight.unwrap_or_default().contains("settle"));
+
+        let never_settles = [(0.000, 3.3), (0.001, 3.8), (0.002, 3.6)];
+        let (ok_never, msg_never, why_never) =
+            check_rail_window(&a_tight, &outcome_for(&never_settles));
+        assert!(
+            !ok_never,
+            "a spike that never settles must fail: {msg_never}"
+        );
+        assert!(
+            msg_never.contains("inf"),
+            "never-settles detail should expose +inf: {msg_never}"
+        );
+        assert!(why_never.unwrap_or_default().contains("settle"));
+    }
+
+    // hwtrace ensemble: a converged member's real feature mismatch must beat a
+    // diverged sibling's INVALID (the R50 FAIL>INVALID doctrine, applied to the
+    // hwtrace path). Base bug: any diverged member forced every feature to INVALID.
     #[test]
     fn hwtrace_converged_mismatch_beats_a_diverged_sibling_invalid() {
         // A square wave 0<->5V of the given period over 1 s at 1 kSa/s.

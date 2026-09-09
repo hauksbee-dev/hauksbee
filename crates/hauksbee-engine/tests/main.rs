@@ -123,8 +123,6 @@ mod live_peripheral_attach;
 mod logic_gates_74hc;
 #[path = "logic_migration.rs"]
 mod logic_migration;
-#[path = "mcp4728_cosim.rs"]
-mod mcp4728_cosim;
 #[path = "mcu_family_router.rs"]
 mod mcu_family_router;
 #[path = "model_check.rs"]
@@ -183,12 +181,6 @@ mod stormduino_bind;
 mod strap_lint_corpus;
 #[path = "synthetic_cosim.rs"]
 mod synthetic_cosim;
-#[path = "tarski_595_chain.rs"]
-mod tarski_595_chain;
-#[path = "tarski_bind.rs"]
-mod tarski_bind;
-#[path = "tarski_full.rs"]
-mod tarski_full;
 #[path = "tarski_stretcher_transient.rs"]
 mod tarski_stretcher_transient;
 #[path = "thermal.rs"]

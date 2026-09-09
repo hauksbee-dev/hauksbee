@@ -401,6 +401,7 @@ const ENFORCED_BOUNDS: Record<string, string[]> = {
   "decoupling.override": ["esr_ohms", "esl_henries"],
   fuzz: ["seeds"],
   ensemble: ["seeds"],
+  assert: ["spike_for_max_ms", "settle_within_ms"],
 };
 
 /**

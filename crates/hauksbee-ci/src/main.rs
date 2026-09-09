@@ -8,7 +8,8 @@
 //! usage/spec error, and 3 when the run is invalid for analysis (an analog chunk
 //! failed to converge under an assertion's window, or the strict abort tripped;
 //! ). When `GITHUB_ACTIONS` is set in the environment, GitHub workflow
-//! annotations are emitted to stdout so failures surface inline.
+//! annotations are emitted to stderr so failures surface inline without
+//! contaminating machine-readable stdout.
 //!
 //! The argument surface is defined with `clap` (derive API): `--help`/`-h`,
 //! usage-on-error, and did-you-mean suggestions all come for free.
@@ -369,6 +370,10 @@ fn main() -> ExitCode {
                 // makes to a machine: under --json, stdout is NDJSON and one
                 // line per spec, and every ::notice landed in the middle of it.
                 if github {
+                    // Keep the published `--json` stdout contract as pure
+                    // NDJSON. GitHub processes workflow commands from stderr
+                    // too, so annotations remain visible without becoming a
+                    // second, non-JSON output line.
                     eprint!("{}", result.render_github_annotations());
                 }
                 let code = result.exit_code() as u8;

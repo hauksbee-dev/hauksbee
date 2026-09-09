@@ -18,7 +18,12 @@
 //! ```
 //! cargo test -p hauksbee-ci sensor_attach -- --nocapture
 //! ```
-//! Requires Renode at `~/renode-portable`.
+//! Requires Renode at `~/renode-portable`. Both co-sim tests take
+//! `support::descriptor_env_lock`: they need the stock stm32f103 descriptor,
+//! and a sibling test in this binary publishes an I2C-less one through the
+//! process-global `HAUKSBEE_MCU_DIR`.
+
+mod support;
 
 use std::path::PathBuf;
 
@@ -47,6 +52,7 @@ fn firmware_present() -> bool {
 /// incorrectly (firmware reads != 40 C). Either failure is a clear signal.
 #[test]
 fn sensor_attach_lm75_hot_flag_goes_high() {
+    let _guard = support::descriptor_env_lock();
     if !renode_available() {
         eprintln!("SKIP sensor_attach_lm75_hot: Renode not installed");
         return;
@@ -94,6 +100,7 @@ fn sensor_attach_lm75_hot_flag_goes_high() {
 /// The 4k7 pull-down holds the net at ~0 V the whole run.
 #[test]
 fn sensor_attach_lm75_cold_flag_stays_low() {
+    let _guard = support::descriptor_env_lock();
     if !renode_available() {
         eprintln!("SKIP sensor_attach_lm75_cold: Renode not installed");
         return;
@@ -176,7 +183,7 @@ fn sensor_spec_missing_source_is_rejected() {
 
     let spec_src = format!(
         r#"name = "sensor test"
-board = "{board}"
+board = {board}
 duration_ms = 10
 
 [[sensor]]
@@ -187,7 +194,7 @@ kind = "voltage"
 net = "+3V3"
 min = 3.0
 "#,
-        board = board_path.display()
+        board = support::toml_path(&board_path)
     );
     let spec_path = dir.join("bad_sensor.toml");
     std::fs::write(&spec_path, &spec_src).unwrap();
@@ -225,7 +232,7 @@ fn sensor_spec_both_sources_is_rejected() {
 
     let spec_src = format!(
         r#"name = "sensor test"
-board = "{board}"
+board = {board}
 duration_ms = 10
 
 [[sensor]]
@@ -238,7 +245,7 @@ kind = "voltage"
 net = "+3V3"
 min = 3.0
 "#,
-        board = board_path.display()
+        board = support::toml_path(&board_path)
     );
     let spec_path = dir.join("both_sources.toml");
     std::fs::write(&spec_path, &spec_src).unwrap();
@@ -259,7 +266,7 @@ fn unknown_sensor_input_is_refused_before_simulation() {
         .join("examples/boards/tolerance_divider.kicad_pcb");
     let spec = format!(
         r#"name = "bad sensor input"
-board = "{}"
+board = {}
 duration_ms = 1
 
 [[sensor]]
@@ -286,7 +293,7 @@ tempereture_c = 40.0
 [[assert]]
 kind = "no_faults"
 "#,
-        board.display()
+        support::toml_path(&board)
     );
     let path = dir.path().join("unknown-input.toml");
     std::fs::write(&path, spec).expect("write test spec");

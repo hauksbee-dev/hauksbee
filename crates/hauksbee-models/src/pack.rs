@@ -224,7 +224,14 @@ impl PackManifest {
             .min_hauksbee_version
             .ok_or(PackError::MissingField("min_hauksbee_version"))?;
         let required = parse_version("pack.min_hauksbee_version", &min)?;
-        let current = parse_version("hauksbee version", hauksbee_version)?;
+        // Cargo exposes the full SemVer string here. Model-pack compatibility
+        // intentionally uses the numeric compatibility line, so a prerelease
+        // such as 0.1.0-beta.1 can load packs whose floor is 0.1.0.
+        let current_core = hauksbee_version
+            .split(['-', '+'])
+            .next()
+            .unwrap_or(hauksbee_version);
+        let current = parse_version("hauksbee version", current_core)?;
         if required > current {
             return Err(PackError::IncompatibleVersion {
                 required: min,
