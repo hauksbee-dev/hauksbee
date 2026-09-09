@@ -1,5 +1,4 @@
 //! hauksbee-checks: the static-check layer of the engine.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! Every check here reads a board plus the models it binds to and returns
 //! findings without running a simulation: [`checks`] is the netlist / boot /

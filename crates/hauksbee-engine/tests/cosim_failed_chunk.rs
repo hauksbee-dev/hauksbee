@@ -9,7 +9,7 @@
 //!   * trips a strict/CI abort once the solve fails `STRICT_CONSECUTIVE_FAILED_ABORT`
 //!     chunks in a row, mapping to exit code `EXIT_INVALID_FOR_ANALYSIS` (3).
 //!
-//! Gate name in `docs/dev-plans/08-validation-and-test-campaign.md` §2.
+//! Gate name in §2.
 
 use std::collections::HashMap;
 

@@ -5,11 +5,9 @@ import pkg from './package.json' with { type: 'json' }
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  // Build-time constant, not an import.meta.env lookup: only a literal is
-  // constant-folded, which is what removes the demo shell from the live
-  // bundle and the upload/live machinery from the demo bundle.
+  // Build-time constants, not import.meta.env lookups: only a literal is
+  // constant-folded.
   define: {
-    __DEMO__: JSON.stringify(process.env.VITE_DEMO === '1'),
     // The version the app reports (and pins the published GitHub action to),
     // read from package.json here so no source file carries a copy of it.
     __APP_VERSION__: JSON.stringify(pkg.version),

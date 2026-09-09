@@ -1,7 +1,7 @@
 /* Soft-I2C read fixture for the synchronous input-responder proof
  * (dev-plan 05 §1.5).
  *
- * Reads a spec-driven MPU-6050 (docs/hunts/specs/mpu6050.toml, address 0x68)
+ * Reads a spec-driven MPU-6050
  * over BIT-BANGED I2C: SCL/SDA toggled as plain GPIOs on PD2/PD3 —
  * deliberately NOT the ATmega328P's hardware TWI pins (PC4/PC5), so nothing
  * but the engine's soft-I2C responder can answer. Every ACK and every read

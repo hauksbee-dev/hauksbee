@@ -1,6 +1,6 @@
 # Docker
 
-**The private beta publishes no container images.** `docker.yml` runs only by
+**This pre-1.0 beta publishes no public container images.** `docker.yml` runs only by
 manual dispatch, so every tag and digest on this page describes a candidate
 build you produce yourself, not an asset attached to a beta release.
 

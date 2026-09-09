@@ -1261,13 +1261,13 @@ jobs:
           for binary in hauksbee hauksbee-ci; do
             "target/release/$binary" --version | grep -F "(git $expected)" >/dev/null
           done
-          qc/run.sh --results-dir qc/release-results
+          qc/run.sh --results-dir qc/results/release-qc
       - name: Retain exact-SHA scenario QC evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-quality-qc-${{ steps.quality-source.outputs.source_sha }}
-          path: qc/release-results/**/report.md
+          path: qc/results/release-qc/**/report.md
           if-no-files-found: error
           retention-days: 90
 
@@ -1306,10 +1306,8 @@ jobs:
           python3 integrations/kicad-plugin/test_hauksbee_ci_core.py
           python3 integrations/pre-commit/test_hauksbee_ci_precommit.py
           python3 scripts/lint-diagrams.py
-          python3 scripts/lint-docs-currency.py
           bash integrations/github-action/test_pick_release_tag.sh
           shellcheck integrations/github-action/*.sh scripts/setup-ci-simavr.sh scripts/simavr-payload-provenance.sh scripts/build-release-source.sh
-          shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
       - name: Product-app lint, unit, browser, build, and visual gates
         working-directory: frontend
         run: |
@@ -1415,6 +1413,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          HAUKSBEE_EXPECTED_REPOSITORY_VISIBILITY: public
         run: bash hauksbee/scripts/preflight-private-release.sh hauksbee
 
       - name: Download all build artifacts

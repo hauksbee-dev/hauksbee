@@ -53,8 +53,6 @@
 //! with its upstream during conduction analysis, so the tear (and therefore
 //! the pin) would not exist.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 use std::collections::{BTreeMap, HashMap};
 

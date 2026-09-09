@@ -9,7 +9,7 @@ import { visibleImportMarkers } from '../src/lib/board-renderer'
 
 // The real frontdoor report lives in the repository's demo/ tree; a checkout
 // without it skips the tests that need it rather than failing on a missing file.
-const FRONTDOOR_REPORT = new URL('../../demo/sessions/blinky/report-nominal.json', import.meta.url)
+const FRONTDOOR_REPORT = new URL('./fixtures-blinky-report-nominal.json', import.meta.url)
 const hasFrontdoorReport = existsSync(FRONTDOOR_REPORT)
 
 function realFrontdoorReport(): WebReport {

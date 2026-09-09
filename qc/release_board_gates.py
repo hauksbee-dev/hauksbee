@@ -29,8 +29,8 @@ from qc.unseen_boards import (
 from qc.value_grading import ValueGrade, grade_board, input_facts, summarize
 
 _REPOSITORY = Path(__file__).resolve().parent.parent
-CANONICAL_HISTORY = _REPOSITORY / "qc/evidence/unseen-external-history.jsonl"
-CANONICAL_EVIDENCE_DIR = _REPOSITORY / "qc/evidence/runs"
+CANONICAL_HISTORY = _REPOSITORY / "qc/results/unseen-external-history.jsonl"
+CANONICAL_EVIDENCE_DIR = _REPOSITORY / "qc/results/evidence-runs"
 RELEASE_SCRATCH = _REPOSITORY / "qc/results/release-gates"
 
 

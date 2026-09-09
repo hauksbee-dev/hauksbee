@@ -63,8 +63,6 @@
 //! refusal survives only on the `detect_rail_tears` path, whose executor does
 //! not carry those boundary-only currents.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 

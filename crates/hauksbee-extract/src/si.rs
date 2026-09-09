@@ -31,7 +31,6 @@
 //! Geometry is read from the same `.kicad_pcb` s-expression the DRC parses,
 //! re-deriving only the narrow slice needed here.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/si.md.
 
 use std::collections::HashMap;
 

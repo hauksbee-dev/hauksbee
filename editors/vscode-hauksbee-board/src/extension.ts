@@ -1,5 +1,5 @@
 // Hauksbee VS Code extension: a THIN shell-out client (no LSP, deferred by
-// design, docs/dev-plans/07-ux-and-integrations.md §4). Two commands shell out
+// design, §4). Two commands shell out
 // to the `hauksbee` / `hauksbee-ci` binaries; their machine output is mapped
 // to VS Code diagnostics by the pure functions in ./mapping.
 //

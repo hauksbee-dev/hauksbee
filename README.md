@@ -12,10 +12,9 @@ A design-rule checker checks geometry against rules. A schematic simulator execu
 
 ## Get Hauksbee
 
-Beta testers should use the exact `v0.1.0-beta.4` release link supplied with
-their invitation once that release is published. Do not substitute the stable
-`latest` URL. Verify the source commit and checksum as described in
-[BETA](BETA.md#getting-a-beta-build). A macOS app is distributed only after its
+Hauksbee is pre-1.0. Install one exact pre-release tag rather than the stable
+`latest` URL, and verify the source commit and checksum as described in
+[BETA](BETA.md#getting-a-beta-build). A macOS app is published only after its
 same-source signing and notarisation gates pass.
 
 After the first stable release, `Hauksbee.app` will also be available from the
@@ -23,8 +22,10 @@ After the first stable release, `Hauksbee.app` will also be available from the
 Ordinary analysis is local; optional datasheet drafting has the separate
 [privacy boundary](BETA.md#privacy).
 
-The convenience installers below follow the stable release channel. Beta users
-must instead use their exact tag and source commit:
+The convenience installers below resolve the stable release channel, which
+does not exist yet. During beta, append `-s -- --version <the tag>` to the
+`bash` at the end of the line, as in
+[BETA](BETA.md#getting-a-beta-build):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash

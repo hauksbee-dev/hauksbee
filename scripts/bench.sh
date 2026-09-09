@@ -2,7 +2,7 @@
 # bench.sh - run the S2 graded-board benchmark harness and print a median table.
 #
 # The harness itself is `crates/hauksbee-solve/benches/graded_boards.rs`, driven
-# by criterion (docs/dev-plans/03-solver-performance.md §9). This wrapper runs it,
+# by criterion. This wrapper runs it,
 # then reads criterion's own JSON estimates and prints one compact table of
 # medians, so you get the headline numbers without digging through
 # target/criterion/ or opening the HTML report (which we do not build).
@@ -29,7 +29,7 @@
 # HONEST-BASELINE RULE (08-validation-and-test-campaign.md §4): a saved baseline
 # is a committed reference. Moving it is a deliberate act - land a baseline
 # change in its OWN commit with the flamegraph diff or an explanation, never
-# folded into an unrelated change. See docs/dev-plans/perf/README.md.
+# folded into an unrelated change.md.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

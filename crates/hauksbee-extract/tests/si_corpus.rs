@@ -1,6 +1,6 @@
 //! Corpus-gated calibration guard for the four signal-integrity checks
-//! (`--si`). The binding discipline (docs/evidence/FAMOUS_SWEEP.md,
-//! docs/evidence/KNOWN_FAULTS_VALIDATION.md): **zero true findings on the known-good
+//! (`--si`). The binding discipline (docs/evidence/CORPUS.md,
+//! docs/evidence/CORPUS.md): **zero true findings on the known-good
 //! corpus, or the check does not fire.** These boards are shipped, working,
 //! reviewed designs, so any high/medium/low SI finding on them is a hauksbee
 //! false positive that must be chased to the file and killed before the check is

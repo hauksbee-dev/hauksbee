@@ -3959,7 +3959,7 @@ pub mod eagle_drc {
         // SHORT_TOUCH_EPS_MM). Removing the over-reports needs Eagle's fill
         // reconstructed from the outline, the pour settings and the foreign
         // copper, which is not implemented. Error rate measured against the
-        // emonTx family in `docs/evidence/KNOWN_FAULTS_VALIDATION.md`.
+        // emonTx family in `docs/evidence/CORPUS.md`.
         for (i, a) in pours.iter().enumerate() {
             for b in pours.iter().skip(i + 1) {
                 if a.layer != b.layer

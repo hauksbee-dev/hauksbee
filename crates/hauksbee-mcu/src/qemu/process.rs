@@ -25,7 +25,6 @@
 //! boot an ESP32 image). [`is_esp_fork`] verifies the binary advertises an
 //! `esp32` machine before it is accepted.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 use crate::children::{home_dir, which};
 use crate::external::{env_override, first_accepted, EmulatorProcess};
@@ -108,14 +107,12 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
 /// The conventional unpacked locations for the fork under one home directory:
 /// Hauksbee's exact-source GPIO-patched build first (the backend still probes
 /// the live QOM object; path priority alone never claims the patch is
-/// present), then the current name, then the pre-rename `.galvani-qemu-esp`
 /// so an existing unpacked fork keeps resolving. Takes the file name as a
 /// parameter so the unit tests can exercise the Windows `.exe` shape anywhere.
 fn home_candidates(home: &Path, file: &str) -> Vec<PathBuf> {
     [
         ".hauksbee-qemu-esp-patched/qemu/bin",
         ".hauksbee-qemu-esp/qemu/bin",
-        ".galvani-qemu-esp/qemu/bin",
     ]
     .iter()
     .map(|dir| home.join(dir).join(file))
@@ -289,7 +286,6 @@ mod discovery_tests {
                         .join(".hauksbee-qemu-esp-patched/qemu/bin")
                         .join(file),
                     home.path().join(".hauksbee-qemu-esp/qemu/bin").join(file),
-                    home.path().join(".galvani-qemu-esp/qemu/bin").join(file),
                 ],
                 "reviewed patched build first, then current and legacy upstream installs"
             );

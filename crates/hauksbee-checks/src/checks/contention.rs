@@ -1,5 +1,4 @@
 //! Model-aware driver-contention lint: two MODELLED push-pull outputs on one net.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! The extract layer already has an output-contention check
 //! ([`LintCheck::OutputContention`] in `hauksbee-extract/src/netlint.rs`). That
