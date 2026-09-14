@@ -104,6 +104,17 @@ fn validate_flag_consistency(cfg: &RunConfig, any_report_flag: bool) -> anyhow::
              is ignored here"
         );
     }
+    // Same for --emit-netlist. With --list-nets alongside it, the net list is
+    // what prints: it is checked first, and saying so names which of the two
+    // the user is about to get.
+    if cfg.emit_netlist && cfg.list_nets {
+        eprintln!("warning: --list-nets prints first, so --emit-netlist is ignored here");
+    } else if cfg.emit_netlist && any_report_flag {
+        eprintln!(
+            "warning: --emit-netlist prints the netlist and exits, so the report flag \
+             is ignored here"
+        );
+    }
     // Same for --tui: an explicit report flag prints and exits, so the
     // dashboard never launches.
     if cfg.plain && cfg.json {

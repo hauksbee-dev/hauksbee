@@ -969,6 +969,14 @@ struct RunArgs {
     #[arg(long, help_heading = "Reports")]
     list_nets: bool,
 
+    /// Print the extracted netlist (every net with the pins on it) and exit, so
+    /// another tool can ask hauksbee what is connected to what. One
+    /// tab-separated `net<TAB>refdes<TAB>pin<TAB>pin-name` line per connected
+    /// pin, or one JSON document under --json. It answers on a board whose
+    /// parts have no models, because connectivity is settled before binding.
+    #[arg(long, help_heading = "Reports")]
+    emit_netlist: bool,
+
     /// Run ALL the static checks at once in one report, instead of one flag at a
     /// time: bind coverage, DRC (shorts + clearance), the connectivity lint,
     /// signal integrity, USB-C CC compliance, and the MCU resource-conflict,
@@ -1805,6 +1813,7 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         no_strict_thermal: a.no_strict_thermal,
         strict_boot: a.strict_boot,
         list_nets: a.list_nets,
+        emit_netlist: a.emit_netlist,
         check: a.check,
         oracle: a.oracle,
         apply_shorts: a.apply_shorts,

@@ -151,6 +151,8 @@ mod refusal_contract;
 mod renode_cosim_coverage_honesty;
 #[path = "renode_riscv_arm_cosim.rs"]
 mod renode_riscv_arm_cosim;
+#[path = "run_emit_netlist.rs"]
+mod run_emit_netlist;
 #[path = "run_manifest_contract.rs"]
 mod run_manifest_contract;
 #[path = "run_report_schema_drift.rs"]

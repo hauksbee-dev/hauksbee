@@ -51,6 +51,10 @@ pub struct RunConfig {
     pub no_strict_thermal: bool,
     pub strict_boot: bool,
     pub list_nets: bool,
+    /// `--emit-netlist`: print the extracted netlist (every net with the pins
+    /// on it) and exit, so another tool can use hauksbee as a connectivity
+    /// oracle without re-deriving the netlist itself.
+    pub emit_netlist: bool,
     pub check: bool,
     pub oracle: bool,
     pub apply_shorts: bool,
@@ -143,6 +147,7 @@ pub(crate) fn valid_digest(digest: &str) -> Option<String> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectedSurface {
     Inventory,
+    Netlist,
     Check,
     Bind,
     Drc,
@@ -165,6 +170,8 @@ enum SelectedSurface {
 fn selected_surface(cfg: &RunConfig) -> SelectedSurface {
     if cfg.list_nets {
         SelectedSurface::Inventory
+    } else if cfg.emit_netlist {
+        SelectedSurface::Netlist
     } else if cfg.check {
         SelectedSurface::Check
     } else if cfg.report {
@@ -237,7 +244,7 @@ fn ci_selected_suites(surface: SelectedSurface) -> Vec<String> {
         SelectedSurface::Ac => &["ac"],
         SelectedSurface::Thermal => &["thermal"],
         SelectedSurface::Serial | SelectedSurface::Headless => &["cosim"],
-        SelectedSurface::Inventory => &["inventory"],
+        SelectedSurface::Inventory | SelectedSurface::Netlist => &["inventory"],
         SelectedSurface::Default => &["run"],
     };
     checks.iter().map(|check| (*check).to_string()).collect()
@@ -451,6 +458,104 @@ fn notes_visible(quiet: bool, json: bool, stdout_is_tty: bool) -> bool {
 /// document no JSON parser accepts. This is pure so it is unit-testable.
 pub(crate) fn list_nets_json(nets: &[String]) -> String {
     serde_json::to_string(nets).unwrap_or_else(|_| "[]".into())
+}
+
+/// One pin sitting on a net, in the `--emit-netlist` document.
+#[derive(serde::Serialize)]
+pub(crate) struct NetlistPin<'a> {
+    #[serde(rename = "ref")]
+    reference: &'a str,
+    /// Pad/pin number as the board file prints it ("1", "A8", "EP").
+    pin: &'a str,
+    /// Pin name from the schematic ("VCC", "GPIO4"); empty on a layout, which
+    /// carries no pin names at all.
+    pin_name: &'a str,
+}
+
+/// One net and everything connected to it.
+#[derive(serde::Serialize)]
+pub(crate) struct NetlistNet<'a> {
+    name: &'a str,
+    pins: Vec<NetlistPin<'a>>,
+}
+
+/// The whole `--emit-netlist` document.
+#[derive(serde::Serialize)]
+pub(crate) struct NetlistDoc<'a> {
+    board: &'a str,
+    nets: Vec<NetlistNet<'a>>,
+}
+
+/// Build the netlist document from the extracted board.
+///
+/// This reads the extraction, not the bind report: the point of the surface is
+/// connectivity, which is settled before any model claims a part, so a board
+/// full of unmodelled parts still answers here. Do-not-populate policy has
+/// already been applied to `board`, so a part the board says is not fitted is
+/// absent from this document exactly as it is absent from the analysis.
+///
+/// Sort is by net name then net id, and within a net by refdes then pin
+/// number, so two runs over the same board emit byte-identical output.
+pub(crate) fn netlist_doc(board: &hauksbee_extract::ExtractedBoard) -> NetlistDoc<'_> {
+    let mut pins_by_net: std::collections::HashMap<i64, Vec<NetlistPin<'_>>> =
+        std::collections::HashMap::new();
+    for component in &board.components {
+        for pin in &component.pins {
+            let Some(net) = pin.net else { continue };
+            pins_by_net.entry(net).or_default().push(NetlistPin {
+                reference: &component.reference,
+                pin: &pin.number,
+                pin_name: &pin.function,
+            });
+        }
+    }
+
+    let mut nets: Vec<(&str, i64, Vec<NetlistPin<'_>>)> = board
+        .nets
+        .iter()
+        .map(|net| {
+            let mut pins = pins_by_net.remove(&net.id).unwrap_or_default();
+            pins.sort_by(|a, b| (a.reference, a.pin).cmp(&(b.reference, b.pin)));
+            (net.name.as_str(), net.id, pins)
+        })
+        .collect();
+    nets.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+
+    NetlistDoc {
+        board: &board.name,
+        nets: nets
+            .into_iter()
+            .map(|(name, _, pins)| NetlistNet { name, pins })
+            .collect(),
+    }
+}
+
+/// The `--emit-netlist --json` document, serialized through serde_json for the
+/// same reason [`list_nets_json`] is: a net or pin name out of a malformed
+/// board file must not be able to produce a document no JSON parser accepts.
+pub(crate) fn netlist_json(board: &hauksbee_extract::ExtractedBoard) -> String {
+    serde_json::to_string_pretty(&netlist_doc(board)).unwrap_or_else(|_| "{}".into())
+}
+
+/// The `--emit-netlist` text rendering: one tab-separated line per connected
+/// pin, in the same order the JSON document uses, so it pipes into `cut`/`awk`
+/// the way `--list-nets` pipes into `grep`.
+pub(crate) fn netlist_lines(board: &hauksbee_extract::ExtractedBoard) -> String {
+    let doc = netlist_doc(board);
+    let mut out = String::new();
+    for net in &doc.nets {
+        for pin in &net.pins {
+            out.push_str(net.name);
+            out.push('\t');
+            out.push_str(pin.reference);
+            out.push('\t');
+            out.push_str(pin.pin);
+            out.push('\t');
+            out.push_str(pin.pin_name);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// The single gate every chatty informational note routes through, so `--quiet`
