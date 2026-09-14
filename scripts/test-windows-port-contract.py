@@ -255,11 +255,19 @@ class WindowsPortContract(unittest.TestCase):
             "windows_hard_parent_death_kills_immediate_grandchild",
         ):
             self.assertIn(symbol, children)
+        # Every emulator spawn reaches spawn_owned through one shared path: the
+        # backends construct an EmulatorProcess, which spawns via
+        # children::spawn_emulator, which is the only caller of spawn_owned
+        # outside children.rs's own tests.
         for process in (
             "crates/hauksbee-mcu/src/renode/process.rs",
             "crates/hauksbee-mcu/src/qemu/process.rs",
         ):
-            self.assertIn("spawn_owned", read(process))
+            self.assertIn("EmulatorProcess::spawn(", read(process))
+        external = read("crates/hauksbee-mcu/src/external.rs")
+        self.assertIn("spawn_emulator(", external)
+        self.assertNotIn("Command::spawn", external)
+        self.assertIn("let (child, guard) = spawn_owned(cmd)?;", children)
         release_docs = read("docs/about/release-and-licensing.md")
         self.assertIn("spawn-to-assignment window", release_docs)
         self.assertNotIn("descendant cannot escape between spawn and assignment", release_docs)
