@@ -65,6 +65,19 @@ pub(crate) fn emit_selected(
         return Ok(true);
     }
 
+    // --emit-netlist: the connectivity the extractor derived, so another tool
+    // can ask hauksbee what is connected to what without re-deriving a netlist
+    // from the board file itself. It answers on a board whose parts have no
+    // models at all, because connectivity is settled before binding.
+    if surface == SelectedSurface::Netlist {
+        if cfg.json {
+            println!("{}", super::netlist_json(board));
+        } else {
+            print!("{}", super::netlist_lines(board));
+        }
+        return Ok(true);
+    }
+
     // --check / --all: the whole static suite (bind + DRC + lint + SI) in ONE
     // report, so a person (or an AI) gets everything in a single command instead
     // of running one flag at a time. Honours --plain / --json / --strict.
