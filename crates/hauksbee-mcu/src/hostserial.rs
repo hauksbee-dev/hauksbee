@@ -118,6 +118,8 @@ pub const BACKLOG_CAP: usize = 64 * 1024;
 /// is also what the emulated UART's baud rate would force anyway.
 /// How many drain-then-poll rounds the liveness probe tolerates before
 /// concluding that a peer which keeps the queue full is simply attached.
+/// The probe is pty-based, so only the Unix build reads this.
+#[cfg(unix)]
 const PEER_PROBE_DRAIN_ROUNDS: usize = 16;
 
 const READ_BUDGET: usize = 64 * 1024;
