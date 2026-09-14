@@ -23,6 +23,9 @@ use std::time::{Duration, Instant};
 /// A spawned emulator child: owned as a process tree (see [`crate::children`]),
 /// registered with the signal reaper, and torn down whole on drop.
 pub(crate) struct EmulatorProcess {
+    // The three QEMU-only members below (this label, `ensure_running`, and
+    // `nonempty_or`) go unread in a renode-only build.
+    #[cfg_attr(not(feature = "qemu"), allow(dead_code))]
     label: &'static str,
     child: Child,
     guard: ProcessTreeGuard,
@@ -109,6 +112,7 @@ impl EmulatorProcess {
     /// and quoting its stderr. Safe to call on every later chunk: `try_wait`
     /// keeps returning the same status, so a terminal emulator failure never
     /// degrades into a stream of bare socket errors.
+    #[cfg_attr(not(feature = "qemu"), allow(dead_code))]
     pub(crate) fn ensure_running(&mut self, operation: &str) -> Result<()> {
         match self.child.try_wait() {
             Ok(None) => Ok(()),
@@ -144,6 +148,7 @@ impl Drop for EmulatorProcess {
 
 /// `s` unless it is empty, else the fallback: an error that embeds captured
 /// stderr must say "nothing" rather than trail off into blank space.
+#[cfg_attr(not(feature = "qemu"), allow(dead_code))]
 pub(crate) fn nonempty_or<'a>(s: &'a str, fallback: &'a str) -> &'a str {
     if s.is_empty() {
         fallback

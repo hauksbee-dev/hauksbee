@@ -917,7 +917,7 @@ fn validate_non_empty(fields: &[(&'static str, &str)]) -> Result<(), SocError> {
     Ok(())
 }
 
-#[cfg(feature = "renode")]
+#[cfg(any(feature = "renode", feature = "qemu"))]
 /// The first item that repeats an earlier one, if any.
 fn first_duplicate<T: PartialEq>(items: impl IntoIterator<Item = T>) -> Option<T> {
     let mut seen = Vec::new();
@@ -930,7 +930,7 @@ fn first_duplicate<T: PartialEq>(items: impl IntoIterator<Item = T>) -> Option<T
     None
 }
 
-#[cfg(feature = "renode")]
+#[cfg(any(feature = "renode", feature = "qemu"))]
 /// Validate GPIO port/bank `(letter, width)` pairs: no zero-width port, none
 /// wider than the 32-bit word a bank is observed as, no two ports sharing a
 /// letter (which the engine keys on).
@@ -950,7 +950,7 @@ fn validate_ports(ports: impl Iterator<Item = (char, u8)>) -> Result<(), SocErro
     }
 }
 
-#[cfg(feature = "renode")]
+#[cfg(any(feature = "renode", feature = "qemu"))]
 /// Validate a bus controller list has no duplicate names.
 fn validate_controllers(bus: &'static str, controllers: &[String]) -> Result<(), SocError> {
     match first_duplicate(controllers) {
@@ -1745,7 +1745,7 @@ mcu_label = "test part"
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "renode", feature = "qemu")))]
 mod width_validation_tests {
     use super::{validate_ports, SocError};
 
