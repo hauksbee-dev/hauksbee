@@ -25,12 +25,14 @@ Prerequisites:
   OpenAI-compatible API backend.
 - `pdftotext` on `PATH` (required for the API backend; local agent backends can
   read the copied PDF directly).
-- The reference datasheet present at `testdata/datasheets/BC847.pdf`. It is the
-  Nexperia BC846 series datasheet (BC847 is in that family). Download:
+- The reference datasheet present at `testdata/datasheets/BC846.pdf`. It is the
+  Nexperia BC846 series sheet, which covers the 65 V types (BC846/BC846W/BC846T
+  and their BC856 PNP complements) and states nothing about the 45 V BC847, so
+  BC846 is the part to ask it for. Download:
 
   ```bash
   mkdir -p testdata/datasheets
-  curl -L -o testdata/datasheets/BC847.pdf \
+  curl -L -o testdata/datasheets/BC846.pdf \
       https://assets.nexperia.com/documents/data-sheet/BC846_SER.pdf
   # 1N4148 reference sheet, if you want to extract it too:
   curl -L -o testdata/datasheets/1N4148.pdf \
@@ -43,11 +45,11 @@ Prerequisites:
 Run the live extraction test:
 
 ```bash
-cargo test -p hauksbee-models --lib extract_bc847_live -- \
+cargo test -p hauksbee-models --lib extract_bc846_live -- \
     --ignored --nocapture
 ```
 
-It runs the configured backend against the BC847 datasheet, parses and validates the reply, and
+It runs the configured backend against the BC846 datasheet, parses and validates the reply, and
 asserts the extracted `bf` lands in the datasheet hFE band (110..450) with VCEO
 in `[models.ratings]`.
 

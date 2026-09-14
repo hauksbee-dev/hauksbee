@@ -78,8 +78,8 @@ From a terminal:
 
 ```bash
 hauksbee models extract \
-    --pdf testdata/datasheets/BC847.pdf \
-    --part BC847 \
+    --pdf testdata/datasheets/BC846.pdf \
+    --part BC846 \
     --out-dir ~/.hauksbee/models       # default if omitted
 ```
 
@@ -521,7 +521,7 @@ in `crates/hauksbee-engine/tests/datasheet_validation.rs`:
 | kind  | check                                                                 |
 |-------|-----------------------------------------------------------------------|
 | diode | forward voltage at a stated forward current (1N4148: ~0.7 V at 10 mA) |
-| BJT   | DC current gain beta = Ic/Ib **and** Vbe at the bias (BC847: hFE in 110..450, Vbe ~0.66 V at 2 mA) |
+| BJT   | DC current gain beta = Ic/Ib **and** Vbe at the bias (BC846: hFE in 110..450, Vbe ~0.66 V at 2 mA) |
 | LDO   | output voltage under a simulated resistor load, within tolerance (AMS1117-3.3: 3.30 V) |
 
 The same suite has a garbage-rejection test proving simulation rejects a
@@ -533,7 +533,7 @@ measurements):
 
 | Part         | Simulated                     | Datasheet truth                  |
 |--------------|-------------------------------|----------------------------------|
-| BC847 (NPN)  | beta 171, Vbe 0.660 V @ 2 mA  | hFE 110..450 (typ 180), Vbe 660 mV |
+| BC846 (NPN)  | beta 171, Vbe 0.660 V @ 2 mA  | hFE 110..450 (typ 180), Vbe 660 mV |
 | 1N4148 (D)   | Vf 0.688 V @ 10.1 mA          | Vf max 1.0 V @ 10 mA (real ~0.7 V) |
 | AMS1117-3.3  | Vout 3.300 V @ 33 mA load     | 3.300 V (3.201..3.399 V)         |
 
@@ -602,8 +602,8 @@ would need a `[models.behavioral]` block (see the LTC4020 entry in
     ratings; it also asserts that the generic power-FET fallback binds an
     unknown FET-in-DPAK by footprint, and that a specific value entry beats
     the catch-all when both match.
-- **Live (manual)**: `hauksbee-models` `extract_bc847_live` is `#[ignore]`d
-  and runs the configured live backend against `testdata/datasheets/BC847.pdf`.
+- **Live (manual)**: `hauksbee-models` `extract_bc846_live` is `#[ignore]`d
+  and runs the configured live backend against `testdata/datasheets/BC846.pdf`.
   `HAUKSBEE_LLM_API_KEY` selects the API; otherwise it uses Codex. See
   `crates/hauksbee-models/README_DATASHEET.md`.
 
