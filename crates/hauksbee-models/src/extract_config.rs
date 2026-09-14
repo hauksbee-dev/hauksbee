@@ -1058,6 +1058,8 @@ pub fn is_local_url(url: &str) -> bool {
 
 /// Where the file lives: `$HAUKSBEE_EXTRACT_CONFIG`, else
 /// `$XDG_CONFIG_HOME/hauksbee/extract.toml`, else `~/.config/hauksbee/extract.toml`.
+/// Windows has no `$HOME`: there it is `%APPDATA%\hauksbee\extract.toml`, else
+/// `%USERPROFILE%\.config\hauksbee\extract.toml`.
 pub fn config_path() -> Result<PathBuf> {
     config_path_in(&ProcessHost)
 }
@@ -1074,10 +1076,18 @@ pub fn config_path_in(host: &dyn Host) -> Result<PathBuf> {
     if let Some(xdg) = set("XDG_CONFIG_HOME") {
         return Ok(xdg.join("hauksbee").join(FILE_NAME));
     }
-    let home = set("HOME").context(
-        "neither $HOME nor $HAUKSBEE_EXTRACT_CONFIG is set, so there is nowhere to keep extraction settings",
+    if let Some(home) = set("HOME") {
+        return Ok(home.join(".config").join("hauksbee").join(FILE_NAME));
+    }
+    // Windows: no $HOME. %APPDATA% is the per-user roaming config root;
+    // %USERPROFILE% is the home directory itself.
+    if let Some(appdata) = set("APPDATA") {
+        return Ok(appdata.join("hauksbee").join(FILE_NAME));
+    }
+    let profile = set("USERPROFILE").context(
+        "none of $HAUKSBEE_EXTRACT_CONFIG, $XDG_CONFIG_HOME, $HOME, %APPDATA% or %USERPROFILE% is set, so there is nowhere to keep extraction settings",
     )?;
-    Ok(home.join(".config").join("hauksbee").join(FILE_NAME))
+    Ok(profile.join(".config").join("hauksbee").join(FILE_NAME))
 }
 
 /// A config as loaded: the values, where they came from, and whether the
@@ -1408,6 +1418,15 @@ mod tests {
         assert_eq!(
             at(&[("HOME", "/h")]).unwrap(),
             PathBuf::from("/h/.config/hauksbee/extract.toml")
+        );
+        // Windows: no $HOME, so the roaming config root, then the profile.
+        assert_eq!(
+            at(&[("APPDATA", "/ad"), ("USERPROFILE", "/up")]).unwrap(),
+            PathBuf::from("/ad/hauksbee/extract.toml")
+        );
+        assert_eq!(
+            at(&[("USERPROFILE", "/up")]).unwrap(),
+            PathBuf::from("/up/.config/hauksbee/extract.toml")
         );
         assert!(at(&[]).is_err());
     }

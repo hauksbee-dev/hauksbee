@@ -285,7 +285,7 @@ jobs:
       # v0.1.0-beta.1 release run) while the same co-sims pass one at a time.
       # corpus-gate.yml serializes its emulator suites for the same reason.
       - name: native engine, CI, and emulator-lifecycle tests
-        run: cargo test -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu -- --test-threads=1
+        run: cargo test --no-fail-fast -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu -- --test-threads=1
       - name: require three real firmware-through-emulator flows
         shell: pwsh
         run: |
