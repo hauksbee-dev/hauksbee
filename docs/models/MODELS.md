@@ -840,6 +840,12 @@ Which directory sets its priority, and how it was authored does not:
 
 A user SPICE card (layer 40) still beats all of them.
 
+`--models-dir` takes any of the three shapes a model directory actually has:
+a directory of loose `*.toml` cards, one pack root (`pack.toml` beside a
+`models/` folder), or a directory that holds packs (`*/pack.toml`), where every
+pack under it loads at layer 30. A directory with none of those in it says so
+on stderr rather than loading nothing quietly.
+
 ### Worked example: a "crazy" custom charger
 
 Suppose you have a part `ACME-BUCK-9000`, a buck charger whose input-current

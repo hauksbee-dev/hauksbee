@@ -129,11 +129,42 @@ pub enum ModelError {
     #[error("directory does not exist: {dir}")]
     MissingDir { dir: String },
 
+    #[error(
+        "no model cards in {dir}: it holds no '*.toml' card and no pack \
+         (a directory with pack.toml beside a models/ folder). Point \
+         --models-dir at the directory the cards are actually in"
+    )]
+    NoCards { dir: String },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
+}
+
+/// Pack directories sitting directly inside `dir`, sorted by path so two runs
+/// load the same cards in the same order.
+fn child_packs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut packs: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join("pack.toml").is_file() && p.join("models").is_dir())
+        .collect();
+    packs.sort();
+    packs
+}
+
+/// Whether `dir` holds at least one `*.toml` file directly.
+fn holds_toml(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            e.path().extension().and_then(|x| x.to_str()) == Some("toml") && e.path().is_file()
+        })
+    })
 }
 
 // ── Source layers ─────────────────────────────────────────────────────────────
@@ -409,22 +440,44 @@ impl ModelLibrary {
             }
         }
         for dir in extra_dirs {
-            // A model pack is presented to users as one directory containing
-            // `pack.toml` and `models/*.toml`.  Requiring callers to know that
-            // `--models-dir` actually meant the internal `models/` child made
-            // the obvious command silently load zero cards.  Accept both the
-            // loose-card directory and the pack root while preserving the
-            // explicit flag's highest-priority layer.
-            let load_dir = if dir.join("pack.toml").is_file() && dir.join("models").is_dir() {
-                dir.join("models")
-            } else {
-                (*dir).to_path_buf()
-            };
-            for e in lib.load_dir_layer(&load_dir, SourceLayer::ModelsDirFlag) {
+            for e in lib.load_models_dir_flag(dir) {
                 eprintln!("[models] --models-dir {}: {e}", dir.display());
             }
         }
         lib
+    }
+
+    /// Load one `--models-dir` argument at [`SourceLayer::ModelsDirFlag`].
+    ///
+    /// The flag is typed by a person, so it accepts every shape a person
+    /// actually has on disk:
+    ///   * a directory of loose `*.toml` cards,
+    ///   * one pack root (`pack.toml` beside `models/`),
+    ///   * a directory that HOLDS packs (`*/pack.toml`).
+    ///
+    /// The third shape used to be a silent no-op. The scan is one level deep,
+    /// so `--models-dir models` over a `models/generic/` pack loaded zero cards
+    /// and every part stayed unresolved with nothing on stderr to say why. A
+    /// directory with nothing loadable in it now says so, for the same reason a
+    /// missing one does.
+    fn load_models_dir_flag(&mut self, dir: &Path) -> Vec<ModelError> {
+        if dir.join("pack.toml").is_file() && dir.join("models").is_dir() {
+            return self.load_dir_layer(&dir.join("models"), SourceLayer::ModelsDirFlag);
+        }
+
+        // Loose cards first, so a directory that holds both keeps loading the
+        // cards sitting directly in it.
+        let mut errors = self.load_dir_layer(dir, SourceLayer::ModelsDirFlag);
+        let packs = child_packs(dir);
+        for pack in &packs {
+            errors.extend(self.load_dir_layer(&pack.join("models"), SourceLayer::ModelsDirFlag));
+        }
+        if errors.is_empty() && packs.is_empty() && dir.is_dir() && !holds_toml(dir) {
+            errors.push(ModelError::NoCards {
+                dir: dir.display().to_string(),
+            });
+        }
+        errors
     }
 
     /// Load every installed pack from `store` at [`SourceLayer::Pack`].
@@ -1195,6 +1248,86 @@ mod tests {
             Some("pack_root_device")
         );
         assert_eq!(resolved.source.as_deref(), Some("user"));
+    }
+
+    /// Write a pack root (`pack.toml` + `models/<id>.toml`) at `root`.
+    fn write_pack(root: &Path, id: &str) {
+        std::fs::create_dir_all(root.join("models")).unwrap();
+        std::fs::write(
+            root.join("pack.toml"),
+            format!(
+                "[pack]\nname='{id}'\nversion='0.1.0'\nlicense='MIT'\nprovenance='hand-written'\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("models").join("device.toml"),
+            format!(
+                "[[models]]\nid = \"{id}\"\nkind = \"digital\"\n[models.match]\n\
+                 value_re = \"(?i)^{id}$\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
+                 [models.coverage]\nmissing = [\"executable_behavior\"]\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn models_dir_flag_accepts_a_directory_of_packs() {
+        // `--models-dir models`, where `models/` is the parent of one or more
+        // packs, used to load nothing at all: the scan is one level deep and
+        // every card lives in `models/<pack>/models/`.
+        let temp = tempfile::tempdir().unwrap();
+        write_pack(&temp.path().join("generic"), "parent_dir_generic");
+        write_pack(&temp.path().join("curated"), "parent_dir_curated");
+        // A loose card beside the packs still loads too.
+        std::fs::write(
+            temp.path().join("loose.toml"),
+            "[[models]]\nid = \"parent_dir_loose\"\nkind = \"digital\"\n[models.match]\n\
+             value_re = \"(?i)^PARENT_DIR_LOOSE$\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
+             [models.coverage]\nmissing = [\"executable_behavior\"]\n",
+        )
+        .unwrap();
+
+        let lib = ModelLibrary::builtin_with_user_dirs(&[temp.path()]);
+        for id in [
+            "parent_dir_generic",
+            "parent_dir_curated",
+            "parent_dir_loose",
+        ] {
+            assert_eq!(
+                by_value(&lib, &id.to_uppercase())
+                    .model
+                    .map(|m| m.id)
+                    .as_deref(),
+                Some(id),
+            );
+        }
+    }
+
+    #[test]
+    fn models_dir_flag_reports_a_directory_with_nothing_to_load() {
+        // The failure this replaces is silent: zero cards, zero output, and a
+        // board whose parts all stay unresolved for no stated reason.
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("notes")).unwrap();
+        std::fs::write(temp.path().join("README.md"), "no cards here\n").unwrap();
+
+        let mut l = lib();
+        let errs = l.load_models_dir_flag(temp.path());
+        assert!(
+            errs.iter().any(|e| matches!(e, ModelError::NoCards { .. })),
+            "{errs:?}"
+        );
+
+        // A directory that does hold cards stays quiet.
+        std::fs::write(
+            temp.path().join("card.toml"),
+            "[[models]]\nid = \"quiet_dir_device\"\nkind = \"digital\"\n[models.match]\n\
+             value_re = \"(?i)^QUIET_DIR_DEVICE$\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
+             [models.coverage]\nmissing = [\"executable_behavior\"]\n",
+        )
+        .unwrap();
+        assert!(l.load_models_dir_flag(temp.path()).is_empty());
     }
 
     #[test]
