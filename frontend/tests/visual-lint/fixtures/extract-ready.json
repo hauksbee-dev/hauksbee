@@ -1,6 +1,10 @@
 {
  "backend": "codex",
- "consent_notice": "This sends the datasheet's text to an LLM backend (codex by default; claude-code or an OpenAI-compatible API with --backend). Nothing is sent until you ask for it. The result is a draft for you to check, not a measurement: a model it writes carries provenance \"datasheet-extracted\".",
+ "backend_label": "Codex",
+ "backend_source": "auto-detected, nothing saved yet",
+ "sends_data_to": "OpenAI, via the account codex is signed in with",
+ "config_path": "/home/runner/.config/hauksbee/extract.toml",
+ "consent_notice": "This sends the datasheet's text to an LLM backend: whichever is configured for extraction (Claude Code, Antigravity, Codex, or an OpenAI-compatible API; `hauksbee models backend show` or the Settings page says which). Nothing is sent until you ask for it. The result is a draft for you to check, not a measurement: a model it writes carries provenance \"datasheet-extracted\".",
  "cost": "Codex signs in with a ChatGPT account, so if you already pay for one this costs nothing extra. Otherwise it bills against whatever account you sign in with.",
  "default_effort": "high",
  "default_model": "gpt-5.6-sol",

@@ -1,0 +1,191 @@
+{
+  "path": "/home/runner/.config/hauksbee/extract.toml",
+  "exists": true,
+  "config": {
+    "backend": "claude-code",
+    "retries": 2,
+    "timeout_secs": 600,
+    "codex": { "model": "", "effort": "", "profile": "", "extra_args": [] },
+    "claude-code": { "model": "claude-opus-5", "effort": "high", "permission_mode": "acceptEdits", "extra_args": [] },
+    "agy": { "model": "", "effort": "", "permission_mode": "", "extra_args": [] },
+    "api": { "base_url": "", "model": "", "api_key_env": "" }
+  },
+  "resolved": {
+    "backend": "claude-code",
+    "backend_source": { "kind": "config" },
+    "retries": 2,
+    "timeout_secs": 600,
+    "codex": { "model": "gpt-5.6-sol", "effort": "high", "profile": null, "extra_args": [] },
+    "claude_code": { "model": "claude-opus-5", "effort": "high", "permission_mode": "acceptEdits", "extra_args": [] },
+    "agy": { "model": "gemini-3.8-flash", "effort": "high", "permission_mode": "accept-edits", "extra_args": [] },
+    "api": { "base_url": "https://api.openai.com/v1", "model": "gpt-5.6-sol", "api_key_env": "OPENAI_API_KEY" },
+    "env_overrides": []
+  },
+  "summary": "Claude Code (claude-opus-5, high effort)",
+  "backends": [
+    {
+      "id": "claude-code",
+      "label": "Claude Code",
+      "backend": "claude-code",
+      "available": true,
+      "detail": "/usr/local/bin/claude",
+      "install": "npm install -g @anthropic-ai/claude-code   # then: claude login",
+      "sends_data_to": "Anthropic, via the account claude is signed in with"
+    },
+    {
+      "id": "agy",
+      "label": "Antigravity (agy)",
+      "backend": "agy",
+      "available": true,
+      "detail": "/usr/local/bin/agy",
+      "install": "npm install -g @google/antigravity-cli   # then: agy login",
+      "sends_data_to": "Google, via the account agy is signed in with"
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "backend": "codex",
+      "available": false,
+      "detail": "codex is not installed",
+      "install": "npm install -g @openai/codex   # then: codex login",
+      "sends_data_to": "OpenAI, via the account codex is signed in with"
+    },
+    {
+      "id": "api",
+      "label": "OpenAI-compatible API",
+      "backend": "api",
+      "available": false,
+      "detail": "$OPENAI_API_KEY is not set",
+      "install": "export OPENAI_API_KEY=sk-...",
+      "sends_data_to": "whatever service answers the configured base URL"
+    }
+  ],
+  "presets": [
+    {
+      "id": "claude-code",
+      "label": "Claude Code · Opus 5, high effort",
+      "summary": "Strongest reading of pin maps. Signs in with your Claude account (`claude login`).",
+      "backend": "claude-code",
+      "model": "claude-opus-5",
+      "effort": "high",
+      "api_base": "",
+      "api_key_env": "",
+      "recommended": true
+    },
+    {
+      "id": "claude-code-fast",
+      "label": "Claude Code · Sonnet 5, medium effort",
+      "summary": "Faster and cheaper; fine for simple passives and well-scanned datasheets.",
+      "backend": "claude-code",
+      "model": "claude-sonnet-5",
+      "effort": "medium",
+      "api_base": "",
+      "api_key_env": "",
+      "recommended": false
+    },
+    {
+      "id": "agy",
+      "label": "Antigravity (agy) · Gemini 3.8 Flash, high effort",
+      "summary": "Google's coding agent. Signs in with your Antigravity account (`agy login`).",
+      "backend": "agy",
+      "model": "gemini-3.8-flash",
+      "effort": "high",
+      "api_base": "",
+      "api_key_env": "",
+      "recommended": true
+    },
+    {
+      "id": "agy-pro",
+      "label": "Antigravity (agy) · Gemini 3.1 Pro, high effort",
+      "summary": "Slower, stronger reasoning on dense multi-page datasheets.",
+      "backend": "agy",
+      "model": "gemini-3.1-pro",
+      "effort": "high",
+      "api_base": "",
+      "api_key_env": "",
+      "recommended": false
+    },
+    {
+      "id": "codex",
+      "label": "Codex · gpt-5.6-sol, high effort",
+      "summary": "Signs in with your ChatGPT account (`codex login`). Free if you already pay for one.",
+      "backend": "codex",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "api_base": "",
+      "api_key_env": "",
+      "recommended": true
+    },
+    {
+      "id": "openai",
+      "label": "OpenAI API",
+      "summary": "Billed to your own OpenAI API key rather than a signed-in account.",
+      "backend": "api",
+      "model": "gpt-5.6-sol",
+      "effort": "",
+      "api_base": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "recommended": false
+    },
+    {
+      "id": "openrouter",
+      "label": "OpenRouter",
+      "summary": "One key, many hosted models, billed per token.",
+      "backend": "api",
+      "model": "anthropic/claude-opus-5",
+      "effort": "",
+      "api_base": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "recommended": false
+    },
+    {
+      "id": "ollama",
+      "label": "Ollama (local)",
+      "summary": "Runs entirely on this machine. Nothing leaves it, but weaker at pin maps.",
+      "backend": "api",
+      "model": "llama3.1",
+      "effort": "",
+      "api_base": "http://localhost:11434/v1",
+      "api_key_env": "OLLAMA_API_KEY",
+      "recommended": false
+    }
+  ],
+  "options": {
+    "efforts": {
+      "claude-code": ["low", "medium", "high", "xhigh", "max"],
+      "agy": ["low", "medium", "high"],
+      "codex": ["minimal", "low", "medium", "high", "xhigh"]
+    },
+    "permission_modes": {
+      "claude-code": ["acceptEdits", "auto", "bypassPermissions", "dontAsk", "manual", "plan"],
+      "agy": ["accept-edits", "plan"]
+    },
+    "models": {
+      "claude-code": ["claude-opus-5", "claude-sonnet-5", "claude-fable-5-1", "opus", "sonnet"],
+      "agy": ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.1-pro"],
+      "codex": ["gpt-5.6-sol", "gpt-5.6"],
+      "api": ["gpt-5.6-sol", "anthropic/claude-opus-5"]
+    }
+  },
+  "keys": [
+    { "key": "backend", "help": "codex | claude-code | agy | api (blank = auto-detect)", "default": "auto" },
+    { "key": "retries", "help": "how many times to retry a failed extraction call", "default": "2" },
+    { "key": "timeout_secs", "help": "how long to wait for one extraction call", "default": "600" },
+    { "key": "codex.model", "help": "the codex model to use", "default": "gpt-5.6-sol" },
+    { "key": "codex.effort", "help": "minimal | low | medium | high | xhigh", "default": "high" },
+    { "key": "codex.profile", "help": "a named codex profile, if you use one", "default": "" },
+    { "key": "codex.extra_args", "help": "extra arguments passed through to codex", "default": "" },
+    { "key": "claude-code.model", "help": "the Claude Code model to use", "default": "claude-opus-5" },
+    { "key": "claude-code.effort", "help": "low | medium | high | xhigh | max", "default": "high" },
+    { "key": "claude-code.permission_mode", "help": "acceptEdits | auto | bypassPermissions | dontAsk | manual | plan", "default": "acceptEdits" },
+    { "key": "claude-code.extra_args", "help": "extra arguments passed through to claude", "default": "" },
+    { "key": "agy.model", "help": "the agy model to use", "default": "gemini-3.8-flash" },
+    { "key": "agy.effort", "help": "low | medium | high", "default": "high" },
+    { "key": "agy.permission_mode", "help": "accept-edits | plan", "default": "accept-edits" },
+    { "key": "agy.extra_args", "help": "extra arguments passed through to agy", "default": "" },
+    { "key": "api.base_url", "help": "the OpenAI-compatible base URL", "default": "https://api.openai.com/v1" },
+    { "key": "api.model", "help": "the model name to send", "default": "gpt-5.6-sol" },
+    { "key": "api.api_key_env", "help": "the NAME of an environment variable holding the key", "default": "OPENAI_API_KEY" }
+  ],
+  "consent_notice": "This sends the datasheet's text to an LLM backend: whichever is configured for extraction (Claude Code, Antigravity, Codex, or an OpenAI-compatible API; `hauksbee models backend show` or the Settings page says which). Nothing is sent until you ask for it. The result is a draft for you to check, not a measurement: a model it writes carries provenance \"datasheet-extracted\"."
+}

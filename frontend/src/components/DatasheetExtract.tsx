@@ -41,9 +41,14 @@ type Ready =
 export function DatasheetExtract({
   openParts,
   onSaved,
+  onOpenSettings,
 }: {
   openParts: WebOpenPart[]
   onSaved?: () => void
+  /** Opens the Settings page's "Datasheet extraction" section, where the
+   *  backend that runs an extraction is actually configured. Omitted, the
+   *  "Change in Settings" link is not shown (there is nowhere to send it). */
+  onOpenSettings?: () => void
 }) {
   // Only a part with no model at all can be helped by drafting one. A part that
   // bound and is open on the live circuit has a model already; offering an
@@ -312,6 +317,27 @@ export function DatasheetExtract({
             {/* Step 2: the datasheet, the part number, and the kind. */}
             {flow.step === 'attach' && info && (
               <div className="mt-2.5">
+                {/* Which backend actually runs this: named up front, since the
+                    model chosen below is layered on top of it. */}
+                <div className="text-[11px] mb-2 flex items-center gap-1.5 flex-wrap" style={{ color: 'var(--silk-faint)' }}>
+                  <span>
+                    Backend: <span style={{ color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}>
+                      {info.backend_label ?? info.backend}
+                    </span>
+                    {info.sends_data_to && <> · {info.sends_data_to}</>}
+                  </span>
+                  {onOpenSettings && (
+                    <button
+                      type="button"
+                      data-testid="extract-open-settings"
+                      onClick={onOpenSettings}
+                      className="hb-press cursor-pointer text-[11px] font-semibold"
+                      style={{ background: 'none', border: 'none', padding: 0, color: 'var(--copper-hi)' }}
+                    >
+                      Change in Settings
+                    </button>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-3 items-end">
                   <label className="text-[11px] block min-w-0 max-w-full" style={{ color: 'var(--silk-faint)' }}>
                     <span className="block mb-1">Part number</span>

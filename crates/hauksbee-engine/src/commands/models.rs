@@ -1213,6 +1213,7 @@ pub fn extract(
     assume_yes: bool,
     backend: Option<hauksbee_models::datasheet::Backend>,
     model: Option<String>,
+    effort: Option<String>,
     api_base: Option<String>,
     api_key_env: Option<String>,
 ) -> anyhow::Result<()> {
@@ -1256,6 +1257,25 @@ pub fn extract(
         println!("Extract a model for {part} ({kind}) from {}", pdf.display());
     }
     println!();
+
+    let args = datasheet::Args::new(pdf.to_path_buf(), part.to_string(), kind.to_string())
+        .out_dir(out_dir.map(std::path::Path::to_path_buf))
+        .model(model)
+        .effort(effort)
+        .backend(backend)
+        .api_base(api_base)
+        .api_key_env(api_key_env);
+
+    // Resolve (and therefore any bad config file) before consent, not after:
+    // the user is told exactly what is about to read their datasheet, and a
+    // broken config surfaces before they have said yes to anything.
+    let resolved = datasheet::resolve_settings(&args)?;
+    println!(
+        "Backend: {} ({})",
+        resolved.summary(),
+        resolved.backend_source.describe()
+    );
+    println!();
     println!("{}", datasheet::CONSENT_NOTICE);
     println!();
 
@@ -1279,12 +1299,6 @@ pub fn extract(
         }
     }
 
-    let args = datasheet::Args::new(pdf.to_path_buf(), part.to_string(), kind.to_string())
-        .out_dir(out_dir.map(std::path::Path::to_path_buf))
-        .model(model)
-        .backend(backend)
-        .api_base(api_base)
-        .api_key_env(api_key_env);
     let written = datasheet::run(args)?;
 
     println!();

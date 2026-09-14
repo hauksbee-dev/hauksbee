@@ -9,6 +9,7 @@
 //! Adding a test file: drop it in `tests/suite/` and add a `mod` line here. A
 //! file that is not listed does not run, so the list is the source of truth.
 
+mod agent_cli_invocation;
 mod analog_active_resolve;
 mod api_backend;
 mod bat54_family;

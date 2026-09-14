@@ -42,6 +42,7 @@
 pub mod behavioral;
 mod check;
 pub mod datasheet;
+pub mod extract_config;
 pub mod logic_spec;
 pub mod matcher;
 pub mod pack;

@@ -3,16 +3,17 @@ import { plural } from '../lib/report-view'
 import type { WebReport } from '../types/report'
 import type { Theme } from '../hooks/useTheme'
 import {
-  BoardTargetIcon, ChecksIcon, LiveIcon, WrenchIcon, SunIcon, MoonIcon,
+  BoardTargetIcon, ChecksIcon, GearIcon, LiveIcon, WrenchIcon, SunIcon, MoonIcon,
 } from './Icons'
 import { relTime } from '../lib/rel-time'
 
-// The app shell's left rail: wordmark + mark, the four real destinations
-// (Board, Checks, Live Sim, Environment), and the active board's identity
-// pinned in the footer. No search, no user menu, no fake nav: hauksbee has no
-// accounts and no multi-project dashboard, so the rail holds only what exists.
+// The app shell's left rail: wordmark + mark, the five real destinations
+// (Board, Checks, Live Sim, Environment, Settings), and the active board's
+// identity pinned in the footer. No search, no user menu, no fake nav: hauksbee
+// has no accounts and no multi-project dashboard, so the rail holds only what
+// exists.
 
-export type AppView = 'board' | 'checks' | 'sim' | 'env'
+export type AppView = 'board' | 'checks' | 'sim' | 'env' | 'settings'
 
 interface NavState {
   view: AppView
@@ -67,6 +68,7 @@ export function Sidebar({
       badge: nav.faultCount > 0 ? nav.faultCount : undefined,
     },
     { id: 'env', label: 'Environment', icon: <WrenchIcon size={16} /> },
+    { id: 'settings', label: 'Settings', icon: <GearIcon size={16} /> },
   ]
 
   return (

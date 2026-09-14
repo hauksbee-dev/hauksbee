@@ -17,8 +17,10 @@ The four authoring routes:
   7805, 74HC595, ATmega328P, and so on) plus passives resolved straight from
   the `Value` field.
 - **Datasheet extraction**: when a part is not in the DB, point hauksbee at
-  the part's PDF datasheet and an LLM backend (codex by default) drafts a
-  model entry in the same TOML schema. It runs from the web report, from
+  the part's PDF datasheet and an LLM backend (saved in
+  `~/.config/hauksbee/extract.toml`, or auto-detected; see "Choosing a
+  backend" below) drafts a model entry in the same TOML schema. It runs from
+  the web report, from
   `hauksbee models extract`, or from the standalone `model-extract` binary.
   Every one of the three states what leaves your machine and asks before it
   sends anything. The result is a draft to check, carries provenance
@@ -87,21 +89,75 @@ when you mean it.
 
 ### Choosing a backend
 
-`--backend` picks which LLM does the reading. All three run the same prompt,
+`--backend` picks which LLM does the reading. All four run the same prompt,
 the same validation, and the same retry-with-feedback loop:
 
-| backend | requirement | flags |
-|---------|-------------|-------|
-| `codex` (default) | `codex` CLI in PATH, signed in | `--backend codex`, `--model` |
-| `claude-code` | `claude` CLI in PATH, signed in | `--backend claude-code`, `--model` |
-| `api` | key in the env var named by `--api-key-env` (default `OPENAI_API_KEY`; a set `HAUKSBEE_LLM_API_KEY` is honoured) | `--backend api`, `--api-base`, `--model`, `--api-key-env` |
+| backend | requirement | default model / effort | flags |
+|---------|-------------|-------------------------|-------|
+| `claude-code` | `claude` CLI in PATH, signed in | `claude-opus-5`, high | `--backend claude-code`, `--model`, `--effort` |
+| `agy` | `agy` CLI in PATH, signed in (Antigravity) | `gemini-3.8-flash`, high | `--backend agy`, `--model`, `--effort` |
+| `codex` | `codex` CLI in PATH, signed in | `gpt-5.6-sol`, high | `--backend codex`, `--model`, `--effort` |
+| `api` | key in the env var named by `--api-key-env` (default `OPENAI_API_KEY`; a set `HAUKSBEE_LLM_API_KEY` is honoured) | `gpt-5.6-sol` | `--backend api`, `--api-base`, `--model`, `--api-key-env` |
 
-With no `--backend`, a set `HAUKSBEE_LLM_API_KEY` selects the API backend.
-`--api-key-env` takes the
-NAME of an environment variable, never the key itself: the key is read from
-the environment at call time and is never stored or logged. A missing CLI or
-an unset key variable errors up front with the exact fix (install the tool, or
-`export OPENAI_API_KEY=...`), before anything is sent.
+`--api-key-env` takes the NAME of an environment variable, never the key
+itself: the key is read from the environment at call time and is never stored
+or logged. A missing CLI, a missing sign-in, or an unset key variable errors
+up front with the exact fix (install the tool, sign in, or `export
+OPENAI_API_KEY=...`), before anything is sent.
+
+#### The config file
+
+Which backend `models extract` uses, and on which model and effort, is a
+persistent setting kept in `~/.config/hauksbee/extract.toml` (override the
+path with `$HAUKSBEE_EXTRACT_CONFIG`, or it follows `$XDG_CONFIG_HOME`). The
+file records only what you have chosen; anything left out takes hauksbee's
+built-in default, so the file stays short and survives a version upgrade that
+changes a default. Manage it with `hauksbee models backend`:
+
+```bash
+hauksbee models backend setup      # interactive: pick a preset, tweak model/effort, save
+hauksbee models backend show       # config path, resolved settings, backend availability
+hauksbee models backend presets    # list the built-in presets
+hauksbee models backend use agy    # apply a preset (or a bare backend name)
+hauksbee models backend set claude-code.effort=max
+hauksbee models backend unset claude-code.effort
+hauksbee models backend keys       # every settable key, its meaning and default
+hauksbee models backend check      # is the configured backend ready to run?
+hauksbee models backend check --send   # + one real connectivity call
+hauksbee models backend reset      # delete the file, back to every default
+hauksbee models backend path       # print the config path
+```
+
+The built-in presets (`hauksbee models backend presets`) are ready-to-use
+configurations: `claude-code`, `claude-code-fast`, `agy`, `agy-pro`, `codex`,
+`openai`, `openrouter`, `ollama`. Applying one sets the backend and seeds that
+backend's own model/effort; other backends' sections are left untouched, so
+switching back and forth does not lose what was there.
+
+**Precedence**, per field, highest first: a command-line flag (`--backend`,
+`--model`, `--effort`, ...); a `HAUKSBEE_*` environment variable (below); this
+file; the built-in default. `hauksbee models backend show` prints exactly
+which of these won and why.
+
+With nothing chosen anywhere — no flag, no env var, no file — extraction takes
+the API backend when `HAUKSBEE_LLM_API_KEY` is exported, otherwise the first
+agent CLI found on PATH, in the order **codex, claude-code, agy**. Whichever
+backend wins, `models extract` prints `Backend: <summary> (<source>)` before
+asking for consent, so you are always told exactly what is about to read your
+datasheet, and where the choice came from.
+
+`HAUKSBEE_*` environment variables override the file for one run (a script or
+CI job's way of overriding a saved developer choice): `HAUKSBEE_EXTRACT_BACKEND`,
+`HAUKSBEE_LLM_API_KEY`, `HAUKSBEE_CLAUDE_MODEL`, `HAUKSBEE_CLAUDE_EFFORT`,
+`HAUKSBEE_AGY_MODEL`, `HAUKSBEE_AGY_EFFORT`, `HAUKSBEE_CODEX_MODEL`,
+`HAUKSBEE_CODEX_EFFORT`, `HAUKSBEE_CODEX_PROFILE`, `HAUKSBEE_LLM_MODEL`,
+`HAUKSBEE_LLM_BASE_URL`, `HAUKSBEE_API_KEY_ENV`, `HAUKSBEE_EXTRACT_TIMEOUT_SECS`,
+`HAUKSBEE_EXTRACT_CONFIG`. No secret is ever written to the config file: the
+`api` backend records the NAME of the environment variable holding its key,
+never the key itself.
+
+The web report has its own Settings page over the same file, so a choice made
+in the terminal or in the browser is the same choice either way.
 
 The standalone extractor uses the same contract: build it with
 `cargo build -p hauksbee-models --bin model-extract`; scripted use additionally
@@ -373,7 +429,7 @@ fixed in this order, and the order is the contract:
    nothing.
 
 The extraction itself is the same `hauksbee_models::datasheet` code the CLI
-runs. Local Codex/Claude backends read the copied PDF, text, and selected page
+runs. Local agent backends (claude-code, agy, codex) read the copied PDF, text, and selected page
 renders in a scratch workspace; the API backend receives extracted text and
 instructions at the configured endpoint. The web plumbing is
 `crates/hauksbee-engine/src/webextract.rs` and
@@ -403,25 +459,29 @@ from, so an extracted model stays auditable.
 
 `crates/hauksbee-models/src/datasheet.rs`:
 
-0. **A scratch workspace** is built first with a copy of the datasheet. Codex
-   runs with workspace-write restrictions; Claude uses its non-interactive
-   edit permission mode. These are backend controls, not a universal network
-   sandbox. The API path sends its request to the configured provider.
+0. **A scratch workspace** is built first with a copy of the datasheet. The
+   agent backends (claude-code, agy, codex) each run with their own
+   non-interactive edit-permission / workspace-write controls, not a
+   universal network sandbox. The API path sends its request to the
+   configured provider.
 1. **PDF to text** through `pdftotext` (if present), plus selected page images
    through `pdftoppm` at 200 DPI. At most seven pages are rendered: page one
    and the pages most relevant to pinout, ratings, and electrical tables. The
    complete copied PDF and text remain available to local agent backends.
 2. **Prompt** built per kind, listing the required params, the ratings to
    pull, and the physical bounds each value must respect.
-3. **Backend call** (see the backend matrix above):
-   - **codex** (default): `codex exec --sandbox workspace-write
+3. **Backend call** (see the backend matrix above; which one runs comes from
+   `hauksbee models backend show`, unless overridden by `--backend`):
+   - **claude-code** (`--backend claude-code`): headless `claude -p` in the
+     sandbox, with a prompt file, an answer file (`model.toml`), a timeout,
+     and the retry contract.
+   - **agy** (`--backend agy`): headless `agy --print`, the same contract
+     again.
+   - **codex** (`--backend codex`): `codex exec --sandbox workspace-write
      --skip-git-repo-check --cd <pdf_dir>`. A short pointer to `prompt.md` is
      written to stdin before EOF; the final agent message (clean TOML) comes back
      while session logging goes to stderr. A hard timeout (10 min) kills a
      stuck run.
-   - **claude-code** (`--backend claude-code`): headless `claude -p` in the
-     same sandbox, with the same prompt file, answer file (`model.toml`),
-     timeout, and retry contract.
    - **api** (`--backend api`): an OpenAI-compatible chat endpoint at
      `--api-base` (default `https://api.openai.com/v1`, or
      `HAUKSBEE_LLM_BASE_URL`), model from `--model` or `HAUKSBEE_LLM_MODEL`,
@@ -440,7 +500,8 @@ The extractor fails loudly and usefully:
   or an api backend whose key variable is unset, errors with the exact fix
   (the install command, or `export OPENAI_API_KEY=...`) before anything is
   sent.
-- **CLI timeout**: a codex/claude run is killed after 10 minutes with a
+- **CLI timeout**: an agent-backend run is killed after 10 minutes (configurable via
+  `hauksbee models backend set timeout_secs=...`) with a
   message to tighten the prompt or switch backend.
 - **Empty / prose reply**: rejected with "empty reply" or "no [[models]]
   table" rather than a confusing TOML parse error.
