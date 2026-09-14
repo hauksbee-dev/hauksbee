@@ -69,18 +69,18 @@ $backends = [ordered]@{
 $gates = @(
     @{
         Name = "renode-rp2040-adc"
-        Test = "rp2040_adc_injection_reaches_firmware"
-        Args = @("test", "-p", "hauksbee-mcu", "--no-default-features", "--features", "renode", "--test", "renode_rp2040_adc", "rp2040_adc_injection_reaches_firmware", "--", "--exact", "--nocapture", "--test-threads=1")
+        Test = "renode_rp2040_adc::rp2040_adc_injection_reaches_firmware"
+        Args = @("test", "-p", "hauksbee-mcu", "--no-default-features", "--features", "renode", "--test", "it", "renode_rp2040_adc::rp2040_adc_injection_reaches_firmware", "--", "--exact", "--nocapture", "--test-threads=1")
     },
     @{
         Name = "qemu-xtensa-i2c"
-        Test = "esp32_i2c_firmware_drives_gpio_from_temperature"
-        Args = @("test", "-p", "hauksbee-engine", "--no-default-features", "--features", "qemu", "--test", "i2c_sensor_cosim_qemu", "esp32_i2c_firmware_drives_gpio_from_temperature", "--", "--exact", "--nocapture", "--test-threads=1")
+        Test = "i2c_sensor_cosim_qemu::esp32_i2c_firmware_drives_gpio_from_temperature"
+        Args = @("test", "-p", "hauksbee-engine", "--no-default-features", "--features", "qemu", "--test", "it", "i2c_sensor_cosim_qemu::esp32_i2c_firmware_drives_gpio_from_temperature", "--", "--exact", "--nocapture", "--test-threads=1")
     },
     @{
         Name = "qemu-riscv32-circuit"
-        Test = "esp32c3_full_cosim_through_solved_circuit"
-        Args = @("test", "-p", "hauksbee-engine", "--no-default-features", "--features", "qemu", "--test", "esp32_qemu_cosim", "esp32c3_full_cosim_through_solved_circuit", "--", "--exact", "--nocapture", "--test-threads=1")
+        Test = "esp32_qemu_cosim::esp32c3_full_cosim_through_solved_circuit"
+        Args = @("test", "-p", "hauksbee-engine", "--no-default-features", "--features", "qemu", "--test", "it", "esp32_qemu_cosim::esp32c3_full_cosim_through_solved_circuit", "--", "--exact", "--nocapture", "--test-threads=1")
     }
 )
 
