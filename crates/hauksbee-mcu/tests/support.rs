@@ -8,6 +8,21 @@
 //! path: absence is a normal, reportable state here.
 
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+/// Serialize every test that touches Espressif QEMU: the ones that boot an
+/// instance, and the ones that point the locator at a fake binary through
+/// `HAUKSBEE_QEMU_XTENSA`. Since this binary links every module, an override
+/// set by one test is visible to a booting test on another thread, which then
+/// finds a "QEMU" that cannot boot and fails instead of skipping. One lock
+/// across both kinds closes that, and keeps the real boots back-to-back so
+/// their wall-clock behaviour stays predictable.
+pub fn qemu_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 
 /// Absolute path to `testdata/firmware/<rel>`, or `None` when that fixture has
 /// not been built. Canonicalized where possible so a backend that resolves

@@ -29,15 +29,12 @@
 use hauksbee_mcu::qemu::{is_available, mailbox, QemuArch};
 use hauksbee_mcu::{I2cEvent, Mcu, QemuBackend, SpiEvent};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Serialize the QEMU-spawning tests (each boots its own instance; running
 /// them back-to-back keeps wall-clock behaviour predictable).
 fn qemu_test_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+    crate::support::qemu_lock()
 }
 
 fn flash_image() -> Option<PathBuf> {

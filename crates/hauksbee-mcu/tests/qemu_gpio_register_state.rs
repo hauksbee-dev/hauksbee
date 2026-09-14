@@ -21,6 +21,7 @@ fn fixture() -> Option<PathBuf> {
 
 #[test]
 fn unmodified_esp_idf_gpio_reaches_the_backend_without_a_mailbox() {
+    let _guard = crate::support::qemu_lock();
     let required = std::env::var("HAUKSBEE_REQUIRE_PATCHED_QEMU").as_deref() == Ok("1");
     if !is_available(QemuArch::Xtensa) {
         assert!(

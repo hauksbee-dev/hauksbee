@@ -30,6 +30,7 @@ fn flash_image() -> Option<PathBuf> {
 
 #[test]
 fn boot_floor_lifts_once_firmware_raises_magic() {
+    let _guard = crate::support::qemu_lock();
     if !is_available(QemuArch::Xtensa) {
         eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
         return;

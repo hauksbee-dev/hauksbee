@@ -32,7 +32,28 @@ const ARGS_FILE: &str = "HAUKSBEE_TEST_QEMU_ARGS_FILE";
 
 /// Both real tests mutate process-wide env vars (`HAUKSBEE_QEMU_XTENSA`, the
 /// pid-file path) before spawning, so they must not interleave.
-static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Three tests here point the locator at a fake QEMU through the process
+/// environment, so they hold the binary-wide QEMU lock (see
+/// `support::qemu_lock`) for as long as the override is set, and the guard
+/// clears the override on the way out, panic included. The fourth passes the
+/// override to a child process instead and only needs the lock.
+struct FakeQemuEnv(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+impl FakeQemuEnv {
+    fn install(fake: &Path) -> Self {
+        let guard = crate::support::qemu_lock();
+        std::env::set_var("HAUKSBEE_QEMU_XTENSA", fake);
+        Self(guard)
+    }
+}
+
+impl Drop for FakeQemuEnv {
+    fn drop(&mut self) {
+        std::env::remove_var("HAUKSBEE_QEMU_XTENSA");
+        std::env::remove_var(GRANDCHILD_PID_FILE);
+        std::env::remove_var(ARGS_FILE);
+    }
+}
 
 /// True while the OS still knows the pid (signal 0 probes existence).
 fn alive(pid: u32) -> bool {
@@ -101,7 +122,6 @@ fn spawned_flash_drive_uses_a_private_snapshot() {
     if std::env::var_os(HELPER_FLAG).is_some() {
         return;
     }
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let fake = write_fake_qemu(dir.path());
     let pid_file = dir.path().join("grandchild.pid");
@@ -109,7 +129,7 @@ fn spawned_flash_drive_uses_a_private_snapshot() {
     let flash = dir.path().join("tracked-flash.bin");
     std::fs::write(&flash, [0xe9]).unwrap();
 
-    std::env::set_var("HAUKSBEE_QEMU_XTENSA", &fake);
+    let _env = FakeQemuEnv::install(&fake);
     std::env::set_var(GRANDCHILD_PID_FILE, &pid_file);
     std::env::set_var(ARGS_FILE, &args_file);
 
@@ -135,7 +155,6 @@ fn spawned_flash_drive_uses_a_private_snapshot() {
         "the writable MTD drive must use a per-process snapshot; argv was:\n{args}"
     );
 
-    std::env::remove_var(ARGS_FILE);
     drop(proc);
 }
 
@@ -147,10 +166,9 @@ fn process_death_reports_status_and_stderr() {
     if std::env::var_os(HELPER_FLAG).is_some() {
         return;
     }
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let fake = write_dying_fake_qemu(dir.path());
-    std::env::set_var("HAUKSBEE_QEMU_XTENSA", &fake);
+    let _env = FakeQemuEnv::install(&fake);
 
     let mut proc = hauksbee_mcu::qemu::QemuProcess::spawn(
         hauksbee_mcu::qemu::QemuArch::Xtensa,
@@ -215,12 +233,11 @@ fn drop_kills_the_whole_emulator_tree() {
     if std::env::var_os(HELPER_FLAG).is_some() {
         return; // running inside the helper re-exec; not this test's turn
     }
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let fake = write_fake_qemu(dir.path());
     let pid_file = dir.path().join("grandchild.pid");
 
-    std::env::set_var("HAUKSBEE_QEMU_XTENSA", &fake);
+    let _env = FakeQemuEnv::install(&fake);
     std::env::set_var(GRANDCHILD_PID_FILE, &pid_file);
 
     let proc = hauksbee_mcu::qemu::QemuProcess::spawn(
@@ -254,7 +271,7 @@ fn sigterm_to_the_owner_reaps_the_emulator() {
     if std::env::var_os(HELPER_FLAG).is_some() {
         return;
     }
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = crate::support::qemu_lock();
     let dir = tempfile::tempdir().unwrap();
     let fake = write_fake_qemu(dir.path());
     let pid_file = dir.path().join("grandchild.pid");

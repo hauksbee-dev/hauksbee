@@ -52,6 +52,7 @@ fn flash_image() -> Option<PathBuf> {
 
 #[test]
 fn esp32_credited_time_tracks_the_guests_delays() {
+    let _guard = crate::support::qemu_lock();
     if !is_available(QemuArch::Xtensa) {
         eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
         return;
