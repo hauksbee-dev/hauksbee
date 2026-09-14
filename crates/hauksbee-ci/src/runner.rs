@@ -3387,9 +3387,12 @@ mod tests {
         };
 
         std::env::remove_var("HAUKSBEE_MCU_DIR");
+        // Joined the way the guard joins it, so the separator is the
+        // platform's own: a backslash on Windows, a slash elsewhere.
+        let resolved = std::path::PathBuf::from("/repo/ci").join("socs");
         assert_eq!(
             held(Some("socs")).as_deref(),
-            Some("/repo/ci/socs"),
+            resolved.to_str(),
             "resolved against the spec dir"
         );
         assert_eq!(var(), None, "restored on drop");
