@@ -139,7 +139,7 @@ switching back and forth does not lose what was there.
 file; the built-in default. `hauksbee models backend show` prints exactly
 which of these won and why.
 
-With nothing chosen anywhere — no flag, no env var, no file — extraction takes
+With nothing chosen anywhere (no flag, no env var, no file), extraction takes
 the API backend when `HAUKSBEE_LLM_API_KEY` is exported, otherwise the first
 agent CLI found on PATH, in the order **codex, claude-code, agy**. Whichever
 backend wins, `models extract` prints `Backend: <summary> (<source>)` before

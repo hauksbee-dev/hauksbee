@@ -34,8 +34,8 @@ Three things follow from that, and all three ship:
 - **Closing a gap needs one TOML file and no recompile.** Analogue parts,
   sensors, logic ICs and MCU variants are all declarative. See
   [`../extending/README.md`](../extending/README.md). Model packs let a team
-  keep its own parts together, and datasheet extraction (an LLM agent backend
-  — Claude Code, Antigravity, Codex, or an API, chosen with `hauksbee models
+  keep its own parts together, and datasheet extraction (an LLM agent backend:
+  Claude Code, Antigravity, Codex, or an API, chosen with `hauksbee models
   backend`) reads a datasheet into a first-draft model.
 - **Coverage is gateable.** The `model_coverage` assertion pins the fraction of
   active ICs that must bind, so the day a new part drops coverage the build
