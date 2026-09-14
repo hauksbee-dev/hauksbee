@@ -557,15 +557,15 @@ fn bjt_is_rejected(m: &ModelEntry) -> bool {
 // artifact is absent, so CI stays green without codex.
 
 #[test]
-fn extracted_bc847_physical() {
-    let Some(m) = load_extracted("BC847.toml") else {
-        eprintln!("no testdata/extracted/BC847.toml: run model-extract; skipping");
+fn extracted_bc846_physical() {
+    let Some(m) = load_extracted("BC846.toml") else {
+        eprintln!("no testdata/extracted/BC846.toml: run model-extract; skipping");
         return;
     };
     assert_bjt_physical(&m);
     assert!(
         m.ratings.max_voltage_v.is_some(),
-        "extracted BC847 must carry VCEO in ratings"
+        "extracted BC846 must carry VCEO in ratings"
     );
 }
 

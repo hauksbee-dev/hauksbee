@@ -3008,30 +3008,37 @@ max_current_a = 0.1\n\
         which("codex") || std::env::var("HAUKSBEE_LLM_API_KEY").is_ok()
     }
 
-    /// Live: the real backend against the BC847 datasheet in testdata. Run with
-    /// `cargo test -p hauksbee-models -- extract_bc847_live --ignored --nocapture`.
+    /// Live: the real backend against the BC846-series datasheet in testdata.
+    /// Run with
+    /// `cargo test -p hauksbee-models -- extract_bc846_live --ignored --nocapture`.
+    ///
+    /// The part asked for is the part the sheet covers. Asking it for a BC847
+    /// is the shape of request that produces a wrong number rather than no
+    /// number: the BC846 series sheet states 65 V VCEO for its own types and
+    /// says nothing at all about the 45 V BC847, so a model that answers
+    /// anyway has substituted a rating from a different device.
     #[test]
     #[ignore]
-    fn extract_bc847_live() {
-        let pdf = testdata("datasheets/BC847.pdf");
-        assert!(pdf.exists(), "BC847 datasheet not found at {pdf:?}");
+    fn extract_bc846_live() {
+        let pdf = testdata("datasheets/BC846.pdf");
+        assert!(pdf.exists(), "BC846 datasheet not found at {pdf:?}");
         if !live_backend_available() {
             return;
         }
         let text = extract_pdf_text(&pdf).expect("PDF text extraction");
-        let prompt = build_prompt("BC847", "bjt_npn", &text);
+        let prompt = build_prompt("BC846", "bjt_npn", &text);
         let args =
-            Args::new(pdf, "BC847".into(), "bjt_npn".into()).out_dir(Some(std::env::temp_dir()));
+            Args::new(pdf, "BC846".into(), "bjt_npn".into()).out_dir(Some(std::env::temp_dir()));
         let reply = Reply::Model {
-            part: "BC847",
+            part: "BC846",
             kind: "bjt_npn",
         };
         let raw = call_backend(&prompt, &args, reply).expect("backend call");
-        let entry = parse_and_validate_reply(&raw, "BC847", "bjt_npn").unwrap();
+        let entry = parse_and_validate_reply(&raw, "BC846", "bjt_npn").unwrap();
         let bf = entry.params.get_f64("bf").expect("bf present");
         assert!(
             (100.0..=460.0).contains(&bf),
-            "bf {bf} outside the BC847 hFE band"
+            "bf {bf} outside the BC846 hFE band"
         );
         assert_eq!(entry.ratings.max_voltage_v, Some(65.0));
     }
