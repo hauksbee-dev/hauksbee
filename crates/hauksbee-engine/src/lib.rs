@@ -49,6 +49,7 @@ pub mod web_design;
 pub mod web_dist;
 pub mod webcheck;
 pub mod webextract;
+pub mod websettings;
 
 // Lower layers, under their pre-split paths.
 pub use hauksbee_bind::{

@@ -4,8 +4,8 @@
 // once, and a stale server answers the same way everywhere.
 
 import type {
-  DepInfo, ExtractReady, LiveLaunchResponse, LiveStatus, ModelSaveResult,
-  RunResponse, SensorCatalogEntry, Startup, WebReport,
+  DepInfo, ExtractBackendsConfig, ExtractReady, ExtractSettings, LiveLaunchResponse, LiveStatus,
+  ModelSaveResult, RunResponse, SensorCatalogEntry, Startup, WebReport,
 } from '../types/report'
 import type { ClientMessage, ServerMessage } from '../types/protocol'
 import { buildBoardUpload, type SupplementalDesignFiles } from './board-upload'
@@ -30,6 +30,18 @@ export async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
 export async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return await res.json() as T
+}
+
+/** PUT a JSON body and read the JSON answer, whatever the status: like
+ *  `postJson`, callers that need to distinguish success from a 400 read the
+ *  status or the body's `error` themselves (see `extractSettingsSave`). */
+export async function putJson<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
@@ -103,7 +115,7 @@ export async function readSseStream(body: ReadableStream<Uint8Array>, onFrame: (
 
 /** POST and stream the SSE answer. Throws when the server refuses the request
  *  outright; returns once the stream closes. */
-async function postSse(url: string, body: FormData | undefined, onFrame: (frame: SseFrame) => void): Promise<void> {
+export async function postSse(url: string, body: FormData | undefined, onFrame: (frame: SseFrame) => void): Promise<void> {
   const res = await fetch(url, { method: 'POST', body })
   if (!res.ok || !res.body) throw new Error(`the server refused it (${statusLine(res)})`)
   await readSseStream(res.body, onFrame)
@@ -153,6 +165,30 @@ export const api = {
     postSse(`/api/deps/install/${encodeURIComponent(id)}`, undefined, onFrame),
   extractReady: () => getJson<ExtractReady>('/api/models/extract/ready'),
   extract: (form: FormData, onFrame: (frame: SseFrame) => void) => postSse('/api/models/extract', form, onFrame),
+  extractSettings: () => getJson<ExtractSettings>('/api/settings/extract'),
+  /** PUT the backend config. Unlike `postJson`, this throws on a non-2xx (a
+   *  400 with `{"error": "..."}`) so the settings page can show the server's
+   *  own refusal message next to Save rather than silently swallowing it. */
+  extractSettingsSave: async (config: ExtractBackendsConfig): Promise<ExtractSettings> => {
+    const res = await fetch('/api/settings/extract', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    const json = await readJson<ExtractSettings & { error?: string }>(res)
+    if (!res.ok) throw new Error(json.error ?? `the server answered ${statusLine(res)}`)
+    return json
+  },
+  extractSettingsPreset: async (id: string): Promise<ExtractSettings> => {
+    const res = await fetch(`/api/settings/extract/preset/${encodeURIComponent(id)}`, { method: 'POST' })
+    const json = await readJson<ExtractSettings & { error?: string }>(res)
+    if (!res.ok) throw new Error(json.error ?? `the server answered ${statusLine(res)}`)
+    return json
+  },
+  /** Runs one tiny model call against the configured backend, streamed the
+   *  same way an install or an extraction is. */
+  extractSettingsTest: (onFrame: (frame: SseFrame) => void) =>
+    postSse('/api/settings/extract/test', undefined, onFrame),
   modelsDraft: (body: unknown) => postJson<{ ok?: boolean; toml?: string; error?: string }>('/api/models/draft', body),
   modelsCheck: (body: { toml: string; format: string }) =>
     postJson<{ ok?: boolean; summary?: string; error?: string }>('/api/models/check', body),

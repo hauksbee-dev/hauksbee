@@ -4,6 +4,7 @@
 //! binary) so the logic lives in the library where the TUI, tests and future
 //! surfaces can reach it.
 
+pub mod backend;
 pub mod boardcode;
 pub mod common;
 pub mod doctor;

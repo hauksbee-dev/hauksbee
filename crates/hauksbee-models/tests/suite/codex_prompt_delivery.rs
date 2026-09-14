@@ -39,9 +39,9 @@ fn the_instruction_is_not_also_a_trailing_argument() {
     // copies disagree and codex sees the prompt twice or not at all.
     let s = source();
     let spawn = s
-        .split("fn run_codex_once")
+        .split("fn run_agent_once")
         .nth(1)
-        .expect("run_codex_once exists");
+        .expect("run_agent_once exists");
     let spawn = &spawn[..spawn.find("\nfn ").unwrap_or(spawn.len())];
     assert!(
         !spawn.contains(".arg(\n            \"Read prompt.md"),
@@ -55,9 +55,9 @@ fn codex_stderr_is_captured_not_discarded() {
     // gave went to /dev/null.
     let s = source();
     let spawn = s
-        .split("fn run_codex_once")
+        .split("fn run_agent_once")
         .nth(1)
-        .expect("run_codex_once exists");
+        .expect("run_agent_once exists");
     let spawn = &spawn[..spawn.find("\nfn ").unwrap_or(spawn.len())];
     assert!(
         !spawn.contains("stderr(Stdio::null())"),
@@ -65,7 +65,7 @@ fn codex_stderr_is_captured_not_discarded() {
          failure into `exited with status 1: `"
     );
     assert!(
-        spawn.contains("codex-stderr.log"),
+        spawn.contains("-stderr.log"),
         "it should land in the sandbox so the error can quote its tail"
     );
 }
@@ -74,9 +74,9 @@ fn codex_stderr_is_captured_not_discarded() {
 fn the_model_is_chosen_explicitly() {
     let s = source();
     let spawn = s
-        .split("fn run_codex_once")
+        .split("fn run_agent_once")
         .nth(1)
-        .expect("run_codex_once exists");
+        .expect("run_agent_once exists");
     let spawn = &spawn[..spawn.find("\nfn ").unwrap_or(spawn.len())];
     assert!(
         spawn.contains("\"--model\""),

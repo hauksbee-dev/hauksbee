@@ -33,6 +33,34 @@ const json = (body: unknown, status = 200) =>
   Response.json(body, { status })
 const liveBoards = new Map<string, string>()
 
+/** A tiny hand-rolled SSE response: `event: <e>\ndata: <d>\n\n` per frame,
+ *  spaced out so a client watching the stream sees real progress rather than
+ *  everything landing in one chunk. Mirrors the shape `readSseStream` in
+ *  lib/api.ts parses (the same framing the real deps-install and extraction
+ *  endpoints use). */
+function sseResponse(frames: { event: string; data: string }[]): Response {
+  const encoder = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      for (const f of frames) {
+        controller.enqueue(encoder.encode(`event: ${f.event}\ndata: ${f.data}\n\n`))
+        await new Promise(resolve => setTimeout(resolve, 30))
+      }
+      controller.close()
+    },
+  })
+  return new Response(body, { headers: { 'content-type': 'text/event-stream' } })
+}
+
+// The backend-settings state the settings page reads and writes, held in
+// memory for the life of the fixture server so a PUT or a preset click shows
+// up on the next GET, the way a real `extract.toml` would.
+let settingsState: Record<string, unknown> | null = null
+async function settings(): Promise<Record<string, unknown>> {
+  if (!settingsState) settingsState = await file(join(FIXTURES, 'settings-extract.json')).json() as Record<string, unknown>
+  return settingsState
+}
+
 /** Endpoints the lint's surfaces actually hit, in the shape the real server
  *  answers with. Anything else under /api returns 501 so a new fetch shows up
  *  as a loud gap rather than a silently empty panel. */
@@ -76,6 +104,31 @@ async function api(req: Request, url: URL): Promise<Response | null> {
   }
   if (p === '/api/live/launch' && method === 'POST') {
     return json({ ok: false, error: 'the fixture server does not run live sessions' })
+  }
+  if (p === '/api/settings/extract' && method === 'GET') return json(await settings())
+  if (p === '/api/settings/extract' && method === 'PUT') {
+    const state = await settings()
+    const body = await req.json() as Record<string, unknown>
+    state.config = { ...(state.config as Record<string, unknown>), ...body }
+    if (body.backend !== undefined) {
+      (state.resolved as Record<string, unknown>).backend = body.backend
+    }
+    return json(state)
+  }
+  if (p.startsWith('/api/settings/extract/preset/') && method === 'POST') {
+    const id = decodeURIComponent(p.slice('/api/settings/extract/preset/'.length))
+    const state = await settings()
+    const preset = (state.presets as { id: string; backend: string }[]).find(pr => pr.id === id)
+    if (!preset) return json({ error: `no such preset: ${id}` }, 400)
+    state.config = { ...(state.config as Record<string, unknown>), backend: preset.backend }
+    return json(state)
+  }
+  if (p === '/api/settings/extract/test' && method === 'POST') {
+    return sseResponse([
+      { event: 'log', data: 'Contacting the configured backend ...' },
+      { event: 'log', data: 'Sent a one-line test prompt.' },
+      { event: 'done', data: 'OK' },
+    ])
   }
   if (p.startsWith('/api/')) return json({ ok: false, error: `no fixture for ${method} ${p}` }, 501)
   return null

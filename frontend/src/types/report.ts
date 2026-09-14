@@ -386,7 +386,7 @@ export interface LiveLaunchResponse {
  *  `hauksbee models extract` shows and accepts. */
 export interface ExtractReady {
   ready: boolean
-  /** "codex" | "api" | "mock" */
+  /** "codex" | "claude-code" | "agy" | "api" | "mock" */
   backend: string
   /** Why it cannot run (only when ready is false). */
   reason?: string | null
@@ -403,6 +403,157 @@ export interface ExtractReady {
   default_model: string
   default_effort: string
   cost: string
+  /** The active backend's human label ("Claude Code"), when the server reports
+   *  one; falls back to `backend` itself when absent (an older server). */
+  backend_label?: string
+  /** One sentence naming where the active backend was chosen from ("from
+   *  ~/.config/hauksbee/extract.toml", "overridden by $VAR for this server
+   *  process", ...). */
+  backend_source?: string
+  /** Who the datasheet's text actually goes to, for the active backend. */
+  sends_data_to?: string
+  /** Where the backend config file lives (whether or not it exists yet). */
+  config_path?: string
+}
+
+/** Where a resolved setting's effective value came from. */
+export type ExtractBackendSource =
+  | { kind: 'config' }
+  | { kind: 'env'; name: string }
+  | { kind: 'auto' }
+  | { kind: 'flag' }
+
+export interface ExtractCodexBackendConfig {
+  model?: string
+  effort?: string
+  profile?: string
+  extra_args?: string[]
+}
+
+export interface ExtractClaudeCodeBackendConfig {
+  model?: string
+  effort?: string
+  permission_mode?: string
+  extra_args?: string[]
+}
+
+export interface ExtractAgyBackendConfig {
+  model?: string
+  effort?: string
+  permission_mode?: string
+  extra_args?: string[]
+}
+
+export interface ExtractApiBackendConfig {
+  base_url?: string
+  model?: string
+  api_key_env?: string
+}
+
+/** What is actually saved to `extract.toml`: every field optional/absent when
+ *  the user never set it. */
+export interface ExtractBackendsConfig {
+  backend?: string
+  retries?: number
+  timeout_secs?: number
+  codex?: ExtractCodexBackendConfig
+  'claude-code'?: ExtractClaudeCodeBackendConfig
+  agy?: ExtractAgyBackendConfig
+  api?: ExtractApiBackendConfig
+}
+
+/** The same shape as `ExtractBackendsConfig`'s per-backend blocks, but with
+ *  every field resolved to the value that will actually be used. */
+export interface ExtractResolvedCodex {
+  model: string
+  effort: string
+  profile: string | null
+  extra_args: string[]
+}
+
+export interface ExtractResolvedClaudeCode {
+  model: string
+  effort: string
+  permission_mode: string
+  extra_args: string[]
+}
+
+export interface ExtractResolvedAgy {
+  model: string
+  effort: string
+  permission_mode: string
+  extra_args: string[]
+}
+
+export interface ExtractResolvedApi {
+  base_url: string
+  model: string
+  api_key_env: string
+}
+
+export interface ExtractResolved {
+  backend: string
+  backend_source: ExtractBackendSource
+  retries: number
+  timeout_secs: number
+  codex: ExtractResolvedCodex
+  claude_code: ExtractResolvedClaudeCode
+  agy: ExtractResolvedAgy
+  api: ExtractResolvedApi
+  /** Environment variables that are currently overriding a saved value, for
+   *  this server process (e.g. `HAUKSBEE_CLAUDE_MODEL`). */
+  env_overrides: string[]
+}
+
+export interface ExtractBackendAvailability {
+  id: string
+  label: string
+  backend: string
+  available: boolean
+  detail: string
+  install: string
+  sends_data_to: string
+}
+
+export interface ExtractPreset {
+  id: string
+  label: string
+  summary: string
+  backend: string
+  model: string
+  effort: string
+  api_base: string
+  api_key_env: string
+  recommended: boolean
+}
+
+export interface ExtractOptions {
+  efforts: Record<string, string[]>
+  permission_modes: Record<string, string[]>
+  models: Record<string, string[]>
+}
+
+export interface ExtractSettingsKey {
+  key: string
+  help: string
+  default: string
+}
+
+/** What `GET /api/settings/extract` returns, and what `PUT`, and each preset
+ *  POST, echo back after applying the change. */
+export interface ExtractSettings {
+  path: string
+  exists: boolean
+  /** Present only when the file exists but could not be parsed. */
+  load_error?: string
+  config: ExtractBackendsConfig
+  resolved: ExtractResolved
+  summary: string
+  backends: ExtractBackendAvailability[]
+  presets: ExtractPreset[]
+  options: ExtractOptions
+  keys: ExtractSettingsKey[]
+  consent_notice: string
 }
 
 /** One value in a drafted model, with the datasheet citation beside it. */

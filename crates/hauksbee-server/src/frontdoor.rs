@@ -7,7 +7,9 @@
 //! by the React app. There is one web experience: a single server path serving
 //! the React bundle in `frontend/dist`, with no server-rendered HTML
 //! alternative. This module is the JSON API that bundle fetches
-//! (`/api/analyze`, `/api/analyze-with-firmware`).
+//! (`/api/analyze`, `/api/analyze-with-firmware`, and the datasheet extraction
+//! and Settings routes under `/api/models/*` / `/api/settings/extract*`, see
+//! [`datasheet_routes`]).
 //!
 //! This module is the thin HTTP layer only. The actual analysis is injected as a
 //! callback (`Analyzer` / `FirmwareAnalyzer` / `SchematicAnalyzer`) so the server
@@ -31,8 +33,9 @@ use axum::{Json, Router};
 pub use hauksbee_frontdoor_api::frontdoor::{
     Analyzer, CheckRunner, DatasheetChecker, DatasheetExtractor, DatasheetHooks, DatasheetJob,
     DatasheetReady, DatasheetSaver, DepInstaller, DepsStatus, DesignAnalyzer, DesignCheckRunner,
-    DesignLiveLauncher, DesignUpload, FirmwareAnalyzer, LiveLaunch, LiveLauncher, ModelDrafter,
-    NamedUpload, SchematicAnalyzer, SchematicCheckRunner, SchematicLiveLauncher, ToolHooks,
+    DesignLiveLauncher, DesignUpload, ExtractSettingsHooks, FirmwareAnalyzer, LiveLaunch,
+    LiveLauncher, ModelDrafter, NamedUpload, SchematicAnalyzer, SchematicCheckRunner,
+    SchematicLiveLauncher, ToolHooks,
 };
 
 /// A JSON (or plain-text) body with its content-type header: the shape every
@@ -427,12 +430,20 @@ const MAX_DATASHEET_BYTES: usize = 32 * 1024 * 1024;
 /// reviewable model card), and `POST /api/models/save` (JSON `{part, kind,
 /// toml}`; writes an ACCEPTED card into the user's model library).
 ///
+/// Also the extraction Settings page's backend: `GET /api/settings/extract`
+/// (the whole settings payload), `PUT /api/settings/extract` (a config JSON
+/// body; 200 with the refreshed payload, or 400 `{"error": ...}`),
+/// `POST /api/settings/extract/preset/{id}` (apply a named preset, same status
+/// mapping), and `POST /api/settings/extract/test` (SSE: run the configured
+/// backend on a one-line connectivity check, `log` lines then `done`/`error`).
+///
 /// The split is the consent contract, not a convenience: extraction sends the
 /// datasheet off this machine, so it happens only on an explicit request, and
 /// its result is never written anywhere until a second explicit request says to
-/// keep it. Both mutating routes carry `reject_cross_site`; the extract route
-/// spends the user's LLM credit and the save route writes to their model
-/// library, so neither may be triggered by a page in another tab.
+/// keep it. Every mutating route carries `reject_cross_site`; the extract and
+/// settings-test routes spend the user's LLM credit, the save route writes to
+/// their model library, and the settings save/preset routes rewrite the config
+/// file, so none may be triggered by a page in another tab.
 pub fn datasheet_routes(hooks: DatasheetHooks) -> Router {
     Router::new()
         .route("/api/models/extract/ready", get(datasheet_ready_handler))
@@ -441,8 +452,98 @@ pub fn datasheet_routes(hooks: DatasheetHooks) -> Router {
         .route("/api/models/check", post(datasheet_check_handler))
         .route("/api/models/draft", post(model_draft_handler))
         .route("/api/sensor-specs", get(sensor_catalog_handler))
+        .route(
+            "/api/settings/extract",
+            get(extract_settings_get_handler).put(extract_settings_save_handler),
+        )
+        .route(
+            "/api/settings/extract/preset/{id}",
+            post(extract_settings_preset_handler),
+        )
+        .route(
+            "/api/settings/extract/test",
+            post(extract_settings_test_handler),
+        )
         .layer(DefaultBodyLimit::max(MAX_DATASHEET_BYTES))
         .with_state(Arc::new(hooks))
+}
+
+/// A `400` carrying `{"error": msg}`, the shape the settings routes answer a
+/// refusal with (unlike the rest of this module's `200 {"ok":false,...}`
+/// convention): the settings form treats any non-2xx as "the save failed",
+/// and `msg` is already the config validator's own readable sentence.
+fn settings_error(msg: &str) -> JsonResponse {
+    json_body(StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg }))
+}
+
+/// GET `/api/settings/extract`: the whole settings payload (config, resolved
+/// backend, availability, presets, option lists) as JSON. Runs on the blocking
+/// pool because it reads the config file and probes PATH for each backend's
+/// CLI.
+async fn extract_settings_get_handler(State(hooks): State<Arc<DatasheetHooks>>) -> JsonResponse {
+    let get = hooks.settings.get.clone();
+    json_ok(
+        tokio::task::spawn_blocking(move || (get)())
+            .await
+            .unwrap_or_else(|_| {
+                "{\"error\":\"the settings read task panicked; see the server log\"}".to_string()
+            }),
+    )
+}
+
+/// PUT `/api/settings/extract`: replace the saved config with the JSON body
+/// (the whole config object, as `GET` returned it under `config`). Validated
+/// before it is written; an invalid value never reaches the file.
+async fn extract_settings_save_handler(
+    State(hooks): State<Arc<DatasheetHooks>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> JsonResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let text = String::from_utf8_lossy(&body).into_owned();
+    let save = hooks.settings.save.clone();
+    match tokio::task::spawn_blocking(move || (save)(&text)).await {
+        Ok(Ok(json)) => json_ok(json),
+        Ok(Err(msg)) => settings_error(&msg),
+        Err(_) => settings_error("the settings save task panicked; see the server log"),
+    }
+}
+
+/// POST `/api/settings/extract/preset/{id}`: apply a named preset (backend +
+/// that backend's model/effort) and save it.
+async fn extract_settings_preset_handler(
+    State(hooks): State<Arc<DatasheetHooks>>,
+    UrlPath(id): UrlPath<String>,
+    headers: HeaderMap,
+) -> JsonResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let preset = hooks.settings.preset.clone();
+    match tokio::task::spawn_blocking(move || (preset)(&id)).await {
+        Ok(Ok(json)) => json_ok(json),
+        Ok(Err(msg)) => settings_error(&msg),
+        Err(_) => settings_error("the preset task panicked; see the server log"),
+    }
+}
+
+/// POST `/api/settings/extract/test`: the cheapest end-to-end proof that the
+/// configured backend works. Streamed as SSE, the same framing as the
+/// dependency installs and the extraction itself (`log` lines, then exactly
+/// one `done` carrying the reply or `error` carrying the reason), because a
+/// connectivity check still calls out to a CLI or an HTTP endpoint and a
+/// silent request would be indistinguishable from a hang.
+async fn extract_settings_test_handler(
+    State(hooks): State<Arc<DatasheetHooks>>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp.into_response();
+    }
+    let test = hooks.settings.test.clone();
+    stream_job("done", move |sink| (test)(sink))
 }
 
 /// Checked-in, product-bundled register behavior for the no-LLM browser path.

@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 
 use hauksbee_frontdoor_api::frontdoor::{DatasheetHooks, DatasheetJob};
 use hauksbee_models::datasheet;
+use hauksbee_models::extract_config::{self, ProcessHost, Resolved};
 
 /// The provenance every model drafted this way carries. The string is the one
 /// `pack.toml` validates against (`hauksbee_models::pack::Provenance`), so a
@@ -116,6 +117,7 @@ pub fn hooks() -> DatasheetHooks {
         check: Arc::new(check),
         spice_check: Arc::new(spice_report),
         draft: Arc::new(draft_upgrade),
+        settings: crate::websettings::hooks(),
     }
 }
 
@@ -162,71 +164,156 @@ fn draft_upgrade(body: &str) -> Result<String, String> {
 }
 
 /// Which backend an extraction would use, and whether it can run right now.
+///
+/// Resolution goes through the persistent settings layer
+/// (`hauksbee_models::extract_config`), the same one the CLI and the Settings
+/// page use: this module never picks a backend on its own, so this page can
+/// never disagree with the config file about who is about to read the
+/// datasheet.
 enum Backend {
     /// A canned reply from `HAUKSBEE_EXTRACT_MOCK_REPLY`: the offline test hook.
     Mock,
-    /// The OpenAI-compatible API backend (`HAUKSBEE_LLM_API_KEY` is set).
-    Api,
-    /// codex, signed in and usable.
-    Codex,
-    /// The Claude Code CLI (`claude`), present on PATH; picked when codex is
-    /// not usable, because the extraction engine speaks both and a machine
-    /// with a working backend must never be told to install a different one.
-    ClaudeCode,
-    /// No backend can run. Carries the
-    /// reason and the one command that fixes it, both from the engine's own
-    /// dependency probe so this can never disagree with the Environment page.
-    Blocked { reason: String, fix: String },
+    /// The resolved backend, available and ready to run.
+    Ready(Resolved),
+    /// The resolved backend cannot run right now. Carries the resolved
+    /// settings too (so the page can still name the backend and its model
+    /// while explaining why), plus the reason and the one command that fixes
+    /// it.
+    Blocked {
+        resolved: Resolved,
+        reason: String,
+        fix: String,
+    },
 }
 
-/// Pick the backend, asking the same extractor probe the Environment page's
-/// rows are built from. The status page uses a fast discovery-only snapshot;
-/// this readiness path additionally checks Codex authentication and therefore
-/// remains fail-closed before consent is offered. It does not probe unrelated
-/// simulators or oracles.
+/// The suffix appended to every non-codex fix: the settings layer supports
+/// four backends, so "install this one" is never the only option.
+const OR_CHOOSE_ANOTHER: &str =
+    "   or choose another backend in Settings / `hauksbee models backend setup`";
+
+/// Resolve the configured backend and check whether it can run right now.
+///
+/// The config file, the environment, and the defaults are folded by
+/// `extract_config::resolve` exactly as `hauksbee models extract` folds them,
+/// so the web page's readiness can never drift from the CLI's. A config file
+/// that exists but fails to parse is reported as blocked with its own error
+/// rather than silently falling back to defaults: running an extraction on
+/// settings the user did not choose would be worse than refusing.
 fn backend() -> Backend {
     if std::env::var_os("HAUKSBEE_EXTRACT_MOCK_REPLY").is_some() {
         return Backend::Mock;
     }
-    if std::env::var_os("HAUKSBEE_LLM_API_KEY").is_some() {
-        return Backend::Api;
-    }
-    let probe = crate::deps::probe_extractors();
-    let codex = probe.iter().find(|d| d.id == "codex");
-    let claude = probe.iter().find(|d| d.id == "claude-code");
-    // Preference order mirrors the CLI: an explicit API key won above; codex
-    // when usable; otherwise the Claude Code CLI when present. The extraction
-    // engine supports all three (hauksbee_models::datasheet::Backend), and a
-    // machine with a working `claude` on PATH must not be told to go install
-    // codex: which LLM the datasheet goes to is named on the consent surface
-    // either way.
-    if codex.is_some_and(|d| d.present) {
-        return Backend::Codex;
-    }
-    if claude.is_some_and(|d| d.present) {
-        return Backend::ClaudeCode;
-    }
-    match codex {
-        Some(d) => Backend::Blocked {
-            reason: d
-                .detail
-                .clone()
-                .unwrap_or_else(|| "codex is not usable on this machine".to_string()),
+    let (config, path, load_error) = match extract_config::load() {
+        Ok(loaded) => (loaded.config, loaded.path, None),
+        Err(e) => {
+            let path = extract_config::config_path().unwrap_or_default();
+            (
+                extract_config::ExtractConfig::default(),
+                path,
+                Some(format!("{e:#}")),
+            )
+        }
+    };
+    let resolved = config.resolve(&ProcessHost, None);
+    if let Some(reason) = load_error {
+        return Backend::Blocked {
+            resolved,
+            reason,
             fix: format!(
-                "{}   # or: npm install -g @anthropic-ai/claude-code (then claude login), \
-                 or set HAUKSBEE_LLM_API_KEY for an OpenAI-compatible endpoint",
-                d.manual
+                "fix or delete {}, or run `hauksbee models backend setup`",
+                path.display()
             ),
-        },
-        // The probe list is built in this crate, so a missing codex row is a
-        // programming error rather than a machine state. Say that instead of
-        // inventing a machine problem the user could go and look for.
-        None => Backend::Blocked {
-            reason: "this build's dependency probe reports no codex entry, so extraction \
-                     readiness cannot be established"
-                .to_string(),
-            fix: "npm install -g @openai/codex   # then: codex login".to_string(),
-        },
+        };
+    }
+
+    // Codex's usability additionally depends on being signed in, which the
+    // discovery-only `availability` rows below cannot see; ask the same probe
+    // the Environment page's rows are built from so this can never disagree
+    // with it. Every other backend's readiness is exactly what `availability`
+    // already reports (a CLI on PATH, or a key/local-endpoint for the api
+    // backend).
+    if resolved.backend == datasheet::Backend::Codex {
+        let probe = crate::deps::probe_extractors();
+        return match probe.iter().find(|d| d.id == "codex") {
+            Some(d) if d.present => Backend::Ready(resolved),
+            Some(d) => {
+                let detail = d
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| "not usable on this machine".to_string());
+                Backend::Blocked {
+                    reason: format!(
+                        "the {} backend is not usable: {detail}",
+                        resolved.backend.label()
+                    ),
+                    fix: format!("{}{OR_CHOOSE_ANOTHER}", d.manual),
+                    resolved,
+                }
+            }
+            // The probe list is built in this crate, so a missing codex row is
+            // a programming error rather than a machine state. Say that
+            // instead of inventing a machine problem the user could go and
+            // look for.
+            None => Backend::Blocked {
+                reason: "this build's dependency probe reports no codex entry, so extraction \
+                         readiness cannot be established"
+                    .to_string(),
+                fix: format!("{}{OR_CHOOSE_ANOTHER}", resolved.backend.install_hint()),
+                resolved,
+            },
+        };
+    }
+
+    let rows = extract_config::availability(&ProcessHost, &resolved);
+    match rows.iter().find(|row| row.backend == resolved.backend) {
+        Some(row) if row.available => Backend::Ready(resolved),
+        Some(row) => {
+            let reason = format!(
+                "the {} backend is not usable: {}",
+                resolved.backend.label(),
+                row.detail
+            );
+            let fix = format!("{}{OR_CHOOSE_ANOTHER}", resolved.backend.install_hint());
+            Backend::Blocked {
+                resolved,
+                reason,
+                fix,
+            }
+        }
+        None => {
+            let reason = format!(
+                "no availability information for the {} backend",
+                resolved.backend.label()
+            );
+            let fix = format!("{}{OR_CHOOSE_ANOTHER}", resolved.backend.install_hint());
+            Backend::Blocked {
+                resolved,
+                reason,
+                fix,
+            }
+        }
+    }
+}
+
+/// The line that tells the user what running this backend costs, matched to
+/// what the Environment page says about the same backend so the two can never
+/// disagree.
+fn cost_line(resolved: &Resolved) -> String {
+    match resolved.backend {
+        datasheet::Backend::ClaudeCode => "Claude Code signs in with your Claude account, so if \
+             you already pay for one this costs nothing extra."
+            .to_string(),
+        datasheet::Backend::Agy => "Antigravity (agy) signs in with your Google account, so if \
+             you already pay for one this costs nothing extra."
+            .to_string(),
+        datasheet::Backend::Codex => "Codex signs in with a ChatGPT account, so if you already \
+             pay for one this costs nothing extra. Otherwise it bills against whatever account \
+             you sign in with."
+            .to_string(),
+        datasheet::Backend::Api => format!(
+            "Billed by the endpoint's provider against the key in ${}.",
+            resolved.api.api_key_env
+        ),
     }
 }
 
@@ -236,12 +323,62 @@ fn backend() -> Backend {
 /// The consent notice and the kind list are served from here rather than
 /// hardcoded in the page for the same reason: one source, no drift.
 pub fn ready_json() -> String {
-    let (ready, backend_id, reason, fix) = match backend() {
-        Backend::Mock => (true, "mock", None, None),
-        Backend::Api => (true, "api", None, None),
-        Backend::Codex => (true, "codex", None, None),
-        Backend::ClaudeCode => (true, "claude-code", None, None),
-        Backend::Blocked { reason, fix } => (false, "codex", Some(reason), Some(fix)),
+    let config_path = extract_config::config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let picked = backend();
+    let (
+        ready,
+        backend_id,
+        backend_label,
+        backend_source,
+        default_model,
+        default_effort,
+        sends_data_to,
+        reason,
+        fix,
+        cost,
+    ) = match &picked {
+        Backend::Mock => (
+            true,
+            "mock".to_string(),
+            "Mock".to_string(),
+            "the HAUKSBEE_EXTRACT_MOCK_REPLY test hook".to_string(),
+            String::new(),
+            String::new(),
+            "nowhere (mock reply hook)".to_string(),
+            None,
+            None,
+            "Mock reply hook set; nothing is sent.".to_string(),
+        ),
+        Backend::Ready(resolved) => (
+            true,
+            resolved.backend.name().to_string(),
+            resolved.backend.label().to_string(),
+            resolved.backend_source.describe(),
+            resolved.model().to_string(),
+            resolved.effort().unwrap_or("").to_string(),
+            resolved.backend.sends_data_to().to_string(),
+            None,
+            None,
+            cost_line(resolved),
+        ),
+        Backend::Blocked {
+            resolved,
+            reason,
+            fix,
+        } => (
+            false,
+            resolved.backend.name().to_string(),
+            resolved.backend.label().to_string(),
+            resolved.backend_source.describe(),
+            resolved.model().to_string(),
+            resolved.effort().unwrap_or("").to_string(),
+            resolved.backend.sends_data_to().to_string(),
+            Some(reason.clone()),
+            Some(fix.clone()),
+            cost_line(resolved),
+        ),
     };
     let kinds: Vec<serde_json::Value> = KINDS
         .iter()
@@ -250,6 +387,8 @@ pub fn ready_json() -> String {
     serde_json::to_string(&serde_json::json!({
         "ready": ready,
         "backend": backend_id,
+        "backend_label": backend_label,
+        "backend_source": backend_source,
         "reason": reason,
         "fix": fix,
         "consent_notice": datasheet::CONSENT_NOTICE,
@@ -258,15 +397,15 @@ pub fn ready_json() -> String {
         // The model that will run if the user does not pick one, so the page can
         // name it instead of saying "the default" and leaving them to guess what
         // is about to read their datasheet and bill their account.
-        "default_model": datasheet::DEFAULT_CODEX_MODEL,
-        "default_effort": datasheet::DEFAULT_CODEX_EFFORT,
-        // The cost line is the one that changes minds, and it is the same one
-        // the Environment page shows for codex: most people who would want
-        // datasheet extraction already pay for ChatGPT, and the only thing
-        // between them and it is not knowing that codex signs in with it.
-        "cost": "Codex signs in with a ChatGPT account, so if you already pay for one this \
-                 costs nothing extra. Otherwise it bills against whatever account you sign in \
-                 with.",
+        "default_model": default_model,
+        "default_effort": default_effort,
+        "sends_data_to": sends_data_to,
+        "config_path": config_path,
+        // The cost line is the one that changes minds: most people who would
+        // want datasheet extraction already pay for the account their chosen
+        // backend signs in with, and the only thing between them and it is
+        // not knowing that.
+        "cost": cost,
     }))
     .unwrap_or_else(|_| {
         "{\"ready\":false,\"reason\":\"could not serialise readiness\"}".to_string()
@@ -288,9 +427,13 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
     // `/api/models/extract/ready`, but that answer is a moment old and the
     // route is reachable without it.
     let picked = backend();
-    if let Backend::Blocked { reason, fix } = &picked {
-        return Err(format!("{reason}\n\nFix it with: {fix}"));
-    }
+    let engine_backend = match &picked {
+        Backend::Mock => None,
+        Backend::Ready(resolved) => Some(resolved.backend),
+        Backend::Blocked { reason, fix, .. } => {
+            return Err(format!("{reason}\n\nFix it with: {fix}"));
+        }
+    };
 
     // A file that is not a PDF cannot be extracted from, and finding that out
     // after the upload has been sent to an LLM would be the one failure mode the
@@ -349,21 +492,14 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
          writes the draft. This usually takes one to three minutes.",
     );
 
-    // The picker's choice rides into the engine explicitly: `datasheet::run`'s
-    // own default is codex, and a picker that chose the Claude CLI must not
-    // have its work silently rerouted. The page's default model name is a
-    // codex model, so it only travels with the codex/api backends; the Claude
-    // CLI keeps its own default.
-    let (engine_backend, model) = match &picked {
-        Backend::ClaudeCode => (Some(datasheet::Backend::ClaudeCode), None),
-        Backend::Api => (Some(datasheet::Backend::Api), Some(job.model.clone())),
-        Backend::Codex => (Some(datasheet::Backend::Codex), Some(job.model.clone())),
-        Backend::Mock | Backend::Blocked { .. } => (None, Some(job.model.clone())),
-    };
+    // The resolved backend rides into the engine explicitly: `datasheet::run`
+    // must not silently reroute to its own default. The page's model field
+    // applies to whichever backend is active (an empty string means "use that
+    // backend's own default"; `Args::model` already filters empty).
     let args = datasheet::Args::new(pdf_path, job.part.clone(), job.kind.clone())
         .out_dir(Some(out_dir.clone()))
         .backend(engine_backend)
-        .model(model);
+        .model(Some(job.model.clone()));
 
     // On its own thread so the heartbeat below can run: `datasheet::run` is one
     // long blocking call with no callback of its own.

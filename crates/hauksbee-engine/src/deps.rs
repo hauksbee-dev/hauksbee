@@ -84,6 +84,7 @@ pub fn probe_all() -> Vec<DepStatus> {
         let avr = scope.spawn(probe_avr);
         let codex = scope.spawn(probe_codex);
         let claude_code = scope.spawn(probe_claude_code);
+        let agy = scope.spawn(probe_agy);
         vec![
             renode.join().expect("Renode dependency probe panicked"),
             esp_qemu
@@ -98,6 +99,7 @@ pub fn probe_all() -> Vec<DepStatus> {
             claude_code
                 .join()
                 .expect("Claude Code dependency probe panicked"),
+            agy.join().expect("Antigravity dependency probe panicked"),
         ]
     })
 }
@@ -127,7 +129,7 @@ pub(crate) fn probe_extractors() -> Vec<DepStatus> {
             }
         }
     }
-    vec![codex, probe_claude_code()]
+    vec![codex, probe_claude_code(), probe_agy()]
 }
 
 /// Claude Code, the second datasheet-to-model extractor backend. Same shape
@@ -171,6 +173,55 @@ fn probe_claude_code() -> DepStatus {
         manual,
         detail: Some(
             "claude CLI found; sign-in is checked only when datasheet extraction is requested."
+                .to_string(),
+        ),
+        sends_data_offhost: Some(privacy),
+    }
+}
+
+/// Antigravity (`agy`), the third datasheet-to-model extractor backend. Same
+/// shape and same privacy honesty as the codex and Claude Code probes: using
+/// it sends datasheet text to Google, nothing runs unless the user asks, and
+/// it is never auto-installed. Presence means the `agy` CLI resolves on PATH;
+/// its version and sign-in state are deliberately deferred until extraction.
+fn probe_agy() -> DepStatus {
+    let unlocks = "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via Antigravity's `agy` CLI";
+    let cost =
+        "free if you already use Antigravity: agy signs in with your Google account".to_string();
+    let manual = hauksbee_models::datasheet::Backend::Agy
+        .install_hint()
+        .to_string();
+    let privacy = "Using this sends the datasheet's text to Google. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.";
+    let Some(bin) = which_on_path("agy") else {
+        return DepStatus {
+            id: "agy",
+            name: "Antigravity (datasheet extraction)",
+            present: false,
+            path: None,
+            version: None,
+            unlocks,
+            installable: false,
+            cost,
+            manual,
+            detail: Some(
+                "agy not found on PATH. This is optional: extraction also runs via                  codex, Claude Code, or an API key, and a model can always be written by hand                  (one TOML file, see docs/extending/)."
+                    .to_string(),
+            ),
+            sends_data_offhost: Some(privacy),
+        };
+    };
+    DepStatus {
+        id: "agy",
+        name: "Antigravity (datasheet extraction)",
+        present: true,
+        version: None,
+        path: Some(bin.display().to_string()),
+        unlocks,
+        installable: false,
+        cost,
+        manual,
+        detail: Some(
+            "agy CLI found; sign-in is checked only when datasheet extraction is requested."
                 .to_string(),
         ),
         sends_data_offhost: Some(privacy),
@@ -1218,7 +1269,8 @@ mod tests {
                 "kicad-cli",
                 "avr",
                 "codex",
-                "claude-code"
+                "claude-code",
+                "agy"
             ],
             "the panel renders this list in order, so adding a probe is a \
              deliberate change to what a user sees, not an incidental one"
@@ -1253,6 +1305,11 @@ mod tests {
                 assert!(
                     offhost.is_some_and(|s| s.contains("Anthropic")),
                     "claude-code must state where the data goes: {d}"
+                );
+            } else if d["id"] == "agy" {
+                assert!(
+                    offhost.is_some_and(|s| s.contains("Google")),
+                    "agy must state where the data goes: {d}"
                 );
             } else {
                 assert!(

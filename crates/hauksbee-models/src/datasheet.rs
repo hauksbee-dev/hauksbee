@@ -23,19 +23,25 @@
 //!
 //! # Backends
 //!
-//! Selected with `--backend codex|claude-code|api`:
+//! Selected with `--backend codex|claude-code|agy|api`, or saved once in
+//! `~/.config/hauksbee/extract.toml` (see [`crate::extract_config`]):
 //!
-//! 1. **codex** (default): shells out to `codex exec` with a carefully
-//!    constructed prompt. Requires `codex` in PATH.
+//! 1. **codex**: shells out to `codex exec` with a carefully constructed
+//!    prompt. Requires `codex` in PATH.
 //! 2. **claude-code**: shells out to headless `claude -p` with the same
-//!    prompt contract. Requires `claude` in PATH.
-//! 3. **api**: calls an OpenAI-compatible chat-completions endpoint,
+//!    prompt contract. Requires `claude` in PATH. Defaults to Opus 5 at high
+//!    reasoning effort.
+//! 3. **agy**: shells out to Antigravity's `agy --print` under the same
+//!    contract. Requires `agy` in PATH. Defaults to Gemini 3.8 Flash at high
+//!    effort.
+//! 4. **api**: calls an OpenAI-compatible chat-completions endpoint,
 //!    configured by `--api-base` (default `https://api.openai.com/v1`),
 //!    `--model`, and `--api-key-env NAME` (the key is read from that
 //!    environment variable at call time and never stored).
 //!
-//! With no `--backend`, setting `HAUKSBEE_LLM_API_KEY` selects the api
-//! backend, matching the behaviour before `--backend` existed.
+//! With no `--backend` anywhere, setting `HAUKSBEE_LLM_API_KEY` selects the
+//! api backend (the behaviour before `--backend` existed); otherwise the first
+//! agent CLI found on PATH, codex then claude then agy.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -44,20 +50,17 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
+use crate::extract_config::{self, ProcessHost, Resolved, ResolvedApi};
 use crate::schema::{ComponentKind, ModelEntry};
 use crate::sensor_spec::{Bus, SensorSpec};
 
-/// How long to let a single agent-CLI run (codex or claude) go before we kill
-/// it and (maybe) retry.
-///
-/// Keep this fixed rather than scaling it with rendered-page count. Page count
-/// is a poor proxy for extraction work (one dense pin table can take longer
-/// than several simple pages), while a model that has produced nothing after
-/// ten minutes is more likely stuck than productively reading page fourteen.
-/// Scaling upward would make the observed no-answer failure slower without
-/// evidence that it improves card quality; scaling downward would penalise
-/// short but difficult datasheets. `MAX_RENDERED_PAGES` already bounds input.
-const CLI_BACKEND_TIMEOUT: Duration = Duration::from_secs(600);
+// How long one agent-CLI run may take before it is killed is
+// `extract_config::DEFAULT_TIMEOUT_SECS` (ten minutes), configurable per
+// machine. It is deliberately not scaled with rendered-page count: page count
+// is a poor proxy for extraction work (one dense pin table can take longer
+// than several simple pages), while a model that has produced nothing after
+// ten minutes is more likely stuck than productively reading page fourteen.
+// `MAX_RENDERED_PAGES` already bounds input.
 
 /// Pages rendered and attached as images.
 ///
@@ -124,6 +127,23 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// An empty sandbox with no datasheet in it, for a connectivity check that
+    /// runs the backend on a one-line prompt. Same isolation as a real run.
+    pub fn scratch() -> Result<Self> {
+        let dir = tempfile::Builder::new()
+            .prefix("hauksbee-extract-check-")
+            .tempdir()
+            .context("creating the check sandbox")?;
+        Ok(Workspace {
+            pdf: dir.path().join("datasheet.pdf"),
+            dir,
+            pages: Vec::new(),
+            selected_pages: Vec::new(),
+            category_disclosures: Vec::new(),
+            has_text_dump: false,
+        })
+    }
+
     pub fn path(&self) -> &Path {
         self.dir.path()
     }
@@ -458,22 +478,81 @@ fn validate_sensor_reply(raw: &str, part: &str, kind: &str) -> Result<SensorSpec
 // ── Argument parsing ──────────────────────────────────────────────────────────
 
 /// Which LLM backend an extraction talks to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Backend {
-    /// `codex exec`, the agent CLI (the default).
+    /// `codex exec`, OpenAI's agent CLI.
     Codex,
     /// Headless `claude -p`, the same prompt contract as codex.
     ClaudeCode,
+    /// Antigravity's `agy --print`, the same contract again.
+    Agy,
     /// An OpenAI-compatible chat-completions endpoint.
     Api,
 }
 
 impl Backend {
+    /// Every backend, in the order the surfaces list them.
+    pub const ALL: [Backend; 4] = [
+        Backend::ClaudeCode,
+        Backend::Agy,
+        Backend::Codex,
+        Backend::Api,
+    ];
+
+    /// The stable id used on the command line, in the config file and on
+    /// the wire.
     pub fn name(self) -> &'static str {
         match self {
             Backend::Codex => "codex",
             Backend::ClaudeCode => "claude-code",
+            Backend::Agy => "agy",
             Backend::Api => "api",
+        }
+    }
+
+    /// The display name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Backend::Codex => "Codex",
+            Backend::ClaudeCode => "Claude Code",
+            Backend::Agy => "Antigravity (agy)",
+            Backend::Api => "OpenAI-compatible API",
+        }
+    }
+
+    /// The executable an agent backend needs on PATH; none for the API.
+    pub fn tool(self) -> Option<&'static str> {
+        match self {
+            Backend::Codex => Some("codex"),
+            Backend::ClaudeCode => Some("claude"),
+            Backend::Agy => Some("agy"),
+            Backend::Api => None,
+        }
+    }
+
+    /// The one command that makes it available.
+    pub fn install_hint(self) -> &'static str {
+        match self {
+            Backend::Codex => "npm install -g @openai/codex   # then: codex login",
+            Backend::ClaudeCode => {
+                "npm install -g @anthropic-ai/claude-code   # then: claude login"
+            }
+            Backend::Agy => {
+                "install Antigravity from https://antigravity.google, then: agy install"
+            }
+            Backend::Api => {
+                "export OPENAI_API_KEY=...   # or name another variable with api.api_key_env"
+            }
+        }
+    }
+
+    /// Where the datasheet's text goes when this backend reads it.
+    pub fn sends_data_to(self) -> &'static str {
+        match self {
+            Backend::Codex => "OpenAI, via the account codex is signed in with",
+            Backend::ClaudeCode => "Anthropic, via the account claude is signed in with",
+            Backend::Agy => "Google, via the account agy is signed in with",
+            Backend::Api => "the endpoint named by api.base_url",
         }
     }
 }
@@ -481,12 +560,32 @@ impl Backend {
 impl std::str::FromStr for Backend {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
-        match s {
+        match s.trim() {
             "codex" => Ok(Backend::Codex),
-            "claude-code" => Ok(Backend::ClaudeCode),
+            "claude-code" | "claude" => Ok(Backend::ClaudeCode),
+            "agy" | "antigravity" => Ok(Backend::Agy),
             "api" => Ok(Backend::Api),
-            other => bail!("unknown backend '{other}': expected codex, claude-code, or api"),
+            other => bail!("unknown backend '{other}': expected codex, claude-code, agy, or api"),
         }
+    }
+}
+
+impl std::fmt::Display for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl serde::Serialize for Backend {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(self.name())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Backend {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        text.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -498,12 +597,15 @@ pub struct Args {
     pub out_dir: Option<PathBuf>,
     /// Retry count for LLM calls (default 2, for at most three attempts)
     pub retries: usize,
-    /// Model the extraction agent runs on. `None` takes
-    /// `HAUKSBEE_CODEX_MODEL` (codex) / `HAUKSBEE_LLM_MODEL` (api), then
-    /// [`DEFAULT_CODEX_MODEL`].
+    /// Model the extraction agent runs on. `None` takes the environment,
+    /// then the config file, then the backend's default (see
+    /// [`crate::extract_config`]).
     pub model: Option<String>,
-    /// Which backend to call. `None` keeps the pre-flag behaviour: the api
-    /// backend when `HAUKSBEE_LLM_API_KEY` is set, codex otherwise.
+    /// Reasoning effort for the agent backends, on the same precedence.
+    pub effort: Option<String>,
+    /// Which backend to call. `None` takes `HAUKSBEE_EXTRACT_BACKEND`, then
+    /// the config file, then the api backend when `HAUKSBEE_LLM_API_KEY` is
+    /// set, then the first agent CLI on PATH.
     pub backend: Option<Backend>,
     /// Base URL for the api backend. `None` takes `HAUKSBEE_LLM_BASE_URL`,
     /// then `https://api.openai.com/v1`.
@@ -526,6 +628,7 @@ impl Args {
             out_dir: None,
             retries: 2,
             model: None,
+            effort: None,
             backend: None,
             api_base: None,
             api_key_env: None,
@@ -545,7 +648,13 @@ impl Args {
         self
     }
 
-    /// Pick the backend. `None` keeps the environment-driven default.
+    /// Pick the reasoning effort. Empty means "not chosen", as for `model`.
+    pub fn effort(mut self, effort: Option<String>) -> Self {
+        self.effort = effort.filter(|e| !e.trim().is_empty());
+        self
+    }
+
+    /// Pick the backend. `None` keeps the configured / auto-detected one.
     pub fn backend(mut self, backend: Option<Backend>) -> Self {
         self.backend = backend;
         self
@@ -588,10 +697,12 @@ pub fn validate_api_key_env_name(name: &str) -> Result<()> {
 /// A surface that offers extraction without showing `CONSENT_NOTICE` first is
 /// a bug, not a shortcut.
 pub const CONSENT_NOTICE: &str =
-    "This sends the datasheet's text to an LLM backend (codex by default; \
-     claude-code or an OpenAI-compatible API with --backend). Nothing is sent \
-     until you ask for it. The result is a draft for you to check, not a \
-     measurement: a model it writes carries provenance \"datasheet-extracted\".";
+    "This sends the datasheet's text to an LLM backend: whichever is configured \
+     for extraction (Claude Code, Antigravity, Codex, or an OpenAI-compatible \
+     API; `hauksbee models backend show` or the Settings page says which). \
+     Nothing is sent until you ask for it. The result is a draft for you to \
+     check, not a measurement: a model it writes carries provenance \
+     \"datasheet-extracted\".";
 
 pub fn parse_args() -> Result<Args> {
     parse_args_from(std::env::args().skip(1))
@@ -622,8 +733,9 @@ pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
             "--kind" => out.kind_str = value("a value")?,
             "--out-dir" => out.out_dir = Some(PathBuf::from(value("a value")?)),
             "--model" => out.model = Some(value("a value")?),
+            "--effort" => out.effort = Some(value("a value (low, medium, high, ...)")?),
             "--backend" => {
-                out.backend = Some(value("a value (codex, claude-code, or api)")?.parse()?)
+                out.backend = Some(value("a value (codex, claude-code, agy, or api)")?.parse()?)
             }
             "--api-base" => out.api_base = Some(value("a value")?),
             "--api-key-env" => {
@@ -658,22 +770,30 @@ OPTIONS:
                           i2c_sensor|spi_sensor  (declarative register-map
                           sensors → a [sensor] spec, not a SPICE model)
     --out-dir <dir>       Output directory (default: ~/.hauksbee/models/)
-    --model <id>          Model for the extraction agent
-                          (default: gpt-5.6-sol at high reasoning effort)
-    --backend <name>      LLM backend: codex (default), claude-code, or api
+    --model <id>          Model for the extraction agent (default: the
+                          backend's own, e.g. claude-opus-5 for claude-code,
+                          gemini-3.8-flash for agy, gpt-5.6-sol for codex)
+    --effort <level>      Reasoning effort for an agent backend (default: high)
+    --backend <name>      LLM backend: claude-code, agy, codex, or api
+                          (default: ~/.config/hauksbee/extract.toml, else the
+                          first agent CLI found on PATH)
     --api-base <url>      Base URL for the api backend
                           (default: https://api.openai.com/v1)
     --api-key-env <NAME>  Environment variable holding the api key
                           (default: OPENAI_API_KEY). The NAME, never the key:
                           the key is read from the environment at call time.
 
-ENVIRONMENT:
-    HAUKSBEE_LLM_API_KEY   API key for OpenAI-compatible backend (setting it
-                           selects the api backend when --backend is absent)
-    HAUKSBEE_CODEX_MODEL   Model for the codex backend (default: gpt-5.6-sol)
-    HAUKSBEE_CODEX_EFFORT  Reasoning effort for it (default: high)
-    HAUKSBEE_LLM_MODEL     Model ID for API backend (e.g. gpt-5.6-sol)
-    HAUKSBEE_LLM_BASE_URL  Base URL (default: https://api.openai.com/v1)
+ENVIRONMENT (each overrides the config file for one run):
+    HAUKSBEE_EXTRACT_BACKEND  Backend name, as for --backend
+    HAUKSBEE_EXTRACT_CONFIG   Path of the config file to read instead
+    HAUKSBEE_CLAUDE_MODEL / HAUKSBEE_CLAUDE_EFFORT   claude-code model / effort
+    HAUKSBEE_AGY_MODEL / HAUKSBEE_AGY_EFFORT         agy model / effort
+    HAUKSBEE_CODEX_MODEL / HAUKSBEE_CODEX_EFFORT     codex model / effort
+    HAUKSBEE_CODEX_PROFILE    codex auth profile
+    HAUKSBEE_LLM_API_KEY      API key for the api backend (setting it selects
+                              that backend when nothing else chose one)
+    HAUKSBEE_LLM_MODEL        Model ID for the api backend
+    HAUKSBEE_LLM_BASE_URL     Base URL (default: https://api.openai.com/v1)
 "
     );
 }
@@ -1039,16 +1159,20 @@ fn number_word(n: usize) -> String {
 }
 
 fn which(cmd: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
+    which_path(cmd).is_some()
+}
+
+/// Where `cmd` resolves on PATH, if anywhere. Shared with the config
+/// resolver so "is it installed" is answered the same way everywhere.
+pub(crate) fn which_path(cmd: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
     let extensions =
         command_extensions(cmd, cfg!(windows), std::env::var("PATHEXT").ok().as_deref());
-    std::env::split_paths(&path).any(|dir| {
+    std::env::split_paths(&path).find_map(|dir| {
         extensions
             .iter()
             .map(|suffix| dir.join(format!("{cmd}{suffix}")))
-            .any(|candidate| executable_file(&candidate))
+            .find(|candidate| executable_file(candidate))
     })
 }
 
@@ -1749,14 +1873,16 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
         return Ok(raw);
     }
 
-    // No explicit --backend keeps the pre-flag behaviour: an exported
-    // HAUKSBEE_LLM_API_KEY selects the api backend, codex otherwise.
-    let chosen = args
-        .backend
-        .unwrap_or(match std::env::var_os("HAUKSBEE_LLM_API_KEY") {
-            Some(_) => Backend::Api,
-            None => Backend::Codex,
-        });
+    // Flags, then environment, then the config file, then defaults: one
+    // resolver for every surface, so the CLI and the web page cannot disagree
+    // about what is about to read the datasheet.
+    let resolved = resolve_settings(args)?;
+    let chosen = resolved.backend;
+    eprintln!(
+        "[model-extract] backend: {} ({})",
+        resolved.summary(),
+        resolved.backend_source.describe()
+    );
     // The API backend has no local-file access, so a prompt carrying the
     // no-text sentinel would ship it nothing to read. Refuse before sending
     // rather than spend the call.
@@ -1767,32 +1893,16 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
         );
     }
 
-    let (tool, install) = match chosen {
+    let tool = match chosen {
         Backend::Api => {
-            let request = ApiRequest::prepare(args)?;
-            return validated_attempts(args, prompt, reply, "api", |p| {
+            let request = ApiRequest::prepare(&resolved.api)?;
+            return validated_attempts(resolved.retries, prompt, reply, "api", |p| {
                 Ok(extract_toml_block(&request.send(p)?, reply.table()))
             });
         }
-        Backend::Codex => (
-            "codex",
-            "Install it (`npm install -g @openai/codex` or `brew install codex`) and sign in, \
-             or pick another backend: --backend claude-code (needs `claude` in PATH) or \
-             --backend api (set OPENAI_API_KEY).",
-        ),
-        Backend::ClaudeCode => (
-            "claude",
-            "Install Claude Code (`npm install -g @anthropic-ai/claude-code`) and sign in, or \
-             pick another backend: --backend codex (needs `codex` in PATH) or --backend api \
-             (set OPENAI_API_KEY).",
-        ),
+        agent => agent.tool().expect("every agent backend names its CLI"),
     };
-    if !which(tool) {
-        bail!(
-            "the {} backend needs the `{tool}` CLI, which is not in PATH. {install}",
-            chosen.name()
-        );
-    }
+    require_tool(chosen)?;
 
     // An agent backend reads the sandboxed PDF, text dump and page renders
     // itself, so the embedded text comes back out of its instruction.
@@ -1809,12 +1919,9 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
         ws.pages.len()
     );
     let base_prompt = format!("{prompt}\n\n{}", verification_clause(&ws));
-    validated_attempts(args, &base_prompt, reply, tool, |p| {
+    validated_attempts(resolved.retries, &base_prompt, reply, tool, |p| {
         let _ = std::fs::remove_file(ws.answer_path());
-        let stdout = match chosen {
-            Backend::Codex => run_codex_once(p, &ws, args.model.as_deref())?,
-            _ => run_claude_once(p, &ws, args.model.as_deref())?,
-        };
+        let stdout = run_agent_once(&resolved, p, &ws)?;
         // Prefer the file we asked for. Falling back to stdout keeps a model
         // that answered in prose from failing outright, but the file is the
         // reliable path: stdout also carries the agent's narration, and one
@@ -1836,14 +1943,14 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
 /// a retrying model "is it valid TOML?" when the real error was `missing
 /// field id` with a line number, so it repeated the same shape mistake.
 fn validated_attempts(
-    args: &Args,
+    retries: usize,
     base_prompt: &str,
     reply: Reply<'_>,
     tool: &str,
     mut fetch: impl FnMut(&str) -> Result<String>,
 ) -> Result<String> {
     let mut prompt = base_prompt.to_string();
-    for attempt in 1..=args.retries + 1 {
+    for attempt in 1..=retries + 1 {
         let started = Instant::now();
         let raw = fetch(&prompt)?;
         eprintln!(
@@ -1853,7 +1960,7 @@ fn validated_attempts(
         );
         match reply.check(&raw) {
             Ok(()) => return Ok(raw),
-            Err(e) if attempt <= args.retries => {
+            Err(e) if attempt <= retries => {
                 eprintln!(
                     "[model-extract] attempt {attempt} failed: {e:#}; retrying with feedback..."
                 );
@@ -2078,42 +2185,199 @@ fn verification_clause(ws: &Workspace) -> String {
     )
 }
 
-/// The model the extraction agent runs on, and how hard it is asked to think.
-///
-/// Reading a datasheet is not a cheap task. The values are easy (a table cell
-/// is a table cell); the pin map is where a weak model fails, because package
-/// drawings are rotated, mirrored, and labelled without numbers, and getting
-/// one wrong produces a part that binds cleanly and simulates a different
-/// device. So the default is the strongest tier at high reasoning effort rather
-/// than whatever codex happens to default to.
-///
-/// Deliberately keep `high` for non-sol overrides too: silently dropping a
-/// weaker model to medium could make the pin-map work less reliable, and
-/// `HAUKSBEE_CODEX_EFFORT` remains the explicit escape hatch. A per-model
-/// default needs comparative benchmark evidence first.
-///
-/// Override with `--model` or `HAUKSBEE_CODEX_MODEL` / `HAUKSBEE_CODEX_EFFORT`.
-pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-sol";
-pub const DEFAULT_CODEX_EFFORT: &str = "high";
+/// The defaults live in [`crate::extract_config`]; re-exported so callers
+/// that only want to name them need not know where they are kept.
+pub use crate::extract_config::{
+    DEFAULT_AGY_EFFORT, DEFAULT_AGY_MODEL, DEFAULT_CLAUDE_EFFORT, DEFAULT_CLAUDE_MODEL,
+    DEFAULT_CODEX_EFFORT, DEFAULT_CODEX_MODEL,
+};
 
-/// Resolve the model and reasoning effort for a codex run: an explicit
-/// `--model` wins, then the environment, then the default above.
-pub fn codex_model(explicit: Option<&str>) -> (String, String) {
-    let model = explicit
-        .map(str::to_string)
-        .or_else(|| std::env::var("HAUKSBEE_CODEX_MODEL").ok())
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string());
-    let effort = std::env::var("HAUKSBEE_CODEX_EFFORT")
+/// The settings one extraction runs with: the config file and environment
+/// folded together, then the caller's flags on top.
+///
+/// A config file that exists but cannot be read is an error here rather than
+/// a warning: silently running on defaults would send the datasheet somewhere
+/// the user did not choose.
+pub fn resolve_settings(args: &Args) -> Result<Resolved> {
+    let loaded = extract_config::load()?;
+    Ok(resolve_with(&loaded.config, &ProcessHost, args))
+}
+
+/// The pure half of [`resolve_settings`]: fold `config`, the `host`'s
+/// environment and the flags in `args`, in that precedence order. Tests
+/// resolve against a fake host with this.
+pub fn resolve_with(
+    config: &extract_config::ExtractConfig,
+    host: &dyn extract_config::Host,
+    args: &Args,
+) -> Resolved {
+    let mut resolved = config.resolve(host, args.backend);
+    resolved.override_model(args.model.as_deref(), args.effort.as_deref());
+    if let Some(base) = &args.api_base {
+        resolved.api.base_url = base.clone();
+    }
+    if let Some(name) = &args.api_key_env {
+        resolved.api.api_key_env = name.clone();
+    }
+    if config.retries.is_none() {
+        resolved.retries = args.retries;
+    }
+    resolved
+}
+
+/// Refuse up front, with the fix, when an agent backend's CLI is missing.
+fn require_tool(backend: Backend) -> Result<()> {
+    let Some(tool) = backend.tool() else {
+        return Ok(());
+    };
+    if which(tool) {
+        return Ok(());
+    }
+    let others: Vec<String> = Backend::ALL
+        .iter()
+        .filter(|b| **b != backend)
+        .map(|b| format!("--backend {}", b.name()))
+        .collect();
+    bail!(
+        "the {} backend needs the `{tool}` CLI, which is not in PATH. Install it \
+         ({}), or pick another backend ({}), or save one with `hauksbee models \
+         backend setup`.",
+        backend.name(),
+        backend.install_hint(),
+        others.join(", ")
+    );
+}
+
+/// One sandboxed run of whichever agent CLI the settings name.
+///
+/// The three CLIs differ only in how they spell the same four things: the
+/// model, the reasoning effort, the permission mode that lets them write
+/// `model.toml` without a prompt, and where the instruction goes. Each is
+/// always named rather than inherited: a CLI's own default varies by plan and
+/// config and would silently decide how good the extraction is.
+///
+///   * codex: `exec --sandbox <mode>` (writes confined to the sandbox, no
+///     network; reads are NOT confined, see `Workspace`), `--skip-git-repo-check`
+///     because the sandbox deliberately is not a repo, `--cd` so it opens the
+///     PDF directly, `--output-last-message` so a narrating reply does not
+///     leave two TOML blocks to choose between, and one `--image` per page.
+///   * claude: `-p --permission-mode <mode> --no-session-persistence`: a
+///     datasheet run is not a conversation anyone resumes, and a transcript
+///     per extraction would keep the datasheet's text around after the
+///     sandbox is gone. It reads the PDF and page renders itself.
+///   * agy: `--mode <mode> --add-dir <sandbox>`, and the pointer as the
+///     `--print=` value because agy reads nothing from stdin.
+fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<String> {
+    let backend = resolved.backend;
+    let (Some(tool), Some(a)) = (backend.tool(), resolved.agent(backend)) else {
+        bail!("the api backend is not an agent CLI");
+    };
+    let pointer = String::from_utf8_lossy(AGENT_POINTER);
+    let mut cmd = Command::new(tool);
+    match backend {
+        Backend::Codex => {
+            cmd.arg("exec");
+            if let Some(profile) = &a.profile {
+                cmd.args(["-p", profile]);
+            }
+            let effort = format!("model_reasoning_effort=\"{}\"", a.effort);
+            cmd.args([
+                "--model",
+                &a.model,
+                "-c",
+                &effort,
+                "--sandbox",
+                &a.permission_mode,
+            ])
+            .args(["--skip-git-repo-check", "--cd"])
+            .arg(ws.path())
+            .arg("--output-last-message")
+            .arg(ws.path().join("last-message.txt"));
+            for page in &ws.pages {
+                cmd.arg("--image").arg(page);
+            }
+        }
+        Backend::ClaudeCode => {
+            cmd.args([
+                "-p",
+                "--output-format",
+                "text",
+                "--permission-mode",
+                &a.permission_mode,
+            ])
+            .args([
+                "--model",
+                &a.model,
+                "--effort",
+                &a.effort,
+                "--no-session-persistence",
+            ]);
+        }
+        Backend::Agy => {
+            cmd.args(["--output-format", "text", "--mode", &a.permission_mode])
+                .args(["--model", &a.model, "--effort", &a.effort, "--add-dir"])
+                .arg(ws.path())
+                .arg(format!("--print={pointer}"));
+        }
+        Backend::Api => unreachable!("handled above"),
+    }
+    cmd.args(&a.extra_args).current_dir(ws.path());
+    run_cli_agent(
+        tool,
+        &mut cmd,
+        ws,
+        prompt,
+        &ws.path().join(format!("{tool}-stderr.log")),
+        Duration::from_secs(resolved.timeout_secs),
+    )
+}
+
+/// Run the configured backend on a one-line prompt and return what it said.
+/// The cheapest end-to-end proof that a setup works: the CLI is found, it is
+/// signed in, the model name is accepted, and an answer comes back. Costs one
+/// tiny model call; sends nothing but the prompt.
+pub fn smoke_test(resolved: &Resolved, progress: &mut dyn FnMut(&str)) -> Result<String> {
+    const PROMPT: &str =
+        "This is a connectivity check. Reply with exactly the word OK and nothing else.";
+    if std::env::var_os("HAUKSBEE_EXTRACT_MOCK_REPLY").is_some() {
+        progress("mock reply hook set; nothing sent");
+        return Ok("OK (mock)".to_string());
+    }
+    progress(&format!(
+        "checking {} ({})",
+        resolved.summary(),
+        resolved.backend_source.describe()
+    ));
+    if resolved.backend == Backend::Api {
+        let request = ApiRequest::prepare(&resolved.api)?;
+        progress(&format!("POST {}", request.url));
+        let reply = request.send(PROMPT)?;
+        return Ok(reply.trim().to_string());
+    }
+    require_tool(resolved.backend)?;
+    let ws = Workspace::scratch()?;
+    progress(&format!(
+        "running `{}` in an empty sandbox ({}), model {}",
+        resolved.backend.tool().unwrap_or("?"),
+        ws.path().display(),
+        resolved.model()
+    ));
+    let prompt = format!("{PROMPT} Write that word to model.toml as well.");
+    let stdout = run_agent_once(resolved, &prompt, &ws)?;
+    let text = std::fs::read_to_string(ws.answer_path())
         .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_CODEX_EFFORT.to_string());
-    (model, effort)
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or(stdout);
+    let reply = text.trim();
+    if reply.is_empty() {
+        bail!("the backend ran but answered nothing");
+    }
+    Ok(reply.chars().take(200).collect())
 }
 
 /// Run one sandboxed agent invocation to completion and return its stdout.
 ///
-/// The contract both agent CLIs share: the sandbox is the working directory,
+/// The contract every agent CLI shares: the sandbox is the working directory,
 /// the full prompt goes in a FILE inside it (argv is world-readable on Linux
 /// via /proc/<pid>/cmdline and visible to `ps -ww` on macOS, and a 40,000
 /// character datasheet excerpt would undo the consent the user gave to send it
@@ -2132,7 +2396,7 @@ fn run_cli_agent(
     ws: &Workspace,
     prompt: &str,
     log: &Path,
-    retry_hint: &str,
+    timeout: Duration,
 ) -> Result<String> {
     std::fs::write(ws.path().join("prompt.md"), prompt)
         .context("writing the prompt into the sandbox")?;
@@ -2151,101 +2415,22 @@ fn run_cli_agent(
     // positional argument: codex's `--image` takes many values, so a trailing
     // `<prompt>` parsed as one more image path and codex reported "No prompt
     // provided via stdin".
+    // agy takes its prompt as `--print=<text>` and reads nothing from stdin;
+    // the pointer is short and secret-free, so argv is fine there. Its pipe
+    // is still written and closed so a CLI that does read stdin sees EOF.
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(AGENT_POINTER);
     }
-    wait_for_cli_backend(child, tool, retry_hint, log)
+    wait_for_cli_backend(child, tool, log, timeout)
 }
 
 /// The stdin instruction every agent run receives. The pages are on disk
 /// beside the PDF (codex also gets them attached with `--image`), so one
-/// pointer serves both CLIs.
+/// pointer serves every CLI (agy gets it as the `--print` value instead).
 const AGENT_POINTER: &[u8] = b"Read prompt.md in your working directory and follow it exactly. \
     The rendered datasheet pages (page-*.png) and datasheet.pdf are in the same directory; \
     read values off the page images for anything that lives in a table or a pinout. \
     Write your answer to model.toml.";
-
-/// One codex invocation. Invocation notes learned the hard way:
-///   * `--sandbox workspace-write` (`--full-auto` is deprecated): writes are
-///     confined to the writable roots, reads are NOT (see `Workspace`).
-///   * `--skip-git-repo-check`, codex otherwise refuses to run outside a repo,
-///     and the sandbox deliberately is not one.
-///   * `--cd <sandbox>` so codex can open the datasheet PDF / extracted text
-///     directly when pdftotext was unavailable.
-///   * the model is named rather than inherited: codex's default varies by the
-///     user's plan and config and silently decides how good the extraction is.
-fn run_codex_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<String> {
-    let (model, effort) = codex_model(model);
-    let mut cmd = Command::new("codex");
-    cmd.arg("exec");
-    // An alternative codex auth profile (an Azure/OpenAI-compatible endpoint
-    // configured in ~/.codex/config.toml) rides in via the environment: the
-    // personal ChatGPT account is rate-limited exactly when extraction runs
-    // are heaviest, and a profile flag is codex's own mechanism for that.
-    if let Some(profile) = std::env::var("HAUKSBEE_CODEX_PROFILE")
-        .ok()
-        .filter(|p| !p.trim().is_empty())
-    {
-        cmd.args(["-p", profile.trim()]);
-    }
-    let effort = format!("model_reasoning_effort=\"{effort}\"");
-    cmd.args([
-        "--model",
-        &model,
-        "-c",
-        &effort,
-        "--sandbox",
-        "workspace-write",
-        "--skip-git-repo-check",
-        "--cd",
-    ])
-    .arg(ws.path())
-    // The answer goes to a file we name, so a reply that also narrates does
-    // not leave two candidate TOML blocks to choose between.
-    .arg("--output-last-message")
-    .arg(ws.path().join("last-message.txt"));
-    // Page renders, in page order: a table or a pinout survives a render and
-    // does not survive a text dump.
-    for page in &ws.pages {
-        cmd.arg("--image").arg(page);
-    }
-    run_cli_agent(
-        "codex",
-        &mut cmd,
-        ws,
-        prompt,
-        &ws.path().join("codex-stderr.log"),
-        "retry with a tighter prompt or set HAUKSBEE_LLM_API_KEY",
-    )
-}
-
-/// One headless `claude -p` invocation under the same contract as codex.
-/// `--permission-mode acceptEdits` lets the agent write `model.toml` without
-/// an interactive prompt; the sandbox directory bounds what those edits touch.
-fn run_claude_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<String> {
-    let mut cmd = Command::new("claude");
-    cmd.args([
-        "-p",
-        "--output-format",
-        "text",
-        "--permission-mode",
-        "acceptEdits",
-    ])
-    .current_dir(ws.path());
-    // An explicit --model only: claude's model names are its own, so the codex
-    // env defaults must not leak into it.
-    if let Some(m) = model {
-        cmd.args(["--model", m]);
-    }
-    run_cli_agent(
-        "claude",
-        &mut cmd,
-        ws,
-        prompt,
-        &ws.path().join("claude-stderr.log"),
-        "retry with a tighter prompt or another --backend",
-    )
-}
 
 /// Poll a spawned CLI agent to completion, killing it at `CLI_BACKEND_TIMEOUT`,
 /// and return its stdout. On a non-zero exit the error quotes the last few
@@ -2256,10 +2441,10 @@ fn run_claude_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<
 fn wait_for_cli_backend(
     mut child: Child,
     tool: &str,
-    retry_hint: &str,
     log_path: &Path,
+    timeout: Duration,
 ) -> Result<String> {
-    let deadline = Instant::now() + CLI_BACKEND_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     while child
         .try_wait()
         .with_context(|| format!("polling {tool}"))?
@@ -2269,8 +2454,9 @@ fn wait_for_cli_backend(
             let _ = child.kill();
             let _ = child.wait();
             bail!(
-                "{tool} timed out after {}s with no answer; {retry_hint}",
-                CLI_BACKEND_TIMEOUT.as_secs()
+                "{tool} timed out after {}s with no answer; retry with a tighter prompt, raise \
+                 timeout_secs, or pick another backend (hauksbee models backend setup)",
+                timeout.as_secs()
             );
         }
         std::thread::sleep(Duration::from_millis(500));
@@ -2305,22 +2491,7 @@ fn wait_for_cli_backend(
 }
 
 /// The default base URL for the api backend.
-pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
-
-/// The environment variable the api backend reads its key from: an explicit
-/// `--api-key-env` wins; otherwise the legacy `HAUKSBEE_LLM_API_KEY` when it
-/// is set (that variable selected the backend before `--backend` existed),
-/// else `OPENAI_API_KEY`.
-fn api_key_env_name(args: &Args) -> String {
-    args.api_key_env.clone().unwrap_or_else(|| {
-        if std::env::var_os("HAUKSBEE_LLM_API_KEY").is_some() {
-            "HAUKSBEE_LLM_API_KEY"
-        } else {
-            "OPENAI_API_KEY"
-        }
-        .to_string()
-    })
-}
+pub use crate::extract_config::DEFAULT_API_BASE;
 
 /// One prepared OpenAI-compatible chat-completions request: everything but
 /// the prompt, resolved once so every retry hits the same endpoint, model and
@@ -2334,36 +2505,34 @@ fn api_key_env_name(args: &Args) -> String {
 struct ApiRequest {
     url: String,
     model: String,
+    /// Empty for a loopback endpoint (Ollama, LM Studio), which wants no
+    /// Authorization header and leaks nothing off the machine.
     api_key: String,
 }
 
 impl ApiRequest {
-    fn prepare(args: &Args) -> Result<Self> {
-        let key_env = api_key_env_name(args);
-        let api_key = std::env::var(&key_env)
-            .ok()
-            .filter(|k| !k.trim().is_empty())
-            .with_context(|| {
-                format!(
-                    "the api backend reads its key from ${key_env}, which is unset or \
-                     empty. Fix: set {key_env} (export {key_env}=<your key>), or name \
-                     the variable that holds your key with --api-key-env NAME. The key \
-                     is never accepted as a flag value and never stored."
-                )
-            })?;
+    fn prepare(settings: &ResolvedApi) -> Result<Self> {
+        let key_env = &settings.api_key_env;
+        let api_key = match std::env::var(key_env).ok().filter(|k| !k.trim().is_empty()) {
+            Some(key) => key,
+            None if extract_config::is_local_url(&settings.base_url) => String::new(),
+            None => bail!(
+                "the api backend reads its key from ${key_env}, which is unset or \
+                 empty. Fix: set {key_env} (export {key_env}=<your key>), or name \
+                 the variable that holds your key with --api-key-env NAME (or \
+                 api.api_key_env in the config). The key is never accepted as a \
+                 flag value and never stored."
+            ),
+        };
         if !which("curl") {
             bail!("the api backend needs `curl`, which is not in PATH; install curl");
         }
-        let setting = |flag: &Option<String>, var: &str, default: &str| {
-            flag.clone()
-                .or_else(|| std::env::var(var).ok())
-                .filter(|v| !v.trim().is_empty())
-                .unwrap_or_else(|| default.to_string())
-        };
-        let base = setting(&args.api_base, "HAUKSBEE_LLM_BASE_URL", DEFAULT_API_BASE);
         Ok(ApiRequest {
-            url: format!("{}/chat/completions", base.trim_end_matches('/')),
-            model: setting(&args.model, "HAUKSBEE_LLM_MODEL", DEFAULT_CODEX_MODEL),
+            url: format!(
+                "{}/chat/completions",
+                settings.base_url.trim_end_matches('/')
+            ),
+            model: settings.model.clone(),
             api_key,
         })
     }
@@ -2386,11 +2555,15 @@ impl ApiRequest {
         let body_path = staging.path().join("request.json");
         std::fs::write(&body_path, serde_json::to_string(&body)?)
             .context("writing the api request body")?;
+        let auth = if self.api_key.is_empty() {
+            String::new()
+        } else {
+            format!("header = \"Authorization: Bearer {}\"\n", self.api_key)
+        };
         let curl_config = format!(
             "url = \"{}\"\nrequest = \"POST\"\nheader = \"Content-Type: application/json\"\n\
-             header = \"Authorization: Bearer {}\"\ndata = \"@{}\"\nsilent\nshow-error\n",
+             {auth}data = \"@{}\"\nsilent\nshow-error\n",
             self.url,
-            self.api_key,
             body_path.display()
         );
         let mut child = Command::new("curl")
@@ -2587,11 +2760,17 @@ mod tests {
         for (flag, want) in [
             ("codex", Backend::Codex),
             ("claude-code", Backend::ClaudeCode),
+            ("agy", Backend::Agy),
             ("api", Backend::Api),
         ] {
             assert_eq!(parse(&["--backend", flag]).unwrap().backend, Some(want));
         }
         assert!(parse(&["--backend", "gemini"]).is_err());
+        assert_eq!(
+            parse(&["--effort", "max"]).unwrap().effort.as_deref(),
+            Some("max")
+        );
+        assert!(parse(&["--effort"]).is_err());
 
         let a = parse(&[
             "--backend",
@@ -2604,7 +2783,14 @@ mod tests {
         .unwrap();
         assert_eq!(a.api_base.as_deref(), Some("https://llm.example/v1"));
         assert_eq!(a.api_key_env.as_deref(), Some("MY_LLM_KEY"));
-        assert_eq!(api_key_env_name(&a), "MY_LLM_KEY");
+        let r = resolve_with(
+            &extract_config::ExtractConfig::default(),
+            &extract_config::FakeHost::default(),
+            &a,
+        );
+        assert_eq!(r.backend, Backend::Api);
+        assert_eq!(r.api.api_key_env, "MY_LLM_KEY");
+        assert_eq!(r.api.base_url, "https://llm.example/v1");
     }
 
     #[test]

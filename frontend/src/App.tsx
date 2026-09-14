@@ -7,6 +7,7 @@ import { BoardView } from './components/BoardView'
 import { ChecksView, checksStorageKey } from './components/ChecksView'
 import type { ChecksSummary } from './components/ChecksView'
 import { DepsPanel } from './components/DepsPanel'
+import { SettingsView } from './components/SettingsView'
 import { ShellChips } from './components/ShellChips'
 import { LaunchErrorBanner, ReplaceLiveConfirm, ResumeErrorBanner } from './components/ShellBanners'
 import SimView from './SimView'
@@ -86,6 +87,7 @@ const VIEW_TITLES: Record<AppView, string> = {
   checks: 'Checks',
   sim: 'Live Sim',
   env: 'Environment',
+  settings: 'Settings',
 }
 
 /** A queue of things a board surface asked the checks builder for, consumed by
@@ -120,6 +122,8 @@ function Shell({ boot }: { boot: Boot }) {
   const [simMounted, setSimMounted] = useState(false)
   // Environment mounts on first visit (its /api/deps fetch is on mount).
   const [envVisited, setEnvVisited] = useState(false)
+  // Settings mounts on first visit too (its GET /api/settings/extract is on mount).
+  const [settingsVisited, setSettingsVisited] = useState(false)
   // `sessionBoard` is the board the /ws session says IT is running (from its
   // BoardInfo frame): the sim surface's identity is bound to this, never to
   // the locally analyzed board.
@@ -183,6 +187,7 @@ function Shell({ boot }: { boot: Boot }) {
 
   const navigate = useCallback((v: AppView) => {
     if (v === 'env') setEnvVisited(true)
+    if (v === 'settings') setSettingsVisited(true)
     if (v === 'sim' && !simMounted) {
       // The nav entry launches (or asks to replace), exactly like the primary
       // action, so "Live Sim" never opens an offline shell. With no launchable
@@ -280,9 +285,10 @@ function Shell({ boot }: { boot: Boot }) {
 
   // On the sim view the header names the SESSION's board (what /ws actually
   // streams), never the locally analyzed one: the two can differ, and the
-  // canvas/nets/footer follow the session. Environment is about this machine's
-  // backends and oracles, not about a board, so it carries none.
-  const headerBoard = view === 'env'
+  // canvas/nets/footer follow the session. Environment and Settings are about
+  // this machine's backends and oracles, not about a board, so neither carries
+  // one.
+  const headerBoard = view === 'env' || view === 'settings'
     ? null
     : view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel
 
@@ -428,6 +434,7 @@ function Shell({ boot }: { boot: Boot }) {
                 spec={spec}
                 checks={checksSummary}
                 sessionName={sessions.current?.name ?? null}
+                onOpenSettings={() => navigate('settings')}
               />
             ) : (
               <UploadView
@@ -488,6 +495,14 @@ function Shell({ boot }: { boot: Boot }) {
             <div className="overflow-y-auto" style={{ display: view === 'env' ? 'block' : 'none', height: '100%' }}>
               <div className="max-w-3xl mx-auto px-6 pb-16 view-enter">
                 <DepsPanel engineVersion={engineVersion} />
+              </div>
+            </div>
+          )}
+
+          {settingsVisited && (
+            <div className="overflow-y-auto" style={{ display: view === 'settings' ? 'block' : 'none', height: '100%' }}>
+              <div className="max-w-3xl mx-auto px-6 pb-16 view-enter">
+                <SettingsView />
               </div>
             </div>
           )}

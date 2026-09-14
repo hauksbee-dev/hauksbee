@@ -353,6 +353,82 @@ enum ModelsCommand {
     /// --yes is the explicit script/CI opt-in. This never invokes a network,
     /// LLM, installer, or model-pack registration.
     Prepare(ModelsPrepareArgs),
+    /// View and change the persistent datasheet-extraction settings
+    /// (which backend, model, and effort `models extract` uses by default).
+    #[command(subcommand)]
+    Backend(ModelsBackendCommand),
+}
+
+#[derive(Subcommand)]
+enum ModelsBackendCommand {
+    /// Show the config file, the resolved settings, and every backend's
+    /// availability on this machine.
+    Show(ModelsBackendShowArgs),
+    /// List the built-in presets (`use <id>` applies one).
+    Presets,
+    /// List every setting `set`/`unset` accept, with its meaning and default.
+    Keys,
+    /// Switch to a preset, or a bare backend name (claude-code, agy, codex,
+    /// api) to change only the backend and keep its existing section.
+    Use(ModelsBackendUseArgs),
+    /// Set one or more settings (see `models backend keys` for the list).
+    /// An empty value (`KEY=`) clears it back to the default.
+    Set(ModelsBackendSetArgs),
+    /// Clear one setting back to its default (shorthand for `set KEY=`).
+    Unset(ModelsBackendUnsetArgs),
+    /// Delete the config file, back to every default. Asks first.
+    Reset(ModelsBackendResetArgs),
+    /// Print the config file path and nothing else.
+    Path,
+    /// Report whether the configured backend can actually run: the CLI is on
+    /// PATH (and signed in, for codex), or the api key/URL is set.
+    Check(ModelsBackendCheckArgs),
+    /// Interactive wizard: pick a preset, optionally tweak model/effort, save.
+    Setup,
+}
+
+#[derive(Parser)]
+struct ModelsBackendShowArgs {
+    /// Machine-readable: one JSON object with the config, resolved settings,
+    /// backend availability, and presets.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct ModelsBackendUseArgs {
+    /// A preset id (see `models backend presets`) or a bare backend name
+    /// (claude-code, agy, codex, api).
+    #[arg(value_name = "PRESET-OR-BACKEND")]
+    target: String,
+}
+
+#[derive(Parser)]
+struct ModelsBackendSetArgs {
+    /// One or more KEY=VALUE settings, e.g. `claude-code.effort=max`. See
+    /// `models backend keys` for the full list.
+    #[arg(value_name = "KEY=VALUE", required = true, num_args = 1..)]
+    pairs: Vec<String>,
+}
+
+#[derive(Parser)]
+struct ModelsBackendUnsetArgs {
+    /// The setting to clear, e.g. `claude-code.effort`.
+    key: String,
+}
+
+#[derive(Parser)]
+struct ModelsBackendResetArgs {
+    /// Skip the confirmation prompt (for scripts).
+    #[arg(long, short = 'y')]
+    yes: bool,
+}
+
+#[derive(Parser)]
+struct ModelsBackendCheckArgs {
+    /// Also run a one-line connectivity check (costs one tiny model call).
+    #[arg(long)]
+    send: bool,
 }
 
 #[derive(Parser)]
@@ -438,15 +514,20 @@ struct ModelsExtractArgs {
     /// Skip the prompt. For scripts that have already got the user's consent.
     #[arg(long, short = 'y')]
     yes: bool,
-    /// Which LLM backend drafts the model. Default: codex (or api when
-    /// HAUKSBEE_LLM_API_KEY is set, matching the pre-flag behaviour).
+    /// Which LLM backend drafts the model. Default: the config file
+    /// (`hauksbee models backend show`), else the first agent CLI found on
+    /// PATH.
     #[arg(long, value_enum)]
     backend: Option<ExtractBackendArg>,
-    /// Model the extraction runs on (a codex/claude model name, or the api
-    /// backend's model id). Default: gpt-5.6-sol for codex, the CLI's own
-    /// default for claude-code.
+    /// Model the extraction runs on (a codex/claude/agy model name, or the
+    /// api backend's model id). Default: the config file (`hauksbee models
+    /// backend show`), else the backend's own built-in default.
     #[arg(long)]
     model: Option<String>,
+    /// Reasoning effort for an agent backend (claude-code/agy/codex). Default:
+    /// high, or whatever the config file names.
+    #[arg(long, value_name = "LEVEL")]
+    effort: Option<String>,
     /// Base URL for --backend api (an OpenAI-compatible endpoint).
     /// Default: HAUKSBEE_LLM_BASE_URL, then <https://api.openai.com/v1>.
     #[arg(long, value_name = "URL")]
@@ -467,6 +548,8 @@ enum ExtractBackendArg {
     Codex,
     /// Headless `claude -p` (needs `claude` in PATH).
     ClaudeCode,
+    /// Antigravity's `agy --print` (needs `agy` in PATH).
+    Agy,
     /// An OpenAI-compatible chat-completions endpoint.
     Api,
 }
@@ -476,6 +559,7 @@ impl From<ExtractBackendArg> for hauksbee_models::datasheet::Backend {
         match b {
             ExtractBackendArg::Codex => Self::Codex,
             ExtractBackendArg::ClaudeCode => Self::ClaudeCode,
+            ExtractBackendArg::Agy => Self::Agy,
             ExtractBackendArg::Api => Self::Api,
         }
     }
@@ -1449,7 +1533,13 @@ fn main() -> anyhow::Result<()> {
         Command::MergeSes(args) => args.json,
         Command::CheckCode(args) => args.json,
         Command::Models(args) => {
-            matches!(&args.command, ModelsCommand::Resolve(r) if r.json)
+            matches!(
+                &args.command,
+                ModelsCommand::Resolve(r) if r.json
+            ) || matches!(
+                &args.command,
+                ModelsCommand::Backend(ModelsBackendCommand::Show(s)) if s.json
+            )
         }
         _ => false,
     };
@@ -1584,9 +1674,34 @@ fn main() -> anyhow::Result<()> {
                 args.yes,
                 args.backend.map(Into::into),
                 args.model,
+                args.effort,
                 args.api_base,
                 args.api_key_env,
             ),
+            ModelsCommand::Backend(cmd) => match cmd {
+                ModelsBackendCommand::Show(args) => {
+                    hauksbee_engine::commands::backend::show(args.json)
+                }
+                ModelsBackendCommand::Presets => hauksbee_engine::commands::backend::presets(),
+                ModelsBackendCommand::Keys => hauksbee_engine::commands::backend::keys(),
+                ModelsBackendCommand::Use(args) => {
+                    hauksbee_engine::commands::backend::use_target(&args.target)
+                }
+                ModelsBackendCommand::Set(args) => {
+                    hauksbee_engine::commands::backend::set(&args.pairs)
+                }
+                ModelsBackendCommand::Unset(args) => {
+                    hauksbee_engine::commands::backend::set(&[format!("{}=", args.key)])
+                }
+                ModelsBackendCommand::Reset(args) => {
+                    hauksbee_engine::commands::backend::reset(args.yes)
+                }
+                ModelsBackendCommand::Path => hauksbee_engine::commands::backend::path(),
+                ModelsBackendCommand::Check(args) => {
+                    hauksbee_engine::commands::backend::check(args.send)
+                }
+                ModelsBackendCommand::Setup => hauksbee_engine::commands::backend::setup(),
+            },
         },
         Command::Watch(args) => {
             hauksbee_engine::commands::watch::run(args.target, args.plain, args.once)

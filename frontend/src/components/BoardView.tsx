@@ -50,7 +50,7 @@ function DropBoardAgain({ testId, label, height }: { testId: string; label: stri
 
 export function BoardView({
   session, onQueue, onOpenChecks,
-  onDriveLive, simMounted, engineVersion, spec, checks, sessionName,
+  onDriveLive, simMounted, engineVersion, spec, checks, sessionName, onOpenSettings,
 }: {
   session: BoardSession
   /** A click on the map asked the checks builder for something. */
@@ -64,6 +64,9 @@ export function BoardView({
   spec: SpecSnapshot | null
   checks: { passed: number; failed: number; invalid: number } | null
   sessionName: string | null
+  /** Opens the Settings view, from the datasheet extraction panel's "Change in
+   *  Settings" link once a backend is configured there. */
+  onOpenSettings?: () => void
 }) {
   const r = session.report!
   const {
@@ -348,7 +351,11 @@ export function BoardView({
             only moment they have the part number and the datasheet in mind. */}
         {!restoredFrom && (
           <>
-            <DatasheetExtract openParts={r.bind?.open_parts ?? []} onSaved={session.reanalyzeCurrent} />
+            <DatasheetExtract
+              openParts={r.bind?.open_parts ?? []}
+              onSaved={session.reanalyzeCurrent}
+              onOpenSettings={onOpenSettings}
+            />
             <div className="mt-3" ref={authoringRef}>
               <WritePart
                 onSaved={session.reanalyzeCurrent}

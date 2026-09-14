@@ -116,6 +116,21 @@ pub type DatasheetChecker = Arc<dyn Fn(&str) -> Result<String, String> + Send + 
 /// Draft a board-local extension from an already resolved model.
 pub type ModelDrafter = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
+/// The extraction settings page's backend: read, save, apply a preset, and a
+/// live connectivity check.
+pub struct ExtractSettingsHooks {
+    /// GET: the whole settings payload as JSON.
+    pub get: Arc<dyn Fn() -> String + Send + Sync>,
+    /// PUT: the request body (a config JSON object) -> the settings payload,
+    /// or an error message.
+    pub save: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>,
+    /// POST preset/{id} -> the settings payload, or an error message.
+    pub preset: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>,
+    /// Run the configured backend on a one-line prompt while streaming
+    /// progress lines; Ok(reply).
+    pub test: Arc<dyn Fn(&mut dyn FnMut(&str)) -> Result<String, String> + Send + Sync>,
+}
+
 /// The datasheet-extraction backend supplied by the analysis application.
 pub struct DatasheetHooks {
     pub ready: DatasheetReady,
@@ -124,6 +139,7 @@ pub struct DatasheetHooks {
     pub check: DatasheetChecker,
     pub spice_check: DatasheetChecker,
     pub draft: ModelDrafter,
+    pub settings: ExtractSettingsHooks,
 }
 
 /// Engine-backed hooks used by browser tool panels.
