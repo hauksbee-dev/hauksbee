@@ -54,7 +54,7 @@ describe('frontend release gates', () => {
     expect(cargoManifest).toContain('workspace-cache-epoch = 1')
 
     const lastFailure = workflow.indexOf(
-      'cargo test --locked -p hauksbee-ci --test spec_and_assertions -- --nocapture',
+      'cargo test --locked -p hauksbee-ci --test it spec_and_assertions -- --nocapture',
     )
     const broadClippy = workflow.indexOf(
       'cargo clippy --workspace --lib --bins --examples -- -D warnings',
