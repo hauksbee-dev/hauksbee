@@ -40,10 +40,15 @@ def main() -> None:
             bundle_drivers.add(driver.resolve())
             for ref in refs:
                 source = (driver.parent / ref).resolve()
-                if source.parent != tests_dir.resolve():
-                    raise AssertionError(f"{driver}: bundled source escapes tests/: {ref}")
+                if crate.resolve() not in source.parents:
+                    raise AssertionError(f"{driver}: bundled source escapes the crate: {ref}")
                 if not source.is_file():
                     raise AssertionError(f"{driver}: bundled source does not exist: {ref}")
+                if tests_dir.resolve() not in source.parents:
+                    # A helper shared with the crate's benches (the graded-board
+                    # builders live in benches/ and the tests bind them the same
+                    # way the benchmark does). Not a test source, so not counted.
+                    continue
                 bundled_sources.append(source)
 
         standalone_sources = [
@@ -58,7 +63,11 @@ def main() -> None:
         counts = Counter(accounted)
         duplicates = sorted(path for path, count in counts.items() if count != 1)
         omitted = sorted(actual_sources - counts.keys())
-        unexpected = sorted(counts.keys() - actual_sources)
+        # A file bound from a subdirectory of tests/ is a module tree root or a
+        # shared helper, not a top-level source, and is not expected to be one.
+        unexpected = sorted(
+            path for path in counts.keys() - actual_sources if path.parent == tests_dir.resolve()
+        )
         if duplicates or omitted or unexpected:
             raise AssertionError(
                 f"{manifest}: integration bundle mismatch\n"

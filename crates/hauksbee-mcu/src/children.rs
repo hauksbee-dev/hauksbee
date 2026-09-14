@@ -12,7 +12,7 @@
 //! on Unix, owning kill-on-close Job Objects on Windows, plus
 //! [`install_signal_reaper`] for Unix paths where `Drop` never runs. The module
 //! also owns the emulator spawn/teardown pair every backend shares
-//! ([`spawn_emulator`], [`terminate_emulator`]) and the small discovery
+//! (`spawn_emulator`, `terminate_emulator`) and the small discovery
 //! primitives (`which`, `home_dir`) their locators use.
 //!
 //! On Unix the registry is a fixed-capacity, lock-free table of PIDs because
@@ -21,6 +21,13 @@
 //! async-signal-safe: atomic loads, `kill(2)`, `signal(2)`, `raise(2)`. Windows
 //! instead retains duplicated Job handles behind an ordinary mutex; there is
 //! no signal handler on that platform, and handles are stable identities.
+
+// Every caller of the spawn, teardown and discovery helpers is a process-driven
+// backend, and both of those are optional features. A build with neither
+// (`--no-default-features`, the shape the GPL-free check compiles) keeps the
+// registry and its signal reaper with nothing to register, so the helpers are
+// dead there by construction rather than by neglect.
+#![cfg_attr(not(any(feature = "renode", feature = "qemu")), allow(dead_code))]
 
 #[cfg(unix)]
 use std::sync::atomic::{AtomicU32, Ordering};

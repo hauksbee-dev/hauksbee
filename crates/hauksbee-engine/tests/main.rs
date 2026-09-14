@@ -135,6 +135,8 @@ mod multi_spi_dispatch;
 mod nep_private_acceptance;
 #[path = "netlist_drc_honesty.rs"]
 mod netlist_drc_honesty;
+#[path = "no_firmware_no_avr.rs"]
+mod no_firmware_no_avr;
 #[path = "packaged_asset_sync.rs"]
 mod packaged_asset_sync;
 #[path = "pin_role_rules.rs"]

@@ -14,7 +14,7 @@
 //! JSON renderers all read from, so they can never disagree (the same discipline
 //! as [`crate::plain`], extended with machine-readable validity + honest bind
 //! roles). It does **not** re-run or weaken any check: it consumes the existing
-//! [`BindReport`], [`DrcReport`],
+//! [`BindReport`](crate::BindReport), [`DrcReport`],
 //! AC bode points, and thermal peaks, and adds the honesty annotations
 //! (`valid`/`reason`, `critical_parts_bound`, grouped DRC) on top.
 //!

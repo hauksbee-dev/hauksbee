@@ -474,7 +474,7 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
 }
 
 /// [`shape_gap`] plus the point of closest approach (see
-/// [`closest_approach_point`]; for full containment, a point of the contained
+/// `closest_approach_point`; for full containment, a point of the contained
 /// copper), which is where a DRC finding is reported.
 pub fn shape_gap_at(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
     match (a, b) {

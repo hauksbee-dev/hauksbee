@@ -1,7 +1,7 @@
 //! hauksbee-cosim: the co-simulation layer of the engine.
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/scheduler.md.
 //!
-//! Given a [`BoundBoard`](hauksbee_bind::BoundBoard) from `hauksbee-bind`,
+//! Given a [`BoundBoard`] from `hauksbee-bind`,
 //! this crate runs it as a *live* co-simulation that couples three domains:
 //!
 //! 1. **Analog**; the MNA transient solver in `hauksbee-solve`, fed the

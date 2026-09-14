@@ -35,62 +35,6 @@ path = "src/lib.rs"
 # linked executable. Keep stable, documented one-file targets explicit and
 # compile the remaining cases in three domain bundles. The source files stay in
 # place so include_str!, fixtures, and failure locations retain their paths.
-[[test]]
-name = "assembly_inputs_ci"
-path = "tests/assembly_inputs_ci.rs"
-
-[[test]]
-name = "boot_coverage"
-path = "tests/boot_coverage.rs"
-
-[[test]]
-name = "ci_report_schema_drift"
-path = "tests/ci_report_schema_drift.rs"
-
-[[test]]
-name = "doc_coverage"
-path = "tests/doc_coverage.rs"
-
-[[test]]
-name = "hwtrace"
-path = "tests/hwtrace.rs"
-
-[[test]]
-name = "mcu_descriptor_dir"
-path = "tests/mcu_descriptor_dir.rs"
-
-[[test]]
-name = "schema_drift"
-path = "tests/schema_drift.rs"
-
-[[test]]
-name = "sensor_attach"
-path = "tests/sensor_attach.rs"
-
-[[test]]
-name = "spec_and_assertions"
-path = "tests/spec_and_assertions.rs"
-
-[[test]]
-name = "tarski_staged_replay"
-path = "tests/tarski_staged_replay.rs"
-
-[[test]]
-name = "tolerance"
-path = "tests/tolerance.rs"
-
-[[test]]
-name = "integration_contracts"
-path = "tests/integration_contracts.rs"
-
-[[test]]
-name = "integration_cli"
-path = "tests/integration_cli.rs"
-
-[[test]]
-name = "integration_runtime"
-path = "tests/integration_runtime.rs"
-
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }

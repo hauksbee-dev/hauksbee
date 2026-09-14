@@ -2,7 +2,7 @@
 //!
 //! [`transient_error_budget`] turns the solver options actually used plus the
 //! run's measured failed and fallback windows into an
-//! [`ErrorBudget`](hauksbee_ir::evidence::ErrorBudget): the machine-readable
+//! [`ErrorBudget`]: the machine-readable
 //! qualification of every transient / thermal / co-sim numeric claim. The
 //! scheduler calls it directly; `hauksbee_engine::evidence::BoardEvidence`
 //! forwards to it so the evidence spine carries the same budget.
