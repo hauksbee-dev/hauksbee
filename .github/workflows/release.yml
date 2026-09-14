@@ -908,7 +908,7 @@ jobs:
       - name: Verify native engine, CI, and emulator lifecycle
         shell: powershell
         working-directory: hauksbee
-        run: cargo test --locked --no-fail-fast -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --all-targets --no-default-features --features renode,qemu -- --test-threads=1
+        run: cargo test --locked -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcu --no-fail-fast --all-targets --no-default-features --features renode,qemu -- --test-threads=1
       - name: Require and retain real Windows firmware integrations
         shell: pwsh
         working-directory: hauksbee
