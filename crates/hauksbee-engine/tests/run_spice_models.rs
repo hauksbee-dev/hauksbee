@@ -82,6 +82,13 @@ fn a_file_that_cannot_serve_is_named_rather_than_binding_nothing_quietly() {
             String::from_utf8_lossy(&out.stderr),
             String::from_utf8_lossy(&out.stdout)
         );
-        assert!(text.contains(path) && text.contains(wants), "{text}");
+        // The name, not the whole path: a JSON error escapes the backslashes
+        // a Windows temp path carries.
+        let name = std::path::Path::new(path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(text.contains(name) && text.contains(wants), "{text}");
     }
 }
