@@ -64,16 +64,16 @@ same-file = "1.0"
 # cosim (scheduler, peripherals, HauksbeeEngine) and checks (static lints)
 # side by side, then this crate (reports, front door, CLI). Every path the
 # downstream crates used before the split is re-exported from lib.rs.
-hauksbee-bind = { version = "0.1.0-beta.5", path = "../hauksbee-bind" }
-hauksbee-cosim = { version = "0.1.0-beta.5", path = "../hauksbee-cosim", default-features = false }
-hauksbee-checks = { version = "0.1.0-beta.5", path = "../hauksbee-checks" }
-hauksbee-extract = { version = "0.1.0-beta.5", path = "../hauksbee-extract" }
-hauksbee-models = { version = "0.1.0-beta.5", path = "../hauksbee-models" }
-hauksbee-ir = { version = "0.1.0-beta.5", path = "../hauksbee-ir" }
-hauksbee-solve = { version = "0.1.0-beta.5", path = "../hauksbee-solve" }
-hauksbee-mcu = { version = "0.1.0-beta.5", path = "../hauksbee-mcu", default-features = false }
-hauksbee-frontdoor-api = { version = "0.1.0-beta.5", path = "../hauksbee-frontdoor-api" }
-hauksbee-server = { version = "0.1.0-beta.5", path = "../hauksbee-server", default-features = false, optional = true }
+hauksbee-bind = { version = "0.1.0-beta.6", path = "../hauksbee-bind" }
+hauksbee-cosim = { version = "0.1.0-beta.6", path = "../hauksbee-cosim", default-features = false }
+hauksbee-checks = { version = "0.1.0-beta.6", path = "../hauksbee-checks" }
+hauksbee-extract = { version = "0.1.0-beta.6", path = "../hauksbee-extract" }
+hauksbee-models = { version = "0.1.0-beta.6", path = "../hauksbee-models" }
+hauksbee-ir = { version = "0.1.0-beta.6", path = "../hauksbee-ir" }
+hauksbee-solve = { version = "0.1.0-beta.6", path = "../hauksbee-solve" }
+hauksbee-mcu = { version = "0.1.0-beta.6", path = "../hauksbee-mcu", default-features = false }
+hauksbee-frontdoor-api = { version = "0.1.0-beta.6", path = "../hauksbee-frontdoor-api" }
+hauksbee-server = { version = "0.1.0-beta.6", path = "../hauksbee-server", default-features = false, optional = true }
 forge-model = { workspace = true }
 forge-codegen = { workspace = true }
 forge-sexpr.workspace = true

@@ -31,7 +31,7 @@ exclude = ["vendor/kicad-forge"]
 workspace-cache-epoch = 1
 
 [workspace.package]
-version = "0.1.0-beta.5"
+version = "0.1.0-beta.6"
 edition = "2021"
 license = "Apache-2.0"
 # Every crate inherits these, so the shared metadata is stated once and cannot

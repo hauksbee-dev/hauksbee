@@ -31,7 +31,7 @@
     ],
     "versions": [
         {
-            "version": "0.1.0-beta.5",
+            "version": "0.1.0-beta.6",
             "status": "development",
             "kicad_version": "7.0"
         }
