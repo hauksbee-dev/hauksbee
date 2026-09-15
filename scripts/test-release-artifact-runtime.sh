@@ -98,7 +98,7 @@ if [ "$MODE" = default ]; then
   }
   echo "release artifact runtime smoke: AVR, CLI/CI, and embedded web front doors passed"
 else
-  # The permissive (BETA-LICENSE.txt) shape intentionally has no AVR backend. Exercise both
+  # The permissive (Apache-2.0) shape intentionally has no AVR backend. Exercise both
   # packaged front doors with a real solver/thermal board instead of letting
   # version and doctor probes stand in for runtime behavior.
   static_out="$(mktemp "${TMPDIR:-/tmp}/hauksbee-artifact-static.XXXXXX")"
