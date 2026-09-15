@@ -55,7 +55,7 @@
     {"path": "scripts/check-private-container-publication.sh", "classification": "private-container-publication-guard", "occurrences": 1, "required_fragments": ["orgs/hauksbee-dev/packages/container/hauksbee"]},
     {"path": "scripts/get-hauksbee.ps1", "classification": "public-installer", "occurrences": 3, "required_fragments": ["$Repo = \"hauksbee-dev/hauksbee\""]},
     {"path": "scripts/get-hauksbee.sh", "classification": "public-installer", "occurrences": 5, "required_fragments": ["REPO=\"hauksbee-dev/hauksbee\""]},
-    {"path": "scripts/build-public-mirror.sh", "classification": "private-release-mirror-builder", "occurrences": 6, "scopes": ["development"]},
+    {"path": "scripts/build-public-mirror.sh", "classification": "private-release-mirror-builder", "occurrences": 2, "scopes": ["development"]},
     {"path": "scripts/make-public.sh", "classification": "private-release-launcher", "occurrences": 1, "scopes": ["development"]},
     {"path": "scripts/test-install-mock.sh", "classification": "installer-regression", "occurrences": 1},
     {"path": "scripts/test-windows-installer.ps1", "classification": "installer-regression", "occurrences": 1}
