@@ -6,16 +6,8 @@
 //! the compiled binary, because every one of these is an exit-code or
 //! output-surface contract.
 
+use crate::support::{board, run, stderr, stdout};
 use std::path::PathBuf;
-use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
-
-fn board(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
-}
 
 /// A board with two real copper shorts (GND <-> +5V), so --strict gates.
 fn shorted_board() -> PathBuf {
@@ -24,21 +16,6 @@ fn shorted_board() -> PathBuf {
 
 fn clean_board() -> PathBuf {
     board("../../testdata/boards/button_pullup.kicad_pcb")
-}
-
-fn run(args: &[&str]) -> std::process::Output {
-    Command::new(bin())
-        .args(args)
-        .output()
-        .expect("hauksbee binary runs")
-}
-
-fn stdout(o: &std::process::Output) -> String {
-    String::from_utf8_lossy(&o.stdout).into_owned()
-}
-
-fn stderr(o: &std::process::Output) -> String {
-    String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
 fn tmp(name: &str) -> PathBuf {

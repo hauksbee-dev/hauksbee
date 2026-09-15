@@ -13,15 +13,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::support::{bin, blinky_board};
 use hauksbee_ci::{run, RunConfig, Spec};
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee-ci")
-}
-
-fn blinky_board() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/blinky.kicad_pcb")
-}
 
 /// A fresh dir holding a copy of the blinky board plus a spec asserting
 /// `+5V >= min_v` with no firmware (pure analog, fast). `min_v = 1.0` passes

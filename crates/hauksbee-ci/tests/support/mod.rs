@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Encode a filesystem path as a complete TOML string value.
 ///
@@ -7,6 +7,34 @@ use std::path::Path;
 /// invalid TOML escape sequences. Let the TOML serializer own the quoting.
 pub fn toml_path(path: &Path) -> String {
     toml::Value::String(path.to_string_lossy().into_owned()).to_string()
+}
+
+/// The compiled `hauksbee-ci` binary (Cargo sets this for the crate's tests).
+#[allow(dead_code)]
+pub fn bin() -> &'static str {
+    env!("CARGO_BIN_EXE_hauksbee-ci")
+}
+
+/// The `blinky` example board shipped with this crate.
+#[allow(dead_code)]
+pub fn blinky_board() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/blinky.kicad_pcb")
+}
+
+/// The repo root, two levels up from this crate's manifest dir.
+#[allow(dead_code)]
+pub fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repo root")
+        .to_path_buf()
+}
+
+/// Decode a captured `Output`'s stderr as UTF-8.
+#[allow(dead_code)]
+pub fn stderr(o: &std::process::Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
 /// Serializes every test that runs a co-sim whose SoC descriptor resolution

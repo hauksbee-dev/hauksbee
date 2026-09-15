@@ -5,12 +5,9 @@
 //! faults appended as `cosim` findings: the file a pipeline archives has to
 //! carry the fault that broke the board, not only the copper checks.
 
+use crate::support::bin;
 use std::path::PathBuf;
 use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
 
 /// A red LED driven straight off +5V through a 25 ohm 0402: ~96 mA through a
 /// 25 mA LED and ~230 mW in a 62 mW resistor, so the stress monitor raises

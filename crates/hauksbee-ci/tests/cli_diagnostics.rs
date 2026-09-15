@@ -6,16 +6,9 @@
 //! optional, a C library's opinion leaking through unattributed, findings in
 //! phase order rather than file order, and a frequency computed from one edge.
 
-use std::path::{Path, PathBuf};
+use crate::support::{bin, blinky_board, stderr};
+use std::path::Path;
 use std::process::{Command, Output};
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee-ci")
-}
-
-fn blinky_board() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/blinky.kicad_pcb")
-}
 
 /// A temp dir with the blinky board in it, and a spec written as a BARE
 /// filename run from inside that dir: the case where `Path::parent()` is `""`.
@@ -31,10 +24,6 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
         .current_dir(dir)
         .output()
         .expect("binary runs")
-}
-
-fn stderr(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
 fn stdout(o: &Output) -> String {

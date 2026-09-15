@@ -3,12 +3,9 @@
 //! NAMED error text (not just a non-zero exit), and the shipping builtin db
 //! must lint clean through the same code path binding uses.
 
+use crate::support::bin;
 use std::path::PathBuf;
 use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

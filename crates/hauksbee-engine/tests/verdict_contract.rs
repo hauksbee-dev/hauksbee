@@ -45,12 +45,9 @@
 //!    Non-finding terminal outcomes use a typed refusal testcase/result;
 //!    `--strict-boot` is promoted to a typed co-sim finding when armed.
 
+use crate::support::{bin, stderr, stdout};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -103,14 +100,6 @@ fn run_in_actions(args: &[&str]) -> Output {
         .env("GITHUB_ACTIONS", "true")
         .output()
         .expect("hauksbee binary runs")
-}
-
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).to_string()
-}
-
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).to_string()
 }
 
 // ── 1. Strict thermal is the default ────────────────────────────────────────

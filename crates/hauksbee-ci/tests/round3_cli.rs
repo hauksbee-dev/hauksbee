@@ -1,16 +1,8 @@
 //! Round-3 audit fixes, hauksbee-ci half: board-file-as-spec detection (B2)
 //! and the width-capped TOML error context, proven against the real binary.
 
-use std::path::PathBuf;
+use crate::support::{bin, blinky_board, stderr};
 use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee-ci")
-}
-
-fn blinky_board() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/blinky.kicad_pcb")
-}
 
 fn run(args: &[&str]) -> std::process::Output {
     Command::new(bin())
@@ -21,10 +13,6 @@ fn run(args: &[&str]) -> std::process::Output {
         .env_remove("GITHUB_ACTIONS")
         .output()
         .expect("binary runs")
-}
-
-fn stderr(o: &std::process::Output) -> String {
-    String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
 #[test]

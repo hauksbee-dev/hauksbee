@@ -8,18 +8,8 @@
 //! These exercise the actual compiled binary so the exit-code contract that a CI
 //! pipeline depends on is tested end to end, not just the library predicates.
 
+use crate::support::{board, run};
 use std::path::PathBuf;
-use std::process::Command;
-
-/// The compiled `hauksbee` binary (Cargo sets this for the engine crate's tests).
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
-
-/// Workspace-relative example boards, resolved from this crate's manifest dir.
-fn board(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
-}
 
 /// A board that contains two real copper shorts (GND <-> +5V on both layers).
 fn shorted_board() -> PathBuf {
@@ -37,13 +27,6 @@ fn ac_loop_board() -> PathBuf {
 
 fn ac_loop_models() -> PathBuf {
     board("tests/fixtures/ac_loop_models")
-}
-
-fn run(args: &[&str]) -> std::process::Output {
-    Command::new(bin())
-        .args(args)
-        .output()
-        .expect("hauksbee binary runs")
 }
 
 #[test]

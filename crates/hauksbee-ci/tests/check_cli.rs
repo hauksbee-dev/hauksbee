@@ -10,16 +10,9 @@
 //! * every INDEPENDENT error is reported in one invocation, on both the
 //!   plain and `--json` paths (and through `run`'s spec-error path too).
 
+use crate::support::{bin, blinky_board};
 use std::path::PathBuf;
 use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee-ci")
-}
-
-fn blinky_board() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/blinky.kicad_pcb")
-}
 
 /// Write `body` to `<tag>.toml` in a fresh temp dir (with a copy of the
 /// blinky board beside it) and return (dir, spec path).

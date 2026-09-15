@@ -4,12 +4,9 @@
 //! when they asked for it and wrong every other time, and it cannot be undone
 //! afterwards, so the refusal is worth a test that drives the real binary.
 
+use crate::support::hauksbee_bin as hauksbee;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-
-fn hauksbee() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_hauksbee"))
-}
 
 /// A file that is a valid path but not a real datasheet. Nothing here should
 /// ever read far enough to care.

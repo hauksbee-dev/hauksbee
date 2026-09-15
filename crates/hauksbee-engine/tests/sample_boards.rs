@@ -14,15 +14,7 @@
 //! the most convincing board we have. What the floor prevents is the number
 //! going BACKWARDS unnoticed.
 
-use std::path::{Path, PathBuf};
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root")
-        .to_path_buf()
-}
+use crate::support::repo_root;
 
 /// Count occurrences, not lines: these files are written compactly, so a
 /// line-based grep reports 1 for a board carrying twenty-eight segments.

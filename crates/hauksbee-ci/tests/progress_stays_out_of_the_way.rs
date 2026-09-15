@@ -8,16 +8,9 @@
 
 mod support;
 
+use crate::support::repo_root;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root")
-        .to_path_buf()
-}
 
 /// A spec small enough to finish in seconds, on a board that ships with the
 /// crate.

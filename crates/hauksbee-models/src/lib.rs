@@ -1280,32 +1280,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn models_dir_flag_accepts_a_pack_root() {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(temp.path().join("models")).unwrap();
-        std::fs::write(
-            temp.path().join("pack.toml"),
-            "[pack]\nname='test'\nversion='0.1.0'\nlicense='MIT'\nprovenance='hand-written'\n",
-        )
-        .unwrap();
-        std::fs::write(
-            temp.path().join("models").join("device.toml"),
-            "[[models]]\nid = \"pack_root_device\"\nkind = \"digital\"\n[models.match]\n\
-             value_re = \"(?i)^PACK_ROOT_DEVICE$\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
-             [models.coverage]\nmissing = [\"executable_behavior\"]\n",
-        )
-        .unwrap();
-
-        let lib = ModelLibrary::builtin_with_user_dirs(&[temp.path()]);
-        let resolved = by_value(&lib, "PACK_ROOT_DEVICE");
-        assert_eq!(
-            resolved.model.map(|m| m.id).as_deref(),
-            Some("pack_root_device")
-        );
-        assert_eq!(resolved.source.as_deref(), Some("user"));
-    }
-
     /// Write a pack root (`pack.toml` + `models/<id>.toml`) at `root`.
     fn write_pack(root: &Path, id: &str) {
         std::fs::create_dir_all(root.join("models")).unwrap();
@@ -1316,74 +1290,73 @@ mod tests {
             ),
         )
         .unwrap();
-        std::fs::write(
-            root.join("models").join("device.toml"),
-            format!(
-                "[[models]]\nid = \"{id}\"\nkind = \"digital\"\n[models.match]\n\
-                 value_re = \"(?i)^{id}$\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
-                 [models.coverage]\nmissing = [\"executable_behavior\"]\n"
-            ),
+        std::fs::write(root.join("models").join("device.toml"), card_toml(id)).unwrap();
+    }
+
+    fn card_toml(id: &str) -> String {
+        format!(
+            "[[models]]\nid = \"{id}\"\nkind = \"digital\"\n[models.match]\n\
+             value_re = \"(?i)^{id}$\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
+             [models.coverage]\nmissing = [\"executable_behavior\"]\n"
         )
-        .unwrap();
     }
 
     #[test]
-    fn models_dir_flag_accepts_a_directory_of_packs() {
-        // `--models-dir models`, where `models/` is the parent of one or more
-        // packs, used to load nothing at all: the scan is one level deep and
-        // every card lives in `models/<pack>/models/`.
-        let temp = tempfile::tempdir().unwrap();
-        write_pack(&temp.path().join("generic"), "parent_dir_generic");
-        write_pack(&temp.path().join("curated"), "parent_dir_curated");
-        // A loose card beside the packs still loads too.
+    fn models_dir_flag_accepts_a_pack_root_a_directory_of_packs_and_loose_cards() {
+        // `--models-dir` has three shapes: the pack root itself, a directory
+        // holding packs (`models/<pack>/models/`, which used to load nothing:
+        // the scan was one level deep), and loose cards, alone or beside packs.
+        let root = tempfile::tempdir().unwrap();
+        write_pack(root.path(), "pack_root_device");
+        let resolved = by_value(
+            &ModelLibrary::builtin_with_user_dirs(&[root.path()]),
+            "PACK_ROOT_DEVICE",
+        );
+        assert_eq!(
+            resolved.model.map(|m| m.id).as_deref(),
+            Some("pack_root_device")
+        );
+        assert_eq!(resolved.source.as_deref(), Some("user"));
+
+        let parent = tempfile::tempdir().unwrap();
+        write_pack(&parent.path().join("generic"), "parent_dir_generic");
+        write_pack(&parent.path().join("curated"), "parent_dir_curated");
         std::fs::write(
-            temp.path().join("loose.toml"),
-            "[[models]]\nid = \"parent_dir_loose\"\nkind = \"digital\"\n[models.match]\n\
-             value_re = \"(?i)^PARENT_DIR_LOOSE$\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
-             [models.coverage]\nmissing = [\"executable_behavior\"]\n",
+            parent.path().join("loose.toml"),
+            card_toml("parent_dir_loose"),
         )
         .unwrap();
-
-        let lib = ModelLibrary::builtin_with_user_dirs(&[temp.path()]);
+        let packs = ModelLibrary::builtin_with_user_dirs(&[parent.path()]);
         for id in [
             "parent_dir_generic",
             "parent_dir_curated",
             "parent_dir_loose",
         ] {
             assert_eq!(
-                by_value(&lib, &id.to_uppercase())
+                by_value(&packs, &id.to_uppercase())
                     .model
                     .map(|m| m.id)
                     .as_deref(),
                 Some(id),
             );
         }
-    }
 
-    #[test]
-    fn models_dir_flag_reports_a_directory_with_nothing_to_load() {
-        // The failure this replaces is silent: zero cards, zero output, and a
-        // board whose parts all stay unresolved for no stated reason.
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(temp.path().join("notes")).unwrap();
-        std::fs::write(temp.path().join("README.md"), "no cards here\n").unwrap();
-
+        // A directory with nothing to load says so instead of loading zero
+        // cards silently, and stays quiet once a card is there.
+        let empty = tempfile::tempdir().unwrap();
+        std::fs::write(empty.path().join("README.md"), "no cards here\n").unwrap();
         let mut l = lib();
-        let errs = l.load_models_dir_flag(temp.path());
+        let errs = l.load_models_dir_flag(empty.path());
         assert!(
             errs.iter().any(|e| matches!(e, ModelError::NoCards { .. })),
             "{errs:?}"
         );
-
-        // A directory that does hold cards stays quiet.
         std::fs::write(
-            temp.path().join("card.toml"),
-            "[[models]]\nid = \"quiet_dir_device\"\nkind = \"digital\"\n[models.match]\n\
-             value_re = \"(?i)^QUIET_DIR_DEVICE$\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
-             [models.coverage]\nmissing = [\"executable_behavior\"]\n",
+            empty.path().join("card.toml"),
+            card_toml("quiet_dir_device"),
         )
         .unwrap();
-        assert!(l.load_models_dir_flag(temp.path()).is_empty());
+        assert!(l.load_models_dir_flag(empty.path()).is_empty());
     }
 
     #[test]
