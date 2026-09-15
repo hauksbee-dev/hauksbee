@@ -13,7 +13,6 @@ members = [
     "crates/hauksbee-checks",
     "crates/hauksbee-engine",
     "crates/hauksbee-ci",
-    "crates/hauksbee-tarski",
     "crates/hauksbee-testkit",
     "crates/hauksbee-mcp",
 ]

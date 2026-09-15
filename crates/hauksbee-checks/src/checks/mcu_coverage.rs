@@ -1,6 +1,5 @@
 //! Boot-strap coverage lint: flag a strap-bearing MCU whose straps were never
 //! checked.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! hauksbee's boot strap-pin lint ([`straps`](super::straps)) keys off the
 //! per-part device model's strap table. When a strap-bearing MCU (STM32 / ESP32

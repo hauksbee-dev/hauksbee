@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useContext } from 'react'
 import type { SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, BacklogMsg, ClientMessage, ActionResultMsg } from '../types/protocol'
-import { SimSourceContext } from '../demo/simSource'
+import { SimSourceContext } from './simSource'
 import { openLiveSocket } from '../lib/api'
 import type { LiveSocket } from '../lib/api'
 

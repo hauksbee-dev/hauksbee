@@ -6,7 +6,7 @@
 # NO pull resistor on the gate net (GATE_CTRL), so at reset the GPIO is Hi-Z and
 # the gate floats: its power-up default is genuinely undefined - the exact "Hi-Z
 # control input" class the netlist cannot adjudicate (see
-# docs/evidence/KNOWN_FAULTS_VALIDATION.md). The boot-coverage assertion makes it
+# docs/evidence/CORPUS.md). The boot-coverage assertion makes it
 # decidable by running the firmware: variant A configures PB0 as an output and
 # drives it HIGH promptly, so the gate is actively driven to a defined level well
 # within the deadline. This spec PASSES.

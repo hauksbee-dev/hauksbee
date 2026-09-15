@@ -16,8 +16,7 @@
 //! Both were established against KiCad CLI 10.0.5 with the
 //! `kicad_dru_precedence` fixtures and
 //! `tests/fixtures/kicad_dru_bare_scope.kicad_pcb`; the raw outputs and hashes
-//! are retained in `qc/evidence/drc-parity/kicad-dru-precedence-10.0.5.md` and
-//! `qc/evidence/drc-parity/dru-bare-value-poisons-the-whole-file.md`.
+//! are retained in the private evidence archive.
 
 use std::collections::BTreeMap;
 

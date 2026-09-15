@@ -7,7 +7,6 @@
 //! verdict. Findings retain the limit, inferred range, model source, and any
 //! uncertainty that raised their severity.
 //!
-//! Design rationale: `docs/how-and-why/hauksbee-engine/checks.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

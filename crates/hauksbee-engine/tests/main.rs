@@ -29,8 +29,6 @@ mod binder_gpio_promotion;
 mod binder_pin_map_merge;
 #[path = "bitbang_spi_cosim.rs"]
 mod bitbang_spi_cosim;
-#[path = "boardcode_miswire.rs"]
-mod boardcode_miswire;
 #[path = "boardcode_run.rs"]
 mod boardcode_run;
 #[path = "bom_identity.rs"]
@@ -103,8 +101,6 @@ mod failed_chunk_reason;
 mod faults;
 #[path = "gerber_determinism.rs"]
 mod gerber_determinism;
-#[path = "hardware_history.rs"]
-mod hardware_history;
 #[path = "host_serial_cosim.rs"]
 mod host_serial_cosim;
 #[path = "i2c_sensor_cosim.rs"]
@@ -113,8 +109,6 @@ mod i2c_sensor_cosim;
 mod i2c_sensor_cosim_qemu;
 #[path = "i2c_sensor_cosim_renode.rs"]
 mod i2c_sensor_cosim_renode;
-#[path = "inhibitory_miswire.rs"]
-mod inhibitory_miswire;
 #[path = "interactive_coverage_parity.rs"]
 mod interactive_coverage_parity;
 #[path = "json_finding_public_api.rs"]
@@ -135,8 +129,6 @@ mod model_check;
 mod models_resolve_layers;
 #[path = "multi_spi_dispatch.rs"]
 mod multi_spi_dispatch;
-#[path = "nep_private_acceptance.rs"]
-mod nep_private_acceptance;
 #[path = "netlist_drc_honesty.rs"]
 mod netlist_drc_honesty;
 #[path = "no_firmware_no_avr.rs"]
@@ -191,8 +183,6 @@ mod stormduino_bind;
 mod strap_lint_corpus;
 #[path = "synthetic_cosim.rs"]
 mod synthetic_cosim;
-#[path = "tarski_stretcher_transient.rs"]
-mod tarski_stretcher_transient;
 #[path = "thermal.rs"]
 mod thermal;
 #[path = "usb_c_double_termination.rs"]

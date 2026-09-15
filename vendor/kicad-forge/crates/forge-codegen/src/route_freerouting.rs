@@ -282,7 +282,7 @@ pub fn write_dsn(pcb: &Pcb, outline: Option<Outline>, rules: &RouteRules) -> Str
             // The padstack is emitted in the pad's own frame, NEVER dimension-
             // swapped: freerouting rotates the padstack shape by the placement
             // angle itself (verified empirically on 1.9.0 and 2.2.4, see
-            // docs/record/FREEROUTING_DSN_SEMANTICS.md), so a swapped padstack
+            //), so a swapped padstack
             // would double-rotate. The pad's own rotation rides on a per-pin
             // `(rotate A)` instead, exactly as KiCad's DSN exporter does; this
             // also handles non-quarter-turn pad angles.
@@ -2039,7 +2039,7 @@ mod tests {
     ///
     /// Freerouting rotates the padstack shape by the placement angle itself and
     /// honours per-pin `(rotate)`, on BOTH 1.9.0 and 2.2.4 (verified by the
-    /// channel experiment in docs/record/FREEROUTING_DSN_SEMANTICS.md), so pad
+    /// channel experiment in), so pad
     /// rotation must ride on `(rotate)` and never on swapped padstack extents.
     fn assert_front_board(text: &str) {
         let pcb = Pcb::parse(text).expect("parse board");

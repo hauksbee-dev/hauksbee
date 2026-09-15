@@ -19,7 +19,3 @@ The default copies continue to work if the app is moved, but run the helper
 again after installing an app update. `--symlink` is an opt-in alternative;
 those links follow the app's current location and break if it is moved or
 replaced.
-
-For a private-beta package, the binaries are for the authorised recipient
-under `BETA-LICENSE`. Do not redistribute the app or installed command-line
-copies.

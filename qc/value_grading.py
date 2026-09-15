@@ -42,7 +42,7 @@ from above, so no count can reach ``delivered``. It does NOT close the step that
 decides a run's exit code: twelve invented net names lift the ardep archive from
 ``failed`` to ``degraded``, because the floor reads a count and cannot see a
 partition. That residual is engine follow-up 2 in
-docs/ci/RELEASE_BOARD_GATES.md.
+the private release-gate notes.
 
 One dimension has no such anchor and is graded on the tool's own words: binding.
 ``critical_parts_bound`` and ``open_parts`` are both written by the report, so a
@@ -54,7 +54,7 @@ why a board with no list at all is disclosed under ``unverified_binding``.
 Closing it properly needs a binding fact the engine derives rather than reports.
 
 Three things this module cannot settle are named rather than approximated, all in
-docs/ci/RELEASE_BOARD_GATES.md and all one engine field each: whether a
+the private release-gate notes and all one engine field each: whether a
 reconstructed net *partition* matches the copper it came from (a net count alone
 cannot say), the placement total for formats with no exact placement token, and
 the binding anchor above. Where a board falls into one of those, it records the
@@ -1638,7 +1638,7 @@ def grade_board(
                 # ratio for THIS board was not verified against the input, and a
                 # reader of the evidence has to be able to see that. The
                 # unlocking change is `num_input_placements` in the web report;
-                # see docs/ci/RELEASE_BOARD_GATES.md.
+                # see the private release-gate notes.
                 signals["placement_recovery_verified"] = False
             else:
                 # Count what the report LISTED, never the bare total. Taking
@@ -1784,7 +1784,7 @@ def grade_board(
         # Disclosed, not capped. Capping would put every well-bound board in
         # `degraded` too, because binding is never anchored to the input for any
         # of them, and a grade nothing can reach says nothing. See the third
-        # engine follow-up in docs/ci/RELEASE_BOARD_GATES.md.
+        # engine follow-up in the private release-gate notes.
         if critical is None or not _open_parts(report):
             signals["binding_verified"] = False
         if critical is None and input_format in PARTFUL_FORMATS:

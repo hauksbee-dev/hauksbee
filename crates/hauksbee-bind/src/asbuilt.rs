@@ -1,6 +1,5 @@
 //! The declarative AS-BUILT overlay: the physical delta between a board's
 //! design files and the real, reworked board on the bench.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/asbuilt.md.
 //!
 //! A `.asbuilt.toml` file describes BOARD state only, solder-blob shorts,
 //! fitted component values, cut traces, lifted pins, jumper wires, parts

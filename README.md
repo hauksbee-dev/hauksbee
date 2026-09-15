@@ -6,25 +6,27 @@ Hand Hauksbee the artifacts you already produce: the layout, schematic, fab arch
 
 A design-rule checker checks geometry against rules. A schematic simulator executes the circuit it was given. Hauksbee's different job is to execute and cross-check the evidence that will become the product: native design files, manufacturing output, assembled-part identity, and firmware.
 
-**New here?** Start with [START_HERE](docs/START_HERE.md). If you are testing a pre-1.0 build, read the [beta contract](BETA.md) too. The authoritative scope and backend matrix live in [CAPABILITIES](docs/about/CAPABILITIES.md) and [LIMITATIONS](docs/about/LIMITATIONS.md).
+**New here?** Start with [START_HERE](docs/START_HERE.md). The authoritative scope and backend matrix live in [CAPABILITIES](docs/about/CAPABILITIES.md) and [LIMITATIONS](docs/about/LIMITATIONS.md).
 
 ![A board live in 2D with net activity](frontend/screenshots/beauty/2d-live.png)
 
 ## Get Hauksbee
 
-Beta testers should use the exact `v0.1.0-beta.6` release link supplied with
-their invitation once that release is published. Do not substitute the stable
-`latest` URL. Verify the source commit and checksum as described in
-[BETA](BETA.md#getting-a-beta-build). A macOS app is distributed only after its
+Hauksbee is pre-1.0. Install one exact pre-release tag from the releases page
+rather than the stable `latest` URL, and check each asset against the `.sha256`
+sidecar published beside it. A macOS app is published only after its
 same-source signing and notarisation gates pass.
 
 After the first stable release, `Hauksbee.app` will also be available from the
 [stable release page](https://github.com/hauksbee-dev/hauksbee/releases/latest).
-Ordinary analysis is local; optional datasheet drafting has the separate
-[privacy boundary](BETA.md#privacy).
+Ordinary analysis is local. The optional datasheet drafting sends the
+datasheet's text to the LLM backend you chose, only after an explicit consent
+notice (see [choosing a backend](docs/models/MODELS.md#choosing-a-backend));
+nothing is ever attached to an issue automatically.
 
-The convenience installers below follow the stable release channel. Beta users
-must instead use their exact tag and source commit:
+The convenience installers below resolve the stable release channel, which
+does not exist yet. During beta, append `-s -- --version <the tag>` to the
+`bash` at the end of the line:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
