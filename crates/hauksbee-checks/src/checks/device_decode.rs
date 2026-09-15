@@ -1,7 +1,6 @@
 //! Device-decode check class: configurable controllers whose strap / divider
 //! resistors *select a documented operating mode*, decoded against the part's
 //! datasheet bands.
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A whole class of parts (USB-PD sink controllers, programmable LDOs, address-
 //! strapped peripherals, mode-pin codecs) read an analog resistor-divider voltage

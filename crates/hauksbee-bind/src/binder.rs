@@ -1,5 +1,4 @@
 //! The binder: [`ExtractedBoard`] + [`ModelLibrary`] -> [`BoundBoard`].
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/binder.md.
 //!
 //! Every component is resolved to a model and turned into something the
 //! co-sim can run:

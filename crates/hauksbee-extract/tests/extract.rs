@@ -1,6 +1,4 @@
 use hauksbee_extract::ExtractedBoard;
-use std::path::PathBuf;
-
 #[test]
 fn dnp_flag_parsed_from_pcb_attr_and_schematic_symbol() {
     // PCB footprint: `(attr ... dnp)` marks Do-Not-Populate; a plain `(attr smd)`
@@ -192,30 +190,4 @@ fn v10_empty_net_name_means_no_net() {
         board.nets.iter().all(|n| !n.name.is_empty()),
         "the empty name must never be interned as a net"
     );
-}
-
-#[test]
-fn tarski_netlist() {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_inputsystem.net");
-    let Ok(src) = std::fs::read_to_string(p) else {
-        eprintln!("tarski netlist missing; skipping");
-        return;
-    };
-    let board = ExtractedBoard::from_kicad_netlist(&src).unwrap();
-    assert_eq!(board.components.len(), 3442);
-    assert!(board.nets.len() > 2000, "got {}", board.nets.len());
-    // The known Tarski structure: 90 shift registers, 19 comparators.
-    let count = |pred: &dyn Fn(&hauksbee_extract::Component) -> bool| {
-        board.components.iter().filter(|c| pred(c)).count()
-    };
-    assert_eq!(count(&|c| c.lib_id.contains("74HC595")), 90);
-    assert_eq!(count(&|c| c.value.contains("LMV7219")), 19);
-    // Pin functions came through from the schematic.
-    let with_funcs = board
-        .components
-        .iter()
-        .flat_map(|c| &c.pins)
-        .filter(|p| !p.function.is_empty())
-        .count();
-    assert!(with_funcs > 1000);
 }

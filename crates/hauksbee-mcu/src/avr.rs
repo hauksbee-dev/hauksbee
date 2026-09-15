@@ -6,7 +6,6 @@
 //! cycle-exact backend: simavr's C hooks fire synchronously inside `avr_run`,
 //! so every reported edge carries its true `avr->cycle` stamp.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/avr.md.
 
 use crate::ffi;
 use crate::traits::{I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent};

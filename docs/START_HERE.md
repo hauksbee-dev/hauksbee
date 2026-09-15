@@ -16,9 +16,9 @@ stronger conclusion instead of guessing.
 
 ## Install and first run
 
-During beta, use only the exact prerelease link and checksum supplied with the
-invitation. A macOS app is offered only after its same-source signing and
-notarisation gates pass. The engine runs locally; optional datasheet drafting
+During beta, install one exact pre-release tag and check its checksum, rather
+than a moving `latest` URL. A macOS app is offered only after its same-source
+signing and notarisation gates pass. The engine runs locally; optional datasheet drafting
 has the separate privacy boundary described in [BETA](../BETA.md#privacy).
 
 After a stable release is published, the convenience installer downloads
@@ -31,9 +31,9 @@ curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/
 Windows x64 uses the PowerShell twin
 (`irm .../scripts/get-hauksbee.ps1 | iex`), and CI can pull
 the public GHCR package after it is published; see
-[DOCKER](ci/DOCKER.md). During the private beta those raw URLs need
-credentials, so use the authenticated installer commands in the
-[README](../README.md) instead.
+[DOCKER](ci/DOCKER.md). Those raw URLs need no credential; during beta, pass
+`--version <the tag>` so the installer pins a pre-release instead of resolving
+a stable one that is not published yet.
 
 From a macOS/Linux checkout, check simulator prerequisites, then build and
 install the web front door and binaries:

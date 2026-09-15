@@ -1,6 +1,5 @@
 //! Build a bootable merged ESP32 flash image from a bare application ELF.
 //!
-//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 //!
 //! # Why this exists
 //!

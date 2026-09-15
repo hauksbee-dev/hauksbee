@@ -17,8 +17,6 @@ mod ci_report_schema_drift;
 mod cli_diagnostics;
 #[path = "cosim_coverage_honesty.rs"]
 mod cosim_coverage_honesty;
-#[path = "doc_coverage.rs"]
-mod doc_coverage;
 #[path = "evidence_spine_ci.rs"]
 mod evidence_spine_ci;
 #[path = "exit3_reachability.rs"]
@@ -27,8 +25,6 @@ mod exit3_reachability;
 mod firmware_guard;
 #[path = "firmware_input_ci.rs"]
 mod firmware_input_ci;
-#[path = "flagship_brownout.rs"]
-mod flagship_brownout;
 #[path = "floating_net_verdict.rs"]
 mod floating_net_verdict;
 #[path = "hook_gate_e2e.rs"]
@@ -71,8 +67,6 @@ mod sensor_attach;
 mod shipped_examples_run;
 #[path = "spec_and_assertions.rs"]
 mod spec_and_assertions;
-#[path = "tarski_staged_replay.rs"]
-mod tarski_staged_replay;
 #[path = "tolerance.rs"]
 mod tolerance;
 #[path = "unpowered_rail_is_declared.rs"]

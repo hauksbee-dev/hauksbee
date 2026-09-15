@@ -352,7 +352,7 @@ def check_landed(doc, root, include_unconfirmed):
         # uConsole entries showed how easily a socketed compute module gets
         # written down as `no-mcu` on a full mainboard. Unreadable packages (a
         # `.7z`, say) cannot be measured, so that residual stays open and is
-        # stated in docs/ci/RELEASE_BOARD_GATES.md rather than implied closed.
+        # stated in the private release-gate notes rather than implied closed.
         if NO_MCU_AXIS_LOCAL in set(b.get("axes", [])):
             for e in b.get("expect", []):
                 target = os.path.join(dest, e)

@@ -42,8 +42,6 @@
 //! The same solve gives `Sx`, `Su` so node voltages can be reconstructed for
 //! probing and inter-island coupling: `v_free = Sx x + Su u`.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/linear.md
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 

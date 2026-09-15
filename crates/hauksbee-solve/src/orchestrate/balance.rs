@@ -48,8 +48,6 @@
 //! result; the report exists precisely so non-convergence cannot be
 //! invisible.
 //!
-//! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 use crate::{SolveError, SolveResult};
 use hauksbee_ir::NodeId;

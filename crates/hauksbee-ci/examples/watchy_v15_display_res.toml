@@ -4,7 +4,7 @@
 #     hauksbee-ci run crates/hauksbee-ci/examples/watchy_v15_display_res.toml
 #
 # This executes the formerly-MISSED Watchy display-RES# validation row
-# (docs/evidence/KNOWN_FAULTS_VALIDATION.md). The board is the unmodified corpus Watchy
+# (docs/evidence/CORPUS.md). The board is the unmodified corpus Watchy
 # v1.5 layout; its RES net (e-paper reset, U1 ESP32-PICO-D4 pad 28 = GPIO9, the
 # display FPC J1 pad 10) has NO pull resistor in v1.5 - the exact "control input
 # on a Hi-Z GPIO" topology the static netlist cannot adjudicate. The firmware is
@@ -19,9 +19,9 @@
 # board carries an ESP32-PICO-D4 (classic Xtensa esp32), and testdata's
 # flash.bin is merged for that chip (bootloader at 0x1000). The repo's OTHER
 # watchy board (crates/hauksbee-ci/examples/boards/watchy.kicad_pcb) is an
-# ESP32-S3 and needs the S3 image in demo/firmware/watchy_display_init_s3/
-# (bootloader at 0x0; provenance demo/firmware/build-watchy-s3.sh). Cross the
-# pairs and the backend now refuses with a named bootloader-offset error.
+# ESP32-S3 and needs an S3 image built for it (bootloader at 0x0), which this
+# tree does not carry. Cross the pairs and the backend now refuses with a named
+# bootloader-offset error.
 
 name = "boot_coverage: Watchy v1.5 e-paper RES# driven HIGH at boot (reduced firmware)"
 board = "../../../../board-corpus/famous/watchy_history/v1.5/Watchy.kicad_pcb"

@@ -1,6 +1,4 @@
 //! Generic evaluator for declarative digital logic (`[models.logic]`).
-//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/digital.md
-//! (the digital-domain essay) and docs/how-and-why/hauksbee-models/logic_spec.md
 //! (the format and the byte-exact migration record).
 //!
 //! One [`LogicComponent`] covers every digital part: a part's behaviour

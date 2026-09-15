@@ -11,7 +11,7 @@
 //! opened, because a gold row that opened none has validated nothing.
 //!
 //! Each gold pair below has a prior-art citation in
-//! `docs/evidence/KNOWN_FAULTS_VALIDATION.md`. The point of encoding them as tests is
+//! `docs/evidence/CORPUS.md`. The point of encoding them as tests is
 //! that the calibration is now CI-enforced: if a future change to the I2C
 //! pull-up check stops flagging the faulty ZSWatch DevKit 1.2.0, or starts
 //! flagging the fixed 1.2.1, the regression fails here immediately.
