@@ -71,6 +71,8 @@ mod sensor_attach;
 mod shipped_examples_run;
 #[path = "spec_and_assertions.rs"]
 mod spec_and_assertions;
+#[path = "spice_models_cli.rs"]
+mod spice_models_cli;
 #[path = "tarski_staged_replay.rs"]
 mod tarski_staged_replay;
 #[path = "tolerance.rs"]

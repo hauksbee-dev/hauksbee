@@ -67,6 +67,10 @@ pub struct RunConfig {
     pub no_open: bool,
     pub port: u16,
     pub models_dir: Option<std::path::PathBuf>,
+    /// `--spice-models`, repeatable: vendor SPICE model files whose `.model` /
+    /// `.subckt` cards bind to parts by card name, at the top of the layer
+    /// ladder.
+    pub spice_models: Vec<std::path::PathBuf>,
     pub ac: Option<String>,
     pub ac_node: Vec<String>,
     pub ac_csv: Option<std::path::PathBuf>,

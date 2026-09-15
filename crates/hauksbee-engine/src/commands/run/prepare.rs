@@ -300,7 +300,16 @@ pub(crate) fn prepare_run_inputs(
     // it before BOM/PnP are applied rather than resolving them under a smaller
     // universe of models.
     let extra: Vec<&std::path::Path> = cfg.models_dir.as_deref().into_iter().collect();
-    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
+    let mut lib = ModelLibrary::builtin_with_user_dirs(&extra);
+    // --spice-models sits above every directory layer: a vendor's own `.model`
+    // card is the most authoritative statement about a part there is, which is
+    // what the spice layer has always meant. It was previously reachable only
+    // from the library API, so a vendor `.lib` beside a board could not become
+    // a binding no matter where it was put.
+    for path in &cfg.spice_models {
+        lib.load_spice_models(path)?;
+    }
+    let lib = lib;
 
     let mut inputs = vec![JsonInputEvidence {
         path: cfg.board.display().to_string(),

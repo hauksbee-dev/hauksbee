@@ -69,6 +69,7 @@ fn run(spec: &Path) -> CiResult {
         spec: spec.to_path_buf(),
         seed: None,
         models_dir: None,
+        ..RunConfig::default()
     })
     .expect("run the spec")
 }

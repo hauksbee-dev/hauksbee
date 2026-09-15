@@ -1,0 +1,10 @@
+* A stand-in for a vendor SPICE model file, in the shape one arrives in: a
+* comment header and one `.model` card per part, named after the part number
+* that appears in the schematic's Value field.
+*
+* The parameters here are a plausible small-signal NPN, not a measurement of
+* any real device. The test this file serves is about the card reaching the
+* binder at all, not about the numbers being right.
+.model 2SD1664R NPN(IS=1.2e-14 BF=250 NF=1.0 VAF=80 RB=10 RC=0.5 RE=0.1
++ CJE=15p CJC=6p TF=0.5n)
+.end

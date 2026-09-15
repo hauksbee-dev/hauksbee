@@ -406,6 +406,7 @@ fn run_checks(args: &Value) -> Result<Value, String> {
         spec: spec_path,
         seed: None,
         models_dir: None,
+        ..hauksbee_ci::RunConfig::default()
     };
     let result = hauksbee_ci::run(&cfg).map_err(|e| format!("spec error: {e}"))?;
     // render_json is the canonical machine shape ({passed, assertions_passed,

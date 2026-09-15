@@ -1030,6 +1030,14 @@ struct RunArgs {
     #[arg(long, value_name = "DIR", help_heading = "Advanced / analyses")]
     models_dir: Option<PathBuf>,
 
+    /// Vendor SPICE model file (`.lib`, `.cir`, `.mod`, `.sp`, `.ckt`).
+    /// Repeatable. Every `.model` / `.subckt` card in it claims the parts whose
+    /// Value or MPN is the card's own name, above every model directory: a
+    /// vendor's own card is the most authoritative statement about a part there
+    /// is.
+    #[arg(long, value_name = "FILE", help_heading = "Advanced / analyses")]
+    spice_models: Vec<PathBuf>,
+
     /// Small-signal AC sweep: `<fstart>:<fstop>:<points>[:dec|:oct|:lin]` (Hz;
     /// points per decade by default, per octave with `:oct`, total with `:lin`). Linearises about the DC operating point and prints
     /// a Bode (magnitude dB + phase) table for `--ac-node`, then exits. Drive is
@@ -1822,6 +1830,7 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         no_open: a.no_open,
         port: a.port,
         models_dir: a.models_dir,
+        spice_models: a.spice_models,
         ac: a.ac,
         ac_node: a.ac_node,
         ac_csv: a.ac_csv,

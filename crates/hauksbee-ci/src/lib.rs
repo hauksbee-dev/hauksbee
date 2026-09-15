@@ -73,6 +73,10 @@ pub struct RunConfig {
     /// and the user model dirs; the same `--models-dir` layer `hauksbee run`
     /// has, so a custom `[[models]]` routing entry binds in CI too.
     pub models_dir: Option<PathBuf>,
+    /// Vendor SPICE model files whose `.model` / `.subckt` cards claim parts by
+    /// card name, above every model directory; the same `--spice-models` flag
+    /// `hauksbee run` has, so a board binds the same way in CI.
+    pub spice_models: Vec<PathBuf>,
 }
 
 /// Apply the board's waiver file to the evaluated assertion results: a real
@@ -197,7 +201,11 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let started = Instant::now();
     let spec = Spec::load(&cfg.spec)?;
     let extra: Vec<&std::path::Path> = cfg.models_dir.as_deref().into_iter().collect();
-    let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&extra);
+    let mut lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&extra);
+    for path in &cfg.spice_models {
+        lib.load_spice_models(path)
+            .map_err(|e| SpecError::Invalid(format!("{e:#}")))?;
+    }
     let outcomes = runner::run_spec_with_lib(&spec, cfg.seed, &lib)?;
     let mut results = assertions::evaluate(&spec, &outcomes);
 

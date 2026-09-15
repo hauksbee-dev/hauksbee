@@ -200,6 +200,13 @@ struct RunArgs {
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
 
+    /// Vendor SPICE model file (`.lib`, `.cir`, `.mod`, `.sp`, `.ckt`).
+    /// Repeatable, and the same flag `hauksbee run` has. Every `.model` /
+    /// `.subckt` card in it claims the parts whose Value or MPN is the card's
+    /// own name, above every model directory.
+    #[arg(long, value_name = "FILE")]
+    spice_models: Vec<PathBuf>,
+
     /// Write a canonical, immutable JSON reproduction manifest. It hashes the
     /// specs and every resolved board/firmware/overlay/model/trace input,
     /// records exact seeds/options/tool versions and safe environment selectors,
@@ -347,6 +354,7 @@ fn main() -> ExitCode {
             spec: spec.clone(),
             seed: args.seed,
             models_dir: args.models_dir.clone(),
+            spice_models: args.spice_models.clone(),
         };
         match run(&cfg) {
             Ok(result) => {
@@ -694,6 +702,9 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
     if let Some(path) = &args.models_dir {
         inputs.push(ManifestInput::new("models_dir", path));
     }
+    for (index, path) in args.spice_models.iter().enumerate() {
+        inputs.push(ManifestInput::new(format!("spice_models[{index}]"), path));
+    }
     inputs.extend(implicit_model_inputs());
 
     let options = BTreeMap::from([
@@ -703,6 +714,7 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
         ("models_dir".into(), serde_json::json!(args.models_dir)),
         ("quiet".into(), serde_json::json!(args.quiet)),
         ("seed".into(), serde_json::json!(args.seed)),
+        ("spice_models".into(), serde_json::json!(args.spice_models)),
         (
             "specs".into(),
             if args.example.is_some() {
@@ -728,6 +740,7 @@ fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manif
         .filter(|_| args.example.is_none())
         .cloned()
         .chain(args.models_dir.iter().cloned())
+        .chain(args.spice_models.iter().cloned())
         .chain(args.junit.iter().cloned())
         .collect::<Vec<_>>();
     let base = std::env::current_dir()?;
