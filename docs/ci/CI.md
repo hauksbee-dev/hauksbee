@@ -112,6 +112,16 @@ hauksbee-ci run ci/board.toml --models-dir hardware/models
 hauksbee-ci check ci/board.toml --models-dir hardware/models
 ```
 
+Above `--models-dir` sits `--spice-models FILE`, repeatable, which loads a
+vendor's own `.model` / `.subckt` cards (`hauksbee-ci run` only; the same flag
+`hauksbee run` has). A card claims the parts whose value or MPN is the card's
+own name. See
+[docs/models/MODELS.md](../models/MODELS.md#a-vendor-spice-model-file).
+
+```bash
+hauksbee-ci run ci/board.toml --spice-models hardware/vendor/bjt.lib
+```
+
 MCU SoC descriptors themselves resolve from `$HAUKSBEE_MCU_DIR` /
 `~/.config/hauksbee/mcu` before the built-ins, in CI and interactive runs
 alike (see `docs/extending/add-an-mcu-variant.md` for the full two-file

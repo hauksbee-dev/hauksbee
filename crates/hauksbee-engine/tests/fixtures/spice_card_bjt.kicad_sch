@@ -1,0 +1,424 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-0000000000f0")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_names
+				(offset 0)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "R"
+				(at 2.032 0 90)
+			)
+			(property "Value" "R"
+				(at 0 0 90)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+		)
+		(symbol "Device:Q_NPN_BCE"
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "Q"
+				(at 5.08 1.27 0)
+			)
+			(property "Value" "Q_NPN_BCE"
+				(at 5.08 -1.27 0)
+			)
+			(symbol "Q_NPN_BCE_1_1"
+				(pin input line
+					(at -5.08 0 0)
+					(length 3.81)
+					(name "B"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 2.54 5.08 270)
+					(length 2.54)
+					(name "C"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 2.54 -5.08 90)
+					(length 2.54)
+					(name "E"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+		)
+		(symbol "power:+5V"
+			(power
+				(global)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "#PWR"
+				(at 0 -3.81 0)
+				(hide yes)
+			)
+			(property "Value" "+5V"
+				(at 0 3.556 0)
+			)
+			(symbol "+5V_1_1"
+				(pin power_in line
+					(at 0 0 90)
+					(length 0)
+					(hide yes)
+					(name "+5V"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+		)
+		(symbol "power:GND"
+			(power
+				(global)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "#PWR"
+				(at 0 -6.35 0)
+				(hide yes)
+			)
+			(property "Value" "GND"
+				(at 0 -3.81 0)
+			)
+			(symbol "GND_1_1"
+				(pin power_in line
+					(at 0 0 270)
+					(length 0)
+					(hide yes)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:Q_NPN_BCE")
+		(at 110 100 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-000000000a10")
+		(property "Reference" "Q1"
+			(at 115 98 0)
+		)
+		(property "Value" "2SD1664R"
+			(at 115 101 0)
+		)
+		(property "Footprint" "Package_TO_SOT_SMD:SOT-23")
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-000000000b10")
+		)
+		(pin "2"
+			(uuid "00000000-0000-0000-0000-000000000b11")
+		)
+		(pin "3"
+			(uuid "00000000-0000-0000-0000-000000000b12")
+		)
+		(instances
+			(project "spice_card_bjt"
+				(path "/00000000-0000-0000-0000-0000000000f0"
+					(reference "Q1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 130 100 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-000000000a11")
+		(property "Reference" "R1"
+			(at 132 100 90)
+		)
+		(property "Value" "1k"
+			(at 132 100 90)
+		)
+		(property "Footprint" "")
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-000000000b13")
+		)
+		(pin "2"
+			(uuid "00000000-0000-0000-0000-000000000b14")
+		)
+		(instances
+			(project "spice_card_bjt"
+				(path "/00000000-0000-0000-0000-0000000000f0"
+					(reference "R1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 110 115 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-000000000a12")
+		(property "Reference" "R2"
+			(at 112 115 90)
+		)
+		(property "Value" "10k"
+			(at 112 115 90)
+		)
+		(property "Footprint" "")
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-000000000b15")
+		)
+		(pin "2"
+			(uuid "00000000-0000-0000-0000-000000000b16")
+		)
+		(instances
+			(project "spice_card_bjt"
+				(path "/00000000-0000-0000-0000-0000000000f0"
+					(reference "R2")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+5V")
+		(at 130 96.19 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-000000000a13")
+		(property "Reference" "#PWR01"
+			(at 130 92.38 0)
+			(hide yes)
+		)
+		(property "Value" "+5V"
+			(at 130 92.634 0)
+		)
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-000000000b17")
+		)
+		(instances
+			(project "spice_card_bjt"
+				(path "/00000000-0000-0000-0000-0000000000f0"
+					(reference "#PWR01")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 112.54 105.08 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-000000000a14")
+		(property "Reference" "#PWR02"
+			(at 112.54 111.43 0)
+			(hide yes)
+		)
+		(property "Value" "GND"
+			(at 112.54 108.89 0)
+		)
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-000000000b18")
+		)
+		(instances
+			(project "spice_card_bjt"
+				(path "/00000000-0000-0000-0000-0000000000f0"
+					(reference "#PWR02")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 110 118.81 0)
+		(unit 1)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-000000000a15")
+		(property "Reference" "#PWR03"
+			(at 110 125.16 0)
+			(hide yes)
+		)
+		(property "Value" "GND"
+			(at 110 122.62 0)
+		)
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-000000000b19")
+		)
+		(instances
+			(project "spice_card_bjt"
+				(path "/00000000-0000-0000-0000-0000000000f0"
+					(reference "#PWR03")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(label "BASE_CTRL"
+		(at 104.92 100 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "00000000-0000-0000-0000-000000000e10")
+	)
+	(label "BASE_CTRL"
+		(at 110 111.19 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "00000000-0000-0000-0000-000000000e11")
+	)
+	(label "LOAD_COLLECTOR"
+		(at 112.54 94.92 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "00000000-0000-0000-0000-000000000e12")
+	)
+	(label "LOAD_COLLECTOR"
+		(at 130 103.81 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "00000000-0000-0000-0000-000000000e13")
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)

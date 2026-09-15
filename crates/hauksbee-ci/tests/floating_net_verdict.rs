@@ -92,6 +92,7 @@ fn run(dir: &Path, board: &Path) -> CiResult {
         spec,
         seed: None,
         models_dir: None,
+        ..RunConfig::default()
     })
     .expect("run the spec")
 }

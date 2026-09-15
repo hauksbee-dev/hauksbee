@@ -646,6 +646,31 @@ impl ModelLibrary {
         self.spice.push(card);
     }
 
+    /// Load a user SPICE model file at [`SourceLayer::Spice`], the top of the
+    /// layer ladder, and say how many cards it carried.
+    ///
+    /// This is [`Self::add_spice_file`] with the errors a person typing a path
+    /// needs. A file with no `.model` or `.subckt` card in it is one of them:
+    /// the user named the file expecting the parts in it to bind, and loading
+    /// zero cards quietly leaves those parts unresolved with nothing said.
+    pub fn load_spice_models(&mut self, path: &Path) -> anyhow::Result<usize> {
+        let added = self.add_spice_file(path).map_err(|e| {
+            anyhow::anyhow!(
+                "cannot read SPICE model cards from '{}': {e}. Point --spice-models at \
+                 the vendor's model file (`.lib`, `.cir`, `.mod`, `.sp` or `.ckt`)",
+                path.display()
+            )
+        })?;
+        if added == 0 {
+            anyhow::bail!(
+                "'{}' carries no `.model` or `.subckt` card, so nothing was loaded from it. \
+                 Point --spice-models at the file holding the vendor's `.model` lines",
+                path.display()
+            );
+        }
+        Ok(added)
+    }
+
     // ── Resolution ────────────────────────────────────────────────────────────
 
     /// Resolve a component query to a model entry.
@@ -1203,6 +1228,37 @@ mod tests {
 
         l.add_spice_card(card("RMOD", spice_input::SpiceCardKind::Model, Some("R")));
         assert!(by_value(&l, "RMOD").model.is_some());
+    }
+
+    #[test]
+    fn a_vendor_spice_file_binds_its_cards_and_reports_a_file_that_cannot_serve() {
+        let temp = tempfile::tempdir().unwrap();
+        let vendor = temp.path().join("vendor.lib");
+        std::fs::write(
+            &vendor,
+            "* vendor models\n.model 2SD1664R NPN(IS=1.2e-14 BF=250 NF=1.0 VAF=80)\n.end\n",
+        )
+        .unwrap();
+
+        let mut l = lib();
+        assert!(by_value(&l, "2SD1664R").model.is_none());
+        assert_eq!(l.load_spice_models(&vendor).unwrap(), 1);
+        let res = by_value(&l, "2SD1664R");
+        assert_eq!(res.model.map(|m| m.id).as_deref(), Some("2sd1664r"));
+        assert_eq!(res.source.as_deref(), Some("spice"));
+
+        // A file the user named that carries nothing is an error, not a quiet
+        // zero: the parts in it were meant to bind.
+        let empty = temp.path().join("empty.lib");
+        std::fs::write(&empty, "* only a comment\n.end\n").unwrap();
+        let err = format!("{:#}", l.load_spice_models(&empty).unwrap_err());
+        assert!(err.contains("empty.lib"), "{err}");
+        assert!(err.contains(".model"), "{err}");
+
+        let missing = temp.path().join("not-there.lib");
+        let err = format!("{:#}", l.load_spice_models(&missing).unwrap_err());
+        assert!(err.contains("not-there.lib"), "{err}");
+        assert!(err.contains("--spice-models"), "{err}");
     }
 
     #[test]
