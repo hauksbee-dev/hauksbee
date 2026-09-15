@@ -3,7 +3,8 @@ name = "hauksbee-forge-codegen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Emit KiCad schematic and board files from forge-model, byte-stable through the forge-sexpr CST"
 
 [dependencies]
-forge-sexpr = { path = "../forge-sexpr" }
-forge-model = { path = "../forge-model" }
+forge-sexpr = { version = "0.1.0", path = "../forge-sexpr" }
+forge-model = { version = "0.1.0", path = "../forge-model" }

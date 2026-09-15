@@ -3,9 +3,10 @@ name = "forge-model"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Typed model of KiCad schematic and board files over the forge-sexpr CST"
 
 [dependencies]
-forge-sexpr = { path = "../forge-sexpr" }
+forge-sexpr = { version = "0.1.0", path = "../forge-sexpr" }
 thiserror = "1"
 
 # The upstream crate declares integration tests under tests/. Only the library
