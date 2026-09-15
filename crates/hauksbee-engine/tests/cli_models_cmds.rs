@@ -4,11 +4,8 @@
 //! handed something it cannot install. All offline: every invocation fails or
 //! returns before anything could reach an LLM backend.
 
+use crate::support::bin;
 use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
 
 fn run(args: &[&str]) -> std::process::Output {
     Command::new(bin())

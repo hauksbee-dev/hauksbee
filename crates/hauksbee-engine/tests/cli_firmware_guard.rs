@@ -8,25 +8,14 @@
 //! These drive the actual compiled binary so the exit-code and output contracts
 //! are tested end to end.
 
+use crate::support::run;
 use std::path::PathBuf;
-use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
 
 /// A board that sits beside two sibling `.kicad_pcb` files, so the "found
 /// nearby" advisory would fire for it.
 fn board_with_siblings() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../hauksbee-ci/examples/boards/blinky.kicad_pcb")
-}
-
-fn run(args: &[&str]) -> std::process::Output {
-    Command::new(bin())
-        .args(args)
-        .output()
-        .expect("hauksbee binary runs")
 }
 
 // --- Defect A: missing firmware is a clean error, not a segfault ------------

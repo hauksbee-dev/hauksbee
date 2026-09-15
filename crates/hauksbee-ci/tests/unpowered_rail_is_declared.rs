@@ -22,16 +22,9 @@
 
 mod support;
 
+use crate::support::repo_root;
 use hauksbee_ci::{report::CiResult, RunConfig};
 use std::path::{Path, PathBuf};
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root")
-        .to_path_buf()
-}
 
 /// A board with two supply-ish nets: `VCC` (5 V by convention, so it resolves)
 /// and `ANALOG_VDD` (a supply with no readable magnitude). Enough parts hang off

@@ -7,24 +7,13 @@
 //! system that silently fails to apply is a check nobody can trust, and one
 //! that silently keeps applying past its date is a check nobody is running.
 
+use crate::support::{hauksbee_bin, repo_root};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The board ships two deliberate GND/+5V pour shorts, so `--check --strict`
 /// exits 2 on it untouched. That makes it the honest fixture for this.
 const BOARD: &str = "examples/boards/boot_gate.kicad_pcb";
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root")
-        .to_path_buf()
-}
-
-fn hauksbee_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_hauksbee"))
-}
 
 /// Copy the board into `dir` so a waiver file can sit beside it without
 /// touching the checked-in fixture.

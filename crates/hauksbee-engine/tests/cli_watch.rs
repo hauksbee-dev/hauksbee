@@ -6,15 +6,12 @@
 //! test makes one real content change and requires one observed re-run. It is a
 //! release contract, not an ignorable timing probe.
 
+use crate::support::bin;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
 
 /// A small, real board fixture shipped with the CI examples.
 fn blinky() -> PathBuf {

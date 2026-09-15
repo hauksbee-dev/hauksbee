@@ -7,12 +7,8 @@
 //! probed net, and it has about one row per simulated millisecond (the headless
 //! chunk cadence). An unknown net must fail before the run, with a suggestion.
 
+use crate::support::run;
 use std::path::PathBuf;
-use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
 
 /// A small board with a +5V rail and a BTN net (no firmware needed: the analog
 /// co-sim still advances and samples nets each chunk).
@@ -26,13 +22,6 @@ fn out_csv(tag: &str) -> PathBuf {
     let p = dir.join("probe.csv");
     let _ = std::fs::remove_file(&p);
     p
-}
-
-fn run(args: &[&str]) -> std::process::Output {
-    Command::new(bin())
-        .args(args)
-        .output()
-        .expect("hauksbee binary runs")
 }
 
 #[test]

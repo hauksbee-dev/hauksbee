@@ -2,16 +2,9 @@
 //! `hauksbee run <file>.board --report` works and reproduces the bind a
 //! `.kicad_pcb` produces, exercising the real compiled binary.
 
+use crate::support::{bin, board};
 use std::path::PathBuf;
 use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
-
-fn board(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
-}
 
 #[test]
 fn run_board_as_code_report() {

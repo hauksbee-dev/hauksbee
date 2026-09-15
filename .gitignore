@@ -108,3 +108,6 @@ testdata/ingest-robustness/corpus-harness/matrix-results.jsonl
 
 cursor-review.log
 cursor-review.log
+
+# Editor language-server caches beside firmware sources.
+.cache/

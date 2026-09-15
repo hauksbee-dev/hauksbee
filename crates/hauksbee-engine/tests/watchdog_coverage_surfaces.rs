@@ -29,18 +29,14 @@
 //! accessors and the shared wording for finding 1 are covered in-crate by
 //! `scheduler.rs`'s `a_backend_that_cannot_reboot_reports_its_watchdog_limitation_verbatim`.
 
+#[cfg(any(feature = "avr", feature = "renode"))]
+use crate::support::bin;
 #[cfg(feature = "avr")]
 use std::path::Path;
 #[cfg(any(feature = "avr", feature = "renode"))]
 use std::path::PathBuf;
 #[cfg(any(feature = "avr", feature = "renode"))]
 use std::process::Command;
-
-/// The compiled `hauksbee` binary (Cargo sets this for the engine crate's tests).
-#[cfg(any(feature = "avr", feature = "renode"))]
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
 
 #[cfg(any(feature = "avr", feature = "renode"))]
 fn repo(rel: &str) -> PathBuf {

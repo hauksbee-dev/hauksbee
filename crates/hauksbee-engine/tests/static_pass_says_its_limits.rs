@@ -11,16 +11,8 @@
 //! was misled by omission, which is the failure mode this project exists to
 //! prevent.
 
-use std::path::{Path, PathBuf};
+use crate::support::repo_root;
 use std::process::Command;
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root")
-        .to_path_buf()
-}
 
 fn plain_check(board: &str) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_hauksbee"))

@@ -50,12 +50,9 @@
 //! were on their way to it), the first row of that table gets even harder to
 //! break, not easier.
 
+use crate::support::bin;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee-ci")
-}
 
 fn manifest() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

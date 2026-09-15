@@ -9,15 +9,7 @@
 //! crate (no repo around the crate) the comparison is skipped, which is the
 //! point: there the mirror IS the only copy.
 
-use std::path::{Path, PathBuf};
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("crate lives two levels under the repo root")
-        .to_path_buf()
-}
+use crate::support::repo_root;
 
 fn assert_mirror(embedded: &[u8], authoritative_rel: &str) {
     let path = repo_root().join(authoritative_rel);

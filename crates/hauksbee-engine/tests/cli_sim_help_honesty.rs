@@ -3,12 +3,9 @@
 //! `--format raw`/`both` all landed). Plus an end-to-end run of a deck whose
 //! model comes in through a deck-relative `.include`.
 
+use crate::support::bin;
 use std::path::PathBuf;
 use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
 
 fn sim_help() -> String {
     let out = Command::new(bin())

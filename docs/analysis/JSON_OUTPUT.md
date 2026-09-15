@@ -46,36 +46,23 @@ file-syntax escapes are decoded (`/GPIO0{slash}XTAL1` arrives as
 
 ## The netlist document
 
-`run <board> --emit-netlist --json` prints one document and exits: the
-connectivity the extractor derived, so another tool can ask hauksbee what is
-connected to what instead of parsing the board file itself. It is not a section
-of the report above; it replaces it.
+`run <board> --emit-netlist --json` prints the extracted connectivity and
+exits, so another tool can ask hauksbee what is connected to what instead of
+parsing the board file. It replaces the report rather than joining it:
 
 ```json
-{
-  "board": "two_resistors",
-  "nets": [
-    {"name": "Net-(R1-Pad2)", "pins": [
-      {"ref": "R1", "pin": "2", "pin_name": "~"},
-      {"ref": "R2", "pin": "1", "pin_name": "~"}
-    ]}
-  ]
-}
+{"board": "two_resistors",
+ "nets": [{"name": "Net-(R1-Pad2)",
+           "pins": [{"ref": "R1", "pin": "2", "pin_name": "~"},
+                    {"ref": "R2", "pin": "1", "pin_name": "~"}]}]}
 ```
 
-`ref` is the refdes as the board file spells it, `pin` the pad/pin number as
-printed (`"1"`, `"A8"`, `"EP"`), and `pin_name` the schematic pin name
-(`"VCC"`, `"GPIO4"`), empty on a layout, which carries no pin names. Nets sort
-by name, pins within a net by refdes then pin number, so two runs on one board
-produce byte-identical output. Unconnected pins appear in no net.
-
-This is extraction, not binding: it answers on a board whose parts have no
-models at all, since connectivity is settled before any model claims a part.
-Do-not-populate policy is already applied, so a part the board says is not
-fitted is absent here exactly as it is absent from the analysis.
-
-Without `--json` the same content prints as one tab-separated
-`net`/`refdes`/`pin`/`pin-name` line per connected pin, in the same order.
+`pin` is the pad or pin number as printed, `pin_name` the schematic pin name
+(empty on a layout). Nets sort by name and pins by refdes then number, so two
+runs are byte-identical; unconnected pins appear in no net. This is
+extraction, not binding: it answers on a board with no models, with the
+do-not-populate policy already applied. Without `--json` the same content is
+one tab-separated `net`/`refdes`/`pin`/`pin-name` line per connected pin.
 
 ## CI artifact flags
 

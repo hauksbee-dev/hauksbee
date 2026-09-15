@@ -1,6 +1,10 @@
 //! One integration-test binary for the crate; each module was a
 //! separate test file (and separate link step) before.
 
+#[allow(dead_code)]
+#[path = "support.rs"]
+mod support;
+
 #[path = "ac_active_models.rs"]
 mod ac_active_models;
 #[path = "altium_no_fabricated_values.rs"]

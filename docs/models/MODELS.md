@@ -848,27 +848,15 @@ on stderr rather than loading nothing quietly.
 
 ### A vendor SPICE model file
 
-`--spice-models <file>` loads a vendor's own `.model` / `.subckt` cards at
-layer 40, the top of the ladder. It is repeatable, and `hauksbee-ci run` takes
-the same flag, so a board binds the same way in a pipeline as it does
-interactively:
-
-```bash
-hauksbee run my_board.kicad_sch --check --spice-models vendor/bjt.lib
-hauksbee-ci run spec.toml --spice-models vendor/bjt.lib --spice-models vendor/fets.lib
-```
-
-A card claims the parts whose `Value` or MPN **is the card's own name**, matched
-exactly and case-insensitively. So `.model 2SD1664R NPN(...)` binds every part
-valued `2SD1664R`, and nothing else; there is no regex, and no
-`[models.match]` block to write. That is the whole point of the layer: a
-vendor's own card is the most authoritative statement about a part there is, so
-it needs no claim rules of its own and it outranks every directory layer.
-
-Cards hauksbee cannot execute stay unresolved rather than binding to a guess: a
-`.subckt`, and a `.model` whose type is outside `D` / `NPN` / `PNP` / `NMOS` /
-`PMOS` / `R` / `C` / `L`. A file that carries no card at all, or that cannot be
-read, is an error naming the path, not a quiet zero.
+`--spice-models <file>` (repeatable, on `hauksbee run` and `hauksbee-ci run`)
+loads a vendor's own `.model` / `.subckt` cards at layer 40, the top of the
+ladder. A card claims the parts whose `Value` or MPN **is the card's own
+name**, matched exactly and case-insensitively: `.model 2SD1664R NPN(...)`
+binds every part valued `2SD1664R` and nothing else, with no match rules to
+write. Cards hauksbee cannot execute (a `.subckt`, or a `.model` type outside
+`D` / `NPN` / `PNP` / `NMOS` / `PMOS` / `R` / `C` / `L`) leave the part
+unresolved rather than binding a guess, and a file with no card, or that
+cannot be read, is an error naming the path.
 
 ### Worked example: a "crazy" custom charger
 

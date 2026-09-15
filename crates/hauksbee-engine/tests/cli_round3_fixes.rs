@@ -1,35 +1,12 @@
 //! Round-3 audit fixes, engine CLI half: contracts that only the compiled
 //! binary can prove (error-handler routing, exit codes, output envelopes).
 
+use crate::support::{board, run, stderr, stdout};
 use std::path::PathBuf;
-use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_hauksbee")
-}
-
-fn run(args: &[&str]) -> std::process::Output {
-    Command::new(bin())
-        .args(args)
-        .output()
-        .expect("hauksbee binary runs")
-}
-
-fn stdout(o: &std::process::Output) -> String {
-    String::from_utf8_lossy(&o.stdout).into_owned()
-}
-
-fn stderr(o: &std::process::Output) -> String {
-    String::from_utf8_lossy(&o.stderr).into_owned()
-}
 
 fn blinky_board() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../hauksbee-ci/examples/boards/blinky.kicad_pcb")
-}
-
-fn board(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
 }
 
 fn clean_board() -> PathBuf {
