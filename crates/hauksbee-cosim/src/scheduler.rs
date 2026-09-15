@@ -3564,6 +3564,10 @@ impl Scheduler {
     /// Runs unconditionally on a failed chunk, same reason as the `post_solve`
     /// deselects: this is a digital frame-boundary reset of the slave command
     /// state machine, not an analog sample.
+    // `chunk` is only read by the debug-only warning below, so a release build
+    // (which the Windows release leg compiles with warnings as errors) would
+    // otherwise see it unused.
+    #[cfg_attr(not(debug_assertions), allow(unused_variables))]
     fn deselect_heuristic_spi_buses(&mut self, chunk: f64) {
         for bus in &self.spi_buses {
             let mut guard = bus.lock().unwrap_or_else(|e| e.into_inner());
