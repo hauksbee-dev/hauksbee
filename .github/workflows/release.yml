@@ -1375,14 +1375,22 @@ jobs:
     # the one deliberately skipped quality job cannot cascade a skip into
     # publication; every needed result is therefore checked explicitly, and
     # exactly one of the two quality paths must have succeeded (the full
-    # gate, or the ci-reuse residue).
+    # gate, split into its four jobs, or the ci-reuse residue).
     if: >-
       always() && startsWith(github.ref, 'refs/tags/') &&
       needs.build.result == 'success' &&
       needs.build-windows.result == 'success' &&
       needs.required-integrations.result == 'success' &&
-      ((needs.release-quality.result == 'success' && needs.release-quality-residue.result == 'skipped') ||
-       (needs.release-quality.result == 'skipped' && needs.release-quality-residue.result == 'success'))
+      ((needs.release-quality-rust.result == 'success' &&
+        needs.release-quality-shapes.result == 'success' &&
+        needs.release-quality-release-binaries.result == 'success' &&
+        needs.release-quality-offline.result == 'success' &&
+        needs.release-quality-residue.result == 'skipped') ||
+       (needs.release-quality-rust.result == 'skipped' &&
+        needs.release-quality-shapes.result == 'skipped' &&
+        needs.release-quality-release-binaries.result == 'skipped' &&
+        needs.release-quality-offline.result == 'skipped' &&
+        needs.release-quality-residue.result == 'success'))
     steps:
       - name: Checkout (for the slug preflight)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
