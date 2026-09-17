@@ -12,15 +12,9 @@ from pathlib import PurePosixPath
 OUTPUTS = ("rust", "frontend", "vscode", "speed", "full")
 
 
-def _all_standard() -> dict[str, bool]:
-    return {"rust": True, "frontend": True, "vscode": True, "speed": True, "full": False}
-
-
 def classify(paths: list[str], *, full: bool = False) -> dict[str, bool]:
-    if full:
-        return {name: True for name in OUTPUTS}
-    if not paths:
-        return _all_standard()
+    if full or not paths:
+        return {name: full or name != "full" for name in OUTPUTS}
 
     result = {name: False for name in OUTPUTS}
     known = True
@@ -31,7 +25,6 @@ def classify(paths: list[str], *, full: bool = False) -> dict[str, bool]:
             known = False
             continue
         top = parts[0]
-        value = path.as_posix()
 
         if top == "frontend":
             result["frontend"] = True
@@ -46,9 +39,10 @@ def classify(paths: list[str], *, full: bool = False) -> dict[str, bool]:
                 result["vscode"] = True
             if crate == "hauksbee-solve":
                 result["speed"] = True
-        elif top in {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo"}:
-            result.update(rust=True, frontend=True, vscode=True, speed=True)
-        elif top in {"scripts", ".github", "app", "docker", "packaging"}:
+        elif top in {
+            "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo",
+            "scripts", ".github", "app", "docker", "packaging",
+        }:
             # Build, packaging, and workflow changes can alter any compiled shape.
             result.update(rust=True, frontend=True, vscode=True, speed=True)
         elif top in {"integrations", "docs", "examples", "testdata", "qc"}:
@@ -65,24 +59,17 @@ def classify(paths: list[str], *, full: bool = False) -> dict[str, bool]:
         else:
             known = False
 
-        if value.endswith((".rs", ".toml")) and top not in {"docs", "qc"}:
+        if path.suffix in {".rs", ".toml"} and top not in {"docs", "qc"}:
             result["rust"] = True
 
-    if not known:
-        conservative = _all_standard()
-        for name, enabled in conservative.items():
-            result[name] = result[name] or enabled
-    return result
+    return result if known else classify([])
 
 
 def changed_paths(base: str, head: str) -> list[str]:
-    proc = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=ACMRTUXB", base, head, "--"],
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
+    output = subprocess.check_output(
+        ["git", "diff", "--name-only", "--no-renames", base, head, "--"], text=True,
     )
-    return [line for line in proc.stdout.splitlines() if line]
+    return output.splitlines()
 
 
 def main() -> int:

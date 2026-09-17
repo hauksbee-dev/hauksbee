@@ -10,34 +10,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    for path in [
-        "../../Cargo.toml",
-        "../../Cargo.lock",
-        "../../crates",
-        "../../vendor",
-        "../../frontend/src",
-        "../../frontend/dist",
-        "../../.github",
-        "../../app",
-        "../../docker",
-        "../../docs",
-        "../../editors",
-        "../../evidence",
-        "../../integrations",
-        "../../licenses",
-        "../../qc",
-        "../../scripts",
-        "../../site",
-        "../../examples",
-        "../../testdata",
-        "../../README.md",
-        "../../COMPLIANCE.md",
-        "../../LICENSE",
-        "../../NOTICE",
-        "../../rust-toolchain.toml",
-    ] {
-        println!("cargo:rerun-if-changed={path}");
-    }
+    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=HAUKSBEE_SOURCE_COMMIT");
     if let Ok(hash) = std::env::var("HAUKSBEE_SOURCE_COMMIT") {
         if hash.len() != 40
@@ -67,31 +40,59 @@ fn main() {
         .ok()
         .as_ref()
         == Some(&manifest_dir);
+    if !owns_workspace_layout {
+        return;
+    }
     let top = Command::new("git")
-        .args([
-            "-C",
-            source_root.to_str().unwrap(),
-            "rev-parse",
-            "--show-toplevel",
-        ])
+        .arg("-C")
+        .arg(&source_root)
+        .args(["rev-parse", "--show-toplevel"])
         .output();
     let owns_git_root = top.ok().filter(|out| out.status.success()).and_then(|out| {
         PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
             .canonicalize()
             .ok()
     }) == Some(source_root.clone());
+    if !owns_git_root {
+        return;
+    }
+    // Watch owned source trees, including new untracked files. Missing paths
+    // force Cargo to rebuild forever; the retired site directory is not source.
+    for path in [
+        "../../Cargo.toml",
+        "../../Cargo.lock",
+        "../../crates",
+        "../../vendor",
+        "../../frontend/src",
+        "../../frontend/dist",
+        "../../.github",
+        "../../app",
+        "../../docker",
+        "../../docs",
+        "../../editors",
+        "../../evidence",
+        "../../integrations",
+        "../../licenses",
+        "../../qc",
+        "../../scripts",
+        "../../examples",
+        "../../testdata",
+        "../../README.md",
+        "../../COMPLIANCE.md",
+        "../../LICENSE",
+        "../../NOTICE",
+        "../../rust-toolchain.toml",
+    ] {
+        println!("cargo:rerun-if-changed={path}");
+    }
     let source_is_clean = Command::new("git")
-        .args([
-            "-C",
-            source_root.to_str().unwrap(),
-            "status",
-            "--porcelain",
-            "--untracked-files=normal",
-            "--",
-        ])
+        .arg("--no-optional-locks") // Do not refresh the watched index during a build.
+        .arg("-C")
+        .arg(&source_root)
+        .args(["status", "--porcelain", "--untracked-files=normal", "--"])
         .output()
         .is_ok_and(|out| out.status.success() && out.stdout.is_empty());
-    if owns_workspace_layout && owns_git_root && source_is_clean {
+    if source_is_clean {
         let out = Command::new("git")
             .args(["-C", source_root.to_str().unwrap(), "rev-parse", "HEAD"])
             .output();
@@ -108,7 +109,6 @@ fn main() {
         }
     }
     // Re-run when the checked-out commit changes (branch switch or new commit).
-    // Harmless when the paths do not exist (non-git builds).
     let dot_git = source_root.join(".git");
     if dot_git.is_file() {
         println!("cargo:rerun-if-changed={}", dot_git.display());

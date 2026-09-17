@@ -88,131 +88,106 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             consumer = tmp / "consumer"
-            source_root = consumer / "vendor" / "hauksbee"
-            crates = source_root / "crates"
-            crates.mkdir(parents=True)
+            consumer.mkdir()
             (consumer / "owned.txt").write_text("consumer\n")
             subprocess.run(["git", "init", "-q", str(consumer)], check=True)
             subprocess.run(["git", "-C", str(consumer), "add", "owned.txt"], check=True)
-            subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(consumer),
-                    "-c",
-                    "user.name=contract",
-                    "-c",
-                    "user.email=contract@example.invalid",
-                    "commit",
-                    "-qm",
-                    "consumer",
-                ],
-                check=True,
-            )
-            consumer_sha = subprocess.check_output(
-                ["git", "-C", str(consumer), "rev-parse", "HEAD"], text=True
-            ).strip()
-
+            subprocess.run(["git", "-C", str(consumer), "commit", "-qm", "consumer"], check=True)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("HAUKSBEE_")}
             for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
-                manifest = crates / crate
-                manifest.mkdir()
+                source = ROOT / "crates" / crate / "build.rs"
                 binary = tmp / f"{crate}-build-script"
-                subprocess.run(
-                    ["rustc", str(ROOT / "crates" / crate / "build.rs"), "-o", str(binary)],
-                    check=True,
-                )
-                result = subprocess.run(
-                    [str(binary)],
-                    env={**os.environ, "CARGO_MANIFEST_DIR": str(manifest)},
-                    text=True,
-                    capture_output=True,
-                    check=True,
-                )
-                self.assertNotIn(consumer_sha, result.stdout, crate)
-                self.assertNotIn("cargo:rustc-env=GIT_HASH=", result.stdout, crate)
-
-            # Cargo's real vendor layout is flat: vendor/<crate>, not a copy of
-            # Hauksbee's crates/<crate> workspace hierarchy. In that shape the
-            # historical ../.. probe lands exactly on the consumer repository.
-            flat_manifest = consumer / "vendor" / "hauksbee-ci"
-            flat_manifest.mkdir(parents=True)
-            binary = tmp / "flat-hauksbee-ci-build-script"
-            subprocess.run(
-                ["rustc", str(ROOT / "crates/hauksbee-ci/build.rs"), "-o", str(binary)],
-                check=True,
-            )
-            result = subprocess.run(
-                [str(binary)],
-                env={**os.environ, "CARGO_MANIFEST_DIR": str(flat_manifest)},
-                text=True,
-                capture_output=True,
-                check=True,
-            )
-            self.assertNotIn(consumer_sha, result.stdout)
-            self.assertNotIn("cargo:rustc-env=GIT_HASH=", result.stdout)
-
-        for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
-            source = (ROOT / "crates" / crate / "build.rs").read_text()
-            self.assertNotIn(
-                'println!("cargo:rerun-if-changed=../../.git");', source
-            )
-            self.assertIn('"packed-refs"', source)
+                subprocess.run(["rustc", str(source), "-o", str(binary)], check=True)
+                watches = [
+                    "cargo:rerun-if-changed=build.rs",
+                    "cargo:rerun-if-env-changed=HAUKSBEE_SOURCE_COMMIT",
+                ]
+                if crate == "hauksbee-ci":
+                    watches.append("cargo:rerun-if-env-changed=HAUKSBEE_RELEASE_TAG")
+                # Both a workspace-shaped copy and Cargo's flat vendor layout
+                # must avoid borrowing identity or watching the consumer tree.
+                for layout in ("vendor/hauksbee/crates", "vendor"):
+                    manifest = consumer / layout / crate
+                    manifest.mkdir(parents=True)
+                    result = subprocess.check_output(
+                        [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
+                    )
+                    self.assertEqual(result.splitlines(), watches, (crate, layout))
+                # An explicit identity must not even need a manifest path or Git.
+                for sha in ("a" * 40, "A" * 40, "a" * 39, "g" * 40, ""):
+                    result = subprocess.run(
+                        [str(binary)], env={"PATH": "", "HAUKSBEE_SOURCE_COMMIT": sha},
+                        text=True, capture_output=True,
+                    )
+                    if sha == "a" * 40:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(
+                            result.stdout.splitlines(), watches + [f"cargo:rustc-env=GIT_HASH={sha}"]
+                        )
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("HAUKSBEE_SOURCE_COMMIT must be", result.stderr)
+                        self.assertEqual(result.stdout.splitlines(), watches)
+                self.assertNotIn('println!("cargo:rerun-if-changed=../../.git");', source.read_text())
+                for name in ('"HEAD"', '"index"', '"packed-refs"', '"refs"'):
+                    self.assertIn(name, source.read_text())
 
     def test_build_provenance_refuses_a_dirty_owned_source_tree(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
-            source_root = tmp / "hauksbee"
-            manifest = source_root / "crates" / "hauksbee-ci"
-            manifest.mkdir(parents=True)
-            tracked = source_root / "tracked.txt"
-            tracked.write_text("clean\n")
-            subprocess.run(["git", "init", "-q", str(source_root)], check=True)
-            subprocess.run(["git", "-C", str(source_root), "add", "."], check=True)
-            subprocess.run(
-                [
-                    "git", "-C", str(source_root), "-c", "user.name=contract",
-                    "-c", "user.email=contract@example.invalid", "commit", "-qm", "clean",
-                ],
-                check=True,
-            )
-            binary = tmp / "build-script"
-            subprocess.run(
-                ["rustc", str(ROOT / "crates/hauksbee-ci/build.rs"), "-o", str(binary)],
-                check=True,
-            )
-            clean = subprocess.run(
-                [str(binary)],
-                env={**os.environ, "CARGO_MANIFEST_DIR": str(manifest)},
-                text=True,
-                capture_output=True,
-                check=True,
-            )
-            self.assertIn("cargo:rustc-env=GIT_HASH=", clean.stdout)
-            tracked.write_text("dirty\n")
-            dirty = subprocess.run(
-                [str(binary)],
-                env={**os.environ, "CARGO_MANIFEST_DIR": str(manifest)},
-                text=True,
-                capture_output=True,
-                check=True,
-            )
-            self.assertNotIn("cargo:rustc-env=GIT_HASH=", dirty.stdout)
-        for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
-            source = (ROOT / "crates" / crate / "build.rs").read_text()
-            for watched in ("../../crates", "../../vendor", "../../frontend/src", "../../integrations"):
-                self.assertIn(watched, source)
+            root = tmp / "hauksbee"
+            for directory in ("docs", "crates"):
+                (root / directory).mkdir(parents=True)
+                (root / directory / "tracked.txt").write_text("clean\n")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "clean"], check=True)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("HAUKSBEE_")}
+            for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
+                manifest = root / "crates" / crate
+                manifest.mkdir()
+                binary = tmp / crate
+                subprocess.run(["rustc", str(ROOT / "crates" / crate / "build.rs"), "-o", str(binary)], check=True)
+                for directory in ("docs", "crates"):
+                    for name in ("tracked.txt", "untracked.txt"):
+                        path = root / directory / name
+                        clean = subprocess.check_output(
+                            [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
+                        )
+                        self.assertIn("cargo:rustc-env=GIT_HASH=", clean, crate)
+                        for watched in ("crates", "vendor", "frontend/src", "integrations", "docs"):
+                            self.assertIn(f"cargo:rerun-if-changed=../../{watched}\n", clean)
+                        self.assertNotIn("cargo:rerun-if-changed=../../site\n", clean)
+                        path.write_text("dirty\n")
+                        dirty = subprocess.check_output(
+                            [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
+                        )
+                        self.assertNotIn("cargo:rustc-env=GIT_HASH=", dirty, (crate, directory, name))
+                        if name == "tracked.txt":
+                            path.write_text("clean\n")
+                        else:
+                            path.unlink()
 
     def test_cargo_rechecks_provenance_when_a_workspace_sibling_becomes_dirty(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp) / "hauksbee"
             crate = root / "crates/hauksbee-ci"
             (crate / "src").mkdir(parents=True)
-            (root / "docs").mkdir()
-            (root / ".gitignore").write_text(
-                "/target\n/crates/hauksbee-ci/target\n/crates/hauksbee-ci/Cargo.lock\n"
-            )
+            source = (ROOT / "crates/hauksbee-ci/build.rs").read_text()
+            # Missing declared inputs always rebuild, so materialise the watched
+            # release-tree shape; the retired site must not be among its inputs.
+            for relative in re.findall(r'"../../([^"\n]+)"', source):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if path.suffix or path.name in ("LICENSE", "NOTICE"):
+                    path.touch()
+                else:
+                    path.mkdir(exist_ok=True)
+            shutil.copy(ROOT / "rust-toolchain.toml", root / "rust-toolchain.toml")
+            (root / "Cargo.toml").write_text('[workspace]\nmembers=["crates/hauksbee-ci"]\nresolver="2"\n')
+            (root / ".gitignore").write_text("/Cargo.lock\n/target\n")
             (root / "docs/contract.md").write_text("clean\n")
-            shutil.copy(ROOT / "crates/hauksbee-ci/build.rs", crate / "build.rs")
+            (crate / "build.rs").write_text(source)
             (crate / "Cargo.toml").write_text(
                 '[package]\nname="probe"\nversion="0.0.0"\nedition="2021"\nbuild="build.rs"\n'
             )
@@ -221,20 +196,21 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             )
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-            subprocess.run(
-                ["git", "-C", str(root), "-c", "user.name=contract", "-c",
-                 "user.email=contract@example.invalid", "commit", "-qm", "clean"],
-                check=True,
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "clean"], check=True)
+            subprocess.run(["git", "-C", str(root), "pack-refs", "--all"], check=True)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("HAUKSBEE_")}
+            env.update(
+                CARGO_TARGET_DIR=str(Path(raw_tmp) / "target"),
+                CARGO_BUILD_BUILD_DIR=str(Path(raw_tmp) / "build"),
             )
-            manifest = crate / "Cargo.toml"
-            clean = subprocess.check_output(
-                ["cargo", "run", "--quiet", "--manifest-path", str(manifest)], text=True
-            ).strip()
-            self.assertRegex(clean, r"^[0-9a-f]{40}$")
+            command = ["cargo", "run", "--verbose", "--manifest-path", str(crate / "Cargo.toml")]
+            clean = subprocess.run(command, env=env, text=True, capture_output=True, check=True)
+            self.assertRegex(clean.stdout.strip(), r"^[0-9a-f]{40}$")
+            fresh = subprocess.run(command, env=env, text=True, capture_output=True, check=True)
+            self.assertEqual(fresh.stdout, clean.stdout)
+            self.assertIn("Fresh probe", fresh.stderr)
             (root / "docs/contract.md").write_text("dirty\n")
-            dirty = subprocess.check_output(
-                ["cargo", "run", "--quiet", "--manifest-path", str(manifest)], text=True
-            ).strip()
+            dirty = subprocess.check_output(command, env=env, text=True).strip()
             self.assertEqual(dirty, "none")
 
     def test_canonical_surface_manifest_exists(self) -> None:
@@ -277,6 +253,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
     def test_mirror_scope_matches_the_curated_release_tree(self) -> None:
         manifest = self.surface_manifest()
         development_only = {
+            "BETA.md",
+            "scripts/build-public-mirror.sh",
             "docs/dev-plans/launch-checklist.md",
             "docs/dev-plans/launch-gtm-strategy.md",
             "docs/dev-plans/linux-clean-room-report-2026-08-14.md",
@@ -1885,150 +1863,138 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("gh api repos/hauksbee-dev/hauksbee failed", result.stdout + result.stderr)
 
-    def run_privacy_phase(
+    def run_visibility_phase(
         self,
+        developer: str = "private",
+        mirror: str = "public",
         *,
-        developer_visibility: str = "private",
-        mirror_visibility: str = "private",
         armed: bool = False,
-        phase: str = "privacy",
-    ) -> tuple[subprocess.CompletedProcess[str], str]:
+        phase: str = "visibility",
+    ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
-            log = tmp / "gh.log"
-            mirror_state = tmp / "mirror.state"
-            developer_state = tmp / "developer.state"
-            immutable_state = tmp / "immutable.state"
-            mirror_state.write_text(mirror_visibility)
-            developer_state.write_text(developer_visibility)
-            immutable_state.write_text("false")
-            gh = tmp / "gh"
-            gh.write_text(
-                textwrap.dedent(
-                    """\
-                    #!/usr/bin/env bash
-                    set -eu
-                    printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
-                    if [ "$1" = api ]; then
-                      if [ "${2:-}" = --method ] && [ "${3:-}" = PUT ] \
-                        && [ "${4:-}" = repos/hauksbee-dev/hauksbee/immutable-releases ]; then
-                        printf '%s\\n' true > "$FAKE_IMMUTABLE_STATE"
-                        exit 0
-                      fi
-                      case "$2" in
-                        repos/ETM-Code/hauksbee-developer)
-                          visibility=$(cat "$FAKE_DEVELOPER_STATE")
-                          [ "$visibility" != missing ] || exit 1
-                          printf '%s\\n' "$visibility"
-                          ;;
-                        repos/hauksbee-dev/hauksbee)
-                          visibility=$(cat "$FAKE_MIRROR_STATE")
-                          [ "$visibility" != missing ] || exit 1
-                          printf '%s\\n' "$visibility"
-                          ;;
-                        repos/hauksbee-dev/hauksbee/immutable-releases)
-                          [ "$(cat "$FAKE_IMMUTABLE_STATE")" = true ] || exit 1
-                          printf '%s\\n' true
-                          ;;
-                        *) exit 64 ;;
-                      esac
-                    elif [ "$1 $2" = "repo create" ]; then
-                      printf '%s\\n' private > "$FAKE_MIRROR_STATE"
-                    elif [ "$1 $2" = "repo edit" ]; then
-                      case "$3" in
-                        ETM-Code/hauksbee-developer)
-                          printf '%s\\n' private > "$FAKE_DEVELOPER_STATE"
-                          ;;
-                        hauksbee-dev/hauksbee)
-                          printf '%s\\n' private > "$FAKE_MIRROR_STATE"
-                          ;;
-                        *) exit 64 ;;
-                      esac
-                    else
-                      exit 64
-                    fi
-                    """
-                )
+            scripts = tmp / "project/scripts"
+            scripts.mkdir(parents=True)
+            for source in (LAUNCHER, ROOT / "scripts/common.sh"):
+                shutil.copy(source, scripts / source.name)
+            (scripts.parent / "Cargo.toml").write_text('version = "0.0.0"\n')
+            log = tmp / "commands.log"
+            log.touch()
+            for name, value in (("developer", developer), ("mirror", mirror), ("immutable", "false")):
+                (tmp / name).write_text(value + "\n")
+            # No inherited credentials, shell startup hooks, or publishing tools.
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            for name in ("bash", "dirname", "grep", "sed"):
+                (bin_dir / name).symlink_to(shutil.which(name, path=os.defpath))
+            # A fixture-local function avoids spawning an interpreter per gh call.
+            common = scripts / "common.sh"
+            common.write_text(common.read_text() + "\ngh() {\n" + textwrap.dedent('''\
+                local repo="${2#repos/}" field=.visibility state value
+                printf 'gh %s\\n' "$*" >> "$FAKE_COMMAND_LOG"
+                if [ "$*" = 'api --method PUT repos/hauksbee-dev/hauksbee/immutable-releases' ]; then
+                  printf 'true\\n' > "$HOME/immutable"
+                  return 0
+                fi
+                [ "$1" != repo ] || repo="$3"
+                case "$repo" in
+                  ETM-Code/hauksbee-developer) state=developer ;;
+                  hauksbee-dev/hauksbee) state=mirror ;;
+                  hauksbee-dev/hauksbee/immutable-releases) state=immutable; field=.enabled ;;
+                  *) return 64 ;;
+                esac
+                if [ "$1" = api ] && [ "$#" = 4 ] && [ "$3" = --jq ] && [ "$4" = "$field" ]; then
+                  read -r value < "$HOME/$state"
+                  [ "$value" != missing ] || return 1
+                  printf '%s\\n' "$value"
+                elif [ "$1 $2" = 'repo create' ] && [ "$#" = 4 ] && [ "$state" = mirror ]; then
+                  case "$4" in
+                    --private|--public) printf '%s\\n' "${4#--}" > "$HOME/$state" ;;
+                    *) return 64 ;;
+                  esac
+                elif [ "$1 $2" = 'repo edit' ] && [ "$#" = 6 ] && [ "$field" = .visibility ]; then
+                  [ "$4" = --visibility ] && [ "$6" = --accept-visibility-change-consequences ] || return 64
+                  case "$5" in
+                    private|public) printf '%s\\n' "$5" > "$HOME/$state" ;;
+                    *) return 64 ;;
+                  esac
+                else
+                  return 64
+                fi
+            ''') + "}\n")
+            # Stop before the launcher's fixed /tmp logs, Cargo, or Git commands.
+            (scripts / "build-public-mirror.sh").write_text(
+                "printf 'builder %s\\n' \"$*\" >> \"$FAKE_COMMAND_LOG\"\nexit 73\n"
             )
-            gh.chmod(0o755)
-            env = os.environ.copy()
-            env.update(
-                {
-                    "PATH": f"{tmp}:{env['PATH']}",
-                    "FAKE_GH_LOG": str(log),
-                    "FAKE_MIRROR_STATE": str(mirror_state),
-                    "FAKE_DEVELOPER_STATE": str(developer_state),
-                    "FAKE_IMMUTABLE_STATE": str(immutable_state),
-                    "NO_COLOR": "1",
-                }
-            )
-            args = ["bash", str(LAUNCHER)]
-            if armed:
-                args.append("--arm")
-            args.extend(["--only", phase])
+            env = {
+                "PATH": str(bin_dir),
+                "HOME": str(tmp),
+                "NO_COLOR": "1",
+                "FAKE_COMMAND_LOG": str(log),
+            }
+            args = [shutil.which("bash", path=os.defpath), str(scripts / "make-public.sh"), "--only", phase]
             result = subprocess.run(
-                args,
-                cwd=ROOT,
+                args + (["--arm"] if armed else []),
+                cwd=scripts.parent,
                 env=env,
                 text=True,
                 capture_output=True,
                 check=False,
+                timeout=10,
             )
-            return result, log.read_text() if log.exists() else ""
+            calls = log.read_text().splitlines()
+            self.assertNotIn(str(ROOT), "\n".join(calls))
+            return result, calls
 
-    def test_private_repositories_are_left_private(self) -> None:
-        result, calls = self.run_privacy_phase()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("developer repository is private", result.stdout)
-        self.assertIn("release mirror is private", result.stdout)
-        self.assertNotIn("repo edit", calls)
-        self.assertNotIn("repo create", calls)
+    def test_visibility_policy_and_dry_run(self) -> None:
+        edit = "gh repo edit {} --visibility {} --accept-visibility-change-consequences"
+        enable = "gh api --method PUT repos/hauksbee-dev/hauksbee/immutable-releases"
+        cases = (
+            ("private", "public", []),
+            ("public", "public", [edit.format("ETM-Code/hauksbee-developer", "private")]),
+            ("private", "private", [edit.format("hauksbee-dev/hauksbee", "public")]),
+            ("private", "missing", ["gh repo create hauksbee-dev/hauksbee --public"]),
+            ("missing", "public", []),
+        )
+        for developer, mirror, changes in cases:
+            for armed in (False, True):
+                with self.subTest(developer=developer, mirror=mirror, armed=armed):
+                    result, calls = self.run_visibility_phase(developer, mirror, armed=armed)
+                    missing = developer == "missing"
+                    self.assertEqual(result.returncode, 1 if missing else 0, result.stderr)
+                    mutations = [c for c in calls if c.startswith("gh repo ") or c == enable]
+                    self.assertEqual(
+                        mutations, changes + [enable] if armed and not missing else []
+                    )
+                    self.assertFalse(any(c.startswith("builder ") for c in calls))
+                    if missing:
+                        self.assertIn("developer repository is missing", result.stderr)
+                    elif armed or not changes:
+                        self.assertIn("developer repository is private", result.stdout)
+                        self.assertIn("release mirror is public", result.stdout)
+                    if not armed and not missing:
+                        for command in changes + [enable]:
+                            self.assertIn("WOULD: " + command, result.stdout)
 
-    def test_absent_mirror_is_created_private_when_armed(self) -> None:
-        result, calls = self.run_privacy_phase(mirror_visibility="missing", armed=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("repo create hauksbee-dev/hauksbee --private", calls)
-        self.assertIn(
-            "api --method PUT repos/hauksbee-dev/hauksbee/immutable-releases",
-            calls,
-        )
-        self.assertNotIn("--visibility public", calls)
-
-    def test_public_repository_is_changed_to_private_never_the_reverse(self) -> None:
-        result, calls = self.run_privacy_phase(mirror_visibility="public", armed=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(
-            "repo edit hauksbee-dev/hauksbee --visibility private", calls
-        )
-        self.assertNotIn("--visibility public", calls)
-
-    def test_public_developer_repository_is_changed_to_private(self) -> None:
-        result, calls = self.run_privacy_phase(
-            developer_visibility="public", armed=True
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(
-            "repo edit ETM-Code/hauksbee-developer --visibility private", calls
-        )
-        self.assertNotIn("--visibility public", calls)
-
-    def test_missing_developer_repository_is_a_hard_failure(self) -> None:
-        result, calls = self.run_privacy_phase(developer_visibility="missing")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("developer repository", result.stderr)
-        self.assertNotIn("repo create ETM-Code/hauksbee-developer", calls)
-
-    def test_mirror_phase_refuses_a_public_push_target_before_building(self) -> None:
-        result, calls = self.run_privacy_phase(
-            mirror_visibility="public", armed=True, phase="mirror"
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("refusing to push", result.stderr)
-        self.assertEqual(
-            calls.strip(),
-            "api repos/hauksbee-dev/hauksbee --jq .visibility",
-            "the launcher must reject visibility before it rebuilds or pushes",
-        )
+    def test_mirror_visibility_is_checked_before_the_sentinel_builder(self) -> None:
+        dry_run, calls = self.run_visibility_phase(phase="mirror")
+        self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
+        self.assertEqual(calls, [])
+        self.assertIn("force-push to public hauksbee-dev/hauksbee", dry_run.stdout)
+        for mirror, code in (("private", 1), ("missing", 1), ("public", 73)):
+            with self.subTest(mirror=mirror):
+                result, calls = self.run_visibility_phase(mirror=mirror, armed=True, phase="mirror")
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                self.assertEqual(calls[0], "gh api repos/hauksbee-dev/hauksbee --jq .visibility")
+                self.assertEqual(len(calls), 2 if mirror == "public" else 1)
+                if mirror == "public":
+                    self.assertTrue(calls[1].startswith("builder --out "), calls)
+                    self.assertTrue(calls[1].endswith("/hauksbee-public-next"), calls)
+                else:
+                    self.assertIn(
+                        "refusing to push" if mirror == "private" else "missing or inaccessible",
+                        result.stderr,
+                    )
 
 
 if __name__ == "__main__":
