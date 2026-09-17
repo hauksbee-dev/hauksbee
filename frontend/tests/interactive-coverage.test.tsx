@@ -1,7 +1,7 @@
-import { expect, test } from 'bun:test'
+import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { chromium } from 'playwright'
+import { chromium, type Browser, type Page } from 'playwright'
 import type { BoardSession } from '../src/hooks/useBoardSession'
 import type { WebReport } from '../src/types/report'
 import { reportVerdictHeadline, reportVerdictTone } from '../src/lib/report-view'
@@ -11,6 +11,16 @@ import { visibleImportMarkers } from '../src/lib/board-renderer'
 // without it skips the tests that need it rather than failing on a missing file.
 const FRONTDOOR_REPORT = new URL('../../demo/sessions/blinky/report-nominal.json', import.meta.url)
 const hasFrontdoorReport = existsSync(FRONTDOOR_REPORT)
+
+// Cold browser and first-page setup do not belong in the 5s DOM assertion budget.
+let browser: Browser | undefined
+let page: Page
+beforeAll(async () => {
+  if (!hasFrontdoorReport) return
+  browser = await chromium.launch({ headless: true })
+  page = await browser.newPage()
+}, 30_000)
+afterAll(async () => { await browser?.close() })
 
 function realFrontdoorReport(): WebReport {
   const startup = JSON.parse(readFileSync(FRONTDOOR_REPORT, 'utf8')) as { report: WebReport }
@@ -107,16 +117,14 @@ test.skipIf(!hasFrontdoorReport)('the browser renders every structured timing qu
   expect(html).toContain('does not prove powered behavior')
   expect(html).toContain('Set up checks')
 
-  const browser = await chromium.launch({ headless: true })
-  try {
-    const page = await browser.newPage()
-    await page.setContent(html)
-    expect(await page.getByText('TIMING INVALID').count()).toBe(0)
-    expect(await page.getByText(/PWL replay refused on net \/CLK/).count()).toBe(1)
-    expect(await page.getByText('Fallback-qualified windows').count()).toBe(1)
-  } finally {
-    await browser.close()
-  }
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+  await page.setContent(html)
+  expect(await page.getByText('TIMING INVALID').count()).toBe(0)
+  expect(await page.getByText(/PWL replay refused on net \/CLK/).count()).toBe(1)
+  expect(await page.getByText('Fallback-qualified windows').count()).toBe(1)
+  expect(errors).toEqual([])
 })
 
 test.skipIf(!hasFrontdoorReport)('typed co-sim invalidity and faults cannot retain a green verdict card', () => {
