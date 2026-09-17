@@ -206,6 +206,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             env.update(
                 CARGO_TARGET_DIR=str(Path(raw_tmp) / "target"),
                 CARGO_BUILD_BUILD_DIR=str(Path(raw_tmp) / "build"),
+                CARGO_TERM_COLOR="never",  # CI forces colour; assertions parse plain Cargo output.
             )
             command = ["cargo", "run", "--verbose", "--manifest-path", str(crate / "Cargo.toml")]
             clean = subprocess.run(command, env=env, text=True, capture_output=True, check=True)
