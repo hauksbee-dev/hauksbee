@@ -5,14 +5,12 @@
 //! ngspice onto our timebase, and compares each declared probe against its
 //! declared PER-QUANTITY tolerance (a diode forward drop wants mV; an RC tail
 //! only percent, one global bar cannot serve both). Each deck emits a per-deck
-//! pass/fail with its worst-case error and where it occurred, and the whole
-//! corpus regenerates `docs/spice-compat/results.md`.
+//! pass/fail with its worst-case error and where it occurred. Results go under
+//! `target/oracle`; set `HAUKSBEE_NGSPICE_REPORT` to explicitly refresh a document.
+//! Correctness-oracle output is content-addressed, not recomputed unchanged.
 //!
-//! ngspice lookup: `$NGSPICE`, then `PATH`, then the known per-OS install
-//! locations, so the harness runs on any machine with ngspice, not just the
-//! one Mac whose Homebrew path was once hardcoded. If ngspice is not found the
-//! harness SKIPS (contributors without it are never blocked); it never fails
-//! for want of the oracle.
+//! ngspice lookup: `$NGSPICE`, then `PATH`, then known per-OS locations.
+//! Missing ngspice skips locally; `HAUKSBEE_REQUIRE_NGSPICE=1` makes it fatal.
 
 use hauksbee_ir::{Directives, SpiceLoader};
 use hauksbee_solve::{
@@ -21,91 +19,10 @@ use hauksbee_solve::{
 };
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-// --- ngspice discovery -------------------------------------------------------
-
-/// Locate the ngspice binary: `$NGSPICE`, then `PATH`, then per-OS defaults.
-fn find_ngspice() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("NGSPICE") {
-        let pb = PathBuf::from(&p);
-        if pb.is_file() {
-            return Some(pb);
-        }
-    }
-    let exe = if cfg!(windows) {
-        "ngspice.exe"
-    } else {
-        "ngspice"
-    };
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let cand = dir.join(exe);
-            if cand.is_file() {
-                return Some(cand);
-            }
-        }
-    }
-    for p in [
-        "/opt/homebrew/bin/ngspice",
-        "/usr/local/bin/ngspice",
-        "/usr/bin/ngspice",
-        "/opt/local/bin/ngspice",
-        "C:\\Program Files\\ngspice\\bin\\ngspice_con.exe",
-        "C:\\Program Files\\ngspice\\bin\\ngspice.exe",
-    ] {
-        let pb = PathBuf::from(p);
-        if pb.is_file() {
-            return Some(pb);
-        }
-    }
-    None
-}
-
-/// The ngspice version line (e.g. `ngspice-46`), for the results table.
-fn ngspice_version(bin: &Path) -> String {
-    let out = match Command::new(bin).arg("--version").output() {
-        Ok(o) => o,
-        Err(_) => return "unknown".to_string(),
-    };
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    for line in text.lines() {
-        if let Some(pos) = line.find("ngspice-") {
-            let tail = &line[pos..];
-            let tok: String = tail
-                .chars()
-                .take_while(|c| !c.is_whitespace() && *c != ':')
-                .collect();
-            return tok;
-        }
-    }
-    "unknown".to_string()
-}
-
-/// Run a netlist string through `ngspice -b` and return its stdout.
-fn run_ngspice(bin: &Path, netlist: &str) -> Option<String> {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    netlist.hash(&mut h);
-    let path = std::env::temp_dir().join(format!(
-        "hauksbee_xcheck_{}_{:016x}.cir",
-        std::process::id(),
-        h.finish()
-    ));
-    std::fs::File::create(&path)
-        .ok()?
-        .write_all(netlist.as_bytes())
-        .ok()?;
-    let out = Command::new(bin).arg("-b").arg(&path).output().ok()?;
-    let _ = std::fs::remove_file(&path);
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
-}
+#[path = "support/oracle.rs"]
+mod oracle;
+use oracle::{find_ngspice, ngspice_version, parse_indexed_table, parse_op_listing, CachedOracle};
 
 // --- ngspice output parsing --------------------------------------------------
 
@@ -117,169 +34,22 @@ struct NgSeries {
 
 /// Parse the `Index time value` block ngspice prints for `.print tran`.
 fn parse_tran_table(text: &str) -> Option<NgSeries> {
-    let mut t = Vec::new();
-    let mut v = Vec::new();
-    let mut in_table = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("Index") && trimmed.contains("time") {
-            in_table = true;
-            continue;
-        }
-        if !in_table || trimmed.starts_with("---") || trimmed.is_empty() {
-            continue;
-        }
-        let cols: Vec<&str> = trimmed.split_whitespace().collect();
-        if cols.len() >= 3 {
-            if let (Ok(time), Ok(val)) = (cols[1].parse::<f64>(), cols[2].parse::<f64>()) {
-                t.push(time);
-                v.push(val);
-            }
-        }
-    }
-    if t.is_empty() {
-        None
-    } else {
-        Some(NgSeries { t, v })
-    }
+    let (t, v): (Vec<_>, Vec<_>) = oracle::parse_tran_table(text).into_iter().unzip();
+    (!t.is_empty()).then_some(NgSeries { t, v })
 }
 
-/// A parsed indexed table with any number of value columns: `x` is the sweep
-/// axis (column 1, time / v-sweep / frequency) and `cols[k]` is value column
-/// `k` (column `k + 2`). Serves `.print dc` (one value column) and `.print ac`
-/// (a `vm` and a `vp` column requested side by side).
-struct NgTable {
-    x: Vec<f64>,
-    cols: Vec<Vec<f64>>,
-}
-
-/// Parse the `Index <axis> v1 [v2 ...]` block ngspice prints for `.print dc/ac`.
-fn parse_indexed_table(text: &str) -> Option<NgTable> {
-    let mut x = Vec::new();
-    let mut cols: Vec<Vec<f64>> = Vec::new();
-    let mut in_table = false;
-    let mut ncol = 0usize;
-    for line in text.lines() {
-        let t = line.trim();
-        if t.starts_with("Index") {
-            in_table = true;
-            continue;
-        }
-        if !in_table || t.starts_with("---") || t.is_empty() {
-            continue;
-        }
-        let c: Vec<&str> = t.split_whitespace().collect();
-        // A data row is `Index xval v1 [v2 ...]`; anything else ends the table.
-        if c.len() < 3 {
-            if !x.is_empty() {
-                break;
-            }
-            continue;
-        }
-        let Ok(xv) = c[1].parse::<f64>() else {
-            if !x.is_empty() {
-                break;
-            }
-            continue;
-        };
-        let vals: Vec<f64> = c[2..]
-            .iter()
-            .filter_map(|s| s.parse::<f64>().ok())
-            .collect();
-        if cols.is_empty() {
-            ncol = vals.len();
-            cols = vec![Vec::new(); ncol];
-        }
-        if vals.len() != ncol || ncol == 0 {
-            continue;
-        }
-        x.push(xv);
-        for (i, v) in vals.iter().enumerate() {
-            cols[i].push(*v);
-        }
-    }
-    if x.is_empty() {
-        None
-    } else {
-        Some(NgTable { x, cols })
-    }
-}
-
-/// Parse the `.op` listing ngspice prints in batch mode: a node-voltage block
-/// (`name  value`) and a source-current block (`vname#branch  value`).
-fn parse_op_listing(text: &str) -> (HashMap<String, f64>, HashMap<String, f64>) {
-    let mut nodes = HashMap::new();
-    let mut sources = HashMap::new();
-    #[derive(PartialEq)]
-    enum State {
-        None,
-        Nodes,
-        Sources,
-    }
-    let mut state = State::None;
-    for line in text.lines() {
-        let t = line.trim();
-        if t.contains("Node") && t.contains("Voltage") {
-            state = State::Nodes;
-            continue;
-        }
-        if t.contains("Source") && t.contains("Current") {
-            state = State::Sources;
-            continue;
-        }
-        // A models block (`Resistor models`, `Diode models`, ...) ends the data.
-        if t.contains("models") {
-            state = State::None;
-            continue;
-        }
-        let cols: Vec<&str> = t.split_whitespace().collect();
-        if cols.len() != 2 {
-            continue;
-        }
-        let Ok(val) = cols[1].parse::<f64>() else {
-            continue;
-        };
-        match state {
-            State::Nodes => {
-                nodes.insert(cols[0].to_ascii_lowercase(), val);
-            }
-            State::Sources => {
-                let key = cols[0]
-                    .to_ascii_lowercase()
-                    .trim_end_matches("#branch")
-                    .to_string();
-                sources.insert(key, val);
-            }
-            State::None => {}
-        }
-    }
-    (nodes, sources)
-}
-
-/// Linear interpolation of an ngspice waveform onto an arbitrary time.
+/// Linear interpolation, clamped at the sampled endpoints.
 fn interp(res: &NgSeries, time: f64) -> f64 {
-    if time <= res.t[0] {
-        return res.v[0];
+    let hi = res.t.partition_point(|&t| t <= time);
+    if hi == 0 || hi == res.t.len() {
+        return res.v[hi.saturating_sub(1)];
     }
-    let last = res.t.len() - 1;
-    if time >= res.t[last] {
-        return res.v[last];
-    }
-    let (mut lo, mut hi) = (0usize, last);
-    while hi - lo > 1 {
-        let mid = (lo + hi) / 2;
-        if res.t[mid] <= time {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
+    let lo = hi - 1;
     let span = res.t[hi] - res.t[lo];
     if span == 0.0 {
         return res.v[hi];
     }
-    let frac = (time - res.t[lo]) / span;
-    res.v[lo] + (res.v[hi] - res.v[lo]) * frac
+    res.v[lo] + (res.v[hi] - res.v[lo]) * (time - res.t[lo]) / span
 }
 
 // --- deck / expectation model ------------------------------------------------
@@ -319,14 +89,9 @@ struct ProbeExpect {
 /// One closed-form expectation: at sweep point `at` (seconds for `tran`, volts for
 /// `dc`, hertz for `ac`), the probe must equal `value`.
 ///
-/// An analytic expectation outranks the oracle wherever one exists. ngspice is a
-/// second implementation, not a definition, and the synapse investigation showed
-/// what that costs: ngspice does not bisect to a switch threshold, so on its
-/// default grid it integrated a whole straddling step with the relay already
-/// closed and reported a membrane 87.5 mV from the truth. Refining its own grid
-/// moved it 10x toward our answer. A deck that can state its own answer in closed
-/// form should assert against that, and use ngspice only to catch what the closed
-/// form does not cover.
+/// Analytic expectations outrank a second implementation: the synapse oracle's
+/// switch-straddling timestep caused an 87.5 mV error; refining its grid improved
+/// it 10x. These are model-equation checks, not physical measurements.
 #[derive(Deserialize)]
 struct AnalyticPoint {
     /// Sweep coordinate: seconds (`tran`), the swept source value (`dc`), hertz
@@ -346,32 +111,13 @@ struct AnalyticPoint {
     note: String,
 }
 
-/// How far a declared tolerance may sit above the error actually measured before
-/// the harness calls it too loose to be a gate.
-///
-/// A bound far above the real error is not caution, it is an absence of coverage:
-/// accuracy can degrade by orders of magnitude underneath it and the suite stays
-/// green. This corpus was carrying bounds up to 250,000x the measured error
-/// (`schottky_1n5817_two_points` at 2.0e-3 against 8.0e-9), which is a gate that
-/// cannot fail for any reason short of total breakage.
-///
-/// 50x is deliberately generous. The legitimate reason for headroom is that the
-/// oracle is not bit-reproducible across platforms and versions: a different
-/// ngspice build can make different adaptive-timestep decisions, and a transient
-/// probe compared through interpolation moves with them. 50x covers that with
-/// room to spare while still failing a real regression. A probe that genuinely
-/// needs more states `loose_reason` and says why, which is a claim in the deck a
-/// reader can check rather than a silently wide number.
+/// Maximum tolerance/error ratio: generous to adaptive-grid and platform changes,
+/// but not the historical 250,000x headroom that hid regressions. Probes needing
+/// more must justify their bound with `loose_reason`.
 const MAX_HEADROOM: f64 = 50.0;
 
-/// Floor under the headroom rule, below which a tolerance is left alone.
-///
-/// Some probes agree to floating-point noise (`resistor_divider V(in)` is exactly
-/// 0.0, `param_divider` is 7.5e-10). Scaling 50x off a number that small would
-/// demand a bound tighter than the difference between two correct answers computed
-/// in different orders, so the rule stops at 1e-6 relative: five orders of
-/// magnitude below any tolerance a physical claim would use, and far above
-/// double-precision assembly-order noise.
+/// Do not tighten below 1e-6 relative just because solvers agree to rounding noise
+/// (e.g. exact divider V(in), or 7.5e-10 error for param_divider).
 const HEADROOM_FLOOR: f64 = 1e-6;
 
 /// Is this probe's tolerance tight enough to be a gate? `None` when it is (or is
@@ -451,43 +197,6 @@ fn opts_from_directives(directives: &Directives) -> SolverOptions {
     opts
 }
 
-/// Rewrite a deck for a single-probe ngspice transient run: drop the deck's own
-/// `.print`/`.plot` cards and inject exactly one `.print tran <expr>` so the
-/// output is a clean three-column `Index time value` table.
-fn deck_for_ngspice_tran(orig: &str, probe_expr: &str) -> String {
-    let mut out = String::new();
-    let mut injected = false;
-    for line in orig.lines() {
-        let l = line.trim_start().to_ascii_lowercase();
-        if l.starts_with(".print") || l.starts_with(".plot") {
-            continue;
-        }
-        if l.starts_with(".end") && !injected {
-            out.push_str(&format!(".print tran {probe_expr}\n"));
-            injected = true;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    if !injected {
-        out.push_str(&format!(".print tran {probe_expr}\n.end\n"));
-    }
-    out
-}
-
-/// Rewrite a deck for a single-probe ngspice DC-sweep run: drop the deck's
-/// `.print`/`.plot` cards and inject one `.print dc <expr>`.
-fn deck_for_ngspice_dc(orig: &str, probe_expr: &str) -> String {
-    rewrite_with_print(orig, &format!(".print dc {probe_expr}"))
-}
-
-/// Rewrite a deck for a single-node ngspice AC run: drop the deck's own
-/// `.print`/`.plot` cards and inject `.print ac vm(<node>) vp(<node>)` so the
-/// output is a four-column `Index frequency vm vp` table (phase in radians).
-fn deck_for_ngspice_ac(orig: &str, node: &str) -> String {
-    rewrite_with_print(orig, &format!(".print ac vm({node}) vp({node})"))
-}
-
 /// Shared body of the ngspice deck rewriters: strip `.print`/`.plot`, then splice
 /// `print_card` in just before `.end`.
 fn rewrite_with_print(orig: &str, print_card: &str) -> String {
@@ -498,7 +207,7 @@ fn rewrite_with_print(orig: &str, print_card: &str) -> String {
         if l.starts_with(".print") || l.starts_with(".plot") {
             continue;
         }
-        if l.starts_with(".end") && !injected {
+        if l.split_whitespace().next() == Some(".end") && !injected {
             out.push_str(print_card);
             out.push('\n');
             injected = true;
@@ -532,53 +241,45 @@ fn worst_tran_error(
     } else {
         1e-9
     });
-    let mut worst = 0.0f64;
-    let mut at = 0.0f64;
-    for (&t, &ov) in ours_t.iter().zip(ours_v) {
-        if t < skip_initial {
-            continue;
-        }
-        let nv = interp(ng, t);
-        let e = (ov - nv).abs() / nv.abs().max(floor);
-        if e > worst {
-            worst = e;
-            at = t;
-        }
-    }
-    (worst, at)
+    worst_error(ours_t, ours_v, ng, skip_initial, |ours, want| {
+        (ours - want).abs() / want.abs().max(floor)
+    })
 }
 
 /// Worst relative error of `ours(xs)` vs ngspice interpolated onto `xs`, with an
 /// absolute floor so a near-zero magnitude does not blow the ratio up. Used for
 /// DC-sweep and AC-magnitude columns. Returns `(worst, at_x)`.
 fn worst_rel_error(xs: &[f64], ours: &[f64], ng: &NgSeries, floor: f64) -> (f64, f64) {
-    let mut worst = 0.0f64;
-    let mut at = xs.first().copied().unwrap_or(0.0);
-    for (&x, &ov) in xs.iter().zip(ours) {
-        let nv = interp(ng, x);
-        let e = (ov - nv).abs() / nv.abs().max(floor);
-        if e > worst {
-            worst = e;
-            at = x;
-        }
-    }
-    (worst, at)
+    worst_error(xs, ours, ng, f64::NEG_INFINITY, |ours, want| {
+        (ours - want).abs() / want.abs().max(floor)
+    })
 }
 
 /// Worst ABSOLUTE error of `ours(xs)` vs ngspice interpolated onto `xs`. Used for
 /// AC phase (degrees), where an absolute tolerance is the honest bar.
 fn worst_abs_error(xs: &[f64], ours: &[f64], ng: &NgSeries) -> (f64, f64) {
-    let mut worst = 0.0f64;
-    let mut at = xs.first().copied().unwrap_or(0.0);
-    for (&x, &ov) in xs.iter().zip(ours) {
-        let nv = interp(ng, x);
-        let e = (ov - nv).abs();
-        if e > worst {
-            worst = e;
-            at = x;
-        }
-    }
-    (worst, at)
+    worst_error(xs, ours, ng, f64::NEG_INFINITY, |ours, want| {
+        (ours - want).abs()
+    })
+}
+
+fn worst_error(
+    xs: &[f64],
+    ours: &[f64],
+    ng: &NgSeries,
+    skip: f64,
+    error: impl Fn(f64, f64) -> f64,
+) -> (f64, f64) {
+    assert_eq!(xs.len(), ours.len(), "comparison axis/value lengths");
+    xs.iter()
+        .zip(ours)
+        .filter(|(x, _)| **x >= skip)
+        .map(|(&x, &value)| {
+            let err = error(value, interp(ng, x));
+            (if err.is_finite() { err } else { f64::INFINITY }, x)
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .unwrap_or((f64::INFINITY, 0.0))
 }
 
 /// Check every closed-form expectation on one probe, appending a result row each.
@@ -618,22 +319,14 @@ fn check_analytic(
             at: format!("{axis}={:.3e}", a.at),
             reltol: a.reltol,
             pass: err < a.reltol,
-            // The headroom rule does not apply to a closed form. There is no
-            // second implementation whose grid could move, so the only thing
-            // between the bound and the measurement is the deck author's honesty
-            // about the model's own accuracy, and a bound chosen to match the
-            // physics is not evidence of a hole.
+            // Closed-form bounds are justified by model accuracy, not oracle drift.
             too_loose: None,
         });
     }
 }
 
 /// Look up a probe's value in a parsed `.op` listing.
-fn op_value(
-    probe: &Probe,
-    nodes: &HashMap<String, f64>,
-    sources: &HashMap<String, f64>,
-) -> Option<f64> {
+fn op_value(probe: &Probe, nodes: &HashMap<String, f64>) -> Option<f64> {
     let node = |n: &str| -> Option<f64> {
         if n == "0" || n.eq_ignore_ascii_case("gnd") {
             Some(0.0)
@@ -644,7 +337,9 @@ fn op_value(
     match probe {
         Probe::NodeVoltage(a) => node(a),
         Probe::NodeDiff(a, b) => Some(node(a)? - node(b)?),
-        Probe::BranchCurrent(d) => sources.get(&d.to_ascii_lowercase()).copied(),
+        Probe::BranchCurrent(d) => nodes
+            .get(&format!("{}#branch", d.to_ascii_lowercase()))
+            .copied(),
     }
 }
 
@@ -654,9 +349,8 @@ fn decks_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/decks")
 }
 
-/// Run one deck end-to-end. Returns `None` only on an ngspice-side failure the
-/// harness cannot attribute (missing output), which the caller treats as skip.
-fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
+/// Run one deck end-to-end; missing, invalid or failed oracle output is fatal.
+fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
     let name = cir_path.file_stem().unwrap().to_string_lossy().to_string();
     let deck = std::fs::read_to_string(cir_path).expect("read deck");
     let expect_path = cir_path.with_extension("expect.toml");
@@ -665,8 +359,8 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
     let expect: Expect = toml::from_str(&expect_text)
         .unwrap_or_else(|e| panic!("parse {}: {e}", expect_path.display()));
 
-    let (circuit, directives) =
-        SpiceLoader::load_with_directives(&deck).unwrap_or_else(|e| panic!("load {name}: {e}"));
+    let (circuit, directives) = SpiceLoader::load_file_with_directives(cir_path)
+        .unwrap_or_else(|e| panic!("load {name}: {e}"));
     let opts = opts_from_directives(&directives);
 
     let probes: Vec<Probe> = expect
@@ -681,11 +375,11 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
         "op" => {
             let ours: SimOutput = run_op(&circuit, &opts, &probes)
                 .unwrap_or_else(|e| panic!("{name}: hauksbee op failed: {e}"));
-            let ng_text = run_ngspice(bin, &deck).expect("ngspice op run");
-            let (nodes, sources) = parse_op_listing(&ng_text);
+            let ng_text = oracle.run(&deck).expect("ngspice op run");
+            let nodes = parse_op_listing(&ng_text).expect("finite ngspice op listing");
             for (pe, pr) in expect.probe.iter().zip(&probes) {
                 let ours_val = ours.column(&pr.label()).unwrap()[0];
-                let ng_val = op_value(pr, &nodes, &sources).unwrap_or_else(|| {
+                let ng_val = op_value(pr, &nodes).unwrap_or_else(|| {
                     panic!("{name}: ngspice op listing has no value for {}", pr.label())
                 });
                 let floor = pe.abstol.unwrap_or(1e-9);
@@ -709,8 +403,9 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                 .unwrap_or_else(|e| panic!("{name}: hauksbee tran failed: {e}"));
             let ours_t = ours.time.clone().unwrap();
             for (pe, pr) in expect.probe.iter().zip(&probes) {
-                let ng_deck = deck_for_ngspice_tran(&deck, &pr.label());
-                let ng = run_ngspice(bin, &ng_deck)
+                let ng_deck = rewrite_with_print(&deck, &format!(".print tran {}", pr.label()));
+                let ng = oracle
+                    .run(&ng_deck)
                     .and_then(|txt| parse_tran_table(&txt))
                     .unwrap_or_else(|| panic!("{name}: no ngspice table for {}", pr.label()));
                 let ours_v = ours.column(&pr.label()).unwrap();
@@ -743,8 +438,9 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
             // Column 0 of every row is the swept value (the sweep axis).
             let ours_x: Vec<f64> = ours.rows.iter().map(|r| r[0]).collect();
             for (pe, pr) in expect.probe.iter().zip(&probes) {
-                let ng_deck = deck_for_ngspice_dc(&deck, &pr.label());
-                let tbl = run_ngspice(bin, &ng_deck)
+                let ng_deck = rewrite_with_print(&deck, &format!(".print dc {}", pr.label()));
+                let tbl = oracle
+                    .run(&ng_deck)
                     .and_then(|txt| parse_indexed_table(&txt))
                     .unwrap_or_else(|| panic!("{name}: no ngspice dc table for {}", pr.label()));
                 let ng = NgSeries {
@@ -784,8 +480,10 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                         other
                     ),
                 };
-                let ng_deck = deck_for_ngspice_ac(&deck, &node);
-                let tbl = run_ngspice(bin, &ng_deck)
+                let ng_deck =
+                    rewrite_with_print(&deck, &format!(".print ac vm({node}) vp({node})"));
+                let tbl = oracle
+                    .run(&ng_deck)
                     .and_then(|txt| parse_indexed_table(&txt))
                     .unwrap_or_else(|| panic!("{name}: no ngspice ac table for {}", pr.label()));
                 assert!(
@@ -862,25 +560,16 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
     }
 }
 
-/// Write the published results table. Regenerated by the corpus test so the
-/// numbers can never go stale.
+/// Write current measurements without modifying tracked documentation by default.
 fn write_results_md(results: &[DeckResult], ng_version: &str) {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .to_path_buf();
-    let dir = repo_root.join("docs/spice-compat");
-    std::fs::create_dir_all(&dir).expect("mkdir docs/spice-compat");
-    let path = dir.join("results.md");
+    let path = oracle::output_path("HAUKSBEE_NGSPICE_REPORT", "spice-compat-results.md");
 
     let mut s = String::new();
     s.push_str("# SPICE compatibility: ngspice cross-check results\n\n");
     s.push_str(
-        // The prose here is the shipped prose: this function rewrites the whole
-        // file, so an STE edit made in results.md alone gets reverted the next
-        // time the test runs with ngspice present.
-        "Generated by `cargo test -p hauksbee-solve --test ngspice` (do not hand-edit).\n\
+        // Keep the generated report and explicit documentation refresh identical.
+        "Generated by `cargo nextest run -p hauksbee-solve --test it -E 'test(ngspice_corpus)'` (do not hand-edit).\n\
+         Set `HAUKSBEE_NGSPICE_REPORT` to refresh this document explicitly.\n\
          The test runs each deck in `crates/hauksbee-solve/tests/decks/` through both\n\
          ngspice `-b` and the hauksbee solver, then compares the worst-case error per\n\
          probe against the per-quantity tolerance declared in that deck's\n\
@@ -910,10 +599,7 @@ fn write_results_md(results: &[DeckResult], ng_version: &str) {
         for (i, q) in d.quantities.iter().enumerate() {
             let deck_cell = if i == 0 { d.name.as_str() } else { "" };
             let analysis_cell = if i == 0 { d.analysis.as_str() } else { "" };
-            // Headroom is how much slack the bound has over the error actually
-            // measured. It is published because it is the number that says whether
-            // a green row means anything: a bound 1000x above the measurement
-            // cannot fail, and a reader deserves to see that.
+            // Publish the tolerance/error ratio so readers can judge sensitivity.
             let headroom = if q.worst_err > 0.0 {
                 format!("{:.0}x", q.reltol / q.worst_err)
             } else {
@@ -940,6 +626,37 @@ fn write_results_md(results: &[DeckResult], ng_version: &str) {
     s.push('\n');
     std::fs::write(&path, s).expect("write results.md");
     eprintln!("wrote {}", path.display());
+}
+
+#[test]
+fn mos_on_resistance_bound_rejects_lost_series_resistance() {
+    let deck = include_str!("decks/mos_rds_on.cir");
+    let expect: Expect = toml::from_str(include_str!("decks/mos_rds_on.expect.toml")).unwrap();
+    let point = &expect.probe[0].analytic[0];
+    for (series, passes) in [("RD=0.05 RS=0.05", true), ("RD=0 RS=0", false)] {
+        let (circuit, directives) =
+            SpiceLoader::load_with_directives(&deck.replace("RD=0.05 RS=0.05", series)).unwrap();
+        let output = run_dc(
+            &circuit,
+            &opts_from_directives(&directives),
+            directives.dc.as_ref().unwrap(),
+            &[Probe::parse("V(d)").unwrap()],
+        )
+        .unwrap();
+        let value = *output.column("V(d)").unwrap().last().unwrap();
+        let error = (value - point.value).abs() / point.value;
+        assert_eq!(error < point.reltol, passes, "{series}: error={error}");
+        assert_eq!(
+            error < expect.probe[0].reltol,
+            passes,
+            "oracle bound: {series}"
+        );
+    }
+    for analysis in ["tran", "dc", "ac"] {
+        let print = format!(".print {analysis} V(out)");
+        let rewritten = rewrite_with_print("title\n.subckt x a b\n.ends x\n.end\n", &print);
+        assert!(rewritten.ends_with(&format!(".ends x\n{print}\n.end\n")));
+    }
 }
 
 #[test]
@@ -972,9 +689,10 @@ fn ngspice_corpus() {
         decks_dir().display()
     );
 
+    let oracle = CachedOracle::new(&bin, &decks_dir());
     let mut results = Vec::new();
     for cir in &cirs {
-        let r = run_deck(&bin, cir);
+        let r = run_deck(&oracle, cir);
         for q in &r.quantities {
             eprintln!(
                 "[{}] {} {}  worst={:.3e}  tol={:.1e}  {}  ({})",
@@ -990,8 +708,7 @@ fn ngspice_corpus() {
         results.push(r);
     }
 
-    // Always regenerate the published table (with real numbers, failures marked)
-    // before asserting, so the doc reflects this exact run.
+    // Preserve measurements, including failures, before asserting.
     write_results_md(&results, &version);
 
     let failed: Vec<&DeckResult> = results.iter().filter(|d| !d.passed()).collect();
@@ -1017,11 +734,7 @@ fn ngspice_corpus() {
         loose.join("\n  ")
     );
 
-    // An expectation must not carry a hardcoded oracle version in its prose. The
-    // corpus was claiming "vs ngspice-46" in seven decks while the oracle on the
-    // machine was 45.2, so the accuracy suite's own documentation was stating a
-    // measurement that had not been made. The version belongs in the generated
-    // table, which records the binary that actually ran, and nowhere else.
+    // Only the generated report may name the measured oracle's version.
     let mut stale = Vec::new();
     let ver_pat = regex_lite_ngspice_version();
     for cir in &cirs {

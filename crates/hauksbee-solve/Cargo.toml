@@ -26,6 +26,8 @@ rayon = { workspace = true }
 [dev-dependencies]
 num-complex = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.11"
+tempfile = { workspace = true }
 # The ngspice differential harness reads a per-deck `expect.toml` (per-quantity
 # tolerances). `toml` is already in the lock (transitive); pin it here for the
 # test binary only.

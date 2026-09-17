@@ -6,6 +6,9 @@
 
 use std::fmt;
 
+pub use hauksbee_engine::commands::common::cap_context_width;
+use hauksbee_engine::reports::cosim::levenshtein;
+
 /// An error loading or validating a spec.
 #[derive(Debug)]
 pub enum SpecError {
@@ -235,55 +238,30 @@ pub fn did_you_mean_hint(target: &str, options: &[&str]) -> String {
     }
 }
 
-/// Width-cap every line of an error message that quotes file content (the
-/// TOML parser's caret-annotated snippet). A machine-written input can be one
-/// enormous line, and quoting it whole buries the actual error; anything past
-/// the cap is elided with a marker. Lines within the cap pass through intact.
-pub fn cap_context_width(msg: &str) -> String {
-    const MAX: usize = 200;
-    msg.lines()
-        .map(|line| {
-            if line.chars().count() <= MAX {
-                line.to_string()
-            } else {
-                let head: String = line.chars().take(MAX).collect();
-                format!("{head} ...(line truncated)")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Classic Levenshtein edit distance.
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let (n, m) = (a.len(), b.len());
-    if n == 0 {
-        return m;
-    }
-    if m == 0 {
-        return n;
-    }
-    let mut prev: Vec<usize> = (0..=m).collect();
-    let mut cur = vec![0usize; m + 1];
-    for i in 1..=n {
-        cur[0] = i;
-        for j in 1..=m {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[m]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn shared_diagnostics_preserve_unicode_and_boundaries() {
+        assert_eq!(cap_context_width(""), "");
+        assert_eq!(cap_context_width("µ\r\n\r\nΩ\n"), "µ\n\nΩ");
+        for width in [199, 200] {
+            let line = "界".repeat(width);
+            assert_eq!(cap_context_width(&line), line);
+        }
+        let capped = "界".repeat(200);
+        assert_eq!(
+            cap_context_width(&format!("{capped}x\nshort")),
+            format!("{capped} ...(line truncated)\nshort")
+        );
+        assert_eq!(levenshtein("", "µΩ"), 2);
+        assert_eq!(levenshtein("µΩ", ""), 2);
+        assert_eq!(did_you_mean("é", &["e"]).as_deref(), Some("e"));
     }
 
     #[test]
