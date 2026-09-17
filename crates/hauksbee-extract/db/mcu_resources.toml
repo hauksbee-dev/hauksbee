@@ -92,8 +92,8 @@ lib_re   = "(?i)(:RP2040_PLATFORM$|:RP_pico2040$|MCU_RaspberryPi:Pico|RaspberryP
 # ===========================================================================
 # RP2040 as the bare QFN-56 chip (e.g. the official RP2040-minimal KiCad board).
 # Here the GPIO function lands on the chip pad whose number is the QFN pin, so
-# the pad->GPIO map is the datasheet's pin table (RP2040 datasheet Table 2,
-# "Pin Locations", QFN-56). Same PWM (n>>1)&7 / A|B rule.
+# the pad->GPIO map follows RP2040 datasheet build 3184e62-clean (2025-02-20),
+# Table 615, pp. 612–613. Same PWM (n>>1)&7 / A|B rule.
 # ---------------------------------------------------------------------------
 [[mcu]]
 id = "rp2040_qfn56"
@@ -105,7 +105,7 @@ value_re = "(?i)^RP2040$"
 lib_re   = "(?i):RP2040$"
 
 [mcu.pins]
-# QFN-56 GPIO pins (datasheet Table 2). IOVDD/DVDD/GND/QSPI/USB/XIN pins omitted.
+# QFN-56 GPIO pins; supply/QSPI/USB/XIN pins omitted, including IOVDD pad33.
 "2"  = { gpio = "GP0",  pwm = "0A" }
 "3"  = { gpio = "GP1",  pwm = "0B" }
 "4"  = { gpio = "GP2",  pwm = "1A" }
@@ -128,14 +128,14 @@ lib_re   = "(?i):RP2040$"
 "30" = { gpio = "GP19", pwm = "1B" }
 "31" = { gpio = "GP20", pwm = "2A" }
 "32" = { gpio = "GP21", pwm = "2B" }
-"33" = { gpio = "GP22", pwm = "3A" }
-"34" = { gpio = "GP23", pwm = "3B" }
-"35" = { gpio = "GP24", pwm = "4A" }
-"36" = { gpio = "GP25", pwm = "4B" }
-"37" = { gpio = "GP26", pwm = "5A", adc = "ADC0" }
-"38" = { gpio = "GP27", pwm = "5B", adc = "ADC1" }
-"39" = { gpio = "GP28", pwm = "6A", adc = "ADC2" }
-"40" = { gpio = "GP29", pwm = "6B", adc = "ADC3" }
+"34" = { gpio = "GP22", pwm = "3A" }
+"35" = { gpio = "GP23", pwm = "3B" }
+"36" = { gpio = "GP24", pwm = "4A" }
+"37" = { gpio = "GP25", pwm = "4B" }
+"38" = { gpio = "GP26", pwm = "5A", adc = "ADC0" }
+"39" = { gpio = "GP27", pwm = "5B", adc = "ADC1" }
+"40" = { gpio = "GP28", pwm = "6A", adc = "ADC2" }
+"41" = { gpio = "GP29", pwm = "6B", adc = "ADC3" }
 
 # ===========================================================================
 # Microchip SAM D5x / E5x, J variant, 64-pin TQFP (ATSAMD51J*).

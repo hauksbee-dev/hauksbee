@@ -1250,58 +1250,57 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         ));
     }
 
-    // Generic signal diode by reference class or footprint evidence. KiCad's
-    // stock "Device:D" symbol carries the value "D" with no MPN, so the model
-    // db cannot resolve it; a bare SOD/SMA/SMB/MELF/DO diode footprint with no
-    // resolved model is the same case. These are real silicon junctions on the
-    // board (on Tarski the ~94 D_stretch/D_inject/D_hyst pulse-stretcher
-    // diodes), so leaving them OPEN silently deletes a conducting path. Mirror
-    // the r_/c_/l_ fallbacks: when the part is unmistakably a 2-terminal
-    // diode, bind a generic 1N4148 signal diode (datasheet-grounded params
-    // below).
-    //
-    // The reference gate covers both the KiCad "D" class and the MIL-STD/ANSI
-    // diode designators (CR, VD, ZD, VR), a "CR1" zener must never reach the
-    // C-first-letter capacitor heuristic below. The footprint gate is
-    // reference-independent: a diode body is a diode whatever the ref says.
+    // Preserve generic two-terminal junctions, but never infer a body from its
+    // library (e.g. RPI_COMPILED:SOIC-8) or an embedded word (LED_DRIVER).
+    // A diode body is not proof of a 1N4148: this remains an unvalidated guess.
     let diode_prefix = (prefix.starts_with('D') && prefix != "DAC")
         || matches!(prefix.as_str(), "CR" | "VD" | "ZD" | "VR");
-    let fp = comp.footprint.to_ascii_uppercase();
-    // Footprint families for small 2-pin signal/switching diodes. The "D_"
-    // test is anchored to the footprint-name position (after the "Lib:"
-    // separator) rather than a bare `contains("D_")`: now that this evidence
-    // is consulted for EVERY reference class, a bare substring would false-
-    // positive on any "..._SMD_..." footprint name.
-    let fp_is_diode = fp.contains("SOD")
-        || fp.contains("SMA")
-        || fp.contains("SMB")
-        || fp.contains("SMC")
-        || fp.contains("MELF")
-        || fp.contains("DO-")
-        || fp.contains("DIODE")
-        || fp.contains("LED")
-        || fp.starts_with("D_")
-        || fp.contains(":D_");
-    // A value that parses only as an electrical RATING (volts/amps) is not
-    // a passive magnitude: a zener marked "5.1V" is 5.1 volts of breakdown,
-    // not 5.1 farads. Such a value must not veto the diode fallback, and it is
-    // what tells an R/C/L reference on a diode-shaped footprint apart from a
-    // real diode.
+    let fp = comp
+        .footprint
+        .rsplit(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    let body = fp
+        .strip_prefix("D_")
+        .or_else(|| fp.strip_prefix("DIODE_"))
+        .unwrap_or(&fp);
+    // A custom LED missed by the model DB must not become a silicon signal diode.
+    if body.starts_with("LED") || body.split('_').any(|token| token == "DRIVER") {
+        return None;
+    }
+    let package = body.split('_').next().unwrap_or("");
+    let fp_is_diode = matches!(package, "SMA" | "SMB" | "SMC" | "MELF" | "MINIMELF")
+        || ["SOD", "DO"].iter().any(|family| {
+            package.strip_prefix(family).is_some_and(|suffix| {
+                let code = suffix.strip_prefix('-').unwrap_or(suffix);
+                let suffix = code.trim_start_matches(|c: char| c.is_ascii_digit());
+                code.len() > suffix.len() && matches!(suffix, "" | "F" | "FL" | "W")
+            })
+        });
+    // Voltage/current ratings (e.g. a zener's 5.1V) are not passive magnitudes.
     let val_is_passive_magnitude = parse_value(&comp.value)
         .map(|p| !matches!(p.unit.as_deref(), Some("V") | Some("A")))
         .unwrap_or(false);
     let ref_is_passive = matches!(prefix.chars().next(), Some('R') | Some('C') | Some('L'));
     if diode_prefix || fp_is_diode {
         let v = comp.value.trim();
-        let val_is_generic = v.is_empty()
-            || v.eq_ignore_ascii_case("D")
-            || v.eq_ignore_ascii_case("diode")
-            || v.eq_ignore_ascii_case("1N4148")
-            || v.eq_ignore_ascii_case("1N4148W")
-            || v.eq_ignore_ascii_case("1N4148WS");
+        let val_is_generic = ["", "D", "diode", "1N4148", "1N4148W", "1N4148WS"]
+            .iter()
+            .any(|name| v.eq_ignore_ascii_case(name));
         // Bind the fallback when the value is a generic diode token, OR the
         // footprint is a diode body and the value is not a passive magnitude.
         if val_is_generic || (fp_is_diode && !val_is_passive_magnitude) {
+            // Repeated physical pads may share an electrical pin; arrays may not.
+            let pins: std::collections::BTreeSet<_> = comp
+                .pins
+                .iter()
+                .map(|pin| pin.number.as_str())
+                .filter(|pin| !pin.is_empty())
+                .collect();
+            if pins.len() > 2 {
+                return None;
+            }
             return Some(make_entry(
                 "signal_diode_1n4148_fallback",
                 ComponentKind::Diode,
@@ -1319,14 +1318,8 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         }
     }
 
-    // A part whose reference class or footprint says "diode" must never fall
-    // through to the R/C/L first-letter heuristic below: "CR1" with value
-    // "5.1V" would land there via 'C' and bind as a 5.1 FARAD capacitor.
-    // Exception: a genuine R/C/L *reference* on a diode-shaped *footprint*
-    // (e.g. a 10k R_MELF resistor) whose value clearly parses as a passive
-    // magnitude must not be deleted; it yields to the passive fallback below.
-    // A diode *reference* (D*, CR, VD, ZD, VR) is checked first in the OR, so it
-    // still always bails regardless of its first letter.
+    // CR1 must not become a capacitor; genuine R/C/L magnitudes on a shared
+    // package (e.g. R_MELF 10k) may still reach the passive fallback.
     if diode_prefix || (fp_is_diode && !(ref_is_passive && val_is_passive_magnitude)) {
         return None;
     }
@@ -2451,53 +2444,27 @@ fn role_node_map_pins(
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> HashMap<String, NodeId> {
     let mut m = HashMap::new();
-    if let Some(kind) = kind {
+    // Each source visits ALL pads before the next source. Per-pad fallback would
+    // let an earlier model pad override a later pinfunction for the same role.
+    let mut fill = |role_of: &dyn Fn(&hauksbee_extract::Pin) -> Option<String>| {
         for pin in &comp.pins {
-            let Some(node) = node_of(pin.net) else {
-                continue;
-            };
-            if let Some(role) = role_from_pinfunction(kind, &pin.function) {
+            if let (Some(role), Some(node)) = (role_of(pin), node_of(pin.net)) {
                 m.entry(role).or_insert(node);
             }
         }
-    }
-    // The db's by-pin-number map fills any role the functions did not cover
-    // (and is the only source for PCB-only extraction, where functions are
-    // empty).
-    for pin in &comp.pins {
-        if let (Some(role), Some(node)) = (pins.get(&pin.number), node_of(pin.net)) {
-            m.entry(role.clone()).or_insert(node);
-        }
-    }
-    // Electrode-letter pad "numbers" fill any remaining gap. Eagle-style and
-    // vendor footprints name pads by electrode ("A"/"K" on a diode, "G"/"D"/
-    // "S" on a MOSFET, "C"/"B"/"E" on a BJT) instead of numbering them; with
-    // no pinfunction (footprint-only extraction) and a numerically-keyed
-    // model pad map, such a part would otherwise match nothing and bind OPEN,
-    // silently deleting a real junction. The letters reuse the kind-aware
-    // pinfunction vocabulary, so "C" stays cathode-on-a-diode and
-    // collector-on-a-BJT.
+    };
     if let Some(kind) = kind {
-        for pin in &comp.pins {
-            let Some(node) = node_of(pin.net) else {
-                continue;
-            };
-            if let Some(role) = role_from_electrode_pad(kind, &pin.number) {
-                m.entry(role).or_insert(node);
-            }
-        }
+        fill(&|pin| role_from_pinfunction(kind, &pin.function));
     }
-    // Eagle "P$1"/"P$2" ordinal pads: strip the "P$" prefix and re-consult the
-    // model's by-pin-number map, so a P$-numbered footprint still reaches a
-    // "1"/"2"-keyed pad map.
-    for pin in &comp.pins {
-        let Some(ord) = ordinal_pad(&pin.number) else {
-            continue;
-        };
-        if let (Some(role), Some(node)) = (pins.get(ord.as_str()), node_of(pin.net)) {
-            m.entry(role.clone()).or_insert(node);
-        }
+    // Numbered model pads fill gaps in schematic pinfunctions.
+    fill(&|pin| pins.get(&pin.number).cloned());
+    if let Some(kind) = kind {
+        // Electrode letters remain kind-aware: C is cathode on a diode, collector
+        // on a BJT. These recover real junctions from footprint-only extraction.
+        fill(&|pin| role_from_electrode_pad(kind, &pin.number));
     }
+    // Eagle P$1/P$2 ordinal pads re-consult the numbered model map last.
+    fill(&|pin| ordinal_pad(&pin.number).and_then(|ord| pins.get(&ord).cloned()));
     m
 }
 
@@ -4773,39 +4740,18 @@ pub fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
         }
         return None;
     }
-    if let Some(rest) = r.strip_prefix('p') {
-        let mut chars = rest.chars();
-        if let Some(port_c) = chars.next() {
-            // Lettered port A-I (STM32F4/F7 large packages reach port I; renode's
-            // PortMap and QEMU's GpioBank both expose GPIOF..GPIOI there).
-            let port_upper = port_c.to_ascii_uppercase();
-            if ('A'..='I').contains(&port_upper) {
-                let digits: String = rest[1..]
-                    .chars()
-                    .take_while(|c| c.is_ascii_digit())
-                    .collect();
-                if let Ok(bit) = digits.parse::<u8>() {
-                    if bit < 32 {
-                        return Some((port_upper, bit));
-                    }
-                }
-            }
-            // Numeric port 0 or 1: the first digit is the port, the remaining
-            // leading digits are the bit index.
-            if port_c == '0' || port_c == '1' {
-                let digits: String = rest[1..]
-                    .chars()
-                    .take_while(|c| c.is_ascii_digit())
-                    .collect();
-                if let Ok(bit) = digits.parse::<u8>() {
-                    if bit < 32 {
-                        return Some((port_c, bit));
-                    }
-                }
-            }
-        }
+    let rest = r.strip_prefix('p')?;
+    let port = rest.chars().next()?.to_ascii_uppercase();
+    // Lettered ports reach I on larger STM32s; numeric ports are banks 0 and 1.
+    if !matches!(port, 'A'..='I' | '0' | '1') {
+        return None;
     }
-    None
+    let digits: String = rest[1..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let bit = digits.parse::<u8>().ok()?;
+    (bit < 32).then_some((port, bit))
 }
 
 /// Arduino digital pin number -> ATmega328P (port, bit).
@@ -5122,7 +5068,10 @@ fn name_is_rail_monitor_tap(n: &str) -> bool {
 /// (e.g. "VDD_5V", "VCC") returns None and is left to the token heuristic.
 /// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
 fn positive_rail_fallback(n: &str) -> Option<f64> {
-    let rest = n.strip_prefix('+').unwrap_or(n);
+    rail_magnitude(n.strip_prefix('+').unwrap_or(n))
+}
+
+fn rail_magnitude(rest: &str) -> Option<f64> {
     let int_part: String = rest
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
@@ -5195,36 +5144,8 @@ fn is_rail_monitor_suffix(tail: &str) -> bool {
 /// magnitude in plain ("12V") or KiCad digit-V-digit ("3V3", "5V0") form.
 /// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
 fn negative_rail_fallback(n: &str) -> Option<f64> {
-    let rest = n.strip_prefix('-')?;
-    let int_part: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    if int_part.is_empty() {
-        return None;
-    }
-    let after = &rest[int_part.len()..];
-    if !after.starts_with('V') {
-        return None;
-    }
-    // Digits directly after the 'V' are the decimal part ("5V0", "3V3").
-    let frac: String = after[1..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    // Same tap-suffix gate as the positive side: "-12V_MON" / "-5V_SENSE" is a
-    // monitor of the negative rail, not the rail node itself.
-    if is_rail_monitor_suffix(&after[1 + frac.len()..]) {
-        return None;
-    }
-    let magnitude: f64 = if frac.is_empty() {
-        int_part.parse().ok()?
-    } else {
-        format!("{}.{}", int_part.trim_end_matches('.'), frac)
-            .parse()
-            .ok()?
-    };
-    (magnitude > 0.0 && magnitude.is_finite()).then_some(-magnitude)
+    // Strip exactly one sign; do not accept -+5V by calling the positive wrapper.
+    rail_magnitude(n.strip_prefix('-')?).map(|magnitude| -magnitude)
 }
 
 /// A net that carries a `power_out` (or `power_out+no_connect`) pin whose
@@ -7112,6 +7033,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn role_sources_have_global_priority_not_per_pad_priority() {
+        let mut c = comp("D1", "D");
+        let map = [("1".into(), "anode".into())].into_iter().collect();
+        let node_of = |net: Option<i64>| net.map(|id| NodeId(id as u32));
+        let mut named = pin("2", 2);
+        named.function = "A".into();
+        for (pins, kind, expected) in [
+            (
+                vec![pin("1", 1), named, pin("A", 3), pin("P$1", 4)],
+                Some(ComponentKind::Diode),
+                2,
+            ),
+            (
+                vec![pin("A", 3), pin("1", 1), pin("P$1", 4)],
+                Some(ComponentKind::Diode),
+                1,
+            ),
+            (
+                vec![pin("P$1", 4), pin("A", 3)],
+                Some(ComponentKind::Diode),
+                3,
+            ),
+            (vec![pin("A", 3), pin("P$1", 4)], None, 4),
+        ] {
+            c.pins = pins;
+            assert_eq!(
+                role_node_map_pins(&c, &map, kind, &node_of)["anode"],
+                NodeId(expected)
+            );
+        }
+    }
+
     /// On a module the Nano d-number table applies first, then a port-named
     /// role (Pro Micro) falls through to the standard port parser; the ADC
     /// channel comes from the role's own digits.
@@ -7453,27 +7407,96 @@ mod tests {
         assert!(!bound.mcus[0].external_clock_present);
     }
 
-    /// An R/C/L reference with a clear passive magnitude binds as a passive
-    /// even on a diode-shaped MELF body; diode references and footprint-only
-    /// diodes keep binding as diodes.
     #[test]
     fn melf_footprint_resistor_binds_as_passive_not_open() {
-        let comp_fp = |reference, value, footprint: &str| {
+        for (reference, value, footprint, kind) in [
+            (
+                "R5",
+                "10k",
+                "Resistor_SMD:R_MELF_MELF0207",
+                ComponentKind::Passive,
+            ),
+            ("L2", "10uH", "Inductor_SMD:L_MELF", ComponentKind::Passive),
+            ("CR1", "5.1V", "Diode_SMD:D_SOD-123", ComponentKind::Diode),
+            ("D9", "D", "Diode_SMD:D_SOD-123", ComponentKind::Diode),
+        ] {
             let mut c = comp(reference, value);
-            c.footprint = footprint.to_string();
-            c
+            c.footprint = footprint.into();
+            assert_eq!(fallback_entry(&c).unwrap().kind, kind, "{footprint}");
+        }
+    }
+
+    #[test]
+    fn diode_fallback_requires_a_body_not_a_library_or_driver_name() {
+        let check = |reference, value, footprint: &str, want| {
+            let mut c = comp(reference, value);
+            c.footprint = footprint.into();
+            assert_eq!(fallback_entry(&c).map(|m| m.kind), want, "{footprint}");
         };
-        let entry = fallback_entry(&comp_fp("R5", "10k", "Resistor_SMD:R_MELF_MELF0207"))
-            .expect("a 10k MELF resistor must bind");
-        assert_eq!(entry.kind, ComponentKind::Passive);
-        let ind = fallback_entry(&comp_fp("L2", "10uH", "Inductor_SMD:L_MELF"))
-            .expect("a MELF inductor binds");
-        assert_eq!(ind.kind, ComponentKind::Passive);
-        let cr = fallback_entry(&comp_fp("CR1", "5.1V", "Diode_SMD:D_SOD-123"));
-        assert!(cr.map_or(true, |e| e.kind != ComponentKind::Passive));
-        let d = fallback_entry(&comp_fp("D9", "D", "Diode_SMD:D_SOD-123"))
-            .expect("a generic diode-footprint part binds as a diode");
-        assert_eq!(d.kind, ComponentKind::Diode);
+        for (value, footprint) in [
+            ("NCP1117ST33T3G", "RPI_COMPILED:onsemi_ncp1117st33t3g"),
+            ("NCP1117ST33T3G", "RPI_COMPILED:SOT-223"),
+            ("W25Q128JVSIQ", "RPI_COMPILED:generic_soic127p790x195-8"),
+            ("unknown", "RPI_COMPILED:QFN-32"),
+            ("unknown", "DiodeLib:SOIC-8"),
+            ("unknown", "custom:XSOD-123"),
+            ("unknown", "custom:SMALL_QFN"),
+            ("unknown", "custom:D_DRIVER"),
+            ("unknown", "custom:LED_DRIVER"),
+            ("unknown", "custom:DIODE_DRIVER"),
+            ("unknown", "custom:SOD123_DRIVER"),
+            ("unknown", "custom:SOD--123"),
+            ("unknown", "custom:DO9DRIVER"),
+        ] {
+            check("U1", value, footprint, None);
+        }
+        for name in [
+            "D_SOD-123",
+            "sod-323",
+            "D_DO-35",
+            "DO35",
+            "SMA",
+            "SMB",
+            "SMC",
+            "MELF",
+            "MINIMELF",
+            "DIODE_SOD123",
+            "SOD-123F",
+            "D_SOD-123FL_HandSoldering",
+        ] {
+            for library in ["", "RPI_COMPILED:"] {
+                check(
+                    "U1",
+                    "unknown",
+                    &format!("{library}{name}"),
+                    Some(ComponentKind::Diode),
+                );
+            }
+        }
+        let mut diode = comp("D9", "D");
+        for pads in [
+            vec![pin("1", 1), pin("2", 2)],
+            vec![pin("1", 1), pin("1", 1), pin("2", 2)],
+        ] {
+            diode.pins = pads;
+            assert!(
+                fallback_entry(&diode).is_some(),
+                "deduplicate electrical pads"
+            );
+        }
+        diode.pins.push(pin("3", 3));
+        assert!(
+            fallback_entry(&diode).is_none(),
+            "an array is not one diode"
+        );
+        // Refusing an unmodelled LED corrects false coverage; it does not add coverage.
+        for name in ["LED_0603", "D_LED_0603", "LED_DRIVER"] {
+            check("D9", "D", &format!("custom:{name}"), None);
+        }
+        assert_eq!(
+            resolve_value(&ModelLibrary::builtin(), "unknown", "LED_SMD:LED_0603").id,
+            "led_generic"
+        );
     }
 
     #[test]
@@ -7506,6 +7529,10 @@ mod tests {
     /// monitor / feedback taps and domain-suffixed signals are not rails.
     #[test]
     fn power_rail_voltage_reads_full_magnitudes_and_refuses_taps_and_signals() {
+        for magnitude in ["+5V", "-5V", "NaNV", "infV", "0V", "1..2V", "5V_MON"] {
+            assert_eq!(positive_rail_fallback(&format!("+{magnitude}")), None);
+            assert_eq!(negative_rail_fallback(&format!("-{magnitude}")), None);
+        }
         for (name, volts) in [
             ("+15V", 15.0),
             ("+15V0", 15.0),
@@ -7611,6 +7638,18 @@ mod tests {
 
     #[test]
     fn gpio_roles_cover_module_analog_pins_and_stm32_ports_past_e() {
+        for (role, want) in [
+            ("PI31", ('I', 31)),
+            ("p031_suffix", ('0', 31)),
+            ("p119", ('1', 19)),
+        ] {
+            assert_eq!(gpio_of_role(role, false), Some(want), "{role}");
+        }
+        for role in [
+            "p", "pÉ1", "p231", "pj1", "pa32", "p132", "pa256", "pa", "pa-1",
+        ] {
+            assert_eq!(gpio_of_role(role, false), None, "{role}");
+        }
         for role in ["a0", "a2", "a5", "a3_scl"] {
             assert_eq!(gpio_of_role(role, true), None, "{role}");
         }

@@ -101,313 +101,393 @@ pub(crate) fn emit_with_schematic_quiet(
     inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
-    let bound = bind_board(board, lib);
-    let summary = BindSummary::from_report(&bound.report);
-    let evidence = crate::evidence::BoardEvidence::from_bound(
+    CheckReport {
+        board_path,
         board,
-        &bound.report,
+        text,
+        raw,
+        input_kind,
+        altium_present,
+        lib,
         reader_notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?
-    .with_input_artifact(board_path, raw, input_kind)?;
-    let clearance_input = (!altium_present)
-        .then(|| KicadClearanceInput::load(board_path, board))
-        .transpose()?;
-    let evidence = evidence.with_custom_rules_coverage(
-        clearance_input
-            .as_ref()
-            .and_then(KicadClearanceInput::custom_coverage),
-    )?;
-    let mut drc = if altium_present {
-        ExtractedBoard::altium_drc(raw)?
-    } else {
-        ExtractedBoard::drc_with_clearance_rules(
+        inputs,
+        schematic_ties,
+    }
+    .emit(
+        CheckDisplay::Full {
+            mode,
+            verbose,
+            oracle,
+            quiet,
+        },
+        strict,
+    )
+}
+
+// Both entrypoints run the same static suite. Keep their input bundle private so
+// public callers retain their existing APIs without duplicating the report pipeline.
+struct CheckReport<'a> {
+    board_path: &'a Path,
+    board: &'a ExtractedBoard,
+    text: &'a str,
+    raw: &'a [u8],
+    input_kind: crate::board_input::InputKind,
+    altium_present: bool,
+    lib: &'a ModelLibrary,
+    reader_notes: &'a [String],
+    inputs: &'a [JsonInputEvidence],
+    schematic_ties: Option<&'a crate::schematic_ties::SchematicTies>,
+}
+
+enum CheckDisplay {
+    Full {
+        mode: OutputMode,
+        verbose: bool,
+        oracle: bool,
+        quiet: bool,
+    },
+    CombinedJson,
+}
+
+impl CheckReport<'_> {
+    fn emit(self, display: CheckDisplay, strict: bool) -> anyhow::Result<()> {
+        let Self {
+            board_path,
+            board,
             text,
+            raw,
+            input_kind,
+            altium_present,
+            lib,
+            reader_notes,
+            inputs,
+            schematic_ties,
+        } = self;
+        let combined = matches!(display, CheckDisplay::CombinedJson);
+        let (mode, verbose, oracle, quiet) = match display {
+            CheckDisplay::Full {
+                mode,
+                verbose,
+                oracle,
+                quiet,
+            } => (mode, verbose, oracle, quiet),
+            CheckDisplay::CombinedJson => (OutputMode::Json, false, false, false),
+        };
+        let bound = bind_board(board, lib);
+        let summary = BindSummary::from_report(&bound.report);
+        let evidence = crate::evidence::BoardEvidence::from_bound(
+            board,
+            &bound.report,
+            reader_notes,
+            hauksbee_ir::evidence::RunDate::from_system_clock(),
+        )?
+        .with_input_artifact(board_path, raw, input_kind)?;
+        let clearance_input = (!altium_present)
+            .then(|| KicadClearanceInput::load(board_path, board))
+            .transpose()?;
+        let evidence = evidence.with_custom_rules_coverage(
             clearance_input
                 .as_ref()
-                .and_then(|input| input.rules.clone()),
-        )?
-    };
+                .and_then(KicadClearanceInput::custom_coverage),
+        )?;
+        let mut drc = if altium_present {
+            ExtractedBoard::altium_drc(raw)?
+        } else {
+            ExtractedBoard::drc_with_clearance_rules(
+                text,
+                clearance_input
+                    .as_ref()
+                    .and_then(|input| input.rules.clone()),
+            )?
+        };
 
-    // The companion schematic's declarations, applied before anything reads the
-    // findings. Reclassifies, never deletes: a covered contact keeps its layer,
-    // location and measured gap and gains the declaration that qualifies it.
-    let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
-    // The schematic contributed to the verdict, so it enters the inventory with
-    // its own hash and what it did. A reader who sees a contact reported as a
-    // declared tie must be able to find the file that declared it.
-    let evidence = match (schematic_ties, &qualification) {
-        (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
-            &ties.path,
-            &ties.raw,
-            ties.contribution(qualification),
-        )?,
-        _ => evidence,
-    };
-    let lint = crate::checks::engine_lint(board, lib);
-    let geo_text = if altium_present { None } else { Some(text) };
-    // Route through the single SI chokepoint so this aggregate surface carries
-    // the same trace-ampacity + input-cap-ripple findings as the dedicated
-    // `--si` report (the bare `si_checks` omitted them, giving `--check` a false
-    // "looks healthy" over an under-width power trace).
-    let mut si = crate::checks::engine_si(board, lib, geo_text);
-    // USB-C CC compliance, only when the board has a USB-C receptacle.
-    let usbc = crate::usb_c_report(board);
+        // The companion schematic's declarations, applied before anything reads the
+        // findings. Reclassifies, never deletes: a covered contact keeps its layer,
+        // location and measured gap and gains the declaration that qualifies it.
+        let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
+        // The schematic contributed to the verdict, so it enters the inventory with
+        // its own hash and what it did. A reader who sees a contact reported as a
+        // declared tie must be able to find the file that declared it.
+        let evidence = match (schematic_ties, &qualification) {
+            (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
+                &ties.path,
+                &ties.raw,
+                ties.contribution(qualification),
+            )?,
+            _ => evidence,
+        };
+        let lint = crate::checks::engine_lint(board, lib);
+        let geo_text = if altium_present { None } else { Some(text) };
+        // Route through the single SI chokepoint so this aggregate surface carries
+        // the same trace-ampacity + input-cap-ripple findings as the dedicated
+        // `--si` report (the bare `si_checks` omitted them, giving `--check` a false
+        // "looks healthy" over an under-width power trace).
+        let mut si = crate::checks::engine_si(board, lib, geo_text);
+        // USB-C CC compliance, only when the board has a USB-C receptacle.
+        let usbc = crate::usb_c_report(board);
 
-    // Waivers: overrule a finding this board's owner judged wrong, without
-    // switching the check off for everyone. Findings an active waiver covers
-    // come out of the gate and go into their own section, never out of sight.
-    let mut waivers = load_waivers(board_path);
-    let mut lint = lint;
-    let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
-    let provenance = if altium_present {
-        crate::result::ClearanceRuleProvenance::tool_default(drc.clearance_mm)
-    } else {
-        clearance_input
-            .as_ref()
-            .expect("non-Altium check loaded KiCad clearance inputs")
-            .provenance(board_path, text, drc.clearance_mm)
-    };
-    let mut drc_structured = DrcStructured::from_report_with_ties(
-        &drc,
-        qualification.as_ref(),
-        text.contains("<eagle") && schematic_ties.is_none(),
-    )
-    .with_clearance_rule_provenance(provenance.clone());
-    let oracle_summary = (oracle && mode != OutputMode::Json).then(|| {
-        super::drc::oracle_cross_check_and_annotate(
-            board_path,
+        // Waivers: overrule a finding this board's owner judged wrong, without
+        // switching the check off for everyone. Findings an active waiver covers
+        // come out of the gate and go into their own section, never out of sight.
+        let mut waivers = load_waivers(board_path);
+        let mut lint = lint;
+        let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
+        let provenance = if altium_present {
+            crate::result::ClearanceRuleProvenance::tool_default(drc.clearance_mm)
+        } else {
+            clearance_input
+                .as_ref()
+                .expect("non-Altium check loaded KiCad clearance inputs")
+                .provenance(board_path, text, drc.clearance_mm)
+        };
+        let mut drc_structured = DrcStructured::from_report_with_ties(
             &drc,
-            &mut drc_structured,
             qualification.as_ref(),
+            text.contains("<eagle") && schematic_ties.is_none(),
         )
-    });
-    let mut actual_findings = lint_findings_json(&lint);
-    actual_findings.extend(si_findings_json(&si));
-    actual_findings.extend(usbc.as_ref().and_then(usbc_finding_json));
-    let mut evidence_maps =
-        evidence.maps_for_drc_with_ties(&drc_structured, qualification.as_ref())?;
-    evidence_maps.extend(evidence.maps_for_findings(&actual_findings)?);
-    for (check, assertion) in [
-        ("drc", "DRC input coverage"),
-        ("si", "Signal-integrity input coverage"),
-    ] {
-        let coverage = evidence.check_coverage_map(check, assertion)?;
-        if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
-            evidence_maps.push(coverage);
+        .with_clearance_rule_provenance(provenance.clone());
+        let oracle_summary = (oracle && mode != OutputMode::Json).then(|| {
+            super::drc::oracle_cross_check_and_annotate(
+                board_path,
+                &drc,
+                &mut drc_structured,
+                qualification.as_ref(),
+            )
+        });
+        let mut actual_findings = lint_findings_json(&lint);
+        actual_findings.extend(si_findings_json(&si));
+        actual_findings.extend(usbc.as_ref().and_then(usbc_finding_json));
+        let mut evidence_maps =
+            evidence.maps_for_drc_with_ties(&drc_structured, qualification.as_ref())?;
+        evidence_maps.extend(evidence.maps_for_findings(&actual_findings)?);
+        for (check, assertion) in [
+            ("drc", "DRC input coverage"),
+            ("si", "Signal-integrity input coverage"),
+        ] {
+            let coverage = evidence.check_coverage_map(check, assertion)?;
+            if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
+                evidence_maps.push(coverage);
+            }
         }
-    }
-    let evidence = evidence.with_maps(evidence_maps);
+        let evidence = evidence.with_maps(evidence_maps);
 
-    // Zero routed copper: a pads-only board passes the spacing check
-    // vacuously (there is nothing to space). Say so prominently instead of
-    // letting "no copper spacing problems" read as "the routing is clean" on
-    // a board that has no routing yet.
-    let unrouted = !altium_present && super::unrouted_kicad_layout(text);
-    // Computed before the match: the JSON arm consumes `drc_structured`.
-    let (serious, worth_a_look) = verdict_counts(&drc_structured, &lint, &si, &usbc);
-    let copper_unvalidated = drc_structured.version_warning.clone();
-    // The verdict blockers: unmodelled current-carrying / active parts. The
-    // lint/SI sections and the closing verdict must read INCONCLUSIVE over
-    // them, never a clean bill; the copper (DRC) section reads the layout and
-    // is deliberately exempt. Without --strict the exit code is unchanged;
-    // under it these blockers exit 3, matching the verdict field.
-    let blockers = crate::result::unmodelled_critical_refs(&summary);
-    let usbc_reliable = super::usb_c::scoped_blockers(board, &blockers).is_empty();
-    let triage = crate::plain::order_triage_with_rule_source(
-        &drc_structured,
-        &provenance,
-        &lint,
-        &si,
-        usbc.as_ref(),
-        usbc_reliable,
-        summary.unresolved,
-        true,
-    );
-    // This surface's own exit gate, computed before anything renders so the
-    // machine document can state the same outcome the exit code will. It is
-    // wider than the `serious` severity on purpose (medium lint findings, any
-    // SI finding), which is why the verdict has to be told about it. An
-    // An unvalidated board format (KiCad 10+) yields possibly-phantom shorts
-    // that do not gate unless KiCad's own DRC confirms the exact net pair; the
-    // unmatched caveat is printed instead.
-    let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
-    let drc_gates = drc_structured
-        .shorts
-        .iter()
-        .any(|short| short.severity == "serious");
-    let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
-    match mode {
-        OutputMode::Json => {
-            let mut jr = JsonReport::new(&bound.name, summary)
-                .with_bind_verdict_gate()
-                .with_surface_gate(would_gate)
-                .with_inputs(inputs)
-                .with_evidence(&evidence);
-            jr.drc = Some(drc_structured.clone());
-            jr.triage = Some(triage.clone());
-            jr.clearance_rule_source = Some(provenance.clone());
-            if unrouted {
-                jr.notes.push(crate::result::JsonNote {
-                    kind: crate::result::JsonNoteKind::Coverage,
-                    message: super::UNROUTED_COPPER_NOTE.to_string(),
-                });
+        // Zero routed copper: a pads-only board passes the spacing check
+        // vacuously (there is nothing to space). Say so prominently instead of
+        // letting "no copper spacing problems" read as "the routing is clean" on
+        // a board that has no routing yet. Preserve the bare-JSON schema, which
+        // has no unrouted note; only the explicit full check adds it.
+        let unrouted = !combined && !altium_present && super::unrouted_kicad_layout(text);
+        // The verdict blockers: unmodelled current-carrying / active parts. The
+        // lint/SI sections and the closing verdict must read INCONCLUSIVE over
+        // them, never a clean bill; the copper (DRC) section reads the layout and
+        // is deliberately exempt. Without --strict the exit code is unchanged;
+        // under it these blockers exit 3, matching the verdict field.
+        let blockers = crate::result::unmodelled_critical_refs(&summary);
+        let usbc_reliable = super::usb_c::scoped_blockers(board, &blockers).is_empty();
+        let triage = crate::plain::order_triage_with_rule_source(
+            &drc_structured,
+            &provenance,
+            &lint,
+            &si,
+            usbc.as_ref(),
+            usbc_reliable,
+            summary.unresolved,
+            true,
+        );
+        // This surface's own exit gate, computed before anything renders so the
+        // machine document can state the same outcome the exit code will. It is
+        // wider than the `serious` severity on purpose (medium lint findings, any
+        // SI finding), which is why the verdict has to be told about it. An
+        // An unvalidated board format (KiCad 10+) yields possibly-phantom shorts
+        // that do not gate unless KiCad's own DRC confirms the exact net pair; the
+        // unmatched caveat is printed instead.
+        let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
+        let drc_gates = if combined {
+            drc_gate_fails(&drc, qualification.as_ref())
+        } else {
+            drc_structured
+                .shorts
+                .iter()
+                .any(|short| short.severity == "serious")
+        };
+        let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
+        match mode {
+            OutputMode::Json => {
+                let mut jr = JsonReport::new(&bound.name, summary)
+                    .with_bind_verdict_gate()
+                    .with_surface_gate(would_gate)
+                    .with_inputs(inputs)
+                    .with_evidence(&evidence);
+                jr.drc = Some(drc_structured.clone());
+                jr.triage = Some(triage.clone());
+                jr.clearance_rule_source = Some(provenance.clone());
+                if unrouted {
+                    jr.notes.push(crate::result::JsonNote {
+                        kind: crate::result::JsonNoteKind::Coverage,
+                        message: super::UNROUTED_COPPER_NOTE.to_string(),
+                    });
+                }
+                if !blockers.is_empty() {
+                    jr.notes.push(crate::result::JsonNote {
+                        kind: crate::result::JsonNoteKind::Coverage,
+                        message: crate::result::inconclusive_verdict(&blockers),
+                    });
+                }
+                jr.findings = Some(actual_findings.clone());
+                // A green verdict that quietly dropped findings would be worse than
+                // no waivers at all, so the machine surface carries them too.
+                jr.waived = waived.iter().cloned().map(Into::into).collect();
+                println!("{}", jr.to_json());
             }
-            if !blockers.is_empty() {
-                jr.notes.push(crate::result::JsonNote {
-                    kind: crate::result::JsonNoteKind::Coverage,
-                    message: crate::result::inconclusive_verdict(&blockers),
-                });
-            }
-            jr.findings = Some(actual_findings.clone());
-            // A green verdict that quietly dropped findings would be worse than
-            // no waivers at all, so the machine surface carries them too.
-            jr.waived = waived.iter().cloned().map(Into::into).collect();
-            println!("{}", jr.to_json());
-        }
-        OutputMode::Plain => {
-            print!("{}", triage.render());
-            // Bind-role honesty (Marco): the plain persona surface must not hide
-            // that active ICs are unmodelled, otherwise `--check --plain` reads
-            // "healthy" while firmware/analog/AC/thermal on their nets are
-            // uncovered. Text/JSON/web all carry this; plain must too. Use the
-            // SAME union the web/json personas do, unresolved active ICs PLUS
-            // resolved-but-open active ICs, so all four personas agree.
-            let open = crate::result::coverage_open_active_refs(&summary).len();
-            if open > 0 {
-                // No part count in the pointer: `critical_parts_total` counts
-                // critical actives, not bind-table rows, and a wrong count
-                // sends a first-time reader hunting for a table that does not
-                // exist (qc scenario 01 pins this).
+            OutputMode::Plain => {
+                print!("{}", triage.render());
+                // Bind-role honesty (Marco): the plain persona surface must not hide
+                // that active ICs are unmodelled, otherwise `--check --plain` reads
+                // "healthy" while firmware/analog/AC/thermal on their nets are
+                // uncovered. Text/JSON/web all carry this; plain must too. Use the
+                // SAME union the web/json personas do, unresolved active ICs PLUS
+                // resolved-but-open active ICs, so all four personas agree.
+                let open = crate::result::coverage_open_active_refs(&summary).len();
+                if open > 0 {
+                    // No part count in the pointer: `critical_parts_total` counts
+                    // critical actives, not bind-table rows, and a wrong count
+                    // sends a first-time reader hunting for a table that does not
+                    // exist (qc scenario 01 pins this).
+                    println!(
+                        "Heads-up: {open} active IC(s) are unresolved/open, so firmware/analog/AC/thermal \
+                         results on their nets would be INCOMPLETE, but the copper checks below are \
+                         unaffected. Add models with --models-dir (hauksbee models --help) to cover \
+                         them (run --report for the bind table).\n"
+                    );
+                }
+                println!("== {} ==", drc_structured.section_title(&provenance));
+                if unrouted {
+                    println!("{}", super::UNROUTED_COPPER_NOTE);
+                }
+                print!(
+                    "{}",
+                    crate::plain::render_drc_condensed_with_rule_source_and_unlock(
+                        &drc_structured,
+                        &provenance,
+                        verbose,
+                        false,
+                    )
+                );
+                if let Some(summary) = &oracle_summary {
+                    print!("{summary}");
+                }
                 println!(
-                    "Heads-up: {open} active IC(s) are unresolved/open, so firmware/analog/AC/thermal \
-                     results on their nets would be INCOMPLETE, but the copper checks below are \
-                     unaffected. Add models with --models-dir (hauksbee models --help) to cover \
-                     them (run --report for the bind table).\n"
+                    "\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) =="
+                );
+                let mut lint_plain = crate::plain_netlint(&lint);
+                lint_plain.unmodelled_critical = blockers.clone();
+                print!("{}", lint_plain.render());
+                println!("\n== Signal integrity ==");
+                let mut si_plain = crate::plain_si(&si);
+                si_plain.unmodelled_critical = blockers.clone();
+                print!("{}", si_plain.render());
+                if let Some(u) = &usbc {
+                    println!("\n== USB-C CC compliance ==");
+                    print!("{}", u.render_plain());
+                }
+                print!(
+                    "{}",
+                    what_this_pass_did_not_check(
+                        summary.mcu_bound,
+                        bound
+                            .mcus
+                            .iter()
+                            .any(|mcu| backend_is_compiled(&mcu.backend)),
+                        usbc.is_some(),
+                    )
                 );
             }
-            println!("== {} ==", drc_structured.section_title(&provenance));
-            if unrouted {
-                println!("{}", super::UNROUTED_COPPER_NOTE);
-            }
-            print!(
-                "{}",
-                crate::plain::render_drc_condensed_with_rule_source_and_unlock(
-                    &drc_structured,
-                    &provenance,
-                    verbose,
-                    false,
-                )
-            );
-            if let Some(summary) = &oracle_summary {
-                print!("{summary}");
-            }
-            println!("\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==");
-            let mut lint_plain = crate::plain_netlint(&lint);
-            lint_plain.unmodelled_critical = blockers.clone();
-            print!("{}", lint_plain.render());
-            println!("\n== Signal integrity ==");
-            let mut si_plain = crate::plain_si(&si);
-            si_plain.unmodelled_critical = blockers.clone();
-            print!("{}", si_plain.render());
-            if let Some(u) = &usbc {
-                println!("\n== USB-C CC compliance ==");
-                print!("{}", u.render_plain());
-            }
-            print!(
-                "{}",
-                what_this_pass_did_not_check(
-                    summary.mcu_bound,
-                    bound
-                        .mcus
-                        .iter()
-                        .any(|mcu| backend_is_compiled(&mcu.backend)),
-                    usbc.is_some(),
-                )
-            );
-        }
-        OutputMode::Text => {
-            let mut display_report = bound.report.clone();
-            super::bind::mark_decode_only_rows(&mut display_report, &lint);
-            print!(
-                "{}",
-                if verbose {
-                    display_report.render_table()
-                } else {
-                    display_report.render_table_compact()
+            OutputMode::Text => {
+                let mut display_report = bound.report.clone();
+                super::bind::mark_decode_only_rows(&mut display_report, &lint);
+                print!(
+                    "{}",
+                    if verbose {
+                        display_report.render_table()
+                    } else {
+                        display_report.render_table_compact()
+                    }
+                );
+                print!("{}", summary.render_banner());
+                println!("\n== {} ==", drc_structured.section_title(&provenance));
+                if unrouted {
+                    println!("{}", super::UNROUTED_COPPER_NOTE);
                 }
-            );
-            print!("{}", summary.render_banner());
-            println!("\n== {} ==", drc_structured.section_title(&provenance));
-            if unrouted {
-                println!("{}", super::UNROUTED_COPPER_NOTE);
-            }
-            print!(
-                "{}",
-                drc_structured.render_with_clearance_rule_provenance(&provenance)
-            );
-            if let Some(summary) = &oracle_summary {
-                print!("{summary}");
-            }
-            println!("\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==");
-            // Verdict first in each model-dependent section: the extract body's
-            // "no findings." must sit under the refusal, not above it.
-            if !blockers.is_empty() {
-                println!("{}", crate::result::inconclusive_verdict(&blockers));
-            }
-            print!("{}", hauksbee_extract::render_netlint(&lint));
-            println!("\n== Signal integrity ==");
-            if !blockers.is_empty() {
-                println!("{}", crate::result::inconclusive_verdict(&blockers));
-            }
-            print!("{}", hauksbee_extract::render_si(&si));
-            if let Some(u) = &usbc {
-                println!("\n== USB-C CC compliance ==");
-                print!("{}", u.render());
+                print!(
+                    "{}",
+                    drc_structured.render_with_clearance_rule_provenance(&provenance)
+                );
+                if let Some(summary) = &oracle_summary {
+                    print!("{summary}");
+                }
+                println!(
+                    "\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) =="
+                );
+                // Verdict first in each model-dependent section: the extract body's
+                // "no findings." must sit under the refusal, not above it.
+                if !blockers.is_empty() {
+                    println!("{}", crate::result::inconclusive_verdict(&blockers));
+                }
+                print!("{}", hauksbee_extract::render_netlint(&lint));
+                println!("\n== Signal integrity ==");
+                if !blockers.is_empty() {
+                    println!("{}", crate::result::inconclusive_verdict(&blockers));
+                }
+                print!("{}", hauksbee_extract::render_si(&si));
+                if let Some(u) = &usbc {
+                    println!("\n== USB-C CC compliance ==");
+                    print!("{}", u.render());
+                }
             }
         }
+        // Undermined run-level evidence (an input-coverage claim, never a
+        // finding's own badge) must reach the closing human verdict too: ending
+        // on "VERDICT: clean" under an undermined coverage claim is the same
+        // vacuous clean the JSON verdict refuses.
+        let coverage_undermined = crate::result::run_level_undermined(evidence.maps(), |a| {
+            actual_findings.iter().any(|f| f.message == a)
+        });
+        if !matches!(mode, OutputMode::Json) {
+            let (serious, worth_a_look) = verdict_counts(&drc_structured, &lint, &si, &usbc);
+            print!(
+                "{}",
+                super::render_evidence_appendix(&evidence, quiet, verbose)
+            );
+            print!("{}", render_waivers(&waived, &waivers));
+            // One verdict line to end on (U4), matching the web/TUI verdict shape:
+            // the last thing `--check` prints answers "is my board ok" without
+            // scrolling back through four sections. --json is unchanged (its
+            // consumers read the structured findings).
+            println!(
+                "\n{}",
+                verdict_line(
+                    serious,
+                    worth_a_look,
+                    &blockers,
+                    coverage_undermined,
+                    drc_structured.version_warning.as_deref(),
+                )
+            );
+        }
+        super::note_ungated_findings(strict, would_gate);
+        if strict && would_gate {
+            super::strict_gate_exit(mode, &gate_items(&drc_structured, &lint, &si, &usbc));
+        }
+        // Exit 3 on the SAME rule the JSON verdict uses (run-level undermined
+        // evidence or unbound verdict-critical parts), not on any undermined map:
+        // a finding-backed badge must not exit 3 under --strict while the verdict
+        // field says pass.
+        let strict_invalid = coverage_undermined || !blockers.is_empty();
+        if strict && strict_invalid {
+            super::exit_invalid_for_analysis(&blockers);
+        }
+        Ok(())
     }
-    // Undermined run-level evidence (an input-coverage claim, never a
-    // finding's own badge) must reach the closing human verdict too: ending
-    // on "VERDICT: clean" under an undermined coverage claim is the same
-    // vacuous clean the JSON verdict refuses.
-    let coverage_undermined = crate::result::run_level_undermined(evidence.maps(), |a| {
-        actual_findings.iter().any(|f| f.message == a)
-    });
-    if !matches!(mode, OutputMode::Json) {
-        print!(
-            "{}",
-            super::render_evidence_appendix(&evidence, quiet, verbose)
-        );
-        print!("{}", render_waivers(&waived, &waivers));
-        // One verdict line to end on (U4), matching the web/TUI verdict shape:
-        // the last thing `--check` prints answers "is my board ok" without
-        // scrolling back through four sections. --json is unchanged (its
-        // consumers read the structured findings).
-        println!(
-            "\n{}",
-            verdict_line(
-                serious,
-                worth_a_look,
-                &blockers,
-                coverage_undermined,
-                copper_unvalidated.as_deref(),
-            )
-        );
-    }
-    super::note_ungated_findings(strict, would_gate);
-    if strict && would_gate {
-        super::strict_gate_exit(mode, &gate_items(&drc_structured, &lint, &si, &usbc));
-    }
-    // Exit 3 on the SAME rule the JSON verdict uses (run-level undermined
-    // evidence or unbound verdict-critical parts), not on any undermined map:
-    // a finding-backed badge must not exit 3 under --strict while the verdict
-    // field says pass.
-    let strict_invalid = coverage_undermined || !blockers.is_empty();
-    if strict && strict_invalid {
-        super::exit_invalid_for_analysis(&blockers);
-    }
-    Ok(())
 }
 
 /// Serious / worth-a-look counts across the whole `--check` suite, classified
@@ -959,153 +1039,19 @@ pub fn emit_combined_json_with_schematic(
     inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
-    let bound = bind_board(board, lib);
-    let evidence = crate::evidence::BoardEvidence::from_bound(
+    CheckReport {
+        board_path,
         board,
-        &bound.report,
+        text,
+        raw,
+        input_kind,
+        altium_present,
+        lib,
         reader_notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?
-    .with_input_artifact(board_path, raw, input_kind)?;
-    let clearance_input = (!altium_present)
-        .then(|| KicadClearanceInput::load(board_path, board))
-        .transpose()?;
-    let evidence = evidence.with_custom_rules_coverage(
-        clearance_input
-            .as_ref()
-            .and_then(KicadClearanceInput::custom_coverage),
-    )?;
-    let mut drc = if altium_present {
-        ExtractedBoard::altium_drc(raw)?
-    } else {
-        ExtractedBoard::drc_with_clearance_rules(
-            text,
-            clearance_input
-                .as_ref()
-                .and_then(|input| input.rules.clone()),
-        )?
-    };
-    // The companion schematic's declarations, applied before anything reads the
-    // findings. Reclassifies, never deletes: a covered contact keeps its layer,
-    // location and measured gap and gains the declaration that qualifies it.
-    let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
-    // The schematic contributed to the verdict, so it enters the inventory with
-    // its own hash and what it did. A reader who sees a contact reported as a
-    // declared tie must be able to find the file that declared it.
-    let evidence = match (schematic_ties, &qualification) {
-        (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
-            &ties.path,
-            &ties.raw,
-            ties.contribution(qualification),
-        )?,
-        _ => evidence,
-    };
-    let mut lint = crate::checks::engine_lint(board, lib);
-    let geo_text = if altium_present { None } else { Some(text) };
-    // Same SI chokepoint as the text path: the combined `run --json` must carry
-    // the ampacity/ripple findings too, or a machine consumer of the JSON reads
-    // a false-clean SI section.
-    let mut si = crate::checks::engine_si(board, lib, geo_text);
-    // Same waivers as `--check` and as the artifact writer. Skipping them here
-    // would leave an excused finding live in `findings`, gating the run to exit 2
-    // with `verdict: "fail"` beside a `--junit`/`--sarif` file, written from the
-    // waived-down suite, that reads `failures="0"`.
-    let mut waivers = load_waivers(board_path);
-    let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
-    let provenance = if altium_present {
-        crate::result::ClearanceRuleProvenance::tool_default(drc.clearance_mm)
-    } else {
-        clearance_input
-            .as_ref()
-            .expect("non-Altium JSON check loaded KiCad clearance inputs")
-            .provenance(board_path, text, drc.clearance_mm)
-    };
-    let drc_structured = DrcStructured::from_report_with_ties(
-        &drc,
-        qualification.as_ref(),
-        text.contains("<eagle") && schematic_ties.is_none(),
-    )
-    .with_clearance_rule_provenance(provenance.clone());
-    let usbc = crate::usb_c_report(board);
-    let mut findings = lint_findings_json(&lint);
-    findings.extend(si_findings_json(&si));
-    // Fold the USB-C CC verdict in too, matching `--check --json`: the default
-    // machine command must not be blind to a Serious CC fault that the explicit
-    // `--check --json` surfaces.
-    findings.extend(usbc.as_ref().and_then(usbc_finding_json));
-    let mut maps = evidence.maps_for_drc_with_ties(&drc_structured, qualification.as_ref())?;
-    maps.extend(evidence.maps_for_findings(&findings)?);
-    for (check, assertion) in [
-        ("drc", "DRC input coverage"),
-        ("si", "Signal-integrity input coverage"),
-    ] {
-        let coverage = evidence.check_coverage_map(check, assertion)?;
-        if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
-            maps.push(coverage);
-        }
+        inputs,
+        schematic_ties,
     }
-    let evidence = evidence.with_maps(maps);
-    let combined_summary = BindSummary::from_report(&bound.report);
-    // Same INCONCLUSIVE coverage note as `--check --json`: the default machine
-    // command is a lint/SI surface too, and its clean verdict over unmodelled
-    // critical parts must carry the same qualification.
-    let blockers = crate::result::unmodelled_critical_refs(&combined_summary);
-    let usbc_reliable = super::usb_c::scoped_blockers(board, &blockers).is_empty();
-    let triage = crate::plain::order_triage_with_rule_source(
-        &drc_structured,
-        &provenance,
-        &lint,
-        &si,
-        usbc.as_ref(),
-        usbc_reliable,
-        combined_summary.unresolved,
-        true,
-    );
-    let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
-    let drc_gates = drc_gate_fails(&drc, qualification.as_ref());
-    let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
-    let mut jr = JsonReport::new(&bound.name, combined_summary)
-        .with_bind_verdict_gate()
-        // Same widening as `--check`: this route shares its gate, so it must
-        // share the verdict that gate implies.
-        .with_surface_gate(would_gate)
-        .with_inputs(inputs)
-        .with_evidence(&evidence);
-    jr.drc = Some(drc_structured.clone());
-    jr.triage = Some(triage);
-    jr.clearance_rule_source = Some(provenance);
-    jr.findings = Some(findings);
-    if !blockers.is_empty() {
-        jr.notes.push(crate::result::JsonNote {
-            kind: crate::result::JsonNoteKind::Coverage,
-            message: crate::result::inconclusive_verdict(&blockers),
-        });
-    }
-    // A green verdict that quietly dropped findings would be worse than no
-    // waivers at all, so this surface carries them like `--check --json` does.
-    jr.waived = waived.iter().cloned().map(Into::into).collect();
-    println!("{}", jr.to_json());
-    // Honour `--strict` on the default machine command: a bare
-    // `run <board> --json --strict` must gate a shorted/failing board like the
-    // text path does (it silently exited 0 before). Mirror emit()'s gate.
-    super::note_ungated_findings(strict, would_gate);
-    if strict && would_gate {
-        super::strict_gate_exit(
-            OutputMode::Json,
-            &gate_items(&drc_structured, &lint, &si, &usbc),
-        );
-    }
-    let strict_invalid = crate::result::run_level_undermined(evidence.maps(), |a| {
-        jr.findings
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .any(|f| f.message == a)
-    }) || !blockers.is_empty();
-    if strict && strict_invalid {
-        super::exit_invalid_for_analysis(&blockers);
-    }
-    Ok(())
+    .emit(CheckDisplay::CombinedJson, strict)
 }
 
 #[cfg(test)]

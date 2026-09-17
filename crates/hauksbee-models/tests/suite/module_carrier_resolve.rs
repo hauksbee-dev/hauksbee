@@ -19,6 +19,139 @@ fn resolve_value(value: &str) -> Option<hauksbee_models::ModelEntry> {
     .model
 }
 
+// ── RP2040 package map ───────────────────────────────────────────────────────
+
+#[test]
+fn rp2040_package_map_preserves_identity_fallback_and_scope() {
+    let lib = ModelLibrary::builtin();
+    let identity = resolve_value("RP2040").expect("bare chip identity");
+    assert!(identity
+        .coverage
+        .missing
+        .iter()
+        .any(|cap| cap == "missing_external_crystal_startup_validation"));
+    for (footprint, full) in [
+        (None, false),
+        (Some(""), false),
+        (Some("unknown"), false),
+        (Some("QFN-48"), false),
+        (Some("QFN-560"), false),
+        (Some("TQFP-56"), false),
+        (Some("WQFN-56"), false),
+        (Some("QFN-56-2EP"), false),
+        (Some("QFN-56_8x8mm_P0.5mm"), false),
+        (Some("Module:RaspberryPi_Pico"), false),
+        (Some("QFN-56"), true),
+        (Some("qfn56"), true),
+        (Some("QFN_56_1EP"), true),
+        (Some("QFN-56-1EP_7x7mm_P0.4mm"), true),
+        (
+            Some("Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm"),
+            true,
+        ),
+    ] {
+        let model = lib
+            .resolve(&ComponentQuery {
+                value: Some("RP2040".into()),
+                footprint: footprint.map(str::to_owned),
+                ..Default::default()
+            })
+            .model
+            .expect("package uncertainty must not discard chip identity");
+        assert_eq!(
+            model.id,
+            if full { "rp2040_qfn56" } else { "rp2040" },
+            "{footprint:?}"
+        );
+        assert_eq!(model.pins.len(), if full { 57 } else { 1 });
+        assert_eq!(
+            model.params.get_str("backend"),
+            identity.params.get_str("backend")
+        );
+        assert_eq!(model.coverage, identity.coverage);
+        assert_eq!(model.straps, identity.straps);
+    }
+    for value in ["RP2350", "RP2040_PLATFORM", "Pico", "RP2040 clone"] {
+        let resolved = lib.resolve(&ComponentQuery {
+            value: Some(value.into()),
+            footprint: Some("QFN-56".into()),
+            ..Default::default()
+        });
+        assert!(
+            resolved.model.is_none_or(|m| m.id != "rp2040_qfn56"),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn rp2040_qfn_map_covers_sio_adc_and_non_gpio_pads() {
+    let model = ModelLibrary::builtin()
+        .resolve(&ComponentQuery {
+            value: Some("RP2040".into()),
+            footprint: Some("QFN-56".into()),
+            ..Default::default()
+        })
+        .model
+        .expect("known chip and package");
+    assert_eq!(model.pins.len(), 57);
+    assert!((1..=57).all(|pad| model.pins.contains_key(&pad.to_string())));
+    assert_eq!(
+        model
+            .pins
+            .values()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        57
+    );
+    // Table 615: pad33 is IOVDD, not GPIO22; the final GPIOs start on pad34.
+    for (gpio, pad) in (2..=9)
+        .chain(11..=18)
+        .chain(27..=32)
+        .chain(34..=41)
+        .enumerate()
+    {
+        let role = if gpio < 26 {
+            format!("gpio{gpio}")
+        } else {
+            format!("gpio{gpio}_adc{}", gpio - 26)
+        };
+        assert_eq!(model.pins[&pad.to_string()], role);
+    }
+    assert_eq!(
+        model
+            .pins
+            .values()
+            .filter(|role| role.starts_with("gpio"))
+            .count(),
+        30
+    );
+    for (pad, role) in [
+        ("19", "testen"),
+        ("20", "osc_in"),
+        ("21", "osc_out"),
+        ("24", "swclk"),
+        ("25", "swd"),
+        ("26", "run"),
+        ("33", "iovdd4"),
+        ("43", "adc_avdd"),
+        ("44", "vreg_vin"),
+        ("45", "vreg_vout"),
+        ("46", "usb_dm"),
+        ("47", "usb_dp"),
+        ("48", "usb_vdd"),
+        ("51", "qspi_sd3"),
+        ("52", "qspi_sclk"),
+        ("53", "qspi_sd0"),
+        ("54", "qspi_sd2"),
+        ("55", "qspi_sd1"),
+        ("56", "qspi_ss"),
+        ("57", "gnd"),
+    ] {
+        assert_eq!(model.pins[pad], role, "pad {pad}");
+    }
+}
+
 // ── Raspberry Pi Pico ────────────────────────────────────────────────────────
 
 /// The Raspberry Pi product code (SC0918 = Pico W) is what distributor BOMs
@@ -78,6 +211,7 @@ fn pico_header_pin_map_and_strapless_module() {
     let model = resolve_value("SC0918").expect("Pico W should resolve");
     assert_eq!(model.pins.get("1").map(String::as_str), Some("gpio0"));
     assert_eq!(model.pins.get("2").map(String::as_str), Some("gpio1"));
+    assert_eq!(model.pins.get("26").map(String::as_str), Some("gpio20"));
     assert_eq!(model.pins.get("30").map(String::as_str), Some("run"));
     assert_eq!(model.pins.get("39").map(String::as_str), Some("vsys"));
     assert_eq!(model.pins.get("40").map(String::as_str), Some("vbus"));

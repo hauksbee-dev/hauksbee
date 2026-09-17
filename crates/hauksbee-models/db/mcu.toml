@@ -1035,7 +1035,98 @@ note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTS
 
 [models.coverage]
 implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]
-missing = ["spi_external_slave", "pio", "adc_temperature_channel_4", "proven_two_core_firmware", "usb_device_controller", "dma_fidelity", "silicon_power_current_profile", "silicon_timing_and_errata"]
+missing = ["spi_external_slave", "pio", "adc_temperature_channel_4", "proven_two_core_firmware", "usb_device_controller", "dma_fidelity", "silicon_power_current_profile", "silicon_timing_and_errata", "missing_external_crystal_startup_validation"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The identity entry above retains pad56 when the package is absent or unknown.
+# Only this more specific match supplies the complete numeric pad map.
+[[models]]
+id = "rp2040_qfn56"
+kind = "mcu"
+description = "Raspberry Pi RP2040, QFN-56 with exposed ground pad"
+
+[models.match]
+value_re = "(?i)^RP2040$"
+footprint_re = '(?i)(^|:)QFN[-_]?56(?:[-_]1EP)?(?:_7x7mm(?:_P0\.4mm)?(?:_EP3\.2x3\.2mm)?)?$'
+
+[models.params]
+backend = "renode:rp2040"
+
+[models.pins]
+# RP2040 datasheet build 3184e62-clean (2025-02-20), Tables 615–621, pp. 612–614.
+# https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf
+# Repeated supplies have distinct roles: mapping roles must not merge board nets.
+# QSPI, USB, debug and supplies are not members of the 30-pin SIO GPIO bank.
+"1"  = "iovdd"
+"2"  = "gpio0"
+"3"  = "gpio1"
+"4"  = "gpio2"
+"5"  = "gpio3"
+"6"  = "gpio4"
+"7"  = "gpio5"
+"8"  = "gpio6"
+"9"  = "gpio7"
+"10" = "iovdd2"
+"11" = "gpio8"
+"12" = "gpio9"
+"13" = "gpio10"
+"14" = "gpio11"
+"15" = "gpio12"
+"16" = "gpio13"
+"17" = "gpio14"
+"18" = "gpio15"
+"19" = "testen"
+"20" = "osc_in"      # XIN: external crystal / clock input
+"21" = "osc_out"     # XOUT: crystal oscillator output
+"22" = "iovdd3"
+"23" = "dvdd"
+"24" = "swclk"
+"25" = "swd"
+"26" = "run"
+"27" = "gpio16"
+"28" = "gpio17"
+"29" = "gpio18"
+"30" = "gpio19"
+"31" = "gpio20"
+"32" = "gpio21"
+"33" = "iovdd4"
+"34" = "gpio22"
+"35" = "gpio23"
+"36" = "gpio24"
+"37" = "gpio25"
+"38" = "gpio26_adc0"
+"39" = "gpio27_adc1"
+"40" = "gpio28_adc2"
+"41" = "gpio29_adc3"
+"42" = "iovdd5"
+"43" = "adc_avdd"
+"44" = "vreg_vin"
+"45" = "vreg_vout"
+"46" = "usb_dm"
+"47" = "usb_dp"
+"48" = "usb_vdd"
+"49" = "iovdd6"
+"50" = "dvdd2"
+"51" = "qspi_sd3"
+"52" = "qspi_sclk"
+"53" = "qspi_sd0"
+"54" = "qspi_sd2"
+"55" = "qspi_sd1"
+"56" = "qspi_ss"
+"57" = "gnd"
+
+# Same executable scope and boot strap as the identity entry (tested for equality).
+# Mapping XIN/XOUT does not make the backend enforce external-crystal presence.
+[[models.straps]]
+role = "qspi_ss"
+level = "high"
+boot_select = true
+note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
+
+[models.coverage]
+implements = ["cortex_m0plus_firmware_execution", "boot_rom_to_main", "gpio_output_and_direction", "gpio_external_input", "uart0_tx", "virtual_clock_and_timers", "adc_external_channels_0_to_3", "i2c0_i2c1_controller_bridge", "shared_sio_register_state"]
+missing = ["spi_external_slave", "pio", "adc_temperature_channel_4", "proven_two_core_firmware", "usb_device_controller", "dma_fidelity", "silicon_power_current_profile", "silicon_timing_and_errata", "missing_external_crystal_startup_validation"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -865,6 +865,36 @@ mod tests {
     }
 
     #[test]
+    fn rp2040_qfn_gpio_resources_match_the_sourced_package_model() {
+        let tables = load_resources();
+        let resources = tables.iter().find(|m| m.id == "rp2040_qfn56").unwrap();
+        let model = hauksbee_models::ModelLibrary::builtin()
+            .resolve(&hauksbee_models::ComponentQuery {
+                value: Some("RP2040".into()),
+                footprint: Some("QFN-56".into()),
+                ..Default::default()
+            })
+            .model
+            .expect("known RP2040 package");
+        assert_eq!(resources.pins.len(), 30);
+        assert!(
+            !resources.pins.contains_key("33"),
+            "pad33 is IOVDD, not GPIO22"
+        );
+        for (pad, pin) in &resources.pins {
+            let gpio: u8 = pin.label.strip_prefix("GP").unwrap().parse().unwrap();
+            let role = model.pins[pad].split('_').next().unwrap();
+            assert_eq!(role, format!("gpio{gpio}"), "pad {pad}");
+            let pwm = format!(
+                "{}{}",
+                (gpio >> 1) & 7,
+                if gpio % 2 == 0 { 'A' } else { 'B' }
+            );
+            assert_eq!(pin.pwm.as_deref(), Some(pwm.as_str()), "pad {pad}");
+        }
+    }
+
+    #[test]
     fn samd51_qspi_group_covers_pa08_pa11() {
         let t = load_resources();
         let m = t.iter().find(|m| m.id == "samd51j_tqfp64").unwrap();

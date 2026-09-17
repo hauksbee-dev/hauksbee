@@ -385,23 +385,7 @@ fn partitioned_nonlinear_island_advances_internal_time_varying_source() {
             n: NodeId::GROUND,
             kind: SourceKind::Dc(2.0),
         });
-        for k in 0..4 {
-            let leg = c.node(&format!("leg{k}"));
-            c.add(Device::Resistor {
-                name: format!("Rx{k}"),
-                a: vin,
-                b: leg,
-                ohms: 1e3,
-                tc1: None,
-            });
-            c.add(Device::Capacitor {
-                name: format!("Cx{k}"),
-                a: leg,
-                b: NodeId::GROUND,
-                farads: 1e-9,
-                ic: Some(0.0),
-            });
-        }
+        crate::shared::add_partition_rc_legs(&mut c);
         // The island under test: a SIN current source driving a resistor in
         // parallel with a diode. The diode makes the island nonlinear; the
         // Isource shares node `d` with it, so the partitioner takes the source

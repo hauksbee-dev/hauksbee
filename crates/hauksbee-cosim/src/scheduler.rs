@@ -1125,6 +1125,25 @@ impl Scheduler {
             ..
         } = bound;
 
+        // Preflight every binding before starting any emulator. These mapped
+        // roles are active-low reset inputs; this checks hard wiring, not an
+        // analogue threshold or a claim about an unmodelled reset network.
+        if firmware.is_some() {
+            for binding in &mcus {
+                if let Some(role) = ["reset", "reset2", "pc6_reset", "run"]
+                    .into_iter()
+                    .find(|role| binding.role_nets.get(*role) == Some(&NodeId::GROUND))
+                {
+                    anyhow::bail!(
+                        "{}: active-low reset role '{role}' is wired directly to ground; \
+                         firmware co-simulation cannot run with this reset binding. \
+                         Check the reset wiring/pin model (reset-disable fuses are not evaluated); \
+                         firmware-less board analysis is still available.",
+                        binding.reference
+                    );
+                }
+            }
+        }
         let mut mcu_subjects = mcu_occurrence_subjects(&report).into_iter();
 
         // Supply-rail absolute-maximum watches, built BEFORE the bindings are
@@ -6577,157 +6596,115 @@ implements = ["i2c_chip_id"]
 missing = ["measurement_registers"]
 "#;
 
+    // Footprint, reference, value, x position; pads carry (number, y, net index).
+    type FixturePart<'a> = (&'a str, &'a str, &'a str, u16, &'a [(u8, u8, usize)]);
+
+    fn pcb_fixture(nets: &[&str], parts: &[FixturePart<'_>]) -> String {
+        use std::fmt::Write as _;
+        let mut pcb = String::from("(kicad_pcb (version 20171130) (host pcbnew 5.1.0)\n");
+        for (id, name) in nets.iter().enumerate() {
+            writeln!(pcb, "  (net {id} {name:?})").unwrap();
+        }
+        for (footprint, reference, value, x, pads) in parts {
+            writeln!(pcb, "  (module {footprint} (layer F.Cu)\n    (at {x} 100)").unwrap();
+            writeln!(
+                pcb,
+                "    (fp_text reference {reference} (at 0 0) (layer F.SilkS))"
+            )
+            .unwrap();
+            writeln!(pcb, "    (fp_text value {value} (at 0 2) (layer F.Fab))").unwrap();
+            for (number, y, net) in *pads {
+                writeln!(
+                    pcb,
+                    "    (pad {number} thru_hole circle (at 0 {y}) (size 1 1) (net {net} {:?}))",
+                    nets[*net]
+                )
+                .unwrap();
+            }
+            pcb.push_str("  )\n");
+        }
+        pcb.push_str(")\n");
+        pcb
+    }
+
     /// A passive +5V → R1(100Ω) → MID → R2(300Ω) → GND divider, no MCU.
-    const DIVIDER_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "MID")
-  (module Resistor:R (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 100 (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 2 "+5V"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 3 "MID"))
-  )
-  (module Resistor:R (layer F.Cu)
-    (at 120 100)
-    (fp_text reference R2 (at 0 0) (layer F.SilkS))
-    (fp_text value 300 (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 3 "MID"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-)
-"#;
+    static DIVIDER_BOARD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        pcb_fixture(
+            &["", "GND", "+5V", "MID"],
+            &[
+                ("Resistor:R", "R1", "100", 110, &[(1, 0, 2), (2, 2, 3)]),
+                ("Resistor:R", "R2", "300", 120, &[(1, 0, 3), (2, 2, 1)]),
+            ],
+        )
+    });
 
     /// A board with NO MCU module: two pulled nets (10 k to +5 V, 10 k to
     /// GND) plus a pulled-high net standing in for a responder-owned MISO.
-    const PLAIN_INPUT_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "BTN_HI")
-  (net 4 "BTN_LO")
-  (net 5 "RESP")
-
-  (module Resistor:R (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 2 "+5V"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 3 "BTN_HI"))
-  )
-  (module Resistor:R2 (layer F.Cu)
-    (at 120 100)
-    (fp_text reference R2 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 4 "BTN_LO"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-  (module Resistor:R3 (layer F.Cu)
-    (at 130 100)
-    (fp_text reference R3 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 2 "+5V"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 5 "RESP"))
-  )
-)
-"#;
+    static PLAIN_INPUT_BOARD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        pcb_fixture(
+            &["", "GND", "+5V", "BTN_HI", "BTN_LO", "RESP"],
+            &[
+                ("Resistor:R", "R1", "10k", 110, &[(1, 0, 2), (2, 2, 3)]),
+                ("Resistor:R2", "R2", "10k", 120, &[(1, 0, 4), (2, 2, 1)]),
+                ("Resistor:R3", "R3", "10k", 130, &[(1, 0, 2), (2, 2, 5)]),
+            ],
+        )
+    });
 
     /// A 74HC74 whose clock (pad 3 = `clk1`) sits on STROBE and data (pad 2 =
     /// `d1`) on DATA, plus a FREE net wired only to a pull-down.
-    const PULSE_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "STROBE")
-  (net 4 "DATA")
-  (net 5 "FREE")
-
-  (module Logic:74HC74 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U5 (at 0 0) (layer F.SilkS))
-    (fp_text value 74HC74 (at 0 2) (layer F.Fab))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 4 "DATA"))
-    (pad 3 thru_hole circle (at 0 3) (size 1 1) (net 3 "STROBE"))
-    (pad 7 thru_hole circle (at 0 7) (size 1 1) (net 1 "GND"))
-    (pad 14 thru_hole circle (at 0 14) (size 1 1) (net 2 "+5V"))
-  )
-  (module Resistor:R (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 5 "FREE"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-)
-"#;
+    static PULSE_BOARD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        pcb_fixture(
+            &["", "GND", "+5V", "STROBE", "DATA", "FREE"],
+            &[
+                (
+                    "Logic:74HC74",
+                    "U5",
+                    "74HC74",
+                    100,
+                    &[(2, 2, 4), (3, 3, 3), (7, 7, 1), (14, 14, 2)],
+                ),
+                ("Resistor:R", "R1", "10k", 110, &[(1, 0, 5), (2, 2, 1)]),
+            ],
+        )
+    });
 
     /// A 74HC08 output (pad 3 = `y1`) on net SHARED that firmware may also
     /// drive as a GPIO output.
-    const CONTENTION_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "SHARED")
-  (net 4 "INA")
-  (net 5 "INB")
-
-  (module Logic:74HC08 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U1 (at 0 0) (layer F.SilkS))
-    (fp_text value 74HC08 (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 1) (size 1 1) (net 4 "INA"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 5 "INB"))
-    (pad 3 thru_hole circle (at 0 3) (size 1 1) (net 3 "SHARED"))
-    (pad 7 thru_hole circle (at 0 7) (size 1 1) (net 1 "GND"))
-    (pad 14 thru_hole circle (at 0 14) (size 1 1) (net 2 "+5V"))
-  )
-  (module Resistor:R (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 4 "INA"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-  (module Resistor:R2 (layer F.Cu)
-    (at 120 100)
-    (fp_text reference R2 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 5 "INB"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-)
-"#;
+    static CONTENTION_BOARD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        pcb_fixture(
+            &["", "GND", "+5V", "SHARED", "INA", "INB"],
+            &[
+                (
+                    "Logic:74HC08",
+                    "U1",
+                    "74HC08",
+                    100,
+                    &[(1, 1, 4), (2, 2, 5), (3, 3, 3), (7, 7, 1), (14, 14, 2)],
+                ),
+                ("Resistor:R", "R1", "10k", 110, &[(1, 0, 4), (2, 2, 1)]),
+                ("Resistor:R2", "R2", "10k", 120, &[(1, 0, 5), (2, 2, 1)]),
+            ],
+        )
+    });
 
     /// A 74HC125 whose `y1` shares BUS with a firmware pin but whose `oe_n_1`
     /// is tied HIGH (released).
-    const TRISTATE_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "BUS")
-  (net 4 "INA")
-
-  (module Logic:74HC125 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U2 (at 0 0) (layer F.SilkS))
-    (fp_text value 74HC125 (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 1) (size 1 1) (net 2 "+5V"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 4 "INA"))
-    (pad 3 thru_hole circle (at 0 3) (size 1 1) (net 3 "BUS"))
-    (pad 7 thru_hole circle (at 0 7) (size 1 1) (net 1 "GND"))
-    (pad 14 thru_hole circle (at 0 14) (size 1 1) (net 2 "+5V"))
-  )
-  (module Resistor:R (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 4 "INA"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-)
-"#;
+    static TRISTATE_BOARD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        pcb_fixture(
+            &["", "GND", "+5V", "BUS", "INA"],
+            &[
+                (
+                    "Logic:74HC125",
+                    "U2",
+                    "74HC125",
+                    100,
+                    &[(1, 1, 2), (2, 2, 4), (3, 3, 3), (7, 7, 1), (14, 14, 2)],
+                ),
+                ("Resistor:R", "R1", "10k", 110, &[(1, 0, 4), (2, 2, 1)]),
+            ],
+        )
+    });
 
     // ── Shared fixtures ──────────────────────────────────────────────────────
 
@@ -6993,7 +6970,7 @@ missing = ["measurement_registers"]
     /// A PLAIN_INPUT_BOARD scheduler with one mock MCU whose GPIO drivers sit
     /// on fresh per-pin nets. Returns the core's shared handles.
     fn sched_with_core(core: MockCore, pins: &[(char, u8)]) -> (Scheduler, MockCore) {
-        let mut sched = board_scheduler(PLAIN_INPUT_BOARD);
+        let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
         let nodes: Vec<_> = pins
             .iter()
             .map(|&pin| (pin, sched.circuit.node(&format!("CS_{}{}", pin.0, pin.1))))
@@ -7010,7 +6987,7 @@ missing = ["measurement_registers"]
     /// A PLAIN_INPUT_BOARD scheduler whose single live MCU is a bus-blind core
     /// with ADC channel 0 bound to `adc_net`.
     fn sched_with_bus_blind_core(adc_net: &str) -> Scheduler {
-        let mut sched = board_scheduler(PLAIN_INPUT_BOARD);
+        let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
         let node = sched.circuit.node(adc_net);
         sched.net_nodes.insert(adc_net.to_string(), node);
         let mut b = binding("U1", "renode:nrf52840", HashMap::new());
@@ -7317,7 +7294,7 @@ missing = ["measurement_registers"]
 
     #[test]
     fn frame_peak_accumulators_track_current_and_reset_per_step() {
-        let mut sched = board_scheduler(DIVIDER_BOARD);
+        let mut sched = board_scheduler(&DIVIDER_BOARD);
         let peak = |sched: &Scheduler, r: &str| sched.frame_peak_current()[r];
 
         sched.step(1e-3);
@@ -8053,7 +8030,7 @@ data_out = ["io0"]
     /// floating net (no device but the pin's own tri-state leg) is left alone.
     #[test]
     fn plain_digital_inputs_reach_the_core() {
-        let mut sched = board_scheduler(PLAIN_INPUT_BOARD);
+        let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
         let float_node = sched.circuit.node("FLOATY");
         let pins = [
             (('C', 0u8), sched.net_nodes["BTN_HI"]),
@@ -8111,7 +8088,7 @@ data_out = ["io0"]
     #[test]
     fn cs_frame_installs_on_exactly_one_mcu_preferring_the_cs_net_driver() {
         let cs_pin = ('C', 2u8);
-        let mut sched = board_scheduler(PLAIN_INPUT_BOARD);
+        let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
         let resp_node = sched.net_nodes["RESP"];
         for _ in 0..2 {
             let drivers = tristated_drivers(&mut sched, &[(cs_pin, resp_node)]);
@@ -8127,7 +8104,7 @@ data_out = ["io0"]
 
         // Same pin on DIFFERENT nets: MCU_0 on an unrelated net, MCU_1 on the
         // real CS net. The frame must land on MCU_1.
-        let mut sched = board_scheduler(PLAIN_INPUT_BOARD);
+        let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
         let unrelated_net = sched.net_nodes["RESP"];
         let cs_net = sched.circuit.node("SPI_CS");
         for (idx, net) in [unrelated_net, cs_net].into_iter().enumerate() {
@@ -8148,7 +8125,7 @@ data_out = ["io0"]
     /// regardless of HashMap iteration order.
     #[test]
     fn pin_driving_node_is_deterministic_when_multiple_pins_share_a_net() {
-        let mut sched = board_scheduler(PLAIN_INPUT_BOARD);
+        let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
         let node = sched.circuit.node("SHARED_CS");
         let pins: Vec<_> = [('D', 7), ('B', 5), ('C', 2), ('B', 4), ('D', 0), ('C', 9)]
             .into_iter()
@@ -8529,6 +8506,117 @@ data_out = ["io0"]
     }
 
     #[test]
+    fn grounded_reset_refuses_firmware_before_any_backend_starts() {
+        let firmware = tempfile::NamedTempFile::new().unwrap();
+        for role in [
+            "reset",
+            "reset2",
+            "pc6_reset",
+            "run",
+            "gpio0",
+            "reset_status",
+            "en",
+        ] {
+            for grounded in [true, false] {
+                let build = || {
+                    let mut circuit = Circuit::new();
+                    let node = if grounded {
+                        NodeId::GROUND
+                    } else {
+                        circuit.node("RESET")
+                    };
+                    let mut bound =
+                        bound_board("reset", circuit, HashMap::new(), Vec::new(), Vec::new());
+                    // The first core must not even reach backend dispatch if a
+                    // later binding makes the firmware run impossible.
+                    bound
+                        .mcus
+                        .push(binding("U1", "invalid-sentinel", HashMap::new()));
+                    let mut second = binding("U2", "invalid-sentinel", HashMap::new());
+                    second.role_nets.insert(role.to_string(), node);
+                    bound.mcus.push(second);
+                    bound
+                };
+                assert!(Scheduler::new(build(), None, SolverOptions::default()).is_ok());
+                let error =
+                    Scheduler::new(build(), Some(firmware.path()), SolverOptions::default())
+                        .err()
+                        .expect("refusal")
+                        .to_string();
+                let held = grounded && matches!(role, "reset" | "reset2" | "pc6_reset" | "run");
+                assert_eq!(
+                    error.contains("wired directly to ground"),
+                    held,
+                    "{role}: {error}"
+                );
+                if held {
+                    assert!(
+                        error.contains("U2")
+                            && error.contains(role)
+                            && error.contains("firmware-less")
+                    );
+                } else {
+                    assert!(error.contains("unknown MCU backend"), "{role}: {error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pcb_numbered_reset_pins_reach_firmware_preflight() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let firmware = tempfile::NamedTempFile::new().unwrap();
+        for (value, footprint, pad, reset_role) in [
+            (
+                "RP2040",
+                "Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm",
+                "26",
+                Some("run"),
+            ),
+            ("Pico", "Module:RaspberryPi_Pico", "30", Some("run")),
+            (
+                "RP2040",
+                "Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm",
+                "1",
+                None,
+            ),
+            ("Pico", "Module:RaspberryPi_Pico", "26", None),
+        ] {
+            // No pinfunction hints: the curated package/header map must carry
+            // the electrical role. The return name is not a reset-net heuristic.
+            let pcb = format!(
+                r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+                (net 0 "") (net 1 "GND")
+                (module "{footprint}" (layer F.Cu) (at 0 0)
+                    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+                    (fp_text value "{value}" (at 0 2) (layer F.Fab))
+                    (pad "{pad}" thru_hole circle (at 0 0) (size 1 1) (net 1 "GND"))))"#
+            );
+            let board = hauksbee_extract::ExtractedBoard::from_auto(&pcb).unwrap();
+            let build = || hauksbee_bind::binder::bind_board(&board, &lib);
+            let bound = build();
+            assert_eq!(bound.mcus.len(), 1);
+            let grounded_reset = bound.mcus[0]
+                .role_nets
+                .get("run")
+                .is_some_and(|n| n.is_ground());
+            assert_eq!(grounded_reset, reset_role.is_some(), "{value} pad {pad}");
+            assert!(Scheduler::new(bound, None, SolverOptions::default()).is_ok());
+            if reset_role.is_some() {
+                let error =
+                    Scheduler::new(build(), Some(firmware.path()), SolverOptions::default())
+                        .err()
+                        .expect("grounded reset refusal")
+                        .to_string();
+                assert!(
+                    error.contains("U1") && error.contains("wired directly to ground"),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn reset_run_state_reboots_mcu_cores_and_clears_coupling_caches() {
         let (mut sched, h) = sched_with_core(MockCore::default(), &[]);
         sched.relayout();
@@ -8574,7 +8662,7 @@ data_out = ["io0"]
     /// `drive_direction_observable` is the conservative AND across live cores.
     #[test]
     fn drive_direction_observable_ands_across_cores() {
-        let mut sched = board_scheduler(PLAIN_INPUT_BOARD);
+        let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
         assert!(
             sched.drive_direction_observable(),
             "no MCUs: vacuously observable"
@@ -8598,7 +8686,7 @@ data_out = ["io0"]
     /// enabled, and a direction-reporting core never populates it.
     #[test]
     fn unobserved_drive_nets_flags_only_direction_blind_undriven_pins() {
-        let mut sched = board_scheduler(PLAIN_INPUT_BOARD);
+        let mut sched = board_scheduler(&PLAIN_INPUT_BOARD);
         let node = sched.net_nodes["BTN_HI"];
         for (observable, reference) in [(true, "U1"), (false, "U2")] {
             let drivers = tristated_drivers(&mut sched, &[(('0', 1u8), node)]);
@@ -8769,7 +8857,7 @@ data_out = ["io0"]
     /// measured width and the part at risk; the pulse still counts two toggles.
     #[test]
     fn subchunk_pulse_on_a_tick_sequential_clock_net_warns_once() {
-        let mut sched = pulse_scheduler(PULSE_BOARD, &[(('B', 1), "STROBE")]);
+        let mut sched = pulse_scheduler(&PULSE_BOARD, &[(('B', 1), "STROBE")]);
         preload_edges(&sched, ('B', 1), &[(100, true), (132, false)]);
         sched.step(DEFAULT_CHUNK_S);
 
@@ -8792,7 +8880,7 @@ data_out = ["io0"]
 
     #[test]
     fn pwl_transition_budget_is_an_explicit_timing_refusal() {
-        let mut sched = pulse_scheduler(PULSE_BOARD, &[(('B', 1), "STROBE")]);
+        let mut sched = pulse_scheduler(&PULSE_BOARD, &[(('B', 1), "STROBE")]);
         let strobe = sched.net_nodes["STROBE"];
         sched.circuit.add(Device::Resistor {
             name: "Rload".into(),
@@ -8816,7 +8904,7 @@ data_out = ["io0"]
     /// on a net clocking nothing sequential is fine at any width: silent.
     #[test]
     fn spanning_pulse_and_non_clock_net_stay_silent() {
-        let mut sched = pulse_scheduler(PULSE_BOARD, &[(('B', 1), "STROBE")]);
+        let mut sched = pulse_scheduler(&PULSE_BOARD, &[(('B', 1), "STROBE")]);
         preload_edges(&sched, ('B', 1), &[(100, true)]);
         for _ in 0..10 {
             sched.step(DEFAULT_CHUNK_S);
@@ -8829,7 +8917,7 @@ data_out = ["io0"]
             sched.short_pulses()
         );
 
-        let mut sched = pulse_scheduler(PULSE_BOARD, &[(('B', 2), "FREE")]);
+        let mut sched = pulse_scheduler(&PULSE_BOARD, &[(('B', 2), "FREE")]);
         preload_edges(&sched, ('B', 2), &[(100, true), (132, false)]);
         sched.step(DEFAULT_CHUNK_S);
         assert!(
@@ -8840,7 +8928,7 @@ data_out = ["io0"]
     }
 
     fn coarse_scheduler() -> Scheduler {
-        let mut coarse = pulse_scheduler(PULSE_BOARD, &[(('B', 1), "STROBE")]);
+        let mut coarse = pulse_scheduler(&PULSE_BOARD, &[(('B', 1), "STROBE")]);
         coarse.mcus[0].core = Box::new(MockCore {
             coarse: true,
             ..Default::default()
@@ -8850,7 +8938,7 @@ data_out = ["io0"]
 
     #[test]
     fn timing_policy_uses_measured_backend_resolution_and_adapts_poll_chunks() {
-        let mut exact = pulse_scheduler(PULSE_BOARD, &[(('B', 1), "STROBE")]);
+        let mut exact = pulse_scheduler(&PULSE_BOARD, &[(('B', 1), "STROBE")]);
         let exact_cov = exact.timing_coverage();
         assert_eq!(exact_cov.len(), 1);
         assert!(exact_cov[0].cycle_exact);
@@ -8916,7 +9004,7 @@ data_out = ["io0"]
     /// push-pull drivers fight and the monitor fires, once per net per run.
     #[test]
     fn firmware_output_fighting_an_enabled_model_output_fires_once() {
-        let mut sched = pulse_scheduler(CONTENTION_BOARD, &[(('B', 1), "SHARED")]);
+        let mut sched = pulse_scheduler(&CONTENTION_BOARD, &[(('B', 1), "SHARED")]);
         sched.step(2.0 * DEFAULT_CHUNK_S);
         assert!(
             sched.driver_contentions().is_empty(),
@@ -8947,7 +9035,7 @@ data_out = ["io0"]
     /// firmware output on the same net is not contention.
     #[test]
     fn tristated_model_output_is_not_contention() {
-        let mut sched = pulse_scheduler(TRISTATE_BOARD, &[(('B', 1), "BUS")]);
+        let mut sched = pulse_scheduler(&TRISTATE_BOARD, &[(('B', 1), "BUS")]);
         sched.step(2.0 * DEFAULT_CHUNK_S);
         preload_edges(&sched, ('B', 1), &[(10, true)]);
         sched.step(3.0 * DEFAULT_CHUNK_S);

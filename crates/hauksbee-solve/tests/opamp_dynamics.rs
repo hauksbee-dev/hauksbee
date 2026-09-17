@@ -280,23 +280,7 @@ fn partitioned_opamp_output_matches_monolith() {
         });
         // Independent RC legs so the partition heuristics fragment and the
         // partitioned engine genuinely engages (the op-amp lands in its island).
-        for k in 0..4 {
-            let leg = c.node(&format!("leg{k}"));
-            c.add(Device::Resistor {
-                name: format!("Rx{k}"),
-                a: vin,
-                b: leg,
-                ohms: 1e3,
-                tc1: None,
-            });
-            c.add(Device::Capacitor {
-                name: format!("Cx{k}"),
-                a: leg,
-                b: NodeId::GROUND,
-                farads: 1e-9,
-                ic: Some(0.0),
-            });
-        }
+        crate::shared::add_partition_rc_legs(&mut c);
         c
     };
     let c = build();

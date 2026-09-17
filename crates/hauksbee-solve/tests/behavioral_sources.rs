@@ -21,63 +21,14 @@
 //!   match the bit-exact `Off` monolith AND the analytic value a dropped
 //!   stamp could never produce.
 
-use hauksbee_ir::{
-    BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, NodeId, SourceKind, SpiceLoader,
-};
+use crate::shared::{add_driver_leg, add_load_leg, add_partition_rc_legs, add_sensed_driver_leg};
+use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, NodeId, SourceKind, SpiceLoader};
 use hauksbee_solve::decompose::ConductionGraph;
 use hauksbee_solve::{
     dc_operating_point, run_tran, AcAnalysis, AcSpec, AssemblyMode, Integration, LinearIsland,
     Partition, Partitioning, Probe, SolveError, SolverOptions, StepControl, Sweep, Transient,
     Workspace,
 };
-
-/// Driver leg: `V1 -> R -> ctrl` with a capacitor to ground; the island whose
-/// voltage the B-source senses. (Same shape as the controlled-sources gates.)
-fn add_driver_leg(c: &mut Circuit) -> NodeId {
-    let vin = c.node("in");
-    let ctrl = c.node("ctrl");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.0),
-    });
-    c.add(Device::Resistor {
-        name: "Rd".into(),
-        a: vin,
-        b: ctrl,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "Cd".into(),
-        a: ctrl,
-        b: NodeId::GROUND,
-        farads: 100e-9,
-        ic: Some(0.0),
-    });
-    ctrl
-}
-
-/// Load leg: an RC island (`out` node) the B-source drives.
-fn add_load_leg(c: &mut Circuit) -> NodeId {
-    let out = c.node("out");
-    c.add(Device::Resistor {
-        name: "Rl".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "Cl".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: 100e-9,
-        ic: Some(0.0),
-    });
-    out
-}
 
 /// A B-source with one V(ctrl) dep, either output flavor.
 fn behavioral_vdep(out: NodeId, ctrl: NodeId, voltage_out: bool) -> Device {
@@ -172,47 +123,6 @@ fn behavioral_vdep_is_a_cross_island_sense_edge() {
 }
 
 // --- touchpoint 6: I(vname) deps demote-and-fuse ------------------------------
-
-/// Driver leg with an in-line zero-volt ammeter (same shape as the F/H gates).
-fn add_sensed_driver_leg(c: &mut Circuit) -> DeviceId {
-    let vin = c.node("in");
-    let ctrl = c.node("ctrl");
-    let cm = c.node("cm");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.0),
-    });
-    c.add(Device::Resistor {
-        name: "Rd".into(),
-        a: vin,
-        b: ctrl,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "Cd".into(),
-        a: ctrl,
-        b: NodeId::GROUND,
-        farads: 100e-9,
-        ic: Some(0.0),
-    });
-    let vs = c.add(Device::Vsource {
-        name: "Vs".into(),
-        p: ctrl,
-        n: cm,
-        kind: SourceKind::Dc(0.0),
-    });
-    c.add(Device::Resistor {
-        name: "Rs".into(),
-        a: cm,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
-    vs
-}
 
 /// An I(vname) dep must DEMOTE the ammeter from cut to island member and fuse
 /// everything into one island containing it; the F/H rule, reached through
@@ -381,24 +291,7 @@ fn auto_partitioning_never_drops_behavioral() {
             c.add(behavioral_vdep(out, ctrl, false));
         }
         // Extra independent RC legs so the partition heuristics engage.
-        for k in 0..4 {
-            let vin = c.node("in");
-            let leg = c.node(&format!("leg{k}"));
-            c.add(Device::Resistor {
-                name: format!("Rx{k}"),
-                a: vin,
-                b: leg,
-                ohms: 1e3,
-                tc1: None,
-            });
-            c.add(Device::Capacitor {
-                name: format!("Cx{k}"),
-                a: leg,
-                b: NodeId::GROUND,
-                farads: 1e-9,
-                ic: Some(0.0),
-            });
-        }
+        add_partition_rc_legs(&mut c);
         let opts_off = SolverOptions {
             integration: Integration::Trapezoidal,
             step: StepControl::Fixed { dt: 1e-6 },

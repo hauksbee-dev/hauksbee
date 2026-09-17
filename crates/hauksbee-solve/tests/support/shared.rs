@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_solve::Waveforms;
 
 /// `V1(in, v) -> R1(r) -> out -> C1(farads, IC=0) -> gnd`: the RC step fixture.
@@ -33,6 +33,120 @@ pub fn rc_lowpass(v: f64, r: f64, farads: f64) -> Circuit {
         ic: Some(0.0),
     });
     c
+}
+
+/// Driver island sensed by controlled/behavioral sources: `V1 -> Rd -> ctrl`,
+/// with a capacitor to ground.
+pub fn add_driver_leg(c: &mut Circuit) -> NodeId {
+    let vin = c.node("in");
+    let ctrl = c.node("ctrl");
+    c.add(Device::Vsource {
+        name: "V1".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(2.0),
+    });
+    c.add(Device::Resistor {
+        name: "Rd".into(),
+        a: vin,
+        b: ctrl,
+        ohms: 1e3,
+        tc1: None,
+    });
+    c.add(Device::Capacitor {
+        name: "Cd".into(),
+        a: ctrl,
+        b: NodeId::GROUND,
+        farads: 100e-9,
+        ic: Some(0.0),
+    });
+    ctrl
+}
+
+/// RC load island (`out`) driven by a controlled or behavioral source.
+pub fn add_load_leg(c: &mut Circuit) -> NodeId {
+    let out = c.node("out");
+    c.add(Device::Resistor {
+        name: "Rl".into(),
+        a: out,
+        b: NodeId::GROUND,
+        ohms: 1e3,
+        tc1: None,
+    });
+    c.add(Device::Capacitor {
+        name: "Cl".into(),
+        a: out,
+        b: NodeId::GROUND,
+        farads: 100e-9,
+        ic: Some(0.0),
+    });
+    out
+}
+
+/// Driver with an in-line zero-volt ammeter: `V1 -> Rd -> ctrl -> Cd`, plus
+/// `ctrl -> Vs(0V) -> cm -> Rs -> gnd`. Returns the ammeter's id for F/H or
+/// behavioral branch-current control; its current is `v_ctrl / 1k`.
+pub fn add_sensed_driver_leg(c: &mut Circuit) -> DeviceId {
+    let vin = c.node("in");
+    let ctrl = c.node("ctrl");
+    let cm = c.node("cm");
+    c.add(Device::Vsource {
+        name: "V1".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(2.0),
+    });
+    c.add(Device::Resistor {
+        name: "Rd".into(),
+        a: vin,
+        b: ctrl,
+        ohms: 1e3,
+        tc1: None,
+    });
+    c.add(Device::Capacitor {
+        name: "Cd".into(),
+        a: ctrl,
+        b: NodeId::GROUND,
+        farads: 100e-9,
+        ic: Some(0.0),
+    });
+    let vs = c.add(Device::Vsource {
+        name: "Vs".into(),
+        p: ctrl,
+        n: cm,
+        kind: SourceKind::Dc(0.0),
+    });
+    c.add(Device::Resistor {
+        name: "Rs".into(),
+        a: cm,
+        b: NodeId::GROUND,
+        ohms: 1e3,
+        tc1: None,
+    });
+    vs
+}
+
+/// Four independent RC legs behind the input source cut make the automatic
+/// partition heuristics fragment the circuit and engage the partitioned engine.
+pub fn add_partition_rc_legs(c: &mut Circuit) {
+    let vin = c.node("in");
+    for k in 0..4 {
+        let leg = c.node(&format!("leg{k}"));
+        c.add(Device::Resistor {
+            name: format!("Rx{k}"),
+            a: vin,
+            b: leg,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Capacitor {
+            name: format!("Cx{k}"),
+            a: leg,
+            b: NodeId::GROUND,
+            farads: 1e-9,
+            ic: Some(0.0),
+        });
+    }
 }
 
 /// Compare two waveform sets sample-for-sample over every node. Returns
