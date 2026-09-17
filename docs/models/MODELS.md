@@ -128,11 +128,17 @@ hauksbee models backend reset      # delete the file, back to every default
 hauksbee models backend path       # print the config path
 ```
 
-The built-in presets (`hauksbee models backend presets`) are ready-to-use
-configurations: `claude-code`, `claude-code-fast`, `agy`, `agy-pro`, `codex`,
-`openai`, `openrouter`, `ollama`. Applying one sets the backend and seeds that
-backend's own model/effort; other backends' sections are left untouched, so
-switching back and forth does not lose what was there.
+Presets (`models backend presets`): `claude-code`, `claude-code-fast`, `agy`,
+`agy-pro`, `codex`, `openai`, `openrouter`, `ollama`. Applying one changes the
+backend and its model/effort, preserving advanced settings and other backends.
+
+For a CLI-compatible wrapper, set `<backend>.command` to its executable name or
+path (not a shell command), or use `HAUKSBEE_CLAUDE_COMMAND`, `HAUKSBEE_AGY_COMMAND`,
+or `HAUKSBEE_CODEX_COMMAND`. Settings exposes this under Advanced → Executable.
+For example: `hauksbee models backend set 'claude-code.command=/path/my agent'`.
+The wrapper controls routing, authentication and charges; presets keep it.
+Missing/nonexecutable wrappers fail without fallback. Unset the command to
+restore the native CLI; ordinary defaults are unchanged.
 
 **Precedence**, per field, highest first: a command-line flag (`--backend`,
 `--model`, `--effort`, ...); a `HAUKSBEE_*` environment variable (below); this

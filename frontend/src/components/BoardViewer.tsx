@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useEffect, useEffectEvent, useRef, useState, useCallback, useMemo } from 'react'
 import { parseKicadPcb } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
 import { segmentsByNet } from '../lib/board-geometry'
@@ -199,6 +199,7 @@ export function BoardViewer({
   }, [frame?.net_voltages, unobservedNets])
 
   // ── Load board ──
+  const notifyEmptyBoard = useEffectEvent(() => onEmptyBoard?.())
   useEffect(() => {
     // Changing boardFile does not implicitly cancel the previous fetch: a slow
     // earlier load could otherwise setBoard (or report an empty board) AFTER
@@ -223,7 +224,7 @@ export function BoardViewer({
           parsed.segments.length === 0 &&
           parsed.vias.length === 0
         ) {
-          onEmptyBoard?.()
+          notifyEmptyBoard()
         }
       })
       .catch((e: Error) => {

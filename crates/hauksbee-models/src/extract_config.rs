@@ -192,11 +192,14 @@ pub struct ExtractConfig {
 }
 
 /// `[claude-code]`, `[agy]`, `[codex]`: one headless agent CLI run in the
-/// sandbox. The same four knobs for each; the CLI's own spelling of them is
+/// sandbox. The same knobs for each; the CLI's own spelling of them is
 /// the runner's business.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentConfig {
+    /// Executable name or path; keeps this backend’s protocol. No shell parsing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -246,13 +249,6 @@ fn tidy(field: &mut Option<String>) {
         .filter(|v| !v.is_empty());
 }
 
-fn is_env_name(name: &str) -> bool {
-    name.chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
 fn check_choice(what: &str, value: &Option<String>, allowed: &[&str]) -> Result<()> {
     match value {
         Some(v) if !allowed.contains(&v.as_str()) => {
@@ -294,6 +290,7 @@ impl ExtractConfig {
     pub fn normalise(&mut self) {
         for a in AGENTS {
             let s = self.agent_mut(a.backend).expect("agent");
+            tidy(&mut s.command);
             tidy(&mut s.model);
             tidy(&mut s.effort);
             tidy(&mut s.permission_mode);
@@ -317,6 +314,14 @@ impl ExtractConfig {
         }
         for a in AGENTS {
             let (name, s) = (a.backend.name(), self.agent(a.backend).expect("agent"));
+            if s.command
+                .as_deref()
+                .is_some_and(|c| c.chars().any(char::is_control))
+            {
+                bail!(
+                    "{name}.command must be an executable name or path without control characters"
+                );
+            }
             check_model(&format!("{name}.model"), &s.model)?;
             check_choice(&format!("{name}.effort"), &s.effort, a.efforts)?;
             check_choice(
@@ -334,17 +339,8 @@ impl ExtractConfig {
         {
             bail!("api.base_url must start with http:// or https://, not '{url}'");
         }
-        if self
-            .api
-            .api_key_env
-            .as_deref()
-            .is_some_and(|n| !is_env_name(n))
-        {
-            bail!(
-                "api.api_key_env takes the NAME of an environment variable (e.g. \
-                 OPENAI_API_KEY), not the key itself. Export the key first, then \
-                 name the variable."
-            );
+        if let Some(name) = &self.api.api_key_env {
+            crate::datasheet::validate_api_key_env_name(name).context("api.api_key_env")?;
         }
         Ok(())
     }
@@ -364,34 +360,34 @@ impl ExtractConfig {
             KeyInfo::new("timeout_secs", "seconds one agent run may take", "600"),
         ];
         for a in AGENTS {
-            let n = a.backend.name();
-            keys.push(KeyInfo::new(
-                format!("{n}.model"),
-                format!("{} model", a.backend.label()),
-                a.model,
-            ));
-            keys.push(KeyInfo::new(
-                format!("{n}.effort"),
-                a.efforts.join(" | "),
-                a.effort,
-            ));
-            keys.push(KeyInfo::new(
-                format!("{n}.permission_mode"),
-                a.permission_modes.join(" | "),
-                a.permission_mode,
-            ));
-            if a.backend == Backend::Codex {
-                keys.push(KeyInfo::new(
-                    "codex.profile",
-                    "codex auth profile (codex -p NAME)",
+            for (field, help, default) in [
+                (
+                    "command",
+                    "executable name or path; wrapper controls routing".into(),
+                    a.backend.tool().expect("agent"),
+                ),
+                ("model", format!("{} model", a.backend.label()), a.model),
+                ("effort", a.efforts.join(" | "), a.effort),
+                (
+                    "permission_mode",
+                    a.permission_modes.join(" | "),
+                    a.permission_mode,
+                ),
+                ("profile", "codex auth profile (codex -p NAME)".into(), ""),
+                (
+                    "extra_args",
+                    "extra CLI arguments, space-separated".into(),
                     "",
-                ));
+                ),
+            ] {
+                if field != "profile" || a.backend == Backend::Codex {
+                    keys.push(KeyInfo::new(
+                        format!("{}.{field}", a.backend.name()),
+                        help,
+                        default,
+                    ));
+                }
             }
-            keys.push(KeyInfo::new(
-                format!("{n}.extra_args"),
-                "extra CLI arguments, space-separated",
-                "",
-            ));
         }
         keys.push(KeyInfo::new(
             "api.base_url",
@@ -476,6 +472,7 @@ impl ExtractConfig {
             .and_then(|b| self.agent_mut(b))
             .ok_or_else(unknown)?;
         match field {
+            "command" => agent.command = opt,
             "model" => agent.model = opt,
             "effort" => agent.effort = opt,
             "permission_mode" => agent.permission_mode = opt,
@@ -542,25 +539,14 @@ impl ExtractConfig {
                 .unwrap_or_else(|| default.to_string())
         };
 
-        let (backend, backend_source) = if let Some(b) = flag_backend {
-            (b, BackendSource::Flag)
-        } else if let Some(b) = env(ENV_BACKEND).and_then(|v| v.parse::<Backend>().ok()) {
-            (b, BackendSource::Env(ENV_BACKEND))
-        } else if let Some(b) = self.backend {
-            (b, BackendSource::Config)
-        } else if env("HAUKSBEE_LLM_API_KEY").is_some() {
-            (Backend::Api, BackendSource::Env("HAUKSBEE_LLM_API_KEY"))
-        } else {
-            // Nothing installed: codex, so the error names one install command.
-            let found = [Backend::Codex, Backend::ClaudeCode, Backend::Agy]
-                .into_iter()
-                .find(|b| b.tool().is_some_and(|t| host.find(t).is_some()));
-            (found.unwrap_or(Backend::Codex), BackendSource::Auto)
-        };
-
         let agent = |spec: &AgentSpec| {
             let s = self.agent(spec.backend).expect("agent");
             ResolvedAgent {
+                command: pick(
+                    &format!("{}_COMMAND", spec.env_prefix),
+                    &s.command,
+                    spec.backend.tool().expect("agent"),
+                ),
                 model: pick(&format!("{}_MODEL", spec.env_prefix), &s.model, spec.model),
                 effort: pick(
                     &format!("{}_EFFORT", spec.env_prefix),
@@ -576,6 +562,28 @@ impl ExtractConfig {
             }
         };
 
+        let [claude_code, agy, codex] = AGENTS.map(|spec| agent(&spec));
+        let (backend, backend_source) = if let Some(b) = flag_backend {
+            (b, BackendSource::Flag)
+        } else if let Some(b) = env(ENV_BACKEND).and_then(|v| v.parse::<Backend>().ok()) {
+            (b, BackendSource::Env(ENV_BACKEND))
+        } else if let Some(b) = self.backend {
+            (b, BackendSource::Config)
+        } else if env("HAUKSBEE_LLM_API_KEY").is_some() {
+            (Backend::Api, BackendSource::Env("HAUKSBEE_LLM_API_KEY"))
+        } else {
+            // Nothing installed: codex, so the error names one install command.
+            let found = [
+                (Backend::Codex, &codex),
+                (Backend::ClaudeCode, &claude_code),
+                (Backend::Agy, &agy),
+            ]
+            .into_iter()
+            .find(|(_, a)| host.find(&a.command).is_some())
+            .map(|(backend, _)| backend);
+            (found.unwrap_or(Backend::Codex), BackendSource::Auto)
+        };
+
         Resolved {
             backend,
             backend_source,
@@ -584,9 +592,9 @@ impl ExtractConfig {
                 .and_then(|v| v.parse().ok())
                 .or(self.timeout_secs)
                 .unwrap_or(DEFAULT_TIMEOUT_SECS),
-            claude_code: agent(&AGENTS[0]),
-            agy: agent(&AGENTS[1]),
-            codex: agent(&AGENTS[2]),
+            claude_code,
+            agy,
+            codex,
             api: ResolvedApi {
                 base_url: pick(
                     "HAUKSBEE_LLM_BASE_URL",
@@ -637,10 +645,13 @@ impl KeyInfo {
 pub const KNOWN_ENV_VARS: &[&str] = &[
     ENV_BACKEND,
     "HAUKSBEE_LLM_API_KEY",
+    "HAUKSBEE_CLAUDE_COMMAND",
     "HAUKSBEE_CLAUDE_MODEL",
     "HAUKSBEE_CLAUDE_EFFORT",
+    "HAUKSBEE_AGY_COMMAND",
     "HAUKSBEE_AGY_MODEL",
     "HAUKSBEE_AGY_EFFORT",
+    "HAUKSBEE_CODEX_COMMAND",
     "HAUKSBEE_CODEX_MODEL",
     "HAUKSBEE_CODEX_EFFORT",
     "HAUKSBEE_CODEX_PROFILE",
@@ -867,6 +878,7 @@ impl BackendSource {
 /// One agent CLI's effective settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedAgent {
+    pub command: String,
     pub model: String,
     pub effort: String,
     pub permission_mode: String,
@@ -953,26 +965,36 @@ impl Resolved {
         }
     }
 
-    /// "Claude Code (claude-opus-5, high effort)": the line every consent
-    /// surface prints, so the user is told exactly what is about to read their
-    /// datasheet.
-    pub fn summary(&self) -> String {
-        match self.effort() {
-            Some(effort) => format!(
-                "{} ({}, {effort} effort)",
-                self.backend.label(),
-                self.model()
-            ),
-            None => format!(
-                "{} ({} at {})",
-                self.backend.label(),
-                self.model(),
-                self.api.base_url
-            ),
-        }
+    /// The command override, if this protocol is run through a custom wrapper.
+    pub fn custom_command(&self, backend: Backend) -> Option<&str> {
+        self.agent(backend)
+            .map(|a| a.command.as_str())
+            .filter(|c| Some(*c) != backend.tool())
     }
 
-    /// The per-run flags a script would use to reproduce this setup.
+    /// The same routing disclosure for consent, availability and run summaries.
+    pub fn sends_data_to(&self, backend: Backend) -> String {
+        self.custom_command(backend).map_or_else(
+            || backend.sends_data_to().to_string(),
+            |command| format!("custom wrapper `{command}` controls destination/routing"),
+        )
+    }
+
+    /// Tell every consent surface exactly what is about to read the datasheet.
+    pub fn summary(&self) -> String {
+        let detail = match self.effort() {
+            Some(effort) => format!("{}, {effort} effort", self.model()),
+            None => format!("{} at {}", self.model(), self.api.base_url),
+        };
+        let routing = self
+            .custom_command(self.backend)
+            .map(|_| format!("; {}", self.sends_data_to(self.backend)))
+            .unwrap_or_default();
+        format!("{} ({detail}{routing})", self.backend.label())
+    }
+
+    /// Per-run protocol/model flags; command overrides still require the same
+    /// config or `HAUKSBEE_*_COMMAND` environment variable.
     pub fn as_flags(&self) -> String {
         let mut s = format!("--backend {} --model {}", self.backend.name(), self.model());
         if let Some(e) = self.effort() {
@@ -1003,7 +1025,7 @@ pub struct BackendStatus {
     /// The command that makes it available when it is not.
     pub install: &'static str,
     /// Where the datasheet goes when this backend is used.
-    pub sends_data_to: &'static str,
+    pub sends_data_to: String,
 }
 
 /// Every backend's status against `host`, with `resolved` deciding what the
@@ -1011,35 +1033,44 @@ pub struct BackendStatus {
 pub fn availability(host: &dyn Host, resolved: &Resolved) -> Vec<BackendStatus> {
     Backend::ALL
         .iter()
-        .map(|&backend| {
-            let (available, detail) = match backend.tool() {
-                Some(tool) => match host.find(tool) {
-                    Some(path) => (true, path.display().to_string()),
-                    None => (false, format!("`{tool}` is not on PATH")),
-                },
-                None => {
-                    let name = &resolved.api.api_key_env;
-                    match host.var(name).filter(|v| !v.trim().is_empty()) {
-                        Some(_) => (true, format!("${name} is set")),
-                        None if is_local_url(&resolved.api.base_url) => (
-                            true,
-                            format!("local endpoint, no key needed (${name} unset)"),
-                        ),
-                        None => (false, format!("${name} is not set")),
-                    }
-                }
-            };
-            BackendStatus {
-                id: backend.name(),
-                label: backend.label(),
-                backend,
-                available,
-                detail,
-                install: backend.install_hint(),
-                sends_data_to: backend.sends_data_to(),
-            }
-        })
+        .map(|&backend| resolved.status(host, backend))
         .collect()
+}
+
+impl Resolved {
+    /// Inspect one effective backend without running it or checking sign-in.
+    pub fn status(&self, host: &dyn Host, backend: Backend) -> BackendStatus {
+        let (available, detail) = match self.agent(backend) {
+            Some(a) => match host.find(&a.command) {
+                Some(path) => (true, path.display().to_string()),
+                None => (false, format!("executable `{}` was not found", a.command)),
+            },
+            None => {
+                let name = &self.api.api_key_env;
+                match host.var(name).filter(|v| !v.trim().is_empty()) {
+                    Some(_) => (true, format!("${name} is set")),
+                    None if is_local_url(&self.api.base_url) => (
+                        true,
+                        format!("local endpoint, no key needed (${name} unset)"),
+                    ),
+                    None => (false, format!("${name} is not set")),
+                }
+            }
+        };
+        BackendStatus {
+            id: backend.name(),
+            label: backend.label(),
+            backend,
+            available,
+            detail,
+            install: if self.custom_command(backend).is_some() {
+                "install the configured wrapper or change the command setting"
+            } else {
+                backend.install_hint()
+            },
+            sends_data_to: self.sends_data_to(backend),
+        }
+    }
 }
 
 /// A loopback endpoint: nothing leaves the machine and no key is expected.
@@ -1070,24 +1101,15 @@ pub fn config_path_in(host: &dyn Host) -> Result<PathBuf> {
             .filter(|p| !p.trim().is_empty())
             .map(PathBuf::from)
     };
-    if let Some(p) = set(ENV_CONFIG_PATH) {
-        return Ok(p);
+    if let Some(path) = set(ENV_CONFIG_PATH) {
+        return Ok(path);
     }
-    if let Some(xdg) = set("XDG_CONFIG_HOME") {
-        return Ok(xdg.join("hauksbee").join(FILE_NAME));
-    }
-    if let Some(home) = set("HOME") {
-        return Ok(home.join(".config").join("hauksbee").join(FILE_NAME));
-    }
-    // Windows: no $HOME. %APPDATA% is the per-user roaming config root;
-    // %USERPROFILE% is the home directory itself.
-    if let Some(appdata) = set("APPDATA") {
-        return Ok(appdata.join("hauksbee").join(FILE_NAME));
-    }
-    let profile = set("USERPROFILE").context(
-        "none of $HAUKSBEE_EXTRACT_CONFIG, $XDG_CONFIG_HOME, $HOME, %APPDATA% or %USERPROFILE% is set, so there is nowhere to keep extraction settings",
-    )?;
-    Ok(profile.join(".config").join("hauksbee").join(FILE_NAME))
+    // Windows falls back to the roaming config root, then the home directory.
+    [("XDG_CONFIG_HOME", "hauksbee"), ("HOME", ".config/hauksbee"),
+     ("APPDATA", "hauksbee"), ("USERPROFILE", ".config/hauksbee")]
+        .into_iter()
+        .find_map(|(var, suffix)| set(var).map(|root| root.join(suffix).join(FILE_NAME)))
+        .context("none of $HAUKSBEE_EXTRACT_CONFIG, $XDG_CONFIG_HOME, $HOME, %APPDATA% or %USERPROFILE% is set, so there is nowhere to keep extraction settings")
 }
 
 /// A config as loaded: the values, where they came from, and whether the
@@ -1183,21 +1205,24 @@ mod tests {
         let r = ExtractConfig::default().resolve(&host(&[], &["claude"]), None);
         assert_eq!(r.backend, Backend::ClaudeCode);
         assert_eq!(r.backend_source, BackendSource::Auto);
-        assert_eq!(
-            (r.claude_code.model.as_str(), r.claude_code.effort.as_str()),
-            ("claude-opus-5", "high")
-        );
-        assert_eq!(
-            (r.agy.model.as_str(), r.agy.effort.as_str()),
-            ("gemini-3.8-flash", "high")
-        );
-        assert_eq!(
-            (r.codex.model.as_str(), r.codex.permission_mode.as_str()),
-            ("gpt-5.6-sol", "workspace-write")
-        );
+        for (backend, model, effort, permission) in [
+            (Backend::ClaudeCode, "claude-opus-5", "high", "acceptEdits"),
+            (Backend::Agy, "gemini-3.8-flash", "high", "accept-edits"),
+            (Backend::Codex, "gpt-5.6-sol", "high", "workspace-write"),
+        ] {
+            let a = r.agent(backend).unwrap();
+            assert_eq!(
+                (&*a.model, &*a.effort, &*a.permission_mode),
+                (model, effort, permission)
+            );
+        }
         assert_eq!((r.retries, r.timeout_secs), (2, 600));
         assert_eq!(r.summary(), "Claude Code (claude-opus-5, high effort)");
         for a in AGENTS {
+            assert_eq!(
+                r.agent(a.backend).unwrap().command,
+                a.backend.tool().unwrap()
+            );
             assert_eq!(a.effort, "high", "{}: high, not max", a.backend);
             assert!(
                 a.efforts.contains(&a.effort) && a.permission_modes.contains(&a.permission_mode)
@@ -1208,20 +1233,14 @@ mod tests {
     #[test]
     fn auto_detection_prefers_codex_then_claude_then_agy() {
         let cfg = ExtractConfig::default();
-        assert_eq!(
-            cfg.resolve(&host(&[], &["codex", "claude", "agy"]), None)
-                .backend,
-            Backend::Codex
-        );
-        assert_eq!(
-            cfg.resolve(&host(&[], &["claude", "agy"]), None).backend,
-            Backend::ClaudeCode
-        );
-        assert_eq!(
-            cfg.resolve(&host(&[], &["agy"]), None).backend,
-            Backend::Agy
-        );
-        assert_eq!(cfg.resolve(&host(&[], &[]), None).backend, Backend::Codex);
+        for (tools, backend) in [
+            (&["codex", "claude", "agy"][..], Backend::Codex),
+            (&["claude", "agy"][..], Backend::ClaudeCode),
+            (&["agy"][..], Backend::Agy),
+            (&[][..], Backend::Codex),
+        ] {
+            assert_eq!(cfg.resolve(&host(&[], tools), None).backend, backend);
+        }
     }
 
     #[test]
@@ -1270,6 +1289,32 @@ mod tests {
     }
 
     #[test]
+    fn custom_commands_resolve_discover_and_disclose_without_fallback() {
+        let mut cfg = ExtractConfig::default();
+        cfg.set("claude-code.command", "claude-mix").unwrap();
+        cfg.set("claude-code.model", "gpt-5.6-sol").unwrap();
+        let h = host(&[], &["claude-mix"]);
+        let r = cfg.resolve(&h, None);
+        assert_eq!(r.backend, Backend::ClaudeCode);
+        assert_eq!(r.claude_code.command, "claude-mix");
+        assert!(r.summary().contains("gpt-5.6-sol"));
+        assert!(r.summary().contains(&r.sends_data_to(r.backend)));
+        let row = availability(&h, &r).remove(0);
+        assert!(row.available && row.sends_data_to.contains("claude-mix"));
+        assert!(!row.sends_data_to.contains("Anthropic"));
+        cfg.set("backend", "claude-code").unwrap();
+        let h = host(
+            &[("HAUKSBEE_CLAUDE_COMMAND", "missing wrapper")],
+            &["claude"],
+        );
+        let r = cfg.resolve(&h, None);
+        assert_eq!(r.backend, Backend::ClaudeCode);
+        assert_eq!(r.claude_code.command, "missing wrapper");
+        assert!(!availability(&h, &r)[0].available);
+        assert!(r.env_overrides.contains(&"HAUKSBEE_CLAUDE_COMMAND".into()));
+    }
+
+    #[test]
     fn presets_apply_to_their_own_section_only() {
         let mut cfg = ExtractConfig::default();
         cfg.set("codex.model", "keep-me").unwrap();
@@ -1310,6 +1355,8 @@ mod tests {
         let mut cfg = ExtractConfig::default();
         for bad in [
             ("claude-code.effort", "turbo"),
+            ("claude-code.command", "bad\0command"),
+            ("agy.command", "bad\ncommand"),
             ("codex.permission_mode", "acceptEdits"),
             ("api.api_key_env", "sk-abc-123"),
             ("api.base_url", "openai.com"),
@@ -1351,6 +1398,8 @@ mod tests {
         let mut cfg = ExtractConfig::default();
         cfg.apply_preset("claude-code").unwrap();
         cfg.set("timeout_secs", "900").unwrap();
+        cfg.set("claude-code.command", r"C:\Program Files\wrapper.exe")
+            .unwrap();
         let text = cfg.to_toml();
         assert!(
             text.contains("backend = \"claude-code\"") && text.contains("[claude-code]"),
@@ -1371,7 +1420,7 @@ mod tests {
     #[test]
     fn a_web_form_with_blank_fields_normalises_to_unset() {
         let mut cfg: ExtractConfig = serde_json::from_str(
-            r#"{"backend":"agy","agy":{"model":"  ","effort":""},"api":{"base_url":" "}}"#,
+            r#"{"backend":"agy","agy":{"command":"  ","model":"  ","effort":""},"api":{"base_url":" "}}"#,
         )
         .unwrap();
         cfg.normalise();
@@ -1406,29 +1455,33 @@ mod tests {
 
     #[test]
     fn the_config_path_honours_the_override_then_xdg_then_home() {
-        let at = |vars: &[(&str, &str)]| config_path_in(&host(vars, &[]));
-        assert_eq!(
-            at(&[("HAUKSBEE_EXTRACT_CONFIG", "/x/y.toml"), ("HOME", "/h")]).unwrap(),
-            PathBuf::from("/x/y.toml")
-        );
-        assert_eq!(
-            at(&[("XDG_CONFIG_HOME", "/xdg"), ("HOME", "/h")]).unwrap(),
-            PathBuf::from("/xdg/hauksbee/extract.toml")
-        );
-        assert_eq!(
-            at(&[("HOME", "/h")]).unwrap(),
-            PathBuf::from("/h/.config/hauksbee/extract.toml")
-        );
-        // Windows: no $HOME, so the roaming config root, then the profile.
-        assert_eq!(
-            at(&[("APPDATA", "/ad"), ("USERPROFILE", "/up")]).unwrap(),
-            PathBuf::from("/ad/hauksbee/extract.toml")
-        );
-        assert_eq!(
-            at(&[("USERPROFILE", "/up")]).unwrap(),
-            PathBuf::from("/up/.config/hauksbee/extract.toml")
-        );
-        assert!(at(&[]).is_err());
+        let cases: &[(&[(&str, &str)], &str)] = &[
+            (
+                &[("HAUKSBEE_EXTRACT_CONFIG", "/x/y.toml"), ("HOME", "/h")],
+                "/x/y.toml",
+            ),
+            (
+                &[("XDG_CONFIG_HOME", "/xdg"), ("HOME", "/h")],
+                "/xdg/hauksbee/extract.toml",
+            ),
+            (&[("HOME", "/h")], "/h/.config/hauksbee/extract.toml"),
+            // Windows: no $HOME, so the roaming config root, then the profile.
+            (
+                &[("APPDATA", "/ad"), ("USERPROFILE", "/up")],
+                "/ad/hauksbee/extract.toml",
+            ),
+            (
+                &[("USERPROFILE", "/up")],
+                "/up/.config/hauksbee/extract.toml",
+            ),
+        ];
+        for (vars, expected) in cases {
+            assert_eq!(
+                config_path_in(&host(vars, &[])).unwrap(),
+                PathBuf::from(expected)
+            );
+        }
+        assert!(config_path_in(&host(&[], &[])).is_err());
     }
 
     #[test]

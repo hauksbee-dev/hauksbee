@@ -423,26 +423,18 @@ export type ExtractBackendSource =
   | { kind: 'auto' }
   | { kind: 'flag' }
 
-export interface ExtractCodexBackendConfig {
+export interface ExtractAgentConfig {
+  command?: string
   model?: string
   effort?: string
+  permission_mode?: string
   profile?: string
   extra_args?: string[]
 }
 
-export interface ExtractClaudeCodeBackendConfig {
-  model?: string
-  effort?: string
-  permission_mode?: string
-  extra_args?: string[]
-}
-
-export interface ExtractAgyBackendConfig {
-  model?: string
-  effort?: string
-  permission_mode?: string
-  extra_args?: string[]
-}
+export type ExtractCodexBackendConfig = ExtractAgentConfig
+export type ExtractClaudeCodeBackendConfig = ExtractAgentConfig
+export type ExtractAgyBackendConfig = ExtractAgentConfig
 
 export interface ExtractApiBackendConfig {
   base_url?: string
@@ -464,26 +456,18 @@ export interface ExtractBackendsConfig {
 
 /** The same shape as `ExtractBackendsConfig`'s per-backend blocks, but with
  *  every field resolved to the value that will actually be used. */
-export interface ExtractResolvedCodex {
+export interface ExtractResolvedAgent {
+  command?: string
   model: string
   effort: string
-  profile: string | null
+  permission_mode?: string
+  profile?: string | null
   extra_args: string[]
 }
 
-export interface ExtractResolvedClaudeCode {
-  model: string
-  effort: string
-  permission_mode: string
-  extra_args: string[]
-}
-
-export interface ExtractResolvedAgy {
-  model: string
-  effort: string
-  permission_mode: string
-  extra_args: string[]
-}
+export type ExtractResolvedCodex = ExtractResolvedAgent
+export type ExtractResolvedClaudeCode = ExtractResolvedAgent
+export type ExtractResolvedAgy = ExtractResolvedAgent
 
 export interface ExtractResolvedApi {
   base_url: string

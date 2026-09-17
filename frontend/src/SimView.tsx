@@ -176,9 +176,8 @@ export default function SimView({
   // net. Recomputed per frame over a short window (see net-state.ts): the
   // engine's own intra-chunk extremes would be better and are preferred
   // automatically the moment the wire carries them.
-  // Keyed on `liveFrame` alone: `frames` is a ref array whose identity never
-  // changes, so it would neither trigger nor prevent a recompute.
-  const netEnvelopes = useMemo(() => envelopesFromHistory(frames), [liveFrame, frames])
+  // The session replaces `frames` on every retained sample.
+  const netEnvelopes = useMemo(() => envelopesFromHistory(frames), [frames])
   const netEnvelopeSource = envelopeSource(liveFrame, netEnvelopes)
 
   const running = status?.running ?? false

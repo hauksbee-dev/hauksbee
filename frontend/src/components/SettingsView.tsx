@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, errorText } from '../lib/api'
 import type {
-  ExtractApiBackendConfig, ExtractBackendAvailability, ExtractBackendsConfig, ExtractClaudeCodeBackendConfig,
-  ExtractCodexBackendConfig, ExtractPreset, ExtractResolved, ExtractSettings,
+  ExtractAgentConfig, ExtractApiBackendConfig, ExtractBackendAvailability, ExtractBackendsConfig,
+  ExtractPreset, ExtractResolved, ExtractSettings,
 } from '../types/report'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 import { ChevronDownIcon, ChevronRightIcon } from './Icons'
@@ -29,16 +29,11 @@ const BACKEND_FALLBACK_LABEL: Record<BackendId, string> = {
   api: 'OpenAI-compatible API',
 }
 
-interface DraftLikeBackend {
+interface DraftAgent {
+  command: string
   model: string
   effort: string
   permission_mode: string
-  extra_args: string
-}
-
-interface DraftCodex {
-  model: string
-  effort: string
   profile: string
   extra_args: string
 }
@@ -53,34 +48,28 @@ interface Draft {
   backend: string
   retries: string
   timeout_secs: string
-  codex: DraftCodex
-  'claude-code': DraftLikeBackend
-  agy: DraftLikeBackend
+  codex: DraftAgent
+  'claude-code': DraftAgent
+  agy: DraftAgent
   api: DraftApi
 }
+
+const agentDraft = (config?: ExtractAgentConfig): DraftAgent => ({
+  command: config?.command ?? '',
+  model: config?.model ?? '',
+  effort: config?.effort ?? '',
+  permission_mode: config?.permission_mode ?? '',
+  profile: config?.profile ?? '',
+  extra_args: (config?.extra_args ?? []).join(' '),
+})
 
 const draftFromConfig = (config: ExtractBackendsConfig): Draft => ({
   backend: config.backend ?? '',
   retries: config.retries !== undefined ? String(config.retries) : '',
   timeout_secs: config.timeout_secs !== undefined ? String(config.timeout_secs) : '',
-  codex: {
-    model: config.codex?.model ?? '',
-    effort: config.codex?.effort ?? '',
-    profile: config.codex?.profile ?? '',
-    extra_args: (config.codex?.extra_args ?? []).join(' '),
-  },
-  'claude-code': {
-    model: config['claude-code']?.model ?? '',
-    effort: config['claude-code']?.effort ?? '',
-    permission_mode: config['claude-code']?.permission_mode ?? '',
-    extra_args: (config['claude-code']?.extra_args ?? []).join(' '),
-  },
-  agy: {
-    model: config.agy?.model ?? '',
-    effort: config.agy?.effort ?? '',
-    permission_mode: config.agy?.permission_mode ?? '',
-    extra_args: (config.agy?.extra_args ?? []).join(' '),
-  },
+  codex: agentDraft(config.codex),
+  'claude-code': agentDraft(config['claude-code']),
+  agy: agentDraft(config.agy),
   api: {
     base_url: config.api?.base_url ?? '',
     model: config.api?.model ?? '',
@@ -94,29 +83,16 @@ const configFromDraft = (draft: Draft): ExtractBackendsConfig => {
   if (draft.retries.trim() !== '') config.retries = Number(draft.retries)
   if (draft.timeout_secs.trim() !== '') config.timeout_secs = Number(draft.timeout_secs)
 
-  const codex: ExtractCodexBackendConfig = {}
-  if (draft.codex.model.trim()) codex.model = draft.codex.model.trim()
-  if (draft.codex.effort.trim()) codex.effort = draft.codex.effort.trim()
-  if (draft.codex.profile.trim()) codex.profile = draft.codex.profile.trim()
-  const codexArgs = draft.codex.extra_args.trim().split(/\s+/).filter(Boolean)
-  if (codexArgs.length) codex.extra_args = codexArgs
-  if (Object.keys(codex).length) config.codex = codex
-
-  const claude: ExtractClaudeCodeBackendConfig = {}
-  if (draft['claude-code'].model.trim()) claude.model = draft['claude-code'].model.trim()
-  if (draft['claude-code'].effort.trim()) claude.effort = draft['claude-code'].effort.trim()
-  if (draft['claude-code'].permission_mode.trim()) claude.permission_mode = draft['claude-code'].permission_mode.trim()
-  const claudeArgs = draft['claude-code'].extra_args.trim().split(/\s+/).filter(Boolean)
-  if (claudeArgs.length) claude.extra_args = claudeArgs
-  if (Object.keys(claude).length) config['claude-code'] = claude
-
-  const agy: ExtractClaudeCodeBackendConfig = {}
-  if (draft.agy.model.trim()) agy.model = draft.agy.model.trim()
-  if (draft.agy.effort.trim()) agy.effort = draft.agy.effort.trim()
-  if (draft.agy.permission_mode.trim()) agy.permission_mode = draft.agy.permission_mode.trim()
-  const agyArgs = draft.agy.extra_args.trim().split(/\s+/).filter(Boolean)
-  if (agyArgs.length) agy.extra_args = agyArgs
-  if (Object.keys(agy).length) config.agy = agy
+  for (const backend of ['codex', 'claude-code', 'agy'] as const) {
+    const agent: ExtractAgentConfig = {}
+    for (const key of ['command', 'model', 'effort', 'permission_mode', 'profile'] as const) {
+      const value = draft[backend][key].trim()
+      if (value) agent[key] = value
+    }
+    const args = draft[backend].extra_args.trim().split(/\s+/).filter(Boolean)
+    if (args.length) agent.extra_args = args
+    if (Object.keys(agent).length) config[backend] = agent
+  }
 
   const apiCfg: ExtractApiBackendConfig = {}
   if (draft.api.base_url.trim()) apiCfg.base_url = draft.api.base_url.trim()
@@ -130,7 +106,7 @@ const configFromDraft = (draft: Draft): ExtractBackendsConfig => {
 /** Every non-blank field the draft would save, as `key=value` pairs in the
  *  exact dotted names `keys[]` documents (`claude-code.model`, `api.base_url`,
  *  ...), for the terminal-equivalent line. */
-function draftArgs(config: ExtractBackendsConfig): string[] {
+function draftArgs(config: ExtractBackendsConfig, saved?: ExtractBackendsConfig): string[] {
   const args: string[] = []
   if (config.backend) args.push(`backend=${config.backend}`)
   if (config.retries !== undefined) args.push(`retries=${config.retries}`)
@@ -147,16 +123,21 @@ function draftArgs(config: ExtractBackendsConfig): string[] {
   block('claude-code', config['claude-code'] as Record<string, unknown> | undefined)
   block('agy', config.agy as Record<string, unknown> | undefined)
   block('api', config.api as Record<string, unknown> | undefined)
+  const keys = new Set(args.map(arg => arg.split('=')[0]))
+  for (const arg of saved ? draftArgs(saved) : []) {
+    const key = arg.split('=')[0]
+    if (!keys.has(key)) args.push(`${key}=`)
+  }
   return args
 }
 
 function resolvedBlock(resolved: ExtractResolved, backend: string) {
   switch (backend) {
-    case 'codex': return { model: resolved.codex.model, effort: resolved.codex.effort }
-    case 'claude-code': return { model: resolved.claude_code.model, effort: resolved.claude_code.effort }
-    case 'agy': return { model: resolved.agy.model, effort: resolved.agy.effort }
-    case 'api': return { model: resolved.api.model, effort: '' }
-    default: return { model: '', effort: '' }
+    case 'codex': return resolved.codex
+    case 'claude-code': return resolved.claude_code
+    case 'agy': return resolved.agy
+    case 'api': return { model: resolved.api.model, effort: '', command: undefined }
+    default: return { model: '', effort: '', command: undefined }
   }
 }
 
@@ -165,24 +146,6 @@ function presetMatchesResolved(preset: ExtractPreset, resolved: ExtractResolved)
   if (preset.backend === 'api') return preset.model === resolved.api.model && preset.api_base === resolved.api.base_url
   const { model, effort } = resolvedBlock(resolved, preset.backend)
   return preset.model === model && preset.effort === effort
-}
-
-/** Which preset (if any) the CURRENT draft is exactly equivalent to, for the
- *  terminal line's `backend use <preset>` shortcut. */
-function draftMatchesPreset(draft: Draft, selectedBackend: string, presets: ExtractPreset[]): ExtractPreset | null {
-  for (const preset of presets) {
-    if (preset.backend !== selectedBackend) continue
-    if (preset.backend === 'api') {
-      if (draft.api.model === preset.model && draft.api.base_url === preset.api_base
-        && draft.api.api_key_env === preset.api_key_env) return preset
-      continue
-    }
-    const block = preset.backend === 'codex' ? draft.codex
-      : preset.backend === 'claude-code' ? draft['claude-code']
-      : preset.backend === 'agy' ? draft.agy : null
-    if (block && block.model === preset.model && block.effort === preset.effort) return preset
-  }
-  return null
 }
 
 function sourceLine(data: ExtractSettings): string {
@@ -240,8 +203,9 @@ function Segmented<T extends string>({ options, value, onChange, testIdPrefix, l
   )
 }
 
-function PresetCard({ preset, availability, active, busy, onUse }: {
+function PresetCard({ preset, availability, customCommand, active, busy, onUse }: {
   preset: ExtractPreset
+  customCommand?: string
   availability?: ExtractBackendAvailability
   active: boolean
   busy: boolean
@@ -267,7 +231,9 @@ function PresetCard({ preset, availability, active, busy, onUse }: {
           </span>
         )}
       </div>
-      <div className="text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>{preset.summary}</div>
+      <div className="text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+        {customCommand ? `Keeps custom command ${customCommand}; its configuration controls routing and charges.` : preset.summary}
+      </div>
       <div className="text-[11px] truncate" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
         {monoLine}
       </div>
@@ -352,15 +318,9 @@ export function SettingsView() {
   const draftJson = draft ? JSON.stringify(configFromDraft(draft)) : null
   const dirty = baseline !== null && draftJson !== null && draftJson !== baseline
 
-  const matchedPreset = data && draft ? draftMatchesPreset(draft, selectedBackend, data.presets) : null
-  const terminalCommand = data && draft
-    ? (matchedPreset
-      ? `hauksbee models backend use ${matchedPreset.id}`
-      : (() => {
-          const args = draftArgs(configFromDraft(draft))
-          return args.length ? `hauksbee models backend set ${args.join(' ')}` : 'hauksbee models backend show'
-        })())
-    : ''
+  const args = draft ? draftArgs(configFromDraft(draft), data?.config) : []
+  const quoted = args.map(arg => /^[\w./=:-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`)
+  const terminalCommand = args.length ? `hauksbee models backend set ${quoted.join(' ')}` : 'hauksbee models backend show'
 
   const applyPreset = useCallback(async (id: string) => {
     setPresetBusy(id)
@@ -454,40 +414,15 @@ export function SettingsView() {
 
   const availability = availabilityFor(data, selectedBackend)
   const resolvedForSelected = resolvedBlock(data.resolved, selectedBackend)
-  // Computed once per render, rather than indexed dynamically inside JSX
-  // closures: `draft[selectedBackend]` narrows fine in a direct expression,
-  // but not reliably once captured by a nested onChange callback.
-  const fields = selectedBackend === 'codex'
-    ? {
-        model: draft.codex.model, effort: draft.codex.effort, extraArgs: draft.codex.extra_args,
-        permission: '', profile: draft.codex.profile,
-        setModel: (v: string) => setDraft(d => d && { ...d, codex: { ...d.codex, model: v } }),
-        setEffort: (v: string) => setDraft(d => d && { ...d, codex: { ...d.codex, effort: v } }),
-        setExtraArgs: (v: string) => setDraft(d => d && { ...d, codex: { ...d.codex, extra_args: v } }),
-        setPermission: (_v: string) => {},
-        setProfile: (v: string) => setDraft(d => d && { ...d, codex: { ...d.codex, profile: v } }),
-      }
-    : selectedBackend === 'claude-code'
-    ? {
-        model: draft['claude-code'].model, effort: draft['claude-code'].effort, extraArgs: draft['claude-code'].extra_args,
-        permission: draft['claude-code'].permission_mode, profile: '',
-        setModel: (v: string) => setDraft(d => d && { ...d, 'claude-code': { ...d['claude-code'], model: v } }),
-        setEffort: (v: string) => setDraft(d => d && { ...d, 'claude-code': { ...d['claude-code'], effort: v } }),
-        setExtraArgs: (v: string) => setDraft(d => d && { ...d, 'claude-code': { ...d['claude-code'], extra_args: v } }),
-        setPermission: (v: string) => setDraft(d => d && { ...d, 'claude-code': { ...d['claude-code'], permission_mode: v } }),
-        setProfile: (_v: string) => {},
-      }
-    : {
-        // 'agy' (and a never-rendered fallback for 'api', whose fields render
-        // via a separate branch below and never read this object).
-        model: draft.agy.model, effort: draft.agy.effort, extraArgs: draft.agy.extra_args,
-        permission: draft.agy.permission_mode, profile: '',
-        setModel: (v: string) => setDraft(d => d && { ...d, agy: { ...d.agy, model: v } }),
-        setEffort: (v: string) => setDraft(d => d && { ...d, agy: { ...d.agy, effort: v } }),
-        setExtraArgs: (v: string) => setDraft(d => d && { ...d, agy: { ...d.agy, extra_args: v } }),
-        setPermission: (v: string) => setDraft(d => d && { ...d, agy: { ...d.agy, permission_mode: v } }),
-        setProfile: (_v: string) => {},
-      }
+  const agentBackend = selectedBackend === 'api' ? 'agy' : selectedBackend
+  const selectedAgent = draft[agentBackend]
+  const setAgent = (key: keyof DraftAgent) => (value: string) =>
+    setDraft(d => d && { ...d, [agentBackend]: { ...d[agentBackend], [key]: value } })
+  const fields = {
+    ...selectedAgent, extraArgs: selectedAgent.extra_args, permission: selectedAgent.permission_mode,
+    setModel: setAgent('model'), setEffort: setAgent('effort'), setCommand: setAgent('command'),
+    setExtraArgs: setAgent('extra_args'), setPermission: setAgent('permission_mode'), setProfile: setAgent('profile'),
+  }
 
   return (
     <div className="mt-10" data-testid="settings-view">
@@ -526,8 +461,8 @@ export function SettingsView() {
       {data.resolved.env_overrides.length > 0 && (
         <Callout tone="warn" testId="settings-env-overrides" className="mt-3">
           {data.resolved.env_overrides.map(v => <code key={v} className="hb-inline mr-1">${v}</code>)}
-          {data.resolved.env_overrides.length === 1 ? ' is' : ' are'} set in this server process's environment and
-          override the saved file for as long as it keeps running.
+          {data.resolved.env_overrides.length === 1 ? ' is' : ' are'} set for this server.
+          HAUKSBEE_EXTRACT_CONFIG selects the file edited here; other settings override its values.
         </Callout>
       )}
 
@@ -539,7 +474,7 @@ export function SettingsView() {
       )}
 
       <div className="mt-2.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-        Sends a one-line prompt to {availabilityFor(data, data.resolved.backend)?.label ?? data.resolved.backend}; nothing else leaves this machine.
+        Tests the saved configuration with a one-line prompt. Routing and charges: {availabilityFor(data, data.resolved.backend)?.sends_data_to ?? 'unknown'}.
       </div>
 
       {testState.phase !== 'idle' && (
@@ -573,6 +508,8 @@ export function SettingsView() {
               key={preset.id}
               preset={preset}
               availability={data.backends.find(b => b.backend === preset.backend)}
+              customCommand={resolvedBlock(data.resolved, preset.backend).command === data.keys.find(k => k.key === `${preset.backend}.command`)?.default
+                ? undefined : resolvedBlock(data.resolved, preset.backend).command}
               active={presetMatchesResolved(preset, data.resolved)}
               busy={presetBusy === preset.id}
               onUse={() => void applyPreset(preset.id)}
@@ -619,12 +556,10 @@ export function SettingsView() {
           })}
         </div>
         <div className="mt-1.5 text-[11px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-          Sends the datasheet's text to: {availability?.sends_data_to ?? 'unknown'}
+          Saved routing (save edits to update): {availability?.sends_data_to ?? 'unknown'}
         </div>
         {availability && !availability.available && (
-          <div className="mt-1.5">
-            <TerminalCommand command={availability.install} testId="settings-backend-install" />
-          </div>
+          <p className="mt-1.5 text-[12px]" data-testid="settings-backend-install">{availability.install}</p>
         )}
       </div>
 
@@ -719,6 +654,18 @@ export function SettingsView() {
 
         {advancedOpen && (
           <div className="mt-3 flex flex-wrap gap-3.5 items-end">
+            {selectedBackend !== 'api' && (
+              <Field label="Executable" hint="Optional CLI-compatible wrapper. Its configuration controls routing and charges.">
+                <input
+                  data-testid="settings-command"
+                  className="hb-input text-[12px] block w-full"
+                  style={{ height: 30, maxWidth: '20rem', fontFamily: 'var(--font-mono)' }}
+                  value={fields.command}
+                  placeholder="Default executable"
+                  onChange={e => fields.setCommand(e.target.value)}
+                />
+              </Field>
+            )}
             {selectedBackend === 'codex' && (
               <Field label="Profile" hint="A named codex profile, if you use one.">
                 <input
@@ -833,5 +780,5 @@ export function SettingsView() {
 }
 
 function resolvedPermission(resolved: ExtractResolved, backend: 'claude-code' | 'agy'): string {
-  return backend === 'claude-code' ? resolved.claude_code.permission_mode : resolved.agy.permission_mode
+  return (backend === 'claude-code' ? resolved.claude_code : resolved.agy).permission_mode ?? ''
 }

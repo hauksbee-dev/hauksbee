@@ -709,7 +709,6 @@ pub fn parse_args() -> Result<Args> {
 }
 
 /// The flag parser, over any argument source so tests can drive it without a
-/// The flag parser, over any argument source so tests can drive it without a
 /// process spawn. `--help` still exits: it is a terminal answer, not a value.
 pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
     let mut args = args.into_iter();
@@ -786,6 +785,8 @@ OPTIONS:
 ENVIRONMENT (each overrides the config file for one run):
     HAUKSBEE_EXTRACT_BACKEND  Backend name, as for --backend
     HAUKSBEE_EXTRACT_CONFIG   Path of the config file to read instead
+    HAUKSBEE_CLAUDE_COMMAND / HAUKSBEE_AGY_COMMAND / HAUKSBEE_CODEX_COMMAND
+                              Custom executable; retains the backend protocol
     HAUKSBEE_CLAUDE_MODEL / HAUKSBEE_CLAUDE_EFFORT   claude-code model / effort
     HAUKSBEE_AGY_MODEL / HAUKSBEE_AGY_EFFORT         agy model / effort
     HAUKSBEE_CODEX_MODEL / HAUKSBEE_CODEX_EFFORT     codex model / effort
@@ -1165,10 +1166,14 @@ fn which(cmd: &str) -> bool {
 /// Where `cmd` resolves on PATH, if anywhere. Shared with the config
 /// resolver so "is it installed" is answered the same way everywhere.
 pub(crate) fn which_path(cmd: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
     let extensions =
         command_extensions(cmd, cfg!(windows), std::env::var("PATHEXT").ok().as_deref());
-    std::env::split_paths(&path).find_map(|dir| {
+    let directories = if Path::new(cmd).is_absolute() || Path::new(cmd).components().count() > 1 {
+        vec![PathBuf::new()]
+    } else {
+        std::env::split_paths(&std::env::var_os("PATH")?).collect()
+    };
+    directories.into_iter().find_map(|dir| {
         extensions
             .iter()
             .map(|suffix| dir.join(format!("{cmd}{suffix}")))
@@ -1900,9 +1905,9 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
                 Ok(extract_toml_block(&request.send(p)?, reply.table()))
             });
         }
-        agent => agent.tool().expect("every agent backend names its CLI"),
+        agent => resolved.agent(agent).expect("agent").command.as_str(),
     };
-    require_tool(chosen)?;
+    require_tool(&resolved)?;
 
     // An agent backend reads the sandboxed PDF, text dump and page renders
     // itself, so the embedded text comes back out of its instruction.
@@ -2226,26 +2231,20 @@ pub fn resolve_with(
 }
 
 /// Refuse up front, with the fix, when an agent backend's CLI is missing.
-fn require_tool(backend: Backend) -> Result<()> {
-    let Some(tool) = backend.tool() else {
-        return Ok(());
-    };
-    if which(tool) {
+fn require_tool(resolved: &Resolved) -> Result<()> {
+    if resolved.agent(resolved.backend).is_none() {
         return Ok(());
     }
-    let others: Vec<String> = Backend::ALL
-        .iter()
-        .filter(|b| **b != backend)
-        .map(|b| format!("--backend {}", b.name()))
-        .collect();
-    bail!(
-        "the {} backend needs the `{tool}` CLI, which is not in PATH. Install it \
-         ({}), or pick another backend ({}), or save one with `hauksbee models \
-         backend setup`.",
-        backend.name(),
-        backend.install_hint(),
-        others.join(", ")
-    );
+    let status = resolved.status(&ProcessHost, resolved.backend);
+    if !status.available {
+        bail!(
+            "{}: {}; {}. No fallback was attempted.",
+            resolved.summary(),
+            status.detail,
+            status.install
+        );
+    }
+    Ok(())
 }
 
 /// One sandboxed run of whichever agent CLI the settings name.
@@ -2269,11 +2268,14 @@ fn require_tool(backend: Backend) -> Result<()> {
 ///     `--print=` value because agy reads nothing from stdin.
 fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<String> {
     let backend = resolved.backend;
-    let (Some(tool), Some(a)) = (backend.tool(), resolved.agent(backend)) else {
+    let Some(a) = resolved.agent(backend) else {
         bail!("the api backend is not an agent CLI");
     };
     let pointer = String::from_utf8_lossy(AGENT_POINTER);
-    let mut cmd = Command::new(tool);
+    let tool = &a.command;
+    let executable = which_path(tool)
+        .with_context(|| format!("executable `{tool}` was not found; no fallback attempted"))?;
+    let mut cmd = Command::new(std::path::absolute(executable)?);
     match backend {
         Backend::Codex => {
             cmd.arg("exec");
@@ -2327,7 +2329,7 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
         &mut cmd,
         ws,
         prompt,
-        &ws.path().join(format!("{tool}-stderr.log")),
+        &ws.path().join(format!("{}-stderr.log", backend.name())),
         Duration::from_secs(resolved.timeout_secs),
     )
 }
@@ -2354,11 +2356,11 @@ pub fn smoke_test(resolved: &Resolved, progress: &mut dyn FnMut(&str)) -> Result
         let reply = request.send(PROMPT)?;
         return Ok(reply.trim().to_string());
     }
-    require_tool(resolved.backend)?;
+    require_tool(resolved)?;
     let ws = Workspace::scratch()?;
     progress(&format!(
         "running `{}` in an empty sandbox ({}), model {}",
-        resolved.backend.tool().unwrap_or("?"),
+        resolved.agent(resolved.backend).expect("agent").command,
         ws.path().display(),
         resolved.model()
     ));
@@ -2731,6 +2733,8 @@ fn dirs_next() -> PathBuf {
 mod tests {
     use super::*;
 
+    static MOCK_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn argv(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
     }
@@ -2958,38 +2962,22 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
 
     #[test]
     fn offline_pipeline_with_mock_reply() {
-        let reply = "Here is the model:\n```toml\n\
-[[models]]\n\
-id = \"bc847\"\n\
-kind = \"bjt_npn\"\n\
-description = \"mock\"\n\
-[models.match]\n\
-value_re = \"(?i)^BC847\"\n\
-[models.params]\n\
-is = 1.6e-14\n\
-bf = 180.0\n\
-nf = 1.0\n\
-vaf = 65.0\n\
-[models.ratings]\n\
-max_voltage_v = 65.0\n\
-max_current_a = 0.1\n\
-[models.pins]\n\
-\"1\" = \"base\"\n\
-\"2\" = \"emitter\"\n\
-\"3\" = \"collector\"\n\
-```\n";
-        let dir = std::env::temp_dir().join("hauksbee_mock_offline");
-        std::fs::create_dir_all(&dir).unwrap();
-        let reply_path = dir.join("reply.txt");
-        std::fs::write(&reply_path, reply).unwrap();
+        let _guard = MOCK_ENV.lock().unwrap();
+        let example = FORMAT_EXAMPLES[0];
+        let dir = tempfile::tempdir().unwrap();
+        let reply_path = dir.path().join("reply.txt");
+        std::fs::write(
+            &reply_path,
+            format!("Here is the model:\n```toml\n{}\n```", example.card),
+        )
+        .unwrap();
         std::env::set_var("HAUKSBEE_EXTRACT_MOCK_REPLY", &reply_path);
 
         let args = Args::new(
-            dir.join("nonexistent.pdf"),
-            "BC847".into(),
-            "bjt_npn".into(),
-        )
-        .out_dir(Some(dir.clone()));
+            dir.path().join("nonexistent.pdf"),
+            example.part.into(),
+            example.kind.into(),
+        );
         let prompt = build_prompt(&args.part, &args.kind_str, "irrelevant");
         let reply = Reply::Model {
             part: &args.part,
@@ -2999,13 +2987,16 @@ max_current_a = 0.1\n\
         let entry = parse_and_validate_reply(&raw, &args.part, &args.kind_str).unwrap();
         std::env::remove_var("HAUKSBEE_EXTRACT_MOCK_REPLY");
 
-        assert_eq!(entry.kind, crate::ComponentKind::BjtNpn);
-        assert_eq!(entry.ratings.max_voltage_v, Some(65.0));
+        let expected = parse_and_validate_reply(example.card, example.part, example.kind).unwrap();
+        assert_eq!(entry.kind, expected.kind);
+        assert_eq!(entry.ratings.max_voltage_v, expected.ratings.max_voltage_v);
         assert!(raw.starts_with("[[models]]"), "fence should be stripped");
     }
 
     fn live_backend_available() -> bool {
-        which("codex") || std::env::var("HAUKSBEE_LLM_API_KEY").is_ok()
+        let loaded = extract_config::load().expect("valid extraction config");
+        let resolved = loaded.config.resolve(&ProcessHost, None);
+        resolved.status(&ProcessHost, resolved.backend).available
     }
 
     /// Live: the real backend against the BC846-series datasheet in testdata.
@@ -3191,6 +3182,72 @@ addr_mask = 0x7f
         assert!(!kind_is_legal("charger"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn custom_command_runs_the_selected_protocol_and_never_falls_back() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = MOCK_ENV.lock().unwrap();
+        let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let command = dir.path().join("custom wrapper");
+        std::fs::write(
+            &command,
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \"$@\"\nprintf 'wrapper stderr' >&2\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut cfg = extract_config::ExtractConfig::default();
+        cfg.set("claude-code.command", command.to_str().unwrap())
+            .unwrap();
+        cfg.set("claude-code.model", "gpt-5.6-sol").unwrap();
+        cfg.set("claude-code.effort", "high").unwrap();
+        let mut resolved = cfg.resolve(
+            &extract_config::FakeHost::default(),
+            Some(Backend::ClaudeCode),
+        );
+        assert_eq!(which_path(command.to_str().unwrap()), Some(command.clone()));
+        require_tool(&resolved).unwrap();
+        let ws = Workspace::scratch().unwrap();
+        let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
+        assert_eq!(
+            output.lines().collect::<Vec<_>>(),
+            [
+                "-p",
+                "--output-format",
+                "text",
+                "--permission-mode",
+                "acceptEdits",
+                "--model",
+                "gpt-5.6-sol",
+                "--effort",
+                "high",
+                "--no-session-persistence"
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.path().join("claude-code-stderr.log")).unwrap(),
+            "wrapper stderr"
+        );
+        let relative = command
+            .strip_prefix(std::env::current_dir().unwrap())
+            .unwrap();
+        resolved.claude_code.command = relative.to_str().unwrap().into();
+        assert!(smoke_test(&resolved, &mut |_| {})
+            .unwrap()
+            .contains("gpt-5.6-sol"));
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(which_path(command.to_str().unwrap()).is_none());
+        std::fs::remove_file(&command).unwrap();
+        assert!(require_tool(&resolved)
+            .unwrap_err()
+            .to_string()
+            .contains("No fallback"));
+        assert!(run_agent_once(&resolved, "fake prompt", &ws)
+            .unwrap_err()
+            .to_string()
+            .contains("custom wrapper"));
+        assert!(smoke_test(&resolved, &mut |_| {}).is_err());
+    }
+
     #[test]
     fn windows_command_discovery_uses_pathext_without_unix_which() {
         assert_eq!(
@@ -3198,7 +3255,7 @@ addr_mask = 0x7f
             [".exe", ".cmd"]
         );
         assert_eq!(
-            command_extensions("pdftotext.exe", true, Some(".EXE;.CMD")),
+            command_extensions(r"C:\Program Files\pdftotext.exe", true, Some(".EXE;.CMD")),
             [""]
         );
         assert_eq!(command_extensions("pdftotext", false, None), [""]);

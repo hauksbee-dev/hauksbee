@@ -104,21 +104,32 @@ pub fn show(json: bool) -> anyhow::Result<()> {
 
 // ── presets / keys ───────────────────────────────────────────────────────────
 
+fn preset_summary(preset: &Preset, resolved: &Resolved) -> String {
+    if resolved.custom_command(preset.backend).is_some() {
+        format!(
+            "Preserves custom command; {}. Check its authentication and charges.",
+            resolved.sends_data_to(preset.backend)
+        )
+    } else {
+        preset.summary.to_string()
+    }
+}
+
 /// `hauksbee models backend presets`
 pub fn presets() -> anyhow::Result<()> {
     let (_, resolved) = load_and_resolve()?;
-    let backends = extract_config::availability(&ProcessHost, &resolved);
-    let ready = |b: Backend| backends.iter().any(|s| s.backend == b && s.available);
-
     for p in extract_config::presets() {
         let tag = if p.recommended { "  (recommended)" } else { "" };
-        let ready_tag = if ready(p.backend) {
+        let ready_tag = if resolved.status(&ProcessHost, p.backend).available {
             "installed"
         } else {
             "not installed"
         };
         println!("{:<12} {}{tag}", p.id, p.label);
-        println!("             {} [{ready_tag}]", p.summary);
+        println!(
+            "             {} [{ready_tag}]",
+            preset_summary(p, &resolved)
+        );
     }
     Ok(())
 }
@@ -255,39 +266,39 @@ fn readiness_line(label: &str, available: bool, detail: &str) -> String {
     format!("{label}: {mark} ({detail})")
 }
 
+fn check_status(
+    resolved: &Resolved,
+    host: &dyn extract_config::Host,
+) -> extract_config::BackendStatus {
+    let mut status = resolved.status(host, resolved.backend);
+    // Only native Codex uses its login probe; wrappers own authentication.
+    if resolved.backend == Backend::Codex && resolved.custom_command(resolved.backend).is_none() {
+        let statuses = crate::deps::probe_extractors();
+        (status.available, status.detail) = match statuses.iter().find(|s| s.id == "codex") {
+            Some(s) => (s.present, s.detail.clone().unwrap_or_default()),
+            None => (false, "codex status unavailable".to_string()),
+        };
+    }
+    status
+}
+
 /// `hauksbee models backend check [--send]`
 pub fn check(send: bool) -> anyhow::Result<()> {
     let (_, resolved) = load_and_resolve()?;
     print_backend_line(&resolved);
-
-    // codex gets the login-aware detail `probe_extractors` already computes
-    // for the web/CLI readiness gate; every other backend's PATH/key-env
-    // check comes straight from `availability`, which is the same check
-    // `resolve_settings` + `require_tool` apply before a real extraction.
-    let (available, detail) = if resolved.backend == Backend::Codex {
-        let statuses = crate::deps::probe_extractors();
-        match statuses.iter().find(|s| s.id == "codex") {
-            Some(s) => (s.present, s.detail.clone().unwrap_or_default()),
-            None => (false, "codex status unavailable".to_string()),
-        }
-    } else {
-        let rows = extract_config::availability(&ProcessHost, &resolved);
-        match rows.iter().find(|s| s.backend == resolved.backend) {
-            Some(s) => (s.available, s.detail.clone()),
-            None => (false, "unknown backend".to_string()),
-        }
-    };
+    let status = check_status(&resolved, &ProcessHost);
     println!(
         "  {}",
-        readiness_line(resolved.backend.label(), available, &detail)
+        readiness_line(status.label, status.available, &status.detail)
     );
 
-    if !available {
+    if !status.available {
         anyhow::bail!(
-            "{} is not ready: {detail}\nFix it ({}), or switch backend: `hauksbee models \
+            "{} is not ready: {}\nFix it ({}), or switch backend: `hauksbee models \
              backend use <preset>` (see `models backend presets`).",
-            resolved.backend.label(),
-            resolved.backend.install_hint()
+            status.label,
+            status.detail,
+            status.install
         );
     }
     if !send {
@@ -316,22 +327,12 @@ fn default_setup_choice(backends: &[extract_config::BackendStatus]) -> &'static 
         .unwrap_or(&all[0])
 }
 
-fn model_key(b: Backend) -> &'static str {
-    match b {
-        Backend::ClaudeCode => "claude-code.model",
-        Backend::Agy => "agy.model",
-        Backend::Codex => "codex.model",
-        Backend::Api => "api.model",
-    }
+fn model_key(b: Backend) -> String {
+    format!("{}.model", b.name())
 }
 
-fn effort_key(b: Backend) -> Option<&'static str> {
-    match b {
-        Backend::ClaudeCode => Some("claude-code.effort"),
-        Backend::Agy => Some("agy.effort"),
-        Backend::Codex => Some("codex.effort"),
-        Backend::Api => None,
-    }
+fn effort_key(b: Backend) -> Option<String> {
+    b.tool().map(|_| format!("{}.effort", b.name()))
 }
 
 fn allowed_efforts(b: Backend) -> &'static [&'static str] {
@@ -374,15 +375,18 @@ pub fn setup() -> anyhow::Result<()> {
     let default = default_setup_choice(&backends);
     println!("Presets:");
     for (i, p) in all.iter().enumerate() {
-        let installed = backends
-            .iter()
-            .any(|s| s.backend == p.backend && s.available);
-        let status = if installed {
+        let status = resolved_now.status(&ProcessHost, p.backend);
+        let ready = if status.available {
             "installed".to_string()
         } else {
-            format!("not installed: {}", p.backend.install_hint())
+            format!("not installed: {}", status.install)
         };
-        println!("  {}. {} \u{2014} {} ({status})", i + 1, p.label, p.summary);
+        println!(
+            "  {}. {} \u{2014} {} ({ready})",
+            i + 1,
+            p.label,
+            preset_summary(p, &resolved_now)
+        );
     }
     println!();
 
@@ -402,14 +406,14 @@ pub fn setup() -> anyhow::Result<()> {
 
     let model = prompt_line(&format!("Model [{}]: ", chosen.model))?;
     if !model.is_empty() {
-        loaded.config.set(model_key(chosen.backend), &model)?;
+        loaded.config.set(&model_key(chosen.backend), &model)?;
     }
 
     if let Some(key) = effort_key(chosen.backend) {
         let allowed = allowed_efforts(chosen.backend).join(", ");
         let effort = prompt_line(&format!("Effort [{}] ({allowed}): ", chosen.effort))?;
         if !effort.is_empty() {
-            loaded.config.set(key, &effort)?;
+            loaded.config.set(&key, &effort)?;
         }
     } else {
         let base = prompt_line(&format!("Base URL [{}]: ", chosen.api_base))?;
@@ -450,33 +454,54 @@ mod tests {
     use extract_config::FakeHost;
 
     #[test]
-    fn a_preset_id_wins_over_a_same_named_backend() {
-        // "claude-code", "agy" and "codex" are all preset ids AND backend
-        // names; the preset (which also seeds model/effort) must win.
-        assert_eq!(
-            classify_use_target("claude-code"),
-            Some(UseTarget::Preset("claude-code"))
-        );
-        assert_eq!(classify_use_target("agy"), Some(UseTarget::Preset("agy")));
-        assert_eq!(
-            classify_use_target("codex"),
-            Some(UseTarget::Preset("codex"))
-        );
+    fn use_targets_prefer_presets_then_bare_backends_and_reject_unknowns() {
+        for (target, expected) in [
+            ("claude-code", Some(UseTarget::Preset("claude-code"))),
+            ("agy", Some(UseTarget::Preset("agy"))),
+            ("codex", Some(UseTarget::Preset("codex"))),
+            ("api", Some(UseTarget::Backend(Backend::Api))),
+            ("nope", None),
+            ("", None),
+        ] {
+            assert_eq!(classify_use_target(target), expected, "{target}");
+        }
     }
 
     #[test]
-    fn a_bare_backend_name_with_no_matching_preset_falls_through() {
-        // "api" is a backend name with no preset of the same id.
-        assert_eq!(
-            classify_use_target("api"),
-            Some(UseTarget::Backend(Backend::Api))
-        );
-    }
-
-    #[test]
-    fn nonsense_targets_are_rejected() {
-        assert_eq!(classify_use_target("nope"), None);
-        assert_eq!(classify_use_target(""), None);
+    fn custom_presets_and_checks_preserve_wrapper_routing_without_native_fallback() {
+        let mut host = FakeHost::default();
+        let mut config = extract_config::ExtractConfig::default();
+        for preset in extract_config::presets()
+            .iter()
+            .filter(|p| p.backend.tool().is_some())
+        {
+            let backend = preset.backend;
+            let resolved = config.resolve(&host, Some(backend));
+            assert_eq!(preset_summary(preset, &resolved), preset.summary);
+            config
+                .set(&format!("{}.command", backend.name()), "custom-wrapper")
+                .unwrap();
+            config.apply_preset(preset.id).unwrap();
+            for available in [false, true] {
+                let tool = if available {
+                    "custom-wrapper"
+                } else {
+                    backend.tool().unwrap()
+                };
+                host.tools = [(tool.into(), "/tmp/agent".into())].into();
+                let resolved = config.resolve(&host, Some(backend));
+                let summary = preset_summary(preset, &resolved);
+                assert_eq!(resolved.custom_command(backend), Some("custom-wrapper"));
+                assert!(summary.contains(&resolved.sends_data_to(backend)));
+                assert!(!summary.contains(preset.summary));
+                let status = check_status(&resolved, &host);
+                assert_eq!(status, resolved.status(&host, backend));
+                assert_eq!(status.available, available);
+            }
+            config
+                .set(&format!("{}.command", backend.name()), "")
+                .unwrap();
+        }
     }
 
     #[test]
@@ -529,9 +554,9 @@ mod tests {
             .map(|k| k.key)
             .collect();
         for b in Backend::ALL {
-            assert!(known.iter().any(|k| k == model_key(b)), "{}", model_key(b));
+            assert!(known.contains(&model_key(b)), "{}", model_key(b));
             if let Some(k) = effort_key(b) {
-                assert!(known.iter().any(|kk| kk == k), "{k}");
+                assert!(known.contains(&k), "{k}");
             }
         }
     }

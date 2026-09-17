@@ -232,7 +232,9 @@ fn backend() -> Backend {
     // with it. Every other backend's readiness is exactly what `availability`
     // already reports (a CLI on PATH, or a key/local-endpoint for the api
     // backend).
-    if resolved.backend == datasheet::Backend::Codex {
+    if resolved.backend == datasheet::Backend::Codex
+        && resolved.custom_command(resolved.backend).is_none()
+    {
         let probe = crate::deps::probe_extractors();
         return match probe.iter().find(|d| d.id == "codex") {
             Some(d) if d.present => Backend::Ready(resolved),
@@ -264,33 +266,14 @@ fn backend() -> Backend {
         };
     }
 
-    let rows = extract_config::availability(&ProcessHost, &resolved);
-    match rows.iter().find(|row| row.backend == resolved.backend) {
-        Some(row) if row.available => Backend::Ready(resolved),
-        Some(row) => {
-            let reason = format!(
-                "the {} backend is not usable: {}",
-                resolved.backend.label(),
-                row.detail
-            );
-            let fix = format!("{}{OR_CHOOSE_ANOTHER}", resolved.backend.install_hint());
-            Backend::Blocked {
-                resolved,
-                reason,
-                fix,
-            }
-        }
-        None => {
-            let reason = format!(
-                "no availability information for the {} backend",
-                resolved.backend.label()
-            );
-            let fix = format!("{}{OR_CHOOSE_ANOTHER}", resolved.backend.install_hint());
-            Backend::Blocked {
-                resolved,
-                reason,
-                fix,
-            }
+    let status = resolved.status(&ProcessHost, resolved.backend);
+    if status.available {
+        Backend::Ready(resolved)
+    } else {
+        Backend::Blocked {
+            reason: format!("{} is not usable: {}", resolved.summary(), status.detail),
+            fix: format!("{}{OR_CHOOSE_ANOTHER}", status.install),
+            resolved,
         }
     }
 }
@@ -299,6 +282,9 @@ fn backend() -> Backend {
 /// what the Environment page says about the same backend so the two can never
 /// disagree.
 fn cost_line(resolved: &Resolved) -> String {
+    if let Some(command) = resolved.custom_command(resolved.backend) {
+        return format!("Routing, authentication and charges are controlled by `{command}`. Check its configuration before sending a datasheet.");
+    }
     match resolved.backend {
         datasheet::Backend::ClaudeCode => "Claude Code signs in with your Claude account, so if \
              you already pay for one this costs nothing extra."
@@ -327,89 +313,43 @@ pub fn ready_json() -> String {
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     let picked = backend();
-    let (
-        ready,
-        backend_id,
-        backend_label,
-        backend_source,
-        default_model,
-        default_effort,
-        sends_data_to,
-        reason,
-        fix,
-        cost,
-    ) = match &picked {
-        Backend::Mock => (
-            true,
-            "mock".to_string(),
-            "Mock".to_string(),
-            "the HAUKSBEE_EXTRACT_MOCK_REPLY test hook".to_string(),
-            String::new(),
-            String::new(),
-            "nowhere (mock reply hook)".to_string(),
-            None,
-            None,
-            "Mock reply hook set; nothing is sent.".to_string(),
-        ),
-        Backend::Ready(resolved) => (
-            true,
-            resolved.backend.name().to_string(),
-            resolved.backend.label().to_string(),
-            resolved.backend_source.describe(),
-            resolved.model().to_string(),
-            resolved.effort().unwrap_or("").to_string(),
-            resolved.backend.sends_data_to().to_string(),
-            None,
-            None,
-            cost_line(resolved),
-        ),
-        Backend::Blocked {
-            resolved,
-            reason,
-            fix,
-        } => (
-            false,
-            resolved.backend.name().to_string(),
-            resolved.backend.label().to_string(),
-            resolved.backend_source.describe(),
-            resolved.model().to_string(),
-            resolved.effort().unwrap_or("").to_string(),
-            resolved.backend.sends_data_to().to_string(),
-            Some(reason.clone()),
-            Some(fix.clone()),
-            cost_line(resolved),
-        ),
+    let mut reply = match &picked {
+        Backend::Mock => serde_json::json!({
+            "backend": "mock",
+            "backend_label": "Mock",
+            "backend_source": "the HAUKSBEE_EXTRACT_MOCK_REPLY test hook",
+            "default_model": "",
+            "default_effort": "",
+            "sends_data_to": "nowhere (mock reply hook)",
+            "cost": "Mock reply hook set; nothing is sent.",
+        }),
+        Backend::Ready(resolved) | Backend::Blocked { resolved, .. } => serde_json::json!({
+            "backend": resolved.backend.name(),
+            "backend_label": resolved.backend.label(),
+            "backend_source": resolved.backend_source.describe(),
+            // Name the actual model and routing before asking for consent.
+            "default_model": resolved.model(),
+            "default_effort": resolved.effort().unwrap_or(""),
+            "sends_data_to": resolved.sends_data_to(resolved.backend),
+            "cost": cost_line(resolved),
+        }),
+    };
+    let (reason, fix) = match &picked {
+        Backend::Blocked { reason, fix, .. } => (Some(reason), Some(fix)),
+        _ => (None, None),
     };
     let kinds: Vec<serde_json::Value> = KINDS
         .iter()
         .map(|(id, label)| serde_json::json!({ "id": id, "label": label }))
         .collect();
-    serde_json::to_string(&serde_json::json!({
-        "ready": ready,
-        "backend": backend_id,
-        "backend_label": backend_label,
-        "backend_source": backend_source,
-        "reason": reason,
-        "fix": fix,
-        "consent_notice": datasheet::CONSENT_NOTICE,
-        "provenance": PROVENANCE,
-        "kinds": kinds,
-        // The model that will run if the user does not pick one, so the page can
-        // name it instead of saying "the default" and leaving them to guess what
-        // is about to read their datasheet and bill their account.
-        "default_model": default_model,
-        "default_effort": default_effort,
-        "sends_data_to": sends_data_to,
-        "config_path": config_path,
-        // The cost line is the one that changes minds: most people who would
-        // want datasheet extraction already pay for the account their chosen
-        // backend signs in with, and the only thing between them and it is
-        // not knowing that.
-        "cost": cost,
-    }))
-    .unwrap_or_else(|_| {
-        "{\"ready\":false,\"reason\":\"could not serialise readiness\"}".to_string()
-    })
+    reply["ready"] = serde_json::json!(reason.is_none());
+    reply["reason"] = serde_json::json!(reason);
+    reply["fix"] = serde_json::json!(fix);
+    reply["consent_notice"] = serde_json::json!(datasheet::CONSENT_NOTICE);
+    reply["provenance"] = serde_json::json!(PROVENANCE);
+    reply["kinds"] = serde_json::json!(kinds);
+    reply["config_path"] = serde_json::json!(config_path);
+    reply.to_string()
 }
 
 /// Run one extraction and return the reviewable model card as JSON.
@@ -1108,6 +1048,18 @@ iq_a = 0.00015      # Source: Figure 3
 [models.ratings]
 max_current_a = 0.5 # Source: absolute maximum ratings
 "#;
+
+    #[test]
+    fn custom_command_discloses_its_own_routing_and_costs() {
+        let mut config = extract_config::ExtractConfig::default();
+        config.claude_code.command = Some("claude-mix".into());
+        let resolved = config.resolve(&ProcessHost, Some(datasheet::Backend::ClaudeCode));
+        assert!(cost_line(&resolved).contains("claude-mix"));
+        assert!(!cost_line(&resolved).contains("nothing extra"));
+        assert!(resolved
+            .sends_data_to(resolved.backend)
+            .contains("claude-mix"));
+    }
 
     #[test]
     fn model_check_and_save_call_out_missing_executable_scope() {

@@ -116,10 +116,13 @@ async function main() {
   ok('Save starts disabled (preset apply already saved server-side)',
     await page.locator('[data-testid="settings-save"]').isDisabled())
   await page.click('[data-testid="settings-effort-medium"]')
+  await page.click('[data-testid="settings-advanced-toggle"]')
+  await page.locator('[data-testid="settings-command"]').fill('/tmp/custom agent')
   await settle(page)
   ok('Save is now enabled', !(await page.locator('[data-testid="settings-save"]').isDisabled()))
   const terminalText = await page.locator('[data-testid="settings-terminal"]').innerText()
-  ok('the terminal line reflects the unsaved effort change', terminalText.includes('agy.effort=medium'), terminalText)
+  ok('the terminal line preserves effort and quotes the custom path',
+    terminalText.includes('agy.effort=medium') && terminalText.includes("'agy.command=/tmp/custom agent'"), terminalText)
   await shoot(page, '03-effort-changed')
 
   // ── 4. Save really writes it ────────────────────────────────────────────
@@ -130,6 +133,14 @@ async function main() {
   ok('the save confirmation names the path', /extract\.toml/.test(savedText), savedText)
   ok('Save is disabled again once the draft matches the saved config',
     await page.locator('[data-testid="settings-save"]').isDisabled())
+  const savedConfig = await (await fetch(`${base}/api/settings/extract`)).json()
+  ok('custom executable survives saving with spaces intact', savedConfig.config.agy.command === '/tmp/custom agent')
+  await page.locator('[data-testid="settings-command"]').fill('')
+  ok('the terminal line also clears an existing command',
+    (await page.locator('[data-testid="settings-terminal"]').innerText()).includes('agy.command='))
+  const cleared = page.waitForResponse(r => r.url().endsWith('/api/settings/extract') && r.request().method() === 'PUT')
+  await page.click('[data-testid="settings-save"]')
+  ok('clearing the command finishes before testing', !(await (await cleared).json()).config.agy.command)
   await shoot(page, '04-saved')
 
   // ── 5. Test backend streams and reports ─────────────────────────────────

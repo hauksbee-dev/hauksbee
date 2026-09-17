@@ -182,7 +182,7 @@ export function useSimSession({ liveFrame, boardInfo, backlog, send }: {
 
   const resume = useCallback(() => setReviewIndex(null), [])
 
-  const history = useMemo<HistoryReview>(() => ({
+  const history: HistoryReview = {
     retained: frameHistory.current.length,
     index: reviewIndex,
     t: reviewIndex !== null ? (frameHistory.current[reviewIndex]?.t ?? null) : null,
@@ -190,10 +190,7 @@ export function useSimSession({ liveFrame, boardInfo, backlog, send }: {
     stepBack,
     stepForward,
     resume,
-    // `liveFrame` is in the deps on purpose though it is not read here: the
-    // counts above come out of a REF, so without it the retained total would
-    // stay frozen at whatever it was when the review last changed.
-  }), [reviewIndex, stepBack, stepForward, resume, liveFrame])
+  }
 
   const clearFaults = useCallback(() => {
     setFaultLog([])
