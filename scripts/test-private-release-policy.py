@@ -33,6 +33,23 @@ MIRROR_DEPENDENCY_CHECKER = ROOT / "scripts" / "check-mirror-dependencies.py"
 REGISTRY_USER = ROOT / "integrations" / "github-action" / "resolve-registry-user.sh"
 
 
+def provenance_checkout(root: Path) -> None:
+    """Use a real existing commit, without creating commits or configuring identity."""
+    source = (ROOT / "crates/hauksbee-ci/build.rs").read_text()
+    watched = re.findall(r'"../../([^"\n]+)"', source)
+    files = [p for p in watched if Path(p).suffix or p in ("LICENSE", "NOTICE")]
+    files += ["docs/START_HERE.md", *(f"crates/{c}/build.rs" for c in
+              ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"))]
+    subprocess.run(["git", "clone", "--quiet", "--shared", "--no-checkout", str(ROOT), str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "sparse-checkout", "set", "--no-cone", "--stdin"],
+                   input="".join(f"/{p}\n" for p in files), text=True, check=True)
+    subprocess.run(["git", "-C", str(root), "checkout", "--quiet", "-b", "provenance-fixture", "HEAD"], check=True)
+    subprocess.run(["git", "-C", str(root), "pack-refs", "--all"], check=True)
+    for path in watched:
+        if path not in files:
+            (root / path).mkdir(parents=True, exist_ok=True)
+
+
 class PrivateReleasePolicyTests(unittest.TestCase):
     def test_retained_qc_report_never_leaks_a_local_binary_path(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -88,11 +105,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             consumer = tmp / "consumer"
-            consumer.mkdir()
-            (consumer / "owned.txt").write_text("consumer\n")
-            subprocess.run(["git", "init", "-q", str(consumer)], check=True)
-            subprocess.run(["git", "-C", str(consumer), "add", "owned.txt"], check=True)
-            subprocess.run(["git", "-C", str(consumer), "commit", "-qm", "consumer"], check=True)
+            provenance_checkout(consumer)
             env = {k: v for k, v in os.environ.items() if not k.startswith("HAUKSBEE_")}
             for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
                 source = ROOT / "crates" / crate / "build.rs"
@@ -136,68 +149,59 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             root = tmp / "hauksbee"
-            for directory in ("docs", "crates"):
-                (root / directory).mkdir(parents=True)
-                (root / directory / "tracked.txt").write_text("clean\n")
-            subprocess.run(["git", "init", "-q", str(root)], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-            subprocess.run(["git", "-C", str(root), "commit", "-qm", "clean"], check=True)
+            provenance_checkout(root)
             env = {k: v for k, v in os.environ.items() if not k.startswith("HAUKSBEE_")}
             for crate in ("hauksbee-engine", "hauksbee-ci", "hauksbee-mcp"):
                 manifest = root / "crates" / crate
-                manifest.mkdir()
                 binary = tmp / crate
                 subprocess.run(["rustc", str(ROOT / "crates" / crate / "build.rs"), "-o", str(binary)], check=True)
-                for directory in ("docs", "crates"):
-                    for name in ("tracked.txt", "untracked.txt"):
-                        path = root / directory / name
-                        clean = subprocess.check_output(
-                            [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
-                        )
-                        self.assertIn("cargo:rustc-env=GIT_HASH=", clean, crate)
-                        for watched in ("crates", "vendor", "frontend/src", "integrations", "docs"):
-                            self.assertIn(f"cargo:rerun-if-changed=../../{watched}\n", clean)
-                        self.assertNotIn("cargo:rerun-if-changed=../../site\n", clean)
-                        path.write_text("dirty\n")
-                        dirty = subprocess.check_output(
-                            [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
-                        )
-                        self.assertNotIn("cargo:rustc-env=GIT_HASH=", dirty, (crate, directory, name))
-                        if name == "tracked.txt":
-                            path.write_text("clean\n")
-                        else:
-                            path.unlink()
+                for relative in ("docs/START_HERE.md", f"crates/{crate}/build.rs",
+                                 "docs/untracked.txt", "crates/untracked.txt"):
+                    path = root / relative
+                    original = path.read_bytes() if path.exists() else None
+                    clean = subprocess.check_output(
+                        [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
+                    )
+                    self.assertIn("cargo:rustc-env=GIT_HASH=", clean, crate)
+                    for watched in ("crates", "vendor", "frontend/src", "integrations", "docs"):
+                        self.assertIn(f"cargo:rerun-if-changed=../../{watched}\n", clean)
+                    self.assertNotIn("cargo:rerun-if-changed=../../site\n", clean)
+                    path.write_text("dirty\n")
+                    dirty = subprocess.check_output(
+                        [str(binary)], env={**env, "CARGO_MANIFEST_DIR": str(manifest)}, text=True
+                    )
+                    self.assertNotIn("cargo:rustc-env=GIT_HASH=", dirty, (crate, relative))
+                    if original is None:
+                        path.unlink()
+                    else:
+                        path.write_bytes(original)
 
     def test_cargo_rechecks_provenance_when_a_workspace_sibling_becomes_dirty(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp) / "hauksbee"
-            crate = root / "crates/hauksbee-ci"
+            provenance_checkout(root)
+            manifest = root / "crates/hauksbee-ci"
+            binary = Path(raw_tmp) / "build-script"
+            subprocess.run(["rustc", str(ROOT / "crates/hauksbee-ci/build.rs"), "-o", str(binary)], check=True)
+            crate = Path(raw_tmp) / "probe"
             (crate / "src").mkdir(parents=True)
-            source = (ROOT / "crates/hauksbee-ci/build.rs").read_text()
-            # Missing declared inputs always rebuild, so materialise the watched
-            # release-tree shape; the retired site must not be among its inputs.
-            for relative in re.findall(r'"../../([^"\n]+)"', source):
-                path = root / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if path.suffix or path.name in ("LICENSE", "NOTICE"):
-                    path.touch()
-                else:
-                    path.mkdir(exist_ok=True)
-            shutil.copy(ROOT / "rust-toolchain.toml", root / "rust-toolchain.toml")
-            (root / "Cargo.toml").write_text('[workspace]\nmembers=["crates/hauksbee-ci"]\nresolver="2"\n')
-            (root / ".gitignore").write_text("/Cargo.lock\n/target\n")
-            (root / "docs/contract.md").write_text("clean\n")
-            (crate / "build.rs").write_text(source)
-            (crate / "Cargo.toml").write_text(
-                '[package]\nname="probe"\nversion="0.0.0"\nedition="2021"\nbuild="build.rs"\n'
-            )
+            # Cargo runs a tiny external probe; the unmodified production build
+            # script inspects the real checkout. Only relative watches are rebased.
+            (crate / "build.rs").write_text('''fn main() {
+                let manifest = std::path::Path::new(''' + json.dumps(str(manifest), ensure_ascii=False) + ''');
+                let output = std::process::Command::new(''' + json.dumps(str(binary), ensure_ascii=False) + ''')
+                    .current_dir(manifest).env("CARGO_MANIFEST_DIR", manifest).output().unwrap();
+                assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+                for line in std::str::from_utf8(&output.stdout).unwrap().lines() {
+                    if let Some(path) = line.strip_prefix("cargo:rerun-if-changed=") {
+                        println!("cargo:rerun-if-changed={}", manifest.join(path).display());
+                    } else { println!("{line}"); }
+                }
+            }''')
+            (crate / "Cargo.toml").write_text('[package]\nname="probe"\nversion="0.0.0"\nedition="2021"\n')
             (crate / "src/main.rs").write_text(
                 'fn main() { println!("{}", option_env!("GIT_HASH").unwrap_or("none")); }\n'
             )
-            subprocess.run(["git", "init", "-q", str(root)], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-            subprocess.run(["git", "-C", str(root), "commit", "-qm", "clean"], check=True)
-            subprocess.run(["git", "-C", str(root), "pack-refs", "--all"], check=True)
             env = {k: v for k, v in os.environ.items() if not k.startswith("HAUKSBEE_")}
             env.update(
                 CARGO_TARGET_DIR=str(Path(raw_tmp) / "target"),
@@ -209,7 +213,7 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             fresh = subprocess.run(command, env=env, text=True, capture_output=True, check=True)
             self.assertEqual(fresh.stdout, clean.stdout)
             self.assertIn("Fresh probe", fresh.stderr)
-            (root / "docs/contract.md").write_text("dirty\n")
+            (root / "docs/START_HERE.md").write_text("dirty\n")
             dirty = subprocess.check_output(command, env=env, text=True).strip()
             self.assertEqual(dirty, "none")
 
