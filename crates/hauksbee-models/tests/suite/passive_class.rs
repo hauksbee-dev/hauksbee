@@ -38,19 +38,14 @@ fn every_builtin_passive_entry_declares_its_class() {
         let non_model = ["pin_rules.toml", "load_profiles.toml", "unmodelled.toml"];
         let db = match toml::from_str::<DbFile>(&text) {
             Ok(db) => db,
-            Err(e) => {
-                assert!(
-                    non_model.contains(&name.as_str()),
-                    "{name} is a model db file that does not deserialize, so every \
-                     passive entry in it goes unchecked: {e}"
-                );
-                continue;
-            }
+            Err(_) if non_model.contains(&name.as_str()) => continue,
+            Err(e) => panic!("{name} is a model db file that does not deserialize: {e}"),
         };
-        for entry in &db.models {
-            if entry.kind != ComponentKind::Passive {
-                continue;
-            }
+        for entry in db
+            .models
+            .iter()
+            .filter(|e| e.kind == ComponentKind::Passive)
+        {
             checked += 1;
             if entry.passive_class.is_none() {
                 missing.push(format!("{}:{}", path.display(), entry.id));
@@ -72,43 +67,52 @@ fn every_builtin_passive_entry_declares_its_class() {
 #[test]
 fn generic_passives_resolve_to_the_right_class() {
     let lib = ModelLibrary::builtin_shared();
-    let class_of = |lib_id: &str, value: &str| {
-        lib.resolve(&ComponentQuery::new(
-            Some(lib_id.to_string()),
-            Some(value.to_string()),
-            None,
-        ))
-        .model
-        .and_then(|e| e.passive_class)
-    };
-    assert_eq!(class_of("Device:R", "10k"), Some(PassiveClass::Resistor));
-    assert_eq!(class_of("Device:C", "100nF"), Some(PassiveClass::Capacitor));
-    assert_eq!(class_of("Device:L", "10uH"), Some(PassiveClass::Inductor));
-    assert_eq!(
-        class_of("Device:Ferrite_Bead", "600R"),
-        Some(PassiveClass::FerriteBead),
-        "a bead's value looks ohmic, so its class is the only thing keeping it \
-         out of the pull-up path"
-    );
-    assert_eq!(
-        class_of("Device:Crystal", "16MHz"),
-        Some(PassiveClass::Crystal)
-    );
-    assert_eq!(class_of("Device:Fuse", "1A"), Some(PassiveClass::Fuse));
+    use PassiveClass::{Capacitor, Crystal, FerriteBead, Fuse, Inductor, NetTie, Resistor};
+    for (lib_id, value, footprint, expected) in [
+        ("Device:R", "10k", "", Some(Resistor)),
+        ("Device:C", "100nF", "", Some(Capacitor)),
+        ("Device:L", "10uH", "", Some(Inductor)),
+        ("Device:Ferrite_Bead", "600R", "", Some(FerriteBead)),
+        ("Device:Crystal", "16MHz", "", Some(Crystal)),
+        ("Device:Fuse", "1A", "", Some(Fuse)),
+        ("", "600@100MHz", "", Some(FerriteBead)),
+        ("", "120 @ 100 MHz", "", Some(FerriteBead)),
+        ("", "25A", "Fuse:Fuse_1812", Some(Fuse)),
+        ("", "0.2A", "Fuse:Fuse_1812", Some(Fuse)),
+        ("", "32V/2A", "Fuse:Fuse_1812", Some(Fuse)),
+        ("", "25A", "Package_SO:SOIC-8", None),
+        ("", "-25A", "Fuse:Fuse_1812", None),
+        ("", "0x2A", "Fuse:Fuse_1812", None),
+        ("", "600@100kHz", "", None),
+        ("", "-600@100MHz", "", None),
+    ] {
+        let result = lib.resolve(&ComponentQuery::new(
+            Some(lib_id.into()),
+            Some(value.into()),
+            Some(footprint.into()),
+        ));
+        // Numeric cards must not claim a rating from these negative controls,
+        // even when an independent footprint-only card identifies a fuse.
+        let actual = result
+            .model
+            .filter(|e| {
+                !lib_id.is_empty()
+                    || matches!(e.id.as_str(), "fuse_rated" | "ferrite_bead_generic_rated")
+            })
+            .and_then(|e| e.passive_class);
+        assert_eq!(actual, expected, "{value} / {footprint}");
+    }
     // A resistor is a resistor and nothing else: the one predicate every caller
     // that asks "can this be a pull-up?" uses.
-    assert!(PassiveClass::Resistor.is_resistor());
-    for other in [
-        PassiveClass::Capacitor,
-        PassiveClass::Inductor,
-        PassiveClass::FerriteBead,
-        PassiveClass::Crystal,
-        PassiveClass::Fuse,
-        PassiveClass::NetTie,
+    for class in [
+        Resistor,
+        Capacitor,
+        Inductor,
+        FerriteBead,
+        Crystal,
+        Fuse,
+        NetTie,
     ] {
-        assert!(
-            !other.is_resistor(),
-            "{other:?} must not read as a resistor"
-        );
+        assert_eq!(class.is_resistor(), class == Resistor, "{class:?}");
     }
 }

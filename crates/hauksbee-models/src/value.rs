@@ -63,13 +63,23 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
     let cleaned = normalise_comma_decimal(&cleaned);
     // Chip-size codes are packages, not magnitudes: "0402" must never read as
     // 402 Ω, and in "0402_47k" the code is a naming prefix, not the value.
-    let mut v: &str = &cleaned;
+    let mut v = cleaned.strip_suffix('\\').unwrap_or(&cleaned);
     while let Some(rest) = strip_size_code(v) {
         if rest.is_empty() {
             return None; // bare "0402" / "0603" / ..., not a value
         }
         v = rest;
     }
+    // Vendor ordering tails: a terminal backslash or a known chip package,
+    // not an arbitrary hyphenated word or a scientific-notation exponent.
+    v = v
+        .match_indices('-')
+        .find_map(|(i, _)| {
+            let package = v[i + 1..].split('-').next()?;
+            let package = package.strip_suffix('T').unwrap_or(package);
+            (i > 0 && FOOTPRINT_SIZE_CODES.contains(&package)).then_some(&v[..i])
+        })
+        .unwrap_or(v);
     // A JEDEC semiconductor part number ("1N4007", "1N5819", "2N3904", "2N7000")
     // is NOT a passive magnitude, but its `<digit>N<digits>` shape collides with
     // the RKM nano form: parse_inner reads "1N4007" as 1 + nano + ".4007" =
@@ -88,7 +98,11 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
     // classification (binder.rs excludes BOTH V and A). It also lets a leading
     // current token be mis-picked as the magnitude ("2A_22u" → 2 F instead of 22 uF).
     // Filter both so V and A are treated identically everywhere.
-    parse_inner(v).filter(|p| !matches!(p.unit.as_deref(), Some("V") | Some("A") | Some("Hz")))
+    parse_inner(v).filter(|p| {
+        p.si.is_finite()
+            && p.si >= 0.0
+            && !matches!(p.unit.as_deref(), Some("V") | Some("A") | Some("Hz"))
+    })
 }
 
 /// Parse a value string that is WHOLLY a frequency and return it in hertz.
@@ -197,16 +211,14 @@ const FOOTPRINT_SIZE_CODES: [&str; 9] = [
 /// value). `None` when the leading digits are NOT a size code ("12065" and
 /// "0402.5" are ordinary numbers).
 fn strip_size_code(s: &str) -> Option<&str> {
-    for code in FOOTPRINT_SIZE_CODES {
-        if let Some(rest) = s.strip_prefix(code) {
-            return match rest.chars().next() {
-                None => Some(rest),
-                Some('_') | Some('-') | Some(' ') | Some('\t') => Some(rest[1..].trim_start()),
-                _ => None,
-            };
-        }
+    let rest = FOOTPRINT_SIZE_CODES
+        .iter()
+        .find_map(|code| s.strip_prefix(code))?;
+    match rest.chars().next() {
+        None => Some(rest),
+        Some('_' | '-' | ' ' | '\t') => Some(rest[1..].trim_start()),
+        _ => None,
     }
-    None
 }
 
 /// Normalise commas: a European decimal separator ("5,1K" -> "5.1K") vs a
@@ -292,18 +304,9 @@ fn normalise_frequency_comma(s: &str) -> String {
 /// True when every comma in `s` is followed by exactly three digits; the
 /// signature of thousands grouping ("1,000,000").
 fn is_thousands_grouped(s: &str) -> bool {
-    for (i, b) in s.bytes().enumerate() {
-        if b == b',' {
-            let run = s[i + 1..]
-                .chars()
-                .take_while(|c| c.is_ascii_digit())
-                .count();
-            if run != 3 {
-                return false;
-            }
-        }
-    }
-    true
+    s.split(',')
+        .skip(1)
+        .all(|group| group.bytes().take_while(u8::is_ascii_digit).count() == 3)
 }
 
 /// EIA tolerance letters (F=±1%, G=±2%, J=±5%, K=±10%, M=±20%) collide with the
@@ -432,20 +435,14 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     let (multiplier, suffix_str, after_suffix) = parse_suffix(rest);
 
     // Check for "4k7" style: suffix followed by digits (the fractional part)
-    let (mantissa_str, unit) = if let Some(frac_start) = after_suffix
-        .find(|c: char| c.is_ascii_digit())
-        .filter(|_| !after_suffix.is_empty() && after_suffix.as_bytes()[0].is_ascii_digit())
+    let (mantissa_str, unit) = if after_suffix
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_digit)
     {
-        // Collect the trailing digit group
-        let frac_bytes = after_suffix.as_bytes();
-        let mut j = 0;
-        while j < frac_bytes.len() && frac_bytes[j].is_ascii_digit() {
-            j += 1;
-        }
-        let frac_digits = &after_suffix[..j];
-        let after_frac = &after_suffix[j..];
-        let _ = frac_start; // suppress warning
-                            // Rebuild as "4.7"
+        let digits = after_suffix.bytes().take_while(u8::is_ascii_digit).count();
+        let (frac_digits, after_frac) = after_suffix.split_at(digits);
+        // Rebuild as "4.7"
         let combined = format!("{}.{}", before, frac_digits);
         let mut unit = parse_tail(after_frac)?;
         if unit.is_none() {
@@ -472,13 +469,8 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     let unit = fixup_tolerance_unit(unit, suffix_str);
 
     let mantissa: f64 = mantissa_str.parse().ok()?;
-    let si = mantissa * multiplier;
-
-    // Convert to base SI unit based on the unit (if present)
-    let si_final = apply_unit(si, unit.as_deref());
-
     Some(ParsedValue {
-        si: si_final,
+        si: mantissa * multiplier,
         suffix: suffix_str.map(|s| s.to_string()),
         unit,
     })
@@ -578,13 +570,12 @@ fn parse_tail(t: &str) -> Option<Option<String>> {
     // meaning, so a lone one (optionally trailed by another annotation) is
     // ignorable. F is deliberately NOT handled here: it collides with the Farad
     // unit and is resolved by unit_token + fixup_tolerance_unit instead.
-    if let Some(rest) = strip_eia_tolerance_letter(t) {
-        if rest.is_empty()
+    if strip_eia_tolerance_letter(t).is_some_and(|rest| {
+        rest.is_empty()
             || rest.starts_with(char::is_whitespace)
             || rest.starts_with(is_annotation_start)
-        {
-            return Some(None);
-        }
+    }) {
+        return Some(None);
     }
     // Directly attached: must be a unit, optionally followed by an annotation
     // ("uF/25V") or a rating that starts with a digit ("F50V").
@@ -643,27 +634,15 @@ fn is_annotation_start(c: char) -> bool {
     matches!(c, '/' | ',' | ';' | '%' | '(' | '@' | '±' | '+')
 }
 
-/// If `t` begins with a lone EIA tolerance-code letter (G=±2%, J=±5%, K=±10%,
-/// M=±20%), return the remainder after it; otherwise `None`. These only reach
-/// [`parse_tail`] as a SECOND letter; the first SI multiplier is already
-/// consumed by [`parse_suffix`], so a leading k/m/g here is a tolerance code,
-/// never a multiplier (a real "10k" never gets here with a leading 'k'). 'F' is
-/// excluded: it means Farad and is handled by [`fixup_tolerance_unit`].
+/// EIA tolerance letters are uppercase; a second lowercase `m` in "3.5mm"
+/// denotes a length, not milli-ohms plus tolerance. The first SI multiplier
+/// is already consumed; `F` is handled by [`fixup_tolerance_unit`].
 fn strip_eia_tolerance_letter(t: &str) -> Option<&str> {
     let mut chars = t.chars();
     match chars.next() {
-        Some('G' | 'g' | 'J' | 'j' | 'K' | 'k' | 'M' | 'm') => Some(chars.as_str()),
+        Some('G' | 'J' | 'K' | 'M') => Some(chars.as_str()),
         _ => None,
     }
-}
-
-/// Adjust SI value for unit-specific conversions.
-/// Currently all base units map directly (Ω, F, H are already base SI);
-/// this is a hook for future unit-aware scaling.
-fn apply_unit(si: f64, _unit: Option<&str>) -> f64 {
-    // All passive values are already in their base SI unit after multiplier
-    // application (Ohms, Farads, Henries). No further conversion needed.
-    si
 }
 
 #[cfg(test)]
@@ -775,6 +754,10 @@ mod tests {
             // letter O as ohms in Altium comments
             ("330O ±1%", 330.0),
             ("10KO ±1%", 10_000.0),
+            ("22OHM-0402T-1/16W-1%", 22.0),
+            ("10K\\", 10_000.0),
+            ("47k-0603", 47_000.0),
+            ("1e-6-0402", 1e-6),
         ] {
             check(s, si);
         }
@@ -833,6 +816,19 @@ mod tests {
             "10k_junk",
             "47kXYZ",
             "100n_47k",
+            "3.5mm",
+            "3.5mm/PJ-W47S-05D2-LF",
+            "-10k",
+            "-22OHM-0402T-1/16W-1%",
+            "1e999",
+            "10k-junk",
+            "10K\\junk",
+            "3.5mm-0402",
+            "1N4148-0402",
+            "10k-0402XYZ",
+            "-0402",
+            "0402\\",
+            "0603-0402",
             // pure voltage / current ratings
             "5V1",
             "3V3",

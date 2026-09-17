@@ -107,20 +107,22 @@ fn footprint_only_fuse_binds_the_low_ohm_wire() {
     // resistance. The footprint rule must still classify the part as a fuse
     // and carry the sourced DC value the binder's fuse path requires.
     let lib = ModelLibrary::builtin();
-    let resolved = lib.resolve(&ComponentQuery {
-        value: Some("500mA".into()),
-        footprint: Some("Fuse:Fuse_0603_1608Metric".into()),
-        ..Default::default()
-    });
-    let model = resolved
-        .model
-        .expect("a Fuse:-library footprint must resolve without a lib_id");
-    assert_eq!(model.id, "fuse_footprint");
-    assert_eq!(
-        model.passive_class,
-        Some(hauksbee_models::schema::PassiveClass::Fuse)
-    );
-    assert_eq!(model.params.get_f64("ohms"), Some(0.01));
+    for (value, id) in [("", "fuse_footprint"), ("500mA", "fuse_rated")] {
+        let model = lib
+            .resolve(&ComponentQuery {
+                value: Some(value.into()),
+                footprint: Some("Fuse:Fuse_0603_1608Metric".into()),
+                ..Default::default()
+            })
+            .model
+            .expect("a Fuse:-library footprint must resolve without a lib_id");
+        assert_eq!(model.id, id);
+        assert_eq!(
+            model.passive_class,
+            Some(hauksbee_models::schema::PassiveClass::Fuse)
+        );
+        assert_eq!(model.params.get_f64("ohms"), Some(0.01));
+    }
 }
 
 #[test]

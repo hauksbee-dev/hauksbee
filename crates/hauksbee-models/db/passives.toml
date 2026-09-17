@@ -321,7 +321,7 @@ description = "Ferrite bead named only by a rating this file has not traced (rep
 # back on the representative 0.35 Ohm and the caveats on `ferrite_bead` apply in
 # full.
 value_re = '''(?ix) ^(
-    [0-9]+ \\s* @ \\s* [0-9]+ \\s* MHZ .*
+    [0-9]+ \s* @ \s* [0-9]+ \s* MHZ .*
   | FB [0-9]{4} / .*
   | L?_?FERRITE ([_ ]?BEAD)?
   | FERRITE[_ ]?BEAD
@@ -561,8 +561,8 @@ description = "Fuse named only by a rating this file has not traced (low-ohm wir
 # footprint so a bare "500mA" on something that is not a fuse cannot bind here.
 # These keep the 0.01 Ohm stand-in and the caveats on `fuse` above apply.
 value_re = '''(?ix) ^(
-    [0-9]+(\\.[0-9]+)? \\s* V \\s* /? \\s* [0-9]+(\\.[0-9]+)? \\s* (M?A)
-  | [0-9]+(\\.[0-9]+)? \\s* (MA|A)
+    [0-9]+(\.[0-9]+)? \s* V \s* /? \s* [0-9]+(\.[0-9]+)? \s* (M?A)
+  | [0-9]+(\.[0-9]+)? \s* (MA|A)
   | FUSE(_[0-9]?TERMINAL)?
 )$'''
 footprint_re = "(?i)fuse"
