@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 
 use hauksbee_ci::runner::{run_spec, run_spec_seeded};
-use hauksbee_ci::{run, RunConfig, Spec};
+use hauksbee_ci::{run, Spec};
 
 const V_MIN: f64 = 5.0 * 9_000.0 / (11_000.0 + 9_000.0); // 2.25
 const V_MAX: f64 = 5.0 * 11_000.0 / (9_000.0 + 11_000.0); // 2.75
@@ -224,10 +224,9 @@ fn failing_seed_reruns_in_isolation_with_identical_values() {
 
     // And the report surfaces the artifact: failing seed + sampled values +
     // pass-rate, with the honest coverage wording on the banner.
-    let result = run(&RunConfig {
-        spec: spec.base_dir.join("mc_isolation.toml"),
-        ..Default::default()
-    })
+    let result = run(&crate::support::run_config(
+        spec.base_dir.join("mc_isolation.toml"),
+    ))
     .expect("ci run");
     assert!(!result.passed());
     let r = &result.results[0];
@@ -350,11 +349,7 @@ fn corner_report_wording_claims_only_monotonic_bounds() {
          [[tolerance]]\nref = \"R2\"\npercent = 10.0\n\n[ensemble]\nmode = \"corners\"\n"
     );
     let spec_path = write_spec("corner_wording", &body);
-    let result = run(&RunConfig {
-        spec: spec_path,
-        ..Default::default()
-    })
-    .expect("runs");
+    let result = run(&crate::support::run_config(spec_path)).expect("runs");
     let human = result.render_human();
     // The wide [2.2, 2.8] assert passes with the bounded-claim wording...
     assert!(

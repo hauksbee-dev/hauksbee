@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 mod support;
 
 #[cfg(feature = "avr")]
-use hauksbee_ci::{run, RunConfig};
+use hauksbee_ci::run;
 
 #[cfg(feature = "avr")]
 fn hwtraces_dir() -> PathBuf {
@@ -73,11 +73,8 @@ fn hwtrace_corpus() {
             .unwrap()
             .display()
             .to_string();
-        let result = run(&RunConfig {
-            spec: spec.clone(),
-            ..Default::default()
-        })
-        .unwrap_or_else(|e| panic!("{scenario}: run failed: {e}"));
+        let result = run(&crate::support::run_config(spec.clone()))
+            .unwrap_or_else(|e| panic!("{scenario}: run failed: {e}"));
 
         for r in &result.results {
             eprintln!(
@@ -164,11 +161,7 @@ trace = "trace.toml"
     )
     .expect("write spec");
 
-    let result = run(&RunConfig {
-        spec: dir.join("spec.toml"),
-        ..Default::default()
-    })
-    .expect("run");
+    let result = run(&crate::support::run_config(dir.join("spec.toml"))).expect("run");
 
     let period = result
         .results

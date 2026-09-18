@@ -12,7 +12,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use hauksbee_ci::{run, RunConfig};
+use hauksbee_ci::run;
 
 /// A reference designator that exists only on the sub-sheet
 /// (`pic_sockets.kicad_sch`): U5 is one of the PIC sockets. Used to prove the
@@ -108,11 +108,8 @@ fn schematic_example_spec_passes() {
     let Some(spec) = schematic_example() else {
         return;
     };
-    let result = run(&RunConfig {
-        spec: spec.path().to_path_buf(),
-        ..Default::default()
-    })
-    .expect("schematic spec runs");
+    let result =
+        run(&crate::support::run_config(spec.path().to_path_buf())).expect("schematic spec runs");
     assert!(
         result.passed(),
         "schematic-stage CI must be GREEN:\n{}",
@@ -136,16 +133,8 @@ fn schematic_and_pcb_agree() {
     let sch_spec = write_tmp("agree_sch.toml", &spec_body(&sch));
     let pcb_spec = write_tmp("agree_pcb.toml", &spec_body(&pcb));
 
-    let sch_res = run(&RunConfig {
-        spec: sch_spec,
-        ..Default::default()
-    })
-    .expect("schematic spec runs");
-    let pcb_res = run(&RunConfig {
-        spec: pcb_spec,
-        ..Default::default()
-    })
-    .expect("pcb spec runs");
+    let sch_res = run(&crate::support::run_config(sch_spec)).expect("schematic spec runs");
+    let pcb_res = run(&crate::support::run_config(pcb_spec)).expect("pcb spec runs");
 
     // Same number of assertions, same labels, same pass/fail on each.
     assert_eq!(
@@ -186,11 +175,7 @@ fn pointing_at_subsheet_is_a_clear_error() {
             support::toml_path(&sub)
         ),
     );
-    let err = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .unwrap_err();
+    let err = run(&crate::support::run_config(spec)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("sub-sheet"), "should flag a sub-sheet: {msg}");
     assert!(
@@ -230,10 +215,7 @@ fn hierarchy_subsheet_components_are_loaded() {
     // "unknown component" means it was not. (This test previously relied on the
     // untracked-kind case silently passing green, that silent pass was bug #18
     // and is now a loud rejection.)
-    match run(&RunConfig {
-        spec,
-        ..Default::default()
-    }) {
+    match run(&crate::support::run_config(spec)) {
         Ok(res) => assert!(
             res.passed(),
             "sub-sheet component must be present and within its ceiling"

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 mod support;
 
-use hauksbee_ci::{run, RunConfig};
+use hauksbee_ci::run;
 
 fn repo(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
@@ -69,11 +69,8 @@ deadline_ms = 20.0
     )
     .unwrap();
 
-    let result = run(&RunConfig {
-        spec: dir.join("spec.toml"),
-        ..Default::default()
-    })
-    .expect("zip firmware spec runs");
+    let result =
+        run(&crate::support::run_config(dir.join("spec.toml"))).expect("zip firmware spec runs");
     assert!(
         result.passed(),
         "the zipped hex boots and drives the gate:\n{}",
@@ -110,11 +107,8 @@ kind = "no_faults"
     )
     .unwrap();
 
-    let err = run(&RunConfig {
-        spec: dir.join("spec.toml"),
-        ..Default::default()
-    })
-    .expect_err("a useless firmware dir must be refused");
+    let err = run(&crate::support::run_config(dir.join("spec.toml")))
+        .expect_err("a useless firmware dir must be refused");
     let msg = err.to_string();
     assert!(
         msg.contains("platformio.ini"),

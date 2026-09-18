@@ -29,7 +29,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use hauksbee_ci::{run, RunConfig};
+use hauksbee_ci::run;
 
 fn repo(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -91,11 +91,7 @@ contains = "hello from stm32"
         ),
     );
 
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("ci run");
+    let result = run(&crate::support::run_config(spec)).expect("ci run");
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(
@@ -212,10 +208,7 @@ max   = 45.0
     );
 
     std::env::set_var("HAUKSBEE_MCU_DIR", &dir);
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    });
+    let result = run(&crate::support::run_config(spec));
     std::env::remove_var("HAUKSBEE_MCU_DIR");
     let result = result.expect("ci run");
     let _ = std::fs::remove_dir_all(&dir);

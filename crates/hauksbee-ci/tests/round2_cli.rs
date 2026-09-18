@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::support::{bin, blinky_board};
-use hauksbee_ci::{run, RunConfig, Spec};
+use hauksbee_ci::{run, Spec};
 
 /// A fresh dir holding a copy of the blinky board plus a spec asserting
 /// `+5V >= min_v` with no firmware (pure analog, fast). `min_v = 1.0` passes
@@ -260,11 +260,7 @@ fn a_suppressed_rail_with_no_declared_supply_reads_dead() {
          [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmax = 0.5\n",
     )
     .unwrap();
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("run completes");
+    let result = run(&crate::support::run_config(spec)).expect("run completes");
     let human = result.render_human();
     assert_eq!(
         result.exit_code(),
@@ -281,11 +277,7 @@ fn asserting_on_an_ideal_fed_net_is_flagged_as_a_hollow_gate() {
     // holds +5V at 5.0: that check cannot fail for a board reason, and the
     // report must say so.
     let (_dir, spec) = board_dir("hollow", 1.0);
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("run completes");
+    let result = run(&crate::support::run_config(spec)).expect("run completes");
     assert_eq!(result.exit_code(), 0);
     assert!(
         result
@@ -308,11 +300,7 @@ fn asserting_on_an_ideal_fed_net_is_flagged_as_a_hollow_gate() {
          [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 4.5\n",
     )
     .unwrap();
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("run completes");
+    let result = run(&crate::support::run_config(spec)).expect("run completes");
     assert!(
         !result
             .coverage_warnings
@@ -341,11 +329,8 @@ fn celsius_less_max_temp_on_a_fallback_bound_part_is_refused_at_load() {
          [[assert]]\nkind = \"max_temp\"\nref = \"R1\"\n",
     )
     .unwrap();
-    let err = run(&RunConfig {
-        spec: spec.clone(),
-        ..Default::default()
-    })
-    .expect_err("the unfalsifiable form must be refused at load");
+    let err = run(&crate::support::run_config(spec.clone()))
+        .expect_err("the unfalsifiable form must be refused at load");
     let msg = err.to_string();
     assert!(
         msg.contains("explicit `celsius`") && msg.contains("R1"),
@@ -360,11 +345,7 @@ fn celsius_less_max_temp_on_a_fallback_bound_part_is_refused_at_load() {
     )
     .unwrap();
     assert!(
-        run(&RunConfig {
-            spec,
-            ..Default::default()
-        })
-        .is_ok(),
+        run(&crate::support::run_config(spec)).is_ok(),
         "the explicit-celsius form still runs"
     );
 }
@@ -389,11 +370,7 @@ reason = "bench-verified; staged rollout of the new rail spec"
 until = "2030-01-01"
 "#,
     );
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("run completes");
+    let result = run(&crate::support::run_config(spec)).expect("run completes");
     assert_eq!(result.exit_code(), 0, "the waived failure does not gate");
     let human = result.render_human();
     assert!(human.contains("[WAIVED]"), "still visible: {human}");
@@ -414,11 +391,7 @@ reason = "lapsed on purpose"
 until = "2020-01-01"
 "#,
     );
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("run completes");
+    let result = run(&crate::support::run_config(spec)).expect("run completes");
     assert_eq!(result.exit_code(), 1, "the finding comes back");
     assert!(
         result.waiver_notes.iter().any(|n| n.contains("lapsed")),
@@ -431,11 +404,8 @@ until = "2020-01-01"
 fn an_unparseable_waiver_file_warns_and_fails_toward_gating() {
     let (dir, spec) = board_dir("garbage", 100.0);
     write_waivers(dir.path(), "this is not toml [[[");
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("run completes; a bad waiver file is a warning, not a crash");
+    let result = run(&crate::support::run_config(spec))
+        .expect("run completes; a bad waiver file is a warning, not a crash");
     assert_eq!(result.exit_code(), 1, "fails closed: the finding gates");
     assert!(
         result
@@ -461,11 +431,7 @@ reason = "a different rail entirely"
 until = "2030-01-01"
 "#,
     );
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("run completes");
+    let result = run(&crate::support::run_config(spec)).expect("run completes");
     assert_eq!(result.exit_code(), 1, "scope is per-finding, not per-rule");
     assert!(
         result

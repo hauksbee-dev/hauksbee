@@ -1,24 +1,7 @@
 [[models]]
-id = "ac_loop_injector"
-kind = "vreg"
-description = "Zero-volt AC loop injection source for CLI AC-loop tests"
-
-[models.match]
-value_re = "^AC_LOOP_INJECTOR$"
-
-[models.params]
-vout = 0.0
-dropout_v = 0.0
-iq_a = 0.0
-
-[models.pins]
-"1" = "out"
-"2" = "gnd"
-
-[[models]]
 id = "ac_error_amp_one_pole"
 kind = "opamp"
-description = "One-pole error amplifier, A0 100 dB, pole 100 Hz"
+description = "One-pole error amplifier; +1V_VLOOP uses the real rail source and dedicated _VLOOP AC-drive rule"
 
 [models.match]
 value_re = "^AC_ERRAMP$"

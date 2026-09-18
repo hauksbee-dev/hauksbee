@@ -373,18 +373,6 @@ pub fn bind_board_with(
     let mut peripherals: Vec<PeripheralBinding> = Vec::new();
     let input_sources: HashMap<String, hauksbee_ir::DeviceId> = HashMap::new();
 
-    // Detect whether the board has its own regulator chain we can solve. If a
-    // vreg is present we let it source its output net rather than overriding
-    // with an ideal rail (only the input rail stays ideal).
-    let has_vreg = board.components.iter().any(|c| {
-        AssemblyState::of(c).fitted().is_some_and(|part| {
-            matches!(
-                resolve(lib, part).model.as_ref().map(|m| m.kind),
-                Some(ComponentKind::Vreg)
-            )
-        })
-    });
-
     // DNP parts the model DB recognises as processors, as (reference, value).
     let mut dnp_mcus: Vec<(String, String)> = Vec::new();
 
@@ -475,7 +463,6 @@ pub fn bind_board_with(
                     &mut mcus,
                     &mut dacs,
                     &mut peripherals,
-                    has_vreg,
                     &power_nets,
                     lib.pin_rules(),
                 );
@@ -1900,7 +1887,6 @@ fn bind_component(
     mcus: &mut Vec<McuBinding>,
     dacs: &mut Vec<DacBinding>,
     peripherals: &mut Vec<PeripheralBinding>,
-    has_vreg: bool,
     power_nets: &HashMap<String, f64>,
     pin_rules: &hauksbee_models::PinRuleTable,
 ) -> (BindOutcome, Option<String>, Vec<String>) {
@@ -2061,7 +2047,7 @@ fn bind_component(
         Diode => bind_diode(comp, model, circuit, &role_nets),
         BjtNpn | BjtPnp => bind_bjt(comp, model, circuit, &role_nets),
         Nmos | Pmos => bind_mosfet(comp, model, circuit, &role_nets),
-        Vreg => bind_vreg(comp, model, circuit, &role_nets, has_vreg),
+        Vreg => bind_vreg(comp, model, circuit, &role_nets),
         Opamp => bind_opamp(comp, model, circuit, &role_nets),
         Comparator => bind_comparator(comp, model, circuit, &role_nets),
         AnalogSwitch => bind_analog_switch(comp, model, circuit, &role_nets, power_nets),
@@ -3409,7 +3395,6 @@ fn bind_vreg(
     model: &ModelEntry,
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
-    _has_vreg: bool,
 ) -> (BindOutcome, Option<String>) {
     // A vreg whose model carries a behavioural converter is realised by the
     // behavioural layer, which owns the output net and reflects real input
@@ -3435,35 +3420,28 @@ fn bind_vreg(
             entry_warning(comp, model),
         );
     }
-    let out = roles.get("out").copied();
-    // A missing `vout` must not silently fabricate a 5 V rail on a board whose
-    // regulator is actually 3.3 V (or anything else). Distinguish a present vout
-    // from the assumed default and SAY SO, matching the bind_analog_switch
-    // DEFAULT_VCC discipline below.
-    let (vout, vout_warning) = match model.params.get_f64("vout") {
-        Some(v) => (v, None),
-        None => (
-            DEFAULT_VCC,
-            Some(format!(
-                "{} ({}): vreg model has no `vout` param; regulating its output net to an \
-                 assumed {DEFAULT_VCC:.1} V; verify the regulator's actual output voltage",
-                comp.reference, comp.value,
-            )),
-        ),
+    let Some(vout) = model.params.get_f64("vout").filter(|v| v.is_finite()) else {
+        return open_warning(comp, "vreg requires an explicit finite `vout` param");
     };
-    let Some(out) = out else {
+    let Some(input) = roles.get("in").copied() else {
+        return open_warning(comp, "vreg input not connected");
+    };
+    let Some(out) = roles.get("out").copied() else {
         return open_warning(comp, "vreg output not connected");
     };
-    if out.is_ground() {
-        return open_warning(comp, "vreg output tied to ground");
+    let Some(gnd) = roles.get("gnd").copied() else {
+        return open_warning(comp, "vreg local return not connected");
+    };
+    if out == gnd || out == input || input == gnd {
+        return open_warning(
+            comp,
+            "vreg input, output, and local return must be distinct",
+        );
     }
-    // Behavioral ideal source: regulate the output net to vout. A real LDO
-    // needs its input above vout+dropout, but for liveness an ideal source is
-    // the right first-order model.
     circuit.add(Device::Vsource {
         name: format!("Vreg_{}", comp.reference),
         p: out,
-        n: NodeId::GROUND,
+        n: gnd,
         kind: SourceKind::Dc(vout),
     });
     // THE ENABLE IS NOT MODELLED, and this says so for every entry that has one
@@ -3502,7 +3480,7 @@ fn bind_vreg(
     // are joined rather than one silently winning. Each is a full sentence already;
     // the leading one keeps the marker that makes the whole string evidence, and the
     // followers drop their own "REF (VALUE): " so the reference is not repeated.
-    let mut caveats: Vec<String> = [entry_warning(comp, model), enable_warning, vout_warning]
+    let mut caveats: Vec<String> = [entry_warning(comp, model), enable_warning]
         .into_iter()
         .flatten()
         .collect();
@@ -6372,7 +6350,6 @@ mod tests {
             &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
-            false,
             power_nets,
             ModelLibrary::builtin().pin_rules(),
         );
@@ -6529,7 +6506,6 @@ mod tests {
             &mut Vec::new(),
             &mut Vec::new(),
             &mut peripherals,
-            false,
             &HashMap::from([("+3V3".to_string(), 3.3)]),
             lib.pin_rules(),
         );
@@ -6599,7 +6575,6 @@ mod tests {
             &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
-            false,
             &HashMap::new(),
             ModelLibrary::builtin().pin_rules(),
         );
@@ -6625,34 +6600,123 @@ mod tests {
         assert_eq!(summary.active_path_unresolved.len(), 1);
     }
 
-    /// A vreg model with no `vout` falls back to 5.0 V and must say so; an
-    /// explicit `vout` binds silently at that voltage.
-    #[test]
-    fn vreg_without_vout_param_warns_about_the_assumed_default() {
+    fn simple_vreg(vout: Option<f64>) -> ModelEntry {
         let mut model = make_entry(
             "generic_ldo",
             ComponentKind::Vreg,
-            "vreg with no vout param",
+            "simple fixed regulator",
             hauksbee_models::Params::default(),
             std::collections::BTreeMap::new(),
         );
-        assert!(model.params.get_f64("vout").is_none());
-        let bind = |model: &ModelEntry| {
-            let mut circuit = Circuit::new();
-            let roles = roles(&mut circuit, &["out"]);
-            bind_vreg(&comp("U9", ""), model, &mut circuit, &roles, true)
-        };
-        let (_, warning) = bind(&model);
-        let warning = warning.expect("a missing vout must produce a warning");
-        assert!(
-            warning.contains("vout") && warning.contains("5.0"),
-            "{warning}"
-        );
+        if let Some(vout) = vout {
+            model.params.set_f64("vout", vout);
+        }
+        model
+    }
 
-        model.params.set_f64("vout", 3.3);
-        let (outcome, warning) = bind(&model);
-        assert!(warning.is_none());
-        assert!(matches!(outcome, BindOutcome::Behavioral { device } if device.contains("3.3")));
+    #[test]
+    fn simple_vreg_requires_finite_voltage_and_all_roles() {
+        for (case, vout, names, warning_token) in [
+            (
+                "missing vout",
+                None,
+                &["in", "out", "gnd"][..],
+                "finite `vout`",
+            ),
+            (
+                "NaN vout",
+                Some(f64::NAN),
+                &["in", "out", "gnd"],
+                "finite `vout`",
+            ),
+            (
+                "infinite vout",
+                Some(f64::INFINITY),
+                &["in", "out", "gnd"],
+                "finite `vout`",
+            ),
+            (
+                "missing input",
+                Some(3.3),
+                &["out", "gnd"],
+                "input not connected",
+            ),
+            (
+                "missing output",
+                Some(3.3),
+                &["in", "gnd"],
+                "output not connected",
+            ),
+            (
+                "missing return",
+                Some(3.3),
+                &["in", "out"],
+                "local return not connected",
+            ),
+        ] {
+            let mut circuit = Circuit::new();
+            let roles = roles(&mut circuit, names);
+            let (outcome, warning) =
+                bind_vreg(&comp("U9", ""), &simple_vreg(vout), &mut circuit, &roles);
+            assert!(matches!(outcome, BindOutcome::Unresolved { .. }), "{case}");
+            assert!(warning.is_some_and(|w| w.contains(warning_token)), "{case}");
+            assert!(circuit.devices.is_empty(), "{case}");
+        }
+    }
+
+    #[test]
+    fn simple_vreg_rejects_tied_roles() {
+        let model = simple_vreg(Some(3.3));
+        for (case, gnd, input, out) in [
+            ("out-return", "A", "B", "A"),
+            ("out-in", "A", "B", "B"),
+            ("in-return", "A", "A", "B"),
+        ] {
+            let mut circuit = Circuit::new();
+            let roles = HashMap::from([
+                ("gnd".into(), circuit.node(gnd)),
+                ("in".into(), circuit.node(input)),
+                ("out".into(), circuit.node(out)),
+            ]);
+            let (outcome, warning) = bind_vreg(&comp("U9", ""), &model, &mut circuit, &roles);
+            assert!(matches!(outcome, BindOutcome::Unresolved { .. }), "{case}");
+            assert!(
+                warning.is_some_and(|w| w.contains("must be distinct")),
+                "{case}"
+            );
+            assert!(circuit.devices.is_empty(), "{case}");
+        }
+    }
+
+    #[test]
+    fn simple_vreg_stamps_exact_voltage_between_output_and_return() {
+        for (case, vout, out, gnd) in [
+            ("global return", 3.3, "OUT", "0"),
+            ("offset return", -5.0, "OUT", "RETURN"),
+            ("ground output", 5.0, "0", "RETURN"),
+        ] {
+            let mut circuit = Circuit::new();
+            let roles = HashMap::from([
+                ("in".into(), circuit.node("IN")),
+                ("out".into(), circuit.node(out)),
+                ("gnd".into(), circuit.node(gnd)),
+            ]);
+            let (outcome, warning) = bind_vreg(
+                &comp("U9", ""),
+                &simple_vreg(Some(vout)),
+                &mut circuit,
+                &roles,
+            );
+            assert!(warning.is_none(), "{case}");
+            assert!(
+                matches!(outcome, BindOutcome::Behavioral { device } if device == format!("vreg {vout:.1}V source")),
+                "{case}"
+            );
+            assert!(
+                matches!(circuit.devices.as_slice(), [Device::Vsource { p, n, kind: SourceKind::Dc(v), .. }] if *p == roles["out"] && *n == roles["gnd"] && *v == vout),
+                "{case}"
+            );
+        }
     }
 
     fn analog_switch_entry(description: &str) -> ModelEntry {

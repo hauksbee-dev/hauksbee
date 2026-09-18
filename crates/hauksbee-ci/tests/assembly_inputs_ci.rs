@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use hauksbee_ci::{run, RunConfig};
+use hauksbee_ci::run;
 
 const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
@@ -77,11 +77,8 @@ fn artifact<'a>(json: &'a serde_json::Value, role: &str) -> &'a serde_json::Valu
 fn bom_placement_and_variant_shape_the_gate_and_its_exact_evidence() {
     let dir = tempfile::tempdir().unwrap();
     let spec = write_fixture(dir.path());
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("the production runner accepts the reconciled assembly inputs");
+    let result = run(&crate::support::run_config(spec))
+        .expect("the production runner accepts the reconciled assembly inputs");
     assert_eq!(result.exit_code(), 0, "{}", result.render_human());
 
     let json: serde_json::Value =
@@ -181,11 +178,8 @@ fn ci_refuses_a_bom_whose_part_dimension_contradicts_the_layout() {
     )
     .unwrap();
 
-    let error = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect_err("a resistor/inductor identity contradiction must fail closed");
+    let error = run(&crate::support::run_config(spec))
+        .expect_err("a resistor/inductor identity contradiction must fail closed");
     let diagnostic = error.to_string();
     assert!(diagnostic.contains("R1"), "{diagnostic}");
     assert!(
@@ -221,11 +215,8 @@ fn a_variant_cannot_silently_name_an_unknown_or_contradictory_reference() {
         let dir = tempfile::tempdir().unwrap();
         let spec = write_fixture(dir.path());
         std::fs::write(dir.path().join("sensorless.variant.toml"), body).unwrap();
-        let error = run(&RunConfig {
-            spec,
-            ..Default::default()
-        })
-        .expect_err("a variant typo or contradiction must fail closed");
+        let error = run(&crate::support::run_config(spec))
+            .expect_err("a variant typo or contradiction must fail closed");
         assert!(error.to_string().contains(expected), "{name}: {error}");
     }
 }

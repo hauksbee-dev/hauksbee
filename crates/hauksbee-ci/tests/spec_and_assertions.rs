@@ -4,7 +4,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use hauksbee_ci::{run, RunConfig, Spec};
+use hauksbee_ci::{run, Spec};
 
 fn example(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -93,11 +93,7 @@ fn unknown_net_lists_near_matches() {
             support::toml_path(&board)
         ),
     );
-    let err = run(&RunConfig {
-        spec: p,
-        ..Default::default()
-    })
-    .unwrap_err();
+    let err = run(&crate::support::run_config(p)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("not found"), "got: {msg}");
     assert!(msg.contains("+5V"), "should suggest the real net: {msg}");
@@ -114,11 +110,7 @@ fn typoed_max_current_ref_is_rejected_not_silently_green() {
             support::toml_path(&board)
         ),
     );
-    let err = run(&RunConfig {
-        spec: p,
-        ..Default::default()
-    })
-    .unwrap_err();
+    let err = run(&crate::support::run_config(p)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("unknown component"), "got: {msg}");
     assert!(msg.contains("R1"), "should suggest the real ref: {msg}");
@@ -137,11 +129,7 @@ fn max_current_on_untracked_component_kind_is_rejected_not_green() {
             support::toml_path(&board)
         ),
     );
-    let err = run(&RunConfig {
-        spec: p,
-        ..Default::default()
-    })
-    .unwrap_err();
+    let err = run(&crate::support::run_config(p)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("C1"), "should name the ref: {msg}");
     assert!(
@@ -163,11 +151,7 @@ fn max_temp_on_component_without_thermal_model_is_rejected_not_green() {
             support::toml_path(&board)
         ),
     );
-    let err = run(&RunConfig {
-        spec: p,
-        ..Default::default()
-    })
-    .unwrap_err();
+    let err = run(&crate::support::run_config(p)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("U1"), "should name the ref: {msg}");
     assert!(
@@ -188,10 +172,9 @@ fn after_ms_on_toggle_is_rejected() {
 
 #[test]
 fn junit_xml_is_well_formed_and_escaped() {
-    let result = run(&RunConfig {
-        spec: example("power_resistor_cool.toml"),
-        ..Default::default()
-    })
+    let result = run(&crate::support::run_config(example(
+        "power_resistor_cool.toml",
+    )))
     .unwrap();
     let xml = result.render_junit();
     assert!(xml.starts_with("<?xml"));
@@ -208,10 +191,9 @@ fn junit_xml_is_well_formed_and_escaped() {
 
 #[test]
 fn github_annotations_emit_error_on_failure() {
-    let result = run(&RunConfig {
-        spec: example("power_resistor_hot.toml"),
-        ..Default::default()
-    })
+    let result = run(&crate::support::run_config(example(
+        "power_resistor_hot.toml",
+    )))
     .unwrap();
     let ann = result.render_github_annotations();
     assert!(
@@ -230,11 +212,8 @@ fn github_annotations_emit_error_on_failure() {
 fn demo_firmware_blink_uart_and_rail_all_pass() {
     // The full co-sim path: boot the demo firmware, assert rail + UART + blink
     // + no faults. Slower (1 s of simulated time) but exercises the MCU.
-    let result = run(&RunConfig {
-        spec: example("blinky.toml"),
-        ..Default::default()
-    })
-    .expect("blinky spec runs");
+    let result =
+        run(&crate::support::run_config(example("blinky.toml"))).expect("blinky spec runs");
     assert!(
         result.passed(),
         "blinky must pass all assertions:\n{}",
@@ -278,11 +257,7 @@ fn main {
             support::toml_path(&board)
         ),
     );
-    let result = run(&RunConfig {
-        spec: p,
-        ..Default::default()
-    })
-    .expect(".board spec runs");
+    let result = run(&crate::support::run_config(p)).expect(".board spec runs");
     assert!(
         result.passed(),
         "the supplied rail on the compiled .board must hold 3.3 V:\n{}",
@@ -302,11 +277,7 @@ fn boot_coverage_requires_net_min_and_deadline() {
             support::toml_path(&board)
         ),
     );
-    let err = run(&RunConfig {
-        spec: p,
-        ..Default::default()
-    })
-    .unwrap_err();
+    let err = run(&crate::support::run_config(p)).unwrap_err();
     assert!(err.to_string().contains("deadline_ms"), "got: {err}");
 }
 

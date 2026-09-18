@@ -27,7 +27,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use hauksbee_ci::{run, RunConfig};
+use hauksbee_ci::run;
 
 fn repo(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -86,11 +86,7 @@ fn watchdog_reboots_reach_the_ci_coverage_hole_path_in_every_format() {
         return;
     }
     let spec = spec_for("wdt.elf", "starved");
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("ci run");
+    let result = run(&crate::support::run_config(spec)).expect("ci run");
 
     let hit = result
         .coverage_warnings
@@ -140,11 +136,7 @@ fn a_fed_watchdog_on_a_faithful_backend_adds_no_coverage_warning() {
         return;
     }
     let spec = spec_for("nowdt.elf", "fed");
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("ci run");
+    let result = run(&crate::support::run_config(spec)).expect("ci run");
 
     assert!(
         !result

@@ -37,6 +37,12 @@ fn board() -> ExtractedBoard {
     }
 }
 
+fn bound_evidence() -> BoardEvidence {
+    let board = board();
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+    BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::from_epoch_days(20_666)).unwrap()
+}
+
 fn map<'a>(evidence: &'a BoardEvidence, net: &str) -> &'a hauksbee_ir::evidence::EvidenceMap {
     evidence
         .maps()
@@ -47,11 +53,7 @@ fn map<'a>(evidence: &'a BoardEvidence, net: &str) -> &'a hauksbee_ir::evidence:
 
 #[test]
 fn actual_bind_incidence_rejects_vacuous_and_saturated_evidence() {
-    let board = board();
-    let bound = bind_board(&board, &ModelLibrary::builtin());
-    let evidence =
-        BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::from_epoch_days(20_666))
-            .unwrap();
+    let evidence = bound_evidence();
 
     assert_eq!(map(&evidence, "3V3").status(), EvidenceStatus::Undermined);
     assert_eq!(map(&evidence, "VBUS").status(), EvidenceStatus::Clean);
@@ -61,11 +63,7 @@ fn actual_bind_incidence_rejects_vacuous_and_saturated_evidence() {
 
 #[test]
 fn actual_finding_scope_selects_only_its_causal_path() {
-    let board = board();
-    let bound = bind_board(&board, &ModelLibrary::builtin());
-    let evidence =
-        BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::from_epoch_days(20_666))
-            .unwrap();
+    let evidence = bound_evidence();
     let finding = JsonFinding {
         check: "lint".into(),
         kind: "fixture".into(),
@@ -692,11 +690,7 @@ fn finding_on_3v3_kind(check: &str, kind: &str) -> JsonFinding {
 
 #[test]
 fn si_findings_are_geometry_causal_and_open_parts_do_not_undermine_them() {
-    let board = board();
-    let bound = bind_board(&board, &ModelLibrary::builtin());
-    let evidence =
-        BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::from_epoch_days(20_666))
-            .unwrap();
+    let evidence = bound_evidence();
     // The premise the contrast rests on: R74 on 3V3 is open (no model), and a
     // model-consuming claim on that net is undermined by it.
     let lint_maps = evidence

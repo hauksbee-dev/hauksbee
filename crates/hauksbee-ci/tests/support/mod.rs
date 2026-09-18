@@ -9,6 +9,16 @@ pub fn toml_path(path: &Path) -> String {
     toml::Value::String(path.to_string_lossy().into_owned()).to_string()
 }
 
+/// A run configuration with only the spec path overridden.
+// Some integration modules compile this shared support file without using every helper.
+#[allow(dead_code)]
+pub fn run_config(spec: PathBuf) -> hauksbee_ci::RunConfig {
+    hauksbee_ci::RunConfig {
+        spec,
+        ..Default::default()
+    }
+}
+
 /// The compiled `hauksbee-ci` binary (Cargo sets this for the crate's tests).
 #[allow(dead_code)]
 pub fn bin() -> &'static str {
