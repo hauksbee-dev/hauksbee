@@ -49,6 +49,8 @@ test('no surface prints a number for a net nobody simulated', () => {
   }))
   expect(scope).toContain('unsupported — not a simulated value')
   expect(scope).not.toContain('3.300')
+  // The long status truncates in the probe row; the name and the detach button keep their width.
+  expect(scope).toContain('title="unsupported — not a simulated value"')
 
   // And a clean fault list says WHY part of the circuit was never watched.
   const faults = renderToStaticMarkup(createElement(FaultPanel, { faults: [], unsupportedReasons: frame.unsupported_reasons }))

@@ -50,6 +50,8 @@ mod mcu_descriptor_dir;
 mod multiunit_keying;
 #[path = "olimex_burst_calibration.rs"]
 mod olimex_burst_calibration;
+#[path = "open_driver_validity.rs"]
+mod open_driver_validity;
 #[path = "packaged_asset_sync.rs"]
 mod packaged_asset_sync;
 #[path = "peripherals.rs"]

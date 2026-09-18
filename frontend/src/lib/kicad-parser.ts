@@ -292,6 +292,7 @@ function parseSegment(c: SNode[], nets: Map<string, string>): Segment | null {
  *  netlist): an absence of geometry, not a failure, and the canvas says so
  *  neutrally rather than in red. */
 export const NO_LAYOUT = 'no layout to draw for this input'
+export const NO_LAYOUT_HINT = 'This is normal for a text board description; simulation and net readings are unaffected.'
 
 export function parseKicadPcb(src: string): ParsedBoard {
   const root = tokenise(src)

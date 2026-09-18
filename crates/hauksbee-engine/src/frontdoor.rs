@@ -2436,16 +2436,25 @@ fn run_web_cosim_with_bound(
     // wording. Note-level like its sibling honesty caveats, which is enough for
     // `cosim_caveat_headline` to demote "Looks healthy".
     for taint in sched.regulation_taint() {
+        let (what, fix) = if taint.reason.contains(crate::scheduler::OPEN_DRIVER) {
+            (
+                " has no model, so the nets it drives are",
+                "Give it a model, then re-run.",
+            )
+        } else {
+            let fix = "Declare or fix the supply on this regulator's input, then re-run.";
+            ("'s regulation is", fix)
+        };
         findings.insert(
             0,
             WebFinding {
                 level: "note".to_string(),
                 what: format!(
-                    "{}'s regulation is not a simulated result",
+                    "{}{what} not a simulated result",
                     taint.refs.first().map_or("A regulator", String::as_str)
                 ),
                 why: taint.reason.clone(),
-                fix: "Declare or fix the supply on this regulator's input, then re-run.".into(),
+                fix: fix.into(),
                 x: None,
                 y: None,
             },

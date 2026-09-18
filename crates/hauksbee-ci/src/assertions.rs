@@ -339,7 +339,11 @@ fn member_invalid_reason(a: &Assertion, out: &RunOutcome) -> Option<String> {
             we * 1e3,
         ));
     }
-    regulation_reason(a, out).map(str::to_string)
+    // An absent open driver cannot make a failure real; a pass stands on the stated
+    // assumption that the part leaves the net alone (the refinement words it).
+    let reason = regulation_reason(a, out)?;
+    let stands = reason.contains(hauksbee_engine::scheduler::OPEN_DRIVER) && check_seed(a, out).0;
+    (!stands).then(|| reason.to_string())
 }
 
 fn evaluate_one(

@@ -341,7 +341,12 @@ impl Engine for HauksbeeEngine {
             // can say "static level, not a measured drive" instead of
             // presenting the passive network's idle voltage as a measurement.
             unobserved_drive_nets: self.sched.unobserved_drive_nets(),
-            unsupported_nets: taint.iter().flat_map(|t| t.nets.clone()).collect(),
+            // An open driver's nets keep their number (the board without the part,
+            // as its reason says); only a regulator's unearned setpoint is blanked.
+            unsupported_nets: (taint.iter())
+                .filter(|t| !t.reason.contains(crate::regulation::OPEN_DRIVER))
+                .flat_map(|t| t.nets.clone())
+                .collect(),
             unsupported_reasons: taint.iter().map(|t| t.reason.clone()).collect(),
             net_voltages: self.sched.net_voltages(),
             // The chunk's envelope, not just the instant above. Without it a

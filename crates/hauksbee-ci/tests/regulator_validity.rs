@@ -160,31 +160,6 @@ fn a_tainted_member_never_outranks_a_real_failure_in_an_ensemble() {
     assert_eq!(a.failing_seeds, vec![1]);
 }
 
-/// One gap, one wording, across two binaries: `ci` depends on `engine`, so this
-/// costs no second test crate. Both get the SAME condition (no declared supply
-/// on VIN), so the strings are comparable byte for byte. `--strict` turns the
-/// undermined evidence into exit 3 through the existing gates.
-#[test]
-fn the_headless_run_carries_the_identical_reason() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let reason = reason(&run(&spec_for(dir.path(), None, None)));
-
-    let out = std::process::Command::new(
-        Path::new(support::bin())
-            .parent()
-            .expect("target dir")
-            .join(format!("hauksbee{}", std::env::consts::EXE_SUFFIX)),
-    )
-    .arg("run")
-    .arg(fixture_board())
-    .args(["--headless", "--seconds", "0.003", "--json", "--strict"])
-    .output()
-    .expect("run the headless binary");
-    let json = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        json.contains(&reason),
-        "the headless run does not carry the CI reason verbatim\n  reason: {reason}\n  stdout: {json}"
-    );
-    assert!(json.contains("\"verdict\": \"invalid\""), "{json}");
-    assert_eq!(out.status.code(), Some(3), "{json}");
-}
+// The headless `hauksbee run` half (same board, no declared supply, `--strict`
+// exit 3 with this reason) lives in hauksbee-engine/tests/cli_strict_plain.rs:
+// this crate's tests may only spawn `hauksbee-ci`, the one binary CI builds for them.

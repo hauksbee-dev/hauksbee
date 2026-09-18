@@ -392,14 +392,18 @@ impl CiResult {
         // assertion), or the analog solve diverged under it (fix the named
         // net). The footer must send the reader to the right one; "inspect the
         // failed window" is wrong advice when no window failed.
-        let count = |prefix: &str| {
-            self.results
-                .iter()
-                .filter(|r| r.invalid && r.detail.starts_with(prefix))
-                .count()
+        // An open part that would DRIVE the judged net refuses through the member
+        // path ("INVALID: U1 (LM317) has no model ..."), and is the same gap.
+        let open_part = |r: &AssertResult| {
+            r.detail.starts_with("INVALID evidence:")
+                || r.detail.contains(hauksbee_engine::scheduler::OPEN_DRIVER)
         };
-        let evidence = count("INVALID evidence:");
-        let timing = count("INVALID: timing coverage refusal:");
+        let count = |hit: &dyn Fn(&AssertResult) -> bool| {
+            let hit = |r: &&AssertResult| r.invalid && hit(r);
+            self.results.iter().filter(hit).count()
+        };
+        let evidence = count(&open_part);
+        let timing = count(&|r| r.detail.starts_with("INVALID: timing coverage refusal:"));
         let missing = if self.analog_abort {
             format!(
                 "a converged analog solve through the run; the consecutive-failure abort tripped and {invalid} assertion(s) were marked INVALID"
@@ -445,7 +449,7 @@ impl CiResult {
                         "read the regulator reason under INVALID assertion '{}': declare a [[supply]] on that regulator's input net with the headroom it names (or fit a lower-dropout part), then rerun the same spec",
                         r.label
                     )
-                } else if r.detail.starts_with("INVALID evidence:") {
+                } else if open_part(r) {
                     format!(
                         "give the open part(s) named under INVALID assertion '{}' a model (hauksbee models new, or a [[supply]] for a battery net), then rerun the same spec",
                         r.label

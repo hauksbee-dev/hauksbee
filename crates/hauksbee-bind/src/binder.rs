@@ -474,6 +474,21 @@ pub fn bind_board_with(
         if let Some(k) = &kind_str {
             component_kinds.insert(comp.reference.clone(), k.clone());
         }
+        // A port's numeric part number parses as a value, so it lands here too;
+        // nothing is plugged into it in the specified scenario, so it drives nothing.
+        let port = is_port_class(&ref_prefix(&comp.reference));
+        if matches!(outcome, BindOutcome::Unresolved { .. }) && !port {
+            let can_drive = |kind: &str| {
+                let k = kind.to_ascii_lowercase();
+                !(k.starts_with("input") || k.starts_with("power_in") || k.contains("no_connect"))
+            };
+            let pin = |p: &hauksbee_extract::Pin| Some((node_of(p.net)?, can_drive(&p.kind)));
+            report.open_parts.push(crate::bind_report::OpenPart {
+                reference: comp.reference.clone(),
+                value: comp.value.clone(),
+                pins: comp.pins.iter().filter_map(pin).collect(),
+            });
+        }
         report.push(BindRow {
             reference: comp.reference.clone(),
             value: comp.value.clone(),
@@ -1151,17 +1166,23 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
     res
 }
 
+/// The upper-cased alphabetic designator prefix of a reference ("JP3" -> "JP").
+fn ref_prefix(reference: &str) -> String {
+    let letters = reference.chars().take_while(char::is_ascii_alphabetic);
+    letters.collect::<String>().to_ascii_uppercase()
+}
+
+/// Connector-class prefixes: ports and mechanical parts, never simulated drivers.
+fn is_port_class(prefix: &str) -> bool {
+    matches!(prefix, "J" | "P" | "X" | "JP" | "TP" | "MP" | "H")
+}
+
 /// Synthesize a model entry for a component the library could not resolve,
 /// using only the reference-designator class and a parseable value. Returns
 /// `None` when no confident fallback applies.
 fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
     use std::collections::BTreeMap;
-    let prefix: String = comp
-        .reference
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect::<String>()
-        .to_ascii_uppercase();
+    let prefix = ref_prefix(&comp.reference);
 
     // Bare AVR MCUs whose value carries a package suffix the DB regex misses
     // (e.g. "ATmega328P-PU", "ATMEGA328-AU").
@@ -1205,9 +1226,7 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
 
     // Connector-class references: not simulatable parts; classify so they
     // don't count against resolution (J5 "Power", P1, test points, jumpers).
-    if matches!(prefix.as_str(), "J" | "P" | "X" | "JP" | "TP" | "MP" | "H")
-        && parse_value(&comp.value).is_none()
-    {
+    if is_port_class(&prefix) && parse_value(&comp.value).is_none() {
         return Some(make_entry(
             "connector_fallback",
             ComponentKind::Ignore,
@@ -1525,12 +1544,7 @@ fn route_mcu_family_str(s: &str) -> Option<McuFamilyRoute> {
 }
 
 fn looks_like_mcu_candidate(comp: &Component) -> bool {
-    let prefix: String = comp
-        .reference
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect::<String>()
-        .to_ascii_uppercase();
+    let prefix = ref_prefix(&comp.reference);
     if matches!(prefix.as_str(), "U" | "IC" | "MCU") {
         return true;
     }
@@ -2727,12 +2741,7 @@ fn bind_passive(
     // thermal consumers all see the same physics. Arrays keep the per-element
     // path: a single pack-level ESR/DCR cannot be assigned to multiple elements
     // without a per-element schema.
-    let prefix = comp
-        .reference
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect::<String>()
-        .to_ascii_uppercase();
+    let prefix = ref_prefix(&comp.reference);
     let is_inductor = model.passive_class == Some(hauksbee_models::schema::PassiveClass::Inductor)
         || prefix.starts_with('L')
         || p.unit
@@ -2907,12 +2916,7 @@ fn passive_device(
     p: &hauksbee_models::value::ParsedValue,
 ) -> (Device, Option<String>) {
     let unit = p.unit.as_deref().unwrap_or("");
-    let prefix = comp
-        .reference
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect::<String>()
-        .to_ascii_uppercase();
+    let prefix = ref_prefix(&comp.reference);
     if prefix.starts_with('C') || unit.eq_ignore_ascii_case("F") {
         (
             Device::Capacitor {
@@ -4491,12 +4495,7 @@ fn assembled_crystal_bridges(
         let Some(part) = AssemblyState::of(comp).fitted() else {
             return false;
         };
-        let prefix = comp
-            .reference
-            .chars()
-            .take_while(|c| c.is_ascii_alphabetic())
-            .collect::<String>()
-            .to_ascii_uppercase();
+        let prefix = ref_prefix(&comp.reference);
         let model_is_crystal = resolve(lib, part)
             .model
             .as_ref()
@@ -5945,11 +5944,7 @@ fn wrong_scale_for_designator(reference: &str, value: &str) -> Option<&'static s
         return None;
     }
     let suffix = parsed.suffix?.to_ascii_uppercase();
-    let prefix: String = reference
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect::<String>()
-        .to_ascii_uppercase();
+    let prefix = ref_prefix(reference);
     match prefix.as_str() {
         "C" | "L" if matches!(suffix.as_str(), "K" | "M" | "MEG" | "G" | "T") => {
             Some("a resistance-scale value")
@@ -5975,11 +5970,7 @@ fn dimension_of(reference: &str, value: &str) -> Option<&'static str> {
 
 /// The class a reference-designator prefix implies, for the three passives.
 fn designator_dimension(reference: &str) -> Option<&'static str> {
-    let prefix: String = reference
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect::<String>()
-        .to_ascii_uppercase();
+    let prefix = ref_prefix(reference);
     match prefix.as_str() {
         "R" => Some("a resistance"),
         "C" => Some("a capacitance"),

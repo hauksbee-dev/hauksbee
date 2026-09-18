@@ -3,9 +3,10 @@
 //! headroom. This module establishes that or reports why not; it never
 //! substitutes a voltage of its own for an unsupported output.
 
-use hauksbee_bind::bind_report::SimpleRegulator;
+use hauksbee_bind::bind_report::{OpenPart, SimpleRegulator};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{run_op, Probe, SolverOptions};
+use std::collections::HashMap;
 
 /// One unsupported regulator: the shared reason, and everything it invalidates.
 /// `refs[0]` is the regulator itself; the rest are MCUs powered from `nets`.
@@ -141,42 +142,98 @@ pub fn reason(
     )
 }
 
-/// Everything regulator `index`'s output can power: a structural walk over
-/// non-source conduction paths (so it covers loads switched on later), stopping at
-/// ground, at `supply_nets`, and at terminals of still-trusted voltage sources.
-pub fn tainted_nodes(
-    circuit: &Circuit,
-    regs: &[SimpleRegulator],
-    supported: &[bool],
-    supply_nets: &[NodeId],
-    index: usize,
-) -> Vec<NodeId> {
-    let mut stop = [&[NodeId::GROUND], supply_nets].concat();
-    let distrusted = |id| {
-        regs.iter()
-            .zip(supported)
-            .any(|(r, ok)| !ok && r.source == id)
-    };
-    for (id, dev) in circuit.iter() {
-        if let (Device::Vsource { p, n, .. }, false) = (dev, distrusted(id)) {
-            stop.extend([*p, *n]);
-        }
-    }
-    let (p, n, _) = terminals(circuit, &regs[index]);
-    let seed = |x: &NodeId| !stop.contains(x) || (*x == p && !p.is_ground());
-    let mut seen: Vec<NodeId> = [p, n].into_iter().filter(seed).collect();
-    let mut next = 0;
-    while let Some(&at) = seen.get(next) {
-        next += 1;
-        for dev in &circuit.devices {
-            let nodes = dev.conduction_nodes();
-            let source = matches!(dev, Device::Vsource { .. } | Device::Isource { .. });
-            if !source && nodes.contains(&at) {
-                let fresh = |x: &NodeId| !stop.contains(x) && !seen.contains(x);
-                let fresh: Vec<_> = nodes.into_iter().filter(fresh).collect();
-                seen.extend(fresh);
+/// The structural walk both taints share: non-source conduction paths (so it
+/// covers loads switched on later), stopping at ground, at `supply_nets`, and at
+/// terminals of still-trusted voltage sources.
+pub struct Walk {
+    stop: Vec<NodeId>,
+    next: HashMap<NodeId, Vec<NodeId>>,
+}
+
+impl Walk {
+    pub fn new(
+        circuit: &Circuit,
+        regs: &[SimpleRegulator],
+        supported: &[bool],
+        supply_nets: &[NodeId],
+    ) -> Self {
+        let mut stop = [&[NodeId::GROUND], supply_nets].concat();
+        let distrusted = |id| {
+            regs.iter()
+                .zip(supported)
+                .any(|(r, ok)| !ok && r.source == id)
+        };
+        let mut next: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        for (id, dev) in circuit.iter() {
+            match dev {
+                Device::Vsource { p, n, .. } if !distrusted(id) => stop.extend([*p, *n]),
+                Device::Vsource { .. } | Device::Isource { .. } => {}
+                _ => {
+                    let nodes = dev.conduction_nodes();
+                    for at in &nodes {
+                        next.entry(*at).or_default().extend(&nodes);
+                    }
+                }
             }
         }
+        Self { stop, next }
     }
-    seen
+
+    fn reach(&self, mut seen: Vec<NodeId>) -> Vec<NodeId> {
+        let mut at = 0;
+        while let Some(node) = seen.get(at).copied() {
+            at += 1;
+            for x in self.next.get(&node).into_iter().flatten() {
+                if !self.stop.contains(x) && !seen.contains(x) {
+                    seen.push(*x);
+                }
+            }
+        }
+        seen
+    }
+
+    /// Everything regulator `reg`'s output can power.
+    pub fn regulator(&self, circuit: &Circuit, reg: &SimpleRegulator) -> Vec<NodeId> {
+        let (p, n, _) = terminals(circuit, reg);
+        let seed = |x: &NodeId| !self.stop.contains(x) || (*x == p && !p.is_ground());
+        self.reach([p, n].into_iter().filter(seed).collect())
+    }
+
+    /// What an unmodelled part could drive if it were present, or `None` when
+    /// the evidence says it cannot: no pin on a `powered` node (nothing to
+    /// drive WITH, so it can only load), or no drive-capable pin off the
+    /// reference nodes. Returns the powering node and the reached nodes.
+    pub fn open_driver(
+        &self,
+        part: &OpenPart,
+        powered: &dyn Fn(NodeId) -> bool,
+    ) -> Option<(NodeId, Vec<NodeId>)> {
+        let from = part.pins.iter().map(|p| p.0).find(|n| powered(*n))?;
+        let mut seeds = Vec::new();
+        for (node, drives) in &part.pins {
+            if *drives && !self.stop.contains(node) && !seeds.contains(node) {
+                seeds.push(*node);
+            }
+        }
+        (!seeds.is_empty()).then(|| (from, self.reach(seeds)))
+    }
+}
+
+/// Marks [`open_driver_reason`], for the surfaces that pick a next action by it.
+pub const OPEN_DRIVER: &str = "has no model, so it is absent from the simulated circuit";
+
+/// The one disclosure every surface repeats for an open part that would drive.
+pub fn open_driver_reason(r: &str, v: &str, from: &str, nets: &[String]) -> String {
+    let more = nets.len().saturating_sub(6);
+    let mut list = nets[..nets.len() - more].join(", ");
+    if more > 0 {
+        list.push_str(&format!(" and {more} more"));
+    }
+    format!(
+        "{r} ({v}) {OPEN_DRIVER}, yet it is powered from {from} and can drive {list}. Any \
+         voltage printed for those nets is the board without {r}, not a simulated result: a \
+         failure there proves nothing, and a pass holds only if {r} leaves them alone. Give {r} a model (`hauksbee models new`, or \
+         `hauksbee models extract` from its datasheet), or declare the supply for the rail it \
+         produces, then rerun."
+    )
 }

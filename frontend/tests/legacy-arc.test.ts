@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { NO_LAYOUT, parseKicadPcb } from '../src/lib/kicad-parser'
+import { NO_LAYOUT, NO_LAYOUT_HINT, parseKicadPcb } from '../src/lib/kicad-parser'
 
 /** A KiCad 5 board outline: four straight edges joined by four 90-degree
  *  fillets, written the pre-6 way as (start = CENTRE, end = first endpoint,
@@ -57,6 +57,7 @@ describe('legacy KiCad 5 gr_arc', () => {
   it('reports an input with no layout as an absence, not a failure', () => {
     expect(() => parseKicadPcb('board "regulator" {\n  part U1 ...\n}\n')).toThrow(NO_LAYOUT)
     expect(NO_LAYOUT).toBe('no layout to draw for this input')
+    expect(NO_LAYOUT_HINT).toBe('This is normal for a text board description; simulation and net readings are unaffected.')
   })
 
   it('leaves a modern three-point arc exactly as written', () => {

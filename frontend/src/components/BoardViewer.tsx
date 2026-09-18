@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useRef, useState, useCallback, useMemo } from 'react'
-import { NO_LAYOUT, parseKicadPcb } from '../lib/kicad-parser'
+import { NO_LAYOUT, NO_LAYOUT_HINT, parseKicadPcb } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
 import { segmentsByNet } from '../lib/board-geometry'
 import type { FootprintInfo } from '../lib/board-geometry'
@@ -789,6 +789,9 @@ export function BoardViewer({
               ? { background: 'var(--overlay-chip-bg)', color: 'var(--overlay-chip-text)', border: '1px solid var(--rule)' }
               : { background: 'var(--overlay-err-bg)', color: 'var(--err)', border: '1px solid var(--overlay-err-border)' }}>
             {error}
+            {error === NO_LAYOUT && (
+              <div className="text-xs mt-1" style={{ color: 'var(--silk-dim)', maxWidth: 320 }}>{NO_LAYOUT_HINT}</div>
+            )}
           </div>
         </div>
       )}

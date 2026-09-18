@@ -386,11 +386,15 @@ fn uncommenting_the_scaffolded_rail_blocks_gates_for_real() {
         // asserts. Model-provenance holes are a different class and are expected
         // here (the hollow_watchy fixture's MBR0530 diodes bind to the generic
         // signal-diode fallback), so they are excluded rather than silencing the
-        // whole channel.
+        // whole channel. So is a powered part with no model at all (watchy's M1
+        // motor, between +3V3 and its driver), which the scheduler names itself.
+        let model_gap = |w: &&String| {
+            w.starts_with("models:") || w.contains(hauksbee_engine::scheduler::OPEN_DRIVER)
+        };
         let cosim_holes: Vec<&String> = result
             .coverage_warnings
             .iter()
-            .filter(|w| !w.starts_with("models:"))
+            .filter(|w| !model_gap(w))
             .collect();
         assert!(
             cosim_holes.is_empty(),

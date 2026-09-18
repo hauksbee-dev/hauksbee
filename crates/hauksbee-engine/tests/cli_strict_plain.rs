@@ -796,3 +796,27 @@ fn boot_panel_reports_high_even_with_a_gate_pulldown() {
         "the gate level must not be inverted/mislabelled; got: {gate_line:?}"
     );
 }
+
+/// The headless half of two `hauksbee-ci` refusal contracts (its tests cannot
+/// spawn this binary): an unsupported regulator (`regulator_validity.rs`) and a
+/// powered unmodelled part that would drive a net (`open_driver_validity.rs`)
+/// both end `--strict` at exit 3, verdict invalid, carrying the scheduler's reason.
+#[test]
+fn headless_strict_refuses_with_the_shared_regulator_and_open_driver_reasons() {
+    let nets = ["SW".to_string(), "VOUT".to_string()];
+    let open = hauksbee_engine::scheduler::open_driver_reason("U1", "TPS54331D", "+12V", &nets);
+    let regulator = "U1 regulation of VOUT is unsupported: input VIN has no independent DC support";
+    for (fixture, reason) in [("regulator.board", regulator), ("open_parts.board", &open)] {
+        let path = board("../hauksbee-ci/tests/fixtures").join(fixture);
+        let args = ["--headless", "--seconds", "0.003", "--json", "--strict"];
+        let out = run_board(&path, &args);
+        let json = String::from_utf8_lossy(&out.stdout);
+        assert!(json.contains(reason), "{fixture}: {json}");
+        assert!(json.contains("not a simulated result"), "{fixture}: {json}");
+        assert!(
+            json.contains("\"verdict\": \"invalid\""),
+            "{fixture}: {json}"
+        );
+        assert_eq!(out.status.code(), Some(3), "{fixture}: {json}");
+    }
+}

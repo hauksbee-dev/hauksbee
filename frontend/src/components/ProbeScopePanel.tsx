@@ -156,13 +156,15 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
                   style={{ background: color, boxShadow: isHidden ? 'none' : `0 0 4px color-mix(in srgb, ${color} 50.2%, transparent)` }}
                 />
                 <span
-                  className="text-[11px] flex-1 truncate"
+                  className="text-[11px] shrink-0 truncate max-w-[50%]"
                   style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}
                 >
                   {displayNet(net)}
                 </span>
                 {live && live.kind !== 'absent' && !isHidden && (
-                  <span className="text-[10px] tnum shrink-0" data-testid="probe-readout"
+                  // A status reading is far longer than a voltage: it gives up its width first,
+                  // so the net name and the detach button never leave the row.
+                  <span className="text-[10px] tnum flex-1 min-w-0 truncate text-right" data-testid="probe-readout" title={netReadoutText(live)}
                     style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)', fontStyle: live.kind === 'measured' ? undefined : 'italic' }}>
                     {netReadoutText(live)}
                   </span>
@@ -170,7 +172,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
                 <button
                   type="button"
                   onClick={() => toggleHidden(net)}
-                  className="hb-press cursor-pointer"
+                  className="hb-press cursor-pointer ml-auto shrink-0"
                   aria-label={isHidden ? `Show the ${displayNet(net)} trace` : `Hide the ${displayNet(net)} trace`}
                   title={isHidden ? 'Show this trace' : 'Hide this trace (keeps recording)'}
                   style={{ background: 'none', border: 'none', color: isHidden ? 'var(--silk-faint)' : 'var(--silk-dim)', display: 'inline-flex', padding: 4 }}
@@ -180,7 +182,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
                 <button
                   type="button"
                   onClick={() => onRemoveProbe(net)}
-                  className="hb-press cursor-pointer"
+                  className="hb-press cursor-pointer shrink-0"
                   aria-label={`Detach the probe from ${displayNet(net)}`}
                   title="Detach this probe"
                   style={{ background: 'none', border: 'none', color: 'var(--silk-faint)', display: 'inline-flex', padding: 4 }}

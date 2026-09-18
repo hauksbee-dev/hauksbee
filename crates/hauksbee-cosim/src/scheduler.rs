@@ -38,7 +38,7 @@ use crate::peripherals::{
     SpiFramingMode, SpiNorFlash, TickCtx, TimelineEvent,
 };
 use crate::regulation;
-pub use crate::regulation::RegulationTaint;
+pub use crate::regulation::{open_driver_reason, RegulationTaint, OPEN_DRIVER};
 use hauksbee_bind::behavioral::BehavioralDevice;
 use hauksbee_bind::bind_report::SimpleRegulator;
 use hauksbee_bind::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
@@ -416,6 +416,7 @@ pub struct Scheduler {
     /// Simple regulators, whether each currently has independent input headroom
     /// (never again once tainted), and whether that must be re-established.
     regulators: Vec<SimpleRegulator>,
+    open_parts: Vec<hauksbee_bind::bind_report::OpenPart>,
     reg_supported: Vec<bool>,
     reg_dirty: bool,
     /// Append-only, and deliberately NOT cleared by [`Self::reset_run_state`].
@@ -1289,6 +1290,7 @@ impl Scheduler {
             node_volts: vec![0.0; n_nodes],
             reg_supported: vec![false; report.regulators.len()],
             regulators: report.regulators,
+            open_parts: report.open_parts,
             reg_dirty: true,
             regulation: Vec::new(),
             branch_x: vec![0.0; n_branch],
@@ -3534,7 +3536,7 @@ impl Scheduler {
     /// Re-decide regulator support when supplies, inputs or shorts changed. Works
     /// on a clone: `node_volts` and the DC seed are never written from it.
     fn establish_regulation(&mut self) {
-        if !std::mem::take(&mut self.reg_dirty) || self.regulators.is_empty() {
+        if !std::mem::take(&mut self.reg_dirty) {
             return;
         }
         // A regulator that was ever unsupported stays so, however it reads now.
@@ -3542,8 +3544,48 @@ impl Scheduler {
             |r: &SimpleRegulator| self.regulation.iter().any(|t| t.refs[0] == r.reference);
         let barred: Vec<bool> = self.regulators.iter().map(tainted).collect();
         let (regs, ok) = (&self.regulators, &mut self.reg_supported);
-        for (i, verdict) in regulation::evaluate(&self.circuit, regs, ok, &barred, &self.opts) {
+        let unsupported = match regs.is_empty() {
+            true => Vec::new(),
+            false => regulation::evaluate(&self.circuit, regs, ok, &barred, &self.opts),
+        };
+        for (i, verdict) in unsupported {
             self.taint_regulator(i, &verdict, None);
+        }
+        self.taint_open_drivers();
+    }
+
+    /// Record every unmodelled part that is powered and could DRIVE a net: what
+    /// the solver prints there is the board without it, not a result. Repeats
+    /// until nothing is added, so a part powered from a tainted net is caught.
+    fn taint_open_drivers(&mut self) {
+        let supply_nets: Vec<NodeId> = self.supplies.iter().map(|s| s.net).collect();
+        let (regs, ok) = (&self.regulators, &self.reg_supported);
+        let walk = regulation::Walk::new(&self.circuit, regs, ok, &supply_nets);
+        let mut rails = supply_nets;
+        let trusted = regs.iter().zip(ok).filter(|(_, ok)| **ok);
+        rails.extend(trusted.map(|(r, _)| regulation::terminals(&self.circuit, r).0));
+        rails.extend(
+            self.behavioral
+                .iter()
+                .filter_map(|d| d.converter_out_node()),
+        );
+        loop {
+            let tainted = |n: NodeId| {
+                let name = self.net_name_of(n.0);
+                self.regulation.iter().any(|t| t.nets.contains(&name))
+            };
+            let powered = |n: NodeId| !n.is_ground() && (rails.contains(&n) || tainted(n));
+            let found = self.open_parts.iter().find_map(|part| {
+                let fresh = !self.regulation.iter().any(|t| t.refs[0] == part.reference);
+                let (from, nodes) = fresh.then(|| walk.open_driver(part, &powered))??;
+                Some((part.clone(), self.net_name_of(from.0), nodes))
+            });
+            let Some((part, from, nodes)) = found else {
+                return;
+            };
+            let (r, v) = (&part.reference, &part.value);
+            let reason = |nets: &[String]| regulation::open_driver_reason(r, v, &from, nets);
+            self.push_taint(part.reference.clone(), nodes, reason);
         }
     }
 
@@ -3560,8 +3602,22 @@ impl Scheduler {
         self.reg_dirty |= revoked.is_some();
         let supply_nets: Vec<NodeId> = self.supplies.iter().map(|s| s.net).collect();
         let (regs, ok) = (&self.regulators, &self.reg_supported);
-        let mut nodes = regulation::tainted_nodes(&self.circuit, regs, ok, &supply_nets, i);
-        let mut refs = vec![reg.reference.clone()];
+        let walk = regulation::Walk::new(&self.circuit, regs, ok, &supply_nets);
+        let nodes = walk.regulator(&self.circuit, reg);
+        let (reference, circuit) = (reg.reference.clone(), &self.circuit);
+        let reason = regulation::reason(circuit, reg, verdict, revoked);
+        self.push_taint(reference, nodes, |_| reason);
+    }
+
+    /// The shared tail of both taints: every MCU whose direct supply is among
+    /// `nodes` joins `refs`, with the GPIO nets it drives from the tainted rail.
+    fn push_taint(
+        &mut self,
+        reference: String,
+        mut nodes: Vec<NodeId>,
+        reason: impl FnOnce(&[String]) -> String,
+    ) {
+        let mut refs = vec![reference];
         for m in &self.mcus {
             let fed =
                 |(role, n): (&String, &NodeId)| is_direct_supply_role(role) && nodes.contains(n);
@@ -3574,7 +3630,7 @@ impl Scheduler {
         nets.sort();
         nets.dedup();
         self.regulation.push(RegulationTaint {
-            reason: regulation::reason(&self.circuit, reg, verdict, revoked),
+            reason: reason(&nets),
             nets,
             refs,
             since_s: self.sim_time,

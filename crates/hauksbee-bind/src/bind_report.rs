@@ -125,6 +125,18 @@ pub struct BindReport {
     pub rows: Vec<BindRow>,
     pub board_name: String,
     pub regulators: Vec<SimpleRegulator>,
+    pub open_parts: Vec<OpenPart>,
+}
+
+/// One unresolved (open-circuit) part and where its pins land, so the scheduler
+/// can tell a bystander from a part that would DRIVE a net if it were modelled.
+/// `pins` pairs each connected node with whether the pin can drive: `false` only
+/// when the schematic types it `input`, `power_in` or `no_connect`.
+#[derive(Debug, Clone)]
+pub struct OpenPart {
+    pub reference: String,
+    pub value: String,
+    pub pins: Vec<(hauksbee_ir::NodeId, bool)>,
 }
 
 /// One simple (ideal-source) regulator stamp and the input headroom it needs.
