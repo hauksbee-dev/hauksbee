@@ -6,7 +6,8 @@ use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{Integration, SolverOptions};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
+
+use crate::support::run_board;
 
 fn pin(number: &str, net: i64) -> Pin {
     crate::support::pin(number, Some(net), "", "")
@@ -549,10 +550,7 @@ fn exchange_fixture() -> PathBuf {
 fn ipc2581_reader_coverage_stays_full_in_json_and_scoped_in_plain() {
     let fixture = exchange_fixture();
     for mode in ["--json", "--plain"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
-            .args(["run", fixture.to_str().unwrap(), "--report", mode])
-            .output()
-            .expect("hauksbee CLI runs");
+        let output = run_board(&fixture, &["--report", mode]);
         assert!(
             output.status.success(),
             "stderr: {}",
@@ -593,12 +591,7 @@ fn specialist_report_surfaces_reuse_the_reader_assumption() {
         &["--usb-c", "--plain"],
         &["--ampacity"],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
-            .arg("run")
-            .arg(&fixture)
-            .args(args)
-            .output()
-            .expect("specialist report runs");
+        let output = run_board(&fixture, args);
         assert!(
             output.status.success(),
             "{args:?} stderr: {}",

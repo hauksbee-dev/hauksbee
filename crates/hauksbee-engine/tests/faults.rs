@@ -5,7 +5,6 @@
 //! capacitor reverse bias, and a healthy-board no-false-positive check.
 
 use crate::support::{capacitor, vsource};
-use std::collections::HashMap;
 
 use hauksbee_engine::stress::{resistor_power_from_footprint, DeviceMeta, StressMonitor};
 use hauksbee_engine::{bind_board, HauksbeeEngine};
@@ -401,12 +400,6 @@ const SYNTH_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   )
 )
 "#;
-
-/// Suppress unused-warning for the helper consts in some builds.
-#[allow(dead_code)]
-fn _unused() {
-    let _ = HashMap::<String, f64>::new();
-}
 
 #[test]
 fn dbg_led() {

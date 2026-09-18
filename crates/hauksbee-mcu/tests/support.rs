@@ -42,3 +42,78 @@ pub fn capture_uart(mcu: &mut impl hauksbee_mcu::Mcu) -> std::sync::Arc<Mutex<Ve
     mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
     uart
 }
+
+/// Emit one Intel-HEX record with a correct checksum.
+#[cfg(feature = "avr")]
+pub fn ihex_record(record_type: u8, addr: u16, data: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut sum = data.len() as u8;
+    sum = sum
+        .wrapping_add((addr >> 8) as u8)
+        .wrapping_add(addr as u8)
+        .wrapping_add(record_type);
+    let mut line = format!(":{:02X}{:04X}{:02X}", data.len(), addr, record_type);
+    for &b in data {
+        sum = sum.wrapping_add(b);
+        write!(line, "{b:02X}").unwrap();
+    }
+    write!(line, "{:02X}", (!sum).wrapping_add(1)).unwrap();
+    line
+}
+
+#[cfg(feature = "avr")]
+fn hex_dir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "hauksbee-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Write `program` (raw flash bytes, little-endian words, loaded at 0) to a
+/// temp .hex under a dir tagged `tag`, and return its path.
+#[cfg(feature = "avr")]
+pub fn write_program_hex(tag: &str, name: &str, program: &[u8]) -> PathBuf {
+    let path = hex_dir(tag).join(name);
+    let mut text = String::new();
+    for (i, chunk) in program.chunks(16).enumerate() {
+        text.push_str(&ihex_record(0x00, (i * 16) as u16, chunk));
+        text.push('\n');
+    }
+    text.push_str(":00000001FF\n"); // EOF record
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// Write pre-built `records` to a temp .hex under a dir tagged `tag`, and
+/// return its path.
+#[cfg(feature = "avr")]
+pub fn write_hex(tag: &str, name: &str, records: &[String]) -> PathBuf {
+    let path = hex_dir(tag).join(name);
+    let mut text = records.join("\n");
+    text.push('\n');
+    text.push_str(":00000001FF\n"); // EOF record
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// Boot the esp32 blinky image under Espressif QEMU, or print why that is not
+/// possible here and return `None` so the caller skips.
+#[cfg(feature = "qemu")]
+pub fn esp32_blinky_or_skip() -> Option<hauksbee_mcu::QemuBackend> {
+    use hauksbee_mcu::qemu::{is_available, QemuArch};
+    if !is_available(QemuArch::Xtensa) {
+        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
+        return None;
+    }
+    let Some(fw) = firmware("esp32_blinky/flash.bin") else {
+        eprintln!("SKIP: flash.bin not built; run ./build.sh in testdata/firmware/esp32_blinky");
+        return None;
+    };
+    Some(hauksbee_mcu::QemuBackend::esp32(&fw).expect("boot Espressif QEMU esp32"))
+}

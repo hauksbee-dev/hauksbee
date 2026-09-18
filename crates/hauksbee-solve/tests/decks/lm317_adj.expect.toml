@@ -1,0 +1,24 @@
+# The LM317 topology's operating point, against ngspice and against the
+# datasheet equation at the same time. The analytic values are what makes this
+# a sign-convention gate: a CCCS gain of +1 instead of -1 leaves ngspice and
+# hauksbee agreeing on a rail that is not the LM317's.
+analysis = "op"
+description = "Adjustable-regulator stamp (VREF + CCCS pass element + IADJ) at R1 = 240, R2 = 720"
+
+[[probe]]
+expr = "V(out)"
+reltol = 1.0e-9
+
+[[probe.analytic]]
+value = 5.036
+reltol = 1.0e-8
+note = "VO = VREF*(1 + R2/R1) + IADJ*R2 = 1.25*(1 + 720/240) + 50e-6*720"
+
+[[probe]]
+expr = "V(adj)"
+reltol = 1.0e-9
+
+[[probe.analytic]]
+value = 3.786
+reltol = 1.0e-8
+note = "V(adj) = VO - VREF = 5.036 - 1.25; equivalently R2*(VREF/R1 + IADJ)"

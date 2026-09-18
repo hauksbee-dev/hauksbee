@@ -1,4 +1,6 @@
-use std::{path::Path, process::Command};
+use std::path::Path;
+
+use crate::support::run_board;
 
 #[test]
 fn board_bom_and_placement_feed_the_release_cli_and_json_inventory() {
@@ -40,10 +42,9 @@ fn board_bom_and_placement_feed_the_release_cli_and_json_inventory() {
     )
     .expect("placement fixture");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
-        .args([
-            "run",
-            board.to_str().unwrap(),
+    let output = run_board(
+        &board,
+        &[
             "--bom",
             bom.to_str().unwrap(),
             "--bom-column",
@@ -52,9 +53,8 @@ fn board_bom_and_placement_feed_the_release_cli_and_json_inventory() {
             placement.to_str().unwrap(),
             "--report",
             "--json",
-        ])
-        .output()
-        .expect("hauksbee runs");
+        ],
+    );
 
     assert!(
         output.status.success(),
@@ -83,19 +83,17 @@ fn board_bom_and_placement_feed_the_release_cli_and_json_inventory() {
         "Assembly Ref,Value,MPN\nU9,,MCP4728\nU9,,STM32F103C8\n",
     )
     .expect("conflicting BOM fixture");
-    let refused = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
-        .args([
-            "run",
-            board.to_str().unwrap(),
+    let refused = run_board(
+        &board,
+        &[
             "--bom",
             bom.to_str().unwrap(),
             "--bom-column",
             "reference=Assembly Ref",
             "--report",
             "--json",
-        ])
-        .output()
-        .expect("hauksbee refusal runs");
+        ],
+    );
     assert_eq!(
         refused.status.code(),
         Some(3),
@@ -120,17 +118,15 @@ fn same_board_watchy_position_exports_pass_the_release_cli() {
         "../hauksbee-extract/tests/fixtures/placement/watchy-pos.csv",
     ] {
         let placement = engine.join(relative);
-        let output = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
-            .args([
-                "run",
-                board.to_str().expect("UTF-8 board fixture path"),
+        let output = run_board(
+            &board,
+            &[
                 "--placement",
                 placement.to_str().expect("UTF-8 placement fixture path"),
                 "--report",
                 "--json",
-            ])
-            .output()
-            .expect("hauksbee runs on its ground-truth placement fixture");
+            ],
+        );
 
         assert!(
             output.status.success(),
@@ -206,17 +202,15 @@ fn ambiguous_release_artifacts_refuse_with_exit_three_and_the_actual_columns() {
     for (flag, name, body, expected) in cases {
         let artifact = dir.path().join(name);
         std::fs::write(&artifact, body).expect("artifact fixture");
-        let output = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
-            .args([
-                "run",
-                board.to_str().expect("UTF-8 board fixture path"),
+        let output = run_board(
+            &board,
+            &[
                 &format!("--{flag}"),
                 artifact.to_str().expect("UTF-8 artifact fixture path"),
                 "--report",
                 "--json",
-            ])
-            .output()
-            .expect("hauksbee refusal runs");
+            ],
+        );
 
         assert_eq!(
             output.status.code(),
@@ -284,17 +278,15 @@ fn every_applicable_board_analysis_json_document_carries_the_input_inventory() {
     ];
 
     for (label, mode_args) in modes {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_hauksbee"));
-        command.args([
-            "run",
-            board.to_str().expect("UTF-8 board path"),
+        let mut args = vec![
             "--bom",
             bom.to_str().expect("UTF-8 BOM path"),
             "--placement",
             placement.to_str().expect("UTF-8 placement path"),
-        ]);
-        command.args(mode_args).arg("--json");
-        let output = command.output().expect("hauksbee analysis runs");
+        ];
+        args.extend_from_slice(mode_args);
+        args.push("--json");
+        let output = run_board(&board, &args);
 
         assert!(
             output.status.success(),

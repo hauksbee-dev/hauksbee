@@ -7,9 +7,8 @@
 //! system that silently fails to apply is a check nobody can trust, and one
 //! that silently keeps applying past its date is a check nobody is running.
 
-use crate::support::{hauksbee_bin, repo_root};
+use crate::support::{combined, repo_root, run_board};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// The board ships two deliberate GND/+5V pour shorts, so `--check --strict`
 /// exits 2 on it untouched. That makes it the honest fixture for this.
@@ -47,13 +46,8 @@ until = "{until}"
 /// Asserts the run actually produced a report. A usage error also exits 2, and
 /// a test that accepted it would pass while proving nothing about the gate.
 fn check_strict(board: &Path) -> (i32, String) {
-    let out = Command::new(hauksbee_bin())
-        .arg("run")
-        .args([board.to_str().unwrap(), "--check", "--strict"])
-        .output()
-        .expect("run hauksbee");
-    let mut s = String::from_utf8_lossy(&out.stdout).to_string();
-    s.push_str(&String::from_utf8_lossy(&out.stderr));
+    let out = run_board(board, &["--check", "--strict"]);
+    let s = combined(&out);
     assert!(
         s.contains("Copper spacing"),
         "hauksbee did not run the check at all:\n{s}"
@@ -136,14 +130,8 @@ fn a_waiver_matching_nothing_is_called_out() {
 
 /// Run `hauksbee run <board> <flag> --strict`, returning (exit code, stdout+stderr).
 fn single_check_strict(board: &Path, flag: &str) -> (i32, String) {
-    let out = Command::new(hauksbee_bin())
-        .arg("run")
-        .args([board.to_str().unwrap(), flag, "--strict"])
-        .output()
-        .expect("run hauksbee");
-    let mut s = String::from_utf8_lossy(&out.stdout).to_string();
-    s.push_str(&String::from_utf8_lossy(&out.stderr));
-    (out.status.code().unwrap_or(-1), s)
+    let out = run_board(board, &[flag, "--strict"]);
+    (out.status.code().unwrap_or(-1), combined(&out))
 }
 
 /// A tiny board whose only lint finding is a Medium `missing_i2c_pullup`: an
@@ -346,11 +334,7 @@ fn single_check_json_carries_the_waived_findings() {
     let board = stage_board(dir.path());
     write_waivers(dir.path(), "2099-01-01", r#"["GND", "+5V"]"#);
 
-    let out = Command::new(hauksbee_bin())
-        .arg("run")
-        .args([board.to_str().unwrap(), "--drc", "--json", "--strict"])
-        .output()
-        .expect("run hauksbee");
+    let out = run_board(&board, &["--drc", "--json", "--strict"]);
     assert_eq!(
         out.status.code(),
         Some(0),

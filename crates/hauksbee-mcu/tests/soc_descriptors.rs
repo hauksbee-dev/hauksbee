@@ -38,55 +38,39 @@ const ESP32C3: &str = include_str!("../db/mcu/esp32c3.soc.toml");
 fn renode_descriptors_equal_constructors() {
     // Byte-equal at the struct level (RenodeConfig: PartialEq); the descriptor
     // reproduces every field the hand-written constructor set.
-    assert_eq!(
-        RenodeConfig::from_soc_toml(STM32F072).unwrap(),
-        RenodeConfig::stm32f072(),
-        "stm32f072.soc.toml must reproduce RenodeConfig::stm32f072()"
-    );
-    assert_eq!(
-        RenodeConfig::from_soc_toml(STM32F103).unwrap(),
-        RenodeConfig::stm32f103(),
-        "stm32f103.soc.toml must reproduce RenodeConfig::stm32f103()"
-    );
-    assert_eq!(
-        RenodeConfig::from_soc_toml(STM32F4).unwrap(),
-        RenodeConfig::stm32f4_discovery(),
-        "stm32f4_discovery.soc.toml must reproduce RenodeConfig::stm32f4_discovery()"
-    );
-    assert_eq!(
-        RenodeConfig::from_soc_toml(NRF52840).unwrap(),
-        RenodeConfig::nrf52840(),
-        "nrf52840.soc.toml must reproduce RenodeConfig::nrf52840()"
-    );
-    assert_eq!(
-        RenodeConfig::from_soc_toml(FE310).unwrap(),
-        RenodeConfig::sifive_fe310(),
-        "sifive_fe310.soc.toml must reproduce RenodeConfig::sifive_fe310()"
-    );
-    assert_eq!(
-        RenodeConfig::from_soc_toml(RP2040).unwrap(),
-        RenodeConfig::rp2040(),
-        "rp2040.soc.toml must reproduce RenodeConfig::rp2040()"
-    );
+    for (toml, built, name) in [
+        (STM32F072, RenodeConfig::stm32f072(), "stm32f072"),
+        (STM32F103, RenodeConfig::stm32f103(), "stm32f103"),
+        (
+            STM32F4,
+            RenodeConfig::stm32f4_discovery(),
+            "stm32f4_discovery",
+        ),
+        (NRF52840, RenodeConfig::nrf52840(), "nrf52840"),
+        (FE310, RenodeConfig::sifive_fe310(), "sifive_fe310"),
+        (RP2040, RenodeConfig::rp2040(), "rp2040"),
+    ] {
+        assert_eq!(
+            RenodeConfig::from_soc_toml(toml).unwrap(),
+            built,
+            "{name}.soc.toml must reproduce RenodeConfig::{name}()"
+        );
+    }
 }
 
 #[test]
 fn qemu_descriptors_equal_constructors() {
-    assert_eq!(
-        QemuConfig::from_soc_toml(ESP32).unwrap(),
-        QemuConfig::esp32(),
-        "esp32.soc.toml must reproduce QemuConfig::esp32()"
-    );
-    assert_eq!(
-        QemuConfig::from_soc_toml(ESP32S3).unwrap(),
-        QemuConfig::esp32s3(),
-        "esp32s3.soc.toml must reproduce QemuConfig::esp32s3()"
-    );
-    assert_eq!(
-        QemuConfig::from_soc_toml(ESP32C3).unwrap(),
-        QemuConfig::esp32c3(),
-        "esp32c3.soc.toml must reproduce QemuConfig::esp32c3()"
-    );
+    for (toml, built, name) in [
+        (ESP32, QemuConfig::esp32(), "esp32"),
+        (ESP32S3, QemuConfig::esp32s3(), "esp32s3"),
+        (ESP32C3, QemuConfig::esp32c3(), "esp32c3"),
+    ] {
+        assert_eq!(
+            QemuConfig::from_soc_toml(toml).unwrap(),
+            built,
+            "{name}.soc.toml must reproduce QemuConfig::{name}()"
+        );
+    }
 }
 
 /// The FE310's post_load_setup (the bring-up footgun) survives the round trip:

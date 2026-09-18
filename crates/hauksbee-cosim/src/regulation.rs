@@ -22,13 +22,19 @@ pub struct RegulationTaint {
 pub type Verdict = Result<f64, String>;
 
 /// `(output, return, signed setpoint)` read back from the stamped source. NaN
-/// when it is no longer a DC source, which no headroom check can pass.
+/// when it is no longer a DC source, which no headroom check can pass. On an
+/// adjustable regulator the source's `n` is the ADJ net, not a return, so the
+/// board return the card named is returned in its place: everything downstream
+/// measures the rail and its headroom against the same node.
 pub fn terminals(circuit: &Circuit, reg: &SimpleRegulator) -> (NodeId, NodeId, f64) {
     match &circuit.devices[reg.source.0 as usize] {
-        Device::Vsource { p, n, kind, .. } => match kind {
-            SourceKind::Dc(v) => (*p, *n, *v),
-            _ => (*p, *n, f64::NAN),
-        },
+        Device::Vsource { p, n, kind, .. } => {
+            let n = reg.adj_return.unwrap_or(*n);
+            match kind {
+                SourceKind::Dc(v) => (*p, n, *v),
+                _ => (*p, n, f64::NAN),
+            }
+        }
         _ => (NodeId::GROUND, NodeId::GROUND, f64::NAN),
     }
 }
@@ -45,12 +51,29 @@ pub fn headroom_ok(reg: &SimpleRegulator, headroom_v: f64) -> bool {
 /// `regs.len() + 1` solves; returns the verdict of each one left unsupported.
 pub fn evaluate(
     circuit: &Circuit,
-    regs: &[SimpleRegulator],
+    regs: &mut [SimpleRegulator],
     supported: &mut [bool],
     barred: &[bool],
     opts: &SolverOptions,
 ) -> Vec<(usize, Verdict)> {
     supported.fill(false);
+    // An adjustable regulator's rail is the board divider's, so the input it
+    // needs is a SOLVED value rather than the bind-time constant a fixed part
+    // has: read |V(out) - V(return)| off the circuit as stamped, before the swap
+    // below removes the reference, and write it back so the headroom test, the
+    // post-chunk monitor and the refusal text all quote one figure.
+    let rail = |r: &SimpleRegulator| {
+        let (p, n, _) = terminals(circuit, r);
+        Probe::NodeDiff(circuit.node_name(p).into(), circuit.node_name(n).into())
+    };
+    let adj = regs.iter().any(|r| r.adj_return.is_some());
+    let solved = adj.then(|| run_op(circuit, opts, &regs.iter().map(rail).collect::<Vec<_>>()));
+    for (i, reg) in regs.iter_mut().enumerate() {
+        if let (Some(Ok(v)), Some(_)) = (&solved, reg.adj_return) {
+            reg.min_in_v = v.rows[0][i].abs() + reg.dropout_v.unwrap_or(0.0);
+        }
+    }
+    let regs = &*regs;
     let (mut probe, mut probes, mut signs) = (circuit.clone(), Vec::new(), Vec::new());
     for reg in regs {
         let (p, n, vout) = terminals(circuit, reg);
@@ -62,10 +85,23 @@ pub fn evaluate(
         if p != n {
             probe.devices[id] = Device::Isource { name, p, n, kind };
         }
+        // The CCCS reads the branch this swap just removed, and IADJ would keep
+        // pushing into a divider the part no longer drives: both go with it,
+        // onto ground, where a 0 A source connects nothing at all.
+        for h in reg.helpers.iter().map(|h| h.0 as usize) {
+            let name = circuit.devices[h].name().to_string();
+            let (p, n, kind) = (NodeId::GROUND, NodeId::GROUND, SourceKind::Dc(0.0));
+            probe.devices[h] = Device::Isource { name, p, n, kind };
+        }
     }
-    // The swap would orphan a branch-current reader (F/H/B/K). No binder path
-    // stamps one on a regulator source; if one ever does, nothing is granted.
-    let mut readers = circuit.devices.iter().flat_map(Device::controlling_sources);
+    // The swap would orphan a branch-current reader (F/H/B/K). An adjustable
+    // regulator's own CCCS is one BY CONSTRUCTION and is neutralised with the
+    // source above; any other reader is unaccounted for, and nothing is granted.
+    let helper = |id| regs.iter().any(|r| r.helpers.contains(&id));
+    let mut readers = circuit
+        .iter()
+        .filter(|(id, _)| !helper(*id))
+        .flat_map(|(_, dev)| dev.controlling_sources());
     let orphaned = readers.any(|id| regs.iter().any(|r| r.source == id));
     loop {
         let solved = match orphaned {
@@ -80,8 +116,10 @@ pub fn evaluate(
             let verdict = solved.as_ref().map(|out| signs[i] * out.rows[0][i]);
             if verdict.is_ok_and(|v| headroom_ok(reg, v)) {
                 (supported[i], granted) = (true, true);
-                let id = reg.source.0 as usize;
-                probe.devices[id] = circuit.devices[id].clone();
+                for id in [reg.source].iter().chain(&reg.helpers) {
+                    let id = id.0 as usize;
+                    probe.devices[id] = circuit.devices[id].clone();
+                }
             } else {
                 unsupported.push((i, verdict.map_err(Clone::clone)));
             }
@@ -108,10 +146,26 @@ pub fn reason(
         || "with regulator ideal sources removed".to_string(),
         |t| format!("first at t={t:.6} s"),
     );
+    // An adjustable part has no output limit and no rail on its card: `min_in_v`
+    // is the rail the BOARD's divider produced and `vout` is only the reference
+    // held across it, so neither may be worded as a setpoint for the output net.
+    let (limit, held) = match reg.adj_return {
+        None => (
+            "upper output limit",
+            format!("The {vout:.3} V on {out} is the ideal source's setpoint"),
+        ),
+        Some(_) => (
+            "solved output",
+            format!(
+                "The voltage on {out} is set by an ideal {vout:.3} V reference across this \
+                 part's external divider"
+            ),
+        ),
+    };
     let need = match reg.dropout_v {
-        None => "upper output limit; the model has no dropout figure".to_string(),
+        None => format!("{limit}; the model has no dropout figure"),
         Some(d) => format!(
-            "{:.3} V upper output limit + {d:.3} V typical dropout",
+            "{:.3} V {limit} + {d:.3} V typical dropout",
             reg.min_in_v - d
         ),
     };
@@ -135,8 +189,8 @@ pub fn reason(
         ),
     };
     format!(
-        "{r} regulation of {out} is unsupported: {clause}. The {vout:.3} V on {out} is the ideal \
-         source's setpoint, not a simulated result; below-dropout, startup and recovery behaviour \
+        "{r} regulation of {out} is unsupported: {clause}. {held}, \
+         not a simulated result; below-dropout, startup and recovery behaviour \
          are not modelled. Results on {out} and everything it powers are invalid for this run, \
          and stay invalid if the input recovers; start a fresh run."
     )
@@ -167,7 +221,10 @@ impl Walk {
         for (id, dev) in circuit.iter() {
             match dev {
                 Device::Vsource { p, n, .. } if !distrusted(id) => stop.extend([*p, *n]),
-                Device::Vsource { .. } | Device::Isource { .. } => {}
+                // A CCCS conducts nothing of its own: an adjustable regulator's
+                // pass current would otherwise read as a path IN <-> ADJ and
+                // leak that regulator's taint onto its own input net.
+                Device::Vsource { .. } | Device::Isource { .. } | Device::Cccs { .. } => {}
                 _ => {
                     let nodes = dev.conduction_nodes();
                     for at in &nodes {

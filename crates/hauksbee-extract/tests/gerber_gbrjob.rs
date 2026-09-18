@@ -7,9 +7,11 @@
 //! blind via stitches the pair the drill actually joins. When absent, the
 //! filename inference runs exactly as before.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use hauksbee_extract::gerber::from_gerber_dir;
+use hauksbee_extract::gerber::GerberExtraction;
+
+use crate::gerber_scratch::extract_fresh;
 
 /// A pad flash (1 mm disc) at (x, y) mm, optionally with an X2 net name.
 fn film(body: &str) -> String {
@@ -25,9 +27,7 @@ fn film(body: &str) -> String {
 /// is reached by the blind barrel. If PWR lands there (correct), the VBUS net
 /// carries PWR's routed track; if GND does (the unnumbered-name collapse),
 /// VBUS reaches only the lone pad and carries no track.
-fn write_job(dir: &PathBuf, with_gbrjob: bool) {
-    let _ = std::fs::remove_dir_all(dir);
-    std::fs::create_dir_all(dir).unwrap();
+fn write_job(dir: &Path, with_gbrjob: bool) {
     std::fs::write(dir.join("top.art"), film("%TO.N,VBUS*%\nX0Y0D03*\n%TD*%\n")).unwrap();
     std::fs::write(
         dir.join("pwr.art"),
@@ -65,10 +65,7 @@ fn tmp(tag: &str) -> PathBuf {
 
 #[test]
 fn gbrjob_orders_an_unnumbered_inner_stack_correctly() {
-    let dir = tmp("with");
-    write_job(&dir, true);
-    let g = from_gerber_dir(&dir).expect("extract");
-    let _ = std::fs::remove_dir_all(&dir);
+    let g = extract_fresh(tmp("with"), |dir| write_job(dir, true)).expect("extract");
 
     assert_eq!(g.stats.n_layers, 4);
     let vbus = g
@@ -97,10 +94,7 @@ fn without_a_gbrjob_the_filename_inference_runs_as_before() {
     // so which plane the blind via reaches is whatever the collapse picked;
     // the job still extracts, with 4 layers and the same pad count. This
     // pins the absence path: no manifest, no behavior change.
-    let dir = tmp("without");
-    write_job(&dir, false);
-    let g = from_gerber_dir(&dir).expect("extract");
-    let _ = std::fs::remove_dir_all(&dir);
+    let g = extract_fresh(tmp("without"), |dir| write_job(dir, false)).expect("extract");
 
     assert_eq!(g.stats.n_layers, 4);
     assert_eq!(g.stats.total_flashes, 5);
@@ -115,36 +109,34 @@ fn kicad9_internal_layer_ids_order_the_stack_without_inventing_layers() {
     // every via stitch) and implied a 7-layer board. The rank of (side,
     // number) still orders the stack correctly, and the non-contiguous
     // numbers must NOT feed the physical-layer table or the layer count.
-    let dir = tmp("kicad9");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    // Names give no order hints: classification must come from the manifest.
-    std::fs::write(dir.join("a.gbr"), film("%TO.N,VBUS*%\nX0Y0D03*\n%TD*%\n")).unwrap();
-    std::fs::write(
-        dir.join("b.gbr"),
-        film("X0Y0D03*\nD11*\nX0Y0D02*\nX10000000Y0D01*\nD10*\nX10000000Y0D03*\n"),
-    )
-    .unwrap();
-    std::fs::write(dir.join("c.gbr"), film("X0Y0D03*\n")).unwrap();
-    std::fs::write(dir.join("d.gbr"), film("%TO.N,BOTNET*%\nX0Y0D03*\n%TD*%\n")).unwrap();
-    std::fs::write(
-        dir.join("blind-drill.txt"),
-        "M48\n; #@! TF.FileFunction,Plated,1,2,PTH,Blind\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX0.0Y0.0\nT0\nM30\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("job.gbrjob"),
-        r#"{"FilesAttributes": [
+    let g = extract_fresh(tmp("kicad9"), |dir| {
+        // Names give no order hints: classification must come from the manifest.
+        std::fs::write(dir.join("a.gbr"), film("%TO.N,VBUS*%\nX0Y0D03*\n%TD*%\n")).unwrap();
+        std::fs::write(
+            dir.join("b.gbr"),
+            film("X0Y0D03*\nD11*\nX0Y0D02*\nX10000000Y0D01*\nD10*\nX10000000Y0D03*\n"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("c.gbr"), film("X0Y0D03*\n")).unwrap();
+        std::fs::write(dir.join("d.gbr"), film("%TO.N,BOTNET*%\nX0Y0D03*\n%TD*%\n")).unwrap();
+        std::fs::write(
+            dir.join("blind-drill.txt"),
+            "M48\n; #@! TF.FileFunction,Plated,1,2,PTH,Blind\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX0.0Y0.0\nT0\nM30\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("job.gbrjob"),
+            r#"{"FilesAttributes": [
     {"Path": "a.gbr", "FileFunction": "Copper,L1,Top"},
     {"Path": "b.gbr", "FileFunction": "Copper,L5,Inr"},
     {"Path": "c.gbr", "FileFunction": "Copper,L7,Inr"},
     {"Path": "d.gbr", "FileFunction": "Copper,L4,Bot"},
     {"Path": "blind-drill.txt", "FileFunction": "Plated,1,2,PTH,Blind"}
   ]}"#,
-    )
-    .unwrap();
-    let g = from_gerber_dir(&dir).expect("extract");
-    let _ = std::fs::remove_dir_all(&dir);
+        )
+        .unwrap();
+    })
+    .expect("extract");
 
     assert_eq!(g.stats.n_layers, 4);
     assert!(
@@ -178,26 +170,24 @@ fn a_manifest_nonplated_drill_is_never_promoted_by_a_sibling_npth_name() {
     // Plated/NonPlated into one Drill role lost the declaration, and the
     // job's plated/non-plated filename split then promoted the opaque file
     // to plated: its mechanical hole stitched the layers, a fabricated short.
-    let dir = tmp("nonplated");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("brd-F_Cu.gbr"), film("X0Y0D03*\n")).unwrap();
-    std::fs::write(dir.join("brd-B_Cu.gbr"), film("X0Y0D03*\n")).unwrap();
-    let excellon = "M48\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX0.0Y0.0\nT0\nM30\n";
-    std::fs::write(dir.join("holes-a.drl"), excellon).unwrap();
-    std::fs::write(dir.join("brd-NPTH.drl"), excellon).unwrap();
-    std::fs::write(
-        dir.join("job.gbrjob"),
-        r#"{"FilesAttributes": [
+    let g = extract_fresh(tmp("nonplated"), |dir| {
+        std::fs::write(dir.join("brd-F_Cu.gbr"), film("X0Y0D03*\n")).unwrap();
+        std::fs::write(dir.join("brd-B_Cu.gbr"), film("X0Y0D03*\n")).unwrap();
+        let excellon = "M48\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX0.0Y0.0\nT0\nM30\n";
+        std::fs::write(dir.join("holes-a.drl"), excellon).unwrap();
+        std::fs::write(dir.join("brd-NPTH.drl"), excellon).unwrap();
+        std::fs::write(
+            dir.join("job.gbrjob"),
+            r#"{"FilesAttributes": [
     {"Path": "brd-F_Cu.gbr", "FileFunction": "Copper,L1,Top"},
     {"Path": "brd-B_Cu.gbr", "FileFunction": "Copper,L2,Bot"},
     {"Path": "holes-a.drl", "FileFunction": "NonPlated,1,2,NPTH"},
     {"Path": "brd-NPTH.drl", "FileFunction": "NonPlated,1,2,NPTH"}
   ]}"#,
-    )
-    .unwrap();
-    let g = from_gerber_dir(&dir).expect("extract");
-    let _ = std::fs::remove_dir_all(&dir);
+        )
+        .unwrap();
+    })
+    .expect("extract");
     assert_eq!(
         g.stats.n_nets, 2,
         "a manifest-declared mechanical hole must stitch nothing"
@@ -211,9 +201,7 @@ fn a_gbrjob_that_agrees_with_numbered_filenames_changes_nothing() {
     // (`gnd02.art` = L2, `pwr03.art` = L3), one with a manifest saying the
     // same thing, one without. The reconstructions must be identical: the
     // manifest adds information only where the filenames had none.
-    let build = |dir: &PathBuf, with_job: bool| {
-        let _ = std::fs::remove_dir_all(dir);
-        std::fs::create_dir_all(dir).unwrap();
+    let build = |dir: &Path, with_job: bool| {
         std::fs::write(dir.join("top.art"), film("X0Y0D03*\n")).unwrap();
         std::fs::write(dir.join("gnd02.art"), film("X0Y0D03*\nX5000000Y0D03*\n")).unwrap();
         std::fs::write(dir.join("pwr03.art"), film("X5000000Y0D03*\n")).unwrap();
@@ -231,8 +219,7 @@ fn a_gbrjob_that_agrees_with_numbered_filenames_changes_nothing() {
             .unwrap();
         }
     };
-    let summarize = |dir: &PathBuf| {
-        let g = from_gerber_dir(dir).expect("extract");
+    let summarize = |g: &GerberExtraction| {
         (
             g.stats.n_layers,
             g.stats.n_nets,
@@ -244,12 +231,11 @@ fn a_gbrjob_that_agrees_with_numbered_filenames_changes_nothing() {
                 .collect::<Vec<_>>(),
         )
     };
-    let d1 = tmp("agree_with");
-    let d2 = tmp("agree_without");
-    build(&d1, true);
-    build(&d2, false);
-    let (a, b) = (summarize(&d1), summarize(&d2));
-    let _ = std::fs::remove_dir_all(&d1);
-    let _ = std::fs::remove_dir_all(&d2);
-    assert_eq!(a, b, "an agreeing manifest must change nothing");
+    let a = extract_fresh(tmp("agree_with"), |dir| build(dir, true)).expect("extract");
+    let b = extract_fresh(tmp("agree_without"), |dir| build(dir, false)).expect("extract");
+    assert_eq!(
+        summarize(&a),
+        summarize(&b),
+        "an agreeing manifest must change nothing"
+    );
 }

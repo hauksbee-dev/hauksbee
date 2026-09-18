@@ -4,7 +4,7 @@
 //! when they asked for it and wrong every other time, and it cannot be undone
 //! afterwards, so the refusal is worth a test that drives the real binary.
 
-use crate::support::hauksbee_bin as hauksbee;
+use crate::support::{hauksbee_bin as hauksbee, run};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -16,20 +16,26 @@ fn stub_pdf(dir: &std::path::Path) -> PathBuf {
     p
 }
 
-#[test]
-fn a_pipe_is_refused_rather_than_answered_for() {
-    // stdin is not a terminal here, so there is nobody to ask. Assuming yes
-    // would send a datasheet because someone ran the wrong command in CI.
-    let dir = tempfile::tempdir().unwrap();
-    let pdf = stub_pdf(dir.path());
-    let out = Command::new(hauksbee())
+/// Attempt the extraction with stdin piped (not a terminal), so there is
+/// nobody to ask for consent.
+fn extract_with_piped_stdin(pdf: &std::path::Path) -> std::process::Output {
+    Command::new(hauksbee())
         .args([
             "models", "extract", "--part", "BC847B", "--kind", "bjt_npn", "--pdf",
         ])
-        .arg(&pdf)
+        .arg(pdf)
         .stdin(Stdio::null())
         .output()
-        .expect("run hauksbee");
+        .expect("run hauksbee")
+}
+
+#[test]
+fn a_pipe_is_refused_rather_than_answered_for() {
+    // Assuming yes would send a datasheet because someone ran the wrong
+    // command in CI.
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = stub_pdf(dir.path());
+    let out = extract_with_piped_stdin(&pdf);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "a pipe must not proceed:\n{err}");
     assert!(
@@ -42,14 +48,7 @@ fn a_pipe_is_refused_rather_than_answered_for() {
 fn the_notice_is_shown_before_anything_is_sent() {
     let dir = tempfile::tempdir().unwrap();
     let pdf = stub_pdf(dir.path());
-    let out = Command::new(hauksbee())
-        .args([
-            "models", "extract", "--part", "BC847B", "--kind", "bjt_npn", "--pdf",
-        ])
-        .arg(&pdf)
-        .stdin(Stdio::null())
-        .output()
-        .expect("run hauksbee");
+    let out = extract_with_piped_stdin(&pdf);
     let all = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -70,18 +69,15 @@ fn the_notice_is_shown_before_anything_is_sent() {
 fn a_missing_datasheet_fails_before_the_consent_question() {
     // Asking someone to approve sending a file that is not there would train
     // them to click through the question.
-    let out = Command::new(hauksbee())
-        .args([
-            "models",
-            "extract",
-            "--pdf",
-            "/no/such/file.pdf",
-            "--part",
-            "X",
-            "--yes",
-        ])
-        .output()
-        .expect("run hauksbee");
+    let out = run(&[
+        "models",
+        "extract",
+        "--pdf",
+        "/no/such/file.pdf",
+        "--part",
+        "X",
+        "--yes",
+    ]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     assert!(err.contains("no datasheet at"), "{err}");

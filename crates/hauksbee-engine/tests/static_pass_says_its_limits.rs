@@ -11,17 +11,13 @@
 //! was misled by omission, which is the failure mode this project exists to
 //! prevent.
 
-use crate::support::repo_root;
-use std::process::Command;
+use crate::support::{repo_root, run_board, stdout};
 
 fn plain_check(board: &str) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
-        .arg("run")
-        .arg(repo_root().join(board))
-        .args(["--check", "--plain"])
-        .output()
-        .expect("run hauksbee");
-    String::from_utf8_lossy(&out.stdout).to_string()
+    stdout(&run_board(
+        &repo_root().join(board),
+        &["--check", "--plain"],
+    ))
 }
 
 #[test]

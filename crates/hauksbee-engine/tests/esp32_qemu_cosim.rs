@@ -51,16 +51,17 @@ fn flash_image() -> Option<PathBuf> {
     }
 }
 
-/// Run the co-sim once, returning (uart_text, max_r1_current_ma, led_high_count,
-/// gpio4_transitions).
-fn run_cosim() -> (String, f64, usize, u32) {
-    let fw = flash_image().expect("flash.bin present");
-    let mut engine = HauksbeeEngine::from_board_file(
-        &board_text(),
-        Some(&fw),
-        "/boards/esp32_devkit_demo.kicad_pcb",
-    )
-    .expect("build ESP32 engine");
+/// Run the co-sim once against `board_text`/`fw`, returning (uart_text,
+/// max_r1_current_ma, led_high_count, gpio4_transitions). Shared by the ESP32
+/// and ESP32-C3 proofs below: the C3 firmware mirrors the ESP32 demo (same
+/// GPIO2/LED_A/GPIO4 net names), so the analog/GPIO stepping loop is identical.
+fn run_cosim_against(
+    board_text: &str,
+    fw: &std::path::Path,
+    board_id: &str,
+) -> (String, f64, usize, u32) {
+    let mut engine = HauksbeeEngine::from_board_file(board_text, Some(fw), board_id)
+        .expect("build ESP32 engine");
 
     // Each QEMU cont/stop + mailbox read is a control round-trip, so use a coarse
     // co-sim chunk (5 ms): plenty to oversample a ~5 Hz blink. The LED RC
@@ -116,6 +117,12 @@ fn run_cosim() -> (String, f64, usize, u32) {
         led_high_samples,
         gpio4_transitions,
     )
+}
+
+/// The ESP32 demo board's own co-sim, at its own board id.
+fn run_cosim() -> (String, f64, usize, u32) {
+    let fw = flash_image().expect("flash.bin present");
+    run_cosim_against(&board_text(), &fw, "/boards/esp32_devkit_demo.kicad_pcb")
 }
 
 #[test]
@@ -226,51 +233,9 @@ fn esp32c3_full_cosim_through_solved_circuit() {
     )
     .expect("read esp32c3 board");
 
-    let mut engine =
-        HauksbeeEngine::from_board_file(&board, Some(&fw), "/boards/esp32c3_devkit_demo.kicad_pcb")
-            .expect("build ESP32-C3 engine");
-    engine.scheduler_mut().chunk_s = 5e-3;
+    let (text, max_r1_ma, led_high, transitions) =
+        run_cosim_against(&board, &fw, "/boards/esp32c3_devkit_demo.kicad_pcb");
 
-    let frame_dt = 5e-3_f64;
-    let n = (1.5_f64 / frame_dt).round() as usize;
-    let mut uart: Vec<u8> = Vec::new();
-    let mut max_r1_ma = 0.0_f64;
-    let mut led_high = 0usize;
-    let mut transitions = 0u32;
-    let mut prev: Option<bool> = None;
-
-    for _ in 0..n {
-        let frame = engine.step(frame_dt);
-        for b in frame.uart.values() {
-            uart.extend_from_slice(b);
-        }
-        let g2 = frame.net_voltages.get("GPIO2_OUT").copied().unwrap_or(0.0);
-        let led = frame.net_voltages.get("LED_A").copied().unwrap_or(0.0);
-        max_r1_ma = max_r1_ma.max((g2 - led).abs() / 330.0 * 1000.0);
-        if led > 1.0 {
-            led_high += 1;
-        }
-        let blink = frame
-            .net_voltages
-            .get("GPIO4_BLINK")
-            .copied()
-            .unwrap_or(0.0);
-        let logic = if blink > 2.0 {
-            Some(true)
-        } else if blink < 1.0 {
-            Some(false)
-        } else {
-            prev
-        };
-        if let (Some(p), Some(c)) = (prev, logic) {
-            if p != c {
-                transitions += 1;
-            }
-        }
-        prev = logic;
-    }
-
-    let text = String::from_utf8_lossy(&uart).to_string();
     eprintln!("ESP32-C3 QEMU co-sim results:");
     eprintln!(
         "  UART has 'hello from esp32': {}",

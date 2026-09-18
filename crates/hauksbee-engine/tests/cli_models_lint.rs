@@ -3,7 +3,7 @@
 //! NAMED error text (not just a non-zero exit), and the shipping builtin db
 //! must lint clean through the same code path binding uses.
 
-use crate::support::run;
+use crate::support::{assert_ok, combined, run};
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
@@ -14,9 +14,14 @@ fn fixture(name: &str) -> PathBuf {
 
 fn lint(path: &std::path::Path) -> (i32, String) {
     let out = run(&["models", "lint", path.to_str().unwrap()]);
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    (out.status.code().unwrap_or(-1), format!("{stdout}{stderr}"))
+    (out.status.code().unwrap_or(-1), combined(&out))
+}
+
+/// The `pic_programmer` board, used by every `models new/coverage/prepare`
+/// scenario in this file as a stand-in for "some real board with unresolved
+/// active parts".
+fn pic_programmer_board() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/pic_programmer.kicad_pcb")
 }
 
 /// One broken fixture per validation category, with the named-error substring
@@ -103,8 +108,7 @@ fn lint_refuses_a_model_with_no_real_match_rule() {
 fn scaffold_does_not_infer_model_kind_from_reference_letter() {
     let dir = tempfile::tempdir().unwrap();
     let scaffold = dir.path().join("u3.toml");
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/boards/pic_programmer.kicad_pcb");
+    let board = pic_programmer_board();
     let made = run(&[
         "models",
         "new",
@@ -114,11 +118,7 @@ fn scaffold_does_not_infer_model_kind_from_reference_letter() {
         "--out",
         scaffold.to_str().unwrap(),
     ]);
-    assert!(
-        made.status.success(),
-        "{}",
-        String::from_utf8_lossy(&made.stderr)
-    );
+    assert_ok(&made);
     let text = std::fs::read_to_string(&scaffold).unwrap();
     assert!(text.contains("kind = \"choose_kind\""), "{text}");
     let (code, out) = lint(&scaffold);
@@ -140,11 +140,7 @@ fn scaffold_does_not_infer_model_kind_from_reference_letter() {
         "--out",
         explicit.to_str().unwrap(),
     ]);
-    assert!(
-        made.status.success(),
-        "{}",
-        String::from_utf8_lossy(&made.stderr)
-    );
+    assert_ok(&made);
     let text = std::fs::read_to_string(explicit).unwrap();
     assert!(text.contains("kind = \"vreg\""), "{text}");
     assert!(!text.contains("kind = \"digital\""), "{text}");
@@ -161,8 +157,7 @@ fn scaffold_does_not_infer_model_kind_from_reference_letter() {
 fn scaffold_emits_unknown_provenance_and_a_pack_without_writing_elsewhere() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("acme-pack");
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/boards/pic_programmer.kicad_pcb");
+    let board = pic_programmer_board();
     let made = run(&[
         "models",
         "new",
@@ -172,11 +167,7 @@ fn scaffold_emits_unknown_provenance_and_a_pack_without_writing_elsewhere() {
         "--pack-dir",
         pack.to_str().unwrap(),
     ]);
-    assert!(
-        made.status.success(),
-        "{}",
-        String::from_utf8_lossy(&made.stderr)
-    );
+    assert_ok(&made);
 
     let manifest = pack.join("pack.toml");
     let model_dir = pack.join("models");
@@ -230,8 +221,7 @@ fn scaffold_emits_unknown_provenance_and_a_pack_without_writing_elsewhere() {
 fn prepare_yes_writes_only_the_printed_pack_plan() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("prepared-pack");
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/boards/pic_programmer.kicad_pcb");
+    let board = pic_programmer_board();
     let out = run(&[
         "models",
         "prepare",
@@ -240,11 +230,7 @@ fn prepare_yes_writes_only_the_printed_pack_plan() {
         pack.to_str().unwrap(),
         "--yes",
     ]);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert_ok(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("no network, LLM, installer, or pack registration"),
@@ -316,8 +302,7 @@ fn prepare_yes_writes_only_the_printed_pack_plan() {
 fn prepare_without_yes_refuses_a_non_tty_before_writing() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("prepared-pack");
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/boards/pic_programmer.kicad_pcb");
+    let board = pic_programmer_board();
     let out = run(&[
         "models",
         "prepare",
@@ -326,11 +311,7 @@ fn prepare_without_yes_refuses_a_non_tty_before_writing() {
         pack.to_str().unwrap(),
     ]);
     assert!(!out.status.success());
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let combined = combined(&out);
     assert!(combined.contains("stdin is not a terminal"), "{combined}");
     assert!(!pack.exists(), "refusal must not create the pack directory");
 }
@@ -342,8 +323,7 @@ fn prepare_refuses_overwrite_without_touching_existing_files() {
     std::fs::create_dir_all(pack.join("models")).unwrap();
     let manifest = pack.join("pack.toml");
     std::fs::write(&manifest, "sentinel").unwrap();
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/boards/pic_programmer.kicad_pcb");
+    let board = pic_programmer_board();
     let out = run(&[
         "models",
         "prepare",
@@ -353,11 +333,7 @@ fn prepare_refuses_overwrite_without_touching_existing_files() {
         "--yes",
     ]);
     assert!(!out.status.success());
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let combined = combined(&out);
     assert!(combined.contains("refusing to overwrite"), "{combined}");
     assert_eq!(std::fs::read_to_string(manifest).unwrap(), "sentinel");
     assert_eq!(std::fs::read_dir(pack.join("models")).unwrap().count(), 0);
@@ -417,8 +393,7 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
 "#,
     )
     .unwrap();
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/boards/pic_programmer.kicad_pcb");
+    let board = pic_programmer_board();
 
     let out = run(&[
         "models",
@@ -428,11 +403,7 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
         models_dir.to_str().unwrap(),
         "--json",
     ]);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert_ok(&out);
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["schema_version"], 4);
     assert!(report["board"]["sha256"].as_str().unwrap().len() == 64);
@@ -522,12 +493,7 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
         pack.to_str().unwrap(),
         "--yes",
     ]);
-    assert!(
-        out.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "{}", combined(&out));
     let inventory: serde_json::Value = serde_json::from_slice(
         &std::fs::read(pack.join("inventory.json")).expect("inventory written"),
     )

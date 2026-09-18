@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use hauksbee_extract::gerber::from_gerber_dir;
+use crate::gerber_scratch::extract_fresh;
 
 fn film(x_mm: i32) -> String {
     format!(
@@ -29,8 +29,6 @@ fn tmp(tag: &str) -> PathBuf {
 }
 
 fn write_four_layer_job(dir: &Path, with_ldp: bool) {
-    let _ = std::fs::remove_dir_all(dir);
-    std::fs::create_dir_all(dir).unwrap();
     for name in ["board.GTL", "board.G1", "board.G2", "board.GBL"] {
         std::fs::write(dir.join(name), film(0)).unwrap();
     }
@@ -49,10 +47,8 @@ fn write_four_layer_job(dir: &Path, with_ldp: bool) {
 
 #[test]
 fn ldp_drill_span_overrides_the_filename_fallback() {
-    let with = tmp("ldp_with");
-    write_four_layer_job(&with, true);
-    let from_metadata = from_gerber_dir(&with).expect("LDP-backed extraction");
-    let _ = std::fs::remove_dir_all(&with);
+    let from_metadata = extract_fresh(tmp("ldp_with"), |dir| write_four_layer_job(dir, true))
+        .expect("LDP-backed extraction");
 
     assert_eq!(from_metadata.stats.n_layers, 4);
     assert_eq!(from_metadata.stats.n_holes, 1);
@@ -66,10 +62,8 @@ fn ldp_drill_span_overrides_the_filename_fallback() {
             && note.contains("physical copper span L1-L2")
     }));
 
-    let without = tmp("ldp_without");
-    write_four_layer_job(&without, false);
-    let from_names = from_gerber_dir(&without).expect("filename fallback extraction");
-    let _ = std::fs::remove_dir_all(&without);
+    let from_names = extract_fresh(tmp("ldp_without"), |dir| write_four_layer_job(dir, false))
+        .expect("filename fallback extraction");
     assert_eq!(from_names.stats.n_layers, 4);
     assert_eq!(
         from_names.stats.n_nets, 1,
@@ -84,20 +78,17 @@ fn ldp_drill_span_overrides_the_filename_fallback() {
 
 #[test]
 fn ldp_names_an_opaque_drill_file_without_filename_help() {
-    let dir = tmp("ldp_opaque_drill");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("board.GTL"), film(0)).unwrap();
-    std::fs::write(dir.join("board.GBL"), film(0)).unwrap();
-    std::fs::write(dir.join("opaque.dat"), drill()).unwrap();
-    std::fs::write(
-        dir.join("board.LDP"),
-        "LayersSetName=Top_Bot_Plated_Thru_Holes|DrillFile=opaque.dat|DrillLayers=gtl,gbl\n",
-    )
-    .unwrap();
-
-    let extracted = from_gerber_dir(&dir).expect("LDP classifies the opaque drill member");
-    let _ = std::fs::remove_dir_all(&dir);
+    let extracted = extract_fresh(tmp("ldp_opaque_drill"), |dir| {
+        std::fs::write(dir.join("board.GTL"), film(0)).unwrap();
+        std::fs::write(dir.join("board.GBL"), film(0)).unwrap();
+        std::fs::write(dir.join("opaque.dat"), drill()).unwrap();
+        std::fs::write(
+            dir.join("board.LDP"),
+            "LayersSetName=Top_Bot_Plated_Thru_Holes|DrillFile=opaque.dat|DrillLayers=gtl,gbl\n",
+        )
+        .unwrap();
+    })
+    .expect("LDP classifies the opaque drill member");
     assert_eq!(extracted.stats.n_layers, 2);
     assert_eq!(extracted.stats.n_holes, 1);
     assert_eq!(extracted.stats.n_nets, 1);
@@ -105,21 +96,18 @@ fn ldp_names_an_opaque_drill_file_without_filename_help() {
 
 #[test]
 fn an_ldp_and_drill_body_span_conflict_refuses_the_stitch_out_loud() {
-    let dir = tmp("ldp_span_conflict");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    for name in ["board.GTL", "board.G1", "board.G2", "board.GBL"] {
-        std::fs::write(dir.join(name), film(0)).unwrap();
-    }
-    std::fs::write(dir.join("board-PTH.TXT"), drill_with_span(1, 3)).unwrap();
-    std::fs::write(
-        dir.join("board.LDP"),
-        "LayersSetName=Top_In1_Plated_Blind_Holes|DrillFile=board-PTH.TXT|DrillLayers=gtl,g1\n",
-    )
-    .unwrap();
-
-    let extracted = from_gerber_dir(&dir).expect("conflict is a visible non-stitching result");
-    let _ = std::fs::remove_dir_all(&dir);
+    let extracted = extract_fresh(tmp("ldp_span_conflict"), |dir| {
+        for name in ["board.GTL", "board.G1", "board.G2", "board.GBL"] {
+            std::fs::write(dir.join(name), film(0)).unwrap();
+        }
+        std::fs::write(dir.join("board-PTH.TXT"), drill_with_span(1, 3)).unwrap();
+        std::fs::write(
+            dir.join("board.LDP"),
+            "LayersSetName=Top_In1_Plated_Blind_Holes|DrillFile=board-PTH.TXT|DrillLayers=gtl,g1\n",
+        )
+        .unwrap();
+    })
+    .expect("conflict is a visible non-stitching result");
     assert_eq!(extracted.stats.n_holes, 1);
     assert_eq!(extracted.stats.refused_span_holes, 1);
     assert_eq!(
@@ -133,20 +121,17 @@ fn an_ldp_and_drill_body_span_conflict_refuses_the_stitch_out_loud() {
 
 #[test]
 fn ldp_plated_authority_overrides_an_npth_filename() {
-    let dir = tmp("ldp_over_name");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("board.GTL"), film(0)).unwrap();
-    std::fs::write(dir.join("board.GBL"), film(0)).unwrap();
-    std::fs::write(dir.join("board-NPTH.txt"), drill()).unwrap();
-    std::fs::write(
-        dir.join("board.LDP"),
-        "LayersSetName=Top_Bot_Plated_Thru_Holes|DrillFile=board-NPTH.txt|DrillLayers=gtl,gbl\n",
-    )
-    .unwrap();
-
-    let extracted = from_gerber_dir(&dir).expect("package plating outranks the name");
-    let _ = std::fs::remove_dir_all(&dir);
+    let extracted = extract_fresh(tmp("ldp_over_name"), |dir| {
+        std::fs::write(dir.join("board.GTL"), film(0)).unwrap();
+        std::fs::write(dir.join("board.GBL"), film(0)).unwrap();
+        std::fs::write(dir.join("board-NPTH.txt"), drill()).unwrap();
+        std::fs::write(
+            dir.join("board.LDP"),
+            "LayersSetName=Top_Bot_Plated_Thru_Holes|DrillFile=board-NPTH.txt|DrillLayers=gtl,gbl\n",
+        )
+        .unwrap();
+    })
+    .expect("package plating outranks the name");
     assert_eq!(extracted.stats.n_holes, 1);
     assert_eq!(extracted.stats.n_nets, 1);
     assert!(extracted.stats.notes.iter().any(|note| {
@@ -157,24 +142,21 @@ fn ldp_plated_authority_overrides_an_npth_filename() {
 
 #[test]
 fn ldp_and_file_body_plating_conflict_is_a_visible_refusal() {
-    let dir = tmp("ldp_plating_conflict");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("board.GTL"), film(0)).unwrap();
-    std::fs::write(dir.join("board.GBL"), film(0)).unwrap();
-    std::fs::write(
-        dir.join("opaque.dat"),
-        "M48\n; #@! TF.FileFunction,NonPlated,1,2,NPTH\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX0.0Y0.0\nT0\nM30\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("board.LDP"),
-        "LayersSetName=Top_Bot_Plated_Thru_Holes|DrillFile=opaque.dat|DrillLayers=gtl,gbl\n",
-    )
-    .unwrap();
-
-    let extracted = from_gerber_dir(&dir).expect("plating conflict is reported, not guessed");
-    let _ = std::fs::remove_dir_all(&dir);
+    let extracted = extract_fresh(tmp("ldp_plating_conflict"), |dir| {
+        std::fs::write(dir.join("board.GTL"), film(0)).unwrap();
+        std::fs::write(dir.join("board.GBL"), film(0)).unwrap();
+        std::fs::write(
+            dir.join("opaque.dat"),
+            "M48\n; #@! TF.FileFunction,NonPlated,1,2,NPTH\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX0.0Y0.0\nT0\nM30\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("board.LDP"),
+            "LayersSetName=Top_Bot_Plated_Thru_Holes|DrillFile=opaque.dat|DrillLayers=gtl,gbl\n",
+        )
+        .unwrap();
+    })
+    .expect("plating conflict is reported, not guessed");
     assert_eq!(extracted.stats.n_holes, 0);
     assert_eq!(extracted.stats.refused_plating_files, 1);
     assert!(extracted.stats.notes.iter().any(|note| {
@@ -183,8 +165,6 @@ fn ldp_and_file_body_plating_conflict_is_a_visible_refusal() {
 }
 
 fn write_extrep_job(dir: &Path, with_extrep: bool) {
-    let _ = std::fs::remove_dir_all(dir);
-    std::fs::create_dir_all(dir).unwrap();
     // `.GM1` normally means outline. The report deliberately declares it top
     // copper, proving the package metadata wins when it disagrees with the
     // filename convention.
@@ -203,10 +183,8 @@ fn write_extrep_job(dir: &Path, with_extrep: bool) {
 
 #[test]
 fn extrep_role_wins_and_names_its_disagreement_with_filename_inference() {
-    let with = tmp("extrep_with");
-    write_extrep_job(&with, true);
-    let from_metadata = from_gerber_dir(&with).expect("EXTREP-backed extraction");
-    let _ = std::fs::remove_dir_all(&with);
+    let from_metadata = extract_fresh(tmp("extrep_with"), |dir| write_extrep_job(dir, true))
+        .expect("EXTREP-backed extraction");
     assert_eq!(from_metadata.stats.n_layers, 2);
     assert!(from_metadata.stats.notes.iter().any(|note| {
         note.contains(".EXTREP")
@@ -215,10 +193,8 @@ fn extrep_role_wins_and_names_its_disagreement_with_filename_inference() {
             && note.contains("exporter metadata was used")
     }));
 
-    let without = tmp("extrep_without");
-    write_extrep_job(&without, false);
-    let from_names = from_gerber_dir(&without).expect("filename fallback extraction");
-    let _ = std::fs::remove_dir_all(&without);
+    let from_names = extract_fresh(tmp("extrep_without"), |dir| write_extrep_job(dir, false))
+        .expect("filename fallback extraction");
     assert_eq!(
         from_names.stats.n_layers, 1,
         "without metadata, .GM1 retains its existing outline classification"
@@ -232,21 +208,19 @@ fn extrep_role_wins_and_names_its_disagreement_with_filename_inference() {
 
 #[test]
 fn a_reused_extrep_extension_is_visible_but_never_arbitrarily_applied() {
-    let dir = tmp("extrep_contested");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("board-Top.gbr"), film(0)).unwrap();
-    std::fs::write(dir.join("board-Bottom.gbr"), film(10)).unwrap();
-    std::fs::write(
-        dir.join("board.EXTREP"),
-        "Layer Extension     Layer Description\n\
-         .gbr                Top Layer\n\
-         .gbr                Top Overlay\n\
-         .gbr                Bottom Layer\n",
-    )
-    .unwrap();
-    let extracted = from_gerber_dir(&dir).expect("ambiguous EXTREP falls back by name");
-    let _ = std::fs::remove_dir_all(&dir);
+    let extracted = extract_fresh(tmp("extrep_contested"), |dir| {
+        std::fs::write(dir.join("board-Top.gbr"), film(0)).unwrap();
+        std::fs::write(dir.join("board-Bottom.gbr"), film(10)).unwrap();
+        std::fs::write(
+            dir.join("board.EXTREP"),
+            "Layer Extension     Layer Description\n\
+             .gbr                Top Layer\n\
+             .gbr                Top Overlay\n\
+             .gbr                Bottom Layer\n",
+        )
+        .unwrap();
+    })
+    .expect("ambiguous EXTREP falls back by name");
 
     assert_eq!(extracted.stats.n_layers, 2);
     assert!(extracted.stats.notes.iter().any(|note| {
@@ -256,24 +230,21 @@ fn a_reused_extrep_extension_is_visible_but_never_arbitrarily_applied() {
 
 #[test]
 fn exact_file_gbrjob_authority_names_an_extrep_disagreement() {
-    let dir = tmp("gbrjob_extrep_conflict");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("misleading.GM1"), film(0)).unwrap();
-    std::fs::write(dir.join("board.GBL"), film(10)).unwrap();
-    std::fs::write(
-        dir.join("board.EXTREP"),
-        "Layer Extension     Layer Description\n.GM1 Top Layer\n.GBL Bottom Layer\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("board.gbrjob"),
-        r#"{"FilesAttributes":[{"Path":"misleading.GM1","FileFunction":"Profile,NP"}]}"#,
-    )
-    .unwrap();
-
-    let extracted = from_gerber_dir(&dir).expect("exact-file manifest wins visibly");
-    let _ = std::fs::remove_dir_all(&dir);
+    let extracted = extract_fresh(tmp("gbrjob_extrep_conflict"), |dir| {
+        std::fs::write(dir.join("misleading.GM1"), film(0)).unwrap();
+        std::fs::write(dir.join("board.GBL"), film(10)).unwrap();
+        std::fs::write(
+            dir.join("board.EXTREP"),
+            "Layer Extension     Layer Description\n.GM1 Top Layer\n.GBL Bottom Layer\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("board.gbrjob"),
+            r#"{"FilesAttributes":[{"Path":"misleading.GM1","FileFunction":"Profile,NP"}]}"#,
+        )
+        .unwrap();
+    })
+    .expect("exact-file manifest wins visibly");
     assert_eq!(extracted.stats.n_layers, 1);
     assert!(extracted.stats.notes.iter().any(|note| {
         note.contains(".gbrjob declares misleading.GM1 as the board outline")
@@ -284,23 +255,20 @@ fn exact_file_gbrjob_authority_names_an_extrep_disagreement() {
 
 #[test]
 fn extrep_bottom_and_x2_bottom_are_not_reported_as_a_conflict() {
-    let dir = tmp("extrep_x2_agree");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("board.GTL"), film(0)).unwrap();
-    std::fs::write(
-        dir.join("opaque.foo"),
-        "%TF.FileFunction,Copper,L2,Bot*%\n%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,1.000000*%\nD10*\nX10000000Y0D03*\nM02*\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("board.EXTREP"),
-        "Layer Extension     Layer Description\n.FOO Bottom Layer\n",
-    )
-    .unwrap();
-
-    let extracted = from_gerber_dir(&dir).expect("X2 and EXTREP agree on bottom");
-    let _ = std::fs::remove_dir_all(&dir);
+    let extracted = extract_fresh(tmp("extrep_x2_agree"), |dir| {
+        std::fs::write(dir.join("board.GTL"), film(0)).unwrap();
+        std::fs::write(
+            dir.join("opaque.foo"),
+            "%TF.FileFunction,Copper,L2,Bot*%\n%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,1.000000*%\nD10*\nX10000000Y0D03*\nM02*\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("board.EXTREP"),
+            "Layer Extension     Layer Description\n.FOO Bottom Layer\n",
+        )
+        .unwrap();
+    })
+    .expect("X2 and EXTREP agree on bottom");
     assert_eq!(extracted.stats.n_layers, 2);
     assert!(extracted
         .stats

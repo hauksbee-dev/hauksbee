@@ -1470,3 +1470,64 @@ high_threshold_v = 1.25
 [models.coverage]
 implements = ["averaged_buck_dc", "board_feedback_divider", "enable_gating", "output_current_ceiling", "reflected_input_power"]
 missing = ["switching_ripple", "compensation_stability", "soft_start", "pfm_ldo_modes", "cycle_by_cycle_peak_limit", "ovp", "uvlo_hysteresis", "thermal_shutdown", "temperature_curves"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LM317: the three-terminal ADJUSTABLE regulator. It has no ground pin and no
+# output setpoint of its own; it holds VO - VADJ at VREF and sources IADJ out of
+# ADJ, so the BOARD's divider sets the rail, which `bind_vreg` stamps as VREF
+# between OUT and ADJ plus a CCCS carrying the pass current onto IN. The solver
+# then produces VO = VREF*(1 + R2/R1) + IADJ*R2 from the R1/R2 actually fitted.
+# Primary source: TI LM317 datasheet SLVS044Y (3-Terminal Adjustable Regulator).
+# DELIBERATELY NOT MODELLED: the reference is ideal, so the output impedance is
+# exactly zero and load regulation reads 0%; line regulation, ripple rejection,
+# noise, the current limit, thermal shutdown and startup are absent, and so is
+# the minimum load current to maintain regulation (3.5 mA typ, 10 mA max), so a
+# divider-only board is not flagged for it. `vout_setpoint_low`/`_high` are
+# deliberately absent: the envelope check keys them by output net and would
+# score a rail this card does not set.
+[[models]]
+id = "lm317_adj"
+kind = "vreg"
+description = "TI LM317 3-terminal adjustable positive regulator, 1.5A (ADJ-referenced; rail set by the board divider)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vref"
+low = 1.20
+high = 1.30
+unit = "V"
+kind = "specification-limits"
+basis = "LM317 datasheet reference voltage VREF over the full operating range"
+
+[models.match]
+# Plain LM317 and its TO-220/A suffixes only: LM317L (100 mA) and LM317M
+# (500 mA) share the reference but not the current rating, so they are left
+# unmatched rather than judged against 1.5 A.
+value_re = "(?i)^LM317A?T?$"
+
+[models.params]
+# Source: TI LM317 datasheet SLVS044Y.
+vref      = 1.25     # VREF (VO - VADJ) typ; 1.20 min / 1.30 max, see interval above
+iadj_a    = 50.0e-6  # IADJ typ, adjustment-terminal current (100 uA max)
+dropout_v = 3.0      # minimum input-to-output differential, Recommended
+                     # Operating Conditions (VI - VO: 3 V min, 40 V max)
+
+[models.pins]
+# Datasheet Pin Functions, TO-220 (KCS/KCT) and SOT-223 (DCY): 1 ADJ, 2 OUT,
+# 3 IN. A `[models.pins]` value IS a binder role, unnormalised, so ADJ is
+# spelled with the binder's name for an adjustable part's reference pin.
+"1" = "fb"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.5  # IO, TO-220, Recommended Operating Conditions
+# The part FLOATS: its absolute maximum is the 40 V input-to-output
+# differential, not an input voltage against ground. Carried as the input
+# rating, which is conservative for a positive rail since VO >= 1.25 V always.
+max_voltage_v = 40.0
+max_junction_temp_c = 125.0

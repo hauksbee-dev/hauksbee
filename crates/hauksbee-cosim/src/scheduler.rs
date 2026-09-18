@@ -3543,7 +3543,7 @@ impl Scheduler {
         let tainted =
             |r: &SimpleRegulator| self.regulation.iter().any(|t| t.refs[0] == r.reference);
         let barred: Vec<bool> = self.regulators.iter().map(tainted).collect();
-        let (regs, ok) = (&self.regulators, &mut self.reg_supported);
+        let (regs, ok) = (&mut self.regulators, &mut self.reg_supported);
         let unsupported = match regs.is_empty() {
             true => Vec::new(),
             false => regulation::evaluate(&self.circuit, regs, ok, &barred, &self.opts),
@@ -3554,14 +3554,22 @@ impl Scheduler {
         self.taint_open_drivers();
     }
 
+    /// The declared supply nets and the reachability walk over them. Both taint
+    /// paths need the same pair, and passing different `supply_nets` to the two
+    /// would make a net a stop node for one taint and not the other.
+    fn taint_walk(&self) -> (Vec<NodeId>, regulation::Walk) {
+        let supply_nets: Vec<NodeId> = self.supplies.iter().map(|s| s.net).collect();
+        let (regs, ok) = (&self.regulators, &self.reg_supported);
+        let walk = regulation::Walk::new(&self.circuit, regs, ok, &supply_nets);
+        (supply_nets, walk)
+    }
+
     /// Record every unmodelled part that is powered and could DRIVE a net: what
     /// the solver prints there is the board without it, not a result. Repeats
     /// until nothing is added, so a part powered from a tainted net is caught.
     fn taint_open_drivers(&mut self) {
-        let supply_nets: Vec<NodeId> = self.supplies.iter().map(|s| s.net).collect();
+        let (mut rails, walk) = self.taint_walk();
         let (regs, ok) = (&self.regulators, &self.reg_supported);
-        let walk = regulation::Walk::new(&self.circuit, regs, ok, &supply_nets);
-        let mut rails = supply_nets;
         let trusted = regs.iter().zip(ok).filter(|(_, ok)| **ok);
         rails.extend(trusted.map(|(r, _)| regulation::terminals(&self.circuit, r).0));
         rails.extend(
@@ -3600,10 +3608,7 @@ impl Scheduler {
         }
         // What a revoked regulator feeds must be re-decided without it.
         self.reg_dirty |= revoked.is_some();
-        let supply_nets: Vec<NodeId> = self.supplies.iter().map(|s| s.net).collect();
-        let (regs, ok) = (&self.regulators, &self.reg_supported);
-        let walk = regulation::Walk::new(&self.circuit, regs, ok, &supply_nets);
-        let nodes = walk.regulator(&self.circuit, reg);
+        let nodes = self.taint_walk().1.regulator(&self.circuit, reg);
         let (reference, circuit) = (reg.reference.clone(), &self.circuit);
         let reason = regulation::reason(circuit, reg, verdict, revoked);
         self.push_taint(reference, nodes, |_| reason);

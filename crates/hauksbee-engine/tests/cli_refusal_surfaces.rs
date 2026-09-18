@@ -1,24 +1,14 @@
 //! Adversarial CLI proof that each analysis-mode missing-card path carries the
 //! complete C5.3 contract at exit 3, not a one-off error sentence.
 
-use std::process::Command;
+use crate::support::{combined, run as run_bin};
 
 fn run(deck: &str, flag: &str) -> (i32, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("request.cir");
     std::fs::write(&path, deck).expect("write deck");
-    let out = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
-        .args(["sim", path.to_str().unwrap(), flag])
-        .output()
-        .expect("run hauksbee");
-    (
-        out.status.code().unwrap_or(-1),
-        format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        ),
-    )
+    let out = run_bin(&["sim", path.to_str().unwrap(), flag]);
+    (out.status.code().unwrap_or(-1), combined(&out))
 }
 
 #[test]

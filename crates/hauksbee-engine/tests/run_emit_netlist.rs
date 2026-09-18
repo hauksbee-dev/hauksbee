@@ -4,7 +4,7 @@
 //! arrive on a schematic with no models and no copper, follow the sheet
 //! hierarchy, and come out byte-identical run to run.
 
-use crate::support::{run, stdout};
+use crate::support::{assert_ok, run, stdout};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -21,11 +21,7 @@ fn emit(rel: &str, json: bool) -> String {
         args.push("--json");
     }
     let out = run(&args);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert_ok(&out);
     stdout(&out)
 }
 

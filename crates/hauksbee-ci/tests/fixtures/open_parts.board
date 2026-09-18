@@ -1,6 +1,6 @@
 # Three unmodelled parts on one +12V auto rail (open_driver_validity.rs):
 #  U1 buck: drives VOUT through L1. MID (RA/RB) and FLOAT (C2 only) are unrelated.
-#  U3 LM317: a pin on VADJ, which RC/R1/R2 alone would put at a plausible 5.0 V.
+#  U3 LM337: a pin on VADJ (an adjustable NEGATIVE part, still unmodelled), which RC/R1/R2 alone would put at a plausible 5.0 V.
 #  U2: hangs on RAIL and is powered only FROM it, so it can load but never drive.
 #  J1: a header whose value is a numeric part number; a port on MID, never a driver.
 board version 20171130
@@ -41,7 +41,7 @@ fn main {
         pad "1" smd rect at 0 0 size 0.8 0.8 layers [F.Cu F.Paste F.Mask] net "FLOAT"
         pad "2" smd rect at 1 0 size 0.8 0.8 layers [F.Cu F.Paste F.Mask] net "GND"
     }
-    comp U3 lib "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" val "LM317" layer "F.Cu" at 68 20 rot 0 {
+    comp U3 lib "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" val "LM337" layer "F.Cu" at 68 20 rot 0 {
         pad "1" smd rect at 0 0 size 0.8 0.8 layers [F.Cu F.Paste F.Mask] net "ADJ"
         pad "2" smd rect at 1 0 size 0.8 0.8 layers [F.Cu F.Paste F.Mask] net "VADJ"
         pad "3" smd rect at 2 0 size 0.8 0.8 layers [F.Cu F.Paste F.Mask] net "+12V"

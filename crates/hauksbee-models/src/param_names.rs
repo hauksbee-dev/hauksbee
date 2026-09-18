@@ -206,6 +206,10 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
         ComponentKind::Nmos | ComponentKind::Pmos => MOSFET,
         ComponentKind::Vreg => &[
             "vout",
+            // The adjustable (ADJ-referenced) trio: the rail is the board's,
+            // not the card's, so there is no `vout` on such an entry.
+            "vref",
+            "iadj_a",
             "dropout_v",
             "iq_a",
             "battery_chemistry",

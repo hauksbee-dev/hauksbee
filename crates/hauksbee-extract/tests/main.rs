@@ -43,6 +43,8 @@ mod gerber_native_partition;
 mod gerber_negative_pour;
 #[path = "gerber_order_determinism.rs"]
 mod gerber_order_determinism;
+#[path = "gerber_scratch.rs"]
+mod gerber_scratch;
 #[path = "gerber_uconsole.rs"]
 mod gerber_uconsole;
 #[path = "gerber_x2.rs"]

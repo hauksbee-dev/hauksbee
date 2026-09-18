@@ -74,7 +74,7 @@ fn only_what_an_open_part_can_drive_is_refused() {
         "{}",
         detail(0)
     );
-    assert!(detail(1).contains("U3 (LM317) has no model"));
+    assert!(detail(1).contains("U3 (LM337) has no model"));
     assert!(detail(3).contains("floating"), "{}", detail(3));
     let blamed = |part: &str| r.coverage_warnings.iter().any(|w| w.contains(part));
     assert!(

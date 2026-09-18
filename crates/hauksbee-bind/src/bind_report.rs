@@ -152,6 +152,15 @@ pub struct SimpleRegulator {
     pub max_in_v: f64,
     /// Typical dropout from the card; `None` means headroom is unverified.
     pub dropout_v: Option<f64>,
+    /// Present only on an ADJ-referenced (adjustable) regulator, where `source`
+    /// carries Vref between OUT and ADJ rather than the rail against a return:
+    /// the board return the rail and the headroom are measured against. The
+    /// rail is then a SOLVED value, so `min_in_v` is not knowable at bind time.
+    pub adj_return: Option<hauksbee_ir::NodeId>,
+    /// The CCCS and IADJ sources an adjustable stamp adds beside `source`: any
+    /// pass that neutralises `source` must neutralise these with it, or the
+    /// controlled source is left reading a branch that no longer exists.
+    pub helpers: Vec<hauksbee_ir::DeviceId>,
 }
 
 impl BindReport {

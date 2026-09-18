@@ -17,36 +17,9 @@
 
 #![cfg(feature = "avr")]
 
+use crate::support::write_program_hex;
 use hauksbee_mcu::{AvrMcu, Mcu};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-
-// ---------------------------------------------------------------------------
-// Inline Intel-HEX fixture (mirrors avr_run_clock.rs)
-// ---------------------------------------------------------------------------
-
-fn ihex_record(record_type: u8, addr: u16, data: &[u8]) -> String {
-    let mut bytes = vec![data.len() as u8, (addr >> 8) as u8, addr as u8, record_type];
-    bytes.extend_from_slice(data);
-    let checksum = (!bytes.iter().fold(0u8, |a, b| a.wrapping_add(*b))).wrapping_add(1);
-    bytes.push(checksum);
-    let hexstr: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
-    format!(":{hexstr}")
-}
-
-fn write_program_hex(name: &str, program: &[u8]) -> PathBuf {
-    let dir = std::env::temp_dir().join("hauksbee_avr_uart_flow");
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let path = dir.join(name);
-    let mut text = String::new();
-    for (i, chunk) in program.chunks(16).enumerate() {
-        text.push_str(&ihex_record(0x00, (i * 16) as u16, chunk));
-        text.push('\n');
-    }
-    text.push_str(":00000001FF\n");
-    std::fs::write(&path, text).expect("write hex");
-    path
-}
 
 /// The boot banner byte the firmware transmits once, immediately after
 /// enabling the UART. Seeing it a second time is proof of a real reboot.
@@ -98,7 +71,7 @@ const UART_ECHO: &[u8] = &[
 /// Build a 16 MHz ATmega328P running the echo firmware, with UART output
 /// captured into a shared buffer.
 fn echo_mcu(name: &str) -> (AvrMcu, Arc<Mutex<Vec<u8>>>) {
-    let hex = write_program_hex(name, UART_ECHO);
+    let hex = write_program_hex("avr-uart-flow", name, UART_ECHO);
     let mut mcu = AvrMcu::atmega328p_16mhz().expect("create MCU");
     mcu.load_firmware(&hex).expect("load echo firmware");
     let out = crate::support::capture_uart(&mut mcu);
@@ -207,7 +180,7 @@ fn reset_reboots_the_core_and_firmware_answers_again() {
 fn pending_queue_overflow_is_counted_not_silent() {
     // Firmware that never enables the UART: two-byte infinite loop, so every
     // queued byte just sits there.
-    let hex = write_program_hex("rjmp_self.hex", &[0xFF, 0xCF]); // rjmp .-2
+    let hex = write_program_hex("avr-uart-flow", "rjmp_self.hex", &[0xFF, 0xCF]); // rjmp .-2
     let mut mcu = AvrMcu::atmega328p_16mhz().expect("create MCU");
     mcu.load_firmware(&hex).expect("load firmware");
 

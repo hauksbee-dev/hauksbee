@@ -156,17 +156,17 @@ pull_ohms = 100000.0
 
 // ── 2. Open-drain asserted by an FSM state ──────────────────────────────────
 
-#[test]
-fn fsm_open_drain_pulls_low_in_asserted_state() {
-    // A STAT open-drain pin idles high (external 10k to 3.3 V) in state "idle",
-    // and is asserted (pulled low) once the FSM transitions to "charging" when
-    // an enable pin crosses its threshold.
+/// Build (but do not run) a harness for the STAT open-drain FSM device: a 10k
+/// external pull-up to 3.3 V on STAT, an EN rail held at `en_v`, and a
+/// "charging" state that asserts (pulls low through 50 ohm) STAT once
+/// `v_en > 1.5`.
+fn fsm_open_drain_harness(en_v: f64) -> Harness {
     let mut c = Circuit::new();
     let v33 = c.node("V33");
     let stat = c.node("STAT");
     let en = c.node("EN");
     stamp_rail(&mut c, v33, "Vv33", 3.3);
-    stamp_rail(&mut c, en, "Ven", 3.3); // enable asserted
+    stamp_rail(&mut c, en, "Ven", en_v);
     c.add(resistor("Rstat_pullup".into(), stat, v33, 10_000.0));
 
     let toml = r#"
@@ -191,10 +191,17 @@ od_assert = true
     roles.insert("en".to_string(), en);
     let dev = BehavioralDevice::stamp(&mut c, "U2", &model, &Params::default(), &roles, &|_| None)
         .expect("fsm + open-drain stamps");
+    Harness::new(c, dev)
+}
 
-    let mut h = Harness::new(c, dev);
-    // The FSM advances on the PREVIOUS chunk's solved voltages, so the EN net
-    // is first seen high on the second chunk (the first solve establishes it).
+#[test]
+fn fsm_open_drain_pulls_low_in_asserted_state() {
+    // A STAT open-drain pin idles high (external 10k to 3.3 V) in state "idle",
+    // and is asserted (pulled low) once the FSM transitions to "charging" when
+    // an enable pin crosses its threshold.
+    let mut h = fsm_open_drain_harness(3.3); // enable asserted
+                                             // The FSM advances on the PREVIOUS chunk's solved voltages, so the EN net
+                                             // is first seen high on the second chunk (the first solve establishes it).
     h.run(2, 1e-4);
     assert_eq!(
         h.dev.state(),
@@ -214,33 +221,7 @@ od_assert = true
 fn fsm_stays_when_guard_false() {
     // Same FSM but the enable is LOW: the device must remain in "idle" and the
     // open-drain must stay off (STAT high).
-    let mut c = Circuit::new();
-    let v33 = c.node("V33");
-    let stat = c.node("STAT");
-    let en = c.node("EN");
-    stamp_rail(&mut c, v33, "Vv33", 3.3);
-    stamp_rail(&mut c, en, "Ven", 0.0); // enable NOT asserted
-    c.add(resistor("Rstat_pullup".into(), stat, v33, 10_000.0));
-    let toml = r#"
-[pins.stat]
-open_drain = true
-od_ohms = 50.0
-[fsm]
-states = ["idle", "charging"]
-[[fsm.transitions]]
-from = "idle"
-to = "charging"
-guard = "v_en > 1.5"
-[fsm.state_pins.charging.stat]
-od_assert = true
-"#;
-    let model: Behavioral = toml::from_str(toml).unwrap();
-    let mut roles = BTreeMap::new();
-    roles.insert("stat".to_string(), stat);
-    roles.insert("en".to_string(), en);
-    let dev = BehavioralDevice::stamp(&mut c, "U2", &model, &Params::default(), &roles, &|_| None)
-        .unwrap();
-    let mut h = Harness::new(c, dev);
+    let mut h = fsm_open_drain_harness(0.0); // enable NOT asserted
     h.run(10, 1e-4);
     assert_eq!(h.dev.state(), "idle");
     assert!(h.v("STAT") > 3.0, "idle STAT should stay high");

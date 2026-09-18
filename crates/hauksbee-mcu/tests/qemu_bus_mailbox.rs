@@ -26,9 +26,8 @@
 
 #![cfg(feature = "qemu")]
 
-use hauksbee_mcu::qemu::{is_available, mailbox, QemuArch};
-use hauksbee_mcu::{I2cEvent, Mcu, QemuBackend, SpiEvent};
-use std::path::PathBuf;
+use hauksbee_mcu::qemu::mailbox;
+use hauksbee_mcu::{I2cEvent, Mcu, SpiEvent};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Serialize the QEMU-spawning tests (each boots its own instance; running
@@ -37,23 +36,11 @@ fn qemu_test_lock() -> MutexGuard<'static, ()> {
     crate::support::qemu_lock()
 }
 
-fn flash_image() -> Option<PathBuf> {
-    crate::support::firmware("esp32_blinky/flash.bin")
-}
-
 macro_rules! qemu_or_skip {
     ($mcu:ident) => {
-        if !is_available(QemuArch::Xtensa) {
-            eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
-            return;
-        }
-        let Some(fw) = flash_image() else {
-            eprintln!(
-                "SKIP: flash.bin not built; run ./build.sh in testdata/firmware/esp32_blinky"
-            );
+        let Some(mut $mcu) = crate::support::esp32_blinky_or_skip() else {
             return;
         };
-        let mut $mcu = QemuBackend::esp32(&fw).expect("boot Espressif QEMU esp32");
     };
 }
 

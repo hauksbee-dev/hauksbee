@@ -6,7 +6,8 @@
 //! refusal from the missing `avr` feature.
 
 use std::path::PathBuf;
-use std::process::Command;
+
+use crate::support::run_board;
 
 fn blinky_board() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -15,16 +16,7 @@ fn blinky_board() -> PathBuf {
 
 #[test]
 fn headless_board_only_run_does_not_require_avr() {
-    let out = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
-        .args([
-            "run",
-            blinky_board().to_str().expect("board path is utf-8"),
-            "--headless",
-            "--seconds",
-            "0.01",
-        ])
-        .output()
-        .expect("hauksbee binary runs");
+    let out = run_board(&blinky_board(), &["--headless", "--seconds", "0.01"]);
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -84,18 +76,16 @@ fn engine_board_only_has_no_live_mcu_core() {
 fn headless_firmware_run_refuses_without_avr() {
     let firmware =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-ci/assets/firmware/demo.hex");
-    let out = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
-        .args([
-            "run",
-            blinky_board().to_str().expect("board path is utf-8"),
+    let out = run_board(
+        &blinky_board(),
+        &[
             "--firmware",
             firmware.to_str().expect("firmware path is utf-8"),
             "--headless",
             "--seconds",
             "0.01",
-        ])
-        .output()
-        .expect("hauksbee binary runs");
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),

@@ -95,6 +95,18 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
             ],
             ..NO_RULES
         },
+        // An ADJUSTABLE (ADJ-referenced) regulator has no output setpoint of its
+        // own: it holds `vref` between OUT and ADJ and the BOARD's divider sets
+        // the rail, so requiring a `vout` here would be a false fact. Its only
+        // quiescent path is the ADJ terminal, so `iadj_a` stands in for `iq_a`.
+        Vreg if entry.behavioral.converter.is_none() && entry.params.get_f64("vref").is_some() => {
+            KindRules {
+                required: &["vref", "dropout_v", "iadj_a"],
+                ranges: &[("dropout_v", 0.0, 10.0), ("iadj_a", 0.0, 1e-3)],
+                magnitude: &[("vref", 0.1, 5.0)],
+                ..NO_RULES
+            }
+        }
         // A declarative converter owns its output, input draw and regulation
         // semantics; `bind_vreg` never reads the simple-LDO tuple on that path,
         // so requiring invented `vout/dropout_v/iq_a` there would be false facts.
@@ -335,6 +347,13 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 });
             }
         }
+        // A regulator entry is either fixed (`vout`) or ADJ-referenced (`vref`).
+        // Carrying both would leave one of the two silently unread by the binder.
+        let both = params.get_f64("vout").is_some() && params.get_f64("vref").is_some();
+        p.require(!both, || {
+            "a vreg entry carries either 'vout' (fixed) or 'vref' (adjustable), not both"
+                .to_string()
+        });
         for (lo, hi) in rules.ordered {
             if let (Some(a), Some(b)) = (params.get_f64(lo), params.get_f64(hi)) {
                 p.require(a < b, || {

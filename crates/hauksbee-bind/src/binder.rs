@@ -3429,6 +3429,12 @@ fn bind_vreg(
             entry_warning(comp, model),
         );
     }
+    // An ADJUSTABLE regulator (LM317 class) has no output setpoint and no
+    // ground pin of its own: it holds V(out) - V(adj) at Vref and the BOARD's
+    // divider sets the rail. `vref` on the card selects that path.
+    if let Some(vref) = model.params.get_f64("vref").filter(|v| v.is_finite()) {
+        return bind_adj_vreg(comp, model, circuit, roles, regulators, vref);
+    }
     let Some(vout) = model.params.get_f64("vout").filter(|v| v.is_finite()) else {
         return open_warning(comp, "vreg requires an explicit finite `vout` param");
     };
@@ -3476,6 +3482,8 @@ fn bind_vreg(
         min_in_v: vout_limit + dropout_v.unwrap_or(0.0),
         max_in_v: model.ratings.max_voltage_v.unwrap_or(f64::INFINITY),
         dropout_v,
+        adj_return: None,
+        helpers: Vec::new(),
     });
     // THE ENABLE IS NOT MODELLED, and this says so for every entry that has one
     // rather than making each entry repeat the sentence.
@@ -3545,6 +3553,84 @@ fn bind_vreg(
             device: format!("vreg {vout:.1}V source"),
         },
         warning,
+    )
+}
+
+/// The adjustable (ADJ-referenced) vreg stamp, from three primitives the IR
+/// already has: `Vref` between OUT and ADJ, a CCCS moving that branch current
+/// onto IN (what the pass element does, so the input draw is honest and ADJ
+/// carries only divider current), and IADJ out of the ADJ pin. KCL at ADJ then
+/// gives the datasheet's `Vout = Vref*(1 + R2/R1) + Iadj*R2` from the BOARD's
+/// own divider, solved by MNA rather than parsed out of the netlist.
+///
+/// The enable caveat `bind_vreg` emits does not apply: an adjustable
+/// three-terminal part has no enable pin to leave unmodelled.
+fn bind_adj_vreg(
+    comp: &Component,
+    model: &ModelEntry,
+    circuit: &mut Circuit,
+    roles: &HashMap<String, NodeId>,
+    regulators: &mut Vec<SimpleRegulator>,
+    vref: f64,
+) -> (BindOutcome, Option<String>) {
+    let Some(input) = roles.get("in").copied() else {
+        return open_warning(comp, "vreg input not connected");
+    };
+    let Some(out) = roles.get("out").copied() else {
+        return open_warning(comp, "vreg output not connected");
+    };
+    // The schematic pin-function pass folds `adj`/`feedback` onto `fb`, but a
+    // `[models.pins]` value is a role verbatim, so both spellings are read here.
+    // Without one there is nothing to regulate against and no rail to report.
+    let Some(adj) = roles.get("fb").or_else(|| roles.get("adj")).copied() else {
+        return open_warning(comp, "adjustable vreg ADJ pin not connected");
+    };
+    if out == adj || out == input || input == adj {
+        return open_warning(comp, "vreg input, output, and ADJ must be distinct");
+    }
+    let source = circuit.add(Device::Vsource {
+        name: format!("Vref_{}", comp.reference),
+        p: out,
+        n: adj,
+        kind: SourceKind::Dc(vref),
+    });
+    // `stamp_vsource` counts the branch current as LEAVING `p`, so delivering
+    // I into OUT reads as -I on this branch; the gain is -1 so that the same I
+    // is drawn out of IN and returned to ADJ, cancelling there.
+    let mut helpers = vec![circuit.add(Device::Cccs {
+        name: format!("Fpass_{}", comp.reference),
+        p: input,
+        n: adj,
+        ctrl_src: source,
+        gain: -1.0,
+    })];
+    if let Some(iadj) = model.params.get_f64("iadj_a").filter(|i| i.is_finite()) {
+        helpers.push(circuit.add(Device::Isource {
+            name: format!("Iadj_{}", comp.reference),
+            p: input,
+            n: adj,
+            kind: SourceKind::Dc(iadj),
+        }));
+    }
+    let dropout_v = model.params.get_f64("dropout_v");
+    regulators.push(SimpleRegulator {
+        reference: comp.reference.clone(),
+        source,
+        input,
+        // The rail is a solved value: `regulation::evaluate` overwrites this from
+        // |V(out) - V(return)|, and until it has, no input is enough (fail closed).
+        min_in_v: f64::INFINITY,
+        max_in_v: model.ratings.max_voltage_v.unwrap_or(f64::INFINITY),
+        dropout_v,
+        // A three-terminal adjustable regulator has no return pin of its own.
+        adj_return: Some(NodeId::GROUND),
+        helpers,
+    });
+    (
+        BindOutcome::Analog {
+            device: format!("vreg {vref:.3}V adjustable reference"),
+        },
+        entry_warning(comp, model),
     )
 }
 

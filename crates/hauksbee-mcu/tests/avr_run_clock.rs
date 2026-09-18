@@ -20,52 +20,8 @@
 // Drives the in-process simavr core: GPL-gated `avr` feature only.
 #![cfg(feature = "avr")]
 
+use crate::support::write_program_hex;
 use hauksbee_mcu::{AvrMcu, Mcu};
-use std::fmt::Write as _;
-use std::path::PathBuf;
-
-// ---------------------------------------------------------------------------
-// Inline Intel-HEX fixtures
-// ---------------------------------------------------------------------------
-
-/// Emit one Intel-HEX record with a correct checksum.
-fn ihex_record(record_type: u8, addr: u16, data: &[u8]) -> String {
-    let mut sum = data.len() as u8;
-    sum = sum
-        .wrapping_add((addr >> 8) as u8)
-        .wrapping_add(addr as u8)
-        .wrapping_add(record_type);
-    let mut line = format!(":{:02X}{:04X}{:02X}", data.len(), addr, record_type);
-    for &b in data {
-        sum = sum.wrapping_add(b);
-        write!(line, "{b:02X}").unwrap();
-    }
-    write!(line, "{:02X}", (!sum).wrapping_add(1)).unwrap();
-    line
-}
-
-/// Write `program` (raw flash bytes, little-endian words, loaded at 0) to a
-/// temp .hex and return its path.
-fn write_program_hex(name: &str, program: &[u8]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee-run-clock-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(name);
-    let mut text = String::new();
-    for (i, chunk) in program.chunks(16).enumerate() {
-        text.push_str(&ihex_record(0x00, (i * 16) as u16, chunk));
-        text.push('\n');
-    }
-    text.push_str(":00000001FF\n"); // EOF record
-    std::fs::write(&path, text).unwrap();
-    path
-}
 
 /// `jmp 0` at address 0: an infinite self-jump of 3-CYCLE instructions, so a
 /// 16-cycle (1 µs @ 16 MHz) budget never lands on an instruction boundary and
@@ -93,7 +49,7 @@ const CLI_SLEEP: &[u8] = &[
 ];
 
 fn mcu_with(program: &[u8], name: &str, freq: u64) -> AvrMcu {
-    let hex = write_program_hex(name, program);
+    let hex = write_program_hex("run-clock", name, program);
     let mut mcu = AvrMcu::new("atmega328p", freq).expect("create MCU");
     mcu.load_firmware(&hex).expect("load inline hex");
     mcu

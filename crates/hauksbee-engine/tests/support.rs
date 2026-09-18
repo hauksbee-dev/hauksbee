@@ -57,6 +57,18 @@ pub fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
+/// Assert a captured run succeeded, surfacing stderr on failure.
+#[allow(dead_code)]
+pub fn assert_ok(o: &Output) {
+    assert!(o.status.success(), "{}", stderr(o));
+}
+
+/// Decode and concatenate a captured run's stdout and stderr, in that order.
+#[allow(dead_code)]
+pub fn combined(o: &Output) -> String {
+    format!("{}{}", stdout(o), stderr(o))
+}
+
 /// The repo root, two levels up from this crate's manifest dir.
 #[allow(dead_code)]
 pub fn repo_root() -> PathBuf {

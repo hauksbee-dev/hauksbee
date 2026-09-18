@@ -1,0 +1,18 @@
+LM317 adjustable regulator as the three primitives the binder stamps
+* An ADJ-referenced regulator is VREF between OUT and ADJ, a CCCS carrying that
+* branch current onto IN (what the pass element does, so the input draw is real
+* and ADJ carries only divider current), and IADJ out of the ADJ pin. Three
+* signed quantities interact -- the Vsource branch-current direction, the CCCS
+* gain and the IADJ polarity -- and a slip in any one of them gives a
+* plausible-looking wrong rail, so the convention is settled against ngspice
+* rather than by argument. R1 = 240 and R2 = 720 put the rail at
+* 1.25*(1 + 720/240) + 50u*720 = 5.036 V, the datasheet equation.
+VIN in 0 DC 10
+VREF out adj DC 1.25
+F1 in adj VREF -1
+IADJ in adj DC 50u
+R1 out adj 240
+R2 adj 0 720
+RL out 0 500
+.op
+.end

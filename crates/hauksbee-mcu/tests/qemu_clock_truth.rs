@@ -32,9 +32,7 @@
 
 #![cfg(feature = "qemu")]
 
-use hauksbee_mcu::qemu::{is_available, QemuArch};
-use hauksbee_mcu::{Mcu, PinId, QemuBackend};
-use std::path::PathBuf;
+use hauksbee_mcu::{Mcu, PinId};
 use std::sync::{Arc, Mutex};
 
 /// Requested post-boot chunk width (what the pre-fix backend credited).
@@ -46,22 +44,12 @@ const HALF_PERIOD_MS: f64 = 100.0;
 /// Edges to span. Eleven edges = ten 100 ms half-periods = 1 s of guest time.
 const EDGES: usize = 11;
 
-fn flash_image() -> Option<PathBuf> {
-    crate::support::firmware("esp32_blinky/flash.bin")
-}
-
 #[test]
 fn esp32_credited_time_tracks_the_guests_delays() {
     let _guard = crate::support::qemu_lock();
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
-        return;
-    }
-    let Some(fw) = flash_image() else {
-        eprintln!("SKIP: flash.bin not built; run ./build.sh in testdata/firmware/esp32_blinky");
+    let Some(mut mcu) = crate::support::esp32_blinky_or_skip() else {
         return;
     };
-    let mut mcu = QemuBackend::esp32(&fw).expect("boot Espressif QEMU esp32");
     let freq = mcu.frequency() as f64;
 
     // Edge log: (chunk index when observed, credited cycle stamp). The chunk

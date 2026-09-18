@@ -6,6 +6,8 @@ mod support;
 
 #[path = "ac_stability.rs"]
 mod ac_stability;
+#[path = "adj_regulator_validity.rs"]
+mod adj_regulator_validity;
 #[path = "analog_invalid.rs"]
 mod analog_invalid;
 #[path = "assembly_inputs_ci.rs"]
