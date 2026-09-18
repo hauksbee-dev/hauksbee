@@ -1154,20 +1154,6 @@ pub fn load_from(path: &Path) -> Result<Loaded> {
     })
 }
 
-/// Load the config, or the defaults with a warning on stderr when the file is
-/// unusable. For surfaces that must keep working (a status page) rather than
-/// refuse (an extraction).
-pub fn load_or_default() -> Loaded {
-    load().unwrap_or_else(|e| {
-        eprintln!("[hauksbee] ignoring extraction config: {e:#}");
-        Loaded {
-            config: ExtractConfig::default(),
-            path: config_path().unwrap_or_default(),
-            exists: false,
-        }
-    })
-}
-
 /// Write the config. Validated first; written atomically (a temp file then a
 /// rename) so a crash mid-write cannot leave half a file behind.
 pub fn save(config: &ExtractConfig, path: &Path) -> Result<()> {

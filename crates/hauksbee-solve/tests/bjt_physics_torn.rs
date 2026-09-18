@@ -17,7 +17,8 @@
 //! fire, the array must fragment, and the torn transient must match the
 //! monolithic reference at every membrane, reference and rail node.
 
-use hauksbee_ir::{BjtModel, Circuit, Device, NodeId, Polarity, SourceKind};
+use crate::shared::{add_capacitor, add_resistor, add_vdc};
+use hauksbee_ir::{BjtModel, Circuit, Device, NodeId, Polarity};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
 
 fn series_charge_model() -> BjtModel {
@@ -42,31 +43,14 @@ fn series_charge_model() -> BjtModel {
 fn build_array(n: usize) -> (Circuit, Vec<String>) {
     let mut c = Circuit::new();
     let p5 = c.node("+5V");
-    c.add(Device::Vsource {
-        name: "V5".into(),
-        p: p5,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    add_vdc(&mut c, "V5", p5, NodeId::GROUND, 5.0);
     let avdd = c.node("ANALOG_VDD");
-    c.add(Device::Resistor {
-        name: "R_shunt".into(),
-        a: p5,
-        b: avdd,
-        ohms: 1e3,
-        tc1: None,
-    });
+    add_resistor(&mut c, "R_shunt", p5, avdd, 1e3);
     let model = series_charge_model();
     let mut membranes = Vec::new();
     for k in 0..n {
         let rref = c.node(&format!("ref{k}"));
-        c.add(Device::Resistor {
-            name: format!("RR{k}"),
-            a: avdd,
-            b: rref,
-            ohms: 10e3,
-            tc1: None,
-        });
+        add_resistor(&mut c, &format!("RR{k}"), avdd, rref, 10e3);
         c.add(Device::Bjt {
             name: format!("Q1_{k}"),
             c: rref,
@@ -84,20 +68,15 @@ fn build_array(n: usize) -> (Circuit, Vec<String>) {
         });
         // Membrane RC load, so the mirror current integrates into a real
         // waveform and the charge banks see moving junction voltages.
-        c.add(Device::Resistor {
-            name: format!("RM{k}"),
-            a: mem,
-            b: NodeId::GROUND,
-            ohms: 47e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: format!("CM{k}"),
-            a: mem,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: Some(0.0),
-        });
+        add_resistor(&mut c, &format!("RM{k}"), mem, NodeId::GROUND, 47e3);
+        add_capacitor(
+            &mut c,
+            &format!("CM{k}"),
+            mem,
+            NodeId::GROUND,
+            1e-9,
+            Some(0.0),
+        );
         membranes.push(format!("mem{k}"));
     }
     (c, membranes)

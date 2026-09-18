@@ -1,9 +1,10 @@
-//! Front-door API HTTP test: boot the analysis routes with a stub analyzer (so
-//! the server crate test stays independent of the engine crate), then drive them
-//! over a real TCP socket, POST `/api/analyze` runs the analyzer on the uploaded
-//! bytes and echoes the filename header back; `/api/analyze-with-firmware` threads
-//! board + firmware parts through verbatim. There is no server-rendered page:
-//! the React bundle owns `/` in the unified server router.
+//! Front-door API HTTP test: boot the design routes with stub callbacks (so the
+//! server crate test stays independent of the engine crate), then drive them
+//! over a real TCP socket. `POST /api/analyze` runs the analyzer on the raw
+//! uploaded bytes and echoes the filename header back;
+//! `/api/analyze-with-firmware` threads every multipart companion through
+//! verbatim; `/api/sim` relays the deck simulator's JSON. There is no
+//! server-rendered page: the React bundle owns `/` in the unified router.
 
 use std::sync::Arc;
 
@@ -25,22 +26,52 @@ async fn http(addr: std::net::SocketAddr, request: &str, body: &[u8]) -> String 
     String::from_utf8_lossy(&buf).into_owned()
 }
 
+/// Serve the design routes with stub callbacks: the analyzer echoes back every
+/// part it received (proving the bytes and names reach it verbatim), and the
+/// deck simulator echoes the deck unless it is asked to refuse.
 async fn spawn() -> std::net::SocketAddr {
-    // Stub analyzer: proves the bytes and filename reach the callback, and
-    // returns a JSON shape the real engine analyzer also returns.
-    let analyze: frontdoor::Analyzer = Arc::new(|name: &str, contents: &[u8]| {
-        format!(
-            "{{\"ok\":true,\"file_name\":\"{name}\",\"len\":{}}}",
-            contents.len()
-        )
+    let analyze: frontdoor::DesignAnalyzer = Arc::new(|upload| {
+        let named = |file: Option<frontdoor::NamedUpload>| {
+            file.map(|f| serde_json::json!({ "name": f.name, "len": f.bytes.len() }))
+        };
+        serde_json::json!({
+            "ok": true,
+            "file_name": upload.board.name,
+            "len": upload.board.bytes.len(),
+            "fw": named(upload.firmware),
+            "schematic": named(upload.schematic),
+            "bom": upload.bom.map(|f| f.name),
+            "placement": upload.placement.map(|f| f.name),
+            "variant": upload.variant.map(|f| f.name),
+            "asbuilt": upload.asbuilt.map(|f| f.name),
+            "models": upload.models.into_iter().map(|f| f.name).collect::<Vec<_>>(),
+        })
+        .to_string()
+    });
+    let sim: frontdoor::DeckSimulator = Arc::new(|name: &str, deck: &str| {
+        if deck.contains(".include") {
+            return Err(format!("{name}: this deck pulls in another file"));
+        }
+        Ok(format!(
+            "{{\"ok\":true,\"analysis\":\"op\",\"deck_len\":{}}}",
+            deck.len()
+        ))
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let router = frontdoor::router(analyze);
+    let router = frontdoor::api_routes_with_design(analyze, sim);
     tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
     addr
+}
+
+/// A `POST <path>` request head with the raw body content type.
+fn raw_post(path: &str, extra: &str, len: usize) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n{extra}\
+         Content-Type: application/octet-stream\r\nContent-Length: {len}\r\n\r\n"
+    )
 }
 
 // There is no server-rendered HTML front door: the one web experience is the
@@ -51,11 +82,10 @@ async fn spawn() -> std::net::SocketAddr {
 async fn analyze_runs_the_callback_on_uploaded_bytes() {
     let addr = spawn().await;
     let body = b"(kicad_pcb tiny)";
-    let req = format!(
-        "POST /api/analyze HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         X-Board-Filename: tiny.kicad_pcb\r\nContent-Type: application/octet-stream\r\n\
-         Content-Length: {}\r\n\r\n",
-        body.len()
+    let req = raw_post(
+        "/api/analyze",
+        "X-Board-Filename: tiny.kicad_pcb\r\n",
+        body.len(),
     );
     let resp = http(addr, &req, body).await;
     assert!(resp.contains("200 OK"), "analyze should 200: {resp:.160}");
@@ -85,11 +115,10 @@ async fn analyze_passes_binary_board_bytes_verbatim() {
         body.len(),
         "the fixture must be one a lossy decode would corrupt"
     );
-    let req = format!(
-        "POST /api/analyze HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         X-Board-Filename: board.PcbDoc\r\nContent-Type: application/octet-stream\r\n\
-         Content-Length: {}\r\n\r\n",
-        body.len()
+    let req = raw_post(
+        "/api/analyze",
+        "X-Board-Filename: board.PcbDoc\r\n",
+        body.len(),
     );
     let resp = http(addr, &req, body).await;
     assert!(resp.contains("200 OK"), "analyze should 200: {resp:.160}");
@@ -103,91 +132,13 @@ async fn analyze_passes_binary_board_bytes_verbatim() {
 async fn analyze_without_filename_header_defaults_gracefully() {
     let addr = spawn().await;
     let body = b"x";
-    let req = format!(
-        "POST /api/analyze HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
+    let req = raw_post("/api/analyze", "", body.len());
     let resp = http(addr, &req, body).await;
     assert!(resp.contains("200 OK"));
     assert!(
         resp.contains("\"file_name\":\"board\""),
         "should default the filename"
     );
-}
-
-/// Spawn the firmware-aware router with a stub FirmwareAnalyzer that echoes back
-/// what it received (board name, board length, firmware name + length, or "none").
-async fn spawn_fw() -> std::net::SocketAddr {
-    let analyze: frontdoor::FirmwareAnalyzer = Arc::new(
-        |name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| {
-            match fw {
-            Some((fw_name, fw_bytes)) => format!(
-                "{{\"ok\":true,\"file_name\":\"{name}\",\"len\":{},\"fw_name\":\"{fw_name}\",\"fw_len\":{}}}",
-                contents.len(),
-                fw_bytes.len()
-            ),
-            None => format!(
-                "{{\"ok\":true,\"file_name\":\"{name}\",\"len\":{},\"fw\":\"none\"}}",
-                contents.len()
-            ),
-        }
-        },
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = frontdoor::router_with_firmware(analyze);
-    tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    addr
-}
-
-async fn spawn_schematic() -> std::net::SocketAddr {
-    let analyze: frontdoor::SchematicAnalyzer = Arc::new(
-        |name: &str,
-         contents: &[u8],
-         fw: Option<(&str, &[u8])>,
-         schematic: Option<(&str, &[u8])>| {
-            let (schematic_name, schematic_len) = schematic
-                .map(|(name, bytes)| (name, bytes.len()))
-                .unwrap_or(("none", 0));
-            format!(
-                "{{\"ok\":true,\"file_name\":\"{name}\",\"len\":{},\"fw\":{},\"schematic_name\":\"{schematic_name}\",\"schematic_len\":{schematic_len}}}",
-                contents.len(),
-                fw.is_some()
-            )
-        },
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = frontdoor::api_routes_with_schematic(analyze);
-    tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    addr
-}
-
-async fn spawn_design() -> std::net::SocketAddr {
-    let analyze: frontdoor::DesignAnalyzer = Arc::new(|upload| {
-        serde_json::json!({
-            "ok": true,
-            "board": upload.board.name,
-            "bom": upload.bom.map(|file| file.name),
-            "placement": upload.placement.map(|file| file.name),
-            "variant": upload.variant.map(|file| file.name),
-            "asbuilt": upload.asbuilt.map(|file| file.name),
-            "models": upload.models.into_iter().map(|file| file.name).collect::<Vec<_>>(),
-        })
-        .to_string()
-    });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = frontdoor::api_routes_with_design(analyze);
-    tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    addr
 }
 
 /// Build a minimal multipart/form-data body for the given parts.
@@ -212,12 +163,18 @@ fn multipart_body(boundary: &str, parts: &[(&str, &str, &[u8])]) -> Vec<u8> {
 
 #[tokio::test]
 async fn design_router_threads_every_supplemental_input_and_repeated_models() {
-    let addr = spawn_design().await;
+    let addr = spawn().await;
     let boundary = "----hauksbeedesignboundary";
+    // Firmware and schematic bytes deliberately include a null + high byte to
+    // prove no part is lossy-UTF8-decoded (which would change the byte count).
+    let fw: &[u8] = &[0x7f, b'E', b'L', b'F', 0x00, 0xff, 0x42];
+    let schematic = b"<eagle><drawing><schematic/></drawing></eagle>";
     let body = multipart_body(
         boundary,
         &[
             ("board", "design.kicad_pcb", b"board"),
+            ("firmware", "drone.elf", fw),
+            ("schematic", "design.sch", schematic),
             ("bom", "bom.csv", b"bom"),
             ("placement", "board.pos", b"placement"),
             ("variant", "production.variant.toml", b"variant"),
@@ -232,6 +189,20 @@ async fn design_router_threads_every_supplemental_input_and_repeated_models() {
         body.len()
     );
     let response = http(addr, &req, &body).await;
+    assert!(
+        response.contains(&format!(
+            "\"fw\":{{\"len\":{},\"name\":\"drone.elf\"}}",
+            fw.len()
+        )),
+        "firmware bytes must reach the analyzer verbatim: {response}"
+    );
+    assert!(
+        response.contains(&format!(
+            "\"schematic\":{{\"len\":{},\"name\":\"design.sch\"}}",
+            schematic.len()
+        )),
+        "schematic bytes must reach the analyzer verbatim: {response}"
+    );
     assert!(response.contains("\"bom\":\"bom.csv\""), "{response}");
     assert!(
         response.contains("\"placement\":\"board.pos\""),
@@ -252,108 +223,22 @@ async fn design_router_threads_every_supplemental_input_and_repeated_models() {
 }
 
 #[tokio::test]
-async fn firmware_router_still_serves_board_only_analyze() {
-    // The firmware-aware router keeps /api/analyze working (board-only path).
-    let addr = spawn_fw().await;
-    let body = b"(kicad_pcb tiny)";
-    let req = format!(
-        "POST /api/analyze HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         X-Board-Filename: tiny.kicad_pcb\r\nContent-Type: application/octet-stream\r\n\
-         Content-Length: {}\r\n\r\n",
-        body.len()
-    );
-    let resp = http(addr, &req, body).await;
-    assert!(
-        resp.contains("200 OK"),
-        "board-only should 200: {resp:.160}"
-    );
-    assert!(
-        resp.contains("\"fw\":\"none\""),
-        "board-only path passes no firmware"
-    );
-}
-
-#[tokio::test]
-async fn analyze_with_firmware_threads_board_and_firmware_bytes() {
-    let addr = spawn_fw().await;
-    let boundary = "----hauksbeetestboundary";
-    // Firmware bytes deliberately include a null + high byte to prove they are
-    // NOT lossy-UTF8-decoded (which would change the byte count / content).
-    let fw: &[u8] = &[0x7f, b'E', b'L', b'F', 0x00, 0xff, 0x42];
-    let board = b"(kicad_pcb tiny board)";
-    let body = multipart_body(
-        boundary,
-        &[
-            ("board", "tiny.kicad_pcb", board),
-            ("firmware", "drone.elf", fw),
-        ],
-    );
-    let req = format!(
-        "POST /api/analyze-with-firmware HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
-    let resp = http(addr, &req, &body).await;
-    assert!(resp.contains("200 OK"), "should 200: {resp:.200}");
-    assert!(
-        resp.contains("\"file_name\":\"tiny.kicad_pcb\""),
-        "board name threaded: {resp}"
-    );
-    assert!(
-        resp.contains("\"fw_name\":\"drone.elf\""),
-        "fw name threaded: {resp}"
-    );
-    // Exact byte count proves the firmware bytes survived intact (no UTF-8 lossy).
-    assert!(
-        resp.contains(&format!("\"fw_len\":{}", fw.len())),
-        "firmware bytes must reach the analyzer verbatim: {resp}"
-    );
-}
-
-#[tokio::test]
-async fn analyze_threads_optional_eagle_schematic_bytes_to_the_analyzer() {
-    let addr = spawn_schematic().await;
-    let boundary = "----hauksbee-schematic-boundary";
-    let board = b"<eagle><drawing><board/></drawing></eagle>";
-    let schematic = b"<eagle><drawing><schematic/></drawing></eagle>";
-    let body = multipart_body(
-        boundary,
-        &[
-            ("board", "design.brd", board),
-            ("schematic", "design.sch", schematic),
-        ],
-    );
-    let req = format!(
-        "POST /api/analyze-with-firmware HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
-    let resp = http(addr, &req, &body).await;
-    assert!(resp.contains("200 OK"), "should 200: {resp:.200}");
-    assert!(resp.contains("\"file_name\":\"design.brd\""), "{resp}");
-    assert!(resp.contains("\"schematic_name\":\"design.sch\""), "{resp}");
-    assert!(
-        resp.contains(&format!("\"schematic_len\":{}", schematic.len())),
-        "schematic bytes were not threaded verbatim: {resp}"
-    );
-}
-
-#[tokio::test]
 async fn checks_thread_optional_eagle_schematic_bytes_to_the_runner() {
-    let check: frontdoor::SchematicCheckRunner = Arc::new(
-        |name, board, firmware, schematic, spec| {
-            let (schematic_name, schematic_len) = schematic
-                .map(|(name, bytes)| (name, bytes.len()))
-                .unwrap_or(("none", 0));
-            format!(
-                "{{\"ok\":true,\"board_name\":\"{name}\",\"board_len\":{},\"firmware\":{},\"schematic_name\":\"{schematic_name}\",\"schematic_len\":{schematic_len},\"spec_len\":{}}}",
-                board.len(), firmware.is_some(), spec.len()
-            )
-        },
-    );
+    let check: frontdoor::DesignCheckRunner = Arc::new(|upload, spec| {
+        let (schematic_name, schematic_len) = upload
+            .schematic
+            .map(|file| (file.name, file.bytes.len()))
+            .unwrap_or(("none".to_string(), 0));
+        format!(
+            "{{\"ok\":true,\"board_name\":\"{}\",\"board_len\":{},\"schematic_name\":\"{schematic_name}\",\"schematic_len\":{schematic_len},\"spec_len\":{}}}",
+            upload.board.name,
+            upload.board.bytes.len(),
+            spec.len()
+        )
+    });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let router = frontdoor::check_route_with_schematic(check);
+    let router = frontdoor::check_route_with_design(check);
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
 
     let boundary = "----hauksbee-check-schematic-boundary";
@@ -384,14 +269,13 @@ async fn checks_thread_optional_eagle_schematic_bytes_to_the_runner() {
 
 #[tokio::test]
 async fn live_launch_threads_optional_eagle_schematic_to_the_launcher() {
-    let launch: frontdoor::SchematicLiveLauncher =
-        Arc::new(|_name, _board, _firmware, schematic| match schematic {
-            Some((name, bytes)) => Err(format!("saw {name} with {} bytes", bytes.len())),
-            None => Err("schematic missing".to_string()),
-        });
+    let launch: frontdoor::DesignLiveLauncher = Arc::new(|upload| match upload.schematic {
+        Some(file) => Err(format!("saw {} with {} bytes", file.name, file.bytes.len())),
+        None => Err("schematic missing".to_string()),
+    });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let router = frontdoor::live_routes_with_schematic(hauksbee_server::LiveHub::new(), launch);
+    let router = frontdoor::live_routes_with_design(hauksbee_server::LiveHub::new(), launch);
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
 
     let boundary = "----hauksbee-live-schematic-boundary";
@@ -431,16 +315,17 @@ async fn served_html_is_no_cache_but_hashed_assets_are_not() {
     std::fs::write(dir.join("index.html"), "<!doctype html><title>x</title>").unwrap();
     std::fs::write(dir.join("assets/app-abc123.js"), "console.log(1)").unwrap();
 
-    let analyze: frontdoor::FirmwareAnalyzer =
-        Arc::new(|_: &str, _: &[u8], _: Option<(&str, &[u8])>| "{\"ok\":true}".to_string());
+    let analyze: frontdoor::DesignAnalyzer = Arc::new(|_| "{\"ok\":true}".to_string());
+    let sim: frontdoor::DeckSimulator = Arc::new(|_, _| Ok("{\"ok\":true}".to_string()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let dir_clone = dir.clone();
     tokio::spawn(async move {
-        hauksbee_server::serve_frontdoor_on(
+        hauksbee_server::serve_frontdoor_on_with_design(
             listener,
             Some(&dir_clone),
             analyze,
+            sim,
             None,
             None,
             None,
@@ -484,7 +369,7 @@ async fn malformed_multipart_names_the_real_cause() {
     // multipart used to fall out of the field loop silently and get reported as
     // the misleading "no board file in the upload". It must instead name the
     // malformed upload, mirroring the sibling read-error arm's JSON shape.
-    let addr = spawn_fw().await;
+    let addr = spawn().await;
     let boundary = "----hauksbeetestboundary3";
     // Declares a boundary that never appears: multer hits end-of-stream while
     // still searching for the first boundary and errors.
@@ -642,7 +527,7 @@ async fn deps_install_refuses_cross_site_requests() {
 
 #[tokio::test]
 async fn analyze_with_firmware_without_firmware_part_falls_back() {
-    let addr = spawn_fw().await;
+    let addr = spawn().await;
     let boundary = "----hauksbeetestboundary2";
     let board = b"(kicad_pcb tiny board)";
     let body = multipart_body(boundary, &[("board", "tiny.kicad_pcb", board)]);
@@ -654,7 +539,59 @@ async fn analyze_with_firmware_without_firmware_part_falls_back() {
     let resp = http(addr, &req, &body).await;
     assert!(resp.contains("200 OK"), "should 200: {resp:.200}");
     assert!(
-        resp.contains("\"fw\":\"none\""),
+        resp.contains("\"fw\":null"),
         "missing firmware part must fall back to board-only: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn sim_relays_the_simulator_json_and_carries_the_deck_verbatim() {
+    let addr = spawn().await;
+    let deck = b"rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.op\n.end\n";
+    let req = raw_post("/api/sim", "X-Board-Filename: rc.cir\r\n", deck.len());
+    let resp = http(addr, &req, deck).await;
+    assert!(resp.contains("200 OK"), "sim should 200: {resp:.200}");
+    assert!(resp.contains("\"analysis\":\"op\""), "{resp}");
+    assert!(
+        resp.contains(&format!("\"deck_len\":{}", deck.len())),
+        "the deck bytes must reach the simulator verbatim: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn sim_refusal_is_a_4xx_carrying_the_reason() {
+    // A deck the simulator will not run (here, one that pulls in another file)
+    // is a bad request, not a server fault: the status says so and the body
+    // still uses this module's {ok:false,error} shape.
+    let addr = spawn().await;
+    let deck = b".include model.lib\nV1 in 0 1\n.op\n";
+    let req = raw_post("/api/sim", "X-Board-Filename: dep.cir\r\n", deck.len());
+    let resp = http(addr, &req, deck).await;
+    assert!(resp.contains(" 422 "), "refusal must be a 4xx: {resp:.200}");
+    assert!(resp.contains("\"ok\":false"), "{resp}");
+    assert!(resp.contains("pulls in another file"), "{resp}");
+    assert!(
+        resp.contains("dep.cir"),
+        "the name reaches the reason: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn sim_refuses_cross_site_requests() {
+    // The deck route runs a solver on uploaded input, so a drive-by POST from a
+    // hostile page (Sec-Fetch-Site, which page JS cannot forge) is refused
+    // before anything is parsed, the same guard the analyze routes carry.
+    let addr = spawn().await;
+    let deck = b"rc\nV1 in 0 1\nR1 in 0 1k\n.op\n";
+    let req = raw_post(
+        "/api/sim",
+        "Sec-Fetch-Site: cross-site\r\nX-Board-Filename: rc.cir\r\n",
+        deck.len(),
+    );
+    let resp = http(addr, &req, deck).await;
+    assert!(resp.contains("403"), "cross-site sim must 403: {resp:.300}");
+    assert!(
+        !resp.contains("deck_len"),
+        "the deck must not have run: {resp}"
     );
 }

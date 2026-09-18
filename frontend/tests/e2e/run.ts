@@ -13,6 +13,7 @@ const frontend = join(here, '../..')
 const results = join(frontend, 'test-results/e2e')
 
 export const E2E_FLOWS = [
+  'deck-sim.ts',
   'layers-dismiss.ts',
   'sessions-export.ts',
   'settings-extract.ts',

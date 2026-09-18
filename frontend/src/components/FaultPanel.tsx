@@ -37,6 +37,9 @@ interface FaultPanelProps {
    *  "happened, and is being kept on the record". A ref absent here is shown
    *  held. */
   activeRefs?: Set<string>
+  /** Why part of the circuit was not simulated (`SimFrame.unsupported_reasons`).
+   *  "No faults detected" is only reassuring about what was actually solved. */
+  unsupportedReasons?: string[]
   /** Clears the accumulated log */
   onClear?: () => void
   /** Callback to highlight a faulted component on the board */
@@ -44,7 +47,7 @@ interface FaultPanelProps {
   selectedFaultRef?: string | null
 }
 
-export function FaultPanel({ faults, activeRefs, onClear, onFaultComponentSelect, selectedFaultRef }: FaultPanelProps) {
+export function FaultPanel({ faults, activeRefs, unsupportedReasons, onClear, onFaultComponentSelect, selectedFaultRef }: FaultPanelProps) {
   const seenRefs = useRef(new Set<string>())
   const [toasts, setToasts] = useState<{ ref: string; kind: string; id: number }[]>([])
   const toastId = useRef(0)
@@ -68,6 +71,14 @@ export function FaultPanel({ faults, activeRefs, onClear, onFaultComponentSelect
 
   return (
     <>
+      {(unsupportedReasons ?? []).length > 0 && (
+        // A clean fault list says nothing about a part of the circuit the
+        // solver never simulated, so the engine's own reason is shown here.
+        <div className="px-3 py-2 text-[10px] leading-relaxed" data-testid="unsupported-reasons"
+          style={{ color: 'var(--warn)', borderBottom: '1px solid var(--rule)' }}>
+          Not simulated, so not monitored: {(unsupportedReasons ?? []).join(' · ')}
+        </div>
+      )}
       {faults.length === 0 ? (
         <div className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
           No faults detected in what is monitored

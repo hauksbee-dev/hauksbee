@@ -12,7 +12,8 @@
 //! probe (ANALOG_VDD: 0 V collapse -> 5.0 V); this test guards the mechanism in
 //! isolation and that it does not regress the ordinary diode solve.
 
-use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId, SourceKind};
+use crate::shared::{add_capacitor, add_resistor, add_vdc};
+use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId};
 use hauksbee_solve::{
     dc_operating_point, run_op, Probe, RobustnessLadder, SolverOptions, Strategy, Workspace,
 };
@@ -20,30 +21,14 @@ use hauksbee_solve::{
 fn build(n_stage: usize, diode_is: f64) -> (Circuit, NodeId, Vec<NodeId>) {
     let mut c = Circuit::new();
     let rail = c.node("RAIL");
-    c.add(Device::Vsource {
-        name: "VR".into(),
-        p: rail,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    add_vdc(&mut c, "VR", rail, NodeId::GROUND, 5.0);
     // Ideal driver held LOW at rest (a comparator output before it fires); the
     // stretch diodes hang off it through an output resistance, the Tarski
     // PinDriver topology that produced the singular Vsource branch.
     let drv_hidden = c.node("DRV_H");
     let drv = c.node("DRV");
-    c.add(Device::Vsource {
-        name: "VDRV".into(),
-        p: drv_hidden,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(0.0),
-    });
-    c.add(Device::Resistor {
-        name: "RDRV".into(),
-        a: drv_hidden,
-        b: drv,
-        ohms: 50.0,
-        tc1: None,
-    });
+    add_vdc(&mut c, "VDRV", drv_hidden, NodeId::GROUND, 0.0);
+    crate::shared::add_resistor(&mut c, "RDRV", drv_hidden, drv, 50.0);
 
     let model = DiodeModel {
         is: diode_is,
@@ -60,13 +45,7 @@ fn build(n_stage: usize, diode_is: f64) -> (Circuit, NodeId, Vec<NodeId>) {
             k: s,
             model,
         });
-        c.add(Device::Capacitor {
-            name: format!("Cs{i}"),
-            a: s,
-            b: NodeId::GROUND,
-            farads: 5.8e-9,
-            ic: None,
-        });
+        add_capacitor(&mut c, &format!("Cs{i}"), s, NodeId::GROUND, 5.8e-9, None);
         c.add(Device::Diode {
             name: format!("Drev{i}"),
             a: NodeId::GROUND,
@@ -128,12 +107,7 @@ fn stiff_diode_dc_converges_to_finite_physical_root() {
 fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
     let mut c = Circuit::new();
     let rail = c.node("RAIL");
-    c.add(Device::Vsource {
-        name: "VR".into(),
-        p: rail,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    add_vdc(&mut c, "VR", rail, NodeId::GROUND, 5.0);
     let model = DiodeModel {
         is: 4.352e-9,
         n: 1.9,
@@ -151,22 +125,11 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
         k: s,
         model,
     });
-    c.add(Device::Capacitor {
-        name: "Cs".into(),
-        a: s,
-        b: NodeId::GROUND,
-        farads: 5.8e-9,
-        ic: None,
-    });
+    add_capacitor(&mut c, "Cs", s, NodeId::GROUND, 5.8e-9, None);
 
     // A fixed bias rail at 3 V for the switch controls.
     let bias = c.node("BIAS");
-    c.add(Device::Vsource {
-        name: "VB".into(),
-        p: bias,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.0),
-    });
+    add_vdc(&mut c, "VB", bias, NodeId::GROUND, 3.0);
 
     // Main switch: rail -> out through a STIFF switch with NEGATIVE feedback,
     // vctrl = bias - v(out). As out rises the switch turns OFF, so the loop has a
@@ -185,13 +148,7 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
         ron: 1.0,
         roff: 1e6,
     });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1.0,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RL", out, NodeId::GROUND, 1.0);
 
     // Decoy switches sitting near their own knees with the same negative-feedback
     // control, each fed from `out` through a diode and loaded to ground: they
@@ -215,13 +172,7 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
             ron: 10.0,
             roff: 1e6,
         });
-        c.add(Device::Resistor {
-            name: format!("Rd{i}"),
-            a: d,
-            b: NodeId::GROUND,
-            ohms: 1e4,
-            tc1: None,
-        });
+        add_resistor(&mut c, &format!("Rd{i}"), d, NodeId::GROUND, 1e4);
     }
     (c, rail, out)
 }
@@ -303,12 +254,7 @@ fn build_comparator_diode_chatter() -> Circuit {
     };
 
     let vref = c.node("VREF");
-    c.add(Device::Vsource {
-        name: "VREF".into(),
-        p: vref,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.0),
-    });
+    add_vdc(&mut c, "VREF", vref, NodeId::GROUND, 2.0);
 
     let out = c.node("OUT");
     let d_a = c.node("D_A");
@@ -325,26 +271,14 @@ fn build_comparator_diode_chatter() -> Circuit {
     // out -> 1k -> diode -> fb -> 10k -> gnd: with out HIGH the diode conducts
     // and fb rises above vref (flipping out LOW); with out LOW fb rests at 0
     // (flipping out HIGH). No consistent static state exists.
-    c.add(Device::Resistor {
-        name: "RFB".into(),
-        a: out,
-        b: d_a,
-        ohms: 1.0e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RFB", out, d_a, 1.0e3);
     c.add(Device::Diode {
         name: "DFB".into(),
         a: d_a,
         k: fb,
         model,
     });
-    c.add(Device::Resistor {
-        name: "RPD".into(),
-        a: fb,
-        b: NodeId::GROUND,
-        ohms: 10.0e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RPD", fb, NodeId::GROUND, 10.0e3);
     c
 }
 
@@ -393,12 +327,7 @@ fn run_op_accepts_genuine_roots_including_staged_ones() {
     let mut c = Circuit::new();
     let a = c.node("A");
     let b = c.node("B");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: a,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    add_vdc(&mut c, "V1", a, NodeId::GROUND, 5.0);
     c.add(Device::Resistor {
         name: "R1".into(),
         a,
@@ -406,13 +335,7 @@ fn run_op_accepts_genuine_roots_including_staged_ones() {
         ohms: 1.0e3,
         tc1: None,
     });
-    c.add(Device::Resistor {
-        name: "R2".into(),
-        a: b,
-        b: NodeId::GROUND,
-        ohms: 1.0e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "R2", b, NodeId::GROUND, 1.0e3);
     let out = run_op(&c, &opts, &[Probe::NodeVoltage("B".into())])
         .expect("a convergent divider must pass the .op residual gate");
     assert!(

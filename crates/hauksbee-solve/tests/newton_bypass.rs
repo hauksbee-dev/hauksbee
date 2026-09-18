@@ -15,6 +15,7 @@
 //! hash (0xb015e2ec03a28c4b), which run with `NewtonBypass::Off` (the
 //! default) and therefore never touch the bypass code at all.
 
+use crate::shared::{add_capacitor, add_vdc};
 use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId, SourceKind};
 use hauksbee_solve::{
     DcInit, DeviceEffects, EventRetryTuning, Integration, NewtonBypass, Partitioning,
@@ -160,38 +161,16 @@ fn spiking_board() -> Circuit {
     let spkb = c.node("spkb");
     let com = c.node("com");
     let rail = c.node("rail");
-    c.add(Device::Vsource {
-        name: "VTH".into(),
-        p: th,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.5),
-    });
-    c.add(Device::Vsource {
-        name: "VRAIL".into(),
-        p: rail,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
+    add_vdc(&mut c, "VTH", th, NodeId::GROUND, 2.5);
+    add_vdc(&mut c, "VRAIL", rail, NodeId::GROUND, 1.0);
     c.add(Device::Isource {
         name: "IIN".into(),
         p: NodeId::GROUND,
         n: m,
         kind: SourceKind::Dc(5e-5),
     });
-    c.add(Device::Capacitor {
-        name: "CM".into(),
-        a: m,
-        b: NodeId::GROUND,
-        farads: 1e-9,
-        ic: None,
-    });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: m,
-        b: NodeId::GROUND,
-        ohms: 1e5,
-        tc1: None,
-    });
+    add_capacitor(&mut c, "CM", m, NodeId::GROUND, 1e-9, None);
+    crate::shared::add_resistor(&mut c, "RL", m, NodeId::GROUND, 1e5);
     c.add(Device::Comparator {
         name: "K1".into(),
         out: spk,
@@ -232,13 +211,7 @@ fn spiking_board() -> Circuit {
         ron: 10.0,
         roff: 1e9,
     });
-    c.add(Device::Resistor {
-        name: "RD".into(),
-        a: com,
-        b: NodeId::GROUND,
-        ohms: 50.0,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RD", com, NodeId::GROUND, 50.0);
     // A junction on the membrane so the stiff path has a bypassable device
     // in it (the linesearch fixture itself is diode-free; the flagship board
     // is not). Anode at the 1 V rail, cathode at the membrane: reverse-biased
@@ -367,21 +340,10 @@ fn high_z_board(drive_v: f64) -> Circuit {
     let mem = c.node("mem");
     let out = c.node("out");
     let th = c.node("th");
-    c.add(Device::Vsource {
-        name: "VDRV".into(),
-        p: drv,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(drive_v),
-    });
+    add_vdc(&mut c, "VDRV", drv, NodeId::GROUND, drive_v);
     // The weak driver: 10 MΩ series (the "driver pass" shape, a fixed source
     // behind series R feeding a kept sense node).
-    c.add(Device::Resistor {
-        name: "RDRV".into(),
-        a: drv,
-        b: a,
-        ohms: 10e6,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RDRV", drv, a, 10e6);
     c.add(Device::Diode {
         name: "D1".into(),
         a,
@@ -392,27 +354,10 @@ fn high_z_board(drive_v: f64) -> Circuit {
             ..DiodeModel::default()
         },
     });
-    c.add(Device::Capacitor {
-        name: "CM".into(),
-        a: mem,
-        b: NodeId::GROUND,
-        farads: 1e-9,
-        ic: Some(0.0),
-    });
+    add_capacitor(&mut c, "CM", mem, NodeId::GROUND, 1e-9, Some(0.0));
     // The high-Z anchor: 1 GΩ to ground. Charging current is nA-scale.
-    c.add(Device::Resistor {
-        name: "RLEAK".into(),
-        a: mem,
-        b: NodeId::GROUND,
-        ohms: 1e9,
-        tc1: None,
-    });
-    c.add(Device::Vsource {
-        name: "VTH".into(),
-        p: th,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(0.4),
-    });
+    crate::shared::add_resistor(&mut c, "RLEAK", mem, NodeId::GROUND, 1e9);
+    add_vdc(&mut c, "VTH", th, NodeId::GROUND, 0.4);
     c.add(Device::Comparator {
         name: "K1".into(),
         out,
@@ -443,13 +388,7 @@ fn high_z_board(drive_v: f64) -> Circuit {
             phase: 0.0,
         },
     });
-    c.add(Device::Resistor {
-        name: "RAUX".into(),
-        a: aux,
-        b: auxm,
-        ohms: 1e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RAUX", aux, auxm, 1e3);
     c.add(Device::Diode {
         name: "DAUX".into(),
         a: auxm,

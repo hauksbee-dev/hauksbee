@@ -21,37 +21,7 @@ const SI_COVERAGE_REFUSAL: &str = "INCONCLUSIVE: the signal-integrity input-cove
 undermined, so a clean result here is not a clean bill (see the evidence section).";
 
 /// Print the SI report in `mode`, then (under `strict`) exit non-zero on a real
-/// finding.
-pub fn emit(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
-    mode: OutputMode,
-    strict: bool,
-    inputs: &[JsonInputEvidence],
-) -> anyhow::Result<()> {
-    emit_quiet(
-        board_path,
-        board,
-        text,
-        raw,
-        input_kind,
-        altium_present,
-        lib,
-        reader_notes,
-        mode,
-        strict,
-        false,
-        inputs,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
+/// finding. `quiet` suppresses the text surface.
 pub(crate) fn emit_quiet(
     board_path: &Path,
     board: &ExtractedBoard,

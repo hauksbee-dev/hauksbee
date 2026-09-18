@@ -479,6 +479,7 @@ export default function SimView({
               <FaultPanel
                 faults={faultLog}
                 activeRefs={activeFaultRefs}
+                unsupportedReasons={frame?.unsupported_reasons}
                 onClear={clearFaults}
                 onFaultComponentSelect={setSelectedFaultRef}
                 selectedFaultRef={selectedFaultRef}

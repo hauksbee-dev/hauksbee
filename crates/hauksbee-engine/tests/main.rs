@@ -81,6 +81,8 @@ mod cosim_fallback_chunk;
 mod cosim_spi_cs_frames_transactions;
 #[path = "datasheet_validation.rs"]
 mod datasheet_validation;
+#[path = "deck_sim_http.rs"]
+mod deck_sim_http;
 #[path = "declarative_sensor_cosim.rs"]
 mod declarative_sensor_cosim;
 #[path = "diode_fallback.rs"]

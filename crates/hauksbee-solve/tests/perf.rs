@@ -7,6 +7,7 @@
 //! sweeps. We also print the rectifier wall-clock next to ngspice's for the
 //! same circuit (no assertion, environments vary).
 
+use crate::shared::{add_capacitor, add_resistor, add_vdc};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
 use std::time::Instant;
@@ -20,29 +21,19 @@ mod cases;
 fn rc_ladder(stages: usize) -> Circuit {
     let mut c = Circuit::new();
     let n0 = c.node("n0");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: n0,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
+    add_vdc(&mut c, "V1", n0, NodeId::GROUND, 1.0);
     let mut prev = n0;
     for i in 0..stages {
         let next = c.node(&format!("n{}", i + 1));
-        c.add(Device::Resistor {
-            name: format!("R{}", i + 1),
-            a: prev,
-            b: next,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: format!("C{}", i + 1),
-            a: next,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: Some(0.0),
-        });
+        add_resistor(&mut c, &format!("R{}", i + 1), prev, next, 1e3);
+        add_capacitor(
+            &mut c,
+            &format!("C{}", i + 1),
+            next,
+            NodeId::GROUND,
+            1e-9,
+            Some(0.0),
+        );
         prev = next;
     }
     c
@@ -132,26 +123,9 @@ fn small_rc_exact_with_fewer_steps() {
     let mut c = Circuit::new();
     let vin = c.node("in");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
-    c.add(Device::Resistor {
-        name: "R".into(),
-        a: vin,
-        b: out,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "C".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: 1e-6,
-        ic: Some(0.0),
-    });
+    add_vdc(&mut c, "V1", vin, NodeId::GROUND, 1.0);
+    add_resistor(&mut c, "R", vin, out, 1e3);
+    add_capacitor(&mut c, "C", out, NodeId::GROUND, 1e-6, Some(0.0));
     let tau = 1e-3;
     let tstop = 5.0 * tau;
 
@@ -354,13 +328,7 @@ fn accuracy_partitioned_vs_monolithic() {
             let mut prev = n0;
             for i in 0..20 {
                 let next = c.node(&format!("n{}", i + 1));
-                c.add(Device::Resistor {
-                    name: format!("R{}", i + 1),
-                    a: prev,
-                    b: next,
-                    ohms: 1e3,
-                    tc1: None,
-                });
+                add_resistor(&mut c, &format!("R{}", i + 1), prev, next, 1e3);
                 c.add(Device::Capacitor {
                     name: format!("C{}", i + 1),
                     a: next,

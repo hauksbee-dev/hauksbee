@@ -5,6 +5,7 @@
 //! the solver matches to better than 1%. This is the calibration that lets the
 //! scenario layer's sag/dip numbers be trusted.
 
+use crate::shared::{add_capacitor, add_resistor, add_vdc};
 use hauksbee_ir::{Circuit, Device, NodeId, PwlPoint, SourceKind};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
 
@@ -54,21 +55,9 @@ fn ideal_cap_constant_current_discharge_with_esr() {
     let cap_top = circuit.node("CAP_TOP");
 
     // ESR resistor between the rail node and the ideal cap plate.
-    circuit.add(Device::Resistor {
-        name: "Resr".into(),
-        a: node,
-        b: cap_top,
-        ohms: r_esr,
-        tc1: None,
-    });
+    add_resistor(&mut circuit, "Resr", node, cap_top, r_esr);
     // Ideal capacitor, pre-charged to V0.
-    circuit.add(Device::Capacitor {
-        name: "C1".into(),
-        a: cap_top,
-        b: NodeId::GROUND,
-        farads: cap,
-        ic: Some(v0),
-    });
+    add_capacitor(&mut circuit, "C1", cap_top, NodeId::GROUND, cap, Some(v0));
     // Constant current step I drawn out of the node: Isource p->n internal, so
     // p = node, n = GROUND pulls I out of the node. PWL: 0 until 1 us, then I.
     let t_edge = 1e-6;
@@ -160,27 +149,10 @@ fn supplied_rail_step_sag_first_order() {
     let mut circuit = Circuit::new();
     let rail = circuit.node("VIN");
     let node = circuit.node("NODE");
-    circuit.add(Device::Vsource {
-        name: "V0".into(),
-        p: rail,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(v0),
-    });
-    circuit.add(Device::Resistor {
-        name: "Rs".into(),
-        a: rail,
-        b: node,
-        ohms: r_s,
-        tc1: None,
-    });
+    add_vdc(&mut circuit, "V0", rail, NodeId::GROUND, v0);
+    add_resistor(&mut circuit, "Rs", rail, node, r_s);
     // Cap starts at V0 (the pre-step operating point: no load => no R_s drop).
-    circuit.add(Device::Capacitor {
-        name: "Cbulk".into(),
-        a: node,
-        b: NodeId::GROUND,
-        farads: cap,
-        ic: Some(v0),
-    });
+    add_capacitor(&mut circuit, "Cbulk", node, NodeId::GROUND, cap, Some(v0));
     let t_edge = 1e-6;
     circuit.add(Device::Isource {
         name: "Iload".into(),
@@ -248,26 +220,9 @@ fn profile_isource_agrees_in_both_solver_paths() {
         let mut circuit = Circuit::new();
         let rail = circuit.node("VIN");
         let node = circuit.node("NODE");
-        circuit.add(Device::Vsource {
-            name: "V0".into(),
-            p: rail,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(v0),
-        });
-        circuit.add(Device::Resistor {
-            name: "Rs".into(),
-            a: rail,
-            b: node,
-            ohms: r_s,
-            tc1: None,
-        });
-        circuit.add(Device::Capacitor {
-            name: "Cbulk".into(),
-            a: node,
-            b: NodeId::GROUND,
-            farads: cap,
-            ic: Some(v0),
-        });
+        add_vdc(&mut circuit, "V0", rail, NodeId::GROUND, v0);
+        add_resistor(&mut circuit, "Rs", rail, node, r_s);
+        add_capacitor(&mut circuit, "Cbulk", node, NodeId::GROUND, cap, Some(v0));
         circuit.add(Device::Isource {
             name: "Iload".into(),
             p: node,

@@ -21,8 +21,11 @@
 //!   match the bit-exact `Off` monolith AND the analytic value a dropped
 //!   stamp could never produce.
 
-use crate::shared::{add_driver_leg, add_load_leg, add_partition_rc_legs, add_sensed_driver_leg};
-use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, NodeId, SourceKind, SpiceLoader};
+use crate::shared::{
+    add_driver_leg, add_load_leg, add_partition_rc_legs, add_resistor, add_sensed_driver_leg,
+    add_vdc,
+};
+use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, NodeId, SpiceLoader};
 use hauksbee_solve::decompose::ConductionGraph;
 use hauksbee_solve::{
     dc_operating_point, run_tran, AcAnalysis, AcSpec, AssemblyMode, Integration, LinearIsland,
@@ -411,19 +414,8 @@ fn ac_linearizes_at_the_operating_point() {
     let vin = c.node("in");
     let a = c.node("a");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(0.0),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: a,
-        ohms: 1e3,
-        tc1: None,
-    });
+    add_vdc(&mut c, "V1", vin, NodeId::GROUND, 0.0);
+    add_resistor(&mut c, "R1", vin, a, 1e3);
     c.add(Device::Capacitor {
         name: "C1".into(),
         a,
@@ -439,13 +431,7 @@ fn ac_linearizes_at_the_operating_point() {
         expr: CompiledExpr::compile("10.0*__d0").unwrap(),
         deps: vec![BDep::Volt(a)],
     });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
+    add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
     let ac = AcAnalysis::new(SolverOptions::default());
     let resp = ac
         .run(

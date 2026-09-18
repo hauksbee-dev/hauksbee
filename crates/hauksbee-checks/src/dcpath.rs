@@ -124,13 +124,10 @@ pub fn net_dc_definition(circuit: &Circuit, start: NodeId) -> NetDcDefinition {
 
     // DC conductance without a reference, or only non-passive devices: no
     // entitlement either way.
-    if has_dc_device.contains(&start) {
-        NetDcDefinition::Indeterminate
-    } else if has_any_noncap_device.contains(&start) {
-        NetDcDefinition::Indeterminate
-    } else {
-        NetDcDefinition::Floating
-    }
+    // Reaching here means one of those two sets contains `start`: the case where
+    // neither does already returned `Floating` above, and neither set changes
+    // during the BFS.
+    NetDcDefinition::Indeterminate
 }
 
 /// Every node a device touches, for the "something non-capacitive is here"

@@ -6,7 +6,7 @@
 //! test makes one real content change and requires one observed re-run. It is a
 //! release contract, not an ignorable timing probe.
 
-use crate::support::bin;
+use crate::support::{bin, run};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -119,12 +119,7 @@ fn wait_for_short(buf: &Arc<Mutex<String>>, needle: &str, ms: u64) -> bool {
 fn watch_once_runs_a_single_check_and_exits() {
     // `--once` is the plumbing check: it runs one check and exits with that run's
     // code, without entering the watch loop.
-    let out = Command::new(bin())
-        .arg("watch")
-        .arg(blinky())
-        .arg("--once")
-        .output()
-        .expect("run hauksbee watch --once");
+    let out = run(&["watch", blinky().to_str().unwrap(), "--once"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("run #1"),
@@ -143,11 +138,7 @@ fn watch_refuses_unknown_target() {
     let dir = tempfile::tempdir().unwrap();
     let txt = dir.path().join("notes.txt");
     std::fs::write(&txt, "hello").unwrap();
-    let out = Command::new(bin())
-        .arg("watch")
-        .arg(&txt)
-        .output()
-        .expect("run hauksbee watch on a .txt");
+    let out = run(&["watch", txt.to_str().unwrap()]);
     assert!(!out.status.success(), "watching a .txt must fail");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

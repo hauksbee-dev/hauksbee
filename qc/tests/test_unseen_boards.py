@@ -301,6 +301,32 @@ def successful_browser_runner(captured: list[Path] | None = None):
     return run
 
 
+
+def artifact_mutating_runner(mutate, exit_code: int = 0):
+    """A browser runner that succeeds, then edits its `results.json` in place.
+
+    `mutate` receives the parsed artifact and changes it; the wrapper writes it
+    back and returns `exit_code`. That is the whole shape of every test here
+    that stages a dishonest, degraded or half-broken run, so the staging lives
+    once and each test carries only the edit that makes its point.
+    """
+
+    def run(
+        paths: list[Path],
+        output: Path,
+        base_url: str,
+        cohort: str,
+        refusals: list[Path],
+        firmware: list[dict | None] | None = None,
+    ) -> int:
+        successful_browser_runner()(paths, output, base_url, cohort, refusals, firmware)
+        artifact = json.loads((output / "results.json").read_text())
+        mutate(artifact)
+        (output / "results.json").write_text(json.dumps(artifact))
+        return exit_code
+
+    return run
+
 class DiscoveryTests(unittest.TestCase):
     def test_discovers_primary_board_inputs_and_deduplicates_the_same_content(
         self,
@@ -1277,19 +1303,8 @@ class CommandTests(unittest.TestCase):
             history = base / "history.jsonl"
             evidence_dir = base / "evidence"
 
-            def failing(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
-                successful_browser_runner()(paths, output, base_url, cohort, refusals, firmware)
-                artifact = json.loads((output / "results.json").read_text())
+            def failing(artifact: dict) -> None:
                 artifact["results"][0]["failures"] = ["report was not useful"]
-                (output / "results.json").write_text(json.dumps(artifact))
-                return 1
 
             # The artifact is graded before the exit code is consulted, so the
             # failure names the board and what went wrong on it rather than only
@@ -1310,7 +1325,7 @@ class CommandTests(unittest.TestCase):
                     base_url="http://127.0.0.1:37651",
                     entropy="a" * 64,
                     tool_commit="e" * 40,
-                    runner=failing,
+                    runner=artifact_mutating_runner(failing, exit_code=1),
                 )
 
             loaded = load_history(history)
@@ -1405,19 +1420,8 @@ class CommandTests(unittest.TestCase):
             )
             history = base / "history.jsonl"
 
-            def mismatched(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
-                successful_browser_runner()(paths, output, base_url, cohort, refusals, firmware)
-                artifact = json.loads((output / "results.json").read_text())
+            def mismatched(artifact: dict) -> None:
                 artifact["results"][0]["path"] = str(base / "different.kicad_pcb")
-                (output / "results.json").write_text(json.dumps(artifact))
-                return 0
 
             with self.assertRaisesRegex(SelectionError, r"do not exactly match"):
                 release_gates.run_external_gate(
@@ -1433,7 +1437,7 @@ class CommandTests(unittest.TestCase):
                     base_url="http://127.0.0.1:37651",
                     entropy="a" * 64,
                     tool_commit="e" * 40,
-                    runner=mismatched,
+                    runner=artifact_mutating_runner(mismatched),
                 )
 
             self.assertEqual("failed", load_history(history).results[0]["status"])
@@ -5201,28 +5205,15 @@ class ValueGateWiringTests(unittest.TestCase):
                 base, "corpus", 1, cohort="corpus"
             )
 
-            def collapsing(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
-                successful_browser_runner()(
-                    paths, output, base_url, cohort, refusals, firmware
-                )
-                artifact = json.loads((output / "results.json").read_text())
+            def collapsing(artifact: dict) -> None:
                 artifact["results"][2]["report"]["num_components"] = 0
-                (output / "results.json").write_text(json.dumps(artifact))
-                return 0
 
             stderr = io.StringIO()
             with (
                 patch.object(release_gates, "CANONICAL_HISTORY", base / "h.jsonl"),
                 patch.object(release_gates, "CANONICAL_EVIDENCE_DIR", base / "ev"),
                 patch.object(release_gates, "RELEASE_SCRATCH", base / "s"),
-                patch.object(release_gates, "_playwright_runner", collapsing),
+                patch.object(release_gates, "_playwright_runner", artifact_mutating_runner(collapsing)),
                 patch.object(unseen_boards, "current_tool_commit", lambda: "e" * 40),
                 redirect_stderr(stderr),
             ):
@@ -5324,26 +5315,13 @@ class ValueGateWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
 
-            def collapsing(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
-                successful_browser_runner()(
-                    paths, output, base_url, cohort, refusals, firmware
-                )
-                artifact = json.loads((output / "results.json").read_text())
+            def collapsing(artifact: dict) -> None:
                 # Honest, exportable, and worthless: every check outside the
                 # value contract still passes on this row.
                 artifact["results"][0]["report"]["num_components"] = 0
-                (output / "results.json").write_text(json.dumps(artifact))
-                return 0
 
             with self.assertRaisesRegex(SelectionError, r"no bench-grade value"):
-                self._run(base, collapsing)
+                self._run(base, artifact_mutating_runner(collapsing))
 
             retained = json.loads(
                 (base / "evidence" / "release-01.json").read_text()
@@ -5363,30 +5341,17 @@ class ValueGateWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
 
-            def malformed(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
-                successful_browser_runner()(
-                    paths, output, base_url, cohort, refusals, firmware
-                )
-                artifact = json.loads((output / "results.json").read_text())
+            def malformed(artifact: dict) -> None:
                 artifact["results"][0]["report"]["assumptions"] = 3
                 artifact["results"][1]["report"]["notes"] = "not a list"
                 artifact["results"][2]["report"]["bind"] = {
                     "critical_parts_bound": "1/2", "open_parts": 7
                 }
-                (output / "results.json").write_text(json.dumps(artifact))
-                return 0
 
             # Either outcome is acceptable; what must NOT happen is a TypeError
             # escaping, which is why this asserts the invariant and not a grade.
             try:
-                self._run(base, malformed)
+                self._run(base, artifact_mutating_runner(malformed))
             except SelectionError:
                 pass
 
@@ -5438,18 +5403,7 @@ class ValueGateWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
 
-            def one_broken(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
-                successful_browser_runner()(
-                    paths, output, base_url, cohort, refusals, firmware
-                )
-                artifact = json.loads((output / "results.json").read_text())
+            def one_broken(artifact: dict) -> None:
                 artifact["results"][0]["failures"] = ["the drop target never armed"]
                 report = artifact["results"][1]["report"]
                 report["bind"] = {
@@ -5464,14 +5418,12 @@ class ValueGateWiringTests(unittest.TestCase):
                      "replacement": f"Add a model for U{i} to your models directory."}
                     for i in range(2)
                 ]
-                (output / "results.json").write_text(json.dumps(artifact))
                 # What the real runner does: frontend/tests/e2e/drag-drop-release.ts
                 # throws on any failing row, so the process exits non-zero. A gate
                 # that checked the exit code before grading retained nothing here.
-                return 1
 
             with self.assertRaisesRegex(SelectionError, r"drop target never armed"):
-                self._run(base, one_broken)
+                self._run(base, artifact_mutating_runner(one_broken, exit_code=1))
 
             retained = json.loads((base / "evidence" / "release-01.json").read_text())
             self.assertEqual("failed", retained["status"])
@@ -5489,18 +5441,7 @@ class ValueGateWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
 
-            def degrading(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
-                successful_browser_runner()(
-                    paths, output, base_url, cohort, refusals, firmware
-                )
-                artifact = json.loads((output / "results.json").read_text())
+            def degrading(artifact: dict) -> None:
                 report = artifact["results"][0]["report"]
                 report["bind"] = {
                     "critical_parts_bound": "0/6",
@@ -5521,12 +5462,10 @@ class ValueGateWiringTests(unittest.TestCase):
                     }
                     for index in range(6)
                 ]
-                (output / "results.json").write_text(json.dumps(artifact))
-                return 0
 
             stderr = io.StringIO()
             with redirect_stderr(stderr):
-                evidence = self._run(base, degrading)
+                evidence = self._run(base, artifact_mutating_runner(degrading))
 
             self.assertEqual("completed", evidence["status"])
             summary = evidence["browser"]["value_summary"]

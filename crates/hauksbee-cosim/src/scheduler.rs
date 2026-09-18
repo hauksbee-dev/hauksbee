@@ -37,7 +37,10 @@ use crate::peripherals::{
     CsProvenance, Eeprom24c, I2cBus, PeripheralSet, RegisterMapSensor, ResolvedCs, SpiBus,
     SpiFramingMode, SpiNorFlash, TickCtx, TimelineEvent,
 };
+use crate::regulation;
+pub use crate::regulation::RegulationTaint;
 use hauksbee_bind::behavioral::BehavioralDevice;
+use hauksbee_bind::bind_report::SimpleRegulator;
 use hauksbee_bind::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
 use hauksbee_bind::digital::{DigitalComponent, PinEdge};
 use hauksbee_bind::power_supply::{PowerSupply, SupplyLeg};
@@ -410,6 +413,13 @@ pub struct Scheduler {
     mcus: Vec<LiveMcu>,
     /// Latest solved node voltages, indexed by `NodeId.0`.
     pub node_volts: Vec<f64>,
+    /// Simple regulators, whether each currently has independent input headroom
+    /// (never again once tainted), and whether that must be re-established.
+    regulators: Vec<SimpleRegulator>,
+    reg_supported: Vec<bool>,
+    reg_dirty: bool,
+    /// Append-only, and deliberately NOT cleared by [`Self::reset_run_state`].
+    regulation: Vec<RegulationTaint>,
     /// Latest solved branch currents, indexed by branch unknown (after nodes).
     /// `branch_x[branch_index]`; map a device to its branch with [`Layout`].
     branch_x: Vec<f64>,
@@ -851,6 +861,33 @@ pub fn watchdog_reset_message(mcu_ref: &str, resets: u64) -> String {
     )
 }
 
+const UNVERIFIED_HEADROOM: &str = "; UNVERIFIED HEADROOM: the model has no dropout figure; \
+                                   only Vin >= Vout was checked";
+
+/// Watchdog limitations, watchdog resets, timing limitations, then regulation
+/// refusals, in the one order and wording every surface carries them (the CI
+/// runner's coverage warnings and the `run` binary's shared coverage messages),
+/// so those two cannot drift apart. Each is a claim the run cannot fully back:
+/// a systematic time bias on a core, or an ideal setpoint with no proven input
+/// headroom standing in for a simulated result.
+pub fn coverage_limitation_messages(scheduler: &Scheduler) -> Vec<String> {
+    let limitations = scheduler.watchdog_limitations();
+    let resets = scheduler.watchdog_resets();
+    let timing = scheduler.timing_limitations();
+    limitations
+        .iter()
+        .map(|(mcu_ref, l)| watchdog_limitation_message(mcu_ref, l))
+        .chain(resets.iter().map(|(m, r)| watchdog_reset_message(m, *r)))
+        .chain(timing.iter().map(|(m, l)| timing_limitation_message(m, l)))
+        .chain(
+            scheduler
+                .regulation_taint()
+                .iter()
+                .map(|t| t.reason.clone()),
+        )
+        .collect()
+}
+
 /// A firmware GPIO pulse that rose AND fell inside a single solver chunk, on a
 /// net that clocks a TICK-evaluated sequential part. Chain-responder parts (74HC595/165 chains, bit-banged
 /// SPI/I2C) resolve such edges synchronously inside the firmware's instruction
@@ -1250,6 +1287,10 @@ impl Scheduler {
             chain_chips,
             mcus: live,
             node_volts: vec![0.0; n_nodes],
+            reg_supported: vec![false; report.regulators.len()],
+            regulators: report.regulators,
+            reg_dirty: true,
+            regulation: Vec::new(),
             branch_x: vec![0.0; n_branch],
             last_dc_seed: None,
             layout,
@@ -3140,6 +3181,9 @@ impl Scheduler {
     }
 
     fn run_chunk(&mut self, chunk: f64, uart: &mut HashMap<String, Vec<u8>>) {
+        // Before any MCU advances: firmware must never run unflagged on a rail
+        // whose regulation is unsupported.
+        self.establish_regulation();
         self.gate_model_peripherals_from_rails();
 
         // Integer microseconds for `run_micros`, banking the sub-microsecond
@@ -3473,7 +3517,73 @@ impl Scheduler {
             // ratings using this chunk's solved operating point (may mutate the
             // circuit in destructive mode).
             self.evaluate_faults();
+
+            // Revoke-only monitor on the full solve; granting is `evaluate`'s job.
+            for i in 0..self.regulators.len() {
+                let reg = &self.regulators[i];
+                let (_, ret, vout) = regulation::terminals(&self.circuit, reg);
+                let volts = |n: NodeId| self.node_volts.get(n.0 as usize).map_or(f64::NAN, |v| *v);
+                let headroom = vout.signum() * (volts(reg.input) - volts(ret));
+                if self.reg_supported[i] && !regulation::headroom_ok(reg, headroom) {
+                    self.taint_regulator(i, &Ok(headroom), Some(self.sim_time));
+                }
+            }
         }
+    }
+
+    /// Re-decide regulator support when supplies, inputs or shorts changed. Works
+    /// on a clone: `node_volts` and the DC seed are never written from it.
+    fn establish_regulation(&mut self) {
+        if !std::mem::take(&mut self.reg_dirty) || self.regulators.is_empty() {
+            return;
+        }
+        // A regulator that was ever unsupported stays so, however it reads now.
+        let tainted =
+            |r: &SimpleRegulator| self.regulation.iter().any(|t| t.refs[0] == r.reference);
+        let barred: Vec<bool> = self.regulators.iter().map(tainted).collect();
+        let (regs, ok) = (&self.regulators, &mut self.reg_supported);
+        for (i, verdict) in regulation::evaluate(&self.circuit, regs, ok, &barred, &self.opts) {
+            self.taint_regulator(i, &verdict, None);
+        }
+    }
+
+    /// Record regulator `i` as unsupported, once: the shared reason, every net
+    /// its output can power, and every MCU whose direct supply is among them
+    /// (with that MCU's GPIO nets, which it drives from the tainted rail).
+    fn taint_regulator(&mut self, i: usize, verdict: &regulation::Verdict, revoked: Option<f64>) {
+        self.reg_supported[i] = false;
+        let reg = &self.regulators[i];
+        if self.regulation.iter().any(|t| t.refs[0] == reg.reference) {
+            return;
+        }
+        // What a revoked regulator feeds must be re-decided without it.
+        self.reg_dirty |= revoked.is_some();
+        let supply_nets: Vec<NodeId> = self.supplies.iter().map(|s| s.net).collect();
+        let (regs, ok) = (&self.regulators, &self.reg_supported);
+        let mut nodes = regulation::tainted_nodes(&self.circuit, regs, ok, &supply_nets, i);
+        let mut refs = vec![reg.reference.clone()];
+        for m in &self.mcus {
+            let fed =
+                |(role, n): (&String, &NodeId)| is_direct_supply_role(role) && nodes.contains(n);
+            if m.binding.role_nets.iter().any(fed) {
+                refs.push(m.binding.reference.clone());
+                nodes.extend(m.binding.gpio_drivers.values().map(|d| d.net));
+            }
+        }
+        let mut nets: Vec<String> = nodes.iter().map(|n| self.net_name_of(n.0)).collect();
+        nets.sort();
+        nets.dedup();
+        self.regulation.push(RegulationTaint {
+            reason: regulation::reason(&self.circuit, reg, verdict, revoked),
+            nets,
+            refs,
+            since_s: self.sim_time,
+        });
+    }
+
+    /// Every regulator whose output (and what it powers) is invalid this run.
+    pub fn regulation_taint(&self) -> &[RegulationTaint] {
+        &self.regulation
     }
 
     /// Inject the previous chunk's solved operating point into one MCU core
@@ -4639,18 +4749,58 @@ impl Scheduler {
     /// residual can vouch for, but an absent residual is indistinguishable
     /// from an unmeasured one; a reader of the evidence JSON must be told,
     /// in so many words, that these nets present an override rather than a
-    /// converged solution. Returns at most one assumption, scoped to the
-    /// forced nets; empty when nothing is forced.
+    /// converged solution. Returns one assumption per simple regulator, then at
+    /// most one scoped to the forced nets.
     pub fn forced_voltage_assumptions(
         &self,
     ) -> Result<Vec<hauksbee_ir::evidence::Assumption>, hauksbee_ir::evidence::EvidenceError> {
         use hauksbee_ir::evidence::{Assumption, AssumptionSource, NetScope, Scope, Subject};
+        // One per simple regulator: its rail is an ideal source's setpoint,
+        // qualified while its input headroom held, undermined otherwise.
+        let mut out = Vec::new();
+        for (reg, &supported) in self.regulators.iter().zip(&self.reg_supported) {
+            let (p, n, _) = regulation::terminals(&self.circuit, reg);
+            let rail = self.net_name_of(if p.is_ground() { n.0 } else { p.0 });
+            let (key, text) = (
+                format!("regulator/{}", reg.reference),
+                format!("the {rail} regulator {}", reg.reference),
+            );
+            let subject = Subject::new(&key, &text);
+            let taint = self.regulation.iter().find(|t| t.refs[0] == reg.reference);
+            let never = (!supported).then_some("its input headroom was never evaluated");
+            let (taint_nets, because) = match taint {
+                Some(t) => (t.nets.clone(), Some(t.reason.as_str())),
+                None => (vec![rail], never),
+            };
+            let scope = Scope::Nets(NetScope::new(taint_nets, None)?);
+            out.push(match because {
+                Some(because) => Assumption::not_exercised(
+                    AssumptionSource::Scheduler,
+                    subject,
+                    scope,
+                    because,
+                    "give the regulator input its headroom from a declared supply and start a fresh run",
+                ),
+                None => Assumption::reduced_fidelity(
+                    AssumptionSource::Scheduler,
+                    subject,
+                    scope,
+                    &format!(
+                        "an ideal source held at its setpoint (input headroom checked against \
+                         typical dropout only; input current, current limit, enable, thermal and \
+                         startup are not modelled){}",
+                        if reg.dropout_v.is_some() { "" } else { UNVERIFIED_HEADROOM }
+                    ),
+                    "validate this rail on hardware or with a behavioural converter model",
+                ),
+            });
+        }
         let nets = self.forced_net_names();
         if nets.is_empty() {
-            return Ok(Vec::new());
+            return Ok(out);
         }
         let list = nets.join(", ");
-        Ok(vec![Assumption::reduced_fidelity(
+        out.push(Assumption::reduced_fidelity(
             AssumptionSource::Scheduler,
             Subject::new(
                 "scheduler/forced-voltages",
@@ -4664,7 +4814,8 @@ impl Scheduler {
             ),
             "remove the force, or validate the forced trajectory independently and cite \
              that validation as the evidence for these nets",
-        )])
+        ));
+        Ok(out)
     }
 
     /// Restart the sim clock and drop every run-accumulated diagnostic so a
@@ -4906,6 +5057,7 @@ impl Scheduler {
 
     /// Override a named input source (any Vsource/Isource by device name).
     pub fn set_input(&mut self, source: &str, value: f64) {
+        self.reg_dirty = true;
         for dev in self.circuit.devices.iter_mut() {
             match dev {
                 Device::Vsource { name, kind, .. } | Device::Isource { name, kind, .. }
@@ -5668,6 +5820,7 @@ impl Scheduler {
         for s in &mut self.supplies {
             if s.net_name == net {
                 s.reconfigure(&mut self.circuit, supply);
+                self.reg_dirty = true;
                 return true;
             }
         }
@@ -5741,6 +5894,7 @@ impl Scheduler {
         // The new device may add a branch unknown; rebuild the MNA layout and
         // resize the branch-current buffer so subsequent solves are consistent.
         self.relayout();
+        self.reg_dirty = true;
         if defect {
             self.faults_pending.push(hauksbee_bind::shorts::short_fault(
                 net_a,
@@ -7027,6 +7181,114 @@ missing = ["measurement_registers"]
             b,
         );
         sched
+    }
+
+    /// +5V -> U1 (3.3 V) -> R1 -> U2 (1.8 V) cascade powering mock MCU U9; U3 is a
+    /// -5 V part returned to +3V; U4/U5 feed each other and nothing else.
+    static REGULATOR_BOARD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let reg = |r, v, pads: &'static [_]| ("Package_TO_SOT_SMD:SOT-223", r, v, 100, pads);
+        pcb_fixture(
+            &[
+                "", "GND", "+5V", "VOUT", "BIN", "LOW", "-5V", "+3V", "NEG", "A", "B",
+            ],
+            &[
+                reg("U1", "AMS1117-3.3", &[(1, 1, 1), (2, 2, 3), (3, 3, 2)]),
+                ("Resistor:R", "R1", "10", 110, &[(1, 0, 3), (2, 2, 4)]),
+                reg("U2", "TLV1117-18", &[(1, 1, 1), (2, 2, 5), (3, 3, 4)]),
+                reg("U3", "LM7905", &[(1, 1, 7), (2, 2, 6), (3, 3, 8)]),
+                reg("U4", "L7805", &[(1, 1, 10), (2, 2, 1), (3, 3, 9)]),
+                reg("U5", "AMS1117-3.3", &[(1, 1, 1), (2, 2, 10), (3, 3, 9)]),
+            ],
+        )
+    });
+
+    fn regulator_sched(volts: f64) -> (Scheduler, MockCore) {
+        let mut sched = board_scheduler(&REGULATOR_BOARD);
+        let gpio = sched.circuit.node("CS_B0");
+        sched.net_nodes.insert("CS_B0".into(), gpio);
+        let drivers = tristated_drivers(&mut sched, &[(('B', 0), gpio)]);
+        let mut mcu = binding("U9", "simavr:test", drivers);
+        mcu.role_nets.insert("vcc".into(), sched.net_nodes["LOW"]);
+        let core = MockCore::default();
+        let handles = core.handles();
+        push_core(&mut sched, core, mcu);
+        sched.relayout();
+        assert!(sched.set_power_supply("+5V", PowerSupply::Ideal { volts }));
+        (sched, handles)
+    }
+
+    #[test]
+    fn regulation_table() {
+        use hauksbee_ir::evidence::AssumptionKind::{NotExercised, ReducedFidelity};
+        let sum = |t: &RegulationTaint| format!("{} <- {}", t.nets.join(","), t.refs.join(","));
+        // U3 (negative, local return) is supported in every row; the U4/U5 cycle
+        // never is, and the fixpoint still terminates.
+        for (volts, starved, says) in [
+            (5.0, false, "declare the supply that feeds B"),
+            (4.4, true, "+5V is 4.400 V above its return, with"),
+            (2.5, true, "needs (3.399 V upper output limit + 1.100 V"),
+        ] {
+            let (mut sched, core) = regulator_sched(volts);
+            sched.establish_regulation();
+            // Decided before any MCU advance, and never by seeding the real state.
+            assert!(core.micros.lock().unwrap().is_empty() && sched.last_dc_seed.is_none());
+            assert!(sched.node_volts.iter().all(|v| *v == 0.0), "{volts}");
+            sched.step(1e-3);
+            let taint = sched.regulation_taint();
+            let tainted: Vec<_> = taint.iter().map(|t| t.refs[0].as_str()).collect();
+            let want: &[_] = if starved {
+                &["U1", "U2", "U4", "U5"]
+            } else {
+                &["U4", "U5"]
+            };
+            assert_eq!(tainted, want, "{volts}");
+            assert!(taint.iter().all(|t| t.since_s == 0.0) && taint[0].reason.contains(says));
+            assert!(
+                (sched.net_voltage("NEG").unwrap() + 2.0).abs() < 1e-6,
+                "{volts}"
+            );
+            let kinds = sched.forced_voltage_assumptions().unwrap();
+            let kinds: Vec<_> = kinds.iter().map(Assumption::kind).collect();
+            let u12 = if starved {
+                NotExercised
+            } else {
+                ReducedFidelity
+            };
+            assert_eq!(
+                kinds,
+                [u12, u12, ReducedFidelity, NotExercised, NotExercised]
+            );
+            if starved {
+                // U1's taint crosses R1 and stops at U2's output; U2's reaches the MCU.
+                assert_eq!(sum(&taint[0]), "BIN,VOUT <- U1");
+                assert_eq!(sum(&taint[1]), "CS_B0,LOW <- U2,U9");
+                assert!(taint[1]
+                    .reason
+                    .contains("BIN has no independent DC support"));
+            } else {
+                assert!((sched.net_voltage("VOUT").unwrap() - 3.3).abs() < 1e-6);
+            }
+        }
+        // This dip bypasses `set_power_supply`, so only the monitor can catch it;
+        // neither the recovery nor a reset restores trust, in U1 or downstream.
+        let (mut sched, _core) = regulator_sched(5.0);
+        sched.step(1e-3);
+        let leg = sched.supplies.iter_mut().find(|s| s.net_name == "+5V");
+        leg.unwrap()
+            .reconfigure(&mut sched.circuit, PowerSupply::Ideal { volts: 2.5 });
+        sched.step(1e-3);
+        sched.set_power_supply("+5V", PowerSupply::Ideal { volts: 5.0 });
+        sched.step(1e-3);
+        sched.reset_run_state().unwrap();
+        sched.step(1e-3);
+        let taint = sched.regulation_taint();
+        assert_eq!(taint.len(), 4, "{taint:?}");
+        assert_eq!(
+            (sum(&taint[2]), sum(&taint[3])),
+            ("BIN,VOUT <- U1".into(), "CS_B0,LOW <- U2,U9".into())
+        );
+        assert!(taint[2].reason.contains(", first at t=0.00") && taint[2].since_s > 0.0);
+        assert_eq!(sched.reg_supported, [false, false, true, false, false]);
     }
 
     fn cycle_core() -> MockCore {

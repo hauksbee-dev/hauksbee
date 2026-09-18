@@ -2,7 +2,8 @@
 //! the test itself and checks the solver against it. Linear circuits hold to
 //! ~1e-6 relative; nonlinear DC points to ~1e-3.
 
-use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, Polarity, SourceKind};
+use crate::shared::{add_capacitor, add_resistor, add_vdc};
+use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, Polarity};
 use hauksbee_solve::{Integration, SolverOptions, StepControl, Transient};
 
 /// Max error of `got` vs `want`, normalized by `reltol*|signal| + atol` so a
@@ -66,19 +67,8 @@ fn series_rlc_underdamped() {
     let vin = circuit.node("in");
     let mid = circuit.node("mid");
     let out = circuit.node("out");
-    circuit.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(v),
-    });
-    circuit.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: mid,
-        ohms: r,
-        tc1: None,
-    });
+    add_vdc(&mut circuit, "V1", vin, NodeId::GROUND, v);
+    add_resistor(&mut circuit, "R1", vin, mid, r);
     circuit.add(Device::Inductor {
         name: "L1".into(),
         a: mid,
@@ -86,13 +76,7 @@ fn series_rlc_underdamped() {
         henries: l,
         ic: Some(0.0),
     });
-    circuit.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: cap,
-        ic: Some(0.0),
-    });
+    add_capacitor(&mut circuit, "C1", out, NodeId::GROUND, cap, Some(0.0));
 
     let period = std::f64::consts::TAU / wd;
     let opts = SolverOptions {
@@ -129,19 +113,8 @@ fn diode_resistor_dc_operating_point() {
     let mut circuit = Circuit::new();
     let vin = circuit.node("in");
     let nd = circuit.node("d");
-    circuit.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(v),
-    });
-    circuit.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: nd,
-        ohms: r,
-        tc1: None,
-    });
+    add_vdc(&mut circuit, "V1", vin, NodeId::GROUND, v);
+    add_resistor(&mut circuit, "R1", vin, nd, r);
     circuit.add(Device::Diode {
         name: "D1".into(),
         a: nd,
@@ -194,30 +167,13 @@ fn bjt_current_mirror_ratio() {
     };
 
     // Supply.
-    circuit.add(Device::Vsource {
-        name: "VCC".into(),
-        p: vcc,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    add_vdc(&mut circuit, "VCC", vcc, NodeId::GROUND, 5.0);
     // Reference resistor sets I_ref ~ (Vcc - Vbe)/Rref.
     let rref = 4.3e3;
-    circuit.add(Device::Resistor {
-        name: "RREF".into(),
-        a: vcc,
-        b: nref,
-        ohms: rref,
-        tc1: None,
-    });
+    add_resistor(&mut circuit, "RREF", vcc, nref, rref);
     // Load resistor on the mirror output.
     let rload = 1e3;
-    circuit.add(Device::Resistor {
-        name: "RL".into(),
-        a: vcc,
-        b: nout,
-        ohms: rload,
-        tc1: None,
-    });
+    add_resistor(&mut circuit, "RL", vcc, nout, rload);
     // Q1 diode-connected: collector tied to base (ref node), emitter to gnd.
     circuit.add(Device::Bjt {
         name: "Q1".into(),

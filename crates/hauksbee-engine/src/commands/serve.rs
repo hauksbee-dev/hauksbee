@@ -220,6 +220,7 @@ pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
             listener,
             dir.as_deref(),
             analyze,
+            crate::commands::common::deck_simulator(),
             Some(check),
             Some(deps),
             Some(crate::commands::common::design_live_launcher()),

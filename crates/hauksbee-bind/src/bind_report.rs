@@ -124,6 +124,22 @@ pub struct BindRow {
 pub struct BindReport {
     pub rows: Vec<BindRow>,
     pub board_name: String,
+    pub regulators: Vec<SimpleRegulator>,
+}
+
+/// One simple (ideal-source) regulator stamp and the input headroom it needs.
+/// Output node, return node and signed `vout` live on `circuit.devices[source]`.
+#[derive(Debug, Clone)]
+pub struct SimpleRegulator {
+    pub reference: String,
+    pub source: hauksbee_ir::DeviceId,
+    pub input: hauksbee_ir::NodeId,
+    /// Largest |vout| endpoint plus `dropout_v` (plus nothing when it is absent).
+    pub min_in_v: f64,
+    /// Absolute-maximum input magnitude; infinite when the card has no rating.
+    pub max_in_v: f64,
+    /// Typical dropout from the card; `None` means headroom is unverified.
+    pub dropout_v: Option<f64>,
 }
 
 impl BindReport {

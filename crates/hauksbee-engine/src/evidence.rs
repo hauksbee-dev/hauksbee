@@ -1106,14 +1106,6 @@ impl BoardEvidence {
         Ok(maps)
     }
 
-    pub fn geometry_map(
-        &self,
-        assertion: impl Into<String>,
-        nets: &[String],
-    ) -> Result<EvidenceMap, EvidenceError> {
-        self.geometry_map_for_check("drc", assertion, nets)
-    }
-
     /// A geometry-and-stated-value claim over real board incidence: the
     /// model-class part assumptions are dropped by the IR's value-claim
     /// traversal, while presence-class part assumptions (a part only assumed
@@ -1140,8 +1132,8 @@ impl BoardEvidence {
         Ok(map)
     }
 
-    /// As [`Self::geometry_map`], for a named check: the same no-component
-    /// traversal, but check-scoped assumptions for `check` still attach.
+    /// A geometry claim for a named check: a no-component traversal on which
+    /// check-scoped assumptions for `check` still attach.
     pub fn geometry_map_for_check(
         &self,
         check: &str,

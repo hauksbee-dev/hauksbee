@@ -58,6 +58,8 @@ mod peripherals;
 mod powerup_state_fuzz;
 #[path = "progress_stays_out_of_the_way.rs"]
 mod progress_stays_out_of_the_way;
+#[path = "regulator_validity.rs"]
+mod regulator_validity;
 #[path = "round2_ci_surface.rs"]
 mod round2_ci_surface;
 #[path = "round2_cli.rs"]

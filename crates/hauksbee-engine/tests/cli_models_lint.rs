@@ -3,9 +3,8 @@
 //! NAMED error text (not just a non-zero exit), and the shipping builtin db
 //! must lint clean through the same code path binding uses.
 
-use crate::support::bin;
+use crate::support::run;
 use std::path::PathBuf;
-use std::process::Command;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -14,11 +13,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn lint(path: &std::path::Path) -> (i32, String) {
-    let out = Command::new(bin())
-        .args(["models", "lint"])
-        .arg(path)
-        .output()
-        .expect("hauksbee binary runs");
+    let out = run(&["models", "lint", path.to_str().unwrap()]);
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr);
     (out.status.code().unwrap_or(-1), format!("{stdout}{stderr}"))
@@ -110,13 +105,15 @@ fn scaffold_does_not_infer_model_kind_from_reference_letter() {
     let scaffold = dir.path().join("u3.toml");
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/boards/pic_programmer.kicad_pcb");
-    let made = Command::new(bin())
-        .args(["models", "new", "U3", "--board"])
-        .arg(&board)
-        .arg("--out")
-        .arg(&scaffold)
-        .output()
-        .expect("scaffold command runs");
+    let made = run(&[
+        "models",
+        "new",
+        "U3",
+        "--board",
+        board.to_str().unwrap(),
+        "--out",
+        scaffold.to_str().unwrap(),
+    ]);
     assert!(
         made.status.success(),
         "{}",
@@ -132,13 +129,17 @@ fn scaffold_does_not_infer_model_kind_from_reference_letter() {
     assert!(out.contains("unknown kind 'choose_kind'"), "{out}");
 
     let explicit = dir.path().join("u3-vreg.toml");
-    let made = Command::new(bin())
-        .args(["models", "new", "U3", "--board"])
-        .arg(&board)
-        .args(["--kind", "vreg", "--out"])
-        .arg(&explicit)
-        .output()
-        .expect("explicit scaffold command runs");
+    let made = run(&[
+        "models",
+        "new",
+        "U3",
+        "--board",
+        board.to_str().unwrap(),
+        "--kind",
+        "vreg",
+        "--out",
+        explicit.to_str().unwrap(),
+    ]);
     assert!(
         made.status.success(),
         "{}",
@@ -162,13 +163,15 @@ fn scaffold_emits_unknown_provenance_and_a_pack_without_writing_elsewhere() {
     let pack = dir.path().join("acme-pack");
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/boards/pic_programmer.kicad_pcb");
-    let made = Command::new(bin())
-        .args(["models", "new", "U3", "--board"])
-        .arg(&board)
-        .args(["--pack-dir"])
-        .arg(&pack)
-        .output()
-        .expect("pack scaffold command runs");
+    let made = run(&[
+        "models",
+        "new",
+        "U3",
+        "--board",
+        board.to_str().unwrap(),
+        "--pack-dir",
+        pack.to_str().unwrap(),
+    ]);
     assert!(
         made.status.success(),
         "{}",
@@ -209,13 +212,15 @@ fn scaffold_emits_unknown_provenance_and_a_pack_without_writing_elsewhere() {
     );
     assert!(out.contains("unknown kind 'choose_kind'"), "{out}");
 
-    let second = Command::new(bin())
-        .args(["models", "new", "U3", "--board"])
-        .arg(&board)
-        .args(["--pack-dir"])
-        .arg(&pack)
-        .output()
-        .expect("second scaffold command runs");
+    let second = run(&[
+        "models",
+        "new",
+        "U3",
+        "--board",
+        board.to_str().unwrap(),
+        "--pack-dir",
+        pack.to_str().unwrap(),
+    ]);
     assert!(!second.status.success(), "overwrite must be refused");
     let second_out = String::from_utf8_lossy(&second.stderr);
     assert!(second_out.contains("refusing to overwrite"), "{second_out}");
@@ -227,14 +232,14 @@ fn prepare_yes_writes_only_the_printed_pack_plan() {
     let pack = dir.path().join("prepared-pack");
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/boards/pic_programmer.kicad_pcb");
-    let out = Command::new(bin())
-        .args(["models", "prepare"])
-        .arg(&board)
-        .args(["--pack-dir"])
-        .arg(&pack)
-        .arg("--yes")
-        .output()
-        .expect("prepare command runs");
+    let out = run(&[
+        "models",
+        "prepare",
+        board.to_str().unwrap(),
+        "--pack-dir",
+        pack.to_str().unwrap(),
+        "--yes",
+    ]);
     assert!(
         out.status.success(),
         "{}",
@@ -313,13 +318,13 @@ fn prepare_without_yes_refuses_a_non_tty_before_writing() {
     let pack = dir.path().join("prepared-pack");
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/boards/pic_programmer.kicad_pcb");
-    let out = Command::new(bin())
-        .args(["models", "prepare"])
-        .arg(&board)
-        .args(["--pack-dir"])
-        .arg(&pack)
-        .output()
-        .expect("prepare command runs");
+    let out = run(&[
+        "models",
+        "prepare",
+        board.to_str().unwrap(),
+        "--pack-dir",
+        pack.to_str().unwrap(),
+    ]);
     assert!(!out.status.success());
     let combined = format!(
         "{}{}",
@@ -339,14 +344,14 @@ fn prepare_refuses_overwrite_without_touching_existing_files() {
     std::fs::write(&manifest, "sentinel").unwrap();
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/boards/pic_programmer.kicad_pcb");
-    let out = Command::new(bin())
-        .args(["models", "prepare"])
-        .arg(&board)
-        .args(["--pack-dir"])
-        .arg(&pack)
-        .arg("--yes")
-        .output()
-        .expect("prepare command runs");
+    let out = run(&[
+        "models",
+        "prepare",
+        board.to_str().unwrap(),
+        "--pack-dir",
+        pack.to_str().unwrap(),
+        "--yes",
+    ]);
     assert!(!out.status.success());
     let combined = format!(
         "{}{}",
@@ -415,14 +420,14 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/boards/pic_programmer.kicad_pcb");
 
-    let out = Command::new(bin())
-        .args(["models", "coverage"])
-        .arg(&board)
-        .args(["--models-dir"])
-        .arg(&models_dir)
-        .arg("--json")
-        .output()
-        .expect("coverage command runs");
+    let out = run(&[
+        "models",
+        "coverage",
+        board.to_str().unwrap(),
+        "--models-dir",
+        models_dir.to_str().unwrap(),
+        "--json",
+    ]);
     assert!(
         out.status.success(),
         "{}",
@@ -466,14 +471,16 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
         row("U1")
     );
 
-    let met = Command::new(bin())
-        .args(["models", "coverage"])
-        .arg(&board)
-        .args(["--models-dir"])
-        .arg(&models_dir)
-        .args(["--require", "U4:nominal_dc_output", "--json"])
-        .output()
-        .expect("capability-gated coverage runs");
+    let met = run(&[
+        "models",
+        "coverage",
+        board.to_str().unwrap(),
+        "--models-dir",
+        models_dir.to_str().unwrap(),
+        "--require",
+        "U4:nominal_dc_output",
+        "--json",
+    ]);
     assert!(
         met.status.success(),
         "declared implemented capability should pass: {}",
@@ -483,14 +490,16 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
     assert_eq!(met_report["summary"]["requirements_met"], 1);
     assert_eq!(met_report["requirements"][0]["met"], true);
 
-    let missing = Command::new(bin())
-        .args(["models", "coverage"])
-        .arg(&board)
-        .args(["--models-dir"])
-        .arg(&models_dir)
-        .args(["--require", "U4:switching_ripple", "--json"])
-        .output()
-        .expect("missing-capability coverage runs");
+    let missing = run(&[
+        "models",
+        "coverage",
+        board.to_str().unwrap(),
+        "--models-dir",
+        models_dir.to_str().unwrap(),
+        "--require",
+        "U4:switching_ripple",
+        "--json",
+    ]);
     assert!(
         !missing.status.success(),
         "an explicitly missing capability must fail closed"
@@ -503,16 +512,16 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
         .unwrap()
         .contains("explicitly declares"));
 
-    let out = Command::new(bin())
-        .args(["models", "prepare"])
-        .arg(&board)
-        .args(["--models-dir"])
-        .arg(&models_dir)
-        .args(["--pack-dir"])
-        .arg(&pack)
-        .arg("--yes")
-        .output()
-        .expect("prepare command runs");
+    let out = run(&[
+        "models",
+        "prepare",
+        board.to_str().unwrap(),
+        "--models-dir",
+        models_dir.to_str().unwrap(),
+        "--pack-dir",
+        pack.to_str().unwrap(),
+        "--yes",
+    ]);
     assert!(
         out.status.success(),
         "{}{}",

@@ -16,10 +16,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use engine::Engine;
-use frontdoor::{
-    CheckRunner, DesignAnalyzer, DesignCheckRunner, DesignLiveLauncher, FirmwareAnalyzer,
-    LiveLauncher, SchematicAnalyzer, SchematicCheckRunner, SchematicLiveLauncher, ToolHooks,
-};
+use frontdoor::{DeckSimulator, DesignAnalyzer, DesignCheckRunner, DesignLiveLauncher, ToolHooks};
 use protocol::BoardInfo;
 use protocol::{ClientMessage, ServerMessage, SessionBacklog, SimFrame, Status};
 use std::path::Path;
@@ -257,41 +254,13 @@ impl Server {
     /// `{"preloaded":true,"board_name":...,"report":<WebReport>}` here (lands
     /// on that board's report, "run it" expands to the sim).
     #[allow(clippy::too_many_arguments)]
-    pub async fn serve_app_on_with_schematic(
-        &self,
-        listener: tokio::net::TcpListener,
-        static_dir: Option<&Path>,
-        board_file: Option<(String, String)>,
-        analyze: SchematicAnalyzer,
-        check: Option<SchematicCheckRunner>,
-        tools: Option<ToolHooks>,
-        launch: Option<SchematicLiveLauncher>,
-        startup_json: String,
-    ) -> anyhow::Result<()> {
-        let router = unified_router(RouterParts {
-            hub: Some(self.hub.clone()),
-            static_dir: static_dir.map(Path::to_path_buf),
-            board_file,
-            analyze: Some(analyze),
-            check,
-            tools,
-            launch,
-            startup_json,
-            ..Default::default()
-        });
-        axum::serve(listener, router).await?;
-        Ok(())
-    }
-
-    /// Complete design-input counterpart used by the shipped app. The
-    /// preloaded session and subsequent browser uploads share one route set.
-    #[allow(clippy::too_many_arguments)]
     pub async fn serve_app_on_with_design(
         &self,
         listener: tokio::net::TcpListener,
         static_dir: Option<&Path>,
         board_file: Option<(String, String)>,
         analyze: DesignAnalyzer,
+        sim: DeckSimulator,
         check: Option<DesignCheckRunner>,
         tools: Option<ToolHooks>,
         launch: Option<DesignLiveLauncher>,
@@ -302,11 +271,11 @@ impl Server {
             static_dir: static_dir.map(Path::to_path_buf),
             board_file,
             design_analyze: Some(analyze),
+            design_sim: Some(sim),
             design_check: check,
             tools,
             design_launch: launch,
             startup_json,
-            ..Default::default()
         });
         axum::serve(listener, router).await?;
         Ok(())
@@ -319,19 +288,16 @@ impl Server {
 /// fill (or replace) the hub's session server-side; a deployment without the
 /// callback keeps the CLI-hint fallback in the frontend. `startup_json` is
 /// what the frontend fetches from `/api/startup` to choose its landing state.
-/// The `design_*` callbacks are the widest upload shape (board plus every
-/// manufacturing companion); the narrower ones adapt onto the schematic shape
-/// at mount time, so no route has two implementations to keep in step.
+/// The `design_*` callbacks take the widest upload shape: the board plus every
+/// manufacturing companion, so no route has two implementations to keep in step.
 #[derive(Default)]
 struct RouterParts {
     hub: Option<Arc<LiveHub>>,
     static_dir: Option<std::path::PathBuf>,
     board_file: Option<(String, String)>,
-    analyze: Option<SchematicAnalyzer>,
-    check: Option<SchematicCheckRunner>,
     tools: Option<ToolHooks>,
-    launch: Option<SchematicLiveLauncher>,
     design_analyze: Option<DesignAnalyzer>,
+    design_sim: Option<DeckSimulator>,
     design_check: Option<DesignCheckRunner>,
     design_launch: Option<DesignLiveLauncher>,
     startup_json: String,
@@ -343,11 +309,9 @@ fn unified_router(parts: RouterParts) -> Router {
         hub,
         static_dir,
         board_file,
-        analyze,
-        check,
         tools,
-        launch,
         design_analyze,
+        design_sim,
         design_check,
         design_launch,
         startup_json,
@@ -366,23 +330,16 @@ fn unified_router(parts: RouterParts) -> Router {
             .with_state(hub.clone()),
         None => Router::new().route("/boards/{name}", get(no_board_handler)),
     };
-    if let (Some(hub), Some(launch)) = (&hub, launch) {
-        router = router.merge(frontdoor::live_routes_with_schematic(hub.clone(), launch));
-    }
     if let (Some(hub), Some(launch)) = (&hub, design_launch) {
         router = router.merge(frontdoor::live_routes_with_design(hub.clone(), launch));
     }
-    if let Some(analyze) = analyze {
-        router = router.merge(frontdoor::api_routes_with_schematic(analyze));
-    }
-    if let Some(analyze) = design_analyze {
-        router = router.merge(frontdoor::api_routes_with_design(analyze));
+    // The analysis routes and the deck simulator are one surface: the browser
+    // panel that drops a board and the one that drops a `.cir` share the guard.
+    if let (Some(analyze), Some(sim)) = (design_analyze, design_sim) {
+        router = router.merge(frontdoor::api_routes_with_design(analyze, sim));
     }
     // The web checks panel's backend (`POST /api/check`): present whenever the
     // embedding binary supplied a runner (the hauksbee-ci shell-out).
-    if let Some(check) = check {
-        router = router.merge(frontdoor::check_route_with_schematic(check));
-    }
     if let Some(check) = design_check {
         router = router.merge(frontdoor::check_route_with_design(check));
     }
@@ -471,60 +428,14 @@ pub async fn bind_frontdoor(
 /// the real bound URL before the server takes over the thread. Used by
 /// `hauksbee serve`. The hub starts empty: `/ws` answers 409 until a board is
 /// launched through `/api/live/launch`; it is mounted even without a launcher
-/// so the route surface stays stable.
-pub async fn serve_frontdoor_on(
-    listener: tokio::net::TcpListener,
-    static_dir: Option<&Path>,
-    analyze: FirmwareAnalyzer,
-    check: Option<CheckRunner>,
-    tools: Option<ToolHooks>,
-    launch: Option<LiveLauncher>,
-    startup_json: String,
-) -> anyhow::Result<()> {
-    serve_frontdoor_on_with_schematic(
-        listener,
-        static_dir,
-        frontdoor::with_schematic_analyzer(analyze),
-        check.map(frontdoor::with_schematic_check),
-        tools,
-        launch.map(frontdoor::with_schematic_launcher),
-        startup_json,
-    )
-    .await
-}
-
-/// Schematic-aware standalone front door. Existing callers keep using
-/// [`serve_frontdoor_on`]; the shipped engine uses this path so an uploaded
-/// Eagle `.sch` reaches both report analysis and live launch.
-pub async fn serve_frontdoor_on_with_schematic(
-    listener: tokio::net::TcpListener,
-    static_dir: Option<&Path>,
-    analyze: SchematicAnalyzer,
-    check: Option<SchematicCheckRunner>,
-    tools: Option<ToolHooks>,
-    launch: Option<SchematicLiveLauncher>,
-    startup_json: String,
-) -> anyhow::Result<()> {
-    let router = unified_router(RouterParts {
-        hub: Some(LiveHub::new()),
-        static_dir: static_dir.map(Path::to_path_buf),
-        analyze: Some(analyze),
-        check,
-        tools,
-        launch,
-        startup_json,
-        ..Default::default()
-    });
-    axum::serve(listener, router).await?;
-    Ok(())
-}
-
-/// Standalone front door whose report, Checks, and Live Sim routes all accept
+/// so the route surface stays stable. Report, Checks and Live Sim all accept
 /// the complete design-input bundle.
+#[allow(clippy::too_many_arguments)]
 pub async fn serve_frontdoor_on_with_design(
     listener: tokio::net::TcpListener,
     static_dir: Option<&Path>,
     analyze: DesignAnalyzer,
+    sim: DeckSimulator,
     check: Option<DesignCheckRunner>,
     tools: Option<ToolHooks>,
     launch: Option<DesignLiveLauncher>,
@@ -534,6 +445,7 @@ pub async fn serve_frontdoor_on_with_design(
         hub: Some(LiveHub::new()),
         static_dir: static_dir.map(Path::to_path_buf),
         design_analyze: Some(analyze),
+        design_sim: Some(sim),
         design_check: check,
         tools,
         design_launch: launch,

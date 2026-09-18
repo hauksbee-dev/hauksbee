@@ -4,6 +4,7 @@ import type { WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
 import { analysisFailureMessage, precheckBoardFile } from '../lib/upload-guard'
 import { inspectZip, zipIsFirmwareOnly } from '../lib/zip-inspect'
+import { DECK_EXTS, isSpiceDeck } from '../lib/deck-sim'
 import { api, errorText, fetchFile, isAbort } from '../lib/api'
 
 // The board session: one uploaded (or preloaded) board, its report, its staged
@@ -130,8 +131,10 @@ export function useBoardSession(opts: {
   preloadedBoardName: string | null
   sessionPreloaded: boolean
   canLaunchLive: boolean
+  /** A dropped file that turned out to be a SPICE deck, not a board. */
+  onDeck: (f: File) => void
 }): BoardSession {
-  const { preloadedReport, preloadedBoardName, sessionPreloaded, canLaunchLive } = opts
+  const { preloadedReport, preloadedBoardName, sessionPreloaded, canLaunchLive, onDeck } = opts
 
   const [report, setReport] = useState<WebReport | null>(preloadedReport)
   const [busy, setBusy] = useState<{ board: string; firmware: string | null } | null>(null)
@@ -367,6 +370,16 @@ export function useBoardSession(opts: {
       handleFirmware(f)
       return
     }
+    // A SPICE deck is not a board: it has no copper to extract, and the whole
+    // point of it is the analysis card inside. `.cir`/`.sp` are decks by name;
+    // `.net` is claimed by KiCad too, so the head of the file decides.
+    if (DECK_EXTS.some(e => f.name.toLowerCase().endsWith(e))) {
+      void f.slice(0, 4096).text().then(head => {
+        if (isSpiceDeck(f.name, head)) onDeck(f)
+        else acceptBoard(f)
+      })
+      return
+    }
     // A zip is ambiguous by design: a gerber package and a firmware project
     // both arrive as one. Read the archive's own file list (a tail read, not a
     // decompression) and route on what is actually in it. Without this, a
@@ -390,7 +403,7 @@ export function useBoardSession(opts: {
       return
     }
     acceptBoard(f)
-  }, [acceptBoard, busy, clearRunState, handleFirmware])
+  }, [acceptBoard, busy, clearRunState, handleFirmware, onDeck])
 
   // Back to nothing loaded: the run aborted, every input dropped, the object
   // URL released. A running live session keeps running server-side until a new

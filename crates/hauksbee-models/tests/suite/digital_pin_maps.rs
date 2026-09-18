@@ -42,6 +42,18 @@ fn assert_pin_map(value: &str, id: &str, expected: &[(&str, &str)]) {
     );
 }
 
+/// [`assert_pin_map`] for a package numbered 1..=N in order: `roles[i]` is the
+/// role the datasheet gives pin `i + 1`, so the list reads down the package.
+fn assert_sequential_pin_map(value: &str, id: &str, roles: &[&str]) {
+    let pins: Vec<String> = (1..=roles.len()).map(|n| n.to_string()).collect();
+    let expected: Vec<(&str, &str)> = pins
+        .iter()
+        .map(String::as_str)
+        .zip(roles.iter().copied())
+        .collect();
+    assert_pin_map(value, id, &expected);
+}
+
 /// 74HC00/08/32/86 all share the standard TI quad-2-input-gate DIP/SOIC
 /// arrangement: left side ascends input-input-output (1A 1B 1Y on 1-3,
 /// 2A 2B 2Y on 4-6), GND 7, and the right side MIRRORS that order so the
@@ -106,24 +118,12 @@ fn hc02_quad_nor_pin_map() {
     // outputs come FIRST on the left (1Y 1A 1B on 1-3, 2Y 2A 2B on 4-6) and
     // LAST on the right (3A 3B 3Y on 8-10, 4A 4B 4Y on 11-13). Outputs land
     // on 1, 4, 10, 13. Copying the '00 template in either direction is wrong.
-    assert_pin_map(
+    assert_sequential_pin_map(
         "74HC02",
         "74hc02",
         &[
-            ("1", "g1y"),
-            ("2", "g1a"),
-            ("3", "g1b"),
-            ("4", "g2y"),
-            ("5", "g2a"),
-            ("6", "g2b"),
-            ("7", "gnd"),
-            ("8", "g3a"),
-            ("9", "g3b"),
-            ("10", "g3y"),
-            ("11", "g4a"),
-            ("12", "g4b"),
-            ("13", "g4y"),
-            ("14", "vcc"),
+            "g1y", "g1a", "g1b", "g2y", "g2a", "g2b", "gnd", "g3a", "g3b", "g3y", "g4a", "g4b",
+            "g4y", "vcc",
         ],
     );
 }
@@ -133,24 +133,11 @@ fn hc04_hex_inverter_pin_map() {
     // Standard '04: left side alternates A,Y ascending (1=1A 2=1Y ... 6=3Y),
     // GND 7; the right side mirrors, so outputs sit on the EVEN pins 8/10/12
     // (4Y 5Y 6Y) with their inputs on 9/11/13, VCC 14.
-    assert_pin_map(
+    assert_sequential_pin_map(
         "74HC04",
         "74hc04",
         &[
-            ("1", "a1"),
-            ("2", "y1"),
-            ("3", "a2"),
-            ("4", "y2"),
-            ("5", "a3"),
-            ("6", "y3"),
-            ("7", "gnd"),
-            ("8", "y4"),
-            ("9", "a4"),
-            ("10", "y5"),
-            ("11", "a5"),
-            ("12", "y6"),
-            ("13", "a6"),
-            ("14", "vcc"),
+            "a1", "y1", "a2", "y2", "a3", "y3", "gnd", "y4", "a4", "y5", "a5", "y6", "a6", "vcc",
         ],
     );
 }
@@ -160,24 +147,11 @@ fn hc27_triple_nor_pin_map() {
     // TI '27 triple 3-input NOR: gate 1 is SPLIT across the package
     // (1A/1B on 1/2, 1C on 12, 1Y on 13); gate 2 sits on 3-6 (2A 2B 2C 2Y);
     // gate 3 is output-first on the right (3Y=8, 3A/3B/3C on 9-11).
-    assert_pin_map(
+    assert_sequential_pin_map(
         "74HC27",
         "74hc27",
         &[
-            ("1", "a1"),
-            ("2", "b1"),
-            ("3", "a2"),
-            ("4", "b2"),
-            ("5", "c2"),
-            ("6", "y2"),
-            ("7", "gnd"),
-            ("8", "y3"),
-            ("9", "a3"),
-            ("10", "b3"),
-            ("11", "c3"),
-            ("12", "c1"),
-            ("13", "y1"),
-            ("14", "vcc"),
+            "a1", "b1", "a2", "b2", "c2", "y2", "gnd", "y3", "a3", "b3", "c3", "c1", "y1", "vcc",
         ],
     );
 }
@@ -186,24 +160,12 @@ fn hc27_triple_nor_pin_map() {
 fn hc125_quad_tristate_buffer_pin_map() {
     // '125: each buffer is OE,A,Y ascending on the left (1-3, 4-6); the right
     // side mirrors to Y,A,OE (8-10, 11-13). Outputs on 3, 6, 8, 11.
-    assert_pin_map(
+    assert_sequential_pin_map(
         "74HC125",
         "74hc125",
         &[
-            ("1", "oe_n_1"),
-            ("2", "a1"),
-            ("3", "y1"),
-            ("4", "oe_n_2"),
-            ("5", "a2"),
-            ("6", "y2"),
-            ("7", "gnd"),
-            ("8", "y3"),
-            ("9", "a3"),
-            ("10", "oe_n_3"),
-            ("11", "y4"),
-            ("12", "a4"),
-            ("13", "oe_n_4"),
-            ("14", "vcc"),
+            "oe_n_1", "a1", "y1", "oe_n_2", "a2", "y2", "gnd", "y3", "a3", "oe_n_3", "y4", "a4",
+            "oe_n_4", "vcc",
         ],
     );
 }
@@ -212,24 +174,12 @@ fn hc125_quad_tristate_buffer_pin_map() {
 fn hc74_dual_dff_pin_map() {
     // TI '74 dual D flip-flop: FF1 on 1-6 (CLR, D, CLK, PRE, Q, Qbar),
     // GND 7; FF2 mirrors on 8-13 (Qbar, Q, PRE, CLK, D, CLR), VCC 14.
-    assert_pin_map(
+    assert_sequential_pin_map(
         "74HC74",
         "74hc74",
         &[
-            ("1", "clr_n1"),
-            ("2", "d1"),
-            ("3", "clk1"),
-            ("4", "pre_n1"),
-            ("5", "q1"),
-            ("6", "q_n1"),
-            ("7", "gnd"),
-            ("8", "q_n2"),
-            ("9", "q2"),
-            ("10", "pre_n2"),
-            ("11", "clk2"),
-            ("12", "d2"),
-            ("13", "clr_n2"),
-            ("14", "vcc"),
+            "clr_n1", "d1", "clk1", "pre_n1", "q1", "q_n1", "gnd", "q_n2", "q2", "pre_n2", "clk2",
+            "d2", "clr_n2", "vcc",
         ],
     );
 }
@@ -238,26 +188,26 @@ fn hc74_dual_dff_pin_map() {
 fn hc595_shift_register_pin_map() {
     // TI '595 (SCLS041): QB..QH on 1-7, GND 8, QH' cascade on 9, SRCLR 10,
     // SRCLK 11, RCLK 12, OE 13, SER 14, QA 15, VCC 16.
-    assert_pin_map(
+    assert_sequential_pin_map(
         "74HC595",
         "74hc595",
         &[
-            ("1", "qb"),
-            ("2", "qc"),
-            ("3", "qd"),
-            ("4", "qe"),
-            ("5", "qf"),
-            ("6", "qg"),
-            ("7", "qh"),
-            ("8", "gnd"),
-            ("9", "qh_serial"),
-            ("10", "srclr_n"),
-            ("11", "srclk"),
-            ("12", "rclk"),
-            ("13", "oe_n"),
-            ("14", "ser"),
-            ("15", "qa"),
-            ("16", "vcc"),
+            "qb",
+            "qc",
+            "qd",
+            "qe",
+            "qf",
+            "qg",
+            "qh",
+            "gnd",
+            "qh_serial",
+            "srclr_n",
+            "srclk",
+            "rclk",
+            "oe_n",
+            "ser",
+            "qa",
+            "vcc",
         ],
     );
 }
@@ -266,26 +216,12 @@ fn hc595_shift_register_pin_map() {
 fn hc165_shift_register_pin_map() {
     // TI '165 (SCLS052): SH/LD 1, CLK 2, parallel E..H on 3-6, QHbar 7,
     // GND 8, QH 9, SER 10, parallel A..D on 11-14, CLK INH 15, VCC 16.
-    assert_pin_map(
+    assert_sequential_pin_map(
         "74HC165",
         "74hc165",
         &[
-            ("1", "pl_n"),
-            ("2", "clk"),
-            ("3", "e"),
-            ("4", "f"),
-            ("5", "g"),
-            ("6", "h"),
-            ("7", "qh_n"),
-            ("8", "gnd"),
-            ("9", "qh"),
-            ("10", "ser"),
-            ("11", "a"),
-            ("12", "b"),
-            ("13", "c"),
-            ("14", "d"),
-            ("15", "clk_inh"),
-            ("16", "vcc"),
+            "pl_n", "clk", "e", "f", "g", "h", "qh_n", "gnd", "qh", "ser", "a", "b", "c", "d",
+            "clk_inh", "vcc",
         ],
     );
 }
@@ -297,22 +233,12 @@ fn hc165_shift_register_pin_map() {
 /// (`sda`/`scl`) rather than the datasheet spelling, per tests/pin_roles.rs.
 #[test]
 fn bma423_accelerometer_pin_map() {
-    assert_pin_map(
+    assert_sequential_pin_map(
         "BMA423",
         "bma423",
         &[
-            ("1", "sdo"),
-            ("2", "sda"),
-            ("3", "vddio"),
-            ("4", "asda"),
-            ("5", "int1"),
-            ("6", "int2"),
-            ("7", "vdd"),
-            ("8", "gndio"),
-            ("9", "gnd"),
-            ("10", "csb"),
-            ("11", "ascl"),
-            ("12", "scl"),
+            "sdo", "sda", "vddio", "asda", "int1", "int2", "vdd", "gndio", "gnd", "csb", "ascl",
+            "scl",
         ],
     );
 }

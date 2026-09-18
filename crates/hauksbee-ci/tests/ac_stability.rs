@@ -172,6 +172,7 @@ fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
         dead_rails: Vec::new(),
         unexercised_bus_ids: Default::default(),
         spi_framing: Default::default(),
+        regulation: Default::default(),
     }
 }
 
@@ -297,6 +298,7 @@ fn ac_gain_assertion_evaluates_rc_corner() {
         dead_rails: Vec::new(),
         unexercised_bus_ids: Default::default(),
         spi_framing: Default::default(),
+        regulation: Default::default(),
     };
 
     // At fc=1000 Hz the gain is -3.01 dB, so "max <= -2.9 at 1000 Hz" passes and

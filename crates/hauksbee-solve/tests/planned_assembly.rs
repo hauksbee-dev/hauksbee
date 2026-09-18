@@ -10,13 +10,13 @@
 //!
 //! Run with `--nocapture` to see the measured deviations (the report numbers).
 
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, Device, NodeId};
 use hauksbee_solve::{
     AssemblyMode, Integration, Partitioning, SolverOptions, StepControl, Transient,
 };
 
 use crate::fixtures::{build_rc_ladder, build_shunt_array};
-use crate::shared::max_deviation;
+use crate::shared::{add_capacitor, add_resistor, add_vdc, max_deviation};
 
 /// The graded-board options from `benches/graded_boards.rs` /
 /// `tests/rail_tear.rs`, so this gate drives the engine exactly as the
@@ -120,19 +120,8 @@ fn planned_matches_interpreted_adaptive_rlc() {
     let vin = c.node("in");
     let n1 = c.node("n1");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: n1,
-        ohms: 50.0,
-        tc1: None,
-    });
+    add_vdc(&mut c, "V1", vin, NodeId::GROUND, 1.0);
+    add_resistor(&mut c, "R1", vin, n1, 50.0);
     c.add(Device::Inductor {
         name: "L1".into(),
         a: n1,
@@ -140,13 +129,7 @@ fn planned_matches_interpreted_adaptive_rlc() {
         henries: 1e-6,
         ic: None,
     });
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: 1e-9,
-        ic: None,
-    });
+    add_capacitor(&mut c, "C1", out, NodeId::GROUND, 1e-9, None);
     // ~5x the RLC settling time so both runs reach the same steady state.
     let tstop = 2e-6;
     let base = SolverOptions {

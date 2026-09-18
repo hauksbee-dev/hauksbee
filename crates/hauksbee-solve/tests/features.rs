@@ -1,6 +1,7 @@
 //! Feature coverage: Gear-2 integration, the SpiceLoader -> solver path, the
 //! streaming callback, the device-effect toggles, and a switch event.
 
+use crate::shared::{add_capacitor, add_resistor, add_vdc};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind, SpiceLoader};
 use hauksbee_solve::{
     DeviceEffects, Integration, Partitioning, SolverOptions, StepControl, Transient,
@@ -21,19 +22,8 @@ fn partitioning_off_is_deterministic_reference() {
         let mid = c.node("mid");
         let out = c.node("out");
         let leg = c.node("leg");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: vin,
-            b: mid,
-            ohms: 50.0,
-            tc1: None,
-        });
+        add_vdc(&mut c, "V1", vin, NodeId::GROUND, 1.0);
+        add_resistor(&mut c, "R1", vin, mid, 50.0);
         c.add(Device::Inductor {
             name: "L1".into(),
             a: mid,
@@ -41,27 +31,9 @@ fn partitioning_off_is_deterministic_reference() {
             henries: 1e-3,
             ic: Some(0.0),
         });
-        c.add(Device::Capacitor {
-            name: "C1".into(),
-            a: out,
-            b: NodeId::GROUND,
-            farads: 1e-7,
-            ic: Some(0.0),
-        });
-        c.add(Device::Resistor {
-            name: "R2".into(),
-            a: vin,
-            b: leg,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: "C2".into(),
-            a: leg,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: Some(0.0),
-        });
+        add_capacitor(&mut c, "C1", out, NodeId::GROUND, 1e-7, Some(0.0));
+        add_resistor(&mut c, "R2", vin, leg, 1e3);
+        add_capacitor(&mut c, "C2", leg, NodeId::GROUND, 1e-9, Some(0.0));
         c
     };
     let c = build();
@@ -484,12 +456,7 @@ fn voltage_switch_conducts_when_closed() {
     let vin = c.node("in");
     let ctrl = c.node("ctrl");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "VIN".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    add_vdc(&mut c, "VIN", vin, NodeId::GROUND, 5.0);
     c.add(Device::Vsource {
         name: "VCTRL".into(),
         p: ctrl,
@@ -507,13 +474,7 @@ fn voltage_switch_conducts_when_closed() {
         ron: 1.0,
         roff: 1e9,
     });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
+    add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
 
     let wf = Transient::new(SolverOptions::fixed(1e-6))
         .run(&c, 1e-6)

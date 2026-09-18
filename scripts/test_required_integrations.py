@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Contract tests for the release-required co-simulation runner."""
 
+import contextlib
 import hashlib
 import json
 import os
@@ -33,6 +34,28 @@ HOST_QEMU_DIR_VERSION = HOST_QEMU_TAG.replace("-", "_")
 
 
 class RequiredIntegrationEvidenceTests(unittest.TestCase):
+    # Two shapes repeated by every containment test below: wait for a pid to
+    # disappear (failing with the caller's message if it does not), and make
+    # sure the process is force-killed however the assertions end.
+    def _assert_pid_exits(self, pid: int, failure: str) -> None:
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.02)
+        self.fail(failure)
+
+    @contextlib.contextmanager
+    def _force_killed(self, pid: int, *, group: bool = True):
+        try:
+            yield
+        finally:
+            try:
+                (os.killpg if group else os.kill)(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
     def setUp(self) -> None:
         self.gate = Gate(
             name="renode-rp2040-adc",
@@ -1031,23 +1054,12 @@ raise SystemExit({returncode})
         child_match = re.search(r"NORMAL_EXIT_CHILD_PID=(\d+)", result.stdout)
         self.assertIsNotNone(child_match, result.stdout)
         child_pid = int(child_match.group(1))
-        try:
+        with self._force_killed(child_pid):
             self.assertEqual(result.returncode, returncode)
-            for _ in range(50):
-                try:
-                    os.kill(child_pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.02)
-            else:
-                self.fail(
-                    f"detached child {child_pid} survived normal exit {returncode}"
-                )
-        finally:
-            try:
-                os.killpg(child_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            self._assert_pid_exits(
+                child_pid,
+                f"detached child {child_pid} survived normal exit {returncode}",
+            )
 
     @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
     def test_zero_exit_reaps_detached_child(self) -> None:
@@ -1081,21 +1093,11 @@ time.sleep(0.2)
         child_match = re.search(r"INHERITED_GROUP_CHILD_PID=(\d+)", result.stdout)
         self.assertIsNotNone(child_match, result.stdout)
         child_pid = int(child_match.group(1))
-        try:
+        with self._force_killed(child_pid, group=False):
             self.assertEqual(result.returncode, 0)
-            for _ in range(50):
-                try:
-                    os.kill(child_pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.02)
-            else:
-                self.fail(f"same-group child {child_pid} survived normal exit")
-        finally:
-            try:
-                os.kill(child_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            self._assert_pid_exits(
+                child_pid, f"same-group child {child_pid} survived normal exit"
+            )
 
     @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
     def test_timeout_kills_sigterm_resistant_descendant_and_keeps_output(self) -> None:
@@ -1142,7 +1144,7 @@ while True:
             child_match = re.search(r"CHILD_PID=(\d+)", result.stdout)
             self.assertIsNotNone(child_match, result.stdout)
             child_pid = int(child_match.group(1))
-            try:
+            with self._force_killed(child_pid):
                 self.assertEqual(result.returncode, 124)
                 self.assertIn("CHILD_READY", result.stdout)
                 self.assertIn("CHILD_PGID", result.stdout)
@@ -1151,21 +1153,10 @@ while True:
                     term_marker.is_file(),
                     "separately grouped descendant never received SIGTERM",
                 )
-                for _ in range(50):
-                    try:
-                        os.kill(child_pid, 0)
-                    except ProcessLookupError:
-                        break
-                    time.sleep(0.02)
-                else:
-                    self.fail(
-                        f"separately grouped descendant {child_pid} survived cleanup"
-                    )
-            finally:
-                try:
-                    os.killpg(child_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                self._assert_pid_exits(
+                    child_pid,
+                    f"separately grouped descendant {child_pid} survived cleanup",
+                )
 
     @unittest.skipUnless(os.name == "posix", "process-group signals require POSIX")
     def test_timeout_reaps_detached_group_after_cargo_exits_on_term(self) -> None:
@@ -1196,23 +1187,13 @@ while True:
             child_match = re.search(r"DETACHED_PID=(\d+)", result.stdout)
             self.assertIsNotNone(child_match, result.stdout)
             child_pid = int(child_match.group(1))
-            try:
+            with self._force_killed(child_pid):
                 self.assertIn("CARGO_READY", result.stdout)
                 self.assertTrue(term_marker.is_file(), result.stdout)
                 self.assertIn("SIGKILL", result.stdout)
-                for _ in range(50):
-                    try:
-                        os.kill(child_pid, 0)
-                    except ProcessLookupError:
-                        break
-                    time.sleep(0.02)
-                else:
-                    self.fail(f"detached emulator group {child_pid} survived cleanup")
-            finally:
-                try:
-                    os.killpg(child_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                self._assert_pid_exits(
+                    child_pid, f"detached emulator group {child_pid} survived cleanup"
+                )
 
     @unittest.skipUnless(os.name == "posix", "daemon containment requires POSIX")
     def test_timeout_reaps_double_forked_reparented_descendant(self) -> None:
@@ -1248,21 +1229,11 @@ while True:
                 timeout_seconds=0.5,
             )
             daemon_pid, daemon_pgid = map(int, state.read_text().split())
-            try:
+            with self._force_killed(daemon_pgid):
                 self.assertEqual(result.returncode, 124)
-                for _ in range(50):
-                    try:
-                        os.kill(daemon_pid, 0)
-                    except ProcessLookupError:
-                        break
-                    time.sleep(0.02)
-                else:
-                    self.fail(f"double-forked descendant {daemon_pid} survived cleanup")
-            finally:
-                try:
-                    os.killpg(daemon_pgid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                self._assert_pid_exits(
+                    daemon_pid, f"double-forked descendant {daemon_pid} survived cleanup"
+                )
 
     def _assert_normal_exit_reaps_double_forked_daemon(self, returncode: int) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -1303,24 +1274,13 @@ raise SystemExit(exit_code)
                 timeout_seconds=5,
             )
             daemon_pid, daemon_pgid = map(int, state.read_text().split())
-            try:
+            with self._force_killed(daemon_pgid):
                 self.assertEqual(result.returncode, returncode, result.stdout)
-                for _ in range(50):
-                    try:
-                        os.kill(daemon_pid, 0)
-                    except ProcessLookupError:
-                        break
-                    time.sleep(0.02)
-                else:
-                    self.fail(
-                        f"double-forked daemon {daemon_pid} survived normal exit "
-                        f"{returncode}"
-                    )
-            finally:
-                try:
-                    os.killpg(daemon_pgid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                self._assert_pid_exits(
+                    daemon_pid,
+                    f"double-forked daemon {daemon_pid} survived normal exit "
+                    f"{returncode}",
+                )
 
     @unittest.skipUnless(os.name == "posix", "daemon containment requires POSIX")
     def test_zero_exit_reaps_double_forked_reparented_descendant(self) -> None:

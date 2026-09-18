@@ -1,8 +1,8 @@
 # Tuned from the `hauksbee-ci init` scaffold: VBAT powered, firmware attached, boot gate watched.
 name = "cane power-up (tuned)"
-board = "../cane.kicad_pcb"
+board = "../ultrasonic_cane.kicad_pcb"
 mcu = "atmega328p"
-firmware = "/tmp/hb-e2e/testdata/firmware/boot_gate_a/boot_gate.hex"
+firmware = "../../../firmware/boot_gate_a/boot_gate.hex"
 duration_ms = 200
 
 [[supply]]

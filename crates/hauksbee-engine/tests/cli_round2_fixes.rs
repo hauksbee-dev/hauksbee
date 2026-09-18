@@ -6,7 +6,7 @@
 //! the compiled binary, because every one of these is an exit-code or
 //! output-surface contract.
 
-use crate::support::{board, run, stderr, stdout};
+use crate::support::{board, run, run_board, stderr, stdout};
 use std::path::PathBuf;
 
 /// A board with two real copper shorts (GND <-> +5V), so --strict gates.
@@ -28,13 +28,10 @@ fn tmp(name: &str) -> PathBuf {
 fn asbuilt_bad_path_errors_on_every_report_branch() {
     let b = shorted_board();
     for flag in ["--report", "--drc", "--check"] {
-        let out = run(&[
-            "run",
-            b.to_str().unwrap(),
-            flag,
-            "--asbuilt",
-            "/nonexistent/overlay.asbuilt.toml",
-        ]);
+        let out = run_board(
+            &b,
+            &[flag, "--asbuilt", "/nonexistent/overlay.asbuilt.toml"],
+        );
         assert!(
             !out.status.success(),
             "{flag} must hard-error on a missing overlay"
@@ -51,7 +48,7 @@ fn asbuilt_bad_path_errors_on_every_report_branch() {
 fn asbuilt_overlay_is_applied_and_narrated_on_report_paths() {
     // Discover two real net names so the jumper overlay describes this board.
     let b = shorted_board();
-    let list = run(&["run", b.to_str().unwrap(), "--list-nets"]);
+    let list = run_board(&b, &["--list-nets"]);
     assert!(list.status.success());
     let nets: Vec<String> = stdout(&list)
         .lines()
@@ -66,14 +63,8 @@ fn asbuilt_overlay_is_applied_and_narrated_on_report_paths() {
     )
     .unwrap();
 
-    let plain = run(&["run", b.to_str().unwrap(), "--report"]);
-    let with = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--report",
-        "--asbuilt",
-        overlay.to_str().unwrap(),
-    ]);
+    let plain = run_board(&b, &["--report"]);
+    let with = run_board(&b, &["--report", "--asbuilt", overlay.to_str().unwrap()]);
     assert!(
         with.status.success(),
         "overlaid report runs: {}",
@@ -97,13 +88,7 @@ fn asbuilt_overlay_is_applied_and_narrated_on_report_paths() {
         "[[replace]]\nref = \"NOSUCHPART99\"\n[replace.set]\nohms = 10.0\n",
     )
     .unwrap();
-    let bad = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--report",
-        "--asbuilt",
-        bogus.to_str().unwrap(),
-    ]);
+    let bad = run_board(&b, &["--report", "--asbuilt", bogus.to_str().unwrap()]);
     assert!(!bad.status.success());
     assert!(stderr(&bad).contains("NOSUCHPART99"));
     let _ = std::fs::remove_file(&overlay);
@@ -115,7 +100,7 @@ fn asbuilt_overlay_is_applied_and_narrated_on_report_paths() {
 #[test]
 fn strict_gate_prints_the_failure_line() {
     let b = shorted_board();
-    let out = run(&["run", b.to_str().unwrap(), "--drc", "--strict"]);
+    let out = run_board(&b, &["--drc", "--strict"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(
         stdout(&out).contains("FAILED under --strict:"),
@@ -125,12 +110,12 @@ fn strict_gate_prints_the_failure_line() {
     assert!(stdout(&out).contains("gate-grade finding(s)"));
 
     // --plain must also acknowledge the gate on stdout.
-    let plain = run(&["run", b.to_str().unwrap(), "--drc", "--strict", "--plain"]);
+    let plain = run_board(&b, &["--drc", "--strict", "--plain"]);
     assert_eq!(plain.status.code(), Some(2));
     assert!(stdout(&plain).contains("FAILED under --strict:"));
 
     // --json keeps stdout a single JSON document; the line goes to stderr.
-    let json = run(&["run", b.to_str().unwrap(), "--drc", "--strict", "--json"]);
+    let json = run_board(&b, &["--drc", "--strict", "--json"]);
     assert_eq!(json.status.code(), Some(2));
     let doc = stdout(&json);
     serde_json::from_str::<serde_json::Value>(&doc)
@@ -143,8 +128,8 @@ fn strict_gate_prints_the_failure_line() {
 #[test]
 fn resources_output_is_distinguishable_from_lint() {
     let b = clean_board();
-    let lint = run(&["run", b.to_str().unwrap(), "--lint"]);
-    let res = run(&["run", b.to_str().unwrap(), "--resources"]);
+    let lint = run_board(&b, &["--lint"]);
+    let res = run_board(&b, &["--resources"]);
     assert!(lint.status.success() && res.status.success());
     assert_ne!(stdout(&lint), stdout(&res), "the two reports must differ");
     assert!(stdout(&res).contains("resource-conflicts:"));
@@ -164,7 +149,7 @@ fn resources_output_is_distinguishable_from_lint() {
 #[test]
 fn plain_resources_names_resource_conflicts_not_connectivity() {
     let b = clean_board();
-    let res = run(&["run", b.to_str().unwrap(), "--resources", "--plain"]);
+    let res = run_board(&b, &["--resources", "--plain"]);
     assert!(res.status.success());
     let out = stdout(&res);
     assert!(
@@ -176,7 +161,7 @@ fn plain_resources_names_resource_conflicts_not_connectivity() {
         "and must not claim anything about connectivity:\n{out}"
     );
     // --lint, which really does run the connectivity family, keeps its subject.
-    let lint = run(&["run", b.to_str().unwrap(), "--lint", "--plain"]);
+    let lint = run_board(&b, &["--lint", "--plain"]);
     assert!(lint.status.success());
     assert!(
         stdout(&lint).contains("no connectivity problems found"),
@@ -190,8 +175,7 @@ fn plain_resources_names_resource_conflicts_not_connectivity() {
 /// board the suite has to say which of the two it was.
 #[test]
 fn plain_check_states_whether_usb_c_compliance_ran() {
-    let b = clean_board();
-    let out = run(&["run", b.to_str().unwrap(), "--check", "--plain"]);
+    let out = run_board(&clean_board(), &["--check", "--plain"]);
     assert!(out.status.success());
     let s = stdout(&out);
     assert!(
@@ -289,18 +273,18 @@ fn artifact_flags_without_their_analysis_are_errors() {
 
 #[test]
 fn ac_node_typo_fails_before_the_sweep_as_an_error() {
-    let b = board("tests/fixtures/ac_loop_one_pole.kicad_pcb");
     let models = board("tests/fixtures/ac_loop_models");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--models-dir",
-        models.to_str().unwrap(),
-        "--ac",
-        "10:1e3:5",
-        "--ac-node",
-        "NO_SUCH_NET_XYZ",
-    ]);
+    let out = run_board(
+        &board("tests/fixtures/ac_loop_one_pole.kicad_pcb"),
+        &[
+            "--models-dir",
+            models.to_str().unwrap(),
+            "--ac",
+            "10:1e3:5",
+            "--ac-node",
+            "NO_SUCH_NET_XYZ",
+        ],
+    );
     assert_eq!(out.status.code(), Some(3), "invalid-for-analysis exit");
     let err = stderr(&out);
     assert!(
@@ -341,7 +325,7 @@ fn escaped_net_names_are_displayed_as_real_names() {
 "#,
     )
     .unwrap();
-    let out = run(&["run", p.to_str().unwrap(), "--list-nets"]);
+    let out = run_board(&p, &["--list-nets"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let text = stdout(&out);
     assert!(text.contains("/GPIO0/XTAL1"), "{text}");
@@ -351,7 +335,7 @@ fn escaped_net_names_are_displayed_as_real_names() {
         "internal escapes must not leak: {text}"
     );
     // The JSON surface carries the real names too.
-    let json = run(&["run", p.to_str().unwrap(), "--list-nets", "--json"]);
+    let json = run_board(&p, &["--list-nets", "--json"]);
     let doc = stdout(&json);
     assert!(
         doc.contains("/GPIO0/XTAL1") && !doc.contains("{slash}"),
@@ -364,18 +348,18 @@ fn escaped_net_names_are_displayed_as_real_names() {
 
 #[test]
 fn junit_and_sarif_artifacts_are_written_and_valid() {
-    let b = shorted_board();
     let junit = tmp("report.junit.xml");
     let sarif = tmp("report.sarif");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--drc",
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &shorted_board(),
+        &[
+            "--drc",
+            "--junit",
+            junit.to_str().unwrap(),
+            "--sarif",
+            sarif.to_str().unwrap(),
+        ],
+    );
     assert!(out.status.success(), "{}", stderr(&out));
     let jx = std::fs::read_to_string(&junit).expect("junit written");
     assert!(

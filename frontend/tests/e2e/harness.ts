@@ -1,4 +1,6 @@
 import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
+import type { ConsoleMessage, Page } from 'playwright'
 
 const FIXTURE_URL = /\[visual-lint fixture server\]\s+(http:\/\/127\.0\.0\.1:\d+)/
 
@@ -138,4 +140,68 @@ export async function waitForServer(base: string, tries = 80) {
     await Bun.sleep(250)
   }
   throw new Error(`nothing answering at ${base}`)
+}
+
+// ── Flow reporting ───────────────────────────────────────────────────────────
+// Every browser flow keeps the same tally and prints the same PASS/FAIL lines.
+// One copy here means a reader moving between flows reads one format, and a new
+// flow cannot quietly invent a laxer console filter or a quieter summary.
+
+let passed = 0
+export const failures: string[] = []
+export const notes: string[] = []
+
+/** Record one expectation, naming it whether it held or not. */
+export function ok(what: string, cond: boolean, detail = '') {
+  const line = `${what}${detail ? ` :: ${detail}` : ''}`
+  if (cond) {
+    passed++
+    console.log(`  PASS  ${line}`)
+  } else {
+    failures.push(line)
+    console.log(`  FAIL  ${line}`)
+  }
+}
+
+/** An observation worth printing that is neither a pass nor a failure. */
+export const note = (s: string) => { notes.push(s); console.log(`  note  ${s}`) }
+
+export const step = (s: string) => console.log(`\n── ${s} ──`)
+
+/** Print the tally and set the exit code; `tail` names where evidence landed. */
+export function summarise(tail: string, withNotes = false) {
+  console.log(`\n${passed} passed, ${failures.length} failed${withNotes ? `, ${notes.length} note(s)` : ''}.`)
+  for (const f of failures) console.log(`  FAILED: ${f}`)
+  console.log(tail)
+  process.exitCode = failures.length > 0 ? 1 : 0
+}
+
+/** Console output that counts as a defect. A failed fetch the app HANDLES (the
+ *  fixture server's 501s, a live launch it reports in the UI) still logs a
+ *  network error in Chromium, so only real page-level errors are collected. */
+export const HANDLED_CONSOLE_NOISE = /Failed to load resource|net::ERR_|the server does not|no fixture for/
+
+export const consoleErrors: string[] = []
+
+/** Collect page-level errors under `label`, ignoring `ignore` matches. */
+export function watchConsole(page: Page, label: string, ignore: RegExp = HANDLED_CONSOLE_NOISE) {
+  page.on('console', (m: ConsoleMessage) => {
+    if (m.type() !== 'error') return
+    const text = m.text()
+    if (ignore.test(text)) return
+    consoleErrors.push(`[${label}] ${text}`)
+  })
+  page.on('pageerror', e => consoleErrors.push(`[${label}] pageerror: ${e.message}`))
+}
+
+export const settle = (page: Page, ms = 400) => page.waitForTimeout(ms)
+
+/** Screenshot taker for one output directory. It settles first: a shot taken
+ *  mid fade shows a half-transparent panel, which is a picture of the
+ *  harness's timing rather than of the UI. */
+export function shotsInto(dir: string) {
+  return async (page: Page, name: string) => {
+    await settle(page, 500)
+    await page.screenshot({ path: join(dir, `${name}.png`), fullPage: false })
+  }
 }

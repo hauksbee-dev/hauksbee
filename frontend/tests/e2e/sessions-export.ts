@@ -21,8 +21,10 @@
 // flow without inventing analysis results for a second board.
 
 import { chromium } from 'playwright'
-import { withFixture } from './harness'
-import type { Browser, ConsoleMessage, Page } from 'playwright'
+import {
+  consoleErrors, note, ok, settle, shotsInto, step, summarise, watchConsole, withFixture,
+} from './harness'
+import type { Browser, Page } from 'playwright'
 import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,47 +35,7 @@ const OUT = process.env.HB_E2E_OUT ?? join(here, '../../test-results/e2e')
 const DL = join(OUT, 'downloads')
 const expectWorkflowExport = process.env.HB_EXPECT_WORKFLOW_EXPORT === '1'
 
-let pass = 0
-const failures: string[] = []
-const notes: string[] = []
-
-function ok(what: string, cond: boolean, detail = '') {
-  if (cond) {
-    pass++
-    console.log(`  PASS  ${what}${detail ? ` :: ${detail}` : ''}`)
-  } else {
-    failures.push(`${what}${detail ? ` :: ${detail}` : ''}`)
-    console.log(`  FAIL  ${what}${detail ? ` :: ${detail}` : ''}`)
-  }
-}
-const note = (s: string) => { notes.push(s); console.log(`  note  ${s}`) }
-const step = (s: string) => console.log(`\n── ${s} ──`)
-
-/** Console output that counts as a defect. A failed fetch the app HANDLES (the
- *  fixture server's 501s, a live launch it reports in the UI) still logs a
- *  network error in Chromium, so only real page-level errors are collected. */
-const consoleErrors: string[] = []
-function watchConsole(page: Page, label: string) {
-  const onMsg = (m: ConsoleMessage) => {
-    if (m.type() !== 'error') return
-    const text = m.text()
-    // Network-level noise from a request the app itself surfaces to the user.
-    if (/Failed to load resource|net::ERR_|the server does not|no fixture for/.test(text)) return
-    consoleErrors.push(`[${label}] ${text}`)
-  }
-  page.on('console', onMsg)
-  page.on('pageerror', e => consoleErrors.push(`[${label}] pageerror: ${e.message}`))
-}
-
-const settle = (page: Page, ms = 400) => page.waitForTimeout(ms)
-
-async function shoot(page: Page, name: string) {
-  // Long enough for every entry animation to have finished: a shot taken mid
-  // fade shows a half-transparent panel, which is a picture of the harness's
-  // timing rather than of the UI.
-  await settle(page, 500)
-  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: false })
-}
+const shoot = shotsInto(OUT)
 
 /** Read the whole session index out of the page's localStorage. */
 async function sessionIndex(page: Page): Promise<{ id: string; name: string; hasReport: boolean; checkCount: number }[]> {
@@ -632,10 +594,7 @@ async function main() {
       await browser.close()
     }
 
-    console.log(`\n${pass} passed, ${failures.length} failed, ${notes.length} note(s).`)
-    for (const f of failures) console.log(`  FAILED: ${f}`)
-    console.log(`screenshots + downloads: ${OUT}`)
-    process.exitCode = failures.length > 0 ? 1 : 0
+    summarise(`screenshots + downloads: ${OUT}`, true)
   })
 }
 

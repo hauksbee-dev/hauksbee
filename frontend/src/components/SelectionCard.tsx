@@ -172,15 +172,17 @@ export function SelectionCard({
                 <span
                   className="text-[12px] tnum shrink-0"
                   data-testid="selection-reading"
-                  title={reading.kind === 'unobserved'
-                    ? 'This backend cannot see whether the MCU drives this pin; the level is the passive network idling, not a measurement.'
-                    : reading.moving
-                      ? 'The net moved over the observed span; this is its excursion, not one sampled instant.'
-                      : undefined}
+                  title={reading.kind === 'unsupported'
+                    ? 'This net is held by a regulator whose input headroom was never established; the number is that ideal source’s setpoint, not a simulated value.'
+                    : reading.kind === 'unobserved'
+                      ? 'This backend cannot see whether the MCU drives this pin; the level is the passive network idling, not a measurement.'
+                      : reading.moving
+                        ? 'The net moved over the observed span; this is its excursion, not one sampled instant.'
+                        : undefined}
                   style={{
-                    color: reading.kind === 'unobserved' ? 'var(--silk-faint)' : 'var(--copper)',
+                    color: reading.kind === 'measured' ? 'var(--copper)' : 'var(--silk-faint)',
                     fontFamily: 'var(--font-mono)',
-                    fontStyle: reading.kind === 'unobserved' ? 'italic' : undefined,
+                    fontStyle: reading.kind === 'measured' ? undefined : 'italic',
                   }}
                 >
                   {netReadoutText(reading)}

@@ -1,23 +1,13 @@
+use crate::shared::{add_resistor, add_vdc};
 use hauksbee_ir::evidence::IntegrationMethod;
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, NodeId};
 use hauksbee_solve::{run_op, run_tran, Integration, Probe, SolverOptions};
 
 fn divider() -> Circuit {
     let mut circuit = Circuit::new();
     let rail = circuit.node("rail");
-    circuit.add(Device::Vsource {
-        name: "V1".into(),
-        p: rail,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.3),
-    });
-    circuit.add(Device::Resistor {
-        name: "R1".into(),
-        a: rail,
-        b: NodeId::GROUND,
-        ohms: 1_000.0,
-        tc1: None,
-    });
+    add_vdc(&mut circuit, "V1", rail, NodeId::GROUND, 3.3);
+    add_resistor(&mut circuit, "R1", rail, NodeId::GROUND, 1_000.0);
     circuit
 }
 

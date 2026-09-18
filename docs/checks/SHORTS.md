@@ -361,8 +361,7 @@ same channel as rating-based faults, so the frontend highlights it. Two entry
 points on `HauksbeeEngine` / `Scheduler`:
 
 - `apply_drc_shorts(&report)`: apply every true overlap a `DrcReport` found
-  (clearance-only violations are not applied), and the convenience
-  `from_board_file_with_drc_shorts(...)` that detects and applies in one call.
+  (clearance-only violations are not applied).
 - `short_nets(net_a, net_b)`: the what-if API, short an arbitrary pair of nets
   on demand (a solder-bridge scenario), including shorting a live net to GND.
 

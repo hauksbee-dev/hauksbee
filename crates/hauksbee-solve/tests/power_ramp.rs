@@ -18,6 +18,7 @@
 //! genuinely fails ("DC homotopy failed"), and it marches cleanly through the
 //! solver's first-class comparator event handling.
 
+use crate::shared::{add_capacitor, add_resistor, add_vdc};
 use hauksbee_ir::{BjtModel, Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::decompose::rails::TearMotive;
 use hauksbee_solve::decompose::verify::Decomposition;
@@ -34,12 +35,7 @@ use hauksbee_solve::{
 fn comparator_astable() -> Circuit {
     let mut c = Circuit::new();
     let vref = c.node("vref");
-    c.add(Device::Vsource {
-        name: "VREF".into(),
-        p: vref,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.5),
-    });
+    add_vdc(&mut c, "VREF", vref, NodeId::GROUND, 2.5);
     let osc = c.node("osc");
     let vc = c.node("vc");
     c.add(Device::Comparator {
@@ -51,27 +47,9 @@ fn comparator_astable() -> Circuit {
         out_hi: 5.0,
         hysteresis: 0.5,
     });
-    c.add(Device::Resistor {
-        name: "Rload".into(),
-        a: osc,
-        b: NodeId::GROUND,
-        ohms: 10e3,
-        tc1: None,
-    });
-    c.add(Device::Resistor {
-        name: "Rf".into(),
-        a: osc,
-        b: vc,
-        ohms: 10e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "Cf".into(),
-        a: vc,
-        b: NodeId::GROUND,
-        farads: 10e-9,
-        ic: None,
-    });
+    crate::shared::add_resistor(&mut c, "Rload", osc, NodeId::GROUND, 10e3);
+    crate::shared::add_resistor(&mut c, "Rf", osc, vc, 10e3);
+    add_capacitor(&mut c, "Cf", vc, NodeId::GROUND, 10e-9, None);
     c
 }
 
@@ -169,37 +147,14 @@ fn power_on_settles_to_the_same_steady_state() {
     // Common-emitter amp with an output cap: one stable DC, tau = Rc*Cout.
     let mut c = Circuit::new();
     let vcc = c.node("vcc");
-    c.add(Device::Vsource {
-        name: "VCC".into(),
-        p: vcc,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    add_vdc(&mut c, "VCC", vcc, NodeId::GROUND, 5.0);
     let col = c.node("col");
     let base = c.node("base");
     let rc = 2.2e3;
     let cout = 10e-9;
-    c.add(Device::Resistor {
-        name: "Rc".into(),
-        a: vcc,
-        b: col,
-        ohms: rc,
-        tc1: None,
-    });
-    c.add(Device::Resistor {
-        name: "Rb1".into(),
-        a: vcc,
-        b: base,
-        ohms: 47e3,
-        tc1: None,
-    });
-    c.add(Device::Resistor {
-        name: "Rb2".into(),
-        a: base,
-        b: NodeId::GROUND,
-        ohms: 10e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "Rc", vcc, col, rc);
+    crate::shared::add_resistor(&mut c, "Rb1", vcc, base, 47e3);
+    crate::shared::add_resistor(&mut c, "Rb2", base, NodeId::GROUND, 10e3);
     c.add(Device::Bjt {
         name: "Q".into(),
         c: col,
@@ -207,13 +162,7 @@ fn power_on_settles_to_the_same_steady_state() {
         e: NodeId::GROUND,
         model: BjtModel::default(),
     });
-    c.add(Device::Capacitor {
-        name: "Cout".into(),
-        a: col,
-        b: NodeId::GROUND,
-        farads: cout,
-        ic: None,
-    });
+    add_capacitor(&mut c, "Cout", col, NodeId::GROUND, cout, None);
 
     let dt = 1e-7;
     let tau = rc * cout; // 22 us
@@ -270,12 +219,7 @@ fn run_staged_power_ramps_the_no_dc_group() {
     // Group A: the astable (nodes vref, osc, vc). Built inline so we keep the
     // node handles for routing checks.
     let vref = c.node("vref");
-    c.add(Device::Vsource {
-        name: "VREF".into(),
-        p: vref,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.5),
-    });
+    add_vdc(&mut c, "VREF", vref, NodeId::GROUND, 2.5);
     let osc = c.node("osc");
     let vc = c.node("vc");
     c.add(Device::Comparator {
@@ -287,51 +231,16 @@ fn run_staged_power_ramps_the_no_dc_group() {
         out_hi: 5.0,
         hysteresis: 0.5,
     });
-    c.add(Device::Resistor {
-        name: "Rload".into(),
-        a: osc,
-        b: NodeId::GROUND,
-        ohms: 10e3,
-        tc1: None,
-    });
-    c.add(Device::Resistor {
-        name: "Rf".into(),
-        a: osc,
-        b: vc,
-        ohms: 10e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "Cf".into(),
-        a: vc,
-        b: NodeId::GROUND,
-        farads: 10e-9,
-        ic: None,
-    });
+    crate::shared::add_resistor(&mut c, "Rload", osc, NodeId::GROUND, 10e3);
+    crate::shared::add_resistor(&mut c, "Rf", osc, vc, 10e3);
+    add_capacitor(&mut c, "Cf", vc, NodeId::GROUND, 10e-9, None);
 
     // Group B: an independent, well-behaved feedforward RC that solves normally.
     let nin = c.node("nin");
-    c.add(Device::Vsource {
-        name: "VN".into(),
-        p: nin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.0),
-    });
+    add_vdc(&mut c, "VN", nin, NodeId::GROUND, 3.0);
     let nout = c.node("nout");
-    c.add(Device::Resistor {
-        name: "RN".into(),
-        a: nin,
-        b: nout,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "CN".into(),
-        a: nout,
-        b: NodeId::GROUND,
-        farads: 10e-9,
-        ic: None,
-    });
+    crate::shared::add_resistor(&mut c, "RN", nin, nout, 1e3);
+    add_capacitor(&mut c, "CN", nout, NodeId::GROUND, 10e-9, None);
 
     let dt = 1e-7;
     let tstop = 1e-3;
@@ -378,20 +287,9 @@ fn run_staged_power_ramps_the_no_dc_group() {
 fn run_staged_is_bitwise_deterministic() {
     let mut c = Circuit::new();
     let sup = c.node("sup");
-    c.add(Device::Vsource {
-        name: "VSUP".into(),
-        p: sup,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.3),
-    });
+    add_vdc(&mut c, "VSUP", sup, NodeId::GROUND, 3.3);
     let out = c.node("out"); // shared output couples all switch consumers
-    c.add(Device::Resistor {
-        name: "RLcommon".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 2e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RLcommon", out, NodeId::GROUND, 2e3);
     // Seven asymmetric linear dividers, each SENSED (not conducted) by a switch:
     // the driver pass absorbs each divider into the switch consumer, so the
     // `absorbed` map carries seven entries whose iteration order sets device
@@ -399,27 +297,16 @@ fn run_staged_is_bitwise_deterministic() {
     let vals = [5.0, 1.2, 4.3, 0.6, 3.9, 2.1, 4.8];
     for (k, &vv) in vals.iter().enumerate() {
         let v = c.node(&format!("vd{k}"));
-        c.add(Device::Vsource {
-            name: format!("VD{k}"),
-            p: v,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(vv),
-        });
+        add_vdc(&mut c, &format!("VD{k}"), v, NodeId::GROUND, vv);
         let sel = c.node(&format!("sel{k}"));
-        c.add(Device::Resistor {
-            name: format!("Ra{k}"),
-            a: v,
-            b: sel,
-            ohms: 1e3 * (1.0 + 0.2 * k as f64),
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: format!("Rb{k}"),
-            a: sel,
-            b: NodeId::GROUND,
-            ohms: 1e3,
-            tc1: None,
-        });
+        add_resistor(
+            &mut c,
+            &format!("Ra{k}"),
+            v,
+            sel,
+            1e3 * (1.0 + 0.2 * k as f64),
+        );
+        add_resistor(&mut c, &format!("Rb{k}"), sel, NodeId::GROUND, 1e3);
         c.add(Device::VSwitch {
             name: format!("SW{k}"),
             a: sup,

@@ -141,7 +141,7 @@ impl Engine for McuDemoEngine {
             },
             net_currents: Default::default(),
             faults: Default::default(),
-            supply_states: Default::default(),
+            ..Default::default()
         }
     }
 

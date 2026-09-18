@@ -21,8 +21,10 @@
 //   bun run tests/e2e/settings-extract.ts          # spawns the fixture server
 
 import { chromium } from 'playwright'
-import { withFixture } from './harness'
-import type { Browser, ConsoleMessage, Page } from 'playwright'
+import {
+  consoleErrors, ok, settle, shotsInto, step, summarise, watchConsole, withFixture,
+} from './harness'
+import type { Browser } from 'playwright'
 import { mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -30,37 +32,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const OUT = process.env.HB_E2E_OUT ?? join(here, '../../test-results/e2e-settings-extract')
 
-let pass = 0
-const failures: string[] = []
-
-function ok(what: string, cond: boolean, detail = '') {
-  if (cond) {
-    pass++
-    console.log(`  PASS  ${what}${detail ? ` :: ${detail}` : ''}`)
-  } else {
-    failures.push(`${what}${detail ? ` :: ${detail}` : ''}`)
-    console.log(`  FAIL  ${what}${detail ? ` :: ${detail}` : ''}`)
-  }
-}
-const step = (s: string) => console.log(`\n── ${s} ──`)
-
-const consoleErrors: string[] = []
-function watchConsole(page: Page, label: string) {
-  page.on('console', (m: ConsoleMessage) => {
-    if (m.type() !== 'error') return
-    const text = m.text()
-    if (/Failed to load resource|net::ERR_|the server does not|no fixture for/.test(text)) return
-    consoleErrors.push(`[${label}] ${text}`)
-  })
-  page.on('pageerror', e => consoleErrors.push(`[${label}] pageerror: ${e.message}`))
-}
-
-const settle = (page: Page, ms = 400) => page.waitForTimeout(ms)
-
-async function shoot(page: Page, name: string) {
-  await settle(page, 500)
-  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: false })
-}
+const shoot = shotsInto(OUT)
 
 async function main() {
   rmSync(OUT, { recursive: true, force: true })
@@ -146,10 +118,7 @@ async function main() {
       await browser.close()
     }
 
-    console.log(`\n${pass} passed, ${failures.length} failed.`)
-    for (const f of failures) console.log(`  FAILED: ${f}`)
-    console.log(`screenshots: ${OUT}`)
-    process.exitCode = failures.length > 0 ? 1 : 0
+    summarise(`screenshots: ${OUT}`)
   })
 }
 

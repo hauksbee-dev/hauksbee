@@ -32,17 +32,6 @@ pub(crate) fn scoped_blockers(board: &ExtractedBoard, blockers: &[String]) -> Ve
 
 /// Print the USB-C CC compliance report in `mode`, then (under `strict`) exit
 /// non-zero on a serious finding.
-pub fn emit(
-    board: &ExtractedBoard,
-    evidence: &crate::evidence::BoardEvidence,
-    mode: OutputMode,
-    strict: bool,
-    inputs: &[JsonInputEvidence],
-    blockers: &[String],
-) -> anyhow::Result<()> {
-    emit_quiet(board, evidence, mode, strict, false, inputs, blockers)
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_quiet(
     board: &ExtractedBoard,

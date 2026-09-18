@@ -16,76 +16,7 @@ use super::{KicadClearanceInput, OutputMode};
 /// Run geometric short / clearance detection, print it in `mode`, cross-check the
 /// oracle when asked, then (under `strict`) exit non-zero on a true short. Returns
 /// `Ok(())` on the non-gating paths; a strict short calls `std::process::exit(2)`.
-#[allow(clippy::too_many_arguments)]
-pub fn emit(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
-    mode: OutputMode,
-    oracle: bool,
-    strict: bool,
-    verbose: bool,
-    inputs: &[JsonInputEvidence],
-) -> anyhow::Result<()> {
-    emit_with_schematic(
-        board_path,
-        board,
-        text,
-        raw,
-        input_kind,
-        altium_present,
-        lib,
-        reader_notes,
-        mode,
-        oracle,
-        strict,
-        verbose,
-        inputs,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn emit_with_schematic(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
-    mode: OutputMode,
-    oracle: bool,
-    strict: bool,
-    verbose: bool,
-    inputs: &[JsonInputEvidence],
-    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
-) -> anyhow::Result<()> {
-    emit_with_schematic_quiet(
-        board_path,
-        board,
-        text,
-        raw,
-        input_kind,
-        altium_present,
-        lib,
-        reader_notes,
-        mode,
-        oracle,
-        strict,
-        verbose,
-        false,
-        inputs,
-        schematic_ties,
-    )
-}
-
+/// `quiet` suppresses the text surface.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_with_schematic_quiet(
     board_path: &Path,

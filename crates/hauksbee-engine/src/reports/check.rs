@@ -16,73 +16,8 @@ use crate::result::{
 use super::{lint_fails, si_fails, KicadClearanceInput, OutputMode};
 
 /// Run the full static suite and print it in `mode`, then (under `strict`) exit
-/// non-zero if any real finding gates.
-pub fn emit(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
-    mode: OutputMode,
-    strict: bool,
-    verbose: bool,
-    inputs: &[JsonInputEvidence],
-) -> anyhow::Result<()> {
-    emit_with_schematic(
-        board_path,
-        board,
-        text,
-        raw,
-        input_kind,
-        altium_present,
-        lib,
-        reader_notes,
-        mode,
-        strict,
-        verbose,
-        inputs,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn emit_with_schematic(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
-    mode: OutputMode,
-    strict: bool,
-    verbose: bool,
-    inputs: &[JsonInputEvidence],
-    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
-) -> anyhow::Result<()> {
-    emit_with_schematic_quiet(
-        board_path,
-        board,
-        text,
-        raw,
-        input_kind,
-        altium_present,
-        lib,
-        reader_notes,
-        mode,
-        strict,
-        verbose,
-        false,
-        false,
-        inputs,
-        schematic_ties,
-    )
-}
-
+/// non-zero if any real finding gates. `quiet` suppresses the text surface and
+/// `oracle` cross-checks against kicad-cli.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_with_schematic_quiet(
     board_path: &Path,

@@ -27,8 +27,11 @@
 //!   reproduces it), unlike E/G, whose node-voltage senses stay visible as
 //!   cross-island sense edges.
 
-use crate::shared::{add_driver_leg, add_load_leg, add_partition_rc_legs, add_sensed_driver_leg};
-use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
+use crate::shared::{
+    add_capacitor, add_driver_leg, add_load_leg, add_partition_rc_legs, add_sensed_driver_leg,
+    add_vdc,
+};
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 use hauksbee_solve::decompose::ConductionGraph;
 use hauksbee_solve::{
     dc_operating_point, Integration, LinearIsland, Partition, Partitioning, SolverOptions,
@@ -238,20 +241,9 @@ fn auto_partitioning_never_drops_controlled_source() {
 fn vccs_dc_matches_analytic() {
     let mut c = Circuit::new();
     let vin = c.node("in");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.0),
-    });
+    add_vdc(&mut c, "V1", vin, NodeId::GROUND, 2.0);
     let out = c.node("out");
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
     c.add(voltage_controlled(out, vin, false));
     let mut ws = Workspace::new(&c);
     let opts = SolverOptions::default();
@@ -273,19 +265,8 @@ fn vcvs_dc_matches_analytic() {
     let vin = c.node("in");
     let a = c.node("a");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: a,
-        ohms: 1e3,
-        tc1: None,
-    });
+    add_vdc(&mut c, "V1", vin, NodeId::GROUND, 1.0);
+    crate::shared::add_resistor(&mut c, "R1", vin, a, 1e3);
     c.add(Device::Resistor {
         name: "R2".into(),
         a,
@@ -301,13 +282,7 @@ fn vcvs_dc_matches_analytic() {
         cn: NodeId::GROUND,
         gain: 4.0,
     });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
     let mut ws = Workspace::new(&c);
     let opts = SolverOptions::default();
     dc_operating_point(&mut ws, &c, &opts).unwrap();
@@ -343,26 +318,9 @@ fn vcvs_control_port_is_high_impedance() {
     let vin = c.node("in");
     let ctrl = c.node("ctrl");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: ctrl,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: ctrl,
-        b: NodeId::GROUND,
-        farads: 1e-6,
-        ic: Some(0.0),
-    });
+    add_vdc(&mut c, "V1", vin, NodeId::GROUND, 1.0);
+    crate::shared::add_resistor(&mut c, "R1", vin, ctrl, 1e3);
+    add_capacitor(&mut c, "C1", ctrl, NodeId::GROUND, 1e-6, Some(0.0));
     c.add(Device::Vcvs {
         name: "E1".into(),
         p: out,
@@ -586,25 +544,9 @@ fn cccs_dc_matches_analytic() {
     let vin = c.node("in");
     let m = c.node("m");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.0),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: m,
-        ohms: 1e3,
-        tc1: None,
-    });
-    let vs = c.add(Device::Vsource {
-        name: "Vs".into(),
-        p: m,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(0.0),
-    });
+    add_vdc(&mut c, "V1", vin, NodeId::GROUND, 2.0);
+    crate::shared::add_resistor(&mut c, "R1", vin, m, 1e3);
+    let vs = add_vdc(&mut c, "Vs", m, NodeId::GROUND, 0.0);
     c.add(Device::Cccs {
         name: "F1".into(),
         p: out,
@@ -612,13 +554,7 @@ fn cccs_dc_matches_analytic() {
         ctrl_src: vs,
         gain: 3.0,
     });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
     let mut ws = Workspace::new(&c);
     let opts = SolverOptions::default();
     dc_operating_point(&mut ws, &c, &opts).unwrap();
@@ -649,33 +585,11 @@ fn ccvs_dc_matches_analytic() {
     let vin = c.node("in");
     let m = c.node("m");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.0),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: m,
-        ohms: 1e3,
-        tc1: None,
-    });
-    let vs = c.add(Device::Vsource {
-        name: "Vs".into(),
-        p: m,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(0.0),
-    });
+    add_vdc(&mut c, "V1", vin, NodeId::GROUND, 2.0);
+    crate::shared::add_resistor(&mut c, "R1", vin, m, 1e3);
+    let vs = add_vdc(&mut c, "Vs", m, NodeId::GROUND, 0.0);
     let h1 = c.add(current_controlled(out, vs, false));
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
     let mut ws = Workspace::new(&c);
     let opts = SolverOptions::default();
     dc_operating_point(&mut ws, &c, &opts).unwrap();

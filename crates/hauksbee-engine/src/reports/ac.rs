@@ -10,21 +10,6 @@ use crate::result::{
     BindSummary, CheckCoverage, JsonReport, Refusal, Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
 
-pub fn emit(
-    bound: &crate::BoundBoard,
-    evidence: &crate::evidence::BoardEvidence,
-    ac_arg: &str,
-    ac_nodes: &[String],
-    csv: Option<&Path>,
-    ac_loop: Option<&str>,
-    json: bool,
-    inputs: &[crate::result::JsonInputEvidence],
-) -> anyhow::Result<()> {
-    emit_quiet(
-        bound, evidence, ac_arg, ac_nodes, csv, ac_loop, json, false, inputs,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_quiet(
     bound: &crate::BoundBoard,

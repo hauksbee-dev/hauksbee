@@ -77,6 +77,15 @@ fn bom(text: &str) -> Bom {
     Bom::from_text(text, "bom.csv", &ColumnOverrides::new()).expect("the BOM reads")
 }
 
+/// `apply_bom_identity` of the CSV `text` against `board` and the builtin
+/// library: the three-argument call every test below makes.
+fn identify(
+    board: &mut ExtractedBoard,
+    text: &str,
+) -> Result<hauksbee_engine::binder::IdentityReport, IdentityRefusal> {
+    apply_bom_identity(board, &bom(text), &ModelLibrary::builtin())
+}
+
 fn outcome_of(board: &ExtractedBoard, reference: &str) -> BindOutcome {
     bind_board(board, &ModelLibrary::builtin())
         .report
@@ -99,12 +108,8 @@ fn a_bom_mpn_binds_a_part_whose_layout_value_says_nothing() {
         "without the BOM this part cannot bind"
     );
 
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value,MPN\nU9,,MCP4728\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("the BOM agrees with the layout");
+    let report = identify(&mut b, "Designator,Value,MPN\nU9,,MCP4728\n")
+        .expect("the BOM agrees with the layout");
 
     // It binds, and the bind is attributable to the file that made it possible.
     assert!(!matches!(
@@ -158,12 +163,7 @@ fn a_bom_that_calls_a_mosfet_a_ten_k_resistor_is_refused_and_says_what_to_do() {
         "the layout alone must resolve Q5 for this test to mean anything"
     );
 
-    let err = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value\nQ5,10k\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect_err("must refuse");
+    let err = identify(&mut b, "Designator,Value\nQ5,10k\n").expect_err("must refuse");
 
     assert_eq!(err.exit_code(), 3);
     let msg = err.to_string();
@@ -189,12 +189,7 @@ fn a_bom_whose_dimension_disagrees_with_the_layout_is_refused() {
     // Ohms against farads on the same designator. Neither side needs a model for
     // this to be decisive.
     let mut b = board(&[("R1", "10k")]);
-    let err = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value\nR1,100nF\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect_err("must refuse");
+    let err = identify(&mut b, "Designator,Value\nR1,100nF\n").expect_err("must refuse");
     assert_eq!(err.exit_code(), 3);
     let msg = err.to_string();
     assert!(
@@ -214,10 +209,9 @@ fn an_explicit_manufacturer_contradiction_is_refused() {
         .properties
         .push(("Manufacturer".to_string(), "Microchip".to_string()));
 
-    let err = apply_bom_identity(
+    let err = identify(
         &mut b,
-        &bom("Designator,Value,Manufacturer\nU1,MCP4728,Texas Instruments\n"),
-        &ModelLibrary::builtin(),
+        "Designator,Value,Manufacturer\nU1,MCP4728,Texas Instruments\n",
     )
     .expect_err("two explicit manufacturers cannot both describe the same fitted part");
     let message = err.to_string();
@@ -230,12 +224,8 @@ fn a_package_electrical_pad_count_contradiction_is_refused() {
     let mut b = board(&[("U1", "MCP4728")]);
     assert_eq!(b.components[0].pins.len(), 10, "fixture premise");
 
-    let err = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value,Footprint\nU1,MCP4728,QFN-16\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect_err("a 16-pad package cannot describe a ten-pad board footprint");
+    let err = identify(&mut b, "Designator,Value,Footprint\nU1,MCP4728,QFN-16\n")
+        .expect_err("a 16-pad package cannot describe a ten-pad board footprint");
     let message = err.to_string();
     assert!(message.contains("QFN-16"), "{message}");
     assert!(
@@ -268,11 +258,10 @@ fn a_placement_package_contradiction_names_the_placement_file_not_a_bom() {
 #[test]
 fn a_bom_for_a_different_board_entirely_is_refused_by_name() {
     let mut b = board(&[("R1", "10k"), ("R2", "10k")]);
-    let err = apply_bom_identity(
+    let err = identify(
         &mut b,
-        &bom("Designator,Value\nX1,10k\nX2,10k\nX3,10k\nX4,10k\nX5,10k\n\
-             X6,10k\nX7,10k\nX8,10k\nX9,10k\nX10,10k\n"),
-        &ModelLibrary::builtin(),
+        "Designator,Value\nX1,10k\nX2,10k\nX3,10k\nX4,10k\nX5,10k\n\
+             X6,10k\nX7,10k\nX8,10k\nX9,10k\nX10,10k\n",
     )
     .expect_err("must refuse");
     assert_eq!(err.exit_code(), 3);
@@ -400,10 +389,9 @@ fn two_files_naming_different_chips_for_one_designator_is_refused() {
     // outcome available: every firmware assertion would then be evaluated against
     // a core the board does not have.
     let mut b = board(&[("U1", "ATmega328P-AU")]);
-    let err = apply_bom_identity(
+    let err = identify(
         &mut b,
-        &bom("Designator,Value,MPN\nU1,ATmega328P-AU,STM32F103C8\n"),
-        &ModelLibrary::builtin(),
+        "Designator,Value,MPN\nU1,ATmega328P-AU,STM32F103C8\n",
     )
     .expect_err("must refuse");
     assert_eq!(err.exit_code(), 3);
@@ -423,12 +411,8 @@ fn a_bom_agreeing_with_a_footprint_guess_is_not_a_contradiction() {
     // not the layout naming a part, so a BOM that names the very part the
     // stand-in stands in for must be a gain and not a refusal of the whole file.
     let mut b = board(&[("D1", "")]);
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value,MPN\nD1,,1N4148W\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("an agreeing BOM must not refuse the file");
+    let report = identify(&mut b, "Designator,Value,MPN\nD1,,1N4148W\n")
+        .expect("an agreeing BOM must not refuse the file");
     assert_eq!(report.identified.len(), 1);
     assert_eq!(report.identified[0].before, Confidence::Guessed);
     assert_eq!(report.identified[0].after, Confidence::Family);
@@ -442,11 +426,10 @@ fn a_package_suffix_is_not_a_different_part() {
     // stand-in rather than the library entry, so the model ids differ. Refusing
     // over a package suffix would make the feature unusable.
     let mut b = board(&[("U1", "ATmega328P-AU")]);
-    let report = apply_bom_identity(
+    let report = identify(
         &mut b,
-        &bom("Designator,Value,MPN,Manufacturer\n\
-             U1,ATmega328P-AU,ATMEGA328P,Microchip Technology\n"),
-        &ModelLibrary::builtin(),
+        "Designator,Value,MPN,Manufacturer\n\
+             U1,ATmega328P-AU,ATMEGA328P,Microchip Technology\n",
     )
     .expect("a suffix is not a disagreement");
     assert!(report.findings.is_empty(), "{:?}", report.findings);
@@ -458,10 +441,9 @@ fn the_layout_keeps_deciding_when_it_already_resolved_the_part() {
     // the layout's reading stands and no attribution is claimed for a bind the
     // layout made on its own.
     let mut b = board(&[("U1", "ATmega328P-AU")]);
-    let report = apply_bom_identity(
+    let report = identify(
         &mut b,
-        &bom("Designator,Value,MPN\nU1,ATmega328P-AU,ATmega328P-AU\n"),
-        &ModelLibrary::builtin(),
+        "Designator,Value,MPN\nU1,ATmega328P-AU,ATmega328P-AU\n",
     )
     .expect("agreement");
     assert!(
@@ -476,12 +458,8 @@ fn a_bom_value_never_overrides_a_layout_value_that_is_already_there() {
     // The other direction of the same rule: the BOM's VALUE column is the same
     // kind of claim the layout makes, so it must not replace it.
     let mut b = board(&[("R1", "10k")]);
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value\nR1,4k7\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("a magnitude disagreement is not a class contradiction");
+    let report = identify(&mut b, "Designator,Value\nR1,4k7\n")
+        .expect("a magnitude disagreement is not a class contradiction");
     assert_eq!(
         b.component("R1").unwrap().value,
         "10k",
@@ -520,12 +498,8 @@ fn a_distributor_order_code_never_reaches_the_binder_as_a_part_number() {
 #[test]
 fn a_bom_refdes_that_is_not_on_the_board_is_reported_and_not_fatal() {
     let mut b = board(&[("R1", "10k"), ("R2", "10k")]);
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value\nR1,10k\nR2,10k\nMH1,M3 screw\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("a mechanical part in the BOM is ordinary");
+    let report = identify(&mut b, "Designator,Value\nR1,10k\nR2,10k\nMH1,M3 screw\n")
+        .expect("a mechanical part in the BOM is ordinary");
     let names: Vec<&Vec<String>> = report
         .findings
         .iter()
@@ -540,12 +514,8 @@ fn a_bom_refdes_that_is_not_on_the_board_is_reported_and_not_fatal() {
 #[test]
 fn a_board_part_absent_from_the_bom_is_reported_and_not_fatal() {
     let mut b = board(&[("R1", "10k"), ("TP1", "")]);
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value\nR1,10k\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("a BOM omitting a test point is ordinary");
+    let report = identify(&mut b, "Designator,Value\nR1,10k\n")
+        .expect("a BOM omitting a test point is ordinary");
     assert!(
         report.findings.iter().any(|f| matches!(
             f,
@@ -559,12 +529,8 @@ fn a_board_part_absent_from_the_bom_is_reported_and_not_fatal() {
 #[test]
 fn a_quantity_that_disagrees_with_its_own_reference_list_is_reported() {
     let mut b = board(&[("R1", "10k"), ("R2", "10k")]);
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value,Quantity\n\"R1, R2\",10k,3\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("a stale quantity is not a different board");
+    let report = identify(&mut b, "Designator,Value,Quantity\n\"R1, R2\",10k,3\n")
+        .expect("a stale quantity is not a different board");
     let line = report
         .findings
         .iter()
@@ -587,12 +553,8 @@ fn a_bom_that_says_a_dnp_part_is_populated_advises_and_does_not_act() {
     // arrives as advice with the flag that honours it.
     let mut b = board(&[("R1", "10k")]);
     b.components[0].dnp = true;
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value,Populate\nR1,10k,yes\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("a populate disagreement is not a different board");
+    let report = identify(&mut b, "Designator,Value,Populate\nR1,10k,yes\n")
+        .expect("a populate disagreement is not a different board");
 
     assert_eq!(
         report.advice,
@@ -624,12 +586,8 @@ fn a_bom_that_says_an_unspecified_part_is_not_fitted_advises_without_inventing_a
     // `dnp=false` is the representation used when a reader found no explicit
     // DNP marker. It must not be promoted to an explicit "fitted" assertion.
     let mut b = board(&[("R1", "10k")]);
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value,DNP\nR1,10k,yes\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("a populate disagreement is not a different board");
+    let report = identify(&mut b, "Designator,Value,DNP\nR1,10k,yes\n")
+        .expect("a populate disagreement is not a different board");
     assert_eq!(report.advice.no_fit, vec!["R1".to_string()]);
     assert!(report.advice.fit.is_empty());
     assert!(!b.component("R1").unwrap().dnp, "still not acted on");
@@ -642,12 +600,7 @@ fn a_bom_that_says_an_unspecified_part_is_not_fitted_advises_without_inventing_a
 #[test]
 fn a_bom_without_a_population_column_leaves_population_unspecified() {
     let mut b = board(&[("R1", "10k")]);
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value\nR1,10k\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("agreement");
+    let report = identify(&mut b, "Designator,Value\nR1,10k\n").expect("agreement");
     assert!(report.advice.is_empty());
     assert!(!report
         .findings
@@ -659,12 +612,7 @@ fn a_bom_without_a_population_column_leaves_population_unspecified() {
 fn a_bom_and_a_layout_that_agree_about_dnp_say_nothing() {
     let mut b = board(&[("R1", "10k")]);
     b.components[0].dnp = true;
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value,DNP\nR1,10k,yes\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("agreement");
+    let report = identify(&mut b, "Designator,Value,DNP\nR1,10k,yes\n").expect("agreement");
     assert!(report.advice.is_empty());
     assert!(!report
         .findings
@@ -697,11 +645,6 @@ fn the_bom_readers_refuse_with_the_same_exit_code_the_engine_defines() {
 #[test]
 fn a_bom_that_agrees_with_the_layout_and_adds_nothing_prints_nothing() {
     let mut b = board(&[("R1", "10k")]);
-    let report = apply_bom_identity(
-        &mut b,
-        &bom("Designator,Value\nR1,10k\n"),
-        &ModelLibrary::builtin(),
-    )
-    .expect("agreement");
+    let report = identify(&mut b, "Designator,Value\nR1,10k\n").expect("agreement");
     assert!(report.lines().is_empty(), "{:?}", report.lines());
 }

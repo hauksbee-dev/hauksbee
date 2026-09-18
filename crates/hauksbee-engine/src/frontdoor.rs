@@ -2432,6 +2432,25 @@ fn run_web_cosim_with_bound(
             analog_invalid_finding(sched.failed_chunk_count(), &failed_windows),
         );
     }
+    // One note per regulator with no established input headroom, in the shared
+    // wording. Note-level like its sibling honesty caveats, which is enough for
+    // `cosim_caveat_headline` to demote "Looks healthy".
+    for taint in sched.regulation_taint() {
+        findings.insert(
+            0,
+            WebFinding {
+                level: "note".to_string(),
+                what: format!(
+                    "{}'s regulation is not a simulated result",
+                    taint.refs.first().map_or("A regulator", String::as_str)
+                ),
+                why: taint.reason.clone(),
+                fix: "Declare or fix the supply on this regulator's input, then re-run.".into(),
+                x: None,
+                y: None,
+            },
+        );
+    }
     let net_volts = sched.net_voltages();
     // Rank by TOGGLE COUNT descending (name tiebreak), matching the CLI toggle
     // table and the JSON activity_summary; this field is documented as "top

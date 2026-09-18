@@ -9,6 +9,7 @@
 //! PWL edge drive of `docs/dev-plans/05-cosim-fidelity.md` section 1.3 relies
 //! on it being fixed.
 
+use crate::shared::{add_capacitor, add_resistor};
 use hauksbee_ir::{Circuit, Device, NodeId, PwlPoint, SourceKind};
 use hauksbee_solve::{SolverOptions, StepControl, Transient};
 
@@ -39,20 +40,8 @@ fn pulse_circuit() -> (Circuit, NodeId) {
             },
         ]),
     });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: out,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: 2e-9,
-        ic: Some(0.0),
-    });
+    add_resistor(&mut c, "R1", vin, out, 1e3);
+    add_capacitor(&mut c, "C1", out, NodeId::GROUND, 2e-9, Some(0.0));
     (c, out)
 }
 
@@ -131,20 +120,8 @@ fn pulse_source_corners_are_registered() {
             period: 100e-6,
         },
     });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: out,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: 2e-9,
-        ic: Some(0.0),
-    });
+    add_resistor(&mut c, "R1", vin, out, 1e3);
+    add_capacitor(&mut c, "C1", out, NodeId::GROUND, 2e-9, Some(0.0));
     let opts = SolverOptions {
         step: StepControl::Adaptive {
             dt_initial: 1e-6,
@@ -197,13 +174,7 @@ fn breakpoint_landing_does_not_collapse_controller_dt() {
             PwlPoint { t: 500e-6, v: 1.0 },
         ]),
     });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: out,
-        ohms: 1e3,
-        tc1: None,
-    });
+    add_resistor(&mut c, "R1", vin, out, 1e3);
     c.add(Device::Capacitor {
         name: "C1".into(),
         a: out,

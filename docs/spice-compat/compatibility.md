@@ -221,10 +221,22 @@ those rows falls under the silently-dropped rule above.
   core (BH) model card parses. Transformer/flyback decks are the payoff
   (`xfmr_1to2`, `xfmr_k1`, `flyback_diode`). A negative `k` is refused.
   Swap a winding's terminals instead.
-- **BJT charge storage uses SPICE-default junction grading.** `cje/cjc/tf/tr`
-  and series `rb/re/rc` are honored, but per-junction `VJE/VJC`/`MJE/MJC`
-  overrides are not parsed. The values default to `0.75`/`0.33`, what an
-  ngspice card without them also gets.
+- **BJT charge storage reads the card's own junction parameters.**
+  `cje/cjc/tf/tr`, the series `rb/re/rc`, and the per-junction
+  `VJE/VJC`/`MJE/MJC` plus the shared `FC` knee are all honored; a card that
+  states none of them still gets the ngspice defaults (`0.75`/`0.33`/`0.5`).
+  The transit-time modulation parameters (`XTF`/`ITF`/`VTF`) and the beta
+  temperature exponent `XTB` have no equation here, and `FC` is still fixed at
+  `0.5` for diodes and MOSFETs.
+- **A dropped model parameter is reported at run time, not swallowed.** When a
+  `.model` card an element actually instantiates states one of the parameters
+  above that hauksbee does not model, and states a value other than the SPICE
+  default, `hauksbee sim` prints a `note:` naming the parameter, its value and
+  the behaviour that was lost, and the browser deck panel shows the same line.
+  A card that restates the default asks for nothing, so it is silent, and a
+  library card no element uses says nothing either. Pasting a vendor card
+  whole is therefore safe: you are told exactly where the device solved
+  differs from the card as written.
 - **Diode model must resolve, like `Q`/`M`.** A `Dxxx a k model` whose named
   `.model` is undefined is refused (`references undefined .model`). One
   whose `.model` is not a diode (for example an `NPN`) is refused (`not a

@@ -1,6 +1,6 @@
 import type { SimFrame } from '../types/protocol'
 import { displayNet } from '../lib/net-name'
-import { readNet, type Envelopes, type EnvelopeSource } from '../lib/net-state'
+import { netReadoutText, readNet, type Envelopes, type EnvelopeSource } from '../lib/net-state'
 
 // Live net list for the sim rail's "Net voltages" card. The card header is
 // owned by the rail; this renders only the rows.
@@ -79,9 +79,12 @@ export function NetPanel({
       <div className="overflow-y-auto py-1" style={{ maxHeight: 280 }}>
         {entries.map(({ name, r }) => {
           const isSelected = name === selectedNet
-          const unobserved = r.kind === 'unobserved'
+          // Anything that is not a measurement gets the same treatment: the
+          // wording from net-state, no number and no bar. A net an unsupported
+          // regulator holds would otherwise read as a confident +0.000V.
+          const unmeasured = r.kind !== 'measured'
           const volts = r.kind === 'measured' ? r.volts : 0
-          const barColor = unobserved ? 'var(--silk-faint)'
+          const barColor = unmeasured ? 'var(--silk-faint)'
             : volts > 4 ? 'var(--warn)'
             : volts > 0.1 ? 'var(--ok)'
             : volts < -0.1 ? 'var(--err)'
@@ -101,12 +104,12 @@ export function NetPanel({
             <div
               key={name}
               onClick={() => onSelectNet(isSelected ? null : name)}
-              data-testid={moving ? 'net-row-moving' : undefined}
+              data-testid={moving ? 'net-row-moving' : unmeasured ? 'net-row-unmeasured' : undefined}
               className="flex items-center gap-2 px-3 py-1.5 cursor-pointer"
               style={{
                 background: isSelected ? 'var(--copper-tint)' : 'transparent',
                 borderLeft: isSelected ? '2px solid var(--copper)' : '2px solid transparent',
-                opacity: unobserved ? 0.72 : 1,
+                opacity: unmeasured ? 0.72 : 1,
               }}
             >
               <div className="flex-1 min-w-0">
@@ -119,21 +122,23 @@ export function NetPanel({
                   </span>
                   <span
                     className="text-[10px] ml-2 shrink-0 tnum"
-                    title={unobserved
-                      ? 'This backend cannot see whether the MCU is driving this pin. The level shown elsewhere is the passive network idling, not a measurement.'
-                      : moving
+                    title={r.kind === 'unsupported'
+                      ? 'This net is held by a regulator whose input headroom was never established, so the backend has no simulated value for it.'
+                      : r.kind === 'unobserved'
+                        ? 'This backend cannot see whether the MCU is driving this pin. The level shown elsewhere is the passive network idling, not a measurement.'
+                        : moving
                         ? 'This net moved over the observed span; the range is its excursion, not one sampled instant.'
                         : undefined}
                     style={{
-                      color: unobserved ? 'var(--silk-faint)'
+                      color: unmeasured ? 'var(--silk-faint)'
                         : isSelected ? 'var(--copper)'
                         : moving ? 'var(--copper-hi)' : barColor,
                       fontFamily: 'var(--font-mono)',
-                      fontStyle: unobserved ? 'italic' : undefined,
+                      fontStyle: unmeasured ? 'italic' : undefined,
                     }}
                   >
-                    {unobserved
-                      ? 'not observed'
+                    {r.kind !== 'measured'
+                      ? netReadoutText(r)
                       : moving
                         ? `${r.min.toFixed(2)}–${r.max.toFixed(2)}V`
                         : `${volts >= 0 ? '+' : ''}${volts.toFixed(3)}V`}
@@ -143,12 +148,12 @@ export function NetPanel({
                   className="h-0.5 rounded-full overflow-hidden relative"
                   style={{
                     background: 'var(--surface-3)',
-                    // An unobserved net gets a dashed, hollow track: there is
+                    // An unmeasured net gets a dashed, hollow track: there is
                     // no measurement to fill it with.
-                    ...(unobserved ? { border: '1px dashed var(--rule)', height: 3 } : null),
+                    ...(unmeasured ? { border: '1px dashed var(--rule)', height: 3 } : null),
                   }}
                 >
-                  {!unobserved && (
+                  {!unmeasured && (
                     <>
                       {/* the excursion band */}
                       {moving && (

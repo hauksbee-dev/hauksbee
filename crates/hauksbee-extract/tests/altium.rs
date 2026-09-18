@@ -159,6 +159,20 @@ fn build_pcbdoc(streams: &[(&str, Vec<u8>)]) -> Vec<u8> {
     cf.into_inner().into_inner()
 }
 
+/// Extract a board from the standard two-net container holding `comps` and
+/// `pads` (the shape every component-identity test below builds).
+fn two_net_bytes(comps: Vec<u8>, pads: Vec<u8>) -> Vec<u8> {
+    build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ])
+}
+
+fn two_net_board(comps: Vec<u8>, pads: Vec<u8>) -> ExtractedBoard {
+    ExtractedBoard::from_altium_pcb(&two_net_bytes(comps, pads)).expect("extract")
+}
+
 /// Two resistors, R1 and R2, sharing a net N1 across their inner pads and each
 /// with an outer pad on its own net (N0_VCC, N2_GND). Plus a track on N1.
 fn two_resistor_board() -> Vec<u8> {
@@ -297,12 +311,7 @@ fn sourcedescription_supplies_the_value_before_unresolved() {
         "C7",
         "|SOURCEDESCRIPTION=Cap Ceramic 1uF 16V X7R 10% SMD 0603",
     );
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]);
-    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    let board = two_net_board(comps, pads);
     let c = board.component("C7").unwrap();
     assert_eq!(c.value, "1uF");
     assert!(c
@@ -319,12 +328,7 @@ fn sourcedescription_supplies_the_value_before_unresolved() {
         "R3",
         "|SOURCEDESCRIPTION=Resistor SMD chip 1 Ohm 250mW 1% 1206",
     );
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]);
-    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    let board = two_net_board(comps, pads);
     let c = board.component("R3").unwrap();
     assert_eq!(c.value, "1Ohm");
     assert!(c
@@ -345,12 +349,7 @@ fn non_copper_pad_records_are_not_pins() {
     pads.extend(pad_record("2", 1, 1, 0, 1.0, 0.0, 0.5));
     // Layer 37 is a mask layer in Altium's numbering: not copper.
     pads.extend(pad_record("3", 37, 0xFFFF, 0, 0.5, 0.0, 0.6));
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]);
-    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    let board = two_net_board(comps, pads);
     let c = board.component("R9").unwrap();
     assert_eq!(
         c.pins.len(),
@@ -377,12 +376,7 @@ fn duplicate_placements_without_channels_merge_as_one_electrical_part() {
     pads.extend(pad_record("1", 1, 0, 1, 0.0, 0.0, 0.5));
     pads.extend(pad_record("2", 1, 1, 1, 1.0, 0.0, 0.5));
 
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]);
-    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    let board = two_net_board(comps, pads);
 
     assert_eq!(
         board.components.len(),
@@ -425,12 +419,7 @@ fn repeated_designators_in_distinct_channels_remain_distinct_parts() {
     pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
     pads.extend(pad_record("1", 1, 1, 1, 1.0, 0.0, 0.5));
 
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]);
-    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    let board = two_net_board(comps, pads);
 
     assert_eq!(board.components.len(), 2);
     assert!(board.component("R1@FLASH1").is_some());
@@ -455,12 +444,7 @@ fn authoritative_unique_ids_distinguish_same_designator_in_one_hierarchy() {
     pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
     pads.extend(pad_record("2", 1, 1, 1, 2.0, 0.0, 0.5));
 
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]);
-    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    let board = two_net_board(comps, pads);
 
     assert_eq!(board.components.len(), 2);
     let references: std::collections::BTreeSet<_> = board
@@ -489,12 +473,7 @@ fn same_authoritative_unique_id_merges_split_component_records() {
     pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
     pads.extend(pad_record("2", 1, 1, 1, 1.0, 0.0, 0.5));
 
-    let board = ExtractedBoard::from_altium_pcb(&build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]))
-    .expect("extract");
+    let board = two_net_board(comps, pads);
 
     assert_eq!(board.components.len(), 1);
     assert_eq!(board.components[0].reference, "TP1");
@@ -516,12 +495,7 @@ fn same_hierarchy_without_unique_id_or_shared_pad_stays_distinct() {
     pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
     pads.extend(pad_record("2", 1, 1, 1, 1.0, 0.0, 0.5));
 
-    let board = ExtractedBoard::from_altium_pcb(&build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]))
-    .expect("extract");
+    let board = two_net_board(comps, pads);
 
     assert_eq!(board.components.len(), 2);
     assert!(board.components.iter().all(|component| component
@@ -546,12 +520,7 @@ fn full_hierarchical_paths_and_real_reference_collisions_remain_distinct() {
     pads.extend(pad_record("1", 1, 1, 1, 2.0, 0.0, 0.5));
     pads.extend(pad_record("1", 1, 0, 2, 4.0, 0.0, 0.5));
 
-    let board = ExtractedBoard::from_altium_pcb(&build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]))
-    .expect("extract");
+    let board = two_net_board(comps, pads);
 
     assert_eq!(board.components.len(), 3);
     assert!(
@@ -588,12 +557,7 @@ fn mixed_missing_channel_metadata_never_collapses_all_replicas() {
     pads.extend(pad_record("1", 1, 1, 1, 2.0, 0.0, 0.5));
     pads.extend(pad_record("1", 1, 0, 2, 4.0, 0.0, 0.5));
 
-    let board = ExtractedBoard::from_altium_pcb(&build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]))
-    .expect("extract");
+    let board = two_net_board(comps, pads);
 
     assert_eq!(board.components.len(), 3);
     assert!(board.component("R1@FLASH1").is_some());
@@ -618,11 +582,7 @@ fn hierarchy_free_duplicate_pin_numbers_on_different_nets_are_not_merged() {
     pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
     pads.extend(pad_record("1", 1, 1, 1, 0.0, 0.0, 0.5));
 
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]);
+    let bytes = two_net_bytes(comps, pads);
     let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
 
     assert_eq!(board.components.len(), 2);
@@ -658,11 +618,7 @@ fn hierarchy_free_disjoint_pads_are_distinct_drc_owners() {
     pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
     pads.extend(pad_record("2", 1, 1, 1, 0.0, 0.0, 0.5));
 
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]);
+    let bytes = two_net_bytes(comps, pads);
     let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
 
     assert_eq!(board.components.len(), 2);
@@ -716,12 +672,7 @@ fn missing_designators_stay_distinct_with_stable_placeholders() {
     pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 1.0));
     pads.extend(pad_record("1", 1, 1, 1, 5.0, 0.0, 1.0));
 
-    let bytes = build_pcbdoc(&[
-        ("Nets6", two_net_stream()),
-        ("Components6", comps),
-        ("Pads6", pads),
-    ]);
-    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    let board = two_net_board(comps, pads);
 
     assert_eq!(board.components.len(), 2);
     assert!(board.component("UNK0").is_some());

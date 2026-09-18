@@ -4,6 +4,7 @@
 //! just the `.ac` small-signal path. Each test computes the closed-form
 //! answer in the test itself.
 
+use crate::shared::{add_resistor, add_vdc};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{
     AcAnalysis, AcSpec, Integration, LoopStability, SolverOptions, StepControl, Sweep, Transient,
@@ -51,13 +52,7 @@ fn step_circuit(
         rail_lo: 0.0,
         rail_hi,
     });
-    ckt.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e6,
-        tc1: None,
-    });
+    add_resistor(&mut ckt, "RL", out, NodeId::GROUND, 1e6);
     ckt
 }
 
@@ -187,12 +182,7 @@ fn ac_margins_unchanged_by_slew() {
         let mut ckt = Circuit::new();
         let fb = ckt.node("fb");
         let out = ckt.node("out");
-        ckt.add(Device::Vsource {
-            name: "VINJ".into(),
-            p: fb,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(0.0),
-        });
+        add_vdc(&mut ckt, "VINJ", fb, NodeId::GROUND, 0.0);
         ckt.add(Device::OpAmp {
             name: "U1".into(),
             out,
@@ -205,13 +195,7 @@ fn ac_margins_unchanged_by_slew() {
             rail_lo: -1e9,
             rail_hi: 1e9,
         });
-        ckt.add(Device::Resistor {
-            name: "RL".into(),
-            a: out,
-            b: NodeId::GROUND,
-            ohms: 1e6,
-            tc1: None,
-        });
+        add_resistor(&mut ckt, "RL", out, NodeId::GROUND, 1e6);
         ckt
     };
     let spec = AcSpec {
@@ -253,12 +237,7 @@ fn partitioned_opamp_output_matches_monolith() {
         let mut c = Circuit::new();
         let vin = c.node("in");
         let out = c.node("out");
-        c.add(Device::Vsource {
-            name: "VIN".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
+        add_vdc(&mut c, "VIN", vin, NodeId::GROUND, 1.0);
         c.add(Device::OpAmp {
             name: "U1".into(),
             out,
@@ -271,13 +250,7 @@ fn partitioned_opamp_output_matches_monolith() {
             rail_lo: 0.0,
             rail_hi: 5.0,
         });
-        c.add(Device::Resistor {
-            name: "RL".into(),
-            a: out,
-            b: NodeId::GROUND,
-            ohms: 1e6,
-            tc1: None,
-        });
+        add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e6);
         // Independent RC legs so the partition heuristics fragment and the
         // partitioned engine genuinely engages (the op-amp lands in its island).
         crate::shared::add_partition_rc_legs(&mut c);

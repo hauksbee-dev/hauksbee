@@ -186,17 +186,28 @@ pub struct BjtModel {
     /// Base-emitter and base-collector zero-bias depletion caps (F).
     pub cje: f64,
     pub cjc: f64,
+    /// Per-junction depletion grading coefficients (SPICE MJE/MJC). A vendor
+    /// card states them; the 0.33 default in their place moves the switching
+    /// edge, so the loader passes the card's own values through.
+    #[serde(default = "f64_mj")]
+    pub mje: f64,
+    #[serde(default = "f64_mj")]
+    pub mjc: f64,
+    /// Per-junction built-in potentials (SPICE VJE/VJC, V) and the shared
+    /// forward-bias capacitance knee (SPICE FC). Same story as MJE/MJC: the
+    /// equations were always general in them, only the loader was not.
+    #[serde(default = "f64_vj")]
+    pub vje: f64,
+    #[serde(default = "f64_vj")]
+    pub vjc: f64,
+    #[serde(default = "f64_fc")]
+    pub fc: f64,
     /// Forward and reverse transit times (s).
     pub tf: f64,
     pub tr: f64,
     /// High-current (Webster) knee currents (A); `INFINITY` disables the roll-off.
-    ///
-    /// Without these, beta never falls at high injection, and a vendor model
-    /// card is not merely approximated but contradicted: the real ON
-    /// Semiconductor 2N3904 card gives beta 164 at 20 mA, and the same card with
-    /// IKF and ISE dropped gives 440. Every general-purpose card in circulation
-    /// carries them, so a library sourced from vendor SPICE cannot be honest
-    /// without them.
+    /// Dropping them contradicts a vendor card rather than approximating it;
+    /// `tests/decks/bjt_sgp_high_injection.cir` is the guard and the numbers.
     #[serde(with = "nonfinite_f64", default = "f64_infinity")]
     pub ikf: f64,
     #[serde(with = "nonfinite_f64", default = "f64_infinity")]
@@ -233,6 +244,11 @@ impl Default for BjtModel {
             rc: 0.0,
             cje: 0.0,
             cjc: 0.0,
+            mje: 0.33,
+            mjc: 0.33,
+            vje: 0.75,
+            vjc: 0.75,
+            fc: 0.5,
             tf: 0.0,
             tr: 0.0,
             ikf: f64::INFINITY,
@@ -253,6 +269,15 @@ fn f64_infinity() -> f64 {
 }
 fn f64_two() -> f64 {
     2.0
+}
+fn f64_mj() -> f64 {
+    0.33
+}
+fn f64_vj() -> f64 {
+    0.75
+}
+fn f64_fc() -> f64 {
+    0.5
 }
 
 impl BjtModel {

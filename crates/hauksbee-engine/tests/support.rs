@@ -36,6 +36,15 @@ pub fn run(args: &[&str]) -> Output {
         .expect("hauksbee binary runs")
 }
 
+/// [`run`] against a board: the `run` subcommand, that board's path, then
+/// `args`. Every CLI test that analyses a board spells this same prefix.
+#[allow(dead_code)]
+pub fn run_board(board: &std::path::Path, args: &[&str]) -> Output {
+    let mut argv = vec!["run", board.to_str().unwrap()];
+    argv.extend_from_slice(args);
+    run(&argv)
+}
+
 /// Decode a captured `Output`'s stdout as UTF-8.
 #[allow(dead_code)]
 pub fn stdout(o: &Output) -> String {

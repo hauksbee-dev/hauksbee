@@ -3,15 +3,11 @@
 //! `--format raw`/`both` all landed). Plus an end-to-end run of a deck whose
 //! model comes in through a deck-relative `.include`.
 
-use crate::support::bin;
+use crate::support::run;
 use std::path::PathBuf;
-use std::process::Command;
 
 fn sim_help() -> String {
-    let out = Command::new(bin())
-        .args(["sim", "--help"])
-        .output()
-        .expect("hauksbee sim --help runs");
+    let out = run(&["sim", "--help"]);
     assert!(out.status.success(), "sim --help should exit 0");
     let raw = String::from_utf8(out.stdout).expect("help is utf-8");
     // clap re-wraps the doc comment to the terminal width, so a phrase can be
@@ -75,10 +71,7 @@ fn sim_help_states_the_working_capabilities() {
 #[test]
 fn sim_runs_a_deck_with_a_relative_include() {
     let deck = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/sim_decks/half_wave.cir");
-    let out = Command::new(bin())
-        .args(["sim", deck.to_str().unwrap(), "--tran"])
-        .output()
-        .expect("hauksbee sim runs");
+    let out = run(&["sim", deck.to_str().unwrap(), "--tran"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "sim must succeed:\n{stderr}");

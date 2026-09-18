@@ -12,11 +12,9 @@
 //! [`datasheet_routes`]).
 //!
 //! This module is the thin HTTP layer only. The actual analysis is injected as a
-//! callback (`Analyzer` / `FirmwareAnalyzer` / `SchematicAnalyzer`) so the server
-//! crate stays free of any dependency on the engine/extract crates (which depend
-//! on *this* crate); the `hauksbee` binary wires the engine's `analyze_json` in.
-//! Every route has ONE handler, the schematic-aware one; the narrower legacy
-//! callback shapes are adapted onto it at mount time so the two can never drift.
+//! callback ([`DesignAnalyzer`], [`DeckSimulator`]) so the server crate stays
+//! free of any dependency on the engine/extract crates (which depend on *this*
+//! crate); the `hauksbee` binary wires the engine's own functions in.
 //! The routes are merged into the unified server router (see [`crate::Server`])
 //! so `serve` and `run --serve` both expose them alongside the WebSocket sim and
 //! the static React bundle.
@@ -31,11 +29,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 
 pub use hauksbee_frontdoor_api::frontdoor::{
-    Analyzer, CheckRunner, DatasheetChecker, DatasheetExtractor, DatasheetHooks, DatasheetJob,
-    DatasheetReady, DatasheetSaver, DepInstaller, DepsStatus, DesignAnalyzer, DesignCheckRunner,
-    DesignLiveLauncher, DesignUpload, ExtractSettingsHooks, FirmwareAnalyzer, LiveLaunch,
-    LiveLauncher, ModelDrafter, NamedUpload, SchematicAnalyzer, SchematicCheckRunner,
-    SchematicLiveLauncher, ToolHooks,
+    DatasheetChecker, DatasheetExtractor, DatasheetHooks, DatasheetJob, DatasheetReady,
+    DatasheetSaver, DeckSimulator, DepInstaller, DepsStatus, DesignAnalyzer, DesignCheckRunner,
+    DesignLiveLauncher, DesignUpload, ExtractSettingsHooks, LiveLaunch, ModelDrafter, NamedUpload,
+    ToolHooks,
 };
 
 /// A JSON (or plain-text) body with its content-type header: the shape every
@@ -103,116 +100,35 @@ fn with_upload_guard<S: Send + Sync + 'static>(router: Router<Arc<S>>, state: S)
         .with_state(Arc::new(state))
 }
 
-/// Build the board-only analysis routes (`/api/analyze`). No server-rendered
-/// page: the React bundle owns `/`. Kept for tests and any board-only caller;
-/// production wires the firmware-aware [`api_routes`] into the unified server.
-pub fn router(analyze: Analyzer) -> Router {
-    api_routes_with_schematic(Arc::new(move |name, board, _, _| analyze(name, board)))
-}
-
 struct DesignState {
     analyze: DesignAnalyzer,
+    sim: DeckSimulator,
 }
 
-/// Build the analysis API routes the React landing page calls: board-only
-/// analysis at `/api/analyze` and the firmware co-sim at
-/// `/api/analyze-with-firmware` (multipart: `board` + optional `firmware`).
-///
-/// Both endpoints share the one [`FirmwareAnalyzer`]; the board-only path simply
-/// passes `None` for the firmware. Returns a `Router<()>` so it merges cleanly
-/// into the unified server router alongside the WebSocket sim and the static
-/// React bundle, keeping the whole web experience on one server path.
-pub fn api_routes(analyze: FirmwareAnalyzer) -> Router {
-    api_routes_with_schematic(with_schematic_analyzer(analyze))
-}
-
-/// Complete browser analysis contract. Supplemental design/manufacturing files
-/// use the same multipart endpoint as firmware and schematic companions.
-pub fn api_routes_with_design(analyze: DesignAnalyzer) -> Router {
-    let state = Arc::new(DesignState { analyze });
-    Router::new()
-        .route("/api/analyze", post(analyze_handler_design_raw))
-        .route("/api/analyze-with-firmware", post(analyze_design_handler))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .layer(axum::middleware::map_response(name_upload_limit_413))
-        .with_state(state)
-}
-
-/// Back-compat alias for [`api_routes`] (the firmware-aware analysis routes).
-/// No server-rendered page: the React bundle owns `/`.
-pub fn router_with_firmware(analyze: FirmwareAnalyzer) -> Router {
-    api_routes(analyze)
-}
-
-/// A [`FirmwareAnalyzer`] as the schematic-aware shape, ignoring the schematic.
-pub(crate) fn with_schematic_analyzer(analyze: FirmwareAnalyzer) -> SchematicAnalyzer {
-    Arc::new(move |name, board, firmware, _| analyze(name, board, firmware))
-}
-
-struct CheckState {
-    check: CheckCallback,
-}
-
-/// Which shape of check callback a route was mounted with. The narrowest
-/// (`CheckRunner`) is adapted onto the schematic shape at mount time, so there
-/// are only two here and one handler behind all three constructors.
-#[derive(Clone)]
-enum CheckCallback {
-    Schematic(SchematicCheckRunner),
-    Design(DesignCheckRunner),
-}
-
-/// A [`CheckRunner`] as the schematic-aware shape, ignoring the schematic.
-pub(crate) fn with_schematic_check(check: CheckRunner) -> SchematicCheckRunner {
-    Arc::new(move |name, board, firmware, _, spec| check(name, board, firmware, spec))
-}
-
-/// A [`LiveLauncher`] as the schematic-aware shape, ignoring the schematic.
-pub(crate) fn with_schematic_launcher(launch: LiveLauncher) -> SchematicLiveLauncher {
-    Arc::new(move |name, board, firmware, _| launch(name, board, firmware))
-}
-
-/// Analysis routes which additionally accept a `schematic` multipart part.
-/// The raw board endpoint remains available and supplies no companions.
-pub fn api_routes_with_schematic(analyze: SchematicAnalyzer) -> Router {
+/// Complete browser analysis contract: the React landing page's own routes.
+/// `/api/analyze` takes the raw board bytes, `/api/analyze-with-firmware` the
+/// multipart bundle (board plus every companion), and `/api/sim` a raw SPICE
+/// deck. All three sit behind one upload guard, so they share the body limit,
+/// the 413 that names it, and the cross-site refusal.
+pub fn api_routes_with_design(analyze: DesignAnalyzer, sim: DeckSimulator) -> Router {
     with_upload_guard(
         Router::new()
-            .route("/api/analyze", post(analyze_handler))
-            .route("/api/analyze-with-firmware", post(analyze_upload_handler)),
-        analyze,
+            .route("/api/analyze", post(analyze_handler_design_raw))
+            .route("/api/analyze-with-firmware", post(analyze_design_handler))
+            .route("/api/sim", post(sim_handler)),
+        DesignState { analyze, sim },
     )
 }
 
-/// The web checks route (`POST /api/check`, multipart: `board` + optional
-/// `firmware` + `spec`). The spec part is the TOML body the browser's builder
-/// composed, everything except the file paths, which the engine injects from
-/// the uploaded parts. Merged into the unified router next to the analysis
-/// routes.
-pub fn check_route(check: CheckRunner) -> Router {
-    check_route_with_schematic(with_schematic_check(check))
-}
-
-/// Schematic-aware checks route used by the shipped standalone app.
-pub fn check_route_with_schematic(check: SchematicCheckRunner) -> Router {
-    check_route_for(CheckCallback::Schematic(check))
-}
-
-/// Checks route which takes the whole design upload (board plus every
-/// companion the desktop app posts) rather than the board and its firmware.
+/// The web checks route (`POST /api/check`, multipart: the design bundle plus
+/// a `spec` part). The spec is the TOML body the browser's builder composed,
+/// everything except the file paths, which the engine injects from the
+/// uploaded parts. Merged into the unified router next to the analysis routes.
 pub fn check_route_with_design(check: DesignCheckRunner) -> Router {
-    check_route_for(CheckCallback::Design(check))
-}
-
-fn check_route_for(check: CheckCallback) -> Router {
     with_upload_guard(
         Router::new().route("/api/check", post(check_handler)),
-        CheckState { check },
+        check,
     )
-}
-
-struct LiveState {
-    hub: Arc<crate::LiveHub>,
-    launch: SchematicLiveLauncher,
 }
 
 struct DesignLiveState {
@@ -220,38 +136,13 @@ struct DesignLiveState {
     launch: DesignLiveLauncher,
 }
 
-/// The live-launch API: `POST /api/live/launch` (multipart `board` + optional
-/// `firmware`, same parts as `/api/analyze-with-firmware`) boots a live sim
-/// session for the upload and swaps it into the hub behind `/ws`;
-/// `GET /api/live/status` reports whether (and which) a session is running so
-/// the UI can confirm before replacing it. The launch runs an uploaded board
-/// (and firmware) through the engine, so it carries the same
-/// `reject_cross_site` guard as the other mutating endpoints.
-pub fn live_routes(hub: Arc<crate::LiveHub>, launch: LiveLauncher) -> Router {
-    live_routes_with_schematic(hub, with_schematic_launcher(launch))
-}
-
-/// Live-launch routes which additionally accept a `schematic` multipart part.
-pub fn live_routes_with_schematic(
-    hub: Arc<crate::LiveHub>,
-    launch: SchematicLiveLauncher,
-) -> Router {
-    with_upload_guard(
-        Router::new()
-            .route("/api/live/launch", post(live_launch_handler))
-            .route("/api/live/status", get(live_status_handler)),
-        LiveState { hub, launch },
-    )
-}
-
-/// `GET /api/live/status`: whether a live session is running, and on which
-/// board, so the UI can confirm before replacing it.
-async fn live_status_handler(State(state): State<Arc<LiveState>>) -> JsonResponse {
-    live_status(&state.hub)
-}
-
-/// Live-launch routes for the full design upload: the board plus every
-/// companion the desktop app can post (firmware, schematic, netlist).
+/// The live-launch API: `POST /api/live/launch` (the same multipart bundle
+/// `/api/analyze-with-firmware` takes) boots a live sim session for the upload
+/// and swaps it into the hub behind `/ws`; `GET /api/live/status` reports
+/// whether (and which) a session is running so the UI can confirm before
+/// replacing it. The launch runs an uploaded board (and firmware) through the
+/// engine, so it carries the same `reject_cross_site` guard as the other
+/// mutating endpoints.
 pub fn live_routes_with_design(hub: Arc<crate::LiveHub>, launch: DesignLiveLauncher) -> Router {
     with_upload_guard(
         Router::new()
@@ -265,6 +156,12 @@ async fn live_status_design_handler(State(state): State<Arc<DesignLiveState>>) -
     live_status(&state.hub)
 }
 
+/// POST `/api/live/launch`: build the engine for the uploaded board (blocking
+/// pool; extract + bind + firmware load are CPU work) and install it as THE
+/// live session. `{ok:true, board_name, replaced}` on success; a refusal (no
+/// processor for the firmware, unloadable firmware, unreadable board) comes
+/// back as `{ok:false, error}` with the engine's own message, so the report
+/// stays up and the UI shows the reason instead of a dead spinner.
 async fn live_launch_design_handler(
     State(state): State<Arc<DesignLiveState>>,
     headers: HeaderMap,
@@ -310,40 +207,6 @@ fn installed_live(hub: &crate::LiveHub, live: LiveLaunch) -> JsonResponse {
         StatusCode::OK,
         serde_json::json!({ "ok": true, "board_name": board_name, "replaced": replaced }),
     )
-}
-
-/// POST `/api/live/launch`: build the engine for the uploaded board (blocking
-/// pool; extract + bind + firmware load are CPU work) and install it as THE
-/// live session. `{ok:true, board_name, replaced}` on success; a refusal (no
-/// processor for the firmware, unloadable firmware, unreadable board) comes
-/// back as `{ok:false, error}` with the engine's own message, so the report
-/// stays up and the UI shows the reason instead of a dead spinner.
-async fn live_launch_handler(
-    State(state): State<Arc<LiveState>>,
-    headers: HeaderMap,
-    mut multipart: Multipart,
-) -> JsonResponse {
-    let mut parts = match guarded_upload(&headers, &mut multipart).await {
-        Ok(parts) => parts,
-        Err(response) => return response,
-    };
-    let Some(board_bytes) = parts.board_bytes.take() else {
-        return json_error(NO_BOARD_PART);
-    };
-    let launch = state.launch.clone();
-    let built = run_blocking("the live launch task", move || {
-        (launch)(
-            &parts.board_name,
-            &board_bytes,
-            parts.firmware(),
-            parts.schematic(),
-        )
-    })
-    .await;
-    match built {
-        Ok(live) => installed_live(&state.hub, live),
-        Err(response) => response,
-    }
 }
 
 struct DepsState {
@@ -937,20 +800,6 @@ struct UploadedParts {
 }
 
 impl UploadedParts {
-    /// The optional firmware part as the `(name, bytes)` the callbacks take.
-    fn firmware(&self) -> Option<(&str, &[u8])> {
-        self.fw_bytes
-            .as_deref()
-            .map(|bytes| (self.fw_name.as_str(), bytes))
-    }
-
-    /// The optional schematic part as the `(name, bytes)` the callbacks take.
-    fn schematic(&self) -> Option<(&str, &[u8])> {
-        self.schematic_bytes
-            .as_deref()
-            .map(|bytes| (self.schematic_name.as_str(), bytes))
-    }
-
     /// Every companion the upload carried, as the one bundle the design-aware
     /// callbacks take.
     fn into_design_upload(self) -> Result<DesignUpload, &'static str> {
@@ -1078,7 +927,7 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
 /// it would pin an async worker thread per active check, and a handful of
 /// concurrent checks could pin every worker and stall all the other routes.
 async fn check_handler(
-    State(state): State<Arc<CheckState>>,
+    State(check): State<Arc<DesignCheckRunner>>,
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> JsonResponse {
@@ -1089,24 +938,11 @@ async fn check_handler(
     let Some(spec) = parts.spec.take() else {
         return json_error(NEEDS_BOARD_AND_SPEC);
     };
-    let check = state.check.clone();
-    match run_blocking("the check task", move || match check {
-        CheckCallback::Design(check) => parts
+    match run_blocking("the check task", move || {
+        parts
             .into_design_upload()
             .map(|upload| check(upload, &spec))
-            .map_err(str::to_string),
-        CheckCallback::Schematic(check) => {
-            let Some(board_bytes) = parts.board_bytes.take() else {
-                return Err(NEEDS_BOARD_AND_SPEC.to_string());
-            };
-            Ok(check(
-                &parts.board_name,
-                &board_bytes,
-                parts.firmware(),
-                parts.schematic(),
-                &spec,
-            ))
-        }
+            .map_err(str::to_string)
     })
     .await
     {
@@ -1121,58 +957,6 @@ async fn check_handler(
 /// container (Altium .PcbDoc). The analyzer's extractor sniffs the format from
 /// the RAW bytes; decoding here to a lossy-UTF8 string would corrupt the binary
 /// formats before they are ever parsed. Returns the analysis JSON.
-async fn analyze_handler(
-    State(analyze): State<Arc<SchematicAnalyzer>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> JsonResponse {
-    if let Some(resp) = reject_cross_site(&headers) {
-        return resp;
-    }
-    let content_type = headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if content_type.starts_with("multipart/form-data") {
-        return json_body(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            serde_json::json!({
-                "ok": false,
-                "error": "/api/analyze takes the raw board file as the request body with the \
-                          file name in the X-Board-Filename header; send multipart/form-data \
-                          to /api/analyze-with-firmware instead",
-            }),
-        );
-    }
-    json_ok((analyze)(board_filename(&headers), &body, None, None))
-}
-
-/// POST `/api/analyze-with-firmware`: a `multipart/form-data` upload with a
-/// `board` part (required) and optional `firmware` / `schematic` parts. Every
-/// part is passed as raw `&[u8]`, NEVER lossy-decoded, which would corrupt an
-/// ELF or a binary board; the analyzer's extractor sniffs binary-vs-text
-/// itself. An absent (or empty) firmware part falls back to a board-only
-/// analysis, the same contract `/api/analyze` offers.
-async fn analyze_upload_handler(
-    State(analyze): State<Arc<SchematicAnalyzer>>,
-    headers: HeaderMap,
-    mut multipart: Multipart,
-) -> JsonResponse {
-    let parts = match guarded_upload(&headers, &mut multipart).await {
-        Ok(parts) => parts,
-        Err(response) => return response,
-    };
-    let Some(board_bytes) = &parts.board_bytes else {
-        return json_error(NO_BOARD_PART);
-    };
-    json_ok((analyze)(
-        &parts.board_name,
-        board_bytes,
-        parts.firmware(),
-        parts.schematic(),
-    ))
-}
-
 async fn analyze_handler_design_raw(
     State(state): State<Arc<DesignState>>,
     headers: HeaderMap,
@@ -1181,14 +965,9 @@ async fn analyze_handler_design_raw(
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
-    let file_name = headers
-        .get("x-board-filename")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("board")
-        .to_string();
     let json = (state.analyze)(DesignUpload {
         board: NamedUpload {
-            name: file_name,
+            name: board_filename(&headers).to_string(),
             bytes: body.to_vec(),
         },
         firmware: None,
@@ -1206,6 +985,12 @@ async fn analyze_handler_design_raw(
     )
 }
 
+/// POST `/api/analyze-with-firmware`: a `multipart/form-data` upload with a
+/// `board` part (required) and optional firmware / schematic / manufacturing
+/// parts. Every part is passed as raw `&[u8]`, NEVER lossy-decoded, which
+/// would corrupt an ELF or a binary board; the analyzer's extractor sniffs
+/// binary-vs-text itself. An absent (or empty) firmware part falls back to a
+/// board-only analysis, the same contract `/api/analyze` offers.
 async fn analyze_design_handler(
     State(state): State<Arc<DesignState>>,
     headers: HeaderMap,
@@ -1232,4 +1017,30 @@ async fn analyze_design_handler(
         [(header::CONTENT_TYPE, "application/json")],
         json,
     )
+}
+
+/// POST `/api/sim`: the raw SPICE deck as the request body, its file name in
+/// `X-Board-Filename`. Answers the engine's own JSON (`ok`, `analysis`,
+/// `columns`, `rows`, `notes`, and the `csv` the CLI would have written), or
+/// a 422 carrying the refusal. It shares this module's upload guard, so an
+/// oversize deck gets the same named 413 and a cross-site POST the same 403.
+/// The solve BLOCKS for its whole duration, so it runs on the blocking pool.
+async fn sim_handler(
+    State(state): State<Arc<DesignState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> JsonResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let name = board_filename(&headers).to_string();
+    let deck = String::from_utf8_lossy(&body).into_owned();
+    let sim = state.sim.clone();
+    match run_blocking("the deck simulation", move || (sim)(&name, &deck)).await {
+        Ok(json) => json_ok(json),
+        // A deck the solver refuses is a bad request, not a server fault: the
+        // status has to say so, but the body is still this module's
+        // `{ok:false,error}` so the panel reads every failure one way.
+        Err((_, content_type, body)) => (StatusCode::UNPROCESSABLE_ENTITY, content_type, body),
+    }
 }

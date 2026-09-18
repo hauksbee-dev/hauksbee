@@ -31,6 +31,10 @@ import type { SimFrame } from '../types/protocol'
 const MOVEMENT_FLOOR_V = 0.05
 
 export type NetReading =
+  /** The net's number is an unsupported regulator's setpoint (or is powered
+   *  from one), so it is not a simulated value at all. Outranks every other
+   *  reading: an unobserved or moving number would still imply a solve. */
+  | { kind: 'unsupported' }
   /** The backend cannot see this pin's drive; the number is not a measurement. */
   | { kind: 'unobserved' }
   /** A measured level. `min`/`max` describe movement over the observed span. */
@@ -80,6 +84,7 @@ export function readNet(
   fallback?: Envelopes,
 ): NetReading {
   if (!frame) return { kind: 'absent' }
+  if (frame.unsupported_nets?.includes(net)) return { kind: 'unsupported' }
   if (frame.unobserved_drive_nets?.includes(net)) return { kind: 'unobserved' }
   const volts = frame.net_voltages?.[net]
   if (volts === undefined) return { kind: 'absent' }
@@ -97,6 +102,7 @@ export function readNet(
  *  measured, and never hides that a net is swinging. */
 export function netReadoutText(r: NetReading): string {
   switch (r.kind) {
+    case 'unsupported': return 'unsupported — not a simulated value'
     case 'unobserved': return 'not observed'
     case 'absent': return '—'
     case 'measured':

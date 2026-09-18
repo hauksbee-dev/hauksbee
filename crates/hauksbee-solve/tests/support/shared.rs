@@ -12,27 +12,53 @@ pub fn rc_lowpass(v: f64, r: f64, farads: f64) -> Circuit {
     let mut c = Circuit::new();
     let vin = c.node("in");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(v),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: out,
-        ohms: r,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads,
-        ic: Some(0.0),
-    });
+    add_vdc(&mut c, "V1", vin, NodeId::GROUND, v);
+    add_resistor(&mut c, "R1", vin, out, r);
+    add_capacitor(&mut c, "C1", out, NodeId::GROUND, farads, Some(0.0));
     c
+}
+
+/// Add a plain resistor (no temperature coefficient): the shape almost every
+/// fixture here wants, written once instead of a seven-line struct literal at
+/// each use.
+pub fn add_resistor(c: &mut Circuit, name: &str, a: NodeId, b: NodeId, ohms: f64) -> DeviceId {
+    c.add(Device::Resistor {
+        name: name.into(),
+        a,
+        b,
+        ohms,
+        tc1: None,
+    })
+}
+
+/// Add a capacitor: the same shape as [`add_resistor`], with the initial
+/// condition kept explicit because fixtures differ on whether they set one.
+pub fn add_capacitor(
+    c: &mut Circuit,
+    name: &str,
+    a: NodeId,
+    b: NodeId,
+    farads: f64,
+    ic: Option<f64>,
+) -> DeviceId {
+    c.add(Device::Capacitor {
+        name: name.into(),
+        a,
+        b,
+        farads,
+        ic,
+    })
+}
+
+/// Add a DC voltage source, the only source kind the fixtures here build by
+/// hand often enough to be worth a name.
+pub fn add_vdc(c: &mut Circuit, name: &str, p: NodeId, n: NodeId, volts: f64) -> DeviceId {
+    c.add(Device::Vsource {
+        name: name.into(),
+        p,
+        n,
+        kind: SourceKind::Dc(volts),
+    })
 }
 
 /// Driver island sensed by controlled/behavioral sources: `V1 -> Rd -> ctrl`,
@@ -40,46 +66,17 @@ pub fn rc_lowpass(v: f64, r: f64, farads: f64) -> Circuit {
 pub fn add_driver_leg(c: &mut Circuit) -> NodeId {
     let vin = c.node("in");
     let ctrl = c.node("ctrl");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.0),
-    });
-    c.add(Device::Resistor {
-        name: "Rd".into(),
-        a: vin,
-        b: ctrl,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "Cd".into(),
-        a: ctrl,
-        b: NodeId::GROUND,
-        farads: 100e-9,
-        ic: Some(0.0),
-    });
+    add_vdc(&mut *c, "V1", vin, NodeId::GROUND, 2.0);
+    add_resistor(&mut *c, "Rd", vin, ctrl, 1e3);
+    add_capacitor(&mut *c, "Cd", ctrl, NodeId::GROUND, 100e-9, Some(0.0));
     ctrl
 }
 
 /// RC load island (`out`) driven by a controlled or behavioral source.
 pub fn add_load_leg(c: &mut Circuit) -> NodeId {
     let out = c.node("out");
-    c.add(Device::Resistor {
-        name: "Rl".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "Cl".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: 100e-9,
-        ic: Some(0.0),
-    });
+    add_resistor(&mut *c, "Rl", out, NodeId::GROUND, 1e3);
+    add_capacitor(&mut *c, "Cl", out, NodeId::GROUND, 100e-9, Some(0.0));
     out
 }
 
@@ -90,39 +87,11 @@ pub fn add_sensed_driver_leg(c: &mut Circuit) -> DeviceId {
     let vin = c.node("in");
     let ctrl = c.node("ctrl");
     let cm = c.node("cm");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.0),
-    });
-    c.add(Device::Resistor {
-        name: "Rd".into(),
-        a: vin,
-        b: ctrl,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "Cd".into(),
-        a: ctrl,
-        b: NodeId::GROUND,
-        farads: 100e-9,
-        ic: Some(0.0),
-    });
-    let vs = c.add(Device::Vsource {
-        name: "Vs".into(),
-        p: ctrl,
-        n: cm,
-        kind: SourceKind::Dc(0.0),
-    });
-    c.add(Device::Resistor {
-        name: "Rs".into(),
-        a: cm,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
+    add_vdc(&mut *c, "V1", vin, NodeId::GROUND, 2.0);
+    add_resistor(&mut *c, "Rd", vin, ctrl, 1e3);
+    add_capacitor(&mut *c, "Cd", ctrl, NodeId::GROUND, 100e-9, Some(0.0));
+    let vs = add_vdc(&mut *c, "Vs", ctrl, cm, 0.0);
+    add_resistor(&mut *c, "Rs", cm, NodeId::GROUND, 1e3);
     vs
 }
 
@@ -132,20 +101,15 @@ pub fn add_partition_rc_legs(c: &mut Circuit) {
     let vin = c.node("in");
     for k in 0..4 {
         let leg = c.node(&format!("leg{k}"));
-        c.add(Device::Resistor {
-            name: format!("Rx{k}"),
-            a: vin,
-            b: leg,
-            ohms: 1e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: format!("Cx{k}"),
-            a: leg,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: Some(0.0),
-        });
+        add_resistor(&mut *c, &format!("Rx{k}"), vin, leg, 1e3);
+        add_capacitor(
+            &mut *c,
+            &format!("Cx{k}"),
+            leg,
+            NodeId::GROUND,
+            1e-9,
+            Some(0.0),
+        );
     }
 }
 

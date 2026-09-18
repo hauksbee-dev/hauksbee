@@ -8,6 +8,7 @@
 //! CONVERGE, to the closed-form operating point, from a cold start on either
 //! rail.
 
+use crate::shared::{add_resistor, add_vdc};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{
     dc_operating_point, Integration, SolverOptions, StepControl, Transient, Workspace,
@@ -20,12 +21,7 @@ fn follower(vin: f64, gain: f64, rail_lo: f64, rail_hi: f64) -> Circuit {
     let mut c = Circuit::new();
     let inp = c.node("in");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "VIN".into(),
-        p: inp,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(vin),
-    });
+    add_vdc(&mut c, "VIN", inp, NodeId::GROUND, vin);
     c.add(Device::OpAmp {
         name: "U1".into(),
         out,
@@ -38,13 +34,7 @@ fn follower(vin: f64, gain: f64, rail_lo: f64, rail_hi: f64) -> Circuit {
         rail_lo,
         rail_hi,
     });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e6,
-        tc1: None,
-    });
+    add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e6);
     c
 }
 
@@ -149,13 +139,7 @@ fn follower_tracks_square_wave_transient() {
         rail_lo: 0.0,
         rail_hi: 32.0,
     });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 1e6,
-        tc1: None,
-    });
+    add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e6);
     let opts = SolverOptions {
         integration: Integration::Trapezoidal,
         step: StepControl::Fixed { dt: 1e-5 },

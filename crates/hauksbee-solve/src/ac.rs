@@ -1043,7 +1043,9 @@ fn stamp_mosfet_ac(
                 continue;
             }
             let vj = sign * (op.v(bulk) - op.vx(term_i));
-            let c = crate::stamp::depletion_charge(cbx, model.pb, model.mj, vj).1;
+            let c =
+                crate::stamp::depletion_charge(cbx, model.pb, model.mj, crate::stamp::DIODE_FC, vj)
+                    .1;
             sys.stamp_admittance(bi, term_i, Complex64::new(0.0, w * c));
         }
     }

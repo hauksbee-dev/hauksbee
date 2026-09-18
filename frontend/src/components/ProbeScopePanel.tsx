@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { BoardInfoMsg, SimFrame, ClientMessage } from '../types/protocol'
 import { CloseIcon, PlusIcon, EyeIcon, EyeOffIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
-import { cssToken, isLightTheme } from '../lib/theme-tokens'
+import { netReadoutText, readNet } from '../lib/net-state'
+import { drawScope, traceToken } from './scope-draw'
 
 // The scope card: a rolling trace per probed net, with a per-trace visibility
 // toggle (the probe keeps buffering while hidden, so showing it again has
@@ -11,11 +12,10 @@ import { cssToken, isLightTheme } from '../lib/theme-tokens'
 // --scope-* / --trace-* tokens in index.css. The trace beams and the probe
 // dots in the list below share the SAME --trace-N token, which is how a
 // reader pairs trace to net; retune the token, never one end of the pair.
-
-/** CSS token for probe slot idx; used by the canvas beams AND the list dots. */
-function traceToken(idx: number): string {
-  return `--trace-${(idx % 6) + 1}`
-}
+//
+// The painting itself lives in scope-draw.ts, shared with the deck panel. The
+// 3-second window below is this caller's alone: it is what a LIVE scope shows,
+// and a finished sweep has its own axis.
 
 const WINDOW_SECS = 3.0
 const MAX_SAMPLES = 600
@@ -50,11 +50,13 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
   useEffect(() => {
     if (!frame) return
     for (const net of probes) {
-      const v = frame.net_voltages[net]
-      if (v === undefined) continue
+      // A trace is a claim that this level was measured, so a net the backend
+      // did not simulate or cannot observe is not buffered at all.
+      const r = readNet(frame, net)
+      if (r.kind !== 'measured') continue
       if (!buffers.current.has(net)) buffers.current.set(net, [])
       const buf = buffers.current.get(net)!
-      buf.push({ t: frame.t, v })
+      buf.push({ t: frame.t, v: r.volts })
       if (buf.length > MAX_SAMPLES) buf.splice(0, buf.length - MAX_SAMPLES)
     }
     // Remove stale buffers
@@ -71,160 +73,28 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       if (!canvas) return
       const ctx = canvas.getContext('2d')
       if (!ctx) return
-      const W = canvas.width
-      const H = canvas.height
 
-      ctx.clearRect(0, 0, W, H)
-      const light = isLightTheme()
-      // The face: phosphor-dark or graticule-light, from the theme tokens.
-      ctx.fillStyle = cssToken('--scope-face')
-      ctx.fillRect(0, 0, W, H)
-      // Subtle scanline effect (every 3px a slightly lighter strip). The
-      // light token is fully transparent: scanlines are a CRT artifact.
-      if (!light) {
-        ctx.fillStyle = cssToken('--scope-scan')
-        for (let sy = 0; sy < H; sy += 3) {
-          ctx.fillRect(0, sy, W, 1)
-        }
-      }
-
+      // The window ends at the newest sample any VISIBLE trace has.
       const visible = probes.filter(p => !hiddenRef.current.has(p))
-      if (probes.length === 0) {
-        ctx.fillStyle = cssToken('--scope-hint')
-        ctx.font = '11px monospace'
-        ctx.textAlign = 'center'
-        ctx.fillText('Attach a probe from the net list below', W / 2, H / 2)
-        return
-      }
-      if (visible.length === 0) {
-        ctx.fillStyle = cssToken('--scope-hint')
-        ctx.font = '11px monospace'
-        ctx.textAlign = 'center'
-        ctx.fillText('All traces hidden', W / 2, H / 2)
-        return
-      }
-
-      const PAD_L = 38
-      const PAD_R = 60
-      const PAD_T = 8
-      const PAD_B = 20
-      const plotW = W - PAD_L - PAD_R
-      const plotH = H - PAD_T - PAD_B
-
-      // Determine time range (visible traces only)
       let tMax = 0
       for (const net of visible) {
         const buf = buffers.current.get(net)
         if (buf && buf.length > 0) tMax = Math.max(tMax, buf[buf.length - 1].t)
       }
-      const tMin = tMax - WINDOW_SECS
-
-      // Determine voltage range (autoscale with nice grid)
-      let vMin = 0, vMax = 5
-      for (const net of visible) {
-        for (const s of buffers.current.get(net) ?? []) {
-          if (s.t >= tMin) {
-            vMin = Math.min(vMin, s.v)
-            vMax = Math.max(vMax, s.v)
-          }
-        }
-      }
-      // Add padding
-      const vRange = vMax - vMin || 1
-      vMin -= vRange * 0.05
-      vMax += vRange * 0.05
-
-      // Nice grid lines at round voltages
-      const gridStep = vRange > 4 ? 1 : vRange > 2 ? 0.5 : 0.2
-      const gridStart = Math.ceil(vMin / gridStep) * gridStep
-
-      // Graticule (phosphor green in dark, deep green ink in light)
-      ctx.strokeStyle = cssToken('--scope-grid')
-      ctx.lineWidth = 0.5
-      ctx.setLineDash([2, 4])
-      for (let gv = gridStart; gv <= vMax; gv += gridStep) {
-        const gy = PAD_T + plotH - ((gv - vMin) / (vMax - vMin)) * plotH
-        ctx.beginPath()
-        ctx.moveTo(PAD_L, gy)
-        ctx.lineTo(PAD_L + plotW, gy)
-        ctx.stroke()
-
-        // Voltage label
-        ctx.fillStyle = cssToken('--scope-tick')
-        ctx.font = '9px JetBrains Mono, monospace'
-        ctx.textAlign = 'right'
-        ctx.fillText(`${gv.toFixed(gv % 1 !== 0 ? 1 : 0)}V`, PAD_L - 4, gy + 3)
-      }
-      ctx.setLineDash([])
-
-      // Time axis label
-      ctx.fillStyle = cssToken('--scope-axis')
-      ctx.font = '9px JetBrains Mono, monospace'
-      ctx.textAlign = 'center'
-      ctx.fillText('← 3s window →', PAD_L + plotW / 2, H - 4)
-
-      // Traces. Dark: multi-pass phosphor bloom. Light: the same passes at a
-      // fraction of the strength; a full bloom under an ink-weight trace reads
-      // as smudge on paper, but a whisper of it keeps the "beam" identity.
-      probes.forEach((net, idx) => {
-        if (hiddenRef.current.has(net)) return
-        const buf = buffers.current.get(net) ?? []
-        const color = cssToken(traceToken(idx))
-
-        if (buf.length < 2) return
-
-        // Build path points once
-        const pts: { x: number; y: number }[] = []
-        for (const s of buf) {
-          if (s.t < tMin) continue
-          pts.push({
-            x: PAD_L + ((s.t - tMin) / WINDOW_SECS) * plotW,
-            y: PAD_T + plotH - ((s.v - vMin) / (vMax - vMin)) * plotH,
-          })
-        }
-        if (pts.length < 2) return
-
-        const drawPath = () => {
-          ctx.beginPath()
-          ctx.moveTo(pts[0].x, pts[0].y)
-          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
-          ctx.stroke()
-        }
-
-        // Pass 1: wide soft glow bloom
-        ctx.strokeStyle = color + (light ? '1a' : '33')
-        ctx.lineWidth = light ? 4.5 : 6
-        ctx.shadowColor = color
-        ctx.shadowBlur = light ? 5 : 12
-        drawPath()
-
-        // Pass 2: medium halo
-        ctx.strokeStyle = color + (light ? '40' : '66')
-        ctx.lineWidth = light ? 2.4 : 3
-        ctx.shadowColor = color
-        ctx.shadowBlur = light ? 3 : 8
-        drawPath()
-
-        // Pass 3: crisp core (the "beam")
-        ctx.strokeStyle = color
-        ctx.lineWidth = light ? 1.4 : 1.2
-        ctx.shadowColor = color
-        ctx.shadowBlur = light ? 0 : 4
-        drawPath()
-        ctx.shadowBlur = 0
-
-        // Legend label on right
-        const lastSample = buf[buf.length - 1]
-        const labelY = lastSample
-          ? PAD_T + plotH - ((lastSample.v - vMin) / (vMax - vMin)) * plotH
-          : PAD_T + (idx + 1) * 14
-        ctx.fillStyle = color
-        ctx.font = 'bold 9px JetBrains Mono, monospace'
-        ctx.textAlign = 'left'
-        ctx.shadowColor = color
-        ctx.shadowBlur = light ? 0 : 4
-        ctx.fillText(displayNet(net), PAD_L + plotW + 4, Math.max(PAD_T + 10, Math.min(H - PAD_B - 2, labelY + 3)))
-        ctx.shadowBlur = 0
+      drawScope(ctx, canvas.width, canvas.height, {
+        traces: visible.map(net => ({
+          label: displayNet(net),
+          colorToken: traceToken(probes.indexOf(net)),
+          points: (buffers.current.get(net) ?? []).map(s => ({ x: s.t, y: s.v })),
+        })),
+        xLabel: `← ${WINDOW_SECS}s window →`,
+        yUnit: 'V',
+        xTick: (t: number) => `${t.toFixed(1)}s`,
+        xRange: [tMax - WINDOW_SECS, tMax],
+        yFloor: [0, 5],
+        hint: probes.length === 0
+          ? 'Attach a probe from the net list below'
+          : visible.length === 0 ? 'All traces hidden' : null,
       })
     }
 
@@ -274,7 +144,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
             // The dot and the beam read the same token; see traceToken above.
             const color = `var(${traceToken(idx)})`
             const isHidden = hidden.has(net)
-            const live = frame?.net_voltages[net]
+            const live = frame ? readNet(frame, net) : null
             return (
               <div
                 key={net}
@@ -291,9 +161,10 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
                 >
                   {displayNet(net)}
                 </span>
-                {live !== undefined && !isHidden && (
-                  <span className="text-[10px] tnum shrink-0" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
-                    {live.toFixed(3)}V
+                {live && live.kind !== 'absent' && !isHidden && (
+                  <span className="text-[10px] tnum shrink-0" data-testid="probe-readout"
+                    style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)', fontStyle: live.kind === 'measured' ? undefined : 'italic' }}>
+                    {netReadoutText(live)}
                   </span>
                 )}
                 <button

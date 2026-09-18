@@ -7,7 +7,7 @@
 //! probed net, and it has about one row per simulated millisecond (the headless
 //! chunk cadence). An unknown net must fail before the run, with a suggestion.
 
-use crate::support::run;
+use crate::support::run_board;
 use std::path::PathBuf;
 
 /// A small board with a +5V rail and a BTN net (no firmware needed: the analog
@@ -26,20 +26,20 @@ fn out_csv(tag: &str) -> PathBuf {
 
 #[test]
 fn probe_writes_csv_with_header_and_plausible_rows() {
-    let b = board();
     let csv = out_csv("ok");
     let seconds = 0.05; // 50 ms at the 1 kHz headless cadence => ~50 rows.
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--probe",
-        "+5V,BTN",
-        "--probe-csv",
-        csv.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &board(),
+        &[
+            "--headless",
+            "--seconds",
+            "0.05",
+            "--probe",
+            "+5V, BTN",
+            "--probe-csv",
+            csv.to_str().unwrap(),
+        ],
+    );
     assert!(
         out.status.success(),
         "headless probe run should succeed; stderr:\n{}",
@@ -77,19 +77,20 @@ fn probe_writes_csv_with_header_and_plausible_rows() {
 
 #[test]
 fn unknown_probe_net_fails_before_run_with_suggestion() {
-    let b = board();
     let csv = out_csv("unknown");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.01",
-        "--probe",
-        "+5W", // a typo for +5V
-        "--probe-csv",
-        csv.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &board(),
+        &[
+            "--headless",
+            "--seconds",
+            "0.01",
+            "--probe",
+            "+5W",
+            // a typo for +5V
+            "--probe-csv",
+            csv.to_str().unwrap(),
+        ],
+    );
     assert!(
         !out.status.success(),
         "an unknown probed net must fail the run"

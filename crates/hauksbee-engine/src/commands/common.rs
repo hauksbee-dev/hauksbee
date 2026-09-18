@@ -161,19 +161,57 @@ pub fn design_analyzer() -> hauksbee_frontdoor_api::frontdoor::DesignAnalyzer {
     std::sync::Arc::new(crate::frontdoor::analyze_design_json)
 }
 
-/// The web live-launch callback: turn an uploaded board (and optional
-/// firmware) into a running [`HauksbeeEngine`] the server hub can install
-/// behind `/ws`. Shared by `hauksbee serve` and `run --serve` so an uploaded
-/// board can go live from either front door.
-///
-/// Refusals mirror the CLI: firmware on a board that bound zero processors is
-/// unanswerable (the CLI exits 3 with `no_processor_message`), so the same
-/// message comes back as the launch error instead of a silent board-only
-/// downgrade. Engine-build failures (unloadable firmware, missing emulator)
-/// surface verbatim too; the frontend keeps the report up and shows them.
-pub fn live_launcher() -> hauksbee_frontdoor_api::frontdoor::LiveLauncher {
-    let launch = schematic_live_launcher();
-    std::sync::Arc::new(move |name, contents, firmware| launch(name, contents, firmware, None))
+/// The browser deck panel's backend: run one uploaded SPICE deck through the
+/// very function `hauksbee sim` runs, and answer with its numbers AND the CSV
+/// bytes the CLI would have written. The panel therefore has no CSV writer and
+/// no second formatting rule that could drift from the command line.
+pub fn deck_simulator() -> hauksbee_frontdoor_api::frontdoor::DeckSimulator {
+    use crate::commands::sim::{sim_output_to_csv, simulate_deck};
+    std::sync::Arc::new(|name: &str, deck: &str| {
+        let run = simulate_deck(deck, &[]).map_err(|e| format!("{name}: {e}"))?;
+        let csv = sim_output_to_csv(&run.output);
+        // The chart reads the CSV's own header and numeric rows, so the table
+        // it draws and the file the user downloads cannot disagree.
+        let mut lines = csv.lines();
+        let columns: Vec<&str> = lines.next().map(csv_fields).unwrap_or_default();
+        let rows: Vec<Vec<f64>> = lines
+            .map(|line| {
+                csv_fields(line)
+                    .iter()
+                    .filter_map(|c| c.parse().ok())
+                    .collect()
+            })
+            .collect();
+        Ok(serde_json::json!({
+            "ok": true,
+            "analysis": run.analysis,
+            "columns": columns,
+            "rows": rows,
+            "notes": run.notes,
+            "csv": csv,
+        })
+        .to_string())
+    })
+}
+
+/// Split one CSV line, honouring the quoting `sim_output_to_csv` applies to a
+/// differential probe label (`"V(out,ref)"`). Values never carry quotes.
+fn csv_fields(line: &str) -> Vec<&str> {
+    let mut fields = Vec::new();
+    let mut quoted = false;
+    let mut start = 0;
+    for (i, c) in line.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                fields.push(line[start..i].trim_matches('"'));
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    fields.push(line[start..].trim_matches('"'));
+    fields
 }
 
 /// Retain the exact uploaded text behind `/boards/{name}` for an honest saved-
@@ -448,6 +486,7 @@ pub fn serve(
                 dir.as_deref(),
                 board_file,
                 analyze,
+                deck_simulator(),
                 Some(check),
                 Some(deps_hooks()),
                 Some(design_live_launcher()),

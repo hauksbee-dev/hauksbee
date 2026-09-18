@@ -91,6 +91,9 @@ async function api(req: Request, url: URL): Promise<Response | null> {
       : null
     return json(withBoardIdentity(captured, name, layoutSha256))
   }
+  // A dropped SPICE deck. The fixture is the rc_ac_bode.cir answer: an AC
+  // sweep, the one analysis whose plot is not a straight line off the response.
+  if (p === '/api/sim' && method === 'POST') return fixture('sim-ac.json')
   if (p === '/api/check' && method === 'POST') return fixture('check-run.json')
   if (p === '/api/deps' && method === 'GET') return fixture('deps.json')
   if (p === '/api/sensor-specs' && method === 'GET') {

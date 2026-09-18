@@ -30,7 +30,7 @@ use hauksbee_solve::{
 };
 use num_complex::Complex64;
 
-use crate::shared::max_deviation;
+use crate::shared::{add_resistor, max_deviation};
 
 /// The shared transformer fixture: `V1(sin) -> Rs -> L1 || (K) || L2 -> RL`,
 /// primary and secondary sharing ONLY ground. Returns the circuit and the
@@ -53,13 +53,7 @@ fn transformer(k: f64, l1_h: f64, l2_h: f64) -> (Circuit, DeviceId, DeviceId) {
             phase: 0.0,
         },
     });
-    c.add(Device::Resistor {
-        name: "Rs".into(),
-        a: vin,
-        b: pri,
-        ohms: 50.0,
-        tc1: None,
-    });
+    add_resistor(&mut c, "Rs", vin, pri, 50.0);
     let l1 = c.add(Device::Inductor {
         name: "L1".into(),
         a: pri,
@@ -80,13 +74,7 @@ fn transformer(k: f64, l1_h: f64, l2_h: f64) -> (Circuit, DeviceId, DeviceId) {
         l2,
         k,
     });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: sec,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
+    add_resistor(&mut c, "RL", sec, NodeId::GROUND, 1e3);
     (c, l1, l2)
 }
 

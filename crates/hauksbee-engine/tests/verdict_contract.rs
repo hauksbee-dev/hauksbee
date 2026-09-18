@@ -91,6 +91,13 @@ fn run(args: &[&str]) -> Output {
         .expect("hauksbee binary runs")
 }
 
+/// `run` against a board: the `run` subcommand, that board's path, then `args`.
+fn run_board(board: &Path, args: &[&str]) -> Output {
+    let mut argv = vec!["run", board.to_str().unwrap()];
+    argv.extend_from_slice(args);
+    run(&argv)
+}
+
 /// Run with `GITHUB_ACTIONS` set, the only condition under which the CLI emits
 /// workflow-command annotations.
 fn run_in_actions(args: &[&str]) -> Output {
@@ -106,7 +113,7 @@ fn run_in_actions(args: &[&str]) -> Output {
 #[test]
 fn thermal_partial_coverage_escalates_by_default() {
     let b = fixture("thermal_partial_coverage.kicad_pcb");
-    let out = run(&["run", b.to_str().unwrap(), "--thermal", "--seconds", "0.05"]);
+    let out = run_board(&b, &["--thermal", "--seconds", "0.05"]);
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -127,14 +134,10 @@ fn thermal_partial_coverage_escalates_by_default() {
 #[test]
 fn no_strict_thermal_opts_out_of_the_exit_but_never_of_the_caveat() {
     let b = fixture("thermal_partial_coverage.kicad_pcb");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--thermal",
-        "--seconds",
-        "0.05",
-        "--no-strict-thermal",
-    ]);
+    let out = run_board(
+        &b,
+        &["--thermal", "--seconds", "0.05", "--no-strict-thermal"],
+    );
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -159,14 +162,7 @@ fn strict_thermal_flag_is_still_accepted_quietly() {
     // Existing CI invocations pass --strict-thermal; it now names the default,
     // so it must keep working (same exit 3) without a usage error.
     let b = fixture("thermal_partial_coverage.kicad_pcb");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--thermal",
-        "--seconds",
-        "0.05",
-        "--strict-thermal",
-    ]);
+    let out = run_board(&b, &["--thermal", "--seconds", "0.05", "--strict-thermal"]);
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -183,13 +179,10 @@ fn strict_thermal_flag_is_still_accepted_quietly() {
 #[test]
 fn strict_and_no_strict_thermal_together_is_a_usage_error() {
     let b = fixture("thermal_partial_coverage.kicad_pcb");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--thermal",
-        "--strict-thermal",
-        "--no-strict-thermal",
-    ]);
+    let out = run_board(
+        &b,
+        &["--thermal", "--strict-thermal", "--no-strict-thermal"],
+    );
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -202,29 +195,23 @@ fn strict_and_no_strict_thermal_together_is_a_usage_error() {
 fn thermal_partial_json_is_refused_by_default_and_valid_under_opt_out() {
     let b = fixture("thermal_partial_coverage.kicad_pcb");
     // Default: the JSON document carries the structured refusal and exits 3.
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--thermal",
-        "--seconds",
-        "0.05",
-        "--json",
-    ]);
+    let out = run_board(&b, &["--thermal", "--seconds", "0.05", "--json"]);
     assert_eq!(out.status.code(), Some(3));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     // Validity is #[serde(flatten)]ed into the thermal object.
     assert_eq!(v["thermal"]["valid"], false);
     assert_eq!(v["thermal"]["coverage"]["partial"], true);
     // Opt-out: valid data, coverage still says partial, note still present.
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--thermal",
-        "--seconds",
-        "0.05",
-        "--json",
-        "--no-strict-thermal",
-    ]);
+    let out = run_board(
+        &b,
+        &[
+            "--thermal",
+            "--seconds",
+            "0.05",
+            "--json",
+            "--no-strict-thermal",
+        ],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_eq!(v["thermal"]["valid"], true);
@@ -267,7 +254,7 @@ fn fully_covered_board_is_unchanged_on_both_sides_of_the_flag() {
 #[test]
 fn lint_over_an_unbound_power_fet_says_inconclusive_naming_it() {
     let b = fixture("verdict_fet_unbound.kicad_pcb");
-    let out = run(&["run", b.to_str().unwrap(), "--lint", "--plain"]);
+    let out = run_board(&b, &["--lint", "--plain"]);
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -290,7 +277,7 @@ fn lint_over_an_unbound_power_fet_says_inconclusive_naming_it() {
     // The expert text surface carries the same sentence, and it LEADS: the
     // extract body's "net-lint: no findings." must sit under the refusal, or
     // the first thing a reader sees is a clean bill.
-    let out = run(&["run", b.to_str().unwrap(), "--lint"]);
+    let out = run_board(&b, &["--lint"]);
     assert_eq!(out.status.code(), Some(0));
     let text = stdout(&out);
     let verdict_at = text.find("INCONCLUSIVE").unwrap_or_else(|| {
@@ -308,8 +295,10 @@ fn lint_over_an_unbound_power_fet_says_inconclusive_naming_it() {
 
 #[test]
 fn lint_with_the_fet_bound_gives_the_normal_verdict() {
-    let b = fixture("verdict_fet_bound.kicad_pcb");
-    let out = run(&["run", b.to_str().unwrap(), "--lint", "--plain"]);
+    let out = run_board(
+        &fixture("verdict_fet_bound.kicad_pcb"),
+        &["--lint", "--plain"],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(
@@ -357,8 +346,10 @@ fn the_inconclusive_sentence_is_identical_across_lint_surfaces() {
 
 #[test]
 fn check_plain_sections_read_inconclusive_but_drc_stays_exempt() {
-    let b = fixture("verdict_fet_unbound.kicad_pcb");
-    let out = run(&["run", b.to_str().unwrap(), "--check", "--plain"]);
+    let out = run_board(
+        &fixture("verdict_fet_unbound.kicad_pcb"),
+        &["--check", "--plain"],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     // Both model-dependent sections carry the sentence.
@@ -379,15 +370,16 @@ fn check_plain_sections_read_inconclusive_but_drc_stays_exempt() {
 #[test]
 fn thermal_json_note_leads_with_the_shared_inconclusive_tag() {
     let b = fixture("thermal_partial_coverage.kicad_pcb");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--thermal",
-        "--seconds",
-        "0.05",
-        "--json",
-        "--no-strict-thermal",
-    ]);
+    let out = run_board(
+        &b,
+        &[
+            "--thermal",
+            "--seconds",
+            "0.05",
+            "--json",
+            "--no-strict-thermal",
+        ],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert!(
@@ -404,7 +396,7 @@ fn thermal_json_note_leads_with_the_shared_inconclusive_tag() {
 #[test]
 fn si_json_carries_the_inconclusive_note_and_exit_zero() {
     let b = fixture("verdict_fet_unbound.kicad_pcb");
-    let out = run(&["run", b.to_str().unwrap(), "--si", "--json"]);
+    let out = run_board(&b, &["--si", "--json"]);
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -424,8 +416,7 @@ fn si_json_carries_the_inconclusive_note_and_exit_zero() {
         "the machine surface carries the same INCONCLUSIVE sentence:\n{notes:?}"
     );
     // Bound side: no such note.
-    let b = fixture("verdict_fet_bound.kicad_pcb");
-    let out = run(&["run", b.to_str().unwrap(), "--si", "--json"]);
+    let out = run_board(&fixture("verdict_fet_bound.kicad_pcb"), &["--si", "--json"]);
     assert_eq!(out.status.code(), Some(0));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     let empty = Vec::new();
@@ -494,7 +485,7 @@ fn web_front_door_refuses_a_clean_bill_over_an_unbound_fet() {
 #[test]
 fn check_closing_verdict_is_inconclusive_not_clean() {
     let b = fixture("verdict_fet_unbound.kicad_pcb");
-    let out = run(&["run", b.to_str().unwrap(), "--check"]);
+    let out = run_board(&b, &["--check"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(
@@ -506,8 +497,7 @@ fn check_closing_verdict_is_inconclusive_not_clean() {
         "no clean bill over an unmodelled current-carrying part:\n{text}"
     );
     // Bound side: the clean verdict returns.
-    let b = fixture("verdict_fet_bound.kicad_pcb");
-    let out = run(&["run", b.to_str().unwrap(), "--check"]);
+    let out = run_board(&fixture("verdict_fet_bound.kicad_pcb"), &["--check"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert!(
         stdout(&out).contains("VERDICT: clean"),
@@ -530,7 +520,7 @@ fn check_closing_verdict_is_inconclusive_not_clean() {
 #[test]
 fn bind_gate_flips_the_model_claim_surfaces_and_spares_the_copper_ones() {
     let unbound = fixture("verdict_fet_unbound.kicad_pcb");
-    let out = run(&["run", unbound.to_str().unwrap(), "--si", "--json"]);
+    let out = run_board(&unbound, &["--si", "--json"]);
     assert_eq!(out.status.code(), Some(0), "exit stays 0 without --strict");
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_eq!(
@@ -539,7 +529,7 @@ fn bind_gate_flips_the_model_claim_surfaces_and_spares_the_copper_ones() {
     );
     assert_eq!(v["ok"], false);
 
-    let out = run(&["run", unbound.to_str().unwrap(), "--drc", "--json"]);
+    let out = run_board(&unbound, &["--drc", "--json"]);
     assert_eq!(out.status.code(), Some(0));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_ne!(
@@ -549,7 +539,7 @@ fn bind_gate_flips_the_model_claim_surfaces_and_spares_the_copper_ones() {
 
     // Bound side: the same surface earns its pass.
     let bound = fixture("verdict_fet_bound.kicad_pcb");
-    let out = run(&["run", bound.to_str().unwrap(), "--si", "--json"]);
+    let out = run_board(&bound, &["--si", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_ne!(v["verdict"], "invalid", "a bound board is not gated:\n{v}");
 }
@@ -561,13 +551,7 @@ fn junit_agrees_with_the_json_verdict_about_bind_blockers() {
     let unbound = fixture("verdict_fet_unbound.kicad_pcb");
     let dir = tempfile::tempdir().expect("tempdir");
     let junit = dir.path().join("out.xml");
-    let out = run(&[
-        "run",
-        unbound.to_str().unwrap(),
-        "--check",
-        "--junit",
-        junit.to_str().unwrap(),
-    ]);
+    let out = run_board(&unbound, &["--check", "--junit", junit.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let xml = std::fs::read_to_string(&junit).expect("junit written");
     assert!(
@@ -757,7 +741,7 @@ fn the_report_surface_describes_the_binding_and_never_gates_on_it() {
         // Exempt from the gate is not the same as silent: the per-net binding
         // evidence the exemption declines to gate on is still in the document
         // for the unbound board.
-        let out = run(&["run", b.to_str().unwrap(), "--report", "--json"]);
+        let out = run_board(&b, &["--report", "--json"]);
         let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
         let undermined_binding = v["evidence"].as_array().expect("evidence").iter().any(|m| {
             m["status"] == "undermined"
@@ -784,7 +768,7 @@ fn the_report_surface_describes_the_binding_and_never_gates_on_it() {
 fn a_medium_lint_finding_fails_the_verdict_because_it_fails_the_gate() {
     let b = fixture("verdict_medium_lint.kicad_pcb");
     // No finding here is `serious`: the gate grade is the surface's own.
-    let out = run(&["run", b.to_str().unwrap(), "--lint", "--json"]);
+    let out = run_board(&b, &["--lint", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_eq!(v["serious_count"], 0, "{v}");
     assert!(
@@ -828,7 +812,7 @@ fn a_medium_lint_finding_fails_the_verdict_because_it_fails_the_gate() {
 #[test]
 fn a_medium_si_finding_fails_the_verdict_because_it_fails_the_gate() {
     let b = medium_si_board();
-    let out = run(&["run", b.to_str().unwrap(), "--si", "--json"]);
+    let out = run_board(&b, &["--si", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_eq!(v["serious_count"], 0, "{v}");
     assert!(
@@ -902,16 +886,17 @@ fn junit_and_sarif_agree_with_a_specialist_surfaces_verdict() {
         let b = fixture(name);
         let junit = dir.path().join(format!("{name}.xml"));
         let sarif = dir.path().join(format!("{name}.sarif"));
-        let out = run(&[
-            "run",
-            b.to_str().unwrap(),
-            "--lint",
-            "--json",
-            "--junit",
-            junit.to_str().unwrap(),
-            "--sarif",
-            sarif.to_str().unwrap(),
-        ]);
+        let out = run_board(
+            &b,
+            &[
+                "--lint",
+                "--json",
+                "--junit",
+                junit.to_str().unwrap(),
+                "--sarif",
+                sarif.to_str().unwrap(),
+            ],
+        );
         assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
         let (verdict, _) = json_verdict(&out);
         assert_eq!(
@@ -1063,21 +1048,21 @@ fn a_gating_medium_finding_is_red_in_the_archived_artifact_too() {
     // The fixture's only finding is a medium/`warning` one, so nothing here is
     // `serious`: the severity word alone made this artifact all-green while the
     // verdict said `fail` and `--strict` exited 2.
-    let b = fixture("verdict_medium_lint.kicad_pcb");
     let dir = tempfile::tempdir().expect("tempdir");
     let junit = dir.path().join("out.xml");
     let sarif = dir.path().join("out.sarif");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--lint",
-        "--json",
-        "--strict",
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &fixture("verdict_medium_lint.kicad_pcb"),
+        &[
+            "--lint",
+            "--json",
+            "--strict",
+            "--junit",
+            junit.to_str().unwrap(),
+            "--sarif",
+            sarif.to_str().unwrap(),
+        ],
+    );
     assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_eq!(v["verdict"], "fail");
@@ -1128,15 +1113,16 @@ fn the_same_board_archives_all_green_once_a_waiver_takes_the_gate_away() {
     )
     .expect("stage the waiver");
     let junit = dir.path().join("out.xml");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--lint",
-        "--json",
-        "--strict",
-        "--junit",
-        junit.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &b,
+        &[
+            "--lint",
+            "--json",
+            "--strict",
+            "--junit",
+            junit.to_str().unwrap(),
+        ],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_eq!(v["verdict"], "pass");
@@ -1250,18 +1236,18 @@ fn specialist_artifacts_and_annotations_grade_only_the_selected_surface() {
 
 #[test]
 fn usb_c_artifact_ignores_unrelated_bind_blockers_like_the_selected_report() {
-    let board = fixture("verdict_fet_unbound.kicad_pcb");
     let dir = tempfile::tempdir().expect("tempdir");
     let junit = dir.path().join("usb-c.xml");
-    let out = run(&[
-        "run",
-        board.to_str().unwrap(),
-        "--usb-c",
-        "--json",
-        "--strict",
-        "--junit",
-        junit.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &fixture("verdict_fet_unbound.kicad_pcb"),
+        &[
+            "--usb-c",
+            "--json",
+            "--strict",
+            "--junit",
+            junit.to_str().unwrap(),
+        ],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert_eq!(json_verdict(&out).0, "pass");
     let xml = std::fs::read_to_string(&junit).expect("junit");
@@ -1280,18 +1266,19 @@ fn a_cosim_fault_run_archives_a_failing_testcase() {
     let dir = tempfile::tempdir().expect("tempdir");
     let junit = dir.path().join("out.xml");
     let sarif = dir.path().join("out.sarif");
-    let out = run(&[
-        "run",
-        board.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--json",
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &board,
+        &[
+            "--headless",
+            "--seconds",
+            "0.05",
+            "--json",
+            "--junit",
+            junit.to_str().unwrap(),
+            "--sarif",
+            sarif.to_str().unwrap(),
+        ],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let (verdict, _) = json_verdict(&out);
     assert_eq!(verdict, "fail", "the faults fail this run's own gate");
@@ -1321,17 +1308,18 @@ fn a_cosim_fault_run_archives_a_failing_testcase() {
     // board also refuses (no firmware to exercise), and `fail` outranks that, so
     // 2 is the code the flags have to produce.
     let strict_junit = dir.path().join("strict.xml");
-    let out = run(&[
-        "run",
-        board.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--json",
-        "--strict",
-        "--junit",
-        strict_junit.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &board,
+        &[
+            "--headless",
+            "--seconds",
+            "0.05",
+            "--json",
+            "--strict",
+            "--junit",
+            strict_junit.to_str().unwrap(),
+        ],
+    );
     assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
     assert_eq!(json_verdict(&out).0, "fail");
     let strict_xml = std::fs::read_to_string(&strict_junit).expect("junit written");
@@ -1349,20 +1337,20 @@ fn an_invalid_verdict_keeps_the_invalid_shape_in_the_artifact() {
     // `invalid` route. This board's red comes from unbound verdict-critical
     // parts, so the artifact carries the INVALID evidence blocker as its only
     // gate-grade entry and the document still reads `invalid`, not `fail`.
-    let b = fixture("verdict_fet_unbound.kicad_pcb");
     let dir = tempfile::tempdir().expect("tempdir");
     let junit = dir.path().join("out.xml");
     let sarif = dir.path().join("out.sarif");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--check",
-        "--json",
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &fixture("verdict_fet_unbound.kicad_pcb"),
+        &[
+            "--check",
+            "--json",
+            "--junit",
+            junit.to_str().unwrap(),
+            "--sarif",
+            sarif.to_str().unwrap(),
+        ],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert_eq!(json_verdict(&out).0, "invalid");
 
@@ -1422,15 +1410,16 @@ fn a_medium_finding_that_does_not_gate_stays_a_passing_testcase() {
     .expect("stage the board");
 
     let junit = dir.path().join("out.xml");
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--check",
-        "--json",
-        "--strict",
-        "--junit",
-        junit.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &b,
+        &[
+            "--check",
+            "--json",
+            "--strict",
+            "--junit",
+            junit.to_str().unwrap(),
+        ],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     assert_eq!(v["verdict"], "pass");
@@ -1465,16 +1454,17 @@ fn cosim_junit_agrees_with_the_cosim_json_verdict_about_bind_blockers() {
     let unbound = fixture("verdict_fet_unbound.kicad_pcb");
     let dir = tempfile::tempdir().expect("tempdir");
     let junit = dir.path().join("cosim.xml");
-    let out = run(&[
-        "run",
-        unbound.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--json",
-        "--junit",
-        junit.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &unbound,
+        &[
+            "--headless",
+            "--seconds",
+            "0.05",
+            "--json",
+            "--junit",
+            junit.to_str().unwrap(),
+        ],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert_eq!(
         json_verdict(&out).0,
@@ -1503,15 +1493,16 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
     let board = fixture("cosim_fault_led.kicad_pcb");
     let dir = tempfile::tempdir().expect("tempdir");
     let complete = dir.path().join("complete.xml");
-    let out = run(&[
-        "run",
-        board.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--junit",
-        complete.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &board,
+        &[
+            "--headless",
+            "--seconds",
+            "0.05",
+            "--junit",
+            complete.to_str().unwrap(),
+        ],
+    );
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let complete_cases = junit_testcases(&std::fs::read_to_string(&complete).expect("junit"));
     assert!(
@@ -1793,13 +1784,7 @@ fn artifact_transaction_refuses_to_overwrite_its_board_input() {
     let board = dir.path().join("board.kicad_pcb");
     let original = std::fs::read(fixture("verdict_fet_bound.kicad_pcb")).expect("fixture");
     std::fs::write(&board, &original).expect("staged board");
-    let out = run(&[
-        "run",
-        board.to_str().unwrap(),
-        "--check",
-        "--junit",
-        board.to_str().unwrap(),
-    ]);
+    let out = run_board(&board, &["--check", "--junit", board.to_str().unwrap()]);
     assert!(
         !out.status.success(),
         "an output/input alias must be refused"
@@ -1820,13 +1805,7 @@ fn artifact_transaction_refuses_a_hard_link_to_its_board_input() {
     std::fs::write(&board, &original).expect("staged board");
     std::fs::hard_link(&board, &junit).expect("hard link supported for staged files");
 
-    let out = run(&[
-        "run",
-        board.to_str().unwrap(),
-        "--check",
-        "--junit",
-        junit.to_str().unwrap(),
-    ]);
+    let out = run_board(&board, &["--check", "--junit", junit.to_str().unwrap()]);
 
     assert!(
         !out.status.success(),
@@ -1848,15 +1827,16 @@ fn artifact_transaction_refuses_hard_linked_junit_and_sarif_outputs() {
     std::fs::write(&junit, original).expect("seed junit");
     std::fs::hard_link(&junit, &sarif).expect("hard link supported for staged files");
 
-    let out = run(&[
-        "run",
-        fixture("verdict_fet_bound.kicad_pcb").to_str().unwrap(),
-        "--check",
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &fixture("verdict_fet_bound.kicad_pcb"),
+        &[
+            "--check",
+            "--junit",
+            junit.to_str().unwrap(),
+            "--sarif",
+            sarif.to_str().unwrap(),
+        ],
+    );
 
     assert!(
         !out.status.success(),
@@ -1878,15 +1858,16 @@ fn parse_error_never_writes_through_hard_linked_artifact_outputs() {
     std::fs::write(&junit, original).expect("seed junit");
     std::fs::hard_link(&junit, &sarif).expect("hard link supported for staged files");
 
-    let out = run(&[
-        "run",
-        fixture("verdict_fet_bound.kicad_pcb").to_str().unwrap(),
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-        "--not-a-real-run-flag",
-    ]);
+    let out = run_board(
+        &fixture("verdict_fet_bound.kicad_pcb"),
+        &[
+            "--junit",
+            junit.to_str().unwrap(),
+            "--sarif",
+            sarif.to_str().unwrap(),
+            "--not-a-real-run-flag",
+        ],
+    );
 
     assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
     assert_eq!(
@@ -1904,15 +1885,16 @@ fn unsafe_artifact_alias_still_invalidates_every_other_safe_requested_surface() 
     let original = std::fs::read(fixture("verdict_fet_bound.kicad_pcb")).expect("fixture");
     std::fs::write(&board, &original).expect("staged board");
     std::fs::write(&sarif, "stale green sarif").expect("stale sarif");
-    let out = run(&[
-        "run",
-        board.to_str().unwrap(),
-        "--check",
-        "--junit",
-        board.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-    ]);
+    let out = run_board(
+        &board,
+        &[
+            "--check",
+            "--junit",
+            board.to_str().unwrap(),
+            "--sarif",
+            sarif.to_str().unwrap(),
+        ],
+    );
     assert!(!out.status.success());
     assert_eq!(
         std::fs::read(&board).expect("board retained"),
@@ -1939,15 +1921,16 @@ fn clap_usage_error_invalidates_requested_artifacts_before_exiting() {
     let sarif = dir.path().join("usage.sarif");
     std::fs::write(&junit, "stale green junit").expect("stale junit");
     std::fs::write(&sarif, "stale green sarif").expect("stale sarif");
-    let out = run(&[
-        "run",
-        fixture("verdict_fet_bound.kicad_pcb").to_str().unwrap(),
-        "--junit",
-        junit.to_str().unwrap(),
-        "--sarif",
-        sarif.to_str().unwrap(),
-        "--not-a-real-run-flag",
-    ]);
+    let out = run_board(
+        &fixture("verdict_fet_bound.kicad_pcb"),
+        &[
+            "--junit",
+            junit.to_str().unwrap(),
+            "--sarif",
+            sarif.to_str().unwrap(),
+            "--not-a-real-run-flag",
+        ],
+    );
     assert!(!out.status.success());
     let xml = std::fs::read_to_string(&junit).expect("junit replaced");
     assert!(
@@ -1976,15 +1959,16 @@ fn clap_usage_error_never_invalidates_over_a_declared_run_input() {
     let firmware = dir.path().join("firmware.hex");
     let original = b":020000040000FA\n:00000001FF\n";
     std::fs::write(&firmware, original).expect("firmware fixture");
-    let out = run(&[
-        "run",
-        fixture("verdict_fet_bound.kicad_pcb").to_str().unwrap(),
-        "--firmware",
-        firmware.to_str().unwrap(),
-        "--junit",
-        firmware.to_str().unwrap(),
-        "--not-a-real-run-flag",
-    ]);
+    let out = run_board(
+        &fixture("verdict_fet_bound.kicad_pcb"),
+        &[
+            "--firmware",
+            firmware.to_str().unwrap(),
+            "--junit",
+            firmware.to_str().unwrap(),
+            "--not-a-real-run-flag",
+        ],
+    );
     assert!(!out.status.success());
     assert_eq!(
         std::fs::read(&firmware).expect("firmware retained"),
@@ -2160,7 +2144,7 @@ fn the_placement_free_refusal_envelope_keeps_ok_iff_pass() {
          (segment (start 0 0) (end 10 0) (width 0.25) (layer F.Cu) (net 1))\n)\n",
     )
     .expect("fixture written");
-    let out = run(&["run", board.to_str().unwrap(), "--check", "--json"]);
+    let out = run_board(&board, &["--check", "--json"]);
     assert_eq!(
         out.status.code(),
         Some(3),

@@ -8,7 +8,7 @@
 //! These exercise the actual compiled binary so the exit-code contract that a CI
 //! pipeline depends on is tested end to end, not just the library predicates.
 
-use crate::support::{board, run};
+use crate::support::{board, run, run_board};
 use std::path::PathBuf;
 
 /// A board that contains two real copper shorts (GND <-> +5V on both layers).
@@ -46,7 +46,7 @@ fn ampacity_prints_capacity_only_report() {
 )"#,
     )
     .expect("write temp board");
-    let out = run(&["run", path.to_str().unwrap(), "--ampacity"]);
+    let out = run_board(&path, &["--ampacity"]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("capacity only"));
@@ -56,8 +56,7 @@ fn ampacity_prints_capacity_only_report() {
 
 #[test]
 fn drc_without_strict_exits_zero_even_with_shorts() {
-    let b = shorted_board();
-    let out = run(&["run", b.to_str().unwrap(), "--drc"]);
+    let out = run_board(&shorted_board(), &["--drc"]);
     assert!(
         out.status.success(),
         "default --drc must stay exit 0 (existing-script contract); got {:?}",
@@ -72,8 +71,7 @@ fn drc_without_strict_exits_zero_even_with_shorts() {
 
 #[test]
 fn drc_strict_exits_nonzero_on_shorts() {
-    let b = shorted_board();
-    let out = run(&["run", b.to_str().unwrap(), "--drc", "--strict"]);
+    let out = run_board(&shorted_board(), &["--drc", "--strict"]);
     assert!(
         !out.status.success(),
         "--strict must fail the gate when shorts exist"
@@ -82,8 +80,7 @@ fn drc_strict_exits_nonzero_on_shorts() {
 
 #[test]
 fn fail_on_findings_alias_works() {
-    let b = shorted_board();
-    let out = run(&["run", b.to_str().unwrap(), "--drc", "--fail-on-findings"]);
+    let out = run_board(&shorted_board(), &["--drc", "--fail-on-findings"]);
     assert!(
         !out.status.success(),
         "--fail-on-findings is the documented alias of --strict"
@@ -92,9 +89,8 @@ fn fail_on_findings_alias_works() {
 
 #[test]
 fn strict_on_clean_board_exits_zero() {
-    let b = clean_board();
     // Lint is clean on this board, so --strict must NOT fail.
-    let out = run(&["run", b.to_str().unwrap(), "--lint", "--strict"]);
+    let out = run_board(&clean_board(), &["--lint", "--strict"]);
     assert!(
         out.status.success(),
         "--strict must exit 0 when there are no findings; got {:?}",
@@ -104,8 +100,7 @@ fn strict_on_clean_board_exits_zero() {
 
 #[test]
 fn plain_drc_prints_verdict_and_what_why_fix() {
-    let b = shorted_board();
-    let out = run(&["run", b.to_str().unwrap(), "--drc", "--plain"]);
+    let out = run_board(&shorted_board(), &["--drc", "--plain"]);
     assert!(
         out.status.success(),
         "--plain alone does not change exit code"
@@ -131,8 +126,8 @@ fn plain_drc_prints_verdict_and_what_why_fix() {
 #[test]
 fn explain_alias_matches_plain() {
     let b = shorted_board();
-    let a = run(&["run", b.to_str().unwrap(), "--drc", "--plain"]);
-    let c = run(&["run", b.to_str().unwrap(), "--drc", "--explain"]);
+    let a = run_board(&b, &["--drc", "--plain"]);
+    let c = run_board(&b, &["--drc", "--explain"]);
     assert_eq!(
         String::from_utf8_lossy(&a.stdout),
         String::from_utf8_lossy(&c.stdout),
@@ -142,8 +137,7 @@ fn explain_alias_matches_plain() {
 
 #[test]
 fn plain_clean_board_reads_healthy() {
-    let b = clean_board();
-    let out = run(&["run", b.to_str().unwrap(), "--lint", "--plain"]);
+    let out = run_board(&clean_board(), &["--lint", "--plain"]);
     let stdout = String::from_utf8_lossy(&out.stdout).to_lowercase();
     assert!(
         stdout.contains("healthy"),
@@ -158,15 +152,10 @@ fn ac_all_requested_nodes_missing_is_invalid_not_valid() {
     // refuse that as INVALID for the requested analysis (valid:false + exit 3),
     // not silently report `ac: { valid: true, nets: [] }` with exit 0.
     let b = clean_board();
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--ac",
-        "1:1e6:20",
-        "--ac-node",
-        "/NONEXISTENT",
-        "--json",
-    ]);
+    let out = run_board(
+        &b,
+        &["--ac", "1:1e6:20", "--ac-node", "/NONEXISTENT", "--json"],
+    );
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -205,15 +194,10 @@ fn ac_all_requested_nodes_missing_text_errors_and_exits_three() {
     // Same honesty hole on the TEXT surface: an error line + exit 3, never a
     // table presented as a valid result. Round 2 hardened this from a WARNING
     // to an error, validated BEFORE the sweep, with did-you-mean suggestions.
-    let b = clean_board();
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--ac",
-        "1:1e6:20",
-        "--ac-node",
-        "/NONEXISTENT",
-    ]);
+    let out = run_board(
+        &clean_board(),
+        &["--ac", "1:1e6:20", "--ac-node", "/NONEXISTENT"],
+    );
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -233,20 +217,20 @@ fn ac_all_requested_nodes_missing_text_errors_and_exits_three() {
 
 #[test]
 fn ac_loop_cli_reports_real_one_pole_phase_margin() {
-    let b = ac_loop_board();
     let models = ac_loop_models();
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--models-dir",
-        models.to_str().unwrap(),
-        "--ac",
-        "1:1e8:50",
-        "--ac-node",
-        "OUT",
-        "--ac-loop",
-        "OUT",
-    ]);
+    let out = run_board(
+        &ac_loop_board(),
+        &[
+            "--models-dir",
+            models.to_str().unwrap(),
+            "--ac",
+            "1:1e8:50",
+            "--ac-node",
+            "OUT",
+            "--ac-loop",
+            "OUT",
+        ],
+    );
 
     assert!(
         out.status.success(),
@@ -279,7 +263,6 @@ fn ac_csv_is_written_even_with_json() {
     // legitimately wants structured JSON on stdout AND a CSV artifact on disk.
     // A CSV writer placed AFTER the `--json` early return drops the CSV whenever
     // both are passed: never written, no diagnostic, exit 0.
-    let b = ac_loop_board();
     let models = ac_loop_models();
     let csv_path = std::env::temp_dir().join(format!(
         "hauksbee_ac_csv_{}_{}.csv",
@@ -290,19 +273,20 @@ fn ac_csv_is_written_even_with_json() {
             .as_nanos()
     ));
     let _ = std::fs::remove_file(&csv_path);
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--models-dir",
-        models.to_str().unwrap(),
-        "--ac",
-        "1:1e8:50",
-        "--ac-node",
-        "OUT",
-        "--ac-csv",
-        csv_path.to_str().unwrap(),
-        "--json",
-    ]);
+    let out = run_board(
+        &ac_loop_board(),
+        &[
+            "--models-dir",
+            models.to_str().unwrap(),
+            "--ac",
+            "1:1e8:50",
+            "--ac-node",
+            "OUT",
+            "--ac-csv",
+            csv_path.to_str().unwrap(),
+            "--json",
+        ],
+    );
     assert!(
         out.status.success(),
         "valid AC sweep must succeed; status={:?}; stderr={}",
@@ -337,21 +321,21 @@ fn ac_partial_json_surfaces_a_not_found_node() {
     // R12: a valid sweep that requests one REAL net (OUT) and one that doesn't
     // exist must still name the missing net in the JSON; the text path warns
     // "net not found", so the JSON must not silently drop it.
-    let b = ac_loop_board();
     let models = ac_loop_models();
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--models-dir",
-        models.to_str().unwrap(),
-        "--ac",
-        "1:1e8:50",
-        "--ac-node",
-        "OUT",
-        "--ac-node",
-        "/NONEXISTENT",
-        "--json",
-    ]);
+    let out = run_board(
+        &ac_loop_board(),
+        &[
+            "--models-dir",
+            models.to_str().unwrap(),
+            "--ac",
+            "1:1e8:50",
+            "--ac-node",
+            "OUT",
+            "--ac-node",
+            "/NONEXISTENT",
+            "--json",
+        ],
+    );
     assert!(
         out.status.success(),
         "a partially-valid sweep (one real net) still succeeds; stderr={}",
@@ -387,7 +371,7 @@ fn plain_check_surfaces_open_active_ic_bind_honesty() {
     // target for a test that needs something to stay UNbound, and the right
     // direction for that board is bound.
     let b = board("tests/fixtures/plain_check_open_active_ic.kicad_pcb");
-    let out = run(&["run", b.to_str().unwrap(), "--check", "--plain"]);
+    let out = run_board(&b, &["--check", "--plain"]);
     assert!(
         out.status.success(),
         "--check --plain does not gate without --strict; got {:?}",
@@ -423,7 +407,7 @@ fn bare_json_strict_gates_a_shorted_board() {
     // (exit 2) like the text/--check paths, while plain `--json` stays exit 0.
     let b = shorted_board();
 
-    let strict = run(&["run", b.to_str().unwrap(), "--json", "--strict"]);
+    let strict = run_board(&b, &["--json", "--strict"]);
     assert_eq!(
         strict.status.code(),
         Some(2),
@@ -441,7 +425,7 @@ fn bare_json_strict_gates_a_shorted_board() {
     );
 
     // Without --strict the same command stays exit 0 (the existing contract).
-    let lax = run(&["run", b.to_str().unwrap(), "--json"]);
+    let lax = run_board(&b, &["--json"]);
     assert_eq!(
         lax.status.code(),
         Some(0),
@@ -452,8 +436,7 @@ fn bare_json_strict_gates_a_shorted_board() {
 #[test]
 fn plain_and_strict_compose() {
     // Plain output AND a non-zero exit on the same run.
-    let b = shorted_board();
-    let out = run(&["run", b.to_str().unwrap(), "--drc", "--plain", "--strict"]);
+    let out = run_board(&shorted_board(), &["--drc", "--plain", "--strict"]);
     assert!(!out.status.success(), "strict still gates with --plain on");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -517,7 +500,7 @@ fn crossing_short_board(version: u32, tag: &str) -> PathBuf {
 fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
     // Validated (KiCad 7): the short gates the build.
     let validated = crossing_short_board(20221018, "validated");
-    let out = run(&["run", validated.to_str().unwrap(), "--drc", "--strict"]);
+    let out = run_board(&validated, &["--drc", "--strict"]);
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -529,7 +512,7 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
 
     // Unvalidated (KiCad 10): the same short does NOT gate (caveat printed).
     let unvalidated = crossing_short_board(20260206, "unvalidated");
-    let out = run(&["run", unvalidated.to_str().unwrap(), "--drc", "--strict"]);
+    let out = run_board(&unvalidated, &["--drc", "--strict"]);
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -542,7 +525,7 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
     );
 
     // And in --check the same divergence holds (the aggregate gate).
-    let out = run(&["run", unvalidated.to_str().unwrap(), "--check", "--strict"]);
+    let out = run_board(&unvalidated, &["--check", "--strict"]);
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -775,23 +758,23 @@ fn boot_state_panel_reports_gate_drive_state() {
 #[cfg(feature = "avr")]
 #[test]
 fn boot_panel_reports_high_even_with_a_gate_pulldown() {
-    let b = board("tests/fixtures/boot_gate_pulldown.kicad_pcb");
     let fw = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
     assert!(
         fw.exists(),
         "required tracked firmware fixture: {}",
         fw.display()
     );
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--firmware",
-        fw.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.05",
-        "--plain",
-    ]);
+    let out = run_board(
+        &board("tests/fixtures/boot_gate_pulldown.kicad_pcb"),
+        &[
+            "--firmware",
+            fw.to_str().unwrap(),
+            "--headless",
+            "--seconds",
+            "0.05",
+            "--plain",
+        ],
+    );
     let p = String::from_utf8_lossy(&out.stdout);
     // The PANEL row (a GATE_CTRL line carrying a state label), not the activity
     // table row (which also contains "GATE_CTRL" but no state word).

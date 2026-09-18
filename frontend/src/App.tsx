@@ -11,6 +11,7 @@ import { SettingsView } from './components/SettingsView'
 import { ShellChips } from './components/ShellChips'
 import { LaunchErrorBanner, ReplaceLiveConfirm, ResumeErrorBanner } from './components/ShellBanners'
 import SimView from './SimView'
+import { DeckPanel } from './components/sim/DeckPanel'
 import type { SimShellStatus } from './SimView'
 import { useTheme } from './hooks/useTheme'
 import { useBoardSession } from './hooks/useBoardSession'
@@ -109,14 +110,18 @@ function useQueue<T extends { seq: number }>(nextSeq: () => number) {
 function Shell({ boot }: { boot: Boot }) {
   const { report: preloadedReport, boardName: preloadedBoardName, canLaunchLive, avrAvailable, engineVersion } = boot
   const { theme, toggleTheme } = useTheme()
+  const [view, setView] = useState<AppView>('board')
+  // A dropped SPICE deck takes the sim slot instead of the live session: it has
+  // no board behind it and nothing to stream, just an analysis to run.
+  const [deck, setDeck] = useState<File | null>(null)
+  const openDeck = useCallback((f: File) => { setDeck(f); setView('sim') }, [])
   const session = useBoardSession({
     preloadedReport,
     preloadedBoardName,
     sessionPreloaded: preloadedReport !== null,
     canLaunchLive,
+    onDeck: openDeck,
   })
-
-  const [view, setView] = useState<AppView>('board')
   // The sim view stays mounted once launched: unmounting would close the
   // WebSocket and drop the fault log / scope buffers.
   const [simMounted, setSimMounted] = useState(false)
@@ -183,12 +188,12 @@ function Shell({ boot }: { boot: Boot }) {
   }, [session])
 
   const serverLiveActive = session.serverLive?.active === true
-  const simEnabled = simMounted || (reportOk && session.liveMode !== 'none') || serverLiveActive
+  const simEnabled = simMounted || deck !== null || (reportOk && session.liveMode !== 'none') || serverLiveActive
 
   const navigate = useCallback((v: AppView) => {
     if (v === 'env') setEnvVisited(true)
     if (v === 'settings') setSettingsVisited(true)
-    if (v === 'sim' && !simMounted) {
+    if (v === 'sim' && !simMounted && !deck) {
       // The nav entry launches (or asks to replace), exactly like the primary
       // action, so "Live Sim" never opens an offline shell. With no launchable
       // board but a session running server-side, open that instead of being a
@@ -198,7 +203,7 @@ function Shell({ boot }: { boot: Boot }) {
       return
     }
     setView(v)
-  }, [driveLive, openLiveSession, reportOk, serverLiveActive, session.liveMode, simMounted])
+  }, [deck, driveLive, openLiveSession, reportOk, serverLiveActive, session.liveMode, simMounted])
 
   const analyzeAnother = useCallback(() => {
     session.resetFlow()
@@ -473,7 +478,13 @@ function Shell({ boot }: { boot: Boot }) {
             </div>
           )}
 
-          {simMounted && (
+          {deck && (
+            <div className="overflow-y-auto" style={{ display: view === 'sim' ? 'block' : 'none', height: '100%' }}>
+              <DeckPanel file={deck} />
+            </div>
+          )}
+
+          {simMounted && !deck && (
             <div style={{ display: view === 'sim' ? 'block' : 'none', height: '100%' }}>
               <SimView
                 onQueue={queueRequest}

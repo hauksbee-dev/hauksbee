@@ -408,6 +408,11 @@ pub struct RunOutcome {
     /// report surfaces every entry, or a GREEN silently vouches for co-sim
     /// paths that never ran.
     pub coverage_warnings: Vec<String>,
+    /// Regulators whose input headroom was never established, with the nets and
+    /// MCU references their unsupported setpoint contaminates. Assertions whose
+    /// subject touches one are INVALID, not PASS: the number on that net is an
+    /// ideal source's setpoint, not a simulated result.
+    pub regulation: Vec<hauksbee_engine::scheduler::RegulationTaint>,
     /// Measured per-backend edge/pulse capability at the chunk used.
     pub timing_coverage: Vec<hauksbee_engine::scheduler::TimingCoverage>,
     /// Timing claims the run could not honor. Any entry invalidates the whole
@@ -1599,32 +1604,11 @@ fn coverage_warnings(engine: &HauksbeeEngine, hollow_warnings: &[String]) -> Vec
         // estimated-fallback model rests on invented ratings, and looked
         // identical to one resting on a real datasheet until now.
         .chain(engine.report().estimated_fallback_warnings())
-        .chain(engine.scheduler().watchdog_limitations().into_iter().map(
-            |(mcu_ref, limitation)| {
-                hauksbee_engine::scheduler::watchdog_limitation_message(&mcu_ref, &limitation)
-            },
+        // Watchdog, timing and regulation coverage, shared with the `run`
+        // binary so the wording cannot drift.
+        .chain(hauksbee_engine::scheduler::coverage_limitation_messages(
+            engine.scheduler(),
         ))
-        .chain(
-            engine
-                .scheduler()
-                .watchdog_resets()
-                .into_iter()
-                .map(|(mcu_ref, resets)| {
-                    hauksbee_engine::scheduler::watchdog_reset_message(&mcu_ref, resets)
-                }),
-        )
-        // Timing coverage: a known systematic time bias on a core (the
-        // wall-clock-paced QEMU family, the F103's TIMx-at-72MHz trade)
-        // makes a CI timing assertion there mean less than it looks.
-        .chain(
-            engine
-                .scheduler()
-                .timing_limitations()
-                .into_iter()
-                .map(|(mcu_ref, limitation)| {
-                    hauksbee_engine::scheduler::timing_limitation_message(&mcu_ref, &limitation)
-                }),
-        )
         .chain(hollow_warnings.iter().cloned())
         .collect()
 }
@@ -2171,6 +2155,7 @@ fn run_one(
             .map(|s| s.message())
             .collect(),
         coverage_warnings: coverage_warnings(&engine, &hollow_warnings),
+        regulation: engine.scheduler().regulation_taint().to_vec(),
         timing_coverage: engine.scheduler().timing_coverage(),
         timing_refusals: timing_configuration_refusal
             .into_iter()

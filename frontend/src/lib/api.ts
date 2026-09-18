@@ -25,28 +25,20 @@ export async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   return await res.json() as T
 }
 
-/** POST a JSON body and read the JSON answer, whatever the status: these
- *  endpoints report their own refusals in the body. */
-export async function postJson<T>(url: string, body: unknown): Promise<T> {
+/** Send a JSON body and read the JSON answer, whatever the status: these
+ *  endpoints report their own refusals in the body, so a caller that needs to
+ *  tell success from a 400 reads the status or the body's `error` itself (see
+ *  `extractSettingsSave`). */
+async function sendJson<T>(method: string, url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
-    method: 'POST',
+    method,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
   return await res.json() as T
 }
 
-/** PUT a JSON body and read the JSON answer, whatever the status: like
- *  `postJson`, callers that need to distinguish success from a 400 read the
- *  status or the body's `error` themselves (see `extractSettingsSave`). */
-export async function putJson<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  return await res.json() as T
-}
+export const postJson = <T>(url: string, body: unknown): Promise<T> => sendJson<T>('POST', url, body)
 
 /** Read a body ONCE as text, then parse defensively: a stale build, a proxy or
  *  a body-limit refusal answers in plaintext, and `res.json()` on that throws
@@ -121,6 +113,15 @@ export async function postSse(url: string, body: FormData | undefined, onFrame: 
   await readSseStream(res.body, onFrame)
 }
 
+/** Read a settings answer, preferring the server's own refusal message over
+ *  the bare status line: both settings writes report a 400 in the body. */
+const settingsOrRefusal = async (sent: Promise<Response>): Promise<ExtractSettings> => {
+  const res = await sent
+  const json = await readJson<ExtractSettings & { error?: string }>(res)
+  if (!res.ok) throw new Error(json.error ?? `the server answered ${statusLine(res)}`)
+  return json
+}
+
 // ── The endpoints ────────────────────────────────────────────────────────────
 
 export const api = {
@@ -169,22 +170,14 @@ export const api = {
   /** PUT the backend config. Unlike `postJson`, this throws on a non-2xx (a
    *  400 with `{"error": "..."}`) so the settings page can show the server's
    *  own refusal message next to Save rather than silently swallowing it. */
-  extractSettingsSave: async (config: ExtractBackendsConfig): Promise<ExtractSettings> => {
-    const res = await fetch('/api/settings/extract', {
+  extractSettingsSave: (config: ExtractBackendsConfig): Promise<ExtractSettings> =>
+    settingsOrRefusal(fetch('/api/settings/extract', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(config),
-    })
-    const json = await readJson<ExtractSettings & { error?: string }>(res)
-    if (!res.ok) throw new Error(json.error ?? `the server answered ${statusLine(res)}`)
-    return json
-  },
-  extractSettingsPreset: async (id: string): Promise<ExtractSettings> => {
-    const res = await fetch(`/api/settings/extract/preset/${encodeURIComponent(id)}`, { method: 'POST' })
-    const json = await readJson<ExtractSettings & { error?: string }>(res)
-    if (!res.ok) throw new Error(json.error ?? `the server answered ${statusLine(res)}`)
-    return json
-  },
+    })),
+  extractSettingsPreset: (id: string): Promise<ExtractSettings> =>
+    settingsOrRefusal(fetch(`/api/settings/extract/preset/${encodeURIComponent(id)}`, { method: 'POST' })),
   /** Runs one tiny model call against the configured backend, streamed the
    *  same way an install or an extraction is. */
   extractSettingsTest: (onFrame: (frame: SseFrame) => void) =>

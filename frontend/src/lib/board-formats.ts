@@ -23,6 +23,7 @@ const BOARD_FORMATS: BoardFormat[] = [
   { vendor: 'IPC', exts: ['.d356', '.xml'] },
   { vendor: 'fab archive', exts: ['.zip', '.tgz', '.tar.gz', '.tar'] },
   { vendor: 'board-as-code', exts: ['.board'] },
+  { vendor: 'SPICE deck', exts: ['.cir', '.sp', '.net'] },
   { vendor: 'Excellon drill', exts: ['.txt'], quiet: true },
 ]
 
@@ -30,8 +31,10 @@ const BOARD_FORMATS: BoardFormat[] = [
  *  rather than refusing. */
 export const FIRMWARE_EXTS = ['.elf', '.hex']
 
-/** Every extension the board picker offers, lowercase, with the dot. */
-export const BOARD_EXTS: string[] = BOARD_FORMATS.flatMap(f => f.exts.map(e => e.toLowerCase()))
+/** Every extension the board picker offers, lowercase, with the dot. Deduped:
+ *  `.net` is claimed by both KiCad and SPICE, and the drop router sniffs the
+ *  content to tell them apart (see `isSpiceDeck`). */
+export const BOARD_EXTS: string[] = [...new Set(BOARD_FORMATS.flatMap(f => f.exts.map(e => e.toLowerCase())))]
 
 /** The `accept` attribute for the board file input. Firmware is included
  *  because a firmware file dropped on the board zone is re-routed, not

@@ -138,6 +138,14 @@ export interface SimFrame {
    *  activity. These must never be animated as active and should read as
    *  "not observed" rather than as a measured zero. Additive. */
   unobserved_drive_nets?: string[]
+  /** Nets whose shown voltage is an unsupported regulator's ideal setpoint, or
+   *  is powered from one. The regulator's input headroom was never established,
+   *  so the number is a setpoint, not a simulated result, and must never be
+   *  read as a measurement. Additive. */
+  unsupported_nets?: string[]
+  /** One reason per unsupported regulator, in the shared wording every other
+   *  surface carries. Additive. */
+  unsupported_reasons?: string[]
   /** net name → voltage in V, sampled at the END of the chunk. A pulse
    *  narrower than the chunk is not in this number; see `net_v_extremes`. */
   net_voltages: Record<string, number>

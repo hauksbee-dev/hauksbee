@@ -94,10 +94,13 @@ function session(report: WebReport): BoardSession {
   }
 }
 
-test.skipIf(!hasFrontdoorReport)('the browser renders every structured timing qualification from a frontdoor report', async () => {
+/** The BoardView as the app renders it. Every case below differs only in the
+ *  session it is given (and, where a session was restored, its name), so the
+ *  full prop list lives here once rather than in each test. */
+async function boardHtml(session: BoardSession, sessionName: string | null = null): Promise<string> {
   const { BoardView } = await import('../src/components/BoardView')
-  const html = renderToStaticMarkup(<BoardView
-    session={session(realFrontdoorReport())}
+  return renderToStaticMarkup(<BoardView
+    session={session}
     onQueue={() => {}}
     onOpenChecks={() => {}}
     onDriveLive={() => {}}
@@ -105,8 +108,12 @@ test.skipIf(!hasFrontdoorReport)('the browser renders every structured timing qu
     engineVersion="0.1.0"
     spec={null}
     checks={null}
-    sessionName={null}
+    sessionName={sessionName}
   />)
+}
+
+test.skipIf(!hasFrontdoorReport)('the browser renders every structured timing qualification from a frontdoor report', async () => {
+  const html = await boardHtml(session(realFrontdoorReport()))
 
   expect(html).toContain('Timing coverage')
   expect(html).toContain('pulses &gt;= 2.000 us guaranteed')
@@ -151,7 +158,6 @@ test.skipIf(!hasFrontdoorReport)('typed co-sim invalidity and faults cannot reta
 })
 
 test.skipIf(!hasFrontdoorReport)('model coverage is a clickable human workflow, not an agent-only report', async () => {
-  const { BoardView } = await import('../src/components/BoardView')
   const report = realFrontdoorReport()
   report.model_coverage = {
     schema_version: 1,
@@ -175,17 +181,7 @@ test.skipIf(!hasFrontdoorReport)('model coverage is a clickable human workflow, 
     }],
     authoring_targets: [],
   }
-  const html = renderToStaticMarkup(<BoardView
-    session={session(report)}
-    onQueue={() => {}}
-    onOpenChecks={() => {}}
-    onDriveLive={() => {}}
-    simMounted={false}
-    engineVersion="0.1.0"
-    spec={null}
-    checks={null}
-    sessionName={null}
-  />)
+  const html = await boardHtml(session(report))
 
   expect(html).toContain('1/1 identified')
   expect(html).toContain('1/1 executable')
@@ -335,7 +331,6 @@ test('live input sliders require an explicit engine source, not an input-looking
 })
 
 test.skipIf(!hasFrontdoorReport)('a report-only restored session does not offer model saves it cannot re-analyze', async () => {
-  const { BoardView } = await import('../src/components/BoardView')
   const restored = session(realFrontdoorReport())
   restored.restoredFrom = {
     sessionName: 'saved bench',
@@ -343,24 +338,13 @@ test.skipIf(!hasFrontdoorReport)('a report-only restored session does not offer 
     firmwareName: null,
     schematicName: null,
   }
-  const html = renderToStaticMarkup(<BoardView
-    session={restored}
-    onQueue={() => {}}
-    onOpenChecks={() => {}}
-    onDriveLive={() => {}}
-    simMounted={false}
-    engineVersion="0.1.0"
-    spec={null}
-    checks={null}
-    sessionName="saved bench"
-  />)
+  const html = await boardHtml(restored, 'saved bench')
   expect(html).toContain('data-testid="restored-notice"')
   expect(html).not.toContain('data-testid="datasheet-extract"')
   expect(html).not.toContain('data-testid="write-part-open"')
 })
 
 test.skipIf(!hasFrontdoorReport)('import diagnostics expose recovered, partial, unplaced and split-net guidance without inventing coordinates', async () => {
-  const { BoardView } = await import('../src/components/BoardView')
   const report = realFrontdoorReport()
   report.import_diagnostics = {
     format: 'Gerber / Excellon reconstruction',
@@ -380,17 +364,7 @@ test.skipIf(!hasFrontdoorReport)('import diagnostics expose recovered, partial, 
       net: 'NET_1',
     }],
   }
-  const html = renderToStaticMarkup(<BoardView
-    session={session(report)}
-    onQueue={() => {}}
-    onOpenChecks={() => {}}
-    onDriveLive={() => {}}
-    simMounted={false}
-    engineVersion="0.1.0"
-    spec={null}
-    checks={null}
-    sessionName={null}
-  />)
+  const html = await boardHtml(session(report))
 
   expect(html).toContain('data-testid="import-diagnostics"')
   expect(html).toContain('1 recovered · 1 partial · 1 unplaced · 1 missing/refused limit')
@@ -409,7 +383,6 @@ test.skipIf(!hasFrontdoorReport)('import diagnostics expose recovered, partial, 
 })
 
 test('a parser refusal renders only its localized excerpt and suggested fix', async () => {
-  const { BoardView } = await import('../src/components/BoardView')
   const failed: WebReport = {
     ok: false,
     error: 'Board-as-Code parse error at line 2',
@@ -428,17 +401,7 @@ test('a parser refusal renders only its localized excerpt and suggested fix', as
       suggested_fix: 'Edit the exact line shown below, then rerun.',
     },
   }
-  const html = renderToStaticMarkup(<BoardView
-    session={session(failed)}
-    onQueue={() => {}}
-    onOpenChecks={() => {}}
-    onDriveLive={() => {}}
-    simMounted={false}
-    engineVersion="0.1.0"
-    spec={null}
-    checks={null}
-    sessionName={null}
-  />)
+  const html = await boardHtml(session(failed))
   expect(html).toContain('data-testid="import-failure"')
   expect(html).toContain('Import stopped at Board-as-Code compiler')
   expect(html).toContain('line 2: this is not valid board code')

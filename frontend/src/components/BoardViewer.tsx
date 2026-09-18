@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useRef, useState, useCallback, useMemo } from 'react'
-import { parseKicadPcb } from '../lib/kicad-parser'
+import { NO_LAYOUT, parseKicadPcb } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
 import { segmentsByNet } from '../lib/board-geometry'
 import type { FootprintInfo } from '../lib/board-geometry'
@@ -12,6 +12,7 @@ import { onThemeChange } from '../lib/theme-tokens'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
 import { FitIcon, ExpandIcon, CollapseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
+import { netReadoutText, readNet } from '../lib/net-state'
 import { fetchFile, isAbort } from '../lib/api'
 import { LayersControl, useLayerControls } from './board/LayersPanel'
 import { useBoardPointer } from '../hooks/useBoardPointer'
@@ -175,13 +176,13 @@ export function BoardViewer({
     [board],
   )
 
-  // Nets whose drive this backend cannot see. The frame still carries a number
-  // for them, but that number is the passive network's static level, not a
-  // measurement of what the MCU is doing. Anything that would read as "we
-  // measured this" has to leave them out.
+  // Nets the frame carries a number for that nobody measured: an unobserved
+  // drive (the number is the passive network's static level) or an unsupported
+  // regulator's setpoint. Anything that would read as "we measured this" has to
+  // leave them out.
   const unobservedNets = useMemo(
-    () => new Set(frame?.unobserved_drive_nets ?? []),
-    [frame?.unobserved_drive_nets],
+    () => new Set([...(frame?.unobserved_drive_nets ?? []), ...(frame?.unsupported_nets ?? [])]),
+    [frame?.unobserved_drive_nets, frame?.unsupported_nets],
   )
 
   // Build net voltages map (throttled by frame reference -- only recompute when
@@ -500,9 +501,7 @@ export function BoardViewer({
             x: probePos.current.boardX,
             y: probePos.current.boardY,
             label: displayNet(probeNet),
-            value: unobservedNetsRef.current.has(probeNet)
-              ? 'not observed'
-              : `${(frame.net_voltages[probeNet]!).toFixed(3)} V`,
+            value: netReadoutText(readNet(frame, probeNet)),
           }
         : undefined
 
@@ -783,7 +782,12 @@ export function BoardViewer({
 
       {error && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="px-4 py-3 rounded-lg text-sm" style={{ background: 'var(--overlay-err-bg)', color: 'var(--err)', border: '1px solid var(--overlay-err-border)' }}>
+          {/* An input with no PCB geometry is an empty state, not an error: a
+              board-as-code file simulates fine and has nothing to draw. */}
+          <div className="px-4 py-3 rounded-lg text-sm" data-testid={error === NO_LAYOUT ? 'board-no-layout' : 'board-error'}
+            style={error === NO_LAYOUT
+              ? { background: 'var(--overlay-chip-bg)', color: 'var(--overlay-chip-text)', border: '1px solid var(--rule)' }
+              : { background: 'var(--overlay-err-bg)', color: 'var(--err)', border: '1px solid var(--overlay-err-border)' }}>
             {error}
           </div>
         </div>

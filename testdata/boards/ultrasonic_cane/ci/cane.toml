@@ -7,7 +7,7 @@
 #   phase_margin, ac_gain, peripheral, hwtrace, model_coverage.
 
 name = "cane power-up"        # label shown in reports
-board = "../cane.kicad_pcb"          # the design file this spec checks
+board = "../ultrasonic_cane.kicad_pcb"          # the design file this spec checks
 # bom = "hardware/bom.csv"        # exact purchased-part identity (optional)
 # bom_columns = ["reference=Customer Reference"] # confirm an ambiguous header
 # placement = "hardware/positions.csv" # assembly position/side cross-check (optional)

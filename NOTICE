@@ -32,3 +32,12 @@ Redistributions of this software, with or without modification, must retain
 this NOTICE file per section 4(d) of the Apache License 2.0. If you build
 something on hauksbee, a visible credit ("powered by hauksbee") is appreciated
 but the licence only requires what section 4 requires.
+
+The ESP32 firmware fixtures (testdata/firmware/esp32_*/*.elf, flash*.bin) are
+built from the adjacent sources and statically link ESP-IDF v5.4 (commit
+67c1de1eebe095d554d281952fde63c16ee2dca0), Copyright 2015-2023 Espressif
+Systems, Apache-2.0, which bundles: FreeRTOS kernel, Copyright 2017
+Amazon.com, Inc., MIT; TLSF, Copyright 2006-2016 Matthew Conte, BSD-3-Clause;
+Xtensa HAL, Copyright 2013 Tensilica Inc., MIT; and newlib, copyright various
+parties, BSD-style (COPYING.NEWLIB). Licence texts:
+https://github.com/espressif/esp-idf/blob/v5.4/docs/en/COPYRIGHT.rst

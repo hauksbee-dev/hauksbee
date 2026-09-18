@@ -16,6 +16,7 @@ import { accessSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileS
 import { dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { terminateProcess } from './harness'
+import { freePort, waitForStartup } from './live-server'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = resolve(here, '../../..')
@@ -48,30 +49,6 @@ function writeEvidence(path: string, value: unknown) {
   renameSync(temporary, path)
 }
 
-async function freePort(): Promise<number> {
-  const holder = Bun.serve({ port: 0, fetch: () => new Response('reserved') })
-  const port = holder.port
-  await holder.stop(true)
-  if (port === undefined) throw new Error('Bun did not assign a local test port')
-  return port
-}
-
-async function waitForServer(base: string, child: Bun.Subprocess, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const exited = await Promise.race([
-      child.exited.then(code => ({ exited: true as const, code })),
-      Bun.sleep(150).then(() => ({ exited: false as const, code: 0 })),
-    ])
-    if (exited.exited) throw new Error(`hauksbee serve exited early with code ${exited.code}`)
-    try {
-      const response = await fetch(`${base}/api/startup`)
-      if (response.ok) return
-    } catch { /* server is still starting */ }
-  }
-  throw new Error(`hauksbee serve did not become ready within ${timeoutMs} ms`)
-}
-
 async function main() {
   if (!board) {
     throw new Error('HB_MODEL_BOARD is required: supply a Watchy v1 board (U4=BMA423, ESP32PICO-D4) and matching firmware; the public v3 sample and blinky are not substitutes.')
@@ -90,7 +67,7 @@ async function main() {
   })
   const browser = await chromium.launch({ headless: true })
   try {
-    await waitForServer(base, server)
+    await waitForStartup(base, server)
     const page = await browser.newPage()
     const consoleErrors: string[] = []
     page.on('pageerror', error => consoleErrors.push(error.message))

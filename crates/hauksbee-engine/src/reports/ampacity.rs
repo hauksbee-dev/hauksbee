@@ -5,14 +5,6 @@
 
 /// Print the trace-capacity report and return. `altium_present` boards carry no
 /// routed-copper geometry through this path yet, so they report an empty table.
-pub fn emit(
-    text: &str,
-    altium_present: bool,
-    evidence: &crate::evidence::BoardEvidence,
-) -> anyhow::Result<()> {
-    emit_quiet(text, altium_present, evidence, &[], false, false, false)
-}
-
 pub(crate) fn emit_quiet(
     text: &str,
     altium_present: bool,

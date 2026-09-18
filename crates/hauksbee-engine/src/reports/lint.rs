@@ -19,31 +19,6 @@ use super::{lint_fails, OutputMode};
 
 /// Print the full `--lint` bundle in `mode`, surface any pin-role guesses, then
 /// (under `strict`) exit non-zero on a high/medium finding.
-pub fn emit(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
-    mode: OutputMode,
-    strict: bool,
-    inputs: &[JsonInputEvidence],
-) -> anyhow::Result<()> {
-    emit_quiet(
-        board_path,
-        board,
-        raw,
-        input_kind,
-        lib,
-        reader_notes,
-        mode,
-        strict,
-        false,
-        inputs,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_quiet(
     board_path: &Path,

@@ -6,7 +6,8 @@
 //! near-zero-ohm links that DOES solve reports nothing, because a diagnostic
 //! that fires on healthy boards trains the user to ignore it.
 
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use crate::shared::add_vdc;
+use hauksbee_ir::{Circuit, Device, NodeId};
 use hauksbee_solve::{blame, dc_operating_point, SolverOptions, Workspace};
 
 fn r(name: &str, a: NodeId, b: NodeId, ohms: f64) -> Device {
@@ -27,18 +28,8 @@ fn a_singular_topology_refuses_and_names_the_node() {
     let mut c = Circuit::new();
     let res = c.node("RES");
     let mid = c.node("MID");
-    c.add(Device::Vsource {
-        name: "Vsupply_RES".into(),
-        p: res,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.3),
-    });
-    c.add(Device::Vsource {
-        name: "Vdrive_RES".into(),
-        p: res,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(20.0),
-    });
+    add_vdc(&mut c, "Vsupply_RES", res, NodeId::GROUND, 3.3);
+    add_vdc(&mut c, "Vdrive_RES", res, NodeId::GROUND, 20.0);
     c.add(r("R1", res, mid, 10_000.0));
     c.add(r("R2", mid, NodeId::GROUND, 10_000.0));
 
@@ -71,12 +62,7 @@ fn a_healthy_board_with_milliohm_links_solves_and_accuses_nobody() {
     let vcc = c.node("VCC");
     let a = c.node("A");
     let b = c.node("B");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vcc,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    add_vdc(&mut c, "V1", vcc, NodeId::GROUND, 5.0);
     // Three 1 mohm jumpers in a chain, exactly what the bind-time 0R treatment
     // produces, plus an ordinary load.
     c.add(r("R1", vcc, a, 1e-3));
@@ -106,12 +92,7 @@ fn a_microohm_link_is_named_as_the_element_to_look_at() {
     let mut c = Circuit::new();
     let vcc = c.node("VCC");
     let a = c.node("A");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vcc,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    add_vdc(&mut c, "V1", vcc, NodeId::GROUND, 5.0);
     c.add(r("R1", vcc, a, 1e-6));
     c.add(r("R2", a, NodeId::GROUND, 4_700.0));
     c.add(r("R3", vcc, NodeId::GROUND, 10_000.0));

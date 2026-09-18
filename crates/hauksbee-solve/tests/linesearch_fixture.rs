@@ -24,6 +24,7 @@
 //! Env-var hazard: HAUKSBEE_* are process-global, so this test lives in its
 //! own test binary (this file) and must stay the only test in it.
 
+use crate::shared::{add_capacitor, add_resistor, add_vdc};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{
     DcInit, DeviceEffects, EventRetryTuning, RobustnessLadder, SolverOptions, StepControl,
@@ -40,18 +41,8 @@ fn spiking_board() -> Circuit {
     let com = c.node("com"); // SPDT common node
     let rail = c.node("rail"); // idle-leg bias
 
-    c.add(Device::Vsource {
-        name: "VTH".into(),
-        p: th,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.5),
-    });
-    c.add(Device::Vsource {
-        name: "VRAIL".into(),
-        p: rail,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
+    add_vdc(&mut c, "VTH", th, NodeId::GROUND, 2.5);
+    add_vdc(&mut c, "VRAIL", rail, NodeId::GROUND, 1.0);
     // Charge current into the membrane.
     c.add(Device::Isource {
         name: "IIN".into(),
@@ -59,23 +50,11 @@ fn spiking_board() -> Circuit {
         n: m,
         kind: SourceKind::Dc(5e-5),
     });
-    c.add(Device::Capacitor {
-        name: "CM".into(),
-        a: m,
-        b: NodeId::GROUND,
-        farads: 1e-9,
-        ic: None,
-    });
+    add_capacitor(&mut c, "CM", m, NodeId::GROUND, 1e-9, None);
     // Leak sized so the open-gate equilibrium (5 V) sits ABOVE threshold:
     // firing is guaranteed, so there is no DC fixed point and the board is
     // the honest FromZero shape.
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: m,
-        b: NodeId::GROUND,
-        ohms: 1e5,
-        tc1: None,
-    });
+    add_resistor(&mut c, "RL", m, NodeId::GROUND, 1e5);
     c.add(Device::Comparator {
         name: "K1".into(),
         out: spk,
@@ -127,13 +106,7 @@ fn spiking_board() -> Circuit {
     });
     // Discharge path: membrane -> s1 -> com -> RD -> ground, tau ~ 60 ns
     // (the fast post-flip transient the event/LTE machinery must track).
-    c.add(Device::Resistor {
-        name: "RD".into(),
-        a: com,
-        b: NodeId::GROUND,
-        ohms: 50.0,
-        tc1: None,
-    });
+    add_resistor(&mut c, "RD", com, NodeId::GROUND, 50.0);
     c
 }
 

@@ -20,16 +20,6 @@ pub use hauksbee_bind::bind_report::{
 use super::OutputMode;
 
 /// Print the bind report in `mode`, then return.
-pub fn emit(
-    board: &ExtractedBoard,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
-    mode: OutputMode,
-    inputs: &[JsonInputEvidence],
-) -> anyhow::Result<()> {
-    emit_quiet(board, lib, reader_notes, mode, false, false, inputs)
-}
-
 pub(crate) fn emit_quiet(
     board: &ExtractedBoard,
     lib: &ModelLibrary,

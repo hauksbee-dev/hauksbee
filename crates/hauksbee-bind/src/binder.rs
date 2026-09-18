@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use hauksbee_extract::{Component, ExtractedBoard};
-use hauksbee_ir::evidence::Assumption;
+use hauksbee_ir::evidence::{Assumption, ModelSource, ModelUncertainty};
 use hauksbee_ir::{
     BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, SourceKind,
 };
@@ -30,7 +30,7 @@ use hauksbee_models::{
     PeripheralSpec, SensorSpec,
 };
 
-use crate::bind_report::{BindOutcome, BindReport, BindRow};
+use crate::bind_report::{BindOutcome, BindReport, BindRow, SimpleRegulator};
 use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
 use crate::drivers::{PinDriver, DEFAULT_RO};
 use crate::power_supply::{PowerSupply, SupplyLeg};
@@ -322,8 +322,8 @@ pub fn bind_board_with(
     let mut net_nodes: HashMap<String, NodeId> = HashMap::new();
     let mut net_names: Vec<String> = Vec::new();
     let mut report = BindReport {
-        rows: Vec::new(),
         board_name: board.name.clone(),
+        ..Default::default()
     };
 
     // ── Pass 1: intern every net as a node, classify power/ground ───────────
@@ -456,13 +456,14 @@ pub fn bind_board_with(
                 let (outcome, warning, guesses) = bind_component(
                     comp,
                     m,
-                    conf,
+                    source.as_ref(),
                     &mut circuit,
                     &node_of,
                     &mut digital,
                     &mut mcus,
                     &mut dacs,
                     &mut peripherals,
+                    &mut report.regulators,
                     &power_nets,
                     lib.pin_rules(),
                 );
@@ -1880,13 +1881,14 @@ fn unresolved_outcome(
 fn bind_component(
     comp: &Component,
     model: &ModelEntry,
-    _conf: Confidence,
+    source: Option<&ModelSource>,
     circuit: &mut Circuit,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
     digital: &mut Vec<DigitalComponent>,
     mcus: &mut Vec<McuBinding>,
     dacs: &mut Vec<DacBinding>,
     peripherals: &mut Vec<PeripheralBinding>,
+    regulators: &mut Vec<SimpleRegulator>,
     power_nets: &HashMap<String, f64>,
     pin_rules: &hauksbee_models::PinRuleTable,
 ) -> (BindOutcome, Option<String>, Vec<String>) {
@@ -2047,7 +2049,7 @@ fn bind_component(
         Diode => bind_diode(comp, model, circuit, &role_nets),
         BjtNpn | BjtPnp => bind_bjt(comp, model, circuit, &role_nets),
         Nmos | Pmos => bind_mosfet(comp, model, circuit, &role_nets),
-        Vreg => bind_vreg(comp, model, circuit, &role_nets),
+        Vreg => bind_vreg(comp, model, source, circuit, &role_nets, regulators),
         Opamp => bind_opamp(comp, model, circuit, &role_nets),
         Comparator => bind_comparator(comp, model, circuit, &role_nets),
         AnalogSwitch => bind_analog_switch(comp, model, circuit, &role_nets, power_nets),
@@ -3280,6 +3282,7 @@ fn bjt_model_from(model: &ModelEntry) -> BjtModel {
         nc: p.get_f64("nc").unwrap_or(d.nc),
         xti: p.get_f64("xti").unwrap_or(d.xti),
         eg: p.get_f64("eg").unwrap_or(d.eg),
+        ..d
     }
 }
 
@@ -3393,8 +3396,10 @@ fn merge_bind_warnings(a: Option<String>, b: Option<String>) -> Option<String> {
 fn bind_vreg(
     comp: &Component,
     model: &ModelEntry,
+    source: Option<&ModelSource>,
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
+    regulators: &mut Vec<SimpleRegulator>,
 ) -> (BindOutcome, Option<String>) {
     // A vreg whose model carries a behavioural converter is realised by the
     // behavioural layer, which owns the output net and reflects real input
@@ -3438,11 +3443,35 @@ fn bind_vreg(
             "vreg input, output, and local return must be distinct",
         );
     }
-    circuit.add(Device::Vsource {
+    let source_id = circuit.add(Device::Vsource {
         name: format!("Vreg_{}", comp.reference),
         p: out,
         n: gnd,
         kind: SourceKind::Dc(vout),
+    });
+    // The headroom the ideal source silently assumes: the card's widest output
+    // endpoint plus typical dropout. A missing dropout is recorded, not invented.
+    let vout_limit = source
+        .into_iter()
+        .flat_map(ModelSource::uncertainty)
+        .find_map(|u| match u {
+            ModelUncertainty::Interval {
+                parameter,
+                low,
+                high,
+                ..
+            } if parameter == "vout" => Some(low.abs().max(high.abs())),
+            _ => None,
+        })
+        .unwrap_or(vout.abs());
+    let dropout_v = model.params.get_f64("dropout_v");
+    regulators.push(SimpleRegulator {
+        reference: comp.reference.clone(),
+        source: source_id,
+        input,
+        min_in_v: vout_limit + dropout_v.unwrap_or(0.0),
+        max_in_v: model.ratings.max_voltage_v.unwrap_or(f64::INFINITY),
+        dropout_v,
     });
     // THE ENABLE IS NOT MODELLED, and this says so for every entry that has one
     // rather than making each entry repeat the sentence.
@@ -6343,9 +6372,10 @@ mod tests {
         let (outcome, warning, _) = bind_component(
             c,
             model,
-            Confidence::Exact,
+            None,
             circuit,
             node_of,
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
@@ -6499,13 +6529,14 @@ mod tests {
         let (outcome, warning, _) = bind_component(
             &component,
             &model,
-            Confidence::Exact,
+            None,
             &mut circuit,
             &node_of,
             &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
             &mut peripherals,
+            &mut Vec::new(),
             &HashMap::from([("+3V3".to_string(), 3.3)]),
             lib.pin_rules(),
         );
@@ -6568,10 +6599,11 @@ mod tests {
         let (outcome, _, _) = bind_component(
             &comp("U1", ""),
             &model,
-            Confidence::Exact,
+            None,
             &mut circuit,
             &|_| None,
             &mut digital,
+            &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
@@ -6612,6 +6644,19 @@ mod tests {
             model.params.set_f64("vout", vout);
         }
         model
+    }
+
+    /// `bind_vreg` for U9, returning what it recorded as well.
+    fn bind_u9(
+        model: &ModelEntry,
+        source: Option<&ModelSource>,
+        circuit: &mut Circuit,
+        roles: &HashMap<String, NodeId>,
+    ) -> (BindOutcome, Option<String>, Vec<SimpleRegulator>) {
+        let mut regs = Vec::new();
+        let (outcome, warning) =
+            bind_vreg(&comp("U9", ""), model, source, circuit, roles, &mut regs);
+        (outcome, warning, regs)
     }
 
     #[test]
@@ -6656,11 +6701,10 @@ mod tests {
         ] {
             let mut circuit = Circuit::new();
             let roles = roles(&mut circuit, names);
-            let (outcome, warning) =
-                bind_vreg(&comp("U9", ""), &simple_vreg(vout), &mut circuit, &roles);
+            let (outcome, warning, regs) = bind_u9(&simple_vreg(vout), None, &mut circuit, &roles);
             assert!(matches!(outcome, BindOutcome::Unresolved { .. }), "{case}");
             assert!(warning.is_some_and(|w| w.contains(warning_token)), "{case}");
-            assert!(circuit.devices.is_empty(), "{case}");
+            assert!(circuit.devices.is_empty() && regs.is_empty(), "{case}");
         }
     }
 
@@ -6678,22 +6722,23 @@ mod tests {
                 ("in".into(), circuit.node(input)),
                 ("out".into(), circuit.node(out)),
             ]);
-            let (outcome, warning) = bind_vreg(&comp("U9", ""), &model, &mut circuit, &roles);
+            let (outcome, warning, regs) = bind_u9(&model, None, &mut circuit, &roles);
             assert!(matches!(outcome, BindOutcome::Unresolved { .. }), "{case}");
             assert!(
                 warning.is_some_and(|w| w.contains("must be distinct")),
                 "{case}"
             );
-            assert!(circuit.devices.is_empty(), "{case}");
+            assert!(circuit.devices.is_empty() && regs.is_empty(), "{case}");
         }
     }
 
     #[test]
     fn simple_vreg_stamps_exact_voltage_between_output_and_return() {
-        for (case, vout, out, gnd) in [
-            ("global return", 3.3, "OUT", "0"),
-            ("offset return", -5.0, "OUT", "RETURN"),
-            ("ground output", 5.0, "0", "RETURN"),
+        let lib = ModelLibrary::builtin();
+        for (case, card, vout, out, gnd, min_in_v, max_in_v) in [
+            ("card", Some("AMS1117-3.3"), 3.3, "OUT", "0", 4.499, 15.0),
+            ("offset", Some("LM7905"), -5.0, "OUT", "RET", 6.1, 25.0),
+            ("bare", None, 5.0, "0", "RET", 5.0, f64::INFINITY),
         ] {
             let mut circuit = Circuit::new();
             let roles = HashMap::from([
@@ -6701,12 +6746,13 @@ mod tests {
                 ("out".into(), circuit.node(out)),
                 ("gnd".into(), circuit.node(gnd)),
             ]);
-            let (outcome, warning) = bind_vreg(
-                &comp("U9", ""),
-                &simple_vreg(Some(vout)),
-                &mut circuit,
-                &roles,
+            let res = card.map(|v| lib.resolve(&ComponentQuery::new(None, Some(v.into()), None)));
+            let model = res.as_ref().map_or_else(
+                || simple_vreg(Some(vout)),
+                |r| r.model.clone().expect("card resolves"),
             );
+            let source = res.as_ref().and_then(|r| r.provenance.as_ref());
+            let (outcome, warning, regs) = bind_u9(&model, source, &mut circuit, &roles);
             assert!(warning.is_none(), "{case}");
             assert!(
                 matches!(outcome, BindOutcome::Behavioral { device } if device == format!("vreg {vout:.1}V source")),
@@ -6716,6 +6762,13 @@ mod tests {
                 matches!(circuit.devices.as_slice(), [Device::Vsource { p, n, kind: SourceKind::Dc(v), .. }] if *p == roles["out"] && *n == roles["gnd"] && *v == vout),
                 "{case}"
             );
+            let [reg] = regs.as_slice() else {
+                panic!("{case}: exactly one regulator is recorded");
+            };
+            assert_eq!((reg.reference.as_str(), reg.input), ("U9", roles["in"]));
+            assert_eq!((reg.source.0, reg.dropout_v), (0, card.map(|_| 1.1)));
+            assert!((reg.min_in_v - min_in_v).abs() < 1e-12, "{case}: {reg:?}");
+            assert_eq!(reg.max_in_v, max_in_v, "{case}");
         }
     }
 

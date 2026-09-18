@@ -224,7 +224,26 @@ fn assemble_evidence_and_ci_artifacts(
                 fix: Some("add a hardware bias that keeps the load off through reset, or confirm and document the polarity".into()),
             }));
     }
+    // A forced run declares itself, and so does a regulator whose input headroom
+    // was never established: without this the only trace of a post-solve
+    // override is a missing residual, which reads as "unmeasured". BEFORE any
+    // map is built, because a map resolves against the assumptions its board
+    // carried at construction.
+    let board_evidence = &board_evidence
+        .clone()
+        .with_assumptions(engine.scheduler().forced_voltage_assumptions()?)?;
     let mut cosim_maps = Vec::new();
+    // One map per unsupported regulator, over everything its setpoint reaches:
+    // the Undermined assumption beneath it makes the verdict invalid and
+    // `--strict` exit 3 through the existing gates, with no new gate code.
+    for taint in engine.scheduler().regulation_taint() {
+        cosim_maps.push(board_evidence.simulation_map(
+            taint.reason.clone(),
+            &taint.nets,
+            &taint.refs,
+            Some(budget.clone()),
+        )?);
+    }
     for finding in &fault_findings {
         cosim_maps.push(board_evidence.simulation_map(
             finding.message.clone(),
@@ -255,12 +274,6 @@ fn assemble_evidence_and_ci_artifacts(
             )?);
         }
     }
-    // A forced run declares itself: without this, the only trace of a
-    // post-solve override in the published evidence is a missing
-    // residual, which reads as "unmeasured" rather than "overridden".
-    let board_evidence = board_evidence
-        .clone()
-        .with_assumptions(engine.scheduler().forced_voltage_assumptions()?)?;
     let run_evidence = board_evidence.clone().with_maps(cosim_maps);
 
     // Rewrite CI artifacts from the final co-sim evidence object before a
@@ -308,7 +321,8 @@ fn assemble_evidence_and_ci_artifacts(
 /// wording so the `--json` notes and the `--plain` heads-ups cannot drift
 /// apart: a drive that lost to a co-located source, dropped ADC injections,
 /// never-exercised bus peripherals, watchdog and timing limitations, watchdog
-/// reboots, heuristic SPI framing, sub-chunk pulses invisible to tick-evaluated
+/// reboots, regulators with no proven input headroom, heuristic SPI framing,
+/// sub-chunk pulses invisible to tick-evaluated
 /// sequential parts, and runtime driver contention. Each is a silent-garbage
 /// mode: they ride this channel in ADDITION to the structured `CosimJson`
 /// fields, so a consumer that only filters notes still sees them.
@@ -323,28 +337,7 @@ fn shared_coverage_messages(
     let mut out = scheduler.drive_conflicts();
     out.extend(scheduler.adc_dropped().iter().map(|d| d.message()));
     out.extend(scheduler.unexercised_buses().iter().map(|b| b.message()));
-    out.extend(
-        scheduler
-            .watchdog_limitations()
-            .iter()
-            .map(|(mcu_ref, limitation)| {
-                crate::scheduler::watchdog_limitation_message(mcu_ref, limitation)
-            }),
-    );
-    out.extend(
-        scheduler
-            .watchdog_resets()
-            .iter()
-            .map(|(mcu_ref, resets)| crate::scheduler::watchdog_reset_message(mcu_ref, *resets)),
-    );
-    out.extend(
-        scheduler
-            .timing_limitations()
-            .iter()
-            .map(|(mcu_ref, limitation)| {
-                crate::scheduler::timing_limitation_message(mcu_ref, limitation)
-            }),
-    );
+    out.extend(crate::scheduler::coverage_limitation_messages(scheduler));
     out.extend(
         crate::reports::cosim::heuristic_framing_warnings(&scheduler.spi_framing_modes())
             .into_iter()

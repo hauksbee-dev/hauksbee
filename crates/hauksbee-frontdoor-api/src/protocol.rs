@@ -169,6 +169,12 @@ pub struct SimFrame {
     /// ignore it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unobserved_drive_nets: Vec<String>,
+    /// Nets whose shown voltage is an unsupported regulator's ideal setpoint, or
+    /// is powered from one: not a simulated value. One reason per regulator.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_nets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_reasons: Vec<String>,
     pub net_voltages: HashMap<String, f64>,
     /// Per-net `(min_v, max_v)` over the frame's whole chunk, not just the
     /// instant `net_voltages` sampled.

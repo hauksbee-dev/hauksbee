@@ -18,8 +18,10 @@
 //   bun run tests/e2e/layers-dismiss.ts          # spawns the fixture server
 
 import { chromium } from 'playwright'
-import { withFixture } from './harness'
-import type { Browser, ConsoleMessage, Page } from 'playwright'
+import {
+  consoleErrors, note, ok, settle, shotsInto, step, summarise, watchConsole, withFixture,
+} from './harness'
+import type { Browser, Page } from 'playwright'
 import { mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,45 +29,13 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const OUT = process.env.HB_E2E_OUT ?? join(here, '../../test-results/e2e-layers')
 
-let pass = 0
-const failures: string[] = []
-const notes: string[] = []
-
-function ok(what: string, cond: boolean, detail = '') {
-  if (cond) {
-    pass++
-    console.log(`  PASS  ${what}${detail ? ` :: ${detail}` : ''}`)
-  } else {
-    failures.push(`${what}${detail ? ` :: ${detail}` : ''}`)
-    console.log(`  FAIL  ${what}${detail ? ` :: ${detail}` : ''}`)
-  }
-}
-const note = (s: string) => { notes.push(s); console.log(`  note  ${s}`) }
-const step = (s: string) => console.log(`\n── ${s} ──`)
-
-/** Console output that counts as a defect, same filter as the sessions pass. */
-const consoleErrors: string[] = []
-function watchConsole(page: Page, label: string) {
-  page.on('console', (m: ConsoleMessage) => {
-    if (m.type() !== 'error') return
-    const text = m.text()
-    if (/Failed to load resource|net::ERR_|the server does not|no fixture for/.test(text)) return
-    consoleErrors.push(`[${label}] ${text}`)
-  })
-  page.on('pageerror', e => consoleErrors.push(`[${label}] pageerror: ${e.message}`))
-}
-
-const settle = (page: Page, ms = 400) => page.waitForTimeout(ms)
 const panelOpen = (page: Page) => page.locator('[data-testid="layers-panel"]').count().then(n => n > 0)
 
 /** Is the Layers trigger the focused element? */
 const triggerFocused = (page: Page) => page.evaluate(() =>
   document.activeElement?.getAttribute('data-testid') === 'layers-toggle')
 
-async function shoot(page: Page, name: string) {
-  await settle(page, 500)
-  await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: false })
-}
+const shoot = shotsInto(OUT)
 
 async function main() {
   rmSync(OUT, { recursive: true, force: true })
@@ -194,10 +164,7 @@ async function main() {
       await browser.close()
     }
 
-    console.log(`\n${pass} passed, ${failures.length} failed, ${notes.length} note(s).`)
-    for (const f of failures) console.log(`  FAILED: ${f}`)
-    console.log(`screenshots: ${OUT}`)
-    process.exitCode = failures.length > 0 ? 1 : 0
+    summarise(`screenshots: ${OUT}`, true)
   })
 }
 

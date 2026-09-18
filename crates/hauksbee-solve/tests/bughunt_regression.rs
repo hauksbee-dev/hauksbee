@@ -1,6 +1,7 @@
 //! Regression tests for defects found in the 2026-07 bug hunt. Each test pins
 //! a specific fixed defect so it cannot silently return.
 
+use crate::shared::{add_capacitor, add_vdc};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind, SpiceLoader};
 use hauksbee_solve::{Partitioning, SolverOptions, StepControl, Transient};
 
@@ -84,26 +85,9 @@ fn zero_ohm_resistor_is_a_short_not_an_open() {
     let mut c = Circuit::new();
     let n1 = c.node("1");
     let n2 = c.node("2");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: n1,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
-    c.add(Device::Resistor {
-        name: "R0".into(),
-        a: n1,
-        b: n2,
-        ohms: 0.0,
-        tc1: None,
-    });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: n2,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
+    add_vdc(&mut c, "V1", n1, NodeId::GROUND, 1.0);
+    crate::shared::add_resistor(&mut c, "R0", n1, n2, 0.0);
+    crate::shared::add_resistor(&mut c, "RL", n2, NodeId::GROUND, 1e3);
     let opts = SolverOptions {
         step: StepControl::Fixed { dt: 1e-6 },
         ..SolverOptions::default()
@@ -126,12 +110,7 @@ fn rc_tc1(tc1: Option<f64>) -> Circuit {
     let mut c = Circuit::new();
     let vin = c.node("in");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
+    add_vdc(&mut c, "V1", vin, NodeId::GROUND, 1.0);
     c.add(Device::Resistor {
         name: "R1".into(),
         a: vin,
@@ -139,13 +118,7 @@ fn rc_tc1(tc1: Option<f64>) -> Circuit {
         ohms: 1e3,
         tc1,
     });
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: 1e-6,
-        ic: Some(0.0),
-    });
+    add_capacitor(&mut c, "C1", out, NodeId::GROUND, 1e-6, Some(0.0));
     c
 }
 
@@ -251,28 +224,11 @@ fn saturated_bjt_with_nf_ne_nr_converges() {
     let vcc = c.node("vcc");
     let nb = c.node("b");
     let nc = c.node("c");
-    c.add(Device::Vsource {
-        name: "VCC".into(),
-        p: vcc,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    add_vdc(&mut c, "VCC", vcc, NodeId::GROUND, 5.0);
     // Rb sets ib ~ 0.42 mA; bf·ib far exceeds the ~4.8 mA Rc allows: hard
     // saturation, vbc forward.
-    c.add(Device::Resistor {
-        name: "RB".into(),
-        a: vcc,
-        b: nb,
-        ohms: 10e3,
-        tc1: None,
-    });
-    c.add(Device::Resistor {
-        name: "RC".into(),
-        a: vcc,
-        b: nc,
-        ohms: 1e3,
-        tc1: None,
-    });
+    crate::shared::add_resistor(&mut c, "RB", vcc, nb, 10e3);
+    crate::shared::add_resistor(&mut c, "RC", vcc, nc, 1e3);
     c.add(Device::Bjt {
         name: "Q1".into(),
         c: nc,
@@ -379,12 +335,7 @@ fn partitioned_nonlinear_island_advances_internal_time_varying_source() {
         // engage the partitioned engine (same recipe as the controlled-source
         // partition gates in tests/controlled_sources.rs).
         let vin = c.node("in");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: vin,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(2.0),
-        });
+        add_vdc(&mut c, "V1", vin, NodeId::GROUND, 2.0);
         crate::shared::add_partition_rc_legs(&mut c);
         // The island under test: a SIN current source driving a resistor in
         // parallel with a diode. The diode makes the island nonlinear; the
@@ -406,13 +357,7 @@ fn partitioned_nonlinear_island_advances_internal_time_varying_source() {
                 phase: 0.0,
             },
         });
-        c.add(Device::Resistor {
-            name: "Rd".into(),
-            a: d,
-            b: NodeId::GROUND,
-            ohms: 200.0,
-            tc1: None,
-        });
+        crate::shared::add_resistor(&mut c, "Rd", d, NodeId::GROUND, 200.0);
         c.add(Device::Diode {
             name: "D1".into(),
             a: d,

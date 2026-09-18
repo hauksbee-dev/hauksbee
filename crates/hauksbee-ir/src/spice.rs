@@ -16,7 +16,7 @@ use crate::models::{BjtModel, DiodeModel, MosfetModel, Polarity};
 use crate::source::{AcStim, PwlPoint, SourceKind};
 use crate::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, NodeId};
 use evalexpr::{build_operator_tree, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 use std::rc::Rc;
@@ -42,6 +42,8 @@ pub struct Directives {
     pub prints: Vec<PrintRequest>,
     /// Whether any `.plot` card was seen (treated as `.print`).
     pub saw_plot: bool,
+    /// One caveat per `.model` card whose parameters the loader dropped unmodelled.
+    pub notes: Vec<String>,
 }
 
 /// Parsed `.tran` parameters (seconds).
@@ -170,17 +172,20 @@ fn load_deck(text: &str, dir: &Path) -> Result<(Circuit, Directives), SpiceError
         deck: &deck,
         fixups: Vec::new(),
         seen: HashMap::new(),
+        used_models: HashSet::new(),
     };
     for line in &deck.elems {
         b.element(line, &top, &mut Vec::new())?;
     }
     b.resolve_fixups()?;
+    let used_models = std::mem::take(&mut b.used_models);
     let mut circuit = b.circuit;
     if let Some(line) = &deck.dc {
         d.dc = Some(parse_dc(line, &circuit)?);
     }
     circuit.initial_conditions = ic_values(&deck.ic, &circuit, &top.env)?;
     circuit.nodesets = ic_values(&deck.nodeset, &circuit, &top.env)?;
+    d.notes = unmodelled_notes(&deck, &used_models);
     if !circuit.initial_conditions.is_empty() && !d.use_initial_conditions {
         bail!(deck.ic[0], "`.ic` requires `uic` on the `.tran` card (hauksbee seeds the power-on start; it does not pin nodes during a DC solve)");
     }
@@ -853,6 +858,8 @@ struct Build<'a> {
     fixups: Vec<Fixup>,
     /// Lowercased refdes -> defining line, to refuse duplicates.
     seen: HashMap<String, usize>,
+    /// Lowercased `.model` names an element actually instantiated.
+    used_models: HashSet<String>,
 }
 
 /// Check a card has at least `n` tokens, naming the expected fields.
@@ -872,7 +879,7 @@ fn exact(line: &Line, toks: &[String], n: usize, what: &str) -> Result<(), Spice
     }
 }
 
-impl Build<'_> {
+impl<'a> Build<'a> {
     fn add(&mut self, line: &Line, dev: Device) -> Result<DeviceId, SpiceError> {
         if let Some(prev) = self.seen.insert(dev.name().to_ascii_lowercase(), line.no) {
             bail!(
@@ -889,8 +896,10 @@ impl Build<'_> {
         std::array::from_fn(|i| self.circuit.node(&scope.node(&toks[i + 1])))
     }
 
-    fn model(&self, line: &Line, name: &str, kinds: &[&str]) -> Result<&Model, SpiceError> {
-        let m = self.deck.models.get(&name.to_ascii_lowercase());
+    fn model(&mut self, line: &Line, name: &str, kinds: &[&str]) -> Result<&'a Model, SpiceError> {
+        let key = name.to_ascii_lowercase();
+        let m = self.deck.models.get(&key);
+        self.used_models.insert(key);
         let m = m.ok_or_else(|| line.err(format!("references undefined .model `{name}`")))?;
         if !kinds.contains(&m.kind.as_str()) {
             let wanted = if kinds == ["d"] {
@@ -1215,8 +1224,9 @@ impl Build<'_> {
         let key = sub_name.to_ascii_lowercase();
         let deck = self.deck;
         let def = deck.subckts.get(&key);
-        let def =
-            def.ok_or_else(|| line.err(format!("references undefined subckt `{sub_name}`")))?;
+        let def = def.ok_or_else(|| {
+            line.err(format!("references undefined subckt `{sub_name}`; if it should come from the board's model library, run `hauksbee models resolve <board>` to see what each part binds to"))
+        })?;
         if actual.len() != def.ports.len() {
             bail!(
                 line,
@@ -1378,6 +1388,60 @@ macro_rules! pick {
     ($m:expr, $d:expr; $($f:ident),*) => {{ let mut d = $d; $( d.$f = $m.get_or(stringify!($f), d.$f); )* d }};
 }
 
+/// `.model` parameters no hauksbee equation contains: the key, the SPICE
+/// default (a card restating it asks for nothing, so it stays silent), the
+/// behaviour it lost, and the model kinds it applies to. `FC` is listed for the
+/// kinds whose depletion charge still uses the fixed knee; the BJT reads its
+/// own, as it now reads `VJE`/`VJC`/`MJE`/`MJC`.
+const UNMODELLED: &[(&str, f64, &str, &[&str])] = &[
+    (
+        "xtb",
+        0.0,
+        "beta and leakage over temperature",
+        &["npn", "pnp"],
+    ),
+    (
+        "xtf",
+        0.0,
+        "transit-time modulation, which sets switching edges",
+        &["npn", "pnp"],
+    ),
+    (
+        "itf",
+        0.0,
+        "transit-time modulation, which sets switching edges",
+        &["npn", "pnp"],
+    ),
+    (
+        "vtf",
+        f64::INFINITY,
+        "transit-time modulation, which sets switching edges",
+        &["npn", "pnp"],
+    ),
+    (
+        "fc",
+        0.5,
+        "the forward-bias depletion-capacitance knee",
+        &["d", "nmos", "pmos"],
+    ),
+];
+
+/// One note per INSTANTIATED `.model` card stating an [`UNMODELLED`] parameter:
+/// a vendor card pasted whole is degraded, and silence about that is the lie
+/// `sim` forbids. Cards a library file defines but no element uses are not the
+/// user's circuit, so they say nothing.
+fn unmodelled_notes(deck: &Deck, used: &HashSet<String>) -> Vec<String> {
+    let mut notes: Vec<String> = deck.models.iter().filter(|(name, _)| used.contains(*name)).filter_map(|(name, m)| {
+        let lost: Vec<String> = UNMODELLED.iter()
+            .filter(|(_, _, _, kinds)| kinds.contains(&m.kind.as_str()))
+            .filter_map(|(k, d, why, _)| Some(format!("{}={} ({why})", k.to_uppercase(), m.get(k).filter(|v| v != d)?)))
+            .collect();
+        (!lost.is_empty()).then(|| format!("note: `.model {name}` states {} which hauksbee does not model; the values were dropped, so the device solved is not the card as written.", lost.join(", ")))
+    }).collect();
+    notes.sort();
+    notes
+}
+
 fn diode_model(m: &Model) -> DiodeModel {
     let mut d = pick!(m, DiodeModel::default(); is, n, rs, cjo, vj, m, tt, bv, xti, eg);
     d.ibv = m.get("ibv").filter(|v| *v > 0.0);
@@ -1385,7 +1449,7 @@ fn diode_model(m: &Model) -> DiodeModel {
 }
 
 fn bjt_model(m: &Model) -> BjtModel {
-    let mut d = pick!(m, BjtModel::default(); is, bf, br, vaf, var, nf, nr, rb, re, rc, cje, cjc, tf, tr, ise, ne, isc, nc, xti, eg);
+    let mut d = pick!(m, BjtModel::default(); is, bf, br, vaf, var, nf, nr, rb, re, rc, cje, cjc, mje, mjc, vje, vjc, fc, tf, tr, ise, ne, isc, nc, xti, eg);
     d.polarity = if m.kind == "pnp" {
         Polarity::P
     } else {

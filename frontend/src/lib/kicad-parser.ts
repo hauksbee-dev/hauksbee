@@ -288,9 +288,14 @@ function parseSegment(c: SNode[], nets: Map<string, string>): Segment | null {
 
 // ── Main parser ──────────────────────────────────────────────────────────────
 
+/** Thrown when the input is simply not a layout (a board-as-code `.board`, a
+ *  netlist): an absence of geometry, not a failure, and the canvas says so
+ *  neutrally rather than in red. */
+export const NO_LAYOUT = 'no layout to draw for this input'
+
 export function parseKicadPcb(src: string): ParsedBoard {
   const root = tokenise(src)
-  if (!isList(root) || head(root) !== 'kicad_pcb') throw new Error('Not a kicad_pcb file')
+  if (!isList(root) || head(root) !== 'kicad_pcb') throw new Error(NO_LAYOUT)
 
   const nets = new Map<string, string>()
   for (const c of root) if (isList(c) && head(c) === 'net') nets.set(str(c[1]), str(c[2]))

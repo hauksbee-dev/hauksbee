@@ -293,6 +293,55 @@ fn member_label(member: &str, out: &RunOutcome) -> String {
     }
 }
 
+/// The shared regulation reason that invalidates this assertion on this member: an
+/// unsupported regulator's output is an ideal source's setpoint, so nothing it
+/// reaches can be judged. `model_coverage` counts bound models, not voltages, and
+/// survives. A subjectless kind (`no_faults` and the other whole-run kinds) is
+/// always on the tainted path, and a firmware-stateful kind is invalidated by a
+/// tainted MCU (`refs[0]` is the regulator; later entries are MCUs it powers) even
+/// when it names no net of its own.
+fn regulation_reason<'a>(a: &Assertion, out: &'a RunOutcome) -> Option<&'a str> {
+    if a.kind == "model_coverage" {
+        return None;
+    }
+    fn named(o: [Option<&String>; 2]) -> Vec<&String> {
+        o.into_iter().flatten().collect()
+    }
+    let nets = named([a.net.as_ref(), a.supply_net.as_ref()]);
+    let refs = named([a.reference.as_ref(), a.mcu.as_ref()]);
+    let stateful = matches!(
+        a.kind.as_str(),
+        "uart" | "toggle" | "boot_coverage" | "peripheral"
+    );
+    out.regulation
+        .iter()
+        .find(|t| {
+            (nets.is_empty() && refs.is_empty())
+                || nets.iter().any(|n| t.nets.contains(n))
+                || refs.iter().any(|r| t.refs.contains(r))
+                || (stateful && t.refs.len() > 1)
+        })
+        .map(|t| t.reason.as_str())
+}
+
+/// Why this member cannot be judged AT ALL, if it cannot: its evaluation window
+/// overlapped a chunk the solver failed on, so the samples are held-stale; or an
+/// unsupported regulator's setpoint reaches what it judges. Worded once, here.
+fn member_invalid_reason(a: &Assertion, out: &RunOutcome) -> Option<String> {
+    if let Some(((ws, we), (fs, fe))) = stale_overlap(a, out) {
+        return Some(format!(
+            "the analog solve failed within this assertion's window ({:.2}-{:.2} ms \
+             overlaps its {:.2}-{:.2} ms evaluation span); those voltages are \
+             held-stale, so the result cannot be trusted.",
+            fs * 1e3,
+            fe * 1e3,
+            ws * 1e3,
+            we * 1e3,
+        ));
+    }
+    regulation_reason(a, out).map(str::to_string)
+}
+
 fn evaluate_one(
     a: &Assertion,
     outcomes: &[RunOutcome],
@@ -309,7 +358,8 @@ fn evaluate_one(
     // Is this member's analog evaluation window held-stale, i.e. does it overlap
     // a chunk the solver failed on? Such a member's samples cannot be trusted, so
     // its pass/fail is meaningless.
-    let member_invalid = |out: &RunOutcome| stale_overlap(a, out).is_some();
+    // ... or does an unsupported regulator's setpoint reach what it judges?
+    let member_invalid = |out: &RunOutcome| member_invalid_reason(a, out).is_some();
 
     // Precedence is FAIL > INVALID > PASS. Evaluate every ensemble member so the
     // result carries the pass-rate and the full failing-seed list, but SKIP a
@@ -430,14 +480,14 @@ fn evaluate_one(
         };
     }
 
-    // No trustworthy failure. INVALID > PASS: if any member's evaluation window
-    // was held-stale (analog divergence), we can neither honestly pass nor fail,
-    // report a distinct INVALID rather than let a window with no valid samples
-    // masquerade as a pass. This fires per-window (not per consecutive-abort), so
-    // an intermittent divergence below the abort threshold still refuses.
-    if let Some((out, ((ws, we), (fs, fe)))) = outcomes
+    // No trustworthy failure. INVALID > PASS: with no member we can honestly
+    // pass or fail, report a distinct INVALID rather than let a window with no
+    // valid samples masquerade as a pass. The stale half fires per-window (not
+    // per consecutive-abort), so an intermittent divergence below the abort
+    // threshold still refuses.
+    if let Some((out, reason)) = outcomes
         .iter()
-        .find_map(|out| stale_overlap(a, out).map(|w| (out, w)))
+        .find_map(|out| member_invalid_reason(a, out).map(|r| (out, r)))
     {
         let per_seed = if outcomes.len() > 1 {
             format!("{}: ", member_label(member, out))
@@ -446,16 +496,7 @@ fn evaluate_one(
         };
         return AssertResult {
             invalid: true,
-            detail: format!(
-                "{per_seed}INVALID: the analog solve failed within this \
-                 assertion's window ({:.2}-{:.2} ms overlaps its \
-                 {:.2}-{:.2} ms evaluation span); those voltages are \
-                 held-stale, so the result cannot be trusted.",
-                fs * 1e3,
-                fe * 1e3,
-                ws * 1e3,
-                we * 1e3,
-            ),
+            detail: format!("{per_seed}INVALID: {reason}"),
             failing_seed: Some(out.seed),
             failing_seeds: vec![out.seed],
             subject_nets,

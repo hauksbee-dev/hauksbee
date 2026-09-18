@@ -1,7 +1,7 @@
 //! Round-3 audit fixes, engine CLI half: contracts that only the compiled
 //! binary can prove (error-handler routing, exit codes, output envelopes).
 
-use crate::support::{board, run, stderr, stdout};
+use crate::support::{board, run, run_board, stderr, stdout};
 use std::path::PathBuf;
 
 fn blinky_board() -> PathBuf {
@@ -110,9 +110,8 @@ fn models_lint_toml_error_context_is_width_capped() {
 
 #[test]
 fn ambient_out_of_range_is_a_usage_error_naming_the_bound() {
-    let b = blinky_board();
     for bad in ["2000", "-300", "1e308", "nan"] {
-        let out = run(&["run", b.to_str().unwrap(), "--thermal", "--ambient", bad]);
+        let out = run_board(&blinky_board(), &["--thermal", "--ambient", bad]);
         assert_eq!(out.status.code(), Some(2), "usage error for {bad}");
         let err = stderr(&out);
         assert!(
@@ -129,18 +128,16 @@ fn ambient_out_of_range_is_a_usage_error_naming_the_bound() {
 
 #[test]
 fn negative_ambient_parses_instead_of_reading_as_a_flag() {
-    let b = blinky_board();
     // -40 C is a perfectly good ambient; clap used to reject it as an
     // unexpected argument. --drc keeps the run cheap.
-    let out = run(&["run", b.to_str().unwrap(), "--drc", "--ambient", "-40"]);
+    let out = run_board(&blinky_board(), &["--drc", "--ambient", "-40"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
 }
 
 #[test]
 fn zero_or_huge_seconds_is_a_usage_error_naming_the_bound() {
-    let b = blinky_board();
     for bad in ["0", "-1", "1e307"] {
-        let out = run(&["run", b.to_str().unwrap(), "--headless", "--seconds", bad]);
+        let out = run_board(&blinky_board(), &["--headless", "--seconds", bad]);
         assert_eq!(
             out.status.code(),
             Some(2),
@@ -158,8 +155,10 @@ fn zero_or_huge_seconds_is_a_usage_error_naming_the_bound() {
 
 #[test]
 fn kicad_prl_input_points_at_the_sibling_board() {
-    let prl = board("../../testdata/boards/button_pullup.kicad_prl");
-    let out = run(&["run", prl.to_str().unwrap(), "--check"]);
+    let out = run_board(
+        &board("../../testdata/boards/button_pullup.kicad_prl"),
+        &["--check"],
+    );
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(
@@ -178,7 +177,7 @@ fn kicad_prl_input_points_at_the_sibling_board() {
 fn directory_with_one_board_file_is_used_with_a_note() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::copy(clean_board(), dir.path().join("only.kicad_pcb")).unwrap();
-    let out = run(&["run", dir.path().to_str().unwrap(), "--drc"]);
+    let out = run_board(&dir.path(), &["--drc"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert!(
         stderr(&out).contains("using the board file inside it"),
@@ -192,7 +191,7 @@ fn directory_with_several_board_files_asks_which() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::copy(clean_board(), dir.path().join("a.kicad_pcb")).unwrap();
     std::fs::copy(clean_board(), dir.path().join("b.kicad_pcb")).unwrap();
-    let out = run(&["run", dir.path().to_str().unwrap(), "--drc"]);
+    let out = run_board(&dir.path(), &["--drc"]);
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(
@@ -208,7 +207,7 @@ fn corrupt_kicad_pcb_says_content_not_format() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("broken.kicad_pcb");
     std::fs::write(&p, "this is not an s-expression at all").unwrap();
-    let out = run(&["run", p.to_str().unwrap(), "--check"]);
+    let out = run_board(&p, &["--check"]);
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(
@@ -221,8 +220,7 @@ fn corrupt_kicad_pcb_says_content_not_format() {
 
 #[test]
 fn list_nets_with_a_report_flag_warns_which_flag_is_ignored() {
-    let b = blinky_board();
-    let out = run(&["run", b.to_str().unwrap(), "--list-nets", "--drc"]);
+    let out = run_board(&blinky_board(), &["--list-nets", "--drc"]);
     assert_eq!(out.status.code(), Some(0));
     assert!(
         stderr(&out).contains("the report flag is ignored"),
@@ -235,23 +233,17 @@ fn list_nets_with_a_report_flag_warns_which_flag_is_ignored() {
 
 #[test]
 fn ampacity_and_thermal_accept_plain() {
-    let b = blinky_board();
-    let ampacity = run(&["run", b.to_str().unwrap(), "--ampacity", "--plain"]);
+    let ampacity = run_board(&blinky_board(), &["--ampacity", "--plain"]);
     assert_eq!(ampacity.status.code(), Some(0), "{}", stderr(&ampacity));
     assert!(stdout(&ampacity).contains("Plain-language ampacity"));
 
     // Thermal is a report-surface contract test, not an AVR integration test.
     // Keep it on a passive board so the permissive (`--no-default-features`)
     // build exercises the plain renderer without requiring the GPL AVR backend.
-    let thermal_board = clean_board();
-    let thermal = run(&[
-        "run",
-        thermal_board.to_str().unwrap(),
-        "--thermal",
-        "--plain",
-        "--seconds",
-        "0.05",
-    ]);
+    let thermal = run_board(
+        &clean_board(),
+        &["--thermal", "--plain", "--seconds", "0.05"],
+    );
     assert_ne!(
         thermal.status.code(),
         Some(1),
@@ -268,7 +260,7 @@ fn ampacity_and_thermal_accept_plain() {
 #[test]
 fn quiet_keeps_summary_but_suppresses_per_item_evidence_appendix() {
     let b = board("tests/fixtures/plain_check_open_active_ic.kicad_pcb");
-    let normal = run(&["run", b.to_str().unwrap(), "--check", "--plain"]);
+    let normal = run_board(&b, &["--check", "--plain"]);
     let quiet = run(&["--quiet", "run", b.to_str().unwrap(), "--check", "--plain"]);
     assert!(
         stdout(&normal).contains("== Evidence =="),
@@ -304,7 +296,7 @@ fn run_on_an_empty_board_is_invalid_for_analysis() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("empty.board");
     std::fs::write(&p, EMPTY_BOARD_DSL).unwrap();
-    let out = run(&["run", p.to_str().unwrap(), "--check"]);
+    let out = run_board(&p, &["--check"]);
     assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr(&out));
     assert!(
         stderr(&out).contains("this board has no components"),
@@ -332,18 +324,18 @@ fn check_code_on_an_empty_board_refuses() {
 #[cfg(feature = "avr")]
 #[test]
 fn empty_probe_is_rejected() {
-    let b = blinky_board();
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.01",
-        "--probe",
-        "",
-        "--probe-csv",
-        "/dev/null",
-    ]);
+    let out = run_board(
+        &blinky_board(),
+        &[
+            "--headless",
+            "--seconds",
+            "0.01",
+            "--probe",
+            "",
+            "--probe-csv",
+            "/dev/null",
+        ],
+    );
     assert_ne!(out.status.code(), Some(0));
     assert!(
         stderr(&out).contains("only empty net name"),
@@ -355,18 +347,18 @@ fn empty_probe_is_rejected() {
 #[cfg(feature = "avr")]
 #[test]
 fn unknown_probe_net_points_at_list_nets() {
-    let b = blinky_board();
-    let out = run(&[
-        "run",
-        b.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.01",
-        "--probe",
-        "TOTALLY_BOGUS_NET",
-        "--probe-csv",
-        "/dev/null",
-    ]);
+    let out = run_board(
+        &blinky_board(),
+        &[
+            "--headless",
+            "--seconds",
+            "0.01",
+            "--probe",
+            "TOTALLY_BOGUS_NET",
+            "--probe-csv",
+            "/dev/null",
+        ],
+    );
     assert_ne!(out.status.code(), Some(0));
     let err = stderr(&out);
     assert!(
@@ -379,8 +371,7 @@ fn unknown_probe_net_points_at_list_nets() {
 
 #[test]
 fn bare_plain_implies_check_instead_of_the_dead_end_hint() {
-    let b = blinky_board();
-    let out = run(&["run", b.to_str().unwrap(), "--plain"]);
+    let out = run_board(&blinky_board(), &["--plain"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let so = stdout(&out);
     assert!(
@@ -398,8 +389,7 @@ fn bare_plain_implies_check_instead_of_the_dead_end_hint() {
 
 #[test]
 fn check_ends_with_a_single_verdict_line() {
-    let b = clean_board();
-    let out = run(&["run", b.to_str().unwrap(), "--check"]);
+    let out = run_board(&clean_board(), &["--check"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let so = stdout(&out);
     let last = so
@@ -434,13 +424,7 @@ fn coverage_heads_up_names_the_draft_pack_command_with_the_board_path() {
          \t}\n}\n",
     )
     .unwrap();
-    let out = run(&[
-        "run",
-        p.to_str().unwrap(),
-        "--headless",
-        "--seconds",
-        "0.01",
-    ]);
+    let out = run_board(&p, &["--headless", "--seconds", "0.01"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let so = stdout(&out);
     // The heads-up moved from per-ref `models new` scaffolding to the
@@ -487,7 +471,7 @@ fn pads_only_board_gets_the_unrouted_copper_note() {
     )
     .unwrap();
     for flag in ["--drc", "--check"] {
-        let out = run(&["run", p.to_str().unwrap(), flag]);
+        let out = run_board(&p, &[flag]);
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -501,7 +485,7 @@ fn pads_only_board_gets_the_unrouted_copper_note() {
         );
     }
     // And the machine surface carries it as a note.
-    let out = run(&["run", p.to_str().unwrap(), "--drc", "--json"]);
+    let out = run_board(&p, &["--drc", "--json"]);
     assert!(
         stdout(&out).contains("no routed copper"),
         "--json note: {}",

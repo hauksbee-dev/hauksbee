@@ -17,20 +17,6 @@ use crate::result::{
 /// table). Exits with the invalid-for-analysis code when the table is invalid,
 /// or (under `strict`, the default; `--no-strict-thermal` opts out) when
 /// coverage is only partial.
-pub fn emit(
-    engine: &mut HauksbeeEngine,
-    evidence: &crate::evidence::BoardEvidence,
-    ambient: f64,
-    seconds: f64,
-    json: bool,
-    strict: bool,
-    inputs: &[JsonInputEvidence],
-) -> anyhow::Result<()> {
-    emit_quiet(
-        engine, evidence, ambient, seconds, json, false, strict, false, inputs,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_quiet(
     engine: &mut HauksbeeEngine,

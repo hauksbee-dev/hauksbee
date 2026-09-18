@@ -2,8 +2,8 @@
 //! front door.
 //!
 //! Each alias and struct here is one capability the web UI can offer: analyze
-//! an uploaded board, launch a live session, run a schematic check, extract a
-//! model from a datasheet. The front door holds them as trait objects and
+//! an uploaded board, launch a live session, run a check, simulate a SPICE
+//! deck, extract a model from a datasheet. The front door holds them as trait objects and
 //! never learns which crate provided them; the engine implements them and
 //! never learns it is being served over a websocket. Keeping only the
 //! signatures here is what lets both sides compile without each other.
@@ -12,13 +12,7 @@ use std::sync::Arc;
 
 use crate::engine::Engine;
 
-/// Analyze an uploaded board: `(file_name, board_bytes) -> JSON report string`.
-pub type Analyzer = Arc<dyn Fn(&str, &[u8]) -> String + Send + Sync>;
-
-/// Analyze a board and optional firmware.
-pub type FirmwareAnalyzer = Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> String + Send + Sync>;
-
-/// Firmware-aware analysis with an optional companion schematic.
+/// Analysis of a board with its optional firmware and companion schematic.
 pub type SchematicAnalyzer =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>) -> String + Send + Sync>;
 
@@ -47,14 +41,10 @@ pub struct DesignUpload {
 /// Analyze the complete browser design-input bundle.
 pub type DesignAnalyzer = Arc<dyn Fn(DesignUpload) -> String + Send + Sync>;
 
-/// Run checks composed by a web builder.
-pub type CheckRunner =
-    Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, &str) -> String + Send + Sync>;
-
-/// Schematic-aware checks runner.
-pub type SchematicCheckRunner = Arc<
-    dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>, &str) -> String + Send + Sync,
->;
+/// Simulate a raw SPICE deck: `(file_name, deck_text) -> JSON result`, or the
+/// reason it was refused. The result carries the same CSV bytes
+/// `hauksbee sim` writes, so the browser needs no CSV writer of its own.
+pub type DeckSimulator = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
 
 /// Run browser-composed checks against the complete design-input bundle.
 pub type DesignCheckRunner = Arc<dyn Fn(DesignUpload, &str) -> String + Send + Sync>;
@@ -69,11 +59,8 @@ pub struct LiveLaunch {
     pub keepalive: Option<Box<dyn std::any::Any + Send>>,
 }
 
-/// Build a live engine for an uploaded board and optional firmware.
-pub type LiveLauncher =
-    Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> Result<LiveLaunch, String> + Send + Sync>;
-
-/// Live launcher which additionally receives an optional schematic.
+/// Build a live engine for an uploaded board, its optional firmware and an
+/// optional companion schematic.
 pub type SchematicLiveLauncher = Arc<
     dyn Fn(&str, &[u8], Option<(&str, &[u8])>, Option<(&str, &[u8])>) -> Result<LiveLaunch, String>
         + Send

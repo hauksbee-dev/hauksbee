@@ -440,7 +440,12 @@ impl CiResult {
             .iter()
             .find(|r| r.invalid)
             .map(|r| {
-                if r.detail.starts_with("INVALID evidence:") {
+                if r.detail.contains(" regulation of ") {
+                    format!(
+                        "read the regulator reason under INVALID assertion '{}': declare a [[supply]] on that regulator's input net with the headroom it names (or fit a lower-dropout part), then rerun the same spec",
+                        r.label
+                    )
+                } else if r.detail.starts_with("INVALID evidence:") {
                     format!(
                         "give the open part(s) named under INVALID assertion '{}' a model (hauksbee models new, or a [[supply]] for a battery net), then rerun the same spec",
                         r.label

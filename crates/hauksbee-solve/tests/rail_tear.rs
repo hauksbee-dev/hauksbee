@@ -10,7 +10,8 @@
 //! This builds the same structure at `n` blocks and checks that the partitioned
 //! (rail-tear) path reproduces the monolithic answer to <= 1e-6 and is faster.
 
-use hauksbee_ir::{Circuit, Device, NodeId};
+use crate::shared::add_capacitor;
+use hauksbee_ir::{Circuit, NodeId};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
 use std::time::Instant;
 
@@ -105,13 +106,7 @@ fn rail_with_ground_bypass_cap_is_not_torn() {
     let (mut c, _m) = build_shunt_array(24);
     // Add a decoupling cap directly from the rail to ground.
     let avdd = c.node("ANALOG_VDD");
-    c.add(Device::Capacitor {
-        name: "C_byp".into(),
-        a: avdd,
-        b: NodeId::GROUND,
-        farads: 100e-9,
-        ic: Some(0.0),
-    });
+    add_capacitor(&mut c, "C_byp", avdd, NodeId::GROUND, 100e-9, Some(0.0));
     let part = hauksbee_solve::Partition::analyze_with_tears(&c);
     assert_eq!(
         part.tears.len(),

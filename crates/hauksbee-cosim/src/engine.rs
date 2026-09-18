@@ -243,21 +243,6 @@ impl HauksbeeEngine {
             },
         });
     }
-
-    /// Convenience: extract + bind + build, then run geometric DRC on the same
-    /// board text and apply every detected short before simulating. This is the
-    /// "detect shorts from geometry, then simulate what the board does with them
-    /// present" path. Returns the engine and the DRC report.
-    pub fn from_board_file_with_drc_shorts(
-        board_text: &str,
-        firmware: Option<&Path>,
-        board_url: &str,
-    ) -> anyhow::Result<(Self, hauksbee_extract::DrcReport)> {
-        let mut engine = Self::from_board_file(board_text, firmware, board_url)?;
-        let report = ExtractedBoard::drc(board_text)?;
-        engine.apply_drc_shorts(&report);
-        Ok((engine, report))
-    }
 }
 
 impl Engine for HauksbeeEngine {
@@ -345,6 +330,7 @@ impl Engine for HauksbeeEngine {
                 )
             })
             .collect();
+        let taint = self.sched.regulation_taint();
         SimFrame {
             t: result.sim_time,
             realtime_factor: if step_wall > 0.0 { dt / step_wall } else { 0.0 },
@@ -355,6 +341,8 @@ impl Engine for HauksbeeEngine {
             // can say "static level, not a measured drive" instead of
             // presenting the passive network's idle voltage as a measurement.
             unobserved_drive_nets: self.sched.unobserved_drive_nets(),
+            unsupported_nets: taint.iter().flat_map(|t| t.nets.clone()).collect(),
+            unsupported_reasons: taint.iter().map(|t| t.reason.clone()).collect(),
             net_voltages: self.sched.net_voltages(),
             // The chunk's envelope, not just the instant above. Without it a
             // strobe narrower than the chunk is gone before the frame is

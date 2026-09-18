@@ -1264,7 +1264,7 @@ pub(crate) fn diode_charge(model: &DiodeModel, vd: f64, id: f64, gd: f64) -> (f6
     let mut q = 0.0;
     let mut c = 0.0;
     if model.cjo > 0.0 {
-        let (qj, cj) = depletion_charge(model.cjo, model.vj, model.m, vd);
+        let (qj, cj) = depletion_charge(model.cjo, model.vj, model.m, DIODE_FC, vd);
         c += cj;
         q += qj;
     }
@@ -1276,13 +1276,13 @@ pub(crate) fn diode_charge(model: &DiodeModel, vd: f64, id: f64, gd: f64) -> (f6
 }
 
 /// SPICE depletion charge/capacitance for one graded junction: `(Qj, Cj)` at
-/// junction voltage `vd`, with the FC-knee linear continuation documented on
-/// [`diode_charge`]. Shared by the diode (`cjo/vj/m` from its model card) and
-/// the BJT's two junctions (`cje`/`cjc` with the SPICE default `vj`/`m`, see
-/// [`BJT_VJ`]/[`BJT_MJ`]); the arithmetic is the diode's original,
+/// junction voltage `vd`, with the `fc` knee's linear continuation documented
+/// on [`diode_charge`]. Shared by the diode (`cjo/vj/m` from its model card)
+/// and the BJT's two junctions (`cje`/`cjc` with the card's own `vje`/`vjc`,
+/// `mje`/`mjc` and `fc`); the arithmetic is the diode's original,
 /// expression-for-expression, so extracting it moved no diode bit.
-pub(crate) fn depletion_charge(cjo: f64, vj: f64, m: f64, vd: f64) -> (f64, f64) {
-    let fcv = DIODE_FC * vj;
+pub(crate) fn depletion_charge(cjo: f64, vj: f64, m: f64, fc: f64, vd: f64) -> (f64, f64) {
+    let fcv = fc * vj;
     if vd < fcv {
         let arg = 1.0 - vd / vj;
         let sarg = arg.powf(-m);
@@ -1295,26 +1295,18 @@ pub(crate) fn depletion_charge(cjo: f64, vj: f64, m: f64, vd: f64) -> (f64, f64)
         };
         (q, c)
     } else {
-        let f2 = (1.0 - DIODE_FC).powf(1.0 + m);
-        let f3 = 1.0 - DIODE_FC * (1.0 + m);
+        let f2 = (1.0 - fc).powf(1.0 + m);
+        let f3 = 1.0 - fc * (1.0 + m);
         let f1 = if (1.0 - m).abs() < 1e-9 {
-            -vj * (1.0 - DIODE_FC).ln()
+            -vj * (1.0 - fc).ln()
         } else {
-            vj * (1.0 - (1.0 - DIODE_FC).powf(1.0 - m)) / (1.0 - m)
+            vj * (1.0 - (1.0 - fc).powf(1.0 - m)) / (1.0 - m)
         };
         let c = cjo * (f3 + m * vd / vj) / f2;
         let q = cjo * (f1 + (f3 * (vd - fcv) + (m / (2.0 * vj)) * (vd * vd - fcv * fcv)) / f2);
         (q, c)
     }
 }
-
-/// SPICE default junction built-in potential / grading coefficient for the
-/// BJT's depletion capacitances (`VJE`/`VJC` = 0.75 V, `MJE`/`MJC` = 0.33).
-/// The loader does not parse per-junction `vj`/`m` overrides yet, so both
-/// junctions use the ngspice defaults; the value an ngspice model card
-/// without VJE/MJE also gets, which keeps the differential decks honest.
-pub(crate) const BJT_VJ: f64 = 0.75;
-pub(crate) const BJT_MJ: f64 = 0.33;
 
 /// Whether a BJT stores charge under the current effects toggles: the
 /// `junction_caps` gate AND at least one charge-producing model field. A
@@ -1337,7 +1329,7 @@ pub(crate) fn bjt_charge_be(model: &BjtModel, vbe: f64, cf: f64, gif: f64) -> (f
     let mut q = 0.0;
     let mut c = 0.0;
     if model.cje > 0.0 {
-        let (qj, cj) = depletion_charge(model.cje, BJT_VJ, BJT_MJ, vbe);
+        let (qj, cj) = depletion_charge(model.cje, model.vje, model.mje, model.fc, vbe);
         q += qj;
         c += cj;
     }
@@ -1355,7 +1347,7 @@ pub(crate) fn bjt_charge_bc(model: &BjtModel, vbc: f64, cr: f64, gir: f64) -> (f
     let mut q = 0.0;
     let mut c = 0.0;
     if model.cjc > 0.0 {
-        let (qj, cj) = depletion_charge(model.cjc, BJT_VJ, BJT_MJ, vbc);
+        let (qj, cj) = depletion_charge(model.cjc, model.vjc, model.mjc, model.fc, vbc);
         q += qj;
         c += cj;
     }
@@ -1627,12 +1619,12 @@ pub(crate) fn mos_charges_at(
     let q_gs = mos_charge_gs(model.cgs_ov, model.c_ox, model.vto, delta, vgs).0;
     let q_gd = mos_charge_gd(model.cgd_ov, model.c_ox, model.vto, delta, vgd).0;
     let q_bd = if model.cbd > 0.0 {
-        depletion_charge(model.cbd, model.pb, model.mj, vbd).0
+        depletion_charge(model.cbd, model.pb, model.mj, DIODE_FC, vbd).0
     } else {
         0.0
     };
     let q_bs = if model.cbs > 0.0 {
-        depletion_charge(model.cbs, model.pb, model.mj, vbs).0
+        depletion_charge(model.cbs, model.pb, model.mj, DIODE_FC, vbs).0
     } else {
         0.0
     };
@@ -2312,7 +2304,7 @@ fn stamp_mosfet<S: StampSink>(
             };
             // Depletion charge companion (open at DC like every capacitor).
             if !ctx.dc && ctx.opts.effects.junction_caps && cbx > 0.0 {
-                let (q, c) = depletion_charge(cbx, model.pb, model.mj, vj);
+                let (q, c) = depletion_charge(cbx, model.pb, model.mj, DIODE_FC, vj);
                 let bk = &ctx.state.xb[bank];
                 let geq = ctx.coeffs.g * c;
                 let ieq_c = (ctx.coeffs.g * q - hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])) - geq * vj;
@@ -3045,7 +3037,7 @@ mod tests {
             ..diode_charge_model()
         };
         for &vd in &[-5.0, -1.0, 0.0, 0.2, 0.34, 0.35, 0.4, 0.9] {
-            let (q_h, c_h) = depletion_charge(m.cjo, m.vj, m.m, vd);
+            let (q_h, c_h) = depletion_charge(m.cjo, m.vj, m.m, DIODE_FC, vd);
             let (idc, gd) = diode_eval(&m, vd, 27.0, false);
             let (q_d, c_d) = diode_charge(&m, vd, idc, gd);
             assert_eq!(
@@ -3263,6 +3255,15 @@ mod tests {
         };
         fd_matches_cap(q_be, &[-5.0, -1.0, 0.0, 0.2, 0.37, 0.5, 0.65], "Qbe");
         fd_matches_cap(q_bc, &[-12.0, -3.0, 0.0, 0.37, 0.5], "Qbc");
+        // MJE comes from the card, not a hardcoded 0.33 (a vendor 2N3904 card
+        // states MJE=.2593, so its depletion cap must differ from the default).
+        let cap = |b: &BjtModel| bjt_charge_be(b, -2.0, 0.0, 0.0).1;
+        let g = BjtModel { mje: 0.2593, ..m };
+        assert_eq!(
+            cap(&g),
+            depletion_charge(m.cje, m.vje, 0.2593, m.fc, -2.0).1
+        );
+        assert!(cap(&g) != cap(&m), "MJE was ignored");
     }
 
     /// Residual rows `(f_b, f_c)` of a one-BJT system at a pinned iterate,

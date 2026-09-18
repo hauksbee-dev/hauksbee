@@ -13,7 +13,8 @@
 //! * DRAIN/SOURCE SWAP: a symmetric device (`rd == rs`) behaves identically when
 //!   the drain and source terminals are exchanged.
 
-use hauksbee_ir::{Circuit, Device, MosLevel, MosfetModel, NodeId, Polarity, SourceKind};
+use crate::shared::{add_resistor, add_vdc};
+use hauksbee_ir::{Circuit, Device, MosLevel, MosfetModel, NodeId, Polarity};
 use hauksbee_solve::{run_op, Probe, SolverOptions};
 
 /// A power-NMOS model whose channel is a small fraction of `rd + rs` at high
@@ -49,25 +50,9 @@ fn drain_voltage(model: MosfetModel, vdd: f64, rl: f64, vg: f64, swap_ds: bool) 
     let nvdd = c.node("vdd");
     let nd = c.node("d");
     let ng = c.node("g");
-    c.add(Device::Vsource {
-        name: "VDD".into(),
-        p: nvdd,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(vdd),
-    });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: nvdd,
-        b: nd,
-        ohms: rl,
-        tc1: None,
-    });
-    c.add(Device::Vsource {
-        name: "VG".into(),
-        p: ng,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(vg),
-    });
+    add_vdc(&mut c, "VDD", nvdd, NodeId::GROUND, vdd);
+    add_resistor(&mut c, "RL", nvdd, nd, rl);
+    add_vdc(&mut c, "VG", ng, NodeId::GROUND, vg);
     // Physically the drain is at `nd` and the source at ground. The swap variant
     // wires them the other way (source at `nd`, drain at ground) with the same
     // symmetric device; V(nd) must come out identically.

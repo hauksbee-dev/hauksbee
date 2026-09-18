@@ -29,7 +29,7 @@ use hauksbee_solve::decompose::rails::TearMotive;
 use hauksbee_solve::decompose::verify::Decomposition;
 use hauksbee_solve::orchestrate::run_staged;
 
-use crate::shared::lerp_at;
+use crate::shared::{add_resistor, lerp_at};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient, Waveforms};
 
 /// Deterministic xorshift64*; good enough to scatter topologies, and every
@@ -96,13 +96,7 @@ fn random_board(seed: u64) -> Circuit {
         let mut tail = vin;
         for k in 0..depth {
             let node = c.node(&format!("i{i}_n{k}"));
-            c.add(Device::Resistor {
-                name: format!("R{i}_{k}"),
-                a: prev,
-                b: node,
-                ohms: rng.f(0.5e3, 5e3),
-                tc1: None,
-            });
+            add_resistor(&mut c, &format!("R{i}_{k}"), prev, node, rng.f(0.5e3, 5e3));
             c.add(Device::Capacitor {
                 name: format!("C{i}_{k}"),
                 a: node,
@@ -124,13 +118,13 @@ fn random_board(seed: u64) -> Circuit {
             if rng.coin() {
                 // Comparator living in `down`, watching `up`'s tail.
                 let out = c.node(&format!("cmp_{up}_{down}_{edge}"));
-                c.add(Device::Resistor {
-                    name: format!("RB{up}_{down}_{edge}"),
-                    a: out,
-                    b: hubs[down],
-                    ohms: 1e3,
-                    tc1: None,
-                });
+                add_resistor(
+                    &mut c,
+                    &format!("RB{up}_{down}_{edge}"),
+                    out,
+                    hubs[down],
+                    1e3,
+                );
                 c.add(Device::Comparator {
                     name: format!("K{up}_{down}_{edge}"),
                     out,
@@ -154,13 +148,13 @@ fn random_board(seed: u64) -> Circuit {
                     ron: 10.0,
                     roff: 1e9,
                 });
-                c.add(Device::Resistor {
-                    name: format!("RS{up}_{down}_{edge}"),
-                    a: o,
-                    b: NodeId::GROUND,
-                    ohms: 10e3,
-                    tc1: None,
-                });
+                add_resistor(
+                    &mut c,
+                    &format!("RS{up}_{down}_{edge}"),
+                    o,
+                    NodeId::GROUND,
+                    10e3,
+                );
             }
         }
     }

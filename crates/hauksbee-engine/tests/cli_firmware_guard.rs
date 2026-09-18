@@ -8,7 +8,7 @@
 //! These drive the actual compiled binary so the exit-code and output contracts
 //! are tested end to end.
 
-use crate::support::run;
+use crate::support::run_board;
 use std::path::PathBuf;
 
 /// A board that sits beside two sibling `.kicad_pcb` files, so the "found
@@ -22,16 +22,16 @@ fn board_with_siblings() -> PathBuf {
 
 #[test]
 fn missing_firmware_is_clean_error_not_segfault() {
-    let board = board_with_siblings();
-    let out = run(&[
-        "run",
-        board.to_str().unwrap(),
-        "--firmware",
-        "does_not_exist.hex",
-        "--headless",
-        "--seconds",
-        "0.05",
-    ]);
+    let out = run_board(
+        &board_with_siblings(),
+        &[
+            "--firmware",
+            "does_not_exist.hex",
+            "--headless",
+            "--seconds",
+            "0.05",
+        ],
+    );
     // A SIGSEGV leaves `code()` == None (killed by signal 11) and the shell sees
     // 139. The guard must instead exit with the ordinary error code (1).
     assert_eq!(
@@ -62,8 +62,7 @@ fn missing_firmware_is_clean_error_not_segfault() {
 
 #[test]
 fn nearby_boards_note_never_on_stdout_in_report_mode() {
-    let board = board_with_siblings();
-    let out = run(&["run", board.to_str().unwrap(), "--report"]);
+    let out = run_board(&board_with_siblings(), &["--report"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         !stdout.contains("found nearby"),
@@ -73,8 +72,7 @@ fn nearby_boards_note_never_on_stdout_in_report_mode() {
 
 #[test]
 fn nearby_boards_note_never_on_stdout_in_json_mode() {
-    let board = board_with_siblings();
-    let out = run(&["run", board.to_str().unwrap(), "--json"]);
+    let out = run_board(&board_with_siblings(), &["--json"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         !stdout.contains("found nearby") && !stdout.contains("note:"),
@@ -84,12 +82,11 @@ fn nearby_boards_note_never_on_stdout_in_json_mode() {
 
 #[test]
 fn quiet_flag_is_accepted_and_silences_the_note() {
-    let board = board_with_siblings();
     // --quiet is a global flag: it must parse in any position and suppress the
     // advisory on both streams. (Under a piped test stdout the note is already
     // TTY-suppressed; this asserts --quiet is a real, accepted switch and never
     // reaches stdout.)
-    let out = run(&["run", board.to_str().unwrap(), "--report", "--quiet"]);
+    let out = run_board(&board_with_siblings(), &["--report", "--quiet"]);
     assert!(
         out.status.success(),
         "run --report --quiet succeeds: {}",

@@ -406,6 +406,8 @@ class PrivateReleasePolicyTests(unittest.TestCase):
             curate(b'docs/ci/CI.md', b'## Renamed private section\ntarski_brownout.toml\n')
         binary = b'\x00/Users/hauksbee-user\xff'
         self.assertEqual(curate(b'firmware.elf', binary), b'\x00/Users/hauksbee-user\xff')
+        elf = curate(b'x.elf', (ROOT / 'testdata/firmware/esp32_native_gpio/esp32_native_gpio.elf').read_bytes())
+        self.assertEqual((len(elf), elf.count(b'Tarski'), elf.count(b'eoghancollins')), (2877308, 0, 0))
         source = (b'#[test]\nfn the_flagship_board_is_the_case_this_came_from() {\n'
                   b'let s = r#"}"#; /* } */\n}\n' + public)
         self.assertEqual(curate(b'crates/hauksbee-ci/tests/unpowered_rail_is_declared.rs', source), b'\n' + public)
