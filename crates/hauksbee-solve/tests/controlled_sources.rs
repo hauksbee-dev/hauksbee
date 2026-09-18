@@ -28,12 +28,54 @@
 //!   cross-island sense edges.
 
 use crate::shared::{add_driver_leg, add_load_leg, add_partition_rc_legs, add_sensed_driver_leg};
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_solve::decompose::ConductionGraph;
 use hauksbee_solve::{
     dc_operating_point, Integration, LinearIsland, Partition, Partitioning, SolverOptions,
     StepControl, Transient, Workspace,
 };
+
+fn voltage_controlled(out: NodeId, ctrl: NodeId, vcvs: bool) -> Device {
+    if vcvs {
+        Device::Vcvs {
+            name: "E1".into(),
+            p: out,
+            n: NodeId::GROUND,
+            cp: ctrl,
+            cn: NodeId::GROUND,
+            gain: 2.0,
+        }
+    } else {
+        Device::Vccs {
+            name: "G1".into(),
+            p: out,
+            n: NodeId::GROUND,
+            cp: ctrl,
+            cn: NodeId::GROUND,
+            gm: 1e-3,
+        }
+    }
+}
+
+fn current_controlled(out: NodeId, vs: DeviceId, cccs: bool) -> Device {
+    if cccs {
+        Device::Cccs {
+            name: "F1".into(),
+            p: out,
+            n: NodeId::GROUND,
+            ctrl_src: vs,
+            gain: 2.0,
+        }
+    } else {
+        Device::Ccvs {
+            name: "H1".into(),
+            p: out,
+            n: NodeId::GROUND,
+            ctrl_src: vs,
+            transres: 2e3,
+        }
+    }
+}
 
 // --- touchpoint 6: partitioner coupling --------------------------------------
 
@@ -58,26 +100,7 @@ fn controlled_source_fuses_control_and_output_islands() {
         let mut c = Circuit::new();
         let ctrl = add_driver_leg(&mut c);
         let out = add_load_leg(&mut c);
-        let dev = if vcvs {
-            Device::Vcvs {
-                name: "E1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                cp: ctrl,
-                cn: NodeId::GROUND,
-                gain: 2.0,
-            }
-        } else {
-            Device::Vccs {
-                name: "G1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                cp: ctrl,
-                cn: NodeId::GROUND,
-                gm: 1e-3,
-            }
-        };
-        c.add(dev);
+        c.add(voltage_controlled(out, ctrl, vcvs));
         let p = Partition::analyze(&c);
         assert_eq!(
             p.islands.len(),
@@ -104,14 +127,7 @@ fn conduction_graph_keeps_control_coupling_as_sense_edges() {
     let mut c = Circuit::new();
     let ctrl = add_driver_leg(&mut c);
     let out = add_load_leg(&mut c);
-    c.add(Device::Vccs {
-        name: "G1".into(),
-        p: out,
-        n: NodeId::GROUND,
-        cp: ctrl,
-        cn: NodeId::GROUND,
-        gm: 1e-3,
-    });
+    c.add(voltage_controlled(out, ctrl, false));
     let g = ConductionGraph::analyze(&c);
     assert_eq!(
         g.islands.len(),
@@ -139,26 +155,7 @@ fn linear_island_with_controlled_source_forces_mna() {
         let mut c = Circuit::new();
         let ctrl = add_driver_leg(&mut c);
         let out = add_load_leg(&mut c);
-        let dev = if vcvs {
-            Device::Vcvs {
-                name: "E1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                cp: ctrl,
-                cn: NodeId::GROUND,
-                gain: 2.0,
-            }
-        } else {
-            Device::Vccs {
-                name: "G1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                cp: ctrl,
-                cn: NodeId::GROUND,
-                gm: 1e-3,
-            }
-        };
-        c.add(dev);
+        c.add(voltage_controlled(out, ctrl, vcvs));
         let p = Partition::analyze(&c);
         assert_eq!(p.islands.len(), 1);
         let isl = &p.islands[0];
@@ -255,14 +252,7 @@ fn vccs_dc_matches_analytic() {
         ohms: 1e3,
         tc1: None,
     });
-    c.add(Device::Vccs {
-        name: "G1".into(),
-        p: out,
-        n: NodeId::GROUND,
-        cp: vin,
-        cn: NodeId::GROUND,
-        gm: 1e-3,
-    });
+    c.add(voltage_controlled(out, vin, false));
     let mut ws = Workspace::new(&c);
     let opts = SolverOptions::default();
     dc_operating_point(&mut ws, &c, &opts).unwrap();
@@ -446,24 +436,7 @@ fn current_control_demotes_ammeter_from_cut_to_island_member() {
         let mut c = Circuit::new();
         let vs = add_sensed_driver_leg(&mut c);
         let out = add_load_leg(&mut c);
-        let dev = if cccs {
-            Device::Cccs {
-                name: "F1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                ctrl_src: vs,
-                gain: 2.0,
-            }
-        } else {
-            Device::Ccvs {
-                name: "H1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                ctrl_src: vs,
-                transres: 2e3,
-            }
-        };
-        c.add(dev);
+        c.add(current_controlled(out, vs, cccs));
         let p = Partition::analyze(&c);
         assert_eq!(
             p.islands.len(),
@@ -501,13 +474,7 @@ fn conduction_graph_fuses_branch_current_coupling() {
     let mut c = Circuit::new();
     let vs = add_sensed_driver_leg(&mut c);
     let out = add_load_leg(&mut c);
-    let f1 = c.add(Device::Cccs {
-        name: "F1".into(),
-        p: out,
-        n: NodeId::GROUND,
-        ctrl_src: vs,
-        gain: 2.0,
-    });
+    let f1 = c.add(current_controlled(out, vs, true));
     let g = ConductionGraph::analyze(&c);
     assert_eq!(
         g.islands.len(),
@@ -534,24 +501,7 @@ fn linear_island_with_current_controlled_source_forces_mna() {
         let mut c = Circuit::new();
         let vs = add_sensed_driver_leg(&mut c);
         let out = add_load_leg(&mut c);
-        let dev = if cccs {
-            Device::Cccs {
-                name: "F1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                ctrl_src: vs,
-                gain: 2.0,
-            }
-        } else {
-            Device::Ccvs {
-                name: "H1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                ctrl_src: vs,
-                transres: 2e3,
-            }
-        };
-        c.add(dev);
+        c.add(current_controlled(out, vs, cccs));
         let p = Partition::analyze(&c);
         assert_eq!(p.islands.len(), 1);
         let isl = &p.islands[0];
@@ -579,23 +529,7 @@ fn auto_partitioning_never_drops_current_controlled_sources() {
         let mut c = Circuit::new();
         let vs = add_sensed_driver_leg(&mut c);
         let out = add_load_leg(&mut c);
-        if cccs {
-            c.add(Device::Cccs {
-                name: "F1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                ctrl_src: vs,
-                gain: 2.0,
-            });
-        } else {
-            c.add(Device::Ccvs {
-                name: "H1".into(),
-                p: out,
-                n: NodeId::GROUND,
-                ctrl_src: vs,
-                transres: 2e3,
-            });
-        }
+        c.add(current_controlled(out, vs, cccs));
         // Extra independent RC legs so the partition heuristics engage.
         add_partition_rc_legs(&mut c);
         let opts_off = SolverOptions {
@@ -734,13 +668,7 @@ fn ccvs_dc_matches_analytic() {
         n: NodeId::GROUND,
         kind: SourceKind::Dc(0.0),
     });
-    let h1 = c.add(Device::Ccvs {
-        name: "H1".into(),
-        p: out,
-        n: NodeId::GROUND,
-        ctrl_src: vs,
-        transres: 2e3,
-    });
+    let h1 = c.add(current_controlled(out, vs, false));
     c.add(Device::Resistor {
         name: "RL".into(),
         a: out,

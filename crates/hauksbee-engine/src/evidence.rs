@@ -992,15 +992,7 @@ impl BoardEvidence {
         for finding in findings {
             let mut nets: BTreeSet<String> = finding.nets.iter().cloned().collect();
             if nets.is_empty() {
-                for (net, references) in &self.refs_by_net {
-                    if finding.refs.iter().any(|reference| {
-                        references
-                            .iter()
-                            .any(|subject| self.subject_matches_reference(subject, reference))
-                    }) {
-                        nets.insert(net.clone());
-                    }
-                }
+                nets = self.nets_for_subjects(&[], &finding.refs);
             }
             if nets.is_empty() {
                 continue;
@@ -1184,6 +1176,19 @@ impl BoardEvidence {
         Ok(map)
     }
 
+    fn nets_for_subjects(&self, nets: &[String], references: &[String]) -> BTreeSet<String> {
+        let mut scoped_nets: BTreeSet<String> = nets.iter().cloned().collect();
+        for (net, refs) in &self.refs_by_net {
+            if references.iter().any(|reference| {
+                refs.iter()
+                    .any(|subject| self.subject_matches_reference(subject, reference))
+            }) {
+                scoped_nets.insert(net.clone());
+            }
+        }
+        scoped_nets
+    }
+
     /// A numeric simulation assertion over nets and/or component references.
     /// It consumes the board and (when present) firmware artifacts and carries
     /// the producer's validated numerical budget.
@@ -1194,15 +1199,7 @@ impl BoardEvidence {
         references: &[String],
         budget: Option<ErrorBudget>,
     ) -> Result<EvidenceMap, EvidenceError> {
-        let mut scoped_nets: BTreeSet<String> = nets.iter().cloned().collect();
-        for (net, refs) in &self.refs_by_net {
-            if references.iter().any(|reference| {
-                refs.iter()
-                    .any(|subject| self.subject_matches_reference(subject, reference))
-            }) {
-                scoped_nets.insert(net.clone());
-            }
-        }
+        let scoped_nets = self.nets_for_subjects(nets, references);
         if scoped_nets.is_empty() {
             return Err(EvidenceError::Empty {
                 field: "simulation_map.nets",
@@ -1232,15 +1229,7 @@ impl BoardEvidence {
         coverage: Option<&str>,
     ) -> Result<EvidenceMap, EvidenceError> {
         let assertion = assertion.into();
-        let mut scoped_nets: BTreeSet<String> = nets.iter().cloned().collect();
-        for (net, refs) in &self.refs_by_net {
-            if references.iter().any(|reference| {
-                refs.iter()
-                    .any(|subject| self.subject_matches_reference(subject, reference))
-            }) {
-                scoped_nets.insert(net.clone());
-            }
-        }
+        let mut scoped_nets = self.nets_for_subjects(nets, references);
         // Board-wide assertions (`no_faults`, model coverage) have no explicit
         // subject. Their honest causal path is the whole extracted board.
         if scoped_nets.is_empty() {
@@ -1424,30 +1413,7 @@ impl BoardEvidence {
             );
             for model in map.models() {
                 let source = model.source();
-                let accuracy = if source
-                    .uncertainty()
-                    .iter()
-                    .any(|value| matches!(value, ModelUncertainty::Unknown { .. }))
-                {
-                    "uncertainty unknown".to_string()
-                } else {
-                    source
-                        .uncertainty()
-                        .iter()
-                        .filter_map(|value| match value {
-                            ModelUncertainty::Interval {
-                                low,
-                                high,
-                                unit,
-                                kind,
-                                basis,
-                                ..
-                            } => Some(format!("interval [{low}, {high}] {unit} {kind} ({basis})")),
-                            ModelUncertainty::Unknown { .. } => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
+                let accuracy = model_accuracy(source);
                 let _ = writeln!(
                     out,
                     "  model {}={} source={} layer={:?} origin={} validation={} {accuracy}",

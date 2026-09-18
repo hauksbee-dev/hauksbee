@@ -790,6 +790,7 @@ mod rate_honesty_tests {
         dies: bool,
         steps: u32,
         healed: bool,
+        reset_fails: bool,
         controls: SolverControls,
         stepped: Arc<AtomicUsize>,
     }
@@ -802,6 +803,7 @@ mod rate_honesty_tests {
                 dies,
                 steps: 0,
                 healed: false,
+                reset_fails: false,
                 controls: SolverControls::default(),
                 stepped: Default::default(),
             }
@@ -836,10 +838,14 @@ mod rate_honesty_tests {
                 ..Default::default()
             }
         }
-        fn reset(&mut self) {
+        fn reset(&mut self) -> Result<(), String> {
+            if std::mem::take(&mut self.reset_fails) {
+                return Err("injected core reset failure".into());
+            }
             self.sim_time = 0.0;
             self.steps = 0;
             self.healed = true;
+            Ok(())
         }
         fn set_controls(&mut self, controls: SolverControls) {
             self.controls = controls;
@@ -998,6 +1004,96 @@ mod rate_honesty_tests {
         );
     }
 
+    #[tokio::test]
+    async fn refused_reset_retains_both_clients_history_until_success() {
+        for (dies, already_failed) in [(false, false), (true, false), (true, true)] {
+            let mut engine = TestEngine::new(0.0, dies);
+            engine.reset_fails = true;
+            engine.steps = u32::from(already_failed);
+            let stepped = engine.stepped.clone();
+            let mut s = Session::start(engine);
+            if already_failed {
+                s.cmd.send(ClientMessage::Play).await.unwrap();
+                s.drain(1.0, |messages| {
+                    messages
+                        .iter()
+                        .any(|m| matches!(m, ServerMessage::Status(_)))
+                })
+                .await;
+                assert_eq!(stepped.load(Ordering::Relaxed), 0);
+            }
+            let old_time = if already_failed { 0.0 } else { 0.01 };
+            s.cmd.send(ClientMessage::Step { dt: 0.01 }).await.unwrap();
+            s.drain(1.0, |messages| {
+                messages
+                    .iter()
+                    .any(|m| matches!(m, ServerMessage::Status(_)))
+            })
+            .await;
+            let old_fatal = s.shared.backlog.lock().unwrap().fatal.clone();
+            s.shared
+                .backlog
+                .lock()
+                .unwrap()
+                .faults
+                .push(crate::protocol::FaultInfo {
+                    component: "R1".into(),
+                    kind: "overcurrent".into(),
+                    value: 2.0,
+                    limit: 1.0,
+                    t: 0.01,
+                    destroyed: false,
+                });
+            let mut other = s.shared.tx.subscribe();
+            for command in [
+                ClientMessage::Reset,
+                ClientMessage::Play,
+                ClientMessage::Step { dt: 0.1 },
+            ] {
+                s.cmd.send(command).await.unwrap();
+            }
+            let messages = s.drain(1.0, |messages| errors(messages).len() == 3).await;
+            assert_eq!(
+                stepped.load(Ordering::Relaxed),
+                usize::from(!already_failed)
+            );
+            assert_eq!(frames(&messages).count(), 0);
+            assert!(!messages
+                .iter()
+                .any(|m| matches!(m, ServerMessage::Backlog(_))));
+            assert!(messages.iter().all(|m| !matches!(m, ServerMessage::Status(status) if status.running || status.sim_time != old_time)));
+            let mut second = Vec::new();
+            while let Ok(json) = other.try_recv() {
+                second.push(serde_json::from_str::<ServerMessage>(&json).unwrap());
+            }
+            assert_eq!(errors(&messages), errors(&second));
+            {
+                let backlog = s.shared.backlog.lock().unwrap();
+                assert_eq!(backlog.faults.len(), 1);
+                assert_eq!(backlog.faults[0].t, 0.01);
+                assert!(backlog.fatal.is_some());
+                if dies {
+                    assert_eq!(backlog.fatal, old_fatal);
+                }
+            }
+            s.cmd.send(ClientMessage::Reset).await.unwrap();
+            let messages = s
+                .drain(1.0, |messages| {
+                    messages
+                        .iter()
+                        .any(|m| matches!(m, ServerMessage::Backlog(_)))
+                })
+                .await;
+            assert!(messages.iter().any(|m| matches!(m, ServerMessage::Backlog(b) if b.fatal.is_none() && b.faults.is_empty())));
+            s.cmd.send(ClientMessage::Step { dt: 0.01 }).await.unwrap();
+            assert_eq!(
+                frames(&s.drain(1.0, |messages| frames(messages).count() == 1).await).count(),
+                1
+            );
+            s.task.abort();
+        }
+    }
+
     /// A live session whose analog solve is irrecoverably failing must stop
     /// stepping and put the reason on the wire (and in the backlog, for a
     /// client that connects after the failure). Play on the dead session
@@ -1136,10 +1232,9 @@ async fn sim_loop(
 ) {
     let mut running = false;
     let mut speed = 1.0f64;
-    // Latched once the analog solve is declared irrecoverable. While set,
-    // Play/Step refuse (re-broadcasting the reason) instead of launching
-    // another unbounded solve of a circuit already known to be dead; Reset
-    // clears it together with the engine's own failure streak.
+    // Latched after an irrecoverable solve or refused reset. While set,
+    // Play/Step repeat the reason without advancing a dead or partially reset
+    // run. Only successful Reset clears this and the engine's failure state.
     let mut fatal: Option<String> = None;
     // Last simulation time seen from the engine, so the Status broadcast after
     // a command reports the real clock instead of resetting the UI to 0.0.
@@ -1169,7 +1264,7 @@ async fn sim_loop(
                       running: &mut bool,
                       meter: &mut crate::rate::RateMeter,
                       fatal: &mut Option<String>| {
-        if let Some(reason) = engine.analog_failure() {
+        if let Some(reason) = engine.run_failure() {
             *running = false;
             meter.clear();
             let message = format!(
@@ -1206,6 +1301,8 @@ async fn sim_loop(
         });
     };
 
+    // Embedders may hand the server an engine whose run already failed.
+    dead_solve(&*engine, &mut running, &mut meter, &mut fatal);
     loop {
         tokio::select! {
             _ = ticker.tick() => {
@@ -1338,29 +1435,29 @@ async fn sim_loop(
                         }
                     }
                     ClientMessage::Reset => {
-                        engine.reset();
                         running = false;
-                        sim_time = 0.0;
                         meter.clear();
-                        // The engine's failure streak was cleared by reset();
-                        // clear the session's latch with it so Play works.
-                        fatal = None;
-                        // A reset starts the fault story over server-side too,
-                        // or the next subscriber would replay pre-reset faults
-                        // as if they belonged to the fresh run. Same for the
-                        // terminal-failure marker: `engine.reset()` cleared the
-                        // abort streak, so the failure story starts over.
-                        let cleared = {
-                            let mut backlog = shared.backlog.lock().expect("backlog lock");
-                            backlog.faults.clear();
-                            backlog.fatal = None;
-                            backlog.clone()
-                        };
-                        // Broadcast the refreshed (empty) backlog: every
-                        // connected client lifts its failure banner on THIS
-                        // acknowledgement, not on optimistically having sent
-                        // a Reset a dead loop may never process.
-                        broadcast_msg(&ServerMessage::Backlog(cleared));
+                        match engine.reset() {
+                            Ok(()) => {
+                                sim_time = 0.0;
+                                fatal = None;
+                                let cleared = {
+                                    let mut backlog = shared.backlog.lock().expect("backlog lock");
+                                    backlog.faults.clear();
+                                    backlog.fatal = None;
+                                    backlog.clone()
+                                };
+                                // Only an acknowledged reset starts a new fault story.
+                                broadcast_msg(&ServerMessage::Backlog(cleared));
+                            }
+                            Err(reason) => {
+                                let message = format!("live simulation reset refused: {reason}");
+                                // Preserve the old clock, faults and original fatal cause.
+                                let held = fatal.get_or_insert_with(|| message.clone());
+                                shared.backlog.lock().expect("backlog lock").fatal = Some(held.clone());
+                                broadcast_msg(&ServerMessage::Error { message });
+                            }
+                        }
                     }
                     ClientMessage::SetSpeed { factor } => {
                         speed = factor.clamp(0.001, 1000.0);

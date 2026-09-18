@@ -142,22 +142,21 @@ fn watchy_esp32_straps_are_clean() {
 /// no wrong-rail pull. The strap lint examines it and is silent.
 #[test]
 fn rp2040_minimal_bootsel_is_clean() {
-    let Some(root) = corpus_root() else { return };
-    let dir = root.join("rp2040_minimal_kicad");
-    if !dir.exists() {
-        eprintln!("rp2040_minimal absent; skipping");
-        return;
-    }
-    // Pick the first .kicad_pcb in the dir.
-    let pcb = std::fs::read_dir(&dir).ok().and_then(|rd| {
-        rd.filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .find(|p| p.extension().and_then(|x| x.to_str()) == Some("kicad_pcb"))
-    });
-    let Some(pcb) = pcb else {
-        eprintln!("no rp2040_minimal .kicad_pcb; skipping");
-        return;
-    };
+    // The fetch pins r3 in a project subdirectory; the hand-built corpus has r2.
+    // Resolve the board itself so a present-but-empty directory cannot pass.
+    let pcb = hauksbee_testkit::corpus_board_any(
+        env!("CARGO_MANIFEST_DIR"),
+        &[
+            "rp2040_minimal_kicad/RPI-RP2040-MINIMAL_R3-S1_public/RPI-RP2040-MINIMAL_R3-S1.kicad_pcb",
+            "rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb",
+        ],
+    )
+    .or_else(|| hauksbee_testkit::corpus_or_skip(
+        env!("CARGO_MANIFEST_DIR"),
+        "rp2040_minimal_r2/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb",
+        "RP2040 BOOTSEL strap calibration",
+    ));
+    let Some(pcb) = pcb else { return };
     let r = strap_report(&pcb);
     assert_eq!(
         strap_findings(&r).len(),

@@ -518,12 +518,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn strap_pullup_to_rail_does_not_reach_oscillator_vdd() {
-        // Regression for the GPIO15 false fire: a strap with a pull-up to +3V3
-        // must NOT "reach" an oscillator that merely shares the +3V3 rail via its
-        // VDD pin. The clean board has the pull-up to +3V3 and (here) we add an
-        // oscillator on an unrelated net sharing only +3V3. Still clean.
+    fn strap_board_with_unrelated_oscillator() -> String {
         let mut text = esp32_strap_board(true);
         // Insert an oscillator powered from +3V3 (net 5) but whose OUTPUT goes to
         // an unrelated net 7, not the strap. Sharing only the rail must not fire.
@@ -541,6 +536,16 @@ mod tests {
         // Replace the trailing ")" with the oscillator block + ")".
         text = text.trim_end().trim_end_matches(')').to_string();
         text.push_str(osc);
+        text
+    }
+
+    #[test]
+    fn strap_pullup_to_rail_does_not_reach_oscillator_vdd() {
+        // Regression for the GPIO15 false fire: a strap with a pull-up to +3V3
+        // must NOT "reach" an oscillator that merely shares the +3V3 rail via its
+        // VDD pin. The clean board has the pull-up to +3V3 and (here) we add an
+        // oscillator on an unrelated net sharing only +3V3. Still clean.
+        let text = strap_board_with_unrelated_oscillator();
         let r = strap_findings(&text);
         assert_eq!(
             r.of_check(LintCheck::StrapPin).count(),
@@ -590,38 +595,16 @@ mod tests {
         // series-R hop walks onto the rail, finds the oscillator's VDD, and
         // fires a spurious HIGH "free-running clock" finding on a correct
         // pull-up. VBAT must count as a rail; the board is clean.
-        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 3 "/GPIO0")
-  (net 5 "VBAT")
-  (net 6 "/OSC_EN")
-  (net 7 "Net-(CR2-OUT)")
-  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U3 (at 0 0) (layer F.SilkS))
-    (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 5 "VBAT"))
-    (pad 25 smd rect (at 0 5) (net 3 "/GPIO0"))
-  )
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 120 100)
-    (fp_text reference R36 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 3 "/GPIO0"))
-    (pad 2 smd rect (at 2 0) (net 5 "VBAT"))
-  )
-  (module Oscillator:Oscillator_SMD_4Pin (layer F.Cu)
-    (at 140 100)
-    (fp_text reference CR2 (at 0 0) (layer F.SilkS))
-    (fp_text value Q25MHz/25ppm/3V/4P (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 6 "/OSC_EN"))
-    (pad 2 smd rect (at 1 0) (net 1 "GND"))
-    (pad 3 smd rect (at 2 0) (net 7 "Net-(CR2-OUT)"))
-    (pad 4 smd rect (at 3 0) (net 5 "VBAT"))
-  )
-)"#;
-        let r = strap_findings(text);
+        let text = strap_board_with_unrelated_oscillator()
+            .replace("\n\n", "\n")
+            .replace("+3V3", "VBAT")
+            .replace("  (net 2 \"+5V\")\n", "")
+            .replace("  (net 4 \"Net-(CR1-OUT)\")\n", "")
+            .replace(
+                "  (net 6 \"/OSC_EN\")\n",
+                "  (net 6 \"/OSC_EN\")\n  (net 7 \"Net-(CR2-OUT)\")\n",
+            );
+        let r = strap_findings(&text);
         assert_eq!(
             r.of_check(LintCheck::StrapPin).count(),
             0,
@@ -668,6 +651,25 @@ mod tests {
         );
     }
 
+    fn floating_boot0_board(net_id: u8, net_name: &str) -> String {
+        format!(
+            r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net {net_id} "{net_name}")
+  (module Package_QFP:LQFP-48 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value STM32F401CCU6 (at 0 2) (layer F.Fab))
+    (pad 9  smd rect (at 0 0) (net 2 "+3V3"))
+    (pad 8  smd rect (at 0 1) (net 1 "GND"))
+    (pad 44 smd rect (at 0 2) (net {net_id} "{net_name}"))
+  )
+)"#
+        )
+    }
+
     #[test]
     fn floating_boot0_no_internal_pull_fires_high() {
         // The flight-controller bug shape (explosion33/RCS_Hardware): an STM32
@@ -675,21 +677,8 @@ mod tests {
         // has no internal pull, so the boot source is undefined at reset; the
         // part can come up in the bootloader instead of the application. Must fire
         // a SERIOUS strap finding.
-        let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+3V3")
-  (net 38 "unconnected-(U1-Pad44)")
-  (module Package_QFP:LQFP-48 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U1 (at 0 0) (layer F.SilkS))
-    (fp_text value STM32F401CCU6 (at 0 2) (layer F.Fab))
-    (pad 9  smd rect (at 0 0) (net 2 "+3V3"))
-    (pad 8  smd rect (at 0 1) (net 1 "GND"))
-    (pad 44 smd rect (at 0 2) (net 38 "unconnected-(U1-Pad44)"))
-  )
-)"#;
-        let r = strap_findings(text);
+        let text = floating_boot0_board(38, "unconnected-(U1-Pad44)");
+        let r = strap_findings(&text);
         let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
         assert_eq!(
             strap.len(),
@@ -706,21 +695,8 @@ mod tests {
         // The `net_is_isolated_to` branch (not the unconnected-* name branch): a
         // BOOT0 net that carries a real name but has nothing on it except the MCU
         // pin (someone labelled it, then forgot the pulldown) is just as floating.
-        let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+3V3")
-  (net 3 "/BOOT0")
-  (module Package_QFP:LQFP-48 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U1 (at 0 0) (layer F.SilkS))
-    (fp_text value STM32F401CCU6 (at 0 2) (layer F.Fab))
-    (pad 9  smd rect (at 0 0) (net 2 "+3V3"))
-    (pad 8  smd rect (at 0 1) (net 1 "GND"))
-    (pad 44 smd rect (at 0 2) (net 3 "/BOOT0"))
-  )
-)"#;
-        let r = strap_findings(text);
+        let text = floating_boot0_board(3, "/BOOT0");
+        let r = strap_findings(&text);
         let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
         assert_eq!(strap.len(), 1, "a named-but-isolated BOOT0 must fire");
         assert!(matches!(strap[0].severity, Severity::High));
@@ -800,35 +776,19 @@ mod tests {
         // Split-divider guard: BOOT0 (needs low) with BOTH a pull-up and a
         // pull-down. The wrong-direction pull (the pull-up) must NOT fire,
         // because the pull-down is present to resolve the strap correctly.
-        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+3V3")
-  (net 3 "/BOOT0")
-  (module Package_QFP:LQFP-48 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U1 (at 0 0) (layer F.SilkS))
-    (fp_text value STM32F103C8T6 (at 0 2) (layer F.Fab))
-    (pad 9  smd rect (at 0 0) (net 2 "+3V3"))
-    (pad 8  smd rect (at 0 1) (net 1 "GND"))
-    (pad 44 smd rect (at 0 2) (net 3 "/BOOT0"))
-  )
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 3 "/BOOT0"))
-    (pad 2 smd rect (at 2 0) (net 2 "+3V3"))
-  )
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+        let mut text = stm32_boot0_board(true);
+        text.pop();
+        text.push_str(
+            r#"  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
     (at 110 105)
     (fp_text reference R2 (at 0 0) (layer F.SilkS))
     (fp_text value 4k7 (at 0 2) (layer F.Fab))
     (pad 1 smd rect (at 0 0) (net 3 "/BOOT0"))
     (pad 2 smd rect (at 2 0) (net 1 "GND"))
   )
-)"#;
-        let r = strap_findings(text);
+)"#,
+        );
+        let r = strap_findings(&text);
         assert_eq!(
             r.of_check(LintCheck::StrapPin).count(),
             0,

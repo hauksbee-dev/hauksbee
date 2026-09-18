@@ -1162,6 +1162,7 @@ install_qemu() {
 # reference machine.
 install_avr() {
   local prefix; prefix="$(avr_prefix)"
+  local verified=0
 
   log "AVR / simavr: checking for existing install under $prefix ..."
   if [ -f "$prefix/include/simavr/sim_avr.h" ] \
@@ -1173,12 +1174,8 @@ install_avr() {
     if [ "$installed_commit" = "$SIMAVR_COMMIT" ] \
       && grep -Fx "Version: $SIMAVR_TAG" "$prefix/lib/pkgconfig/simavr.pc" >/dev/null 2>&1 \
       && "$SCRIPT_DIR/simavr-payload-provenance.sh" verify "$prefix" >/dev/null 2>&1; then
-      ok "Verified commit $SIMAVR_COMMIT already installed at $prefix — skipping."
-      info "  header: $prefix/include/simavr/sim_avr.h"
-      info "  lib:    $prefix/lib/libsimavr.a"
-      return 0
-    fi
-    if [ "$installed_commit" = "$SIMAVR_COMMIT" ]; then
+      verified=1
+    elif [ "$installed_commit" = "$SIMAVR_COMMIT" ]; then
       warn "simavr at $prefix has the right commit marker but incomplete, tagless, or payload-mismatched build metadata; rebuilding it from the verified source."
     else
       die "existing simavr under $prefix is not proven to be commit $SIMAVR_COMMIT. Move that prefix aside or choose an empty --prefix, then rerun; refusing to overwrite or trust an unidentified library."
@@ -1205,6 +1202,13 @@ install_avr() {
       have cc || have gcc || warn "no C compiler on PATH; the simavr build will fail without one."
       ;;
   esac
+
+  if [ "$verified" -eq 1 ]; then
+    ok "Verified commit $SIMAVR_COMMIT already installed at $prefix — skipping."
+    info "  header: $prefix/include/simavr/sim_avr.h"
+    info "  lib:    $prefix/lib/libsimavr.a"
+    return 0
+  fi
 
   # 2. fetch, verify, build, and install the exact reviewed simavr commit.
   have git  || die "git not found; needed to clone simavr."

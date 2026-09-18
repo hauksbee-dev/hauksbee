@@ -19,25 +19,35 @@ use hauksbee_ci::{run, RunConfig};
 /// hierarchy is actually followed.
 const SUBSHEET_REF: &str = "U5";
 
-/// The checked-in schematic-stage example spec.
-fn schematic_example() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/pic_programmer_schematic.toml")
-}
-
-/// The board the checked-in example spec actually points at, resolved the way
-/// the loader resolves it (relative to the spec file's own directory).
-fn example_board_path() -> PathBuf {
-    let spec = schematic_example();
-    let text = std::fs::read_to_string(&spec).expect("read the example spec");
-    let board = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.starts_with('#'))
-        .find_map(|l| l.strip_prefix("board"))
-        .and_then(|rest| rest.trim_start().strip_prefix('='))
-        .map(|v| v.trim().trim_matches('"').to_string())
-        .expect("the example spec has a board key");
-    spec.parent().expect("spec has a parent").join(board)
+/// The checked-in example, with only its corpus location adapted to this checkout.
+/// Resolve the EXAMPLE's board, not an unrelated fixture: a broken example path
+/// must still fail, while an explicit corpus override must actually be used.
+fn schematic_example() -> Option<tempfile::NamedTempFile> {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/pic_programmer_schematic.toml");
+    let text = std::fs::read_to_string(path).expect("read the example spec");
+    let mut spec: toml::Value = toml::from_str(&text).expect("parse the example spec");
+    let rel = spec["board"]
+        .as_str()
+        .expect("the example spec has a board key")
+        .strip_prefix("../../../board-corpus/")
+        .expect("the example points into the documented repo-root corpus");
+    let board = hauksbee_testkit::corpus_board(
+        env!("CARGO_MANIFEST_DIR"),
+        &rel.replacen("kicad_demos/", "kicad-demos-src/", 1),
+    )
+    .or_else(|| {
+        hauksbee_testkit::corpus_or_skip(
+            env!("CARGO_MANIFEST_DIR"),
+            rel,
+            "PIC programmer schematic example",
+        )
+    })?;
+    spec["board"] =
+        toml::Value::String(board.canonicalize().unwrap().to_string_lossy().into_owned());
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), toml::to_string(&spec).unwrap()).unwrap();
+    Some(file)
 }
 
 /// The corpus pic_programmer project directory, if the corpus is present in
@@ -49,15 +59,14 @@ fn example_board_path() -> PathBuf {
 /// Naming only the first meant every test here skipped for anyone who followed
 /// CONTRIBUTING and ran the fetch, and a skip nobody reads is not a gate.
 fn pic_programmer_dir() -> PathBuf {
-    for name in ["kicad-demos-src", "kicad_demos"] {
-        if let Some(p) = hauksbee_testkit::corpus_board(
-            env!("CARGO_MANIFEST_DIR"),
-            &format!("{name}/demos/pic_programmer"),
-        ) {
-            return p;
-        }
-    }
-    PathBuf::new()
+    hauksbee_testkit::corpus_board_any(
+        env!("CARGO_MANIFEST_DIR"),
+        &[
+            "kicad-demos-src/demos/pic_programmer",
+            "kicad_demos/demos/pic_programmer",
+        ],
+    )
+    .unwrap_or_default()
 }
 
 fn write_tmp(name: &str, body: &str) -> PathBuf {
@@ -96,21 +105,11 @@ kind = "no_faults"
 
 #[test]
 fn schematic_example_spec_passes() {
-    // Skip on the EXAMPLE's own board path, not on whether some corpus
-    // directory exists. Those are two different questions, and while they were
-    // asked separately the corpus could be present with the example's `board`
-    // pointing somewhere else entirely, and the test that exists to catch that
-    // was the one thing skipping.
-    if !example_board_path().exists() {
-        eprintln!(
-            "the example's board is not in this checkout ({}); skipping. Fetch it \
-             with: scripts/fetch-corpus.sh --only kicad_demos",
-            example_board_path().display()
-        );
+    let Some(spec) = schematic_example() else {
         return;
-    }
+    };
     let result = run(&RunConfig {
-        spec: schematic_example(),
+        spec: spec.path().to_path_buf(),
         ..Default::default()
     })
     .expect("schematic spec runs");

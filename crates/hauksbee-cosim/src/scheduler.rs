@@ -595,6 +595,8 @@ pub struct Scheduler {
     /// of being discarded; also printed once at the start of each failed
     /// streak, which is the breadcrumb a bisection needs.
     last_solve_error: Option<String>,
+    /// A reset may mutate even its first core before failing; never march it.
+    reset_failure: Option<String>,
     /// Standalone GPIO-edge-driven digital components (indices into `digital`)
     /// advanced through the generalized micro-tick replay, NOT through
     /// a 595 chain or the 165 responder. Empty on the current corpus (every GPIO
@@ -1293,6 +1295,7 @@ impl Scheduler {
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
             last_solve_error: None,
+            reset_failure: None,
             replay_chips,
             replay_pin_nets,
             last_chunk_edges: Vec::new(),
@@ -3091,9 +3094,17 @@ impl Scheduler {
             .all(|m| m.core.drive_direction_observable())
     }
 
-    /// Advance the co-sim by `dt` seconds in fixed chunks.
+    /// Advance the co-sim by `dt` seconds in fixed chunks. After a failed reset,
+    /// returns the unchanged clock without a sample; consult `reset_failure`.
+    /// Retained diagnostics still describe the old run, not a new observation.
     pub fn step(&mut self, dt: f64) -> StepResult {
         let mut uart: HashMap<String, Vec<u8>> = HashMap::new();
+        if self.reset_failure.is_some() {
+            return StepResult {
+                sim_time: self.sim_time,
+                uart,
+            };
+        }
         // `chunk_s` is a maximum cadence, not a rounded target: strict timing
         // negotiation may have chosen it as the largest acceptable poll error.
         // Ceiling guarantees the actual `dt / chunks` slice never exceeds it.
@@ -4669,7 +4680,30 @@ impl Scheduler {
     /// The MCU cores are REBOOTED (reset vector, power-on registers, firmware
     /// kept), not merely re-clocked: rewinding time while the firmware kept
     /// its wedged PC made Reset a lie for the one part users press it for.
-    pub fn reset_run_state(&mut self) {
+    /// A refusal preserves the old diagnostics; a possibly partial core reset
+    /// also latches execution off. This does not reset external bus devices.
+    pub fn reset_run_state(&mut self) -> Result<(), String> {
+        for m in &self.mcus {
+            if !m.core.supports_reset() {
+                return Err(format!(
+                    "{}: this MCU backend cannot reset; relaunch the session",
+                    m.binding.reference
+                ));
+            }
+        }
+        // No rollback is promised: even the first failing core may have changed.
+        // Keep the old history and coupling state until every reset succeeds.
+        for m in &mut self.mcus {
+            if let Err(error) = m.core.reset() {
+                let reason = format!(
+                    "{}: MCU reset failed: {error}; relaunch or retry reset",
+                    m.binding.reference
+                );
+                self.reset_failure = Some(reason.clone());
+                return Err(reason);
+            }
+        }
+        self.reset_failure = None;
         self.sim_time = 0.0;
         self.micros_carry = 0.0;
         self.failed_chunks = 0;
@@ -4707,43 +4741,19 @@ impl Scheduler {
         if self.stress.destructive {
             self.circuit = self.original_circuit.clone();
         }
-        // Reboot the MCU cores: restarting the sim clock while the firmware
-        // keeps its old PC and SRAM would leave a wedged firmware wedged
-        // forever, with no recovery from a stuck serial protocol short of
-        // killing the server. A reset that rewinds time must also pulse the
-        // cores' RESET line.
-        for mi in 0..self.mcus.len() {
-            match self.mcus[mi].core.reset() {
-                Ok(()) => {
-                    let m = &mut self.mcus[mi];
-                    // The core's IO registers are back at power-on, so the
-                    // coupling caches must match: stale levels would replay
-                    // the wedged run's pin state onto the rebooted firmware.
-                    m.last_levels.clear();
-                    m.configured_outputs.clear();
-                    m.digital_in_levels.clear();
-                    if let Ok(mut sh) = m.shared.lock() {
-                        sh.pin_edges.clear();
-                        sh.pin_edge_log.clear();
-                        sh.uart_out.clear();
-                    }
-                    // GPIO drivers back to Hi-Z until the rebooted firmware
-                    // configures its pins again (the promotion/edge paths
-                    // re-enable them), matching real reset-line behaviour.
-                    for drv in self.mcus[mi].binding.gpio_drivers.values_mut() {
-                        drv.set_enabled(&mut self.circuit, false);
-                    }
-                }
-                // A backend that cannot reboot keeps ALL its coupling state:
-                // clearing caches for a core that did not actually restart
-                // would tri-state its drivers with no firmware edges coming
-                // to re-enable them. Loud, not silent, so the user knows the
-                // firmware survived the reset.
-                Err(e) => eprintln!(
-                    "WARNING: {}: reset did not reboot the MCU core ({e}); \
-                     firmware state persists across this reset",
-                    self.mcus[mi].binding.reference
-                ),
+        // All cores rebooted successfully; now discard their stale coupling.
+        for m in &mut self.mcus {
+            m.last_levels.clear();
+            m.configured_outputs.clear();
+            m.digital_in_levels.clear();
+            if let Ok(mut sh) = m.shared.lock() {
+                sh.pin_edges.clear();
+                sh.pin_edge_log.clear();
+                sh.uart_out.clear();
+            }
+            // Hi-Z until firmware configures its pins again.
+            for drv in m.binding.gpio_drivers.values_mut() {
+                drv.set_enabled(&mut self.circuit, false);
             }
         }
         // The analog operating point restarts with the story: drop the warm
@@ -4759,6 +4769,12 @@ impl Scheduler {
             leg.drain_activity();
             set_isource_dc(&mut self.circuit, leg.isource, 0.0);
         }
+        Ok(())
+    }
+
+    /// Digital reset failure, separate from the retained analog evidence.
+    pub fn reset_failure(&self) -> Option<&str> {
+        self.reset_failure.as_deref()
     }
 
     fn update_stats(&mut self) {
@@ -6731,6 +6747,8 @@ missing = ["measurement_registers"]
         /// Report pin drive direction (the trait default is blind).
         direction_observable: bool,
         was_reset: Arc<Mutex<bool>>,
+        reset_unsupported: bool,
+        reset_fails: bool,
         i2c_cb: Arc<Mutex<Option<Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>>>>,
         spi_cb: Arc<Mutex<Option<Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>>>>,
         pin_cb: Arc<Mutex<Option<Box<dyn FnMut(PinId, bool, u64) + Send>>>>,
@@ -6847,8 +6865,16 @@ missing = ["measurement_registers"]
         fn set_i2c_slave_addresses(&mut self, addresses: &[u8]) {
             *self.i2c_addrs.lock().unwrap_or_else(|e| e.into_inner()) = addresses.to_vec();
         }
+        fn supports_reset(&self) -> bool {
+            !self.reset_unsupported
+        }
         fn reset(&mut self) -> anyhow::Result<()> {
             *self.was_reset.lock().unwrap() = true;
+            self.cycles = 0;
+            self.calls = 0;
+            if std::mem::take(&mut self.reset_fails) {
+                anyhow::bail!("injected reset failure");
+            }
             Ok(())
         }
         fn drive_direction_observable(&self) -> bool {
@@ -8497,7 +8523,7 @@ data_out = ["io0"]
         }
         assert!(sched.analog_abort_tripped());
 
-        sched.reset_run_state();
+        sched.reset_run_state().unwrap();
         assert_eq!(sched.sim_time, 0.0);
         assert_eq!(sched.failed_chunk_count(), 0);
         assert!(sched.failed_windows().is_empty());
@@ -8617,6 +8643,112 @@ data_out = ["io0"]
     }
 
     #[test]
+    fn reset_refusals_preserve_history_and_block_partial_cores() {
+        for (unsupported, fails) in [(true, 2), (false, 1), (false, 2)] {
+            let first = MockCore {
+                reset_fails: fails == 1,
+                ..Default::default()
+            };
+            let (mut sched, h1) = sched_with_core(first, &[]);
+            let second = MockCore {
+                reset_unsupported: unsupported,
+                reset_fails: fails == 2,
+                ..Default::default()
+            };
+            let h2 = second.handles();
+            push_core(&mut sched, second, binding("U2", "test", HashMap::new()));
+            sched.relayout();
+            sched.step(0.001);
+            sched.failed_windows.push((0.0, 0.001));
+            sched.last_solve_error = Some("old analog failure".into());
+            sched.mcus[0].last_levels.insert(('B', 5), true);
+            sched.mcus[0]
+                .shared
+                .lock()
+                .unwrap()
+                .uart_out
+                .extend_from_slice(b"held");
+            sched.frame_peak_current.insert("R1".into(), 2.0);
+            sched
+                .faults_pending
+                .push(hauksbee_bind::shorts::short_fault("A", "B", 0.001));
+            let snapshot = |s: &Scheduler| {
+                format!(
+                    "{:?}",
+                    (
+                        s.sim_time,
+                        &s.node_volts,
+                        &s.failed_windows,
+                        &s.last_solve_error,
+                        &s.frame_v_extremes,
+                        &s.stats,
+                        &s.frame_peak_current,
+                        s.failed_chunks,
+                        &s.faults_pending,
+                        &s.mcus[0].shared.lock().unwrap().uart_out
+                    )
+                )
+            };
+            let before = snapshot(&sched);
+            let old_time = sched.sim_time;
+            assert!(sched
+                .reset_run_state()
+                .unwrap_err()
+                .contains(if fails == 1 { "U1" } else { "U2" }));
+            assert_eq!(*h1.was_reset.lock().unwrap(), !unsupported);
+            assert_eq!(*h2.was_reset.lock().unwrap(), !unsupported && fails == 2);
+            assert_eq!(sched.mcus[0].core.state().pc == 0, !unsupported);
+            assert!(sched.mcus[0].last_levels[&('B', 5)]);
+            assert_eq!(sched.reset_failure().is_some(), !unsupported);
+            if !unsupported {
+                let calls = h1.micros.lock().unwrap().len();
+                for _ in 0..2 {
+                    assert_eq!(sched.step(0.1).sim_time, old_time);
+                }
+                assert_eq!(h1.micros.lock().unwrap().len(), calls);
+            }
+            assert_eq!(before, snapshot(&sched));
+            if !unsupported {
+                use hauksbee_frontdoor_api::engine::Engine;
+                let bound = bound_board(
+                    "guard",
+                    Circuit::new(),
+                    HashMap::new(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                let mut engine =
+                    crate::engine::HauksbeeEngine::from_bound(bound, None, "").unwrap();
+                std::mem::swap(engine.scheduler_mut(), &mut sched);
+                assert!(engine.run_failure().is_some());
+                let stopped = engine.step(0.1);
+                assert!(stopped.component_states.is_empty() && stopped.faults.is_empty());
+                assert_eq!(before, snapshot(engine.scheduler()));
+                std::mem::swap(engine.scheduler_mut(), &mut sched);
+                let held_failure = sched.reset_failure.clone();
+                push_core(
+                    &mut sched,
+                    MockCore {
+                        reset_unsupported: true,
+                        ..Default::default()
+                    },
+                    binding("U3", "unsupported", HashMap::new()),
+                );
+                assert!(sched.reset_run_state().is_err());
+                assert_eq!(sched.reset_failure, held_failure);
+                assert_eq!(before, snapshot(&sched));
+                sched.mcus.pop();
+                sched.responder_registries.pop();
+                sched.reset_run_state().unwrap();
+                assert!(sched.reset_failure().is_none());
+                assert_eq!(sched.sim_time, 0.0);
+                assert!(sched.failed_windows.is_empty());
+                assert!(sched.step(0.001).sim_time > 0.0);
+            }
+        }
+    }
+
+    #[test]
     fn reset_run_state_reboots_mcu_cores_and_clears_coupling_caches() {
         let (mut sched, h) = sched_with_core(MockCore::default(), &[]);
         sched.relayout();
@@ -8636,7 +8768,7 @@ data_out = ["io0"]
             sh.uart_out.extend_from_slice(b"stale");
         }
 
-        sched.reset_run_state();
+        sched.reset_run_state().unwrap();
 
         assert!(
             *h.was_reset.lock().unwrap(),

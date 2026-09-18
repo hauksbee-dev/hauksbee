@@ -291,6 +291,14 @@ impl Engine for HauksbeeEngine {
     }
 
     fn step(&mut self, dt: f64) -> SimFrame {
+        // A refused reset has no new sample, including no fresh MCU state.
+        // Direct callers must inspect run_failure before publishing this frame.
+        if self.sched.reset_failure().is_some() {
+            return SimFrame {
+                t: self.sched.sim_time,
+                ..Default::default()
+            };
+        }
         // Measure the step's real cost so the frame reports the DELIVERED
         // sim-per-wall ratio. The server's sim loop overwrites this with a
         // rolling-window measurement for the stream; the per-step value keeps
@@ -360,12 +368,12 @@ impl Engine for HauksbeeEngine {
         }
     }
 
-    fn reset(&mut self) {
+    fn reset(&mut self) -> Result<(), String> {
         // Restart the sim clock AND drop every run-accumulated diagnostic (failed
         // chunks/windows, the consecutive-failure streak, the sub-µs clock carry,
         // net stats, per-frame peaks). Zeroing only `sim_time` here once let the
         // previous run's failure surface and clock carry bleed into the next run.
-        self.sched.reset_run_state();
+        self.sched.reset_run_state()
     }
 
     fn set_controls(&mut self, controls: SolverControls) {
@@ -565,14 +573,21 @@ impl Engine for HauksbeeEngine {
         Ok(())
     }
 
+    fn run_failure(&self) -> Option<String> {
+        self.sched
+            .reset_failure()
+            .map(str::to_owned)
+            .or_else(|| self.analog_failure())
+    }
+
     /// The strict-abort streak, surfaced to the live server: once
     /// [`crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT`] chunks in a row
     /// have failed every rescue rung, no further stepping will produce a real
     /// answer, and the sim loop must end the session with this reason instead
     /// of grinding the dead solve forever. Same threshold the headless
     /// `--strict` / CI abort uses: one rule for "this run is unrecoverable".
-    /// A `reset()` clears the streak (see `reset_run_state`), so a relaunch
-    /// or reset starts clean.
+    /// A successful `reset()` clears the streak (see `reset_run_state`), so a
+    /// relaunch or acknowledged reset starts clean.
     fn analog_failure(&self) -> Option<String> {
         if !self.sched.analog_abort_tripped() {
             return None;

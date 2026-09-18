@@ -2,11 +2,11 @@
 //! voltage; the family must not collapse onto the +5V model (which silently
 //! simulated 9V/12V/15V rails as 5V).
 
+use super::{expect_model, resolve_value};
 use hauksbee_models::{ComponentQuery, ModelLibrary};
 
 #[test]
 fn seven_eight_xx_family_resolves_to_its_own_voltage() {
-    let lib = ModelLibrary::builtin();
     for (val, id, vout) in [
         ("7805", "7805", 5.0),
         ("LM7805CT", "7805", 5.0),
@@ -21,14 +21,7 @@ fn seven_eight_xx_family_resolves_to_its_own_voltage() {
         ("7818", "7818", 18.0),
         ("7824", "7824", 24.0),
     ] {
-        let q = ComponentQuery {
-            value: Some(val.into()),
-            ..Default::default()
-        };
-        let m = lib
-            .resolve(&q)
-            .model
-            .unwrap_or_else(|| panic!("{val} did not resolve to any model"));
+        let m = expect_model(val);
         assert_eq!(m.id, id, "{val} resolved to the wrong model id");
         assert_eq!(
             m.params.get_f64("vout"),
@@ -46,10 +39,7 @@ fn seven_eight_xx_family_resolves_to_its_own_voltage() {
 fn mnt_pocket_tlv1117_18_is_voltage_specific_and_explicitly_partial() {
     let lib = ModelLibrary::builtin();
 
-    let red = lib.resolve(&ComponentQuery {
-        value: Some("TLV1117-33".into()),
-        ..Default::default()
-    });
+    let red = resolve_value("TLV1117-33");
     assert!(
         red.model.is_none(),
         "the unfitted TLV1117-33 option must stay unresolved (RED)"

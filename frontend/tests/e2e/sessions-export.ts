@@ -506,6 +506,52 @@ async function main() {
   await settle(sp, 500)
   await sp.screenshot({ path: join(OUT, '14-switcher-320.png') })
 
+  // Failed reset is not a rewind: exercise the real live hooks and transport
+  // against explicit wire fixtures, without launching an emulator or an LLM.
+  step('a refused live reset retains faults and the selected historical frame')
+  const live = await browser.newContext({ baseURL: base, viewport: { width: 1440, height: 900 } })
+  await live.route('**/api/live/status', route => route.fulfill({ json: { active: true, board_name: 'reset-fixture' } }))
+  await live.route('**/boards/reset-fixture.kicad_pcb', route => route.fulfill({ contentType: 'text/plain',
+    body: readFileSync(join(here, '../../../crates/hauksbee-ci/examples/boards/power_resistor.kicad_pcb'), 'utf8') }))
+  const wire: import('playwright').WebSocketRoute[] = []
+  let resets = 0
+  await live.routeWebSocket('**/ws', socket => {
+    wire.push(socket)
+    socket.send(JSON.stringify({ type: 'BoardInfo', name: 'reset-fixture', board_url: '/boards/reset-fixture.kicad_pcb',
+      num_components: 1, num_nets: 1, nets: ['A'], component_kinds: { R1: 'resistor' }, mcus: [] }))
+    socket.send(JSON.stringify({ type: 'Backlog' }))
+    socket.onMessage(message => { if (JSON.parse(String(message)).type === 'Reset') resets++ })
+  })
+  const lp = await live.newPage()
+  watchConsole(lp, 'live-reset')
+  await lp.goto('/', { waitUntil: 'domcontentloaded' })
+  await lp.locator('[data-testid="nav-sim"]').click()
+  await lp.waitForSelector('[data-testid="transport-step-back"]')
+  const fault = { component: 'R1', kind: 'overcurrent', value: 2, limit: 1, t: 1 }
+  for (const t of [1, 2, 3]) {
+    wire[0]!.send(JSON.stringify({ type: 'SimFrame', t, realtime_factor: 1, net_voltages: { A: t },
+      component_states: { R1: { stress: 1 } }, uart: {}, faults: t === 1 ? [fault] : [] }))
+    await settle(lp, 100)
+  }
+  wire[0]!.send(JSON.stringify({ type: 'Status', running: false, sim_time: 3, options: {
+    temperature_c: 25, parasitics: false, junction_caps: false, tolerances: false, integration: 'trap', fixed_dt: 0, granularity: 1 } }))
+  await lp.locator('[data-testid="transport-step-back"]').click()
+  await lp.locator('[data-testid="fault-row-active"]').click()
+  const heldReview = await lp.locator('[data-testid="transport-review"]').innerText()
+  const heldFaults = await lp.locator('[data-testid="fault-count-label"]').innerText()
+  for (const reply of [null, 'live simulation reset refused: U2 cannot reset', 'live simulation reset refused: U1 failed after mutating']) {
+    await lp.getByRole('button', { name: 'Restart the simulation', exact: true }).click()
+    if (reply) wire[0]!.send(JSON.stringify({ type: 'Error', message: reply }))
+    await settle(lp, 100)
+    ok('a reset request/refusal keeps the fault log', await lp.locator('[data-testid="fault-count-label"]').innerText() === heldFaults)
+    ok('a reset request/refusal keeps historical review', await lp.locator('[data-testid="transport-review"]').innerText() === heldReview)
+    ok('a reset request/refusal keeps the selected fault', await lp.getByRole('button', { name: 'deselect', exact: true }).count() === 1)
+    if (reply) ok('the reset refusal stays visible', await lp.getByText(reply, { exact: true }).count() === 1)
+  }
+  ok('all reset requests reach the wire', resets === 3)
+  await shoot(lp, '15-refused-reset')
+  await live.close()
+
   // ── 9. Console ───────────────────────────────────────────────────────────
   step('console')
   ok('no console errors anywhere in the run', consoleErrors.length === 0,

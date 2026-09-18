@@ -127,10 +127,7 @@ export function TransportBar({
     send({ type: 'Step', dt: 0.001 })
   }, [send, reviewing, history])
 
-  const handleReset = useCallback(() => {
-    history?.resume()
-    send({ type: 'Reset' })
-  }, [send, history])
+  const handleReset = useCallback(() => send({ type: 'Reset' }), [send])
 
   const applySpeed = useCallback((f: number) => {
     const tidy = tidyFactor(f)

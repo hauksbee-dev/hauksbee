@@ -11,6 +11,7 @@
 //! The generic power-FET fallback is also checked: an unknown FET value in a
 //! DPAK footprint should bind by footprint when no value match exists.
 
+use super::resolve_value;
 use hauksbee_models::{ComponentKind, ComponentQuery, ModelLibrary};
 
 fn lib() -> ModelLibrary {
@@ -21,12 +22,7 @@ fn lib() -> ModelLibrary {
 
 #[test]
 fn ipa045n10n3g_resolves_nmos_with_correct_ratings() {
-    let lib = lib();
-    let q = ComponentQuery {
-        value: Some("IPA045N10N3G".into()),
-        ..Default::default()
-    };
-    let r = lib.resolve(&q);
+    let r = resolve_value("IPA045N10N3G");
     let m = r.model.expect("IPA045N10N3G must resolve");
     assert_eq!(m.id, "ipa045n10n3g");
     assert_eq!(m.kind, ComponentKind::Nmos, "IPA045N10N3G must be nmos");
@@ -52,12 +48,7 @@ fn ipa045n10n3g_resolves_nmos_with_correct_ratings() {
 
 #[test]
 fn irf9358_resolves_pmos_with_correct_ratings() {
-    let lib = lib();
-    let q = ComponentQuery {
-        value: Some("IRF9358".into()),
-        ..Default::default()
-    };
-    let r = lib.resolve(&q);
+    let r = resolve_value("IRF9358");
     let m = r.model.expect("IRF9358 must resolve");
     assert_eq!(m.id, "irf9358");
     assert_eq!(m.kind, ComponentKind::Pmos, "IRF9358 must be pmos");
@@ -83,12 +74,7 @@ fn irf9358_resolves_pmos_with_correct_ratings() {
 
 #[test]
 fn sir182dp_resolves_nmos_with_correct_ratings() {
-    let lib = lib();
-    let q = ComponentQuery {
-        value: Some("SIR182DP".into()),
-        ..Default::default()
-    };
-    let r = lib.resolve(&q);
+    let r = resolve_value("SIR182DP");
     let m = r.model.expect("SIR182DP must resolve");
     assert_eq!(m.id, "sir182dp");
     assert_eq!(m.kind, ComponentKind::Nmos, "SIR182DP must be nmos");
@@ -150,12 +136,7 @@ fn fds4435bz_resolves_exact_grouped_so8_and_reproduces_datasheet_dc_points() {
 
 #[test]
 fn bq76952_resolves_with_stack_voltage_rating() {
-    let lib = lib();
-    let q = ComponentQuery {
-        value: Some("bq76952".into()),
-        ..Default::default()
-    };
-    let r = lib.resolve(&q);
+    let r = resolve_value("bq76952");
     let m = r.model.expect("bq76952 must resolve");
     assert_eq!(m.id, "bq76952");
     assert_eq!(
@@ -185,14 +166,9 @@ fn bq76952_resolves_with_stack_voltage_rating() {
 
 #[test]
 fn lm5109_resolves_as_digital() {
-    let lib = lib();
     // The mppt-1210 board uses LM5109BMA variant
     for val in ["LM5109", "LM5109BMA", "LM5109BSD"] {
-        let q = ComponentQuery {
-            value: Some(val.into()),
-            ..Default::default()
-        };
-        let r = lib.resolve(&q);
+        let r = resolve_value(val);
         let m = r.model.unwrap_or_else(|| panic!("{val} must resolve"));
         assert_eq!(m.id, "lm5109", "{val} must resolve to lm5109");
         assert_eq!(m.kind, ComponentKind::Digital, "{val} must be digital");
@@ -210,13 +186,8 @@ fn lm5109_resolves_as_digital() {
 
 #[test]
 fn lm5107_resolves_as_digital() {
-    let lib = lib();
     for val in ["LM5107", "LM5107SD", "LM5107SDX"] {
-        let q = ComponentQuery {
-            value: Some(val.into()),
-            ..Default::default()
-        };
-        let r = lib.resolve(&q);
+        let r = resolve_value(val);
         let m = r.model.unwrap_or_else(|| panic!("{val} must resolve"));
         assert_eq!(m.id, "lm5107", "{val} must resolve to lm5107");
         assert_eq!(m.kind, ComponentKind::Digital, "{val} must be digital");
@@ -225,13 +196,8 @@ fn lm5107_resolves_as_digital() {
 
 #[test]
 fn ina181_resolves_as_opamp_with_supply_rating() {
-    let lib = lib();
     for val in ["INA181", "INA181A1", "INA181A3", "INA181A4IDBVR"] {
-        let q = ComponentQuery {
-            value: Some(val.into()),
-            ..Default::default()
-        };
-        let r = lib.resolve(&q);
+        let r = resolve_value(val);
         let m = r.model.unwrap_or_else(|| panic!("{val} must resolve"));
         assert_eq!(m.id, "ina181", "{val} must resolve to ina181");
         assert_eq!(m.kind, ComponentKind::Opamp, "{val} must be opamp");
@@ -249,13 +215,8 @@ fn ina181_resolves_as_opamp_with_supply_rating() {
 
 #[test]
 fn ina2181_resolves_dual_opamp_with_supply_rating() {
-    let lib = lib();
     for val in ["INA2181", "INA2181A1", "INA2181A3IDGSR"] {
-        let q = ComponentQuery {
-            value: Some(val.into()),
-            ..Default::default()
-        };
-        let r = lib.resolve(&q);
+        let r = resolve_value(val);
         let m = r.model.unwrap_or_else(|| panic!("{val} must resolve"));
         assert_eq!(m.id, "ina2181", "{val} must resolve to ina2181");
         assert_eq!(

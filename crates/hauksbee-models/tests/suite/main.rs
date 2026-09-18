@@ -44,3 +44,18 @@ mod user_dir_layering;
 mod vreg_78xx_resolve;
 mod vreg_79xx_negative;
 mod zener_family;
+
+/// Resolve a value-only fixture without inventing MPN or footprint metadata.
+fn resolve_value(value: &str) -> hauksbee_models::Resolution {
+    hauksbee_models::ModelLibrary::builtin_shared().resolve(&hauksbee_models::ComponentQuery::new(
+        None,
+        Some(value.into()),
+        None,
+    ))
+}
+
+fn expect_model(value: &str) -> hauksbee_models::ModelEntry {
+    resolve_value(value)
+        .model
+        .unwrap_or_else(|| panic!("{value} did not resolve to any model"))
+}

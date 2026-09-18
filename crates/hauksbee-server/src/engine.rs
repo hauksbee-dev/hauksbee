@@ -23,9 +23,6 @@ pub struct McuDemoEngine {
     mcu: Box<dyn hauksbee_mcu::Mcu + Send>,
     name: String,
     board_url: String,
-    /// Kept so `reset()` can reboot from a fresh firmware load, not just zero the
-    /// clock, which would leak the MCU core, UART buffer and LED state across it.
-    firmware_path: std::path::PathBuf,
     sim_time: f64,
     controls: SolverControls,
     uart_rx: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
@@ -47,7 +44,6 @@ impl McuDemoEngine {
             mcu,
             name: name.to_string(),
             board_url: board_url.to_string(),
-            firmware_path: firmware_hex.to_path_buf(),
             sim_time: 0.0,
             controls: SolverControls::default(),
             uart_rx,
@@ -56,9 +52,7 @@ impl McuDemoEngine {
         })
     }
 
-    /// Build a fresh AvrMcu with the demo callbacks wired to the given shared
-    /// UART/LED state. Shared by `new` and `reset` so a reboot re-registers the
-    /// same callbacks against the same Arcs.
+    /// Build a fresh AvrMcu with callbacks wired to the shared UART/LED state.
     fn build_mcu(
         firmware_hex: &std::path::Path,
         uart_rx: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
@@ -151,18 +145,14 @@ impl Engine for McuDemoEngine {
         }
     }
 
-    fn reset(&mut self) {
-        // A real reboot, not just a clock rewind: rebuild the MCU core from a
-        // fresh firmware load and clear the buffered UART / LED state, so the
-        // post-reset frames reflect a fresh boot instead of leaking mid-stream
-        // execution across the reset.
-        if let Ok(mcu) = Self::build_mcu(&self.firmware_path, &self.uart_rx, &self.led_state) {
-            self.mcu = mcu;
-        }
+    fn reset(&mut self) -> Result<(), String> {
+        // Reset the loaded core in place, retaining its registered callbacks.
+        self.mcu.reset().map_err(|error| error.to_string())?;
         self.uart_rx.lock().unwrap().clear();
         *self.led_state.lock().unwrap() = false;
         self.adc_volts = 2.5;
         self.sim_time = 0.0;
+        Ok(())
     }
 
     fn set_controls(&mut self, controls: SolverControls) {

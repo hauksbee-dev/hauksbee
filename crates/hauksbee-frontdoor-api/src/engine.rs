@@ -17,7 +17,8 @@ pub trait Engine: Send + 'static {
     fn board_info(&self) -> BoardInfo;
     /// Advance simulation by `dt` seconds and produce a frame.
     fn step(&mut self, dt: f64) -> SimFrame;
-    fn reset(&mut self);
+    /// Rewind only after every loaded core has successfully reset.
+    fn reset(&mut self) -> Result<(), String>;
     fn set_controls(&mut self, controls: SolverControls);
     fn controls(&self) -> SolverControls;
     /// Write bytes to an MCU's serial input.
@@ -38,6 +39,12 @@ pub trait Engine: Send + 'static {
     /// Attach a source-bound declarative bus device to the live simulation.
     fn attach_register_map(&mut self, _spec: LiveRegisterMapSpec) -> Result<(), String> {
         Err("this engine does not support attaching live register-map devices".into())
+    }
+
+    /// A stopped run, including a partially failed digital reset. Consumers
+    /// must not publish a new sample when this reports a reset failure.
+    fn run_failure(&self) -> Option<String> {
+        self.analog_failure()
     }
 
     /// A human-readable reason when the analog solve is failing irrecoverably.

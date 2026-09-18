@@ -5,18 +5,7 @@
 //! model can be made to sit on one point. Sitting on both is what says the part
 //! will behave at the current a board actually runs it at.
 
-use hauksbee_models::{ComponentQuery, ModelLibrary};
-
-fn resolve(value: &str) -> hauksbee_models::ModelEntry {
-    let lib = ModelLibrary::builtin();
-    let q = ComponentQuery {
-        value: Some(value.into()),
-        ..Default::default()
-    };
-    lib.resolve(&q)
-        .model
-        .unwrap_or_else(|| panic!("{value} did not resolve to any model"))
-}
+use super::expect_model as resolve;
 
 /// The Shockley forward voltage the entry's own parameters imply at `i`.
 fn vf_at(m: &hauksbee_models::ModelEntry, i: f64) -> f64 {

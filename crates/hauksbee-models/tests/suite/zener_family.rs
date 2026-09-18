@@ -9,18 +9,7 @@
 //! current, which puts a 5.1 V part at 5.8 V under an ordinary shunt load and
 //! makes a "regulated" node wander with its source.
 
-use hauksbee_models::{ComponentQuery, ModelLibrary};
-
-fn resolve(value: &str) -> hauksbee_models::ModelEntry {
-    let lib = ModelLibrary::builtin();
-    let q = ComponentQuery {
-        value: Some(value.into()),
-        ..Default::default()
-    };
-    lib.resolve(&q)
-        .model
-        .unwrap_or_else(|| panic!("{value} did not resolve to any model"))
-}
+use super::expect_model as resolve;
 
 /// Every code the Multicomp 1N4728A-1N4764A datasheet's Specification Table
 /// prints, with the voltage and knee current it prints for it.

@@ -15,6 +15,34 @@ COMMIT = "f44723e8c42431136d5b4de81f789ded56d7e8fa"
 
 
 class SimavrProvenanceContract(unittest.TestCase):
+    def check_avr(self, include: Path, library: Path) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env.update(
+            {
+                "CARGO_TERM_COLOR": "never",
+                "SIMAVR_COMMIT": COMMIT,
+                "SIMAVR_INCLUDE_DIR": str(include),
+                "SIMAVR_LIB_DIR": str(library),
+            }
+        )
+        return subprocess.run(
+            [
+                "cargo",
+                "check",
+                "-p",
+                "hauksbee-mcu",
+                "--no-default-features",
+                "--features",
+                "avr",
+                "--lib",
+            ],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
     def test_payload_change_cannot_reuse_the_commit_marker(self) -> None:
         source = (ROOT / "crates/hauksbee-mcu/build.rs").read_text()
         self.assertIn(".hauksbee-simavr-payload.sha256", source)
@@ -38,32 +66,7 @@ class SimavrProvenanceContract(unittest.TestCase):
                 check=True,
             )
             archive.write_text("substituted archive\n")
-            env = os.environ.copy()
-            env.update(
-                {
-                    "CARGO_TERM_COLOR": "never",
-                    "SIMAVR_COMMIT": COMMIT,
-                    "SIMAVR_INCLUDE_DIR": str(prefix / "include"),
-                    "SIMAVR_LIB_DIR": str(prefix / "lib"),
-                }
-            )
-            result = subprocess.run(
-                [
-                    "cargo",
-                    "check",
-                    "-p",
-                    "hauksbee-mcu",
-                    "--no-default-features",
-                    "--features",
-                    "avr",
-                    "--lib",
-                ],
-                cwd=ROOT,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            result = self.check_avr(prefix / "include", prefix / "lib")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("simavr payload digest mismatch", result.stderr)
 
@@ -103,32 +106,7 @@ class SimavrProvenanceContract(unittest.TestCase):
             (library_prefix / "lib/libsimavr.a").write_text("fixture\n")
             (include_prefix / ".hauksbee-simavr-commit").write_text(f"{COMMIT}\n")
             (library_prefix / ".hauksbee-simavr-commit").write_text(f"{COMMIT}\n")
-            env = os.environ.copy()
-            env.update(
-                {
-                    "CARGO_TERM_COLOR": "never",
-                    "SIMAVR_COMMIT": COMMIT,
-                    "SIMAVR_INCLUDE_DIR": str(include_prefix / "include"),
-                    "SIMAVR_LIB_DIR": str(library_prefix / "lib"),
-                }
-            )
-            result = subprocess.run(
-                [
-                    "cargo",
-                    "check",
-                    "-p",
-                    "hauksbee-mcu",
-                    "--no-default-features",
-                    "--features",
-                    "avr",
-                    "--lib",
-                ],
-                cwd=ROOT,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            result = self.check_avr(include_prefix / "include", library_prefix / "lib")
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(
@@ -208,27 +186,49 @@ class SimavrProvenanceContract(unittest.TestCase):
             [COMMIT, f"{prefix / 'include'}/", f"{prefix / 'lib'}/"],
         )
 
-    def test_tagless_matching_marker_is_not_accepted_as_a_complete_install(self) -> None:
+    def cached_installer(self, tagged: bool, installed: bool):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
-            prefix = tmp / "simavr"
-            (prefix / "include/simavr").mkdir(parents=True)
-            (prefix / "lib").mkdir()
+            prefix, fake_bin = tmp / "simavr", tmp / "bin"
+            for directory in (prefix / "include/simavr", prefix / "lib/pkgconfig", fake_bin):
+                directory.mkdir(parents=True)
             (prefix / "include/simavr/sim_avr.h").write_text("fixture\n")
             (prefix / "lib/libsimavr.a").write_text("fixture\n")
             (prefix / ".hauksbee-simavr-commit").write_text(f"{COMMIT}\n")
-
-            fake_bin = tmp / "bin"
-            fake_bin.mkdir()
-            fake_git = fake_bin / "git"
-            fake_git.write_text(
-                "#!/bin/sh\n"
-                "echo 'FETCH_ATTEMPTED' >&2\n"
-                "exit 73\n"
+            if tagged:
+                (prefix / "lib/pkgconfig/simavr.pc").write_text("Version: v1.8\n")
+                subprocess.run(
+                    [str(ROOT / "scripts/simavr-payload-provenance.sh"), "record", str(prefix)],
+                    check=True,
+                )
+            marker, calls = tmp / "libelf", tmp / "calls"
+            if installed:
+                marker.touch()
+            commands = {
+                "uname": 'case "$1" in -s) printf "Darwin\\n";; -m) printf "arm64\\n";; *) exit 73;; esac',
+                "brew": 'printf "%s\\n" "$*" >> "$CALLS"\n'
+                'case "$*" in\n'
+                ' "list libelf") test -f "$LIBELF";;\n'
+                ' "install libelf") touch "$LIBELF";;\n'
+                " *) exit 73;; esac",
+                "pkg-config": 'test "$*" = "--exists libelf" && test -f "$LIBELF"',
+                "git": "echo FETCH_ATTEMPTED >&2; exit 73",
+            }
+            for command in ("make", "curl", "sudo"):
+                commands[command] = 'echo "unexpected external command" >> "$CALLS"; exit 73'
+            for name, body in commands.items():
+                executable = fake_bin / name
+                executable.write_text(f"#!/bin/sh\n{body}\n")
+                executable.chmod(0o755)
+            env = dict(
+                os.environ,
+                PATH=f"{fake_bin}:{os.environ['PATH']}",
+                HOME=str(tmp),
+                CALLS=str(calls),
+                LIBELF=str(marker),
             )
-            fake_git.chmod(0o755)
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            probe = [str(fake_bin / "pkg-config"), "--exists", "libelf"]
+            self.assertEqual(subprocess.run(probe, env=env).returncode, 0 if installed else 1)
             result = subprocess.run(
                 [str(ROOT / "scripts/install-sims.sh"), "--avr", "--prefix", str(prefix)],
                 cwd=ROOT,
@@ -237,9 +237,23 @@ class SimavrProvenanceContract(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
+            self.assertEqual(subprocess.run(probe, env=env).returncode, 0)
+            return result, calls.read_text().splitlines() if calls.exists() else []
 
+    def test_tagless_matching_marker_is_not_accepted_as_a_complete_install(self) -> None:
+        result, _ = self.cached_installer(tagged=False, installed=True)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("FETCH_ATTEMPTED", result.stderr)
+
+    def test_verified_cache_ensures_host_libelf_without_rebuilding(self) -> None:
+        for installed in (False, True):
+            with self.subTest(installed=installed):
+                result, calls = self.cached_installer(tagged=True, installed=installed)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("already installed", result.stdout)
+                self.assertEqual(
+                    calls, ["list libelf"] if installed else ["list libelf", "install libelf"]
+                )
 
 
 if __name__ == "__main__":

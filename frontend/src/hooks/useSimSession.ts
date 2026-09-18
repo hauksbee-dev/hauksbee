@@ -30,7 +30,7 @@ interface SimSession {
   /** True once a session has existed, so a dropped socket reads as a loss
    *  rather than a first connect that has not landed yet. */
   everHadSession: boolean
-  /** `send`, plus the local resets a Reset implies. */
+  /** Send a command; reset history changes only after server acknowledgement. */
   send: (msg: ClientMessage) => void
   selectedFaultRef: string | null
   setSelectedFaultRef: (ref: string | null) => void
@@ -224,13 +224,6 @@ export function useSimSession({ liveFrame, boardInfo, backlog, send }: {
     send({ type: 'RemoveProbe', net })
   }, [send])
 
-  // Reset also starts the fault story over: a log of faults from the previous
-  // run reads as live faults on the fresh one.
-  const sendWrapped = useCallback((msg: ClientMessage) => {
-    if (msg.type === 'Reset') clearFaults()
-    send(msg)
-  }, [clearFaults, send])
-
   return {
     frame,
     frames: frameHistory.current,
@@ -244,7 +237,7 @@ export function useSimSession({ liveFrame, boardInfo, backlog, send }: {
     removeProbe,
     uartActive,
     everHadSession,
-    send: sendWrapped,
+    send,
     selectedFaultRef,
     setSelectedFaultRef,
     sessionEpoch,

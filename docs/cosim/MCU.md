@@ -29,14 +29,14 @@ on_spi_controller(name,cb)  same, routed to ONE named SPI controller (a slave on
                           spi2 must not see spi3's traffic)
 ```
 
-That is the coupling surface, the part a peripheral model or the scheduler
-drives. The trait (`crates/hauksbee-mcu/src/traits.rs`) also carries status and
-fidelity accessors the engine reads rather than drives: `state`, `frequency`,
-`reset`, `cycle_exact`, `pins_configured_output`, `uart_rx_overflow`, `uart_rx_pending`,
-`set_active_ports`. `reset` is implemented on the AVR backend only; on Renode and
-QEMU it errors, and nothing in the engine calls it in response to a rail event,
-so a board that browns out has its analog collapse caught by a `rail` assertion
-while its firmware keeps executing as though the supply held.
+That is the coupling surface; the trait also exposes status and fidelity
+accessors. `reset` mutates the loaded core: `supports_reset` defaults to false,
+with AVR opting in; unsupported Renode/QEMU sessions require a relaunch.
+The scheduler preflights every core and clears the old run only after all
+resets succeed. A possibly partial reset stops execution and preserves the
+old evidence. Reset is not invoked for rail events: a board that browns out
+has its analog collapse caught by a `rail` assertion while its firmware keeps
+executing as though the supply held.
 
 ### `on_input_responder`, closing a readback inside the firmware's bit-bang loop
 

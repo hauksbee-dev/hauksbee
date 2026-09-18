@@ -1101,6 +1101,10 @@ impl Mcu for AvrMcu {
         Ok(())
     }
 
+    fn supports_reset(&self) -> bool {
+        true
+    }
+
     fn reset(&mut self) -> Result<()> {
         // A real MCU reset (the board's RESET line): PC to the reset vector,
         // registers/SREG/IO cleared, cycle timers and every IO module reset

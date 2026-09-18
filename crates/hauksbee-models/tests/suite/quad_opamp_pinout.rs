@@ -5,18 +5,7 @@
 //! middle of each side. A map copied from the dual would bind both supplies to
 //! signal pins and simulate a different circuit while binding cleanly.
 
-use hauksbee_models::{ComponentQuery, ModelLibrary};
-
-fn resolve(value: &str) -> hauksbee_models::ModelEntry {
-    let lib = ModelLibrary::builtin();
-    let q = ComponentQuery {
-        value: Some(value.into()),
-        ..Default::default()
-    };
-    lib.resolve(&q)
-        .model
-        .unwrap_or_else(|| panic!("{value} did not resolve to any model"))
-}
+use super::expect_model as resolve;
 
 #[test]
 fn the_supplies_sit_mid_side_not_at_the_corners() {

@@ -155,6 +155,12 @@ pub trait Mcu {
         self.run_micros(ms * 1000)
     }
 
+    /// Reset support is opt-in. Callers preflight every core before rebooting
+    /// any of them; false means reset must not be attempted on this backend.
+    fn supports_reset(&self) -> bool {
+        false
+    }
+
     /// Hard-reset the core, as if the board's RESET line were pulsed: PC back
     /// to the reset vector, registers and peripherals to their power-on state,
     /// the loaded firmware kept. This is the recovery path for a wedged

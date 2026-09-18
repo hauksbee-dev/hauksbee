@@ -13,19 +13,26 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 use std::path::PathBuf;
 
-fn corpus(rel: &str) -> PathBuf {
-    hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join(rel)
+fn corpus(extension: &str) -> Option<PathBuf> {
+    let rel = format!("demos/pic_programmer/pic_programmer.{extension}");
+    hauksbee_testkit::corpus_board(
+        env!("CARGO_MANIFEST_DIR"),
+        &format!("kicad-demos-src/{rel}"),
+    )
+    .or_else(|| {
+        hauksbee_testkit::corpus_or_skip(
+            env!("CARGO_MANIFEST_DIR"),
+            &format!("kicad_demos/{rel}"),
+            "PIC programmer binding",
+        )
+    })
 }
 
 #[test]
 fn pic_programmer_schematic_binds() {
-    let sch_path = corpus("kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_sch");
-    if !sch_path.exists() {
-        eprintln!("corpus missing; skipping");
+    let Some(sch_path) = corpus("kicad_sch") else {
         return;
-    }
+    };
     let board = ExtractedBoard::from_kicad_schematic_path(&sch_path).expect("schematic extraction");
     let lib = ModelLibrary::builtin();
     let bound = bind_board(&board, &lib);
@@ -53,12 +60,9 @@ fn pic_programmer_schematic_binds() {
 
 #[test]
 fn schematic_and_pcb_bind_the_same_components() {
-    let sch_path = corpus("kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_sch");
-    let pcb_path = corpus("kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_pcb");
-    if !sch_path.exists() || !pcb_path.exists() {
-        eprintln!("corpus missing; skipping");
+    let Some((sch_path, pcb_path)) = corpus("kicad_sch").zip(corpus("kicad_pcb")) else {
         return;
-    }
+    };
     let sch = ExtractedBoard::from_kicad_schematic_path(&sch_path).unwrap();
     let pcb = ExtractedBoard::from_kicad_pcb(&std::fs::read_to_string(&pcb_path).unwrap()).unwrap();
     let lib = ModelLibrary::builtin();

@@ -8,18 +8,7 @@
 //! family". If this map ever drifts to match the 78xx, hauksbee stops being
 //! able to see that mistake and starts endorsing it.
 
-use hauksbee_models::{ComponentQuery, ModelLibrary};
-
-fn resolve(value: &str) -> hauksbee_models::ModelEntry {
-    let lib = ModelLibrary::builtin();
-    let q = ComponentQuery {
-        value: Some(value.into()),
-        ..Default::default()
-    };
-    lib.resolve(&q)
-        .model
-        .unwrap_or_else(|| panic!("{value} did not resolve to any model"))
-}
+use super::expect_model as resolve;
 
 #[test]
 fn each_negative_code_resolves_to_its_own_voltage() {

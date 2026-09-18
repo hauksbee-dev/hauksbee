@@ -186,6 +186,7 @@ fn reset_reboots_the_core_and_firmware_answers_again() {
     run_ms_chunked(&mut mcu, 20);
     assert_eq!(out.lock().unwrap().as_slice(), &[BANNER, b'A']);
 
+    assert!(mcu.supports_reset());
     mcu.reset().expect("AVR backend must support core reset");
 
     // After a reboot the firmware starts from the reset vector: banner again,

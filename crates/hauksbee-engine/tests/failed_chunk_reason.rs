@@ -71,7 +71,7 @@ fn failed_chunk_retains_the_solver_error() {
     );
 
     // A run reset clears the stale reason with the rest of the accounting.
-    sched.reset_run_state();
+    sched.reset_run_state().unwrap();
     assert!(
         sched.last_solve_error().is_none(),
         "reset_run_state clears the failure reason"

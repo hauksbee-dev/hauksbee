@@ -596,8 +596,7 @@ mod tests {
         assert_eq!(classify_topology("+12V", "PVDD_OUT"), Some(Topology::Buck));
     }
 
-    #[test]
-    fn synchronous_boost_with_only_numeric_rail_names_is_not_called_a_buck() {
+    fn synchronous_stage(name: &str, inductor_rail: &str, fet_rail: &str) -> ExtractedBoard {
         let component = |reference: &str, value: &str, pins: Vec<(&str, i64)>| -> Component {
             Component {
                 reference: reference.into(),
@@ -620,12 +619,12 @@ mod tests {
                     .collect(),
             }
         };
-        let board = ExtractedBoard {
-            name: "ambiguous_sync_stage".into(),
+        ExtractedBoard {
+            name: name.into(),
             nets: vec![
                 hauksbee_extract::Net {
                     id: 1,
-                    name: "+3V3".into(),
+                    name: inductor_rail.into(),
                 },
                 hauksbee_extract::Net {
                     id: 2,
@@ -633,7 +632,7 @@ mod tests {
                 },
                 hauksbee_extract::Net {
                     id: 3,
-                    name: "+12V".into(),
+                    name: fet_rail.into(),
                 },
                 hauksbee_extract::Net {
                     id: 4,
@@ -646,7 +645,12 @@ mod tests {
                 component("Q2", "NMOS", vec![("1", 2), ("2", 4)]),
                 component("C1", "100uF", vec![("1", 3), ("2", 4)]),
             ],
-        };
+        }
+    }
+
+    #[test]
+    fn synchronous_boost_with_only_numeric_rail_names_is_not_called_a_buck() {
+        let board = synchronous_stage("ambiguous_sync_stage", "+3V3", "+12V");
         let (stages, abstentions) =
             detect_converters_with_abstentions(&board, &ModelLibrary::builtin());
         assert!(
@@ -720,55 +724,7 @@ mod tests {
     fn a_classified_stage_leaves_no_abstention() {
         // The note must not fire on boards whose converters were understood, or
         // it becomes noise that trains users to ignore it.
-        let component = |reference: &str, value: &str, pins: Vec<(&str, i64)>| -> Component {
-            Component {
-                reference: reference.into(),
-                value: value.into(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
-                layer: "F.Cu".into(),
-                properties: vec![],
-                dnp: false,
-                pins: pins
-                    .into_iter()
-                    .map(|(number, net)| Pin {
-                        number: number.into(),
-                        net: Some(net),
-                        function: String::new(),
-                        kind: String::new(),
-                        position: None,
-                    })
-                    .collect(),
-            }
-        };
-        let board = ExtractedBoard {
-            name: "named_sync_stage".into(),
-            nets: vec![
-                hauksbee_extract::Net {
-                    id: 1,
-                    name: "VOUT_3V3".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 2,
-                    name: "SW".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 3,
-                    name: "VIN_12V".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 4,
-                    name: "GND".into(),
-                },
-            ],
-            components: vec![
-                component("L1", "10uH", vec![("1", 1), ("2", 2)]),
-                component("Q1", "NMOS", vec![("1", 2), ("2", 3)]),
-                component("Q2", "NMOS", vec![("1", 2), ("2", 4)]),
-                component("C1", "100uF", vec![("1", 3), ("2", 4)]),
-            ],
-        };
+        let board = synchronous_stage("named_sync_stage", "VOUT_3V3", "VIN_12V");
         let (stages, abstentions) =
             detect_converters_with_abstentions(&board, &ModelLibrary::builtin());
         assert_eq!(stages.len(), 1, "named rails must classify");
