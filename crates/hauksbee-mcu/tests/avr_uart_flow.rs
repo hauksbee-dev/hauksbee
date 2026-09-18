@@ -101,9 +101,7 @@ fn echo_mcu(name: &str) -> (AvrMcu, Arc<Mutex<Vec<u8>>>) {
     let hex = write_program_hex(name, UART_ECHO);
     let mut mcu = AvrMcu::atmega328p_16mhz().expect("create MCU");
     mcu.load_firmware(&hex).expect("load echo firmware");
-    let out = Arc::new(Mutex::new(Vec::new()));
-    let sink = out.clone();
-    mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+    let out = crate::support::capture_uart(&mut mcu);
     (mcu, out)
 }
 

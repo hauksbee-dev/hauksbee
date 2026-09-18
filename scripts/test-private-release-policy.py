@@ -373,10 +373,84 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertEqual(files, len(actual))
         self.assertEqual(absent, sum(actual.values()))
         self.assertEqual(total, absent + removed)
+        namespace = {"re": re}
+        exec((ROOT / "scripts/mirror_content.py").read_text(), namespace)
+        declarations = builder.split("FIXTURE = re.compile(", 1)[1].split("import os, sys", 1)[0]
+        exec("FIXTURE = re.compile(" + declarations, namespace)
+        partial = 0
+        for path in namespace["PARTIAL"]:
+            source = (ROOT / path).read_text()
+            partial += sum(bool(namespace["FIXTURE"].search(
+                source[m.end():namespace["end_of_fn"](source, m.end())]))
+                for m in re.finditer(r"#\[(?:tokio::)?test\]\n", source))
+        self.assertEqual(removed, partial)
 
         nep = (ROOT / "crates/hauksbee-engine/tests/nep_private_acceptance.rs").read_text()
         self.assertIn("fn real_nep_host_exposes_standard_grade_7ms_gap()", nep)
         self.assertIn("fn real_nep_host_succeeds_with_compliant_firmware()", nep)
+
+    def test_mirror_content_preserves_public_bytes(self) -> None:
+        namespace = {}
+        exec((ROOT / "scripts/mirror_content.py").read_text(), namespace)
+        curate, end = namespace["curate"], namespace["end_of_fn"]
+        for body in ('let s = "}\\\"{";', 'let s = r###"}"###;', '// }\n{}',
+                     '/* } { */ {}', "let x: &'static str = \"}\";"):
+            source = 'fn example() { ' + body + ' }'
+            self.assertEqual(end(source + '\nfn keep() {}', 0), len(source))
+        public = b'## Public\nUnchanged \\ bytes\r\n'
+        private = b'## Worked example: the Tarski brownout\nprivate\n### Detail\nprivate\n'
+        for path in (b'docs/CI.md', b'docs/ci/CI.md'):
+            self.assertEqual(curate(path, public + private + public), public * 2)
+        self.assertEqual(curate(b'other.md', public + private), public + private)
+        with self.assertRaisesRegex(ValueError, 'curation drifted'):
+            curate(b'docs/ci/CI.md', b'## Renamed private section\ntarski_brownout.toml\n')
+        binary = b'\x00/Users/hauksbee-user\xff'
+        self.assertEqual(curate(b'firmware.elf', binary), b'\x00/Users/hauksbee-user\xff')
+        source = (b'#[test]\nfn the_flagship_board_is_the_case_this_came_from() {\n'
+                  b'let s = r#"}"#; /* } */\n}\n' + public)
+        self.assertEqual(curate(b'crates/hauksbee-ci/tests/unpowered_rail_is_declared.rs', source), b'\n' + public)
+        scoped = b'    /// Private-only docs\n    #[cfg(feature = "avr")]\n    ' + source.replace(b'the_flagship_board_is_the_case_this_came_from', b'private_nep_topology_installs_edge_exact_parallel_memory')
+        following = b'\n    #[test]\n    fn public_without_avr() {}\n\n    #[cfg(feature = "avr")]\n    #[test]\n    fn public_with_avr() {}\n'
+        self.assertEqual(curate(b'crates/hauksbee-cosim/src/scheduler.rs', scoped + following), b'\n' + public + following)
+        # Historical fixtures stay private in the build cache, never in Git.
+        fixture_index = os.environ.get("MIRROR_HISTORY_FIXTURES")
+        cases = [(str(p.relative_to(ROOT)), p.read_bytes()) for p in
+                 (ROOT / "examples/sessions").glob('*.txt') if not p.name.startswith(('06_', '07_', '12_'))]
+        if fixture_index:
+            index = Path(fixture_index)
+            cases += [(path, (index.parent / 'fixtures' / sha).read_bytes())
+                      for path, shas in json.loads(index.read_text()).items() for sha in shas]
+        for path, data in cases:
+            with self.subTest(path=path, sha=hashlib.sha256(data).hexdigest()):
+                output = curate(path.encode(), data)
+                self.assertEqual(curate(path.encode(), output), output, "curation must be idempotent")
+                if path.endswith('.txt'):
+                    self.assertEqual(output, data.replace(b'/Users/hauksbee-user', b'/Users/hauksbee-user'))
+                else:
+                    self.assertFalse(re.search(rb'tarski_(?:brownout|miswire)|Tarski bring-up|06_ci_spec_red|07_ci_spec_repaired_green|12_miswire_repair_demo|fn private_nep_topology_installs_edge_exact_parallel_memory', output))
+                    if path.endswith('.rs'):
+                        if path.endswith('/scheduler.rs'):
+                            boundary = b'    #[cfg(feature = "avr")]\n    #[test]\n    #[ignore = "requires the private NEP board path"]'
+                            start = data.index(boundary)
+                            finish = data.index(b'\n    }', data.index(b'fn private_nep_topology_installs_edge_exact_parallel_memory', start)) + len(b'\n    }')
+                            self.assertEqual(output, data[:start] + data[finish:], "remove exactly the private item including its AVR gate")
+                        for match in re.finditer(r'(?:^|\n)[ \t]*#\[test\]\n', data.decode()):
+                            start = match.end()
+                            finish = end(data.decode(), start)
+                            block = data.decode()[start:finish].encode()
+                            if b'the_flagship_board_is_the_case_this_came_from' not in block and b'private_nep_topology_installs_edge_exact_parallel_memory' not in block:
+                                self.assertIn(block, output, "public Rust tests must be byte-identical")
+                    else:
+                        for block in re.split(rb'(?m)(?=^#{2,3} )', data):
+                            heading = block.split(b'\n', 1)[0]
+                            if re.search(rb'DSL|Logical re-layout|Routing|Power supplies|Net drives|Rail suppression|Component overrides|Initial-state fuzzing|Component tolerances|Assertions:|Boot coverage|provenance|Step [234]:|trap:|test that proves|Honest notes', heading):
+                                protected = block.replace(b' (see the brownout below)', b'')
+                                # Step 4 also contains a separate private recalled-values aside.
+                                protected = re.sub(rb' \(The recalled Tarski\b.*?\)', b'', protected, flags=re.S)
+                                self.assertIn(protected, output, "public document section must be byte-identical")
+                # The same bytes at an unclassified path receive only the existing
+                # home redaction; private rules must never become global rewrites.
+                self.assertEqual(curate(b'negative-control', data), data.replace(b'/Users/hauksbee-user', b'/Users/hauksbee-user'))
 
     def private_installer_fixture(
         self, *, include_mcp: bool = True, bad_binary_version: str | None = None

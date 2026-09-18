@@ -49,9 +49,7 @@ fn scanner_mcu() -> (AvrMcu, Arc<Mutex<Vec<u8>>>) {
     );
     let mut mcu = AvrMcu::atmega328p_16mhz().expect("create MCU");
     mcu.load_firmware(&fw).expect("load scan.hex");
-    let uart: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = uart.clone();
-    mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+    let uart = crate::support::capture_uart(&mut mcu);
     (mcu, uart)
 }
 

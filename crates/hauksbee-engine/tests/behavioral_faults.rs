@@ -20,9 +20,11 @@ use std::path::PathBuf;
 use hauksbee_engine::bind_board;
 use hauksbee_engine::scheduler::Scheduler;
 use hauksbee_extract::ExtractedBoard;
-use hauksbee_ir::{Device, NodeId, SourceKind};
+use hauksbee_ir::{NodeId, SourceKind::Dc};
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::SolverOptions;
+
+use crate::support::{resistor, vsource};
 
 /// The directory the corpus boards sit directly under, whichever layout this
 /// machine has, or `None` with a printed note.
@@ -173,19 +175,15 @@ fn ltc4020_input_power(path: &PathBuf) -> Option<f64> {
     let bat_name = pin_net_name(path, "U2", "20")?; // BAT
     let vin = *bound.net_nodes.get(&vin_name)?;
     let bat = *bound.net_nodes.get(&bat_name)?;
-    bound.circuit.add(Device::Vsource {
-        name: "Vbrick_test".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(19.0),
-    });
-    bound.circuit.add(Device::Resistor {
-        name: "Rsysload_test".into(),
-        a: bat,
-        b: NodeId::GROUND,
-        ohms: 5.0, // heavy load: demands more than any brick can supply
-        tc1: None,
-    });
+    bound
+        .circuit
+        .add(vsource("Vbrick_test".into(), vin, NodeId::GROUND, Dc(19.0)));
+    bound.circuit.add(resistor(
+        "Rsysload_test".into(),
+        bat,
+        NodeId::GROUND,
+        5.0, // heavy load: demands more than any brick can supply
+    ));
     let mut sched = Scheduler::new(bound, None, SolverOptions::default()).ok()?;
     sched.set_behavioral_input_budget("U2", 19.0, 60.0);
     for _ in 0..80 {
@@ -251,12 +249,12 @@ fn ltc6803_leak(path: &PathBuf) -> Option<f64> {
     let vplus_name = pin_net_name(path, "U4", "1")?; // V+
     let mut bound = focused(path, &["U4", "R52"])?;
     let vplus = *bound.net_nodes.get(&vplus_name)?;
-    bound.circuit.add(Device::Vsource {
-        name: "Vpack_test".into(),
-        p: vplus,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(28.0), // 8S LiFePO4 pack top
-    });
+    bound.circuit.add(vsource(
+        "Vpack_test".into(),
+        vplus,
+        NodeId::GROUND,
+        Dc(28.0), // 8S LiFePO4 pack top
+    ));
     let mut sched = Scheduler::new(bound, None, SolverOptions::default()).ok()?;
     for _ in 0..40 {
         let _ = sched.step(1e-3);
@@ -311,20 +309,13 @@ fn npm1300_shphld_sleep_v(path: &PathBuf) -> Option<f64> {
     let mut bound = focused(path, &["IC401"])?;
     let vsys = *bound.net_nodes.get(&vsys_name)?;
     let shphld = *bound.net_nodes.get(&shphld_name)?;
-    bound.circuit.add(Device::Vsource {
-        name: "Vvsys_test".into(),
-        p: vsys,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.7),
-    });
+    bound
+        .circuit
+        .add(vsource("Vvsys_test".into(), vsys, NodeId::GROUND, Dc(3.7)));
     // A sleeping MCU GPIO is a weak high-impedance leak to ground.
-    bound.circuit.add(Device::Resistor {
-        name: "Rgpio_sleep".into(),
-        a: shphld,
-        b: NodeId::GROUND,
-        ohms: 10e6,
-        tc1: None,
-    });
+    bound
+        .circuit
+        .add(resistor("Rgpio_sleep".into(), shphld, NodeId::GROUND, 10e6));
     let mut sched = Scheduler::new(bound, None, SolverOptions::default()).ok()?;
     for _ in 0..30 {
         let _ = sched.step(1e-3);
@@ -466,12 +457,9 @@ fn ltc4020_rng_ss_destabilises_only_when_driven() {
     let mut bound = focused(&mb20, &["U2", "R8", "R49"]).unwrap();
     let rng = *bound.net_nodes.get(&rng_net).unwrap();
     // Drive RNG/SS low (a GPIO pulling the charge-range pin down).
-    bound.circuit.add(Device::Vsource {
-        name: "Vrng_test".into(),
-        p: rng,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(0.0),
-    });
+    bound
+        .circuit
+        .add(vsource("Vrng_test".into(), rng, NodeId::GROUND, Dc(0.0)));
     let mut sched = Scheduler::new(bound, None, SolverOptions::default()).unwrap();
     for _ in 0..10 {
         let _ = sched.step(1e-3);

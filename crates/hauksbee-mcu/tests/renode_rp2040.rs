@@ -74,9 +74,7 @@ macro_rules! rp2040_or_skip {
 fn rp2040_sdk_firmware_reaches_main_and_prints() {
     rp2040_or_skip!(mcu, "rp2040_blink_uart", "blink_uart.elf");
 
-    let uart: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = uart.clone();
-    mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+    let uart = crate::support::capture_uart(&mut mcu);
 
     for _ in 0..6 {
         mcu.run_micros(50_000).expect("run chunk");
@@ -135,9 +133,7 @@ fn rp2040_led_toggles_are_observed() {
 fn rp2040_quiet_firmware_produces_no_led_edges() {
     rp2040_or_skip!(mcu, "rp2040_quiet", "quiet.elf");
 
-    let uart: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let uart_sink = uart.clone();
-    mcu.on_uart(Box::new(move |b| uart_sink.lock().unwrap().push(b)));
+    let uart = crate::support::capture_uart(&mut mcu);
 
     let seen: Arc<Mutex<Vec<PinId>>> = Arc::new(Mutex::new(Vec::new()));
     let pins = seen.clone();

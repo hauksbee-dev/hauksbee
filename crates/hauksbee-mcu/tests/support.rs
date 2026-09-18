@@ -33,3 +33,12 @@ pub fn firmware(rel: &str) -> Option<PathBuf> {
         .join(rel);
     p.exists().then(|| p.canonicalize().unwrap_or(p))
 }
+
+/// Record the backend's UART bytes without changing callback or lock semantics.
+#[cfg(any(feature = "avr", feature = "renode"))]
+pub fn capture_uart(mcu: &mut impl hauksbee_mcu::Mcu) -> std::sync::Arc<Mutex<Vec<u8>>> {
+    let uart = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let sink = uart.clone();
+    mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+    uart
+}

@@ -804,31 +804,14 @@ fn controlled_impedance_no_stackup_is_info_never_finding() {
 fn double_listed_board(reference: &str, value: &str, copies: usize) -> ExtractedBoard {
     let pins = (0..copies)
         .map(|_| crate::Pin {
-            number: "5".into(),
-            net: Some(1),
             function: "SDA".into(),
-            kind: String::new(),
-            position: None,
+            ..crate::testutil::pin("5", Some(1))
         })
         .collect();
-    ExtractedBoard {
-        name: "b".into(),
-        nets: vec![crate::Net {
-            id: 1,
-            name: "SDA".into(),
-        }],
-        components: vec![crate::Component {
-            reference: reference.into(),
-            value: value.into(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
-            pins,
-        }],
-    }
+    crate::testutil::board(
+        &[(1, "SDA")],
+        vec![crate::testutil::part(reference, value, "", "", pins)],
+    )
 }
 
 #[test]

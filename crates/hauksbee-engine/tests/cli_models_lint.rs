@@ -109,7 +109,7 @@ fn scaffold_does_not_infer_model_kind_from_reference_letter() {
     let dir = tempfile::tempdir().unwrap();
     let scaffold = dir.path().join("u3.toml");
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+        .join("../../testdata/boards/pic_programmer.kicad_pcb");
     let made = Command::new(bin())
         .args(["models", "new", "U3", "--board"])
         .arg(&board)
@@ -161,7 +161,7 @@ fn scaffold_emits_unknown_provenance_and_a_pack_without_writing_elsewhere() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("acme-pack");
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+        .join("../../testdata/boards/pic_programmer.kicad_pcb");
     let made = Command::new(bin())
         .args(["models", "new", "U3", "--board"])
         .arg(&board)
@@ -226,7 +226,7 @@ fn prepare_yes_writes_only_the_printed_pack_plan() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("prepared-pack");
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+        .join("../../testdata/boards/pic_programmer.kicad_pcb");
     let out = Command::new(bin())
         .args(["models", "prepare"])
         .arg(&board)
@@ -312,7 +312,7 @@ fn prepare_without_yes_refuses_a_non_tty_before_writing() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("prepared-pack");
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+        .join("../../testdata/boards/pic_programmer.kicad_pcb");
     let out = Command::new(bin())
         .args(["models", "prepare"])
         .arg(&board)
@@ -338,7 +338,7 @@ fn prepare_refuses_overwrite_without_touching_existing_files() {
     let manifest = pack.join("pack.toml");
     std::fs::write(&manifest, "sentinel").unwrap();
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+        .join("../../testdata/boards/pic_programmer.kicad_pcb");
     let out = Command::new(bin())
         .args(["models", "prepare"])
         .arg(&board)
@@ -413,7 +413,7 @@ missing = ["switching_ripple", "current_limit", "soft_start"]
     )
     .unwrap();
     let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../frontend/public/boards/pic_programmer.kicad_pcb");
+        .join("../../testdata/boards/pic_programmer.kicad_pcb");
 
     let out = Command::new(bin())
         .args(["models", "coverage"])

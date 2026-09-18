@@ -76,8 +76,7 @@ fn boot_gate_board() -> PathBuf {
 /// finding and nothing serious, so `--si`'s own gate is the only thing that can
 /// make it fail.
 fn medium_si_board() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../frontend/public/boards/stickhub.kicad_pcb")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/stickhub.kicad_pcb")
 }
 
 fn run(args: &[&str]) -> Output {

@@ -133,9 +133,7 @@ macro_rules! stm32_or_skip {
 fn stm32_uart_says_hello() {
     stm32_or_skip!(mcu);
 
-    let uart_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = uart_buf.clone();
-    mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+    let uart_buf = crate::support::capture_uart(&mut mcu);
 
     // Boot the firmware: a few 50 ms chunks is plenty for the banner.
     for _ in 0..6 {
@@ -232,9 +230,7 @@ fn stm32_reports_drive_direction() {
 fn stm32_uart_command_response() {
     stm32_or_skip!(mcu);
 
-    let uart_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = uart_buf.clone();
-    mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+    let uart_buf = crate::support::capture_uart(&mut mcu);
 
     // Boot.
     for _ in 0..6 {

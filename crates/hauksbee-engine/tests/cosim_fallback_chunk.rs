@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use hauksbee_engine::binder::BoundBoard;
 use hauksbee_engine::result::{strict_analog_exit_code, EXIT_INVALID_FOR_ANALYSIS};
 use hauksbee_engine::scheduler::{ChunkFallbackMethod, Scheduler, STRICT_CONSECUTIVE_FAILED_ABORT};
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, Device, NodeId, SourceKind::Dc, SourceKind::Pulse};
 use hauksbee_solve::SolverOptions;
 
 fn board_from(name: &str, circuit: Circuit, nets: &[(&str, NodeId)]) -> BoundBoard {
@@ -52,23 +52,13 @@ fn firing_board() -> BoundBoard {
     let spkb = c.node("spkb");
     let com = c.node("com");
     let rail = c.node("rail");
-    c.add(vsource(
-        "VTH".into(),
-        th,
-        NodeId::GROUND,
-        SourceKind::Dc(2.5),
-    ));
-    c.add(vsource(
-        "VRAIL".into(),
-        rail,
-        NodeId::GROUND,
-        SourceKind::Dc(1.0),
-    ));
+    c.add(vsource("VTH".into(), th, NodeId::GROUND, Dc(2.5)));
+    c.add(vsource("VRAIL".into(), rail, NodeId::GROUND, Dc(1.0)));
     c.add(Device::Isource {
         name: "IIN".into(),
         p: NodeId::GROUND,
         n: m,
-        kind: SourceKind::Pulse {
+        kind: Pulse {
             v1: 0.0,
             v2: 2e-4,
             delay: 10e-6,
@@ -131,18 +121,8 @@ fn firing_board() -> BoundBoard {
 fn impossible_board() -> BoundBoard {
     let mut c = Circuit::new();
     let n1 = c.node("n1");
-    c.add(vsource(
-        "V1".into(),
-        n1,
-        NodeId::GROUND,
-        SourceKind::Dc(5.0),
-    ));
-    c.add(vsource(
-        "V2".into(),
-        n1,
-        NodeId::GROUND,
-        SourceKind::Dc(3.0),
-    ));
+    c.add(vsource("V1".into(), n1, NodeId::GROUND, Dc(5.0)));
+    c.add(vsource("V2".into(), n1, NodeId::GROUND, Dc(3.0)));
     board_from("impossible", c, &[("n1", n1)])
 }
 
@@ -263,11 +243,11 @@ fn rlc_ringing_board() -> BoundBoard {
     let vin = c.node("vin");
     let mid = c.node("mid");
     let vc = c.node("vc");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Pulse {
+    c.add(vsource(
+        "V1".into(),
+        vin,
+        NodeId::GROUND,
+        Pulse {
             v1: 0.0,
             v2: RLC_V0,
             delay: RLC_DELAY_S,
@@ -276,7 +256,7 @@ fn rlc_ringing_board() -> BoundBoard {
             width: 1.0,
             period: 2.0,
         },
-    });
+    ));
     c.add(resistor("R1".into(), vin, mid, RLC_R));
     c.add(Device::Inductor {
         name: "L1".into(),
@@ -367,12 +347,7 @@ fn forced_smooth_fallback_reports_a_small_estimate() {
     let mut c = Circuit::new();
     let vin = c.node("vin");
     let out = c.node("out");
-    c.add(vsource(
-        "V1".into(),
-        vin,
-        NodeId::GROUND,
-        SourceKind::Dc(5.0),
-    ));
+    c.add(vsource("V1".into(), vin, NodeId::GROUND, Dc(5.0)));
     c.add(resistor("R1".into(), vin, out, 1e3));
     c.add(capacitor("C1".into(), out, NodeId::GROUND, 100e-9));
     let out_id = out;

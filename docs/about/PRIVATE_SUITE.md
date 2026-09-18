@@ -9,8 +9,8 @@ This page makes that omitted coverage explicit.
 
 ## What is missing
 
-**69 tests: 65 in the 17 absent files below, plus 4 removed from files that
-otherwise ship. Also absent: 11 engine examples.**
+**85 tests: 79 in the 20 absent files below, plus 6 removed from files that
+otherwise ship. Also absent: 11 engine examples and one solver example.**
 
 | Suite | Tests | What it covers |
 |---|---|---|
@@ -31,9 +31,14 @@ otherwise ship. Also absent: 11 engine examples.**
 | `mcp4728_cosim` | 2 | DAC peripheral co-simulation |
 | `tarski_decomposition_analysis` | 1 | Tearing choices on a mesh that does not converge fused |
 | `nep_private_acceptance` | 2 | Cycle-exact AT28C256 page-program rejection and corrected-firmware positive control for a second private board, both driven by the board owner's real host tool |
+| `stretcher_transient` | 2 | Private neuron topology and comparator/stretcher rework, not an independent numerical fixture |
+| `bug_hunt_physics` | 6 | Timing values and calibrated expectations from the private layout |
+| `avr_mcu_tests` | 6 | AVR execution against firmware from the private T1-devboard repository |
 
-The four tests missing from files that otherwise ship are in
-`spec_and_assertions`, `cli_boardcode` and `extract`. Those files keep the
+The six tests missing from files that otherwise ship are in
+`spec_and_assertions`, `cli_boardcode`, `extract`, `unpowered_rail_is_declared`
+and `hauksbee-cosim`'s `scheduler`. The scheduler test requires the private NEP
+board and is ignored by default; its presence is not a public test pass. Those files keep the
 rest of their coverage.
 
 Two engine modules leave with the data, because they encode the board's
@@ -45,9 +50,9 @@ Independent coverage exercises the same general machinery, against
 boards that do ship:
 
 - The decomposition and staged-solve layer: `hauksbee-solve`'s `staged_dc`,
-  `staged_property`, `rail_tear`, `power_ramp`, `stretcher_transient` and
+  `staged_property`, `rail_tear`, `power_ramp` and
   `bjt_physics_torn`.
-- Extraction, binding, checks and reporting: the ten demo boards under
+- Extraction, binding, checks and reporting: the public test boards under
   `testdata/boards`, plus the public corpus that `scripts/fetch-corpus.sh`
   fetches. See `CONTRIBUTING.md`.
 - Firmware co-simulation: the AVR and ESP demo boards and their firmware, which

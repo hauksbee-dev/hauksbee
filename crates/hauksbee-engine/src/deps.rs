@@ -1098,9 +1098,18 @@ fn run_streaming(
         // A fresh process group so a timeout kill reaches grandchildren too.
         cmd.process_group(0);
     }
-    let (mut child, tree_guard) = hauksbee_mcu::children::spawn_owned(&mut cmd)
+    let (child, tree_guard) = hauksbee_mcu::children::spawn_owned(&mut cmd)
         .map_err(|e| format!("could not start the installer: {e}"))?;
+    stream_owned_child(child, tree_guard, progress, timeout)
+}
 
+// Keep the production deadline unchanged; callers already own the process tree.
+fn stream_owned_child(
+    mut child: std::process::Child,
+    tree_guard: hauksbee_mcu::children::ProcessTreeGuard,
+    progress: &mut dyn FnMut(&str),
+    timeout: Duration,
+) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let mut readers = Vec::new();
     for pipe in [
@@ -1545,45 +1554,71 @@ echo "codex-cli 0.0.0""#,
     #[cfg(windows)]
     #[test]
     fn timeout_kills_a_real_installer_grandchild_through_the_owned_job() {
-        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
         use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
         };
 
         let scratch = tempfile::tempdir().expect("scratch directory");
         let marker = scratch.path().join("grandchild.pid");
         let escaped = marker.display().to_string().replace('\'', "''");
+        // Startup deliberately exceeds the timeout; only a live descendant arms it.
         let script = format!(
-            "$p=Start-Process powershell -ArgumentList '-NoProfile','-Command','Start-Sleep 300' -PassThru; Set-Content -LiteralPath '{escaped}' -Value $p.Id; Wait-Process -Id $p.Id"
+            "Start-Sleep -Milliseconds 1250; $p=Start-Process powershell -ArgumentList '-NoProfile','-Command','Start-Sleep 300' -PassThru; Set-Content -LiteralPath '{escaped}' -Value $p.Id; Wait-Process -Id $p.Id"
         );
-        let err = run_streaming(shell_command(&script), &mut |_| {}, Duration::from_secs(1))
-            .expect_err("owned installer tree times out");
-        assert!(err.contains("was stopped"), "{err}");
-        let pid: u32 = std::fs::read_to_string(&marker)
-            .expect("grandchild marker")
-            .trim()
-            .parse()
-            .expect("numeric grandchild pid");
-        for _ in 0..100 {
-            // SAFETY: the queried handle is checked and closed on every path.
-            let live = unsafe {
-                let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-                if handle.is_null() {
-                    false
-                } else {
-                    let mut code = 0;
-                    let live =
-                        GetExitCodeProcess(handle, &mut code) != 0 && code == STILL_ACTIVE as u32;
-                    CloseHandle(handle);
-                    live
+        let stderr_path = scratch.path().join("stderr.log");
+        let mut cmd = shell_command(&script);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(std::fs::File::create(&stderr_path).expect("installer stderr capture"));
+        let (mut child, guard) =
+            hauksbee_mcu::children::spawn_owned(&mut cmd).expect("spawn owned installer tree");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let grandchild = loop {
+            if let Some(pid) = std::fs::read_to_string(&marker)
+                .ok()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+            {
+                // SAFETY: adopt only a valid owned process handle; retain it through termination.
+                let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                if !handle.is_null() {
+                    let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+                    if unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } == WAIT_TIMEOUT {
+                        break handle; // The exact descendant is alive, not just a recorded PID.
+                    }
                 }
-            };
-            if !live {
-                return;
+            }
+            if !matches!(child.try_wait(), Ok(None)) || Instant::now() >= deadline {
+                let _ = guard.terminate();
+                let _ = child.kill();
+                for _ in 0..100 {
+                    if matches!(child.try_wait(), Ok(Some(_))) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                panic!(
+                    "installer grandchild was not ready; stderr: {}",
+                    std::fs::read_to_string(&stderr_path).unwrap_or_default()
+                );
             }
             std::thread::sleep(Duration::from_millis(50));
-        }
-        panic!("installer grandchild {pid} survived Job-backed timeout");
+        };
+        let started = Instant::now();
+        let err = stream_owned_child(child, guard, &mut |_| {}, Duration::from_secs(1))
+            .expect_err("owned installer tree times out");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timeout did not return promptly"
+        );
+        assert!(err.contains("was stopped"), "{err}");
+        // SAFETY: the retained handle still names the same observed-live descendant.
+        assert_eq!(
+            unsafe { WaitForSingleObject(grandchild.as_raw_handle(), 5000) },
+            WAIT_OBJECT_0,
+            "installer grandchild survived Job-backed timeout"
+        );
     }
 
     #[test]

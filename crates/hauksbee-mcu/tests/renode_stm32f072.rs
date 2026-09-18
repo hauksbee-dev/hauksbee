@@ -186,9 +186,7 @@ fn f072_driving_firmware_toggles_pc6_and_prints() {
             recorder.lock().unwrap().push(high);
         }
     }));
-    let uart: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = uart.clone();
-    mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+    let uart = crate::support::capture_uart(&mut mcu);
 
     for _ in 0..12 {
         mcu.run_micros(50_000).expect("run a 50 ms chunk");
@@ -244,9 +242,7 @@ fn f072_quiet_firmware_produces_nothing() {
     mcu.on_pin_change(Box::new(move |pin, _high, _cycle| {
         sink.lock().unwrap().push(pin);
     }));
-    let uart: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let bytes = uart.clone();
-    mcu.on_uart(Box::new(move |b| bytes.lock().unwrap().push(b)));
+    let uart = crate::support::capture_uart(&mut mcu);
 
     for _ in 0..12 {
         mcu.run_micros(50_000).expect("run a 50 ms chunk");
@@ -281,9 +277,7 @@ fn f072_quiet_firmware_produces_nothing() {
 fn f072_adc_injection_reaches_the_firmware() {
     f072_or_skip!(mcu, "blinky.elf");
 
-    let uart: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = uart.clone();
-    mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+    let uart = crate::support::capture_uart(&mut mcu);
 
     // Boot far enough to be in the command loop.
     for _ in 0..3 {

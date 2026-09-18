@@ -69,9 +69,7 @@ fn rp2040_i2c_bridge_round_trips_with_pico_sdk_firmware() {
     let mut mcu = RenodeBackend::new(config).expect("spawn Renode RP2040");
     assert!(mcu.i2c_bus_modeled(), "RP2040 models I2C (i2c0/i2c1)");
 
-    let uart: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let uart_sink = uart.clone();
-    mcu.on_uart(Box::new(move |b| uart_sink.lock().unwrap().push(b)));
+    let uart = crate::support::capture_uart(&mut mcu);
 
     // What the bridge saw, so "the firmware printed zeroes" can be told apart
     // from "the bridge was never reached".
@@ -152,9 +150,7 @@ fn rp2040_spi_bridge_probe() {
     config.spi_controllers = vec!["spi0".to_string()];
     let mut mcu = RenodeBackend::new(config).expect("spawn Renode RP2040");
 
-    let uart: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let uart_sink = uart.clone();
-    mcu.on_uart(Box::new(move |b| uart_sink.lock().unwrap().push(b)));
+    let uart = crate::support::capture_uart(&mut mcu);
 
     let mosi: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     let seen = mosi.clone();

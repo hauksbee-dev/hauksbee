@@ -5,8 +5,11 @@
 // waits for the engine-correlated register-map attachment receipt.
 //
 // Usage:
-//   HAUKSBEE_BIN=target/debug/hauksbee \
+//   HAUKSBEE_BIN=target/debug/hauksbee HB_MODEL_BOARD=/path/to/watchy-v1.kicad_pcb \
 //     bun run frontend/tests/e2e/model-workbench-live.ts
+// Requires Watchy v1 (U4=BMA423, MCU=ESP32PICO-D4) with matching ESP32 firmware.
+// The bundled firmware targets v1; the public Watchy v3 sample and blinky are
+// not substitutes. HB_MODEL_FIRMWARE may select another matching v1 image.
 
 import { chromium } from 'playwright'
 import { accessSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -17,7 +20,7 @@ import { terminateProcess } from './harness'
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = resolve(here, '../../..')
 const binary = resolve(repo, process.env.HAUKSBEE_BIN ?? 'target/debug/hauksbee')
-const board = resolve(repo, process.env.HB_MODEL_BOARD ?? 'qc/defect_regressions/fixtures/watchy_res_pullup/fixed/Watchy.kicad_pcb')
+const board = process.env.HB_MODEL_BOARD ? resolve(repo, process.env.HB_MODEL_BOARD) : ''
 const firmware = resolve(repo, process.env.HB_MODEL_FIRMWARE ?? 'testdata/firmware/watchy_display_init/flash.bin')
 const sensorRef = process.env.HB_MODEL_SENSOR_REF ?? 'U4'
 const bundledLm75 = resolve(repo, 'testdata/sensor-specs/lm75.toml')
@@ -70,6 +73,9 @@ async function waitForServer(base: string, child: Bun.Subprocess, timeoutMs = 30
 }
 
 async function main() {
+  if (!board) {
+    throw new Error('HB_MODEL_BOARD is required: supply a Watchy v1 board (U4=BMA423, ESP32PICO-D4) and matching firmware; the public v3 sample and blinky are not substitutes.')
+  }
   const started = performance.now()
   requireFile(binary, 'Hauksbee binary')
   requireFile(board, 'Watchy board')

@@ -19,9 +19,11 @@
 
 use std::path::PathBuf;
 
-use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, Polarity, SourceKind};
+use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, Polarity, SourceKind::Dc};
 use hauksbee_models::schema::{ComponentKind, DbFile, ModelEntry};
 use hauksbee_solve::{SolverOptions, Transient};
+
+use crate::support::{resistor, vsource};
 
 // ── Locating models ────────────────────────────────────────────────────────
 
@@ -137,19 +139,8 @@ pub fn diode_vf_current(m: &ModelEntry, i_f: f64) -> (f64, f64) {
     let mut c = Circuit::new();
     let nin = c.node("in");
     let na = c.node("a");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: nin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(vcc),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: nin,
-        b: na,
-        ohms: r,
-        tc1: None,
-    });
+    c.add(vsource("V1".into(), nin, NodeId::GROUND, Dc(vcc)));
+    c.add(resistor("R1".into(), nin, na, r));
     c.add(Device::Diode {
         name: "D1".into(),
         a: na,
@@ -190,25 +181,14 @@ pub fn bjt_beta_try(m: &ModelEntry, vcc: f64, rc: f64, i_b: f64) -> Result<f64, 
     let ncol = c.node("col");
     let nbase = c.node("base");
 
-    c.add(Device::Vsource {
-        name: "Vcc".into(),
-        p: nvcc,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(vcc),
-    });
-    c.add(Device::Resistor {
-        name: "Rc".into(),
-        a: nvcc,
-        b: ncol,
-        ohms: rc,
-        tc1: None,
-    });
+    c.add(vsource("Vcc".into(), nvcc, NodeId::GROUND, Dc(vcc)));
+    c.add(resistor("Rc".into(), nvcc, ncol, rc));
     // Push Ib into the base node from ground.
     c.add(Device::Isource {
         name: "Ib".into(),
         p: NodeId::GROUND,
         n: nbase,
-        kind: SourceKind::Dc(i_b),
+        kind: Dc(i_b),
     });
     c.add(Device::Bjt {
         name: "Q1".into(),
@@ -235,24 +215,13 @@ pub fn bjt_vbe_try(m: &ModelEntry) -> Result<f64, String> {
     let nvcc = c.node("vcc");
     let ncol = c.node("col");
     let nbase = c.node("base");
-    c.add(Device::Vsource {
-        name: "Vcc".into(),
-        p: nvcc,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(10.0),
-    });
-    c.add(Device::Resistor {
-        name: "Rc".into(),
-        a: nvcc,
-        b: ncol,
-        ohms: 2.2e3,
-        tc1: None,
-    });
+    c.add(vsource("Vcc".into(), nvcc, NodeId::GROUND, Dc(10.0)));
+    c.add(resistor("Rc".into(), nvcc, ncol, 2.2e3));
     c.add(Device::Isource {
         name: "Ib".into(),
         p: NodeId::GROUND,
         n: nbase,
-        kind: SourceKind::Dc(i_b),
+        kind: Dc(i_b),
     });
     c.add(Device::Bjt {
         name: "Q1".into(),
@@ -278,19 +247,13 @@ pub fn ldo_output_under_load(m: &ModelEntry, r_load: f64) -> (f64, f64) {
     let nout = c.node("out");
     // The behavioral regulator: an ideal source at vout on the output net,
     // exactly as binder::bind_vreg stamps it.
-    c.add(Device::Vsource {
-        name: format!("Vreg_{}", m.id),
-        p: nout,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(vout),
-    });
-    c.add(Device::Resistor {
-        name: "Rload".into(),
-        a: nout,
-        b: NodeId::GROUND,
-        ohms: r_load,
-        tc1: None,
-    });
+    c.add(vsource(
+        format!("Vreg_{}", m.id),
+        nout,
+        NodeId::GROUND,
+        Dc(vout),
+    ));
+    c.add(resistor("Rload".into(), nout, NodeId::GROUND, r_load));
     let wf = dc(&c);
     let v = final_v(&wf, &c, "out");
     let i = source_current(&wf, &format!("Vreg_{}", m.id));

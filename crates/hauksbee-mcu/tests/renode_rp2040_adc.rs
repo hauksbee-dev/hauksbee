@@ -18,7 +18,6 @@
 use hauksbee_mcu::renode::is_available;
 use hauksbee_mcu::{Mcu, RenodeBackend, RenodeConfig};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 fn adc_elf() -> Option<PathBuf> {
     crate::support::firmware("rp2040_adc_probe/adc_probe.elf")
@@ -52,9 +51,7 @@ fn rp2040_adc_injection_reaches_firmware() {
     );
     let mut mcu = RenodeBackend::new(config).expect("spawn Renode RP2040");
 
-    let uart: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = uart.clone();
-    mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+    let uart = crate::support::capture_uart(&mut mcu);
 
     mcu.load_firmware(&elf).expect("load pico-sdk ADC ELF");
 
