@@ -8,7 +8,9 @@
 //! These exercise the actual compiled binary so the exit-code contract that a CI
 //! pipeline depends on is tested end to end, not just the library predicates.
 
-use crate::support::{board, run, run_board};
+#[cfg(feature = "avr")]
+use crate::support::run;
+use crate::support::{board, run_board};
 use std::path::PathBuf;
 
 /// A board that contains two real copper shorts (GND <-> +5V on both layers).

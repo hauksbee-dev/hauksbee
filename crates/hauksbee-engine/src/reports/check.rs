@@ -543,7 +543,7 @@ fn gate_items(
 
 /// The full static suite (DRC shorts + lint + SI + USB-C) as DATA, for the
 /// `--junit`/`--sarif` artifact writers: the same checks and the same waiver
-/// discipline as [`emit`], without rendering a report. Waived findings are
+/// discipline as `emit_with_schematic_quiet`, without rendering a report. Waived findings are
 /// excluded here exactly as they are excluded from the gate, so a SARIF error
 /// can never fail a pipeline the report command would pass.
 pub fn gather_findings(
@@ -932,7 +932,7 @@ pub(crate) fn render_waivers_scoped(
 /// The bare-`--json` combined machine report (bind + DRC + lint/straps/resources
 /// + SI + USB-C) for a `run <board> --json` with no specific report selector.
 /// Without it a bare `--json` would fall through to the TUI/websocket default and
-/// hang a piped / CI / AI caller. Carries the same findings as [`emit`]'s JSON,
+/// hang a piped / CI / AI caller. Carries the same findings as `emit_with_schematic_quiet`'s JSON,
 /// and (under `strict`) gates with the same exit-2 contract.
 pub fn emit_combined_json(
     board_path: &Path,

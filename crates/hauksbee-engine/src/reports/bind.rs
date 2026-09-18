@@ -2,7 +2,7 @@
 //!
 //! The report types themselves ([`BindReport`], [`BindRow`], [`BindOutcome`])
 //! live in [`hauksbee_bind::bind_report`] and are re-exported here so every
-//! `reports::bind::...` path keeps working. [`emit`] prints the table in one
+//! `reports::bind::...` path keeps working. `emit_quiet` prints the table in one
 //! [`OutputMode`], augmented by [`BindSummary::render_banner`]. This is a
 //! description of the board, not a pass/fail check, so `--strict` does not
 //! apply; `--plain` adds a one-line bottom verdict.
