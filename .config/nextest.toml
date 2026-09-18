@@ -1,0 +1,9 @@
+# Each Renode test boots its own emulator process. Several starting at once on a
+# loaded machine can miss the 60 s monitor prompt, which fails the test for a
+# reason that has nothing to do with the code under test. One at a time.
+[test-groups.renode]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "test(renode)"
+test-group = "renode"

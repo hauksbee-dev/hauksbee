@@ -10,7 +10,9 @@
 #![cfg(feature = "serve")]
 
 use hauksbee_engine::commands::common::deck_simulator;
-use hauksbee_engine::commands::sim::{sim_output_to_csv, simulate_deck};
+use hauksbee_engine::commands::sim::{
+    sim_output_to_csv, simulate_deck, simulate_deck_within, DECK_TIME_LIMIT,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const DECKS: &str = "../hauksbee-solve/tests/decks";
@@ -114,6 +116,18 @@ fn an_oversized_sweep_is_refused_before_it_is_solved_and_the_cap_is_named() {
     // The same deck with a sane stop time runs.
     let ok = deck.replace(".tran 1n 10\n", ".tran 1n 10u\n");
     assert_eq!(simulate_deck(&ok, &[]).unwrap().analysis, "tran");
+}
+
+#[test]
+fn a_deck_that_outlasts_the_browser_limit_is_refused_instead_of_holding_the_request() {
+    // A limit of zero proves the brake without waiting a minute for it.
+    let deck = "slow\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1n\n.tran 1n 1u\n.end\n";
+    let error = simulate_deck_within(deck, &[], std::time::Duration::ZERO)
+        .expect_err("a deck past the limit is refused");
+    assert!(error.contains("still solving"), "{error}");
+    assert!(error.contains("hauksbee sim <deck.cir>"), "{error}");
+    let run = simulate_deck_within(deck, &[], DECK_TIME_LIMIT).expect("inside the limit");
+    assert_eq!(run.analysis, "tran");
 }
 
 #[test]

@@ -166,9 +166,10 @@ pub fn design_analyzer() -> hauksbee_frontdoor_api::frontdoor::DesignAnalyzer {
 /// bytes the CLI would have written. The panel therefore has no CSV writer and
 /// no second formatting rule that could drift from the command line.
 pub fn deck_simulator() -> hauksbee_frontdoor_api::frontdoor::DeckSimulator {
-    use crate::commands::sim::{sim_output_to_csv, simulate_deck};
+    use crate::commands::sim::{sim_output_to_csv, simulate_deck_within, DECK_TIME_LIMIT};
     std::sync::Arc::new(|name: &str, deck: &str| {
-        let run = simulate_deck(deck, &[]).map_err(|e| format!("{name}: {e}"))?;
+        let run =
+            simulate_deck_within(deck, &[], DECK_TIME_LIMIT).map_err(|e| format!("{name}: {e}"))?;
         let csv = sim_output_to_csv(&run.output);
         // The chart reads the CSV's own header and numeric rows, so the table
         // it draws and the file the user downloads cannot disagree.

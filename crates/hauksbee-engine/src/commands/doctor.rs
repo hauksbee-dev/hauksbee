@@ -154,6 +154,9 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
         .iter()
         .filter(|b| b.status == "ok" || b.status == "builtin")
         .count();
+    // Nothing above says where the web app is; both framings say it once here.
+    const SERVE_LINE: &str =
+        "The web app is `hauksbee serve`, which serves http://127.0.0.1:3001 by default.";
     let summary_line = format!(
         "{available} of {} backends available; `hauksbee install --help` fetches the missing ones.",
         backends.len()
@@ -175,8 +178,10 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
             super::models::box_table(&["Backend", "Status", "Co-sim", "Detail"], &rows)
         );
         println!("{summary_line}");
+        println!("{SERVE_LINE}");
     } else {
         eprintln!("hauksbee co-sim backends (resolved by the engine's own discovery)");
+        eprintln!("{SERVE_LINE}");
         for b in &backends {
             eprintln!("    {:<13} {}", b.name, b.summary);
         }

@@ -81,6 +81,11 @@ fn doctor_defaults_to_backends_without_the_flag() {
             "bare `doctor` still reports backend '{name}'. stdout:\n{stdout}"
         );
     }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("`hauksbee serve`") && stderr.contains("http://127.0.0.1:3001"),
+        "bare `doctor` names the web app. stderr:\n{stderr}"
+    );
 }
 
 #[test]

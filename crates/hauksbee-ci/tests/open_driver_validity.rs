@@ -45,6 +45,14 @@ fn an_open_converter_behind_an_inductor_refuses_the_rail_with_the_part_named() {
     assert!(json.contains(&reason), "{json}");
     let next = r.refusal().expect("an invalid run refuses").next_action;
     assert!(next.contains("hauksbee models new"), "{next}");
+    // The evidence must agree with the verdict: U1 is on this assertion's
+    // causal path, so its map is undermined, never merely qualified.
+    let map = r
+        .evidence
+        .iter()
+        .find(|m| m.assertion() == a.label)
+        .expect("evidence for the refused assertion");
+    assert!(map.is_undermined(), "{:?}", map.status());
     assert_eq!(r.exit_code(), 3);
 }
 

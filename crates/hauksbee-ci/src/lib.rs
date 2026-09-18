@@ -432,12 +432,26 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         } else {
             None
         };
+        // A part blamed for refusing this assertion is on its causal path even
+        // when it sits a component away from the judged net. Naming it lets its
+        // own open-part assumption undermine the map, so an INVALID verdict
+        // stops reading as qualified.
+        let mut subject_refs = result.subject_refs.clone();
+        if result.invalid {
+            subject_refs.extend(
+                outcomes
+                    .iter()
+                    .flat_map(|outcome| &outcome.regulation)
+                    .filter(|taint| result.detail.contains(&taint.reason))
+                    .flat_map(|taint| taint.refs.iter().cloned()),
+            );
+        }
         maps.push(
             evidence
                 .ci_assertion_map(
                     &result.label,
                     &result.subject_nets,
-                    &result.subject_refs,
+                    &subject_refs,
                     budget,
                     coverage_description.as_deref(),
                 )

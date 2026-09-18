@@ -273,10 +273,33 @@ pub fn simulate_deck(text: &str, print: &[String]) -> Result<DeckRun, String> {
     })
 }
 
-/// Most solved points one uploaded deck may ask for. The server runs a deck on
-/// a shared blocking thread with no wall-clock timeout, so the only cheap brake
-/// is the step count the deck's own cards already imply.
+/// Most solved points one uploaded deck may ask for. It bounds how many steps
+/// a deck asks for, never what one costs; [`DECK_TIME_LIMIT`] bounds the rest.
 const MAX_DECK_POINTS: f64 = 200_000.0;
+
+/// Longest a deck uploaded to the web app may spend solving; the CLI is uncapped.
+pub const DECK_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// [`simulate_deck`] under a wall-clock limit, for the browser deck panel. The
+/// solver has no cancel hook, so an over-running solve is left on its own
+/// thread to finish (the point budget bounds it); what this bounds is how long
+/// a request may wait, which is what ties the server up.
+pub fn simulate_deck_within(
+    text: &str,
+    print: &[String],
+    limit: std::time::Duration,
+) -> Result<DeckRun, String> {
+    let (text, print) = (text.to_string(), print.to_vec());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(simulate_deck(&text, &print)));
+    rx.recv_timeout(limit).unwrap_or_else(|_| {
+        Err(format!(
+            "this deck was still solving after {limit:?}, which is longer than a deck run in \
+             the browser is given. Shorten the stop time or widen the step, or run it locally \
+             with `hauksbee sim <deck.cir>`."
+        ))
+    })
+}
 
 /// Refuse, before solving, a deck whose cards imply more than [`MAX_DECK_POINTS`].
 fn within_point_budget(d: &Directives) -> Result<(), String> {
