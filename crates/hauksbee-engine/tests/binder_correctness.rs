@@ -8,7 +8,7 @@
 
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::reports::bind::BindOutcome;
-use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 
@@ -58,27 +58,17 @@ fn inferred_same_hierarchy_altium_merge_stays_unbound_end_to_end() {
 }
 
 fn pin(number: &str, net: i64, function: &str) -> Pin {
-    Pin {
-        number: number.to_string(),
-        net: Some(net),
-        function: function.to_string(),
-        kind: "passive".to_string(),
-        position: None,
-    }
+    crate::support::pin(number, Some(net), function, "passive")
 }
 
 fn comp(reference: &str, value: &str, footprint: &str, pins: Vec<Pin>) -> Component {
-    Component {
-        reference: reference.to_string(),
-        value: value.to_string(),
-        lib_id: String::new(),
-        footprint: footprint.to_string(),
-        position: None,
-        layer: String::new(),
-        properties: Vec::new(),
-        dnp: false,
+    crate::support::component(
+        reference.to_string(),
+        value.to_string(),
+        String::new(),
+        footprint.to_string(),
         pins,
-    }
+    )
 }
 
 fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
@@ -86,10 +76,7 @@ fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
         name: "binder_correctness_test".to_string(),
         nets: nets
             .iter()
-            .map(|(id, name)| Net {
-                id: *id,
-                name: name.to_string(),
-            })
+            .map(|(id, name)| crate::support::net(*id, name.to_string()))
             .collect(),
         components,
     }

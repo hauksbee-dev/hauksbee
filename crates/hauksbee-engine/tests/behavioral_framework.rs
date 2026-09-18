@@ -13,6 +13,7 @@
 //!   - averaged-converter output regulation, output-current foldback, and the
 //!     programmable input-current limit (the LTC4020 ILIMIT shape).
 
+use crate::support::{resistor, vsource};
 use std::collections::BTreeMap;
 
 use hauksbee_engine::behavioral::{program_iin_limit, BehavioralDevice};
@@ -106,12 +107,12 @@ impl Harness {
 
 /// Stamp a stiff ideal rail (Vsource to ground) on a node.
 fn stamp_rail(c: &mut Circuit, node: NodeId, name: &str, volts: f64) {
-    c.add(Device::Vsource {
-        name: name.to_string(),
-        p: node,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(volts),
-    });
+    c.add(vsource(
+        name.to_string(),
+        node,
+        NodeId::GROUND,
+        SourceKind::Dc(volts),
+    ));
 }
 
 // ── 1. Internal pull to a rail (nPM1300 SHPHLD shape) ───────────────────────
@@ -127,13 +128,7 @@ fn internal_pull_drags_floating_pin_to_rail() {
     let pin = c.node("SHPHLD_NET");
     stamp_rail(&mut c, vsys, "Vvsys", 3.7);
     // Weak leak to ground = a sleeping GPIO's high-Z input.
-    c.add(Device::Resistor {
-        name: "Rgpio_leak".into(),
-        a: pin,
-        b: NodeId::GROUND,
-        ohms: 10e6,
-        tc1: None,
-    });
+    c.add(resistor("Rgpio_leak".into(), pin, NodeId::GROUND, 10e6));
 
     let toml = r#"
 [pins.shphld]
@@ -172,13 +167,7 @@ fn fsm_open_drain_pulls_low_in_asserted_state() {
     let en = c.node("EN");
     stamp_rail(&mut c, v33, "Vv33", 3.3);
     stamp_rail(&mut c, en, "Ven", 3.3); // enable asserted
-    c.add(Device::Resistor {
-        name: "Rstat_pullup".into(),
-        a: stat,
-        b: v33,
-        ohms: 10_000.0,
-        tc1: None,
-    });
+    c.add(resistor("Rstat_pullup".into(), stat, v33, 10_000.0));
 
     let toml = r#"
 [pins.stat]
@@ -231,13 +220,7 @@ fn fsm_stays_when_guard_false() {
     let en = c.node("EN");
     stamp_rail(&mut c, v33, "Vv33", 3.3);
     stamp_rail(&mut c, en, "Ven", 0.0); // enable NOT asserted
-    c.add(Device::Resistor {
-        name: "Rstat_pullup".into(),
-        a: stat,
-        b: v33,
-        ohms: 10_000.0,
-        tc1: None,
-    });
+    c.add(resistor("Rstat_pullup".into(), stat, v33, 10_000.0));
     let toml = r#"
 [pins.stat]
 open_drain = true
@@ -276,13 +259,7 @@ fn expression_law_injects_computed_current() {
     // Drive the cell node from 3.3 V through a 100 ohm source resistor.
     let src = c.node("CELL_SRC");
     stamp_rail(&mut c, src, "Vsrc", 3.3);
-    c.add(Device::Resistor {
-        name: "Rsrc".into(),
-        a: src,
-        b: cell,
-        ohms: 100.0,
-        tc1: None,
-    });
+    c.add(resistor("Rsrc".into(), src, cell, 100.0));
 
     // Law: current from cell -> ground equal to v_cell / 1000 (a 1k leak).
     let toml = r#"
@@ -329,13 +306,7 @@ fn voltage_law_harness(en_v: f64, drive_v: f64) -> Harness {
     let en = c.node("EN");
     stamp_rail(&mut c, v33, "Vv33", 3.3);
     stamp_rail(&mut c, en, "Ven", en_v);
-    c.add(Device::Resistor {
-        name: "Rpullup".into(),
-        a: pinn,
-        b: v33,
-        ohms: 10_000.0,
-        tc1: None,
-    });
+    c.add(resistor("Rpullup".into(), pinn, v33, 10_000.0));
     let toml = format!(
         r#"
 [fsm]
@@ -409,13 +380,7 @@ fn malformed_fsm_guard_disables_transition_without_panicking() {
     let en = c.node("EN");
     let sig = c.node("SIG");
     stamp_rail(&mut c, en, "Ven", 3.3);
-    c.add(Device::Resistor {
-        name: "Rsig_leak".into(),
-        a: sig,
-        b: NodeId::GROUND,
-        ohms: 10e6,
-        tc1: None,
-    });
+    c.add(resistor("Rsig_leak".into(), sig, NodeId::GROUND, 10e6));
     // A pull leg keeps the device non-inert; the FSM is what we're testing.
     let toml = r#"
 [pins.sig]
@@ -457,21 +422,9 @@ fn converter_harness(prog_ohms: f64, r_load: f64) -> Harness {
     // Brick: 20 V behind 0.1 ohm.
     let brick = c.node("BRICK");
     stamp_rail(&mut c, brick, "Vbrick", 20.0);
-    c.add(Device::Resistor {
-        name: "Rbrick".into(),
-        a: brick,
-        b: pvin,
-        ohms: 0.1,
-        tc1: None,
-    });
+    c.add(resistor("Rbrick".into(), brick, pvin, 0.1));
     // Battery load: a resistor from BAT to ground (the charge current sink).
-    c.add(Device::Resistor {
-        name: "Rload".into(),
-        a: bat,
-        b: NodeId::GROUND,
-        ohms: r_load,
-        tc1: None,
-    });
+    c.add(resistor("Rload".into(), bat, NodeId::GROUND, r_load));
 
     // Converter: regulate BAT to 14.4 V, input limit programmed by R8/R49.
     // The threshold scales LINEARLY with the programming resistor up to a
@@ -719,20 +672,8 @@ fn efficiency_harness(eff: f64) -> Harness {
     let bat = c.node("BAT");
     let brick = c.node("BRICK");
     stamp_rail(&mut c, brick, "Vbrick", 20.0);
-    c.add(Device::Resistor {
-        name: "Rbrick".into(),
-        a: brick,
-        b: pvin,
-        ohms: 0.1,
-        tc1: None,
-    });
-    c.add(Device::Resistor {
-        name: "Rload".into(),
-        a: bat,
-        b: NodeId::GROUND,
-        ohms: 100.0,
-        tc1: None,
-    });
+    c.add(resistor("Rbrick".into(), brick, pvin, 0.1));
+    c.add(resistor("Rload".into(), bat, NodeId::GROUND, 100.0));
     let toml = format!(
         r#"
 [converter]

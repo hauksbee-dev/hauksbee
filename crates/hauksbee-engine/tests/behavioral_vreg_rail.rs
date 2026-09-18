@@ -20,33 +20,23 @@ use hauksbee_engine::binder::{bind_board_with, BoundBoard};
 use hauksbee_engine::reports::bind::BindOutcome;
 use hauksbee_engine::scheduler::Scheduler;
 use hauksbee_engine::CustomRegistry;
-use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::SolverOptions;
 
 fn pin(number: &str, net: i64) -> Pin {
-    Pin {
-        number: number.to_string(),
-        net: Some(net),
-        function: String::new(),
-        kind: "passive".to_string(),
-        position: None,
-    }
+    crate::support::pin(number, Some(net), "", "passive")
 }
 
 fn comp(reference: &str, value: &str, footprint: &str, pins: Vec<Pin>) -> Component {
-    Component {
-        reference: reference.to_string(),
-        value: value.to_string(),
-        lib_id: String::new(),
-        footprint: footprint.to_string(),
-        position: None,
-        layer: String::new(),
-        properties: Vec::new(),
-        dnp: false,
+    crate::support::component(
+        reference.to_string(),
+        value.to_string(),
+        String::new(),
+        footprint.to_string(),
         pins,
-    }
+    )
 }
 
 /// +5V (net 1) feeds a behavioural buck U1 whose regulated 3.3 V output is the
@@ -57,18 +47,9 @@ fn buck_board() -> ExtractedBoard {
     ExtractedBoard {
         name: "buck_rail_test".to_string(),
         nets: vec![
-            Net {
-                id: 1,
-                name: "+5V".to_string(),
-            },
-            Net {
-                id: 2,
-                name: "+3.3V".to_string(),
-            },
-            Net {
-                id: 3,
-                name: "GND".to_string(),
-            },
+            crate::support::net(1, "+5V".to_string()),
+            crate::support::net(2, "+3.3V".to_string()),
+            crate::support::net(3, "GND".to_string()),
         ],
         components: vec![
             comp(

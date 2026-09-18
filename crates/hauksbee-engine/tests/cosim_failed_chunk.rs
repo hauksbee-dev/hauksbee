@@ -11,15 +11,15 @@
 //!
 //! Gate name in `docs/dev-plans/08-validation-and-test-campaign.md` §2.
 
+use crate::support::{resistor, vsource};
 use std::collections::HashMap;
 
 use hauksbee_engine::binder::BoundBoard;
-use hauksbee_engine::reports::bind::BindReport;
 use hauksbee_engine::result::{
     strict_analog_exit_code, CosimFailedWindow, CosimJson, EXIT_INVALID_FOR_ANALYSIS,
 };
 use hauksbee_engine::scheduler::{Scheduler, STRICT_CONSECUTIVE_FAILED_ABORT};
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, NodeId, SourceKind};
 use hauksbee_solve::SolverOptions;
 
 /// Build a board whose single chunk solve cannot converge. The forcing is an
@@ -34,39 +34,28 @@ fn impossible_board() -> BoundBoard {
     let mut circuit = Circuit::new();
     let n1 = circuit.node("n1");
     // Two conflicting ideal sources on n1 -> GROUND: 5 V and 3 V at once.
-    circuit.add(Device::Vsource {
-        name: "V1".to_string(),
-        p: n1,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
-    circuit.add(Device::Vsource {
-        name: "V2".to_string(),
-        p: n1,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.0),
-    });
+    circuit.add(vsource(
+        "V1".to_string(),
+        n1,
+        NodeId::GROUND,
+        SourceKind::Dc(5.0),
+    ));
+    circuit.add(vsource(
+        "V2".to_string(),
+        n1,
+        NodeId::GROUND,
+        SourceKind::Dc(3.0),
+    ));
 
     let mut net_nodes = HashMap::new();
     net_nodes.insert("n1".to_string(), n1);
 
-    BoundBoard {
-        name: "impossible".to_string(),
+    crate::support::bound_board(
+        "impossible".to_string(),
         circuit,
         net_nodes,
-        net_names: vec!["n1".to_string()],
-        digital: Vec::new(),
-        mcus: Vec::new(),
-        dnp_mcus: Vec::new(),
-        component_kinds: HashMap::new(),
-        input_sources: HashMap::new(),
-        supplies: Vec::new(),
-        behavioral: Vec::new(),
-        device_meta: Vec::new(),
-        dacs: Vec::new(),
-        peripherals: Vec::new(),
-        report: BindReport::default(),
-    }
+        vec!["n1".to_string()],
+    )
 }
 
 /// Mirror the CLI's `build_cosim_json` field wiring so the test exercises the
@@ -278,38 +267,21 @@ fn cosim_valid_run_reports_analog_valid_true() {
     // analog_valid == true and an empty (omitted) failed_windows list.
     let mut circuit = Circuit::new();
     let n1 = circuit.node("n1");
-    circuit.add(Device::Vsource {
-        name: "V1".to_string(),
-        p: n1,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
-    circuit.add(Device::Resistor {
-        name: "R1".to_string(),
-        a: n1,
-        b: NodeId::GROUND,
-        ohms: 1_000.0,
-        tc1: None,
-    });
+    circuit.add(vsource(
+        "V1".to_string(),
+        n1,
+        NodeId::GROUND,
+        SourceKind::Dc(5.0),
+    ));
+    circuit.add(resistor("R1".to_string(), n1, NodeId::GROUND, 1_000.0));
     let mut net_nodes = HashMap::new();
     net_nodes.insert("n1".to_string(), n1);
-    let board = BoundBoard {
-        name: "valid".to_string(),
+    let board = crate::support::bound_board(
+        "valid".to_string(),
         circuit,
         net_nodes,
-        net_names: vec!["n1".to_string()],
-        digital: Vec::new(),
-        mcus: Vec::new(),
-        dnp_mcus: Vec::new(),
-        component_kinds: HashMap::new(),
-        input_sources: HashMap::new(),
-        supplies: Vec::new(),
-        behavioral: Vec::new(),
-        device_meta: Vec::new(),
-        dacs: Vec::new(),
-        peripherals: Vec::new(),
-        report: BindReport::default(),
-    };
+        vec!["n1".to_string()],
+    );
 
     let mut sched =
         Scheduler::new(board, None, SolverOptions::default()).expect("build valid scheduler");

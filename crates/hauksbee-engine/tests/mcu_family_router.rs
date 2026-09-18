@@ -4,34 +4,21 @@ use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 use hauksbee_models::ModelLibrary;
 
 fn net(id: i64, name: &str) -> Net {
-    Net {
-        id,
-        name: name.to_string(),
-    }
+    crate::support::net(id, name.to_string())
 }
 
 fn pin(number: &str, net: Option<i64>, function: &str) -> Pin {
-    Pin {
-        number: number.to_string(),
-        net,
-        function: function.to_string(),
-        kind: String::new(),
-        position: None,
-    }
+    crate::support::pin(number, net, function, "")
 }
 
 fn component(reference: &str, value: &str, lib_id: &str, pins: Vec<Pin>) -> Component {
-    Component {
-        reference: reference.to_string(),
-        value: value.to_string(),
-        lib_id: lib_id.to_string(),
-        footprint: String::new(),
-        position: None,
-        layer: String::new(),
-        properties: Vec::new(),
-        dnp: false,
+    crate::support::component(
+        reference.to_string(),
+        value.to_string(),
+        lib_id.to_string(),
+        String::new(),
         pins,
-    }
+    )
 }
 
 fn board_with(component: Component) -> ExtractedBoard {

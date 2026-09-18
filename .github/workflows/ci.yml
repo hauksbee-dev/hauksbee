@@ -303,7 +303,7 @@ jobs:
       - name: build the exact permissive Windows release binaries
         env:
           HAUKSBEE_SOURCE_COMMIT: ${{ github.sha }}
-        run: cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,embed-web
+        run: cargo build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp --no-default-features --features renode,qemu,serve,embed-web
       - name: prove the release shape and real drag-and-drop journey
         shell: pwsh
         run: |
@@ -321,15 +321,18 @@ jobs:
           try {
             $ready = $false
             for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              if ($server.HasExited) { break }
               try {
-                Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8417/ | Out-Null
+                Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 http://127.0.0.1:8417/ | Out-Null
                 $ready = $true
                 break
-              } catch {
-                Start-Sleep -Milliseconds 500
-              }
+              } catch { Start-Sleep -Milliseconds 500 }
             }
-            if (-not $ready) { throw "the Windows release server never became ready" }
+            if (-not $ready) {
+              $stderrText = Get-Content output\windows-frontdoor\server.stderr.log -Raw
+              $state = if ($server.HasExited) { "exit $($server.ExitCode)" } else { "timeout" }
+              throw "the Windows release server never became ready ($state):`n$stderrText"
+            }
             $board = (Resolve-Path examples\board-as-code\starter.board).Path
             $env:HB_E2E_BASE = "http://127.0.0.1:8417"
             $env:HB_BOARD_FILES = ConvertTo-Json -Compress @($board) # starter.board

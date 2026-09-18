@@ -9,12 +9,12 @@
 //! Two-sided throughout: the contested board is loud, and a board where nothing
 //! contests a net is silent.
 
+use crate::support::{resistor, vsource};
 use std::collections::HashMap;
 
 use hauksbee_engine::binder::BoundBoard;
-use hauksbee_engine::reports::bind::BindReport;
 use hauksbee_engine::scheduler::Scheduler;
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, NodeId, SourceKind};
 use hauksbee_solve::SolverOptions;
 
 fn board(circuit: Circuit, nets: &[(&str, NodeId)]) -> BoundBoard {
@@ -22,23 +22,12 @@ fn board(circuit: Circuit, nets: &[(&str, NodeId)]) -> BoundBoard {
     for (name, id) in nets {
         net_nodes.insert((*name).to_string(), *id);
     }
-    BoundBoard {
-        name: "drive_override".to_string(),
+    crate::support::bound_board(
+        "drive_override".to_string(),
         circuit,
         net_nodes,
-        net_names: nets.iter().map(|(n, _)| (*n).to_string()).collect(),
-        digital: Vec::new(),
-        mcus: Vec::new(),
-        dnp_mcus: Vec::new(),
-        component_kinds: HashMap::new(),
-        input_sources: HashMap::new(),
-        supplies: Vec::new(),
-        behavioral: Vec::new(),
-        device_meta: Vec::new(),
-        dacs: Vec::new(),
-        peripherals: Vec::new(),
-        report: BindReport::default(),
-    }
+        nets.iter().map(|(n, _)| (*n).to_string()).collect(),
+    )
 }
 
 /// The reported shape: a 3.3 V rail on RES, and a 20 V drive stamped on the same
@@ -46,25 +35,19 @@ fn board(circuit: Circuit, nets: &[(&str, NodeId)]) -> BoundBoard {
 fn contested_board() -> BoundBoard {
     let mut circuit = Circuit::new();
     let res = circuit.node("RES");
-    circuit.add(Device::Vsource {
-        name: "Vsupply_RES".to_string(),
-        p: res,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.3),
-    });
-    circuit.add(Device::Vsource {
-        name: "Vci_drive_RES".to_string(),
-        p: res,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(20.0),
-    });
-    circuit.add(Device::Resistor {
-        name: "R1".to_string(),
-        a: res,
-        b: NodeId::GROUND,
-        ohms: 10_000.0,
-        tc1: None,
-    });
+    circuit.add(vsource(
+        "Vsupply_RES".to_string(),
+        res,
+        NodeId::GROUND,
+        SourceKind::Dc(3.3),
+    ));
+    circuit.add(vsource(
+        "Vci_drive_RES".to_string(),
+        res,
+        NodeId::GROUND,
+        SourceKind::Dc(20.0),
+    ));
+    circuit.add(resistor("R1".to_string(), res, NodeId::GROUND, 10_000.0));
     board(circuit, &[("RES", res)])
 }
 
@@ -72,19 +55,13 @@ fn contested_board() -> BoundBoard {
 fn quiet_board() -> BoundBoard {
     let mut circuit = Circuit::new();
     let res = circuit.node("RES");
-    circuit.add(Device::Vsource {
-        name: "Vsupply_RES".to_string(),
-        p: res,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.3),
-    });
-    circuit.add(Device::Resistor {
-        name: "R1".to_string(),
-        a: res,
-        b: NodeId::GROUND,
-        ohms: 10_000.0,
-        tc1: None,
-    });
+    circuit.add(vsource(
+        "Vsupply_RES".to_string(),
+        res,
+        NodeId::GROUND,
+        SourceKind::Dc(3.3),
+    ));
+    circuit.add(resistor("R1".to_string(), res, NodeId::GROUND, 10_000.0));
     board(circuit, &[("RES", res)])
 }
 

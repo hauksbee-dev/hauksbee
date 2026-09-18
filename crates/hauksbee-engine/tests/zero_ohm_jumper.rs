@@ -17,27 +17,17 @@ use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
 
 fn pin(number: &str, net: i64) -> Pin {
-    Pin {
-        number: number.to_string(),
-        net: Some(net),
-        function: String::new(),
-        kind: "passive".to_string(),
-        position: None,
-    }
+    crate::support::pin(number, Some(net), "", "passive")
 }
 
 fn comp(reference: &str, value: &str, pins: Vec<Pin>) -> Component {
-    Component {
-        reference: reference.to_string(),
-        value: value.to_string(),
-        lib_id: String::new(),
-        footprint: "Resistor_SMD:R_0402_1005Metric".to_string(),
-        position: None,
-        layer: String::new(),
-        properties: Vec::new(),
-        dnp: false,
+    crate::support::component(
+        reference.to_string(),
+        value.to_string(),
+        String::new(),
+        "Resistor_SMD:R_0402_1005Metric".to_string(),
         pins,
-    }
+    )
 }
 
 /// A chain of `0`-valued links between real nets, exactly the anyshake shape.
@@ -56,15 +46,9 @@ fn jumper_board() -> ExtractedBoard {
     components.push(comp("R100", "10k", vec![pin("1", 1), pin("2", 99)]));
     components.push(comp("R101", "4k7", vec![pin("1", 11), pin("2", 99)]));
     let mut nets: Vec<Net> = (1..=11)
-        .map(|i| Net {
-            id: i,
-            name: format!("NET_{i}"),
-        })
+        .map(|i| crate::support::net(i, format!("NET_{i}")))
         .collect();
-    nets.push(Net {
-        id: 99,
-        name: "GND".to_string(),
-    });
+    nets.push(crate::support::net(99, "GND".to_string()));
     ExtractedBoard {
         name: "zero_ohm_jumper_test".to_string(),
         nets,

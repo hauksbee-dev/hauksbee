@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import ast
 import os
+import pathlib
 from pathlib import Path
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -311,6 +313,23 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         )
         self.assertIn("manifest['excluded_prefixes'] = []", builder)
         self.assertIn("surface.get('scopes', ['development', 'mirror'])", builder)
+
+        # Run only the curation helper on a copy; never launch the mirror builder.
+        helper = builder.split("def drop_test(path, name):\n", 1)[1].split("\nPY\n", 1)[0]
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            target = Path(raw_tmp) / "test-policy.py"
+            target.write_text(Path(__file__).read_text())
+            helper = "def drop_test(path, name):\n" + helper
+            helper = helper.replace("'scripts/test-private-release-policy.py'", repr(str(target)))
+            exec(compile(helper, "mirror-policy-curation", "exec"), {"pathlib": pathlib})
+            retained = ast.parse(target.read_text())
+            methods = {node.name for node in ast.walk(retained) if isinstance(node, ast.FunctionDef)}
+            launcher_methods = {
+                "run_visibility_phase", "test_visibility_policy_and_dry_run",
+                "test_mirror_visibility_is_checked_before_the_sentinel_builder",
+            }
+            self.assertTrue(launcher_methods.isdisjoint(methods))
+            self.assertIn("test_public_installer_downloads_without_credential", methods)
 
     def test_private_suite_disclosure_counts_each_absent_test_file(self) -> None:
         builder = (ROOT / "scripts/build-public-mirror.sh").read_text()

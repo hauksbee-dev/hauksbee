@@ -6,12 +6,12 @@
 //! keeps the most recent solver message (device-named when a behavioural
 //! fault caused the failure) and exposes it alongside the failed windows.
 
+use crate::support::vsource;
 use std::collections::HashMap;
 
 use hauksbee_engine::binder::BoundBoard;
-use hauksbee_engine::reports::bind::BindReport;
 use hauksbee_engine::scheduler::Scheduler;
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, NodeId, SourceKind};
 use hauksbee_solve::SolverOptions;
 
 /// Same forcing as `cosim_failed_chunk.rs`: two conflicting ideal sources on
@@ -19,37 +19,26 @@ use hauksbee_solve::SolverOptions;
 fn impossible_board() -> BoundBoard {
     let mut circuit = Circuit::new();
     let n1 = circuit.node("n1");
-    circuit.add(Device::Vsource {
-        name: "V1".to_string(),
-        p: n1,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
-    circuit.add(Device::Vsource {
-        name: "V2".to_string(),
-        p: n1,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.0),
-    });
+    circuit.add(vsource(
+        "V1".to_string(),
+        n1,
+        NodeId::GROUND,
+        SourceKind::Dc(5.0),
+    ));
+    circuit.add(vsource(
+        "V2".to_string(),
+        n1,
+        NodeId::GROUND,
+        SourceKind::Dc(3.0),
+    ));
     let mut net_nodes = HashMap::new();
     net_nodes.insert("n1".to_string(), n1);
-    BoundBoard {
-        name: "impossible".to_string(),
+    crate::support::bound_board(
+        "impossible".to_string(),
         circuit,
         net_nodes,
-        net_names: vec!["n1".to_string()],
-        digital: Vec::new(),
-        mcus: Vec::new(),
-        dnp_mcus: Vec::new(),
-        component_kinds: HashMap::new(),
-        input_sources: HashMap::new(),
-        supplies: Vec::new(),
-        behavioral: Vec::new(),
-        device_meta: Vec::new(),
-        dacs: Vec::new(),
-        peripherals: Vec::new(),
-        report: BindReport::default(),
-    }
+        vec!["n1".to_string()],
+    )
 }
 
 #[test]

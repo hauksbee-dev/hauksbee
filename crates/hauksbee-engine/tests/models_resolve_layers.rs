@@ -10,17 +10,13 @@ use hauksbee_extract::{Component, ExtractedBoard};
 use hauksbee_models::{ModelLibrary, SourceLayer};
 
 fn comp(reference: &str, value: &str, footprint: &str) -> Component {
-    Component {
-        reference: reference.to_string(),
-        value: value.to_string(),
-        lib_id: String::new(),
-        footprint: footprint.to_string(),
-        position: None,
-        layer: String::new(),
-        properties: Vec::new(),
-        dnp: false,
-        pins: Vec::new(),
-    }
+    crate::support::component(
+        reference.to_string(),
+        value.to_string(),
+        String::new(),
+        footprint.to_string(),
+        Vec::new(),
+    )
 }
 
 fn board() -> ExtractedBoard {

@@ -18,6 +18,7 @@
 // (deliberate ellipsis truncation) are printed and do not fail.
 
 import { chromium } from 'playwright'
+import { withFixture, waitForServer } from '../e2e/harness'
 import type { Browser, Page } from 'playwright'
 import { mkdirSync, rmSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -50,16 +51,6 @@ function staticServer(root: string, port: number) {
   })
 }
 
-async function waitForServer(base: string, tries = 60) {
-  for (let i = 0; i < tries; i++) {
-    try {
-      const res = await fetch(base, { signal: AbortSignal.timeout(1000) })
-      if (res.ok) return
-    } catch { /* not up yet */ }
-    await Bun.sleep(250)
-  }
-  throw new Error(`nothing answering at ${base}`)
-}
 
 /** Run one surface chain at one viewport, auditing after every surface. */
 async function runPass(
@@ -221,59 +212,51 @@ function report(): number {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-const APP_PORT = Number(process.env.HB_LINT_PORT ?? 3479)
-const SITE_PORT = APP_PORT + 1
+const APP_PORT = Number(process.env.HB_LINT_PORT ?? 0)
+const SITE_PORT = APP_PORT === 0 ? 0 : APP_PORT + 1
 
 rmSync(SHOTS, { recursive: true, force: true })
 mkdirSync(SHOTS, { recursive: true })
 
-const externalBase = process.env.HB_LINT_BASE ?? null
-let fixtureProc: Bun.Subprocess | null = null
-let siteServer: ReturnType<typeof staticServer> | null = null
+await withFixture(async appBase => {
+  let siteServer: ReturnType<typeof staticServer> | null = null
 
-const appBase = externalBase ?? `http://127.0.0.1:${APP_PORT}`
-if (!externalBase) {
-  fixtureProc = Bun.spawn(['bun', 'run', join(here, 'fixture-server.ts'), String(APP_PORT)], {
-    stdout: 'inherit', stderr: 'inherit',
+  const browser = await chromium.launch({
+    // Every surface is 2D canvas, so no GPU flags and no software-GL
+    // workarounds are needed.
+    headless: true,
   })
-}
 
-const browser = await chromium.launch({
-  // Every surface is 2D canvas, so no GPU flags and no software-GL
-  // workarounds are needed.
-  headless: true,
-})
-
-try {
-  await waitForServer(appBase)
-  for (const vp of VIEWPORTS) {
-    await runPass(browser, appBase, '', APP_SURFACES, vp)
-  }
-
-  // ── The separately owned site ───────────────────────────────────────────
-  // Local app-only work can opt out explicitly. When the site pass is enabled,
-  // an absent build is a gate failure rather than a silent release-quality
-  // skip.
-  const siteDist = join(here, '../../../site/dist')
-  const doSite = process.env.HB_LINT_SITE !== '0'
-  if (doSite && existsSync(join(siteDist, 'index.html'))) {
-    siteServer = staticServer(siteDist, SITE_PORT)
-    const siteBase = `http://127.0.0.1:${SITE_PORT}`
-    await waitForServer(siteBase)
+  try {
     for (const vp of VIEWPORTS) {
-      await runPass(browser, siteBase, 'site/', SITE_SURFACES, vp)
+      await runPass(browser, appBase, '', APP_SURFACES, vp)
     }
-  } else if (doSite) {
-    rows.push({
-      surface: 'site', viewport: 'all', shot: null,
-      rule: 'missing-build', severity: 'error', selector: siteDist,
-      detail: 'site pass requested but site/dist/index.html is absent',
-    })
+
+    // ── The separately owned site ───────────────────────────────────────────
+    // Local app-only work can opt out explicitly. When the site pass is enabled,
+    // an absent build is a gate failure rather than a silent release-quality
+    // skip.
+    const siteDist = join(here, '../../../site/dist')
+    const doSite = process.env.HB_LINT_SITE !== '0'
+    if (doSite && existsSync(join(siteDist, 'index.html'))) {
+      siteServer = staticServer(siteDist, SITE_PORT)
+      const siteBase = `http://127.0.0.1:${siteServer.port}`
+      await waitForServer(siteBase, 60)
+      for (const vp of VIEWPORTS) {
+        await runPass(browser, siteBase, 'site/', SITE_SURFACES, vp)
+      }
+    } else if (doSite) {
+      rows.push({
+        surface: 'site', viewport: 'all', shot: null,
+        rule: 'missing-build', severity: 'error', selector: siteDist,
+        detail: 'site pass requested but site/dist/index.html is absent',
+      })
+    }
+  } finally {
+    await browser.close()
+    await siteServer?.stop(true)
   }
-} finally {
-  await browser.close()
-  fixtureProc?.kill()
-  await siteServer?.stop(true)
-}
+
+}, process.env.HB_LINT_BASE ?? null, APP_PORT, 60)
 
 process.exit(report())

@@ -65,6 +65,30 @@ class WindowsPortContract(unittest.TestCase):
         self.assertRegex(ci, r"HB_BOARD_FILES.*starter\.board")
         self.assertIn('$env:HB_RELEASE_COHORT = "smoke"', ci)
 
+    def test_embedded_windows_releases_explicitly_enable_serve_without_avr(self) -> None:
+        for name in ("ci", "nightly", "release"):
+            with self.subTest(workflow=name):
+                commands = re.findall(
+                    r"(?m)^\s*run: (cargo build[^\n]*--release[^\n]*-p hauksbee-engine[^\n]*)",
+                    read(f".github/workflows/{name}.yml"),
+                )
+                self.assertEqual(len(commands), 1)
+                args = commands[0].split()
+                self.assertIn("--no-default-features", args)
+                self.assertNotIn("--all-features", args)
+                self.assertEqual(set(args[args.index("--features") + 1].split(",")),
+                                 {"renode", "qemu", "serve", "embed-web"})
+
+    def test_frontdoor_readiness_reports_early_process_exit(self) -> None:
+        for name in ("ci", "nightly"):
+            with self.subTest(workflow=name):
+                ci = read(f".github/workflows/{name}.yml")
+                self.assertRegex(ci, r"for \([^\n]+\) \{\s*if \(\$server.HasExited\) \{ break \}\s*try")
+                self.assertIn("Invoke-WebRequest -UseBasicParsing -TimeoutSec 2", ci)
+                self.assertRegex(ci, r"\$stderrText = Get-Content .*server\.stderr\.log -Raw")
+                self.assertRegex(ci, r'\$state = if \(\$server.HasExited\).*\$server.ExitCode.*"timeout"')
+                self.assertIn('($state):`n$stderrText"', ci)
+
     def test_release_builds_and_verifies_a_permissive_windows_zip(self) -> None:
         release = read(".github/workflows/release.yml")
         self.assertRegex(release, r"build-windows:")

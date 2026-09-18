@@ -19,12 +19,12 @@
 //!     net named, never adopted as a quiet answer, so even a law the implicit
 //!     form cannot express fails honestly instead of poisoning the run.
 
+use crate::support::vsource;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use hauksbee_engine::behavioral::BehavioralDevice;
 use hauksbee_engine::binder::BoundBoard;
-use hauksbee_engine::reports::bind::BindReport;
 use hauksbee_engine::scheduler::{Scheduler, STRICT_CONSECUTIVE_FAILED_ABORT};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_models::behavioral::Behavioral;
@@ -39,21 +39,8 @@ fn board_with(
 ) -> BoundBoard {
     let net_names = net_nodes.keys().cloned().collect();
     BoundBoard {
-        name: "clamp-fixture".to_string(),
-        circuit,
-        net_nodes,
-        net_names,
-        digital: Vec::new(),
-        mcus: Vec::new(),
-        dnp_mcus: Vec::new(),
-        component_kinds: HashMap::new(),
-        input_sources: HashMap::new(),
-        supplies: Vec::new(),
         behavioral,
-        device_meta: Vec::new(),
-        dacs: Vec::new(),
-        peripherals: Vec::new(),
-        report: BindReport::default(),
+        ..crate::support::bound_board("clamp-fixture".to_string(), circuit, net_nodes, net_names)
     }
 }
 
@@ -63,12 +50,12 @@ fn usblc6_fixture() -> (BoundBoard, NodeId) {
     let mut c = Circuit::new();
     let io = c.node("IO");
     let vbus = c.node("VBUS");
-    c.add(Device::Vsource {
-        name: "Vbus".into(),
-        p: vbus,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    c.add(vsource(
+        "Vbus".into(),
+        vbus,
+        NodeId::GROUND,
+        SourceKind::Dc(5.0),
+    ));
     // ST's own piecewise numbers, exactly as the shipped usblc6_2 model
     // carries them.
     let toml = r#"

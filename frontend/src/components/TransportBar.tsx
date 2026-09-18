@@ -158,15 +158,14 @@ export function TransportBar({
 
   return (
     <div
-      className="flex items-center gap-3 px-4 shrink-0 select-none"
+      className="flex flex-wrap items-center gap-3 px-4 py-2 min-h-[46px] shrink-0 select-none xl:py-0"
       style={{
         background: 'var(--surface)',
         borderBottom: '1px solid var(--hairline)',
-        height: 46,
       }}
     >
       {/* Transport controls */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 shrink-0">
         <button
           onClick={handlePlayPause}
           title={running ? 'Pause (Space)' : 'Play (Space)'}
@@ -232,7 +231,7 @@ export function TransportBar({
         </button>
       </div>
 
-      <div className="w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
+      <div className="hidden xl:block w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
 
       {/* Scrub, replay only: live sim time cannot be dragged backwards. */}
       {replay && replay.duration > 0 && (
@@ -261,7 +260,7 @@ export function TransportBar({
               / {replay.duration.toFixed(1)}s
             </span>
           </div>
-          <div className="w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
+          <div className="hidden xl:block w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
         </>
       )}
 
@@ -270,14 +269,14 @@ export function TransportBar({
         <>
           <div
             data-testid="transport-review"
-            className="flex items-center gap-2 px-2.5 py-1 rounded-lg shrink-0"
+            className="flex flex-wrap items-center gap-2 px-2.5 py-1 rounded-lg max-w-full min-w-0"
             style={{
               border: '1px solid var(--copper-deep)',
               background: 'var(--copper-tint-strong)',
               color: 'var(--copper-hi)',
             }}
           >
-            <span className="text-[11px] tnum" style={{ fontFamily: 'var(--font-mono)' }}>
+            <span className="text-[11px] tnum min-w-0 break-words" style={{ fontFamily: 'var(--font-mono)' }}>
               reviewing t={formatTime(history.t ?? 0)} ·{' '}
               {history.retained - (history.index ?? 0)} back of {history.retained} kept
             </span>
@@ -290,14 +289,14 @@ export function TransportBar({
               live
             </button>
           </div>
-          <div className="w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
+          <div className="hidden xl:block w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
         </>
       )}
 
       {/* Speed: a log scale whose first three quarters are all slower than
           realtime, the presets for the decade marks, and a box for an exact
           rate the slider cannot land on. */}
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full">
         <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--silk-faint)' }}>speed</span>
         <input
           type="range"
@@ -328,7 +327,7 @@ export function TransportBar({
           style={{ width: 58, fontFamily: 'var(--font-mono)', padding: '2px 5px' }}
         />
         <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>x</span>
-        <div className="flex items-center gap-0.5">
+        <div className="flex flex-wrap items-center gap-0.5">
           {SPEED_PRESETS.map(p => (
             <button
               key={p}
@@ -351,11 +350,11 @@ export function TransportBar({
         </div>
       </div>
 
-      <div className="w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
+      <div className="hidden xl:block w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
 
       {/* Elapsed sim time, and the two rates kept apart. Asked-for and achieved
           are different numbers and the bar never prints one as the other. */}
-      <div className="flex items-baseline gap-1.5 shrink-0" style={{ fontFamily: 'var(--font-mono)' }}>
+      <div className="flex flex-wrap items-baseline gap-1.5 min-w-0 max-w-full" style={{ fontFamily: 'var(--font-mono)' }}>
         <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--silk-faint)' }}>t</span>
         <span
           className="text-[13px] font-semibold tnum"
@@ -387,7 +386,7 @@ export function TransportBar({
 
       {/* Board identity + connection */}
       {boardInfo && (
-        <span className="text-[11px] truncate" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
+        <span className="text-[11px] truncate min-w-0 max-w-full" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
           {boardInfo.name}
         </span>
       )}

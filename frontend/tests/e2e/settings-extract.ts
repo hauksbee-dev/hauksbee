@@ -21,6 +21,7 @@
 //   bun run tests/e2e/settings-extract.ts          # spawns the fixture server
 
 import { chromium } from 'playwright'
+import { withFixture } from './harness'
 import type { Browser, ConsoleMessage, Page } from 'playwright'
 import { mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -65,106 +66,91 @@ async function main() {
   rmSync(OUT, { recursive: true, force: true })
   mkdirSync(OUT, { recursive: true })
 
-  const external = process.env.HB_E2E_BASE ?? null
-  let fixture: Bun.Subprocess | null = null
-  const port = Number(process.env.HB_E2E_PORT ?? 3492)
-  const base = external ?? `http://127.0.0.1:${port}`
-  if (!external) {
-    fixture = Bun.spawn(
-      ['bun', 'run', join(here, '../visual-lint/fixture-server.ts'), String(port)],
-      { stdout: 'inherit', stderr: 'inherit' },
-    )
-  }
-  for (let i = 0; i < 80; i++) {
+  await withFixture(async base => {
+    const browser: Browser = await chromium.launch({ headless: true })
     try {
-      const r = await fetch(base, { signal: AbortSignal.timeout(1000) })
-      if (r.ok) break
-    } catch { /* not up yet */ }
-    await Bun.sleep(250)
-  }
-  console.log(`base: ${base}${external ? ' (external)' : ' (fixture server)'}`)
+      const ctx = await browser.newContext({ baseURL: base, viewport: { width: 1280, height: 900 } })
+      const page = await ctx.newPage()
+      page.setDefaultTimeout(20_000)
+      watchConsole(page, 'app')
 
-  const browser: Browser = await chromium.launch({ headless: true })
-  const ctx = await browser.newContext({ baseURL: base, viewport: { width: 1280, height: 900 } })
-  const page = await ctx.newPage()
-  page.setDefaultTimeout(20_000)
-  watchConsole(page, 'app')
+      // ── 1. Open the page, read the summary ──────────────────────────────────
+      step('the Settings rail item opens the page')
+      await page.goto('/', { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 30_000 })
+      await page.click('[data-testid="nav-settings"]')
+      await page.waitForSelector('[data-testid="settings-status"]', { timeout: 20_000 })
+      await settle(page, 700)
+      const statusText = await page.locator('[data-testid="settings-status"]').innerText()
+      ok('the status strip names the active backend', statusText.includes('Claude Code (claude-opus-5, high effort)'), statusText)
+      ok('the status strip names where it came from', /extract\.toml/.test(statusText), statusText)
+      await shoot(page, '01-settings-loaded')
 
-  // ── 1. Open the page, read the summary ──────────────────────────────────
-  step('the Settings rail item opens the page')
-  await page.goto('/', { waitUntil: 'domcontentloaded' })
-  await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 30_000 })
-  await page.click('[data-testid="nav-settings"]')
-  await page.waitForSelector('[data-testid="settings-status"]', { timeout: 20_000 })
-  await settle(page, 700)
-  const statusText = await page.locator('[data-testid="settings-status"]').innerText()
-  ok('the status strip names the active backend', statusText.includes('Claude Code (claude-opus-5, high effort)'), statusText)
-  ok('the status strip names where it came from', /extract\.toml/.test(statusText), statusText)
-  await shoot(page, '01-settings-loaded')
+      // ── 2. A preset's Use really applies it ──────────────────────────────────
+      step('the agy preset\'s Use button applies it')
+      await page.click('[data-testid="settings-preset-agy-use"]')
+      await page.waitForSelector('[data-testid="settings-backend-agy"][aria-pressed="true"]', { timeout: 10_000 })
+      ok('the backend picker now shows agy pressed/active', true)
+      const modelPlaceholder = await page.locator('[data-testid="settings-model"]').getAttribute('placeholder')
+      ok('the model field placeholder is agy\'s resolved default', modelPlaceholder === 'gemini-3.8-flash', String(modelPlaceholder))
+      await shoot(page, '02-agy-preset-applied')
 
-  // ── 2. A preset's Use really applies it ──────────────────────────────────
-  step('the agy preset\'s Use button applies it')
-  await page.click('[data-testid="settings-preset-agy-use"]')
-  await page.waitForSelector('[data-testid="settings-backend-agy"][aria-pressed="true"]', { timeout: 10_000 })
-  ok('the backend picker now shows agy pressed/active', true)
-  const modelPlaceholder = await page.locator('[data-testid="settings-model"]').getAttribute('placeholder')
-  ok('the model field placeholder is agy\'s resolved default', modelPlaceholder === 'gemini-3.8-flash', String(modelPlaceholder))
-  await shoot(page, '02-agy-preset-applied')
+      // ── 3. Editing a field marks the draft dirty ────────────────────────────
+      step('changing effort enables Save and updates the terminal line')
+      ok('Save starts disabled (preset apply already saved server-side)',
+        await page.locator('[data-testid="settings-save"]').isDisabled())
+      await page.click('[data-testid="settings-effort-medium"]')
+      await page.click('[data-testid="settings-advanced-toggle"]')
+      await page.locator('[data-testid="settings-command"]').fill('/tmp/custom agent')
+      await settle(page)
+      ok('Save is now enabled', !(await page.locator('[data-testid="settings-save"]').isDisabled()))
+      const terminalText = await page.locator('[data-testid="settings-terminal"]').innerText()
+      ok('the terminal line preserves effort and quotes the custom path',
+        terminalText.includes('agy.effort=medium') && terminalText.includes("'agy.command=/tmp/custom agent'"), terminalText)
+      await shoot(page, '03-effort-changed')
 
-  // ── 3. Editing a field marks the draft dirty ────────────────────────────
-  step('changing effort enables Save and updates the terminal line')
-  ok('Save starts disabled (preset apply already saved server-side)',
-    await page.locator('[data-testid="settings-save"]').isDisabled())
-  await page.click('[data-testid="settings-effort-medium"]')
-  await page.click('[data-testid="settings-advanced-toggle"]')
-  await page.locator('[data-testid="settings-command"]').fill('/tmp/custom agent')
-  await settle(page)
-  ok('Save is now enabled', !(await page.locator('[data-testid="settings-save"]').isDisabled()))
-  const terminalText = await page.locator('[data-testid="settings-terminal"]').innerText()
-  ok('the terminal line preserves effort and quotes the custom path',
-    terminalText.includes('agy.effort=medium') && terminalText.includes("'agy.command=/tmp/custom agent'"), terminalText)
-  await shoot(page, '03-effort-changed')
+      // ── 4. Save really writes it ────────────────────────────────────────────
+      step('Save PUTs the draft and confirms')
+      await page.click('[data-testid="settings-save"]')
+      await page.waitForSelector('[data-testid="settings-saved"]', { timeout: 10_000 })
+      const savedText = await page.locator('[data-testid="settings-saved"]').innerText()
+      ok('the save confirmation names the path', /extract\.toml/.test(savedText), savedText)
+      ok('Save is disabled again once the draft matches the saved config',
+        await page.locator('[data-testid="settings-save"]').isDisabled())
+      const savedConfig = await (await fetch(`${base}/api/settings/extract`)).json()
+      ok('custom executable survives saving with spaces intact', savedConfig.config.agy.command === '/tmp/custom agent')
+      await page.locator('[data-testid="settings-command"]').fill('')
+      ok('the terminal line also clears an existing command',
+        (await page.locator('[data-testid="settings-terminal"]').innerText()).includes('agy.command='))
+      const cleared = page.waitForResponse(r => r.url().endsWith('/api/settings/extract') && r.request().method() === 'PUT')
+      await page.click('[data-testid="settings-save"]')
+      ok('clearing the command finishes before testing', !(await (await cleared).json()).config.agy.command)
+      await shoot(page, '04-saved')
 
-  // ── 4. Save really writes it ────────────────────────────────────────────
-  step('Save PUTs the draft and confirms')
-  await page.click('[data-testid="settings-save"]')
-  await page.waitForSelector('[data-testid="settings-saved"]', { timeout: 10_000 })
-  const savedText = await page.locator('[data-testid="settings-saved"]').innerText()
-  ok('the save confirmation names the path', /extract\.toml/.test(savedText), savedText)
-  ok('Save is disabled again once the draft matches the saved config',
-    await page.locator('[data-testid="settings-save"]').isDisabled())
-  const savedConfig = await (await fetch(`${base}/api/settings/extract`)).json()
-  ok('custom executable survives saving with spaces intact', savedConfig.config.agy.command === '/tmp/custom agent')
-  await page.locator('[data-testid="settings-command"]').fill('')
-  ok('the terminal line also clears an existing command',
-    (await page.locator('[data-testid="settings-terminal"]').innerText()).includes('agy.command='))
-  const cleared = page.waitForResponse(r => r.url().endsWith('/api/settings/extract') && r.request().method() === 'PUT')
-  await page.click('[data-testid="settings-save"]')
-  ok('clearing the command finishes before testing', !(await (await cleared).json()).config.agy.command)
-  await shoot(page, '04-saved')
+      // ── 5. Test backend streams and reports ─────────────────────────────────
+      step('Test backend streams a reply')
+      await page.click('[data-testid="settings-test"]')
+      await page.waitForSelector('[data-testid="settings-test-done"]', { timeout: 15_000 })
+      const logText = await page.locator('[data-testid="settings-test-log"]').innerText()
+      ok('the log well shows progress lines', logText.length > 0, logText)
+      const doneText = await page.locator('[data-testid="settings-test-done"]').innerText()
+      ok('the result names the reply', doneText.includes('OK'), doneText)
+      await shoot(page, '05-test-done')
 
-  // ── 5. Test backend streams and reports ─────────────────────────────────
-  step('Test backend streams a reply')
-  await page.click('[data-testid="settings-test"]')
-  await page.waitForSelector('[data-testid="settings-test-done"]', { timeout: 15_000 })
-  const logText = await page.locator('[data-testid="settings-test-log"]').innerText()
-  ok('the log well shows progress lines', logText.length > 0, logText)
-  const doneText = await page.locator('[data-testid="settings-test-done"]').innerText()
-  ok('the result names the reply', doneText.includes('OK'), doneText)
-  await shoot(page, '05-test-done')
+      // ── 6. Console ───────────────────────────────────────────────────────────
+      step('console')
+      ok('no console errors anywhere in the run', consoleErrors.length === 0, consoleErrors.slice(0, 5).join(' | '))
 
-  // ── 6. Console ───────────────────────────────────────────────────────────
-  step('console')
-  ok('no console errors anywhere in the run', consoleErrors.length === 0, consoleErrors.slice(0, 5).join(' | '))
+      await ctx.close()
+    } finally {
+      await browser.close()
+    }
 
-  await ctx.close()
-  await browser.close()
-  fixture?.kill()
-
-  console.log(`\n${pass} passed, ${failures.length} failed.`)
-  for (const f of failures) console.log(`  FAILED: ${f}`)
-  console.log(`screenshots: ${OUT}`)
-  process.exit(failures.length > 0 ? 1 : 0)
+    console.log(`\n${pass} passed, ${failures.length} failed.`)
+    for (const f of failures) console.log(`  FAILED: ${f}`)
+    console.log(`screenshots: ${OUT}`)
+    process.exitCode = failures.length > 0 ? 1 : 0
+  })
 }
 
 await main()

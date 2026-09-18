@@ -1,7 +1,13 @@
 //! Shared helpers for the engine crate's integration-test binary.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+
+use hauksbee_engine::binder::BoundBoard;
+use hauksbee_engine::reports::bind::BindReport;
+use hauksbee_extract::{Component, Net, Pin};
+use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 
 /// The compiled `hauksbee` binary (Cargo sets this for the engine crate's tests).
 #[allow(dead_code)]
@@ -50,4 +56,90 @@ pub fn repo_root() -> PathBuf {
         .nth(2)
         .expect("repo root")
         .to_path_buf()
+}
+
+/// Return a device without changing the caller's insertion order or DeviceId.
+pub fn resistor(name: String, a: NodeId, b: NodeId, ohms: f64) -> Device {
+    Device::Resistor {
+        name,
+        a,
+        b,
+        ohms,
+        tc1: None,
+    }
+}
+
+pub fn capacitor(name: String, a: NodeId, b: NodeId, farads: f64) -> Device {
+    Device::Capacitor {
+        name,
+        a,
+        b,
+        farads,
+        ic: None,
+    }
+}
+
+pub fn vsource(name: String, p: NodeId, n: NodeId, kind: SourceKind) -> Device {
+    Device::Vsource { name, p, n, kind }
+}
+
+/// Minimal runtime layers; preserve the supplied net map and net-name order.
+pub fn bound_board(
+    name: String,
+    circuit: Circuit,
+    net_nodes: HashMap<String, NodeId>,
+    net_names: Vec<String>,
+) -> BoundBoard {
+    BoundBoard {
+        name,
+        circuit,
+        net_nodes,
+        net_names,
+        digital: Vec::new(),
+        mcus: Vec::new(),
+        dnp_mcus: Vec::new(),
+        component_kinds: HashMap::new(),
+        input_sources: HashMap::new(),
+        supplies: Vec::new(),
+        behavioral: Vec::new(),
+        device_meta: Vec::new(),
+        dacs: Vec::new(),
+        peripherals: Vec::new(),
+        report: BindReport::default(),
+    }
+}
+
+/// Unpositioned fixture pin; PCB-only and passive kinds remain distinct.
+pub fn pin(number: &str, net: Option<i64>, function: &str, kind: &str) -> Pin {
+    Pin {
+        number: number.to_string(),
+        net,
+        function: function.to_string(),
+        kind: kind.to_string(),
+        position: None,
+    }
+}
+
+pub fn component(
+    reference: String,
+    value: String,
+    lib_id: String,
+    footprint: String,
+    pins: Vec<Pin>,
+) -> Component {
+    Component {
+        reference,
+        value,
+        lib_id,
+        footprint,
+        position: None,
+        layer: String::new(),
+        properties: Vec::new(),
+        dnp: false,
+        pins,
+    }
+}
+
+pub fn net(id: i64, name: String) -> Net {
+    Net { id, name }
 }

@@ -4,6 +4,7 @@
 //! 0402 resistor over-power) plus a direct stress-monitor unit for polarized
 //! capacitor reverse bias, and a healthy-board no-false-positive check.
 
+use crate::support::{capacitor, vsource};
 use std::collections::HashMap;
 
 use hauksbee_engine::stress::{resistor_power_from_footprint, DeviceMeta, StressMonitor};
@@ -174,13 +175,7 @@ fn polarized_cap_reverse_bias_faults() {
     let pos = circuit.node("CAP_POS");
     let neg = circuit.node("CAP_NEG");
     // Hold CAP_NEG at +2 V, CAP_POS at ground → reverse bias of 2 V.
-    let cap = circuit.add(Device::Capacitor {
-        name: "C1".into(),
-        a: pos,
-        b: neg,
-        farads: 1e-6,
-        ic: None,
-    });
+    let cap = circuit.add(capacitor("C1".into(), pos, neg, 1e-6));
 
     let mut ratings = Ratings::default();
     ratings.polarized = true;
@@ -453,12 +448,12 @@ fn pin_overcurrent_fires_on_driver_leg_current() {
         let drv = NodeId(1);
         // The shape bind_mcu stamps: hidden driver node, Vsource to ground,
         // series resistor to the (here: omitted) net.
-        let vd = circuit.add(Device::Vsource {
-            name: "Vdrv_U1_B5".into(),
-            p: drv,
-            n: NodeId::GROUND,
-            kind: hauksbee_ir::SourceKind::Dc(5.0),
-        });
+        let vd = circuit.add(vsource(
+            "Vdrv_U1_B5".into(),
+            drv,
+            NodeId::GROUND,
+            hauksbee_ir::SourceKind::Dc(5.0),
+        ));
         let meta = DeviceMeta {
             reference: "U1:PB5".into(),
             device: vd,

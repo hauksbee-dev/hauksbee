@@ -1,46 +1,22 @@
 use hauksbee_engine::binder::bind_board;
-use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 
 fn pin(number: &str, net: i64) -> Pin {
-    Pin {
-        number: number.to_string(),
-        net: Some(net),
-        function: String::new(),
-        kind: String::new(),
-        position: None,
-    }
+    crate::support::pin(number, Some(net), "", "")
 }
 
 fn ina186_board() -> ExtractedBoard {
     ExtractedBoard {
         name: "ina186_fixture".to_string(),
         nets: vec![
-            Net {
-                id: 1,
-                name: "GND".to_string(),
-            },
-            Net {
-                id: 2,
-                name: "+3V3".to_string(),
-            },
-            Net {
-                id: 3,
-                name: "VREF".to_string(),
-            },
-            Net {
-                id: 4,
-                name: "SENSE_P".to_string(),
-            },
-            Net {
-                id: 5,
-                name: "SENSE_N".to_string(),
-            },
-            Net {
-                id: 6,
-                name: "ISENSE_OUT".to_string(),
-            },
+            crate::support::net(1, "GND".to_string()),
+            crate::support::net(2, "+3V3".to_string()),
+            crate::support::net(3, "VREF".to_string()),
+            crate::support::net(4, "SENSE_P".to_string()),
+            crate::support::net(5, "SENSE_N".to_string()),
+            crate::support::net(6, "ISENSE_OUT".to_string()),
         ],
         components: vec![Component {
             reference: "U1".to_string(),

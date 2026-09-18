@@ -1,6 +1,6 @@
 use hauksbee_engine::result::{BindSummary, DrcShort, DrcStructured, JsonFinding, JsonReport};
 use hauksbee_engine::{bind_board, BoardEvidence};
-use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_ir::evidence::{AssumptionKind, EvidenceStatus, RunDate};
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{Integration, SolverOptions};
@@ -9,49 +9,29 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn pin(number: &str, net: i64) -> Pin {
-    Pin {
-        number: number.into(),
-        net: Some(net),
-        function: String::new(),
-        kind: String::new(),
-        position: None,
-    }
+    crate::support::pin(number, Some(net), "", "")
 }
 
 fn part(reference: &str, value: &str, nets: &[i64]) -> Component {
-    Component {
-        reference: reference.into(),
-        value: value.into(),
-        lib_id: String::new(),
-        footprint: String::new(),
-        position: None,
-        layer: String::new(),
-        properties: Vec::new(),
-        dnp: false,
-        pins: nets
-            .iter()
+    crate::support::component(
+        reference.into(),
+        value.into(),
+        String::new(),
+        String::new(),
+        nets.iter()
             .enumerate()
             .map(|(i, net)| pin(&(i + 1).to_string(), *net))
             .collect(),
-    }
+    )
 }
 
 fn board() -> ExtractedBoard {
     ExtractedBoard {
         name: "evidence-fixture".into(),
         nets: vec![
-            Net {
-                id: 1,
-                name: "3V3".into(),
-            },
-            Net {
-                id: 2,
-                name: "VBUS".into(),
-            },
-            Net {
-                id: 3,
-                name: "GND".into(),
-            },
+            crate::support::net(1, "3V3".into()),
+            crate::support::net(2, "VBUS".into()),
+            crate::support::net(3, "GND".into()),
         ],
         components: vec![part("R74", "", &[1, 3]), part("R1", "10k", &[2, 3])],
     }

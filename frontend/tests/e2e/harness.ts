@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url'
+
 const FIXTURE_URL = /\[visual-lint fixture server\]\s+(http:\/\/127\.0\.0\.1:\d+)/
 
 /**
@@ -91,4 +93,49 @@ export async function terminateProcess(child: KillableProcess, timeoutMs = 5_000
     child.kill(9)
     await child.exited
   }
+}
+
+/** Own a fixture until the whole browser flow ends, including launch failure. */
+export async function withFixture(
+  run: (base: string) => Promise<void>,
+  external: string | null = process.env.HB_E2E_BASE ?? null,
+  port = Number(process.env.HB_E2E_PORT ?? 0),
+  tries = 80,
+) {
+  const fixture = external
+    ? null
+    : Bun.spawn(
+        [
+          'bun',
+          'run',
+          fileURLToPath(new URL('../visual-lint/fixture-server.ts', import.meta.url)),
+          String(port),
+        ],
+        { stdout: 'pipe', stderr: 'inherit' },
+      )
+  try {
+    const base = fixture
+      ? await waitForFixtureBase(fixture.stdout, fixture.exited, 20_000, (chunk) =>
+          process.stdout.write(chunk),
+        )
+      : external!
+    await waitForServer(base, tries)
+    console.log(`base: ${base}${external ? ' (external)' : ' (fixture server)'}`)
+    await run(base)
+  } finally {
+    if (fixture) await terminateProcess(fixture)
+  }
+}
+
+export async function waitForServer(base: string, tries = 80) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await fetch(base, { signal: AbortSignal.timeout(1000) })
+      if (res.ok) return
+    } catch {
+      /* not up yet */
+    }
+    await Bun.sleep(250)
+  }
+  throw new Error(`nothing answering at ${base}`)
 }

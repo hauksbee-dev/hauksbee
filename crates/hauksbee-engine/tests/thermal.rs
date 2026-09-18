@@ -6,6 +6,7 @@
 //! A two-sided case (within limits vs pushed over by a higher ambient) and a
 //! healthy-board no-false-positive case round it out.
 
+use crate::support::{resistor, vsource};
 use std::collections::HashMap;
 
 use hauksbee_engine::stress::{DeviceMeta, FaultKind, StressMonitor};
@@ -32,19 +33,13 @@ fn hand_checked_half_watt_sot23_reaches_150c() {
     // resistor dissipates 0.5 W. Nodes: 0 GND, 1 V+.
     let mut circuit = Circuit::new();
     let vp = NodeId(1);
-    circuit.add(Device::Vsource {
-        name: "V1".into(),
-        p: vp,
-        n: NodeId::GROUND,
-        kind: hauksbee_ir::SourceKind::Dc(1.0),
-    });
-    let rid = circuit.add(Device::Resistor {
-        name: "R1".into(),
-        a: vp,
-        b: NodeId::GROUND,
-        ohms: 2.0,
-        tc1: None,
-    });
+    circuit.add(vsource(
+        "V1".into(),
+        vp,
+        NodeId::GROUND,
+        hauksbee_ir::SourceKind::Dc(1.0),
+    ));
+    let rid = circuit.add(resistor("R1".into(), vp, NodeId::GROUND, 2.0));
 
     // theta_JA explicit (250) so the test does not depend on footprint parsing
     // of the synthetic device; max Tj 150 so we sit exactly at the limit.
@@ -106,13 +101,7 @@ fn hand_checked_half_watt_sot23_reaches_150c() {
 /// theta_JA and Tj limit so the arithmetic is hand-checkable.
 fn pwm_fixture(tj_limit_c: f64) -> (Circuit, StressMonitor) {
     let mut circuit = Circuit::new();
-    let load = circuit.add(Device::Resistor {
-        name: "Q1".into(),
-        a: NodeId(1),
-        b: NodeId::GROUND,
-        ohms: 1.0,
-        tc1: None,
-    });
+    let load = circuit.add(resistor("Q1".into(), NodeId(1), NodeId::GROUND, 1.0));
     let meta = DeviceMeta {
         reference: "Q1".into(),
         device: load,
@@ -270,13 +259,7 @@ fn firmware_pwm_duty_that_keeps_the_part_cool_stays_silent() {
 fn overpower_judges_time_weighted_power_not_the_endpoint() {
     let build = || {
         let mut circuit = Circuit::new();
-        let load = circuit.add(Device::Resistor {
-            name: "Q1".into(),
-            a: NodeId(1),
-            b: NodeId::GROUND,
-            ohms: 1.0,
-            tc1: None,
-        });
+        let load = circuit.add(resistor("Q1".into(), NodeId(1), NodeId::GROUND, 1.0));
         let meta = DeviceMeta {
             reference: "Q1".into(),
             device: load,
@@ -372,12 +355,12 @@ fn ambient_pushes_part_over_its_limit() {
     let build = |ambient: f64| -> Vec<hauksbee_engine::stress::FaultEvent> {
         let mut circuit = Circuit::new();
         let vp = NodeId(1);
-        circuit.add(Device::Vsource {
-            name: "V1".into(),
-            p: vp,
-            n: NodeId::GROUND,
-            kind: hauksbee_ir::SourceKind::Dc(1.0),
-        });
+        circuit.add(vsource(
+            "V1".into(),
+            vp,
+            NodeId::GROUND,
+            hauksbee_ir::SourceKind::Dc(1.0),
+        ));
         let rid = circuit.add(Device::Resistor {
             name: "R1".into(),
             a: vp,
@@ -422,19 +405,13 @@ fn ambient_pushes_part_over_its_limit() {
     // trip on the chunk it crosses.
     let mut circuit = Circuit::new();
     let vp = NodeId(1);
-    circuit.add(Device::Vsource {
-        name: "V1".into(),
-        p: vp,
-        n: NodeId::GROUND,
-        kind: hauksbee_ir::SourceKind::Dc(1.0),
-    });
-    let rid = circuit.add(Device::Resistor {
-        name: "R1".into(),
-        a: vp,
-        b: NodeId::GROUND,
-        ohms: 2.0,
-        tc1: None,
-    });
+    circuit.add(vsource(
+        "V1".into(),
+        vp,
+        NodeId::GROUND,
+        hauksbee_ir::SourceKind::Dc(1.0),
+    ));
+    let rid = circuit.add(resistor("R1".into(), vp, NodeId::GROUND, 2.0));
     let meta = DeviceMeta {
         reference: "R1".into(),
         device: rid,
@@ -550,12 +527,12 @@ fn healthy_board_no_overtemp() {
 fn dual_package(unit2_ohms: f64) -> (Circuit, Vec<DeviceMeta>) {
     let mut circuit = Circuit::new();
     let vp = NodeId(1);
-    circuit.add(Device::Vsource {
-        name: "V1".into(),
-        p: vp,
-        n: NodeId::GROUND,
-        kind: hauksbee_ir::SourceKind::Dc(1.0),
-    });
+    circuit.add(vsource(
+        "V1".into(),
+        vp,
+        NodeId::GROUND,
+        hauksbee_ir::SourceKind::Dc(1.0),
+    ));
     let q1 = circuit.add(Device::Resistor {
         name: "Q1_q1".into(),
         a: vp,
@@ -563,13 +540,7 @@ fn dual_package(unit2_ohms: f64) -> (Circuit, Vec<DeviceMeta>) {
         ohms: 2.0, // 0.5 W
         tc1: None,
     });
-    let q2 = circuit.add(Device::Resistor {
-        name: "Q1_q2".into(),
-        a: vp,
-        b: NodeId::GROUND,
-        ohms: unit2_ohms,
-        tc1: None,
-    });
+    let q2 = circuit.add(resistor("Q1_q2".into(), vp, NodeId::GROUND, unit2_ohms));
     let ratings = Ratings {
         // Per-UNIT rating, as the model DB documents for dual pairs
         // (bjt.toml: ratings are "per transistor"). 0.6 W: each 0.5 W unit is

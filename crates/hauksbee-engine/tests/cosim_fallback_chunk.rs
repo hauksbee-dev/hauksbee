@@ -16,10 +16,10 @@
 //! window invented for it. The ladder shrinks the set of windows the run
 //! cannot vouch for; it never manufactures a number for one.
 
+use crate::support::{capacitor, resistor, vsource};
 use std::collections::HashMap;
 
 use hauksbee_engine::binder::BoundBoard;
-use hauksbee_engine::reports::bind::BindReport;
 use hauksbee_engine::result::{strict_analog_exit_code, EXIT_INVALID_FOR_ANALYSIS};
 use hauksbee_engine::scheduler::{ChunkFallbackMethod, Scheduler, STRICT_CONSECUTIVE_FAILED_ABORT};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
@@ -32,23 +32,7 @@ fn board_from(name: &str, circuit: Circuit, nets: &[(&str, NodeId)]) -> BoundBoa
         net_nodes.insert(n.to_string(), id);
         net_names.push(n.to_string());
     }
-    BoundBoard {
-        name: name.to_string(),
-        circuit,
-        net_nodes,
-        net_names,
-        digital: Vec::new(),
-        mcus: Vec::new(),
-        dnp_mcus: Vec::new(),
-        component_kinds: HashMap::new(),
-        input_sources: HashMap::new(),
-        supplies: Vec::new(),
-        behavioral: Vec::new(),
-        device_meta: Vec::new(),
-        dacs: Vec::new(),
-        peripherals: Vec::new(),
-        report: BindReport::default(),
-    }
+    crate::support::bound_board(name.to_string(), circuit, net_nodes, net_names)
 }
 
 /// An integrate-and-fire relaxation loop with a resting DC point: a pulsed
@@ -68,18 +52,18 @@ fn firing_board() -> BoundBoard {
     let spkb = c.node("spkb");
     let com = c.node("com");
     let rail = c.node("rail");
-    c.add(Device::Vsource {
-        name: "VTH".into(),
-        p: th,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.5),
-    });
-    c.add(Device::Vsource {
-        name: "VRAIL".into(),
-        p: rail,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
+    c.add(vsource(
+        "VTH".into(),
+        th,
+        NodeId::GROUND,
+        SourceKind::Dc(2.5),
+    ));
+    c.add(vsource(
+        "VRAIL".into(),
+        rail,
+        NodeId::GROUND,
+        SourceKind::Dc(1.0),
+    ));
     c.add(Device::Isource {
         name: "IIN".into(),
         p: NodeId::GROUND,
@@ -94,20 +78,8 @@ fn firing_board() -> BoundBoard {
             period: 1e-3,
         },
     });
-    c.add(Device::Capacitor {
-        name: "CM".into(),
-        a: m,
-        b: NodeId::GROUND,
-        farads: 1e-9,
-        ic: None,
-    });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: m,
-        b: NodeId::GROUND,
-        ohms: 1e5,
-        tc1: None,
-    });
+    c.add(capacitor("CM".into(), m, NodeId::GROUND, 1e-9));
+    c.add(resistor("RL".into(), m, NodeId::GROUND, 1e5));
     c.add(Device::Comparator {
         name: "K1".into(),
         out: spk,
@@ -148,13 +120,7 @@ fn firing_board() -> BoundBoard {
         ron: 10.0,
         roff: 1e9,
     });
-    c.add(Device::Resistor {
-        name: "RD".into(),
-        a: com,
-        b: NodeId::GROUND,
-        ohms: 50.0,
-        tc1: None,
-    });
+    c.add(resistor("RD".into(), com, NodeId::GROUND, 50.0));
     let m_id = m;
     board_from("firing", c, &[("m", m_id)])
 }
@@ -165,18 +131,18 @@ fn firing_board() -> BoundBoard {
 fn impossible_board() -> BoundBoard {
     let mut c = Circuit::new();
     let n1 = c.node("n1");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: n1,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
-    c.add(Device::Vsource {
-        name: "V2".into(),
-        p: n1,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.0),
-    });
+    c.add(vsource(
+        "V1".into(),
+        n1,
+        NodeId::GROUND,
+        SourceKind::Dc(5.0),
+    ));
+    c.add(vsource(
+        "V2".into(),
+        n1,
+        NodeId::GROUND,
+        SourceKind::Dc(3.0),
+    ));
     board_from("impossible", c, &[("n1", n1)])
 }
 
@@ -311,13 +277,7 @@ fn rlc_ringing_board() -> BoundBoard {
             period: 2.0,
         },
     });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: mid,
-        ohms: RLC_R,
-        tc1: None,
-    });
+    c.add(resistor("R1".into(), vin, mid, RLC_R));
     c.add(Device::Inductor {
         name: "L1".into(),
         a: mid,
@@ -325,13 +285,7 @@ fn rlc_ringing_board() -> BoundBoard {
         henries: RLC_L,
         ic: None,
     });
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: vc,
-        b: NodeId::GROUND,
-        farads: RLC_C,
-        ic: None,
-    });
+    c.add(capacitor("C1".into(), vc, NodeId::GROUND, RLC_C));
     let vc_id = vc;
     board_from("rlc-ringing", c, &[("vc", vc_id)])
 }
@@ -413,26 +367,14 @@ fn forced_smooth_fallback_reports_a_small_estimate() {
     let mut c = Circuit::new();
     let vin = c.node("vin");
     let out = c.node("out");
-    c.add(Device::Vsource {
-        name: "V1".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: out,
-        ohms: 1e3,
-        tc1: None,
-    });
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: 100e-9,
-        ic: None,
-    });
+    c.add(vsource(
+        "V1".into(),
+        vin,
+        NodeId::GROUND,
+        SourceKind::Dc(5.0),
+    ));
+    c.add(resistor("R1".into(), vin, out, 1e3));
+    c.add(capacitor("C1".into(), out, NodeId::GROUND, 100e-9));
     let out_id = out;
     let board = board_from("rc-smooth", c, &[("out", out_id)]);
 

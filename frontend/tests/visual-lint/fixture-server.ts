@@ -93,6 +93,23 @@ async function api(req: Request, url: URL): Promise<Response | null> {
   }
   if (p === '/api/check' && method === 'POST') return fixture('check-run.json')
   if (p === '/api/deps' && method === 'GET') return fixture('deps.json')
+  if (p === '/api/sensor-specs' && method === 'GET') {
+    // One representative production catalog entry, with canonical behavior bytes.
+    return json({
+      schema_version: 1,
+      read_only: true,
+      llm_required: false,
+      entries: [
+        {
+          id: 'lm75',
+          name: 'LM75 temperature subset',
+          bus: 'i2c',
+          scope: 'temperature register at 0x48; no timing/OS/thermal dynamics',
+          spec_toml: await file(join(here, '../../../testdata/sensor-specs/lm75.toml')).text(),
+        },
+      ],
+    })
+  }
   if (p === '/api/models/extract/ready' && method === 'GET') return fixture('extract-ready.json')
   if (p === '/api/models/check' && method === 'POST') return fixture('models-check.json')
   if (p === '/api/models/save' && method === 'POST') {

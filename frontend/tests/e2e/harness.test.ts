@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test'
-import { terminateProcess, waitForFixtureBase } from './harness'
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import { terminateProcess, waitForFixtureBase, withFixture } from './harness'
 
 const encoder = new TextEncoder()
 
@@ -87,5 +87,71 @@ describe('end-to-end child cleanup', () => {
     }, 5)
 
     expect(signals).toEqual([undefined, 9])
+  })
+})
+
+describe('shared fixture ownership', () => {
+  afterEach(() => mock.restore())
+
+  test('external base does not spawn a fixture', async () => {
+    const spawn = spyOn(Bun, 'spawn')
+    spyOn(globalThis, 'fetch').mockResolvedValue(new Response('ready'))
+    const reached: string[] = []
+    await withFixture(async (base) => {
+      reached.push(base)
+    }, 'http://127.0.0.1:1234')
+    expect(reached).toEqual(['http://127.0.0.1:1234'])
+    expect(spawn).not.toHaveBeenCalled()
+  })
+
+  test('external readiness timeout never enters the browser flow', async () => {
+    spyOn(globalThis, 'fetch').mockResolvedValue(new Response('not ready', { status: 503 }))
+    spyOn(Bun, 'sleep').mockResolvedValue(undefined)
+    const run = mock(async () => undefined)
+    expect(await rejectionMessage(withFixture(run, 'http://127.0.0.1:1234', 0, 1))).toContain(
+      'nothing answering',
+    )
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  test('announced port, explicit overrides and output survive browser launch failure', async () => {
+    const write = spyOn(process.stdout, 'write').mockReturnValue(true)
+    const spawn = spyOn(Bun, 'spawn')
+    spyOn(globalThis, 'fetch').mockResolvedValue(new Response('ready'))
+    for (const port of [0, 4321]) {
+      let finish!: (code: number) => void
+      const child = {
+        stdout: output('[visual-lint fixture server] http://127.0.0.1:43127\n'),
+        exited: new Promise<number>((resolve) => {
+          finish = resolve
+        }),
+        kill: mock(() => finish(0)),
+      }
+      spawn.mockReturnValue(child as never)
+      const reason = await rejectionMessage(
+        withFixture(
+          async (base) => {
+            expect(base).toBe('http://127.0.0.1:43127')
+            throw new Error('browser launch failed')
+          },
+          null,
+          port,
+        ),
+      )
+      expect(reason).toContain('browser launch failed')
+      expect(spawn.mock.calls.at(-1)?.[0]).toContain(String(port))
+      expect(spawn.mock.calls.at(-1)?.[1]).toEqual({ stdout: 'pipe', stderr: 'inherit' })
+      expect(write).toHaveBeenCalledWith(expect.stringContaining('43127'))
+      expect(child.kill).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  test('early fixture exit is propagated and reaped', async () => {
+    const child = { stdout: output('startup failed\n'), exited: Promise.resolve(23), kill: mock() }
+    spyOn(Bun, 'spawn').mockReturnValue(child as never)
+    const run = mock(async () => undefined)
+    expect(await rejectionMessage(withFixture(run, null, 0))).toMatch(/exited|closed stdout/)
+    expect(run).not.toHaveBeenCalled()
+    expect(child.kill).toHaveBeenCalledTimes(1)
   })
 })

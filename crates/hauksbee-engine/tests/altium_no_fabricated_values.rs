@@ -12,17 +12,11 @@
 
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::reports::bind::BindOutcome;
-use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_models::ModelLibrary;
 
 fn pin(number: &str, net: i64) -> Pin {
-    Pin {
-        number: number.to_string(),
-        net: Some(net),
-        function: String::new(),
-        kind: String::new(),
-        position: None,
-    }
+    crate::support::pin(number, Some(net), "", "")
 }
 
 /// A component exactly as the fixed Altium extractor emits it: empty value,
@@ -49,14 +43,8 @@ fn refdes_shaped_names_never_become_magnitudes() {
     let board = ExtractedBoard {
         name: "no_fabricated_values".to_string(),
         nets: vec![
-            Net {
-                id: 1,
-                name: "A".to_string(),
-            },
-            Net {
-                id: 2,
-                name: "B".to_string(),
-            },
+            crate::support::net(1, "A".to_string()),
+            crate::support::net(2, "B".to_string()),
         ],
         components: vec![
             // "R74" as a VALUE would RKM-decode to 0.74 ohm; as a refdes with

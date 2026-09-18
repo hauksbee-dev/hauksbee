@@ -10,33 +10,23 @@
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::power_supply::STIFF_R_OHMS;
 use hauksbee_engine::scheduler::Scheduler;
-use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+use hauksbee_extract::{Component, ExtractedBoard, Pin};
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::SolverOptions;
 
 fn pin(number: &str, net: i64) -> Pin {
-    Pin {
-        number: number.to_string(),
-        net: Some(net),
-        function: String::new(),
-        kind: "passive".to_string(),
-        position: None,
-    }
+    crate::support::pin(number, Some(net), "", "passive")
 }
 
 fn comp(reference: &str, value: &str, pins: Vec<Pin>) -> Component {
-    Component {
-        reference: reference.to_string(),
-        value: value.to_string(),
-        lib_id: String::new(),
-        footprint: "Resistor_SMD:R_0402_1005Metric".to_string(),
-        position: None,
-        layer: String::new(),
-        properties: Vec::new(),
-        dnp: false,
+    crate::support::component(
+        reference.to_string(),
+        value.to_string(),
+        String::new(),
+        "Resistor_SMD:R_0402_1005Metric".to_string(),
         pins,
-    }
+    )
 }
 
 /// +5V -- R12 (0R) -- MID -- R2 (1k) -- GND: a fitted zero-ohm link in series
@@ -45,18 +35,9 @@ fn zero_ohm_board() -> ExtractedBoard {
     ExtractedBoard {
         name: "zero_ohm_test".to_string(),
         nets: vec![
-            Net {
-                id: 1,
-                name: "+5V".to_string(),
-            },
-            Net {
-                id: 2,
-                name: "MID".to_string(),
-            },
-            Net {
-                id: 3,
-                name: "GND".to_string(),
-            },
+            crate::support::net(1, "+5V".to_string()),
+            crate::support::net(2, "MID".to_string()),
+            crate::support::net(3, "GND".to_string()),
         ],
         components: vec![
             comp("R12", "0", vec![pin("1", 1), pin("2", 2)]),
