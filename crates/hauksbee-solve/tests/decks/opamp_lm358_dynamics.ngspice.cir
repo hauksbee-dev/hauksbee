@@ -1,0 +1,17 @@
+ngspice reference for opamp_lm358_dynamics: the same macromodel as B sources
+* ngspice has no op-amp element, so this spells out stamp_opamp: dv/dt =
+* clip((AOL*(vin-vout)-v)/TAU, +-SR) behind the rail clamp, TAU = 1/(2*pi*7) =
+* 22.7364205 ms. Neither stage reaches a rail, so anti-windup is moot; uic/.ic
+* seed the follower DC point, a current-fed cap having no ngspice op point.
+.param AOL=1e5 TAU=22.7364205e-3 SR=3e5 VLO=0 VHI=10.5
+Vs s 0 PWL(0 1.0 1u 1.0 1.000001u 1.01)
+Bis 0 ps I = max(-SR, min(SR, (AOL*(V(s)-V(os)) - V(ps))/TAU))
+Cps ps 0 1
+Bos os 0 V = max(VLO, min(VHI, V(ps)))
+Vb b 0 PWL(0 1.0 1u 1.0 1.000001u 6.0)
+Bib 0 pb I = max(-SR, min(SR, (AOL*(V(b)-V(ob)) - V(pb))/TAU))
+Cpb pb 0 1
+Bob ob 0 V = max(VLO, min(VHI, V(pb)))
+.ic v(ps)=0.99999 v(pb)=0.99999
+.tran 2n 12u 0 2n uic
+.end

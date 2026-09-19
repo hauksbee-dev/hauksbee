@@ -24,29 +24,7 @@ use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_models::ModelLibrary;
 
 /// Nano with A2 (pad 21, PC2) on net "BUS", pulled down through 10k.
-const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "BUS")
-
-  (module Module:Arduino_Nano (layer F.Cu)
-    (at 100 100)
-    (fp_text reference A1 (at 0 0) (layer F.SilkS))
-    (fp_text value Arduino_Nano (at 0 2) (layer F.Fab))
-    (pad 4 thru_hole circle (at 0 4) (size 1 1) (net 1 "GND"))
-    (pad 27 thru_hole circle (at 0 27) (size 1 1) (net 2 "+5V"))
-    (pad 21 thru_hole circle (at 0 21) (size 1 1) (net 3 "BUS"))
-  )
-  (module Resistor:R (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 3 "BUS"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-)
-"#;
+const BOARD: &str = hauksbee_testkit::ARDUINO_NANO_GPIO_BOARD;
 
 fn firmware() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

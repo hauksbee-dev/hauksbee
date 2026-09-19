@@ -56,29 +56,15 @@ fn load(p: &PathBuf) -> Option<ExtractedBoard> {
 
 /// Walk the corpus and yield every loadable CAD file.
 fn corpus_boards(root: &Path) -> Vec<(PathBuf, ExtractedBoard)> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in rd.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                stack.push(p);
-                continue;
-            }
-            let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
-            if !matches!(ext, "kicad_pcb" | "kicad_sch" | "net" | "brd") {
-                continue;
-            }
-            // Files the extractor cannot handle are skipped, not failed: this
-            // test calibrates the lint, it does not police the readers.
-            let Some(board) = load(&p) else { continue };
-            out.push((p, board));
-        }
-    }
-    out
+    hauksbee_testkit::walk_files_with_ext(root, &["kicad_pcb", "kicad_sch", "net", "brd"])
+        .into_iter()
+        // Files the extractor cannot handle are skipped, not failed: this
+        // test calibrates the lint, it does not police the readers.
+        .filter_map(|p| {
+            let board = load(&p)?;
+            Some((p, board))
+        })
+        .collect()
 }
 
 #[test]

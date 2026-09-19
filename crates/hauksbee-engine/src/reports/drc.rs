@@ -78,13 +78,14 @@ pub(crate) fn emit_with_schematic_quiet(
     // read this flag, `--drc` and `--check`.
     let unrouted = !altium_present && super::unrouted_kicad_layout(text);
     let bound = bind_board(board, lib);
-    let evidence = crate::evidence::BoardEvidence::from_bound(
+    let evidence = crate::evidence::board_evidence(
         board,
         &bound.report,
         reader_notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
+        board_path,
+        raw,
+        input_kind,
     )?
-    .with_input_artifact(board_path, raw, input_kind)?
     .with_custom_rules_coverage(
         clearance_input
             .as_ref()

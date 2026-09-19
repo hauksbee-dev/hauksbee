@@ -20,6 +20,8 @@ mod check_cli;
 mod ci_report_schema_drift;
 #[path = "cli_diagnostics.rs"]
 mod cli_diagnostics;
+#[path = "comparator_hysteresis.rs"]
+mod comparator_hysteresis;
 #[path = "cosim_coverage_honesty.rs"]
 mod cosim_coverage_honesty;
 #[path = "doc_coverage.rs"]

@@ -40,8 +40,8 @@ use forge_sexpr::List;
 use crate::assembly::AssemblyState;
 use crate::gerber::geo::{point_in_polygon, polygon_bounds};
 use crate::netlint::{
-    i2c_role, is_capacitor, is_ground, is_resistor, is_unconnected_net, norm,
-    numeric_rail_magnitude, parse_ohms,
+    has_signal_role_token, i2c_role, is_capacitor, is_ground, is_resistor, is_unconnected_net,
+    norm, numeric_rail_magnitude, parse_ohms,
 };
 use crate::part_class::{self, connected_pads};
 use crate::{Component, ExtractedBoard};
@@ -214,34 +214,9 @@ fn rail_voltage(name: &str) -> Option<f64> {
         _ => {
             // Reject rail-named SIGNAL nets: a `3V3_EN` / `1V8_PG` enable or
             // power-good net is not the rail, so a resistor tapping it must not
-            // count as an I2C pull-up (mirrors netlint's has_signal_role_token).
-            let is_signal = n.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| {
-                matches!(
-                    t,
-                    "EN" | "ENABLE"
-                        | "PG"
-                        | "PGOOD"
-                        | "POWERGOOD"
-                        | "GOOD"
-                        | "SEL"
-                        | "SELECT"
-                        | "DET"
-                        | "DETECT"
-                        | "MON"
-                        | "MONITOR"
-                        | "STAT"
-                        | "STATUS"
-                        | "FLT"
-                        | "FAULT"
-                        | "INT"
-                        | "IRQ"
-                        | "RST"
-                        | "RESET"
-                        | "CTRL"
-                        | "CTL"
-                )
-            });
-            if is_signal {
+            // count as an I2C pull-up (shares netlint's token table so the
+            // two reports cannot classify the same net two ways).
+            if has_signal_role_token(&n) {
                 None
             } else if let Some(v) = numeric_rail_magnitude(&n) {
                 // A numerically-named rail carries its own magnitude ("5V0",

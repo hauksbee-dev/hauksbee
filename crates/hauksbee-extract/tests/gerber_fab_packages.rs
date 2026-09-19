@@ -33,10 +33,7 @@ C1        100n             C_0402_1005Metric   14.5000    10.0000    0.0000  top
 const CSV: &str = "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\nR1,10k,R0402,10.5mm,10mm,0,T\nC1,100n,C0402,14.5mm,10mm,0,T\n";
 
 fn scratch(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("hauksbee_fab_pkg_{tag}_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    hauksbee_testkit::fresh_scratch_dir("fab_pkg", tag)
 }
 
 fn write_package(dir: &Path, files: &[(&str, &str)]) {

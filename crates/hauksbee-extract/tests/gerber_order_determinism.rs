@@ -29,10 +29,7 @@ fn film(body: &str) -> String {
 }
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "hauksbee_gerber_order_{tag}_{}",
-        std::process::id()
-    ))
+    hauksbee_testkit::scratch_path("gerber_order", tag)
 }
 
 /// A four-layer job whose manifest declares BOTH inner films as `Copper,L2,Inr`.

@@ -25,9 +25,7 @@ use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::SolverOptions;
 
-fn pin(number: &str, net: i64) -> Pin {
-    crate::support::pin(number, Some(net), "", "passive")
-}
+use crate::support::passive_pin as pin;
 
 fn comp(reference: &str, value: &str, footprint: &str, pins: Vec<Pin>) -> Component {
     crate::support::component(
@@ -71,11 +69,7 @@ fn buck_board() -> ExtractedBoard {
 /// A model library with one converter-carrying vreg, the output pin mapped as
 /// `fb` (the fixed-output-buck shape: the sense pin IS the rail node).
 fn lib_with_buck(out_role: &str) -> ModelLibrary {
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee_behavioral_vreg_rail_{out_role}_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = hauksbee_testkit::fresh_scratch_dir("behavioral_vreg_rail", out_role);
     std::fs::write(
         dir.join("testbuck.toml"),
         format!(

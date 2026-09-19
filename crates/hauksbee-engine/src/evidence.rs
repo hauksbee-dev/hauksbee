@@ -1615,6 +1615,23 @@ impl BoardEvidence {
     }
 }
 
+/// `BoardEvidence::from_bound` immediately followed by `with_input_artifact`
+/// against the input file's own bytes — the shape every board-report surface
+/// wants: bind output plus the exact artifact that produced it. A free
+/// function (not a further builder method) so it can take `board_path` as
+/// `impl AsRef<Path>` the same way `with_input_artifact` does.
+pub(crate) fn board_evidence(
+    board: &ExtractedBoard,
+    report: &BindReport,
+    reader_notes: &[String],
+    board_path: impl AsRef<Path>,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
+) -> Result<BoardEvidence, EvidenceError> {
+    BoardEvidence::from_bound(board, report, reader_notes, RunDate::from_system_clock())?
+        .with_input_artifact(board_path, raw, input_kind)
+}
+
 fn normalize_part_statement(text: &str, refs: &[String]) -> String {
     if refs.is_empty() {
         return text.to_string();

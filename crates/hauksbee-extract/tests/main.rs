@@ -1,6 +1,10 @@
 //! One integration-test binary for the crate; each module was a
 //! separate test file (and separate link step) before.
 
+#[allow(dead_code)]
+#[path = "support.rs"]
+mod support;
+
 #[path = "altium.rs"]
 mod altium;
 #[path = "altium_corpus.rs"]

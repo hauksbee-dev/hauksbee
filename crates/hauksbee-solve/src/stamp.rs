@@ -2621,9 +2621,15 @@ fn stamp_vswitch<S: StampSink>(
 }
 
 /// One transient step of the op-amp's output-follower dynamics: the internal
-/// drive EMF is the previous accepted EMF relaxed toward the clipped ideal
-/// target through the single pole (exact first-order update over `dt`), then
-/// rate-limited by the slew spec. Shared verbatim by the Newton stamp (every
+/// drive EMF is the previous accepted EMF relaxed toward the UNCLAMPED ideal
+/// target through the single pole (exact first-order update over `dt`), THEN
+/// saturated to `rails`, THEN rate-limited by the slew spec. Lagging the
+/// CLAMPED target instead gives `dv/dt = (rail-v)*2*pi*pole_hz`: at the physical
+/// `pole_hz = GBW/AOL` (7 Hz, LM358) a follower's 10 mV step crawls at 418 V/s,
+/// not `2*pi*GBW*vd` = 44 kV/s capped by the datasheet slew, and a rate clip
+/// can never speed an edge up. This order honours both, agrees with `.ac` (same
+/// roll-off of the same raw target) and makes the clamp the anti-windup, the
+/// state being the output itself. Shared by the Newton stamp (every
 /// iteration reads the SAME frozen `v_prev`, so the step's dynamics are a
 /// fixed affine map of the current inputs, no mid-Newton state mutation) and
 /// by the on-accept state advance in `transient.rs` (which persists the
@@ -2634,14 +2640,16 @@ fn stamp_vswitch<S: StampSink>(
 /// absent/zero/non-finite): the caller keeps the classic instantaneous stamp
 /// bit-identically. Otherwise `Some((v_out, dscale))` where `v_out` is the
 /// EMF to drive this step and `dscale` = ∂v_out/∂target is the factor the
-/// input-coupling tangent must be scaled by (`1-exp(-dt/τ)` through the pole,
-/// 0 when the slew clamp is pinning the output; the output is then a
-/// constant this step, like a frozen comparator rail).
+/// input-coupling tangent must be scaled by (`α = 1-exp(-dt/τ)` through the
+/// pole, 0 when a rail or the slew clip pins the output, which is then this
+/// step's constant, like a frozen comparator rail). Infinite `rails` skip the
+/// saturation (the rail-crossing limiter's interior segment, below).
 pub(crate) fn opamp_transient_output(
     v_prev: f64,
     target: f64,
     pole_hz: Option<f64>,
     slew: Option<f64>,
+    rails: (f64, f64),
     dt: f64,
 ) -> Option<(f64, f64)> {
     let pole = pole_hz.filter(|p| *p > 0.0 && p.is_finite());
@@ -2654,7 +2662,11 @@ pub(crate) fn opamp_transient_output(
     // Single pole: exact discrete step of dv/dt = (target - v)/τ over dt.
     // (Exact, not a companion discretization: the output follower is driven
     // by the frozen v_prev, so the closed form costs one exp and is
-    // unconditionally stable at any dt/τ.)
+    // unconditionally stable at any dt/τ. So is the CLOSED loop, whose per-step
+    // gain is now α·gain, not rail-limited: the stamp is affine in the iterate,
+    // so a follower solves exactly to ((1-α)v_prev + αAvin)/(1+αA), factor
+    // (1-α)/(1+αA) in [0,1) for every dt, so a coarse dt costs edge accuracy,
+    // not stability.)
     let alpha = match pole {
         Some(p) => {
             let tau = 1.0 / (std::f64::consts::TAU * p);
@@ -2662,8 +2674,12 @@ pub(crate) fn opamp_transient_output(
         }
         None => 1.0,
     };
-    let mut v_out = v_prev + (target - v_prev) * alpha;
-    let mut dscale = alpha;
+    // Lag the RAW target, then saturate; ∂v_out/∂target is α while the output
+    // is free and 0 the moment a rail or the slew clip pins it.
+    let lagged = v_prev + (target - v_prev) * alpha;
+    let free = lagged > rails.0 && lagged < rails.1;
+    let mut v_out = lagged.clamp(rails.0, rails.1);
+    let mut dscale = if free { alpha } else { 0.0 };
     if let Some(sr) = slew_v_per_s {
         let dv_max = sr * dt;
         let dv = v_out - v_prev;
@@ -2734,24 +2750,29 @@ fn stamp_opamp<S: StampSink>(
     // at the NEXT iterate, the interior segment itself. Feeding the clamped
     // target with live tangents instead would stamp the segment offset by
     // (clamp(raw)-raw), volts to megavolts of error at the crossing point.
-    let lin_target = if crossed { raw } else { target };
+    // Widening the rails away IS "keep the raw target": the dynamics clamp for
+    // themselves, after the lag, so a crossing is the ABSENCE of that clamp.
+    let wide = (f64::NEG_INFINITY, f64::INFINITY);
+    let rails = if crossed { wide } else { (rail_lo, rail_hi) };
     let dynamics = if ctx.dc {
         None
     } else {
         let v_prev = ctx.state.x1[id.0 as usize];
-        opamp_transient_output(v_prev, lin_target, pole_hz, slew, ctx.coeffs.dt)
+        opamp_transient_output(v_prev, raw, pole_hz, slew, rails, ctx.coeffs.dt)
     };
     // `dscale` scales every input-coupling tangent: the linearized output is
     // v_out(op) + dscale * d(target), so the classic couplings (∂target/∂vp =
     // gain, ∂/∂vn = -gain, ∂/∂vref = 1) each pick up the same factor. The
-    // no-dynamics path keeps dscale = 1 and emf = target: bit-identical to
-    // the classic instantaneous stamp.
-    let (emf, dscale) = dynamics.unwrap_or((lin_target, 1.0));
+    // no-dynamics path keeps emf = clamp(raw) and dscale = 1, or 0 when
+    // saturated, which is what the guard on the couplings below used to say:
+    // bit-identical to the classic instantaneous stamp, in DC and transient.
+    let flat = if in_rail || crossed { 1.0 } else { 0.0 };
+    let (emf, dscale) = dynamics.unwrap_or((raw.clamp(rails.0, rails.1), flat));
     let oi = ctx.layout.node(out);
     if let Some(oi) = oi {
         sink.g(oi, oi, gout);
         sink.i(oi, gout * emf);
-        if (in_rail || crossed) && dscale != 0.0 {
+        if dscale != 0.0 {
             if let Some(ri) = reference.and_then(|n| ctx.layout.node(n)) {
                 sink.g(oi, ri, -gout * dscale);
                 sink.i(oi, -(gout * dscale * vref));

@@ -1,0 +1,16 @@
+ngspice reference for opamp_deck_gain11: the same hard clamp as a B source
+* ngspice has no op-amp element, so this is the transfer function stamp_opamp
+* uses (AOL 1e5, rails 0.005/10.5) over the same node names. Its clamped
+* derivative is exactly 0, which gmin stepping only warns about, so gminsteps=0
+* leaves the work to source stepping. The A card needs no homotopy at all.
+Vin in 0 DC 0.4
+Bb eb 0 V = max(0.005, min(10.5, 1e5*(V(in)-V(nb))))
+Rob eb outb 75
+Rfb outb nb 10k
+Rgb nb 0 1k
+Bd ed 0 V = max(0.005, min(10.5, 1e5*(V(in)-V(outd))))
+Rod ed outd 75
+Rld outd 0 10k
+.options gminsteps=0
+.op
+.end

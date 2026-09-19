@@ -69,9 +69,7 @@ fn stripped(film: &str) -> String {
 }
 
 fn job_dir(tag: &str, film: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("hauksbee_x2_{tag}_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = hauksbee_testkit::fresh_scratch_dir("x2", tag);
     std::fs::write(dir.join("board-F_Cu.gbr"), film).unwrap();
     dir
 }

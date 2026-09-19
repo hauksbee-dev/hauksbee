@@ -103,14 +103,7 @@ impl Exception {
     /// Days since the epoch that this exception stops applying, or `None` if the
     /// date does not parse (which the test treats as a failure, not a pass).
     fn until_days(&self) -> Option<i64> {
-        let mut it = self.until.split('-');
-        let y: i64 = it.next()?.parse().ok()?;
-        let m: i64 = it.next()?.parse().ok()?;
-        let d: i64 = it.next()?.parse().ok()?;
-        if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-            return None;
-        }
-        Some(days_from_civil(y, m, d))
+        hauksbee_testkit::until_days(self.until)
     }
 }
 
@@ -121,29 +114,6 @@ fn message_names(message: &str, reference: &str) -> bool {
     message
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
         .any(|tok| tok == reference)
-}
-
-/// Days since 1970-01-01 for a proleptic Gregorian date (Hinnant's algorithm).
-/// Chosen over a date crate because this is the only date arithmetic in the
-/// suite and a dev-dependency for it would be heavier than the eight lines.
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-/// Today, in days since the epoch. Captured once so a long run cannot have an
-/// exception lapse halfway through it.
-fn today_days() -> i64 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    secs.div_euclid(86_400)
 }
 
 /// The corpus root. The sweep recurses, so it covers both the hand-built
@@ -169,7 +139,7 @@ fn exclusion_reason(path: &Path, root: &Path) -> Option<String> {
 #[test]
 fn placeholder_value_is_silent_at_medium_and_above_across_corpus() {
     let Some(root) = boards_root() else { return };
-    let today = today_days();
+    let today = hauksbee_testkit::today_days();
     // Every exception must carry a parseable expiry before it is allowed to
     // suppress anything. A malformed date is a hole with no closing time.
     let expiries: Vec<i64> = EXCEPTIONS

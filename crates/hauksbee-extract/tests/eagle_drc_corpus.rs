@@ -26,16 +26,9 @@
 //! Each was fixed at the cause with a principled rule (see `drc.rs`), never a
 //! per-board allowlist. With those fixes the eight boards are short-clean.
 
-use std::path::PathBuf;
 use std::time::Instant;
 
 use hauksbee_extract::ExtractedBoard;
-
-/// Locate board-corpus relative to this crate, if present.
-fn corpus_root() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")).unwrap_or_default();
-    p.exists().then_some(p)
-}
 
 fn require_corpus() -> bool {
     std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok()
@@ -89,7 +82,7 @@ const FAMOUS_EAGLE: &[(&str, &str)] = &[
 
 #[test]
 fn famous_eagle_boards_have_no_true_shorts() {
-    let Some(root) = corpus_root() else {
+    let Some(root) = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")) else {
         assert!(
             !require_corpus(),
             "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is absent"

@@ -31,12 +31,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rstar::{RTree, RTreeObject, AABB};
+use rstar::{RTree, AABB};
 
 use crate::dsu::Dsu;
 use crate::{Component, ExtractedBoard, Net, Pin};
 
-use super::geo::{shape_gap, Shape};
+use super::geo::{shape_gap, BoundsLeaf, Shape};
 use super::placement::Placement;
 use super::rs274x::{CopperPrim, PrimKind, X2Attrs};
 
@@ -53,21 +53,6 @@ struct LayerPrim {
     bounds: [f64; 4],
     /// X2 identity carried over from the film (empty on stripped films).
     attrs: X2Attrs,
-}
-
-struct Leaf {
-    bounds: [f64; 4],
-    idx: usize,
-}
-
-impl RTreeObject for Leaf {
-    type Envelope = AABB<[f64; 2]>;
-    fn envelope(&self) -> Self::Envelope {
-        AABB::from_corners(
-            [self.bounds[0], self.bounds[1]],
-            [self.bounds[2], self.bounds[3]],
-        )
-    }
 }
 
 /// Which copper layers a plated hit's barrel actually reaches.
@@ -249,9 +234,9 @@ pub fn reconstruct(
             .copied()
             .filter(|&gi| prims[gi].kind != PrimKind::Region)
             .collect();
-        let leaves: Vec<Leaf> = solids
+        let leaves: Vec<BoundsLeaf> = solids
             .iter()
-            .map(|&gi| Leaf {
+            .map(|&gi| BoundsLeaf {
                 bounds: prims[gi].bounds,
                 idx: gi,
             })
@@ -294,7 +279,7 @@ pub fn reconstruct(
             let region_tree = RTree::bulk_load(
                 regions
                     .iter()
-                    .map(|&rgi| Leaf {
+                    .map(|&rgi| BoundsLeaf {
                         bounds: prims[rgi].bounds,
                         idx: rgi,
                     })
@@ -722,19 +707,6 @@ pub fn reconstruct(
         .collect();
 
     // Index the placed components so each flash can find its nearest one.
-    struct CompLeaf {
-        bounds: [f64; 4],
-        idx: usize,
-    }
-    impl RTreeObject for CompLeaf {
-        type Envelope = AABB<[f64; 2]>;
-        fn envelope(&self) -> Self::Envelope {
-            AABB::from_corners(
-                [self.bounds[0], self.bounds[1]],
-                [self.bounds[2], self.bounds[3]],
-            )
-        }
-    }
     let half_extents: Vec<f64> = placements
         .iter()
         .map(|p| footprint_half_extent(&p.package))
@@ -746,10 +718,10 @@ pub fn reconstruct(
         .iter()
         .map(|p| grid_window(&p.package, p.rotation))
         .collect();
-    let comp_leaves: Vec<CompLeaf> = placements
+    let comp_leaves: Vec<BoundsLeaf> = placements
         .iter()
         .enumerate()
-        .map(|(i, p)| CompLeaf {
+        .map(|(i, p)| BoundsLeaf {
             bounds: [
                 p.x - half_extents[i],
                 p.y - half_extents[i],

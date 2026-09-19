@@ -879,10 +879,12 @@ fn for_each_reactive(
     }
 }
 
-/// An op-amp's clipped ideal output target at the solution in `ws`; `None`
-/// for any other device. Op-amps with output dynamics (pole_hz/slew) keep the
-/// internal drive EMF as their state; ideal ones never read the slot.
-fn opamp_target(ws: &Workspace, dev: &Device) -> Option<f64> {
+/// An op-amp's RAW (unclipped) ideal output target at the solution in `ws`, with
+/// its rails; `None` for any other device. Unclipped because the pole lags the
+/// raw target and only then saturates ([`crate::stamp::opamp_transient_output`]);
+/// callers wanting the DC point clamp it. Op-amps with output dynamics
+/// (pole_hz/slew) keep the drive EMF as their state; ideal ones never read it.
+fn opamp_target(ws: &Workspace, dev: &Device) -> Option<(f64, f64, f64)> {
     let Device::OpAmp {
         inp,
         inn,
@@ -896,7 +898,8 @@ fn opamp_target(ws: &Workspace, dev: &Device) -> Option<f64> {
         return None;
     };
     let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
-    Some((vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi))
+    let raw = vref + gain * (node_v(ws, *inp) - node_v(ws, *inn));
+    Some((raw, *rail_lo, *rail_hi))
 }
 
 /// At the operating point every state is flat: capacitor voltage = node
@@ -917,8 +920,8 @@ pub(crate) fn seed_reactive_state(
         state.seed(r.bank, r.dev, r.ic.unwrap_or(r.value))
     });
     for (id, dev) in circuit.iter() {
-        if let Some(target) = opamp_target(ws, dev) {
-            state.seed(0, id.0 as usize, target);
+        if let Some((raw, lo, hi)) = opamp_target(ws, dev) {
+            state.seed(0, id.0 as usize, raw.clamp(lo, hi));
         }
     }
 }
@@ -949,9 +952,9 @@ pub(crate) fn advance_reactive_state(
             continue;
         };
         let i = id.0 as usize;
-        let target = opamp_target(ws, dev).expect("an op-amp has a target");
+        let (target, lo, hi) = opamp_target(ws, dev).expect("an op-amp has a target");
         if let Some((v_out, _)) =
-            crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, h)
+            crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, (lo, hi), h)
         {
             state.x2[i] = state.x1[i];
             state.x1[i] = v_out;

@@ -1,9 +1,9 @@
 //! SPICE netlist loader for the `.cir` subset hauksbee simulates.
 //! Long-form how-and-why: docs/how-and-why/hauksbee-ir/spice.md.
 //!
-//! Elements `R C L V I D Q M S E G F H B K` and `X` subcircuit calls; `.model`
-//! cards for `D`, `NPN`/`PNP`, `NMOS`/`PMOS` (level 1) and `SW`; `DC`/`SIN`/
-//! `PULSE`/`PWL` sources with an optional `AC <mag> [phase]` stimulus; SI
+//! Elements `R C L V I D Q M S E G F H B K A` and `X` subcircuit calls; `.model`
+//! cards for `D`, `NPN`/`PNP`, `NMOS`/`PMOS` (level 1), `SW` and `OPAMP`;
+//! `DC`/`SIN`/`PULSE`/`PWL` sources with an optional `AC <mag> [phase]`; SI
 //! suffixes on bare values; `.param` with `{expr}` arithmetic (params fold to
 //! constants; suffixes are not allowed inside braces); `.subckt`/`.ends`
 //! flattening with per-instance parameter overrides; `.include`; and the
@@ -1123,6 +1123,35 @@ impl<'a> Build<'a> {
                 }
                 return Ok(());
             }
+            // `Axxx out inp inn <model>` + `.model <name> opamp(...)`: the
+            // finite-gain rail-clamped amplifier, stamped with an ANALYTIC tangent
+            // where a `B` source's is exactly 0. Gain and rails have no defaults.
+            'A' => {
+                exact(line, &toks, 5, "out, inp, inn, model")?;
+                let [out, inp, inn] = self.nodes(&toks, scope);
+                let (m, id) = (self.model(line, &toks[4], &["opamp"])?, &toks[4]);
+                const KEYS: [&str; 5] = ["gain", "rail_lo", "rail_hi", "pole_hz", "slew"];
+                if let Some(k) = m.params.keys().find(|k| !KEYS.contains(&k.as_str())) {
+                    bail!(line, "`.model {id} opamp` takes {KEYS:?}, not `{k}`");
+                }
+                let miss = |k: &str| line.err(format!("`.model {id} opamp` is missing `{k}`"));
+                let need = |k: &str| m.get(k).ok_or_else(|| miss(k));
+                if need("rail_lo")? >= need("rail_hi")? {
+                    bail!(line, "`.model {id} opamp` needs rail_lo below rail_hi");
+                }
+                Device::OpAmp {
+                    name,
+                    out,
+                    inp,
+                    inn,
+                    reference: None,
+                    gain: need("gain")?,
+                    pole_hz: m.get("pole_hz"),
+                    slew: m.get("slew"),
+                    rail_lo: need("rail_lo")?,
+                    rail_hi: need("rail_hi")?,
+                }
+            }
             'B' => return self.behavioral(line, &toks, scope),
             'X' => return self.instance(line, &toks, scope, chain),
             other => bail!(line, "unknown element type `{other}`"),
@@ -1849,6 +1878,25 @@ mod tests {
         assert!(err("t\n.model X D(IS=1x)\n").contains("unparseable value for `is`"));
         assert!(err("t\n.model X D(IS=1)\n.model X D(IS=2)\n").contains("conflicting redefinition"));
         assert!(SpiceLoader::load("t\n.model X D(IS=1)\n.model X D(IS=1)\n").is_ok());
+    }
+
+    /// The deck op-amp: one good card, and the ways of writing a bad one. A
+    /// missing gain or rail REFUSES: an invented rail answers wrongly, silently.
+    #[test]
+    fn opamp_card_and_its_refusals() {
+        let ok = "t\nA1 o p n OPA\n.model OPA opamp(gain=1e5 rail_lo=0 rail_hi=10.5 pole_hz=7)\n";
+        let got = format!("{:?}", dev(&SpiceLoader::load(ok).unwrap(), "A1"));
+        let want = "reference: None, gain: 100000.0, pole_hz: Some(7.0), slew: None, \
+                    rail_lo: 0.0, rail_hi: 10.5";
+        assert!(got.contains(want), "{got}");
+        for (net, want) in [
+            (ok.replace("gain=1e5 ", ""), "is missing `gain`"),
+            (ok.replace("pole_hz=7", "gbw=7e5"), "not `gbw`"),
+            (ok.replace("opamp(", "sw("), "not one of opamp"),
+            (ok.replace("rail_lo=0", "rail_lo=12"), "below rail_hi"),
+        ] {
+            assert!(err(&net).contains(want), "{net} -> {}", err(&net));
+        }
     }
 
     #[test]

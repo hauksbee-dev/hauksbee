@@ -1,0 +1,18 @@
+# The deck A op-amp's TRANSIENT dynamics. Before the two-stage fix the pole lagged the RAIL-CLAMPED target, which pinned a follower's target to the rail for
+# any step over VOH/AOL = 105 uV and ramped the output at (rail-out)*2*pi*pole = 418 V/s: 718x under the datasheet slew and 105x under the 4.4e4 V/s small-signal rate.
+# ngspice has no op-amp element, so the companion .ngspice.cir writes the SAME macromodel with B sources; agreement below is same-model-form NUMERICAL agreement between two integrators, NOT physical validation of an LM358.
+analysis = "tran"
+description = "deck op-amp transient: closed-loop pole on a 10 mV step, slew clip on a 5 V step"
+full_scale = 6.0
+[[probe]]
+expr = "V(os)"
+reltol = 2.0e-04
+analytic = [
+  {at = 1.2273629e-06, value = 1.0063111, reltol = 1.0e-04, note = "t0 + 1*tau_cl. The follower settles at vin*AOL/(AOL+1) = vin*0.9999900, so os0 = 0.9999900, osinf = 1.0099899, dV = 0.0099999, and it relaxes with tau_cl = tau_ol/(1+AOL) = 227.3619 ns (the textbook 1/(2*pi*GBW) = 227.3642 ns to five figures). Value = osinf - dV/e = 1.0099899 - 0.0099999*0.36787944 = 1.0063111 V. The solver breakpoints on the input edge at t0 = 1.000001 us, so the exponential starts exactly there. Budget: the discrete lag is backward-Euler-like in the closed loop (per-step factor (1-alpha)/(1+alpha*AOL)), leading error first order in dt/tau_cl = 2ns/227.36ns = 0.0088, i.e. 0.44% of tau_cl = 1.6e-5 V here, which is what is measured against both ngspice and this closed form. The 1e-4 bound is 6x that, and 1.0% of the 10 mV step; the old rail-lagged model was 105x out here"},
+  {at = 1.6820868e-06, value = 1.0094920, reltol = 1.0e-04, note = "t0 + 3*tau_cl: osinf - dV*exp(-3) = 1.0099899 - 0.0099999*0.049787068 = 1.0094920 V. Same first-order budget as the 1-tau point. Two points one and three time constants apart pin the RATE, not just the endpoint: a wrong tau cannot hit both"}]
+[[probe]]
+expr = "V(ob)"
+reltol = 2.0e-05
+analytic = [
+  {at = 3.0e-06, value = 1.5999897, reltol = 1.0e-05, note = "The 5 V step asks for AOL*5/tau_ol = 2.2e7 V/s, so every step is rate-clipped and V(ob) is a straight 0.3 V/us line until the unclipped rate falls under SR at 5.93 V (t = 17.4 us, past this deck). Value = os0 + SR*(t-t0) = 0.9999900 + 3e5*1.999999e-6 = 1.5999897 V. The ramp is exact arithmetic in both integrators (v_prev + SR*dt per step) and the solver breakpoints on the edge, so there is no grid quantisation to budget for; measured 5.0e-7 vs ngspice and 1.9e-7 vs this closed form, and the bounds are set near that floor rather than at a model-error budget"},
+  {at = 9.0e-06, value = 3.3999897, reltol = 1.0e-05, note = "os0 + SR*7.999999e-6 = 3.3999897 V. With the 3 us point that is a slope of (3.3999897-1.5999897)/6us = 0.3000000 V/us, the datasheet 0.3 V/us at G=+1 to seven figures. The old model produced 418 V/s = 0.00042 V/us here, 718x low"}]

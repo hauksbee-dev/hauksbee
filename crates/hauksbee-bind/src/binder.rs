@@ -3939,6 +3939,59 @@ fn bind_timer_555(
     )
 }
 
+/// One section of an OPEN-COLLECTOR comparator (LM393/LM339 class), as two
+/// devices the IR already has rather than a new `Device` variant: a
+/// [`Device::OpAmp`] railed `0..1` as the gate (inputs deliberately SWAPPED so
+/// gate = 1 means SINKING, which is what an inverting open-collector stage
+/// does; `gain` is the card's smoothing scale, not the datasheet AVD), and a
+/// [`Device::Behavioral`] current sink on the output pin as the whole output
+/// stage: `I = gate*max(V(out),0)/RON + V(out)*GLEAK`, two datasheet numbers
+/// and nothing else. Nothing drives the high rail, so the BOARD's pull-up sets
+/// the high level, two sections can wire-OR onto one net, and no pull-up leaves
+/// the output floating -- all of which a push-pull [`Device::Comparator`] gets
+/// wrong. Hysteresis is likewise the BOARD's feedback resistor, solved.
+fn bind_open_collector(
+    circuit: &mut Circuit,
+    name: &str,
+    (out, inp, inn, gnd): (NodeId, NodeId, NodeId, NodeId),
+    model: &ModelEntry,
+) {
+    let p = |k: &str, d: f64| model.params.get_f64(k).unwrap_or(d);
+    let gate = circuit.node(&format!("{name}_oc_gate"));
+    circuit.add(Device::OpAmp {
+        name: name.to_string(),
+        out: gate,
+        inp: inn,
+        inn: inp,
+        reference: None,
+        gain: p("gain", 1000.0),
+        pole_hz: None,
+        slew: None,
+        rail_lo: 0.0,
+        rail_hi: 1.0,
+    });
+    // `max(V(out), 0)` keeps the sink one-directional: the DC homotopy walks
+    // the output node below ground on its way in, and an unclamped V(out)/RON
+    // there would SOURCE current and run away. There is deliberately NO
+    // `min(.., IOL)` ceiling: a capped sink is FLAT in V(out) above the cap,
+    // contributing NO conductance to the output row, and Newton then crawls and
+    // times out at the crossing (measured). RON reproduces the datasheet's VOL
+    // test point; the ceiling is declared not modelled on the card instead.
+    let expr = format!(
+        "__d0*max(__d1,0.0)/{} + __d1*{}",
+        p("ron_ohms", 32.5),
+        p("leak_s", 2e-11),
+    );
+    circuit.add(Device::Behavioral {
+        name: format!("Boc_{name}"),
+        p: out,
+        n: gnd,
+        output: hauksbee_ir::BOutput::Current,
+        expr: hauksbee_ir::CompiledExpr::compile(&expr).expect("open-collector sink expression"),
+        deps: vec![hauksbee_ir::BDep::Volt(gate), hauksbee_ir::BDep::Volt(out)],
+    });
+}
+
 fn bind_comparator(
     comp: &Component,
     model: &ModelEntry,
@@ -3977,49 +4030,57 @@ fn bind_comparator(
         }
     }
 
-    // Multi-channel packages (LM393 dual, LM339 quad): one Comparator per wired
-    // channel, keyed `_q<N>`, same shape and rationale as bind_opamp above.
+    // Multi-channel packages (LM393 dual, LM339 quad): one section per wired
+    // channel, keyed `_q<N>`, same shape and rationale as bind_opamp above. A
+    // section whose three pins are not all connected is not bound at all, so
+    // an unused half leaves no device and no floating internal node behind.
     let channels = wired_channels(roles);
-    for &(unit, out, inp, inn) in &channels {
-        circuit.add(Device::Comparator {
-            name: format!("{}_q{}", comp.reference, unit + 1),
-            out,
-            inp,
-            inn,
-            out_lo,
-            out_hi,
-            hysteresis: hyst,
-        });
-    }
-    if !channels.is_empty() {
-        return (
-            BindOutcome::Behavioral {
-                device: format!("comparator x{}", channels.len()),
-            },
-            None,
-        );
-    }
-
-    let out = pick(roles, &["out", "out_1", "q"]).copied();
-    let inp = pick(roles, &["in_plus", "inp", "in+"]).copied();
-    let inn = pick(roles, &["in_minus", "inn", "in-"]).copied();
-    let (Some(out), Some(inp), Some(inn)) = (out, inp, inn) else {
-        return open_warning(comp, "comparator pins not all connected");
+    let sections: Vec<(String, NodeId, NodeId, NodeId)> = if channels.is_empty() {
+        let out = pick(roles, &["out", "out_1", "q"]).copied();
+        let inp = pick(roles, &["in_plus", "inp", "in+"]).copied();
+        let inn = pick(roles, &["in_minus", "inn", "in-"]).copied();
+        let (Some(out), Some(inp), Some(inn)) = (out, inp, inn) else {
+            return open_warning(comp, "comparator pins not all connected");
+        };
+        vec![(comp.reference.clone(), out, inp, inn)]
+    } else {
+        channels
+            .iter()
+            .map(|&(unit, out, inp, inn)| {
+                (format!("{}_q{}", comp.reference, unit + 1), out, inp, inn)
+            })
+            .collect()
     };
-    circuit.add(Device::Comparator {
-        name: comp.reference.clone(),
-        out,
-        inp,
-        inn,
-        out_lo,
-        out_hi,
-        hysteresis: hyst,
-    });
+    // `open_collector` picks the two-device stage (see `bind_open_collector`);
+    // a push-pull part keeps the single `Device::Comparator` stamp unchanged.
+    let open_collector = model.params.get_bool("open_collector").unwrap_or(false);
+    let gnd = pick(roles, &["vss", "gnd"])
+        .copied()
+        .unwrap_or(NodeId::GROUND);
+    for (name, out, inp, inn) in &sections {
+        if open_collector {
+            bind_open_collector(circuit, name, (*out, *inp, *inn, gnd), model);
+        } else {
+            circuit.add(Device::Comparator {
+                name: name.clone(),
+                out: *out,
+                inp: *inp,
+                inn: *inn,
+                out_lo,
+                out_hi,
+                hysteresis: hyst,
+            });
+        }
+    }
+    let device = match (open_collector, channels.is_empty()) {
+        (true, true) => "open-collector comparator".to_string(),
+        (true, false) => format!("open-collector comparator x{}", sections.len()),
+        (false, true) => "comparator".to_string(),
+        (false, false) => format!("comparator x{}", sections.len()),
+    };
     (
-        BindOutcome::Behavioral {
-            device: "comparator".to_string(),
-        },
-        None,
+        BindOutcome::Behavioral { device },
+        entry_warning(comp, model),
     )
 }
 

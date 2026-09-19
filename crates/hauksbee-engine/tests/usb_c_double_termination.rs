@@ -26,13 +26,9 @@ use std::path::{Path, PathBuf};
 use hauksbee_engine::checks::usb_c::audit_cc_termination;
 use hauksbee_extract::ExtractedBoard;
 
-/// The directory the corpus boards sit directly under, whichever layout this
-/// machine has, or `None` with a printed note.
-///
-/// Resolved through the testkit rather than by joining `famous/` here: that
-/// level exists only in the hand-built corpus, so a hard join found nothing on
-/// the corpus `scripts/fetch-corpus.sh` produces, and every sweep below walked
-/// an empty directory and reported the empty walk as a pass.
+/// This suite's corpus root; see
+/// [`hauksbee_testkit::corpus_boards_root_or_skip`] for why it goes through
+/// the testkit rather than joining `famous/` locally.
 fn corpus_root() -> Option<PathBuf> {
     hauksbee_testkit::corpus_boards_root_or_skip(
         env!("CARGO_MANIFEST_DIR"),

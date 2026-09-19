@@ -170,13 +170,14 @@ fn gather_ci_artifact_findings(
     )?;
     findings.retain(|finding| ci_check_selected(surface, finding));
     let bound = bind_board(&board, &lib);
-    let evidence = crate::evidence::BoardEvidence::from_bound(
+    let evidence = crate::evidence::board_evidence(
         &board,
         &bound.report,
         &reader_notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?
-    .with_input_artifact(&cfg.board, &raw, input_kind)?;
+        &cfg.board,
+        &raw,
+        input_kind,
+    )?;
     let mut maps = evidence.maps_for_findings(&findings)?;
     // The same run-level/finding-backed split the JSON verdict makes:
     // finding-backed maps become badges, never gate-grade JUnit failures,

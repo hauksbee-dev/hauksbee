@@ -1579,7 +1579,8 @@ fn read_outline(outlines: &[PathBuf]) -> Vec<geo::Shape> {
 /// which is what a castellation physically is; the count makes a job with
 /// castellations visible in the reconstruction stats.
 fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
-    use rstar::{RTree, RTreeObject, AABB};
+    use geo::BoundsLeaf;
+    use rstar::{RTree, AABB};
     if outline.is_empty() {
         return 0;
     }
@@ -1587,24 +1588,11 @@ fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
     // carry thousands of hits, so pairing them off directly is quadratic. Index
     // the outline the way the rest of the module indexes copper, so each hit
     // only pays for the segments its own barrel could possibly reach.
-    struct Seg {
-        bounds: [f64; 4],
-        idx: usize,
-    }
-    impl RTreeObject for Seg {
-        type Envelope = AABB<[f64; 2]>;
-        fn envelope(&self) -> Self::Envelope {
-            AABB::from_corners(
-                [self.bounds[0], self.bounds[1]],
-                [self.bounds[2], self.bounds[3]],
-            )
-        }
-    }
     let tree = RTree::bulk_load(
         outline
             .iter()
             .enumerate()
-            .map(|(idx, s)| Seg {
+            .map(|(idx, s)| BoundsLeaf {
                 bounds: s.bounds(),
                 idx,
             })

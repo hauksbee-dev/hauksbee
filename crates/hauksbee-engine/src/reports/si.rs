@@ -59,13 +59,14 @@ pub(crate) fn emit_quiet(
     });
     report.findings = kept;
     let bound = bind_board(board, lib);
-    let evidence = crate::evidence::BoardEvidence::from_bound(
+    let evidence = crate::evidence::board_evidence(
         board,
         &bound.report,
         reader_notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?
-    .with_input_artifact(board_path, raw, input_kind)?;
+        board_path,
+        raw,
+        input_kind,
+    )?;
     let coverage = evidence.check_coverage_map("si", "Signal-integrity input coverage")?;
     let run_level = if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
         vec![coverage]

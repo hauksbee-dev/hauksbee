@@ -142,6 +142,19 @@ pub fn pin(number: &str, net: Option<i64>, function: &str, kind: &str) -> Pin {
     }
 }
 
+/// [`pin`] with no function and no kind: just a number on a net, the common
+/// case for a fixture that only cares about connectivity.
+#[allow(dead_code)]
+pub fn netted_pin(number: &str, net: i64) -> Pin {
+    pin(number, Some(net), "", "")
+}
+
+/// [`pin`] with no function, kind "passive": a resistor/capacitor-style pad.
+#[allow(dead_code)]
+pub fn passive_pin(number: &str, net: i64) -> Pin {
+    pin(number, Some(net), "", "passive")
+}
+
 pub fn component(
     reference: String,
     value: String,
@@ -164,4 +177,18 @@ pub fn component(
 
 pub fn net(id: i64, name: String) -> Net {
     Net { id, name }
+}
+
+/// A two-pin 0402 resistor-shaped [`component`], the shape both the
+/// zero-ohm-jumper and zero-ohm-link fixtures build their board from: no
+/// `lib_id`, footprint fixed at the real 0402 link package.
+#[allow(dead_code)]
+pub fn r0402(reference: &str, value: &str, pins: Vec<Pin>) -> Component {
+    component(
+        reference.to_string(),
+        value.to_string(),
+        String::new(),
+        "Resistor_SMD:R_0402_1005Metric".to_string(),
+        pins,
+    )
 }

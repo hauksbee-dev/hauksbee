@@ -1,11 +1,9 @@
 use hauksbee_engine::binder::bind_board;
-use hauksbee_extract::{Component, ExtractedBoard, Pin};
+use hauksbee_extract::{Component, ExtractedBoard};
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 
-fn pin(number: &str, net: i64) -> Pin {
-    crate::support::pin(number, Some(net), "", "")
-}
+use crate::support::netted_pin as pin;
 
 fn ina186_board() -> ExtractedBoard {
     ExtractedBoard {

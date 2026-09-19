@@ -22,10 +22,7 @@ fn drill_with_span(from: u32, to: u32) -> String {
 }
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "hauksbee_altium_metadata_{tag}_{}",
-        std::process::id()
-    ))
+    hauksbee_testkit::scratch_path("altium_metadata", tag)
 }
 
 fn write_four_layer_job(dir: &Path, with_ldp: bool) {

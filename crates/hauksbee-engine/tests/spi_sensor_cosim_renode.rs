@@ -45,6 +45,22 @@ fn firmware() -> Option<PathBuf> {
     }
 }
 
+/// Renode + firmware preconditions shared by every test below: `Some(path)`
+/// when both are satisfied, `None` after printing why (SKIP) it did not run.
+fn preconditions() -> Option<PathBuf> {
+    if !is_available() {
+        eprintln!("SKIP: Renode not installed");
+        return None;
+    }
+    match firmware() {
+        Some(fw) => Some(fw),
+        None => {
+            eprintln!("SKIP: spi_adc.elf not built; run `make -C testdata/firmware/stm32_spi_adc`");
+            None
+        }
+    }
+}
+
 /// Run the co-sim for `ms` of virtual time with the MCP3008 channel-0 voltage
 /// fixed at `ch0_volts`. Returns the final "FLAG" net voltage.
 ///
@@ -85,12 +101,7 @@ fn run_at_voltage(ch0_volts: f64, ms: u32) -> f64 {
 
 #[test]
 fn stm32_spi_adc_drives_flag_below_threshold() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
-    let Some(_fw) = firmware() else {
-        eprintln!("SKIP: spi_adc.elf not built; run `make -C testdata/firmware/stm32_spi_adc`");
+    let Some(_fw) = preconditions() else {
         return;
     };
 
@@ -107,12 +118,7 @@ fn stm32_spi_adc_drives_flag_below_threshold() {
 
 #[test]
 fn stm32_spi_adc_drives_flag_above_threshold() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
-    let Some(_fw) = firmware() else {
-        eprintln!("SKIP: spi_adc.elf not built; run `make -C testdata/firmware/stm32_spi_adc`");
+    let Some(_fw) = preconditions() else {
         return;
     };
 
@@ -131,12 +137,7 @@ fn stm32_spi_adc_drives_flag_above_threshold() {
 
 #[test]
 fn stm32_spi_adc_flag_follows_voltage_sweep() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
-        return;
-    }
-    let Some(_fw) = firmware() else {
-        eprintln!("SKIP: spi_adc.elf not built; run `make -C testdata/firmware/stm32_spi_adc`");
+    let Some(_fw) = preconditions() else {
         return;
     };
 

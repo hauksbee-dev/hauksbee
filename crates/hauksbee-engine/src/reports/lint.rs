@@ -43,13 +43,14 @@ pub(crate) fn emit_quiet(
     let waived = partition_lint_waivers(&mut report, &mut waivers);
     // Bind once: both the JSON header and the pin-role guess surfacing read it.
     let bound = bind_board(board, lib);
-    let evidence = crate::evidence::BoardEvidence::from_bound(
+    let evidence = crate::evidence::board_evidence(
         board,
         &bound.report,
         reader_notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?
-    .with_input_artifact(board_path, raw, input_kind)?;
+        board_path,
+        raw,
+        input_kind,
+    )?;
     // Pin-role GUESS warnings: roles the binder inferred from the configurable
     // pin-rule table rather than an explicit pin-function. Nothing is silently
     // guessed, so the lint reports each one, but on the correct channel per
@@ -233,31 +234,6 @@ fn lint_json(
 /// `--resources`: only the MCU internal resource-conflict check (plus the
 /// unchecked-MCU coverage note, so a clean result is not mistaken for "checked
 /// and conflict-free").
-pub fn emit_resources(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
-    mode: OutputMode,
-    strict: bool,
-    inputs: &[JsonInputEvidence],
-) -> anyhow::Result<()> {
-    emit_resources_quiet(
-        board_path,
-        board,
-        raw,
-        input_kind,
-        lib,
-        reader_notes,
-        mode,
-        strict,
-        false,
-        inputs,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_resources_quiet(
     board_path: &Path,
@@ -275,13 +251,14 @@ pub(crate) fn emit_resources_quiet(
     let mut waivers = super::check::load_waivers(board_path);
     let waived = partition_lint_waivers(&mut report, &mut waivers);
     let bound = bind_board(board, lib);
-    let evidence = crate::evidence::BoardEvidence::from_bound(
+    let evidence = crate::evidence::board_evidence(
         board,
         &bound.report,
         reader_notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?
-    .with_input_artifact(board_path, raw, input_kind)?;
+        board_path,
+        raw,
+        input_kind,
+    )?;
     // Same INCONCLUSIVE contract as the full `--lint`: this subset's clean
     // verdict is just as vacuous over an unmodelled critical part.
     let blockers =

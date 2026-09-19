@@ -1033,8 +1033,10 @@ fn dual_opamp_stamps_one_device_per_channel() {
     );
 }
 
-/// Bug #12 (comparator half): the LM393 dual comparator gets one Comparator
-/// per channel, same `_q<N>` keying.
+/// Bug #12 (comparator half): the LM393 dual comparator gets one output stage
+/// per channel, same `_q<N>` keying. The LM393 is OPEN COLLECTOR, so that
+/// stage is the `Boc_<name>` Behavioral sink (`bind_open_collector`), not a
+/// push-pull `Device::Comparator`, and it is the sink on the channel's net.
 #[test]
 fn dual_comparator_stamps_one_device_per_channel() {
     // LM393 SOIC-8 pad map: 1=out_a, 2=in_minus_a, 3=in_plus_a, 4=vss,
@@ -1074,7 +1076,7 @@ fn dual_comparator_stamps_one_device_per_channel() {
         .devices
         .iter()
         .filter_map(|d| match d {
-            Device::Comparator { name, out, .. } => Some((name.clone(), *out)),
+            Device::Behavioral { name, p, .. } => Some((name.clone(), *p)),
             _ => None,
         })
         .collect();
@@ -1083,8 +1085,8 @@ fn dual_comparator_stamps_one_device_per_channel() {
         2,
         "a dual comparator is exactly two devices: {outs:?}"
     );
-    assert!(outs.contains(&("U2_q1".to_string(), bound.node("OUT_A").unwrap())));
-    assert!(outs.contains(&("U2_q2".to_string(), bound.node("OUT_B").unwrap())));
+    assert!(outs.contains(&("Boc_U2_q1".to_string(), bound.node("OUT_A").unwrap())));
+    assert!(outs.contains(&("Boc_U2_q2".to_string(), bound.node("OUT_B").unwrap())));
 }
 
 /// A single-channel op-amp-class part (LMV7219, unsuffixed out/in_plus/

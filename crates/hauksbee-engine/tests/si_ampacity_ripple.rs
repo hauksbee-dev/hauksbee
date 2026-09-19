@@ -676,26 +676,19 @@ fn si_ripple_abstains_when_two_stages_supply_the_same_output_load() {
 // Corpus sweep: zero false positives on the known-good famous boards.
 // ===========================================================================
 
-/// The directory the corpus boards sit directly under, whichever layout this
-/// machine has, or `None` with a printed note.
-///
-/// Resolved through the testkit rather than by joining `famous/` here: that
-/// level exists only in the hand-built corpus, so a hard join found nothing on
-/// the corpus `scripts/fetch-corpus.sh` produces, and every sweep below walked
-/// an empty directory and reported the empty walk as a pass.
-fn corpus_root() -> Option<PathBuf> {
-    hauksbee_testkit::corpus_boards_root_or_skip(
-        env!("CARGO_MANIFEST_DIR"),
-        "SI ampacity/ripple corpus sweep",
-    )
-}
-
 /// The ampacity and ripple checks must raise zero *findings* (info notes are
 /// fine) across the known-good famous corpus: a check that cannot discriminate
 /// does not ship. This is the same discipline the other SI checks hold.
 #[test]
 fn famous_corpus_has_no_ampacity_or_ripple_findings() {
-    let Some(root) = corpus_root() else { return };
+    // See `hauksbee_testkit::corpus_boards_root_or_skip` for why this goes
+    // through the testkit rather than joining `famous/` locally.
+    let Some(root) = hauksbee_testkit::corpus_boards_root_or_skip(
+        env!("CARGO_MANIFEST_DIR"),
+        "SI ampacity/ripple corpus sweep",
+    ) else {
+        return;
+    };
     let lib = ModelLibrary::builtin();
     let mut boards_checked = 0usize;
     let mut not_known_good = 0usize;

@@ -105,6 +105,27 @@ impl Shape {
     }
 }
 
+/// An R*-tree leaf: a primitive's bounding box plus its index into a parallel
+/// `Vec` the tree itself does not own. Shared by the DRC sweep, the gerber
+/// connectivity tracer's copper and component indices, and the castellation
+/// scan, so we keep the heavy shape/placement data out of the tree and look
+/// it up by index, and the tree nodes stay small.
+#[derive(Debug, Clone)]
+pub(crate) struct BoundsLeaf {
+    pub(crate) bounds: [f64; 4],
+    pub(crate) idx: usize,
+}
+
+impl rstar::RTreeObject for BoundsLeaf {
+    type Envelope = rstar::AABB<[f64; 2]>;
+    fn envelope(&self) -> Self::Envelope {
+        rstar::AABB::from_corners(
+            [self.bounds[0], self.bounds[1]],
+            [self.bounds[2], self.bounds[3]],
+        )
+    }
+}
+
 /// AABB (minx, miny, maxx, maxy) of a point list; infinite for an empty one.
 pub fn polygon_bounds<'a>(pts: impl IntoIterator<Item = &'a (f64, f64)>) -> [f64; 4] {
     pts.into_iter().fold(

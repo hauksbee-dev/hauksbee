@@ -132,100 +132,93 @@ pub(crate) fn probe_extractors() -> Vec<DepStatus> {
     vec![codex, probe_claude_code(), probe_agy()]
 }
 
-/// Claude Code, the second datasheet-to-model extractor backend. Same shape
-/// and same privacy honesty as the codex probe: using it sends datasheet
-/// text to Anthropic, nothing runs unless the user asks, and it is never
-/// auto-installed. Presence means the `claude` CLI resolves on PATH. Its
-/// version and sign-in state are deliberately deferred until extraction, so a
-/// status page never starts the CLI just to display a row.
-fn probe_claude_code() -> DepStatus {
-    let unlocks = "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI";
-    let cost = "free if you already pay for Claude: the CLI signs in with that account".to_string();
-    let manual = "npm install -g @anthropic-ai/claude-code   # then: claude login".to_string();
-    let privacy = "Using this sends the datasheet's text to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.";
-    let Some(bin) = which_on_path("claude") else {
+/// One optional LLM CLI probed the same way as the others: a plain PATH
+/// lookup, no version or sign-in check (that is deliberately deferred until
+/// extraction, so a status page never starts the CLI just to display a row),
+/// and the same privacy-honesty framing. Codex differs (its own
+/// `which_codex()` resolver and a readiness-endpoint comment) and keeps its
+/// own function.
+struct PathCliSpec {
+    bin: &'static str,
+    id: &'static str,
+    name: &'static str,
+    unlocks: &'static str,
+    cost: String,
+    manual: String,
+    privacy: &'static str,
+    absent_detail: String,
+    present_detail: String,
+}
+
+fn probe_path_cli(spec: PathCliSpec) -> DepStatus {
+    let Some(path) = which_on_path(spec.bin) else {
         return DepStatus {
-            id: "claude-code",
-            name: "Claude Code (datasheet extraction)",
+            id: spec.id,
+            name: spec.name,
             present: false,
             path: None,
             version: None,
-            unlocks,
+            unlocks: spec.unlocks,
             installable: false,
-            cost,
-            manual,
-            detail: Some(
-                "claude not found on PATH. This is optional: extraction also runs via                  codex or an API key, and a model can always be written by hand (one                  TOML file, see docs/extending/)."
-                    .to_string(),
-            ),
-            sends_data_offhost: Some(privacy),
+            cost: spec.cost,
+            manual: spec.manual,
+            detail: Some(spec.absent_detail),
+            sends_data_offhost: Some(spec.privacy),
         };
     };
     DepStatus {
-        id: "claude-code",
-        name: "Claude Code (datasheet extraction)",
+        id: spec.id,
+        name: spec.name,
         present: true,
         version: None,
-        path: Some(bin.display().to_string()),
-        unlocks,
+        path: Some(path.display().to_string()),
+        unlocks: spec.unlocks,
         installable: false,
-        cost,
-        manual,
-        detail: Some(
-            "claude CLI found; sign-in is checked only when datasheet extraction is requested."
-                .to_string(),
-        ),
-        sends_data_offhost: Some(privacy),
+        cost: spec.cost,
+        manual: spec.manual,
+        detail: Some(spec.present_detail),
+        sends_data_offhost: Some(spec.privacy),
     }
 }
 
-/// Antigravity (`agy`), the third datasheet-to-model extractor backend. Same
-/// shape and same privacy honesty as the codex and Claude Code probes: using
-/// it sends datasheet text to Google, nothing runs unless the user asks, and
-/// it is never auto-installed. Presence means the `agy` CLI resolves on PATH;
-/// its version and sign-in state are deliberately deferred until extraction.
+/// Claude Code, the second datasheet-to-model extractor backend: using it
+/// sends datasheet text to Anthropic, so [`PathCliSpec::privacy`] carries
+/// that honesty forward.
+fn probe_claude_code() -> DepStatus {
+    probe_path_cli(PathCliSpec {
+        bin: "claude",
+        id: "claude-code",
+        name: "Claude Code (datasheet extraction)",
+        unlocks: "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via the Claude Code CLI",
+        cost: "free if you already pay for Claude: the CLI signs in with that account".to_string(),
+        manual: "npm install -g @anthropic-ai/claude-code   # then: claude login".to_string(),
+        privacy: "Using this sends the datasheet's text to Anthropic. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
+        absent_detail: "claude not found on PATH. This is optional: extraction also runs via                  codex or an API key, and a model can always be written by hand (one                  TOML file, see docs/extending/)."
+            .to_string(),
+        present_detail: "claude CLI found; sign-in is checked only when datasheet extraction is requested."
+            .to_string(),
+    })
+}
+
+/// Antigravity (`agy`), the third datasheet-to-model extractor backend: using
+/// it sends datasheet text to Google, so [`PathCliSpec::privacy`] carries
+/// that honesty forward.
 fn probe_agy() -> DepStatus {
-    let unlocks = "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via Antigravity's `agy` CLI";
-    let cost =
-        "free if you already use Antigravity: agy signs in with your Google account".to_string();
-    let manual = hauksbee_models::datasheet::Backend::Agy
-        .install_hint()
-        .to_string();
-    let privacy = "Using this sends the datasheet's text to Google. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.";
-    let Some(bin) = which_on_path("agy") else {
-        return DepStatus {
-            id: "agy",
-            name: "Antigravity (datasheet extraction)",
-            present: false,
-            path: None,
-            version: None,
-            unlocks,
-            installable: false,
-            cost,
-            manual,
-            detail: Some(
-                "agy not found on PATH. This is optional: extraction also runs via                  codex, Claude Code, or an API key, and a model can always be written by hand                  (one TOML file, see docs/extending/)."
-                    .to_string(),
-            ),
-            sends_data_offhost: Some(privacy),
-        };
-    };
-    DepStatus {
+    probe_path_cli(PathCliSpec {
+        bin: "agy",
         id: "agy",
         name: "Antigravity (datasheet extraction)",
-        present: true,
-        version: None,
-        path: Some(bin.display().to_string()),
-        unlocks,
-        installable: false,
-        cost,
-        manual,
-        detail: Some(
-            "agy CLI found; sign-in is checked only when datasheet extraction is requested."
-                .to_string(),
-        ),
-        sends_data_offhost: Some(privacy),
-    }
+        unlocks: "datasheet-to-model extraction (`hauksbee models extract`, the web Extend flow) via Antigravity's `agy` CLI",
+        cost: "free if you already use Antigravity: agy signs in with your Google account".to_string(),
+        manual: hauksbee_models::datasheet::Backend::Agy
+            .install_hint()
+            .to_string(),
+        privacy: "Using this sends the datasheet's text to Google. Nothing is sent unless                    you ask for an extraction, and hauksbee never runs it on its own.",
+        absent_detail: "agy not found on PATH. This is optional: extraction also runs via                  codex, Claude Code, or an API key, and a model can always be written by hand                  (one TOML file, see docs/extending/)."
+            .to_string(),
+        present_detail: "agy CLI found; sign-in is checked only when datasheet extraction is requested."
+            .to_string(),
+    })
 }
 
 /// Codex, the optional datasheet-to-model extractor.

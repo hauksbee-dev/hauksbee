@@ -217,12 +217,18 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "vout_setpoint_high",
         ],
         ComponentKind::Opamp => &["gain", "pole_hz", "slew", "rail_lo", "rail_hi"],
+        // `out_lo`/`out_hi`/`hysteresis` are the push-pull stamp's; the last four
+        // the open-collector stage's, whose levels come from the board instead.
         ComponentKind::Comparator => &[
             "out_lo",
             "out_hi",
             "hysteresis",
             "tpd_s",
             "supply_static_ua",
+            "open_collector",
+            "gain",
+            "ron_ohms",
+            "leak_s",
         ],
         // The first half are datasheet quantities; the rest are the numerical
         // parameters of the composite stamp (see db/timer.toml), on the card

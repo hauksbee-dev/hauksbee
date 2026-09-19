@@ -32,13 +32,9 @@ use hauksbee_engine::checks::straps::strap_lint;
 use hauksbee_extract::{ExtractedBoard, LintCheck, NetLintReport, Severity};
 use hauksbee_models::ModelLibrary;
 
-/// The directory the corpus boards sit directly under, whichever layout this
-/// machine has, or `None` with a printed note.
-///
-/// Resolved through the testkit rather than by joining `famous/` here: that
-/// level exists only in the hand-built corpus, so a hard join found nothing on
-/// the corpus `scripts/fetch-corpus.sh` produces, and every sweep below walked
-/// an empty directory and reported the empty walk as a pass.
+/// This suite's corpus root; see
+/// [`hauksbee_testkit::corpus_boards_root_or_skip`] for why it goes through
+/// the testkit rather than joining `famous/` locally.
 fn corpus_root() -> Option<PathBuf> {
     hauksbee_testkit::corpus_boards_root_or_skip(
         env!("CARGO_MANIFEST_DIR"),
@@ -178,40 +174,25 @@ fn strap_lint_only_fires_on_olimex_gpio0_across_corpus() {
     let Some(root) = corpus_root() else { return };
     let mut offenders: Vec<String> = Vec::new();
     let mut olimex_gpio0_hits = 0usize;
+    let lib = ModelLibrary::builtin();
     // Walk every native CAD file; one representative per board is enough, but a
     // full walk is the strongest statement.
-    let mut stack = vec![root.clone()];
-    while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else {
+    for p in hauksbee_testkit::walk_files_with_ext(&root, &["kicad_pcb", "net", "brd"]) {
+        // Read + parse defensively; skip files the extractor cannot handle.
+        let Ok(text) = std::fs::read_to_string(&p) else {
             continue;
         };
-        for entry in rd.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                stack.push(p);
-                continue;
-            }
-            let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
-            if !matches!(ext, "kicad_pcb" | "net" | "brd") {
-                continue;
-            }
-            // Read + parse defensively; skip files the extractor cannot handle.
-            let Ok(text) = std::fs::read_to_string(&p) else {
-                continue;
-            };
-            let Ok(board) = ExtractedBoard::from_auto(&text) else {
-                continue;
-            };
-            let lib = ModelLibrary::builtin();
-            let r = strap_lint(&board, &lib);
-            for f in r.of_check(LintCheck::StrapPin) {
-                let is_olimex_gpio0 = p.to_string_lossy().contains("olimex_esp32")
-                    && f.nets.iter().any(|n| n.contains("GPIO0"));
-                if is_olimex_gpio0 {
-                    olimex_gpio0_hits += 1;
-                } else {
-                    offenders.push(format!("{}: {}", p.display(), f.message));
-                }
+        let Ok(board) = ExtractedBoard::from_auto(&text) else {
+            continue;
+        };
+        let r = strap_lint(&board, &lib);
+        for f in r.of_check(LintCheck::StrapPin) {
+            let is_olimex_gpio0 = p.to_string_lossy().contains("olimex_esp32")
+                && f.nets.iter().any(|n| n.contains("GPIO0"));
+            if is_olimex_gpio0 {
+                olimex_gpio0_hits += 1;
+            } else {
+                offenders.push(format!("{}: {}", p.display(), f.message));
             }
         }
     }

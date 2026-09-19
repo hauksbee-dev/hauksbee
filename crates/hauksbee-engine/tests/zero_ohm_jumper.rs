@@ -11,24 +11,13 @@
 //! board still refuses and names the net.
 
 use hauksbee_engine::binder::bind_board;
-use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+use hauksbee_extract::{ExtractedBoard, Net};
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
 
-fn pin(number: &str, net: i64) -> Pin {
-    crate::support::pin(number, Some(net), "", "passive")
-}
-
-fn comp(reference: &str, value: &str, pins: Vec<Pin>) -> Component {
-    crate::support::component(
-        reference.to_string(),
-        value.to_string(),
-        String::new(),
-        "Resistor_SMD:R_0402_1005Metric".to_string(),
-        pins,
-    )
-}
+use crate::support::passive_pin as pin;
+use crate::support::r0402 as comp;
 
 /// A chain of `0`-valued links between real nets, exactly the anyshake shape.
 fn jumper_board() -> ExtractedBoard {

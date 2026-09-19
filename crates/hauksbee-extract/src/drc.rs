@@ -41,7 +41,7 @@
 use std::collections::HashMap;
 
 use forge_sexpr::{Document, List};
-use rstar::{RTree, RTreeObject, AABB};
+use rstar::{RTree, AABB};
 
 use crate::gerber::geo::{point_in_polygon, polygon_bounds, shape_gap_at, Capsule, Shape};
 use serde::{Deserialize, Serialize};
@@ -958,25 +958,6 @@ impl Primitive {
             net: self.net,
             owner: self.owner.clone(),
         }
-    }
-}
-
-/// An R*-tree leaf: a primitive's bounding box plus its index. We keep the
-/// heavy shape data out of the tree and look it up by index, so the tree nodes
-/// stay small.
-#[derive(Debug, Clone)]
-struct Leaf {
-    bounds: [f64; 4],
-    idx: usize,
-}
-
-impl RTreeObject for Leaf {
-    type Envelope = AABB<[f64; 2]>;
-    fn envelope(&self) -> Self::Envelope {
-        AABB::from_corners(
-            [self.bounds[0], self.bounds[1]],
-            [self.bounds[2], self.bounds[3]],
-        )
     }
 }
 
@@ -2584,9 +2565,9 @@ fn sweep_buckets(
         for (i, p) in prims.iter_mut().enumerate() {
             p.idx = i;
         }
-        let leaves: Vec<Leaf> = prims
+        let leaves: Vec<crate::gerber::geo::BoundsLeaf> = prims
             .iter()
-            .map(|p| Leaf {
+            .map(|p| crate::gerber::geo::BoundsLeaf {
                 bounds: p.bounds,
                 idx: p.idx,
             })

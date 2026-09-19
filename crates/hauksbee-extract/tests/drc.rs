@@ -4,6 +4,8 @@
 
 use hauksbee_extract::{ClearanceRules, ExtractedBoard, NetClassRule, ViolationKind};
 
+use crate::support::assert_short;
+
 const KICAD_10_KEYHOLE_ANTIPAD_BOARD: &str =
     include_str!("fixtures/kicad_10_keyhole_antipad.kicad_pcb");
 
@@ -28,23 +30,6 @@ fn board(items: &str) -> String {
 
 fn drc(items: &str) -> hauksbee_extract::DrcReport {
     ExtractedBoard::drc(&board(items)).expect("drc runs")
-}
-
-/// A short between nets A and B exists with the expected item kinds.
-fn assert_short(report: &hauksbee_extract::DrcReport, want_a: &str, want_b: &str) {
-    let found = report.shorts().any(|f| {
-        let names = [f.net_a_name.as_str(), f.net_b_name.as_str()];
-        names.contains(&want_a) && names.contains(&want_b)
-    });
-    assert!(
-        found,
-        "expected a SHORT between {want_a} and {want_b}; got {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone(), f.gap_mm))
-            .collect::<Vec<_>>()
-    );
 }
 
 /// One copper kind overlapping foreign copper: (name, four-layer board, items,
@@ -143,22 +128,7 @@ fn each_copper_kind_overlapping_foreign_copper_is_one_short() {
         let report = if four_layer { drc4(items) } else { drc(items) };
         assert_eq!(report.short_count(), 1, "{name}: exactly one short");
         assert_short(&report, a, b);
-        let f = report.shorts().next().unwrap();
-        assert!(
-            f.gap_mm <= 0.0,
-            "{name}: overlap gap {} is non-positive",
-            f.gap_mm
-        );
-        if let Some(layer) = layer {
-            assert_eq!(f.layer, layer, "{name}: layer");
-        }
-        if let Some(owner) = owner {
-            let owners = [f.item_a.owner.as_str(), f.item_b.owner.as_str()];
-            assert!(
-                owners.contains(&owner),
-                "{name}: owner recorded: {owners:?}"
-            );
-        }
+        crate::support::assert_overlap_short(&report, name, layer, owner);
     }
 }
 

@@ -19,7 +19,7 @@ fn clean_board() -> PathBuf {
 }
 
 fn tmp(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("hauksbee-r2-{}-{name}", std::process::id()))
+    hauksbee_testkit::scratch_path("r2", name)
 }
 
 // ── --asbuilt on every path (blocker 1) ─────────────────────────────────────

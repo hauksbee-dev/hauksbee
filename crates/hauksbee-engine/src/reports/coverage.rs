@@ -429,13 +429,6 @@ pub fn hole_count(caveats: &[CoverageCaveat]) -> usize {
     caveats.iter().filter(|c| c.is_hole()).count()
 }
 
-pub fn disposition_count(caveats: &[CoverageCaveat], disposition: CoverageDisposition) -> usize {
-    caveats
-        .iter()
-        .filter(|caveat| caveat.class.disposition() == disposition)
-        .count()
-}
-
 pub fn fallback_qualification_message(window: &crate::result::CosimFallbackWindow) -> String {
     let estimate = window
         .error_estimate_v

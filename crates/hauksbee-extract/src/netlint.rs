@@ -291,7 +291,7 @@ fn rail_voltage(name: &str) -> Option<f64> {
 /// these for the pure `<digits>V<digits>` grammar, but the loose `contains`
 /// fallbacks (3V3/1V8) need the same protection or a divider tapping such a
 /// sense net is miscounted as a pull-up and a genuine finding is suppressed.
-fn has_signal_role_token(n: &str) -> bool {
+pub(crate) fn has_signal_role_token(n: &str) -> bool {
     n.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| {
         matches!(
             t,

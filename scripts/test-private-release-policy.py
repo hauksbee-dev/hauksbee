@@ -314,6 +314,14 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertIn("manifest['excluded_prefixes'] = []", builder)
         self.assertIn("surface.get('scopes', ['development', 'mirror'])", builder)
 
+        # The developer probes leave by one glob; hauksbee-ci/examples/ is the
+        # user-facing spec-and-board set and stays, which holds only while that
+        # directory carries no Rust for the probe glob to catch.
+        self.assertIn("\n  'crates/*/examples/*.rs'\n", builder)
+        ci_examples = subprocess.check_output(
+            ["git", "ls-files", "crates/hauksbee-ci/examples"], cwd=ROOT, text=True).split()
+        self.assertTrue(ci_examples and not any(p.endswith(".rs") for p in ci_examples))
+
         # Run only the curation helper on a copy; never launch the mirror builder.
         helper = builder.split("def drop_test(path, name):\n", 1)[1].split("\nPY\n", 1)[0]
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -404,6 +412,17 @@ class PrivateReleasePolicyTests(unittest.TestCase):
         self.assertEqual(curate(b'other.md', public + private), public + private)
         with self.assertRaisesRegex(ValueError, 'curation drifted'):
             curate(b'docs/ci/CI.md', b'## Renamed private section\ntarski_brownout.toml\n')
+
+        # No shipped document may tell a reader to run a filtered probe; its
+        # recorded output stays, being evidence rather than an instruction.
+        invocation = re.compile(rb"--example +" + namespace["PROBE"].encode())
+        for name in sorted(namespace["PROBE_DOCS"]):
+            source = (ROOT / name).read_bytes()
+            curated = curate(name.encode(), source)
+            self.assertRegex(source, invocation, name)
+            self.assertNotRegex(curated, invocation, name)
+            if "oracle" in name:
+                self.assertIn(b"clearance_mm=0.2 primitives=225347 shorts=0", curated)
         binary = b'\x00/Users/hauksbee-user\xff'
         self.assertEqual(curate(b'firmware.elf', binary), b'\x00/Users/hauksbee-user\xff')
         elf = curate(b'x.elf', (ROOT / 'testdata/firmware/esp32_native_gpio/esp32_native_gpio.elf').read_bytes())

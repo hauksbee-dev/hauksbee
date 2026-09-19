@@ -352,6 +352,18 @@ fn simulate(
          interval."
             .into(),
     );
+    // The pole sets the small-signal rate; only `slew` bounds a large step. A
+    // card with a pole and no slew therefore edges faster than any real part.
+    if circuit.devices.iter().any(|d| {
+        matches!(d, hauksbee_ir::Device::OpAmp { pole_hz: Some(p), slew, .. }
+            if p.is_finite() && *p > 0.0 && !slew.is_some_and(|s| s > 0.0))
+    }) {
+        notes.push(
+            "note: an op-amp card sets `pole_hz` but no `slew` (V/us), so large steps are not \
+             slew-limited and edge faster than the real part; small-signal results are unaffected."
+                .into(),
+        );
+    }
     let analysis = forced.unwrap_or(if directives.tran.is_some() {
         Analysis::Tran
     } else if directives.dc.is_some() {

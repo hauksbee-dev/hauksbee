@@ -7,6 +7,8 @@
 
 use hauksbee_extract::{ExtractedBoard, ViolationKind};
 
+use crate::support::assert_short;
+
 /// Wrap board geometry in a minimal Eagle 6 `.brd`. `designrules` lets a test
 /// control the embedded clearance rule; `signals` carries the copper. Eagle is
 /// y-up, millimetres. Two outer copper layers (1 = Top / F.Cu, 16 = Bottom /
@@ -88,23 +90,6 @@ fn drc_rules(
 ) -> hauksbee_extract::DrcReport {
     let text = board(packages, elements, signals, rules);
     ExtractedBoard::drc(&text).expect("eagle drc runs")
-}
-
-/// True if a short between two named nets exists.
-fn assert_short(report: &hauksbee_extract::DrcReport, a: &str, b: &str) {
-    let found = report.shorts().any(|f| {
-        let names = [f.net_a_name.as_str(), f.net_b_name.as_str()];
-        names.contains(&a) && names.contains(&b)
-    });
-    assert!(
-        found,
-        "expected a SHORT between {a} and {b}; got {:?}",
-        report
-            .findings
-            .iter()
-            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone(), f.gap_mm))
-            .collect::<Vec<_>>()
-    );
 }
 
 /// An `<element>` with no `package` attribute is schema-invalid and lands with
@@ -364,22 +349,7 @@ fn each_copper_kind_overlapping_foreign_copper_is_a_short() {
         if exactly_one {
             assert_eq!(report.short_count(), 1, "{name}: exactly one short");
         }
-        let f = report.shorts().next().unwrap();
-        assert!(
-            f.gap_mm <= 0.0,
-            "{name}: overlap gap {} is non-positive",
-            f.gap_mm
-        );
-        if let Some(layer) = layer {
-            assert_eq!(f.layer, layer, "{name}: layer");
-        }
-        if let Some(owner) = owner {
-            let owners = [f.item_a.owner.as_str(), f.item_b.owner.as_str()];
-            assert!(
-                owners.contains(&owner),
-                "{name}: owner recorded: {owners:?}"
-            );
-        }
+        crate::support::assert_overlap_short(&report, name, layer, owner);
     }
 }
 

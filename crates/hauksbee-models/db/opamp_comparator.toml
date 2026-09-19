@@ -164,19 +164,76 @@ warning = "[auto-bind] generic INA186 value has no A1/A2/A3/A4/A5 gain suffix; a
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# LM393/LM2903 dual comparator, OPEN COLLECTOR. TI SLCS005AH; the LM2903
+# automotive grade shares those tables. Nothing here drives the high rail, so
+# `out_hi` is not a property of the part: the BOARD's pull-up sets the high
+# level and the BOARD's feedback resistor sets the hysteresis. Until
+# `open_collector` existed this card said open-collector and bound push-pull,
+# supplying current the part cannot. NOT MODELLED: `warning` below (the route
+# that reaches the reader) and `coverage.missing`. The input common-mode range
+# is in there and not in `[[models.envelope]]` because that schema scopes a pin
+# to ABSOLUTE volts and this limit (0 to VCC-1.5 V) tracks the supply.
 [[models]]
 id = "lm393"
 kind = "comparator"
-description = "LM393 dual comparator, open-collector output"
+description = "LM393/LM2903 dual comparator, open-collector output (the board's pull-up and feedback set the levels and the hysteresis)"
 
 [models.match]
-value_re = "(?i)^LM393"
+value_re = "(?i)^LM(393|2903)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 30.0
+abs_max_v = 36.0
+basis = "TI SLCS005AH, Recommended Operating Conditions, LM393 supply voltage 2 V to 30 V; Absolute Maximum Ratings VCC 36 V"
 
 [models.params]
-# Source: Texas Instruments LM393 datasheet (SNOSC16D), typical
-out_lo     = 0.0    # output pulled low (V), open-collector at 0
-out_hi     = 5.0    # output high (V), pulled up externally (assumed 5V)
-hysteresis = 0.005  # ~5 mV, datasheet input offset
+# Source: TI LM393 SLCS005AH, Electrical Characteristics, TA = 25 C, VCC = 5 V.
+open_collector   = true
+ron_ohms         = 32.5      # VOL 130 mV typ at IOL = 4 mA -> 32.5 ohm
+leak_s           = 2.0e-11   # IOH 0.1 nA typ at VOH = 5 V -> 2e-11 S
+supply_static_ua = 450.0     # ICC 0.45 mA typ, both channels, VO = 2.5 V, RL inf
+#
+# Datasheet numbers this card records but does NOT stamp, so the reader can see
+# what the two-device stage costs rather than having to infer it:
+#   VOL          130 mV typ / 400 mV max at IOL = 4 mA   (ron_ohms is the typ)
+#   IOL          16 mA typ, 6 mA min                     (no ceiling stamped)
+#   IIO          +/-5 mV max input offset voltage        (taken as 0)
+#   IIB          25 nA typ, 250 nA max input bias        (taken as 0)
+#   IIO(bias)    5 nA typ, 50 nA max input offset current(taken as 0)
+#   VICR         0 V to VCC-1.5 V common-mode range      (not checked)
+#   tpd          1.3 us typ response time, 100 mV overdrive, 5 mV step
+#                (300 ns typ at TTL-level swing)         (not modelled)
+#   AVD          200 V/mV typ, 50 V/mV min, VO 1.4-11.4 V
+# Every one of these also appears in `warning` and/or `coverage.missing`, which
+# are the routes that actually reach a reader; this block is the audit trail.
+# The datasheet is silent on output capacitance and on VOL over temperature at
+# this IOL, so both stay unknown rather than being interpolated.
+#
+# NOT a datasheet number below this line, the same separation db/timer.toml
+# draws between the 555's stamp parameters and SLFS022's. The AVD above is
+# unusable as the gate gain: against the 0..1 gate rails 200 V/mV is a 5 uV
+# linear band, narrower than the op-amp's rail-crossing limiter can resolve,
+# and the solve then orbits instead of converging -- measured, a fixed 9.8 mV
+# period-3 limit cycle on the output net at the trip point, to iteration 100.
+# 1000 is the 555's `comparator_gain` trick at the 555's scale: a 1 mV band,
+# 0.4 % of the 227 mV hysteresis of the board in the paired test, and well
+# inside the +/-5 mV input offset that is already declared unmodelled. So the
+# trip point this card computes is nominal to ~1 mV of numerics, on top of a
+# datasheet uncertainty an order of magnitude larger.
+gain             = 1000.0    # gate smoothing: input volts per full 0..1 gate
+warning = "response time (1.3 us typ at 100 mV overdrive, 300 ns at a TTL-level step) is not modelled: the output switches inside one timestep, so propagation delay and any race that depends on it are unanswered. The low-level sink ceiling (16 mA typ, 6 mA min) is not modelled either, so a pull-up stiff enough to demand more than that gets a VOL the part cannot actually hold. The input common-mode range (0 V to VCC-1.5 V) is not checked, so an input driven above VCC-1.5 V is answered as if the part still compared it. Input offset voltage (+/-5 mV max), input bias current (25 nA typ, 250 nA max) and input offset current (5 nA typ, 50 nA max) are all taken as zero, and VOL is the 130 mV typ rather than the 400 mV max, so a computed threshold or low level is the NOMINAL part at 25 C, not a bound over the datasheet's spread or over temperature."
+
+[models.coverage]
+implements = ["open_collector_output", "external_pullup_sets_high_level", "wire_or",
+              "external_feedback_sets_hysteresis", "vol_from_sink_current",
+              "off_state_leakage", "dual_channel"]
+missing = ["response_time", "output_current_limit", "input_common_mode_range",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "output_rise_time", "vol_over_temperature", "output_capacitance",
+           "parameter_spread"]
 
 [models.pins]
 "1" = "out_a"
@@ -187,6 +244,81 @@ hysteresis = 0.005  # ~5 mV, datasheet input offset
 "6" = "in_minus_b"
 "7" = "out_b"
 "8" = "vcc"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The quad sibling of `lm393` above: the same open-collector stage bound four
+# times by `wired_channels`, the same NOT MODELLED list, a different package and
+# a slightly softer VOL. TI SLCS006Z; the LM2901 automotive grade shares those
+# tables. An unused section simply does not bind, so a board that wires two of
+# the four leaves no device and no floating internal node behind.
+[[models]]
+id = "lm339"
+kind = "comparator"
+description = "LM339/LM2901 quad comparator, open-collector output (the board's pull-up and feedback set the levels and the hysteresis)"
+
+[models.match]
+value_re = "(?i)^LM(339|2901)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 30.0
+abs_max_v = 36.0
+basis = "TI SLCS006Z, Recommended Operating Conditions, LM339 supply voltage 2 V to 30 V; Absolute Maximum Ratings VCC 36 V"
+
+[models.params]
+# Source: TI LM339 SLCS006Z, Electrical Characteristics, TA = 25 C, VCC = 5 V.
+open_collector   = true
+ron_ohms         = 37.5      # VOL 150 mV typ at IOL = 4 mA -> 37.5 ohm
+leak_s           = 2.0e-11   # IOH 0.1 nA typ at VOH = 5 V -> 2e-11 S
+supply_static_ua = 800.0     # ICC 0.8 mA typ, all four channels, RL inf
+#
+# Recorded but NOT stamped, as on `lm393` above:
+#   VOL          150 mV typ / 400 mV max at IOL = 4 mA   (ron_ohms is the typ)
+#   IOL          16 mA typ, 6 mA min                     (no ceiling stamped)
+#   VIO          +/-5 mV max input offset voltage        (taken as 0)
+#   IIB          25 nA typ, 250 nA max input bias        (taken as 0)
+#   IIO          5 nA typ, 50 nA max input offset current(taken as 0)
+#   VICR         0 V to VCC-1.5 V common-mode range      (not checked)
+#   tpd          1.3 us typ response time, 100 mV overdrive, 5 mV step
+#                (300 ns typ at TTL-level swing)         (not modelled)
+#   AVD          200 V/mV typ, 50 V/mV min
+# The datasheet is silent on output capacitance and on VOL over temperature at
+# this IOL, so both stay unknown rather than being interpolated.
+#
+# NOT a datasheet number: see the long note on `lm393` above for why the gate
+# gain is a numerical parameter and not the AVD. Same value, same reasoning --
+# the gate rails are 0..1 here too, so the band is the same 1 mV.
+gain             = 1000.0    # gate smoothing: input volts per full 0..1 gate
+warning = "response time (1.3 us typ at 100 mV overdrive, 300 ns at a TTL-level step) is not modelled: the output switches inside one timestep, so propagation delay and any race that depends on it are unanswered. The low-level sink ceiling (16 mA typ, 6 mA min) is not modelled either, so a pull-up stiff enough to demand more than that gets a VOL the part cannot actually hold. The input common-mode range (0 V to VCC-1.5 V) is not checked, so an input driven above VCC-1.5 V is answered as if the part still compared it. Input offset voltage (+/-5 mV max), input bias current (25 nA typ, 250 nA max) and input offset current (5 nA typ, 50 nA max) are all taken as zero, and VOL is the 150 mV typ rather than the 400 mV max, so a computed threshold or low level is the NOMINAL part at 25 C, not a bound over the datasheet's spread or over temperature."
+
+[models.coverage]
+implements = ["open_collector_output", "external_pullup_sets_high_level", "wire_or",
+              "external_feedback_sets_hysteresis", "vol_from_sink_current",
+              "off_state_leakage", "quad_channel"]
+missing = ["response_time", "output_current_limit", "input_common_mode_range",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "output_rise_time", "vol_over_temperature", "output_capacitance",
+           "parameter_spread"]
+
+[models.pins]
+# SLCS006Z Pin Functions, D/N/PW 14-pin. Note GND is pin 12, not pin 11.
+"1" = "out_b"
+"2" = "out_a"
+"3" = "vcc"
+"4" = "in_minus_a"
+"5" = "in_plus_a"
+"6" = "in_minus_b"
+"7" = "in_plus_b"
+"8" = "in_minus_c"
+"9" = "in_plus_c"
+"10" = "in_minus_d"
+"11" = "in_plus_d"
+"12" = "vss"
+"13" = "out_d"
+"14" = "out_c"
 
 # ─────────────────────────────────────────────────────────────────────────────
 

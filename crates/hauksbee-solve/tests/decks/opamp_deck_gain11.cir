@@ -1,0 +1,16 @@
+Deck op-amp: non-inverting gain of 11 and a unity follower, from A cards
+* Two independent stages sharing one model card and one 0.4 V input. AOL, the
+* rails and ROUT are design-deck placeholders (VOH is not a datasheet number;
+* no linear-region value depends on it). The companion .ngspice.cir is the SAME
+* hard clamp as a B source: numerical agreement on a shared model form.
+.model OPA opamp (gain=1e5 rail_lo=0.005 rail_hi=10.5)
+Vin in 0 DC 0.4
+AG eb in nb OPA
+Rob eb outb 75
+Rfb outb nb 10k
+Rgb nb 0 1k
+AF ed in outd OPA
+Rod ed outd 75
+Rld outd 0 10k
+.op
+.end

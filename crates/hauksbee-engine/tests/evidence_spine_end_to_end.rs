@@ -1,6 +1,6 @@
 use hauksbee_engine::result::{BindSummary, DrcShort, DrcStructured, JsonFinding, JsonReport};
 use hauksbee_engine::{bind_board, BoardEvidence};
-use hauksbee_extract::{Component, ExtractedBoard, Pin};
+use hauksbee_extract::{Component, ExtractedBoard};
 use hauksbee_ir::evidence::{AssumptionKind, EvidenceStatus, RunDate};
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::{Integration, SolverOptions};
@@ -9,9 +9,7 @@ use std::path::PathBuf;
 
 use crate::support::run_board;
 
-fn pin(number: &str, net: i64) -> Pin {
-    crate::support::pin(number, Some(net), "", "")
-}
+use crate::support::netted_pin as pin;
 
 fn part(reference: &str, value: &str, nets: &[i64]) -> Component {
     crate::support::component(

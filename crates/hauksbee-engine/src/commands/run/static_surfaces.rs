@@ -18,13 +18,14 @@ fn board_evidence(
     run_inputs: &RunInputs,
     bound: &crate::binder::BoundBoard,
 ) -> anyhow::Result<crate::evidence::BoardEvidence> {
-    Ok(crate::evidence::BoardEvidence::from_bound(
+    Ok(crate::evidence::board_evidence(
         &run_inputs.board,
         &bound.report,
         &run_inputs.reader_notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?
-    .with_input_artifact(&cfg.board, &run_inputs.raw, run_inputs.input_kind)?)
+        &cfg.board,
+        &run_inputs.raw,
+        run_inputs.input_kind,
+    )?)
 }
 
 pub(crate) fn emit_selected(

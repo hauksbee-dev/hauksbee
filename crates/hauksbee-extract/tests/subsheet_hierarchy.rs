@@ -14,15 +14,11 @@
 //! refuses with a message naming what it needs when no parent exists. These tests
 //! pin the false-positive case, the clean top-level case, and the refusal.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use hauksbee_extract::{ExtractedBoard, LintCheck, Severity};
 
-fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
+use crate::support::fixture;
 
 fn floating_control_highs(board: &ExtractedBoard) -> Vec<String> {
     board

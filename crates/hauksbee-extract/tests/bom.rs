@@ -61,7 +61,7 @@
 //!   repo, so the placement reading can be checked against it rather than
 //!   against itself.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use hauksbee_extract::bom::{
     Bom, BomDetection, BomDialect, BomError, ColumnOverrides, ColumnRole, MappingConfidence,
@@ -71,12 +71,7 @@ use hauksbee_extract::placement::{
 };
 use hauksbee_extract::ExtractedBoard;
 
-fn fixture(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(rel)
-}
+use crate::support::fixture;
 
 fn read_bom(rel: &str) -> Bom {
     Bom::read(&fixture(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))

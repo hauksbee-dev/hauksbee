@@ -39,13 +39,14 @@ pub(crate) fn build_live_simulation(
         Some(b) => b,
         None => bind_board(&board, &lib),
     };
-    let mut board_evidence = crate::evidence::BoardEvidence::from_bound(
+    let mut board_evidence = crate::evidence::board_evidence(
         &board,
         &bound.report,
         &reader_notes,
-        hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?
-    .with_input_artifact(&cfg.board, &raw, input_kind)?;
+        &cfg.board,
+        &raw,
+        input_kind,
+    )?;
     if let Some(firmware) = &cfg.firmware {
         board_evidence = board_evidence.with_firmware_artifact(
             firmware,

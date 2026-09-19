@@ -1,0 +1,11 @@
+LM358 follower dynamics: GBW-rate small signal and slew-rate large signal
+* One card, two followers: the same pole_hz/slew must give both limits. TI SLOS068AB sec 5.7: AOL 100 V/mV,
+* GBW 0.7 MHz, slew 0.3 V/us at G=+1, so pole_hz = GBW/AOL = 7 Hz. AS's 10 mV step edges at the closed-loop
+* tau_cl = 1/(2*pi*GBW) = 227.36 ns (4.4e4 V/s, under the 3e5 ceiling); AB's 5 V step at a flat 0.3 V/us.
+.model LM358 opamp (gain=1e5 pole_hz=7 slew=0.3 rail_lo=0 rail_hi=10.5)
+Vs s 0 PWL(0 1.0 1u 1.0 1.000001u 1.01)
+AS os s os LM358
+Vb b 0 PWL(0 1.0 1u 1.0 1.000001u 6.0)
+AB ob b ob LM358
+.tran 2n 12u 0 2n
+.end

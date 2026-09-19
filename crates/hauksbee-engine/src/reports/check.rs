@@ -110,13 +110,14 @@ impl CheckReport<'_> {
         };
         let bound = bind_board(board, lib);
         let summary = BindSummary::from_report(&bound.report);
-        let evidence = crate::evidence::BoardEvidence::from_bound(
+        let evidence = crate::evidence::board_evidence(
             board,
             &bound.report,
             reader_notes,
-            hauksbee_ir::evidence::RunDate::from_system_clock(),
-        )?
-        .with_input_artifact(board_path, raw, input_kind)?;
+            board_path,
+            raw,
+            input_kind,
+        )?;
         let clearance_input = (!altium_present)
             .then(|| KicadClearanceInput::load(board_path, board))
             .transpose()?;
@@ -934,33 +935,6 @@ pub(crate) fn render_waivers_scoped(
 /// Without it a bare `--json` would fall through to the TUI/websocket default and
 /// hang a piped / CI / AI caller. Carries the same findings as `emit_with_schematic_quiet`'s JSON,
 /// and (under `strict`) gates with the same exit-2 contract.
-pub fn emit_combined_json(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
-    strict: bool,
-    inputs: &[JsonInputEvidence],
-) -> anyhow::Result<()> {
-    emit_combined_json_with_schematic(
-        board_path,
-        board,
-        text,
-        raw,
-        input_kind,
-        altium_present,
-        lib,
-        reader_notes,
-        strict,
-        inputs,
-        None,
-    )
-}
-
 pub fn emit_combined_json_with_schematic(
     board_path: &Path,
     board: &ExtractedBoard,

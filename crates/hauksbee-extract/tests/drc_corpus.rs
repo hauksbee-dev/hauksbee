@@ -117,31 +117,6 @@ impl ShortException {
     }
 }
 
-/// Days since 1970-01-01 for a `YYYY-MM-DD` string.
-fn until_days(until: &str) -> Option<i64> {
-    let mut it = until.split('-');
-    let y: i64 = it.next()?.parse().ok()?;
-    let m: i64 = it.next()?.parse().ok()?;
-    let d: i64 = it.next()?.parse().ok()?;
-    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-        return None;
-    }
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some(era * 146_097 + doe - 719_468)
-}
-
-fn today_days() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| (d.as_secs() as i64).div_euclid(86_400))
-        .unwrap_or(0)
-}
-
 #[test]
 fn corpus_boards_have_no_true_shorts() {
     let Some(root) = corpus_root() else {
@@ -153,11 +128,11 @@ fn corpus_boards_have_no_true_shorts() {
     boards.sort();
     assert!(!boards.is_empty(), "found at least one corpus board");
 
-    let today = today_days();
+    let today = hauksbee_testkit::today_days();
     let expiries: Vec<i64> = SHORT_EXCEPTIONS
         .iter()
         .map(|e| {
-            until_days(e.until).unwrap_or_else(|| {
+            hauksbee_testkit::until_days(e.until).unwrap_or_else(|| {
                 panic!(
                     "short exception for {} has an unparseable `until` ({:?}); use YYYY-MM-DD",
                     e.board, e.until

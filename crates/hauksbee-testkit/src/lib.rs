@@ -33,6 +33,24 @@ pub fn require_assets() -> bool {
     std::env::var_os("HAUKSBEE_REQUIRE_CORPUS").is_some()
 }
 
+/// A scratch path under the OS temp dir, unique to this test binary's
+/// process: `<tmp>/hauksbee_<prefix>_<tag>_<pid>`. Not created; callers that
+/// need it to exist use [`fresh_scratch_dir`] or create it themselves (e.g.
+/// when a helper like `extract_fresh` owns the create/remove lifecycle).
+pub fn scratch_path(prefix: &str, tag: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("hauksbee_{prefix}_{tag}_{}", std::process::id()))
+}
+
+/// [`scratch_path`], freshly created. Any leftover contents from an earlier
+/// run under the same pid (vanishingly rare, but happens under pid reuse)
+/// are removed first.
+pub fn fresh_scratch_dir(prefix: &str, tag: &str) -> PathBuf {
+    let dir = scratch_path(prefix, tag);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create scratch dir");
+    dir
+}
+
 /// The name of the corpus directory, as `scripts/fetch-corpus.sh` writes it and
 /// `corpus.toml` declares it in `meta.default_dir`.
 const CORPUS_DIR_NAME: &str = "board-corpus";
@@ -190,6 +208,65 @@ pub fn corpus_boards_root_or_skip(manifest_dir: &str, what: &str) -> Option<Path
         ),
     }
 }
+
+/// Every file under `root` (recursive) whose extension is one of `exts`, in
+/// directory-stack visit order (LIFO, not sorted).
+///
+/// The shared shape behind the corpus-wide "walk every native CAD file and
+/// check it" sweeps: a plain iterative walk with no directory pruning, no
+/// `walkdir` dependency for the one thing these suites need. A caller that
+/// must skip whole subtrees (e.g. `.git`, or a corpus.toml exclusion) still
+/// writes its own walk; this is for the common case of "every match, full
+/// depth".
+pub fn walk_files_with_ext(root: &Path, exts: &[&str]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            if exts.contains(&p.extension().and_then(|x| x.to_str()).unwrap_or("")) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// KiCad board text for a minimal Arduino Nano + 10k pull resistor fixture:
+/// net 1 GND, net 2 +5V, net 3 BUS (A1 pad 4 = GND, pad 27 = +5V, pad 21 =
+/// BUS; R1 across BUS/GND). Shared by the AVR and host-serial co-sim tests
+/// that only need "an Arduino Nano on a net", not a specific board's real
+/// layout.
+pub const ARDUINO_NANO_GPIO_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "BUS")
+
+  (module Module:Arduino_Nano (layer F.Cu)
+    (at 100 100)
+    (fp_text reference A1 (at 0 0) (layer F.SilkS))
+    (fp_text value Arduino_Nano (at 0 2) (layer F.Fab))
+    (pad 4 thru_hole circle (at 0 4) (size 1 1) (net 1 "GND"))
+    (pad 27 thru_hole circle (at 0 27) (size 1 1) (net 2 "+5V"))
+    (pad 21 thru_hole circle (at 0 21) (size 1 1) (net 3 "BUS"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 3 "BUS"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+)
+"#;
 
 /// What to tell someone whose corpus did not resolve, naming every directory
 /// that was looked in.
@@ -355,6 +432,40 @@ pub fn scanned(gate: &str, n: usize) {
          list was found or loadable, so this gate proves nothing. Check the \
          corpus layout (scripts/fetch-corpus.sh) before trusting a pass."
     );
+}
+
+/// Days since 1970-01-01 for a `YYYY-MM-DD` string (proleptic Gregorian,
+/// Hinnant's algorithm), or `None` if the string does not parse.
+///
+/// Shared by every corpus gate that records a dated exception on the same
+/// terms `hauksbee-waivers.toml` does: a reason and an expiry, checked
+/// against [`today_days`] so a stale exception goes red instead of
+/// suppressing forever. A dev-dependency for this would be heavier than the
+/// dozen lines, and this is the only date arithmetic any of these suites need.
+pub fn until_days(until: &str) -> Option<i64> {
+    let mut it = until.split('-');
+    let y: i64 = it.next()?.parse().ok()?;
+    let m: i64 = it.next()?.parse().ok()?;
+    let d: i64 = it.next()?.parse().ok()?;
+    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// Today, in days since the epoch. Callers capture this once per run so a
+/// long sweep cannot have an exception lapse partway through it.
+pub fn today_days() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.as_secs() as i64).div_euclid(86_400))
+        .unwrap_or(0)
 }
 
 fn missing(what: &str, rel: &str, source: &str, remedy: &str) -> Option<PathBuf> {

@@ -12,12 +12,10 @@
 
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::reports::bind::BindOutcome;
-use hauksbee_extract::{Component, ExtractedBoard, Pin};
+use hauksbee_extract::{Component, ExtractedBoard};
 use hauksbee_models::ModelLibrary;
 
-fn pin(number: &str, net: i64) -> Pin {
-    crate::support::pin(number, Some(net), "", "")
-}
+use crate::support::netted_pin as pin;
 
 /// A component exactly as the fixed Altium extractor emits it: empty value,
 /// the unresolved reason attached as a property, PCB-only pins.

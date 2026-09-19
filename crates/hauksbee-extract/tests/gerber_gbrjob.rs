@@ -60,7 +60,7 @@ fn write_job(dir: &Path, with_gbrjob: bool) {
 }
 
 fn tmp(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("hauksbee_gbrjob_{tag}_{}", std::process::id()))
+    hauksbee_testkit::scratch_path("gbrjob", tag)
 }
 
 #[test]

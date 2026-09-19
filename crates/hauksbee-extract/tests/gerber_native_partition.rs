@@ -15,13 +15,7 @@ struct TempJob(PathBuf);
 
 impl TempJob {
     fn new(tag: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "hauksbee_gerber_native_{tag}_{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("create differential Gerber job");
-        Self(path)
+        Self(hauksbee_testkit::fresh_scratch_dir("gerber_native", tag))
     }
 }
 

@@ -1,0 +1,18 @@
+# The deck `A` op-amp against the same hard-clamp transfer function written as a
+# B source for ngspice: numerical agreement on a shared model form, not physical
+# validation of an LM358. Both probes land 7e-8 from the oracle, so the bound is
+# the corpus floor. Follower closed form: Vin/(1+1/AOL) = 0.3999960 V, printed.
+analysis = "op"
+description = "deck op-amp (A card + .model opamp): non-inverting gain of 11 and unity follower"
+
+[[probe]]
+expr = "V(outb)"
+reltol = 1.0e-06
+[[probe.analytic]]
+value = 4.399516
+reltol = 1.0e-05
+note = "non-inverting gain of 11 at finite open-loop gain: 11*Vin/(1+11/AOL) = 4.4/(1+11/1e5) = 4.399516 V, and ROUT sits inside the loop so the loop gain divides it out to under 1e-7 V. The design's ngspice run printed 4.399513 V"
+
+[[probe]]
+expr = "V(outd)"
+reltol = 1.0e-06

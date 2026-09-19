@@ -29,11 +29,6 @@ use hauksbee_extract::ExtractedBoard;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-fn corpus_root() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")).unwrap_or_default();
-    p.exists().then_some(p)
-}
-
 /// Whether an absent Altium family should FAIL rather than report NOT RUN.
 ///
 /// Deliberately NOT `HAUKSBEE_REQUIRE_CORPUS`. That flag means "the boards
@@ -70,7 +65,7 @@ const FAMOUS_ALTIUM: &[(&str, usize, usize)] = &[
 
 #[test]
 fn famous_altium_boards_extract_and_are_short_clean() {
-    let Some(root) = corpus_root() else {
+    let Some(root) = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")) else {
         assert!(
             !require_altium_corpus(),
             "HAUKSBEE_REQUIRE_ALTIUM_CORPUS set but board-corpus is absent"
@@ -231,7 +226,7 @@ const XVAL: &[(&str, usize)] = &[
 
 #[test]
 fn cross_validate_against_kicad_altium_importer() {
-    let Some(root) = corpus_root() else {
+    let Some(root) = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")) else {
         assert!(
             !require_altium_corpus(),
             "HAUKSBEE_REQUIRE_ALTIUM_CORPUS set but board-corpus is absent"
@@ -319,7 +314,7 @@ fn cross_validate_against_kicad_altium_importer() {
 /// sweep above covers it with per-board floors this cannot know.
 #[test]
 fn fetched_altium_boards_extract_and_are_short_clean() {
-    let Some(root) = corpus_root() else {
+    let Some(root) = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")) else {
         eprintln!("NOT RUN  fetched Altium sweep: board-corpus not present");
         assert!(!hauksbee_testkit::require_assets());
         return;

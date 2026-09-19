@@ -17,11 +17,7 @@ fn board() -> PathBuf {
 }
 
 fn out_csv(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("hauksbee_probe_{}_{tag}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join("probe.csv");
-    let _ = std::fs::remove_file(&p);
-    p
+    hauksbee_testkit::fresh_scratch_dir("probe", tag).join("probe.csv")
 }
 
 #[test]

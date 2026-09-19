@@ -96,6 +96,7 @@ loader ignores the deck's first line, which is its title.
 | `H` CCVS | `Hxxx n+ n- vname transres`: current-controlled voltage source. |
 | `B` behavioral source | `Bxxx n+ n- V={expr}` or `I={expr}` over `v()/i()/time/param` (evalexpr subset). |
 | `K` coupled inductors | `Kxxx L1 L2 k`: lossless mutual coupling, `0 < k <= 1` (k=1 legal). |
+| `A` op-amp | `Axxx out inp inn model` + `.model NAME opamp(gain= rail_lo= rail_hi= [pole_hz=] [slew=])`: finite-gain rail-clamped amplifier, stamped with an analytic tangent so a feedback loop converges at DC where a `B`-source clamp cannot. `gain`/`rail_lo`/`rail_hi` are required and any other parameter name refuses. ngspice has no op-amp element, so the corpus reference deck spells the same transfer function as a `B` source: that is numerical agreement on a shared model form, not physical validation of a part. `pole_hz` is the open-loop pole and `slew` (V/us) bounds large steps; a card with a pole and no `slew` edges faster than a real part and `hauksbee sim` says so. One pole only: no ringing or phase margin. |
 | `X` subcircuit call | `Xxxx nodes... NAME [p=v]`: instantiates a `.subckt`, flattened at load with mangled internal names. |
 
 ### `.model` types

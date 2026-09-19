@@ -353,6 +353,10 @@ fn decks_dir() -> PathBuf {
 fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
     let name = cir_path.file_stem().unwrap().to_string_lossy().to_string();
     let deck = std::fs::read_to_string(cir_path).expect("read deck");
+    // A deck using a card ngspice has no element for (the `A` op-amp) ships a
+    // companion `<name>.ngspice.cir`: same model form, same node names.
+    let ng_src = std::fs::read_to_string(cir_path.with_extension("ngspice.cir"))
+        .unwrap_or_else(|_| deck.clone());
     let expect_path = cir_path.with_extension("expect.toml");
     let expect_text = std::fs::read_to_string(&expect_path)
         .unwrap_or_else(|_| panic!("missing {}", expect_path.display()));
@@ -375,7 +379,7 @@ fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
         "op" => {
             let ours: SimOutput = run_op(&circuit, &opts, &probes)
                 .unwrap_or_else(|e| panic!("{name}: hauksbee op failed: {e}"));
-            let ng_text = oracle.run(&deck).expect("ngspice op run");
+            let ng_text = oracle.run(&ng_src).expect("ngspice op run");
             let nodes = parse_op_listing(&ng_text).expect("finite ngspice op listing");
             for (pe, pr) in expect.probe.iter().zip(&probes) {
                 let ours_val = ours.column(&pr.label()).unwrap()[0];
@@ -403,7 +407,7 @@ fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
                 .unwrap_or_else(|e| panic!("{name}: hauksbee tran failed: {e}"));
             let ours_t = ours.time.clone().unwrap();
             for (pe, pr) in expect.probe.iter().zip(&probes) {
-                let ng_deck = rewrite_with_print(&deck, &format!(".print tran {}", pr.label()));
+                let ng_deck = rewrite_with_print(&ng_src, &format!(".print tran {}", pr.label()));
                 let ng = oracle
                     .run(&ng_deck)
                     .and_then(|txt| parse_tran_table(&txt))
@@ -438,7 +442,7 @@ fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
             // Column 0 of every row is the swept value (the sweep axis).
             let ours_x: Vec<f64> = ours.rows.iter().map(|r| r[0]).collect();
             for (pe, pr) in expect.probe.iter().zip(&probes) {
-                let ng_deck = rewrite_with_print(&deck, &format!(".print dc {}", pr.label()));
+                let ng_deck = rewrite_with_print(&ng_src, &format!(".print dc {}", pr.label()));
                 let tbl = oracle
                     .run(&ng_deck)
                     .and_then(|txt| parse_indexed_table(&txt))
@@ -481,7 +485,7 @@ fn run_deck(oracle: &CachedOracle, cir_path: &Path) -> DeckResult {
                     ),
                 };
                 let ng_deck =
-                    rewrite_with_print(&deck, &format!(".print ac vm({node}) vp({node})"));
+                    rewrite_with_print(&ng_src, &format!(".print ac vm({node}) vp({node})"));
                 let tbl = oracle
                     .run(&ng_deck)
                     .and_then(|txt| parse_indexed_table(&txt))
@@ -659,6 +663,22 @@ fn mos_on_resistance_bound_rejects_lost_series_resistance() {
     }
 }
 
+/// The deck op-amp converges COLD at DC with no homotopy rung firing (the
+/// corpus entry checks the values it converges to). The same amplifier as a `B`
+/// source does not: its finite-difference tangent is exactly 0 inside the clamp
+/// and the loop two-cycles between the rails. The answer alone would still pass
+/// if a change rescued it with staged DC, so require the drained ladder silent.
+#[test]
+fn deck_opamp_converges_cold_with_no_fallback_strategy() {
+    let (circuit, directives) =
+        SpiceLoader::load_with_directives(include_str!("decks/opamp_deck_gain11.cir")).unwrap();
+    let probes = ["V(outb)", "V(outd)"].map(|p| Probe::parse(p).unwrap());
+    drop(hauksbee_solve::take_strategy_activations());
+    run_op(&circuit, &opts_from_directives(&directives), &probes).unwrap();
+    let fired = hauksbee_solve::take_strategy_activations();
+    assert!(fired.is_empty(), "cold DC needed the ladder: {fired:?}");
+}
+
 #[test]
 fn ngspice_corpus() {
     let Some(bin) = find_ngspice() else {
@@ -681,6 +701,7 @@ fn ngspice_corpus() {
         .expect("read decks dir")
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("cir"))
+        .filter(|p| !p.to_string_lossy().ends_with(".ngspice.cir"))
         .collect();
     cirs.sort();
     assert!(

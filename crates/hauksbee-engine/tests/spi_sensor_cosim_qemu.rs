@@ -53,6 +53,24 @@ fn flash_image() -> Option<PathBuf> {
     }
 }
 
+/// QEMU + firmware preconditions shared by every test below: `Some(path)`
+/// when both are satisfied, `None` after printing why (SKIP) it did not run.
+fn preconditions() -> Option<PathBuf> {
+    if !is_available(QemuArch::Xtensa) {
+        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
+        return None;
+    }
+    match flash_image() {
+        Some(fw) => Some(fw),
+        None => {
+            eprintln!(
+                "SKIP: flash.bin not built; run `./build.sh` in testdata/firmware/esp32_spi_adc"
+            );
+            None
+        }
+    }
+}
+
 /// Run the co-sim for `ms` of virtual time with the MCP3008 channel-0 voltage
 /// fixed at `ch0_volts`. Returns the final "FLAG" net voltage.
 ///
@@ -93,14 +111,9 @@ fn run_at_voltage(ch0_volts: f64, ms: u32) -> f64 {
 
 #[test]
 fn esp32_spi_adc_drives_flag_below_threshold() {
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
+    let Some(_fw) = preconditions() else {
         return;
-    }
-    if flash_image().is_none() {
-        eprintln!("SKIP: flash.bin not built; run `./build.sh` in testdata/firmware/esp32_spi_adc");
-        return;
-    }
+    };
 
     // 0.8 V < 1.65 V threshold -> counts < 512 -> FLAG LOW
     let v = run_at_voltage(0.8, 500);
@@ -121,14 +134,9 @@ fn esp32_spi_adc_drives_flag_below_threshold() {
 // un-ignore with mailbox-aware firmware or a QEMU SPI peripheral hook.
 #[ignore = "esp32_spi_adc firmware drives the real (host-invisible) SPI2 controller; needs the mailbox bus contract or a QEMU SPI hook; see 05-cosim-fidelity.md section 5.2/5.3"]
 fn esp32_spi_adc_drives_flag_above_threshold() {
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
+    let Some(_fw) = preconditions() else {
         return;
-    }
-    if flash_image().is_none() {
-        eprintln!("SKIP: flash.bin not built; run `./build.sh` in testdata/firmware/esp32_spi_adc");
-        return;
-    }
+    };
 
     // 2.5 V > 1.65 V threshold -> counts > 512 -> FLAG HIGH
     let v = run_at_voltage(2.5, 500);
@@ -147,14 +155,9 @@ fn esp32_spi_adc_drives_flag_above_threshold() {
 // Same cause as above: the real SPI2 controller is host-invisible in QEMU.
 #[ignore = "esp32_spi_adc firmware drives the real (host-invisible) SPI2 controller; needs the mailbox bus contract or a QEMU SPI hook; see 05-cosim-fidelity.md section 5.2/5.3"]
 fn esp32_spi_adc_flag_follows_voltage_sweep() {
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
+    let Some(_fw) = preconditions() else {
         return;
-    }
-    if flash_image().is_none() {
-        eprintln!("SKIP: flash.bin not built; run `./build.sh` in testdata/firmware/esp32_spi_adc");
-        return;
-    }
+    };
 
     // Sweep the MCP3008 channel voltage across the 1.65 V (Vref/2) threshold.
     // With a working SPI bridge: below threshold -> FLAG LOW, at/above -> FLAG HIGH.
@@ -189,12 +192,7 @@ fn esp32_spi_adc_flag_follows_voltage_sweep() {
 
 #[test]
 fn esp32_spi_adc_uart_announces_ready() {
-    if !is_available(QemuArch::Xtensa) {
-        eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
-        return;
-    }
-    let Some(fw) = flash_image() else {
-        eprintln!("SKIP: flash.bin not built");
+    let Some(fw) = preconditions() else {
         return;
     };
 
