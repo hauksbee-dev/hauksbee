@@ -4,8 +4,7 @@
 //! of parts is powered by nothing, every surface says so, and says so before
 //! the results it undermines.
 
-mod support;
-
+use crate::support::{self, repo_root};
 use hauksbee_ci::{report::CiResult, RunConfig};
 use std::path::{Path, PathBuf};
 

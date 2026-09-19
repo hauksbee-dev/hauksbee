@@ -26,6 +26,7 @@ use hauksbee_solve::orchestrate::run_staged;
 use hauksbee_solve::{
     DcInit, Integration, SolveError, SolvePhase, SolverOptions, StepControl, Transient,
 };
+use hauksbee_testkit::circuits::{bjt, comparator, vswitch};
 
 /// Inverting comparator relaxation astable: the comparator output `osc` swings
 /// 0..5 V, senses the capacitor node `vc` on its inverting input against a
@@ -38,15 +39,8 @@ fn comparator_astable() -> Circuit {
     add_vdc(&mut c, "VREF", vref, NodeId::GROUND, 2.5);
     let osc = c.node("osc");
     let vc = c.node("vc");
-    c.add(Device::Comparator {
-        name: "CMP".into(),
-        out: osc,
-        inp: vref, // inverting: reference on +, cap on -
-        inn: vc,
-        out_lo: 0.0,
-        out_hi: 5.0,
-        hysteresis: 0.5,
-    });
+    // inverting: reference on +, cap on -
+    comparator(&mut c, "CMP", osc, vref, vc, 0.5);
     crate::shared::add_resistor(&mut c, "Rload", osc, NodeId::GROUND, 10e3);
     crate::shared::add_resistor(&mut c, "Rf", osc, vc, 10e3);
     add_capacitor(&mut c, "Cf", vc, NodeId::GROUND, 10e-9, None);
@@ -155,13 +149,7 @@ fn power_on_settles_to_the_same_steady_state() {
     crate::shared::add_resistor(&mut c, "Rc", vcc, col, rc);
     crate::shared::add_resistor(&mut c, "Rb1", vcc, base, 47e3);
     crate::shared::add_resistor(&mut c, "Rb2", base, NodeId::GROUND, 10e3);
-    c.add(Device::Bjt {
-        name: "Q".into(),
-        c: col,
-        b: base,
-        e: NodeId::GROUND,
-        model: BjtModel::default(),
-    });
+    bjt(&mut c, "Q", col, base, NodeId::GROUND, &BjtModel::default());
     add_capacitor(&mut c, "Cout", col, NodeId::GROUND, cout, None);
 
     let dt = 1e-7;
@@ -222,15 +210,7 @@ fn run_staged_power_ramps_the_no_dc_group() {
     add_vdc(&mut c, "VREF", vref, NodeId::GROUND, 2.5);
     let osc = c.node("osc");
     let vc = c.node("vc");
-    c.add(Device::Comparator {
-        name: "CMP".into(),
-        out: osc,
-        inp: vref,
-        inn: vc,
-        out_lo: 0.0,
-        out_hi: 5.0,
-        hysteresis: 0.5,
-    });
+    comparator(&mut c, "CMP", osc, vref, vc, 0.5);
     crate::shared::add_resistor(&mut c, "Rload", osc, NodeId::GROUND, 10e3);
     crate::shared::add_resistor(&mut c, "Rf", osc, vc, 10e3);
     add_capacitor(&mut c, "Cf", vc, NodeId::GROUND, 10e-9, None);
@@ -307,17 +287,15 @@ fn run_staged_is_bitwise_deterministic() {
             1e3 * (1.0 + 0.2 * k as f64),
         );
         add_resistor(&mut c, &format!("Rb{k}"), sel, NodeId::GROUND, 1e3);
-        c.add(Device::VSwitch {
-            name: format!("SW{k}"),
-            a: sup,
-            b: out,
-            ctrl_p: sel,
-            ctrl_n: NodeId::GROUND,
-            von: 1.5 + 0.1 * k as f64,
-            voff: 0.5,
-            ron: 10.0 + k as f64,
-            roff: 1e9,
-        });
+        vswitch(
+            &mut c,
+            &format!("SW{k}"),
+            sup,
+            out,
+            (sel, NodeId::GROUND),
+            (1.5 + 0.1 * k as f64, 0.5),
+            (10.0 + k as f64, 1e9),
+        );
     }
 
     let dt = 1e-7;

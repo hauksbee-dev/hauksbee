@@ -2,10 +2,11 @@
 //! streaming callback, the device-effect toggles, and a switch event.
 
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind, SpiceLoader};
+use hauksbee_ir::{Circuit, NodeId, SpiceLoader};
 use hauksbee_solve::{
     DeviceEffects, Integration, Partitioning, SolverOptions, StepControl, Transient,
 };
+use hauksbee_testkit::circuits::{ind, vdc, vswitch};
 
 /// `Partitioning::Off` must reproduce the classic monolithic engine exactly.
 /// The partitioned `Auto` path may differ within tolerance (Gauss-Seidel / ZOH
@@ -24,13 +25,7 @@ fn partitioning_off_is_deterministic_reference() {
         let leg = c.node("leg");
         add_vdc(&mut c, "V1", vin, NodeId::GROUND, 1.0);
         add_resistor(&mut c, "R1", vin, mid, 50.0);
-        c.add(Device::Inductor {
-            name: "L1".into(),
-            a: mid,
-            b: out,
-            henries: 1e-3,
-            ic: Some(0.0),
-        });
+        ind(&mut c, "L1", mid, out, 1e-3);
         add_capacitor(&mut c, "C1", out, NodeId::GROUND, 1e-7, Some(0.0));
         add_resistor(&mut c, "R2", vin, leg, 1e3);
         add_capacitor(&mut c, "C2", leg, NodeId::GROUND, 1e-9, Some(0.0));
@@ -457,23 +452,16 @@ fn voltage_switch_conducts_when_closed() {
     let ctrl = c.node("ctrl");
     let out = c.node("out");
     add_vdc(&mut c, "VIN", vin, NodeId::GROUND, 5.0);
-    c.add(Device::Vsource {
-        name: "VCTRL".into(),
-        p: ctrl,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(3.0), // above threshold -> closed
-    });
-    c.add(Device::VSwitch {
-        name: "S1".into(),
-        a: vin,
-        b: out,
-        ctrl_p: ctrl,
-        ctrl_n: NodeId::GROUND,
-        von: 2.0,
-        voff: 1.0,
-        ron: 1.0,
-        roff: 1e9,
-    });
+    vdc(&mut c, "VCTRL", ctrl, 3.0); // above threshold -> closed
+    vswitch(
+        &mut c,
+        "S1",
+        vin,
+        out,
+        (ctrl, NodeId::GROUND),
+        (2.0, 1.0),
+        (1.0, 1e9),
+    );
     add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e3);
 
     let wf = Transient::new(SolverOptions::fixed(1e-6))

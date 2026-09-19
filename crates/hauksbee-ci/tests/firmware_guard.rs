@@ -8,13 +8,9 @@
 //! relative to. This is a library-level test (no binary, no native loader), so it
 //! runs regardless of which MCU backend features are enabled.
 
-use std::path::PathBuf;
-
 use hauksbee_ci::{run, RunConfig, SpecError};
 
-fn example_board() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/blinky.kicad_pcb")
-}
+use crate::support::blinky_board as example_board;
 
 #[test]
 fn stale_firmware_path_is_clean_error_not_segfault() {

@@ -1,249 +1,31 @@
-//! Compact circuit builders, stamp scaffolding and waveform comparisons
-//! shared by the crate's unit tests, so each test states only the circuit
-//! and the number it expects. Test-only: `lib.rs` declares this module under
-//! `#[cfg(test)]`, and nothing in the shipped library depends on it.
+//! Stamp scaffolding and waveform comparisons shared by the crate's unit
+//! tests, so each test states only the circuit and the number it expects.
+//! Test-only: `lib.rs` declares this module under `#[cfg(test)]`, and
+//! nothing in the shipped library depends on it.
+//!
+//! The device-literal builders (`res`, `cap`, `vdc`, ...) that used to live
+//! here moved to `hauksbee-testkit::circuits`, which unlike this
+//! `#[cfg(test)]`-private module is reachable from this crate's own
+//! integration tests (and every other crate's), so there is exactly one
+//! copy of each builder instead of one private and one duplicated in
+//! `tests/support`. Re-exported here so existing `test_fixtures::res(..)`
+//! call sites in this crate's unit tests keep working unchanged.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use hauksbee_ir::{BjtModel, Circuit, Device, DeviceId, DiodeModel, NodeId, Polarity, SourceKind};
+use hauksbee_ir::{Circuit, DeviceId, NodeId};
 
 use crate::options::{Integration, Partitioning, SolverOptions, StepControl};
 use crate::stamp::{IntegCoeffs, StampCtx};
 use crate::system::{Layout, ReactiveState};
 use crate::transient::{Transient, Waveforms};
 
-pub const GND: NodeId = NodeId::GROUND;
-
-pub fn res(c: &mut Circuit, name: &str, a: NodeId, b: NodeId, ohms: f64) -> DeviceId {
-    c.add(Device::Resistor {
-        name: name.into(),
-        a,
-        b,
-        ohms,
-        tc1: None,
-    })
-}
-
-pub fn cap(c: &mut Circuit, name: &str, a: NodeId, b: NodeId, farads: f64) -> DeviceId {
-    c.add(Device::Capacitor {
-        name: name.into(),
-        a,
-        b,
-        farads,
-        ic: None,
-    })
-}
-
-pub fn cap_ic(c: &mut Circuit, name: &str, a: NodeId, b: NodeId, farads: f64, ic: f64) -> DeviceId {
-    c.add(Device::Capacitor {
-        name: name.into(),
-        a,
-        b,
-        farads,
-        ic: Some(ic),
-    })
-}
-
-pub fn ind(c: &mut Circuit, name: &str, a: NodeId, b: NodeId, henries: f64) -> DeviceId {
-    c.add(Device::Inductor {
-        name: name.into(),
-        a,
-        b,
-        henries,
-        ic: Some(0.0),
-    })
-}
-
-pub fn vdc(c: &mut Circuit, name: &str, p: NodeId, volts: f64) -> DeviceId {
-    vdc_between(c, name, p, GND, volts)
-}
-
-pub fn vdc_between(c: &mut Circuit, name: &str, p: NodeId, n: NodeId, volts: f64) -> DeviceId {
-    c.add(Device::Vsource {
-        name: name.into(),
-        p,
-        n,
-        kind: SourceKind::Dc(volts),
-    })
-}
-
-pub fn idc(c: &mut Circuit, name: &str, p: NodeId, n: NodeId, amps: f64) -> DeviceId {
-    c.add(Device::Isource {
-        name: name.into(),
-        p,
-        n,
-        kind: SourceKind::Dc(amps),
-    })
-}
-
-/// A one-shot pulse source `p -> GND`: `v1` until `delay`, then a `rise` ramp
-/// to `v2`, held for `width`, then a `fall` ramp back.
-pub fn vpulse(
-    c: &mut Circuit,
-    name: &str,
-    p: NodeId,
-    (v1, v2): (f64, f64),
-    delay: f64,
-    (rise, fall): (f64, f64),
-    width: f64,
-) -> DeviceId {
-    c.add(Device::Vsource {
-        name: name.into(),
-        p,
-        n: GND,
-        kind: SourceKind::Pulse {
-            v1,
-            v2,
-            delay,
-            rise,
-            fall,
-            width,
-            period: 0.0,
-        },
-    })
-}
-
-pub fn diode(c: &mut Circuit, name: &str, a: NodeId, k: NodeId, model: DiodeModel) -> DeviceId {
-    c.add(Device::Diode {
-        name: name.into(),
-        a,
-        k,
-        model,
-    })
-}
-
-pub fn bjt(
-    c: &mut Circuit,
-    name: &str,
-    col: NodeId,
-    base: NodeId,
-    emit: NodeId,
-    model: &BjtModel,
-) -> DeviceId {
-    c.add(Device::Bjt {
-        name: name.into(),
-        c: col,
-        b: base,
-        e: emit,
-        model: model.clone(),
-    })
-}
-
-pub fn pnp() -> BjtModel {
-    BjtModel {
-        polarity: Polarity::P,
-        ..BjtModel::default()
-    }
-}
-
-/// A 0/5 V comparator.
-pub fn comparator(
-    c: &mut Circuit,
-    name: &str,
-    out: NodeId,
-    inp: NodeId,
-    inn: NodeId,
-    hysteresis: f64,
-) -> DeviceId {
-    c.add(Device::Comparator {
-        name: name.into(),
-        out,
-        inp,
-        inn,
-        out_lo: 0.0,
-        out_hi: 5.0,
-        hysteresis,
-    })
-}
-
-/// A switch whose control is `ctrl` against ground, `roff = 1e9`.
-pub fn sw(
-    c: &mut Circuit,
-    name: &str,
-    a: NodeId,
-    b: NodeId,
-    ctrl: NodeId,
-    (von, voff): (f64, f64),
-    ron: f64,
-) -> DeviceId {
-    vswitch(c, name, a, b, (ctrl, GND), (von, voff), (ron, 1e9))
-}
-
-pub fn vswitch(
-    c: &mut Circuit,
-    name: &str,
-    a: NodeId,
-    b: NodeId,
-    (ctrl_p, ctrl_n): (NodeId, NodeId),
-    (von, voff): (f64, f64),
-    (ron, roff): (f64, f64),
-) -> DeviceId {
-    c.add(Device::VSwitch {
-        name: name.into(),
-        a,
-        b,
-        ctrl_p,
-        ctrl_n,
-        von,
-        voff,
-        ron,
-        roff,
-    })
-}
-
-/// 1 V through two 1 kΩ resistors to ground: the midpoint solves to 0.5 V.
-/// Returns `(circuit, top, mid)`.
-pub fn divider() -> (Circuit, NodeId, NodeId) {
-    let mut c = Circuit::new();
-    let top = c.node("top");
-    let mid = c.node("mid");
-    vdc(&mut c, "V", top, 1.0);
-    res(&mut c, "R1", top, mid, 1e3);
-    res(&mut c, "R2", mid, GND, 1e3);
-    (c, top, mid)
-}
-
-/// `n` PNP blocks hanging off `rail`: emitter on the rail, base through `rb`
-/// to `base_to`, collector through `rc` to ground. Returns `(base, col)` per
-/// block, named `{prefix}b{k}` / `{prefix}c{k}`.
-pub fn pnp_blocks(
-    c: &mut Circuit,
-    prefix: &str,
-    rail: NodeId,
-    n: usize,
-    base_to: NodeId,
-    rb: f64,
-    rc: f64,
-) -> Vec<(NodeId, NodeId)> {
-    let model = pnp();
-    (0..n)
-        .map(|k| {
-            let base = c.node(&format!("{prefix}b{k}"));
-            let col = c.node(&format!("{prefix}c{k}"));
-            bjt(c, &format!("{prefix}Q{k}"), col, base, rail, &model);
-            res(c, &format!("{prefix}Rb{k}"), base, base_to, rb);
-            res(c, &format!("{prefix}Rc{k}"), col, GND, rc);
-            (base, col)
-        })
-        .collect()
-}
-
-/// The shunt-fed PNP array: +5V -> `r_shunt` -> ANALOG_VDD -> `n` blocks.
-/// Returns `(circuit, rail, feed, shunt device, blocks)`.
-pub fn shunt_array(
-    n: usize,
-    r_shunt: f64,
-) -> (Circuit, NodeId, NodeId, DeviceId, Vec<(NodeId, NodeId)>) {
-    let mut c = Circuit::new();
-    let p5 = c.node("+5V");
-    vdc(&mut c, "V5", p5, 5.0);
-    let rail = c.node("ANALOG_VDD");
-    let shunt = res(&mut c, "R_shunt", p5, rail, r_shunt);
-    let blocks = pnp_blocks(&mut c, "", rail, n, GND, 100e3, 10e3);
-    (c, rail, p5, shunt, blocks)
-}
+pub use hauksbee_testkit::circuits::{
+    bjt, cap, cap_ic, comparator, diode, divider, idc, ind, pnp, pnp_blocks, res, shunt_array, sw,
+    vdc, vdc_between, vpulse, vswitch, GND,
+};
 
 pub fn fixed_opts(dt: f64) -> SolverOptions {
     SolverOptions {

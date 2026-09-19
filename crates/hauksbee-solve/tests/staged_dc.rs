@@ -13,10 +13,11 @@
 //! isolation and that it does not regress the ordinary diode solve.
 
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
-use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId};
+use hauksbee_ir::{Circuit, DiodeModel, NodeId};
 use hauksbee_solve::{
     dc_operating_point, run_op, Probe, RobustnessLadder, SolverOptions, Strategy, Workspace,
 };
+use hauksbee_testkit::circuits::{comparator, diode, res, vswitch};
 
 fn build(n_stage: usize, diode_is: f64) -> (Circuit, NodeId, Vec<NodeId>) {
     let mut c = Circuit::new();
@@ -39,19 +40,9 @@ fn build(n_stage: usize, diode_is: f64) -> (Circuit, NodeId, Vec<NodeId>) {
     let mut stage_nodes = Vec::new();
     for i in 0..n_stage {
         let s = c.node(&format!("S{i}")); // stretch node, floating at rest
-        c.add(Device::Diode {
-            name: format!("Dfwd{i}"),
-            a: drv,
-            k: s,
-            model,
-        });
+        diode(&mut c, &format!("Dfwd{i}"), drv, s, model);
         add_capacitor(&mut c, &format!("Cs{i}"), s, NodeId::GROUND, 5.8e-9, None);
-        c.add(Device::Diode {
-            name: format!("Drev{i}"),
-            a: NodeId::GROUND,
-            k: s,
-            model,
-        });
+        diode(&mut c, &format!("Drev{i}"), NodeId::GROUND, s, model);
         stage_nodes.push(s);
     }
     (c, rail, stage_nodes)
@@ -119,12 +110,7 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
     // forces the staged path (relaxed-seed + branch_reg) to engage, exactly the
     // condition under which the switches limit-cycle on the real board.
     let s = c.node("STRETCH");
-    c.add(Device::Diode {
-        name: "Dr".into(),
-        a: NodeId::GROUND,
-        k: s,
-        model,
-    });
+    diode(&mut c, "Dr", NodeId::GROUND, s, model);
     add_capacitor(&mut c, "Cs", s, NodeId::GROUND, 5.8e-9, None);
 
     // A fixed bias rail at 3 V for the switch controls.
@@ -137,17 +123,15 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
     // (1e6 on/off ratio) so the self-deciding tanh chatters between staged passes
     // (out flips the switch which flips out); the limit cycle the freeze cures.
     let out = c.node("OUT");
-    c.add(Device::VSwitch {
-        name: "Smain".into(),
-        a: rail,
-        b: out,
-        ctrl_p: bias,
-        ctrl_n: out,
-        von: 2.5,
-        voff: 1.5,
-        ron: 1.0,
-        roff: 1e6,
-    });
+    vswitch(
+        &mut c,
+        "Smain",
+        rail,
+        out,
+        (bias, out),
+        (2.5, 1.5),
+        (1.0, 1e6),
+    );
     crate::shared::add_resistor(&mut c, "RL", out, NodeId::GROUND, 1.0);
 
     // Decoy switches sitting near their own knees with the same negative-feedback
@@ -155,23 +139,16 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
     // couple to the main node and add discrete states the event loop must settle.
     for i in 0..n_decoy {
         let d = c.node(&format!("DEC{i}"));
-        c.add(Device::Diode {
-            name: format!("Dd{i}"),
-            a: out,
-            k: d,
-            model,
-        });
-        c.add(Device::VSwitch {
-            name: format!("Sd{i}"),
-            a: d,
-            b: NodeId::GROUND,
-            ctrl_p: bias,
-            ctrl_n: d,
-            von: 2.5,
-            voff: 1.5,
-            ron: 10.0,
-            roff: 1e6,
-        });
+        diode(&mut c, &format!("Dd{i}"), out, d, model);
+        vswitch(
+            &mut c,
+            &format!("Sd{i}"),
+            d,
+            NodeId::GROUND,
+            (bias, d),
+            (2.5, 1.5),
+            (10.0, 1e6),
+        );
         add_resistor(&mut c, &format!("Rd{i}"), d, NodeId::GROUND, 1e4);
     }
     (c, rail, out)
@@ -259,25 +236,12 @@ fn build_comparator_diode_chatter() -> Circuit {
     let out = c.node("OUT");
     let d_a = c.node("D_A");
     let fb = c.node("FB");
-    c.add(Device::Comparator {
-        name: "UCHAT".into(),
-        out,
-        inp: vref,
-        inn: fb,
-        out_lo: 0.0,
-        out_hi: 5.0,
-        hysteresis: 0.003,
-    });
+    comparator(&mut c, "UCHAT", out, vref, fb, 0.003);
     // out -> 1k -> diode -> fb -> 10k -> gnd: with out HIGH the diode conducts
     // and fb rises above vref (flipping out LOW); with out LOW fb rests at 0
     // (flipping out HIGH). No consistent static state exists.
     crate::shared::add_resistor(&mut c, "RFB", out, d_a, 1.0e3);
-    c.add(Device::Diode {
-        name: "DFB".into(),
-        a: d_a,
-        k: fb,
-        model,
-    });
+    diode(&mut c, "DFB", d_a, fb, model);
     crate::shared::add_resistor(&mut c, "RPD", fb, NodeId::GROUND, 10.0e3);
     c
 }
@@ -328,13 +292,7 @@ fn run_op_accepts_genuine_roots_including_staged_ones() {
     let a = c.node("A");
     let b = c.node("B");
     add_vdc(&mut c, "V1", a, NodeId::GROUND, 5.0);
-    c.add(Device::Resistor {
-        name: "R1".into(),
-        a,
-        b,
-        ohms: 1.0e3,
-        tc1: None,
-    });
+    res(&mut c, "R1", a, b, 1.0e3);
     crate::shared::add_resistor(&mut c, "R2", b, NodeId::GROUND, 1.0e3);
     let out = run_op(&c, &opts, &[Probe::NodeVoltage("B".into())])
         .expect("a convergent divider must pass the .op residual gate");

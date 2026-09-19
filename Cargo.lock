@@ -1460,6 +1460,7 @@ version = "0.1.0-beta.6"
 dependencies = [
  "criterion",
  "hauksbee-ir",
+ "hauksbee-testkit",
  "num-complex",
  "rayon",
  "serde",
@@ -1489,6 +1490,9 @@ dependencies = [
 [[package]]
 name = "hauksbee-testkit"
 version = "0.1.0-beta.6"
+dependencies = [
+ "hauksbee-ir",
+]
 
 [[package]]
 name = "heapless"

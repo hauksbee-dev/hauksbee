@@ -7,7 +7,7 @@
 [[models]]
 id = "2n7002"
 kind = "nmos"
-description = "2N7002 N-channel MOSFET SOT-23, 60V, 300mA, Vth≈2.5V"
+description = "2N7002 N-channel MOSFET SOT-23, 60V, 300mA, Vth≈2.0V typ (spec 1.0-2.5V)"
 
 [models.match]
 # Package/config-suffix variants of the same N-MOSFET die: 2N7002K, 2N7002P,
@@ -16,12 +16,16 @@ description = "2N7002 N-channel MOSFET SOT-23, 60V, 300mA, Vth≈2.5V"
 value_re = "(?i)^2N7002[A-Z0-9-]*$"
 
 [models.params]
-# Source: Nexperia 2N7002 datasheet Rev. 4 2021, SPICE model
-vto    = 2.5      # threshold voltage (V)
-kp     = 0.04     # transconductance parameter (A/V²), k'*(W/L)
+# A TYPICAL fit to Nexperia 2N7002 Rev. 7, Table 6, not a guaranteed bound. Rows
+# fitted: VGSth typ 2 V (min 1, max 2.5); RDSon typ 2.8 Ω (max 5) at VGS = 10 V,
+# ID = 500 mA; RDSon typ 3.8 Ω (max 5.3) at VGS = 4.5 V, ID = 75 mA. Solves back
+# to 3.20 Ω and 4.30 Ω, inside both typ..max bands (ngspice level 1 agrees). The
+# RDSon rows stop at VGS = 4.5 V, so a lower gate drive is an extrapolation.
+vto    = 2.0      # VGSth typ (V); a part anywhere in 1.0-2.5 V is not this card
+kp     = 0.26     # transconductance parameter (A/V²), k'*(W/L), fitted
 lambda = 0.01     # channel-length modulation (1/V)
-rd     = 2.0      # drain ohmic resistance (Ω)
-rs     = 0.5      # source ohmic resistance (Ω)
+rd     = 2.2      # drain ohmic resistance (Ω), fitted jointly with kp
+rs     = 0.5      # source ohmic resistance (Ω), bond-wire/package share
 cgd    = 3.0e-13  # gate-drain capacitance (F)
 cgs    = 5.0e-13  # gate-source capacitance (F)
 

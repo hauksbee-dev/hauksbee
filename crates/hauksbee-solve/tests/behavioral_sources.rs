@@ -32,6 +32,7 @@ use hauksbee_solve::{
     Partition, Partitioning, Probe, SolveError, SolverOptions, StepControl, Sweep, Transient,
     Workspace,
 };
+use hauksbee_testkit::circuits::cap;
 
 /// A B-source with one V(ctrl) dep, either output flavor.
 fn behavioral_vdep(out: NodeId, ctrl: NodeId, voltage_out: bool) -> Device {
@@ -416,13 +417,7 @@ fn ac_linearizes_at_the_operating_point() {
     let out = c.node("out");
     add_vdc(&mut c, "V1", vin, NodeId::GROUND, 0.0);
     add_resistor(&mut c, "R1", vin, a, 1e3);
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a,
-        b: NodeId::GROUND,
-        farads: 1e-6,
-        ic: None,
-    });
+    cap(&mut c, "C1", a, NodeId::GROUND, 1e-6);
     c.add(Device::Behavioral {
         name: "B1".into(),
         p: out,

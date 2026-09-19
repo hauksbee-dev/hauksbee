@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "avr")]
-mod support;
+use crate::support;
 
 #[cfg(feature = "avr")]
 use hauksbee_ci::run;

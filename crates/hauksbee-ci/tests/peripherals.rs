@@ -5,22 +5,14 @@
 
 use std::path::PathBuf;
 
-mod support;
-
 use hauksbee_ci::{run, RunConfig};
+
+use crate::support;
 
 fn testdata(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata")
         .join(rel)
-}
-
-fn write_tmp(name: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("hauksbee_ci_periph_tests_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join(name);
-    std::fs::write(&p, body).unwrap();
-    p
 }
 
 #[test]
@@ -119,7 +111,7 @@ max = 25
         vcd = support::toml_path(&vcd_out),
         pwl = pwl,
     );
-    let spec_path = write_tmp("vcd_sink.toml", &spec);
+    let spec_path = support::write_tmp("vcd_sink.toml", &spec);
 
     let cfg = RunConfig {
         spec: spec_path,

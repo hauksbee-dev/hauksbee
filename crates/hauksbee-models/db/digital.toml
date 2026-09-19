@@ -857,6 +857,37 @@ id = "74hc14"
 kind = "digital"
 description = "74HC14 hex inverter with Schmitt-trigger inputs"
 
+[models.source]
+tier = "curated-library"
+validation = "physical-bounds-only"
+[[models.source.references]]
+url = "https://www.ti.com/lit/ds/symlink/sn74hc14.pdf"
+title = "Texas Instruments SNx4HC14 datasheet, SCLS085L, revised February 2025"
+locator = "Section 5.5 Electrical Characteristics - 74, VCC = 4.5 V rows (VT+, VT-)"
+sha256 = "777ed9379ae69f81079324697c5685ddc7eddb3fdf285b70f419d347f9d132a1"
+# The `vih`/`vil` params below are the TYPICALS of these rows; the guaranteed
+# window is what a board with a precise trip point must be judged against.
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vih"
+low = 1.55
+high = 3.13
+unit = "V"
+kind = "specification-limits"
+basis = "VT+ positive-going threshold, SCLS085L Section 5.5 at VCC = 4.5 V, TA = 25 C"
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vil"
+low = 0.9
+high = 2.45
+unit = "V"
+kind = "specification-limits"
+basis = "VT- negative-going threshold, SCLS085L Section 5.5 at VCC = 4.5 V, TA = 25 C"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "threshold_vcc_scaling"
+reason = "vih/vil are the VCC = 4.5 V rows and are NOT scaled with the modelled supply, so a board run off 3.3 V or 5 V is judged against 4.5 V thresholds; the same table's VT+ typ is 1.2 V at VCC = 2 V and 3.3 V at VCC = 6 V, which is how far that moves. Vendor spread is a second, unmodelled axis: Nexperia 74HC14 (Rev. 10, 29 February 2024, Table 10) gives VT+ 1.7 min / 2.38 typ / 3.15 max and VT- 0.9 / 1.4 / 2.0 at VCC = 4.5 V"
+
 [models.match]
 value_re = "(?i)^(SN)?74HC14"
 

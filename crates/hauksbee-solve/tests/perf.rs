@@ -10,6 +10,7 @@
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
+use hauksbee_testkit::circuits::cap_ic;
 use std::time::Instant;
 
 // The two marketed benchmark circuits, shared with the asserting gates so a
@@ -329,13 +330,14 @@ fn accuracy_partitioned_vs_monolithic() {
             for i in 0..20 {
                 let next = c.node(&format!("n{}", i + 1));
                 add_resistor(&mut c, &format!("R{}", i + 1), prev, next, 1e3);
-                c.add(Device::Capacitor {
-                    name: format!("C{}", i + 1),
-                    a: next,
-                    b: NodeId::GROUND,
-                    farads: 10e-9,
-                    ic: Some(0.0),
-                });
+                cap_ic(
+                    &mut c,
+                    &format!("C{}", i + 1),
+                    next,
+                    NodeId::GROUND,
+                    10e-9,
+                    0.0,
+                );
                 prev = next;
             }
             c

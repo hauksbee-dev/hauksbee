@@ -37,6 +37,7 @@ use hauksbee_solve::{
     dc_operating_point, Integration, LinearIsland, Partition, Partitioning, SolverOptions,
     StepControl, Transient, Workspace,
 };
+use hauksbee_testkit::circuits::res;
 
 fn voltage_controlled(out: NodeId, ctrl: NodeId, vcvs: bool) -> Device {
     if vcvs {
@@ -267,13 +268,7 @@ fn vcvs_dc_matches_analytic() {
     let out = c.node("out");
     add_vdc(&mut c, "V1", vin, NodeId::GROUND, 1.0);
     crate::shared::add_resistor(&mut c, "R1", vin, a, 1e3);
-    c.add(Device::Resistor {
-        name: "R2".into(),
-        a,
-        b: NodeId::GROUND,
-        ohms: 1e3,
-        tc1: None,
-    });
+    res(&mut c, "R2", a, NodeId::GROUND, 1e3);
     let e1 = c.add(Device::Vcvs {
         name: "E1".into(),
         p: out,
@@ -329,13 +324,8 @@ fn vcvs_control_port_is_high_impedance() {
         cn: NodeId::GROUND,
         gain: 3.0,
     });
-    c.add(Device::Resistor {
-        name: "RL".into(),
-        a: out,
-        b: NodeId::GROUND,
-        ohms: 10.0, // heavy load: a control-port leak would be conspicuous
-        tc1: None,
-    });
+    // heavy load: a control-port leak would be conspicuous
+    res(&mut c, "RL", out, NodeId::GROUND, 10.0);
     let opts = SolverOptions {
         integration: Integration::Trapezoidal,
         step: StepControl::Fixed { dt: 1e-6 },

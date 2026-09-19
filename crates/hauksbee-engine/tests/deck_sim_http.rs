@@ -155,6 +155,12 @@ fn a_vendor_card_says_which_of_its_parameters_were_dropped() {
         "{stated:?}"
     );
     // A card restating the SPICE default asks for nothing, so it stays silent,
-    // and so does one whose parameters hauksbee now reads (VJE/MJE/FC).
-    assert_eq!(notes("XTF=0 ITF=0 VJE=0.65 FC=0.4"), Vec::<String>::new());
+    // and so does one whose parameters hauksbee now reads (VJE/MJE/FC). What
+    // every run states regardless is the basis its numbers rest on.
+    let quiet = notes("XTF=0 ITF=0 VJE=0.65 FC=0.4");
+    assert_eq!(quiet.len(), 1, "{quiet:?}");
+    assert!(
+        quiet[0].contains("carry no uncertainty interval"),
+        "{quiet:?}"
+    );
 }

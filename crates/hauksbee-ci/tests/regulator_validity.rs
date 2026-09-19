@@ -11,7 +11,7 @@
 //! in the coverage warnings, in each assertion detail and in the headless `run`
 //! notes; and a genuine failure on an untainted net stays a failure (FAIL > INVALID).
 
-mod support;
+use crate::support;
 
 use hauksbee_ci::report::CiResult;
 use hauksbee_ci::runner::RunOutcome;

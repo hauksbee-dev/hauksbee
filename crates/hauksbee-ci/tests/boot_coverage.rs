@@ -27,11 +27,7 @@ use std::path::PathBuf;
 
 use hauksbee_ci::run;
 
-fn example(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples")
-        .join(name)
-}
+use crate::support::{self, example};
 
 /// The firmware hex files are committed, but rebuild them from source if a
 /// toolchain is present so the test tracks the .c, not a stale artifact. Absence
@@ -85,8 +81,7 @@ fn which_avr_gcc() -> bool {
 #[test]
 fn gate_driven_promptly_passes() {
     ensure_firmware("a");
-    let result =
-        run(&crate::support::run_config(example("boot_gate_pass.toml"))).expect("PASS spec runs");
+    let result = run(&support::run_config(example("boot_gate_pass.toml"))).expect("PASS spec runs");
     assert!(
         result.passed(),
         "variant A drives the gate within the deadline, so all assertions pass:\n{}",
@@ -117,8 +112,7 @@ fn gate_driven_promptly_passes() {
 #[test]
 fn gate_left_floating_fails_naming_the_net() {
     ensure_firmware("b");
-    let result =
-        run(&crate::support::run_config(example("boot_gate_fail.toml"))).expect("FAIL spec runs");
+    let result = run(&support::run_config(example("boot_gate_fail.toml"))).expect("FAIL spec runs");
     assert!(
         !result.passed(),
         "variant B never drives the gate, so boot-coverage must FAIL:\n{}",
@@ -238,7 +232,7 @@ fn watchy_v15_display_res_driven_passes() {
     }
     let (_spec_dir, spec) = resolved_spec("watchy_v15_display_res.toml", &board);
     let t0 = std::time::Instant::now();
-    let result = run(&crate::support::run_config(spec)).expect("Watchy PASS spec runs");
+    let result = run(&support::run_config(spec)).expect("Watchy PASS spec runs");
     let wall = t0.elapsed();
     let bc = result
         .results
@@ -283,7 +277,7 @@ fn watchy_v15_display_res_undriven_fails() {
         return;
     }
     let (_spec_dir, spec) = resolved_spec("watchy_v15_display_res_undriven.toml", &board);
-    let result = run(&crate::support::run_config(spec)).expect("Watchy FAIL spec runs");
+    let result = run(&support::run_config(spec)).expect("Watchy FAIL spec runs");
     let bc = result
         .results
         .iter()

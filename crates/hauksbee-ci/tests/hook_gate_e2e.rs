@@ -14,12 +14,10 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use crate::support::blinky_board as board;
+
 fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hauksbee-ci"))
-}
-
-fn board() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/blinky.kicad_pcb")
 }
 
 /// A git repo with an identity, so `git commit` works unattended.

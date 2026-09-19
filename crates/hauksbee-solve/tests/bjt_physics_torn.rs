@@ -18,8 +18,9 @@
 //! monolithic reference at every membrane, reference and rail node.
 
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
-use hauksbee_ir::{BjtModel, Circuit, Device, NodeId, Polarity};
+use hauksbee_ir::{BjtModel, Circuit, NodeId, Polarity};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
+use hauksbee_testkit::circuits::bjt;
 
 fn series_charge_model() -> BjtModel {
     BjtModel {
@@ -51,21 +52,9 @@ fn build_array(n: usize) -> (Circuit, Vec<String>) {
     for k in 0..n {
         let rref = c.node(&format!("ref{k}"));
         add_resistor(&mut c, &format!("RR{k}"), avdd, rref, 10e3);
-        c.add(Device::Bjt {
-            name: format!("Q1_{k}"),
-            c: rref,
-            b: rref,
-            e: avdd,
-            model,
-        });
+        bjt(&mut c, &format!("Q1_{k}"), rref, rref, avdd, &model);
         let mem = c.node(&format!("mem{k}"));
-        c.add(Device::Bjt {
-            name: format!("Q2_{k}"),
-            c: mem,
-            b: rref,
-            e: avdd,
-            model,
-        });
+        bjt(&mut c, &format!("Q2_{k}"), mem, rref, avdd, &model);
         // Membrane RC load, so the mirror current integrates into a real
         // waveform and the charge banks see moving junction voltages.
         add_resistor(&mut c, &format!("RM{k}"), mem, NodeId::GROUND, 47e3);

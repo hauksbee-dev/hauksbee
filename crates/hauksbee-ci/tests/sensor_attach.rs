@@ -23,17 +23,11 @@
 //! and a sibling test in this binary publishes an I2C-less one through the
 //! process-global `HAUKSBEE_MCU_DIR`.
 
-mod support;
-
 use std::path::PathBuf;
 
 use hauksbee_ci::run;
 
-fn example(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples")
-        .join(name)
-}
+use crate::support::{self, example};
 
 fn renode_available() -> bool {
     hauksbee_mcu::renode::is_available()
@@ -65,7 +59,7 @@ fn sensor_attach_lm75_hot_flag_goes_high() {
         return;
     }
 
-    let result = run(&crate::support::run_config(example("lm75_thermostat.toml")))
+    let result = run(&support::run_config(example("lm75_thermostat.toml")))
         .expect("lm75_thermostat spec should load and run");
 
     assert!(
@@ -110,10 +104,8 @@ fn sensor_attach_lm75_cold_flag_stays_low() {
         return;
     }
 
-    let result = run(&crate::support::run_config(example(
-        "lm75_thermostat_cold.toml",
-    )))
-    .expect("lm75_thermostat_cold spec should load and run");
+    let result = run(&support::run_config(example("lm75_thermostat_cold.toml")))
+        .expect("lm75_thermostat_cold spec should load and run");
 
     assert!(
         result.passed(),
@@ -293,7 +285,7 @@ kind = "no_faults"
     );
     let path = dir.path().join("unknown-input.toml");
     std::fs::write(&path, spec).expect("write test spec");
-    let error = run(&crate::support::run_config(path))
+    let error = run(&support::run_config(path))
         .expect_err("unknown register-map input must not silently keep its default");
     assert!(
         error.to_string().contains("tempereture_c") && error.to_string().contains("not declared"),

@@ -21,8 +21,7 @@
 //! Same stated assumption set on both sides, opposite verdicts: a user
 //! assertion plus the fix commit's own resistor becomes a RED -> GREEN pair.
 
-mod support;
-
+use crate::support;
 use hauksbee_ci::{report::CiResult, RunConfig};
 use std::path::{Path, PathBuf};
 

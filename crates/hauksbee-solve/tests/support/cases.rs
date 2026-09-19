@@ -8,6 +8,7 @@
 
 use hauksbee_ir::{BjtModel, Circuit, Device, NodeId, Polarity, SourceKind};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl};
+use hauksbee_testkit::circuits::{bjt, cap_ic, res, vdc, vswitch, GND};
 
 // --- the rectifier -----------------------------------------------------------
 
@@ -56,12 +57,7 @@ pub struct Synapse {
 pub fn build_synapse_array(n: usize) -> Synapse {
     let mut c = Circuit::new();
     let vcc = c.node("vcc");
-    c.add(Device::Vsource {
-        name: "VCC".into(),
-        p: vcc,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    vdc(&mut c, "VCC", vcc, 5.0);
     let mut net = String::from("synapse array\nVCC vcc 0 DC 5\n");
     let mut membrane_nodes = Vec::new();
     let model = BjtModel {
@@ -98,74 +94,36 @@ pub fn build_synapse_array(n: usize) -> Synapse {
         ));
 
         let sw = c.node(&format!("sw{k}"));
-        c.add(Device::VSwitch {
-            name: format!("S{k}"),
-            a: vcc,
-            b: sw,
-            ctrl_p: ctrl,
-            ctrl_n: NodeId::GROUND,
-            von: 2.5,
-            voff: 0.5,
-            ron: 10.0,
-            roff: 1e9,
-        });
+        vswitch(
+            &mut c,
+            &format!("S{k}"),
+            vcc,
+            sw,
+            (ctrl, GND),
+            (2.5, 0.5),
+            (10.0, 1e9),
+        );
         net.push_str(&format!("S{k} vcc sw{k} ctrl{k} 0 SMOD\n"));
 
         let rref = c.node(&format!("ref{k}"));
-        c.add(Device::Resistor {
-            name: format!("RR{k}"),
-            a: sw,
-            b: rref,
-            ohms: 10e3,
-            tc1: None,
-        });
+        res(&mut c, &format!("RR{k}"), sw, rref, 10e3);
         net.push_str(&format!("RR{k} sw{k} ref{k} 10k\n"));
 
         // Bleeder: keeps the mirror reference defined while the switch is open,
         // so the diode-connected base does not float and stall Newton.
-        c.add(Device::Resistor {
-            name: format!("RB{k}"),
-            a: rref,
-            b: NodeId::GROUND,
-            ohms: 1e6,
-            tc1: None,
-        });
+        res(&mut c, &format!("RB{k}"), rref, GND, 1e6);
         net.push_str(&format!("RB{k} ref{k} 0 1meg\n"));
 
-        c.add(Device::Bjt {
-            name: format!("Q1_{k}"),
-            c: rref,
-            b: rref,
-            e: NodeId::GROUND,
-            model,
-        });
+        bjt(&mut c, &format!("Q1_{k}"), rref, rref, GND, &model);
         net.push_str(&format!("Q1_{k} ref{k} ref{k} 0 QMOD\n"));
 
         let mem = c.node(&format!("mem{k}"));
-        c.add(Device::Bjt {
-            name: format!("Q2_{k}"),
-            c: mem,
-            b: rref,
-            e: NodeId::GROUND,
-            model,
-        });
+        bjt(&mut c, &format!("Q2_{k}"), mem, rref, GND, &model);
         net.push_str(&format!("Q2_{k} mem{k} ref{k} 0 QMOD\n"));
 
-        c.add(Device::Resistor {
-            name: format!("RM{k}"),
-            a: vcc,
-            b: mem,
-            ohms: 47e3,
-            tc1: None,
-        });
+        res(&mut c, &format!("RM{k}"), vcc, mem, 47e3);
         net.push_str(&format!("RM{k} vcc mem{k} 47k\n"));
-        c.add(Device::Capacitor {
-            name: format!("CM{k}"),
-            a: mem,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: Some(5.0),
-        });
+        cap_ic(&mut c, &format!("CM{k}"), mem, GND, 1e-9, 5.0);
         net.push_str(&format!("CM{k} mem{k} 0 1n IC=5\n"));
         membrane_nodes.push(format!("mem{k}"));
     }

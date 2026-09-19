@@ -28,6 +28,10 @@ num-complex = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
 tempfile = { workspace = true }
+# Shared device-literal builders (`res`, `cap`, `vdc`, ...) used by both the
+# unit tests (via `src/test_fixtures.rs`, which re-exports them) and the
+# integration tests under `tests/`.
+hauksbee-testkit = { path = "../hauksbee-testkit" }
 # The ngspice differential harness reads a per-deck `expect.toml` (per-quantity
 # tolerances). `toml` is already in the lock (transitive); pin it here for the
 # test binary only.

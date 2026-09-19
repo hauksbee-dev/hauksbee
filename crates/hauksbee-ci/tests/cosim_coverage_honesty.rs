@@ -25,17 +25,11 @@
 //! that resolves a descriptor. Both skip cleanly without Renode or the
 //! firmware fixtures.
 
-mod support;
-
 use std::path::PathBuf;
 
 use hauksbee_ci::run;
 
-fn repo(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(rel)
-}
+use crate::support::{self, repo};
 
 fn renode_available() -> bool {
     hauksbee_mcu::renode::is_available()
@@ -91,7 +85,7 @@ contains = "hello from stm32"
         ),
     );
 
-    let result = run(&crate::support::run_config(spec)).expect("ci run");
+    let result = run(&support::run_config(spec)).expect("ci run");
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(
@@ -208,7 +202,7 @@ max   = 45.0
     );
 
     std::env::set_var("HAUKSBEE_MCU_DIR", &dir);
-    let result = run(&crate::support::run_config(spec));
+    let result = run(&support::run_config(spec));
     std::env::remove_var("HAUKSBEE_MCU_DIR");
     let result = result.expect("ci run");
     let _ = std::fs::remove_dir_all(&dir);

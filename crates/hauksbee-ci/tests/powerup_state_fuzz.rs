@@ -25,39 +25,7 @@
 //!
 //! Corpus-gated: skipped when the board-corpus symlink is absent.
 
-use std::path::PathBuf;
-
-mod support;
-
-use hauksbee_ci::{run, RunConfig};
-
-/// The directory the corpus boards sit directly under, whichever layout this
-/// machine has.
-///
-/// The `famous/` level exists only in the hand-built corpus, so joining it
-/// unconditionally meant no board resolved on the corpus
-/// `scripts/fetch-corpus.sh` produces, and every case below took its
-/// board-missing branch.
-fn corpus() -> PathBuf {
-    hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR")).unwrap_or_default()
-}
-
-fn require_corpus() -> bool {
-    std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok()
-}
-
-/// Write a spec body to a temp file and run it.
-fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
-    let dir = std::env::temp_dir().join(format!("hauksbee_ci_powerup_fuzz_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join(name);
-    std::fs::write(&p, body).unwrap();
-    run(&RunConfig {
-        spec: p,
-        ..Default::default()
-    })
-    .expect("spec runs")
-}
+use crate::support::{self, corpus_boards_root as corpus, require_corpus, run_body};
 
 /// LumenPnP motherboard: the low-side AO3400A MOSFET gates are driven by
 /// STM32F407 GPIOs that are Hi-Z at reset; only a 10k-to-GND pull holds each

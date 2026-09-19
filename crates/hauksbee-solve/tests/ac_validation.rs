@@ -3,8 +3,9 @@
 //! compares the solver to a textbook transfer function to a tight tolerance.
 
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, Device, NodeId};
 use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
+use hauksbee_testkit::circuits::{bjt, comparator, ind, res, vdc, vswitch};
 
 fn opts() -> SolverOptions {
     SolverOptions::fixed(1e-6)
@@ -168,13 +169,7 @@ fn series_rlc_resonant_frequency_and_q() {
     let out = ckt.node("out");
     add_vdc(&mut ckt, "VIN", vin, NodeId::GROUND, 0.0);
     add_resistor(&mut ckt, "R1", vin, mid, r);
-    ckt.add(Device::Inductor {
-        name: "L1".into(),
-        a: mid,
-        b: out,
-        henries: l,
-        ic: None,
-    });
+    ind(&mut ckt, "L1", mid, out, l);
     add_capacitor(&mut ckt, "C1", out, NodeId::GROUND, c, None);
 
     // Sweep finely around f0.
@@ -252,13 +247,7 @@ fn series_lc_notch_at_resonance() {
     add_vdc(&mut ckt, "VIN", vin, NodeId::GROUND, 0.0);
     add_resistor(&mut ckt, "R1", vin, out, r);
     // Series L then C from out to ground: a series LC trap.
-    ckt.add(Device::Inductor {
-        name: "L1".into(),
-        a: out,
-        b: tank,
-        henries: l,
-        ic: None,
-    });
+    ind(&mut ckt, "L1", out, tank, l);
     add_capacitor(&mut ckt, "C1", tank, NodeId::GROUND, c, None);
 
     let spec = AcSpec {
@@ -468,13 +457,7 @@ fn zero_ohm_jumper_is_a_short_in_ac() {
     let mid = ckt.node("mid");
     let out = ckt.node("out");
     add_vdc(&mut ckt, "VIN", vin, NodeId::GROUND, 0.0);
-    ckt.add(Device::Resistor {
-        name: "R0".into(),
-        a: vin,
-        b: mid,
-        ohms: 0.0, // the jumper
-        tc1: None,
-    });
+    res(&mut ckt, "R0", vin, mid, 0.0); // the jumper
     add_resistor(&mut ckt, "R1", mid, out, r);
     add_capacitor(&mut ckt, "C1", out, NodeId::GROUND, c, None);
     let fc = 1.0 / (std::f64::consts::TAU * r * c);
@@ -559,15 +542,7 @@ fn comparator_output_is_held_by_its_output_stage_in_ac() {
     let x = ckt.node("x");
     add_vdc(&mut ckt, "VIN", vin, NodeId::GROUND, 0.0);
     add_capacitor(&mut ckt, "CC", vin, x, 1e-9, None);
-    ckt.add(Device::Comparator {
-        name: "U1".into(),
-        out: x,
-        inp: NodeId::GROUND,
-        inn: NodeId::GROUND,
-        out_lo: 0.0,
-        out_hi: 5.0,
-        hysteresis: 0.0,
-    });
+    comparator(&mut ckt, "U1", x, NodeId::GROUND, NodeId::GROUND, 0.0);
     let spec = AcSpec {
         fstart: 1e3,
         fstop: 1e3,
@@ -597,13 +572,14 @@ fn cold_bjt_base_is_not_coupled_through_a_floored_gmu() {
     let nc = ckt.node("c");
     let nb = ckt.node("b");
     add_vdc(&mut ckt, "VC", nc, NodeId::GROUND, 5.0);
-    ckt.add(Device::Bjt {
-        name: "Q1".into(),
-        c: nc,
-        b: nb,
-        e: NodeId::GROUND,
-        model: hauksbee_ir::BjtModel::default(),
-    });
+    bjt(
+        &mut ckt,
+        "Q1",
+        nc,
+        nb,
+        NodeId::GROUND,
+        &hauksbee_ir::BjtModel::default(),
+    );
     let spec = AcSpec {
         fstart: 1e3,
         fstop: 1e3,
@@ -636,43 +612,29 @@ fn spdt_bbm_loser_leg_is_open_in_ac_like_dc() {
     // Dedicated AC injection: VINJ drives, the control biases are AC-grounded.
     add_vdc(&mut ckt, "VINJ", inj, NodeId::GROUND, 0.0);
     add_resistor(&mut ckt, "RS", inj, a, 1.0e3);
-    ckt.add(Device::Vsource {
-        name: "VC0".into(),
-        p: c0,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0), // margin (5-1.5)/1 = 3.5: firmly selected
-    });
-    ckt.add(Device::Vsource {
-        name: "VC1".into(),
-        p: c1,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(2.5), // margin (2.5-1.5)/1 = 1.0: raw-on, loses
-    });
-    // Selected throw: a -> out.
-    ckt.add(Device::VSwitch {
-        name: "SW1_s0".into(),
+    vdc(&mut ckt, "VC0", c0, 5.0); // margin (5-1.5)/1 = 3.5: firmly selected
+    vdc(&mut ckt, "VC1", c1, 2.5); // margin (2.5-1.5)/1 = 1.0: raw-on, loses
+                                   // Selected throw: a -> out.
+    vswitch(
+        &mut ckt,
+        "SW1_s0",
         a,
-        b: out,
-        ctrl_p: c0,
-        ctrl_n: NodeId::GROUND,
-        von: 2.0,
-        voff: 1.0,
-        ron: 1.0,
-        roff: 1e9,
-    });
+        out,
+        (c0, NodeId::GROUND),
+        (2.0, 1.0),
+        (1.0, 1e9),
+    );
     // Losing throw: a -> GND rail. Bare tanh at margin 1.0 is ~0.94 S (a
     // short); the DC break-before-make drives it to ~roff.
-    ckt.add(Device::VSwitch {
-        name: "SW1_s1".into(),
+    vswitch(
+        &mut ckt,
+        "SW1_s1",
         a,
-        b: NodeId::GROUND,
-        ctrl_p: c1,
-        ctrl_n: NodeId::GROUND,
-        von: 2.0,
-        voff: 1.0,
-        ron: 1.0,
-        roff: 1e9,
-    });
+        NodeId::GROUND,
+        (c1, NodeId::GROUND),
+        (2.0, 1.0),
+        (1.0, 1e9),
+    );
     let spec = AcSpec {
         fstart: 1e3,
         fstop: 1e3,
@@ -704,13 +666,7 @@ fn reactive_stamps_are_regular_at_the_dc_limit() {
     let vin = ckt.node("in");
     let out = ckt.node("out");
     add_vdc(&mut ckt, "VIN", vin, NodeId::GROUND, 0.0);
-    ckt.add(Device::Inductor {
-        name: "L1".into(),
-        a: vin,
-        b: out,
-        henries: 1e-3,
-        ic: None,
-    });
+    ind(&mut ckt, "L1", vin, out, 1e-3);
     add_resistor(&mut ckt, "R1", out, NodeId::GROUND, 1.0e3);
     add_capacitor(&mut ckt, "C1", out, NodeId::GROUND, 1e-9, None);
     // 1 uHz: ωL ~ 6e-9 Ω, ωC ~ 6e-15 S; the DC limit for both elements.
@@ -757,17 +713,15 @@ fn vswitch_mid_transition_control_modulation_appears_in_ac() {
         let ctrl = ckt.node("ctrl");
         add_vdc(&mut ckt, "VA", a, NodeId::GROUND, 5.0);
         add_vdc(&mut ckt, "VINJ", ctrl, NodeId::GROUND, vctrl_dc);
-        ckt.add(Device::VSwitch {
-            name: "SW1".into(),
+        vswitch(
+            &mut ckt,
+            "SW1",
             a,
-            b: out,
-            ctrl_p: ctrl,
-            ctrl_n: NodeId::GROUND,
-            von: 2.0,
-            voff: 1.0,
-            ron: 100.0,
-            roff: 1e6,
-        });
+            out,
+            (ctrl, NodeId::GROUND),
+            (2.0, 1.0),
+            (100.0, 1e6),
+        );
         add_resistor(&mut ckt, "RL", out, NodeId::GROUND, 1.0e3);
         ckt
     }

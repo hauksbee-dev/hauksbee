@@ -126,7 +126,7 @@ pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
                 // can argue with, not a single opaque pass/fail.
                 evaluate_hwtrace(spec, a, outcomes, mode)
             } else {
-                vec![evaluate_one(a, outcomes, mode)]
+                vec![evaluate_one(a, outcomes, mode, spec.frame_ms)]
             }
         })
         .collect()
@@ -327,7 +327,7 @@ fn regulation_reason<'a>(a: &Assertion, out: &'a RunOutcome) -> Option<&'a str> 
 /// Why this member cannot be judged AT ALL, if it cannot: its evaluation window
 /// overlapped a chunk the solver failed on, so the samples are held-stale; or an
 /// unsupported regulator's setpoint reaches what it judges. Worded once, here.
-fn member_invalid_reason(a: &Assertion, out: &RunOutcome) -> Option<String> {
+fn member_invalid_reason(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> Option<String> {
     if let Some(((ws, we), (fs, fe))) = stale_overlap(a, out) {
         return Some(format!(
             "the analog solve failed within this assertion's window ({:.2}-{:.2} ms \
@@ -342,7 +342,8 @@ fn member_invalid_reason(a: &Assertion, out: &RunOutcome) -> Option<String> {
     // An absent open driver cannot make a failure real; a pass stands on the stated
     // assumption that the part leaves the net alone (the refinement words it).
     let reason = regulation_reason(a, out)?;
-    let stands = reason.contains(hauksbee_engine::scheduler::OPEN_DRIVER) && check_seed(a, out).0;
+    let stands =
+        reason.contains(hauksbee_engine::scheduler::OPEN_DRIVER) && check_seed(a, out, frame_ms).0;
     (!stands).then(|| reason.to_string())
 }
 
@@ -350,6 +351,7 @@ fn evaluate_one(
     a: &Assertion,
     outcomes: &[RunOutcome],
     mode: Option<crate::tolerance::Mode>,
+    frame_ms: f64,
 ) -> AssertResult {
     let label = a.label();
     let kind = a.kind.clone();
@@ -363,7 +365,7 @@ fn evaluate_one(
     // a chunk the solver failed on? Such a member's samples cannot be trusted, so
     // its pass/fail is meaningless.
     // ... or does an unsupported regulator's setpoint reach what it judges?
-    let member_invalid = |out: &RunOutcome| member_invalid_reason(a, out).is_some();
+    let member_invalid = |out: &RunOutcome| member_invalid_reason(a, out, frame_ms).is_some();
 
     // Precedence is FAIL > INVALID > PASS. Evaluate every ensemble member so the
     // result carries the pass-rate and the full failing-seed list, but SKIP a
@@ -390,7 +392,7 @@ fn evaluate_one(
         if member_invalid(out) {
             continue;
         }
-        let (ok, detail, why) = check_seed(a, out);
+        let (ok, detail, why) = check_seed(a, out, frame_ms);
         if ok {
             last_detail = detail;
         } else {
@@ -491,7 +493,7 @@ fn evaluate_one(
     // threshold still refuses.
     if let Some((out, reason)) = outcomes
         .iter()
-        .find_map(|out| member_invalid_reason(a, out).map(|r| (out, r)))
+        .find_map(|out| member_invalid_reason(a, out, frame_ms).map(|r| (out, r)))
     {
         let per_seed = if outcomes.len() > 1 {
             format!("{}: ", member_label(member, out))
@@ -636,7 +638,7 @@ fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
 /// why): `why` is the observed-shortfall sentence a failing bound computes
 /// (`None` on a pass, and on kinds whose detail already IS the diagnosis,
 /// e.g. boot_coverage's drive-state analysis).
-fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
+fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, Option<String>) {
     // Adapter for the kinds whose checks carry no separate `why`.
     fn plain((ok, detail): (bool, String)) -> (bool, String, Option<String>) {
         (ok, detail, None)
@@ -644,7 +646,7 @@ fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>)
     match a.kind.as_str() {
         "voltage" => check_voltage(a, out),
         "uart" => plain(check_uart(a, out)),
-        "toggle" => check_toggle(a, out),
+        "toggle" => check_toggle(a, out, frame_ms),
         "no_faults" => plain(check_no_faults(out)),
         "max_current" => check_max_current(a, out),
         "max_temp" => check_max_temp(a, out),
@@ -1434,7 +1436,7 @@ fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     }
 }
 
-fn check_toggle(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
+fn check_toggle(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let toggles = out.toggles.get(&net).copied().unwrap_or(0);
 
@@ -1477,6 +1479,35 @@ fn check_toggle(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String
         // A full square-wave period is two toggles, so frequency = toggles /
         // (2 * duration_s). Compare against tolerance (fractional, default 25%).
         let dur_s = out.sim_ms / 1000.0;
+        // An edge per sample is not a measured rate, it is the sampling grid
+        // reporting itself: the true waveform may be at that rate or at any
+        // multiple of it, and the two cannot be told apart from these samples.
+        // A run that toggled on 1499 of its 1500 frames once reported
+        // "~249833.33 Hz" as if it were a number. Every edge is also pinned to
+        // a frame boundary, so each half period carries up to one frame of
+        // error: under ten samples per period the grid alone moves the answer
+        // by tens of percent, which is not a measurement of anything.
+        const MIN_SAMPLES_PER_PERIOD: f64 = 10.0;
+        // The grid the run actually sampled on: the runner floors `frame_ms` at
+        // 1 us, so a spec asking for finer frames got these.
+        let frame_ms = frame_ms.max(1e-3);
+        let samples_per_period = (2.0 * out.sim_ms / frame_ms) / toggles as f64;
+        if samples_per_period < MIN_SAMPLES_PER_PERIOD {
+            return (
+                false,
+                format!(
+                    "{net}: {toggles} toggles over {:.0} frames is under-sampled \
+                     ({samples_per_period:.1} samples per period); no frequency measured",
+                    out.sim_ms / frame_ms
+                ),
+                Some(format!(
+                    "{net} changes level every {samples_per_period:.1} samples, so the run \
+                     cannot separate its rate from the sampling grid. Reduce frame_ms to at \
+                     most {:.3e} (a tenth of the {freq} Hz period) and re-run",
+                    100.0 / freq
+                )),
+            );
+        }
         let measured = if dur_s > 0.0 {
             toggles as f64 / (2.0 * dur_s)
         } else {
@@ -2031,7 +2062,7 @@ mod tests {
     #[test]
     fn an_interior_probe_failure_escalates_but_a_corner_failure_does_not() {
         let a = assertion("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n");
-        let eval = |members: &[RunOutcome]| evaluate_one(&a, members, Some(Mode::Corners));
+        let eval = |members: &[RunOutcome]| evaluate_one(&a, members, Some(Mode::Corners), 1.0);
         // Corners in band, the interior probe sags out: non-monotonic.
         let r = eval(&corners_and_probe(3.30, 3.28, 2.40));
         assert!(!r.passed && r.failing_seed == Some(2), "{}", r.detail);
@@ -2069,7 +2100,7 @@ mod tests {
             vout_member(3, 3.30, true),
             vout_member(4, 3.40, true),
         ];
-        let r = evaluate_one(&a, &outcomes, Some(Mode::Corners));
+        let r = evaluate_one(&a, &outcomes, Some(Mode::Corners), 1.0);
         assert!(r.passed, "{}", r.detail);
         assert!(!r.detail.contains("NON-MONOTONIC"));
         assert!(
@@ -2094,6 +2125,7 @@ mod tests {
             &a,
             &[vout_member(1, 2.0, false), diverged(2)],
             Some(Mode::Corners),
+            1.0,
         );
         assert!(
             !res.invalid && !res.passed && res.failing_seed == Some(1),
@@ -2112,6 +2144,7 @@ mod tests {
             &a,
             &[vout_member(0, 3.3, false), diverged(3)],
             Some(Mode::Corners),
+            1.0,
         );
         assert!(res.invalid, "{}", res.detail);
         assert!(

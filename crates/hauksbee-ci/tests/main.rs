@@ -62,6 +62,8 @@ mod peripherals;
 mod powerup_state_fuzz;
 #[path = "progress_stays_out_of_the_way.rs"]
 mod progress_stays_out_of_the_way;
+#[path = "regulator_headroom_boundary.rs"]
+mod regulator_headroom_boundary;
 #[path = "regulator_validity.rs"]
 mod regulator_validity;
 #[path = "round2_ci_surface.rs"]
@@ -74,6 +76,8 @@ mod round3_cli;
 mod schema_drift;
 #[path = "schematic_ci.rs"]
 mod schematic_ci;
+#[path = "schmitt_oscillator.rs"]
+mod schmitt_oscillator;
 #[path = "sensor_attach.rs"]
 mod sensor_attach;
 #[path = "shipped_examples_run.rs"]

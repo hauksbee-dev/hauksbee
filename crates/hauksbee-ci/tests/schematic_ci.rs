@@ -8,11 +8,11 @@
 //! right fixture for the powerful guarantee here: **schematic-stage CI and
 //! layout-stage CI return the same verdict where both exist.**
 
-mod support;
-
 use std::path::PathBuf;
 
 use hauksbee_ci::run;
+
+use crate::support;
 
 /// A reference designator that exists only on the sub-sheet
 /// (`pic_sockets.kicad_sch`): U5 is one of the PIC sockets. Used to prove the
@@ -69,14 +69,6 @@ fn pic_programmer_dir() -> PathBuf {
     .unwrap_or_default()
 }
 
-fn write_tmp(name: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("hauksbee_ci_sch_tests");
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join(name);
-    std::fs::write(&p, body).unwrap();
-    p
-}
-
 /// The shared assertion body, parameterised on the board path. Identical for
 /// the schematic and the PCB so the only variable is which stage we run at.
 fn spec_body(board: &std::path::Path) -> String {
@@ -108,8 +100,7 @@ fn schematic_example_spec_passes() {
     let Some(spec) = schematic_example() else {
         return;
     };
-    let result =
-        run(&crate::support::run_config(spec.path().to_path_buf())).expect("schematic spec runs");
+    let result = run(&support::run_config(spec.path().to_path_buf())).expect("schematic spec runs");
     assert!(
         result.passed(),
         "schematic-stage CI must be GREEN:\n{}",
@@ -130,11 +121,11 @@ fn schematic_and_pcb_agree() {
         return;
     }
 
-    let sch_spec = write_tmp("agree_sch.toml", &spec_body(&sch));
-    let pcb_spec = write_tmp("agree_pcb.toml", &spec_body(&pcb));
+    let sch_spec = support::write_tmp("agree_sch.toml", &spec_body(&sch));
+    let pcb_spec = support::write_tmp("agree_pcb.toml", &spec_body(&pcb));
 
-    let sch_res = run(&crate::support::run_config(sch_spec)).expect("schematic spec runs");
-    let pcb_res = run(&crate::support::run_config(pcb_spec)).expect("pcb spec runs");
+    let sch_res = run(&support::run_config(sch_spec)).expect("schematic spec runs");
+    let pcb_res = run(&support::run_config(pcb_spec)).expect("pcb spec runs");
 
     // Same number of assertions, same labels, same pass/fail on each.
     assert_eq!(
@@ -168,14 +159,14 @@ fn pointing_at_subsheet_is_a_clear_error() {
         eprintln!("corpus pic_programmer missing; skipping");
         return;
     }
-    let spec = write_tmp(
+    let spec = support::write_tmp(
         "subsheet.toml",
         &format!(
             "name=\"sub\"\nboard={}\nduration_ms=1\n[[assert]]\nkind=\"no_faults\"\n",
             support::toml_path(&sub)
         ),
     );
-    let err = run(&crate::support::run_config(spec)).unwrap_err();
+    let err = run(&support::run_config(spec)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("sub-sheet"), "should flag a sub-sheet: {msg}");
     assert!(
@@ -199,7 +190,7 @@ fn hierarchy_subsheet_components_are_loaded() {
         return;
     }
     // SUBSHEET_REF (a PIC socket) lives only on the sub-sheet pic_sockets.kicad_sch.
-    let spec = write_tmp(
+    let spec = support::write_tmp(
         "subsheet_load.toml",
         &format!(
             "name=\"load\"\nboard={}\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"{}\"\namps=100.0\n",
@@ -215,7 +206,7 @@ fn hierarchy_subsheet_components_are_loaded() {
     // "unknown component" means it was not. (This test previously relied on the
     // untracked-kind case silently passing green, that silent pass was bug #18
     // and is now a loud rejection.)
-    match run(&crate::support::run_config(spec)) {
+    match run(&support::run_config(spec)) {
         Ok(res) => assert!(
             res.passed(),
             "sub-sheet component must be present and within its ceiling"

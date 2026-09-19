@@ -8,10 +8,12 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-mod support;
-
 use hauksbee_ci::run;
 
+use crate::support;
+
+/// A path under this crate's own manifest dir (its `examples/` and `../../testdata`),
+/// distinct from [`support::repo`] which resolves against the workspace root.
 fn repo(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
 }

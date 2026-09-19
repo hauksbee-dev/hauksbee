@@ -1,4 +1,58 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Write `body` to a fresh temp file named `name` and return its path.
+///
+/// Every integration module compiles into the same `it` binary and cargo
+/// runs its tests concurrently, so the destination directory is unique per
+/// call (process id + a monotonic counter) rather than shared by name: two
+/// tests writing the same `name` (even across different modules) must never
+/// collide on one path.
+#[allow(dead_code)]
+pub fn write_tmp(name: &str, body: &str) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("hauksbee_ci_tests_{}_{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join(name);
+    std::fs::write(&p, body).unwrap();
+    p
+}
+
+/// Write `body` to a spec file named `name` and run it with default config.
+#[allow(dead_code)]
+pub fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
+    hauksbee_ci::run(&run_config(write_tmp(name, body))).expect("spec runs")
+}
+
+/// A committed example board/spec under this crate's `examples/` directory.
+#[allow(dead_code)]
+pub fn example(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join(name)
+}
+
+/// A path under the repository root, [`repo_root`] plus `rel`.
+#[allow(dead_code)]
+pub fn repo(rel: &str) -> PathBuf {
+    repo_root().join(rel)
+}
+
+/// The directory the board corpus sits directly under, whichever layout this
+/// machine has (the hand-built `famous/<id>` tree or the flat `<id>` layout
+/// `scripts/fetch-corpus.sh` produces), or an empty default if the corpus is
+/// absent.
+#[allow(dead_code)]
+pub fn corpus_boards_root() -> PathBuf {
+    hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR")).unwrap_or_default()
+}
+
+/// Whether an absent corpus board must hard-fail rather than skip.
+#[allow(dead_code)]
+pub fn require_corpus() -> bool {
+    std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok()
+}
 
 /// Encode a filesystem path as a complete TOML string value.
 ///

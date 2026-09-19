@@ -12,6 +12,7 @@
 use crate::shared::{add_capacitor, add_resistor};
 use hauksbee_ir::{Circuit, Device, NodeId, PwlPoint, SourceKind};
 use hauksbee_solve::{SolverOptions, StepControl, Transient};
+use hauksbee_testkit::circuits::cap_ic;
 
 /// A 2 us PWL pulse at t = 400 us into an RC (tau = 2 us), after 400 us of
 /// dead-flat quiet during which the adaptive controller grows dt toward
@@ -175,13 +176,8 @@ fn breakpoint_landing_does_not_collapse_controller_dt() {
         ]),
     });
     add_resistor(&mut c, "R1", vin, out, 1e3);
-    c.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: 1e-9,
-        ic: Some(1.0), // pre-settled: the march is quiet from t = 0
-    });
+    // pre-settled: the march is quiet from t = 0
+    cap_ic(&mut c, "C1", out, NodeId::GROUND, 1e-9, 1.0);
     let opts = SolverOptions {
         step: StepControl::Adaptive {
             dt_initial: 1e-6,

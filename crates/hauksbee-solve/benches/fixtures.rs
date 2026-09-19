@@ -11,7 +11,8 @@
 //! so the mirror-array builder the exactness test relies on and the one the
 //! benchmark times are literally the same code, and cannot drift apart.
 
-use hauksbee_ir::{BjtModel, Circuit, Device, NodeId, Polarity, SourceKind};
+use hauksbee_ir::{BjtModel, Circuit, NodeId, Polarity};
+use hauksbee_testkit::circuits::{bjt, cap_ic, res, vdc};
 
 /// An `n`-stage linear RC ladder driven by a 1 V DC source.
 ///
@@ -36,31 +37,21 @@ pub fn build_rc_ladder(n: usize) -> Circuit {
     let c_farads = 1e-9;
     let mut c = Circuit::new();
     let vin = c.node("in");
-    c.add(Device::Vsource {
-        name: "VIN".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(1.0),
-    });
+    vdc(&mut c, "VIN", vin, 1.0);
     // Chain: each stage is a series R from the previous node plus a shunt C to
     // ground. `prev` walks the chain so stage k reads stage k-1's node.
     let mut prev = vin;
     for k in 0..n {
         let node = c.node(&format!("n{k}"));
-        c.add(Device::Resistor {
-            name: format!("R{k}"),
-            a: prev,
-            b: node,
-            ohms: r_ohms,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: format!("C{k}"),
-            a: node,
-            b: NodeId::GROUND,
-            farads: c_farads,
-            ic: Some(0.0),
-        });
+        res(&mut c, &format!("R{k}"), prev, node, r_ohms);
+        cap_ic(
+            &mut c,
+            &format!("C{k}"),
+            node,
+            NodeId::GROUND,
+            c_farads,
+            0.0,
+        );
         prev = node;
     }
     c
@@ -86,21 +77,10 @@ pub fn build_rc_ladder(n: usize) -> Circuit {
 pub fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
     let mut c = Circuit::new();
     let p5 = c.node("+5V");
-    c.add(Device::Vsource {
-        name: "V5".into(),
-        p: p5,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
+    vdc(&mut c, "V5", p5, 5.0);
     // The defining element: the sense shunt feeding the analog rail.
     let avdd = c.node("ANALOG_VDD");
-    c.add(Device::Resistor {
-        name: "R_shunt".into(),
-        a: p5,
-        b: avdd,
-        ohms: 1e3,
-        tc1: None,
-    });
+    res(&mut c, "R_shunt", p5, avdd, 1e3);
 
     // PNP high-side mirror: emitters on the rail, like the board's ANALOG_VDD
     // current mirrors.
@@ -121,45 +101,15 @@ pub fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
         // with the total array load - the exact coupling we must reproduce.
         // Reference leg: rail -> RR -> diode-connected mirror reference.
         let rref = c.node(&format!("ref{k}"));
-        c.add(Device::Resistor {
-            name: format!("RR{k}"),
-            a: avdd,
-            b: rref,
-            ohms: 10e3,
-            tc1: None,
-        });
+        res(&mut c, &format!("RR{k}"), avdd, rref, 10e3);
         // Diode-connected reference transistor with emitter on the rail.
-        c.add(Device::Bjt {
-            name: format!("Q1_{k}"),
-            c: rref,
-            b: rref,
-            e: avdd,
-            model,
-        });
+        bjt(&mut c, &format!("Q1_{k}"), rref, rref, avdd, &model);
         // Mirror output transistor, emitter on the rail, collector -> membrane.
         let mem = c.node(&format!("mem{k}"));
-        c.add(Device::Bjt {
-            name: format!("Q2_{k}"),
-            c: mem,
-            b: rref,
-            e: avdd,
-            model,
-        });
+        bjt(&mut c, &format!("Q2_{k}"), mem, rref, avdd, &model);
         // Membrane RC to ground.
-        c.add(Device::Resistor {
-            name: format!("RM{k}"),
-            a: mem,
-            b: NodeId::GROUND,
-            ohms: 47e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: format!("CM{k}"),
-            a: mem,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: Some(0.0),
-        });
+        res(&mut c, &format!("RM{k}"), mem, NodeId::GROUND, 47e3);
+        cap_ic(&mut c, &format!("CM{k}"), mem, NodeId::GROUND, 1e-9, 0.0);
         membranes.push(format!("mem{k}"));
     }
     (c, membranes)

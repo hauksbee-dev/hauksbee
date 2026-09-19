@@ -1622,9 +1622,7 @@ fn main() -> anyhow::Result<()> {
             #[cfg(not(feature = "serve"))]
             {
                 let _ = args;
-                Err(anyhow::anyhow!(
-                    "hauksbee was built without the serve feature"
-                ))
+                Err(anyhow::anyhow!(hauksbee_engine::commands::common::NO_SERVE))
             }
         }
         Command::Doctor(args) => hauksbee_engine::commands::doctor::run(args.backends, args.json),

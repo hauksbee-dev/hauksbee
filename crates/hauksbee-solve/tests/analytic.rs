@@ -3,8 +3,9 @@
 //! ~1e-6 relative; nonlinear DC points to ~1e-3.
 
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
-use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, Polarity};
+use hauksbee_ir::{BjtModel, Circuit, DiodeModel, NodeId, Polarity};
 use hauksbee_solve::{Integration, SolverOptions, StepControl, Transient};
+use hauksbee_testkit::circuits::{bjt, diode, ind};
 
 /// Max error of `got` vs `want`, normalized by `reltol*|signal| + atol` so a
 /// near-zero early sample isn't penalized as if its relative error mattered.
@@ -69,13 +70,7 @@ fn series_rlc_underdamped() {
     let out = circuit.node("out");
     add_vdc(&mut circuit, "V1", vin, NodeId::GROUND, v);
     add_resistor(&mut circuit, "R1", vin, mid, r);
-    circuit.add(Device::Inductor {
-        name: "L1".into(),
-        a: mid,
-        b: out,
-        henries: l,
-        ic: Some(0.0),
-    });
+    ind(&mut circuit, "L1", mid, out, l);
     add_capacitor(&mut circuit, "C1", out, NodeId::GROUND, cap, Some(0.0));
 
     let period = std::f64::consts::TAU / wd;
@@ -115,12 +110,7 @@ fn diode_resistor_dc_operating_point() {
     let nd = circuit.node("d");
     add_vdc(&mut circuit, "V1", vin, NodeId::GROUND, v);
     add_resistor(&mut circuit, "R1", vin, nd, r);
-    circuit.add(Device::Diode {
-        name: "D1".into(),
-        a: nd,
-        k: NodeId::GROUND,
-        model,
-    });
+    diode(&mut circuit, "D1", nd, NodeId::GROUND, model);
 
     // Reference: solve (V - Vd)/R = Is*(exp(Vd/Vt) - 1) for Vd by Newton.
     let vt = 0.025852_f64; // kT/q at 27 C
@@ -175,21 +165,9 @@ fn bjt_current_mirror_ratio() {
     let rload = 1e3;
     add_resistor(&mut circuit, "RL", vcc, nout, rload);
     // Q1 diode-connected: collector tied to base (ref node), emitter to gnd.
-    circuit.add(Device::Bjt {
-        name: "Q1".into(),
-        c: nref,
-        b: nref,
-        e: NodeId::GROUND,
-        model,
-    });
+    bjt(&mut circuit, "Q1", nref, nref, NodeId::GROUND, &model);
     // Q2 mirrors: base on ref, collector on out, emitter to gnd.
-    circuit.add(Device::Bjt {
-        name: "Q2".into(),
-        c: nout,
-        b: nref,
-        e: NodeId::GROUND,
-        model,
-    });
+    bjt(&mut circuit, "Q2", nout, nref, NodeId::GROUND, &model);
 
     let opts = SolverOptions::fixed(1e-6);
     let wf = Transient::new(opts).run(&circuit, 1e-6).unwrap();

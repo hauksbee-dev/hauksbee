@@ -31,6 +31,7 @@ use hauksbee_solve::orchestrate::run_staged;
 
 use crate::shared::{add_resistor, lerp_at};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient, Waveforms};
+use hauksbee_testkit::circuits::{cap, comparator, vswitch};
 
 /// Deterministic xorshift64*; good enough to scatter topologies, and every
 /// draw is reproducible from the seed printed on failure.
@@ -97,13 +98,13 @@ fn random_board(seed: u64) -> Circuit {
         for k in 0..depth {
             let node = c.node(&format!("i{i}_n{k}"));
             add_resistor(&mut c, &format!("R{i}_{k}"), prev, node, rng.f(0.5e3, 5e3));
-            c.add(Device::Capacitor {
-                name: format!("C{i}_{k}"),
-                a: node,
-                b: NodeId::GROUND,
-                farads: rng.f(0.2e-9, 2e-9),
-                ic: None,
-            });
+            cap(
+                &mut c,
+                &format!("C{i}_{k}"),
+                node,
+                NodeId::GROUND,
+                rng.f(0.2e-9, 2e-9),
+            );
             prev = node;
             tail = node;
         }
@@ -125,29 +126,26 @@ fn random_board(seed: u64) -> Circuit {
                     hubs[down],
                     1e3,
                 );
-                c.add(Device::Comparator {
-                    name: format!("K{up}_{down}_{edge}"),
+                comparator(
+                    &mut c,
+                    &format!("K{up}_{down}_{edge}"),
                     out,
-                    inp: tails[up],
-                    inn: NodeId::GROUND,
-                    out_lo: 0.0,
-                    out_hi: 5.0,
-                    hysteresis: 1e-3,
-                });
+                    tails[up],
+                    NodeId::GROUND,
+                    1e-3,
+                );
             } else {
                 // Switch in `down` gated by `up`'s tail.
                 let o = c.node(&format!("sw_{up}_{down}_{edge}"));
-                c.add(Device::VSwitch {
-                    name: format!("S{up}_{down}_{edge}"),
-                    a: hubs[down],
-                    b: o,
-                    ctrl_p: tails[up],
-                    ctrl_n: NodeId::GROUND,
-                    von: rng.f(1.0, 2.5),
-                    voff: rng.f(0.3, 0.9),
-                    ron: 10.0,
-                    roff: 1e9,
-                });
+                vswitch(
+                    &mut c,
+                    &format!("S{up}_{down}_{edge}"),
+                    hubs[down],
+                    o,
+                    (tails[up], NodeId::GROUND),
+                    (rng.f(1.0, 2.5), rng.f(0.3, 0.9)),
+                    (10.0, 1e9),
+                );
                 add_resistor(
                     &mut c,
                     &format!("RS{up}_{down}_{edge}"),

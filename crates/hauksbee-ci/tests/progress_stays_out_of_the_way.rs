@@ -6,9 +6,7 @@
 //! parser and a CI log to a human reading a result, and a hundred progress
 //! lines in either is a regression, not a feature.
 
-mod support;
-
-use crate::support::repo_root;
+use crate::support::{self, repo_root};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

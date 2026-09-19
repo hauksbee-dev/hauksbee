@@ -11,9 +11,7 @@ use std::path::PathBuf;
 use hauksbee_ci::{init::init_to, run, RunConfig, Spec};
 
 /// A board with a detectable MCU (atmega328p) and a named +5V rail.
-fn blinky() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/blinky.kicad_pcb")
-}
+use crate::support::blinky_board as blinky;
 
 /// The shipped Watchy board: a USB-fed VBUS rail plus a +3V3 rail the board
 /// derives from it, so the scaffold has both a source rail and a derived one.

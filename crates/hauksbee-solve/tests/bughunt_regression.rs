@@ -4,6 +4,7 @@
 use crate::shared::{add_capacitor, add_vdc};
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind, SpiceLoader};
 use hauksbee_solve::{Partitioning, SolverOptions, StepControl, Transient};
+use hauksbee_testkit::circuits::{bjt, diode};
 
 fn rc(farads: f64) -> Circuit {
     crate::shared::rc_lowpass(1.0, 1e3, farads)
@@ -229,16 +230,17 @@ fn saturated_bjt_with_nf_ne_nr_converges() {
     // saturation, vbc forward.
     crate::shared::add_resistor(&mut c, "RB", vcc, nb, 10e3);
     crate::shared::add_resistor(&mut c, "RC", vcc, nc, 1e3);
-    c.add(Device::Bjt {
-        name: "Q1".into(),
-        c: nc,
-        b: nb,
-        e: NodeId::GROUND,
-        model: BjtModel {
+    bjt(
+        &mut c,
+        "Q1",
+        nc,
+        nb,
+        NodeId::GROUND,
+        &BjtModel {
             nr: 1.5,
             ..BjtModel::default()
         },
-    });
+    );
     let out = run_op(
         &c,
         &SolverOptions::default(),
@@ -358,12 +360,7 @@ fn partitioned_nonlinear_island_advances_internal_time_varying_source() {
             },
         });
         crate::shared::add_resistor(&mut c, "Rd", d, NodeId::GROUND, 200.0);
-        c.add(Device::Diode {
-            name: "D1".into(),
-            a: d,
-            k: NodeId::GROUND,
-            model: DiodeModel::default(),
-        });
+        diode(&mut c, "D1", d, NodeId::GROUND, DiodeModel::default());
         c
     };
     // Fixed dt: Off and Auto share the exact accepted grid, so the waveforms

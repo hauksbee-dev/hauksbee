@@ -15,17 +15,9 @@
 //! `support::descriptor_env_lock` like every other descriptor-resolving test
 //! in this binary.
 
-mod support;
-
-use std::path::PathBuf;
-
 use hauksbee_ci::{run, RunConfig};
 
-fn repo(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(rel)
-}
+use crate::support::{self, repo};
 
 #[test]
 fn a_spec_descriptor_dir_serves_the_overridden_descriptor() {

@@ -9,27 +9,19 @@
 //! the exact CI path a board spec would: an `[ac]` sweep feeds a `phase_margin`
 //! assertion, and the evaluator passes/fails on the computed margin.
 
-use std::path::PathBuf;
-
 use hauksbee_ci::assertions::evaluate;
 use hauksbee_ci::runner::{AcOutcome, RunOutcome};
 use hauksbee_ci::Spec;
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
 
-fn write_tmp(name: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("hauksbee_ci_ac_tests_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join(name);
-    std::fs::write(&p, body).unwrap();
-    p
-}
+use crate::support;
 
 // --- spec validation --------------------------------------------------------
 
 #[test]
 fn phase_margin_assertion_needs_ac_block() {
-    let p = write_tmp(
+    let p = support::write_tmp(
         "pm_no_ac.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[[assert]]\nkind=\"phase_margin\"\nnet=\"FB\"\nmin=45\n",
     );
@@ -39,7 +31,7 @@ fn phase_margin_assertion_needs_ac_block() {
 
 #[test]
 fn phase_margin_needs_a_bound() {
-    let p = write_tmp(
+    let p = support::write_tmp(
         "pm_no_bound.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=1\nfstop=1e6\npoints=10\n[[assert]]\nkind=\"phase_margin\"\nnet=\"FB\"\n",
     );
@@ -49,7 +41,7 @@ fn phase_margin_needs_a_bound() {
 
 #[test]
 fn ac_gain_assertion_parses() {
-    let p = write_tmp(
+    let p = support::write_tmp(
         "ac_gain.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=10\nfstop=1e5\npoints=10\nsweep=\"dec\"\n[[assert]]\nkind=\"ac_gain\"\nnet=\"OUT\"\nmax=-3.0\nfreq_hz=1000\n",
     );
@@ -60,7 +52,7 @@ fn ac_gain_assertion_parses() {
 
 #[test]
 fn bad_sweep_mode_is_rejected() {
-    let p = write_tmp(
+    let p = support::write_tmp(
         "bad_sweep.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=10\nfstop=1e5\npoints=10\nsweep=\"octave\"\n[[assert]]\nkind=\"ac_gain\"\nnet=\"OUT\"\nmin=-3\n",
     );
@@ -133,46 +125,12 @@ fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
     ac.margins.insert(net.to_string(), st.margins());
     ac.bode.insert(net.to_string(), resp.bode(ckt, net));
     RunOutcome {
-        bind: None,
-        evidence: None,
-        dc_definitions: Default::default(),
-        seed: 0,
-        windows: Default::default(),
-        uart: Default::default(),
-        faults: Vec::new(),
-        toggles: Default::default(),
-        peak_current: Default::default(),
-        peripherals: Default::default(),
-        rail_windows: Default::default(),
-        protection_tripped: Default::default(),
-        protection_tripped_scoped: Default::default(),
         ambient_c: 25.0,
-        peak_temp_c: Default::default(),
-        sim_ms: 0.0,
-        boot_first_cross_ms: Default::default(),
-        boot_drop_after_cross_ms: Default::default(),
-        driven_nets: Default::default(),
-        drive_direction_observable: false,
-        first_fault_ms: None,
         ac: Some(ac),
         // AC assertions are seed-independent DC-linearised sweeps, never touched
         // by a failed transient chunk: a clean, valid analog outcome.
         analog_valid: true,
-        failed_windows: Vec::new(),
-        fallback_windows: Vec::new(),
-        error_budget: None,
-        analog_abort: false,
-        sampled_values: Vec::new(),
-        interior: false,
-        net_series: std::collections::HashMap::new(),
-        substitutions: Vec::new(),
-        coverage_warnings: Vec::new(),
-        timing_coverage: Vec::new(),
-        timing_refusals: Vec::new(),
-        dead_rails: Vec::new(),
-        unexercised_bus_ids: Default::default(),
-        spi_framing: Default::default(),
-        regulation: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -183,7 +141,7 @@ fn stable_loop_passes_phase_margin_45() {
     let ckt = representative_loop(1.0e5, 1.0e3, 1.5915e-6);
     let out = outcome_for(&ckt, "out");
 
-    let p = write_tmp(
+    let p = support::write_tmp(
         "stable.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=1\nfstop=1e8\npoints=50\n[[assert]]\nkind=\"phase_margin\"\nnet=\"out\"\nmin=45\n",
     );
@@ -209,7 +167,7 @@ fn marginal_loop_fails_strict_phase_margin() {
     let ckt = representative_loop(1.0e5, 1.0e3, 1.5915e-6);
     let out = outcome_for(&ckt, "out");
 
-    let p = write_tmp(
+    let p = support::write_tmp(
         "marginal.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=1\nfstop=1e8\npoints=50\n[[assert]]\nkind=\"phase_margin\"\nnet=\"out\"\nmin=120\n",
     );
@@ -261,49 +219,15 @@ fn ac_gain_assertion_evaluates_rc_corner() {
     let mut ac = AcOutcome::default();
     ac.bode.insert("out".to_string(), resp.bode(&ckt, "out"));
     let outcome = RunOutcome {
-        bind: None,
-        evidence: None,
-        dc_definitions: Default::default(),
-        seed: 0,
-        windows: Default::default(),
-        uart: Default::default(),
-        faults: Vec::new(),
-        toggles: Default::default(),
-        peak_current: Default::default(),
-        peripherals: Default::default(),
-        rail_windows: Default::default(),
-        protection_tripped: Default::default(),
-        protection_tripped_scoped: Default::default(),
         ambient_c: 25.0,
-        peak_temp_c: Default::default(),
-        sim_ms: 0.0,
-        boot_first_cross_ms: Default::default(),
-        boot_drop_after_cross_ms: Default::default(),
-        driven_nets: Default::default(),
-        drive_direction_observable: false,
-        first_fault_ms: None,
         ac: Some(ac),
         analog_valid: true,
-        failed_windows: Vec::new(),
-        fallback_windows: Vec::new(),
-        error_budget: None,
-        analog_abort: false,
-        sampled_values: Vec::new(),
-        interior: false,
-        net_series: std::collections::HashMap::new(),
-        substitutions: Vec::new(),
-        coverage_warnings: Vec::new(),
-        timing_coverage: Vec::new(),
-        timing_refusals: Vec::new(),
-        dead_rails: Vec::new(),
-        unexercised_bus_ids: Default::default(),
-        spi_framing: Default::default(),
-        regulation: Default::default(),
+        ..Default::default()
     };
 
     // At fc=1000 Hz the gain is -3.01 dB, so "max <= -2.9 at 1000 Hz" passes and
     // "min >= -2.9 at 1000 Hz" fails.
-    let pass = write_tmp(
+    let pass = support::write_tmp(
         "acgain_pass.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=10\nfstop=1e6\npoints=30\n[[assert]]\nkind=\"ac_gain\"\nnet=\"out\"\nmax=-2.9\nfreq_hz=1000\n",
     );
@@ -315,7 +239,7 @@ fn ac_gain_assertion_evaluates_rc_corner() {
         r[0].detail
     );
 
-    let fail = write_tmp(
+    let fail = support::write_tmp(
         "acgain_fail.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=10\nfstop=1e6\npoints=30\n[[assert]]\nkind=\"ac_gain\"\nnet=\"out\"\nmin=-2.9\nfreq_hz=1000\n",
     );

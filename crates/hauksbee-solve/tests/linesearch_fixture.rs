@@ -25,11 +25,12 @@
 //! own test binary (this file) and must stay the only test in it.
 
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, NodeId};
 use hauksbee_solve::{
     DcInit, DeviceEffects, EventRetryTuning, RobustnessLadder, SolverOptions, StepControl,
     Strategy, Transient, Waveforms,
 };
+use hauksbee_testkit::circuits::{comparator, idc, vswitch};
 
 /// Integrate-and-fire relaxation oscillator with a binder-style SPDT pair.
 fn spiking_board() -> Circuit {
@@ -44,66 +45,41 @@ fn spiking_board() -> Circuit {
     add_vdc(&mut c, "VTH", th, NodeId::GROUND, 2.5);
     add_vdc(&mut c, "VRAIL", rail, NodeId::GROUND, 1.0);
     // Charge current into the membrane.
-    c.add(Device::Isource {
-        name: "IIN".into(),
-        p: NodeId::GROUND,
-        n: m,
-        kind: SourceKind::Dc(5e-5),
-    });
+    idc(&mut c, "IIN", NodeId::GROUND, m, 5e-5);
     add_capacitor(&mut c, "CM", m, NodeId::GROUND, 1e-9, None);
     // Leak sized so the open-gate equilibrium (5 V) sits ABOVE threshold:
     // firing is guaranteed, so there is no DC fixed point and the board is
     // the honest FromZero shape.
     add_resistor(&mut c, "RL", m, NodeId::GROUND, 1e5);
-    c.add(Device::Comparator {
-        name: "K1".into(),
-        out: spk,
-        inp: m,
-        inn: th,
-        out_lo: 0.0,
-        out_hi: 5.0,
-        hysteresis: 0.2,
-    });
+    comparator(&mut c, "K1", spk, m, th, 0.2);
     // Complementary select for the idle leg. The two throws must be driven by
     // OPPOSITE controls (as real SPDT select wiring is): with a shared control
     // the BBM winner-take-all margins tie exactly (the sibling margin is
     // span-absolute), the discharge leg gets halved forever, and the membrane
     // servos at threshold instead of firing; measured on the first cut of this
     // fixture.
-    c.add(Device::Comparator {
-        name: "K2".into(),
-        out: spkb,
-        inp: th,
-        inn: m,
-        out_lo: 0.0,
-        out_hi: 5.0,
-        hysteresis: 0.2,
-    });
+    comparator(&mut c, "K2", spkb, th, m, 0.2);
     // SPDT: names differ only in the `_s0`/`_s1` suffix and share the common
     // node `com`, exactly the shape `SpdtPairs::analyze` pairs up, so the
     // break-before-make winner-take-all code runs on every stamp.
-    c.add(Device::VSwitch {
-        name: "GATE_s1".into(), // discharge leg: on while the spike is high
-        a: com,
-        b: m,
-        ctrl_p: spk,
-        ctrl_n: NodeId::GROUND,
-        von: 3.0,
-        voff: 2.0,
-        ron: 10.0,
-        roff: 1e9,
-    });
-    c.add(Device::VSwitch {
-        name: "GATE_s0".into(), // idle leg: on while the spike is low
-        a: com,
-        b: rail,
-        ctrl_p: spkb,
-        ctrl_n: NodeId::GROUND,
-        von: 3.0,
-        voff: 2.0,
-        ron: 10.0,
-        roff: 1e9,
-    });
+    vswitch(
+        &mut c,
+        "GATE_s1", // discharge leg: on while the spike is high
+        com,
+        m,
+        (spk, NodeId::GROUND),
+        (3.0, 2.0),
+        (10.0, 1e9),
+    );
+    vswitch(
+        &mut c,
+        "GATE_s0", // idle leg: on while the spike is low
+        com,
+        rail,
+        (spkb, NodeId::GROUND),
+        (3.0, 2.0),
+        (10.0, 1e9),
+    );
     // Discharge path: membrane -> s1 -> com -> RD -> ground, tau ~ 60 ns
     // (the fast post-flip transient the event/LTE machinery must track).
     add_resistor(&mut c, "RD", com, NodeId::GROUND, 50.0);

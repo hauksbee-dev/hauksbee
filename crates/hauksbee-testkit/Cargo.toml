@@ -15,6 +15,10 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+# `circuits`: shared MNA device-literal builders for every crate's tests, so
+# a resistor/capacitor/etc. fixture is written once instead of copied into
+# each suite as a raw `Device::X { .. }` struct literal.
+hauksbee-ir = { version = "0.1.0-beta.6", path = "../hauksbee-ir" }
 
 [lints]
 workspace = true

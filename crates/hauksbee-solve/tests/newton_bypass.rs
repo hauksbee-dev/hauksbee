@@ -21,6 +21,7 @@ use hauksbee_solve::{
     DcInit, DeviceEffects, EventRetryTuning, Integration, NewtonBypass, Partitioning,
     RobustnessLadder, SolverOptions, StepControl, Strategy, Transient, Waveforms,
 };
+use hauksbee_testkit::circuits::{comparator, diode, idc, vswitch};
 
 use crate::fixtures::{build_rc_ladder, build_shunt_array};
 
@@ -163,54 +164,29 @@ fn spiking_board() -> Circuit {
     let rail = c.node("rail");
     add_vdc(&mut c, "VTH", th, NodeId::GROUND, 2.5);
     add_vdc(&mut c, "VRAIL", rail, NodeId::GROUND, 1.0);
-    c.add(Device::Isource {
-        name: "IIN".into(),
-        p: NodeId::GROUND,
-        n: m,
-        kind: SourceKind::Dc(5e-5),
-    });
+    idc(&mut c, "IIN", NodeId::GROUND, m, 5e-5);
     add_capacitor(&mut c, "CM", m, NodeId::GROUND, 1e-9, None);
     crate::shared::add_resistor(&mut c, "RL", m, NodeId::GROUND, 1e5);
-    c.add(Device::Comparator {
-        name: "K1".into(),
-        out: spk,
-        inp: m,
-        inn: th,
-        out_lo: 0.0,
-        out_hi: 5.0,
-        hysteresis: 0.2,
-    });
-    c.add(Device::Comparator {
-        name: "K2".into(),
-        out: spkb,
-        inp: th,
-        inn: m,
-        out_lo: 0.0,
-        out_hi: 5.0,
-        hysteresis: 0.2,
-    });
-    c.add(Device::VSwitch {
-        name: "GATE_s1".into(),
-        a: com,
-        b: m,
-        ctrl_p: spk,
-        ctrl_n: NodeId::GROUND,
-        von: 3.0,
-        voff: 2.0,
-        ron: 10.0,
-        roff: 1e9,
-    });
-    c.add(Device::VSwitch {
-        name: "GATE_s0".into(),
-        a: com,
-        b: rail,
-        ctrl_p: spkb,
-        ctrl_n: NodeId::GROUND,
-        von: 3.0,
-        voff: 2.0,
-        ron: 10.0,
-        roff: 1e9,
-    });
+    comparator(&mut c, "K1", spk, m, th, 0.2);
+    comparator(&mut c, "K2", spkb, th, m, 0.2);
+    vswitch(
+        &mut c,
+        "GATE_s1",
+        com,
+        m,
+        (spk, NodeId::GROUND),
+        (3.0, 2.0),
+        (10.0, 1e9),
+    );
+    vswitch(
+        &mut c,
+        "GATE_s0",
+        com,
+        rail,
+        (spkb, NodeId::GROUND),
+        (3.0, 2.0),
+        (10.0, 1e9),
+    );
     crate::shared::add_resistor(&mut c, "RD", com, NodeId::GROUND, 50.0);
     // A junction on the membrane so the stiff path has a bypassable device
     // in it (the linesearch fixture itself is diode-free; the flagship board
@@ -218,16 +194,17 @@ fn spiking_board() -> Circuit {
     // (quiescent) for the whole inter-spike charge, conducting only in the
     // brief post-reset dip below ~0.45 V; the quiescent-most-of-the-time
     // shape bypass targets, without clamping the firing ramp.
-    c.add(Device::Diode {
-        name: "DLOAD".into(),
-        a: rail,
-        k: m,
-        model: DiodeModel {
+    diode(
+        &mut c,
+        "DLOAD",
+        rail,
+        m,
+        DiodeModel {
             is: 4.352e-9,
             n: 1.906,
             ..DiodeModel::default()
         },
-    });
+    );
     c
 }
 
@@ -344,29 +321,22 @@ fn high_z_board(drive_v: f64) -> Circuit {
     // The weak driver: 10 MΩ series (the "driver pass" shape, a fixed source
     // behind series R feeding a kept sense node).
     crate::shared::add_resistor(&mut c, "RDRV", drv, a, 10e6);
-    c.add(Device::Diode {
-        name: "D1".into(),
+    diode(
+        &mut c,
+        "D1",
         a,
-        k: mem,
-        model: DiodeModel {
+        mem,
+        DiodeModel {
             is: 4.352e-9,
             n: 1.906,
             ..DiodeModel::default()
         },
-    });
+    );
     add_capacitor(&mut c, "CM", mem, NodeId::GROUND, 1e-9, Some(0.0));
     // The high-Z anchor: 1 GΩ to ground. Charging current is nA-scale.
     crate::shared::add_resistor(&mut c, "RLEAK", mem, NodeId::GROUND, 1e9);
     add_vdc(&mut c, "VTH", th, NodeId::GROUND, 0.4);
-    c.add(Device::Comparator {
-        name: "K1".into(),
-        out,
-        inp: mem,
-        inn: th,
-        out_lo: 0.0,
-        out_hi: 5.0,
-        hysteresis: 0.05,
-    });
+    comparator(&mut c, "K1", out, mem, th, 0.05);
     // The masked-convergence stressor: an UNRELATED stiff junction branch on
     // the same board. The Newton iterations are GLOBAL (one monolithic
     // matrix), so this sine-walked diode forces 3+ iterations on every step,
@@ -389,16 +359,17 @@ fn high_z_board(drive_v: f64) -> Circuit {
         },
     });
     crate::shared::add_resistor(&mut c, "RAUX", aux, auxm, 1e3);
-    c.add(Device::Diode {
-        name: "DAUX".into(),
-        a: auxm,
-        k: NodeId::GROUND,
-        model: DiodeModel {
+    diode(
+        &mut c,
+        "DAUX",
+        auxm,
+        NodeId::GROUND,
+        DiodeModel {
             is: 4.352e-9,
             n: 1.906,
             ..DiodeModel::default()
         },
-    });
+    );
     c
 }
 

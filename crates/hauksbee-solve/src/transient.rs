@@ -397,6 +397,17 @@ impl Transient {
         // rest and no `ic` anywhere it reproduces the all-zero construction
         // value, so a genuine power-on-from-rest march (`FromZero` + `Ramped`
         // sources, no IC anywhere) is unchanged.
+        // A continuation opens where the previous window closed, not at the
+        // board's steady state: overwrite the operating point just solved with
+        // the carried unknowns, BEFORE the reactive history is seeded from
+        // them. The DC solve above still ran, so the staged regularizers stay
+        // armed exactly as they were and a board with no reachable operating
+        // point still fails where it always did.
+        if opts.dc_init == DcInit::Continue {
+            if let Some(seed) = dc_seed.filter(|s| s.len() == ws.x.len()) {
+                ws.x.copy_from_slice(seed);
+            }
+        }
         seed_reactive_state(&mut state, circuit, &ws, opts);
 
         let mut t = 0.0;

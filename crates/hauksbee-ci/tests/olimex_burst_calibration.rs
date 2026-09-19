@@ -12,35 +12,7 @@
 //! Corpus-gated: skipped when the board-corpus symlink is absent;
 //! `HAUKSBEE_REQUIRE_CORPUS=1` turns absence into a hard failure.
 
-use std::path::PathBuf;
-
-mod support;
-
-use hauksbee_ci::{run, RunConfig};
-
-fn corpus() -> PathBuf {
-    // Through the shared resolver, which accepts both the hand-built
-    // `famous/<id>` layout and the `<id>` layout scripts/fetch-corpus.sh
-    // produces. Joining `famous` directly is what made this calibration skip
-    // silently for anyone who used the documented fetch.
-    hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR")).unwrap_or_default()
-}
-
-fn require_corpus() -> bool {
-    std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok()
-}
-
-fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
-    let dir = std::env::temp_dir().join("hauksbee_ci_olimex_burst");
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join(name);
-    std::fs::write(&p, body).unwrap();
-    run(&RunConfig {
-        spec: p,
-        ..Default::default()
-    })
-    .expect("spec runs")
-}
+use crate::support::{self, corpus_boards_root as corpus, require_corpus, run_body};
 
 #[test]
 fn olimex_evb_wifi_burst_on_robust_supply_passes() {

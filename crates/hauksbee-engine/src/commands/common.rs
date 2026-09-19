@@ -507,8 +507,16 @@ pub fn serve(
     _open: bool,
     _no_open: bool,
 ) -> anyhow::Result<()> {
-    anyhow::bail!("hauksbee was built without the serve feature")
+    anyhow::bail!(NO_SERVE)
 }
+
+/// Why this binary has no web server, and the one command that builds one. An
+/// exit code alone left the reader with nowhere to go; `serve` is a default
+/// feature, so the fix is almost always "drop `--no-default-features`".
+#[cfg(not(feature = "serve"))]
+pub const NO_SERVE: &str = "hauksbee was built without the serve feature: rebuild it with \
+     `cargo build --release -p hauksbee-engine --features serve` (`serve` is on by default, so a \
+     plain `cargo build --release` also gets it).";
 
 /// Advisory staleness check for the served React bundle. `frontend/dist` is a
 /// gitignored build artifact: `git pull` updates `frontend/src` but never

@@ -16,11 +16,12 @@
 //! flags, exactly because it is the load-bearing gate for the whole stage.
 
 use crate::shared::{add_capacitor, add_vdc};
-use hauksbee_ir::{Circuit, Device, NodeId};
+use hauksbee_ir::{Circuit, NodeId};
 use hauksbee_solve::{
     AssemblyMode, Integration, ParallelPolicy, Partitioning, SolverOptions, StepControl, Transient,
     Waveforms,
 };
+use hauksbee_testkit::circuits::res;
 
 use crate::fixtures::{build_rc_ladder, build_shunt_array};
 
@@ -102,13 +103,8 @@ fn build_rc_fan(n: usize) -> Circuit {
     add_vdc(&mut c, "V1", rail, NodeId::GROUND, 1.0);
     for k in 0..n {
         let mid = c.node(&format!("leg{k}"));
-        c.add(Device::Resistor {
-            name: format!("R{k}"),
-            a: rail,
-            b: mid,
-            ohms: 1e3 + k as f64, // stagger so legs are not numerically identical
-            tc1: None,
-        });
+        // stagger so legs are not numerically identical
+        res(&mut c, &format!("R{k}"), rail, mid, 1e3 + k as f64);
         add_capacitor(
             &mut c,
             &format!("C{k}"),

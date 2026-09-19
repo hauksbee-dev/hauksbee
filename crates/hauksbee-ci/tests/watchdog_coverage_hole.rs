@@ -23,17 +23,11 @@
 
 #![cfg(feature = "avr")]
 
-mod support;
-
 use std::path::PathBuf;
 
 use hauksbee_ci::run;
 
-fn repo(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(rel)
-}
+use crate::support::{self, repo};
 
 /// A spec that runs `firmware` on the ATmega blinky board for 200 ms in 5 ms
 /// frames. The WDTO_15MS timeout bites in frame 3 or 4 of every reboot cycle, so
@@ -86,7 +80,7 @@ fn watchdog_reboots_reach_the_ci_coverage_hole_path_in_every_format() {
         return;
     }
     let spec = spec_for("wdt.elf", "starved");
-    let result = run(&crate::support::run_config(spec)).expect("ci run");
+    let result = run(&support::run_config(spec)).expect("ci run");
 
     let hit = result
         .coverage_warnings
@@ -136,7 +130,7 @@ fn a_fed_watchdog_on_a_faithful_backend_adds_no_coverage_warning() {
         return;
     }
     let spec = spec_for("nowdt.elf", "fed");
-    let result = run(&crate::support::run_config(spec)).expect("ci run");
+    let result = run(&support::run_config(spec)).expect("ci run");
 
     assert!(
         !result

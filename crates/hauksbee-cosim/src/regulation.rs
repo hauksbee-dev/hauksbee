@@ -40,7 +40,15 @@ pub fn terminals(circuit: &Circuit, reg: &SimpleRegulator) -> (NodeId, NodeId, f
 }
 
 pub fn headroom_ok(reg: &SimpleRegulator, headroom_v: f64) -> bool {
-    headroom_v.is_finite() && (reg.min_in_v..=reg.max_in_v).contains(&headroom_v)
+    // A datasheet-guaranteed row sits exactly on the bound (VI = VO + dropout),
+    // and the solved input carries Newton residual, so a bare `>=` refuses a row
+    // the part is specified to meet. The slack is relative to the bound, a few
+    // orders above solver noise and far below any shortfall worth reporting: a
+    // 7 V bound admits 6.99999999 V and still refuses 6.9999 V.
+    let slack = |bound: f64| bound.abs().max(1.0) * 1e-9;
+    headroom_v.is_finite()
+        && headroom_v >= reg.min_in_v - slack(reg.min_in_v)
+        && headroom_v <= reg.max_in_v + slack(reg.max_in_v)
 }
 
 /// Decide `supported` from scratch on a CLONE with every regulator source swapped

@@ -139,6 +139,15 @@ pub enum DcInit {
     /// homotopy. The `t = 0` of such a run is a power-on rest state, not a
     /// settled operating point.
     FromZero,
+    /// Continue a march that a previous run already left mid-flight: the DC
+    /// operating point is still solved (it is what arms the staged
+    /// regularizers), but the seed supplied alongside it, not that point,
+    /// becomes `x(0)` and therefore the reactive history. A co-sim chunk is a
+    /// window of ONE march, so its capacitors must open where the last window
+    /// left them; a DC point opens them at the board's steady state instead,
+    /// which silently deletes every time constant longer than a chunk. Falls
+    /// back to the DC point when no seed of the right width is supplied.
+    Continue,
 }
 
 /// How the timestep is chosen.

@@ -94,7 +94,8 @@ pub struct DcDirective {
 /// (`V(out)`, `V(a,b)`, `I(V1)`) for the consumer's probe parser.
 #[derive(Debug, Clone)]
 pub struct PrintRequest {
-    /// `op`/`dc`/`ac`/`tran`, lowercased.
+    /// `op`/`dc`/`ac`/`tran`, lowercased; empty when the card omitted it
+    /// (ngspice's bare `.print v(x)`), meaning whichever analysis runs.
     pub analysis: String,
     pub vars: Vec<String>,
     pub is_plot: bool,
@@ -1319,8 +1320,13 @@ fn source_spec(
             .take(2)
             .map_while(|t| value(line, t, env).ok())
             .collect();
+        // `AC` introducing nothing is an unfinished card; defaulting the
+        // magnitude to 1 would make every AC result an invented number.
+        let Some(&mag) = vals.first() else {
+            bail!(line, "`AC` states no magnitude");
+        };
         ac = Some(AcStim {
-            mag: vals.first().copied().unwrap_or(1.0),
+            mag,
             phase_deg: vals.get(1).copied().unwrap_or(0.0),
         });
         rest.drain(i..=i + vals.len());
@@ -1334,6 +1340,11 @@ fn source_spec(
     let start = rest.iter().skip(1).position(is_fn).map_or(0, |p| p + 1);
     let rest = &rest[start..];
     let Some(head) = rest.first() else {
+        // `V1 in 0 AC 1` is complete: ngspice's pure AC stimulus is DC 0. A card
+        // with nothing at all is truncated, and used to solve as a confident 0 V.
+        if ac.is_none() {
+            bail!(line, "source card states no value");
+        }
         return Ok((SourceKind::Dc(0.0), ac));
     };
     let mut a = rest[1..]
@@ -1345,9 +1356,12 @@ fn source_spec(
     let [a0, a1, a2, a3, a4, a5, a6, ..] = a[..] else {
         unreachable!()
     };
+    // A bare keyword (`I1 0 cc DC`, `V1 a 0 SIN`) states no value either: it
+    // padded the empty argument list to seven zeros and solved as DC 0. The
+    // `given` guards send it to the value parser below, which refuses.
     let kind = match head.to_ascii_lowercase().as_str() {
-        "dc" => SourceKind::Dc(a0),
-        "sin" | "sine" => SourceKind::Sin {
+        "dc" if given >= 1 => SourceKind::Dc(a0),
+        "sin" | "sine" if given >= 1 => SourceKind::Sin {
             offset: a0,
             amplitude: a1,
             freq: a2,
@@ -1355,7 +1369,7 @@ fn source_spec(
             theta: a4,
             phase: a5,
         },
-        "pulse" => SourceKind::Pulse {
+        "pulse" if given >= 1 => SourceKind::Pulse {
             v1: a0,
             v2: a1,
             delay: a2,
@@ -1364,7 +1378,7 @@ fn source_spec(
             width: if given < 6 { f64::INFINITY } else { a5 },
             period: a6,
         },
-        "pwl" => SourceKind::Pwl(
+        "pwl" if given >= 1 => SourceKind::Pwl(
             a[..given]
                 .chunks_exact(2)
                 .map(|c| PwlPoint { t: c[0], v: c[1] })
@@ -1543,24 +1557,21 @@ fn parse_ac(line: &Line, toks: &[String]) -> Result<AcDirective, SpiceError> {
     })
 }
 
+/// ngspice accepts `.print v(x)` with the analysis type omitted; an unnamed one
+/// stays empty, which every reader takes as "whichever analysis runs".
 fn parse_print(line: &Line, is_plot: bool) -> Result<PrintRequest, SpiceError> {
     let toks: Vec<String> = line.text.split_whitespace().map(str::to_string).collect();
-    let analysis = toks
+    let head = toks
         .get(1)
-        .map(|t| t.to_ascii_lowercase())
-        .unwrap_or_default();
-    if !matches!(analysis.as_str(), "op" | "dc" | "ac" | "tran") {
-        bail!(
-            line,
-            "expected an analysis type (op/dc/ac/tran) and output variables"
-        );
-    }
-    if toks.len() < 3 {
+        .map_or_else(String::new, |t| t.to_ascii_lowercase());
+    let named = matches!(head.as_str(), "op" | "dc" | "ac" | "tran");
+    let vars = &toks[usize::from(named) + 1..];
+    if vars.is_empty() {
         bail!(line, "no output variables");
     }
     Ok(PrintRequest {
-        analysis,
-        vars: toks[2..].to_vec(),
+        analysis: if named { head } else { String::new() },
+        vars: vars.to_vec(),
         is_plot,
     })
 }
@@ -1723,7 +1734,7 @@ mod tests {
     #[test]
     fn sources_functions_and_ac_stimulus() {
         let c = load("t\nV1 a 0 DC 5\nV2 b 0 3\nV3 c 0 SIN(0 1 1k 1u 2 30)\nI1 d 0 PULSE(0 1 1u 2n 3n 4u 5u)\n\
-                      V4 e 0 PWL(0 0 1u 5 2u 0)\nV5 f 0 DC 0 SIN( 0 1 1k 0 0 0 ) AC 1 45\nV6 g 0 AC\nI2 h 0\n\
+                      V4 e 0 PWL(0 0 1u 5 2u 0)\nV5 f 0 DC 0 SIN( 0 1 1k 0 0 0 ) AC 1 45\n\
                       V7 j 0 PULSE(0 1)\n");
         assert!(matches!(
             dev(&c, "V1"),
@@ -1765,33 +1776,27 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(
-            dev(&c, "I2"),
-            Device::Isource {
-                kind: SourceKind::Dc(0.0),
-                ..
-            }
-        ));
         assert!(
             matches!(dev(&c, "V7"), Device::Vsource { kind: SourceKind::Pulse { width, .. }, .. } if width.is_infinite())
         );
-        assert_eq!(c.ac_stimulus.len(), 2);
-        assert_eq!(
-            c.ac_stimulus[0].1,
-            AcStim {
-                mag: 1.0,
-                phase_deg: 45.0
-            }
-        );
-        assert_eq!(
-            c.ac_stimulus[1].1,
-            AcStim {
-                mag: 1.0,
-                phase_deg: 0.0
-            }
-        );
-        assert!(err("t\nV1 a 0 DC ac=1\n").contains("malformed number"));
-        assert!(err("t\nV1 a 0 5 6\n").contains("unexpected token `6`"));
+        let want = AcStim {
+            mag: 1.0,
+            phase_deg: 45.0,
+        };
+        assert_eq!((c.ac_stimulus.len(), c.ac_stimulus[0].1), (1, want));
+        // A missing value is a refusal, never a silently substituted zero: these
+        // all used to solve as DC 0. (R/C/L arity lives in the passive test.)
+        for (net, want) in [
+            ("t\nV1 a 0 DC ac=1\n", "malformed number"),
+            ("t\nV1 a 0 5 6\n", "unexpected token `6`"),
+            ("t\nI1 0 cc DC\nR1 cc 0 5.1k\n", "malformed number `DC`"),
+            ("t\nV1 a 0 DC\n", "malformed number `DC`"),
+            ("t\nV1 a 0 SIN\n", "malformed number `SIN`"),
+            ("t\nI2 h 0\n", "source card states no value"),
+            ("t\nV6 g 0 AC\n", "`AC` states no magnitude"),
+        ] {
+            assert!(err(net).contains(want), "{net} -> {}", err(net));
+        }
     }
 
     #[test]
@@ -2041,7 +2046,14 @@ mod tests {
         assert!(err("t\nV1 a 0 1\n.dc V1 0 5 -1\n").contains("cannot reach stop"));
         assert!(err("t\nR1 a 0 1\n.dc R1 0 5 1\n").contains("independent V or I source"));
         assert!(err("t\nV1 a 0 1\n.dc Vz 0 5 1\n").contains("does not exist"));
-        assert!(err("t\n.print foo v(a)\n").contains("analysis type"));
+        // ngspice's bare form: no analysis named, so it belongs to whichever runs.
+        let bare = "t\nR1 a 0 1k\nV1 a 0 1\n.print v(a)\n.end\n";
+        let (_, b) = SpiceLoader::load_with_directives(bare).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            (b.prints[0].analysis.as_str(), &b.prints[0].vars[..]),
+            ("", &["v(a)".to_string()][..])
+        );
+        assert!(err("t\n.print\n").contains("no output variables"));
         assert!(err("t\n.four 1k v(out)\n").contains("unsupported directive `.four`"));
         assert!(err("t\n.control\nrun\n.endc\n").contains("unrecognized directive `.control`"));
         assert!(err("t\n.ends\n").contains("without a matching"));

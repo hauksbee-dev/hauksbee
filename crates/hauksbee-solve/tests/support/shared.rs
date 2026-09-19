@@ -4,8 +4,9 @@
 
 #![allow(dead_code)]
 
-use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, DeviceId, NodeId};
 use hauksbee_solve::Waveforms;
+use hauksbee_testkit::circuits;
 
 /// `V1(in, v) -> R1(r) -> out -> C1(farads, IC=0) -> gnd`: the RC step fixture.
 pub fn rc_lowpass(v: f64, r: f64, farads: f64) -> Circuit {
@@ -20,15 +21,10 @@ pub fn rc_lowpass(v: f64, r: f64, farads: f64) -> Circuit {
 
 /// Add a plain resistor (no temperature coefficient): the shape almost every
 /// fixture here wants, written once instead of a seven-line struct literal at
-/// each use.
+/// each use. Thin wrapper over `hauksbee_testkit::circuits::res`, kept under
+/// this name since most of this crate's tests already call it that way.
 pub fn add_resistor(c: &mut Circuit, name: &str, a: NodeId, b: NodeId, ohms: f64) -> DeviceId {
-    c.add(Device::Resistor {
-        name: name.into(),
-        a,
-        b,
-        ohms,
-        tc1: None,
-    })
+    circuits::res(c, name, a, b, ohms)
 }
 
 /// Add a capacitor: the same shape as [`add_resistor`], with the initial
@@ -41,24 +37,16 @@ pub fn add_capacitor(
     farads: f64,
     ic: Option<f64>,
 ) -> DeviceId {
-    c.add(Device::Capacitor {
-        name: name.into(),
-        a,
-        b,
-        farads,
-        ic,
-    })
+    match ic {
+        Some(ic) => circuits::cap_ic(c, name, a, b, farads, ic),
+        None => circuits::cap(c, name, a, b, farads),
+    }
 }
 
 /// Add a DC voltage source, the only source kind the fixtures here build by
 /// hand often enough to be worth a name.
 pub fn add_vdc(c: &mut Circuit, name: &str, p: NodeId, n: NodeId, volts: f64) -> DeviceId {
-    c.add(Device::Vsource {
-        name: name.into(),
-        p,
-        n,
-        kind: SourceKind::Dc(volts),
-    })
+    circuits::vdc_between(c, name, p, n, volts)
 }
 
 /// Driver island sensed by controlled/behavioral sources: `V1 -> Rd -> ctrl`,

@@ -31,7 +31,7 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_mcu::AvrMcu;
 use hauksbee_mcu::{Mcu, PinId};
 use hauksbee_models::{Bus, PeripheralSpec};
-use hauksbee_solve::{Layout, SolverOptions, Transient, TransientDiagnostics};
+use hauksbee_solve::{DcInit, Layout, SolverOptions, Transient, TransientDiagnostics};
 
 use crate::peripherals::{
     CsProvenance, Eeprom24c, I2cBus, PeripheralSet, RegisterMapSensor, ResolvedCs, SpiBus,
@@ -3942,6 +3942,18 @@ impl Scheduler {
         seed: Option<&[f64]>,
         thermal: &mut ChunkThermalAccum,
     ) -> Result<(Vec<f64>, TransientDiagnostics), (String, Vec<f64>)> {
+        // A chunk is a WINDOW of one continuous march, so a seeded chunk starts
+        // where the last one ended rather than at a fresh operating point. Left
+        // as a mere Newton warm start, the DC point re-opened every capacitor at
+        // the board's steady state each chunk, deleting any time constant longer
+        // than a chunk: a 74HC14 Schmitt oscillator then free-ran at one toggle
+        // per chunk with its timing capacitor decorative (multiplying C by ten
+        // left the toggle count identical). The first chunk has nothing to carry
+        // and keeps its power-on solve; `FromZero` states its own start.
+        let mut opts = opts;
+        if seed.is_some() && opts.dc_init == DcInit::Solve {
+            opts.dc_init = DcInit::Continue;
+        }
         let t = Transient::new(opts);
         let mut final_x: Vec<f64> = Vec::new();
         // Trapezoid state: the previous accepted step's (time, per-device

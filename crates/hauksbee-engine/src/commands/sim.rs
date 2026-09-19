@@ -344,6 +344,14 @@ fn simulate(
     forced: Option<Analysis>,
     notes: &mut Vec<String>,
 ) -> Result<(&'static str, SimOutput), SimError> {
+    // Four printed digits read as a measurement unless the run says what they
+    // rest on, so every deck run states its basis whether or not it has caveats.
+    notes.push(
+        "note: results come solely from the deck's own model cards at nominal values; no \
+         tolerance, temperature or parasitic spread is applied, so they carry no uncertainty \
+         interval."
+            .into(),
+    );
     let analysis = forced.unwrap_or(if directives.tran.is_some() {
         Analysis::Tran
     } else if directives.dc.is_some() {
@@ -371,7 +379,7 @@ fn simulate(
         let deck_vars: Vec<String> = directives
             .prints
             .iter()
-            .filter(|pr| pr.analysis == tag)
+            .filter(|pr| pr.analysis.is_empty() || pr.analysis == tag)
             .flat_map(|pr| pr.vars.iter().cloned())
             .collect();
         if directives.saw_plot {

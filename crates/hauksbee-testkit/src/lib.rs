@@ -13,6 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod circuits;
+
 /// The repository root, derived from the calling crate's manifest directory.
 ///
 /// `CARGO_MANIFEST_DIR` is set per-crate at compile time, so this takes it as

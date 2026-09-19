@@ -28,24 +28,10 @@
 
 use std::path::PathBuf;
 
-mod support;
-
-use hauksbee_ci::{run, RunConfig};
+use crate::support::{self, run_body};
 
 fn board() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/inkplate_class.net")
-}
-
-fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
-    let dir = std::env::temp_dir().join("hauksbee_ci_inkplate");
-    std::fs::create_dir_all(&dir).unwrap();
-    let p = dir.join(name);
-    std::fs::write(&p, body).unwrap();
-    run(&RunConfig {
-        spec: p,
-        ..Default::default()
-    })
-    .expect("spec runs")
 }
 
 /// BATTERY side: cold-boot inrush trips the 1 A-class LiPo protection and the
