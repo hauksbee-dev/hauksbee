@@ -963,30 +963,6 @@ fn newton_solve_core(
                 iters,
             };
         }
-        // Residual of the NONLINEAR system at the current linearization point,
-        // F(lin_point) = g*lin_point - rhs over the node block. Computed from the
-        // just-stamped (g, rhs) BEFORE the solve clobbers rhs, so the line-search
-        // can compare the trial residual against it. Only built when the
-        // line-search is armed (otherwise it is dead work on the bit-identical
-        // default path).
-        let f_norm_lin = if line_search && !ws.linear {
-            let mut worst = 0.0f64;
-            for i in 0..ws.layout.n_nodes {
-                let row = ws.matrix.row(i);
-                let mut acc = 0.0;
-                for &(col, val) in row {
-                    acc += val * ws.lin_point[col];
-                }
-                let f = (acc - ws.rhs[i]).abs();
-                if f > worst {
-                    worst = f;
-                }
-            }
-            worst
-        } else {
-            0.0
-        };
-
         ws.symbolic.solve(&mut ws.rhs, &mut ws.solve_scratch);
         // rhs now holds the new (UNDAMPED) Newton iterate.
         ws.x.copy_from_slice(&ws.rhs);
@@ -1057,6 +1033,18 @@ fn newton_solve_core(
         // loop continues -- exactly what stops the traveling overshoot.
         if line_search {
             let dx: Vec<f64> = (0..ws.x.len()).map(|i| ws.x[i] - ws.lin_point[i]).collect();
+            // The Armijo anchor, measured by the SAME self-anchored re-stamp the
+            // trials below use. Multiplying the live stamp by lin_point instead
+            // measures the LINEARIZED residual, a different quantity: the trial
+            // side then fell to zero with alpha while the anchor stayed put
+            // (measured on a tanh B-amp: anchor 6.3e-4, trials 5.7e-3*alpha), so
+            // no step could ever satisfy the test and every iteration walked to
+            // the floor.
+            ws.x.copy_from_slice(&ws.lin_point);
+            let anchor_node = residual_inf_norm_at(
+                ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
+            );
+            let f_norm_lin = merit(ws, anchor_node, opts);
             let mut alpha = 1.0;
             let mut best_alpha = 1.0;
             let mut best_norm = f64::INFINITY;
@@ -1065,26 +1053,21 @@ fn newton_solve_core(
                 for i in 0..ws.x.len() {
                     ws.x[i] = ws.lin_point[i] + alpha * dx[i];
                 }
-                let trial_norm = residual_inf_norm_at(
+                let node_norm = residual_inf_norm_at(
                     ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
                 );
+                let trial_norm = merit(ws, node_norm, opts);
                 if trial_norm < best_norm {
                     best_norm = trial_norm;
                     best_alpha = alpha;
                 }
-                // Armijo sufficient-decrease on the residual inf-norm. The first
-                // Newton iterate (f_norm_lin==0 because lin_point is the cold
-                // start) accepts the full step. So does a trial already inside
-                // `abstol`: the norm covers the KCL rows only, so where the one
-                // nonlinearity is a V-output B-source's BRANCH row both norms
-                // are round-off (measured 4e-17 -> 1e-16 A), "decrease" is a coin
-                // flip, and the search fell to the alpha floor on 40% of the 555
-                // deck's iterations, turning Newton into a 63/64-per-iteration
-                // crawl that ran out of max_newton on every latch edge.
+                // Armijo sufficient decrease, unless the ANCHOR is already a
+                // root (merit <= 1, which includes the cold-start lin_point):
+                // there is then nothing to decrease, the comparison is pure
+                // round-off, and backtracking on it is what turned the 555
+                // deck's latch edges into a 63/64-per-iteration crawl.
                 let accept = trial_norm.is_finite()
-                    && (f_norm_lin <= 0.0
-                        || trial_norm < (1.0 - ARMIJO_C * alpha) * f_norm_lin
-                        || trial_norm <= opts.abstol);
+                    && (f_norm_lin <= 1.0 || trial_norm < (1.0 - ARMIJO_C * alpha) * f_norm_lin);
                 if accept || alpha <= ARMIJO_ALPHA_FLOOR + 1e-15 {
                     break;
                 }
@@ -1362,6 +1345,35 @@ fn residual_inf_norm_at(
         ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
     )
     .0
+}
+
+/// The line-search merit at the point `residual_inf_norm_at` just stamped into
+/// `ws`: every row's residual in units of the tolerance that governs it,
+/// `abstol` (amps) for the KCL rows it already reduced to `node_norm` and
+/// `vntol` (volts) for the BRANCH rows added here. One inf-norm then spans both
+/// blocks without mixing units, and `<= 1` means "this point is a root".
+///
+/// Both halves are needed. The KCL rows cannot see a nonlinearity that lives in
+/// a branch row: a V-output B-source contributes `v(a) - v(b) - f(x) = 0` there
+/// and nothing to any node sum, so on a tanh amplifier the node norm sat at
+/// 4e-17 A while the iterate swung 4.96 V rail to rail. And an unnormalised
+/// mixed norm cannot tell a volt-scale branch residual from an amp-scale node
+/// one, so it damps a Wien oscillator that was converging at full steps down to
+/// the alpha floor and drags its frequency from 1591 Hz to 512.
+fn merit(ws: &Workspace, node_norm: f64, opts: &SolverOptions) -> f64 {
+    let mut worst = node_norm / opts.abstol;
+    for i in ws.layout.n_nodes..ws.rhs.len() {
+        let mut acc = 0.0;
+        for &(col, val) in ws.matrix.row(i) {
+            acc += val * ws.x[col];
+        }
+        let f = acc - ws.rhs[i];
+        if !f.is_finite() {
+            return f64::INFINITY;
+        }
+        worst = worst.max(f.abs() / opts.vntol);
+    }
+    worst
 }
 
 fn residual_argmax_at(

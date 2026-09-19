@@ -1,0 +1,21 @@
+wien bridge with a tanh b-source amplifier
+* The way a deck writes an op-amp when it has no op-amp card: a behavioural
+* V-source at open-loop gain 1e4, soft-limited by tanh, closed through the Wien
+* network (R = 10k, C = 10n, f0 = 1/(2*pi*R*C) = 1591.5 Hz) and an RF/RG pair.
+* The only nonlinear row in the system is B1's V-output BRANCH row, so the
+* Armijo line search's KCL-only merit reads round-off at every trial; waiving
+* the search on that basis lets Newton take undamped steps through the tanh knee
+* and the march dies at dt_min inside the first few microseconds. Ikick starts
+* the oscillator (there is no noise source) and is gone by 0.2 ms.
+Vref  vref 0   DC 0.833
+C1    out  x   10n
+R1    x    p   10k
+R2    p    vref 10k
+C2    p    vref 10n
+RF    out  n   20k
+RG    n    0   10.0k
+B1    out  0   V={2.5 + 2.48*tanh(10000*(v(p)-v(n))/2.48)}
+Ikick 0    p   PULSE(0 1u 100u 1u 1u 10u 10)
+.tran 2u 4m 0 2u
+.print tran v(out)
+.end

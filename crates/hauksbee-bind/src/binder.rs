@@ -3765,7 +3765,18 @@ fn bind_shunt_ref(
         BindOutcome::Analog {
             device: format!("shunt reference {vref:.3}V (the board's divider sets the cathode)"),
         },
-        entry_warning(comp, model),
+        // WHICH PADS the card's map took as each terminal, said next to the
+        // result: this part's pad order is package-dependent, so a map that
+        // disagrees with the fitted package is otherwise invisible behind a
+        // confident voltage.
+        entry_warning(comp, model).map(|w| {
+            let pad = |want: &[&str]| {
+                let hit = model.pins.iter().find(|(_, r)| want.contains(&r.as_str()));
+                hit.map_or("(unmapped)", |(p, _)| p.as_str()).to_string()
+            };
+            let (k, f, a) = (pad(&["out"]), pad(&["fb", "adj", "ref"]), pad(&["gnd"]));
+            format!("{w}; pads taken as CATHODE {k} / REF {f} / ANODE {a}")
+        }),
     )
 }
 

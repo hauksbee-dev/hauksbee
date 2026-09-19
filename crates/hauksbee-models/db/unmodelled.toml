@@ -186,3 +186,41 @@ entry for the open case, or a `passive` entry with the element's DC resistance \
 for the conductive case. Put it in your models directory keyed on this board's \
 value or footprint.
 """
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TL431 / TL432 on a package whose pin map this library does not carry, and
+# every TL432 (the mirrored-pinout sibling).
+#
+# The TL431 has no single pinout: SLVS543 Table 5-1 gives seven pad orders, and
+# they disagree about which pad is which terminal (DBZ is CATHODE 1 / REF 2 /
+# ANODE 3; LP is CATHODE 1 / ANODE 2 / REF 3). db/vreg.toml carries four of them
+# as footprint-gated entries (DBZ, LP, PK, D). The rest -- DBV (SOT-23-5),
+# DCK (SC-70-6) and the single-anode P / PS / PW eight-pin group -- are reached
+# here, because the failure mode of a guessed map on a shunt reference is not a
+# missing answer but a confidently wrong regulated voltage.
+#
+# TL432 is a GAP, not an omission of laziness: it is electrically the same part
+# and would use the same numbers, but its pin maps are mirrored (DBZ: REF 1 /
+# CATHODE 2 / ANODE 3), and the card schema has no way to share one electrical
+# block between two match rules. `value_re` on every TL431 entry is anchored at
+# "TL431", so a TL432 cannot pick up a TL431 map by accident; it lands here.
+[[unmodelled]]
+id = "tl431_tl432_unmapped_package"
+value_re = "(?i)^TL43[12]"
+because = """
+this shunt reference's pad order is package-dependent and the terminals move \
+between packages (SLVS543 Table 5-1: DBZ is CATHODE 1 / REF 2 / ANODE 3, LP is \
+CATHODE 1 / ANODE 2 / REF 3). The library carries the DBZ (SOT-23-3), LP \
+(TO-92), PK (SOT-89) and D (SOIC-8) maps for the TL431 and none for the \
+mirrored-pinout TL432, so this part's package has no map here. Binding it to \
+another package's map would not fail visibly: it would answer a precise \
+cathode voltage computed through the wrong pads.
+"""
+unlocked_by = """
+A model card naming this package's pad order. Copy a TL431 entry from \
+db/vreg.toml into your models directory, keep every parameter, and change only \
+`match.footprint_re` to your footprint and `[models.pins]` to the CATHODE / \
+REF / ANODE pads SLVS543 Table 5-1 gives for it (for the TL432 the same table's \
+TL432x columns: DBZ CATHODE 2 / REF 1 / ANODE 3, DBV CATHODE 4 / REF 5 / \
+ANODE 2, PK CATHODE 1 / REF 3 / ANODE 2).
+"""

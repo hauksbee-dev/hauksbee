@@ -11,10 +11,17 @@
 
 use crate::support;
 
-/// U1 (TL431, SOT-23 pads 1 REF / 2 ANODE / 3 CATHODE), `rs` from VIN to the
-/// cathode net OUT and, when `div`, R1/R2 of 10 k each. `refnet` is pad 1's
-/// net: "REF" programmed, "OUT" two-terminal 2.5 V, "GND" the mis-wire.
-fn board(rs: &str, div: bool, refnet: &str) -> String {
+/// A package: its footprint, and the pads SLVS543 Table 5-1 gives that package
+/// for CATHODE / REF / ANODE. The pin map is package-dependent and the orders
+/// are NOT rotations of one another, so the pads are part of the case.
+type Pkg = (&'static str, [u32; 3]);
+const DBZ: Pkg = ("Package_TO_SOT_SMD:SOT-23", [1, 2, 3]);
+const LP: Pkg = ("Package_TO_SOT_THT:TO-92_Inline", [1, 3, 2]);
+
+/// U1 (TL431 in package `pkg`), `rs` from VIN to the cathode net OUT and, when
+/// `div`, R1/R2 of 10 k each. `refnet` is the REF pad's net: "REF" programmed,
+/// "OUT" two-terminal 2.5 V, "GND" the mis-wire.
+fn board(rs: &str, div: bool, refnet: &str, (lib, [k, f, a]): Pkg) -> String {
     let pad = |n: u32, net: &str| {
         format!("pad \"{n}\" smd rect at {n} 0 size 2 1.5 layers [F.Cu F.Mask] net \"{net}\"\n")
     };
@@ -23,8 +30,8 @@ fn board(rs: &str, div: bool, refnet: &str) -> String {
             "comp {r} lib \"{lib}\" val \"{val}\" layer \"F.Cu\" at {x} 20 rot 0 {{\n{pads}}}\n"
         )
     };
-    let u1 = pad(1, refnet) + &pad(2, "GND") + &pad(3, "OUT");
-    let mut parts = comp("U1", "TL431", 20, "Package_TO_SOT_SMD:SOT-23", u1);
+    let u1 = pad(k, "OUT") + &pad(f, refnet) + &pad(a, "GND");
+    let mut parts = comp("U1", "TL431", 20, lib, u1);
     for (i, (r, val, a, b)) in [
         ("RS", Some(rs), "VIN", "OUT"),
         ("R1", div.then_some("10k"), "OUT", "REF"),
@@ -44,10 +51,10 @@ fn board(rs: &str, div: bool, refnet: &str) -> String {
 
 /// Run one board with one cathode-net voltage assertion, check what the report
 /// tells its reader about U1, and return whether the assertion passed.
-fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64)) -> bool {
+fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64), pkg: Pkg) -> bool {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("tl431.board");
-    std::fs::write(&path, board(rs, div, refnet)).expect("write board");
+    std::fs::write(&path, board(rs, div, refnet, pkg)).expect("write board");
     let r = support::run_body(
         &format!("{case}.toml"),
         &format!(
@@ -95,6 +102,17 @@ fn a_shunt_reference_is_programmed_by_the_board_and_sags_when_it_is_starved() {
         ("starved sag", "100k", true, "REF", (1.9633, 2.0033), true),
         ("ref on anode", "1k", false, "GND", ACCEPT_5V, false),
     ] {
-        assert_eq!(vka_in(case, rs, div, refnet, band), want, "{case} {band:?}");
+        let got = vka_in(case, rs, div, refnet, band, DBZ);
+        assert_eq!(got, want, "{case} {band:?}");
+    }
+    // THE REGRESSION. The same electrical part in TO-92, whose pads are CATHODE
+    // 1 / ANODE 2 / REF 3 -- a DIFFERENT order, not a rotation. One card with
+    // one pin map cannot regulate on both boards, so a package-blind map fails
+    // here even though it passes every row above.
+    for (case, band) in [
+        ("to92 accept", ACCEPT_5V),
+        ("to92 ngspice", (5.0037, 5.0137)),
+    ] {
+        assert!(vka_in(case, "1k", true, "REF", band, LP), "{case} {band:?}");
     }
 }

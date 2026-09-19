@@ -1,0 +1,14 @@
+# The tanh B-source amplifier's branch row is the system's ONLY nonlinear
+# equation and contributes nothing to any node sum, so a KCL-only line-search
+# merit reads round-off (4e-17 A) however far the iterate is from a root: waive
+# that comparison and Newton dies at dt_min within microseconds, honour it on
+# the noise and the oscillation drops from 1591 Hz to 512. Same closed form in
+# both engines, so what is left is timestep/resample error. Measured 2.8e-6.
+analysis = "tran"
+description = "Wien oscillator whose amplifier is a high-gain tanh B-source (f0 = 1591.5 Hz)"
+full_scale = 2.5
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 5.0e-05
