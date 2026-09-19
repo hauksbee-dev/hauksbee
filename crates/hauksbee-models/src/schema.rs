@@ -716,6 +716,11 @@ pub struct Ratings {
     /// heatsinked path; the free-air estimate uses `theta_ja_c_per_w`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theta_jc_c_per_w: Option<f64>,
+
+    /// FLOOR, not a ceiling: the least current (A) the datasheet guarantees regulation
+    /// at (TL431 IKmin, an LDO minimum load); below it the run discloses, not answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_current_a: Option<f64>,
 }
 
 /// Severity requested by a sourced operating-envelope entry.

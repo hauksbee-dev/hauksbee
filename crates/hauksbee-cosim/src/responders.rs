@@ -38,6 +38,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::peripherals::i2c::I2cBus;
 use crate::peripherals::spi::SpiBus;
+use crate::MutexExt;
 use hauksbee_bind::digital::{Hc165Chain, Hc595Chain, LogicLevels};
 use hauksbee_bind::logic::ParallelMemoryPort;
 use hauksbee_mcu::I2cEvent;
@@ -462,10 +463,7 @@ impl ParallelMemoryResponder {
     /// whenever this responder cannot present a word (read gate inactive,
     /// address unresolved, or the address outside the part).
     fn release_data_bus(&self) -> Vec<InputDrive> {
-        self.runtime
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .read_enabled = false;
+        self.runtime.lock_or_recover().read_enabled = false;
         self.data_out
             .iter()
             .copied()
@@ -505,7 +503,7 @@ impl ParallelMemoryResponder {
             chain.replay(&chain_edges);
         }
 
-        let volts_guard = self.volts.lock().unwrap_or_else(|e| e.into_inner());
+        let volts_guard = self.volts.lock_or_recover();
         let volts = volts_guard.as_slice();
         let levels = self.levels;
         let pin_levels = &self.pin_levels;
@@ -585,7 +583,7 @@ impl ParallelMemoryResponder {
             return self.release_data_bus();
         };
         {
-            let mut runtime = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
+            let mut runtime = self.runtime.lock_or_recover();
             runtime.address = address;
             runtime.word = word;
             runtime.read_enabled = true;
@@ -720,7 +718,7 @@ impl Hc165Responder {
         volts: Arc<Mutex<Vec<f64>>>,
     ) -> Self {
         let (pl_n, clk) = {
-            let c = chain.lock().unwrap_or_else(|e| e.into_inner());
+            let c = chain.lock_or_recover();
             (c.pl_n, c.clk)
         };
         Hc165Responder {
@@ -741,9 +739,9 @@ impl InputResponder for Hc165Responder {
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         // Fixed lock order: voltage snapshot first, then the chain (both leaf
         // locks; nothing here takes them together the other way round).
-        let v = self.volts.lock().unwrap_or_else(|e| e.into_inner());
+        let v = self.volts.lock_or_recover();
         let node_v = |n: hauksbee_ir::NodeId| v.get(n.0 as usize).copied().unwrap_or(0.0);
-        let mut ch = self.chain.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ch = self.chain.lock_or_recover();
         match ch.on_edge(pin, high, &node_v, &self.levels) {
             Some((miso, level)) => vec![InputDrive::drive(miso, level)],
             None => Vec::new(),
@@ -869,7 +867,7 @@ impl BitBangSpiResponder {
         // construction; decode it into CPOL/CPHA once. `spi_mode` is validated
         // to 0..=3 upstream, but the bit ops are harmless for any u8.
         let mode = {
-            let bus = bus.lock().unwrap_or_else(|e| e.into_inner());
+            let bus = bus.lock_or_recover();
             bus.spi_mode()
         };
         let cpol = mode & 0b10 != 0;
@@ -914,7 +912,7 @@ impl BitBangSpiResponder {
 
     fn fault(&mut self, msg: &str) {
         let id = {
-            let bus = self.bus.lock().unwrap_or_else(|e| e.into_inner());
+            let bus = self.bus.lock_or_recover();
             bus.id().to_string()
         };
         eprintln!(
@@ -984,7 +982,7 @@ impl InputResponder for BitBangSpiResponder {
                     ));
                     return Vec::new();
                 }
-                let mut bus = self.bus.lock().unwrap_or_else(|e| e.into_inner());
+                let mut bus = self.bus.lock_or_recover();
                 bus.cs_assert();
                 self.presented = bus.miso_preview();
                 drop(bus);
@@ -1003,14 +1001,11 @@ impl InputResponder for BitBangSpiResponder {
                     eprintln!(
                         "WARN: bit-banged SPI '{}': CS deasserted mid-byte ({} of 8 bits \
                          clocked); the firmware aborted a transfer",
-                        self.bus.lock().unwrap_or_else(|e| e.into_inner()).id(),
+                        self.bus.lock_or_recover().id(),
                         self.nbits,
                     );
                 }
-                self.bus
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .cs_deassert();
+                self.bus.lock_or_recover().cs_deassert();
                 return vec![InputDrive::release(self.pins.miso)];
             }
             return Vec::new();
@@ -1036,7 +1031,7 @@ impl InputResponder for BitBangSpiResponder {
             self.nbits += 1;
             if self.nbits == 8 {
                 let (actual, next) = {
-                    let mut bus = self.bus.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut bus = self.bus.lock_or_recover();
                     let actual = bus.transfer(self.acc);
                     (actual, bus.miso_preview())
                 };
@@ -1202,10 +1197,7 @@ impl SoftI2cResponder {
     }
 
     fn dispatch(&mut self, ev: I2cEvent) -> Option<u8> {
-        self.bus
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .dispatch(ev)
+        self.bus.lock_or_recover().dispatch(ev)
     }
 
     /// Put a slave-driven level on the wire (records it for re-assertion).
@@ -1281,12 +1273,7 @@ impl SoftI2cResponder {
             let addr = acc >> 1;
             let read = acc & 1 != 0;
             self.addr = addr;
-            let known = self
-                .bus
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .addresses()
-                .contains(&addr);
+            let known = self.bus.lock_or_recover().addresses().contains(&addr);
             // Dispatch the Start regardless (the bus tracks its own active
             // address; an unmatched Start clears it), but only a MODELED
             // address gets the ACK. An unknown address is NACKed honestly,
@@ -2036,12 +2023,7 @@ data_out = ["io0"]
                 .collect::<Vec<_>>(),
             "a lone /WE rising edge enters a read and drives erased 0xff immediately"
         );
-        assert!(
-            runtime
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .read_enabled
-        );
+        assert!(runtime.lock_or_recover().read_enabled);
     }
 
     #[test]
@@ -2150,12 +2132,7 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         }
         responder.on_edge_at(we, false, 20);
         assert_eq!(bus_byte(&responder.on_edge_at(we, true, 21)), 0xa5);
-        assert!(
-            runtime
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .read_enabled
-        );
+        assert!(runtime.lock_or_recover().read_enabled);
     }
 
     // ── Bit-banged SPI ───────────────────────────────────────────────────────

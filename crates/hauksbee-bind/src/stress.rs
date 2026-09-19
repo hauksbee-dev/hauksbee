@@ -50,7 +50,7 @@
 
 use std::collections::HashMap;
 
-use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use hauksbee_ir::{evidence::Assumption, Circuit, Device, DeviceId, NodeId};
 use hauksbee_models::schema::{ComponentKind, Ratings};
 
 /// Consecutive chunks a continuous-rating violation must persist before it is
@@ -650,6 +650,7 @@ pub struct StressMonitor {
     chunk_energy_j: Vec<f64>,
     /// Simulated time (s) the deposited energy covers. Zero means no deposit.
     chunk_elapsed_s: f64,
+    best_current_a: Vec<f64>,
 }
 
 impl Default for StressMonitor {
@@ -673,7 +674,33 @@ impl StressMonitor {
             temp_by_ref: HashMap::new(),
             chunk_energy_j: vec![0.0; n],
             chunk_elapsed_s: 0.0,
+            best_current_a: vec![0.0; n],
         }
+    }
+
+    /// One disclosure per part that never reached the `min_current_a` its card
+    /// declares. NOT a fault: the model regulates below the floor where the real
+    /// part is not guaranteed to, so it rides the partial-model path.
+    pub fn under_minimum_current(&self) -> Vec<Assumption> {
+        self.metas
+            .iter()
+            .zip(&self.best_current_a)
+            .filter_map(|(m, &seen)| {
+                let floor = m.ratings.min_current_a.filter(|f| seen < *f)?;
+                let (r, ma, floor_ma) = (&m.reference, seen * 1e3, floor * 1e3);
+                Some(Assumption::partial_model_for_component(
+                    &format!("{r}-min-current"),
+                    r,
+                    "",
+                    &format!(
+                        "{r} carries {ma:.2} mA, below the {floor_ma:.2} mA its datasheet card \
+                         requires for regulation, so the voltage it holds here is not guaranteed"
+                    ),
+                    "raise its current above the card's minimum (a smaller series resistor, or \
+                     a preload), then re-run",
+                ))
+            })
+            .collect()
     }
 
     /// Every device whose overpower check could not run because its package was
@@ -892,6 +919,12 @@ impl StressMonitor {
                 }
             })
             .collect();
+        // Each device's BEST current: a starved chunk must not outvote a healthy one.
+        for (i, op) in ops.iter().enumerate() {
+            if let Some(op) = op {
+                self.best_current_a[i] = self.best_current_a[i].max(op.current_a);
+            }
+        }
         // Heating power per device. When the scheduler deposited accepted-step
         // energy for this chunk, the physical figure is the TIME-WEIGHTED
         // average `energy / elapsed`: a firmware PWM waveform switches inside

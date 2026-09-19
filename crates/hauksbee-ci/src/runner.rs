@@ -1433,6 +1433,9 @@ fn production_assumptions(
             ));
         }
     }
+    // Parts the solve found below the minimum current their card guarantees
+    // regulation at: never a silent clean pass.
+    production_assumptions.extend(engine.scheduler().stress.under_minimum_current());
     let all_nets: Vec<&str> = board
         .nets
         .iter()
@@ -1862,7 +1865,14 @@ fn run_one(
     // probes. Loading the traces here (fail-loud, before the sim spends its
     // minutes) also validates them, so a malformed trace aborts the run with a
     // named error instead of failing every feature at evaluation time.
-    let hwtrace_nets = crate::hwtrace::assert_nets(spec)?;
+    let mut series_nets = crate::hwtrace::assert_nets(spec)?;
+    // A `toggle` frequency is TIMED from edges, so those nets need a waveform.
+    series_nets.extend(
+        spec.asserts
+            .iter()
+            .filter(|a| a.kind == "toggle" && a.freq_hz.is_some())
+            .filter_map(|a| a.net.clone()),
+    );
     let mut net_series: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
 
     // The transient is where the minutes go, so it is the phase worth reporting
@@ -1957,9 +1967,9 @@ fn run_one(
                     extremes(name).for_each(|x| w.fold(x));
                 }
             }
-            // Hardware-trace waveforms: record the probed nets' voltages at the
-            // frame cadence, for feature extraction against the captured trace.
-            for net in &hwtrace_nets {
+            // Watched waveforms: the hwtrace-probed and toggle-rate nets, at the
+            // frame cadence, for feature extraction and for edge timing.
+            for net in &series_nets {
                 if let Some(&v) = frame.net_voltages.get(net) {
                     net_series
                         .entry(net.clone())

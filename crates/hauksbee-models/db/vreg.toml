@@ -1531,3 +1531,135 @@ max_current_a = 1.5  # IO, TO-220, Recommended Operating Conditions
 # rating, which is conservative for a positive rail since VO >= 1.25 V always.
 max_voltage_v = 40.0
 max_junction_temp_c = 125.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TL431: an adjustable precision SHUNT reference, not a series pass regulator.
+# It has no input pin: it sinks cathode current to hold REF at VREF above the
+# anode, and the BOARD's series resistor and R1/R2 divider set the cathode
+# voltage. `shunt = true` selects `bind_shunt_ref`, which stamps it as four
+# primitives (an internal reference Vsource, a railed error amplifier, an
+# ammeter and a transconductance) so the datasheet's programming equation
+#     VKA = VREF*(1 + R1/R2) + IREF*R1        (SLVS543, Figure 7-2, section 7)
+# falls out of the MNA solve of the fitted R1/R2, and is never parsed out of
+# the netlist. Roles reuse the vreg vocabulary: CATHODE is `out` (the node the
+# part regulates), ANODE is `gnd` (its local return), REF is `fb`.
+#
+# Primary source: TI TL431/TL432 datasheet SLVS543 (Aug 2004, rev. May 2024).
+#
+# GRADE: `value_re` matches EVERY grade -- TL431 (2 %), TL431A (1 %) and
+# TL431B (0.5 %). The VREF interval below is the PLAIN (I) grade's, 2.440 to
+# 2.550 V, because the A and B intervals are strictly inside it: one card with
+# the widest interval answers a board that writes "TL431B" with more
+# uncertainty than that part has earned, which is the safe direction, whereas
+# one card with the B interval would understate the spread of a part whose
+# value field says only "TL431". `ikmin_a` is the plain grade's 1 mA max for
+# the same reason (A/B are specified at 0.7 mA max). The typ VREF is 2.495 V
+# on all three grades, so the NOMINAL answer is grade-independent; only the
+# stated uncertainty differs. Split this into per-grade cards the day a board
+# needs the tighter interval.
+#
+# DELIBERATELY NOT MODELLED, each also in `warning` (the route that reaches a
+# report reader) and in `coverage.missing` (the machine-readable list):
+#   * Temperature. SLVS543 gives a full-range VREF DEVIATION (14 mV typ,
+#     34 mV max for TL431BI) and no ppm/degC coefficient at all, so there is
+#     no temperature curve here to interpolate and none is invented. Every
+#     number on this card is Ta = 25 C.
+#   * Stability against capacitive load. SLVS543 Figures 6-16 and 6-18 define
+#     instability regions in the (IKA, CL) plane. This model has NO dynamics
+#     that could enter them, so it reports a steady cathode voltage for a
+#     board that in fact oscillates.
+#   * The minimum cathode current for regulation. `ikmin_a` is recorded and
+#     NOT enforced: the stamp regulates smoothly down to IKA = 0, so between
+#     0 and 1 mA it claims a regulation the real part does not hold. Below
+#     that the error amplifier rails off and the cathode voltage sags to the
+#     divider's own, which IS visible, but the 0-1 mA band is optimistic.
+#   * Reference noise (SLVS543 gives 150 nV/sqrt(Hz) at 1 kHz), the off-state
+#     cathode current (IOFF, 0.1 uA typ / 1 uA max at VKA = 36 V), and the
+#     REF-pin input capacitance.
+#   * Grade spread. The stamp uses the 2.495 V typ; the interval above is
+#     carried as uncertainty, not solved as a corner.
+[[models]]
+id = "tl431"
+kind = "vreg"
+description = "TI TL431 adjustable precision shunt reference, 2.495 V (all grades; the board's divider sets the cathode voltage)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vref"
+low = 2.440
+high = 2.550
+unit = "V"
+kind = "specification-limits"
+basis = "TI SLVS543 section 6.6, VREF for the plain (I) grade at Ta = 25 C, VKA = VREF, IKA = 10 mA; the A (2.470-2.520) and B (2.483-2.507) grades are strictly inside this"
+
+[models.match]
+# Every TL431 grade and package suffix. TLV431 is a DIFFERENT part (1.24 V
+# reference) and this anchor does not match it.
+value_re = "(?i)^TL431"
+
+[[models.envelope]]
+# The only absolute-volt window the envelope schema can express for this part.
+# The IKA window (1 mA to 100 mA recommended, 150 mA absolute maximum) is a
+# CURRENT and the schema has no current envelope, so both ends live in
+# `ratings` instead, where the stress monitor scores them against the stamped
+# ammeter: `max_current_a` as a fault, `min_current_a` as a disclosure.
+kind = "supply_range"
+pin = "out"
+min_v = 2.5
+max_v = 36.0
+abs_max_v = 37.0
+basis = "TI SLVS543 section 6.4, Recommended Operating Conditions, cathode voltage VKA 2.5 V to 36 V; section 6.1 Absolute Maximum Ratings, cathode voltage 37 V"
+
+[models.params]
+# Source: TI SLVS543, sections 6.1/6.4/6.6, Ta = 25 C.
+shunt     = true      # selects the shunt-reference stamp
+vref      = 2.495     # VREF typ; 2.440 min / 2.550 max, see the interval above
+iref_a    = 2.0e-6    # IREF typ (4 uA max), IKA = 10 mA, R1 = 10 k, R2 = open
+zka_ohms  = 0.2       # |ZKA| typ (0.5 max), VKA = VREF, f <= 1 kHz, IKA 1->100 mA
+iktest_a  = 0.010     # the IKA at which VREF and |ZKA| are specified
+ikmax_a   = 0.100     # IKA max, Recommended Operating Conditions
+ikmin_a   = 0.001     # IKA min for regulation, plain grade (0.7 mA A/B grade).
+                      # The ENFORCED copy of this floor is `ratings.min_current_a`,
+                      # which the stress monitor scores the solved IKA against.
+#
+# The two stamp parameters are DERIVED from the four datasheet numbers above by
+# `bind_shunt_ref`, not chosen, which is why neither appears here:
+#   error-amplifier gain  AOL  = 1/(zka_ohms*ikmax_a) = 50 V/V, so the closed
+#                               loop reproduces |ZKA| = 0.2 ohm exactly
+#   internal reference    VINT = vref - iktest_a*zka_ohms = 2.493 V, so VKA is
+#                               exactly the datasheet 2.495 V at IKA = 10 mA
+warning = "temperature is not modelled: every number is the 25 C typical, and SLVS543 gives only a full-range VREF deviation (34 mV max on the B grade), not a coefficient, so there is no drift curve here at all. Stability against capacitive load is not modelled either: SLVS543 Figures 6-16 and 6-18 define instability regions in the (IKA, CL) plane and this stamp has no dynamics that could enter them, so a board that oscillates is reported as a steady cathode voltage. The minimum cathode current for regulation (1 mA max spec, 0.4 mA typ) is not modelled as a BEHAVIOUR: the stamp keeps regulating smoothly down to IKA = 0 where the real part does not. It is enforced as a DISCLOSURE instead, through `ratings.min_current_a`: any run whose solved cathode current stays under 1 mA says so next to the result rather than answering a regulated voltage unqualified. Further starved than that, the amplifier rails off and the voltage sags to the divider's own, which is visible on its own. Reference noise, the off-state cathode current and the REF-pin capacitance are absent, and the reference is the 2.495 V typ, so a computed cathode voltage is the NOMINAL part, not a bound over the 2.440-2.550 V grade spread."
+
+[models.coverage]
+implements = ["board_feedback_divider", "reference_pin_current", "dynamic_impedance",
+              "cathode_current_ceiling", "falls_out_of_regulation_when_starved",
+              "two_terminal_reference_wiring"]
+missing = ["temperature_drift", "capacitive_load_stability", "minimum_cathode_current",
+           "reference_noise", "off_state_cathode_current", "ref_input_capacitance",
+           "parameter_spread", "startup_transient"]
+
+[models.pins]
+# SLVS543 Pin Functions, TO-92 (LP) and SOT-23 (DBZ): 1 REF, 2 ANODE,
+# 3 CATHODE. A `[models.pins]` value IS a binder role, so the three pins are
+# spelled with the vreg vocabulary's names for them (see the header above).
+"1" = "fb"
+"2" = "gnd"
+"3" = "out"
+
+[models.ratings]
+# IKA, Recommended Operating Conditions (continuous absolute maximum is
+# 150 mA). The stamp puts a zero-volt ammeter in the cathode leg, so the
+# stress monitor's vreg overcurrent check scores the real IKA against this.
+max_current_a = 0.100
+# IKA MINIMUM for regulation, Electrical Characteristics (1 mA max spec,
+# 0.4 mA typ, plain grade). A floor, not a ceiling: the stamp regulates
+# smoothly below it, so the monitor records the shortfall and the run says so
+# next to the result instead of answering a regulated voltage unqualified.
+min_current_a = 0.001
+# Cathode voltage, Absolute Maximum Ratings.
+max_voltage_v = 37.0
+max_junction_temp_c = 125.0

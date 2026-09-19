@@ -184,55 +184,95 @@ impl RailWindow {
         self.max_v = self.max_v.max(v);
     }
 
-    /// Total time (s) the rail spent strictly below `threshold` volts, summed
-    /// over the sampled window (rectangular integration on the sample grid).
-    pub fn dip_duration_s(&self, threshold: f64) -> f64 {
+    /// Total time (s) the rail spent strictly past `threshold` on the `below`
+    /// side, summed over the sampled window (rectangular integration on the
+    /// sample grid). `dip_duration_s` (below) and `spike_duration_s` (above)
+    /// are this same accounting mirrored across the threshold, so they share
+    /// it here instead of each carrying their own copy of the loop.
+    fn duration_past_s(&self, threshold: f64, below: bool) -> f64 {
+        let past = |v: f64| if below { v < threshold } else { v > threshold };
         let mut total = 0.0;
         let mut last_dt = 0.0;
         for w in self.samples.windows(2) {
             let (t0, v0) = w[0];
             let (t1, _v1) = w[1];
-            // Count the interval as "dipped" when its leading sample is below.
+            // Count the interval as counted when its leading sample is past.
             let dt = (t1 - t0).max(0.0);
             last_dt = dt;
-            if v0 < threshold {
+            if past(v0) {
                 total += dt;
             }
         }
-        // The trailing sample owns one more frame interval; if it is still below
-        // the threshold at the window end, count that dwell too (otherwise a dip
-        // that runs to the last frame is reported one frame short).
+        // The trailing sample owns one more frame interval; if it is still
+        // past the threshold at the window end, count that dwell too
+        // (otherwise a dip/spike that runs to the last frame is reported one
+        // frame short).
         if let Some(&(_, vlast)) = self.samples.last() {
-            if vlast < threshold {
+            if past(vlast) {
                 total += last_dt;
             }
         }
         total
     }
 
+    /// Total time (s) the rail spent strictly below `threshold` volts, summed
+    /// over the sampled window (rectangular integration on the sample grid).
+    pub fn dip_duration_s(&self, threshold: f64) -> f64 {
+        self.duration_past_s(threshold, true)
+    }
+
     /// Total time (s) the rail spent strictly above `threshold` volts, summed
     /// over the sampled window (rectangular integration on the sample grid).
     pub fn spike_duration_s(&self, threshold: f64) -> f64 {
-        let mut total = 0.0;
-        let mut last_dt = 0.0;
-        for w in self.samples.windows(2) {
-            let (t0, v0) = w[0];
-            let (t1, _v1) = w[1];
-            // Count the interval as "spiking" when its leading sample is above.
-            let dt = (t1 - t0).max(0.0);
-            last_dt = dt;
-            if v0 > threshold {
-                total += dt;
-            }
-        }
-        // Match dip_duration_s: the trailing sample owns one more frame interval
-        // when it is still above the threshold at the window end.
+        self.duration_past_s(threshold, false)
+    }
+
+    /// Shared engine for `recovery_s` (below) and `settling_s` (above): from
+    /// the first sample past `threshold` to the moment the rail returned to
+    /// `target` and stayed there; the FIRST sample recovered past which no
+    /// later sample crosses back. Returns 0 if the rail never crossed
+    /// `threshold`, and `+∞` if it crossed but never sustained a return to
+    /// `target` (so a `recover_within_ms`/settling assertion FAILS loud
+    /// rather than passing on the small `window_end − t_cross` value a late
+    /// crossing produced).
+    fn recovered_at_s(&self, threshold: f64, target: f64, below: bool) -> f64 {
+        let past = |v: f64| if below { v < threshold } else { v > threshold };
+        let recovered = |v: f64| if below { v >= target } else { v <= target };
+        let first_cross = self.samples.iter().find(|(_, v)| past(*v)).map(|(t, _)| *t);
+        let Some(t_cross) = first_cross else {
+            return 0.0;
+        };
+        // Never recovered: the rail ended on the wrong side of `target`, so it
+        // never sustained a crossing back. A late crossing would otherwise
+        // report `window_end − t_cross` (a small value) and FALSELY pass a
+        // recover_within_ms/settling bound. Fail loud with +∞.
         if let Some(&(_, vlast)) = self.samples.last() {
-            if vlast > threshold {
-                total += last_dt;
+            if !recovered(vlast) {
+                return f64::INFINITY;
             }
         }
-        total
+        // The last time the rail was still on the wrong side of `target`
+        // (after the crossing).
+        let last_unrecovered = self
+            .samples
+            .iter()
+            .filter(|(t, v)| *t >= t_cross && !recovered(*v))
+            .map(|(t, _)| *t)
+            .fold(t_cross, f64::max);
+        // The rail does not actually reach `target` until the first sample
+        // after `last_unrecovered`: every sample past it is recovered by
+        // definition, so that sample is the moment it returned and stayed.
+        // Returning `last_unrecovered` itself reported recovery a full frame
+        // early, a silent false pass for a rail that only crosses back on the
+        // following frame. The +∞ guard above already ensured the final
+        // sample is recovered, so such a sample always exists.
+        let recovered_at = self
+            .samples
+            .iter()
+            .filter(|(t, v)| *t > last_unrecovered && recovered(*v))
+            .map(|(t, _)| *t)
+            .fold(f64::INFINITY, f64::min);
+        (recovered_at - t_cross).max(0.0)
     }
 
     /// Recovery time (s): from the first sample below `threshold` to the moment
@@ -242,44 +282,7 @@ impl RailWindow {
     /// `recover_to` (so a `recover_within_ms` assertion FAILS loud rather than
     /// passing on the small `window_end − t_dip` value a late dip produced).
     pub fn recovery_s(&self, threshold: f64, recover_to: f64) -> f64 {
-        let first_dip = self
-            .samples
-            .iter()
-            .find(|(_, v)| *v < threshold)
-            .map(|(t, _)| *t);
-        let Some(t_dip) = first_dip else {
-            return 0.0;
-        };
-        // Never recovered: the rail ended below recover_to, so it never sustained
-        // a crossing back above the recovery threshold. A late dip would
-        // otherwise report `window_end − t_dip` (a small value) and FALSELY pass
-        // a recover_within_ms bound. Fail loud with +∞.
-        if let Some(&(_, vlast)) = self.samples.last() {
-            if vlast < recover_to {
-                return f64::INFINITY;
-            }
-        }
-        // The last time the rail was still below recover_to (after the dip).
-        let last_below = self
-            .samples
-            .iter()
-            .filter(|(t, v)| *t >= t_dip && *v < recover_to)
-            .map(|(t, _)| *t)
-            .fold(t_dip, f64::max);
-        // The rail does not actually REACH recover_to until the first sample after
-        // last_below: every sample past last_below is at or above recover_to by
-        // definition, so that sample is the moment it returned and stayed.
-        // Returning `last_below` itself reported recovery a full frame early, a
-        // silent false pass of `recover_within_ms` for a rail that only crosses
-        // back on the following frame. The +∞ guard above already ensured the
-        // final sample is ≥ recover_to, so such a sample always exists.
-        let recover_at = self
-            .samples
-            .iter()
-            .filter(|(t, v)| *t > last_below && *v >= recover_to)
-            .map(|(t, _)| *t)
-            .fold(f64::INFINITY, f64::min);
-        (recover_at - t_dip).max(0.0)
+        self.recovered_at_s(threshold, recover_to, true)
     }
 
     /// Settling time (s): from the first sample above `threshold` to the first
@@ -287,36 +290,7 @@ impl RailWindow {
     /// Returns 0 if the rail never spiked, and `+∞` if it spiked but the final
     /// sample is still above `settle_to`.
     pub fn settling_s(&self, threshold: f64, settle_to: f64) -> f64 {
-        let first_spike = self
-            .samples
-            .iter()
-            .find(|(_, v)| *v > threshold)
-            .map(|(t, _)| *t);
-        let Some(t_spike) = first_spike else {
-            return 0.0;
-        };
-        // Never settled: a final sample above settle_to means there is no
-        // sustained return to the settled band within the window.
-        if let Some(&(_, vlast)) = self.samples.last() {
-            if vlast > settle_to {
-                return f64::INFINITY;
-            }
-        }
-        // Any later sample above settle_to (including a spike sample that is
-        // below the spike threshold) postpones the settling instant.
-        let last_above = self
-            .samples
-            .iter()
-            .filter(|(t, v)| *t >= t_spike && *v > settle_to)
-            .map(|(t, _)| *t)
-            .fold(t_spike, f64::max);
-        let settle_at = self
-            .samples
-            .iter()
-            .filter(|(t, v)| *t > last_above && *v <= settle_to)
-            .map(|(t, _)| *t)
-            .fold(f64::INFINITY, f64::min);
-        (settle_at - t_spike).max(0.0)
+        self.recovered_at_s(threshold, settle_to, false)
     }
 }
 

@@ -39,6 +39,7 @@ use crate::peripherals::{
 };
 use crate::regulation;
 pub use crate::regulation::{open_driver_reason, RegulationTaint, OPEN_DRIVER};
+use crate::MutexExt;
 use hauksbee_bind::behavioral::BehavioralDevice;
 use hauksbee_bind::bind_report::SimpleRegulator;
 use hauksbee_bind::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
@@ -345,14 +346,8 @@ impl ModelPeripheralPowerLeg {
     /// Gate the bus model with the rail: an unpowered part cannot ACK.
     fn set_bus_powered(&self, powered: bool) {
         match &self.bus {
-            ModelPeripheralBus::I2c(bus) => bus
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .set_powered(powered),
-            ModelPeripheralBus::Spi(bus) => bus
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .set_powered(powered),
+            ModelPeripheralBus::I2c(bus) => bus.lock_or_recover().set_powered(powered),
+            ModelPeripheralBus::Spi(bus) => bus.lock_or_recover().set_powered(powered),
         }
     }
 
@@ -360,10 +355,7 @@ impl ModelPeripheralPowerLeg {
     fn low_power_mode(&self) -> bool {
         match &self.bus {
             ModelPeripheralBus::I2c(_) => false,
-            ModelPeripheralBus::Spi(bus) => bus
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .low_power_mode(),
+            ModelPeripheralBus::Spi(bus) => bus.lock_or_recover().low_power_mode(),
         }
     }
 
@@ -372,16 +364,10 @@ impl ModelPeripheralPowerLeg {
     fn drain_activity(&self) {
         match &self.bus {
             ModelPeripheralBus::I2c(bus) => {
-                let _ = bus
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .take_activity();
+                let _ = bus.lock_or_recover().take_activity();
             }
             ModelPeripheralBus::Spi(bus) => {
-                let _ = bus
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .take_activity();
+                let _ = bus.lock_or_recover().take_activity();
             }
         }
     }
@@ -1437,7 +1423,7 @@ impl Scheduler {
         edge_exact.extend(self.replay_chips.iter().copied());
         edge_exact.extend(self.parallel_memory_chips.iter().copied());
         for c in &self.hc165_chains {
-            let c = c.lock().unwrap_or_else(|e| e.into_inner());
+            let c = c.lock_or_recover();
             edge_exact.extend(c.order.iter().copied());
         }
         let mut map: HashMap<u32, Vec<String>> = HashMap::new();
@@ -1538,9 +1524,7 @@ impl Scheduler {
             t: self.sim_time,
             dt: self.chunk_s,
         };
-        bus.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .drive_all(&mut ctx);
+        bus.lock_or_recover().drive_all(&mut ctx);
     }
 
     /// Instantiate I2C/SPI slaves declared by exact resolved model cards.
@@ -1626,9 +1610,7 @@ impl Scheduler {
     ) {
         let bus = Arc::new(Mutex::new(bus));
         if power.is_some() {
-            bus.lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .set_powered(false);
+            bus.lock_or_recover().set_powered(false);
         }
         self.attach_i2c_bus(bus.clone());
         if let Some(power) = power {
@@ -1649,9 +1631,7 @@ impl Scheduler {
     ) {
         let bus = Arc::new(Mutex::new(bus));
         if power.is_some() {
-            bus.lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .set_powered(false);
+            bus.lock_or_recover().set_powered(false);
         }
         let cs = cs_net.and_then(|net| {
             self.pin_driving_node(net).map(|pin| ResolvedCs {
@@ -1733,14 +1713,9 @@ impl Scheduler {
     fn apply_model_peripheral_activity(&mut self) {
         for leg in &mut self.model_peripheral_power {
             let (activity, low_power) = match &leg.bus {
-                ModelPeripheralBus::I2c(bus) => (
-                    bus.lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .take_activity(),
-                    false,
-                ),
+                ModelPeripheralBus::I2c(bus) => (bus.lock_or_recover().take_activity(), false),
                 ModelPeripheralBus::Spi(bus) => {
-                    let mut bus = bus.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut bus = bus.lock_or_recover();
                     (bus.take_activity(), bus.low_power_mode())
                 }
             };
@@ -1779,8 +1754,7 @@ impl Scheduler {
         let cb = reg.clone();
         self.mcus[mi].core.on_input_responder_batch(Box::new(
             move |edges: &[(PinId, bool)], cycle: u64| -> Vec<hauksbee_mcu::PinDrive> {
-                cb.lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                cb.lock_or_recover()
                     .dispatch_batch_at(
                         &edges
                             .iter()
@@ -1806,8 +1780,7 @@ impl Scheduler {
         self.mcus[mi].core.on_input_responder_direction(Box::new(
             move |changes: &[(PinId, bool, bool)], cycle: u64| {
                 direction_registry
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .lock_or_recover()
                     .dispatch_direction_at(
                         &changes
                             .iter()
@@ -1881,10 +1854,7 @@ impl Scheduler {
                 let responder =
                     Hc165Responder::new(chain.clone(), levels, self.input_volts.clone());
                 let registry = self.responder_registry(mi);
-                registry
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .register(Box::new(responder));
+                registry.lock_or_recover().register(Box::new(responder));
                 // MISO is responder-owned from here on: the plain
                 // digital-input sync must never also drive it.
                 self.mcus[mi].responder_input_pins.insert(miso);
@@ -1920,8 +1890,7 @@ impl Scheduler {
 
         for item in pending {
             self.responder_registry(item.mcu)
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .lock_or_recover()
                 .register(Box::new(item.responder));
             self.mcus[item.mcu]
                 .responder_input_pins
@@ -2274,7 +2243,7 @@ impl Scheduler {
 
     fn apply_parallel_memory_outputs(&mut self) {
         for binding in &self.parallel_memory_drives {
-            let runtime = binding.runtime.lock().unwrap_or_else(|e| e.into_inner());
+            let runtime = binding.runtime.lock_or_recover();
             let component = &mut self.digital[binding.component];
             for (bit, role) in binding.outputs.iter().enumerate() {
                 let Some(driver) = component.drivers.get_mut(role) else {
@@ -2579,7 +2548,7 @@ impl Scheduler {
         // instead of a silent green.
         let id = {
             use crate::peripherals::Peripheral as _;
-            let g = bus.lock().unwrap_or_else(|e| e.into_inner());
+            let g = bus.lock_or_recover();
             g.id().to_string()
         };
         self.record_bus_if_unexercised(&id, "I2C", None);
@@ -2594,7 +2563,7 @@ impl Scheduler {
         let all: Vec<Arc<Mutex<I2cBus>>> = self.i2c_buses.clone();
         let addresses: Vec<u8> = all
             .iter()
-            .flat_map(|b| b.lock().unwrap_or_else(|e| e.into_inner()).addresses())
+            .flat_map(|b| b.lock_or_recover().addresses())
             .collect();
         for m in &mut self.mcus {
             m.core.set_i2c_slave_addresses(&addresses);
@@ -2607,7 +2576,7 @@ impl Scheduler {
                     | hauksbee_mcu::I2cEvent::Stop { addr } => addr,
                 };
                 for b in &buses {
-                    let mut bus = b.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut bus = b.lock_or_recover();
                     if bus.addresses().contains(&addr) {
                         return bus.dispatch(ev);
                     }
@@ -2626,13 +2595,9 @@ impl Scheduler {
     /// the chunk-boundary heuristic, reported as `heuristic` in the co-sim
     /// coverage.
     pub fn attach_spi_bus(&mut self, bus: Arc<Mutex<SpiBus>>, cs: Option<ResolvedCs<NodeId>>) {
-        let id = bus
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .id()
-            .to_string();
+        let id = bus.lock_or_recover().id().to_string();
         self.record_bus_if_unexercised(&id, "SPI", None);
-        bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(
+        bus.lock_or_recover().set_cs_pin(
             cs.map(|c| c.pin),
             cs.map_or(CsProvenance::SpecDeclared, |c| c.provenance),
         );
@@ -2664,13 +2629,9 @@ impl Scheduler {
         bus: Arc<Mutex<SpiBus>>,
         cs: Option<ResolvedCs<NodeId>>,
     ) {
-        let id = bus
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .id()
-            .to_string();
+        let id = bus.lock_or_recover().id().to_string();
         self.record_bus_if_unexercised(&id, "SPI", Some(controller));
-        bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(
+        bus.lock_or_recover().set_cs_pin(
             cs.map(|c| c.pin),
             cs.map_or(CsProvenance::SpecDeclared, |c| c.provenance),
         );
@@ -2680,7 +2641,7 @@ impl Scheduler {
             m.core.on_spi_controller(
                 &ctrl,
                 Box::new(move |ev| {
-                    let mut guard = b.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut guard = b.lock_or_recover();
                     if ev.deselect {
                         guard.note_backend_deselect();
                         0xFF
@@ -2722,7 +2683,7 @@ impl Scheduler {
                 .is_some_and(|drv| cs_net.map_or(true, |node| drv.net == node))
         });
         if let Some(m) = owner {
-            let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
+            let mut sh = m.shared.lock_or_recover();
             sh.cs_frames.push(CsFrame {
                 pin,
                 active_low: true,
@@ -2761,7 +2722,7 @@ impl Scheduler {
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "bit-banged SPI '{}': no live MCU drives SCLK pin {:?}",
-                    bus.lock().unwrap_or_else(|e| e.into_inner()).id(),
+                    bus.lock_or_recover().id(),
                     pins.sclk
                 )
             })?;
@@ -2770,7 +2731,7 @@ impl Scheduler {
                 anyhow::bail!(
                     "bit-banged SPI '{}': {name} pin {:?} is not a wired GPIO of the MCU \
                      that drives SCLK ({})",
-                    bus.lock().unwrap_or_else(|e| e.into_inner()).id(),
+                    bus.lock_or_recover().id(),
                     pin,
                     self.mcus[mi].binding.reference,
                 );
@@ -2778,14 +2739,13 @@ impl Scheduler {
         }
         // This CS came from the bit-bang wiring, not from a spec `cs_net` and not
         // from a model pad map, and says so.
-        bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(
+        bus.lock_or_recover().set_cs_pin(
             Some(pins.cs_n),
             crate::peripherals::CsProvenance::BitBangPins,
         );
         let responder = crate::responders::BitBangSpiResponder::new(bus.clone(), pins);
         self.responder_registry(mi)
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .lock_or_recover()
             .register(Box::new(responder));
         // MISO is responder-owned: the plain digital-input sync must never
         // also drive it.
@@ -2827,8 +2787,7 @@ impl Scheduler {
         }
         let responder = crate::responders::SoftI2cResponder::new(bus.clone(), scl, sda);
         self.responder_registry(mi)
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .lock_or_recover()
             .register(Box::new(responder));
         // SDA is bidirectional and responder-owned: the responder answers
         // ACKs/read bits on it inside the run loop, so the plain
@@ -2875,7 +2834,7 @@ impl Scheduler {
         self.spi_buses
             .iter()
             .map(|b| {
-                let g = b.lock().unwrap_or_else(|e| e.into_inner());
+                let g = b.lock_or_recover();
                 (g.id().to_string(), g.framing_mode())
             })
             .collect()
@@ -2936,11 +2895,11 @@ impl Scheduler {
             .map(|p| (p.id().to_string(), p.kind().to_string()))
             .collect();
         for bus in &self.i2c_buses {
-            let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            let b = bus.lock_or_recover();
             out.push((b.id().to_string(), b.kind().to_string()));
         }
         for bus in &self.spi_buses {
-            let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            let b = bus.lock_or_recover();
             out.push((b.id().to_string(), b.kind().to_string()));
         }
         out
@@ -2951,11 +2910,11 @@ impl Scheduler {
         let mut m = self.peripherals.states();
         use crate::peripherals::Peripheral as _;
         for bus in &self.i2c_buses {
-            let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            let b = bus.lock_or_recover();
             m.insert(b.id().to_string(), b.state());
         }
         for bus in &self.spi_buses {
-            let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            let b = bus.lock_or_recover();
             m.insert(b.id().to_string(), b.state());
         }
         for leg in &self.model_peripheral_power {
@@ -3231,7 +3190,7 @@ impl Scheduler {
         // PL load (it fires inside the MCU run below, so it must reflect the
         // PREVIOUS chunk's settled spike-latch voltages).
         if !self.hc165_chains.is_empty() {
-            let mut snap = self.input_volts.lock().unwrap_or_else(|e| e.into_inner());
+            let mut snap = self.input_volts.lock_or_recover();
             snap.clear();
             snap.extend_from_slice(&self.node_volts);
         }
@@ -3280,7 +3239,7 @@ impl Scheduler {
             let mcu_ref = m.binding.reference.clone();
 
             let (edges, edge_log, bytes) = {
-                let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
+                let mut sh = m.shared.lock_or_recover();
                 (
                     std::mem::take(&mut sh.pin_edges),
                     std::mem::take(&mut sh.pin_edge_log),
@@ -3412,9 +3371,7 @@ impl Scheduler {
                 dt: chunk,
             };
             for b in buses {
-                b.lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .flush_stops(&mut ctx);
+                b.lock_or_recover().flush_stops(&mut ctx);
             }
         }
 
@@ -3753,10 +3710,7 @@ impl Scheduler {
         // callback); QEMU runs the firmware against a real device, so it reads
         // the value through its own I2C controller.
         for bus in &self.i2c_buses {
-            let sensors = bus
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .temperature_sensors();
+            let sensors = bus.lock_or_recover().temperature_sensors();
             for (addr, milli_c) in sensors {
                 m.core.set_i2c_device_temperature(addr, milli_c);
             }
@@ -3792,7 +3746,7 @@ impl Scheduler {
     #[cfg_attr(not(debug_assertions), allow(unused_variables))]
     fn deselect_heuristic_spi_buses(&mut self, chunk: f64) {
         for bus in &self.spi_buses {
-            let mut guard = bus.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = bus.lock_or_recover();
             if guard.frames_itself() {
                 continue;
             }
@@ -5892,7 +5846,7 @@ impl Scheduler {
         self.hc165_chains
             .iter()
             .map(|c| {
-                let c = c.lock().unwrap_or_else(|e| e.into_inner());
+                let c = c.lock_or_recover();
                 (c.pl_n, c.clk, c.miso, c.order.len())
             })
             .collect()
@@ -5903,7 +5857,7 @@ impl Scheduler {
     pub fn hc165_loaded_words(&self) -> Vec<u16> {
         self.hc165_chains
             .iter()
-            .map(|c| c.lock().unwrap_or_else(|e| e.into_inner()).loaded_word())
+            .map(|c| c.lock_or_recover().loaded_word())
             .collect()
     }
 
@@ -6059,7 +6013,7 @@ impl Scheduler {
         self.branch_x.resize(n_branch, 0.0);
         // Keep the 165 read-chain voltage snapshot sized to the node count.
         {
-            let mut snap = self.input_volts.lock().unwrap_or_else(|e| e.into_inner());
+            let mut snap = self.input_volts.lock_or_recover();
             snap.resize(n_nodes, 0.0);
         }
         // The unknown vector changed shape; a prior warm seed no longer applies.
@@ -6102,7 +6056,7 @@ fn dispatch_spi(
     ev: hauksbee_mcu::SpiEvent,
 ) -> u8 {
     let apply = |bus: &std::sync::Arc<std::sync::Mutex<crate::peripherals::SpiBus>>| -> u8 {
-        let mut g = bus.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = bus.lock_or_recover();
         if ev.deselect {
             // A backend-surfaced CS deassert (Renode hardware-NSS
             // FinishTransmission): the backend frames CS itself, so record that
@@ -6117,7 +6071,7 @@ fn dispatch_spi(
         return apply(&buses[0]);
     }
     for b in buses {
-        if b.lock().unwrap_or_else(|e| e.into_inner()).is_selected() {
+        if b.lock_or_recover().is_selected() {
             return apply(b);
         }
     }
@@ -6687,7 +6641,7 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
     // UB. So never panic on a poisoned lock: recover the guard and keep going
     // (the captured data is a simple accumulation buffer).
     core.on_pin_change(Box::new(move |pin: PinId, high: bool, cycle: u64| {
-        let mut sh = pin_sink.lock().unwrap_or_else(|e| e.into_inner());
+        let mut sh = pin_sink.lock_or_recover();
         sh.pin_edges.insert((pin.port, pin.bit), high);
         sh.pin_edge_log.push(PinEdge {
             cycle,
@@ -6711,7 +6665,7 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
         }
         drop(sh);
         for (bus, asserted) in frames {
-            let mut b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            let mut b = bus.lock_or_recover();
             if asserted {
                 b.cs_assert();
             } else {
@@ -6721,11 +6675,7 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
     }));
     let uart_sink = shared.clone();
     core.on_uart(Box::new(move |b: u8| {
-        uart_sink
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .uart_out
-            .push(b);
+        uart_sink.lock_or_recover().uart_out.push(b);
     }));
     // Tell a polling backend which ports the board actually wired, so it only
     // reads those output registers each chunk (no effect on push backends).
@@ -7064,10 +7014,7 @@ missing = ["measurement_registers"]
             Ok(n)
         }
         fn run_micros(&mut self, us: u64) -> anyhow::Result<()> {
-            self.micros
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(us);
+            self.micros.lock_or_recover().push(us);
             self.cycles += 16 * us;
             self.calls += 1;
             if self.fail_micros {
@@ -7090,19 +7037,18 @@ missing = ["measurement_registers"]
         }
         fn set_digital_in(&mut self, pin: PinId, high: bool) {
             self.digital_ins
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .lock_or_recover()
                 .push(((pin.port, pin.bit), high));
         }
         fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
         fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
-            *self.pin_cb.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb);
+            *self.pin_cb.lock_or_recover() = Some(cb);
         }
         fn on_input_responder(&mut self, responder: EdgeResponder) {
             if self.legacy {
                 self.responder_installs
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                *self.responder.lock().unwrap_or_else(|e| e.into_inner()) = Some(responder);
+                *self.responder.lock_or_recover() = Some(responder);
             }
         }
         fn input_responder_synchronous(&self) -> bool {
@@ -7113,22 +7059,19 @@ missing = ["measurement_registers"]
         }
         fn on_input_responder_direction(&mut self, responder: DirectionResponder) {
             if self.legacy {
-                *self
-                    .direction_responder
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(responder);
+                *self.direction_responder.lock_or_recover() = Some(responder);
             }
         }
         fn uart_write(&mut self, _bytes: &[u8]) {}
         fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
         fn on_i2c(&mut self, cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {
-            *self.i2c_cb.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb);
+            *self.i2c_cb.lock_or_recover() = Some(cb);
         }
         fn on_spi(&mut self, cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {
-            *self.spi_cb.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb);
+            *self.spi_cb.lock_or_recover() = Some(cb);
         }
         fn set_i2c_slave_addresses(&mut self, addresses: &[u8]) {
-            *self.i2c_addrs.lock().unwrap_or_else(|e| e.into_inner()) = addresses.to_vec();
+            *self.i2c_addrs.lock_or_recover() = addresses.to_vec();
         }
         fn supports_reset(&self) -> bool {
             !self.reset_unsupported
@@ -7431,10 +7374,7 @@ missing = ["measurement_registers"]
     /// Preload the mock MCU's shared capture state with an already-happened
     /// GPIO transition sequence; the next `step` drains it like a firmware chunk.
     fn preload_edges(sched: &Scheduler, pin: (char, u8), transitions: &[(u64, bool)]) {
-        let mut sh = sched.mcus[0]
-            .shared
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut sh = sched.mcus[0].shared.lock_or_recover();
         for &(cycle, level) in transitions {
             sh.pin_edges.insert(pin, level);
             sh.pin_edge_log.push(PinEdge {
@@ -7476,9 +7416,7 @@ missing = ["measurement_registers"]
         ));
 
         let sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
-        let mut bus = sched.i2c_buses()[0]
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut bus = sched.i2c_buses()[0].lock_or_recover();
         assert_eq!(i2c_read_after_pointer(&mut bus, 0x18, 0x00), Some(0x13));
     }
 
@@ -7500,9 +7438,7 @@ missing = ["measurement_registers"]
         assert!((idle["supply_current_a"] - 6e-6).abs() < 1e-12, "{idle:?}");
 
         {
-            let mut bus = sched.i2c_buses()[0]
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut bus = sched.i2c_buses()[0].lock_or_recover();
             bus.dispatch(hauksbee_mcu::I2cEvent::Start {
                 addr: 0x50,
                 read: true,
@@ -7523,9 +7459,7 @@ missing = ["measurement_registers"]
         let off = sched.peripheral_states()["U1"].clone();
         assert_eq!(off["powered"], 0.0);
         assert_eq!(off["supply_current_a"], 0.0);
-        let mut bus = sched.i2c_buses()[0]
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut bus = sched.i2c_buses()[0].lock_or_recover();
         assert_eq!(
             bus.dispatch(hauksbee_mcu::I2cEvent::Start {
                 addr: 0x50,
@@ -7545,9 +7479,7 @@ missing = ["measurement_registers"]
         assert_eq!(sched.spi_buses().len(), 1, "exact flash model attaches");
         let current = |sched: &Scheduler| sched.peripheral_states()["U1"]["supply_current_a"];
         let command = |sched: &Scheduler, byte: u8| {
-            let mut bus = sched.spi_buses()[0]
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
+            let mut bus = sched.spi_buses()[0].lock_or_recover();
             bus.cs_assert();
             bus.transfer(byte);
             bus.cs_deassert();
@@ -8086,11 +8018,10 @@ data_out = ["io0"]
         assert_eq!(m.installs.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(m.sched.parallel_memory_chips.contains(&0));
 
-        let mut slot = m.edge.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slot = m.edge.lock_or_recover();
         let callback = slot.as_mut().expect("legacy singleton callback installed");
         m.direction
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .lock_or_recover()
             .as_mut()
             .expect("direction callback installed")(&[(PinId::new('B', 0), true, false)], 9);
         let _ = callback(PinId::new('B', 0), false, 10);
@@ -8130,7 +8061,7 @@ data_out = ["io0"]
         m.sched.build_and_install_parallel_memories();
         assert_eq!(m.installs.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(m.sched.parallel_memory_chips.is_empty());
-        assert!(m.edge.lock().unwrap_or_else(|e| e.into_inner()).is_none());
+        assert!(m.edge.lock_or_recover().is_none());
     }
 
     #[test]
@@ -8413,7 +8344,7 @@ data_out = ["io0"]
 
         sched.step(5.0 * DEFAULT_CHUNK_S);
 
-        let calls = digital_ins.lock().unwrap_or_else(|e| e.into_inner());
+        let calls = digital_ins.lock_or_recover();
         let for_pin = |pin: (char, u8)| -> Vec<bool> {
             calls
                 .iter()
@@ -8441,12 +8372,7 @@ data_out = ["io0"]
     }
 
     fn cs_frames(sched: &Scheduler, m: usize) -> usize {
-        sched.mcus[m]
-            .shared
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .cs_frames
-            .len()
+        sched.mcus[m].shared.lock_or_recover().cs_frames.len()
     }
 
     /// A CS pin two MCUs both own frames on exactly one of them: the MCU that
@@ -8656,17 +8582,13 @@ data_out = ["io0"]
         sched.attach_i2c_bus(bus1.clone());
         sched.attach_i2c_bus(bus2.clone());
 
-        let addrs = h
-            .i2c_addrs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let addrs = h.i2c_addrs.lock_or_recover().clone();
         assert!(
             addrs.contains(&0x50) && addrs.contains(&0x48),
             "{addrs:#04x?}"
         );
 
-        let mut slot = h.i2c_cb.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slot = h.i2c_cb.lock_or_recover();
         let cb = slot.as_mut().expect("on_i2c handler installed");
         let addr = 0x50;
         cb(E::Start { addr, read: false });
@@ -8682,8 +8604,8 @@ data_out = ["io0"]
         cb(E::Stop { addr });
         drop(slot);
 
-        let b1 = bus1.lock().unwrap_or_else(|e| e.into_inner());
-        let b2 = bus2.lock().unwrap_or_else(|e| e.into_inner());
+        let b1 = bus1.lock_or_recover();
+        let b2 = bus2.lock_or_recover();
         assert_eq!(b1.slave::<Eeprom24c>(0x50).unwrap().contents()[0], 0xAB);
         assert_eq!(read_back, Some(0xAB));
         assert!(b2
@@ -8704,10 +8626,7 @@ data_out = ["io0"]
         }
         impl crate::peripherals::spi::SpiSlave for RecSlave {
             fn transfer(&mut self, mosi: u8) -> u8 {
-                self.got
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(mosi);
+                self.got.lock_or_recover().push(mosi);
                 self.miso
             }
             fn as_any(&self) -> &dyn std::any::Any {
@@ -8743,7 +8662,7 @@ data_out = ["io0"]
         sched.attach_spi_bus(bus(&got2, 0xA5), resolved(cs2));
 
         let edge = |pin: (char, u8), high: bool| {
-            let mut slot = h.pin_cb.lock().unwrap_or_else(|e| e.into_inner());
+            let mut slot = h.pin_cb.lock_or_recover();
             (slot.as_mut().expect("on_pin_change installed"))(
                 PinId {
                     port: pin.0,
@@ -8754,14 +8673,14 @@ data_out = ["io0"]
             );
         };
         let xfer = |mosi: u8| -> u8 {
-            let mut slot = h.spi_cb.lock().unwrap_or_else(|e| e.into_inner());
+            let mut slot = h.spi_cb.lock_or_recover();
             (slot.as_mut().expect("on_spi handler installed"))(hauksbee_mcu::SpiEvent {
                 mosi,
                 deselect: false,
                 cycle: 0,
             })
         };
-        let bytes = |g: &Arc<Mutex<Vec<u8>>>| g.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let bytes = |g: &Arc<Mutex<Vec<u8>>>| g.lock_or_recover().clone();
 
         edge(cs1, false);
         assert_eq!(xfer(0x42), 0x5A);
@@ -8795,11 +8714,7 @@ data_out = ["io0"]
         for _ in 0..chunks {
             sched.run_chunk(chunk, &mut uart);
         }
-        let total = micros
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .sum();
+        let total = micros.lock_or_recover().iter().sum();
         total
     }
 

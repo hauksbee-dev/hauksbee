@@ -445,16 +445,16 @@ fn parse_timescale(tok: &str) -> Option<f64> {
 
 /// One detected edge: time and direction.
 #[derive(Debug, Clone, Copy)]
-struct Edge {
-    t: f64,
-    rising: bool,
+pub(crate) struct Edge {
+    pub t: f64,
+    pub rising: bool,
 }
 
 /// Detect threshold crossings with hysteresis (±5% of swing around the
 /// threshold), the way a scope's measure menu does. Without hysteresis, noise
 /// riding on a real capture near the threshold would manufacture edges and
 /// fake a period/duty disagreement, or worse, fake an agreement.
-fn detect_edges(series: &[(f64, f64)], threshold: Option<f64>) -> Vec<Edge> {
+pub(crate) fn detect_edges(series: &[(f64, f64)], threshold: Option<f64>) -> Vec<Edge> {
     let (min, max) = extremes(series);
     let swing = max - min;
     if swing <= 1e-9 {
@@ -464,16 +464,34 @@ fn detect_edges(series: &[(f64, f64)], threshold: Option<f64>) -> Vec<Edge> {
     let hi = thr + 0.05 * swing;
     let lo = thr - 0.05 * swing;
 
+    // An edge's time is the crossing of `thr`, not that of the sample confirming
+    // it through the hysteresis: a confirming sample pins the edge to the grid
+    // and quantises every rate read off it. Samples that RESOLVE the transition
+    // are interpolated between; a whole swing in ONE step is a digital event (a
+    // VCD change point) already timed exactly, so it is left alone.
+    let cross = |a: (f64, f64), b: (f64, f64)| match b.1 - a.1 {
+        dv if dv.abs() >= 0.9 * swing => b.0,
+        dv => (thr - a.1) / dv * (b.0 - a.0) + a.0,
+    };
     let mut edges = Vec::new();
     let mut state_high = series[0].1 > thr;
+    let (mut up, mut down, mut prev) = (series[0].0, series[0].0, series[0]);
     for &(t, v) in series {
-        if !state_high && v >= hi {
-            state_high = true;
-            edges.push(Edge { t, rising: true });
-        } else if state_high && v <= lo {
-            state_high = false;
-            edges.push(Edge { t, rising: false });
+        if prev.1 < thr && v >= thr {
+            up = cross(prev, (t, v));
+        } else if prev.1 > thr && v <= thr {
+            down = cross(prev, (t, v));
         }
+        prev = (t, v);
+        let (t, rising) = if !state_high && v >= hi {
+            (up, true)
+        } else if state_high && v <= lo {
+            (down, false)
+        } else {
+            continue;
+        };
+        state_high = rising;
+        edges.push(Edge { t, rising });
     }
     edges
 }

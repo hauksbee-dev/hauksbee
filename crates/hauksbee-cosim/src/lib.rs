@@ -28,6 +28,23 @@ pub mod regulation;
 pub mod responders;
 pub mod scheduler;
 
+/// Every shared-state mutex in this crate is co-simulation bookkeeping (bus
+/// state, pin callbacks, captured samples): losing it to a poisoned lock
+/// would abort a run for a panic elsewhere on an unrelated thread, so every
+/// site recovers the guard rather than propagating the poison. This trait is
+/// the one place that recovery policy is written down; every call site that
+/// used to spell out `.lock().unwrap_or_else(|e| e.into_inner())` calls
+/// [`MutexExt::lock_or_recover`] instead, so the two can no longer drift.
+pub(crate) trait MutexExt<T> {
+    fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T> MutexExt<T> for std::sync::Mutex<T> {
+    fn lock_or_recover(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 pub use engine::HauksbeeEngine;
 pub use peripherals::{
     controls::{Encoder, Potentiometer, Pushbutton, Stimulus, StimulusKind, ToggleSwitch},

@@ -84,6 +84,8 @@ mod schmitt_oscillator;
 mod sensor_attach;
 #[path = "shipped_examples_run.rs"]
 mod shipped_examples_run;
+#[path = "shunt_reference.rs"]
+mod shunt_reference;
 #[path = "spec_and_assertions.rs"]
 mod spec_and_assertions;
 #[path = "spice_models_cli.rs"]

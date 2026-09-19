@@ -215,6 +215,12 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "battery_chemistry",
             "vout_setpoint_low",
             "vout_setpoint_high",
+            "shunt",
+            "iref_a",
+            "zka_ohms",
+            "iktest_a",
+            "ikmax_a",
+            "ikmin_a",
         ],
         ComponentKind::Opamp => &["gain", "pole_hz", "slew", "rail_lo", "rail_hi"],
         // `out_lo`/`out_hi`/`hysteresis` are the push-pull stamp's; the last four

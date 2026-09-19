@@ -3459,6 +3459,13 @@ fn bind_vreg(
             entry_warning(comp, model),
         );
     }
+    // A SHUNT reference (TL431 class) is not a pass element at all and has no
+    // input pin: it SINKS cathode current to hold REF at Vref above its anode,
+    // and the board's series resistor and divider set the cathode voltage.
+    // Checked before `vref` because such a card carries `vref` too.
+    if model.params.get_bool("shunt").unwrap_or(false) {
+        return bind_shunt_ref(comp, model, circuit, roles);
+    }
     // An ADJUSTABLE regulator (LM317 class) has no output setpoint and no
     // ground pin of its own: it holds V(out) - V(adj) at Vref and the BOARD's
     // divider sets the rail. `vref` on the card selects that path.
@@ -3659,6 +3666,95 @@ fn bind_adj_vreg(
     (
         BindOutcome::Analog {
             device: format!("vreg {vref:.3}V adjustable reference"),
+        },
+        entry_warning(comp, model),
+    )
+}
+
+/// A TL431-class adjustable SHUNT reference, from four primitives the IR
+/// already has (internal reference, railed error amplifier, cathode sink,
+/// ammeter) rather than a new solver device. Roles reuse the vreg vocabulary:
+/// CATHODE is `out`, ANODE is `gnd` (the part's local return), REF is `fb`.
+/// `Ika = ikmax*V(gate)`, so the amplifier's rails ARE the cathode-current
+/// limits: railed low the part sinks nothing and the cathode sags to whatever
+/// the board's divider makes it, which is how a starved reference falls out of
+/// regulation here. In between the BOARD's R1/R2 closes the loop and MNA
+/// produces `VKA = Vref*(1 + R1/R2) + Iref*R1` from the resistors actually
+/// fitted, never parsed out. Neither shape number is chosen: closed-loop
+/// `dVka/dIka` is `1/(AOL*ikmax)`, so `AOL = 1/(zka*ikmax)` reproduces the
+/// datasheet `|ZKA|` exactly and linearly, and the internal reference is
+/// lowered by `iktest*zka` to put `VKA` at the datasheet `Vref` at the current
+/// it is specified at. The hard clamp is deliberate: its 20 mV input band is
+/// far wider than the op-amp rail-crossing limiter needs. The ammeter is named
+/// `Vreg_<ref>` because that is the seam `gather_device_meta` scores against the
+/// card's `max_current_a`; it sits ANODE-side so its `p` stays private (a
+/// `Vreg_` whose `p` were the cathode net would kill that net's auto-rail).
+fn bind_shunt_ref(
+    comp: &Component,
+    model: &ModelEntry,
+    circuit: &mut Circuit,
+    roles: &HashMap<String, NodeId>,
+) -> (BindOutcome, Option<String>) {
+    let r = &comp.reference;
+    let p = |k: &str, d: f64| model.params.get_f64(k).unwrap_or(d);
+    let anode = roles.get("gnd").copied().unwrap_or(NodeId::GROUND);
+    let wired = |n: Option<&NodeId>| n.copied().filter(|&n| n != anode);
+    let (Some(cathode), Some(refpin)) = (
+        wired(roles.get("out")),
+        wired(pick(roles, &["fb", "adj", "ref"])),
+    ) else {
+        return open_warning(
+            comp,
+            "shunt reference CATHODE or REF is open, or is tied to its ANODE: the internal \
+             reference can then never be reached, so the part can never conduct and never \
+             regulates",
+        );
+    };
+    let (vref, zka, ikmax) = (p("vref", 2.495), p("zka_ohms", 0.2), p("ikmax_a", 0.1));
+    let vr = circuit.node(&format!("{r}_shunt_vref"));
+    circuit.add(Device::Vsource {
+        name: format!("Vint_{r}"),
+        p: vr,
+        n: anode,
+        kind: SourceKind::Dc(vref - p("iktest_a", 0.01) * zka),
+    });
+    let gate = circuit.node(&format!("{r}_shunt_gate"));
+    circuit.add(Device::OpAmp {
+        name: r.clone(),
+        out: gate,
+        inp: refpin,
+        inn: vr,
+        reference: None,
+        gain: 1.0 / (zka * ikmax),
+        pole_hz: None,
+        slew: None,
+        rail_lo: 0.0,
+        rail_hi: 1.0,
+    });
+    let kint = circuit.node(&format!("{r}_shunt_ik"));
+    circuit.add(Device::Vccs {
+        name: format!("Gka_{r}"),
+        p: cathode,
+        n: kint,
+        cp: gate,
+        cn: NodeId::GROUND,
+        gm: ikmax,
+    });
+    circuit.add(Device::Vsource {
+        name: format!("Vreg_{r}"),
+        p: kint,
+        n: anode,
+        kind: SourceKind::Dc(0.0),
+    });
+    circuit.add(Device::Isource {
+        name: format!("Iref_{r}"),
+        p: refpin,
+        n: anode,
+        kind: SourceKind::Dc(p("iref_a", 0.0)),
+    });
+    (
+        BindOutcome::Analog {
+            device: format!("shunt reference {vref:.3}V (the board's divider sets the cathode)"),
         },
         entry_warning(comp, model),
     )

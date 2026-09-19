@@ -1451,54 +1451,30 @@ fn check_toggle(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String
         return (ok, format!("{net}: {toggles} toggles (need >= {min})"), why);
     }
     if let Some(freq) = a.freq_hz {
-        // A frequency needs a period, and a period needs at least one full
-        // cycle observed: two toggles. Below that there is nothing to divide.
-        // The arithmetic below happily produced "~0.50 Hz from 1 toggles" from a
-        // single edge, a number that reads as a measurement and is not one: it
-        // says only "something happened once", and whether the net is running at
-        // 0.5 Hz or 50 Hz with a stalled firmware cannot be told apart from it.
-        // Three toggles is the floor for a cycle plus the edge that confirms it
-        // repeats, which is what makes a rate a rate.
-        const MIN_TOGGLES_FOR_A_RATE: u64 = 3;
-        if toggles < MIN_TOGGLES_FOR_A_RATE {
-            let plural = if toggles == 1 { "" } else { "s" };
+        // The grid the run sampled on: the runner floors `frame_ms` at 1 us.
+        let dt_s = frame_ms.max(1e-3) / 1000.0;
+        let series = out.net_series.get(&net).map_or(&[][..], Vec::as_slice);
+        let (hz, measured) = match edge_rate(series, dt_s) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    false,
+                    format!("{net}: {e}; no frequency measured"),
+                    Some(format!(
+                        "a rate is TIMED between two same-way edges. Either {net} barely \
+                         switches, or duration_ms is too short for {freq} Hz periods"
+                    )),
+                );
+            }
+        };
+        // Under ten samples a period, the grid is reporting itself, not a rate.
+        let samples_per_period = 1.0 / (hz * dt_s);
+        if samples_per_period < 10.0 {
             return (
                 false,
                 format!(
-                    "{net}: {toggles} toggle{plural} over the run, too few to measure a \
-                     frequency from (need at least {MIN_TOGGLES_FOR_A_RATE})"
-                ),
-                Some(format!(
-                    "a rate needs a repeated cycle, and {toggles} edge(s) is not one. \
-                     Either the net is barely switching (check the firmware drives it) \
-                     or the run is too short to contain a few periods of {freq} Hz: \
-                     duration_ms must cover at least two, ideally several"
-                )),
-            );
-        }
-        // A full square-wave period is two toggles, so frequency = toggles /
-        // (2 * duration_s). Compare against tolerance (fractional, default 25%).
-        let dur_s = out.sim_ms / 1000.0;
-        // An edge per sample is not a measured rate, it is the sampling grid
-        // reporting itself: the true waveform may be at that rate or at any
-        // multiple of it, and the two cannot be told apart from these samples.
-        // A run that toggled on 1499 of its 1500 frames once reported
-        // "~249833.33 Hz" as if it were a number. Every edge is also pinned to
-        // a frame boundary, so each half period carries up to one frame of
-        // error: under ten samples per period the grid alone moves the answer
-        // by tens of percent, which is not a measurement of anything.
-        const MIN_SAMPLES_PER_PERIOD: f64 = 10.0;
-        // The grid the run actually sampled on: the runner floors `frame_ms` at
-        // 1 us, so a spec asking for finer frames got these.
-        let frame_ms = frame_ms.max(1e-3);
-        let samples_per_period = (2.0 * out.sim_ms / frame_ms) / toggles as f64;
-        if samples_per_period < MIN_SAMPLES_PER_PERIOD {
-            return (
-                false,
-                format!(
-                    "{net}: {toggles} toggles over {:.0} frames is under-sampled \
-                     ({samples_per_period:.1} samples per period); no frequency measured",
-                    out.sim_ms / frame_ms
+                    "{net}: {measured} is under-sampled ({samples_per_period:.1} samples \
+                     per period); no frequency measured"
                 ),
                 Some(format!(
                     "{net} changes level every {samples_per_period:.1} samples, so the run \
@@ -1508,32 +1484,50 @@ fn check_toggle(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String
                 )),
             );
         }
-        let measured = if dur_s > 0.0 {
-            toggles as f64 / (2.0 * dur_s)
-        } else {
-            0.0
-        };
         let tol = a.tolerance.unwrap_or(0.25);
-        let lo = freq * (1.0 - tol);
-        let hi = freq * (1.0 + tol);
-        let ok = measured >= lo && measured <= hi;
+        let (lo, hi) = (freq * (1.0 - tol), freq * (1.0 + tol));
+        let ok = hz >= lo && hz <= hi;
         let why = (!ok).then(|| {
             format!(
-                "{net} ran at ~{measured:.2} Hz, outside your {lo:.2}-{hi:.2} Hz band \
+                "{net} ran at {measured}, outside your {lo:.2}-{hi:.2} Hz band \
                  ({freq} Hz ±{:.0}%)",
                 tol * 100.0
             )
         });
         return (
             ok,
-            format!(
-                "{net}: ~{measured:.2} Hz from {toggles} toggles (want {freq} Hz ±{:.0}%)",
-                tol * 100.0
-            ),
+            format!("{net}: {measured} (want {freq} Hz ±{:.0}%)", tol * 100.0),
             why,
         );
     }
     (false, format!("{net}: toggle assertion incomplete"), None)
+}
+
+/// Time a net's rising threshold crossings and divide the whole periods by the
+/// span from the first such edge to the last. Returns the rate in Hz AND the
+/// one phrase every surface prints for it, resolution included, so text, JSON
+/// and the pass/fail comparison agree. It deliberately does NOT count level
+/// changes and divide by the run: that charged the rate for the partial periods
+/// at BOTH ends and for a start-up cycle unlike the rest (a 555's first charge
+/// runs to ln 3, not ln 2: 4% low on a board right to 0.3%, needing 7% to pass).
+pub(crate) fn edge_rate(series: &[(f64, f64)], dt_s: f64) -> Result<(f64, String), String> {
+    let edges = crate::hwtrace::detect_edges(series, None);
+    let rising: Vec<f64> = edges.iter().filter(|e| e.rising).map(|e| e.t).collect();
+    let periods = rising.len().saturating_sub(1);
+    let span = rising.last().copied().unwrap_or(0.0) - rising.first().copied().unwrap_or(0.0);
+    if span <= 0.0 {
+        return Err(format!(
+            "{} rising edge(s), too few to measure a frequency from (2 make a period)",
+            rising.len()
+        ));
+    }
+    // The +- is the grid's, not a guess: one sample step of residual timing
+    // error at each end of the span, which interpolation only ever beats.
+    let (hz, err) = (periods as f64 / span, 200.0 * dt_s / span);
+    Ok((
+        hz,
+        format!("{hz:.1} Hz ±{err:.1}% (edge timing, {periods} periods)"),
+    ))
 }
 
 /// phase_margin: the loop's phase margin (degrees) at gain crossover must lie in
@@ -1918,6 +1912,46 @@ mod tests {
 
     fn assertion(src: &str) -> Assertion {
         toml::from_str(src).expect("assertion shape")
+    }
+
+    /// `n` samples at `dt` of a 0-5 V `P`-long wave: `duty` high, `rise` edges.
+    fn wave(duty: f64, phase: f64, rise: f64, dt: f64, n: usize) -> Vec<(f64, f64)> {
+        const P: f64 = 1e-3;
+        let ramp = |x: f64| 5.0 * (x / rise.max(1e-12)).min(1.0);
+        (0..n)
+            .map(|i| {
+                let (t, hi) = (i as f64 * dt, duty * P);
+                let u = (t / P + phase).fract() * P;
+                let v = if u < hi { ramp(u) } else { 5.0 - ramp(u - hi) };
+                (t, v)
+            })
+            .collect()
+    }
+
+    /// Partial periods at either end, a mid-period start, a lopsided duty and
+    /// an edge between samples all leave an EDGE-TIMED rate alone; one edge is
+    /// refused, not divided.
+    #[test]
+    fn edge_rate_times_edges_instead_of_counting_them() {
+        let dt = 1e-5; // case, duty, phase, rise_s, samples, Hz (None = refused)
+        for (case, duty, phase, rise, n, want) in [
+            ("partial periods both ends", 0.5, 0.0, 0.0, 1070, Some(1e3)),
+            ("edge between samples", 0.5, 0.0, 7e-5, 1070, Some(1e3)),
+            ("a single edge is no rate", 0.5, 0.0, 0.0, 60, None),
+            ("15% duty must not bias", 0.15, 0.0, 0.0, 1070, Some(1e3)),
+            ("window opens mid-period", 0.5, 0.63, 0.0, 1070, Some(1e3)),
+        ] {
+            let got = edge_rate(&wave(duty, phase, rise, dt, n), dt);
+            match (want, &got) {
+                (Some(hz), Ok((measured, text))) => {
+                    assert!((measured - hz).abs() / hz < 1e-3, "{case}: {text}");
+                    let seen = "±0.2% (edge timing, 10 periods)";
+                    assert!(text.contains(seen), "{case}: {text}");
+                }
+                (None, Err(e)) => assert!(e.contains("rising edge"), "{case}: {e}"),
+                _ => panic!("{case}: wanted {want:?}, got {got:?}"),
+            }
+        }
     }
 
     /// One ensemble member holding `VOUT` flat at `v` over the whole run.

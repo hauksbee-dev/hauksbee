@@ -2208,11 +2208,11 @@ impl Assertion {
                     self.freq_hz.is_none() || self.min_toggles.is_none(),
                     format!("toggle assertion on '{net}' sets both `freq_hz` and `min_toggles`; use one (frequency OR count)"),
                 )?;
-                // Toggle counts accumulate from t=0 (scheduler stats), so an
-                // `after_ms` window would be silently ignored.
+                // Counts accumulate from t=0 and a rate is timed between the
+                // run's own edges, so an `after_ms` window would be ignored.
                 need(
                     self.after_ms.is_none(),
-                    format!("toggle assertion on '{net}' does not support `after_ms` (toggles are counted over the whole run)"),
+                    format!("toggle assertion on '{net}' does not support `after_ms` (counts and rates both span the whole run)"),
                 )?;
                 // `tolerance` is a FRACTION of freq_hz (0.25 = +-25%), and the
                 // check widens the accepted band by it. A value like 10 (someone

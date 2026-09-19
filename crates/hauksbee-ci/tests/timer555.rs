@@ -128,12 +128,13 @@ fn a_555_times_its_own_board_and_refuses_what_it_cannot_time() {
             ),
             "{c_nf}n: OUT was not at VOL through the discharge after {te} ms"
         );
-        // Free-running, every cycle is ln(2)*(RA+2RB)*C. 7%: the rate is an
-        // edge COUNT over the run, so it carries the longer first charge (0.4
-        // of a period) and one edge of quantisation -- under 4% of the ~47
-        // edges here -- on top of the solve itself, which lands within 0.3%.
+        // Free-running, every cycle is ln(2)*(RA+2RB)*C. 3.5% = the card's own
+        // timing_error_frac interval (0-3%, SLFS022's 3% max initial error) plus
+        // the 0.5% the edge-TIMED rate can be out over these 22 periods; nothing
+        // wider is justified now the long first charge and the partial period at
+        // the end of the run both fall outside the span the rate is timed over.
         let f = 1.0 / (2.0_f64.ln() * 30e3 * c_nf * 1e-9);
-        let rate = format!("kind = \"toggle\"\nfreq_hz = {f}\ntolerance = 0.07\n");
+        let rate = format!("kind = \"toggle\"\nfreq_hz = {f}\ntolerance = 0.035\n");
         assert!(
             passes(&format!("{c_nf}n rate"), &b, 24e3 / f, &rate),
             "{c_nf}n: OUT did not run at 1/(ln(2)*(RA+2RB)*C) = {f} Hz"
