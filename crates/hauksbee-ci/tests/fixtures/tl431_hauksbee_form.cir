@@ -1,0 +1,63 @@
+TL431 shunt reference - the HAUKSBEE stamp's own model form
+* ---------------------------------------------------------------------------
+* NOT a physical TL431 model. This is exactly what
+* `bind_shunt_ref` stamps, device for device:
+*   Vint  -> Device::Vsource  internal reference, VREF - IKTEST*ZKA
+*   Bgate -> Device::OpAmp    HARD-clamped finite-gain amplifier, rails 0..1
+*   Gka   -> Device::Vccs     gm = IKMAX, turns the 0..1 gate into Ika
+*   Vka   -> Device::Vsource  the 0 V ammeter in the cathode leg
+*   Iref  -> Device::Isource  the datasheet REF input current
+* Agreement between ngspice and Hauksbee on this deck is numerical agreement
+* on the SAME model form; it is NOT physical validation of a TL431.
+*
+* Datasheet inputs, TI SLVS543, Ta = 25 C:
+*   VREF = 2.495 V, IREF = 2 uA, ZKA = 0.2 ohm, IKTEST = 10 mA, IKMAX = 100 mA
+* Derived, not chosen:
+*   AOL  = 1/(ZKA*IKMAX)   = 50 V/V   -> closed-loop dVka/dIka = ZKA exactly
+*   VINT = VREF-IKTEST*ZKA = 2.493 V  -> VKA = VREF exactly at IKA = IKTEST
+* ---------------------------------------------------------------------------
+.param VREF=2.495
+.param IREF=2u
+.param IKMAX=0.100
+.param ZKA=0.2
+.param IKTEST=0.010
+.param AOL={1/(ZKA*IKMAX)}
+.param VINT={VREF-IKTEST*ZKA}
+
+Vcc   vcc 0 DC 12
+Rs    vcc k  1k
+R1    k   ref 10k
+R2    ref 0   10k
+
+Vint  vr   0 DC {VINT}
+Bgate gate 0 V = max(0, min(1, AOL*(V(ref)-V(vr))))
+Gka   k    kb gate 0 {IKMAX}
+Vka   kb   0 DC 0
+Iref  ref  0 DC {IREF}
+
+.control
+op
+echo "--- row 1: 5 V divider, Vcc 12 V through 1 k, R1 = R2 = 10 k ---"
+print v(k) v(ref) v(gate) i(Vka)
+let vo_ideal = VREF*(1+10k/10k) + IREF*10k
+print vo_ideal
+
+alter Rs = 100k
+op
+echo "--- row 3: starved, Vcc 12 V through 100 k ---"
+print v(k) v(ref) v(gate) i(Vka)
+
+alter Rs = 1k
+alter R1 = 1m
+op
+echo "--- row 2: 2.5 V direct, REF tied to CATHODE (R1 -> 0), R2 open ---"
+print v(k) v(ref) v(gate) i(Vka)
+
+alter R1 = 10k
+alter R2 = 10k
+alter Rs = 100
+op
+echo "--- row 4: heavy shunt, Vcc 12 V through 100 ohm ---"
+print v(k) v(ref) v(gate) i(Vka)
+.endc
+.end

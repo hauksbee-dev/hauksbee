@@ -2,8 +2,8 @@
 //! R1/R2 divider set its cathode voltage, and `bind_shunt_ref` stamps it from
 //! four primitives the IR already has so the datasheet's
 //! `VKA = VREF*(1 + R1/R2) + IREF*R1` is SOLVED, not printed. Every band is set
-//! from ngspice-47 on `target/launch/checkpoint14-tl431/decks/`
-//! `tl431_hauksbee_form.cir`, the same four devices written as ngspice cards:
+//! from ngspice-47 on `tests/fixtures/tl431_hauksbee_form.cir`, the same four
+//! devices written as ngspice cards:
 //! 5.008696 V for the 5 V setter (the ideal equation says 5.010000; the 1.3 mV
 //! is the finite gain the datasheet `|ZKA|` fixes), 2.494851 V two-terminal,
 //! 1.983333 V starved. That is numerical agreement on the SAME model form, NOT

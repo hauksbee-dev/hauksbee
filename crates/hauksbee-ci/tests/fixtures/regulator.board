@@ -1,9 +1,8 @@
 # Board-as-Code (hauksbee board DSL v1)
 # The minimal simple-regulator topology: an AMS1117-3.3 LDO from VIN to VOUT, a
-# 10uF output cap and a 330R load. The same three parts and three nets as
-# target/launch/regulator-beta6-diagnostic/regulator.kicad_sch (where the
-# validity defect was first reproduced), in the compact board DSL rather than
-# 1400 lines of s-expression.
+# 10uF output cap and a 330R load. The same three parts and three nets as the
+# KiCad schematic where the validity defect was first reproduced, in the compact
+# board DSL rather than 1400 lines of s-expression.
 board version 20171130
 
 fn main {

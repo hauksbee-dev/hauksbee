@@ -888,12 +888,21 @@ fn gather_device_meta(
     // source; that Vsource is the same monitoring seam (its branch current is
     // the delivered output current), so it takes the same meta, otherwise a
     // converter-modelled regulator silently loses its stress/max_temp watch.
+    // An ADJUSTABLE regulator stamps "Vref_<ref>" (the VREF source between OUT
+    // and ADJ, see `bind_adj_vreg`) and nothing else touches its OUT net, so
+    // that branch unknown IS the total output current, divider included, which
+    // is the quantity both `max_current_a` and `min_current_a` are specified
+    // against. Unmatched here it carried no meta at all, so an adjustable part
+    // was exempt from BOTH checks: a divider-only LM317 read cleanly regulated.
     for (id, dev) in circuit.iter() {
         if let Device::Vsource { name, .. } = dev {
-            let reference = name.strip_prefix("Vreg_").or_else(|| {
-                name.strip_prefix("Vbeh_")
-                    .and_then(|s| s.strip_suffix("_conv"))
-            });
+            let reference = name
+                .strip_prefix("Vreg_")
+                .or_else(|| name.strip_prefix("Vref_"))
+                .or_else(|| {
+                    name.strip_prefix("Vbeh_")
+                        .and_then(|s| s.strip_suffix("_conv"))
+                });
             if let Some(reference) = reference {
                 if let Some(info) = by_ref.get(reference) {
                     if info.kind == ComponentKind::Vreg {
@@ -3948,8 +3957,7 @@ fn bind_timer_555(
     // conductance RAMPS over a band past its threshold, and comparators alone
     // leave a stable root inside that ramp where partial discharge cancels RA
     // and the part never oscillates. ADDED, not max()-ed in: at that root Rt
-    // already exceeds Q, so a max() gates the feedback out. Measured both ways
-    // in target/launch/checkpoint13-555/impl-notes.md.
+    // already exceeds Q, so a max() gates the feedback out (measured both ways).
     let rstn = timer_cmp(
         "__d3",
         &p("reset_threshold_v", 0.7).to_string(),

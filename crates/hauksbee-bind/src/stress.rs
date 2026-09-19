@@ -696,8 +696,11 @@ impl StressMonitor {
                         "{r} carries {ma:.2} mA, below the {floor_ma:.2} mA its datasheet card \
                          requires for regulation, so the voltage it holds here is not guaranteed"
                     ),
-                    "raise its current above the card's minimum (a smaller series resistor, or \
-                     a preload), then re-run",
+                    // Neutral about WHICH network feeds it: a shunt reference is fed
+                    // by its series resistor, a series regulator by its load and its
+                    // divider, and naming only the shunt's cure misdirects the other.
+                    "raise its current above the card's minimum (a preload resistor, or a \
+                     lower-value feed network), then re-run",
                 ))
             })
             .collect()

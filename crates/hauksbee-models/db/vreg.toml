@@ -1480,9 +1480,13 @@ missing = ["switching_ripple", "compensation_stability", "soft_start", "pfm_ldo_
 # Primary source: TI LM317 datasheet SLVS044Y (3-Terminal Adjustable Regulator).
 # DELIBERATELY NOT MODELLED: the reference is ideal, so the output impedance is
 # exactly zero and load regulation reads 0%; line regulation, ripple rejection,
-# noise, the current limit, thermal shutdown and startup are absent, and so is
-# the minimum load current to maintain regulation (3.5 mA typ, 10 mA max), so a
-# divider-only board is not flagged for it. `vout_setpoint_low`/`_high` are
+# noise, the current limit, thermal shutdown and startup are absent. The minimum
+# load current to maintain regulation is not modelled as a BEHAVIOUR either: the
+# stamp holds VREF down to IO = 0 where the real part does not. It is enforced as
+# a DISCLOSURE instead, through `ratings.min_current_a`: any run whose solved
+# OUTPUT current (load plus the divider's own 1.25 V / R1) stays under the floor
+# says so next to the result rather than answering a regulated rail unqualified.
+# `vout_setpoint_low`/`_high` are
 # deliberately absent: the envelope check keys them by output net and would
 # score a rail this card does not set.
 [[models]]
@@ -1526,6 +1530,14 @@ dropout_v = 3.0      # minimum input-to-output differential, Recommended
 
 [models.ratings]
 max_current_a = 1.5  # IO, TO-220, Recommended Operating Conditions
+# Minimum load current to maintain regulation, SLVS044Y Electrical
+# Characteristics (VI - VO = 40 V): 3.5 mA typ, 10 mA MAX. The MAX is the
+# guaranteed figure -- the typ is what a sample happens to need, not what any
+# LM317 is promised to regulate at -- so the enforced floor is 10 mA and a
+# design between the two is disclosed rather than blessed. The enforced copy
+# is compared against the `Vref_<ref>` branch current, which is total OUTPUT
+# current (load + divider), the quantity the datasheet specifies.
+min_current_a = 0.010
 # The part FLOATS: its absolute maximum is the 40 V input-to-output
 # differential, not an input voltage against ground. Carried as the input
 # rating, which is conservative for a positive rail since VO >= 1.25 V always.

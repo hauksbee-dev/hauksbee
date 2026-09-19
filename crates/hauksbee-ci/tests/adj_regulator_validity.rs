@@ -14,9 +14,10 @@
 use crate::support;
 
 /// U1 (LM317, ADJ/OUT/IN on pads 1/2/3), R1 = 240 from OUT to ADJ, R2 from ADJ
-/// to ground and a 500R load, in the board DSL. `r2 = None` omits R2, leaving
-/// ADJ with no DC path to ground at all.
-fn board(r2: Option<f64>) -> String {
+/// to ground and an `rl` load, in the board DSL. `r2 = None` omits R2, leaving
+/// ADJ with no DC path to ground at all; `rl = None` omits the load, leaving the
+/// divider as the only draw.
+fn board(r2: Option<f64>, rl: Option<f64>) -> String {
     // Pads are offset by pad number so that no two of a part's land coincide.
     let pad = |n: u32, net: &str| {
         format!("pad \"{n}\" smd rect at {n} 0 size 2 1.5 layers [F.Cu F.Mask] net \"{net}\"\n")
@@ -37,7 +38,7 @@ fn board(r2: Option<f64>) -> String {
     for (i, (r, val, a, b)) in [
         ("R1", Some(240.0), "VOUT", "ADJ"),
         ("R2", r2, "ADJ", "GND"),
-        ("RL", Some(500.0), "VOUT", "GND"),
+        ("RL", rl, "VOUT", "GND"),
     ]
     .into_iter()
     .enumerate()
@@ -57,14 +58,17 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
     // plausible 5 V.
     let vout = 1.25 * (1.0 + 720.0 / 240.0) + 50.0e-6 * 720.0;
     let dir = tempfile::tempdir().expect("tempdir");
-    for (case, r2, vin, supported) in [
-        ("legal control", Some(720.0), 12.0, true),
+    // `starved` is the SLVS044Y minimum-load-current disclosure (10 mA max spec):
+    // the divider alone draws 1.25/240 = 5.21 mA, the 500R load adds 10.07 mA.
+    for (case, r2, rl, vin, supported, starved) in [
+        ("legal control", Some(720.0), Some(500.0), 12.0, true, false),
+        ("divider only", Some(720.0), None, 12.0, true, true),
         // 5.036 V of rail plus 3 V of dropout needs 8.036 V, and 6 V is not it.
-        ("insufficient headroom", Some(720.0), 6.0, false),
-        ("ADJ floating", None, 12.0, false),
+        ("low headroom", Some(720.0), Some(500.0), 6.0, false, false),
+        ("ADJ floating", None, Some(500.0), 12.0, false, false),
     ] {
         let board_path = dir.path().join(format!("{case}.board"));
-        std::fs::write(&board_path, board(r2)).expect("write board");
+        std::fs::write(&board_path, board(r2, rl)).expect("write board");
         let spec = dir.path().join(format!("{case}.toml"));
         std::fs::write(
             &spec,
@@ -89,6 +93,10 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
         if supported {
             assert!(a.passed && !a.invalid, "{case}: {a:?}");
             assert_eq!(r.exit_code(), 0, "{case}: {:?}", r.results);
+            // SOLVED, not declared: the rail is the same 5.036 V either way, so
+            // only the solved output current can tell these two rows apart.
+            let said = r.render_human().contains("requires for regulation");
+            assert_eq!(said, starved, "{case}: min-current disclosure");
             continue;
         }
         // Never a number on this net: the run refuses, and the assertion is not
