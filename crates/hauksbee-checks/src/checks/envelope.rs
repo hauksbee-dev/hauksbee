@@ -407,18 +407,9 @@ pub fn envelope_lint_with_drives(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::{board, pin};
     use super::*;
-    use hauksbee_extract::{Component, LintCheck, Net, Pin, Severity};
-
-    fn pin(number: &str, net: i64) -> Pin {
-        Pin {
-            number: number.into(),
-            net: Some(net),
-            function: String::new(),
-            kind: String::new(),
-            position: None,
-        }
-    }
+    use hauksbee_extract::{Component, LintCheck, Pin, Severity};
 
     fn part(reference: &str, value: &str, pins: Vec<Pin>) -> Component {
         Component {
@@ -431,20 +422,6 @@ mod tests {
             properties: Vec::new(),
             dnp: false,
             pins,
-        }
-    }
-
-    fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
-        ExtractedBoard {
-            name: "envelope-test".into(),
-            nets: nets
-                .iter()
-                .map(|(id, name)| Net {
-                    id: *id,
-                    name: (*name).into(),
-                })
-                .collect(),
-            components,
         }
     }
 

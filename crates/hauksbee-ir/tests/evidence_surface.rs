@@ -25,15 +25,10 @@ use hauksbee_ir::evidence::{
     ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionKind, AssumptionSource,
     CausalPathIndex, Contribution, ErrorBudget, EvidenceMap, EvidenceRegistry, EvidenceStatus,
     IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, ModelSource, ModelSourceTier,
-    ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, RunDate, Scope, Subject,
-    ValueOrigin,
+    ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, Scope, Subject, ValueOrigin,
 };
 
-/// 2026-08-01. A run builds this from its own clock reading; a fixed value keeps
-/// the test off the wall clock.
-fn today() -> RunDate {
-    RunDate::from_epoch_days(20_666)
-}
+use crate::support::today;
 
 fn pack_source() -> ModelSource {
     ModelSource::new(

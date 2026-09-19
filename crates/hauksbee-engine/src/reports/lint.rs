@@ -420,6 +420,7 @@ mod tests {
             supplies: Vec::new(),
             behavioral: Vec::new(),
             device_meta: Vec::new(),
+            latching_switches: false,
             dacs: Vec::new(),
             peripherals: Vec::new(),
             report: BindReport::default(),

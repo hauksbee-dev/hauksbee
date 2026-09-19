@@ -587,13 +587,19 @@ fn run_script_uncaught_refusal_carries_the_structured_throw() {
 // packaging smoke test (or a human checking what they installed) precisely
 // nothing. A flag answer must be a real answer.
 
+/// Run the compiled `hauksbee-mcp` binary with a single flag and return its
+/// output. Shared by the three flag-answer tests below.
+fn run_flag(flag: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_hauksbee-mcp"))
+        .arg(flag)
+        .output()
+        .expect("run hauksbee-mcp")
+}
+
 #[test]
 fn version_flag_prints_the_version_and_exits_zero() {
     for flag in ["--version", "-V"] {
-        let out = Command::new(env!("CARGO_BIN_EXE_hauksbee-mcp"))
-            .arg(flag)
-            .output()
-            .expect("run hauksbee-mcp");
+        let out = run_flag(flag);
         assert!(out.status.success(), "{flag} must exit 0");
         let stdout = String::from_utf8_lossy(&out.stdout);
         let expected = match option_env!("GIT_HASH") {
@@ -607,10 +613,7 @@ fn version_flag_prints_the_version_and_exits_zero() {
 #[test]
 fn help_flag_prints_usage_and_exits_zero() {
     for flag in ["--help", "-h"] {
-        let out = Command::new(env!("CARGO_BIN_EXE_hauksbee-mcp"))
-            .arg(flag)
-            .output()
-            .expect("run hauksbee-mcp");
+        let out = run_flag(flag);
         assert!(out.status.success(), "{flag} must exit 0");
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(stdout.contains("USAGE"), "{flag} stdout: {stdout}");
@@ -624,10 +627,7 @@ fn help_flag_prints_usage_and_exits_zero() {
 
 #[test]
 fn unknown_flag_fails_loudly_instead_of_starting_the_server() {
-    let out = Command::new(env!("CARGO_BIN_EXE_hauksbee-mcp"))
-        .arg("--definitely-not-a-flag")
-        .output()
-        .expect("run hauksbee-mcp");
+    let out = run_flag("--definitely-not-a-flag");
     assert!(!out.status.success(), "an unknown flag must not exit 0");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

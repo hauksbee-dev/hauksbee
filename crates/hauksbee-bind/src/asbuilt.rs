@@ -918,6 +918,7 @@ mod tests {
     /// the named nets, mirroring the runner's own test literal.
     fn test_board(nets: &[(&str, u32)]) -> BoundBoard {
         BoundBoard {
+            latching_switches: false,
             name: "asbuilt-test".to_string(),
             circuit: hauksbee_ir::Circuit::new(),
             net_nodes: nets
@@ -1122,6 +1123,7 @@ mod tests {
         net_nodes.insert("N".to_string(), n);
 
         let mut bound = BoundBoard {
+            latching_switches: false,
             name: String::new(),
             circuit: Circuit::new(),
             net_nodes,

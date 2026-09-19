@@ -617,28 +617,15 @@ pub type Bme280 = Lm75;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::peripherals::test_support::{i2c_read_burst, i2c_write};
 
     #[test]
     fn lm75_encodes_and_reads_temperature() {
         let mut bus = I2cBus::new("I2C").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, 25.0)));
         // Point to temp register (0x00) then read two bytes.
-        bus.dispatch(I2cEvent::Start {
-            addr: 0x48,
-            read: false,
-        });
-        bus.dispatch(I2cEvent::Write {
-            addr: 0x48,
-            data: 0x00,
-        });
-        bus.dispatch(I2cEvent::Start {
-            addr: 0x48,
-            read: true,
-        });
-        let msb = bus.dispatch(I2cEvent::Read { addr: 0x48 }).unwrap();
-        let lsb = bus.dispatch(I2cEvent::Read { addr: 0x48 }).unwrap();
-        bus.dispatch(I2cEvent::Stop { addr: 0x48 });
+        let d = i2c_read_burst(&mut bus, 0x48, 0x00, 2);
         // Decode back: 25 °C.
-        let t = be_to_temp(msb, lsb);
+        let t = be_to_temp(d[0], d[1]);
         assert!((t - 25.0).abs() < 0.13, "decoded {t} not ~25");
     }
 
@@ -654,31 +641,7 @@ mod tests {
     fn eeprom_write_then_read_back() {
         let mut bus = I2cBus::new("I2C").with_slave(Box::new(Eeprom24c::new(0x50, 256)));
         // Write "Hi" at address 0x0010.
-        for ev in [
-            I2cEvent::Start {
-                addr: 0x50,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0x00,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0x10,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: b'H',
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: b'i',
-            },
-            I2cEvent::Stop { addr: 0x50 },
-        ] {
-            bus.dispatch(ev);
-        }
+        i2c_write(&mut bus, 0x50, &[0x00, 0x10, b'H', b'i']);
         let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
         assert!(ee.contains(b"Hi"), "EEPROM should contain 'Hi'");
         assert_eq!(ee.contents()[0x10], b'H');
@@ -695,27 +658,7 @@ mod tests {
             .with_word_address_bytes(1)
             .with_page_size(8);
         let mut bus = I2cBus::new("I2C").with_slave(Box::new(eeprom));
-        for ev in [
-            I2cEvent::Start {
-                addr: 0x50,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0x7f,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0xa5,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0x5a,
-            },
-            I2cEvent::Stop { addr: 0x50 },
-        ] {
-            bus.dispatch(ev);
-        }
+        i2c_write(&mut bus, 0x50, &[0x7f, 0xa5, 0x5a]);
         let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
         assert_eq!(ee.contents()[0x7f], 0xa5);
         assert_eq!(ee.contents()[0x78], 0x5a, "8-byte page wraps at 0x7f");
@@ -730,27 +673,7 @@ mod tests {
         // address bits over to the START of the same page (0x00/0x01). It never
         // spills linearly into page 1 (0x20).
         let mut bus = I2cBus::new("I2C").with_slave(Box::new(Eeprom24c::new(0x50, 4096)));
-        let mut evs = vec![
-            I2cEvent::Start {
-                addr: 0x50,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0x00,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0x1E,
-            },
-        ];
-        for data in [0xA0, 0xA1, 0xA2, 0xA3] {
-            evs.push(I2cEvent::Write { addr: 0x50, data });
-        }
-        evs.push(I2cEvent::Stop { addr: 0x50 });
-        for ev in evs {
-            bus.dispatch(ev);
-        }
+        i2c_write(&mut bus, 0x50, &[0x00, 0x1E, 0xA0, 0xA1, 0xA2, 0xA3]);
         let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
         assert_eq!(ee.contents()[0x1E], 0xA0);
         assert_eq!(ee.contents()[0x1F], 0xA1);
@@ -775,31 +698,7 @@ mod tests {
         // size is honored, not just that some wrap happened.)
         let mut bus =
             I2cBus::new("I2C").with_slave(Box::new(Eeprom24c::new(0x50, 4096).with_page_size(64)));
-        for ev in [
-            I2cEvent::Start {
-                addr: 0x50,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0x00,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0x3F,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0xB0,
-            },
-            I2cEvent::Write {
-                addr: 0x50,
-                data: 0xB1,
-            },
-            I2cEvent::Stop { addr: 0x50 },
-        ] {
-            bus.dispatch(ev);
-        }
+        i2c_write(&mut bus, 0x50, &[0x00, 0x3F, 0xB0, 0xB1]);
         let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
         assert_eq!(ee.contents()[0x3F], 0xB0);
         assert_eq!(ee.contents()[0x00], 0xB1, "wraps at the 64-byte page end");
@@ -882,13 +781,12 @@ mod tests {
         }
         let mut circuit = Circuit::default();
         let volts: Vec<f64> = Vec::new();
-        let mut ctx = TickCtx {
+        bus.flush_stops(&mut TickCtx {
             circuit: &mut circuit,
             node_volts: &volts,
             t: 0.0,
             dt: 1e-3,
-        };
-        bus.flush_stops(&mut ctx);
+        });
         assert_eq!(
             bus.slave::<StopSpy>(0x60).unwrap().stops,
             1,
@@ -898,31 +796,13 @@ mod tests {
 
         // Same-address repeated START (the register-read idiom): exactly one
         // delivery, not one per leg.
-        for ev in [
-            I2cEvent::Start {
-                addr: 0x48,
-                read: false,
-            },
-            I2cEvent::Write {
-                addr: 0x48,
-                data: 0x00,
-            },
-            I2cEvent::Start {
-                addr: 0x48,
-                read: true,
-            },
-            I2cEvent::Read { addr: 0x48 },
-            I2cEvent::Stop { addr: 0x48 },
-        ] {
-            bus.dispatch(ev);
-        }
-        let mut ctx = TickCtx {
+        i2c_read_burst(&mut bus, 0x48, 0x00, 1);
+        bus.flush_stops(&mut TickCtx {
             circuit: &mut circuit,
             node_volts: &volts,
             t: 0.0,
             dt: 1e-3,
-        };
-        bus.flush_stops(&mut ctx);
+        });
         assert_eq!(
             bus.slave::<StopSpy>(0x48).unwrap().stops,
             2,

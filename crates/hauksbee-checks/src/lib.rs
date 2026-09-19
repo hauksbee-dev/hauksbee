@@ -12,6 +12,8 @@
 pub mod checks;
 pub mod dcpath;
 pub mod decoupling;
+#[cfg(test)]
+mod test_support;
 
 pub use checks::usb_c::{
     classify_attach, classify_board, extract_sink_termination, usb_c_report, Attach, Cable,

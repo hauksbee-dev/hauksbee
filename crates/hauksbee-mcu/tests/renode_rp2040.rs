@@ -26,7 +26,6 @@
 
 #![cfg(feature = "renode")]
 
-use hauksbee_mcu::renode::is_available;
 use hauksbee_mcu::{Mcu, PinId, RenodeBackend, RenodeConfig};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -51,8 +50,7 @@ fn firmware(dir: &str, name: &str) -> Option<PathBuf> {
 /// bound. Read a startup red here against the host's load first.
 macro_rules! rp2040_or_skip {
     ($name:ident, $dir:literal, $elf:literal) => {
-        if !is_available() {
-            eprintln!("SKIP: Renode not installed");
+        if !crate::support::renode_or_skip() {
             return;
         }
         let Some(elf) = firmware($dir, $elf) else {

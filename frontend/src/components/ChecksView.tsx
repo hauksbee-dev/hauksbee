@@ -807,6 +807,7 @@ export function ChecksView({
             result={result}
             runKey={run?.toml}
             workflowYml={workflowYml}
+            reportSerious={report.serious}
           />
         </div>
       </div>

@@ -12,25 +12,29 @@ use hauksbee_server::protocol::ServerMessage;
 use hauksbee_server::Server;
 use std::path::PathBuf;
 
+use crate::support;
+
 fn demo_hex() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/firmware/demo/demo.hex");
     p.exists().then_some(p)
 }
 
+/// Boot the demo engine on an ephemeral port and serve it in the background;
+/// `None` when the demo firmware fixture is not present (both callers skip
+/// the same way).
+async fn spawn_demo_server() -> Option<std::net::SocketAddr> {
+    let hex = demo_hex()?;
+    let engine = McuDemoEngine::new(&hex, "demo", "/boards/demo.kicad_pcb").unwrap();
+    let server = Server::new(Box::new(engine));
+    Some(support::spawn_router(server.router(None)).await)
+}
+
 #[tokio::test]
 async fn ws_protocol_roundtrip() {
-    let Some(hex) = demo_hex() else {
+    let Some(addr) = spawn_demo_server().await else {
         eprintln!("SKIP: demo.hex missing");
         return;
     };
-    let engine = McuDemoEngine::new(&hex, "demo", "/boards/demo.kicad_pcb").unwrap();
-    let server = Server::new(Box::new(engine));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = server.router(None);
-    tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
 
     // Raw websocket handshake without extra deps.
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -155,33 +159,19 @@ async fn read_ws_text(stream: &mut tokio::net::TcpStream, residue: &mut Vec<u8>)
 /// `200 text/plain` board text; the two are told apart by Content-Type.
 #[tokio::test]
 async fn board_probe_miss_is_200_json_not_404() {
-    let Some(hex) = demo_hex() else {
+    let Some(addr) = spawn_demo_server().await else {
         eprintln!("SKIP: demo.hex missing");
         return;
     };
-    let engine = McuDemoEngine::new(&hex, "demo", "/boards/demo.kicad_pcb").unwrap();
-    let server = Server::new(Box::new(engine));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = server.router(None);
-    tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    stream
-        .write_all(
-            format!(
-                "GET /boards/gone.kicad_pcb HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
-            )
-            .as_bytes(),
-        )
-        .await
-        .unwrap();
-    let mut buf = Vec::new();
-    let _ = stream.read_to_end(&mut buf).await;
-    let resp = String::from_utf8_lossy(&buf);
+    let resp = support::http(
+        addr,
+        &format!(
+            "GET /boards/gone.kicad_pcb HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        ),
+        b"",
+    )
+    .await;
     assert!(resp.contains("200 OK"), "miss must be 200: {resp}");
     assert!(
         resp.contains("application/json"),

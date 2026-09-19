@@ -261,35 +261,11 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::two_pin_resistor;
     use hauksbee_extract::LintCheck;
 
     fn bare_resistor() -> Component {
-        Component {
-            reference: "R7".into(),
-            value: "10k".into(),
-            lib_id: "Device:R".into(),
-            footprint: "R_0603".into(),
-            position: None,
-            layer: "F.Cu".into(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: vec![
-                hauksbee_extract::Pin {
-                    number: "1".into(),
-                    net: Some(1),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                },
-                hauksbee_extract::Pin {
-                    number: "2".into(),
-                    net: Some(2),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                },
-            ],
-        }
+        two_pin_resistor("R7", "10k")
     }
 
     /// Two-sided three-state contract: a fitted plain resistor counts as a

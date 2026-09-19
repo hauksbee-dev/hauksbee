@@ -13,7 +13,7 @@ import type { RunResponse } from '../../types/report'
 export function SpecPane({
   specText, specStem, specFileName, builtToml, rawMode, rawText, setRawText,
   onLeaveRawMode, onEnterRawMode, stale, running, canRun, onRun,
-  validationCount, result, runKey, workflowYml,
+  validationCount, result, runKey, workflowYml, reportSerious,
 }: {
   specText: string
   specStem: string
@@ -36,6 +36,8 @@ export function SpecPane({
   runKey: string | undefined
   /** The generated workflow, or null on a build with no release commit. */
   workflowYml: string | null
+  /** Serious findings on the board's own report, carried into the verdict. */
+  reportSerious: number
 }) {
   const [ciOpen, setCiOpen] = useState(false)
   const download = (name: string, contents: string) =>
@@ -166,7 +168,7 @@ export function SpecPane({
         </div>
       )}
 
-      {result && <RunResults result={result} runKey={runKey} stale={stale} rawMode={rawMode} />}
+      {result && <RunResults result={result} runKey={runKey} stale={stale} rawMode={rawMode} reportSerious={reportSerious} />}
 
       {/* GitHub CI setup: the two files and where they go. */}
       {ciOpen && (

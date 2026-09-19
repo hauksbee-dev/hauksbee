@@ -309,8 +309,9 @@ pub fn contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::board;
     use super::*;
-    use hauksbee_extract::{Component, Net, Pin};
+    use hauksbee_extract::{Component, Pin};
 
     /// A component whose pads are wired by `(pad number, net id)`.
     fn comp(reference: &str, value: &str, pads: &[(&str, i64)]) -> Component {
@@ -333,20 +334,6 @@ mod tests {
                     position: None,
                 })
                 .collect(),
-        }
-    }
-
-    fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
-        ExtractedBoard {
-            name: "t".into(),
-            nets: nets
-                .iter()
-                .map(|(id, n)| Net {
-                    id: *id,
-                    name: (*n).to_string(),
-                })
-                .collect(),
-            components,
         }
     }
 

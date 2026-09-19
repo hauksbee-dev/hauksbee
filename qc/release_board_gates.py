@@ -870,6 +870,41 @@ def run_external_gate(
     # terminal ledger record never have to re-read the source tree to do it.
     eligible_pool_sha256 = candidate_pool_digest(eligible)
     corpus_pool_sha256 = candidate_pool_digest(corpus)
+
+    def _unstaged_boards(candidates: list[Candidate]) -> list[dict]:
+        boards = []
+        for candidate in candidates:
+            record = _evidence_record(candidate)
+            record["staged_sha256"] = None
+            boards.append(record)
+        return boards
+
+    def _common_evidence(boards: list[dict]) -> dict:
+        return {
+            "schema_version": 1,
+            "gate": "external-five",
+            "iteration_id": iteration_id,
+            "planned_at": planned_at,
+            "tool_commit": tool_commit,
+            "manifest_sha256": manifest_sha256,
+            "candidate_pool_sha256": eligible_pool_sha256,
+            "known_corpus_pool_sha256": corpus_pool_sha256,
+            "boards": boards,
+        }
+
+    def _fail(common: dict, browser: dict, validation_error: str, *, browser_exit_code=None):
+        _record_external_evidence(
+            history_path=history_path,
+            evidence_dir=evidence_dir,
+            iteration_id=iteration_id,
+            tool_commit=tool_commit,
+            common=common,
+            status="failed",
+            browser=browser,
+            browser_exit_code=browser_exit_code,
+            validation_error=validation_error,
+        )
+
     reservation = reserve_iteration(
         history_path,
         eligible,
@@ -890,22 +925,7 @@ def run_external_gate(
             [board.get("firmware_sha256") or None for board in reservation["boards"]],
         )
     except (OSError, SelectionError) as error:
-        unstaged_boards = []
-        for candidate in selected:
-            record = _evidence_record(candidate)
-            record["staged_sha256"] = None
-            unstaged_boards.append(record)
-        common = {
-            "schema_version": 1,
-            "gate": "external-five",
-            "iteration_id": iteration_id,
-            "planned_at": planned_at,
-            "tool_commit": tool_commit,
-            "manifest_sha256": manifest_sha256,
-            "candidate_pool_sha256": eligible_pool_sha256,
-            "known_corpus_pool_sha256": corpus_pool_sha256,
-            "boards": unstaged_boards,
-        }
+        common = _common_evidence(_unstaged_boards(selected))
         _record_external_evidence(
             history_path=history_path,
             evidence_dir=evidence_dir,
@@ -925,43 +945,13 @@ def run_external_gate(
         board_evidence = _board_evidence(selected, staged_hashes, firmware)
     except (OSError, SelectionError) as error:
         # Reading a staged input can fail; the reservation must still close.
-        unstaged = []
-        for candidate in selected:
-            record = _evidence_record(candidate)
-            record["staged_sha256"] = None
-            unstaged.append(record)
-        _record_external_evidence(
-            history_path=history_path,
-            evidence_dir=evidence_dir,
-            iteration_id=iteration_id,
-            tool_commit=tool_commit,
-            common={
-                "schema_version": 1,
-                "gate": "external-five",
-                "iteration_id": iteration_id,
-                "planned_at": planned_at,
-                "tool_commit": tool_commit,
-                "manifest_sha256": manifest_sha256,
-                "candidate_pool_sha256": eligible_pool_sha256,
-                "known_corpus_pool_sha256": corpus_pool_sha256,
-                "boards": unstaged,
-            },
-            status="failed",
-            browser={"artifact": "staged-inputs-unreadable", "results": []},
-            validation_error=f"could not read staged inputs: {error}",
+        _fail(
+            _common_evidence(_unstaged_boards(selected)),
+            {"artifact": "staged-inputs-unreadable", "results": []},
+            f"could not read staged inputs: {error}",
         )
         raise SelectionError(f"could not read staged inputs: {error}") from error
-    common_evidence = {
-        "schema_version": 1,
-        "gate": "external-five",
-        "iteration_id": iteration_id,
-        "planned_at": planned_at,
-        "tool_commit": tool_commit,
-        "manifest_sha256": manifest_sha256,
-        "candidate_pool_sha256": eligible_pool_sha256,
-        "known_corpus_pool_sha256": corpus_pool_sha256,
-        "boards": board_evidence,
-    }
+    common_evidence = _common_evidence(board_evidence)
     result_dir = run_root / "browser"
     try:
         # Always empty: the eligibility filter above keeps `unreadable-by-design`
@@ -977,15 +967,10 @@ def run_external_gate(
             firmware,
         )
     except OSError as error:
-        _record_external_evidence(
-            history_path=history_path,
-            evidence_dir=evidence_dir,
-            iteration_id=iteration_id,
-            tool_commit=tool_commit,
-            common=common_evidence,
-            status="failed",
-            browser={"artifact": "runner-did-not-start", "results": []},
-            validation_error=f"browser runner could not start: {error}",
+        _fail(
+            common_evidence,
+            {"artifact": "runner-did-not-start", "results": []},
+            f"browser runner could not start: {error}",
         )
         raise SelectionError(f"browser runner could not start: {error}") from error
     try:
@@ -995,16 +980,11 @@ def run_external_gate(
         # the reservation still has to receive its one terminal record.
         digests_after = [f"unreadable: {error}"]
     if digests_after != immutability_digests:
-        _record_external_evidence(
-            history_path=history_path,
-            evidence_dir=evidence_dir,
-            iteration_id=iteration_id,
-            tool_commit=tool_commit,
-            common=common_evidence,
-            status="failed",
-            browser=_failed_browser_summary(result_dir / "results.json", staged),
+        _fail(
+            common_evidence,
+            _failed_browser_summary(result_dir / "results.json", staged),
+            "staged input changed during browser execution",
             browser_exit_code=return_code,
-            validation_error="staged input changed during browser execution",
         )
         raise SelectionError("staged input changed during browser execution")
     # Graded FIRST, whatever the exit code. The real runner exits non-zero on any
@@ -1020,17 +1000,7 @@ def run_external_gate(
     if return_code != 0 and validation_error is None:
         validation_error = f"browser runner exited with status {return_code}"
     if validation_error is not None:
-        _record_external_evidence(
-            history_path=history_path,
-            evidence_dir=evidence_dir,
-            iteration_id=iteration_id,
-            tool_commit=tool_commit,
-            common=common_evidence,
-            status="failed",
-            browser=browser,
-            browser_exit_code=return_code,
-            validation_error=validation_error,
-        )
+        _fail(common_evidence, browser, validation_error, browser_exit_code=return_code)
         # Printed before raising: a failing run is exactly when the other boards'
         # warnings matter, and raising first meant they were retained but never
         # shown.

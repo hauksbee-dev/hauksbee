@@ -545,12 +545,13 @@ pub fn render_boot_gate_panel(rows: &[(String, String, BootGateState)]) -> Strin
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::board;
     use super::{
         analyze, boot_gate_states, gate_bias, is_base_pad_name, is_gate_pad_name,
         is_power_or_ground_net, net_drives_a_switch, net_has_no_bias_resistor, switch_control_pad,
         transistor_gate_nets, BiasLevel, BootGateState,
     };
-    use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+    use hauksbee_extract::{Component, Pin};
 
     fn pin(net: Option<i64>) -> Pin {
         Pin {
@@ -574,20 +575,6 @@ mod tests {
             pins: vec![pin(Some(a)), pin(Some(b))],
         }
     }
-    fn board(nets: &[(i64, &str)], comps: Vec<Component>) -> ExtractedBoard {
-        ExtractedBoard {
-            name: "t".into(),
-            nets: nets
-                .iter()
-                .map(|(id, n)| Net {
-                    id: *id,
-                    name: (*n).into(),
-                })
-                .collect(),
-            components: comps,
-        }
-    }
-
     #[test]
     fn rails_and_grounds_recognised_signals_not() {
         let b = board(

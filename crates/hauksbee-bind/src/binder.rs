@@ -168,6 +168,14 @@ pub struct BoundBoard {
     pub dacs: Vec<DacBinding>,
     /// Source-bound I2C/SPI slaves declared by component model cards.
     pub peripherals: Vec<PeripheralBinding>,
+    /// Set when some part's stamp uses a [`Device::VSwitch`] as a LATCH rather
+    /// than as a pass element (today: `bind_timer_555`). `switch_model` is a
+    /// global solver option, and under `SwitchModel::Smooth` the switch is
+    /// explicitly memoryless, so such a part would silently free-run and print
+    /// a plausible wrong frequency. The scheduler forces `Hysteretic` on a
+    /// board carrying one; an analog switch, which Smooth models correctly, is
+    /// deliberately not counted here.
+    pub latching_switches: bool,
     pub report: BindReport,
 }
 
@@ -622,6 +630,9 @@ pub fn bind_board_with(
     // matched by their Vsource device id directly.
     let device_meta = gather_device_meta(board, lib, &circuit, &mcus, &digital, &dacs);
 
+    // Computed before the move: see `BoundBoard::latching_switches`.
+    let latching_switches = component_kinds.values().any(|k| k == "timer");
+
     BoundBoard {
         name: board.name.clone(),
         circuit,
@@ -637,6 +648,7 @@ pub fn bind_board_with(
         device_meta,
         dacs,
         peripherals,
+        latching_switches,
         report,
     }
 }
@@ -1756,6 +1768,7 @@ fn kind_str(kind: ComponentKind) -> &'static str {
         Opamp => "opamp",
         Comparator => "comparator",
         AnalogSwitch => "analog_switch",
+        Timer => "timer",
         Digital => "digital",
         Dac => "dac",
         Adc => "adc",
@@ -2066,6 +2079,7 @@ fn bind_component(
         Vreg => bind_vreg(comp, model, source, circuit, &role_nets, regulators),
         Opamp => bind_opamp(comp, model, circuit, &role_nets),
         Comparator => bind_comparator(comp, model, circuit, &role_nets),
+        Timer => bind_timer_555(comp, model, circuit, &role_nets),
         AnalogSwitch => bind_analog_switch(comp, model, circuit, &role_nets, power_nets),
         Digital | ShiftRegister => {
             let kind = if model.kind == ShiftRegister {
@@ -2570,6 +2584,22 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
             "shdn" | "shutdown" | "nshdn" => "shdn",
             "fb" | "adj" | "feedback" => "fb",
             "nc" => "nc",
+            _ => return None,
+        },
+        // A 555's schematic pin names are unusually varied (CONT/CV/CTRL for
+        // pin 5, DIS/DISCH for 7), and the pad-number map cannot settle a
+        // symbol that numbers them differently, so the board's own pin
+        // function is read first. `~{RESET}` is the active-low spelling KiCad
+        // writes; the sense is handled in the stamp, not by the role name.
+        ComponentKind::Timer => match f.as_str() {
+            "vcc" | "vdd" | "v+" => "vcc",
+            "gnd" | "vss" | "ground" => "gnd",
+            "out" | "output" | "q" => "out",
+            "trig" | "trigger" | "tr" => "trig",
+            "thres" | "thresh" | "threshold" | "thr" | "th" => "thres",
+            "disch" | "discharge" | "dis" | "dsch" => "disch",
+            "ctrl" | "cont" | "control" | "cv" | "cont_v" | "cvolt" => "ctrl",
+            "reset" | "rst" | "~{reset}" | "reset_n" | "nreset" => "reset",
             _ => return None,
         },
         ComponentKind::Opamp | ComponentKind::Comparator => match f.as_str() {
@@ -3719,6 +3749,193 @@ fn bind_opamp(
             device: "opamp".to_string(),
         },
         warning,
+    )
+}
+
+/// One smoothed comparator, as a canonical B-source sub-expression: 0 while
+/// `__d{a}` is below `__d{b}`, 1 above, over a transition of `vcc/gain` volts.
+/// Dividing by VCC is what makes the trip a fixed FRACTION of the swing and
+/// therefore the whole model supply-independent (an absolute gain measured
+/// clean at 5 V and broke into a limit cycle at 15 V); the `max(.., 1.0)` floor
+/// is for the DC homotopy, which walks VCC down through zero.
+fn timer_cmp(a: &str, b: &str, vcc: &str, gain: f64) -> String {
+    format!("0.5*(1.0+math::tanh({gain}*({a}-{b})/max({vcc},1.0)))")
+}
+
+/// A 555 is not a formula: it is the datasheet block diagram stamped out of
+/// primitives the solver already has, so the BOARD's RA/RB/C set the interval
+/// by the SOLVE. Eight devices: the internal 5k/5k/5k divider as three Resistors,
+/// both comparators and the RESET gate folded into ONE Behavioral control node
+/// `ctl`, and one hysteretic [`Device::VSwitch`] that is at once the SR LATCH
+/// (its own hysteresis IS the latch memory -- there is no latch device) and the
+/// discharge transistor. A second VSwitch on the same control plus a pull-up exposes the latch state as
+/// a node `qb`, which both closes the latch's own feedback (see `ctl_expr`) and
+/// drives the output stage: a Behavioral source behind a series R, so VOL/VOH
+/// move under load.
+///
+/// The two legs are named `_disch` and `_q`, never `_s0`/`_s1`:
+/// `SpdtPairs::analyze` pairs VSwitch legs by that suffix and applies
+/// break-before-make to them, and these two must be free to close together.
+///
+/// What this owes: the interval is solved, not printed, so the paired ngspice
+/// deck (`hauksbee-solve/tests/decks/ne555_astable.*`) is what pins the latch
+/// band and the comparator gain; a wiring the part cannot work from REFUSES
+/// with a named reason rather than reporting a fabricated frequency.
+fn bind_timer_555(
+    comp: &Component,
+    model: &ModelEntry,
+    circuit: &mut Circuit,
+    roles: &HashMap<String, NodeId>,
+) -> (BindOutcome, Option<String>) {
+    let r = &comp.reference;
+    let p = |name: &str, fallback: f64| model.params.get_f64(name).unwrap_or(fallback);
+    let Some(vcc) = roles.get("vcc").copied().filter(|n| !n.is_ground()) else {
+        return open_warning(comp, "555 VCC not connected");
+    };
+    let gnd = roles.get("gnd").copied().unwrap_or(NodeId::GROUND);
+    let Some(thres) = roles.get("thres").copied() else {
+        return open_warning(
+            comp,
+            "555 THRES not connected: there is no timing node to solve",
+        );
+    };
+    let Some(trig) = roles.get("trig").copied() else {
+        return open_warning(comp, "555 TRIG not connected");
+    };
+    let (out, disch) = (roles.get("out").copied(), roles.get("disch").copied());
+    if out.is_none() && disch.is_none() {
+        return open_warning(
+            comp,
+            "555 has neither OUT nor DISCH connected: nothing it does is observable",
+        );
+    }
+    // A RESET pin left unconnected reads as RELEASED (tied to VCC), which is
+    // what the datasheet tells a board to do with it; a genuinely floating
+    // RESET is a hardware defect this model does not represent (card note).
+    let reset = roles.get("reset").copied().unwrap_or(vcc);
+    // The internal divider, as the two FRACTIONS rather than three equal legs:
+    // a CMOS-555 card overriding `divider_ohms` keeps the same trip points.
+    let (th, tr) = (p("threshold_frac", 2.0 / 3.0), p("trigger_frac", 1.0 / 3.0));
+    let leg = 3.0 * p("divider_ohms", 5000.0);
+    // CTRL wired (the usual 10 nF bypass, or an external reference) uses the
+    // board's own node, so the board's voltage moves BOTH thresholds together.
+    let ctrl = roles
+        .get("ctrl")
+        .copied()
+        .unwrap_or_else(|| circuit.node(&format!("{r}_555_ctrl")));
+    let tref = circuit.node(&format!("{r}_555_tref"));
+    for (a, b, ohms) in [
+        (vcc, ctrl, leg * (1.0 - th)),
+        (ctrl, tref, leg * (th - tr)),
+        (tref, gnd, leg * tr),
+    ] {
+        circuit.add(Device::Resistor {
+            name: format!("Rdiv_{r}_{}", circuit.node_name(b)),
+            a,
+            b,
+            ohms,
+            tc1: None,
+        });
+    }
+
+    let gain = p("comparator_gain", 1200.0);
+    let hold = p("latch_hold", 0.3);
+    let qb = circuit.node(&format!("{r}_555_q"));
+    // ctl = hold + (1-hold)*(max(Rt, 1-Rstn) + Q) - St*Rstn. Neither comparator
+    // leaves it at `hold`, inside the relay's band, so the latch HOLDS;
+    // THRES sets it to 1 (>= von), TRIG drives it to hold-1 (<= voff), and
+    // both together read as TRIG, which is the datasheet's precedence. RESET
+    // (Rstn -> 0) forces the set branch and outranks everything.
+    //
+    // `Q = 1 - qb/VCC` is the latch's OWN state fed back into its control, which
+    // is what makes this an SR latch rather than a high-gain loop: a relay's
+    // conductance RAMPS over a band past its threshold, and comparators alone
+    // leave a stable root inside that ramp where partial discharge cancels RA
+    // and the part never oscillates. ADDED, not max()-ed in: at that root Rt
+    // already exceeds Q, so a max() gates the feedback out. Measured both ways
+    // in target/launch/checkpoint13-555/impl-notes.md.
+    let rstn = timer_cmp(
+        "__d3",
+        &p("reset_threshold_v", 0.7).to_string(),
+        "__d2",
+        gain,
+    );
+    let ctl_expr = format!(
+        "{hold} + {}*(max({}, 1.0-{rstn}) + 1.0-__d6/max(__d2,1.0)) - {}*{rstn}",
+        1.0 - hold,
+        timer_cmp("__d0", "__d1", "__d2", gain),
+        timer_cmp("__d4", "__d5", "__d2", gain),
+    );
+    let ctl = circuit.node(&format!("{r}_555_ctl"));
+    circuit.add(Device::Behavioral {
+        name: format!("Bctl_{r}"),
+        p: ctl,
+        n: gnd,
+        output: hauksbee_ir::BOutput::Voltage,
+        expr: hauksbee_ir::CompiledExpr::compile(&ctl_expr).expect("555 control expression"),
+        deps: [thres, ctrl, vcc, reset, tref, trig, qb]
+            .map(hauksbee_ir::BDep::Volt)
+            .to_vec(),
+    });
+    let (von, voff) = (p("latch_von", 0.75), p("latch_voff", 0.25));
+    let pullup = p("sense_ohms", 10_000.0);
+    let leg_of = |name: &str, a: NodeId, ron: f64| Device::VSwitch {
+        name: format!("{r}_555{name}"),
+        a,
+        b: gnd,
+        ctrl_p: ctl,
+        ctrl_n: gnd,
+        von,
+        voff,
+        ron,
+        roff: 1e9,
+    };
+    // The sense leg alone carries the latch, so a board that leaves DISCH open
+    // (a monostable driving only OUT) still latches.
+    if let Some(disch) = disch {
+        let d = leg_of("_disch", disch, p("rsat_ohms", 12.0));
+        circuit.add(d);
+    }
+    let q = leg_of("_q", qb, pullup * 0.01);
+    circuit.add(q);
+    circuit.add(Device::Resistor {
+        name: format!("Rq_{r}"),
+        a: vcc,
+        b: qb,
+        ohms: pullup,
+        tc1: None,
+    });
+    if let Some(out) = out {
+        let (vol, drop) = (p("vol_v", 0.1), p("voh_drop_v", 1.4));
+        let outi = circuit.node(&format!("{r}_555_outi"));
+        circuit.add(Device::Behavioral {
+            name: format!("Bout_{r}"),
+            p: outi,
+            n: gnd,
+            output: hauksbee_ir::BOutput::Voltage,
+            // Gain 20, not the comparators' 1200: the latch node this reads
+            // already swings rail to rail in ONE step, and a 1200 cliff on top
+            // of that is what Newton could not cross. 20 still saturates.
+            expr: hauksbee_ir::CompiledExpr::compile(&format!(
+                "{vol} + (__d1-{drop}-{vol})*{}",
+                timer_cmp("__d0", "0.5*__d1", "__d1", 20.0)
+            ))
+            .expect("555 output expression"),
+            deps: vec![hauksbee_ir::BDep::Volt(qb), hauksbee_ir::BDep::Volt(vcc)],
+        });
+        circuit.add(Device::Resistor {
+            name: format!("Rout_{r}"),
+            a: outi,
+            b: out,
+            ohms: p("out_ohms", 10.0),
+            tc1: None,
+        });
+    }
+    (
+        BindOutcome::Analog {
+            device: "555 timer (hysteretic-switch SR latch)".to_string(),
+        },
+        entry_warning(comp, model),
     )
 }
 

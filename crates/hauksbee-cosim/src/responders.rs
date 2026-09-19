@@ -2579,13 +2579,12 @@ style = "i2c_pointer"
         };
         assert_eq!(src_volts(&circuit), 0.0, "not driven before flush");
         let volts = vec![0.0; 4];
-        let mut ctx = TickCtx {
+        bus.lock().unwrap().flush_stops(&mut TickCtx {
             circuit: &mut circuit,
             node_volts: &volts,
             t: 0.0,
             dt: 1e-3,
-        };
-        bus.lock().unwrap().flush_stops(&mut ctx);
+        });
         assert!((src_volts(&circuit) - 2.048).abs() < 1e-9);
     }
 }

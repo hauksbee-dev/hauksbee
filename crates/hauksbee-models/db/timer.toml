@@ -1,0 +1,120 @@
+# NE555/LM555-class bipolar precision timer.
+#
+# Stamped at bind time as the datasheet block diagram out of primitives the
+# solver already has (see `bind_timer_555`): the internal 5k-5k-5k divider as
+# three Resistors, both comparators and the RESET gate folded into ONE
+# Behavioral control expression, the SR latch AND the discharge transistor as
+# one hysteretic Device::VSwitch (SPICE3 SW), a second VSwitch as the latch
+# sense leg, and the output stage as a Behavioral source behind a series R.
+# The BOARD's own RA/RB/C then set the frequency by the SOLVE, not by a
+# formula read off this card.
+# Primary source: TI NE555/SA555/SE555 SLFS022 (Precision Timers).
+#
+# DELIBERATELY NOT MODELLED
+# - Propagation delay (~100 ns comparator-to-output): a fixed offset on every
+#   interval, so a board timing above ~100 kHz gets an optimistic answer. With
+#   no delay or pin capacitance in the loop, a timing capacitor carrying a
+#   series ESL ties THRES to DISCH algebraically: that board REFUSES at t=0.
+# - ICC (3 mA typ at 5 V) and the 100-200 mA totem-pole shoot-through at each
+#   output transition -- which is WHY a real 555 needs the 100 nF bypass on
+#   pin 8, so a decoupling study here will see no reason for that cap.
+# - Temperature drift (50 ppm/C) and the 0.005 %/V supply sensitivity: both
+#   zero here, and `tc1` on the divider legs is left unset.
+# - Input bias currents (250 nA THRES, 30 nA TRIG), a first-order frequency
+#   error on megohm timing resistors: this card is honest below ~1 MOhm.
+# - Output current limit and rise/fall times. `out_ohms` is a MODELLING choice,
+#   not a datasheet number: it gives the output a finite impedance so VOL/VOH
+#   move under load, but nothing limits the current or the slew.
+# - RESET propagation delay and minimum pulse width (the threshold IS
+#   modelled). A RESET pin left unconnected reads as RELEASED (the binder ties
+#   it to VCC); on real hardware a floating RESET is a defect.
+# - Monostable retrigger lockout, and the recovery edge of a trigger held below
+#   1/3 VCC: the steady-state precedence is right, the transitions are not.
+#
+# NOT MATCHED: the CMOS 555s (TLC555, LMC555, ICM7555, TS555, CSS555). Those
+# need their own card, not a suffix on this one: rail-to-rail output levels
+# (VOH ~ VCC-0.3, not VCC-1.4), input bias five orders of magnitude lower, a
+# 2-15 V supply range instead of 4.5-16, and a ~100 kOhm divider leg that loads
+# CTRL completely differently. `divider_ohms`, `vol_v` and `voh_drop_v` are
+# card params precisely so such an entry can override them.
+[[models]]
+id = "ne555_bipolar"
+kind = "timer"
+description = "TI NE555-class bipolar precision timer (astable/monostable; the interval is set by the board's R and C)"
+
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "timing_error_frac"
+low = 0.0
+high = 0.03
+unit = "fraction"
+kind = "specification-limits"
+basis = "SLFS022 Electrical Characteristics, initial error of timing interval, NE555: 1% typ, 3% max"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 16.0
+abs_max_v = 18.0
+basis = "TI SLFS022, Recommended Operating Conditions, NE555 supply-voltage row (4.5 V to 16 V); Absolute Maximum Ratings VCC 18 V"
+
+[models.match]
+# Bipolar 555s only, any package or temperature-grade suffix. The CMOS parts
+# are deliberately excluded; see the NOT MATCHED note above.
+value_re = "(?ix) ^ (SA|SE|NE|NA|LM|MC|KA|TA|UA|NJM)? 555 (C|CN|N|P|D|DR|PS|PW|PWR|FP|J|JG|CM|CP|CD|CDR)? ([-._/][A-Z0-9._/-]*)? $"
+
+[models.params]
+# Source: TI SLFS022, Electrical Characteristics, VCC = 5 V to 15 V, TA = 25 C.
+threshold_frac    = 0.666667  # "Threshold voltage level", 2/3 VCC
+trigger_frac      = 0.333333  # "Trigger voltage level", 1/3 VCC
+divider_ohms      = 5000.0    # internal divider leg, 5 k typ (block diagram)
+rsat_ohms         = 12.0      # "Discharge switch ON-state voltage" 0.12 V typ
+                              # at 10 mA -> 12 ohm
+vol_v             = 0.1       # VOL, IOL = 5 mA at VCC = 5 V: 0.1 V typ
+voh_drop_v        = 1.4       # VCC - VOH, IOH = -100 mA: 1.4 V typ at 5 V
+reset_threshold_v = 0.7       # "Reset voltage" 0.7 V typ (0.4 min / 1.0 max)
+timing_error_frac = 0.01      # initial error of the timing interval, 1% typ
+# NOT datasheet numbers below this line. They are the NUMERICAL parameters of
+# the composite stamp, pinned by the paired ngspice deck
+# (hauksbee-solve/tests/decks/ne555_astable.*), and they live on the card so a
+# drift in either is caught there rather than argued about here.
+out_ohms          = 10.0      # output-stage series impedance (shapes VOL/VOH
+                              # under load; there is no current limit)
+sense_ohms        = 10000.0   # pull-up on the latch sense leg
+comparator_gain   = 1200.0    # comparator smoothing, in units of 1/VCC: a
+                              # fixed FRACTION of the swing is what makes the
+                              # model supply-independent (an absolute gain
+                              # broke into a limit cycle at 15 V)
+latch_von         = 0.75      # SR latch = one hysteretic VSwitch. The three
+latch_voff        = 0.25      # move together: widening the band to 0.85/0.15
+latch_hold        = 0.3       # made ngspice's SW re-close on band re-entry and
+                              # collapsed the monostable to its trigger pulse.
+
+[models.pins]
+# SLFS022 Pin Functions, DIP-8 / SOIC-8 (D, P, PS, PW).
+"1" = "gnd"
+"2" = "trig"
+"3" = "out"
+"4" = "reset"
+"5" = "ctrl"
+"6" = "thres"
+"7" = "disch"
+"8" = "vcc"
+
+[models.ratings]
+max_voltage_v = 16.0        # VCC, Recommended Operating Conditions (18 V abs max)
+max_current_a = 0.2         # output source/sink, 200 mA
+max_junction_temp_c = 125.0
+
+[models.coverage]
+implements = ["astable_from_board_rc", "monostable_from_board_rc", "internal_divider",
+              "external_control_voltage", "reset_override", "trigger_over_threshold_priority",
+              "discharge_saturation", "output_levels"]
+missing = ["propagation_delay", "supply_current_spike", "temperature_drift",
+           "input_bias_current", "trigger_held_low", "output_current_limit",
+           "rise_fall_times", "reset_propagation", "monostable_retrigger_lockout"]

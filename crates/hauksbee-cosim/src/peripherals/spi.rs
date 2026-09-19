@@ -1019,6 +1019,13 @@ impl SpiSlave for Mcp3008 {
 mod tests {
     use super::*;
 
+    /// WREN is its own CS transaction: select, send 0x06, deselect.
+    fn wren(flash: &mut SpiNorFlash) {
+        flash.select();
+        flash.transfer(0x06);
+        flash.deselect();
+    }
+
     #[test]
     fn eeprom_write_read_roundtrip() {
         let mut bus = SpiBus::new("SPI", Box::new(Spi25Eeprom::new(256)));
@@ -1060,9 +1067,7 @@ mod tests {
 
         // WREN is its own transaction. Program at the final byte of an 8-byte
         // page; the second byte wraps to the first byte of that same page.
-        flash.select();
-        flash.transfer(0x06);
-        flash.deselect();
+        wren(&mut flash);
         flash.select();
         for byte in [0x02, 0x00, 0x00, 0x07, 0xaa, 0x55] {
             flash.transfer(byte);
@@ -1073,9 +1078,7 @@ mod tests {
 
         // A second program can clear more bits, but cannot turn a zero back to
         // one without erase: 0x55 & 0xff remains 0x55.
-        flash.select();
-        flash.transfer(0x06);
-        flash.deselect();
+        wren(&mut flash);
         flash.select();
         for byte in [0x02, 0x00, 0x00, 0x00, 0xff] {
             flash.transfer(byte);
@@ -1088,9 +1091,7 @@ mod tests {
     fn spi_nor_sector_erase_requires_write_enable() {
         let mut flash = SpiNorFlash::new(8192, 256, 4096, [0xef, 0x40, 0x18], 0);
 
-        flash.select();
-        flash.transfer(0x06);
-        flash.deselect();
+        wren(&mut flash);
         flash.select();
         for byte in [0x02, 0x00, 0x00, 0x10, 0x00] {
             flash.transfer(byte);
@@ -1106,9 +1107,7 @@ mod tests {
         flash.deselect();
         assert_eq!(flash.contents()[0x10], 0x00);
 
-        flash.select();
-        flash.transfer(0x06);
-        flash.deselect();
+        wren(&mut flash);
         flash.select();
         for byte in [0x20, 0x00, 0x00, 0x10] {
             flash.transfer(byte);

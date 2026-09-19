@@ -42,7 +42,6 @@
 
 #![cfg(feature = "renode")]
 
-use hauksbee_mcu::renode::is_available;
 use hauksbee_mcu::{Mcu, PinId, RenodeBackend, RenodeConfig};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -139,8 +138,7 @@ fn measured_ratio(
     pin: PinId,
     half_period_ms: f64,
 ) -> Option<f64> {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
+    if !crate::support::renode_or_skip() {
         return None;
     }
     let Some(elf) = firmware(elf_name) else {

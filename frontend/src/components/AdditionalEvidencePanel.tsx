@@ -23,6 +23,7 @@ function EvidenceFile({ label, hint, file, accept, locked, onFile }: {
         <input
           className="sr-only"
           type="file"
+          aria-label={`${file ? 'Replace' : 'Choose'} ${label}`}
           accept={accept}
           disabled={locked}
           onChange={event => onFile(event.currentTarget.files?.[0] ?? null)}
@@ -145,6 +146,7 @@ export function AdditionalEvidencePanel({
                 <input
                   className="sr-only"
                   type="file"
+                  aria-label="Choose a model library folder"
                   accept=".toml"
                   multiple
                   disabled={locked}
@@ -157,6 +159,7 @@ export function AdditionalEvidencePanel({
                 <input
                   className="sr-only"
                   type="file"
+                  aria-label="Choose model library .toml files"
                   accept=".toml"
                   multiple
                   disabled={locked}

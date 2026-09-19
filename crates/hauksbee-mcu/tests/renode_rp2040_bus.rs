@@ -33,7 +33,6 @@
 
 #![cfg(feature = "renode")]
 
-use hauksbee_mcu::renode::is_available;
 use hauksbee_mcu::traits::I2cEvent;
 use hauksbee_mcu::{Mcu, RenodeBackend, RenodeConfig};
 use std::path::PathBuf;
@@ -47,8 +46,7 @@ fn firmware(dir: &str, name: &str) -> Option<PathBuf> {
 
 #[test]
 fn rp2040_i2c_bridge_round_trips_with_pico_sdk_firmware() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
+    if !crate::support::renode_or_skip() {
         return;
     }
     let Some(elf) = firmware("rp2040_i2c_probe", "i2c_probe.elf") else {
@@ -137,8 +135,7 @@ fn rp2040_i2c_bridge_round_trips_with_pico_sdk_firmware() {
             never dispatches to its registered ISPIPeripheral, so hauksbee's SPI \
             bridge cannot be reached. See the module docs."]
 fn rp2040_spi_bridge_probe() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
+    if !crate::support::renode_or_skip() {
         return;
     }
     let Some(elf) = firmware("rp2040_spi_probe", "spi_probe.elf") else {

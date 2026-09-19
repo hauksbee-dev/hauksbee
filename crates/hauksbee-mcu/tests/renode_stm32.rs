@@ -277,8 +277,7 @@ fn stm32_uart_command_response() {
 /// controller (tracked by Arc<Mutex<Vec<u8>>>).
 #[test]
 fn stm32f4_spi2_and_spi3_bridge_setup_no_crosstalk() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
+    if !crate::support::renode_or_skip() {
         return;
     }
 

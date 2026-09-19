@@ -645,6 +645,22 @@ def _content_digest(path: Path, bundle_members: tuple[str, ...]) -> str:
     return digest.hexdigest()
 
 
+def _stage_atomically(staged_path: Path, payload: bytes) -> Path:
+    """Write `payload` to `staged_path`, or reuse it verbatim where a previous
+    run already staged it with identical bytes. A same-name collision with
+    different content, or a symlink there, is refused rather than silently
+    staging the wrong board or firmware under a name a browser input trusts."""
+    if staged_path.exists():
+        if staged_path.is_symlink() or staged_path.read_bytes() != payload:
+            raise SelectionError(f"staging collision: {staged_path.name}")
+        return staged_path
+    with staged_path.open("xb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return staged_path
+
+
 def materialize_candidate(candidate: Candidate, destination: Path) -> Path:
     """Return a directly droppable file, packaging loose Gerbers deterministically."""
 
@@ -660,15 +676,7 @@ def materialize_candidate(candidate: Candidate, destination: Path) -> Path:
             raise SelectionError(
                 f"candidate changed after discovery: {candidate.relative_path}"
             )
-        if staged_path.exists():
-            if staged_path.is_symlink() or staged_path.read_bytes() != payload:
-                raise SelectionError(f"staging collision: {staged_path.name}")
-            return staged_path
-        with staged_path.open("xb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        return staged_path
+        return _stage_atomically(staged_path, payload)
 
     archive_path = destination / f"{safe_source}-{candidate.board_id[6:14]}.zip"
     if archive_path.exists():
@@ -741,15 +749,7 @@ def materialize_firmware(
                 f"paired firmware changed after reservation: "
                 f"{candidate.firmware_relative_path}"
             )
-    if staged_path.exists():
-        if staged_path.is_symlink() or staged_path.read_bytes() != payload:
-            raise SelectionError(f"staging collision: {staged_path.name}")
-        return staged_path
-    with staged_path.open("xb") as handle:
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
-    return staged_path
+    return _stage_atomically(staged_path, payload)
 
 
 def _rank(seed: str, *parts: str) -> bytes:

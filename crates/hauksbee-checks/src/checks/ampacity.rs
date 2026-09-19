@@ -1041,19 +1041,10 @@ pub fn append_ampacity(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::pin;
     use super::*;
 
     use hauksbee_extract::{Component, Net, Pin};
-
-    fn pin(number: &str, net: i64) -> Pin {
-        Pin {
-            number: number.into(),
-            net: Some(net),
-            function: String::new(),
-            kind: String::new(),
-            position: None,
-        }
-    }
 
     /// A one-entry library holding `toml`, written to a temp dir keyed on `tag`.
     fn lib_from(tag: &str, toml_src: &str) -> ModelLibrary {

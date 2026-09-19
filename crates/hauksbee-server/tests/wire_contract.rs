@@ -10,6 +10,24 @@ use hauksbee_server::protocol::{
     SimFrame, SupplyState,
 };
 
+/// A minimal `BoardInfo` (no `Default` impl on the wire type); callers
+/// override just the fields their assertion cares about.
+fn base_board_info() -> BoardInfo {
+    BoardInfo {
+        name: "b".into(),
+        board_url: "/boards/b.kicad_pcb".into(),
+        num_components: 0,
+        num_nets: 0,
+        nets: vec![],
+        component_kinds: Default::default(),
+        mcus: vec![],
+        power_supplies: Default::default(),
+        peripherals: vec![],
+        input_sources: vec![],
+        shorts: None,
+    }
+}
+
 #[test]
 fn fault_info_serializes_kind_not_fault_kind() {
     let mut frame = SimFrame::default();
@@ -36,15 +54,8 @@ fn fault_info_serializes_kind_not_fault_kind() {
 #[test]
 fn explicit_input_sources_and_live_attachments_match_the_browser_wire() {
     let mut info = BoardInfo {
-        name: "b".into(),
-        board_url: "/boards/b.kicad_pcb".into(),
-        num_components: 0,
         num_nets: 1,
         nets: vec!["A0".into()],
-        component_kinds: Default::default(),
-        mcus: vec![],
-        power_supplies: Default::default(),
-        peripherals: vec![],
         input_sources: vec![InputSourceInfo {
             id: "A0".into(),
             kind: "voltage".into(),
@@ -53,7 +64,7 @@ fn explicit_input_sources_and_live_attachments_match_the_browser_wire() {
             initial: 2.5,
             unit: "V".into(),
         }],
-        shorts: None,
+        ..base_board_info()
     };
     let json = serde_json::to_value(ServerMessage::BoardInfo(info.clone())).unwrap();
     assert_eq!(json["input_sources"][0]["id"], "A0");
@@ -107,19 +118,7 @@ fn explicit_input_sources_and_live_attachments_match_the_browser_wire() {
 
 #[test]
 fn board_info_power_supplies_is_a_map_of_tagged_configs() {
-    let mut info = BoardInfo {
-        name: "b".into(),
-        board_url: "/boards/b.kicad_pcb".into(),
-        num_components: 0,
-        num_nets: 0,
-        nets: vec![],
-        component_kinds: Default::default(),
-        mcus: vec![],
-        power_supplies: Default::default(),
-        peripherals: vec![],
-        input_sources: vec![],
-        shorts: None,
-    };
+    let mut info = base_board_info();
     info.power_supplies
         .insert("5V".into(), PowerSupplyConfig::Ideal { volts: 5.0 });
     let json = serde_json::to_value(ServerMessage::BoardInfo(info)).unwrap();

@@ -396,6 +396,12 @@ impl Workspace {
         self.switch_latch.as_ref()
     }
 
+    /// Seed the relay state from OUTSIDE this workspace (a co-sim chunk builds
+    /// a fresh one, and a latch must not forget which way it is at the boundary).
+    pub fn set_switch_latch(&mut self, latch: Option<std::collections::HashMap<DeviceId, bool>>) {
+        self.switch_latch = latch;
+    }
+
     /// The behavioral-expression fault of the last failed Newton attempt, if
     /// that is why it failed (see the field doc). Drivers fold this into their
     /// refusal messages.
@@ -1068,9 +1074,17 @@ fn newton_solve_core(
                 }
                 // Armijo sufficient-decrease on the residual inf-norm. The first
                 // Newton iterate (f_norm_lin==0 because lin_point is the cold
-                // start) accepts the full step.
+                // start) accepts the full step. So does a trial already inside
+                // `abstol`: the norm covers the KCL rows only, so where the one
+                // nonlinearity is a V-output B-source's BRANCH row both norms
+                // are round-off (measured 4e-17 -> 1e-16 A), "decrease" is a coin
+                // flip, and the search fell to the alpha floor on 40% of the 555
+                // deck's iterations, turning Newton into a 63/64-per-iteration
+                // crawl that ran out of max_newton on every latch edge.
                 let accept = trial_norm.is_finite()
-                    && (f_norm_lin <= 0.0 || trial_norm < (1.0 - ARMIJO_C * alpha) * f_norm_lin);
+                    && (f_norm_lin <= 0.0
+                        || trial_norm < (1.0 - ARMIJO_C * alpha) * f_norm_lin
+                        || trial_norm <= opts.abstol);
                 if accept || alpha <= ARMIJO_ALPHA_FLOOR + 1e-15 {
                     break;
                 }

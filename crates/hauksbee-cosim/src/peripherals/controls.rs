@@ -604,13 +604,12 @@ mod tests {
         ]));
         let mut stim = Stimulus::voltage(&mut c, "S1", net, kind);
         let volts = vec![0.0; c.node_count()];
-        let mut ctx = TickCtx {
+        stim.pre_solve(&mut TickCtx {
             circuit: &mut c,
             node_volts: &volts,
             t: 0.0,
             dt: 0.1,
-        };
-        stim.pre_solve(&mut ctx);
+        });
         assert!(
             (stim.last_value - 1.0).abs() < 1e-9,
             "stimulus must sample at chunk end (t+dt=0.1 → 1.0), got {}",
@@ -624,13 +623,12 @@ mod tests {
         let net = c.node("BTN");
         let mut b = Pushbutton::new(&mut c, "BTN1", net, NodeId::GROUND, 0.0);
         let volts = vec![0.0; c.node_count()];
-        let mut ctx = TickCtx {
+        b.pre_solve(&mut TickCtx {
             circuit: &mut c,
             node_volts: &volts,
             t: 0.0,
             dt: 1e-4,
-        };
-        b.pre_solve(&mut ctx);
+        });
         // Released = open (high resistance).
         if let Device::Resistor { ohms, .. } = &c.devices[b.contact.0 as usize] {
             assert!(*ohms > 1e6, "released button should be open");
@@ -639,13 +637,12 @@ mod tests {
         }
         b.set_value(1.0);
         let volts = vec![0.0; c.node_count()];
-        let mut ctx = TickCtx {
+        b.pre_solve(&mut TickCtx {
             circuit: &mut c,
             node_volts: &volts,
             t: 1e-4,
             dt: 1e-4,
-        };
-        b.pre_solve(&mut ctx);
+        });
         if let Device::Resistor { ohms, .. } = &c.devices[b.contact.0 as usize] {
             assert!(*ohms < 10.0, "pressed button should be closed, got {ohms}");
         }
@@ -709,13 +706,12 @@ mod tests {
             }),
         );
         let volts = vec![0.0; c.node_count()];
-        let mut ctx = TickCtx {
+        s.pre_solve(&mut TickCtx {
             circuit: &mut c,
             node_volts: &volts,
             t: 250e-6,
             dt: 1e-5,
-        };
-        s.pre_solve(&mut ctx);
+        });
         // Quarter period of a 1 kHz sine -> peak ~5.0 V.
         assert!(
             (s.last_value - 5.0).abs() < 0.1,

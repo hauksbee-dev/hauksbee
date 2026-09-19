@@ -1278,6 +1278,7 @@ impl UsbcReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{pin, pin_fn};
 
     // --- DC-bridge predicate (#10) ------------------------------------------
 
@@ -1294,22 +1295,7 @@ mod tests {
             // Two netted pads: the classification ladder's first rung is the
             // terminal count, and every real bridge/pulldown candidate reaches
             // these fns with both pads on nets.
-            pins: vec![
-                hauksbee_extract::Pin {
-                    number: "1".into(),
-                    net: Some(1),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                },
-                hauksbee_extract::Pin {
-                    number: "2".into(),
-                    net: Some(2),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                },
-            ],
+            pins: vec![pin("1", 1), pin("2", 2)],
         }
     }
 
@@ -1363,22 +1349,7 @@ mod tests {
             layer: String::new(),
             properties: vec![],
             dnp: false,
-            pins: vec![
-                hauksbee_extract::Pin {
-                    number: "A5".into(),
-                    net: Some(cc1),
-                    function: "CC1".into(),
-                    kind: String::new(),
-                    position: None,
-                },
-                hauksbee_extract::Pin {
-                    number: "B5".into(),
-                    net: Some(cc2),
-                    function: "CC2".into(),
-                    kind: String::new(),
-                    position: None,
-                },
-            ],
+            pins: vec![pin_fn("A5", cc1, "CC1"), pin_fn("B5", cc2, "CC2")],
         };
         // J_early (board-order first, score 100+5=105) then J_late (later, but
         // "receptacle" in the footprint → 100+40+5=145).
@@ -1709,13 +1680,6 @@ mod tests {
         // double-terminated board (external 5.1k + nPM1300 internal 5.1k) the JSON
         // read a nominal-looking 5100 while the effective (and the headline) is the
         // out-of-spec ~2550, a cross-surface disagreement. The JSON must match.
-        let pin = |number: &str, net: i64, function: &str| hauksbee_extract::Pin {
-            number: number.into(),
-            net: Some(net),
-            function: function.into(),
-            kind: String::new(),
-            position: None,
-        };
         let board = ExtractedBoard {
             name: "dt".into(),
             nets: vec![
@@ -1742,7 +1706,7 @@ mod tests {
                     layer: String::new(),
                     properties: vec![],
                     dnp: false,
-                    pins: vec![pin("A5", 1, "CC1"), pin("B5", 2, "CC2")],
+                    pins: vec![pin_fn("A5", 1, "CC1"), pin_fn("B5", 2, "CC2")],
                 },
                 // External discrete 5.1k Rd on CC1 -> GND.
                 hauksbee_extract::Component {
@@ -1754,7 +1718,7 @@ mod tests {
                     layer: String::new(),
                     properties: vec![],
                     dnp: false,
-                    pins: vec![pin("1", 1, ""), pin("2", 0, "")],
+                    pins: vec![pin("1", 1), pin("2", 0)],
                 },
                 // nPM1300 PMIC whose CC1 provides an internal 5.1k Rd.
                 hauksbee_extract::Component {
@@ -1766,7 +1730,7 @@ mod tests {
                     layer: String::new(),
                     properties: vec![],
                     dnp: false,
-                    pins: vec![pin("30", 1, "CC1")],
+                    pins: vec![pin_fn("30", 1, "CC1")],
                 },
             ],
         };

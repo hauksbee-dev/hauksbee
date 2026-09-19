@@ -53,6 +53,8 @@ pub mod mcu_coverage;
 pub mod model_controls;
 pub mod ripple;
 pub mod straps;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod usb_c;
 
 use hauksbee_extract::{ExtractedBoard, NetLintReport, SiReport};

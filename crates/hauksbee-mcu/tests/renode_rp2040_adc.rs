@@ -15,7 +15,6 @@
 
 #![cfg(feature = "renode")]
 
-use hauksbee_mcu::renode::is_available;
 use hauksbee_mcu::{Mcu, RenodeBackend, RenodeConfig};
 use std::path::PathBuf;
 
@@ -33,8 +32,7 @@ fn last_count(text: &str) -> Option<u32> {
 
 #[test]
 fn rp2040_adc_injection_reaches_firmware() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
+    if !crate::support::renode_or_skip() {
         return;
     }
     let Some(elf) = adc_elf() else {

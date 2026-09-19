@@ -27,13 +27,11 @@
 
 #![cfg(feature = "renode")]
 
-use hauksbee_mcu::renode::is_available;
 use hauksbee_mcu::{Mcu, RenodeBackend, RenodeConfig};
 
 #[test]
 fn nrf52840_descriptor_names_real_controllers_and_bridges_register() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
+    if !crate::support::renode_or_skip() {
         return;
     }
 

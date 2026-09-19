@@ -101,6 +101,7 @@ static BUILTIN_TOML_FILES: &[(&str, &str)] = builtin_db![
     "digital",
     "dac_adc",
     "vreg",
+    "timer",
     "power_ics",
     "mcu",
     "ignore",

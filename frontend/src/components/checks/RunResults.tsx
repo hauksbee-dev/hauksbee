@@ -29,16 +29,20 @@ const VERDICT_LINE: Record<Overall, string> = {
 /** Overall result. It fades up once when the run lands; it does NOT re-animate
  *  when the spec is edited afterwards, because the panel then goes stale rather
  *  than becoming new. */
-export function RunResults({ result, runKey, stale, rawMode }: {
+export function RunResults({ result, runKey, stale, rawMode, reportSerious }: {
   result: RunResponse
   /** Changes only when a new run lands, so the arrival plays once per run. */
   runKey: string | undefined
   stale: boolean
   /** Raw mode has no builder rows to annotate, so results are listed here. */
   rawMode: boolean
+  /** Serious findings the board's own report raised. A spec that asserts
+   *  nothing about them has not cleared them, so a pass here is not green. */
+  reportSerious: number
 }) {
   const results = result.ok ? result.results ?? [] : []
   const overall = overallVerdict(result)
+  const uncovered = overall === 'passed' && reportSerious > 0
   const noteLines = (key: string, lines: string[] | undefined, prefix: string, color: string) =>
     (lines ?? []).map((line, i) => (
       <div key={`${key}${i}`} className="mt-1 text-[12px]" style={{ color }}>
@@ -63,9 +67,15 @@ export function RunResults({ result, runKey, stale, rawMode }: {
           </div>
         ) : (
           <>
-            <div className="rounded-lg px-3 py-2.5 text-[14px] font-semibold" style={VERDICT_STYLE[overall]}>
-              {VERDICT_LINE[overall]}
+            <div className="rounded-lg px-3 py-2.5 text-[14px] font-semibold" style={VERDICT_STYLE[uncovered ? 'invalid' : overall]}>
+              {uncovered ? 'These checks passed, but the board is not cleared.' : VERDICT_LINE[overall]}
               {result.analog_abort && ' (analog solve aborted, results not trustworthy)'}
+              {uncovered && (
+                <div className="text-[12px] font-normal mt-1" data-testid="checks-uncovered-serious" style={{ color: 'var(--warn-strong)' }}>
+                  {reportSerious} serious issue{reportSerious === 1 ? '' : 's'} in the board report {reportSerious === 1 ? 'is' : 'are'} not
+                  covered by these checks, so this run does not clear the board.
+                </div>
+              )}
               {stale && (
                 <div className="text-[11px] font-normal mt-0.5" style={{ color: 'var(--silk-dim)' }}>
                   from a previous run; the spec has changed since

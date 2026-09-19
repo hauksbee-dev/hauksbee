@@ -139,6 +139,34 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
             ordered: &[("out_lo", "out_hi")],
             ..NO_RULES
         },
+        // A 555's trip points are FRACTIONS of VCC (that is the part's defining
+        // property), so they are bounded away from the rails rather than given
+        // in volts, and `trigger_frac < threshold_frac` is the ordering that
+        // makes the two comparators a hysteresis band at all. `latch_voff <
+        // latch_von` is the same claim about the SR latch's own band: swapped,
+        // the relay would open where it should close and the part would
+        // free-run at the solver's timestep.
+        Timer => KindRules {
+            required: &[
+                "threshold_frac",
+                "trigger_frac",
+                "divider_ohms",
+                "rsat_ohms",
+            ],
+            ranges: &[
+                ("threshold_frac", 0.05, 0.95),
+                ("trigger_frac", 0.05, 0.95),
+                ("divider_ohms", 100.0, 1e6),
+                ("rsat_ohms", 0.1, 1000.0),
+                ("comparator_gain", 10.0, 1e5),
+                ("timing_error_frac", 0.0, 0.5),
+            ],
+            ordered: &[
+                ("trigger_frac", "threshold_frac"),
+                ("latch_voff", "latch_von"),
+            ],
+            ..NO_RULES
+        },
         // ron/roff ranges overlap, so a swapped pair (ron=5000, roff=2000)
         // would model a switch that conducts MORE when open; the order rule
         // closes that the way the opamp/comparator rails are ordered.
@@ -828,6 +856,7 @@ pub const KIND_NAMES: &[&str] = &[
     "vreg",
     "opamp",
     "comparator",
+    "timer",
     "analog_switch",
     "digital",
     "dac",

@@ -102,6 +102,20 @@ pub fn write_hex(tag: &str, name: &str, records: &[String]) -> PathBuf {
     path
 }
 
+/// `true` when live Renode is installed; otherwise prints the standard skip
+/// message and returns `false` so the caller can `return` immediately. Every
+/// `renode_*` test that skips with plain "Renode not installed" (not one of
+/// the few with an extra unlock condition or a different message) uses this.
+#[cfg(feature = "renode")]
+pub fn renode_or_skip() -> bool {
+    if hauksbee_mcu::renode::is_available() {
+        true
+    } else {
+        eprintln!("SKIP: Renode not installed");
+        false
+    }
+}
+
 /// Boot the esp32 blinky image under Espressif QEMU, or print why that is not
 /// possible here and return `None` so the caller skips.
 #[cfg(feature = "qemu")]

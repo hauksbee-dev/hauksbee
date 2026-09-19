@@ -1118,6 +1118,7 @@ mod tests {
     use super::*;
     use crate::peripherals::i2c::{I2cBus, Lm75};
     use crate::peripherals::spi::SpiBus;
+    use crate::peripherals::test_support::{i2c_read_burst, i2c_write};
     use hauksbee_mcu::I2cEvent;
 
     const LM75_SPEC: &str = r#"
@@ -1215,27 +1216,6 @@ addr_mask = 0x7f
 
     fn i2c_bus(sensor: RegisterMapSensor) -> I2cBus {
         I2cBus::new("I2C").with_slave(Box::new(sensor))
-    }
-
-    /// One pointer-framed write transaction: START, `bytes`, STOP.
-    fn i2c_write(bus: &mut I2cBus, addr: u8, bytes: &[u8]) {
-        bus.dispatch(I2cEvent::Start { addr, read: false });
-        for &data in bytes {
-            bus.dispatch(I2cEvent::Write { addr, data });
-        }
-        bus.dispatch(I2cEvent::Stop { addr });
-    }
-
-    /// Pointered burst read of `n` bytes starting at register `reg`.
-    fn i2c_read_burst(bus: &mut I2cBus, addr: u8, reg: u8, n: usize) -> Vec<u8> {
-        bus.dispatch(I2cEvent::Start { addr, read: false });
-        bus.dispatch(I2cEvent::Write { addr, data: reg });
-        bus.dispatch(I2cEvent::Start { addr, read: true });
-        let out = (0..n)
-            .map(|_| bus.dispatch(I2cEvent::Read { addr }).unwrap())
-            .collect();
-        bus.dispatch(I2cEvent::Stop { addr });
-        out
     }
 
     fn i2c_write_u16(bus: &mut I2cBus, addr: u8, reg: u8, value: u16) {
@@ -1692,13 +1672,12 @@ style = "i2c_pointer"
         };
         assert_eq!(src_volts(&circuit), 0.0, "not driven before flush");
         let volts = vec![0.0; 4];
-        let mut ctx = TickCtx {
+        bus.flush_stops(&mut TickCtx {
             circuit: &mut circuit,
             node_volts: &volts,
             t: 0.0,
             dt: 1e-3,
-        };
-        bus.flush_stops(&mut ctx);
+        });
         assert!((src_volts(&circuit) - 2.048).abs() < 1e-9);
     }
 

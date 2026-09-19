@@ -3738,6 +3738,7 @@ i2c_address = 0x76
             device_meta: Vec::new(),
             dacs: Vec::new(),
             peripherals: Vec::new(),
+            latching_switches: false,
             report: hauksbee_engine::reports::bind::BindReport::default(),
         };
         let check = |supply: &str| {

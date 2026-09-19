@@ -1,6 +1,8 @@
 //! One integration-test binary for the crate; each module was a
 //! separate test file (and separate link step) before.
 
+mod support;
+
 #[path = "compat_drift.rs"]
 mod compat_drift;
 #[path = "evidence_release_contract.rs"]

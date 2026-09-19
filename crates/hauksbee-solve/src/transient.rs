@@ -106,17 +106,36 @@ pub struct StepSample<'a> {
 #[derive(Debug, Clone, Default)]
 pub struct TransientDiagnostics {
     pub final_residual: Option<(f64, usize)>,
+    /// The relay latch at that final point, for a caller that continues the
+    /// SAME circuit in a later run (a co-sim chunk); `None` when none is tracked.
+    pub switch_latch: Option<std::collections::HashMap<hauksbee_ir::DeviceId, bool>>,
 }
 
 /// The transient engine.
 pub struct Transient {
     opts: SolverOptions,
+    switch_latch_seed: Option<std::collections::HashMap<hauksbee_ir::DeviceId, bool>>,
 }
 
 impl Transient {
     /// New engine with the given options.
     pub fn new(opts: SolverOptions) -> Self {
-        Transient { opts }
+        Transient {
+            opts,
+            switch_latch_seed: None,
+        }
+    }
+
+    /// Start with the relay latch a previous run ENDED on. A latching relay is
+    /// state, exactly like a capacitor's charge: a co-sim that builds a fresh
+    /// workspace per chunk would otherwise reset a 555's SR latch every chunk.
+    #[must_use]
+    pub fn with_switch_latch(
+        mut self,
+        latch: Option<std::collections::HashMap<hauksbee_ir::DeviceId, bool>>,
+    ) -> Self {
+        self.switch_latch_seed = latch;
+        self
     }
 
     /// Run to `tstop`, collecting every accepted step into [`Waveforms`].
@@ -236,6 +255,7 @@ impl Transient {
         }
 
         let mut ws = Workspace::new(circuit);
+        ws.set_switch_latch(self.switch_latch_seed.clone());
         let n_dev = circuit.devices.len();
 
         // Convergence doctrine for behavioral sources:
@@ -264,6 +284,16 @@ impl Transient {
         // chunk when a seed is supplied); under FromZero a power-on start with
         // no DC solve at all: x(0) = 0 and reactive history zeroed further down.
         let from_zero = opts.dc_init == DcInit::FromZero;
+        // A continuation that carries BOTH halves of the state -- the unknowns
+        // and the relay latch -- has nothing to ask a DC solve: the point would
+        // be discarded below, and a board whose latch drives the node that flips
+        // it (a free-running 555 astable) has no operating point to find, so
+        // every chunk would walk the whole homotopy ladder to a failure
+        // (measured: 95% of the wall time of a 2 ms run). Only a caller that
+        // carries a latch gets this; every other board solves as before.
+        let carried = opts.dc_init == DcInit::Continue
+            && self.switch_latch_seed.is_some()
+            && dc_seed.is_some_and(|s| s.len() == ws.x.len());
         // Known softness (review note): the staged-DC regularizers arm on
         // ws.used_staged_dc(), which only a DC solve can set, so a power-on
         // march runs the bare per-step path. A stiff board that needed the
@@ -327,7 +357,7 @@ impl Transient {
                     ws.x[i] = v0;
                 }
             }
-        } else {
+        } else if !carried {
             // The DC solve manages its own staged regularizers internally and
             // leaves the workspace flag at 0.
             dc_operating_point_seeded(&mut ws, circuit, opts, dc_seed)?;
@@ -764,7 +794,10 @@ impl Transient {
             dt = next_dt;
             sink(StepSample { time: t, x: &ws.x });
         }
-        Ok(TransientDiagnostics { final_residual })
+        Ok(TransientDiagnostics {
+            final_residual,
+            switch_latch: ws.switch_latch().cloned(),
+        })
     }
 }
 

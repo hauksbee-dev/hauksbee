@@ -1,0 +1,41 @@
+NE555 astable as the eight-device composite the binder stamps
+* Every card here is a Device the solver ALREADY has, so this deck is the
+* oracle for bind_timer_555 itself and not merely for a board using it:
+*   R           -> Device::Resistor            (internal 5k/5k/5k divider)
+*   B ... V=    -> Device::Behavioral{Voltage}  (comparators+RESET; output stage)
+*   S/.model SW -> Device::VSwitch, SwitchModel::Hysteretic
+* The SR LATCH is the SW element's own hysteresis memory: there is no latch
+* device. vt=0.5/vh=0.25 (von 0.75, voff 0.25) and the 0.3 hold value are
+* DECK-PINNED numbers, not datasheet ones -- a wider band re-closes the relay
+* on band re-entry in ngspice, so the pair travels with the model card.
+VCC vcc 0 DC 5
+VRST reset 0 DC 5
+RD1 vcc ctrl 5k
+RD2 ctrl tref 5k
+RD3 tref 0 5k
+* ctl = 0.3 + 0.7*max(Rt, Q, 1-Rstn) - St*Rstn, with the three comparisons
+* smoothed at a gain of 1200/VCC (a fixed FRACTION of the swing, which is what
+* makes the model supply-independent from 4.5 V to 16 V).
+* Q = 1 - qb/VCC is the LATCH'S OWN STATE fed back into its control, ADDED and
+* not max()-ed in: without it the composite settles INSIDE the relay's
+* conductance ramp (thres pinned at 3.3460 V, partial discharge cancelling RA),
+* and under a max() the feedback is gated out because Rt = 0.65 exceeds
+* Q = 0.40 there. Added, the loop gain is +89 and the set state holds itself.
+BCTL ctl 0 V={0.3 + 0.7*(max(0.5*(1+tanh(1200*(V(thres)-V(ctrl))/max(V(vcc),1))), 1-0.5*(1+tanh(1200*(V(reset)-0.7)/max(V(vcc),1)))) + 1-V(qb)/max(V(vcc),1)) - 0.5*(1+tanh(1200*(V(tref)-V(thres))/max(V(vcc),1)))*0.5*(1+tanh(1200*(V(reset)-0.7)/max(V(vcc),1)))}
+.model SENSE SW vt=0.5 vh=0.25 ron=100 roff=1e9
+.model DPASS SW vt=0.5 vh=0.25 ron=12 roff=1e9
+SQ qb 0 ctl 0 SENSE
+RQ vcc qb 10k
+SDIS disch 0 ctl 0 DPASS
+* The output stage reads the latch, which already swings rail to rail in ONE
+* step, so it is smoothed at 20 and not 1200: at 1200 that step is a cliff
+* Newton could not cross. 20 still saturates at the latch's own levels.
+BOUT outi 0 V={0.1 + (V(vcc)-1.4-0.1)*0.5*(1+tanh(20*(V(qb)-0.5*V(vcc))/max(V(vcc),1)))}
+ROUT outi out 10
+* The BOARD: RA = 10k, RB = 10k, C = 10n. f = 1/(ln2*(RA+2RB)C) = 4809 Hz.
+RA vcc disch 10k
+RB disch thres 10k
+CT thres 0 10n
+RL out 0 1e6
+.tran 100n 500u uic
+.end

@@ -40,6 +40,8 @@ pub mod load;
 pub mod register_map;
 pub mod sink;
 pub mod spi;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub use controls::{Encoder, Potentiometer, Pushbutton, Stimulus, ToggleSwitch};
 pub use i2c::{Bme280, Eeprom24c, I2cBus, I2cSlave};

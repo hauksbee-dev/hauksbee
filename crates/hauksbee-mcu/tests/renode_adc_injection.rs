@@ -42,7 +42,6 @@
 
 #![cfg(feature = "renode")]
 
-use hauksbee_mcu::renode::is_available;
 use hauksbee_mcu::{AdcChannelMap, AdcInject, Mcu, RenodeBackend, RenodeConfig};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -164,8 +163,7 @@ fn expected_count(volts: f64) -> u32 {
 
 #[test]
 fn renode_adc_injection_reaches_firmware() {
-    if !is_available() {
-        eprintln!("SKIP: Renode not installed");
+    if !crate::support::renode_or_skip() {
         return;
     }
 

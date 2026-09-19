@@ -213,34 +213,10 @@ pub fn bus_loading_lint(board: &ExtractedBoard) -> NetLintReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::two_pin_resistor;
 
     fn bare_pullup() -> Component {
-        Component {
-            reference: "R1".into(),
-            value: "4.7k".into(),
-            lib_id: "Device:R".into(),
-            footprint: "R_0603".into(),
-            position: None,
-            layer: "F.Cu".into(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: vec![
-                hauksbee_extract::Pin {
-                    number: "1".into(),
-                    net: Some(1),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                },
-                hauksbee_extract::Pin {
-                    number: "2".into(),
-                    net: Some(2),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                },
-            ],
-        }
+        two_pin_resistor("R1", "4.7k")
     }
 
     /// Two-sided three-state contract: a fitted pull-up contributes its ohms

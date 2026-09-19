@@ -1,0 +1,24 @@
+# The 555 composite against ngspice, waveform for waveform. V(thres) is the
+# CONTINUOUS signal and carries the real bar: it is the RC ramp whose two
+# turning points ARE the 2/3 and 1/3 thresholds, so agreeing on it is agreeing
+# on the time constant and on both comparator trips at once. V(out) is NOT
+# probed: it is a full-swing square wave, so any disagreement about a switching
+# instant reads as a 70% error at the samples inside the edge and no tolerance
+# on it could mean anything. VOL/VOH are checked on a board instead, by the
+# voltage assertions in hauksbee-ci/tests/timer555.rs.
+analysis = "tran"
+description = "NE555 astable composite (RA 10k, RB 10k, C 10n, VCC 5): one hysteretic VSwitch is both SR latch and discharge transistor"
+full_scale = 5.0
+# Past the power-on charge, which starts at 0 rather than at 1/3 VCC and so is
+# a longer first half-cycle in both simulators but not the same length.
+skip_initial = 3.0e-4
+
+[[probe]]
+expr = "V(thres)"
+reltol = 6.0e-2
+
+[[probe.analytic]]
+at = 4.6e-4
+value = 2.4131
+reltol = 0.06
+note = "closed form for this astable from power-on: charge 0 -> 2/3 VCC through RA+RB takes (RA+RB)C*ln3 = 219.72 us, then discharge 2/3 -> 1/3 VCC through RB takes RB*C*ln2 = 69.31 us (t = 289.03 us), then charge 1/3 -> 2/3 takes (RA+RB)C*ln2 = 138.63 us (t = 427.66 us). t = 460 us is 32.34 us into the discharge that follows, so V(thres) = 2/3*VCC*exp(-32.34us/(RB*C)) = 2.4131 V. The 6% band is the phase error three transitions accumulate: a relay's conductance ramps over a narrow band past its threshold, so each edge lands LATE by at most that band divided by the control's slew, and the sampled point sits on a 24 mV/us slope"

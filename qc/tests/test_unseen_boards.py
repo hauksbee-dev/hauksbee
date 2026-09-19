@@ -206,6 +206,16 @@ def manifest_pool(
     return root, manifest
 
 
+def _external_and_corpus_pools(base: Path) -> tuple[Path, Path, Path, Path]:
+    """The five-external/one-corpus pool pair every external-gate test below
+    stages before exercising the gate itself."""
+    external_root, external_manifest = manifest_pool(
+        base, "external", 5, cohort="external"
+    )
+    corpus_root, corpus_manifest = manifest_pool(base, "corpus", 1, cohort="corpus")
+    return external_root, external_manifest, corpus_root, corpus_manifest
+
+
 # What the engine returns for a pre-Eagle-6 binary board, in the shape the
 # validator checks: the page renders this text, so a stub whose rendered message
 # does not carry the server's diagnostic must fail the same way a real journey
@@ -328,6 +338,33 @@ def artifact_mutating_runner(mutate, exit_code: int = 0):
     return run
 
 class DiscoveryTests(unittest.TestCase):
+    @staticmethod
+    def _alpha_header(*, cohort: str | None = None, license_confirmed: bool = False) -> str:
+        """TOML shared by every single-'alpha'-board manifest below: same id,
+        url, rev and license. Callers append their own axes/expect/firmware
+        lines, which is what each test actually varies."""
+        header = f'cohort = "{cohort}"\n\n' if cohort else ""
+        header += (
+            '[[board]]\n'
+            'id = "alpha"\n'
+            'url = "https://example.invalid/alpha"\n'
+            f'rev = "{"a" * 40}"\n'
+            'license = "MIT"\n'
+        )
+        if license_confirmed:
+            header += "license_confirmed = true\n"
+        return header
+
+    @staticmethod
+    def _alpha_source(base: Path) -> tuple[Path, Path]:
+        """The `pool/alpha` staging tree every source-escape test below writes
+        its board file(s) into."""
+        corpus = base / "pool"
+        source = corpus / "alpha"
+        source.mkdir(parents=True)
+        (source / ".hauksbee-rev").write_text("a" * 40 + "\n")
+        return corpus, source
+
     def test_discovers_primary_board_inputs_and_deduplicates_the_same_content(
         self,
     ) -> None:
@@ -453,15 +490,7 @@ class DiscoveryTests(unittest.TestCase):
             (source / ".hauksbee-rev").write_text("b" * 40 + "\n")
             manifest = base / "corpus.toml"
             manifest.write_text(
-                """
-                [[board]]
-                id = "alpha"
-                url = "https://example.invalid/alpha"
-                rev = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                license = "MIT"
-                axes = ["kicad"]
-                expect = ["board.kicad_pcb"]
-                """
+                self._alpha_header() + 'axes = ["kicad"]\nexpect = ["board.kicad_pcb"]\n'
             )
 
             with self.assertRaisesRegex(
@@ -481,15 +510,7 @@ class DiscoveryTests(unittest.TestCase):
             (source / ".hauksbee-rev").write_text("a" * 40 + "\n")
             manifest = base / "corpus.toml"
             manifest.write_text(
-                """
-                [[board]]
-                id = "alpha"
-                url = "https://example.invalid/alpha"
-                rev = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                license = "MIT"
-                axes = ["kicad"]
-                expect = ["board.kicad_pcb"]
-                """
+                self._alpha_header() + 'axes = ["kicad"]\nexpect = ["board.kicad_pcb"]\n'
             )
 
             first = discover_candidates(corpus, manifest_path=manifest)[0]
@@ -641,17 +662,9 @@ expect = ["board.kicad_pcb"]
             (source / ".hauksbee-rev").write_text("a" * 40 + "\n")
             manifest = base / "external.toml"
             manifest.write_text(
-                """cohort = "external"
-
-[[board]]
-id = "alpha"
-url = "https://example.invalid/alpha"
-rev = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-license = "MIT"
-license_confirmed = true
-axes = ["kicad"]
-expect = ["board.kicad_pcb"]
-"""
+                self._alpha_header(cohort="external", license_confirmed=True)
+                + 'axes = ["kicad"]\n'
+                'expect = ["board.kicad_pcb"]\n'
             )
 
             with self.assertRaisesRegex(SelectionError, r"not a Git checkout"):
@@ -670,14 +683,9 @@ expect = ["board.kicad_pcb"]
             (other / "board.TXT").write_text("drill")
             manifest = base / "pool.toml"
             manifest.write_text(
-                """[[board]]
-id = "alpha"
-url = "https://example.invalid/alpha"
-rev = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-license = "MIT"
-axes = ["gerber-only"]
-expect = ["../other/board.GTL", "../other/board.TXT"]
-"""
+                self._alpha_header()
+                + 'axes = ["gerber-only"]\n'
+                'expect = ["../other/board.GTL", "../other/board.TXT"]\n'
             )
 
             with self.assertRaisesRegex(SelectionError, r"escapes declared source"):
@@ -691,23 +699,15 @@ expect = ["../other/board.GTL", "../other/board.TXT"]
         # hand the browser an arbitrary file off this machine.
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            corpus = base / "pool"
-            source = corpus / "alpha"
-            source.mkdir(parents=True)
-            (source / ".hauksbee-rev").write_text("a" * 40 + "\n")
+            corpus, source = self._alpha_source(base)
             (source / "board.kicad_pcb").write_text("(kicad_pcb alpha)")
             (base / "secret.elf").write_text("not firmware from this source")
             manifest = base / "pool.toml"
             manifest.write_text(
-                """[[board]]
-id = "alpha"
-url = "https://example.invalid/alpha"
-rev = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-license = "MIT"
-axes = ["kicad8"]
-expect = ["board.kicad_pcb"]
-firmware = "../../secret.elf"
-"""
+                self._alpha_header()
+                + 'axes = ["kicad8"]\n'
+                'expect = ["board.kicad_pcb"]\n'
+                'firmware = "../../secret.elf"\n'
             )
 
             with self.assertRaisesRegex(SelectionError, r"firmware escapes declared"):
@@ -719,23 +719,15 @@ firmware = "../../secret.elf"
         # unchecked it surfaced as a bare non-zero runner exit with no reason.
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            corpus = base / "pool"
-            source = corpus / "alpha"
-            source.mkdir(parents=True)
-            (source / ".hauksbee-rev").write_text("a" * 40 + "\n")
+            corpus, source = self._alpha_source(base)
             (source / "board.brd").write_bytes(b"\x10\x80binary eagle")
             (source / "app.elf").write_text("firmware")
             manifest = base / "pool.toml"
             manifest.write_text(
-                """[[board]]
-id = "alpha"
-url = "https://example.invalid/alpha"
-rev = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-license = "MIT"
-axes = ["eagle-binary", "unreadable-by-design"]
-expect = ["board.brd"]
-firmware = "app.elf"
-"""
+                self._alpha_header()
+                + 'axes = ["eagle-binary", "unreadable-by-design"]\n'
+                'expect = ["board.brd"]\n'
+                'firmware = "app.elf"\n'
             )
 
             with self.assertRaisesRegex(
@@ -746,10 +738,7 @@ firmware = "app.elf"
     def test_arbitrary_tar_gz_is_not_claimed_as_odbpp(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            corpus = base / "pool"
-            source = corpus / "alpha"
-            source.mkdir(parents=True)
-            (source / ".hauksbee-rev").write_text("a" * 40 + "\n")
+            corpus, source = self._alpha_source(base)
             archive_path = source / "not-odb.tar.gz"
             payload = base / "README.txt"
             payload.write_text("not a board")
@@ -757,14 +746,7 @@ firmware = "app.elf"
                 archive.add(payload, arcname="README.txt")
             manifest = base / "pool.toml"
             manifest.write_text(
-                """[[board]]
-id = "alpha"
-url = "https://example.invalid/alpha"
-rev = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-license = "MIT"
-axes = ["odb"]
-expect = ["not-odb.tar.gz"]
-"""
+                self._alpha_header() + 'axes = ["odb"]\nexpect = ["not-odb.tar.gz"]\n'
             )
 
             with self.assertRaisesRegex(SelectionError, r"no supported drag-and-drop"):
@@ -1198,6 +1180,59 @@ class HistoryTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    # Every external-five/corpus gate call below plans at the same instant,
+    # against the same fixture server, with the same entropy and tool commit;
+    # only the pools, the iteration/run id, and the runner ever change.
+    def run_external(
+        self,
+        base: Path,
+        external_root: Path,
+        external_manifest: Path,
+        corpus_root: Path,
+        corpus_manifest: Path,
+        *,
+        iteration_id: str,
+        runner,
+        history: Path | None = None,
+        evidence_dir: Path | None = None,
+    ):
+        return release_gates.run_external_gate(
+            external_root=external_root,
+            external_manifest=external_manifest,
+            corpus_root=corpus_root,
+            corpus_manifest=corpus_manifest,
+            history_path=base / "history.jsonl" if history is None else history,
+            evidence_dir=base / "evidence" if evidence_dir is None else evidence_dir,
+            scratch_root=base / "scratch",
+            iteration_id=iteration_id,
+            planned_at="2026-08-06T12:00:00Z",
+            base_url="http://127.0.0.1:37651",
+            entropy="a" * 64,
+            tool_commit="e" * 40,
+            runner=runner,
+        )
+
+    def run_corpus(
+        self,
+        base: Path,
+        corpus_root: Path,
+        corpus_manifest: Path,
+        *,
+        run_id: str,
+        runner,
+        evidence_dir: Path | None = None,
+    ):
+        return release_gates.run_corpus_gate(
+            corpus_root=corpus_root,
+            corpus_manifest=corpus_manifest,
+            evidence_dir=base / "evidence" if evidence_dir is None else evidence_dir,
+            scratch_root=base / "scratch",
+            run_id=run_id,
+            base_url="http://127.0.0.1:37651",
+            tool_commit="e" * 40,
+            runner=runner,
+        )
+
     def test_release_orchestrator_api_is_available(self) -> None:
         self.assertTrue(hasattr(release_gates, "run_external_gate"))
         self.assertTrue(hasattr(release_gates, "run_corpus_gate"))
@@ -1218,19 +1253,13 @@ class CommandTests(unittest.TestCase):
             history = base / "history.jsonl"
             evidence_dir = base / "evidence"
 
-            evidence = release_gates.run_external_gate(
-                external_root=external_root,
-                external_manifest=external_manifest,
-                corpus_root=corpus_root,
-                corpus_manifest=corpus_manifest,
-                history_path=history,
-                evidence_dir=evidence_dir,
-                scratch_root=base / "scratch",
+            evidence = self.run_external(
+                base,
+                external_root,
+                external_manifest,
+                corpus_root,
+                corpus_manifest,
                 iteration_id="release-01",
-                planned_at="2026-08-06T12:00:00Z",
-                base_url="http://127.0.0.1:37651",
-                entropy="a" * 64,
-                tool_commit="e" * 40,
                 runner=successful_browser_runner(captured),
             )
 
@@ -1273,19 +1302,13 @@ class CommandTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(SelectionError, r"only 4 remain"):
-                release_gates.run_external_gate(
-                    external_root=external_root,
-                    external_manifest=external_manifest,
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    history_path=base / "history.jsonl",
-                    evidence_dir=base / "evidence",
-                    scratch_root=base / "scratch",
+                self.run_external(
+                    base,
+                    external_root,
+                    external_manifest,
+                    corpus_root,
+                    corpus_manifest,
                     iteration_id="release-01",
-                    planned_at="2026-08-06T12:00:00Z",
-                    base_url="http://127.0.0.1:37651",
-                    entropy="a" * 64,
-                    tool_commit="e" * 40,
                     runner=successful_browser_runner(),
                 )
 
@@ -1294,11 +1317,8 @@ class CommandTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest = manifest_pool(
-                base, "external", 5, cohort="external"
-            )
-            corpus_root, corpus_manifest = manifest_pool(
-                base, "corpus", 1, cohort="corpus"
+            external_root, external_manifest, corpus_root, corpus_manifest = (
+                _external_and_corpus_pools(base)
             )
             history = base / "history.jsonl"
             evidence_dir = base / "evidence"
@@ -1312,19 +1332,15 @@ class CommandTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 SelectionError, r"browser journey failed for external-0"
             ):
-                release_gates.run_external_gate(
-                    external_root=external_root,
-                    external_manifest=external_manifest,
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    history_path=history,
+                self.run_external(
+                    base,
+                    external_root,
+                    external_manifest,
+                    corpus_root,
+                    corpus_manifest,
+                    history=history,
                     evidence_dir=evidence_dir,
-                    scratch_root=base / "scratch",
                     iteration_id="release-failed",
-                    planned_at="2026-08-06T12:00:00Z",
-                    base_url="http://127.0.0.1:37651",
-                    entropy="a" * 64,
-                    tool_commit="e" * 40,
                     runner=artifact_mutating_runner(failing, exit_code=1),
                 )
 
@@ -1339,11 +1355,8 @@ class CommandTests(unittest.TestCase):
     def test_external_gate_records_a_runner_launch_exception_as_failed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest = manifest_pool(
-                base, "external", 5, cohort="external"
-            )
-            corpus_root, corpus_manifest = manifest_pool(
-                base, "corpus", 1, cohort="corpus"
+            external_root, external_manifest, corpus_root, corpus_manifest = (
+                _external_and_corpus_pools(base)
             )
             history = base / "history.jsonl"
 
@@ -1358,19 +1371,14 @@ class CommandTests(unittest.TestCase):
                 raise OSError("browser executable is unavailable")
 
             with self.assertRaisesRegex(SelectionError, r"could not start"):
-                release_gates.run_external_gate(
-                    external_root=external_root,
-                    external_manifest=external_manifest,
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    history_path=history,
-                    evidence_dir=base / "evidence",
-                    scratch_root=base / "scratch",
+                self.run_external(
+                    base,
+                    external_root,
+                    external_manifest,
+                    corpus_root,
+                    corpus_manifest,
+                    history=history,
                     iteration_id="runner-unavailable",
-                    planned_at="2026-08-06T12:00:00Z",
-                    base_url="http://127.0.0.1:37651",
-                    entropy="a" * 64,
-                    tool_commit="e" * 40,
                     runner=unavailable,
                 )
             self.assertEqual("failed", load_history(history).results[0]["status"])
@@ -1378,11 +1386,8 @@ class CommandTests(unittest.TestCase):
     def test_external_gate_records_a_staging_failure_as_failed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest = manifest_pool(
-                base, "external", 5, cohort="external"
-            )
-            corpus_root, corpus_manifest = manifest_pool(
-                base, "corpus", 1, cohort="corpus"
+            external_root, external_manifest, corpus_root, corpus_manifest = (
+                _external_and_corpus_pools(base)
             )
             history = base / "history.jsonl"
             with (
@@ -1392,19 +1397,14 @@ class CommandTests(unittest.TestCase):
                 ),
                 self.assertRaisesRegex(SelectionError, r"could not stage"),
             ):
-                release_gates.run_external_gate(
-                    external_root=external_root,
-                    external_manifest=external_manifest,
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    history_path=history,
-                    evidence_dir=base / "evidence",
-                    scratch_root=base / "scratch",
+                self.run_external(
+                    base,
+                    external_root,
+                    external_manifest,
+                    corpus_root,
+                    corpus_manifest,
+                    history=history,
                     iteration_id="staging-unavailable",
-                    planned_at="2026-08-06T12:00:00Z",
-                    base_url="http://127.0.0.1:37651",
-                    entropy="a" * 64,
-                    tool_commit="e" * 40,
                     runner=successful_browser_runner(),
                 )
             self.assertEqual("failed", load_history(history).results[0]["status"])
@@ -1412,11 +1412,8 @@ class CommandTests(unittest.TestCase):
     def test_external_gate_marks_a_zero_exit_artifact_mismatch_failed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest = manifest_pool(
-                base, "external", 5, cohort="external"
-            )
-            corpus_root, corpus_manifest = manifest_pool(
-                base, "corpus", 1, cohort="corpus"
+            external_root, external_manifest, corpus_root, corpus_manifest = (
+                _external_and_corpus_pools(base)
             )
             history = base / "history.jsonl"
 
@@ -1424,19 +1421,14 @@ class CommandTests(unittest.TestCase):
                 artifact["results"][0]["path"] = str(base / "different.kicad_pcb")
 
             with self.assertRaisesRegex(SelectionError, r"do not exactly match"):
-                release_gates.run_external_gate(
-                    external_root=external_root,
-                    external_manifest=external_manifest,
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    history_path=history,
-                    evidence_dir=base / "evidence",
-                    scratch_root=base / "scratch",
+                self.run_external(
+                    base,
+                    external_root,
+                    external_manifest,
+                    corpus_root,
+                    corpus_manifest,
+                    history=history,
                     iteration_id="artifact-mismatch",
-                    planned_at="2026-08-06T12:00:00Z",
-                    base_url="http://127.0.0.1:37651",
-                    entropy="a" * 64,
-                    tool_commit="e" * 40,
                     runner=artifact_mutating_runner(mismatched),
                 )
 
@@ -1447,11 +1439,8 @@ class CommandTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest = manifest_pool(
-                base, "external", 5, cohort="external"
-            )
-            corpus_root, corpus_manifest = manifest_pool(
-                base, "corpus", 1, cohort="corpus"
+            external_root, external_manifest, corpus_root, corpus_manifest = (
+                _external_and_corpus_pools(base)
             )
             history = base / "history.jsonl"
 
@@ -1468,19 +1457,14 @@ class CommandTests(unittest.TestCase):
                 return code
 
             with self.assertRaisesRegex(SelectionError, r"staged input changed"):
-                release_gates.run_external_gate(
-                    external_root=external_root,
-                    external_manifest=external_manifest,
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    history_path=history,
-                    evidence_dir=base / "evidence",
-                    scratch_root=base / "scratch",
+                self.run_external(
+                    base,
+                    external_root,
+                    external_manifest,
+                    corpus_root,
+                    corpus_manifest,
+                    history=history,
                     iteration_id="mutated-input",
-                    planned_at="2026-08-06T12:00:00Z",
-                    base_url="http://127.0.0.1:37651",
-                    entropy="a" * 64,
-                    tool_commit="e" * 40,
                     runner=mutating,
                 )
             self.assertEqual("failed", load_history(history).results[0]["status"])
@@ -1490,11 +1474,8 @@ class CommandTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest = manifest_pool(
-                base, "external", 5, cohort="external"
-            )
-            corpus_root, corpus_manifest = manifest_pool(
-                base, "corpus", 1, cohort="corpus"
+            external_root, external_manifest, corpus_root, corpus_manifest = (
+                _external_and_corpus_pools(base)
             )
 
             def path_leaking(
@@ -1515,19 +1496,14 @@ class CommandTests(unittest.TestCase):
                 return 0
 
             evidence_dir = base / "evidence"
-            release_gates.run_external_gate(
-                external_root=external_root,
-                external_manifest=external_manifest,
-                corpus_root=corpus_root,
-                corpus_manifest=corpus_manifest,
-                history_path=base / "history.jsonl",
+            self.run_external(
+                base,
+                external_root,
+                external_manifest,
+                corpus_root,
+                corpus_manifest,
                 evidence_dir=evidence_dir,
-                scratch_root=base / "scratch",
                 iteration_id="redaction",
-                planned_at="2026-08-06T12:00:00Z",
-                base_url="http://127.0.0.1:37651",
-                entropy="a" * 64,
-                tool_commit="e" * 40,
                 runner=path_leaking,
             )
             retained = (evidence_dir / "redaction.json").read_text()
@@ -1545,14 +1521,11 @@ class CommandTests(unittest.TestCase):
             )
             captured: list[Path] = []
 
-            evidence = release_gates.run_corpus_gate(
-                corpus_root=corpus_root,
-                corpus_manifest=corpus_manifest,
-                evidence_dir=base / "evidence",
-                scratch_root=base / "scratch",
+            evidence = self.run_corpus(
+                base,
+                corpus_root,
+                corpus_manifest,
                 run_id="corpus-01",
-                base_url="http://127.0.0.1:37651",
-                tool_commit="e" * 40,
                 runner=successful_browser_runner(captured),
             )
 
@@ -1596,14 +1569,11 @@ class CommandTests(unittest.TestCase):
                     paths, output, base_url, cohort, refusals, firmware
                 )
 
-            evidence = release_gates.run_corpus_gate(
-                corpus_root=corpus_root,
-                corpus_manifest=corpus_manifest,
-                evidence_dir=base / "evidence",
-                scratch_root=base / "scratch",
+            evidence = self.run_corpus(
+                base,
+                corpus_root,
+                corpus_manifest,
                 run_id="corpus-refusal",
-                base_url="http://127.0.0.1:37651",
-                tool_commit="e" * 40,
                 runner=recording,
             )
 
@@ -1633,14 +1603,11 @@ class CommandTests(unittest.TestCase):
                 return 0
 
             with self.assertRaisesRegex(SelectionError, r"did not refuse"):
-                release_gates.run_corpus_gate(
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    evidence_dir=base / "evidence",
-                    scratch_root=base / "scratch",
+                self.run_corpus(
+                    base,
+                    corpus_root,
+                    corpus_manifest,
                     run_id="corpus-refusal-inverted",
-                    base_url="http://127.0.0.1:37651",
-                    tool_commit="e" * 40,
                     runner=analysing_the_unreadable,
                 )
 
@@ -1670,14 +1637,11 @@ class CommandTests(unittest.TestCase):
                     return 0
 
                 with self.assertRaisesRegex(SelectionError, r"retained no|no reason"):
-                    release_gates.run_corpus_gate(
-                        corpus_root=corpus_root,
-                        corpus_manifest=corpus_manifest,
-                        evidence_dir=base / "evidence",
-                        scratch_root=base / "scratch",
+                    self.run_corpus(
+                        base,
+                        corpus_root,
+                        corpus_manifest,
                         run_id=f"corpus-refusal-hollow-{stripped}",
-                        base_url="http://127.0.0.1:37651",
-                        tool_commit="e" * 40,
                         runner=hollow,
                     )
 
@@ -1694,14 +1658,11 @@ class CommandTests(unittest.TestCase):
                 return successful_browser_runner()(paths, output, base_url, cohort, [])
 
             with self.assertRaisesRegex(SelectionError, r"did not apply the"):
-                release_gates.run_corpus_gate(
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    evidence_dir=base / "evidence",
-                    scratch_root=base / "scratch",
+                self.run_corpus(
+                    base,
+                    corpus_root,
+                    corpus_manifest,
                     run_id="corpus-refusal-ignored",
-                    base_url="http://127.0.0.1:37651",
-                    tool_commit="e" * 40,
                     runner=contract_never_applied,
                 )
 
@@ -1728,19 +1689,13 @@ class CommandTests(unittest.TestCase):
             captured: list[Path] = []
 
             with self.assertRaisesRegex(SelectionError, r"only 4 remain"):
-                release_gates.run_external_gate(
-                    external_root=external_root,
-                    external_manifest=external_manifest,
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    history_path=base / "history.jsonl",
-                    evidence_dir=base / "evidence",
-                    scratch_root=base / "scratch",
+                self.run_external(
+                    base,
+                    external_root,
+                    external_manifest,
+                    corpus_root,
+                    corpus_manifest,
                     iteration_id="external-refusals",
-                    planned_at="2026-08-06T12:00:00Z",
-                    base_url="http://127.0.0.1:37651",
-                    entropy="a" * 64,
-                    tool_commit="e" * 40,
                     runner=successful_browser_runner(captured),
                 )
             self.assertEqual([], captured, "no journey may run on a refusal input")
@@ -3453,6 +3408,31 @@ class ValueContractTests(unittest.TestCase):
 class GerberValueContractTests(unittest.TestCase):
     """The ardep class: honest, exportable, and worth nothing at a bench."""
 
+    def _gerber_grade(
+        self,
+        facts,
+        *,
+        nets,
+        axes=(),
+        components=0,
+        critical="0/0",
+        coverage_note="Supply the original native layout to run DRC.",
+    ):
+        """Grade a `gerber_archive` package. Only `nets`, `axes` and (rarely)
+        `components`/`critical`/`coverage_note` vary between the tests below."""
+        return value_grading.grade_board(
+            journey_row(
+                components=components,
+                nets=nets,
+                critical=critical,
+                coverage_note=coverage_note,
+            ),
+            input_format="gerber_archive",
+            expects_refusal=False,
+            facts=facts,
+            axes=axes,
+        )
+
     def test_a_gerber_package_reconstructing_no_nets_fails_without_a_floor(
         self,
     ) -> None:
@@ -3843,18 +3823,7 @@ class GerberValueContractTests(unittest.TestCase):
             self.assertEqual(
                 floor, value_grading.expected_min_nets(facts, ("esp32",)), label
             )
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0,
-                    nets=nets,
-                    critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
-                axes=("gerber-only", "esp32"),
-            )
+            grade = self._gerber_grade(facts, nets=nets, axes=("gerber-only", "esp32"))
             self.assertEqual(expected, grade.grade, label)
 
     def test_a_passive_two_net_board_is_not_held_to_the_floor(self) -> None:
@@ -3877,16 +3846,8 @@ class GerberValueContractTests(unittest.TestCase):
             self.assertEqual(3, value_grading.expected_min_nets(facts, ("efm32",)))
             self.assertEqual(3, value_grading.expected_min_nets(facts, ()))
 
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0,
-                    nets=2,
-                    critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
+            grade = self._gerber_grade(
+                facts, nets=2,
                 axes=("gerber-only", "power-electronics", "no-mcu", "medium"),
             )
 
@@ -3923,16 +3884,8 @@ class GerberValueContractTests(unittest.TestCase):
             # One copper layer is below the applicability guard, so no floor.
             self.assertIsNone(value_grading.expected_min_nets(facts, ("stm32",)))
 
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0,
-                    nets=3,
-                    critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
+            grade = self._gerber_grade(
+                facts, nets=3,
                 axes=("kicad9", "gerber-only", "automotive", "stm32", "large"),
             )
             self.assertEqual(value_grading.DEGRADED, grade.grade)
@@ -3954,16 +3907,7 @@ class GerberValueContractTests(unittest.TestCase):
             facts = value_grading.input_facts("gerber_archive", staged)
 
             self.assertEqual(40, facts["aperture_flashes"])
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0, nets=60, critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
-                axes=("gerber-only", "stm32"),
-            )
+            grade = self._gerber_grade(facts, nets=60, axes=("gerber-only", "stm32"))
 
             self.assertEqual(value_grading.DEGRADED, grade.grade, grade.reasons)
 
@@ -3988,29 +3932,11 @@ class GerberValueContractTests(unittest.TestCase):
             self.assertEqual(6, facts["aperture_flashes"])
             self.assertEqual(1806, facts["total_gerber_flashes"])
 
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0, nets=30, critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
-                axes=("gerber-only", "stm32"),
-            )
+            grade = self._gerber_grade(facts, nets=30, axes=("gerber-only", "stm32"))
             self.assertEqual(value_grading.DEGRADED, grade.grade, grade.reasons)
 
             # The ceiling still bites on the whole package's flash count.
-            over = value_grading.grade_board(
-                journey_row(
-                    components=0, nets=1807, critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
-                axes=("gerber-only", "stm32"),
-            )
+            over = self._gerber_grade(facts, nets=1807, axes=("gerber-only", "stm32"))
             self.assertEqual(value_grading.FAILED, over.grade)
             self.assertTrue(
                 any("implausible reconstruction" in r for r in over.reasons)
@@ -4039,17 +3965,8 @@ class GerberValueContractTests(unittest.TestCase):
             self.assertEqual(2000, facts["aperture_flashes"])
             self.assertEqual(10, value_grading.expected_min_nets(facts, ("stm32",)))
 
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0,
-                    nets=20,
-                    critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
-                axes=("gerber-only", "stm32", "large"),
+            grade = self._gerber_grade(
+                facts, nets=20, axes=("gerber-only", "stm32", "large")
             )
             self.assertEqual(value_grading.DEGRADED, grade.grade, grade.reasons)
 
@@ -4077,16 +3994,7 @@ class GerberValueContractTests(unittest.TestCase):
             self.assertFalse(facts["copper_classified"])
             self.assertEqual(10, value_grading.expected_min_nets(facts, ("stm32",)))
 
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0, nets=1, critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
-                axes=("gerber-only", "stm32"),
-            )
+            grade = self._gerber_grade(facts, nets=1, axes=("gerber-only", "stm32"))
             self.assertEqual(value_grading.FAILED, grade.grade)
             self.assertIs(False, grade.signals["reconstruction_floor_verified"])
 
@@ -4145,16 +4053,7 @@ class GerberValueContractTests(unittest.TestCase):
             self.assertFalse(facts["copper_classified"])
             self.assertIsNotNone(value_grading.expected_min_nets(facts, ("stm32",)))
 
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0, nets=1, critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
-                axes=("gerber-only", "stm32"),
-            )
+            grade = self._gerber_grade(facts, nets=1, axes=("gerber-only", "stm32"))
             self.assertEqual(value_grading.FAILED, grade.grade)
 
             # A genuine single-sided board, whose other films say what they are,
@@ -4195,16 +4094,8 @@ class GerberValueContractTests(unittest.TestCase):
             self.assertEqual(962, facts["aperture_flashes"])
             self.assertEqual(4, value_grading.expected_min_nets(facts, ("stm32",)))
 
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0,
-                    nets=1,
-                    critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
+            grade = self._gerber_grade(
+                facts, nets=1,
                 axes=("kicad9", "gerber-only", "automotive", "stm32", "large"),
             )
             self.assertEqual(value_grading.FAILED, grade.grade)
@@ -4252,20 +4143,14 @@ class GerberValueContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             staged = Path(raw) / "package.zip"
             gerber_archive(staged, copper_layers=4, flashes_per_layer=481)
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0,
-                    nets=1,
-                    critical="0/0",
-                    coverage_note=(
-                        "It came from gerber reconstruction: 0 of 1924 aperture "
-                        "flashes (0%) were matched to a placed component."
-                    ),
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=value_grading.input_facts("gerber_archive", staged),
+            grade = self._gerber_grade(
+                value_grading.input_facts("gerber_archive", staged),
+                nets=1,
                 axes=("kicad9", "gerber-only", "automotive", "stm32", "large"),
+                coverage_note=(
+                    "It came from gerber reconstruction: 0 of 1924 aperture "
+                    "flashes (0%) were matched to a placed component."
+                ),
             )
 
             self.assertEqual(value_grading.FAILED, grade.grade)
@@ -4280,20 +4165,14 @@ class GerberValueContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             staged = Path(raw) / "package.zip"
             gerber_archive(staged, copper_layers=4, flashes_per_layer=481)
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0,
-                    nets=220,
-                    critical="0/0",
-                    coverage_note=(
-                        "Gerber input: clearance DRC needs the original layout "
-                        "file and was not run."
-                    ),
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=value_grading.input_facts("gerber_archive", staged),
+            grade = self._gerber_grade(
+                value_grading.input_facts("gerber_archive", staged),
+                nets=220,
                 axes=("kicad9", "gerber-only", "automotive", "stm32", "large"),
+                coverage_note=(
+                    "Gerber input: clearance DRC needs the original layout "
+                    "file and was not run."
+                ),
             )
 
             self.assertEqual(value_grading.DEGRADED, grade.grade)
@@ -4333,12 +4212,11 @@ class GerberValueContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             staged = Path(raw) / "package.zip"
             gerber_archive(staged, copper_layers=4, flashes_per_layer=481)
-            grade = value_grading.grade_board(
-                journey_row(components=0, nets=99_999, critical="0/0"),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=value_grading.input_facts("gerber_archive", staged),
+            grade = self._gerber_grade(
+                value_grading.input_facts("gerber_archive", staged),
+                nets=99_999,
                 axes=("kicad9", "gerber-only", "automotive", "stm32", "large"),
+                coverage_note=None,
             )
 
             self.assertEqual(value_grading.FAILED, grade.grade)
@@ -4380,12 +4258,11 @@ class GerberValueContractTests(unittest.TestCase):
             staged = Path(raw) / "package.zip"
             gerber_archive(staged, copper_layers=2, flashes_per_layer=300)
             facts = value_grading.input_facts("gerber_archive", staged)
-            grade = value_grading.grade_board(
-                journey_row(components=0, nets=900, critical="0/0"),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
+            grade = self._gerber_grade(
+                facts,
+                nets=900,
                 axes=("kicad9", "gerber-only", "automotive", "stm32", "large"),
+                coverage_note=None,
             )
 
             self.assertEqual(value_grading.FAILED, grade.grade)
@@ -4429,17 +4306,7 @@ class GerberValueContractTests(unittest.TestCase):
             gerber_archive(staged, copper_layers=4, flashes_per_layer=481)
             facts = value_grading.input_facts("gerber_archive", staged)
             for components in (0, 1, 40):
-                grade = value_grading.grade_board(
-                    journey_row(
-                        components=components,
-                        nets=220,
-                        critical="0/0",
-                        coverage_note="Supply the original native layout to run DRC.",
-                    ),
-                    input_format="gerber_archive",
-                    expects_refusal=False,
-                    facts=facts,
-                )
+                grade = self._gerber_grade(facts, nets=220, components=components)
                 self.assertEqual(
                     value_grading.DEGRADED, grade.grade, f"{components} components"
                 )
@@ -4463,16 +4330,8 @@ class GerberValueContractTests(unittest.TestCase):
             self.assertEqual(0, facts["aperture_flashes"])
             self.assertEqual(2, facts["gerber_layers"])
             self.assertIsNone(value_grading.expected_min_nets(facts, ("stm32",)))
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0,
-                    nets=2,
-                    critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
+            grade = self._gerber_grade(
+                facts, nets=2,
                 axes=("kicad9", "gerber-only", "automotive", "stm32", "large"),
             )
 
@@ -4484,45 +4343,55 @@ class GerberValueContractTests(unittest.TestCase):
             gerber_archive(staged, copper_layers=2, flashes_per_layer=12)
             facts = value_grading.input_facts("gerber_archive", staged)
             self.assertIsNone(value_grading.expected_min_nets(facts, ("stm32",)))
-            grade = value_grading.grade_board(
-                journey_row(
-                    components=0,
-                    nets=2,
-                    critical="0/0",
-                    coverage_note="Supply the original native layout to run DRC.",
-                ),
-                input_format="gerber_archive",
-                expects_refusal=False,
-                facts=facts,
+            grade = self._gerber_grade(
+                facts, nets=2,
                 axes=("kicad9", "gerber-only", "automotive", "stm32", "large"),
             )
 
             self.assertEqual(value_grading.DEGRADED, grade.grade)
 
 
+def _kit_manifest(
+    base: Path,
+    *,
+    firmware: bool = True,
+    firmware_bytes: bytes = b"\x7fELF fixture",
+    firmware_expect: str | None = None,
+) -> tuple[Path, Path]:
+    """A single-board `kit` corpus, optionally paired with firmware. Every
+    firmware-manifest test below wants this exact one-board layout and only
+    varies whether firmware is present, its bytes, or its declared use."""
+    root = base / "corpus"
+    source = root / "kit"
+    source.mkdir(parents=True)
+    (source / "board.kicad_pcb").write_bytes(b"(kicad_pcb kit)")
+    if firmware:
+        (source / "firmware.elf").write_bytes(firmware_bytes)
+    (source / ".hauksbee-rev").write_text(f"{1:040x}\n")
+    manifest = base / "corpus.toml"
+    lines = [
+        'cohort = "corpus"\n\n',
+        "[[board]]\n",
+        'id = "kit"\n',
+        f'rev = "{1:040x}"\n',
+        'license = "MIT"\n',
+        "license_confirmed = true\n",
+        'axes = ["kicad"]\n',
+        'expect = ["board.kicad_pcb"]\n',
+    ]
+    if firmware:
+        lines.append('firmware = "firmware.elf"\n')
+    if firmware_expect is not None:
+        lines.append(f'firmware_expect = "{firmware_expect}"\n')
+    manifest.write_text("".join(lines))
+    return root, manifest
+
+
 class FirmwareJourneyContractTests(unittest.TestCase):
     def test_a_manifest_may_pair_firmware_with_a_board(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            root = base / "corpus"
-            source = root / "kit"
-            source.mkdir(parents=True)
-            (source / "board.kicad_pcb").write_bytes(b"(kicad_pcb kit)")
-            (source / "firmware.elf").write_bytes(b"\x7fELF fixture")
-            (source / ".hauksbee-rev").write_text(f"{1:040x}\n")
-            manifest = base / "corpus.toml"
-            manifest.write_text(
-                'cohort = "corpus"\n\n'
-                "[[board]]\n"
-                'id = "kit"\n'
-                f'rev = "{1:040x}"\n'
-                'license = "MIT"\n'
-                "license_confirmed = true\n"
-                'axes = ["kicad"]\n'
-                'expect = ["board.kicad_pcb"]\n'
-                'firmware = "firmware.elf"\n'
-                'firmware_expect = "cosim"\n'
-            )
+            root, manifest = _kit_manifest(base, firmware_expect="cosim")
 
             candidates = discover_candidates(root, manifest_path=manifest)
 
@@ -4536,24 +4405,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
     def test_the_reservation_records_the_firmware_digest(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            root = base / "corpus"
-            source = root / "kit"
-            source.mkdir(parents=True)
-            (source / "board.kicad_pcb").write_bytes(b"(kicad_pcb kit)")
-            (source / "firmware.elf").write_bytes(b"\x7fELF fixture")
-            (source / ".hauksbee-rev").write_text(f"{1:040x}\n")
-            manifest = base / "corpus.toml"
-            manifest.write_text(
-                'cohort = "corpus"\n\n'
-                "[[board]]\n"
-                'id = "kit"\n'
-                f'rev = "{1:040x}"\n'
-                'license = "MIT"\n'
-                "license_confirmed = true\n"
-                'axes = ["kicad"]\n'
-                'expect = ["board.kicad_pcb"]\n'
-                'firmware = "firmware.elf"\n'
-            )
+            root, manifest = _kit_manifest(base)
             candidate = discover_candidates(root, manifest_path=manifest)[0]
 
             record = unseen_boards._board_record(candidate)
@@ -4571,21 +4423,9 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         # with no terminal result, which an append-only ledger can never correct.
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            root = base / "corpus"
-            source = root / "kit"
-            source.mkdir(parents=True)
-            (source / "board.kicad_pcb").write_bytes(b"(kicad_pcb kit)")
-            (source / "firmware.elf").write_bytes(b"\x7fELF")
-            (source / ".hauksbee-rev").write_text(f"{1:040x}\n")
-            manifest = base / "corpus.toml"
-            manifest.write_text(
-                'cohort = "corpus"\n\n[[board]]\nid = "kit"\n'
-                f'rev = "{1:040x}"\nlicense = "MIT"\nlicense_confirmed = true\n'
-                'axes = ["kicad"]\nexpect = ["board.kicad_pcb"]\n'
-                'firmware = "firmware.elf"\n'
-            )
+            root, manifest = _kit_manifest(base, firmware_bytes=b"\x7fELF")
             candidate = discover_candidates(root, manifest_path=manifest)[0]
-            (source / "firmware.elf").unlink()
+            (root / "kit" / "firmware.elf").unlink()
 
             # A SelectionError, which every caller and the CLI already handle,
             # rather than an OSError that escapes them.
@@ -4599,24 +4439,8 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         # would let the journey co-simulate an image the ledger never recorded.
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            root = base / "corpus"
+            root, manifest = _kit_manifest(base, firmware_bytes=b"\x7fELF original")
             source = root / "kit"
-            source.mkdir(parents=True)
-            (source / "board.kicad_pcb").write_bytes(b"(kicad_pcb kit)")
-            (source / "firmware.elf").write_bytes(b"\x7fELF original")
-            (source / ".hauksbee-rev").write_text(f"{1:040x}\n")
-            manifest = base / "corpus.toml"
-            manifest.write_text(
-                'cohort = "corpus"\n\n'
-                "[[board]]\n"
-                'id = "kit"\n'
-                f'rev = "{1:040x}"\n'
-                'license = "MIT"\n'
-                "license_confirmed = true\n"
-                'axes = ["kicad"]\n'
-                'expect = ["board.kicad_pcb"]\n'
-                'firmware = "firmware.elf"\n'
-            )
             candidate = discover_candidates(root, manifest_path=manifest)[0]
             reserved = hashlib.sha256(b"\x7fELF original").hexdigest()
 
@@ -4703,22 +4527,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         # exercising the co-simulation it still claims to demand.
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            source = base / "corpus" / "kit"
-            source.mkdir(parents=True)
-            (source / "board.kicad_pcb").write_bytes(b"(kicad_pcb kit)")
-            (source / ".hauksbee-rev").write_text(f"{1:040x}\n")
-            manifest = base / "corpus.toml"
-            manifest.write_text(
-                'cohort = "corpus"\n\n'
-                "[[board]]\n"
-                'id = "kit"\n'
-                f'rev = "{1:040x}"\n'
-                'license = "MIT"\n'
-                "license_confirmed = true\n"
-                'axes = ["kicad"]\n'
-                'expect = ["board.kicad_pcb"]\n'
-                'firmware_expect = "cosim"\n'
-            )
+            root, manifest = _kit_manifest(base, firmware=False, firmware_expect="cosim")
 
             with self.assertRaisesRegex(
                 SelectionError, r"firmware_expect is declared without a firmware path"
@@ -4728,47 +4537,13 @@ class FirmwareJourneyContractTests(unittest.TestCase):
     def test_an_unknown_firmware_expectation_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            root = base / "corpus"
-            source = root / "kit"
-            source.mkdir(parents=True)
-            (source / "board.kicad_pcb").write_bytes(b"(kicad_pcb kit)")
-            (source / "firmware.elf").write_bytes(b"\x7fELF fixture")
-            (source / ".hauksbee-rev").write_text(f"{1:040x}\n")
-            manifest = base / "corpus.toml"
-            manifest.write_text(
-                'cohort = "corpus"\n\n'
-                "[[board]]\n"
-                'id = "kit"\n'
-                f'rev = "{1:040x}"\n'
-                'license = "MIT"\n'
-                "license_confirmed = true\n"
-                'axes = ["kicad"]\n'
-                'expect = ["board.kicad_pcb"]\n'
-                'firmware = "firmware.elf"\n'
-                'firmware_expect = "vibes"\n'
-            )
+            root, manifest = _kit_manifest(base, firmware_expect="vibes")
 
             with self.assertRaisesRegex(SelectionError, r"firmware_expect must be"):
                 discover_candidates(root, manifest_path=manifest)
 
     def test_staged_firmware_that_never_cosimulates_fails(self) -> None:
-        grade = value_grading.grade_board(
-            journey_row(
-                firmware={
-                    "staged": True,
-                    "loaded": True,
-                    "detail": "ELF, AVR",
-                    "pin_activity": False,
-                    "serial_activity": False,
-                    "pin_activity_rendered": None,
-                },
-                cosim=None,
-            ),
-            input_format="kicad_pcb",
-            expects_refusal=False,
-            facts=ANCHORED_KICAD,
-            firmware_expect="cosim",
-        )
+        grade = self._firmware_grade(firmware=self._firmware(), cosim=None)
 
         self.assertEqual(value_grading.FAILED, grade.grade)
         self.assertTrue(
@@ -4779,27 +4554,14 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         # No upload fixes an inert co-sim, so it cannot be honest degradation:
         # a `degraded` grade there would need an unlock the gate invented for
         # itself, which is exactly what this contract must not do.
-        grade = value_grading.grade_board(
-            journey_row(
-                firmware={
-                    "staged": True,
-                    "loaded": True,
-                    "detail": "ELF, AVR",
-                    "pin_activity": False,
-                    "serial_activity": False,
-                    "pin_activity_rendered": None,
-                },
-                cosim={
-                    "ran": True,
-                    "seconds_simulated": 0.25,
-                    "uart_output": "",
-                    "gpio_nets": [{"name": "PB0", "driven": False}],
-                },
-            ),
-            input_format="kicad_pcb",
-            expects_refusal=False,
-            facts=ANCHORED_KICAD,
-            firmware_expect="cosim",
+        grade = self._firmware_grade(
+            firmware=self._firmware(),
+            cosim={
+                "ran": True,
+                "seconds_simulated": 0.25,
+                "uart_output": "",
+                "gpio_nets": [{"name": "PB0", "driven": False}],
+            },
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
@@ -4808,19 +4570,14 @@ class FirmwareJourneyContractTests(unittest.TestCase):
     def test_load_only_without_a_stated_reason_fails(self) -> None:
         # Otherwise `load-only` excuses a malformed image, a loader crash and a
         # missing backend equally, which is the escape hatch it must not be.
-        grade = value_grading.grade_board(
-            journey_row(
-                firmware={
-                    "staged": True,
-                    "loaded": True,
-                    "detail": "ELF, e_machine 0x1234",
-                },
-                cosim={"ran": False},
-            ),
-            input_format="kicad_pcb",
-            expects_refusal=False,
-            facts=ANCHORED_KICAD,
-            firmware_expect="load-only",
+        grade = self._firmware_grade(
+            firmware={
+                "staged": True,
+                "loaded": True,
+                "detail": "ELF, e_machine 0x1234",
+            },
+            cosim={"ran": False},
+            expect="load-only",
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
@@ -4860,22 +4617,10 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         # `load-only` lowers the bar for what must happen, never the bar for the
         # quality of what did: an image that co-simulates after all is held to
         # the same activity contract as one that was expected to.
-        grade = value_grading.grade_board(
-            journey_row(
-                firmware={
-                    "staged": True,
-                    "loaded": True,
-                    "detail": "ELF, AVR",
-                    "pin_activity": False,
-                    "serial_activity": False,
-                    "pin_activity_rendered": None,
-                },
-                cosim={"ran": True, "seconds_simulated": 0.25, "gpio_nets": []},
-            ),
-            input_format="kicad_pcb",
-            expects_refusal=False,
-            facts=ANCHORED_KICAD,
-            firmware_expect="load-only",
+        grade = self._firmware_grade(
+            firmware=self._firmware(),
+            cosim={"ran": True, "seconds_simulated": 0.25, "gpio_nets": []},
+            expect="load-only",
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
@@ -4884,27 +4629,14 @@ class FirmwareJourneyContractTests(unittest.TestCase):
     def test_a_cosim_that_states_no_analog_verdict_fails(self) -> None:
         # Omitting the verdict must not grade better than declaring it invalid,
         # which is what a rule keying only on the literal False would allow.
-        grade = value_grading.grade_board(
-            journey_row(
-                critical="0/1",
-                firmware={
-                    "staged": True,
-                    "loaded": True,
-                    "detail": "ELF, AVR",
-                    "pin_activity": True,
-                    "serial_activity": False,
-                    "pin_activity_rendered": True,
-                },
-                cosim={
-                    "ran": True,
-                    "seconds_simulated": 0.25,
-                    "gpio_nets": [{"name": "PB0", "driven": True}],
-                },
-            ),
-            input_format="kicad_pcb",
-            expects_refusal=False,
-            facts=ANCHORED_KICAD,
-            firmware_expect="cosim",
+        grade = self._firmware_grade(
+            critical="0/1",
+            firmware=self._firmware(pin_activity=True, pin_activity_rendered=True),
+            cosim={
+                "ran": True,
+                "seconds_simulated": 0.25,
+                "gpio_nets": [{"name": "PB0", "driven": True}],
+            },
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
@@ -4915,55 +4647,29 @@ class FirmwareJourneyContractTests(unittest.TestCase):
     def test_a_cosim_whose_analog_solve_was_invalidated_is_degraded(self) -> None:
         # The unlock is the report's own per-part sentence, not one the gate
         # writes: what makes the voltages usable is binding the open parts.
-        grade = value_grading.grade_board(
-            journey_row(
-                critical="0/1",
-                firmware={
-                    "staged": True,
-                    "loaded": True,
-                    "detail": "ELF, AVR",
-                    "pin_activity": True,
-                    "serial_activity": False,
-                    "pin_activity_rendered": True,
-                },
-                cosim={
-                    "ran": True,
-                    "seconds_simulated": 0.25,
-                    "analog_valid": False,
-                    "gpio_nets": [{"name": "PB0", "driven": True}],
-                },
-            ),
-            input_format="kicad_pcb",
-            expects_refusal=False,
-            facts=ANCHORED_KICAD,
-            firmware_expect="cosim",
+        grade = self._firmware_grade(
+            critical="0/1",
+            firmware=self._firmware(pin_activity=True, pin_activity_rendered=True),
+            cosim={
+                "ran": True,
+                "seconds_simulated": 0.25,
+                "analog_valid": False,
+                "gpio_nets": [{"name": "PB0", "driven": True}],
+            },
         )
 
         self.assertEqual(value_grading.DEGRADED, grade.grade)
         self.assertTrue(any("Add a model for U0" in unlock for unlock in grade.unlocks))
 
     def test_pin_activity_the_page_never_rendered_fails(self) -> None:
-        grade = value_grading.grade_board(
-            journey_row(
-                firmware={
-                    "staged": True,
-                    "loaded": True,
-                    "detail": "ELF, AVR",
-                    "pin_activity": True,
-                    "serial_activity": False,
-                    "pin_activity_rendered": False,
-                },
-                cosim={
-                    "ran": True,
-                    "seconds_simulated": 0.25,
-                    "analog_valid": True,
-                    "gpio_nets": [{"name": "PB0", "driven": True}],
-                },
-            ),
-            input_format="kicad_pcb",
-            expects_refusal=False,
-            facts=ANCHORED_KICAD,
-            firmware_expect="cosim",
+        grade = self._firmware_grade(
+            firmware=self._firmware(pin_activity=True, pin_activity_rendered=False),
+            cosim={
+                "ran": True,
+                "seconds_simulated": 0.25,
+                "analog_valid": True,
+                "gpio_nets": [{"name": "PB0", "driven": True}],
+            },
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
@@ -4974,41 +4680,47 @@ class FirmwareJourneyContractTests(unittest.TestCase):
     def test_serial_output_alone_is_not_pin_activity(self) -> None:
         # UART output is worth recording and is not a substitute for the one
         # observation that says firmware and hardware interacted.
-        grade = value_grading.grade_board(
-            journey_row(
-                firmware={
-                    "staged": True,
-                    "loaded": True,
-                    "detail": "ELF, AVR",
-                    "pin_activity": False,
-                    "serial_activity": True,
-                    "pin_activity_rendered": None,
-                },
-                cosim={
-                    "ran": True,
-                    "seconds_simulated": 0.25,
-                    "analog_valid": True,
-                    "uart_output": "boot\n",
-                    "gpio_nets": [],
-                },
-            ),
-            input_format="kicad_pcb",
-            expects_refusal=False,
-            facts=ANCHORED_KICAD,
-            firmware_expect="cosim",
+        grade = self._firmware_grade(
+            firmware=self._firmware(serial_activity=True),
+            cosim={
+                "ran": True,
+                "seconds_simulated": 0.25,
+                "analog_valid": True,
+                "uart_output": "boot\n",
+                "gpio_nets": [],
+            },
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
         self.assertTrue(any("drove no pin" in reason for reason in grade.reasons))
 
-    def _firmware_grade(self, **kwargs):
+    def _firmware_grade(self, *, expect: str = "cosim", **kwargs):
         return value_grading.grade_board(
             journey_row(**kwargs),
             input_format="kicad_pcb",
             expects_refusal=False,
             facts=ANCHORED_KICAD,
-            firmware_expect=kwargs.pop("expect", "cosim"),
+            firmware_expect=expect,
         )
+
+    @staticmethod
+    def _firmware(
+        *,
+        detail: str = "ELF, AVR",
+        pin_activity: bool = False,
+        serial_activity: bool = False,
+        pin_activity_rendered: bool | None = None,
+    ) -> dict:
+        """A staged-and-loaded firmware report; only the activity fields vary
+        between the pin/serial-activity tests below."""
+        return {
+            "staged": True,
+            "loaded": True,
+            "detail": detail,
+            "pin_activity": pin_activity,
+            "serial_activity": serial_activity,
+            "pin_activity_rendered": pin_activity_rendered,
+        }
 
     def test_every_firmware_failure_branch_is_exercised(self) -> None:
         # One case per reason the firmware dimension can fail, so none of them is
@@ -5039,13 +4751,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
             ),
         ]
         for fragment, firmware, cosim, expect in cases:
-            grade = value_grading.grade_board(
-                journey_row(firmware=firmware, cosim=cosim),
-                input_format="kicad_pcb",
-                expects_refusal=False,
-                facts=ANCHORED_KICAD,
-                firmware_expect=expect,
-            )
+            grade = self._firmware_grade(firmware=firmware, cosim=cosim, expect=expect)
             self.assertEqual(value_grading.FAILED, grade.grade, fragment)
             self.assertTrue(
                 any(fragment in reason for reason in grade.reasons),
@@ -5053,23 +4759,17 @@ class FirmwareJourneyContractTests(unittest.TestCase):
             )
 
     def test_an_invalidated_analog_solve_with_nothing_offered_fails(self) -> None:
-        grade = value_grading.grade_board(
-            journey_row(
-                critical="2/2",
-                firmware={
-                    "staged": True, "loaded": True, "detail": "ELF",
-                    "pin_activity": True, "serial_activity": False,
-                    "pin_activity_rendered": True,
-                },
-                cosim={
-                    "ran": True, "seconds_simulated": 0.25, "analog_valid": False,
-                    "gpio_nets": [{"name": "PB0", "driven": True}],
-                },
-            ),
-            input_format="kicad_pcb",
-            expects_refusal=False,
-            facts=ANCHORED_KICAD,
-            firmware_expect="cosim",
+        grade = self._firmware_grade(
+            critical="2/2",
+            firmware={
+                "staged": True, "loaded": True, "detail": "ELF",
+                "pin_activity": True, "serial_activity": False,
+                "pin_activity_rendered": True,
+            },
+            cosim={
+                "ran": True, "seconds_simulated": 0.25, "analog_valid": False,
+                "gpio_nets": [{"name": "PB0", "driven": True}],
+            },
         )
 
         self.assertEqual(value_grading.FAILED, grade.grade)
@@ -5078,28 +4778,17 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         )
 
     def test_a_driven_pin_and_a_running_cosim_is_delivered(self) -> None:
-        grade = value_grading.grade_board(
-            journey_row(
-                firmware={
-                    "staged": True,
-                    "loaded": True,
-                    "detail": "ELF, AVR",
-                    "pin_activity": True,
-                    "serial_activity": True,
-                    "pin_activity_rendered": True,
-                },
-                cosim={
-                    "ran": True,
-                    "seconds_simulated": 0.25,
-                    "analog_valid": True,
-                    "uart_output": "boot\n",
-                    "gpio_nets": [{"name": "PB0", "driven": True}],
-                },
+        grade = self._firmware_grade(
+            firmware=self._firmware(
+                pin_activity=True, serial_activity=True, pin_activity_rendered=True
             ),
-            input_format="kicad_pcb",
-            expects_refusal=False,
-            facts=ANCHORED_KICAD,
-            firmware_expect="cosim",
+            cosim={
+                "ran": True,
+                "seconds_simulated": 0.25,
+                "analog_valid": True,
+                "uart_output": "boot\n",
+                "gpio_nets": [{"name": "PB0", "driven": True}],
+            },
         )
 
         self.assertEqual(value_grading.DELIVERED, grade.grade)
@@ -5109,11 +4798,7 @@ class ValueGateWiringTests(unittest.TestCase):
     """The grades reach the evidence document, the summary, and the exit code."""
 
     def _pools(self, base: Path) -> tuple[Path, Path, Path, Path]:
-        external_root, external_manifest = manifest_pool(
-            base, "external", 5, cohort="external"
-        )
-        corpus_root, corpus_manifest = manifest_pool(base, "corpus", 1, cohort="corpus")
-        return external_root, external_manifest, corpus_root, corpus_manifest
+        return _external_and_corpus_pools(base)
 
     def _run(self, base: Path, runner):
         external_root, external_manifest, corpus_root, corpus_manifest = self._pools(
@@ -5131,6 +4816,18 @@ class ValueGateWiringTests(unittest.TestCase):
             planned_at="2026-08-06T12:00:00Z",
             base_url="http://127.0.0.1:37651",
             entropy="a" * 64,
+            tool_commit="e" * 40,
+            runner=runner,
+        )
+
+    def _run_corpus(self, base: Path, corpus_root: Path, corpus_manifest: Path, *, run_id: str, runner):
+        return release_gates.run_corpus_gate(
+            corpus_root=corpus_root,
+            corpus_manifest=corpus_manifest,
+            evidence_dir=base / "evidence",
+            scratch_root=base / "scratch",
+            run_id=run_id,
+            base_url="http://127.0.0.1:37651",
             tool_commit="e" * 40,
             runner=runner,
         )
@@ -5198,11 +4895,8 @@ class ValueGateWiringTests(unittest.TestCase):
         # same way every other gate error does.
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest = manifest_pool(
-                base, "external", 5, cohort="external"
-            )
-            corpus_root, corpus_manifest = manifest_pool(
-                base, "corpus", 1, cohort="corpus"
+            external_root, external_manifest, corpus_root, corpus_manifest = (
+                _external_and_corpus_pools(base)
             )
 
             def collapsing(artifact: dict) -> None:
@@ -5287,15 +4981,8 @@ class ValueGateWiringTests(unittest.TestCase):
                 return 0
 
             with self.assertRaisesRegex(SelectionError, r"no bench-grade value"):
-                release_gates.run_corpus_gate(
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    evidence_dir=base / "evidence",
-                    scratch_root=base / "scratch",
-                    run_id="corpus-value-01",
-                    base_url="http://127.0.0.1:37651",
-                    tool_commit="e" * 40,
-                    runner=collapsing,
+                self._run_corpus(
+                    base, corpus_root, corpus_manifest, run_id="corpus-value-01", runner=collapsing
                 )
 
             # And the graded document is retained, not lost with the exception.
@@ -5513,31 +5200,14 @@ class ValueGateWiringTests(unittest.TestCase):
                 return 0
 
             with self.assertRaisesRegex(SelectionError, r"staged input changed"):
-                release_gates.run_corpus_gate(
-                    corpus_root=corpus_root,
-                    corpus_manifest=corpus_manifest,
-                    evidence_dir=base / "evidence",
-                    scratch_root=base / "scratch",
-                    run_id="corpus-swap",
-                    base_url="http://127.0.0.1:37651",
-                    tool_commit="e" * 40,
-                    runner=swapping,
+                self._run_corpus(
+                    base, corpus_root, corpus_manifest, run_id="corpus-swap", runner=swapping
                 )
 
     def test_the_gate_hands_the_journey_the_firmware_it_staged(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            corpus_root, corpus_manifest = manifest_pool(
-                base, "corpus", 1, cohort="corpus"
-            )
-            (corpus_root / "corpus-0" / "firmware.elf").write_bytes(b"\x7fELF")
-            corpus_manifest.write_text(
-                corpus_manifest.read_text().replace(
-                    'expect = ["board.kicad_pcb"]',
-                    'expect = ["board.kicad_pcb"]\nfirmware = "firmware.elf"',
-                    1,
-                )
-            )
+            corpus_root, corpus_manifest = self._firmware_corpus(base)
             handed: list[list[dict | None] | None] = []
 
             def capturing(
@@ -5571,15 +5241,8 @@ class ValueGateWiringTests(unittest.TestCase):
                 (output / "results.json").write_text(json.dumps(artifact))
                 return 0
 
-            evidence = release_gates.run_corpus_gate(
-                corpus_root=corpus_root,
-                corpus_manifest=corpus_manifest,
-                evidence_dir=base / "evidence",
-                scratch_root=base / "scratch",
-                run_id="corpus-firmware",
-                base_url="http://127.0.0.1:37651",
-                tool_commit="e" * 40,
-                runner=capturing,
+            evidence = self._run_corpus(
+                base, corpus_root, corpus_manifest, run_id="corpus-firmware", runner=capturing
             )
 
             self.assertEqual(1, len(handed))

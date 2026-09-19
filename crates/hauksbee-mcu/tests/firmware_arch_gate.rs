@@ -8,17 +8,11 @@
 //! ("invalid header: 0xffffffff") with no error. These tests lock that shut.
 
 use hauksbee_mcu::elf::{self, EM_ARM, EM_AVR, EM_RISCV, EM_XTENSA};
-use std::path::{Path, PathBuf};
 
-/// Resolve a path under the workspace `testdata/firmware/` directory.
-fn fw(rel: &str) -> PathBuf {
-    // CARGO_MANIFEST_DIR is crates/hauksbee-mcu; testdata lives at the repo root.
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
-    root.join("testdata/firmware").join(rel)
+/// Resolve a path under the workspace `testdata/firmware/` directory, or
+/// `None` when that fixture is absent from this checkout.
+fn fw(rel: &str) -> Option<std::path::PathBuf> {
+    crate::support::firmware(rel)
 }
 
 #[test]
@@ -33,10 +27,9 @@ fn real_testdata_elfs_report_expected_machines() {
         ("demo/demo.elf", EM_AVR),
     ];
     for (rel, expected) in cases {
-        let p = fw(rel);
-        if !p.exists() {
+        let Some(p) = fw(rel) else {
             continue; // testdata not present in this checkout
-        }
+        };
         assert_eq!(
             elf::read_e_machine(&p).unwrap(),
             Some(expected),
@@ -56,10 +49,9 @@ fn matched_arch_loads_fine_avr_arm_riscv_xtensa() {
         ("esp32_blinky/esp32c3_blinky.elf", EM_RISCV, "ESP32-C3"),
     ];
     for (rel, expected, label) in ok {
-        let p = fw(rel);
-        if !p.exists() {
+        let Some(p) = fw(rel) else {
             continue;
-        }
+        };
         assert!(
             elf::validate_arch(&p, expected, label).is_ok(),
             "expected {rel} to be accepted as {label}"
@@ -71,11 +63,10 @@ fn matched_arch_loads_fine_avr_arm_riscv_xtensa() {
 fn the_persona_bug_is_refused_xtensa_image_on_riscv_board() {
     // Exactly the persona scenario: the Xtensa ESP32 app ELF aimed at the
     // RISC-V ESP32-C3 (e_machine RISC-V = 0xF3).
-    let p = fw("esp32_blinky/esp32_blinky.elf");
-    if !p.exists() {
+    let Some(p) = fw("esp32_blinky/esp32_blinky.elf") else {
         eprintln!("skipping: testdata esp32_blinky.elf absent");
         return;
-    }
+    };
     let err = elf::validate_arch(&p, EM_RISCV, "ESP32-C3 (RISC-V RV32IMC)")
         .expect_err("an Xtensa image on a RISC-V board must be REFUSED");
     let msg = format!("{err}");
@@ -90,10 +81,9 @@ fn the_persona_bug_is_refused_xtensa_image_on_riscv_board() {
 
 #[test]
 fn arm_image_on_avr_backend_is_refused() {
-    let p = fw("stm32_blinky/blinky.elf");
-    if !p.exists() {
+    let Some(p) = fw("stm32_blinky/blinky.elf") else {
         return;
-    }
+    };
     let err = elf::validate_arch(&p, EM_AVR, "atmega (AVR)")
         .expect_err("an ARM image on an AVR backend must be REFUSED");
     let msg = format!("{err}");
@@ -105,10 +95,9 @@ fn arm_image_on_avr_backend_is_refused() {
 fn raw_merged_flash_bin_is_unchecked_not_false_errored() {
     // The real esp32 merged flash image is raw (starts 0xffffffff): no ELF
     // header, so the gate must SKIP it (Ok), never false-error.
-    let p = fw("esp32_blinky/flash.bin");
-    if !p.exists() {
+    let Some(p) = fw("esp32_blinky/flash.bin") else {
         return;
-    }
+    };
     assert_eq!(elf::read_e_machine(&p).unwrap(), None);
     assert!(elf::validate_arch(&p, EM_RISCV, "ESP32-C3").is_ok());
 }
@@ -122,12 +111,14 @@ fn raw_merged_flash_bin_is_unchecked_not_false_errored() {
 fn qemu_backend_refuses_xtensa_sibling_on_riscv_board_before_spawn() {
     use hauksbee_mcu::{QemuBackend, QemuConfig};
 
-    let src_bin = fw("esp32_blinky/flash.bin"); // raw Xtensa merged image
-    let src_elf = fw("esp32_blinky/esp32_blinky.elf"); // Xtensa app ELF (sibling)
-    if !src_bin.exists() || !src_elf.exists() {
+    // raw Xtensa merged image, and the Xtensa app ELF beside it (sibling).
+    let (Some(src_bin), Some(src_elf)) = (
+        fw("esp32_blinky/flash.bin"),
+        fw("esp32_blinky/esp32_blinky.elf"),
+    ) else {
         eprintln!("skipping: esp32_blinky testdata absent");
         return;
-    }
+    };
 
     // Stage a temp dir mirroring the esp-idf build layout: raw flash.bin beside
     // the Xtensa app ELF. Point the RISC-V ESP32-C3 backend at it.
@@ -161,12 +152,13 @@ fn qemu_backend_refuses_xtensa_sibling_on_riscv_board_before_spawn() {
 fn qemu_backend_accepts_riscv_sibling_on_riscv_board_at_gate() {
     use hauksbee_mcu::{QemuBackend, QemuConfig};
 
-    let src_bin = fw("esp32_blinky/flash_c3.bin");
-    let src_elf = fw("esp32_blinky/esp32c3_blinky.elf");
-    if !src_bin.exists() || !src_elf.exists() {
+    let (Some(src_bin), Some(src_elf)) = (
+        fw("esp32_blinky/flash_c3.bin"),
+        fw("esp32_blinky/esp32c3_blinky.elf"),
+    ) else {
         eprintln!("skipping: esp32c3 testdata absent");
         return;
-    }
+    };
     let dir = std::env::temp_dir().join(format!("hauksbee-archgate-ok-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let bin = dir.join("flash_c3.bin");

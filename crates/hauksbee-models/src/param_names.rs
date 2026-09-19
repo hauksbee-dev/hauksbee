@@ -224,6 +224,25 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "tpd_s",
             "supply_static_ua",
         ],
+        // The first half are datasheet quantities; the rest are the numerical
+        // parameters of the composite stamp (see db/timer.toml), on the card
+        // so the paired ngspice deck pins them where a reader can find them.
+        ComponentKind::Timer => &[
+            "threshold_frac",
+            "trigger_frac",
+            "divider_ohms",
+            "rsat_ohms",
+            "vol_v",
+            "voh_drop_v",
+            "reset_threshold_v",
+            "timing_error_frac",
+            "out_ohms",
+            "sense_ohms",
+            "comparator_gain",
+            "latch_von",
+            "latch_voff",
+            "latch_hold",
+        ],
         ComponentKind::AnalogSwitch => &["ron", "roff", "vth"],
         ComponentKind::Digital => DIGITAL_COMMON,
         ComponentKind::ShiftRegister => SHIFT_REGISTER,

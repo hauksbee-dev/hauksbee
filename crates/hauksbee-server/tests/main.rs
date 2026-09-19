@@ -1,6 +1,8 @@
 //! One integration-test binary for the crate; each module was a
 //! separate test file (and separate link step) before.
 
+mod support;
+
 #[path = "frontdoor_http.rs"]
 mod frontdoor_http;
 #[path = "packaged_asset_sync.rs"]

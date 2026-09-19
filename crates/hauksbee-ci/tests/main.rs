@@ -88,6 +88,8 @@ mod spec_and_assertions;
 mod spice_models_cli;
 #[path = "tarski_staged_replay.rs"]
 mod tarski_staged_replay;
+#[path = "timer555.rs"]
+mod timer555;
 #[path = "tolerance.rs"]
 mod tolerance;
 #[path = "unpowered_rail_is_declared.rs"]

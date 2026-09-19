@@ -3,13 +3,11 @@ use hauksbee_ir::evidence::{
     CausalPathIndex, EntityKind, EntityRef, ErrorBudget, EvidenceError, EvidenceMap,
     EvidenceRegistry, EvidenceStatus, IntegrationMethod, IntegrationTolerance, MatchConfidence,
     ModelLayer, ModelOnPath, ModelSource, ModelSourceTier, ModelUncertainty, ModelValidation,
-    NetScope, ParameterProvenance, ParameterRef, Residual, RunDate, Scope, SubjectSet, TimeWindow,
+    NetScope, ParameterProvenance, ParameterRef, Residual, Scope, SubjectSet, TimeWindow,
     ValueOrigin, WindowMethod,
 };
 
-fn today() -> RunDate {
-    RunDate::from_epoch_days(20_666)
-}
+use crate::support::today;
 
 fn tolerance() -> IntegrationTolerance {
     IntegrationTolerance::new(1e-3, 1e-6, 1e-12, 1e-14).expect("valid solver tolerances")
@@ -311,7 +309,7 @@ fn waiver_status_and_prose_share_the_same_run_date() {
         "DDR_CLK",
         "fab accepted the stackup",
         "2030-01-01",
-        RunDate::from_epoch_days(20_666),
+        today(),
     )
     .unwrap();
     let expired = Assumption::waived(
@@ -320,7 +318,7 @@ fn waiver_status_and_prose_share_the_same_run_date() {
         "DDR_CLK",
         "fab accepted the stackup",
         "2026-01-01",
-        RunDate::from_epoch_days(20_666),
+        today(),
     )
     .unwrap();
 

@@ -9,22 +9,8 @@
 use std::sync::Arc;
 
 use hauksbee_server::frontdoor;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// Read a whole HTTP/1.1 response off the socket (until the server closes it or
-/// we have read the declared Content-Length). Good enough for these small bodies.
-async fn http(addr: std::net::SocketAddr, request: &str, body: &[u8]) -> String {
-    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    stream.write_all(request.as_bytes()).await.unwrap();
-    if !body.is_empty() {
-        stream.write_all(body).await.unwrap();
-    }
-    stream.flush().await.unwrap();
-    let mut buf = Vec::new();
-    // The handlers do not keep-alive aggressively under test; read to EOF.
-    let _ = stream.read_to_end(&mut buf).await;
-    String::from_utf8_lossy(&buf).into_owned()
-}
+use crate::support;
 
 /// Serve the design routes with stub callbacks: the analyzer echoes back every
 /// part it received (proving the bytes and names reach it verbatim), and the
@@ -57,13 +43,7 @@ async fn spawn() -> std::net::SocketAddr {
             deck.len()
         ))
     });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = frontdoor::api_routes_with_design(analyze, sim);
-    tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    addr
+    support::spawn_router(frontdoor::api_routes_with_design(analyze, sim)).await
 }
 
 /// A `POST <path>` request head with the raw body content type.
@@ -71,6 +51,28 @@ fn raw_post(path: &str, extra: &str, len: usize) -> String {
     format!(
         "POST {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n{extra}\
          Content-Type: application/octet-stream\r\nContent-Length: {len}\r\n\r\n"
+    )
+}
+
+/// A `POST <path>` request head for a multipart body under `boundary`.
+fn multipart_post(path: &str, boundary: &str, len: usize) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {len}\r\n\r\n"
+    )
+}
+
+/// A `GET <path>` request with no extra headers.
+fn get_req(path: &str) -> String {
+    format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+}
+
+/// A `POST <path>` request with an empty body and no declared content type
+/// (the `/api/deps/install/...` route takes its target id from the path, not
+/// from a body, so unlike `raw_post` there is no `Content-Type` header).
+fn post_no_body(path: &str, extra: &str) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n{extra}Content-Length: 0\r\n\r\n"
     )
 }
 
@@ -87,7 +89,7 @@ async fn analyze_runs_the_callback_on_uploaded_bytes() {
         "X-Board-Filename: tiny.kicad_pcb\r\n",
         body.len(),
     );
-    let resp = http(addr, &req, body).await;
+    let resp = support::http(addr, &req, body).await;
     assert!(resp.contains("200 OK"), "analyze should 200: {resp:.160}");
     assert!(resp.contains("application/json"), "should return JSON");
     // The filename header reached the analyzer and the body length is correct.
@@ -120,7 +122,7 @@ async fn analyze_passes_binary_board_bytes_verbatim() {
         "X-Board-Filename: board.PcbDoc\r\n",
         body.len(),
     );
-    let resp = http(addr, &req, body).await;
+    let resp = support::http(addr, &req, body).await;
     assert!(resp.contains("200 OK"), "analyze should 200: {resp:.160}");
     assert!(
         resp.contains(&format!("\"len\":{}", body.len())),
@@ -133,7 +135,7 @@ async fn analyze_without_filename_header_defaults_gracefully() {
     let addr = spawn().await;
     let body = b"x";
     let req = raw_post("/api/analyze", "", body.len());
-    let resp = http(addr, &req, body).await;
+    let resp = support::http(addr, &req, body).await;
     assert!(resp.contains("200 OK"));
     assert!(
         resp.contains("\"file_name\":\"board\""),
@@ -183,12 +185,8 @@ async fn design_router_threads_every_supplemental_input_and_repeated_models() {
             ("model_file", "b.toml", b"b"),
         ],
     );
-    let req = format!(
-        "POST /api/analyze-with-firmware HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
-    let response = http(addr, &req, &body).await;
+    let req = multipart_post("/api/analyze-with-firmware", boundary, body.len());
+    let response = support::http(addr, &req, &body).await;
     assert!(
         response.contains(&format!(
             "\"fw\":{{\"len\":{},\"name\":\"drone.elf\"}}",
@@ -236,10 +234,7 @@ async fn checks_thread_optional_eagle_schematic_bytes_to_the_runner() {
             spec.len()
         )
     });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = frontdoor::check_route_with_design(check);
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let addr = support::spawn_router(frontdoor::check_route_with_design(check)).await;
 
     let boundary = "----hauksbee-check-schematic-boundary";
     let board = b"<eagle><drawing><board/></drawing></eagle>";
@@ -253,12 +248,8 @@ async fn checks_thread_optional_eagle_schematic_bytes_to_the_runner() {
             ("spec", "spec.toml", spec),
         ],
     );
-    let req = format!(
-        "POST /api/check HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
-    let resp = http(addr, &req, &body).await;
+    let req = multipart_post("/api/check", boundary, body.len());
+    let resp = support::http(addr, &req, &body).await;
     assert!(resp.contains("200 OK"), "should 200: {resp:.200}");
     assert!(resp.contains("\"schematic_name\":\"design.sch\""), "{resp}");
     assert!(
@@ -273,10 +264,11 @@ async fn live_launch_threads_optional_eagle_schematic_to_the_launcher() {
         Some(file) => Err(format!("saw {} with {} bytes", file.name, file.bytes.len())),
         None => Err("schematic missing".to_string()),
     });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = frontdoor::live_routes_with_design(hauksbee_server::LiveHub::new(), launch);
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let addr = support::spawn_router(frontdoor::live_routes_with_design(
+        hauksbee_server::LiveHub::new(),
+        launch,
+    ))
+    .await;
 
     let boundary = "----hauksbee-live-schematic-boundary";
     let schematic = b"<eagle><drawing><schematic/></drawing></eagle>";
@@ -291,12 +283,8 @@ async fn live_launch_threads_optional_eagle_schematic_to_the_launcher() {
             ("schematic", "design.sch", schematic),
         ],
     );
-    let request = format!(
-        "POST /api/live/launch HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
-    let response = http(addr, &request, &body).await;
+    let request = multipart_post("/api/live/launch", boundary, body.len());
+    let response = support::http(addr, &request, &body).await;
     assert!(response.contains("saw design.sch"), "{response}");
     assert!(
         response.contains(&format!("with {} bytes", schematic.len())),
@@ -335,12 +323,7 @@ async fn served_html_is_no_cache_but_hashed_assets_are_not() {
         .unwrap();
     });
 
-    let html = http(
-        addr,
-        "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
-        b"",
-    )
-    .await;
+    let html = support::http(addr, &get_req("/"), b"").await;
     assert!(html.contains("200 OK"), "index should 200: {html:.160}");
     let html_lower = html.to_ascii_lowercase();
     assert!(
@@ -348,12 +331,7 @@ async fn served_html_is_no_cache_but_hashed_assets_are_not() {
         "index.html must be no-cache: {html:.400}"
     );
 
-    let js = http(
-        addr,
-        "GET /assets/app-abc123.js HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
-        b"",
-    )
-    .await;
+    let js = support::http(addr, &get_req("/assets/app-abc123.js"), b"").await;
     assert!(js.contains("200 OK"), "asset should 200: {js:.160}");
     assert!(
         !js.to_ascii_lowercase().contains("cache-control: no-cache"),
@@ -374,12 +352,8 @@ async fn malformed_multipart_names_the_real_cause() {
     // Declares a boundary that never appears: multer hits end-of-stream while
     // still searching for the first boundary and errors.
     let body = b"this is not a multipart body at all";
-    let req = format!(
-        "POST /api/analyze-with-firmware HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
-    let resp = http(addr, &req, body).await;
+    let req = multipart_post("/api/analyze-with-firmware", boundary, body.len());
+    let resp = support::http(addr, &req, body).await;
     assert!(
         resp.contains("200 OK"),
         "error is carried in the JSON body: {resp:.200}"
@@ -415,24 +389,13 @@ async fn spawn_deps() -> std::net::SocketAddr {
             ))
         }
     });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = frontdoor::deps_routes(status, install);
-    tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    addr
+    support::spawn_router(frontdoor::deps_routes(status, install)).await
 }
 
 #[tokio::test]
 async fn deps_status_relays_the_engine_json() {
     let addr = spawn_deps().await;
-    let resp = http(
-        addr,
-        "GET /api/deps HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
-        b"",
-    )
-    .await;
+    let resp = support::http(addr, &get_req("/api/deps"), b"").await;
     assert!(resp.contains("200 OK"), "{resp:.200}");
     assert!(resp.contains("application/json"), "{resp:.200}");
     assert!(
@@ -444,13 +407,7 @@ async fn deps_status_relays_the_engine_json() {
 #[tokio::test]
 async fn deps_install_streams_progress_then_done() {
     let addr = spawn_deps().await;
-    let resp = http(
-        addr,
-        "POST /api/deps/install/ok-dep HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Length: 0\r\n\r\n",
-        b"",
-    )
-    .await;
+    let resp = support::http(addr, &post_no_body("/api/deps/install/ok-dep", ""), b"").await;
     assert!(resp.contains("200 OK"), "{resp:.200}");
     assert!(
         resp.contains("text/event-stream"),
@@ -474,13 +431,7 @@ async fn deps_install_streams_progress_then_done() {
 #[tokio::test]
 async fn deps_install_failure_carries_the_real_tail() {
     let addr = spawn_deps().await;
-    let resp = http(
-        addr,
-        "POST /api/deps/install/renode HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Length: 0\r\n\r\n",
-        b"",
-    )
-    .await;
+    let resp = support::http(addr, &post_no_body("/api/deps/install/renode", ""), b"").await;
     assert!(
         resp.contains("event: error"),
         "terminal error event: {resp}"
@@ -498,10 +449,9 @@ async fn deps_install_refuses_cross_site_requests() {
     // page (Sec-Fetch-Site: cross-site, which page JS cannot forge) must be
     // refused before anything starts, same guard as the analyze/check routes.
     let addr = spawn_deps().await;
-    let resp = http(
+    let resp = support::http(
         addr,
-        "POST /api/deps/install/ok-dep HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Sec-Fetch-Site: cross-site\r\nContent-Length: 0\r\n\r\n",
+        &post_no_body("/api/deps/install/ok-dep", "Sec-Fetch-Site: cross-site\r\n"),
         b"",
     )
     .await;
@@ -514,10 +464,12 @@ async fn deps_install_refuses_cross_site_requests() {
         "the installer must not have run: {resp}"
     );
     // Same-origin page JS (Sec-Fetch-Site: same-origin) stays allowed.
-    let ok = http(
+    let ok = support::http(
         addr,
-        "POST /api/deps/install/ok-dep HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Sec-Fetch-Site: same-origin\r\nContent-Length: 0\r\n\r\n",
+        &post_no_body(
+            "/api/deps/install/ok-dep",
+            "Sec-Fetch-Site: same-origin\r\n",
+        ),
         b"",
     )
     .await;
@@ -531,12 +483,8 @@ async fn analyze_with_firmware_without_firmware_part_falls_back() {
     let boundary = "----hauksbeetestboundary2";
     let board = b"(kicad_pcb tiny board)";
     let body = multipart_body(boundary, &[("board", "tiny.kicad_pcb", board)]);
-    let req = format!(
-        "POST /api/analyze-with-firmware HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
-         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    );
-    let resp = http(addr, &req, &body).await;
+    let req = multipart_post("/api/analyze-with-firmware", boundary, body.len());
+    let resp = support::http(addr, &req, &body).await;
     assert!(resp.contains("200 OK"), "should 200: {resp:.200}");
     assert!(
         resp.contains("\"fw\":null"),
@@ -549,7 +497,7 @@ async fn sim_relays_the_simulator_json_and_carries_the_deck_verbatim() {
     let addr = spawn().await;
     let deck = b"rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.op\n.end\n";
     let req = raw_post("/api/sim", "X-Board-Filename: rc.cir\r\n", deck.len());
-    let resp = http(addr, &req, deck).await;
+    let resp = support::http(addr, &req, deck).await;
     assert!(resp.contains("200 OK"), "sim should 200: {resp:.200}");
     assert!(resp.contains("\"analysis\":\"op\""), "{resp}");
     assert!(
@@ -566,7 +514,7 @@ async fn sim_refusal_is_a_4xx_carrying_the_reason() {
     let addr = spawn().await;
     let deck = b".include model.lib\nV1 in 0 1\n.op\n";
     let req = raw_post("/api/sim", "X-Board-Filename: dep.cir\r\n", deck.len());
-    let resp = http(addr, &req, deck).await;
+    let resp = support::http(addr, &req, deck).await;
     assert!(resp.contains(" 422 "), "refusal must be a 4xx: {resp:.200}");
     assert!(resp.contains("\"ok\":false"), "{resp}");
     assert!(resp.contains("pulls in another file"), "{resp}");
@@ -588,7 +536,7 @@ async fn sim_refuses_cross_site_requests() {
         "Sec-Fetch-Site: cross-site\r\nX-Board-Filename: rc.cir\r\n",
         deck.len(),
     );
-    let resp = http(addr, &req, deck).await;
+    let resp = support::http(addr, &req, deck).await;
     assert!(resp.contains("403"), "cross-site sim must 403: {resp:.300}");
     assert!(
         !resp.contains("deck_len"),

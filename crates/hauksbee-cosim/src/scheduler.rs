@@ -593,6 +593,16 @@ pub struct Scheduler {
     /// `None` means the active solver path did not measure one; it never means
     /// a zero residual.
     worst_residual: Option<(f64, usize)>,
+    /// The relay latch the last converged chunk ENDED on, carried into the
+    /// next. A chunk builds a fresh solver workspace, so without this every
+    /// latching switch resets at every chunk boundary -- the same defect that
+    /// made a Schmitt oscillator free-run at one toggle per chunk, but on the
+    /// discrete state instead of the reactive one.
+    last_switch_latch: Option<std::collections::HashMap<hauksbee_ir::DeviceId, bool>>,
+    /// This board stamps a LATCH out of hysteretic switches (a 555's SR latch),
+    /// which changes two things about how its chunks are marched; see
+    /// `march_chunk`.
+    latching: bool,
     /// Current run of back-to-back failed chunks (reset to 0 by any converged
     /// chunk). Feeds the strict/CI abort threshold.
     consecutive_failed_chunks: u32,
@@ -1149,8 +1159,17 @@ impl Scheduler {
     pub fn new(
         bound: BoundBoard,
         firmware: Option<&std::path::Path>,
-        opts: SolverOptions,
+        mut opts: SolverOptions,
     ) -> anyhow::Result<Self> {
+        // A part whose stamp uses a VSwitch as a LATCH (a 555's SR latch) has no
+        // memory at all under SwitchModel::Smooth, so it would free-run and
+        // report a plausible wrong frequency rather than fail. Nothing sets
+        // Smooth on the board path today; this makes that a property of the
+        // board rather than of who happened to build the options.
+        let bound_latching = bound.latching_switches;
+        if bound_latching {
+            opts.effects.switch_model = hauksbee_solve::SwitchModel::Hysteretic;
+        }
         let BoundBoard {
             circuit,
             net_nodes,
@@ -1335,6 +1354,8 @@ impl Scheduler {
             debug_skip_refined_companion: false,
             chunk_has_pwl_drives: false,
             worst_residual: None,
+            last_switch_latch: None,
+            latching: bound_latching,
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
             last_solve_error: None,
@@ -3953,8 +3974,17 @@ impl Scheduler {
         let mut opts = opts;
         if seed.is_some() && opts.dc_init == DcInit::Solve {
             opts.dc_init = DcInit::Continue;
+        } else if self.latching && self.last_switch_latch.is_none() && opts.dc_init == DcInit::Solve
+        {
+            // FIRST chunk of a latching board: a latch fed by its own output
+            // has no DC operating point to enter from (a free-running 555: open
+            // drives THRES up, which sets it; closed drives it down, which
+            // resets it). Power-on from rest is the state such a board starts
+            // in, and what the paired ngspice deck states with `uic`. Later
+            // cold starts (the ladder's) must not restart the board from rest.
+            opts.dc_init = DcInit::FromZero;
         }
-        let t = Transient::new(opts);
+        let t = Transient::new(opts).with_switch_latch(self.last_switch_latch.clone());
         let mut final_x: Vec<f64> = Vec::new();
         // Trapezoid state: the previous accepted step's (time, per-device
         // powers). Local to this march on purpose: a fallback rung or a
@@ -4590,6 +4620,13 @@ impl Scheduler {
     }
 
     fn record_residual(&mut self, diagnostics: TransientDiagnostics) {
+        // Both converged paths funnel through here, so this is the one place
+        // the carried latch is adopted -- on a latching board only, so every
+        // other board enters each chunk exactly as it always did. `None` (no
+        // latch tracked) keeps the previous chunk's rather than clearing it.
+        if self.latching && diagnostics.switch_latch.is_some() {
+            self.last_switch_latch = diagnostics.switch_latch;
+        }
         let Some(candidate) = diagnostics.final_residual else {
             return;
         };
@@ -4936,6 +4973,7 @@ impl Scheduler {
         self.fallback_chunks = 0;
         self.fallback_windows.clear();
         self.worst_residual = None;
+        self.last_switch_latch = None;
         self.consecutive_failed_chunks = 0;
         self.max_consecutive_failed_chunks = 0;
         self.last_solve_error = None;
@@ -7189,6 +7227,7 @@ missing = ["measurement_registers"]
             device_meta,
             dacs: Vec::new(),
             peripherals: Vec::new(),
+            latching_switches: false,
             report: hauksbee_bind::bind_report::BindReport::default(),
         }
     }
@@ -7677,115 +7716,81 @@ missing = ["measurement_registers"]
     /// A Nano module driving net CLK from A2 (PC2) into an RC integrator
     /// (10k into 100 nF, tau = 1 ms).
     #[cfg(feature = "avr")]
-    const RC_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "CLK")
-  (net 4 "MID")
-
-  (module Module:Arduino_Nano (layer F.Cu)
-    (at 100 100)
-    (fp_text reference A1 (at 0 0) (layer F.SilkS))
-    (fp_text value Arduino_Nano (at 0 2) (layer F.Fab))
-    (pad 4 thru_hole circle (at 0 4) (size 1 1) (net 1 "GND"))
-    (pad 27 thru_hole circle (at 0 27) (size 1 1) (net 2 "+5V"))
-    (pad 21 thru_hole circle (at 0 21) (size 1 1) (net 3 "CLK"))
-  )
-  (module Resistor:R (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 3 "CLK"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 4 "MID"))
-  )
-  (module Capacitor:C (layer F.Cu)
-    (at 120 100)
-    (fp_text reference C1 (at 0 0) (layer F.SilkS))
-    (fp_text value 100nF (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 4 "MID"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-)
-"#;
+    static RC_BOARD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        pcb_fixture(
+            &["", "GND", "+5V", "CLK", "MID"],
+            &[
+                (
+                    "Module:Arduino_Nano",
+                    "A1",
+                    "Arduino_Nano",
+                    100,
+                    &[(4, 4, 1), (27, 27, 2), (21, 21, 3)],
+                ),
+                ("Resistor:R", "R1", "10k", 110, &[(1, 0, 3), (2, 2, 4)]),
+                ("Capacitor:C", "C1", "100nF", 120, &[(1, 0, 4), (2, 2, 1)]),
+            ],
+        )
+    });
 
     /// A Nano driving SER/SRCLK/RCLK of a real bound 74HC595 whose Q0/Q7 are
     /// pulled down.
     #[cfg(feature = "avr")]
-    const CHAIN_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "SER")
-  (net 4 "SRCLK")
-  (net 5 "RCLK")
-  (net 6 "Q0")
-  (net 7 "Q7")
-
-  (module Module:Arduino_Nano (layer F.Cu)
-    (at 100 100)
-    (fp_text reference A1 (at 0 0) (layer F.SilkS))
-    (fp_text value Arduino_Nano (at 0 2) (layer F.Fab))
-    (pad 4 thru_hole circle (at 0 4) (size 1 1) (net 1 "GND"))
-    (pad 27 thru_hole circle (at 0 27) (size 1 1) (net 2 "+5V"))
-    (pad 14 thru_hole circle (at 0 14) (size 1 1) (net 3 "SER"))
-    (pad 16 thru_hole circle (at 0 16) (size 1 1) (net 4 "SRCLK"))
-    (pad 15 thru_hole circle (at 0 15) (size 1 1) (net 5 "RCLK"))
-  )
-  (module Logic:SN74HC595 (layer F.Cu)
-    (at 120 100)
-    (fp_text reference U2 (at 0 0) (layer F.SilkS))
-    (fp_text value 74HC595 (at 0 2) (layer F.Fab))
-    (pad 14 thru_hole circle (at 0 0) (size 1 1) (net 3 "SER"))
-    (pad 11 thru_hole circle (at 0 1) (size 1 1) (net 4 "SRCLK"))
-    (pad 12 thru_hole circle (at 0 2) (size 1 1) (net 5 "RCLK"))
-    (pad 15 thru_hole circle (at 0 3) (size 1 1) (net 6 "Q0"))
-    (pad 7 thru_hole circle (at 0 4) (size 1 1) (net 7 "Q7"))
-    (pad 16 thru_hole circle (at 0 5) (size 1 1) (net 2 "+5V"))
-    (pad 8 thru_hole circle (at 0 6) (size 1 1) (net 1 "GND"))
-  )
-  (module Resistor:R (layer F.Cu)
-    (at 130 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 6 "Q0"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-  (module Resistor:R2 (layer F.Cu)
-    (at 140 100)
-    (fp_text reference R2 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 7 "Q7"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-)
-"#;
+    static CHAIN_BOARD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        pcb_fixture(
+            &["", "GND", "+5V", "SER", "SRCLK", "RCLK", "Q0", "Q7"],
+            &[
+                (
+                    "Module:Arduino_Nano",
+                    "A1",
+                    "Arduino_Nano",
+                    100,
+                    &[
+                        (4, 4, 1),
+                        (27, 27, 2),
+                        (14, 14, 3),
+                        (16, 16, 4),
+                        (15, 15, 5),
+                    ],
+                ),
+                (
+                    "Logic:SN74HC595",
+                    "U2",
+                    "74HC595",
+                    120,
+                    &[
+                        (14, 0, 3),
+                        (11, 1, 4),
+                        (12, 2, 5),
+                        (15, 3, 6),
+                        (7, 4, 7),
+                        (16, 5, 2),
+                        (8, 6, 1),
+                    ],
+                ),
+                ("Resistor:R", "R1", "10k", 130, &[(1, 0, 6), (2, 2, 1)]),
+                ("Resistor:R2", "R2", "10k", 140, &[(1, 0, 7), (2, 2, 1)]),
+            ],
+        )
+    });
 
     /// A Nano driving net BUS from A2 (PC2) into a plain 10k pull-down.
     #[cfg(feature = "avr")]
-    const RELEASE_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "BUS")
-
-  (module Module:Arduino_Nano (layer F.Cu)
-    (at 100 100)
-    (fp_text reference A1 (at 0 0) (layer F.SilkS))
-    (fp_text value Arduino_Nano (at 0 2) (layer F.Fab))
-    (pad 4 thru_hole circle (at 0 4) (size 1 1) (net 1 "GND"))
-    (pad 27 thru_hole circle (at 0 27) (size 1 1) (net 2 "+5V"))
-    (pad 21 thru_hole circle (at 0 21) (size 1 1) (net 3 "BUS"))
-  )
-  (module Resistor:R (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 3 "BUS"))
-    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
-  )
-)
-"#;
+    static RELEASE_BOARD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        pcb_fixture(
+            &["", "GND", "+5V", "BUS"],
+            &[
+                (
+                    "Module:Arduino_Nano",
+                    "A1",
+                    "Arduino_Nano",
+                    100,
+                    &[(4, 4, 1), (27, 27, 2), (21, 21, 3)],
+                ),
+                ("Resistor:R", "R1", "10k", 110, &[(1, 0, 3), (2, 2, 1)]),
+            ],
+        )
+    });
 
     /// Bind `board` and promote the given Nano pins to driven-low outputs,
     /// exactly as their first firmware edges would.
@@ -7817,7 +7822,7 @@ missing = ["measurement_registers"]
     #[test]
     fn cosim_bitbang_595_latches_through_bound_nets() {
         // SER on D11/PB3, SRCLK on D13/PB5, RCLK on D12/PB4.
-        let mut sched = nano_scheduler(CHAIN_BOARD, &[('B', 3), ('B', 5), ('B', 4)]);
+        let mut sched = nano_scheduler(&CHAIN_BOARD, &[('B', 3), ('B', 5), ('B', 4)]);
 
         let byte = 0xA6u8;
         let mut log = Vec::new();
@@ -7878,7 +7883,7 @@ missing = ["measurement_registers"]
         let mut edges = HashMap::new();
         edges.insert(('C', 2u8), transitions);
 
-        let mut sched = nano_scheduler(RC_BOARD, &[('C', 2)]);
+        let mut sched = nano_scheduler(&RC_BOARD, &[('C', 2)]);
         assert!(sched.solve_chunk(chunk), "control solve converges");
         let mid_dc = sched.net_voltage("MID").expect("MID");
         assert!(
@@ -7886,7 +7891,7 @@ missing = ["measurement_registers"]
             "DC control must leave the RC at ~0 V, got {mid_dc:.3}"
         );
 
-        let mut sched = nano_scheduler(RC_BOARD, &[('C', 2)]);
+        let mut sched = nano_scheduler(&RC_BOARD, &[('C', 2)]);
         sched.last_chunk_edges.push(ChunkPinEdges {
             mcu_reference: "A1".into(),
             edges,
@@ -7920,7 +7925,7 @@ missing = ["measurement_registers"]
     #[cfg(feature = "avr")]
     #[test]
     fn sync_configured_outputs_releases_dropped_pins() {
-        let mut sched = nano_scheduler(RELEASE_BOARD, &[]);
+        let mut sched = nano_scheduler(&RELEASE_BOARD, &[]);
         let enabled = |sched: &Scheduler| sched.mcus[0].binding.gpio_drivers[&('C', 2)].enabled;
         let no_edges = std::collections::HashSet::new();
 

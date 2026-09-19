@@ -476,6 +476,10 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             check=False,
         )
 
+    def _assert_unsafe_archive(self, result: subprocess.CompletedProcess[str]) -> None:
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe archive", result.stderr)
+
     def test_archive_validator_rejects_parent_traversal_member(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             archive = Path(raw_tmp) / "traversal.tar"
@@ -485,8 +489,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 stream.addfile(member)
             result = self._run_provenance_helper("archive", str(archive))
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unsafe archive", result.stderr)
+        self._assert_unsafe_archive(result)
 
     def test_archive_validator_rejects_escaping_tar_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -498,8 +501,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 stream.addfile(member)
             result = self._run_provenance_helper("archive", str(archive))
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unsafe archive", result.stderr)
+        self._assert_unsafe_archive(result)
 
     def test_archive_validator_accounts_for_stripped_parent_components(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -513,8 +515,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 "archive", "--strip-components", "1", str(archive)
             )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unsafe archive", result.stderr)
+        self._assert_unsafe_archive(result)
 
     def test_archive_validator_rejects_escaping_tar_hardlink(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -526,8 +527,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 stream.addfile(member)
             result = self._run_provenance_helper("archive", str(archive))
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("unsafe archive", result.stderr)
+        self._assert_unsafe_archive(result)
 
     def test_archive_validator_rejects_escaping_zip_path_and_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -545,10 +545,8 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 stream.writestr(member, "/tmp/unverified-qemu")
             symlink_result = self._run_provenance_helper("archive", str(symlink))
 
-        self.assertNotEqual(traversal_result.returncode, 0)
-        self.assertIn("unsafe archive", traversal_result.stderr)
-        self.assertNotEqual(symlink_result.returncode, 0)
-        self.assertIn("unsafe archive", symlink_result.stderr)
+        self._assert_unsafe_archive(traversal_result)
+        self._assert_unsafe_archive(symlink_result)
 
     def test_backend_path_records_fail_closed_on_missing_relative_or_duplicate_values(
         self,

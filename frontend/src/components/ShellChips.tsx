@@ -1,5 +1,5 @@
 import type { WebReport } from '../types/report'
-import { reportVerdictTone } from '../lib/report-view'
+import { reportVerdictTone, summarizeEvidence } from '../lib/report-view'
 import type { SimShellStatus } from '../SimView'
 import type { ChecksSummary } from './ChecksView'
 import type { AppView } from './Sidebar'
@@ -109,12 +109,20 @@ export function ShellChips({
         ...(tone === 'error'
           ? { tone: 'err' as const, label: report.serious > 0 ? `${report.serious} serious` : 'analysis failed' }
           : tone === 'warning'
-            ? { tone: 'warn' as const, label: report.total > 0 ? `${report.total} findings` : 'analysis qualified' }
+            // An undermined run-level claim is what the body headline leads
+            // with ("invalid for analysis"); "qualified" beside it reads as a
+            // weaker verdict than the report gives.
+            ? summarizeEvidence(report.evidence).undermined > 0
+              ? { tone: 'warn' as const, label: 'analysis undermined' }
+              : { tone: 'warn' as const, label: report.total > 0 ? `${report.total} findings` : 'analysis qualified' }
             : { tone: 'ok' as const, label: 'analysis clean' }),
       })
     }
     if (checks) {
       const { passed, failed, invalid } = checks
+      // A green checks chip must never sit beside the report's own serious
+      // findings: a spec that asserts nothing about them has not cleared them.
+      const uncovered = report?.ok === true ? report.serious : 0
       chips.push({
         testid: 'chip-checks',
         onClick: () => goTo('checks'),
@@ -122,7 +130,9 @@ export function ShellChips({
           ? { tone: 'err' as const, label: `checks ${failed} failed` }
           : invalid > 0
             ? { tone: 'warn' as const, label: `checks ${invalid} invalid` }
-            : { tone: 'ok' as const, label: `checks ${passed} passed` }),
+            : uncovered > 0
+              ? { tone: 'warn' as const, label: `checks ${passed} passed, ${uncovered} serious uncovered` }
+              : { tone: 'ok' as const, label: `checks ${passed} passed` }),
       })
     }
     if (simOffline) {

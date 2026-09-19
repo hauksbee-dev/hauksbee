@@ -806,6 +806,9 @@ pub enum ComponentKind {
     Opamp,
     /// Voltage comparator (behavioral).
     Comparator,
+    /// 555-class precision timer, stamped at bind time as a composite of
+    /// resistors, behavioral sources and a hysteretic switch (the SR latch).
+    Timer,
     /// Single-pole analog switch / transmission gate.
     AnalogSwitch,
     /// Generic digital behavioral block.

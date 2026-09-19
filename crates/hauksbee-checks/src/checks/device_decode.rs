@@ -1161,6 +1161,16 @@ fn check_cypd3177(board: &ExtractedBoard, u: &Component, report: &mut NetLintRep
     }
 }
 
+/// Parse a synthetic board and run it through `device_decode_lint` with the
+/// built-in model library. Shared by the `tests`, `bq2407x_tests` and
+/// `tps25982_tests` modules below, which each fed an identical board through
+/// an identically-named local copy of this helper.
+#[cfg(test)]
+fn lint(board_text: &str) -> NetLintReport {
+    let board = ExtractedBoard::from_kicad_pcb(board_text).expect("board parses");
+    device_decode_lint(&board, &ModelLibrary::builtin())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1294,12 +1304,6 @@ mod tests {
         )
     }
 
-    fn decode_findings(text: &str) -> NetLintReport {
-        let board = ExtractedBoard::from_kicad_pcb(text).expect("parse synthetic board");
-        let lib = ModelLibrary::builtin();
-        device_decode_lint(&board, &lib)
-    }
-
     #[test]
     fn device_decode_findings_flow_through_engine_lint() {
         // Chokepoint fix: device_decode must run INSIDE engine_lint so
@@ -1329,7 +1333,7 @@ mod tests {
         //   its lower detents (5.1k leg -> 1315 mV = 12V) sit below VBUS_MIN. The
         //   top reachable band equals 19V, and the 15V/20V finding plus the Note-1
         //   finding both apply. We assert the Note-1 (High) finding fires.
-        let r = decode_findings(&cypd_board("10k", "5k1"));
+        let r = lint(&cypd_board("10k", "5k1"));
         let note1: Vec<_> = r
             .of_check(LintCheck::DeviceDecode)
             .filter(|f| matches!(f.severity, Severity::High))
@@ -1345,7 +1349,7 @@ mod tests {
         // The selector cannot reach 20V (no detent grounds the pull-up / opens the
         // pull-down to give >= 2779 mV), so the Medium "unreachable top band"
         // finding fires regardless of the Note-1 case.
-        let r = decode_findings(&cypd_board("10k", "5k1"));
+        let r = lint(&cypd_board("10k", "5k1"));
         let med: Vec<_> = r
             .of_check(LintCheck::DeviceDecode)
             .filter(|f| matches!(f.severity, Severity::Medium))
@@ -1386,7 +1390,7 @@ mod tests {
   )
 )"#;
         assert_eq!(
-            decode_findings(text).of_check(LintCheck::DeviceDecode).count(),
+            lint(text).of_check(LintCheck::DeviceDecode).count(),
             0,
             "a fixed-voltage (no-selector) CYPD3177 must not trip the selector-reachability finding"
         );
@@ -1462,7 +1466,7 @@ mod tests {
         // static divider, so per zero-false-positive discipline it stays silent on
         // VBUS_MAX. VBUS_MIN resolves (100k/1k -> ~33 mV = 5V band) but with no
         // VBUS_MAX band to compare, Note-1 cannot fire. Net result: silent.
-        let r = decode_findings(text);
+        let r = lint(text);
         assert_eq!(
             r.of_check(LintCheck::DeviceDecode).count(),
             0,
@@ -1484,12 +1488,7 @@ mod tests {
     (pad 2 smd rect (at 0 1) (net 21 "VBUS_max") (pinfunction "VBUS_MAX"))
   )
 )"#;
-        assert_eq!(
-            decode_findings(text)
-                .of_check(LintCheck::DeviceDecode)
-                .count(),
-            0
-        );
+        assert_eq!(lint(text).of_check(LintCheck::DeviceDecode).count(), 0);
     }
 
     // ── DNP-awareness (the real pd-sink board's actual state) ────────────────
@@ -1560,7 +1559,7 @@ mod tests {
   )
 )"#;
         assert_eq!(
-            decode_findings(text).of_check(LintCheck::DeviceDecode).count(),
+            lint(text).of_check(LintCheck::DeviceDecode).count(),
             0,
             "with the permanent pull-down DNP the static divider is uncomputable; the check must stay silent"
         );
@@ -1570,7 +1569,6 @@ mod tests {
 #[cfg(test)]
 mod bq2407x_tests {
     use super::*;
-    use hauksbee_extract::ExtractedBoard;
 
     fn bq_board(tmr_value: &str) -> String {
         format!(
@@ -1594,11 +1592,6 @@ mod bq2407x_tests {
 )
 "#
         )
-    }
-
-    fn lint(board_text: &str) -> NetLintReport {
-        let board = ExtractedBoard::from_kicad_pcb(board_text).expect("board parses");
-        device_decode_lint(&board, &ModelLibrary::builtin())
     }
 
     /// The seed case: 4.7k where 47k was intended, below the 18-72k band.
@@ -1737,7 +1730,6 @@ mod bq2407x_tests {
 #[cfg(test)]
 mod tps25982_tests {
     use super::*;
-    use hauksbee_extract::ExtractedBoard;
 
     fn tps_board(
         part_value: &str,
@@ -1794,11 +1786,6 @@ mod tps25982_tests {
 {resistor}{connector})
 "#
         )
-    }
-
-    fn lint(board_text: &str) -> NetLintReport {
-        let board = ExtractedBoard::from_kicad_pcb(board_text).expect("board parses");
-        device_decode_lint(&board, &ModelLibrary::builtin())
     }
 
     fn connector_budget_warnings(report: &NetLintReport) -> Vec<&LintFinding> {

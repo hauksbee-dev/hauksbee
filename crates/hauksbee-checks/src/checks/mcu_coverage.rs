@@ -210,7 +210,8 @@ pub fn mcu_coverage_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hauksbee_extract::{Component, Pin};
+    use crate::test_support::{board, pin};
+    use hauksbee_extract::Component;
 
     fn comp(reference: &str, value: &str, lib_id: &str) -> Component {
         comp_n(reference, value, lib_id, 1)
@@ -228,15 +229,7 @@ mod tests {
             layer: String::new(),
             properties: Vec::new(),
             dnp: false,
-            pins: (1..=n)
-                .map(|i| Pin {
-                    number: i.to_string(),
-                    net: Some(0),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
-                })
-                .collect(),
+            pins: (1..=n).map(|i| pin(&i.to_string(), 0)).collect(),
         }
     }
 
@@ -323,15 +316,15 @@ mod tests {
     #[test]
     fn flags_unmodelled_mcu_but_not_a_modelled_one() {
         let lib = ModelLibrary::builtin();
-        let board = ExtractedBoard {
-            name: "t".into(),
-            nets: Vec::new(),
-            components: vec![
+        let board = board(
+            "t",
+            &[],
+            vec![
                 comp("U4", "STM32WL55CCU6", "Package_QFP:LQFP-48"), // not in DB → flagged
                 comp("U1", "STM32F103C8T6", "Package_QFP:LQFP-48"), // DB-authored, has straps
                 comp("R1", "10k", "Device:R"),                      // passive
             ],
-        };
+        );
         let report = mcu_coverage_lint(&board, &lib);
         assert_eq!(report.findings.len(), 1, "exactly one unchecked-MCU note");
         let f = &report.findings[0];
@@ -351,14 +344,14 @@ mod tests {
     #[test]
     fn flags_fallback_routed_mcu_but_not_a_db_authored_one() {
         let lib = ModelLibrary::builtin();
-        let board = ExtractedBoard {
-            name: "t".into(),
-            nets: Vec::new(),
-            components: vec![
+        let board = board(
+            "t",
+            &[],
+            vec![
                 comp("U1", "STM32F407VGT6", "Package_QFP:LQFP-100"), // DB-miss → fallback
                 comp("U2", "STM32F103C8T6", "Package_QFP:LQFP-48"),  // DB-authored, has straps
             ],
-        };
+        );
         let report = mcu_coverage_lint(&board, &lib);
         let refs: Vec<&str> = report.findings.iter().map(|f| f.refs[0].as_str()).collect();
         assert_eq!(
@@ -376,15 +369,15 @@ mod tests {
     #[test]
     fn flags_unmodelled_esp_module_but_not_db_authored_wroom() {
         let lib = ModelLibrary::builtin();
-        let board = ExtractedBoard {
-            name: "t".into(),
-            nets: Vec::new(),
-            components: vec![
+        let board = board(
+            "t",
+            &[],
+            vec![
                 // value doesn't open with ESP32; only the RF_Module library says ESP32.
                 comp("U1", "ESP-WROOM-32", "RF_Module:ESP32-WROOM-32"),
                 comp("U2", "ESP32-WROOM-32", "RF_Module:ESP32-WROOM-32"), // DB-authored
             ],
-        };
+        );
         let report = mcu_coverage_lint(&board, &lib);
         let refs: Vec<&str> = report.findings.iter().map(|f| f.refs[0].as_str()).collect();
         // U2 is the DB-modelled WROOM (has straps) → not flagged. U1 ("ESP-WROOM-32")
@@ -414,11 +407,7 @@ mod tests {
     #[test]
     fn flags_fallback_routed_esp32() {
         let lib = ModelLibrary::builtin();
-        let board = ExtractedBoard {
-            name: "t".into(),
-            nets: Vec::new(),
-            components: vec![comp("U1", "ESP32-C3FH4", "Package:QFN-32")],
-        };
+        let board = board("t", &[], vec![comp("U1", "ESP32-C3FH4", "Package:QFN-32")]);
         let report = mcu_coverage_lint(&board, &lib);
         assert_eq!(
             report
@@ -454,14 +443,14 @@ mod tests {
     #[test]
     fn non_strap_bearing_unmodelled_mcu_is_not_flagged() {
         let lib = ModelLibrary::builtin();
-        let board = ExtractedBoard {
-            name: "t".into(),
-            nets: Vec::new(),
-            components: vec![
+        let board = board(
+            "t",
+            &[],
+            vec![
                 comp_n("U1", "ATSAMD51J20A-AU", "Package_QFP:LQFP-64", 40), // not in DB, no boot strap
                 comp("U2", "ATmega2560-16AU", "Package_QFP:TQFP-100"),      // AVR, fuses not straps
             ],
-        };
+        );
         assert!(
             mcu_coverage_lint(&board, &lib).findings.is_empty(),
             "non-strap-bearing MCUs (SAMD, AVR) must not be flagged"
