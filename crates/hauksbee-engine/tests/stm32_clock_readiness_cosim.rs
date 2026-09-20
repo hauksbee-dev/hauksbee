@@ -12,13 +12,7 @@ use hauksbee_mcu::renode::is_available;
 use std::path::PathBuf;
 
 fn firmware() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/stm32_clock_ready/clock_ready.elf");
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::testdata("firmware/stm32_clock_ready/clock_ready.elf")
 }
 
 fn board_text(with_crystal: bool) -> String {

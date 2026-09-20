@@ -412,7 +412,7 @@ impl CiResult {
             let mut parts = Vec::new();
             if evidence > 0 {
                 parts.push(format!(
-                    "a model for every part the assertions rest on; {evidence} assertion(s) depend on an unresolved (open) part"
+                    "every critical assumption under those assertions closed; {evidence} assertion(s) rest on an unresolved (open) part or a violated datasheet limit"
                 ));
             }
             if timing > 0 {
@@ -451,7 +451,7 @@ impl CiResult {
                     )
                 } else if open_part(r) {
                     format!(
-                        "give the open part(s) named under INVALID assertion '{}' a model (hauksbee models new, or a [[supply]] for a battery net), then rerun the same spec",
+                        "close the assumption named under INVALID assertion '{}' (give an open part a model with hauksbee models new, add a [[supply]] for a battery net, or bring a part inside the card limit it names), then rerun the same spec",
                         r.label
                     )
                 } else if r.detail.starts_with("INVALID: timing coverage refusal:") {

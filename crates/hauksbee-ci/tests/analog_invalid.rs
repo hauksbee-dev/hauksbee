@@ -18,12 +18,12 @@
 //! CI-layer consequences are proven here at the outcome/evaluation boundary.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use hauksbee_ci::assertions::evaluate;
-use hauksbee_ci::report::CiResult;
 use hauksbee_ci::runner::{NetWindow, RunOutcome};
 use hauksbee_ci::spec::Spec;
+
+use crate::support::ci_result;
 
 /// Write a spec TOML to a uniquely-named temp file and load it (tests run in
 /// parallel, so the file name is per-test).
@@ -67,27 +67,6 @@ fn outcome_with(
         failed_windows,
         analog_abort,
         ..Default::default()
-    }
-}
-
-fn ci_result(results: Vec<hauksbee_ci::assertions::AssertResult>, analog_abort: bool) -> CiResult {
-    CiResult {
-        spec_name: "t".to_string(),
-        board: "b.kicad_pcb".to_string(),
-        results,
-        seeds: 1,
-        elapsed: Duration::from_secs(0),
-        analog_abort,
-        coverage: None,
-        substitutions: Vec::new(),
-        coverage_warnings: Vec::new(),
-        timing_coverage: Vec::new(),
-        timing_refusals: Vec::new(),
-        dead_rails: Vec::new(),
-        waiver_notes: Vec::new(),
-        inventory: Vec::new(),
-        assumptions: Vec::new(),
-        evidence: Vec::new(),
     }
 }
 

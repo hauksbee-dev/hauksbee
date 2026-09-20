@@ -7,9 +7,15 @@
 //! (hauksbee-engine's `cosim_failed_chunk.rs`), but neither of those is a
 //! process exiting 3 through a shell on a spec someone could write.
 //!
-//! **It cannot be reached, and this file is the evidence.** Every route from the
-//! spec surface into the analog solve is closed on purpose, and each one is
-//! closed at a specific place in the code:
+//! **NO LONGER THE ONLY ROUTE.** Exit 3 now also carries a second, deliberate
+//! meaning: a datasheet operating limit this run MEASURED as violated
+//! (`AssumptionKind::OperatingLimitViolated` -> `Undermined`), which a
+//! hand-written spec reaches easily — see
+//! `comparator_hysteresis::an_input_pair_above_the_common_mode_ceiling_refuses_instead_of_answering`
+//! and `shunt_reference`'s minimum-current rows. What this file still proves is
+//! the narrower claim it was written for: **the FAILED-SOLVE route into exit 3
+//! cannot be reached from the spec surface.** Every way in is closed on purpose,
+//! and each one is closed at a specific place in the code:
 //!
 //! | route | what closes it |
 //! |---|---|

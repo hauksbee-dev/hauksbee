@@ -133,14 +133,7 @@ fn build_adc_copy_elf() -> Vec<u8> {
 
 /// Write the firmware ELF to a unique temp path.
 fn write_elf_to_temp() -> std::path::PathBuf {
-    let p = std::env::temp_dir().join(format!(
-        "hauksbee-renode-adc-fixture-{}-{}.elf",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let p = crate::support::unique_temp("hauksbee-renode-adc-fixture", ".elf");
     std::fs::write(&p, build_adc_copy_elf()).expect("write fixture ELF");
     p
 }

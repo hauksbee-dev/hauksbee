@@ -8,11 +8,54 @@ description = "LM358 dual op-amp, 32V supply, rail-to-rail input"
 [models.match]
 value_re = "(?i)^LM358"
 
+# VICR, one entry per channel. The op-amp's real rule is stricter than the
+# comparator's -- EITHER input above V+ - 1.5 V leaves the guaranteed range --
+# but the envelope kind encodes the both-inputs form, so this UNDER-reports on
+# an op-amp rather than over-reporting: a flagged board is certainly out of
+# range, an unflagged one is not thereby in range.
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_a", "in_minus_a"]
+headroom_v = 1.5
+severity = "serious"
+basis = "TI LM358 SLOS068AB, Recommended Operating Conditions, common-mode input voltage 0 V to V+ - 1.5 V at VCC = 5 V"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_b", "in_minus_b"]
+headroom_v = 1.5
+severity = "serious"
+basis = "TI LM358 SLOS068AB, Recommended Operating Conditions, common-mode input voltage 0 V to V+ - 1.5 V at VCC = 5 V"
+
 [models.params]
-# Source: Texas Instruments LM358 datasheet (SNOSC16D), typical parameters
-gain    = 100000.0  # open-loop DC gain (V/V), typ 100 dB
-rail_lo = 0.0       # output low rail (V), approx. Vss + 0 V (1-supply)
-rail_hi = 32.0      # output high rail (V), single supply
+# Sources: TI "LM158/LM258/LM358/LM2904" SLOS068AB (June 1976, rev. October
+# 2024), OUTPUT section of the Electrical Characteristics; corroborated on the
+# swing figures by Diodes Incorporated DS35167 Rev. 2-2 (February 2011).
+gain    = 100000.0  # open-loop DC gain (V/V), AOL 100 V/mV typ
+# THE SWING IS A HEADROOM FROM THE SUPPLY PINS, NOT A FIXED LEVEL. These two
+# are what the binder uses when the part's V+/V- pads are on nets: the output
+# saturates at V(V-)+swing_lo .. V(V+)-swing_hi, so a 5 V single supply tops
+# out near 3.5 V, not at the 32 V absolute-maximum supply the old rail_hi
+# named. A board that does not wire V+ is refused as an open part rather than
+# silently given the fixed rail.
+swing_hi = 1.5      # "VO voltage output swing from rail, positive rail,
+                    # VS = 5 V, RL >= 2 kOhm": MAX 1.5 V (SLOS068AB). Diodes
+                    # states the same ceiling as "0V to V+ - 1.5V". No MINIMUM
+                    # is printed by either vendor, so this is the guaranteed
+                    # worst case, not a typical.
+swing_lo = 0.020    # same row, negative rail, VS = 5 V, RL <= 10 kOhm,
+                    # TA = -25 to 85 C: TYP 5 mV, MAX 20 mV. The MAX is taken.
+rail_lo = 0.0       # fallback levels, used only by a deck `.model opamp(...)`
+rail_hi = 32.0      # (no supply pins to read); NOT a swing limit.
+warning = "the output swing is bounded by the supply pins (V(V-)+20 mV to V(V+)-1.5 V, the datasheet MAX headrooms at RL >= 2 kOhm), but nothing else about the output stage is: the output current limit (short-circuit and the 20 mA source / 10 mA sink region) is not modelled, so a load stiffer than 2 kOhm gets a swing the part cannot actually hold and a heavier one is answered as if it could. The input common-mode range is now checked by the `input_common_mode` envelope above, and that rule UNDER-REPORTS for an op-amp: it fires only when BOTH inputs of one channel sit above V+ - 1.5 V, whereas this part leaves its guaranteed range as soon as EITHER input does, so a single input above the ceiling is not flagged at all. The 0 V lower end is not checked either, the amplification itself is still computed as if the part were in range, and the phase-reversal behaviour below V- is not modelled at all. Input offset voltage (3 mV typ, 7 mV max), input bias current (45 nA typ, 250 nA max) and input offset current (5 nA typ, 50 nA max) are taken as zero, and the gain is the 100 V/mV typ rather than the 25 V/mV min, so a computed output is the NOMINAL part at 25 C, not a bound over the datasheet's spread or over temperature. The 0.7 MHz gain-bandwidth and 0.3 V/us slew rate are not on this card, so a board-bound LM358 answers DC and settles instantly."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "dual_channel", "split_or_single_supply"]
+missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
+           "input_bias_current", "input_offset_current", "parameter_spread"]
 
 [models.pins]
 # Pin numbers for DIP-8 / SOIC-8 LM358 (unit A, pin numbers vary by schematic)
@@ -42,6 +85,14 @@ pole_hz = 45000.0
 rail_lo = 0.0
 rail_hi = 5.5
 
+warning = "the output swing on this card is a FIXED level, not a headroom from the voltage on the supply pin: unlike the LM358/LM324/TSV914 entries it carries no `swing_hi`/`swing_lo`, so a INA186A1 on a rail lower than that level is answered as if it could swing past its own supply. The output current limit, the input common-mode range, input offset voltage and input bias current are all unmodelled (taken as zero or unchecked), and every figure is the datasheet TYPICAL at 25 C, not a bound over the part's spread or over temperature."
+
+[models.coverage]
+implements = ["fixed_gain", "finite_output_swing"]
+missing = ["supply_referenced_output_swing", "output_current_limit",
+           "input_common_mode_range", "input_offset_voltage", "input_bias_current",
+           "parameter_spread"]
+
 [models.pins]
 "1" = "ref"
 "2" = "vss"
@@ -63,6 +114,14 @@ gain = 50.0
 pole_hz = 37000.0
 rail_lo = 0.0
 rail_hi = 5.5
+
+warning = "the output swing on this card is a FIXED level, not a headroom from the voltage on the supply pin: unlike the LM358/LM324/TSV914 entries it carries no `swing_hi`/`swing_lo`, so a INA186A2 on a rail lower than that level is answered as if it could swing past its own supply. The output current limit, the input common-mode range, input offset voltage and input bias current are all unmodelled (taken as zero or unchecked), and every figure is the datasheet TYPICAL at 25 C, not a bound over the part's spread or over temperature."
+
+[models.coverage]
+implements = ["fixed_gain", "finite_output_swing"]
+missing = ["supply_referenced_output_swing", "output_current_limit",
+           "input_common_mode_range", "input_offset_voltage", "input_bias_current",
+           "parameter_spread"]
 
 [models.pins]
 "1" = "ref"
@@ -86,6 +145,14 @@ pole_hz = 35000.0
 rail_lo = 0.0
 rail_hi = 5.5
 
+warning = "the output swing on this card is a FIXED level, not a headroom from the voltage on the supply pin: unlike the LM358/LM324/TSV914 entries it carries no `swing_hi`/`swing_lo`, so a INA186A3 on a rail lower than that level is answered as if it could swing past its own supply. The output current limit, the input common-mode range, input offset voltage and input bias current are all unmodelled (taken as zero or unchecked), and every figure is the datasheet TYPICAL at 25 C, not a bound over the part's spread or over temperature."
+
+[models.coverage]
+implements = ["fixed_gain", "finite_output_swing"]
+missing = ["supply_referenced_output_swing", "output_current_limit",
+           "input_common_mode_range", "input_offset_voltage", "input_bias_current",
+           "parameter_spread"]
+
 [models.pins]
 "1" = "ref"
 "2" = "vss"
@@ -107,6 +174,14 @@ gain = 200.0
 pole_hz = 33000.0
 rail_lo = 0.0
 rail_hi = 5.5
+
+warning = "the output swing on this card is a FIXED level, not a headroom from the voltage on the supply pin: unlike the LM358/LM324/TSV914 entries it carries no `swing_hi`/`swing_lo`, so a INA186A4 on a rail lower than that level is answered as if it could swing past its own supply. The output current limit, the input common-mode range, input offset voltage and input bias current are all unmodelled (taken as zero or unchecked), and every figure is the datasheet TYPICAL at 25 C, not a bound over the part's spread or over temperature."
+
+[models.coverage]
+implements = ["fixed_gain", "finite_output_swing"]
+missing = ["supply_referenced_output_swing", "output_current_limit",
+           "input_common_mode_range", "input_offset_voltage", "input_bias_current",
+           "parameter_spread"]
 
 [models.pins]
 "1" = "ref"
@@ -130,6 +205,14 @@ pole_hz = 27000.0
 rail_lo = 0.0
 rail_hi = 5.5
 
+warning = "the output swing on this card is a FIXED level, not a headroom from the voltage on the supply pin: unlike the LM358/LM324/TSV914 entries it carries no `swing_hi`/`swing_lo`, so a INA186A5 on a rail lower than that level is answered as if it could swing past its own supply. The output current limit, the input common-mode range, input offset voltage and input bias current are all unmodelled (taken as zero or unchecked), and every figure is the datasheet TYPICAL at 25 C, not a bound over the part's spread or over temperature."
+
+[models.coverage]
+implements = ["fixed_gain", "finite_output_swing"]
+missing = ["supply_referenced_output_swing", "output_current_limit",
+           "input_common_mode_range", "input_offset_voltage", "input_bias_current",
+           "parameter_spread"]
+
 [models.pins]
 "1" = "ref"
 "2" = "vss"
@@ -152,7 +235,13 @@ gain = 25.0
 pole_hz = 45000.0
 rail_lo = 0.0
 rail_hi = 5.5
-warning = "[auto-bind] generic INA186 value has no A1/A2/A3/A4/A5 gain suffix; assuming INA186A1 gain 25 V/V"
+warning = "[auto-bind] generic INA186 value has no A1/A2/A3/A4/A5 gain suffix; assuming INA186A1 gain 25 V/V. Also, the output swing on this card is a FIXED level, not a headroom from the voltage on the supply pin: unlike the LM358/LM324/TSV914 entries it carries no `swing_hi`/`swing_lo`, so a INA186 on a rail lower than that level is answered as if it could swing past its own supply. The output current limit, the input common-mode range, input offset voltage and input bias current are all unmodelled (taken as zero or unchecked), and every figure is the datasheet TYPICAL at 25 C, not a bound over the part's spread or over temperature."
+
+[models.coverage]
+implements = ["fixed_gain", "finite_output_swing"]
+missing = ["supply_referenced_output_swing", "output_current_limit",
+           "input_common_mode_range", "input_offset_voltage", "input_bias_current",
+           "parameter_spread"]
 
 [models.pins]
 "1" = "ref"
@@ -171,8 +260,9 @@ warning = "[auto-bind] generic INA186 value has no A1/A2/A3/A4/A5 gain suffix; a
 # `open_collector` existed this card said open-collector and bound push-pull,
 # supplying current the part cannot. NOT MODELLED: `warning` below (the route
 # that reaches the reader) and `coverage.missing`. The input common-mode range
-# is in there and not in `[[models.envelope]]` because that schema scopes a pin
-# to ABSOLUTE volts and this limit (0 to VCC-1.5 V) tracks the supply.
+# now IS in `[[models.envelope]]`, as the supply-relative `input_common_mode`
+# kind: `supply_range` scopes a pin to ABSOLUTE volts, and this limit tracks
+# the supply (0 to VCC-1.5 V).
 [[models]]
 id = "lm393"
 kind = "comparator"
@@ -180,6 +270,29 @@ description = "LM393/LM2903 dual comparator, open-collector output (the board's 
 
 [models.match]
 value_re = "(?i)^LM(393|2903)"
+
+# VICR, one entry per channel. SLCS005AH prints the upper end as VCC-1.5 V at
+# TA = 25 C (VCC-2.0 V over the full temperature range); 1.5 V is the 25 C
+# figure the rest of this card is specified at, so a board flagged against it
+# is out of range even in the friendliest case. The datasheet's own note is
+# that the comparator still answers correctly while ONE input stays inside the
+# range, which is why each entry lists both inputs of a channel and the check
+# fires only when both are above the ceiling.
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_a", "in_minus_a"]
+headroom_v = 1.5
+severity = "serious"
+basis = "TI LM393 SLCS005AH, Recommended Operating Conditions, common-mode input voltage VICR 0 V to VCC-1.5 V at TA = 25 C (VCC-2.0 V over temperature)"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_b", "in_minus_b"]
+headroom_v = 1.5
+severity = "serious"
+basis = "TI LM393 SLCS005AH, Recommended Operating Conditions, common-mode input voltage VICR 0 V to VCC-1.5 V at TA = 25 C (VCC-2.0 V over temperature)"
 
 [[models.envelope]]
 kind = "supply_range"
@@ -203,7 +316,8 @@ supply_static_ua = 450.0     # ICC 0.45 mA typ, both channels, VO = 2.5 V, RL in
 #   IIO          +/-5 mV max input offset voltage        (taken as 0)
 #   IIB          25 nA typ, 250 nA max input bias        (taken as 0)
 #   IIO(bias)    5 nA typ, 50 nA max input offset current(taken as 0)
-#   VICR         0 V to VCC-1.5 V common-mode range      (not checked)
+#   VICR         0 V to VCC-1.5 V common-mode range      (both-inputs-high
+#                                                        checked, see envelope)
 #   tpd          1.3 us typ response time, 100 mV overdrive, 5 mV step
 #                (300 ns typ at TTL-level swing)         (not modelled)
 #   AVD          200 V/mV typ, 50 V/mV min, VO 1.4-11.4 V
@@ -224,7 +338,7 @@ supply_static_ua = 450.0     # ICC 0.45 mA typ, both channels, VO = 2.5 V, RL in
 # trip point this card computes is nominal to ~1 mV of numerics, on top of a
 # datasheet uncertainty an order of magnitude larger.
 gain             = 1000.0    # gate smoothing: input volts per full 0..1 gate
-warning = "response time (1.3 us typ at 100 mV overdrive, 300 ns at a TTL-level step) is not modelled: the output switches inside one timestep, so propagation delay and any race that depends on it are unanswered. The low-level sink ceiling (16 mA typ, 6 mA min) is not modelled either, so a pull-up stiff enough to demand more than that gets a VOL the part cannot actually hold. The input common-mode range (0 V to VCC-1.5 V) is not checked, so an input driven above VCC-1.5 V is answered as if the part still compared it. Input offset voltage (+/-5 mV max), input bias current (25 nA typ, 250 nA max) and input offset current (5 nA typ, 50 nA max) are all taken as zero, and VOL is the 130 mV typ rather than the 400 mV max, so a computed threshold or low level is the NOMINAL part at 25 C, not a bound over the datasheet's spread or over temperature."
+warning = "response time (1.3 us typ at 100 mV overdrive, 300 ns at a TTL-level step) is not modelled: the output switches inside one timestep, so propagation delay and any race that depends on it are unanswered. The low-level sink ceiling (16 mA typ, 6 mA min) is not modelled either, so a pull-up stiff enough to demand more than that gets a VOL the part cannot actually hold. The input common-mode range is checked only as the `input_common_mode` envelope above states it: a run with BOTH inputs of one channel above VCC-1.5 V is flagged, while a single input above that ceiling (which the datasheet still answers correctly) and the -0.3 V lower end are not, and the comparison itself is still computed as if the part were in range. Input offset voltage (+/-5 mV max), input bias current (25 nA typ, 250 nA max) and input offset current (5 nA typ, 50 nA max) are all taken as zero, and VOL is the 130 mV typ rather than the 400 mV max, so a computed threshold or low level is the NOMINAL part at 25 C, not a bound over the datasheet's spread or over temperature."
 
 [models.coverage]
 implements = ["open_collector_output", "external_pullup_sets_high_level", "wire_or",
@@ -260,6 +374,41 @@ description = "LM339/LM2901 quad comparator, open-collector output (the board's 
 [models.match]
 value_re = "(?i)^LM(339|2901)"
 
+# VICR, one entry per channel; the note on `lm393` above applies verbatim
+# (upper end VCC-1.5 V at 25 C, VCC-2.0 V over temperature, and the output
+# state stays correct while one input of the pair is inside the range).
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_a", "in_minus_a"]
+headroom_v = 1.5
+severity = "serious"
+basis = "TI LM339 SLCS006Z, Recommended Operating Conditions, common-mode input voltage VICR 0 V to VCC-1.5 V at TA = 25 C (VCC-2.0 V over temperature)"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_b", "in_minus_b"]
+headroom_v = 1.5
+severity = "serious"
+basis = "TI LM339 SLCS006Z, Recommended Operating Conditions, common-mode input voltage VICR 0 V to VCC-1.5 V at TA = 25 C (VCC-2.0 V over temperature)"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_c", "in_minus_c"]
+headroom_v = 1.5
+severity = "serious"
+basis = "TI LM339 SLCS006Z, Recommended Operating Conditions, common-mode input voltage VICR 0 V to VCC-1.5 V at TA = 25 C (VCC-2.0 V over temperature)"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_d", "in_minus_d"]
+headroom_v = 1.5
+severity = "serious"
+basis = "TI LM339 SLCS006Z, Recommended Operating Conditions, common-mode input voltage VICR 0 V to VCC-1.5 V at TA = 25 C (VCC-2.0 V over temperature)"
+
 [[models.envelope]]
 kind = "supply_range"
 pin = "vcc"
@@ -281,7 +430,8 @@ supply_static_ua = 800.0     # ICC 0.8 mA typ, all four channels, RL inf
 #   VIO          +/-5 mV max input offset voltage        (taken as 0)
 #   IIB          25 nA typ, 250 nA max input bias        (taken as 0)
 #   IIO          5 nA typ, 50 nA max input offset current(taken as 0)
-#   VICR         0 V to VCC-1.5 V common-mode range      (not checked)
+#   VICR         0 V to VCC-1.5 V common-mode range      (both-inputs-high
+#                                                        checked, see envelope)
 #   tpd          1.3 us typ response time, 100 mV overdrive, 5 mV step
 #                (300 ns typ at TTL-level swing)         (not modelled)
 #   AVD          200 V/mV typ, 50 V/mV min
@@ -292,7 +442,7 @@ supply_static_ua = 800.0     # ICC 0.8 mA typ, all four channels, RL inf
 # gain is a numerical parameter and not the AVD. Same value, same reasoning --
 # the gate rails are 0..1 here too, so the band is the same 1 mV.
 gain             = 1000.0    # gate smoothing: input volts per full 0..1 gate
-warning = "response time (1.3 us typ at 100 mV overdrive, 300 ns at a TTL-level step) is not modelled: the output switches inside one timestep, so propagation delay and any race that depends on it are unanswered. The low-level sink ceiling (16 mA typ, 6 mA min) is not modelled either, so a pull-up stiff enough to demand more than that gets a VOL the part cannot actually hold. The input common-mode range (0 V to VCC-1.5 V) is not checked, so an input driven above VCC-1.5 V is answered as if the part still compared it. Input offset voltage (+/-5 mV max), input bias current (25 nA typ, 250 nA max) and input offset current (5 nA typ, 50 nA max) are all taken as zero, and VOL is the 150 mV typ rather than the 400 mV max, so a computed threshold or low level is the NOMINAL part at 25 C, not a bound over the datasheet's spread or over temperature."
+warning = "response time (1.3 us typ at 100 mV overdrive, 300 ns at a TTL-level step) is not modelled: the output switches inside one timestep, so propagation delay and any race that depends on it are unanswered. The low-level sink ceiling (16 mA typ, 6 mA min) is not modelled either, so a pull-up stiff enough to demand more than that gets a VOL the part cannot actually hold. The input common-mode range is checked only as the `input_common_mode` envelope above states it: a run with BOTH inputs of one channel above VCC-1.5 V is flagged, while a single input above that ceiling (which the datasheet still answers correctly) and the -0.3 V lower end are not, and the comparison itself is still computed as if the part were in range. Input offset voltage (+/-5 mV max), input bias current (25 nA typ, 250 nA max) and input offset current (5 nA typ, 50 nA max) are all taken as zero, and VOL is the 150 mV typ rather than the 400 mV max, so a computed threshold or low level is the NOMINAL part at 25 C, not a bound over the datasheet's spread or over temperature."
 
 [models.coverage]
 implements = ["open_collector_output", "external_pullup_sets_high_level", "wire_or",
@@ -340,6 +490,7 @@ tpd_s      = 7.0e-9 # propagation delay 7 ns typ @ 5V (Table 6.3)
 # (SNOS561). Stamped as a constant quiescent pull on the VCC pin net so a
 # metering shunt in series with the part's rail reads it.
 supply_static_ua = 900.0
+warning = "the output HIGH level on this card is fixed at 4.95 V, the datasheet typical for a 5 V supply, and does NOT follow the voltage on the board's rail: the binder hard-codes it rather than reading the VCC pad, so this part on a 3.3 V board is still answered as swinging to 4.95 V, above its own supply. The low level (50 mV) is fixed the same way. Treat any result that turns on the output level of a LMV7219 on a rail other than 5 V as unanswered."
 
 [models.pins]
 "1" = "out"
@@ -386,6 +537,14 @@ gain    = 100.0    # representative gain (V/V), A3 suffix; A1=20, A2=50, A4=200
 rail_lo = 0.0      # output low limit (V), ground-referenced
 rail_hi = 26.0     # output high limit (V), VS supply
 
+warning = "the output swing on this card is a FIXED level, not a headroom from the voltage on the supply pin: unlike the LM358/LM324/TSV914 entries it carries no `swing_hi`/`swing_lo`, so a INA180 on a rail lower than that level is answered as if it could swing past its own supply. The output current limit, the input common-mode range, input offset voltage and input bias current are all unmodelled (taken as zero or unchecked), and every figure is the datasheet TYPICAL at 25 C, not a bound over the part's spread or over temperature."
+
+[models.coverage]
+implements = ["fixed_gain", "finite_output_swing"]
+missing = ["supply_referenced_output_swing", "output_current_limit",
+           "input_common_mode_range", "input_offset_voltage", "input_bias_current",
+           "parameter_spread"]
+
 [models.pins]
 # SOT-23-5 pinout. Source: INA180 datasheet SBOS774D, Section 7.1 Pin Configuration.
 "1" = "out"      # Output
@@ -414,6 +573,14 @@ value_re = "(?i)^INA181"
 gain    = 100.0
 rail_lo = 0.0
 rail_hi = 26.0
+
+warning = "the output swing on this card is a FIXED level, not a headroom from the voltage on the supply pin: unlike the LM358/LM324/TSV914 entries it carries no `swing_hi`/`swing_lo`, so a INA181 on a rail lower than that level is answered as if it could swing past its own supply. The output current limit, the input common-mode range, input offset voltage and input bias current are all unmodelled (taken as zero or unchecked), and every figure is the datasheet TYPICAL at 25 C, not a bound over the part's spread or over temperature."
+
+[models.coverage]
+implements = ["fixed_gain", "finite_output_swing"]
+missing = ["supply_referenced_output_swing", "output_current_limit",
+           "input_common_mode_range", "input_offset_voltage", "input_bias_current",
+           "parameter_spread"]
 
 [models.pins]
 # SOT-23-5 pinout. Source: INA181 datasheet SBOS744C, Section 7.1.
@@ -444,6 +611,14 @@ value_re = "(?i)^INA186"
 gain    = 100.0
 rail_lo = 0.0
 rail_hi = 26.0
+
+warning = "the output swing on this card is a FIXED level, not a headroom from the voltage on the supply pin: unlike the LM358/LM324/TSV914 entries it carries no `swing_hi`/`swing_lo`, so a INA186 on a rail lower than that level is answered as if it could swing past its own supply. The output current limit, the input common-mode range, input offset voltage and input bias current are all unmodelled (taken as zero or unchecked), and every figure is the datasheet TYPICAL at 25 C, not a bound over the part's spread or over temperature."
+
+[models.coverage]
+implements = ["fixed_gain", "finite_output_swing"]
+missing = ["supply_referenced_output_swing", "output_current_limit",
+           "input_common_mode_range", "input_offset_voltage", "input_bias_current",
+           "parameter_spread"]
 
 [models.pins]
 # SOT-23-5 pinout. Source: INA186 datasheet SBOS791A, Section 7.1.
@@ -482,6 +657,14 @@ gain    = 100.0    # representative (A3 suffix); actual gain from part suffix
 rail_lo = 0.0
 rail_hi = 26.0
 
+warning = "the output swing on this card is a FIXED level, not a headroom from the voltage on the supply pin: unlike the LM358/LM324/TSV914 entries it carries no `swing_hi`/`swing_lo`, so a INA2181 on a rail lower than that level is answered as if it could swing past its own supply. The output current limit, the input common-mode range, input offset voltage and input bias current are all unmodelled (taken as zero or unchecked), and every figure is the datasheet TYPICAL at 25 C, not a bound over the part's spread or over temperature."
+
+[models.coverage]
+implements = ["fixed_gain", "finite_output_swing"]
+missing = ["supply_referenced_output_swing", "output_current_limit",
+           "input_common_mode_range", "input_offset_voltage", "input_bias_current",
+           "parameter_spread"]
+
 [models.pins]
 # MSOP-10 / VSSOP-10 pinout. Source: INA2181 datasheet SBOS831A, Section 7.1.
 # Channel A: IN+A=1, IN-A=2, OUTA=3; Channel B: IN+B=8, IN-B=9, OUTB=10.
@@ -519,9 +702,23 @@ value_re = "(?i)^LM[123]24[A-Z]*$"
 # August 1975, revised September 2025.
 gain    = 100000.0  # AOL typ 100 V/mV, Table 6.5 (the LM324B grade's column;
                     # the plain part shares the design and the typical)
-rail_lo = 0.0       # single-supply part: the output swings down to V- (ground)
+# The swing is a HEADROOM FROM THE SUPPLY PINS (see the lm358 entry, same
+# output stage and the same printed rows): VOH sits 1.5 V below V+ at
+# RL >= 2 kOhm and VOL 20 mV above V-. SLOS066AE prints the identical
+# "voltage output swing from rail" rows as SLOS068AB does for the dual.
+swing_hi = 1.5      # positive rail, VS = 5 V, RL >= 2 kOhm: MAX 1.5 V
+swing_lo = 0.020    # negative rail, VS = 5 V, RL <= 10 kOhm: MAX 20 mV
+rail_lo = 0.0       # fallback levels only (deck `.model opamp(...)`, no pins)
 rail_hi = 30.0      # VCC max, Recommended Operating Conditions, LM324xx column
-                    # (the 32 V in Absolute Maximum Ratings is a damage limit)
+                    # (the 32 V in Absolute Maximum Ratings is a damage limit).
+                    # NEITHER is a swing limit; `swing_hi` is.
+warning = "the output swing is bounded by the supply pins (V(V-)+20 mV to V(V+)-1.5 V, the datasheet MAX headrooms at RL >= 2 kOhm), but nothing else about the output stage is: the output current limit is not modelled, so a load stiffer than 2 kOhm gets a swing the part cannot actually hold. The input common-mode range (0 V to V+ - 1.5 V) is not checked, so an input driven above it is answered as if the part still amplified it. Input offset voltage (7 mV max), input bias current (250 nA max) and input offset current (50 nA max) are taken as zero, and the gain is the 100 V/mV typ rather than the 25 V/mV min, so a computed output is the NOMINAL part at 25 C, not a bound over the datasheet's spread or over temperature. Gain-bandwidth and slew rate are not on this card, so a board-bound LM324 answers DC and settles instantly. All four amplifiers share one supply leg and one pair of rails; nothing here distinguishes them beyond their nets."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "quad_channel", "split_or_single_supply"]
+missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
+           "input_bias_current", "input_offset_current", "parameter_spread"]
 
 [models.pins]
 # Table 5-1 "Pin Functions", the 14-pin D/DB/J/N/NS/PW/W packages. Note the
@@ -628,6 +825,7 @@ tpd_s      = 4.5e-5  # tPHL (the SLOWER edge) at VS = 0.9 V, overdrive 50 mV: th
                      # above; tPLH at the same corner is 40 us.
 supply_static_ua = 0.075   # IQ typ 75 nA at 25 C (150 nA max at 25 C, 200 nA
                            # over -40 to 125 C)
+warning = "the output HIGH level on this card is fixed at 3.230 V, the 3.3 V rail this entry was written against minus the datasheet's 70 mV upper drop, and does NOT follow the voltage on the board's rail: the binder hard-codes it rather than reading the VCC pad, so the same part on a 1.8 V or 5 V supply is still answered as swinging to 3.230 V. The low level (35 mV) is fixed the same way. Treat any result that turns on the output level of a TLV3691 on a rail other than 3.3 V as unanswered."
 
 [models.pins]
 # Section 6, DPF (X2SON-6). Cross-checked against the margay datalogger, where
@@ -732,8 +930,20 @@ gain    = 31623.0   # Avd 90 dB typ, RL = 10 kOhm, Vout = 0.5 to 2.8 V, 25 C,
                     # VCC = 3.3 V: Rev 2 Table 4, read directly (80 dB min = 1e4).
                     # Was 28184, which is Table 3's 2.5 V figure. Nothing turns on
                     # the difference in a closed loop; the citation was the defect.
-rail_lo = 0.015     # Vlow typ, 15 mV from the negative rail @ RL = 10 kOhm
+# HEADROOMS, not levels: the old rail_hi = 3.285 baked a 3.3 V board into the
+# card, so the same part on a 5 V rail clipped 1.7 V early and on a sagging
+# rail never clipped at all. These track the V+/V- pads instead.
+swing_lo = 0.015    # Vlow typ, 15 mV from the negative rail @ RL = 10 kOhm
+swing_hi = 0.015    # Vhigh, the same 15 mV of headroom below V+
+rail_lo = 0.015     # fallback levels only (deck `.model opamp(...)`, no pins)
 rail_hi = 3.285     # 3.3 V rail minus the same 15 mV of headroom
+warning = "rail-to-rail output within 15 mV typ of each supply pin at RL = 10 kOhm; the output current limit is not modelled, so a heavier load gets a swing the part cannot hold. Input offset voltage (0.2 mV typ, 3 mV max on the plain grade), input bias current and input offset current are taken as zero and the input common-mode range is not checked. The 8 MHz gain-bandwidth and 4.5 V/us slew rate are not on this card, so a board-bound TSV914 answers DC and settles instantly, and the gain is the 90 dB typ rather than the 80 dB min. All four amplifiers share one supply leg and one pair of rails."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "rail_to_rail_output", "quad_channel"]
+missing = ["output_current_limit", "input_common_mode_range", "input_offset_voltage",
+           "input_bias_current", "input_offset_current", "parameter_spread"]
 # NO supply leg: `hauksbee models lint` reports `supply_static_ua` as unread for
 # the opamp kind, so the datasheet's 0.8 mA typ / 1.1 mA max per amplifier at
 # VCC = 3.3 V lives in the note above rather than as a field nothing consumes.

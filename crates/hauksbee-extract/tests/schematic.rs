@@ -13,6 +13,24 @@ fn fixture(name: &str) -> Option<ExtractedBoard> {
     ExtractedBoard::from_kicad_schematic_path(&p).ok()
 }
 
+/// Load a schematic fixture by name, or SKIP the test.
+///
+/// A missing fixture is a normal, reportable state in this suite (the same
+/// contract `support::fixture` keeps), so every test announces the skip and
+/// returns rather than failing. A macro because the skip has to `return` from
+/// the caller.
+macro_rules! fixture_or_skip {
+    ($name:literal) => {
+        match fixture($name) {
+            Some(board) => board,
+            None => {
+                eprintln!("fixture missing; skipping");
+                return;
+            }
+        }
+    };
+}
+
 fn net_of<'a>(b: &'a ExtractedBoard, reference: &str, pin: &str) -> Option<i64> {
     let c = b.component(reference)?;
     c.pins.iter().find(|p| p.number == pin)?.net
@@ -32,10 +50,7 @@ fn fixture_no_connect_control_pin_is_tagged_and_suppressed() {
     // KiCad-netlist loader preserves KiCad's "input+no_connect" pintype. Without
     // the tag, netlint's floating-control-pin check has no way to honor the
     // deliberate no-connect and cries wolf.
-    let Some(b) = fixture("no_connect_control_pin.kicad_sch") else {
-        eprintln!("fixture missing; skipping");
-        return;
-    };
+    let b = fixture_or_skip!("no_connect_control_pin.kicad_sch");
     let u1 = b.component("U1").expect("U1 present");
     let oe = u1.pins.iter().find(|p| p.number == "1").expect("OE pin");
     assert!(
@@ -57,10 +72,7 @@ fn fixture_no_connect_control_pin_is_tagged_and_suppressed() {
 
 #[test]
 fn fixture_two_resistors_in_series() {
-    let Some(b) = fixture("two_resistors.kicad_sch") else {
-        eprintln!("fixture missing; skipping");
-        return;
-    };
+    let b = fixture_or_skip!("two_resistors.kicad_sch");
     assert_eq!(b.components.len(), 2, "R1 and R2");
     // R1.2 and R2.1 are wired together at the midpoint.
     assert!(
@@ -73,10 +85,7 @@ fn fixture_two_resistors_in_series() {
 
 #[test]
 fn fixture_power_and_labels_unify() {
-    let Some(b) = fixture("power_labels.kicad_sch") else {
-        eprintln!("fixture missing; skipping");
-        return;
-    };
+    let b = fixture_or_skip!("power_labels.kicad_sch");
     // Both resistor top pins go to a +5V power symbol; they must share a net
     // even though they never touch geometrically.
     assert!(
@@ -92,9 +101,7 @@ fn fixture_power_and_labels_unify() {
 
 #[test]
 fn fixture_unnamed_net_naming() {
-    let Some(b) = fixture("two_resistors.kicad_sch") else {
-        return;
-    };
+    let b = fixture_or_skip!("two_resistors.kicad_sch");
     // The midpoint net is unnamed → KiCad-style Net-(Rx-PadN) after the
     // lowest member.
     let mid = net_of(&b, "R1", "2").unwrap();
@@ -107,10 +114,7 @@ fn fixture_unnamed_net_naming() {
 
 #[test]
 fn fixture_vector_bus_members() {
-    let Some(b) = fixture("bus_vector.kicad_sch") else {
-        eprintln!("fixture missing; skipping");
-        return;
-    };
+    let b = fixture_or_skip!("bus_vector.kicad_sch");
     // Three resistors. R1.1 and R3.1 both carry the member label D0 (far apart,
     // each mid-span on its wire, both feeding the D[0..1] bus): they unify.
     assert!(
@@ -138,10 +142,7 @@ fn fixture_hierarchical_bus() {
     // child ADDR[0..1] hierarchical label, member-wise. The parent's R-A0/R-A1
     // and the child's RC-A0/RC-A1 must pair by member (A0 with A0, A1 with A1),
     // never cross.
-    let Some(b) = fixture("bus_hier_top.kicad_sch") else {
-        eprintln!("fixture missing; skipping");
-        return;
-    };
+    let b = fixture_or_skip!("bus_hier_top.kicad_sch");
     assert!(
         same_net(&b, ("RA", "1"), ("RC", "1")),
         "ADDR member A0 must connect parent RA to child RC across the sheet"
@@ -170,10 +171,7 @@ fn fixture_bus_alias_crosses_sheet() {
     // unify member-wise across the boundary. If the alias were *not* expanded,
     // the pin would carry a single literal member `MEM.ADDR` and nothing would
     // cross - the symptom the fix removes.
-    let Some(b) = fixture("bus_alias_top.kicad_sch") else {
-        eprintln!("fixture missing; skipping");
-        return;
-    };
+    let b = fixture_or_skip!("bus_alias_top.kicad_sch");
     assert!(
         same_net(&b, ("RA", "1"), ("RC", "1")),
         "alias member MEM.A1 must connect parent RA to child RC across the sheet"
@@ -210,10 +208,7 @@ fn fixture_global_bus_label_globalizes_members() {
     // one net even though no wire, sheet pin, or hierarchical label crosses
     // the boundary, exactly how KiCad treats a global bus label. Before the
     // fix the label's scope was dropped and the members stayed sheet-local.
-    let Some(b) = fixture("global_bus_top.kicad_sch") else {
-        eprintln!("fixture missing; skipping");
-        return;
-    };
+    let b = fixture_or_skip!("global_bus_top.kicad_sch");
     assert!(
         same_net(&b, ("RA", "1"), ("RC", "1")),
         "global bus member GB0 must unify across sheets"
@@ -242,10 +237,7 @@ fn fixture_net_naming_priority() {
     // higher-priority name, per KiCad's driver precedence
     // global > power > local > hierarchical, NOT the alphabetically
     // smallest name of the old two-tier scheme.
-    let Some(b) = fixture("naming_priority.kicad_sch") else {
-        eprintln!("fixture missing; skipping");
-        return;
-    };
+    let b = fixture_or_skip!("naming_priority.kicad_sch");
     // R1's net carries both a +5V power pin and a global label "SIG".
     // Alphabetically "+5V" < "SIG", so the old tie inside the Global tier
     // picked the power name; the global label must win.
@@ -269,10 +261,7 @@ fn fixture_multiunit_common_pin_bridges_nets() {
     // (with R2). Pin 5 is ONE physical pin, so NETA and NETB are electrically
     // one net. Before the fix the dedup kept NETA on the pin and silently
     // dropped the short to NETB.
-    let Some(b) = fixture("multiunit_common_pin.kicad_sch") else {
-        eprintln!("fixture missing; skipping");
-        return;
-    };
+    let b = fixture_or_skip!("multiunit_common_pin.kicad_sch");
     assert!(
         same_net(&b, ("R1", "1"), ("R2", "1")),
         "nets bridged by the shared common pin must merge"

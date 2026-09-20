@@ -2,27 +2,34 @@ import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AdditionalEvidencePanel } from '../src/components/AdditionalEvidencePanel'
 
+/** Every slot empty and every handler a no-op: these tests assert what the
+ *  panel RENDERS, not the session wiring behind it. The two clear handlers are
+ *  optional and are passed only by the test that needs them present. */
+const EMPTY = {
+  firmware: null,
+  schematic: null,
+  bom: null,
+  placementFile: null,
+  variant: null,
+  asbuilt: null,
+  models: [],
+  onFirmware: () => {},
+  onSchematic: () => {},
+  onBom: () => {},
+  onPlacement: () => {},
+  onVariant: () => {},
+  onAsbuilt: () => {},
+  onModels: () => {},
+}
+
 describe('additional evidence surface', () => {
   test('offers the complete supplemental-input contract in the browser', () => {
     const html = renderToStaticMarkup(
       <AdditionalEvidencePanel
         placement="intake"
-        firmware={null}
-        schematic={null}
-        bom={null}
-        placementFile={null}
-        variant={null}
-        asbuilt={null}
-        models={[]}
-        onFirmware={() => {}}
+        {...EMPTY}
         onClearFirmware={() => {}}
-        onSchematic={() => {}}
         onClearSchematic={() => {}}
-        onBom={() => {}}
-        onPlacement={() => {}}
-        onVariant={() => {}}
-        onAsbuilt={() => {}}
-        onModels={() => {}}
       />,
     )
 
@@ -43,20 +50,7 @@ describe('additional evidence surface', () => {
     const html = renderToStaticMarkup(
       <AdditionalEvidencePanel
         placement="report"
-        firmware={null}
-        schematic={null}
-        bom={null}
-        placementFile={null}
-        variant={null}
-        asbuilt={null}
-        models={[]}
-        onFirmware={() => {}}
-        onSchematic={() => {}}
-        onBom={() => {}}
-        onPlacement={() => {}}
-        onVariant={() => {}}
-        onAsbuilt={() => {}}
-        onModels={() => {}}
+        {...EMPTY}
         showWebControls={false}
       />,
     )

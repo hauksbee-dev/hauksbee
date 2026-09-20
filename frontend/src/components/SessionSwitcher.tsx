@@ -6,6 +6,7 @@ import type { SessionRow } from '../lib/session-store'
 import { CloseIcon, HistoryIcon, PencilIcon, TrashIcon } from './Icons'
 import { relTime } from '../lib/rel-time'
 import { ARRIVE, LEAVE } from '../motion'
+import { useDismissable } from '../hooks/useDismissable'
 
 // The saved-session indicator in the left rail, and the switcher it opens.
 //
@@ -94,24 +95,9 @@ export function SessionRail({ state, onResume }: {
     return () => clearInterval(t)
   }, [])
 
-  // Same dismissal as the export menu: an outside click or Escape. The panel is
-  // fixed and covers part of the work surface, so re-finding the one button that
-  // closes it is not an acceptable way out.
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  // The panel is fixed and covers part of the work surface, so re-finding the
+  // one button that closes it is not an acceptable way out.
+  useDismissable(open, wrap, setOpen)
 
   const note = outcomeNote(state)
   const current = state.current

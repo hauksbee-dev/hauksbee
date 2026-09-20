@@ -27,14 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 fn demo_elf(name: &str) -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/renode_demos")
-        .join(name);
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::testdata(&format!("firmware/renode_demos/{name}"))
 }
 
 /// Boot `elf` under `config` through the RenodeBackend and collect UART for a

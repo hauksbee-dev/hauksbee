@@ -13,6 +13,13 @@ mpn_re     = "(?i)^ATmega328P"
 # hauksbee-mcu backend identifier, tells the co-sim layer which emulator core
 # to instantiate.
 backend = "simavr:atmega328p"
+# Microchip ATmega328P DS40001984, "ADC Noise Canceler / Analog Input Circuitry":
+# the ADC is optimized for analog signals with an output impedance of
+# approximately 10 kOhm or less, because the 14 pF sample-and-hold capacitor is
+# charged through the 1..100 kOhm input path within one sampling window. A card
+# WITHOUT this key is not checked at all, which is the honest state for every
+# other MCU here until its own datasheet figure is quoted.
+max_adc_source_impedance_ohms = 10000.0
 
 [models.pins]
 # TQFP-32 / DIP-28 pin map (KiCad Device:ATmega328P default symbol)

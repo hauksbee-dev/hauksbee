@@ -978,11 +978,7 @@ async fn analyze_handler_design_raw(
         asbuilt: None,
         models: Vec::new(),
     });
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
-    )
+    json_ok(json)
 }
 
 /// POST `/api/analyze-with-firmware`: a `multipart/form-data` upload with a
@@ -1012,11 +1008,7 @@ async fn analyze_design_handler(
         Ok(json) => json,
         Err(_) => return json_error("the analysis task panicked; see the server log"),
     };
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        json,
-    )
+    json_ok(json)
 }
 
 /// POST `/api/sim`: the raw SPICE deck as the request body, its file name in

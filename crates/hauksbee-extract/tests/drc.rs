@@ -9,15 +9,13 @@ use crate::support::assert_short;
 const KICAD_10_KEYHOLE_ANTIPAD_BOARD: &str =
     include_str!("fixtures/kicad_10_keyhole_antipad.kicad_pcb");
 
-/// Wrap copper items in a minimal KiCad 7+ board with two declared signal nets
-/// (`A`, `B`) plus GND, and a default-clearance setup.
-fn board(items: &str) -> String {
+/// Wrap copper items in a minimal KiCad 7+ board carrying `layers`, two
+/// declared signal nets (`A`, `B`) plus GND, and a default-clearance setup.
+fn board_on(layers: &str, items: &str) -> String {
     format!(
         r#"(kicad_pcb (version 20221018) (generator pcbnew)
   (layers
-    (0 "F.Cu" signal)
-    (31 "B.Cu" signal)
-  )
+{layers}  )
   (net 0 "")
   (net 1 "A")
   (net 2 "B")
@@ -26,6 +24,11 @@ fn board(items: &str) -> String {
 )
 "#
     )
+}
+
+/// The two-layer stack most cases here only need.
+fn board(items: &str) -> String {
+    board_on("    (0 \"F.Cu\" signal)\n    (31 \"B.Cu\" signal)\n", items)
 }
 
 fn drc(items: &str) -> hauksbee_extract::DrcReport {
@@ -448,21 +451,9 @@ fn kicad_pro_rules_apply_assignments_and_wildcard_patterns() {
 
 /// Wrap copper items in a 4-layer board (F/In1/In2/B) with nets A and B.
 fn board4(items: &str) -> String {
-    format!(
-        r#"(kicad_pcb (version 20221018) (generator pcbnew)
-  (layers
-    (0 "F.Cu" signal)
-    (1 "In1.Cu" signal)
-    (2 "In2.Cu" signal)
-    (31 "B.Cu" signal)
-  )
-  (net 0 "")
-  (net 1 "A")
-  (net 2 "B")
-  (net 3 "GND")
-{items}
-)
-"#
+    board_on(
+        "    (0 \"F.Cu\" signal)\n    (1 \"In1.Cu\" signal)\n    (2 \"In2.Cu\" signal)\n    (31 \"B.Cu\" signal)\n",
+        items,
     )
 }
 

@@ -493,14 +493,7 @@ fn resolve_bad_spec_and_missing() {
 /// over a built-in of the same part name.
 #[test]
 fn resolve_from_override_dir_adds_a_part_as_data() {
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee-mcu-override-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = crate::support::unique_temp("hauksbee-mcu-override", "");
     std::fs::create_dir_all(&dir).unwrap();
     // A brand-new part that ships in no built-in, while reusing the F072's
     // stock Renode platform underneath.
@@ -576,14 +569,7 @@ fn resolve_validates_the_spec_backend_token() {
 /// the builtin (the repo's layering doctrine).
 #[test]
 fn override_dir_is_fail_loud_and_beats_builtin() {
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee-mcu-shadow-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = crate::support::unique_temp("hauksbee-mcu-shadow", "");
     std::fs::create_dir_all(&dir).unwrap();
 
     // (a) Invalid override for the BUILTIN part nrf52840: a typo'd field the

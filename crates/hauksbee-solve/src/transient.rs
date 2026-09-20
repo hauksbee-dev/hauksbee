@@ -899,7 +899,8 @@ fn opamp_target(ws: &Workspace, dev: &Device) -> Option<(f64, f64, f64)> {
     };
     let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
     let raw = vref + gain * (node_v(ws, *inp) - node_v(ws, *inn));
-    Some((raw, *rail_lo, *rail_hi))
+    let (lo, hi) = hauksbee_ir::Rail::band(*rail_lo, *rail_hi, |n| node_v(ws, n));
+    Some((raw, lo, hi))
 }
 
 /// At the operating point every state is flat: capacitor voltage = node

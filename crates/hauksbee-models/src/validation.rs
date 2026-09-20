@@ -125,6 +125,8 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
                 ("gain", 1.0, 1e9),
                 ("rail_lo", -60.0, 60.0),
                 ("rail_hi", -60.0, 60.0),
+                ("swing_lo", 0.0, 5.0),
+                ("swing_hi", 0.0, 5.0),
             ],
             ordered: &[("rail_lo", "rail_hi")],
             ..NO_RULES
@@ -227,6 +229,21 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 }
                 p.require(!lower.eq_ignore_ascii_case(upper), || {
                     "operating envelope rail_order lower and upper roles must differ".into()
+                });
+            }
+            OperatingEnvelope::InputCommonMode {
+                supply,
+                inputs,
+                headroom_v,
+                ..
+            } => {
+                for role in std::iter::once(supply).chain(inputs) {
+                    p.require(has_role_ci(entry, role), || {
+                        format!("operating envelope role '{role}' is not a role in [models.pins]")
+                    });
+                }
+                p.require(inputs.len() >= 2 && headroom_v.is_finite() && *headroom_v >= 0.0, || {
+                    format!("operating envelope input_common_mode needs at least two input roles and a finite non-negative headroom_v, got {} and {headroom_v}", inputs.len())
                 });
             }
         }

@@ -302,6 +302,11 @@
           "type": "string"
         },
         {
+          "const": "operating_limit_violated",
+          "description": "This run MEASURED the part outside a requirement its card states: a\nfact about the BOARD, not an omission of the model, so it is critical.",
+          "type": "string"
+        },
+        {
           "const": "parser_limitation",
           "description": "The producing parser has a known limitation that can fabricate or miss\nfindings here.",
           "type": "string"

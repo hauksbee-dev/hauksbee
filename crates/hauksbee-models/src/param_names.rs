@@ -222,7 +222,11 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "ikmax_a",
             "ikmin_a",
         ],
-        ComponentKind::Opamp => &["gain", "pole_hz", "slew", "rail_lo", "rail_hi"],
+        // `swing_*`: output-swing headrooms from the V-/V+ PINS, which bind the
+        // rails to the supply nets (`rail_*` then only a fallback).
+        ComponentKind::Opamp => &[
+            "gain", "pole_hz", "slew", "rail_lo", "rail_hi", "swing_lo", "swing_hi",
+        ],
         // `out_lo`/`out_hi`/`hysteresis` are the push-pull stamp's; the last four
         // the open-collector stage's, whose levels come from the board instead.
         ComponentKind::Comparator => &[
@@ -260,7 +264,7 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
         ComponentKind::ShiftRegister => SHIFT_REGISTER,
         ComponentKind::Dac => CONVERTER_COMMON,
         ComponentKind::Adc => ADC_VOCAB,
-        ComponentKind::Mcu => &["backend", "module"],
+        ComponentKind::Mcu => &["backend", "module", "max_adc_source_impedance_ohms"],
         ComponentKind::Connector | ComponentKind::Ignore => &[],
     }
 }

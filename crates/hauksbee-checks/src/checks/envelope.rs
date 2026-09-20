@@ -42,7 +42,7 @@ enum RailKnowledge {
     Unknown,
 }
 
-fn finding_severity(severity: EnvelopeSeverity) -> Severity {
+pub(crate) fn finding_severity(severity: EnvelopeSeverity) -> Severity {
     match severity {
         EnvelopeSeverity::Serious => Severity::High,
         EnvelopeSeverity::Medium => Severity::Medium,
@@ -57,7 +57,7 @@ fn raised_one_band(severity: Severity) -> Severity {
     }
 }
 
-fn role_net_id(comp: &Component, model: &ModelEntry, role: &str) -> Option<i64> {
+pub(crate) fn role_net_id(comp: &Component, model: &ModelEntry, role: &str) -> Option<i64> {
     model
         .pins
         .iter()
@@ -399,6 +399,10 @@ pub fn envelope_lint_with_drives(
                         nets: vec![lower_net.name.clone(), upper_net.name.clone()],
                     });
                 }
+                // Supply-relative input windows need the level ON the input
+                // pins, not the rail interval this resolver derives: they are
+                // evaluated in `super::analog_inputs`.
+                OperatingEnvelope::InputCommonMode { .. } => {}
             }
         }
     }
@@ -411,17 +415,11 @@ mod tests {
     use super::*;
     use hauksbee_extract::{Component, LintCheck, Pin, Severity};
 
+    /// The shared builder, taking pins already built rather than pad/net pairs.
     fn part(reference: &str, value: &str, pins: Vec<Pin>) -> Component {
         Component {
-            reference: reference.into(),
-            value: value.into(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
             pins,
+            ..super::super::test_support::part(reference, value, &[])
         }
     }
 

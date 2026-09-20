@@ -9,7 +9,7 @@
 //! 1.983333 V starved. That is numerical agreement on the SAME model form, NOT
 //! physical validation of a TL431.
 
-use crate::support;
+use crate::support::{self, comp, pad};
 
 /// A package: its footprint, and the pads SLVS543 Table 5-1 gives that package
 /// for CATHODE / REF / ANODE. The pin map is package-dependent and the orders
@@ -22,16 +22,8 @@ const LP: Pkg = ("Package_TO_SOT_THT:TO-92_Inline", [1, 3, 2]);
 /// `div`, R1/R2 of 10 k each. `refnet` is the REF pad's net: "REF" programmed,
 /// "OUT" two-terminal 2.5 V, "GND" the mis-wire.
 fn board(rs: &str, div: bool, refnet: &str, (lib, [k, f, a]): Pkg) -> String {
-    let pad = |n: u32, net: &str| {
-        format!("pad \"{n}\" smd rect at {n} 0 size 2 1.5 layers [F.Cu F.Mask] net \"{net}\"\n")
-    };
-    let comp = |r: &str, val: &str, x: usize, lib: &str, pads: String| {
-        format!(
-            "comp {r} lib \"{lib}\" val \"{val}\" layer \"F.Cu\" at {x} 20 rot 0 {{\n{pads}}}\n"
-        )
-    };
     let u1 = pad(k, "OUT") + &pad(f, refnet) + &pad(a, "GND");
-    let mut parts = comp("U1", "TL431", 20, lib, u1);
+    let mut parts = comp("U1", lib, "TL431", 20, u1);
     for (i, (r, val, a, b)) in [
         ("RS", Some(rs), "VIN", "OUT"),
         ("R1", div.then_some("10k"), "OUT", "REF"),
@@ -42,7 +34,7 @@ fn board(rs: &str, div: bool, refnet: &str, (lib, [k, f, a]): Pkg) -> String {
     {
         let Some(val) = val else { continue };
         let r0805 = "Resistor_SMD:R_0805_2012Metric";
-        parts += &comp(r, val, 40 + i * 8, r0805, pad(1, a) + &pad(2, b));
+        parts += &comp(r, r0805, val, 40 + i * 8, pad(1, a) + &pad(2, b));
     }
     // An empty REF net would be a floating-net finding of the test's own making.
     let refnet = if div { "net \"REF\"\n" } else { "" };
@@ -52,9 +44,7 @@ fn board(rs: &str, div: bool, refnet: &str, (lib, [k, f, a]): Pkg) -> String {
 /// Run one board with one cathode-net voltage assertion, check what the report
 /// tells its reader about U1, and return whether the assertion passed.
 fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64), pkg: Pkg) -> bool {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("tl431.board");
-    std::fs::write(&path, board(rs, div, refnet, pkg)).expect("write board");
+    let path = support::write_tmp("tl431.board", &board(rs, div, refnet, pkg));
     let r = support::run_body(
         &format!("{case}.toml"),
         &format!(
@@ -78,6 +68,11 @@ fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64),
     // SOLVED, not declared: on every starved board (9k1, 100k), on no other.
     let flag = human.contains("requires for regulation");
     assert_eq!(flag, rs != "1k", "{case}: min-current flag");
+    // Not decoration: a MEASURED IKmin violation undermines (exit 3), while the
+    // model's own documented omissions stay a qualified pass at exit 0.
+    if refnet != "GND" {
+        assert_eq!(r.exit_code(), i32::from(flag) * 3, "{case}: exit code");
+    }
     r.results
         .iter()
         .find(|x| x.label == "vka")

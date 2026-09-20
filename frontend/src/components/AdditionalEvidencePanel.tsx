@@ -1,6 +1,34 @@
 import { FirmwareJack } from './FirmwareJack'
 import { SchematicJack } from './SchematicJack'
 import type { InputHTMLAttributes } from 'react'
+import type { BoardSession } from '../hooks/useBoardSession'
+
+/**
+ * The evidence slots and their handlers, read off the session. Intake and
+ * report render the SAME contract from the SAME session, so the wiring lives
+ * here once rather than being re-typed at each placement.
+ */
+export function evidenceSlots(session: BoardSession) {
+  return {
+    firmware: session.firmwareFile,
+    schematic: session.schematicFile,
+    bom: session.supplementalFiles.bom,
+    placementFile: session.supplementalFiles.placement,
+    variant: session.supplementalFiles.variant,
+    asbuilt: session.supplementalFiles.asbuilt,
+    models: session.supplementalFiles.models,
+    onFirmware: session.handleFirmware,
+    onClearFirmware: session.clearFirmware,
+    onSchematic: session.handleSchematic,
+    onClearSchematic: session.clearSchematic,
+    onBom: session.handleBom,
+    onPlacement: session.handlePlacement,
+    onVariant: session.handleVariant,
+    onAsbuilt: session.handleAsbuilt,
+    onModels: session.handleModels,
+    locked: !!session.busy,
+  }
+}
 
 function EvidenceFile({ label, hint, file, accept, locked, onFile }: {
   label: string

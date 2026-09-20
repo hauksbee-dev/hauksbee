@@ -3,8 +3,8 @@
 //! read `RED: VOUT settled 0.000 V`, and the regulator was never named. A powered
 //! open part that can drive the net (directly, or through modelled series
 //! conduction) makes a FAILURE there INVALID in the scheduler's one wording, since the
-//! number is the board without it; a pass stands on the stated assumption that the
-//! part leaves the net alone, and a part with nothing to drive WITH is only a caveat. The headless `hauksbee run` half
+//! number is the board without it; an IN-BAND reading there is no more a pass than a
+//! failure is a failure, and a part with nothing to drive WITH is only a caveat. The headless `hauksbee run` half
 //! lives in `hauksbee-engine/tests/cli_strict_plain.rs`, against the same string.
 
 use crate::support;
@@ -59,30 +59,35 @@ fn an_open_converter_behind_an_inductor_refuses_the_rail_with_the_part_named() {
 #[test]
 fn only_what_an_open_part_can_drive_is_refused() {
     let asserts = [
-        ("VADJ", 4.8, 5.2),   // (b) a modelled divider's 5.0 V, in band: a stated caveat
-        ("VADJ", 8.0, 9.0),   // ... and out of band: no failure without U3, so INVALID
+        ("VADJ", 4.8, 5.2), // (b) a modelled divider's 5.0 V, in band: U3 can still drive it
+        ("VADJ", 8.0, 9.0), // ... and out of band: no failure without U3, so INVALID
         ("RAIL", 11.8, 12.0), // (c) U2 only loads RAIL: GREEN, with the caveat
         ("FLOAT", -0.1, 0.3), // (d) floating, no open part near: stays RED
-        ("MID", 5.9, 6.1),    // (e) unrelated PASS (header J1 is a port) ...
-        ("MID", 7.0, 8.0),    // ... and unrelated FAIL keep their verdicts
+        ("MID", 5.9, 6.1),  // (e) unrelated PASS (header J1 is a port) ...
+        ("MID", 7.0, 8.0),  // ... and unrelated FAIL keep their verdicts
     ];
     let r = run("all.toml", &asserts);
     let flags: Vec<(bool, bool)> = r.results.iter().map(|a| (a.passed, a.invalid)).collect();
     let (pass, fail, invalid) = ((true, false), (false, false), (false, true));
+    let unproven = (true, true); // in band, but the band is not evidence
     assert_eq!(
         flags,
-        [pass, invalid, pass, fail, pass, fail],
+        [unproven, invalid, pass, fail, pass, fail],
         "{:?}",
         r.results
     );
+    // An IN-BAND reading on a net an open ACTIVE part can drive is no more a
+    // pass than an out-of-band one is a failure: it names U3 and exits 3, with
+    // nobody asking for coverage. U2, which can only LOAD RAIL, stays a caveat.
     let detail = |i: usize| r.results[i].detail.as_str();
     let caveat = "unmodelled part on the net drives or loads it";
+    let named = |i: usize| detail(i).contains("U3 (LM337) has no model");
     assert!(
-        detail(0).contains(caveat) && detail(2).contains(caveat),
+        !detail(0).contains(caveat) && detail(2).contains(caveat),
         "{}",
         detail(0)
     );
-    assert!(detail(1).contains("U3 (LM337) has no model"));
+    assert!(named(0) && named(1) && r.exit_code() == 3, "{}", detail(0));
     assert!(detail(3).contains("floating"), "{}", detail(3));
     let blamed = |part: &str| r.coverage_warnings.iter().any(|w| w.contains(part));
     assert!(

@@ -791,38 +791,14 @@ fn emontx_ground_tie_is_real_copper_on_both_layers_and_both_are_reported() {
 
     // Snapshot the geometry, add declaration context, then prove the geometry
     // and gate survive. The schematic has no board-coordinate authority.
-    let before: Vec<(String, String, String, f64, f64, f64)> = report
-        .shorts()
-        .map(|f| {
-            (
-                f.net_a_name.clone(),
-                f.net_b_name.clone(),
-                f.layer.clone(),
-                f.gap_mm,
-                f.x,
-                f.y,
-            )
-        })
-        .collect();
+    let before = crate::support::short_geometry(&report);
     let qualified = report.qualify_with_declared_ties(&sch.to_string_lossy(), &ties);
     assert_eq!(
         qualified.qualified_count(),
         0,
         "the declaration cannot authorize either layer's contact"
     );
-    let after: Vec<(String, String, String, f64, f64, f64)> = report
-        .shorts()
-        .map(|f| {
-            (
-                f.net_a_name.clone(),
-                f.net_b_name.clone(),
-                f.layer.clone(),
-                f.gap_mm,
-                f.x,
-                f.y,
-            )
-        })
-        .collect();
+    let after = crate::support::short_geometry(&report);
     assert_eq!(
         after, before,
         "every finding keeps its nets, layer, measured gap and location"

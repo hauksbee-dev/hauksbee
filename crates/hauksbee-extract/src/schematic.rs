@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use forge_sexpr::{Document, List};
 
 use crate::dsu::Dsu;
+use crate::pcb::at_of;
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 
 /// Coordinates are snapped to this grid (in mm) before comparison so that
@@ -1618,18 +1619,6 @@ fn place_pin(local: (f64, f64, f64), inst: (f64, f64, f64), mirror: Option<&str>
         _ => {}
     }
     snap(inst.0 + rx, inst.1 + ry)
-}
-
-/// `(at x y [rot])` for an instance/element.
-fn at_of(list: &List) -> (f64, f64, f64) {
-    match list.find("at") {
-        Some(at) => (
-            at.arg_f64(0).unwrap_or(0.0),
-            at.arg_f64(1).unwrap_or(0.0),
-            at.arg_f64(2).unwrap_or(0.0),
-        ),
-        None => (0.0, 0.0, 0.0),
-    }
 }
 
 /// `(at x y ...)` → snapped point.

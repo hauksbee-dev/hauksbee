@@ -13,21 +13,13 @@
 //! capacitors. Cycle-level agreement with ngspice is pinned separately by
 //! `hauksbee-solve/tests/decks/ne555_astable.{cir,expect.toml}`.
 
-use crate::support;
+use crate::support::{self, comp, pad};
 
 /// The classic astable: RA from VCC to DISCH, RB from DISCH to THRES, the
 /// timing cap on THRES, TRIG shorted to THRES (pins 2 and 6 on one net, which
 /// is what makes it astable), and a load on OUT. `c_nf = None` leaves the
 /// timing cap off.
 fn board(c_nf: Option<f64>, reset_net: &str) -> String {
-    let pad = |n: u32, net: &str| {
-        format!("pad \"{n}\" smd rect at {n} 0 size 2 1.5 layers [F.Cu F.Mask] net \"{net}\"\n")
-    };
-    let comp = |r: &str, lib: &str, val: &str, x: usize, pads: String| {
-        format!(
-            "comp {r} lib \"{lib}\" val \"{val}\" layer \"F.Cu\" at {x} 20 rot 0 {{\n{pads}}}\n"
-        )
-    };
     // DIP-8: 1 GND, 2 TRIG, 3 OUT, 4 RESET, 5 CTRL, 6 THRES, 7 DISCH, 8 VCC.
     let u1 = pad(1, "GND")
         + &pad(2, "THRES")
@@ -66,21 +58,17 @@ fn board(c_nf: Option<f64>, reset_net: &str) -> String {
 /// unmodelled or open part: the composite drives OUT, so nothing may claim it
 /// does not.
 fn passes(case: &str, src: &str, end_ms: f64, assertion: &str) -> bool {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let board_path = dir.path().join("t.board");
-    std::fs::write(&board_path, src).expect("write board");
-    let spec = dir.path().join("t.toml");
-    std::fs::write(
-        &spec,
-        format!(
+    let board_path = support::write_tmp("t.board", src);
+    let spec = support::write_tmp(
+        "t.toml",
+        &format!(
             "name = \"{case}\"\nboard = {}\nduration_ms = {end_ms}\nframe_ms = 0.005\n\
              [[supply]]\nnet = \"VCC\"\nkind = \"bench\"\nvolts = 5.0\n\
              current_limit_a = 0.5\nr_out_ohms = 0.1\n\
              [[assert]]\nname = \"out\"\nnet = \"OUT\"\n{assertion}",
             support::toml_path(&board_path),
         ),
-    )
-    .expect("write spec");
+    );
     let r = hauksbee_ci::run(&support::run_config(spec)).expect("run the spec");
     assert!(
         !r.coverage_warnings.iter().any(|w| w.contains("U1")),

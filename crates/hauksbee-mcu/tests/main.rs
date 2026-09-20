@@ -1,7 +1,6 @@
 //! One integration-test binary for the crate: every module below is compiled
 //! and linked once instead of once per file.
 
-#[allow(dead_code)]
 #[path = "support.rs"]
 mod support;
 

@@ -22,6 +22,21 @@ pub(crate) fn pin(number: &str, net: i64) -> Pin {
     }
 }
 
+/// A component at `reference`/`value` whose pads are `(pad number, net id)`.
+pub(crate) fn part(reference: &str, value: &str, pads: &[(&str, i64)]) -> Component {
+    Component {
+        reference: reference.into(),
+        value: value.into(),
+        lib_id: String::new(),
+        footprint: String::new(),
+        position: None,
+        layer: String::new(),
+        properties: Vec::new(),
+        dnp: false,
+        pins: pads.iter().map(|(n, net)| pin(n, *net)).collect(),
+    }
+}
+
 /// A board named `"t"` built from `(net id, net name)` pairs plus components.
 pub(crate) fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
     ExtractedBoard {

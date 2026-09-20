@@ -2701,8 +2701,8 @@ fn stamp_opamp<S: StampSink>(
     gain: f64,
     pole_hz: Option<f64>,
     slew: Option<f64>,
-    rail_lo: f64,
-    rail_hi: f64,
+    rail_lo: hauksbee_ir::Rail,
+    rail_hi: hauksbee_ir::Rail,
     sink: &mut S,
 ) {
     // Behavioral: drive `out` toward clamp(gain*(vp-vn)) through a stiff
@@ -2715,7 +2715,11 @@ fn stamp_opamp<S: StampSink>(
     // the capacitor's companion-state lifecycle). The DC operating point and
     // the AC path are untouched: a single pole passes DC unattenuated, and
     // slew is a large-signal (transient-only) limit.
+    // A card-bound rail rides its supply PIN's net, resolved at THIS iterate and
+    // held constant through the linearization: explicit, no ∂out/∂V(pin) column.
+    // A supply net is stiff next to the 1 Ω stage; the solution is exact anyway.
     let gout = 1.0; // output stage conductance (1 ohm), strong source
+    let (rail_lo, rail_hi) = hauksbee_ir::Rail::band(rail_lo, rail_hi, |n| ctx.v(n));
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
     let vref = reference.map(|n| ctx.v(n)).unwrap_or(0.0);

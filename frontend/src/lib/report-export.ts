@@ -225,7 +225,7 @@ function evidenceHtml({ has, maps, summary, caveated, assumptions, inventory }: 
       <td class="mono">${esc((map.assumptions ?? []).join(', ') || 'none')}</td>
     </tr>`).join('')
   const cards = assumptions.map(assumption => `<div class="card" style="border-left-color:${
-    assumption.kind === 'open_part' ? 'var(--warn)' : 'var(--note-accent)'
+    assumption.kind === 'open_part' || assumption.kind === 'operating_limit_violated' ? 'var(--warn)' : 'var(--note-accent)'
   }">
       <span class="tag mono" style="color:var(--warn-strong)">${esc(assumption.id)}</span>
       <div class="what">${esc(assumption.statement)}</div>

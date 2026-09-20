@@ -42,6 +42,7 @@
 //!   the estimated bus capacitance to meet the rise-time budget.
 
 pub mod ampacity;
+pub mod analog_inputs;
 pub mod back_power;
 pub mod boot;
 pub mod bus_loading;
@@ -105,6 +106,13 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(bus_loading::bus_loading_lint(board).findings);
+    // Static surfaces have no solved levels, so the comparator half of this
+    // check reads the rail table and abstains on a divider tap; the ADC
+    // source-impedance half is pure topology and runs either way.
+    let rails = |net: &str| hauksbee_bind::binder::power_rail_voltage(net);
+    report
+        .findings
+        .extend(analog_inputs::analog_input_lint(board, lib, &rails).findings);
     for finding in model_controls::model_control_lint(board, lib).findings {
         // Schematic/netlist extraction can already carry the pin function and
         // raise the same structural finding. The model-aware path exists for

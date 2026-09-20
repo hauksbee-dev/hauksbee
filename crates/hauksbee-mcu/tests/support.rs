@@ -61,16 +61,24 @@ pub fn ihex_record(record_type: u8, addr: u16, data: &[u8]) -> String {
     line
 }
 
-#[cfg(feature = "avr")]
-fn hex_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee-{tag}-{}-{}",
+/// A temp path no other process or run can collide with: `name`, this process
+/// id and the current nanosecond, plus `suffix` (`""` for a directory).
+///
+/// Tests run concurrently in the same temp dir, so a fixed name is a race.
+pub fn unique_temp(name: &str, suffix: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "{name}-{}-{}{suffix}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
-    ));
+    ))
+}
+
+#[cfg(feature = "avr")]
+fn hex_dir(tag: &str) -> PathBuf {
+    let dir = unique_temp(&format!("hauksbee-{tag}"), "");
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }

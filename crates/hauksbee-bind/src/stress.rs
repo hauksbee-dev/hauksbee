@@ -403,28 +403,8 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     // ("R_0201_0603Metric"), imperial 01005 → metric 0402. So the smallest
     // packages MUST be matched first, before the larger imperial tokens they
     // embed as a metric suffix, or they are silently over-rated.
-    if f.contains("01005") {
-        chip(1.0 / 32.0)
-    } else if f.contains("0201") {
-        chip(1.0 / 20.0)
-    } else if f.contains("0402") {
-        chip(1.0 / 16.0)
-    } else if f.contains("0603") {
-        chip(1.0 / 10.0)
-    } else if f.contains("0805") {
-        chip(1.0 / 8.0)
-    } else if f.contains("1206") {
-        chip(1.0 / 4.0)
-    } else if f.contains("1210") {
-        chip(1.0 / 2.0)
-    } else if f.contains("2010") {
-        chip(3.0 / 4.0)
-    } else if f.contains("2512") {
-        chip(1.0)
-    } else if f.contains("1812") {
-        chip(1.0)
-    } else if f.contains("2220") {
-        chip(1.0)
+    if let Some(w) = imperial_chip_watts(|code| f.contains(code)) {
+        chip(w)
     } else if let Some(w) = din_axial_rating(&f) {
         // A DIN body code IS size evidence, and the codes are not interchangeable:
         // DIN0204 is a 1/8 W body while DIN0207 is 1/4 W, so treating them alike
@@ -449,11 +429,30 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     }
 }
 
-/// Every imperial chip size code the rating table recognises. Used to tell
-/// KiCad's dual "imperial_metricMetric" form from a metric-only name.
-const IMPERIAL_CHIP_CODES: &[&str] = &[
-    "01005", "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2220", "2512",
+/// Every imperial chip size code the rating table recognises, smallest body
+/// first (the ordering [`resistor_power_from_footprint`] depends on), and the
+/// standard rating (W) that body carries.
+const IMPERIAL_CHIP_WATTS: &[(&str, f64)] = &[
+    ("01005", 1.0 / 32.0),
+    ("0201", 1.0 / 20.0),
+    ("0402", 1.0 / 16.0),
+    ("0603", 1.0 / 10.0),
+    ("0805", 1.0 / 8.0),
+    ("1206", 1.0 / 4.0),
+    ("1210", 1.0 / 2.0),
+    ("2010", 3.0 / 4.0),
+    ("2512", 1.0),
+    ("1812", 1.0),
+    ("2220", 1.0),
 ];
+
+/// The rating of the first [`IMPERIAL_CHIP_WATTS`] code `wanted` accepts.
+fn imperial_chip_watts(wanted: impl Fn(&str) -> bool) -> Option<f64> {
+    IMPERIAL_CHIP_WATTS
+        .iter()
+        .find(|(code, _)| wanted(code))
+        .map(|(_, w)| *w)
+}
 
 /// The chip rating for a footprint that carries only the METRIC size code.
 ///
@@ -522,7 +521,7 @@ fn classify_metric_only(f: &str) -> MetricCode {
             .into_iter()
             .rev()
             .collect();
-        if !prev_token.is_empty() && IMPERIAL_CHIP_CODES.contains(&prev_token.as_str()) {
+        if !prev_token.is_empty() && imperial_chip_watts(|c| c == prev_token).is_some() {
             // The imperial token is authoritative; leave it to the imperial pass.
             return MetricCode::Absent;
         }
@@ -680,7 +679,8 @@ impl StressMonitor {
 
     /// One disclosure per part that never reached the `min_current_a` its card
     /// declares. NOT a fault: the model regulates below the floor where the real
-    /// part is not guaranteed to, so it rides the partial-model path.
+    /// part is not guaranteed to, which is a MEASURED datasheet-limit violation
+    /// on this board, so it undermines rather than merely qualifying.
     pub fn under_minimum_current(&self) -> Vec<Assumption> {
         self.metas
             .iter()
@@ -688,10 +688,9 @@ impl StressMonitor {
             .filter_map(|(m, &seen)| {
                 let floor = m.ratings.min_current_a.filter(|f| seen < *f)?;
                 let (r, ma, floor_ma) = (&m.reference, seen * 1e3, floor * 1e3);
-                Some(Assumption::partial_model_for_component(
+                Some(Assumption::operating_limit_violated(
                     &format!("{r}-min-current"),
                     r,
-                    "",
                     &format!(
                         "{r} carries {ma:.2} mA, below the {floor_ma:.2} mA its datasheet card \
                          requires for regulation, so the voltage it holds here is not guaranteed"

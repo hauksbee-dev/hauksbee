@@ -348,6 +348,9 @@ pub enum AssumptionKind {
     /// mechanism: heuristic bus framing, a strapless MCU model, a net held by
     /// an ideal source.
     ReducedFidelity,
+    /// This run MEASURED the part outside a requirement its card states: a
+    /// fact about the BOARD, not an omission of the model, so it is critical.
+    OperatingLimitViolated,
     /// The producing parser has a known limitation that can fabricate or miss
     /// findings here.
     ParserLimitation,
@@ -369,6 +372,7 @@ impl AssumptionKind {
             Self::NotChecked => "not_checked",
             Self::NotExercised => "not_exercised",
             Self::ReducedFidelity => "reduced_fidelity",
+            Self::OperatingLimitViolated => "operating_limit_violated",
             Self::ParserLimitation => "parser_limitation",
             Self::Waived => "waived",
         }
@@ -386,6 +390,7 @@ impl AssumptionKind {
             Self::NotChecked => "not-checked",
             Self::NotExercised => "not-exercised",
             Self::ReducedFidelity => "reduced-fidelity",
+            Self::OperatingLimitViolated => "operating-limit-violated",
             Self::ParserLimitation => "parser-limitation",
             Self::Waived => "waived",
         }
@@ -993,6 +998,22 @@ impl Assumption {
             ),
             None,
         )
+    }
+
+    /// A datasheet operating requirement this run MEASURED as violated (a
+    /// minimum load current, an input common-mode range, a source impedance).
+    /// [`Self::partial_model_for_component`]'s `gap`/`fix` sentences and board
+    /// scope, but the critical kind and its own what/cost: the part IS
+    /// modelled, and it is the BOARD that is outside what the card covers.
+    pub fn operating_limit_violated(subject: &str, reference: &str, gap: &str, fix: &str) -> Self {
+        let part = or_else(reference, "an unnamed part").to_string();
+        let mut built = Self::partial_model_for_component(subject, reference, "", gap, fix);
+        built.kind = AssumptionKind::OperatingLimitViolated;
+        built.id = AssumptionId::new(built.kind, subject); // named subject, no disambiguator
+        built.collision_base_id = built.id.clone();
+        built.statement = sentence(&format!("{part} is operated outside a limit its card sets"));
+        built.consequence = sentence(&format!("No result that depends on {part} is a pass"));
+        built
     }
 
     /// An unresolved part defaulted to an open circuit. `reason` is the
@@ -3453,7 +3474,7 @@ impl EvidenceMap {
     ///
     /// | On-path assumption kind | Effect |
     /// |---|---|
-    /// | `OpenPart`, `SubstituteModel`, `NotChecked`, `NotExercised`, `FittedByDefault` | `Undermined` |
+    /// | `OpenPart`, `SubstituteModel`, `NotChecked`, `NotExercised`, `FittedByDefault`, `OperatingLimitViolated` | `Undermined` |
     /// | `InferredPinRole`, `DefaultParameter`, `ReducedFidelity`, `ParserLimitation` | `Qualified` |
     /// | `Waived`, expiry not yet passed | `Qualified` |
     /// | `Waived`, expired or with an unreadable expiry | `Undermined` |
@@ -3471,7 +3492,8 @@ impl EvidenceMap {
                 | AssumptionKind::SubstituteModel
                 | AssumptionKind::NotChecked
                 | AssumptionKind::NotExercised
-                | AssumptionKind::FittedByDefault => EvidenceStatus::Undermined,
+                | AssumptionKind::FittedByDefault
+                | AssumptionKind::OperatingLimitViolated => EvidenceStatus::Undermined,
                 AssumptionKind::InferredPinRole
                 | AssumptionKind::DefaultParameter
                 | AssumptionKind::ReducedFidelity

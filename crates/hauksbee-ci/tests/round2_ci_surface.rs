@@ -13,7 +13,6 @@
 //! * The merged multi-spec JUnit document aggregates honest counts.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use hauksbee_ci::assertions::AssertResult;
 use hauksbee_ci::report::{junit_error_suite, render_junit_document, CiResult};
@@ -129,24 +128,7 @@ fn result_named(label: &str, passed: bool) -> AssertResult {
 }
 
 fn ci_result(results: Vec<AssertResult>) -> CiResult {
-    CiResult {
-        spec_name: "t".into(),
-        board: "b.kicad_pcb".into(),
-        results,
-        seeds: 1,
-        elapsed: Duration::from_secs(0),
-        analog_abort: false,
-        coverage: None,
-        substitutions: Vec::new(),
-        coverage_warnings: Vec::new(),
-        timing_coverage: Vec::new(),
-        timing_refusals: Vec::new(),
-        dead_rails: Vec::new(),
-        waiver_notes: Vec::new(),
-        inventory: Vec::new(),
-        assumptions: Vec::new(),
-        evidence: Vec::new(),
-    }
+    crate::support::ci_result(results, false)
 }
 
 #[test]

@@ -760,18 +760,38 @@ pub enum OperatingEnvelope {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         note: String,
     },
+    /// A SUPPLY-RELATIVE input window: the `inputs` roles of one channel may
+    /// not ALL sit above `V(supply) - headroom_v`. The absolute `SupplyRange`
+    /// above cannot express a limit that tracks the rail (a comparator's
+    /// `VICR` upper end of `V+ - 1.5 V`), and the "all, not one" shape is the
+    /// LM339/LM393 rule: one input inside the range still compares correctly.
+    InputCommonMode {
+        supply: String,
+        inputs: Vec<String>,
+        headroom_v: f64,
+        #[serde(default)]
+        severity: EnvelopeSeverity,
+        #[serde(default)]
+        basis: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        note: String,
+    },
 }
 
 impl OperatingEnvelope {
     pub fn basis(&self) -> &str {
         match self {
-            Self::SupplyRange { basis, .. } | Self::RailOrder { basis, .. } => basis,
+            Self::SupplyRange { basis, .. }
+            | Self::RailOrder { basis, .. }
+            | Self::InputCommonMode { basis, .. } => basis,
         }
     }
 
     pub fn severity(&self) -> EnvelopeSeverity {
         match self {
-            Self::SupplyRange { severity, .. } | Self::RailOrder { severity, .. } => *severity,
+            Self::SupplyRange { severity, .. }
+            | Self::RailOrder { severity, .. }
+            | Self::InputCommonMode { severity, .. } => *severity,
         }
     }
 }

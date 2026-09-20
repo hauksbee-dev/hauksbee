@@ -559,6 +559,29 @@ mod tests {
         assert_eq!(eval_expr("1.0/2.0", &vars), Some(0.5));
     }
 
+    /// Instantiate a macro holding just `primitive`, at the origin and
+    /// unscaled, and return its hull points.
+    fn one_primitive_hull(name: &str, primitive: MacroContent) -> Vec<(f64, f64)> {
+        let m = ApertureMacro {
+            name: name.to_string(),
+            content: vec![primitive],
+        };
+        instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull
+    }
+
+    /// The `(minx, maxx, miny, maxy)` bounds of [`one_primitive_hull`], which is
+    /// how the rotation tests read where a primitive actually landed.
+    fn hull_bbox(name: &str, primitive: MacroContent) -> (f64, f64, f64, f64) {
+        let pts = one_primitive_hull(name, primitive);
+        let (minx, maxx) = pts
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+        let (miny, maxy) = pts
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        (minx, maxx, miny, maxy)
+    }
+
     fn donut(extra_dark_after: bool, hole_at: (f64, f64)) -> ApertureMacro {
         use gerber_types::{CenterLinePrimitive, CirclePrimitive};
         let mut content = vec![
@@ -702,11 +725,7 @@ mod tests {
             diameter: MacroDecimal::Value(1.0),
             angle: MacroDecimal::Value(0.0),
         };
-        let m = ApertureMacro {
-            name: "FOO".to_string(),
-            content: vec![MacroContent::Polygon(poly)],
-        };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
+        let pts = one_primitive_hull("FOO", MacroContent::Polygon(poly));
         assert!(
             pts.len() <= 12,
             "vertex count must be clamped, got {}",
@@ -729,11 +748,7 @@ mod tests {
             diameter: MacroDecimal::Value(6.0),
             angle: MacroDecimal::Value(45.0),
         };
-        let m = ApertureMacro {
-            name: "HEX".to_string(),
-            content: vec![MacroContent::Polygon(poly)],
-        };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
+        let pts = one_primitive_hull("HEX", MacroContent::Polygon(poly));
         let n = pts.len() as f64;
         let cx: f64 = pts.iter().map(|p| p.0).sum::<f64>() / n;
         let cy: f64 = pts.iter().map(|p| p.1).sum::<f64>() / n;
@@ -757,17 +772,7 @@ mod tests {
             center: (MacroDecimal::Value(0.0), MacroDecimal::Value(0.0)),
             angle: MacroDecimal::Value(90.0),
         };
-        let m = ApertureMacro {
-            name: "CL".to_string(),
-            content: vec![MacroContent::CenterLine(cl)],
-        };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
-        let (minx, maxx) = pts
-            .iter()
-            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
-        let (miny, maxy) = pts
-            .iter()
-            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        let (minx, maxx, miny, maxy) = hull_bbox("CL", MacroContent::CenterLine(cl));
         assert!(
             (maxx - minx - 2.0).abs() < 1e-6,
             "x span {} (expected ~2 after 90° rotation)",
@@ -794,17 +799,7 @@ mod tests {
             center: (MacroDecimal::Value(3.0), MacroDecimal::Value(0.0)),
             angle: MacroDecimal::Value(90.0),
         };
-        let m = ApertureMacro {
-            name: "CL".to_string(),
-            content: vec![MacroContent::CenterLine(cl)],
-        };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
-        let (minx, maxx) = pts
-            .iter()
-            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
-        let (miny, maxy) = pts
-            .iter()
-            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        let (minx, maxx, miny, maxy) = hull_bbox("CL", MacroContent::CenterLine(cl));
         assert!(
             (minx + 1.0).abs() < 1e-6 && (maxx - 1.0).abs() < 1e-6,
             "x∈[-1,1], got [{minx},{maxx}]"
@@ -835,17 +830,7 @@ mod tests {
             ],
             angle: MacroDecimal::Value(90.0),
         };
-        let m = ApertureMacro {
-            name: "OUT".to_string(),
-            content: vec![MacroContent::Outline(outline)],
-        };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
-        let (minx, maxx) = pts
-            .iter()
-            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
-        let (miny, maxy) = pts
-            .iter()
-            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        let (minx, maxx, miny, maxy) = hull_bbox("OUT", MacroContent::Outline(outline));
         assert!(
             (minx + 2.0).abs() < 1e-6 && maxx.abs() < 1e-6,
             "x∈[-2,0] after rotation, got [{minx},{maxx}]"
@@ -869,17 +854,7 @@ mod tests {
             end: (MacroDecimal::Value(4.0), MacroDecimal::Value(0.0)),
             angle: MacroDecimal::Value(90.0),
         };
-        let m = ApertureMacro {
-            name: "VL".to_string(),
-            content: vec![MacroContent::VectorLine(vl)],
-        };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
-        let (minx, maxx) = pts
-            .iter()
-            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
-        let (miny, maxy) = pts
-            .iter()
-            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        let (minx, maxx, miny, maxy) = hull_bbox("VL", MacroContent::VectorLine(vl));
         assert!(
             (maxx - minx - 1.0).abs() < 1e-6,
             "x span ~1 (the width) after 90°, got {}",

@@ -24,7 +24,6 @@ use std::sync::{Arc, Mutex};
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::{HauksbeeEngine, Mcp3008, SpiBus};
 use hauksbee_extract::ExtractedBoard;
-use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_mcu::renode::is_available;
 use hauksbee_models::ModelLibrary;
 use std::path::PathBuf;
@@ -36,13 +35,7 @@ fn board_text() -> String {
 }
 
 fn firmware() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/stm32_spi_adc/spi_adc.elf");
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::testdata("firmware/stm32_spi_adc/spi_adc.elf")
 }
 
 /// Renode + firmware preconditions shared by every test below: `Some(path)`
@@ -88,15 +81,7 @@ fn run_at_voltage(ch0_volts: f64, ms: u32) -> f64 {
 
     let frame_dt = 5e-3_f64;
     let n = (ms as f64 / 1000.0 / frame_dt).round() as usize;
-    let mut last_flag = 0.0_f64;
-
-    for _ in 0..n {
-        let frame = engine.step(frame_dt);
-        if let Some(&v) = frame.net_voltages.get("FLAG") {
-            last_flag = v;
-        }
-    }
-    last_flag
+    crate::support::last_flag(&mut engine, frame_dt, n)
 }
 
 #[test]

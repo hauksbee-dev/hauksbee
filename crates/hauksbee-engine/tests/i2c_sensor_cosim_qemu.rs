@@ -51,7 +51,6 @@
 use std::sync::{Arc, Mutex};
 
 use hauksbee_engine::{HauksbeeEngine, I2cBus, Lm75};
-use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_mcu::qemu::{is_available, QemuArch};
 use std::path::PathBuf;
 
@@ -117,13 +116,7 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
     let n = ((ms as f64) / (frame_dt * 1e3)).round() as usize;
     let n = n.max(1);
 
-    let mut last_flag = 0.0_f64;
-    for _ in 0..n {
-        let frame = engine.step(frame_dt);
-        if let Some(&v) = frame.net_voltages.get("FLAG") {
-            last_flag = v;
-        }
-    }
+    let last_flag = crate::support::last_flag(&mut engine, frame_dt, n);
     assert!(
         engine.scheduler().analog_valid(),
         "QEMU/MCU transport failed during the run; stale FLAG voltage must not \
@@ -231,13 +224,7 @@ fn esp32_i2c_temperature_change_is_live() {
     let frame_dt = 5e-3_f64;
 
     // Run 400 ms cold (enough for multiple I2C poll cycles at the 50 ms rate).
-    let mut last_flag = 0.0_f64;
-    for _ in 0..80 {
-        let frame = engine.step(frame_dt);
-        if let Some(&v) = frame.net_voltages.get("FLAG") {
-            last_flag = v;
-        }
-    }
+    let last_flag = crate::support::last_flag(&mut engine, frame_dt, 80);
     assert!(
         last_flag < 1.0,
         "after 400 ms at 20 C, FLAG should be LOW; got {last_flag:.3} V"
@@ -252,12 +239,7 @@ fn esp32_i2c_temperature_change_is_live() {
     }
 
     // Run another 400 ms hot.
-    for _ in 0..80 {
-        let frame = engine.step(frame_dt);
-        if let Some(&v) = frame.net_voltages.get("FLAG") {
-            last_flag = v;
-        }
-    }
+    let last_flag = crate::support::last_flag(&mut engine, frame_dt, 80);
     assert!(
         last_flag > 2.0,
         "after raising to 40 C, FLAG should go HIGH; got {last_flag:.3} V. \

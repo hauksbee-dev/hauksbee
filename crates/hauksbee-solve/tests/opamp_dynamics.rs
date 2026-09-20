@@ -5,7 +5,7 @@
 //! answer in the test itself.
 
 use crate::shared::{add_resistor, add_vdc};
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, Device, NodeId, Rail, SourceKind};
 use hauksbee_solve::{
     AcAnalysis, AcSpec, Integration, LoopStability, SolverOptions, StepControl, Sweep, Transient,
 };
@@ -49,8 +49,8 @@ fn step_circuit(
         gain,
         pole_hz,
         slew,
-        rail_lo: 0.0,
-        rail_hi,
+        rail_lo: Rail::fixed(0.0),
+        rail_hi: Rail::fixed(rail_hi),
     });
     add_resistor(&mut ckt, "RL", out, NodeId::GROUND, 1e6);
     ckt
@@ -192,8 +192,8 @@ fn ac_margins_unchanged_by_slew() {
             gain: a0,
             pole_hz: Some(100.0),
             slew,
-            rail_lo: -1e9,
-            rail_hi: 1e9,
+            rail_lo: Rail::fixed(-1e9),
+            rail_hi: Rail::fixed(1e9),
         });
         add_resistor(&mut ckt, "RL", out, NodeId::GROUND, 1e6);
         ckt
@@ -247,8 +247,8 @@ fn partitioned_opamp_output_matches_monolith() {
             gain: 1.0,
             pole_hz: Some(pole_hz),
             slew: None,
-            rail_lo: 0.0,
-            rail_hi: 5.0,
+            rail_lo: Rail::fixed(0.0),
+            rail_hi: Rail::fixed(5.0),
         });
         add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e6);
         // Independent RC legs so the partition heuristics fragment and the

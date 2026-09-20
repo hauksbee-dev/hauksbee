@@ -3,7 +3,7 @@
 //! compares the solver to a textbook transfer function to a tight tolerance.
 
 use crate::shared::{add_capacitor, add_resistor, add_vdc};
-use hauksbee_ir::{Circuit, Device, NodeId};
+use hauksbee_ir::{Circuit, Device, NodeId, Rail};
 use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
 use hauksbee_testkit::circuits::{bjt, comparator, ind, res, vdc, vswitch};
 
@@ -336,8 +336,8 @@ fn opamp_unity_buffer_phase_margin_about_90() {
         gain: a0,
         pole_hz: None,
         slew: None,
-        rail_lo: -1e9,
-        rail_hi: 1e9,
+        rail_lo: Rail::fixed(-1e9),
+        rail_hi: Rail::fixed(1e9),
     });
     // Dominant pole: R from oa to out, C from out to ground.
     add_resistor(&mut ckt, "RP", oa, out, r);
@@ -395,8 +395,8 @@ fn opamp_reference_feedthrough_rolls_off_with_the_bandwidth_pole() {
         gain: 1000.0,
         pole_hz: Some(pole_hz),
         slew: None,
-        rail_lo: -1e9,
-        rail_hi: 1e9,
+        rail_lo: Rail::fixed(-1e9),
+        rail_hi: Rail::fixed(1e9),
     });
 
     let spec = AcSpec {

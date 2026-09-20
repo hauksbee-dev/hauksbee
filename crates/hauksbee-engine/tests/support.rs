@@ -6,7 +6,9 @@ use std::process::{Command, Output};
 
 use hauksbee_engine::binder::BoundBoard;
 use hauksbee_engine::reports::bind::BindReport;
+use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::{Component, Net, Pin};
+use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 
 /// The compiled `hauksbee` binary (Cargo sets this for the engine crate's tests).
@@ -25,6 +27,33 @@ pub fn hauksbee_bin() -> PathBuf {
 #[allow(dead_code)]
 pub fn board(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+}
+
+/// `rel` under the repository's `testdata/`, canonicalized, or `None` when this
+/// checkout does not carry it.
+///
+/// Firmware images and demo ELFs are BUILT (`make -C testdata/firmware/...`),
+/// not committed, so every co-sim test has to decide whether to run or skip
+/// from the same existence check.
+pub fn testdata(rel: &str) -> Option<PathBuf> {
+    let p = board("../../testdata").join(rel);
+    p.exists().then(|| p.canonicalize().unwrap_or(p))
+}
+
+/// Step `engine` through `n` frames of `frame_dt` seconds and return the last
+/// voltage it reported on the "FLAG" net (0 V if it reported none).
+///
+/// Every sensor co-sim reads its firmware's verdict off that one net, so the
+/// stepping loop is the same whichever transport (in-process, QEMU, Renode) and
+/// whichever bus (I2C, SPI) is under test.
+pub fn last_flag(engine: &mut HauksbeeEngine, frame_dt: f64, n: usize) -> f64 {
+    let mut last = 0.0;
+    for _ in 0..n {
+        if let Some(&v) = engine.step(frame_dt).net_voltages.get("FLAG") {
+            last = v;
+        }
+    }
+    last
 }
 
 /// Run the compiled binary and wait for it to exit.

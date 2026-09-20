@@ -4,7 +4,7 @@ import type { SessionsState } from '../hooks/useSessions'
 import { BoardTargetIcon, HistoryIcon } from './Icons'
 import { relTime } from '../lib/rel-time'
 import { hasDefaultName } from '../lib/session-store'
-import { AdditionalEvidencePanel } from './AdditionalEvidencePanel'
+import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePanel'
 import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
 import { UploadBanners } from './ui'
 import { motion, useReducedMotion } from 'motion/react'
@@ -93,9 +93,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
   avrAvailable?: boolean
 }) {
   const {
-    busy, uploadError, uploadNotice, dismissNotice, firmwareFile, schematicFile, supplementalFiles,
-    handleBoard, handleFirmware, clearFirmware, handleSchematic, clearSchematic,
-    handleBom, handlePlacement, handleVariant, handleAsbuilt, handleModels, runSample,
+    busy, uploadError, uploadNotice, dismissNotice, handleBoard, runSample,
   } = session
   const reduced = useReducedMotion()
 
@@ -320,23 +318,7 @@ export function UploadView({ session, onOpenLive, sessions, onResume, avrAvailab
           {/* One companion-input contract feeds report, Checks and Live Sim. */}
           <AdditionalEvidencePanel
             placement="intake"
-            firmware={firmwareFile}
-            schematic={schematicFile}
-            bom={supplementalFiles.bom}
-            placementFile={supplementalFiles.placement}
-            variant={supplementalFiles.variant}
-            asbuilt={supplementalFiles.asbuilt}
-            models={supplementalFiles.models}
-            onFirmware={handleFirmware}
-            onClearFirmware={clearFirmware}
-            onSchematic={handleSchematic}
-            onClearSchematic={clearSchematic}
-            onBom={handleBom}
-            onPlacement={handlePlacement}
-            onVariant={handleVariant}
-            onAsbuilt={handleAsbuilt}
-            onModels={handleModels}
-            locked={!!busy}
+            {...evidenceSlots(session)}
           />
 
           {/* Prepare your own project, one line per ECAD, no jargon */}

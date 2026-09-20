@@ -78,6 +78,37 @@ impl NodeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct DeviceId(pub u32);
 
+/// An op-amp output saturation level, `V(pin) + offset` volts: `pin` is the
+/// part's supply pad when the card gives a datasheet output-swing HEADROOM from
+/// it (so a sagging, ramping or split supply is honoured), and ground for a
+/// plain fixed level ([`Rail::fixed`]). A supply pad is a SENSE terminal, read
+/// at the current iterate: explicit, no Jacobian column, exact on convergence.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Rail {
+    pub pin: NodeId,
+    pub offset: f64,
+}
+
+impl Rail {
+    /// A fixed level in volts, tracking no supply pin.
+    pub const fn fixed(offset: f64) -> Rail {
+        Rail {
+            pin: NodeId::GROUND,
+            offset,
+        }
+    }
+
+    /// The ORDERED `(lo, hi)` band a pair of rails resolves to, each read as
+    /// `V(pin) + offset` from a node-voltage reader. A supply that has not come
+    /// up (the DC homotopy starts every source at zero, and a ramping rail
+    /// passes through it) puts a headroom ceiling below the floor; the band
+    /// collapses onto the floor there instead of inverting.
+    pub fn band(lo: Rail, hi: Rail, v: impl Fn(NodeId) -> f64) -> (f64, f64) {
+        let (lo, hi) = (v(lo.pin) + lo.offset, v(hi.pin) + hi.offset);
+        (lo, hi.max(lo))
+    }
+}
+
 /// A circuit: interned node names, devices, and a global temperature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Circuit {
@@ -315,8 +346,8 @@ pub enum Device {
         /// Output slew-rate limit in V/µs; `None`/`0` = unlimited.
         #[serde(default)]
         slew: Option<f64>,
-        rail_lo: f64,
-        rail_hi: f64,
+        rail_lo: Rail,
+        rail_hi: Rail,
     },
     /// Behavioral comparator: output snaps to a rail at the threshold.
     Comparator {
@@ -480,12 +511,15 @@ impl Device {
                 inp,
                 inn,
                 reference,
+                rail_lo,
+                rail_hi,
                 ..
             } => {
                 let mut nodes = vec![*out, *inp, *inn];
                 if let Some(reference) = reference {
                     nodes.push(*reference);
                 }
+                nodes.extend([rail_lo.pin, rail_hi.pin].iter().filter(|n| !n.is_ground()));
                 nodes
             }
             Device::Comparator { out, inp, inn, .. } => {
@@ -576,6 +610,8 @@ impl Device {
                 inp,
                 inn,
                 reference,
+                rail_lo,
+                rail_hi,
                 ..
             } => {
                 *out = f(*out);
@@ -583,6 +619,14 @@ impl Device {
                 *inn = f(*inn);
                 if let Some(reference) = reference {
                     *reference = f(*reference);
+                }
+                // A fixed rail's ground sentinel is not a terminal, so it is
+                // NOT remapped: sub-circuit extraction would otherwise move it
+                // onto a real net and change the level.
+                for r in [rail_lo, rail_hi] {
+                    if !r.pin.is_ground() {
+                        r.pin = f(r.pin);
+                    }
                 }
             }
             Device::Comparator { out, inp, inn, .. } => {
@@ -848,12 +892,15 @@ impl Device {
                 inp,
                 inn,
                 reference,
+                rail_lo,
+                rail_hi,
                 ..
             } => {
                 let mut v = vec![*inp, *inn];
                 if let Some(reference) = reference {
                     v.push(*reference);
                 }
+                v.extend([rail_lo.pin, rail_hi.pin].iter().filter(|n| !n.is_ground()));
                 v
             }
             Device::Comparator { inp, inn, .. } => vec![*inp, *inn],
@@ -985,8 +1032,8 @@ impl Device {
                 gain: 1e5,
                 pole_hz: Some(1e6),
                 slew: None,
-                rail_lo: -5.0,
-                rail_hi: 5.0,
+                rail_lo: Rail::fixed(-5.0),
+                rail_hi: Rail::fixed(5.0),
             },
             Device::Comparator {
                 name: "Kex".into(),

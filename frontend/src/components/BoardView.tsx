@@ -5,7 +5,7 @@ import type { BoardSession } from '../hooks/useBoardSession'
 import { WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { SelectionCard } from './SelectionCard'
-import { AdditionalEvidencePanel } from './AdditionalEvidencePanel'
+import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePanel'
 import { ConstraintModal } from './ConstraintModal'
 import type { ConstraintDraft } from './ConstraintEditor'
 import { DatasheetExtract } from './DatasheetExtract'
@@ -71,8 +71,7 @@ export function BoardView({
   const r = session.report!
   const {
     boardUrl, selectedNet, selectedComponent, setSelectedNet, setSelectedComponent,
-    busy, uploadError, uploadNotice, dismissNotice, firmwareFile, schematicFile, supplementalFiles, handleFirmware,
-    clearFirmware, handleSchematic, clearSchematic, handleBom, handlePlacement, handleVariant, handleAsbuilt, handleModels,
+    busy, uploadError, uploadNotice, dismissNotice, firmwareFile,
     boardFile, boardLabel, liveMode, onEmptyBoard, restoredFrom,
   } = session
 
@@ -270,23 +269,7 @@ export function BoardView({
             browser can upload them. */}
         <AdditionalEvidencePanel
           placement="report"
-          firmware={firmwareFile}
-          schematic={schematicFile}
-          bom={supplementalFiles.bom}
-          placementFile={supplementalFiles.placement}
-          variant={supplementalFiles.variant}
-          asbuilt={supplementalFiles.asbuilt}
-          models={supplementalFiles.models}
-          onFirmware={handleFirmware}
-          onClearFirmware={clearFirmware}
-          onSchematic={handleSchematic}
-          onClearSchematic={clearSchematic}
-          onBom={handleBom}
-          onPlacement={handlePlacement}
-          onVariant={handleVariant}
-          onAsbuilt={handleAsbuilt}
-          onModels={handleModels}
-          locked={!!busy}
+          {...evidenceSlots(session)}
           boardName={boardLabel ?? r.file_name}
           cosimRan={r.cosim?.ran}
           showWebControls={!!boardFile && !restoredFrom}

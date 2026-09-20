@@ -785,6 +785,32 @@ fn raw_via_slave(slave: &std::ffi::CStr) {
 mod tests {
     use super::*;
 
+    /// Poll until the endpoint reports a peer attach, sleeping `poll_ms`
+    /// between probes, for up to 200 probes. `false` means it never arrived.
+    ///
+    /// Connecting or opening the peer end returns BEFORE the endpoint's own
+    /// point-in-time probe can see it, so the attach lands on one of the next
+    /// polls rather than necessarily the first.
+    fn await_attach(ep: &mut HostSerial, poll_ms: u64) -> bool {
+        for _ in 0..200 {
+            if ep.poll_peer().contains(&PeerEvent::Attached) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(poll_ms));
+        }
+        false
+    }
+
+    /// Open the other end of a PTY endpoint the way a host serial tool does.
+    #[cfg(unix)]
+    fn open_pty_peer(ep: &HostSerial, what: &str) -> std::fs::File {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(ep.endpoint())
+            .unwrap_or_else(|e| panic!("{what}: {e}"))
+    }
+
     /// The backlog is bounded and the loss is COUNTED, not silent: a session
     /// whose peer never attached (or never read) must be able to say how many
     /// firmware bytes the host tool did not see.
@@ -820,14 +846,7 @@ mod tests {
         let mut peer = TcpStream::connect(ep.endpoint()).expect("connect");
         // `connect` returns before the listener has accepted, so the attach is
         // observed on one of the next polls, not necessarily the first.
-        let mut saw_attach = false;
-        for _ in 0..200 {
-            if ep.poll_peer().contains(&PeerEvent::Attached) {
-                saw_attach = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        let saw_attach = await_attach(&mut ep, 5);
         assert!(saw_attach, "a peer that connects must be reported");
 
         let mut got = [0u8; 32];
@@ -889,12 +908,7 @@ mod tests {
             .open(ep.endpoint())
             .expect("open pty peer");
 
-        for _ in 0..200 {
-            if ep.poll_peer().contains(&PeerEvent::Attached) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        await_attach(&mut ep, 1);
         assert!(ep.peer_attached(), "peer attach must be observed and rawed");
 
         // Match the original NEP host: it re-applies its own noncanonical
@@ -965,17 +979,8 @@ mod tests {
         use std::os::fd::AsRawFd;
 
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
-        let mut first = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(ep.endpoint())
-            .expect("first peer");
-        for _ in 0..200 {
-            if ep.poll_peer().contains(&PeerEvent::Attached) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        let mut first = open_pty_peer(&ep, "first peer");
+        await_attach(&mut ep, 1);
         assert!(ep.peer_attached());
         first.write_all(b"a").expect("first peer byte");
         let mut first_byte = Vec::new();
@@ -989,11 +994,7 @@ mod tests {
         assert_eq!(first_byte, b"a");
         drop(first);
 
-        let mut second = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(ep.endpoint())
-            .expect("second peer before next poll");
+        let mut second = open_pty_peer(&ep, "second peer before next poll");
         // A hidden replacement cannot be rawed by a point-in-time observer.
         // Real serial clients configure their fd before writing; use binary
         // bytes here so an accidental cooked-mode test cannot false-green.
@@ -1020,17 +1021,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
-        let first = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(ep.endpoint())
-            .expect("first peer");
-        for _ in 0..200 {
-            if ep.poll_peer().contains(&PeerEvent::Attached) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        let first = open_pty_peer(&ep, "first peer");
+        await_attach(&mut ep, 1);
         assert!(ep.peer_attached());
         drop(first);
 
@@ -1042,17 +1034,8 @@ mod tests {
         );
         assert!(ep.poll_peer().contains(&PeerEvent::Detached));
 
-        let mut second = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(ep.endpoint())
-            .expect("replacement peer");
-        for _ in 0..200 {
-            if ep.poll_peer().contains(&PeerEvent::Attached) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        let mut second = open_pty_peer(&ep, "replacement peer");
+        await_attach(&mut ep, 1);
         let mut received = [0u8; 8];
         second.read_exact(&mut received).expect("retained output");
         assert_eq!(&received, b"retained");
@@ -1068,17 +1051,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
-        let mut peer = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(ep.endpoint())
-            .expect("peer");
-        for _ in 0..200 {
-            if ep.poll_peer().contains(&PeerEvent::Attached) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        let mut peer = open_pty_peer(&ep, "peer");
+        await_attach(&mut ep, 1);
         assert!(ep.peer_attached());
         ep.backlog.extend(b"racy");
 

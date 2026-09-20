@@ -47,7 +47,6 @@
 use std::sync::{Arc, Mutex};
 
 use hauksbee_engine::{HauksbeeEngine, I2cBus, Lm75};
-use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_mcu::renode::is_available;
 use std::path::PathBuf;
 
@@ -119,14 +118,7 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
     let n = (ms as f64 / (frame_dt * 1e3)).round() as usize;
     let n = n.max(1);
 
-    let mut last_flag = 0.0;
-    for _ in 0..n {
-        let frame = engine.step(frame_dt);
-        if let Some(&v) = frame.net_voltages.get("FLAG") {
-            last_flag = v;
-        }
-    }
-    last_flag
+    crate::support::last_flag(&mut engine, frame_dt, n)
 }
 
 /// The core proof: the firmware reads the LM75 temperature via I2C and drives
@@ -232,13 +224,7 @@ fn stm32_i2c_temperature_change_is_live() {
     let frame_dt = 5e-3_f64;
 
     // Run 200 ms cold.
-    let mut last_flag = 0.0_f64;
-    for _ in 0..40 {
-        let frame = engine.step(frame_dt);
-        if let Some(&v) = frame.net_voltages.get("FLAG") {
-            last_flag = v;
-        }
-    }
+    let last_flag = crate::support::last_flag(&mut engine, frame_dt, 40);
     assert!(
         last_flag < 1.0,
         "after 200 ms at 20 C, FLAG should be LOW; got {last_flag:.3} V"
@@ -251,12 +237,7 @@ fn stm32_i2c_temperature_change_is_live() {
             lm75.set_temp_c(40.0);
         }
     }
-    for _ in 0..40 {
-        let frame = engine.step(frame_dt);
-        if let Some(&v) = frame.net_voltages.get("FLAG") {
-            last_flag = v;
-        }
-    }
+    let last_flag = crate::support::last_flag(&mut engine, frame_dt, 40);
     assert!(
         last_flag > 2.0,
         "after raising to 40 C, FLAG should go HIGH; got {last_flag:.3} V. \

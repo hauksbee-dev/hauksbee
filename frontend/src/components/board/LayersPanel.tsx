@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { ParsedBoard } from '../../lib/kicad-parser'
 import { allStrokes } from '../../lib/kicad-parser'
 import { boardTheme, getLayerStyle } from '../../lib/layer-colors'
 import { LayersIcon } from '../Icons'
 import { SwitchTrack } from '../ui'
+import { useDismissable } from '../../hooks/useDismissable'
 
 // The map's layer controls: which of THIS board's layers are drawn, the
 // pads/labels/activity switches, and a net to highlight.
@@ -124,35 +125,21 @@ export function LayersControl({ board, controls, pickerNets, selectedNet, onNetC
     showLabels, setShowLabels, showActivity, setShowActivity,
   } = controls
 
-  // Same dismissal as the export menu and the session switcher: an outside
-  // click or Escape. The panel covers a third of the map, so re-finding the one
-  // button that closes it is not an acceptable way out. Escape hands focus back
-  // to the trigger, because a keyboard reader who dismissed the panel has to
-  // land somewhere, and the control they just used is the only sane place.
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      // The expanded view listens for Escape on `window`, which bubbles LAST,
-      // after `document`. Stopping propagation here is what makes the panel the
-      // innermost dismissible surface: one Escape closes the panel and leaves
-      // the map expanded, a second collapses it. A guard on the other effect
-      // cannot do this, because within a single keydown React has not yet
-      // processed the state change and both listeners are still attached.
-      e.stopPropagation()
-      setOpen(false)
-      trigger.current?.focus()
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  // The panel covers a third of the map, so re-finding the one button that
+  // closes it is not an acceptable way out. Escape hands focus back to the
+  // trigger, because a keyboard reader who dismissed the panel has to land
+  // somewhere, and the control they just used is the only sane place.
+  useDismissable(open, wrap, setOpen, e => {
+    // The expanded view listens for Escape on `window`, which bubbles LAST,
+    // after `document`. Stopping propagation here is what makes the panel the
+    // innermost dismissible surface: one Escape closes the panel and leaves
+    // the map expanded, a second collapses it. A guard on the other effect
+    // cannot do this, because within a single keydown React has not yet
+    // processed the state change and both listeners are still attached.
+    e.stopPropagation()
+    setOpen(false)
+    trigger.current?.focus()
+  })
 
   return (
     <div ref={wrap} className="flex flex-col items-end gap-2 ml-auto pointer-events-auto">

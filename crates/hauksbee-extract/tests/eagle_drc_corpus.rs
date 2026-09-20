@@ -30,10 +30,6 @@ use std::time::Instant;
 
 use hauksbee_extract::ExtractedBoard;
 
-fn require_corpus() -> bool {
-    std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok()
-}
-
 /// The eight famous Eagle main board files (the "Main board file" column of
 /// `board-corpus/famous/SOURCES.md`), relative to `board-corpus/famous`.
 const FAMOUS_EAGLE: &[(&str, &str)] = &[
@@ -84,7 +80,7 @@ const FAMOUS_EAGLE: &[(&str, &str)] = &[
 fn famous_eagle_boards_have_no_true_shorts() {
     let Some(root) = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")) else {
         assert!(
-            !require_corpus(),
+            !crate::support::require_corpus(),
             "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is absent"
         );
         eprintln!("board-corpus not present; skipping famous Eagle DRC sweep");
@@ -157,7 +153,10 @@ fn famous_eagle_boards_have_no_true_shorts() {
                     arduino_uno_r3_official,adafruit_circuit_playground,adafruit_feather_m0,\
                     adafruit_metro_m4,adafruit_qtpy,adafruit_trinket_m0,sparkfun_redboard,\
                     sparkfun_pro_micro,sparkfun_thingplus_samd51,sparkfun_thingplus_rp2040`.";
-        assert!(!require_corpus(), "HAUKSBEE_REQUIRE_CORPUS set and {msg}");
+        assert!(
+            !crate::support::require_corpus(),
+            "HAUKSBEE_REQUIRE_CORPUS set and {msg}"
+        );
         eprintln!("skipping famous Eagle DRC sweep: {msg}");
         return;
     }

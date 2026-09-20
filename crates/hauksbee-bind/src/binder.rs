@@ -22,7 +22,8 @@ use std::collections::HashMap;
 use hauksbee_extract::{Component, ExtractedBoard};
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelUncertainty};
 use hauksbee_ir::{
-    BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, SourceKind,
+    BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, Rail,
+    SourceKind,
 };
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{
@@ -3737,8 +3738,8 @@ fn bind_shunt_ref(
         gain: 1.0 / (zka * ikmax),
         pole_hz: None,
         slew: None,
-        rail_lo: 0.0,
-        rail_hi: 1.0,
+        rail_lo: Rail::fixed(0.0),
+        rail_hi: Rail::fixed(1.0),
     });
     let kint = circuit.node(&format!("{r}_shunt_ik"));
     circuit.add(Device::Vccs {
@@ -3799,6 +3800,32 @@ fn wired_channels(roles: &HashMap<String, NodeId>) -> Vec<(usize, NodeId, NodeId
         .collect()
 }
 
+/// The two output saturation levels for a card-bound op-amp, or the open-part
+/// refusal when the card needs a supply pin the board does not give it: falling
+/// back to the fixed `rail_hi` with V+ missing would answer a single-supply
+/// saturation question with the part's ABSOLUTE-MAXIMUM supply (32 V on a 5 V
+/// board) and call it clean, the very false-safe `swing_hi` exists to close.
+/// Ground on V- is no refusal: it is a real rail, spelt as the offset alone.
+fn supply_rails(
+    comp: &Component,
+    model: &ModelEntry,
+    roles: &HashMap<String, NodeId>,
+) -> Result<(Rail, Rail), (BindOutcome, Option<String>)> {
+    let rail = |swing: &str, fixed: &str, dflt: f64, sign: f64, pins: &[&str]| {
+        let Some(headroom) = model.params.get_f64(swing) else {
+            return Ok(Rail::fixed(model.params.get_f64(fixed).unwrap_or(dflt)));
+        };
+        match pick(roles, pins).copied().filter(|n| sign > 0.0 || !n.is_ground()) {
+            Some(pin) => Ok(Rail { pin, offset: sign * headroom }),
+            None => Err(open_warning(comp, "op-amp supply pin is not on a net, so the card's datasheet output swing has no rail to sit on")),
+        }
+    };
+    Ok((
+        rail("swing_lo", "rail_lo", 0.0, 1.0, &["vss", "vee", "v_minus"])?,
+        rail("swing_hi", "rail_hi", 5.0, -1.0, &["vcc", "vs", "vdd"])?,
+    ))
+}
+
 fn bind_opamp(
     comp: &Component,
     model: &ModelEntry,
@@ -3810,8 +3837,12 @@ fn bind_opamp(
     let pole_hz = model.params.get_f64("pole_hz");
     // Datasheet slew rate in V/µs (the unit datasheets quote it in).
     let slew = model.params.get_f64("slew");
-    let rail_lo = model.params.get_f64("rail_lo").unwrap_or(0.0);
-    let rail_hi = model.params.get_f64("rail_hi").unwrap_or(5.0);
+    // A card's `swing_lo`/`swing_hi` bind the rails to the supply-pin NETS, so
+    // the ceiling follows the real rail; `rail_lo`/`rail_hi` are the fallback.
+    let (rail_lo, rail_hi) = match supply_rails(comp, model, roles) {
+        Ok(rails) => rails,
+        Err(open) => return open,
+    };
     let warning = entry_warning(comp, model);
 
     // Per-unit names use the `_q<N>` key the CI thermal aggregation matches
@@ -4082,8 +4113,8 @@ fn bind_open_collector(
         gain: p("gain", 1000.0),
         pole_hz: None,
         slew: None,
-        rail_lo: 0.0,
-        rail_hi: 1.0,
+        rail_lo: Rail::fixed(0.0),
+        rail_hi: Rail::fixed(1.0),
     });
     // `max(V(out), 0)` keeps the sink one-directional: the DC homotopy walks
     // the output node below ground on its way in, and an unclamped V(out)/RON

@@ -17,7 +17,6 @@ use std::sync::{Arc, Mutex};
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::{HauksbeeEngine, I2cBus, Lm75};
 use hauksbee_extract::ExtractedBoard;
-use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_models::ModelLibrary;
 
 /// Minimal board: U1 ATmega328P with PB0 (pad 14) on net "FLAG", power/ground
@@ -77,14 +76,7 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
     // Run the co-sim.
     let frame_dt = 1e-3_f64;
     let n = ms as usize;
-    let mut last_flag = 0.0;
-    for _ in 0..n {
-        let frame = engine.step(frame_dt);
-        if let Some(&v) = frame.net_voltages.get("FLAG") {
-            last_flag = v;
-        }
-    }
-    last_flag
+    crate::support::last_flag(&mut engine, frame_dt, n)
 }
 
 #[test]

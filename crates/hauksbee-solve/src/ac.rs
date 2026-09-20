@@ -479,9 +479,14 @@ fn stamp_ac(
             rail_lo,
             rail_hi,
             ..
-        } => stamp_opamp_ac(
-            sys, layout, op, *out, *inp, *inn, *reference, *gain, *pole_hz, *rail_lo, *rail_hi, w,
-        ),
+        } => {
+            // Supply-pin rails resolve at the OPERATING POINT: small-signal,
+            // all that matters is which side of saturation the bias sits on.
+            let (lo, hi) = hauksbee_ir::Rail::band(*rail_lo, *rail_hi, |n| op.v(n));
+            stamp_opamp_ac(
+                sys, layout, op, *out, *inp, *inn, *reference, *gain, *pole_hz, lo, hi, w,
+            )
+        }
         // A switch is a smooth voltage-controlled conductance: small-signal it
         // is its quiescent conductance PLUS a control transconductance (below).
         // A comparator output is a fixed rail (open small-signal input).

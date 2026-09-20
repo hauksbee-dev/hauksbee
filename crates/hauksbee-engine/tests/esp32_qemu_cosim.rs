@@ -42,13 +42,7 @@ fn board_text() -> String {
 }
 
 fn flash_image() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/esp32_blinky/flash.bin");
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::testdata("firmware/esp32_blinky/flash.bin")
 }
 
 /// Run the co-sim once against `board_text`/`fw`, returning (uart_text,
@@ -206,13 +200,7 @@ fn esp32_cosim_is_deterministic_across_runs() {
 // ── ESP32-C3 (RISC-V) via the same QEMU backend ─────────────────────────────
 
 fn c3_flash_image() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/esp32_blinky/flash_c3.bin");
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::testdata("firmware/esp32_blinky/flash_c3.bin")
 }
 
 #[test]

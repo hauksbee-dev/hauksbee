@@ -7,6 +7,7 @@ import { ARRIVE, LEAVE } from '../motion'
 import { buildReportHtml, downloadText, reportJson } from '../lib/report-export'
 import { specStemFor, workflowExportAvailable, workflowYaml } from '../lib/ci-workflow'
 import { APP_VERSION } from '../lib/version'
+import { useDismissable } from '../hooks/useDismissable'
 
 // One Export menu, under the report's verdict, holding every file this report
 // can become.
@@ -38,24 +39,9 @@ export function ExportMenu({
   const wrap = useRef<HTMLDivElement>(null)
   const reduced = useReducedMotion()
 
-  // Close on an outside click or Escape. A menu that only closes by re-clicking
-  // its own trigger is a menu that sits over the report while you try to read
-  // the thing you just exported.
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  // A menu that only closes by re-clicking its own trigger is a menu that sits
+  // over the report while you try to read the thing you just exported.
+  useDismissable(open, wrap, setOpen)
 
   const stem = specStemFor(report.file_name)
 

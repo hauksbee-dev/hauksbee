@@ -12,7 +12,7 @@
 use hauksbee_ci::assertions::evaluate;
 use hauksbee_ci::runner::{AcOutcome, RunOutcome};
 use hauksbee_ci::Spec;
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, Device, NodeId, Rail, SourceKind};
 use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
 
 use crate::support;
@@ -88,8 +88,8 @@ fn representative_loop(a0: f64, r: f64, c: f64) -> Circuit {
         gain: a0,
         pole_hz: None,
         slew: None,
-        rail_lo: -1e9,
-        rail_hi: 1e9,
+        rail_lo: Rail::fixed(-1e9),
+        rail_hi: Rail::fixed(1e9),
     });
     ckt.add(Device::Resistor {
         name: "RP".into(),

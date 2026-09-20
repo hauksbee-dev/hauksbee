@@ -1,0 +1,47 @@
+# LM358 non-inverting DC amp: gain 1 + RF/RG = 11, RL = 2 kOhm (the condition
+# on the datasheet's positive-rail output-swing row), V+ on pad 8 and V- on
+# pad 4. The supply net V5 is the spec's, so the same board answers on any
+# rail. Section B is tied off to GND the way a board ties off a spare half.
+# This is the frozen checkpoint16 case c04 board, kept as a regression.
+board version 1
+
+fn main {
+    net "OUT"
+    net "INM"
+    net "VSIG"
+    net "GND"
+    net "V5"
+    net "OUT_B"
+
+    comp U1 lib "Package_DIP:DIP-8_W7.62mm" val "LM358" layer "F.Cu" at 10.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "OUT"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "INM"
+        pad "3" thru_hole circle at 7.62 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "VSIG"
+        pad "4" thru_hole circle at 10.16 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+        pad "5" thru_hole circle at 12.70 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+        pad "6" thru_hole circle at 15.24 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+        pad "7" thru_hole circle at 17.78 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "OUT_B"
+        pad "8" thru_hole circle at 20.32 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "V5"
+    }
+
+    comp RG lib "Resistor_SMD:R_0805_2012Metric" val "1k" layer "F.Cu" at 40.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "INM"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+    }
+
+    comp RF lib "Resistor_SMD:R_0805_2012Metric" val "10k" layer "F.Cu" at 70.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "OUT"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "INM"
+    }
+
+    comp RL lib "Resistor_SMD:R_0805_2012Metric" val "2k" layer "F.Cu" at 100.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "OUT"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+    }
+
+    comp CBYP lib "Capacitor_SMD:C_0805_2012Metric" val "100nF" layer "F.Cu" at 130.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "V5"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+    }
+
+}

@@ -1392,6 +1392,7 @@ fn production_assumptions(
     spec: &Spec,
     board: &ExtractedBoard,
     engine: &HauksbeeEngine,
+    lib: &ModelLibrary,
     seed: u32,
     hollow_assumptions: Vec<hauksbee_ir::evidence::Assumption>,
 ) -> Result<Vec<hauksbee_ir::evidence::Assumption>, SpecError> {
@@ -1436,6 +1437,12 @@ fn production_assumptions(
     // Parts the solve found below the minimum current their card guarantees
     // regulation at: never a silent clean pass.
     production_assumptions.extend(engine.scheduler().stress.under_minimum_current());
+    // Analog inputs outside the window their card guarantees: a comparator
+    // channel with every input above its common-mode ceiling (MEASURED, so it
+    // undermines), an ADC pin behind too high a source impedance (qualifies).
+    let solved = |net: &str| engine.scheduler().net_voltage(net);
+    let analog = hauksbee_engine::checks::analog_inputs::run_assumptions(board, lib, &solved);
+    production_assumptions.extend(analog);
     let all_nets: Vec<&str> = board
         .nets
         .iter()
@@ -2116,7 +2123,7 @@ fn run_one(
             .map_err(|error| SpecError::Invalid(format!("building run error budget: {error}")))?,
     );
     let production_assumptions =
-        production_assumptions(spec, &board, &engine, seed, hollow_assumptions)?;
+        production_assumptions(spec, &board, &engine, lib, seed, hollow_assumptions)?;
     let evidence = build_evidence(
         &board,
         &engine,

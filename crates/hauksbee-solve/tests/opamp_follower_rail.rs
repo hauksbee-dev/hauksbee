@@ -9,7 +9,7 @@
 //! rail.
 
 use crate::shared::{add_resistor, add_vdc};
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, Device, NodeId, Rail, SourceKind};
 use hauksbee_solve::{
     dc_operating_point, Integration, SolverOptions, StepControl, Transient, Workspace,
 };
@@ -31,8 +31,8 @@ fn follower(vin: f64, gain: f64, rail_lo: f64, rail_hi: f64) -> Circuit {
         gain,
         pole_hz: None,
         slew: None,
-        rail_lo,
-        rail_hi,
+        rail_lo: Rail::fixed(rail_lo),
+        rail_hi: Rail::fixed(rail_hi),
     });
     add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e6);
     c
@@ -136,8 +136,8 @@ fn follower_tracks_square_wave_transient() {
         gain,
         pole_hz: None,
         slew: None,
-        rail_lo: 0.0,
-        rail_hi: 32.0,
+        rail_lo: Rail::fixed(0.0),
+        rail_hi: Rail::fixed(32.0),
     });
     add_resistor(&mut c, "RL", out, NodeId::GROUND, 1e6);
     let opts = SolverOptions {

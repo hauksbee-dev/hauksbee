@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use hauksbee_extract::gerber::{from_gerber_dir, GerberExtraction};
 use hauksbee_extract::ExtractError;
 
-#[allow(dead_code)]
 pub fn extract_fresh(
     dir: PathBuf,
     build: impl FnOnce(&Path),

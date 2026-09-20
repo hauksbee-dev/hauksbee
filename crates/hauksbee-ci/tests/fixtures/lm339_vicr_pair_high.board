@@ -1,0 +1,58 @@
+# c09: LM339B comparing two high-side divider taps, IN+=4.306V IN-=4.000V, 10k pull-up on OUT
+board version 1
+
+fn main {
+    net "OUT"
+    net "V5"
+    net "INM"
+    net "INP"
+    net "GND"
+
+    comp U1 lib "Package_DIP:DIP-14_W7.62mm" val "LM339B" layer "F.Cu" at 10.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] nonet
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "OUT"
+        pad "3" thru_hole circle at 7.62 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "V5"
+        pad "4" thru_hole circle at 10.16 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "INM"
+        pad "5" thru_hole circle at 12.70 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "INP"
+        pad "6" thru_hole circle at 15.24 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+        pad "7" thru_hole circle at 17.78 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+        pad "8" thru_hole circle at 20.32 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+        pad "9" thru_hole circle at 22.86 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+        pad "10" thru_hole circle at 25.40 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+        pad "11" thru_hole circle at 27.94 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+        pad "12" thru_hole circle at 30.48 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+        pad "13" thru_hole circle at 33.02 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] nonet
+        pad "14" thru_hole circle at 35.56 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] nonet
+    }
+
+    comp R1 lib "Resistor_SMD:R_0805_2012Metric" val "10k" layer "F.Cu" at 40.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "V5"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "INP"
+    }
+
+    comp R2 lib "Resistor_SMD:R_0805_2012Metric" val "62k" layer "F.Cu" at 70.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "INP"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+    }
+
+    comp R3 lib "Resistor_SMD:R_0805_2012Metric" val "10k" layer "F.Cu" at 100.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "V5"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "INM"
+    }
+
+    comp R4 lib "Resistor_SMD:R_0805_2012Metric" val "40k" layer "F.Cu" at 130.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "INM"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+    }
+
+    comp RPULLUP lib "Resistor_SMD:R_0805_2012Metric" val "10k" layer "F.Cu" at 160.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "OUT"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "V5"
+    }
+
+    comp CBYP lib "Capacitor_SMD:C_0805_2012Metric" val "100nF" layer "F.Cu" at 190.0 20 rot 0 {
+        pad "1" thru_hole circle at 2.54 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "V5"
+        pad "2" thru_hole circle at 5.08 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+    }
+
+}

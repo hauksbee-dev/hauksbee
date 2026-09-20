@@ -1066,7 +1066,23 @@ Two commands gate, with two deliberately different contracts:
 | 0 | every assertion held, or every failure is covered by an active waiver (GREEN) |
 | 1 | at least one assertion failed and no active waiver covers it (RED) |
 | 2 | spec / board error (desynced spec, missing board, bad TOML), a usage error, or a requested output file (`--junit`, `--sarif`) that could not be written |
-| 3 | invalid for analysis: the analog solve aborted, or an assertion's evaluation window overlapped a failed solve span, so the result is not trustworthy and the run refuses to pretend |
+| 3 | invalid for analysis: the analog solve aborted, an assertion's evaluation window overlapped a failed solve span, or an assertion's evidence is `undermined`, so the result is not trustworthy and the run refuses to pretend |
+
+`undermined` is not a flag anyone opts into; it is derived from the assumptions
+on an assertion's own causal path, and two of those kinds are worth naming here
+because both used to read green:
+
+| on the asserted net | evidence | verdict |
+|---|---|---|
+| an unmodelled (open) ACTIVE part the run proved can drive it (the `co-sim COVERAGE HOLE` wording) | `undermined` | INVALID, exit 3 |
+| an unmodelled part the circuit shows cannot drive it (the net's DC level is defined through modeled elements) | `qualified` | PASS, exit 0, with the caveat stated |
+| a datasheet operating requirement this run MEASURED as violated (`operating_limit_violated`: a minimum load current, an input-range or source-impedance limit) | `undermined` | INVALID, exit 3 |
+| a documented omission of the model itself (`reduced_fidelity`: "temperature is not modelled", one channel of eight) | `qualified` | PASS, exit 0, with the caveat stated |
+
+There is no `--strict` on `hauksbee-ci run`, deliberately: a board used outside
+its datasheet, or an unmodelled part that can move the very net under
+assertion, must not need a flag before the exit code says so.
+
 
 Two of those rows are easy to misread from the table alone. A waived failure
 exits 0 while its own result still reports `passed: false`, so a consumer reading

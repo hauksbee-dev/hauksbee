@@ -47,10 +47,6 @@ fn corpus(rels: &[&str]) -> Option<PathBuf> {
     hauksbee_testkit::corpus_board_any(env!("CARGO_MANIFEST_DIR"), rels)
 }
 
-fn require_corpus() -> bool {
-    std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok()
-}
-
 /// The `kicad-cli` release the floors below were measured against. See the
 /// module docs: a floor and a toolchain version are one fact, not two.
 const CALIBRATED_KICAD_CLI: &str = "9.0.3";
@@ -440,7 +436,7 @@ fn rp2040_minimal_exact_nets() {
         ],
         "rp2040_minimal",
     ) else {
-        if require_corpus() {
+        if crate::support::require_corpus() {
             panic!("corpus/kicad-cli required but couldn't round-trip rp2040_minimal");
         }
         eprintln!("skipping rp2040_minimal (no corpus/kicad-cli)");
@@ -528,7 +524,7 @@ fn advanced_geometry_boards_match_kicad() {
             None => eprintln!("skipping {tag} (kicad-cli could not round-trip it)"),
         }
     }
-    if require_corpus() {
+    if crate::support::require_corpus() {
         assert!(
             ran >= 1,
             "corpus required but no geometry board round-tripped"
@@ -639,7 +635,7 @@ fn corpus_sweep_partition_floor() {
             None => eprintln!("skipping {tag} (kicad-cli could not round-trip it)"),
         }
     }
-    if require_corpus() {
+    if crate::support::require_corpus() {
         assert!(
             ran >= 1,
             "corpus required but no board could be round-tripped"

@@ -34,13 +34,7 @@ fn board_text() -> String {
 }
 
 fn firmware() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/stm32_blinky/blinky.elf");
-    if p.exists() {
-        Some(p.canonicalize().unwrap_or(p))
-    } else {
-        None
-    }
+    crate::support::testdata("firmware/stm32_blinky/blinky.elf")
 }
 
 #[test]

@@ -19,10 +19,51 @@ pub fn write_tmp(name: &str, body: &str) -> PathBuf {
     p
 }
 
+/// One board-DSL pad: number `n` on net `net`, placed at x = `n` so that no two
+/// lands of a part coincide.
+pub fn pad(n: u32, net: &str) -> String {
+    format!("pad \"{n}\" smd rect at {n} 0 size 2 1.5 layers [F.Cu F.Mask] net \"{net}\"\n")
+}
+
+/// One board-DSL component: reference `r`, footprint `lib`, value `val`, placed
+/// at x = `x`, carrying `pads` (built from [`pad`]).
+pub fn comp(r: &str, lib: &str, val: &str, x: usize, pads: String) -> String {
+    format!("comp {r} lib \"{lib}\" val \"{val}\" layer \"F.Cu\" at {x} 20 rot 0 {{\n{pads}}}\n")
+}
+
 /// Write `body` to a spec file named `name` and run it with default config.
 #[allow(dead_code)]
 pub fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
     hauksbee_ci::run(&run_config(write_tmp(name, body))).expect("spec runs")
+}
+
+/// A [`hauksbee_ci::CiResult`] carrying `results` and nothing else: spec "t" on
+/// board "b.kicad_pcb", one seed, no elapsed time, and every honesty list empty.
+///
+/// The report surfaces are judged from synthesized results in several modules,
+/// and each one needs the same otherwise-empty carrier around them.
+pub fn ci_result(
+    results: Vec<hauksbee_ci::assertions::AssertResult>,
+    analog_abort: bool,
+) -> hauksbee_ci::CiResult {
+    hauksbee_ci::CiResult {
+        spec_name: "t".to_string(),
+        board: "b.kicad_pcb".to_string(),
+        results,
+        seeds: 1,
+        elapsed: std::time::Duration::from_secs(0),
+        analog_abort,
+        coverage: None,
+        substitutions: Vec::new(),
+        coverage_warnings: Vec::new(),
+        timing_coverage: Vec::new(),
+        timing_refusals: Vec::new(),
+        dead_rails: Vec::new(),
+        waiver_notes: Vec::new(),
+        inventory: Vec::new(),
+        assumptions: Vec::new(),
+        evidence: Vec::new(),
+    }
 }
 
 /// A committed example board/spec under this crate's `examples/` directory.

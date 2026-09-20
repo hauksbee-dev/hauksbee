@@ -536,6 +536,16 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                     _ => None,
                 })
                 .unwrap_or_default();
+            // ... UNLESS the run already proved an open part can DRIVE this net:
+            // the downgrade's premise is that an unmodelled part could only
+            // matter by driving it, and the co-sim taint refutes exactly that.
+            if let Some(taint) = outcomes.iter().flat_map(|o| &o.regulation).find(|t| {
+                t.reason.contains(hauksbee_engine::scheduler::OPEN_DRIVER)
+                    && result.subject_nets.iter().any(|n| t.nets.contains(n))
+            }) {
+                result.detail = format!("{} {}", result.detail, taint.reason);
+                continue;
+            }
             *map = evidence
                 .map_assuming_open_parts_high_impedance(map.clone())
                 .map_err(SpecError::invalid(format!(

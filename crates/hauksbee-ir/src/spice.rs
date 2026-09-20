@@ -1148,8 +1148,8 @@ impl<'a> Build<'a> {
                     gain: need("gain")?,
                     pole_hz: m.get("pole_hz"),
                     slew: m.get("slew"),
-                    rail_lo: need("rail_lo")?,
-                    rail_hi: need("rail_hi")?,
+                    rail_lo: crate::Rail::fixed(need("rail_lo")?),
+                    rail_hi: crate::Rail::fixed(need("rail_hi")?),
                 }
             }
             'B' => return self.behavioral(line, &toks, scope),
@@ -1887,7 +1887,8 @@ mod tests {
         let ok = "t\nA1 o p n OPA\n.model OPA opamp(gain=1e5 rail_lo=0 rail_hi=10.5 pole_hz=7)\n";
         let got = format!("{:?}", dev(&SpiceLoader::load(ok).unwrap(), "A1"));
         let want = "reference: None, gain: 100000.0, pole_hz: Some(7.0), slew: None, \
-                    rail_lo: 0.0, rail_hi: 10.5";
+                    rail_lo: Rail { pin: NodeId(0), offset: 0.0 }, \
+                    rail_hi: Rail { pin: NodeId(0), offset: 10.5 }";
         assert!(got.contains(want), "{got}");
         for (net, want) in [
             (ok.replace("gain=1e5 ", ""), "is missing `gain`"),

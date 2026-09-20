@@ -84,7 +84,7 @@ fn is_i2c_net(name: &str) -> bool {
 /// three-state assembly contract is part of the shared predicate: a DNP or
 /// identity-refused pull-up must not count toward the bus's effective pull
 /// resistance.
-fn resistor_ohms(c: &Component) -> Option<f64> {
+pub(crate) fn resistor_ohms(c: &Component) -> Option<f64> {
     if !super::straps::is_assembled_resistor(c) {
         return None;
     }

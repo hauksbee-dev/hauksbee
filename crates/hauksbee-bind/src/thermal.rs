@@ -72,134 +72,93 @@ pub const DEFAULT_TJ_MAX_C: f64 = 125.0;
 /// D2PAK, SOT-223, SMA/SMB/SMC), which are typically rated to 150 C.
 pub const POWER_TJ_MAX_C: f64 = 150.0;
 
+/// Power / discrete / IC package body tokens, matched anywhere in an uppercased
+/// footprint string (KiCad footprints embed the package name, e.g.
+/// "Package_TO_SOT_SMD:SOT-23", "Package_TO_SOT_THT:TO-220-3_Vertical"), each
+/// with its still-air theta_JA (C/W).
+///
+/// ORDER MATTERS: the first row whose token is present wins, so the more
+/// specific / larger bodies come before the substrings that would also match a
+/// smaller one (TO-263 before TO-220, SOT-223 before SOT-23, the small diode
+/// bodies before the generic SOD ones, SOIC-16 before SOIC-8).
+const PACKAGE_THETA_JA: &[(&[&str], f64)] = &[
+    (&["TO-263", "TO263", "D2PAK", "DDPAK"], 50.0),
+    (&["TO-252", "TO252", "DPAK"], 70.0),
+    (&["TO-220", "TO220"], 62.0),
+    (&["TO-92", "TO92"], 200.0),
+    (&["SOT-223", "SOT223"], 65.0),
+    (&["SOT-89", "SOT89"], 140.0),
+    (&["SOT-23-5", "SOT-23-6", "SOT23-5", "SOT23-6"], 220.0),
+    (&["SOT-353", "SOT-363"], 220.0),
+    (&["SOT-23", "SOT23"], 250.0),
+    (&["SOD-523", "SOD523", "SOD-323", "SOD323"], 450.0),
+    (&["SOD-123", "SOD123", "SOD-80"], 340.0),
+    (&["DO-214AB", "SMC"], 60.0),
+    (&["DO-214AA", "SMB"], 75.0),
+    (&["DO-214AC", "SMA"], 90.0),
+    // Through-hole axial rectifier / small-signal in free air.
+    (&["DO-41", "DO41", "DO-201", "DO-35"], 100.0),
+    (&["SOIC-16", "SOIC-14", "SO-16", "SO-14"], 90.0),
+    (&["SOIC-8", "SOIC8", "SO-8", "SOIC_8"], 120.0),
+    (&["TSSOP", "MSOP"], 150.0),
+    // Bottom thermal pad to copper; moderate.
+    (&["QFN", "DFN"], 50.0),
+    (&["LQFP", "TQFP", "QFP"], 60.0),
+];
+
+/// Size-derived theta_JA for a chip resistor / capacitor footprint, by imperial
+/// size token: still-air with minimal copper, bracketing the power deratings the
+/// stress monitor already encodes.
+///
+/// 01005 MUST be tested before 0402: KiCad pairs the imperial code with its
+/// metric twin, and 01005's metric code IS 0402 ("R_01005_0402Metric"), so a
+/// substring match on "0402" would give the smallest chip the 0402 theta_JA
+/// (600), LOWER than 0201's 900, i.e. under-estimating Tj on the worst-cooling
+/// body. Smaller body = hotter, so 01005 sits ABOVE 0201, matching
+/// resistor_power_from_footprint's "match the smallest package first" rule.
+const CHIP_THETA_JA: &[(&str, f64)] = &[
+    ("01005", 1200.0),
+    ("0201", 900.0),
+    ("0402", 600.0),
+    ("0603", 400.0),
+    ("0805", 300.0),
+    ("1206", 220.0),
+    ("1210", 160.0),
+    ("2010", 120.0),
+    ("2512", 80.0),
+];
+
+/// Package bodies that exist to dissipate, so default to [`POWER_TJ_MAX_C`].
+const POWER_BODIES: &[&str] = &[
+    "TO-220", "TO220", "TO-263", "TO263", "D2PAK", "TO-252", "TO252", "DPAK", "SOT-223", "SOT223",
+    "DO-214", "SMA", "SMB", "SMC",
+];
+
+/// The first row of `table` one of whose tokens `f` contains.
+fn body_match<T: Copy>(table: &[(T, f64)], f: &str, has: impl Fn(T, &str) -> bool) -> Option<f64> {
+    table.iter().find(|(k, _)| has(*k, f)).map(|(_, v)| *v)
+}
+
 /// Derive a junction-to-ambient thermal resistance (C/W) from a footprint
 /// string, by matching the package body token. Still-air, no heatsink. See the
 /// module docs for the per-package sources.
 pub fn theta_ja_from_footprint(footprint: &str, kind: ComponentKind) -> f64 {
     let f = footprint.to_ascii_uppercase();
-
     // Chip passives: size-derived (smaller body = worse cooling).
     if matches!(kind, ComponentKind::Passive) {
         if let Some(t) = chip_passive_theta_ja(&f) {
             return t;
         }
     }
-
-    // Power / discrete / IC packages, matched by body token anywhere in the
-    // footprint string (KiCad footprints embed the package name, e.g.
-    // "Package_TO_SOT_SMD:SOT-23", "Package_TO_SOT_THT:TO-220-3_Vertical").
-    // Order matters: check the more specific / larger bodies before substrings
-    // that would also match a smaller one (TO-263 before TO-220, SOT-223 before
-    // SOT-23, SOIC-16 before SOIC-8).
-    if f.contains("TO-263") || f.contains("TO263") || f.contains("D2PAK") || f.contains("DDPAK") {
-        return 50.0;
-    }
-    if f.contains("TO-252") || f.contains("TO252") || f.contains("DPAK") {
-        return 70.0;
-    }
-    if f.contains("TO-220") || f.contains("TO220") {
-        return 62.0;
-    }
-    if f.contains("TO-92") || f.contains("TO92") {
-        return 200.0;
-    }
-    if f.contains("SOT-223") || f.contains("SOT223") {
-        return 65.0;
-    }
-    if f.contains("SOT-89") || f.contains("SOT89") {
-        return 140.0;
-    }
-    if f.contains("SOT-23-5")
-        || f.contains("SOT-23-6")
-        || f.contains("SOT23-5")
-        || f.contains("SOT23-6")
-        || f.contains("SOT-353")
-        || f.contains("SOT-363")
-    {
-        return 220.0;
-    }
-    if f.contains("SOT-23") || f.contains("SOT23") {
-        return 250.0;
-    }
-    // Diode-specific small bodies (run hot; check before generic SOD).
-    if f.contains("SOD-523")
-        || f.contains("SOD523")
-        || f.contains("SOD-323")
-        || f.contains("SOD323")
-    {
-        return 450.0;
-    }
-    if f.contains("SOD-123") || f.contains("SOD123") || f.contains("SOD-80") {
-        return 340.0;
-    }
-    if f.contains("DO-214AB") || f.contains("SMC") {
-        return 60.0;
-    }
-    if f.contains("DO-214AA") || f.contains("SMB") {
-        return 75.0;
-    }
-    if f.contains("DO-214AC") || f.contains("SMA") {
-        return 90.0;
-    }
-    if f.contains("DO-41") || f.contains("DO41") || f.contains("DO-201") || f.contains("DO-35") {
-        // Through-hole axial rectifier / small-signal in free air.
-        return 100.0;
-    }
-    // SOIC / SO bodies.
-    if f.contains("SOIC-16") || f.contains("SOIC-14") || f.contains("SO-16") || f.contains("SO-14")
-    {
-        return 90.0;
-    }
-    if f.contains("SOIC-8") || f.contains("SOIC8") || f.contains("SO-8") || f.contains("SOIC_8") {
-        return 120.0;
-    }
-    if f.contains("TSSOP") || f.contains("MSOP") {
-        return 150.0;
-    }
-    if f.contains("QFN") || f.contains("DFN") {
-        // Bottom thermal pad to copper; moderate.
-        return 50.0;
-    }
-    if f.contains("LQFP") || f.contains("TQFP") || f.contains("QFP") {
-        return 60.0;
-    }
-
-    DEFAULT_THETA_JA
+    let any = |tokens: &[&str], f: &str| tokens.iter().any(|t| f.contains(t));
+    body_match(PACKAGE_THETA_JA, &f, any).unwrap_or(DEFAULT_THETA_JA)
 }
 
-/// Size-derived theta_JA for a chip resistor / capacitor footprint, by imperial
-/// size token. `None` if the footprint carries no recognised chip size (so the
-/// caller can fall through to a default). Values are still-air with minimal
-/// copper; they bracket the power deratings the stress monitor already uses.
+/// Size-derived theta_JA for a chip resistor / capacitor footprint, from
+/// [`CHIP_THETA_JA`]. `None` if the footprint carries no recognised chip size
+/// (so the caller can fall through to a default).
 fn chip_passive_theta_ja(f_upper: &str) -> Option<f64> {
-    // 01005 MUST be tested before 0402: KiCad pairs the imperial code with its
-    // metric twin, and 01005's metric code IS 0402 ("R_01005_0402Metric"), so a
-    // substring match on "0402" would give the smallest chip the 0402 theta_JA
-    // (600), LOWER than 0201's 900, i.e. under-estimating Tj on the worst-cooling
-    // body. Smaller body = hotter, so 01005 sits ABOVE 0201, matching
-    // resistor_power_from_footprint's "match the smallest package first" rule.
-    let t = if f_upper.contains("01005") {
-        1200.0
-    } else if f_upper.contains("0201") {
-        900.0
-    } else if f_upper.contains("0402") {
-        600.0
-    } else if f_upper.contains("0603") {
-        400.0
-    } else if f_upper.contains("0805") {
-        300.0
-    } else if f_upper.contains("1206") {
-        220.0
-    } else if f_upper.contains("1210") {
-        160.0
-    } else if f_upper.contains("2010") {
-        120.0
-    } else if f_upper.contains("2512") {
-        80.0
-    } else {
-        return None;
-    };
-    Some(t)
+    body_match(CHIP_THETA_JA, f_upper, |t, f| f.contains(t))
 }
 
 /// Default maximum junction temperature (C) for a package class. Power packages
@@ -207,21 +166,7 @@ fn chip_passive_theta_ja(f_upper: &str) -> Option<f64> {
 /// else to the common 125 C industrial limit.
 pub fn default_tj_max(footprint: &str) -> f64 {
     let f = footprint.to_ascii_uppercase();
-    let power = f.contains("TO-220")
-        || f.contains("TO220")
-        || f.contains("TO-263")
-        || f.contains("TO263")
-        || f.contains("D2PAK")
-        || f.contains("TO-252")
-        || f.contains("TO252")
-        || f.contains("DPAK")
-        || f.contains("SOT-223")
-        || f.contains("SOT223")
-        || f.contains("DO-214")
-        || f.contains("SMA")
-        || f.contains("SMB")
-        || f.contains("SMC");
-    if power {
+    if POWER_BODIES.iter().any(|b| f.contains(b)) {
         POWER_TJ_MAX_C
     } else {
         DEFAULT_TJ_MAX_C

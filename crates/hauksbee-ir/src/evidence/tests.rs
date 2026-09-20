@@ -46,6 +46,12 @@ fn all_kinds() -> Vec<Assumption> {
             "the chunk-boundary heuristic",
             "expose the chip-select GPIO so framing reads real edges",
         ),
+        Assumption::operating_limit_violated(
+            "U1-min-current",
+            "U1",
+            "U1 carries 1.25 mA, below the 10.00 mA its datasheet card requires",
+            "raise its current above the card's minimum, then re-run",
+        ),
         Assumption::parser_limitation(
             AssumptionSource::Reader,
             Subject::new("drc/short", "shorts on this board"),
@@ -395,6 +401,10 @@ fn status_rule_covers_every_kind() {
         (AssumptionKind::NotChecked, EvidenceStatus::Undermined),
         (AssumptionKind::NotExercised, EvidenceStatus::Undermined),
         (AssumptionKind::ReducedFidelity, EvidenceStatus::Qualified),
+        (
+            AssumptionKind::OperatingLimitViolated,
+            EvidenceStatus::Undermined,
+        ),
         (AssumptionKind::ParserLimitation, EvidenceStatus::Qualified),
         (AssumptionKind::Waived, EvidenceStatus::Qualified),
     ];

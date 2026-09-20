@@ -44,6 +44,7 @@ use forge_sexpr::{Document, List};
 use rstar::{RTree, AABB};
 
 use crate::gerber::geo::{point_in_polygon, polygon_bounds, shape_gap_at, Capsule, Shape};
+use crate::pcb::at_of;
 use serde::{Deserialize, Serialize};
 
 /// Default copper-to-copper clearance (mm) when the board states no rule.
@@ -2160,18 +2161,6 @@ fn circle_from_3(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> Option<(f64, f6
     let uy = (a2 * (c.0 - b.0) + b2 * (a.0 - c.0) + c2 * (b.0 - a.0)) / d;
     let r = ((a.0 - ux).powi(2) + (a.1 - uy).powi(2)).sqrt();
     Some((ux, uy, r))
-}
-
-/// `(at x y [rot])` reader.
-fn at_of(list: &List) -> (f64, f64, f64) {
-    match list.find("at") {
-        Some(at) => (
-            at.arg_f64(0).unwrap_or(0.0),
-            at.arg_f64(1).unwrap_or(0.0),
-            at.arg_f64(2).unwrap_or(0.0),
-        ),
-        None => (0.0, 0.0, 0.0),
-    }
 }
 
 /// Reference designator of a footprint (property "Reference" or fp_text).
