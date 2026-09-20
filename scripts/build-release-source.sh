@@ -20,9 +20,9 @@ if [ -n "$EXPECTED_SHA" ] && [ "$SOURCE_SHA" != "$EXPECTED_SHA" ]; then
   echo "source checkout $SOURCE_SHA does not match expected release $EXPECTED_SHA" >&2
   exit 1
 fi
-SIMAVR_COMMIT="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]{40})"$/\1/p' "$ROOT/scripts/install-sims.sh" | head -1)"
+SIMAVR_COMMIT="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]{40})"$/\1/p' "$ROOT/crates/hauksbee-engine/assets/scripts/install-sims.sh" | head -1)"
 [[ "$SIMAVR_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
-  echo "install-sims.sh does not pin one simavr commit" >&2
+  echo "the simulator installer does not pin one simavr commit" >&2
   exit 1
 }
 

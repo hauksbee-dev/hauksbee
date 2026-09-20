@@ -140,7 +140,7 @@ describe('frontend release gates', () => {
 
   test('every default-feature Rust job installs the immutable simavr prerequisite', () => {
     const setup = readFileSync(join(repository, 'scripts/setup-ci-simavr.sh'), 'utf8')
-    const installer = readFileSync(join(repository, 'scripts/install-sims.sh'), 'utf8')
+    const installer = readFileSync(join(repository, 'crates/hauksbee-engine/assets/scripts/install-sims.sh'), 'utf8')
     expect(setup).toContain('scripts/install-sims.sh" --avr')
     expect(setup).toContain('SIMAVR_INCLUDE_DIR')
     expect(setup).toContain('SIMAVR_LIB_DIR')
@@ -163,7 +163,7 @@ describe('frontend release gates', () => {
       const nextJob = rest.search(/^ {2}[a-z][a-z0-9-]*:\n/m)
       const block = nextJob === -1 ? rest : rest.slice(0, nextJob)
       expect(block).toContain('uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830')
-      expect(block).toContain("hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh')")
+      expect(block).toContain("hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh')")
       expect(block).toContain('run: scripts/setup-ci-simavr.sh')
     }
     const release = readFileSync(join(repository, '.github/workflows/release.yml'), 'utf8')
@@ -171,7 +171,7 @@ describe('frontend release gates', () => {
     const buildRs = readFileSync(join(repository, 'crates/hauksbee-mcu/build.rs'), 'utf8')
     const bundle = readFileSync(join(repository, 'scripts/bundle.sh'), 'utf8')
     const docker = readFileSync(join(repository, 'docker/Dockerfile.slim'), 'utf8')
-    expect(release).toContain("hashFiles('hauksbee/Cargo.lock', 'hauksbee/scripts/install-sims.sh', 'hauksbee/scripts/simavr-payload-provenance.sh', 'hauksbee/crates/hauksbee-mcu/build.rs')")
+    expect(release).toContain("hashFiles('hauksbee/Cargo.lock', 'hauksbee/crates/hauksbee-engine/assets/scripts/install-sims.sh', 'hauksbee/scripts/simavr-payload-provenance.sh', 'hauksbee/crates/hauksbee-mcu/build.rs')")
     expect(release).not.toContain('restore-keys: |\n            release-${{ matrix.label }}-')
     expect(buildRs).toContain('cargo:rerun-if-env-changed=SIMAVR_COMMIT')
     expect(buildRs).toContain('cargo:rustc-env=HAUKSBEE_SIMAVR_COMMIT=')

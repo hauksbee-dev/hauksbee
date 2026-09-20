@@ -51,7 +51,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.hauksbee-simavr
-          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
       - run: cargo test --workspace

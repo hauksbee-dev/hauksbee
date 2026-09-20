@@ -1,27 +1,18 @@
 import type { RunResponse } from '../../types/report'
-import { refusalLines } from '../../lib/report-view'
+import { overallVerdict, refusalLines, type Overall } from '../../lib/report-view'
 import { ArriveOnce } from '../../motion'
-import { AssertionEvidence } from './pieces'
-
-type Overall = 'passed' | 'invalid' | 'failed'
-
-/** The run's one-word verdict, from the per-assertion results when there are
- *  any and from the runner's own exit otherwise. */
-function overallVerdict(result: RunResponse): Overall {
-  const results = result.results ?? []
-  if (results.length === 0) return result.passed ? 'passed' : 'failed'
-  if (results.some(x => !x.invalid && !x.passed)) return 'failed'
-  return results.some(x => x.invalid) ? 'invalid' : 'passed'
-}
+import { AssertionEvidence, ResultChip } from './pieces'
 
 const VERDICT_STYLE: Record<Overall, React.CSSProperties> = {
   passed: { background: 'var(--ok-bg)', border: '1px solid var(--ok-border)', color: 'var(--ok)' },
+  measured: { background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: 'var(--silk)' },
   invalid: { background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--warn-strong)' },
   failed: { background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' },
 }
 
 const VERDICT_LINE: Record<Overall, string> = {
   passed: 'All checks passed.',
+  measured: 'Measured only: no bound was set, so nothing was judged.',
   invalid: 'Some checks could not be judged.',
   failed: 'Checks failed.',
 }
@@ -102,9 +93,7 @@ export function RunResults({ result, runKey, stale, rawMode, reportSerious }: {
                 style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
               >
                 <div className="flex flex-wrap gap-2">
-                  <span style={{ color: x.invalid ? 'var(--warn)' : x.passed ? 'var(--ok)' : 'var(--err)', fontWeight: 700 }}>
-                    {x.invalid ? 'INVALID' : x.passed ? 'PASS' : 'FAIL'}
-                  </span>
+                  <ResultChip result={x} stale={stale} />
                   <span style={{ color: 'var(--silk)' }}>{x.label}</span>
                   <span style={{ color: 'var(--silk-faint)' }}>{x.detail}</span>
                 </div>

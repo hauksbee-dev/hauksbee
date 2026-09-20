@@ -119,7 +119,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.hauksbee-simavr
-          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
       # Run recent failures before the broad workspace lint. The full shards
@@ -198,7 +198,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.hauksbee-simavr
-          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
       # No corpus here: these are the tests that run from the fixtures bundled
@@ -233,7 +233,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.hauksbee-simavr
-          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
       - name: cargo test (native macOS workspace)
@@ -454,7 +454,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.hauksbee-simavr
-          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
       # The //! module headers are rustdoc input, rendered by `cargo doc` and
@@ -581,7 +581,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.hauksbee-simavr
-          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
       # No build job exists to borrow artifacts from, and the suite has to

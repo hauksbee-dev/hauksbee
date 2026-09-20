@@ -107,9 +107,9 @@ if [ "$DO_BUILD" -eq 1 ]; then
   # whether from the build above or an earlier one.
   [ -d "$HAUKSBEE_ROOT/frontend/dist" ] \
     || die "frontend build reported success but frontend/dist is missing; refusing a web-less install."
-  SIMAVR_COMMIT="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]+)"$/\1/p' "$HAUKSBEE_ROOT/scripts/install-sims.sh" | head -1)"
+  SIMAVR_COMMIT="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]+)"$/\1/p' "$HAUKSBEE_ROOT/crates/hauksbee-engine/assets/scripts/install-sims.sh" | head -1)"
   [[ "$SIMAVR_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
-    || die "scripts/install-sims.sh does not name one immutable simavr commit"
+    || die "the simulator installer does not name one immutable simavr commit"
   _simavr_prefix="$(dirname "$(dirname "$_simavr_lib")")"
   [ "$(cat "$_simavr_prefix/.hauksbee-simavr-commit" 2>/dev/null || true)" = "$SIMAVR_COMMIT" ] \
     || die "simavr at $_simavr_prefix is not the pinned install from scripts/install-sims.sh --avr; refusing an unattested source build"

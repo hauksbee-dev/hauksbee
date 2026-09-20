@@ -8,7 +8,6 @@
 //! path: absence is a normal, reportable state here.
 
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// Serialize every test that touches Espressif QEMU: the ones that boot an
 /// instance, and the ones that point the locator at a fake binary through
@@ -17,9 +16,10 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 /// finds a "QEMU" that cannot boot and fails instead of skipping. One lock
 /// across both kinds closes that, and keeps the real boots back-to-back so
 /// their wall-clock behaviour stays predictable.
-pub fn qemu_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+#[cfg(feature = "qemu")]
+pub fn qemu_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
         .lock()
         .unwrap_or_else(|e| e.into_inner())
 }
@@ -36,8 +36,8 @@ pub fn firmware(rel: &str) -> Option<PathBuf> {
 
 /// Record the backend's UART bytes without changing callback or lock semantics.
 #[cfg(any(feature = "avr", feature = "renode"))]
-pub fn capture_uart(mcu: &mut impl hauksbee_mcu::Mcu) -> std::sync::Arc<Mutex<Vec<u8>>> {
-    let uart = std::sync::Arc::new(Mutex::new(Vec::new()));
+pub fn capture_uart(mcu: &mut impl hauksbee_mcu::Mcu) -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+    let uart = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = uart.clone();
     mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
     uart
@@ -65,6 +65,7 @@ pub fn ihex_record(record_type: u8, addr: u16, data: &[u8]) -> String {
 /// id and the current nanosecond, plus `suffix` (`""` for a directory).
 ///
 /// Tests run concurrently in the same temp dir, so a fixed name is a race.
+#[cfg(any(feature = "avr", feature = "renode"))]
 pub fn unique_temp(name: &str, suffix: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{name}-{}-{}{suffix}",

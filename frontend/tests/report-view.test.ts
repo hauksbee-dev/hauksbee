@@ -5,9 +5,9 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
-  assumptionsForEvidence, describeModelSource, refusalLines, summarizeErrorBudget, summarizeEvidence,
+  assumptionsForEvidence, describeModelSource, overallVerdict, refusalLines, summarizeErrorBudget, summarizeEvidence,
 } from '../src/lib/report-view'
-import type { ErrorBudget, RefusalContract } from '../src/types/report'
+import type { ErrorBudget, RefusalContract, RunResponse } from '../src/types/report'
 
 describe('C5.3 refusal contract', () => {
   test('the browser preserves all four answers from the CI result', () => {
@@ -140,4 +140,12 @@ describe('summarizeErrorBudget', () => {
       'Residual: unmeasured by this solver path',
     )
   })
+})
+
+test('a run that judged nothing is measured, never passed', () => {
+  const row = (measured: boolean, invalid = false) => ({ passed: true, invalid, measured })
+  const verdict = (...results: object[]) => overallVerdict({ ok: true, passed: true, results } as RunResponse)
+  expect(verdict(row(true), row(true))).toBe('measured')
+  expect(verdict(row(true), row(false))).toBe('passed')
+  expect(verdict(row(true), row(true, true))).toBe('invalid')
 })

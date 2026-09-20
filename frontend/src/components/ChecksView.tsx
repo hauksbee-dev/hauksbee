@@ -40,6 +40,8 @@ export interface ChecksSummary {
   passed: number
   failed: number
   invalid: number
+  /** Reported without a bound: counted apart, because nothing judged them. */
+  measured?: number
 }
 
 /** Shape of the autosaved localStorage payload (all fields best-effort: a
@@ -319,7 +321,8 @@ export function ChecksView({
       return
     }
     onSummary({
-      passed: results.filter(x => !x.invalid && x.passed).length,
+      passed: results.filter(x => !x.invalid && !x.measured && x.passed).length,
+      measured: results.filter(x => !x.invalid && x.measured).length,
       failed: results.filter(x => !x.invalid && !x.passed).length,
       invalid: results.filter(x => x.invalid).length,
     })

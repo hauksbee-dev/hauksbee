@@ -185,9 +185,9 @@ if [ "$PERMISSIVE" -eq 1 ]; then
   alternative_line="This is the permissive app shape."
 else
   SIMAVR_COMMIT="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]+)"$/\1/p' \
-    "$HAUKSBEE_ROOT/scripts/install-sims.sh" | head -1)"
+    "$HAUKSBEE_ROOT/crates/hauksbee-engine/assets/scripts/install-sims.sh" | head -1)"
   [[ "$SIMAVR_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
-    || die "scripts/install-sims.sh does not name one immutable SIMAVR_COMMIT"
+    || die "the simulator installer does not name one immutable SIMAVR_COMMIT"
   [[ "$doctor_avr" == *"source commit $SIMAVR_COMMIT"* ]] \
     || die "app binary does not attest simavr source commit $SIMAVR_COMMIT (doctor says: ${doctor_avr:-no avr row})"
   binary_licence="GPL-3.0"

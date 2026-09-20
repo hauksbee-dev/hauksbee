@@ -1,13 +1,14 @@
 //! The crate-embedded asset mirrors must match their authoritative copies.
 //!
 //! `cargo package` ships only files under the crate directory, so everything
-//! this crate embeds lives in `assets/` mirrors. The authoritative copies
-//! stay where they are maintained and consumed (repo-root `scripts/`, the
-//! blinky board in `crates/hauksbee-ci/examples/boards/`, the demo deck in
-//! repo-root `examples/decks/`). This test pins mirror == authoritative,
-//! byte for byte, whenever the authoritative file is present; in a published
-//! crate (no repo around the crate) the comparison is skipped, which is the
-//! point: there the mirror IS the only copy.
+//! this crate embeds lives in `assets/`. The large Unix installer and Python
+//! provenance helper are authoritative there, with repo-root forwarders kept
+//! for stable user-facing paths. Smaller assets remain mirrors of their
+//! maintained homes (repo-root `scripts/`, the blinky board in
+//! `crates/hauksbee-ci/examples/boards/`, the demo deck in repo-root
+//! `examples/decks/`). This test checks both arrangements whenever the repo is
+//! present; in a published crate (no repo around the crate), checks against
+//! repo-root files are skipped.
 
 use crate::support::repo_root;
 
@@ -26,12 +27,42 @@ fn assert_mirror(embedded: &[u8], authoritative_rel: &str) {
 }
 
 #[test]
-fn installer_script_mirrors_match_the_repo_scripts() {
-    for (embedded, rel) in [
+fn installer_forwarders_target_the_crate_owned_scripts() {
+    for (forwarder, target, marker) in [
         (
-            include_bytes!("../assets/scripts/install-sims.sh").as_slice(),
             "scripts/install-sims.sh",
+            "crates/hauksbee-engine/assets/scripts/install-sims.sh",
+            "exec \"$SCRIPT_DIR/../crates/hauksbee-engine/assets/scripts/install-sims.sh\" \"$@\"",
         ),
+        (
+            "scripts/simulator-provenance.py",
+            "crates/hauksbee-engine/assets/scripts/simulator-provenance.py",
+            "crates/hauksbee-engine/assets/scripts/simulator-provenance.py",
+        ),
+    ] {
+        let forwarder = repo_root().join(forwarder);
+        let target = repo_root().join(target);
+        if !forwarder.exists() {
+            // Published crate: repo-root forwarders are unavailable.
+            continue;
+        }
+        assert!(
+            target.is_file(),
+            "forwarder target is missing: {}",
+            target.display()
+        );
+        let contents = std::fs::read_to_string(&forwarder).expect("read installer forwarder");
+        assert!(
+            contents.contains(marker),
+            "{} does not invoke its crate-owned target",
+            forwarder.display()
+        );
+    }
+}
+
+#[test]
+fn installer_sidecar_mirrors_match_the_repo_scripts() {
+    for (embedded, rel) in [
         (
             include_bytes!("../assets/scripts/common.sh").as_slice(),
             "scripts/common.sh",
@@ -47,10 +78,6 @@ fn installer_script_mirrors_match_the_repo_scripts() {
         (
             include_bytes!("../assets/scripts/espressif-qemu-checksums.txt").as_slice(),
             "scripts/espressif-qemu-checksums.txt",
-        ),
-        (
-            include_bytes!("../assets/scripts/simulator-provenance.py").as_slice(),
-            "scripts/simulator-provenance.py",
         ),
         (
             include_bytes!("../assets/scripts/simavr-payload-provenance.sh").as_slice(),

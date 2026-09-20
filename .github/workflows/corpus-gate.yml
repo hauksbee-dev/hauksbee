@@ -99,7 +99,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/hauksbee/simulator-archives
-          key: required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/required-simulator-versions.env', 'scripts/renode-checksums.txt', 'scripts/espressif-qemu-checksums.txt') }}
+          key: required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/required-simulator-versions.env', 'scripts/renode-checksums.txt', 'scripts/espressif-qemu-checksums.txt') }}
 
       # The pinned Espressif QEMU binaries are dynamically linked against
       # pixman, SDL2, libslirp and libgcrypt. The first three are missing from
@@ -122,7 +122,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.hauksbee-simavr
-          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
+          key: simavr-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/hauksbee-engine/assets/scripts/install-sims.sh', 'scripts/setup-ci-simavr.sh', 'scripts/simavr-payload-provenance.sh') }}
       - name: install the immutable simavr build prerequisite
         run: scripts/setup-ci-simavr.sh
 

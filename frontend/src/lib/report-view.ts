@@ -11,7 +11,7 @@
 
 import type {
   ErrorBudget, ErrorBudgetWindow, EvidenceAssumption, EvidenceMap, JsonNote, ModelCoverageComponent,
-  ModelCoverageSnapshot, ModelOnPath, RefusalContract, WebCosimSection, WebFallbackWindow, WebFinding,
+  ModelCoverageSnapshot, ModelOnPath, RefusalContract, RunResponse, WebCosimSection, WebFallbackWindow, WebFinding,
   WebGpioNet, WebHeadsUp, WebImportObject, WebReport, WebSection, WebTimingCoverage,
 } from '../types/report'
 
@@ -316,3 +316,16 @@ export const padNetsOf = (component: ModelCoverageComponent): string[] =>
 
 /** A coverage stage as words. */
 export const stageWords = (stage: string) => stage.replaceAll('_', ' ')
+
+export type Overall = 'passed' | 'measured' | 'invalid' | 'failed'
+
+/** The run's one-word verdict, from the per-assertion results when there are
+ *  any and from the runner's own exit otherwise. */
+export function overallVerdict(result: RunResponse): Overall {
+  const results = result.results ?? []
+  if (results.length === 0) return result.passed ? 'passed' : 'failed'
+  if (results.some(x => !x.invalid && !x.passed)) return 'failed'
+  if (results.some(x => x.invalid)) return 'invalid'
+  // Nothing judged is not a pass: the CLI headlines such a run MEASURED.
+  return results.every(x => x.measured) ? 'measured' : 'passed'
+}

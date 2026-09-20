@@ -239,6 +239,26 @@ fn a_suppressed_rail_with_no_declared_supply_reads_dead() {
     );
 }
 
+#[test]
+fn a_stimulus_outranks_the_rail_inferred_from_its_nets_name() {
+    // Held-out c17: the name-inferred ideal 5 V rail won against the spec's own
+    // stimulus, so a commanded step never reached the net and read back clean.
+    let dir = tempfile::tempdir().unwrap();
+    let board = dir.path().join("blinky.kicad_pcb");
+    std::fs::copy(blinky_board(), &board).unwrap();
+    let spec = dir.path().join("stepped.toml");
+    std::fs::write(
+        &spec,
+        "name = \"stepped\"\nboard = \"blinky.kicad_pcb\"\nduration_ms = 20\n\n\
+         [[peripheral]]\nid = \"SRC\"\ntype = \"stimulus\"\nnet = \"+5V\"\noffset = 5\n\
+         [[peripheral.event]]\nt_ms = 5\nvalue = 4\n\n\
+         [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nafter_ms = 10\nmax = 4.2\n",
+    )
+    .unwrap();
+    let result = run(&crate::support::run_config(spec)).expect("run completes");
+    assert_eq!(result.exit_code(), 0, "{}", result.render_human());
+}
+
 // ── hollow-gate honesty: asserting on your own ideal source ─────────────────
 
 #[test]

@@ -3119,7 +3119,12 @@ fn bias_bound(
     spec: &Spec,
     fuzz_drives: &[(String, f64)],
 ) -> Result<Vec<String>, SpecError> {
-    for net in &spec.suppress_rail {
+    // A stimulus is the engineer's own source for its net. Left in place, the
+    // rail inferred from a name ("VBUS" = 5 V) is ideal and wins: the net sits
+    // at 5 V through a commanded step to 15 V, and the report calls it clean.
+    let stimulated = spec.peripherals.iter().filter(|p| p.kind == "stimulus");
+    let stimulated = stimulated.filter_map(|p| p.net.as_ref());
+    for net in spec.suppress_rail.iter().chain(stimulated) {
         suppress_rail(bound, net);
     }
     for s in &spec.supplies {

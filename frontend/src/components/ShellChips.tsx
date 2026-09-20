@@ -119,7 +119,9 @@ export function ShellChips({
       })
     }
     if (checks) {
-      const { passed, failed, invalid } = checks
+      const { passed, failed, invalid, measured = 0 } = checks
+      const counts = [passed > 0 || measured === 0 ? `${passed} passed` : '', measured > 0 ? `${measured} measured` : '']
+      const label = `checks ${counts.filter(Boolean).join(', ')}`
       // A green checks chip must never sit beside the report's own serious
       // findings: a spec that asserts nothing about them has not cleared them.
       const uncovered = report?.ok === true ? report.serious : 0
@@ -131,8 +133,8 @@ export function ShellChips({
           : invalid > 0
             ? { tone: 'warn' as const, label: `checks ${invalid} invalid` }
             : uncovered > 0
-              ? { tone: 'warn' as const, label: `checks ${passed} passed, ${uncovered} serious uncovered` }
-              : { tone: 'ok' as const, label: `checks ${passed} passed` }),
+              ? { tone: 'warn' as const, label: `${label}, ${uncovered} serious uncovered` }
+              : { tone: passed > 0 || measured === 0 ? 'ok' as const : 'quiet' as const, label }),
       })
     }
     if (simOffline) {

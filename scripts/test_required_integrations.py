@@ -135,7 +135,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             line for line in workflow.splitlines() if "key: required-sims-" in line
         )
 
-        self.assertIn("scripts/install-sims.sh", cache_key)
+        self.assertIn(
+            "crates/hauksbee-engine/assets/scripts/install-sims.sh", cache_key
+        )
         self.assertIn("scripts/required-simulator-versions.env", cache_key)
         self.assertIn("required-simulator-versions.env", bundle)
         self.assertIn("~/.cache/hauksbee/simulator-archives", workflow)
@@ -228,7 +230,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
     def test_every_selected_renode_release_asset_has_a_pinned_hash(self) -> None:
         scripts = Path(__file__).resolve().parent
-        installer = (scripts / "install-sims.sh").read_text()
+        installer = (
+            scripts.parent / "crates/hauksbee-engine/assets/scripts/install-sims.sh"
+        ).read_text()
         version = "1.16.1"
         selected = {
             platform: asset.replace("${RENODE_VERSION}", version)
@@ -272,7 +276,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
     def test_qemu_gpio_source_patch_is_exact_probed_and_bundled(self) -> None:
         scripts = Path(__file__).resolve().parent
-        installer = (scripts / "install-sims.sh").read_text()
+        installer = (
+            scripts.parent / "crates/hauksbee-engine/assets/scripts/install-sims.sh"
+        ).read_text()
         versions = (scripts / "required-simulator-versions.env").read_text()
         bundle = (scripts / "bundle.sh").read_text()
         acceptance = (scripts / "test-qemu-gpio-source-patch.sh").read_text()
@@ -307,7 +313,10 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         self.assertRegex(hashlib.sha256(patch.read_bytes()).hexdigest(), r"^[0-9a-f]{64}$")
 
     def test_required_macos_mount_is_owned_by_exit_and_signal_traps(self) -> None:
-        installer = (Path(__file__).resolve().parent / "install-sims.sh").read_text()
+        installer = (
+            Path(__file__).resolve().parents[1]
+            / "crates/hauksbee-engine/assets/scripts/install-sims.sh"
+        ).read_text()
         self.assertIn("cleanup_required_mount()", installer)
         self.assertIn("trap handle_installer_exit EXIT", installer)
         self.assertIn('REQUIRED_MOUNTPOINT="$mountpoint"', installer)
@@ -468,7 +477,10 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         return subprocess.run(
             [
                 sys.executable,
-                str(Path(__file__).resolve().parent / "simulator-provenance.py"),
+                str(
+                    Path(__file__).resolve().parents[1]
+                    / "crates/hauksbee-engine/assets/scripts/simulator-provenance.py"
+                ),
                 *args,
             ],
             text=True,
@@ -918,7 +930,14 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                 "required-simulator-versions.env",
                 "renode-checksums.txt",
             ):
-                (isolated / name).write_bytes((source_scripts / name).read_bytes())
+                source = source_scripts / name
+                if name in ("install-sims.sh", "simulator-provenance.py"):
+                    source = (
+                        source_scripts.parent
+                        / "crates/hauksbee-engine/assets/scripts"
+                        / name
+                    )
+                (isolated / name).write_bytes(source.read_bytes())
             (isolated / "espressif-qemu-checksums.txt").write_bytes(sums.read_bytes())
             (isolated / "install-sims.sh").chmod(0o755)
             env.update(
@@ -1001,7 +1020,14 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             isolated = tmp / "scripts"
             isolated.mkdir()
             for name in required:
-                (isolated / name).write_bytes((scripts_dir / name).read_bytes())
+                source = scripts_dir / name
+                if name in ("install-sims.sh", "simulator-provenance.py"):
+                    source = (
+                        scripts_dir.parent
+                        / "crates/hauksbee-engine/assets/scripts"
+                        / name
+                    )
+                (isolated / name).write_bytes(source.read_bytes())
             (isolated / "install-sims.sh").chmod(0o755)
             env = os.environ.copy()
             env["HOME"] = str(tmp / "home")

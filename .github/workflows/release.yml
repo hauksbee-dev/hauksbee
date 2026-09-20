@@ -357,7 +357,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             hauksbee/target
-          key: release-${{ matrix.label }}-${{ hashFiles('hauksbee/Cargo.lock', 'hauksbee/scripts/install-sims.sh', 'hauksbee/scripts/simavr-payload-provenance.sh', 'hauksbee/crates/hauksbee-mcu/build.rs') }}
+          key: release-${{ matrix.label }}-${{ hashFiles('hauksbee/Cargo.lock', 'hauksbee/crates/hauksbee-engine/assets/scripts/install-sims.sh', 'hauksbee/scripts/simavr-payload-provenance.sh', 'hauksbee/crates/hauksbee-mcu/build.rs') }}
 
       # ── system deps for the DEFAULT shape only ─────────────────────────────
       # The permissive shape needs nothing beyond Rust. The default shape links
@@ -386,7 +386,7 @@ jobs:
         shell: bash
         run: |
           cd hauksbee
-          simavr_commit="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]+)"$/\1/p' scripts/install-sims.sh | head -1)"
+          simavr_commit="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]+)"$/\1/p' crates/hauksbee-engine/assets/scripts/install-sims.sh | head -1)"
           test "${#simavr_commit}" -eq 40
           simavr_prefix="$HOME/.hauksbee-simavr/$simavr_commit"
           bash scripts/install-sims.sh --avr --prefix "$simavr_prefix"
@@ -1110,7 +1110,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/hauksbee/simulator-archives
-          key: release-required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hauksbee/scripts/install-sims.sh', 'hauksbee/scripts/required-simulator-versions.env', 'hauksbee/scripts/renode-checksums.txt', 'hauksbee/scripts/espressif-qemu-checksums.txt') }}
+          key: release-required-sims-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hauksbee/crates/hauksbee-engine/assets/scripts/install-sims.sh', 'hauksbee/scripts/required-simulator-versions.env', 'hauksbee/scripts/renode-checksums.txt', 'hauksbee/scripts/espressif-qemu-checksums.txt') }}
 
       - name: Run and retain same-SHA required integration evidence
         shell: bash

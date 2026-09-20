@@ -285,9 +285,9 @@ capacitors really do start discharged.
 
 The ramp is sampled once per frame, so keep `ramp_ms` comfortably above
 `frame_ms`: the operating point is seeded at the level the ramp has reached
-after one frame, which is `frame_ms / ramp_ms` of the rail. At the 0.05 ms
-default frame a 1 ms ramp seeds the board at 5 % of the rail; a ramp shorter
-than a frame is indistinguishable from no ramp at all.
+after one frame, which is `frame_ms / ramp_ms` of the rail. With
+`frame_ms = 0.05` a 1 ms ramp seeds the board at 5 % of the rail; at the 1 ms
+default frame the same ramp is indistinguishable from no ramp at all.
 
 ```toml
 [[supply]]

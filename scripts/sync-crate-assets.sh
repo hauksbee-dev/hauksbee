@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # sync-crate-assets.sh - refresh the crate-embedded mirrors of repo-level assets.
 #
-# `cargo package` ships only files under a crate's own directory, so every
-# asset a published crate embeds via include_str!/include_bytes! lives in a
-# mirror under crates/<crate>/assets/. The AUTHORITATIVE copy of each asset
-# stays where it is maintained and consumed (scripts/, testdata/,
-# crates/hauksbee-ci/examples/, examples/); this script copies authoritative
-# over mirror, and each crate's tests/packaged_asset_sync.rs fails the build
-# whenever a mirror drifts, pointing here.
+# `cargo package` ships only files under a crate's own directory, so assets a
+# published crate embeds via include_str!/include_bytes! live under
+# crates/<crate>/assets/. Most are mirrors of authoritative copies elsewhere.
+# The two large installer files are the exception: install-sims.sh and
+# simulator-provenance.py are authoritative under hauksbee-engine/assets/scripts,
+# while their repo-root scripts/ paths are small forwarders. The remaining
+# pairs below copy authoritative over mirror, and packaged_asset_sync.rs catches
+# drift.
 #
 # Idempotent; run from anywhere inside the repo.
 set -euo pipefail
@@ -15,12 +16,10 @@ cd "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 
 # authoritative -> mirror
 pairs=(
-  "scripts/install-sims.sh:crates/hauksbee-engine/assets/scripts/install-sims.sh"
   "scripts/common.sh:crates/hauksbee-engine/assets/scripts/common.sh"
   "scripts/required-simulator-versions.env:crates/hauksbee-engine/assets/scripts/required-simulator-versions.env"
   "scripts/renode-checksums.txt:crates/hauksbee-engine/assets/scripts/renode-checksums.txt"
   "scripts/espressif-qemu-checksums.txt:crates/hauksbee-engine/assets/scripts/espressif-qemu-checksums.txt"
-  "scripts/simulator-provenance.py:crates/hauksbee-engine/assets/scripts/simulator-provenance.py"
   "scripts/simavr-payload-provenance.sh:crates/hauksbee-engine/assets/scripts/simavr-payload-provenance.sh"
   "scripts/install-sims-windows.ps1:crates/hauksbee-engine/assets/scripts/install-sims-windows.ps1"
   "crates/hauksbee-ci/examples/boards/blinky.kicad_pcb:crates/hauksbee-engine/assets/examples/blinky.kicad_pcb"

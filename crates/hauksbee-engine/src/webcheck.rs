@@ -145,9 +145,9 @@ const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 /// `duration_ms`: simulated time. 2 s of sim time is plenty for a web quick
 /// check; longer runs belong on the CLI.
 const MAX_WEB_DURATION_MS: f64 = 2000.0;
-/// `frame_ms`: net-sampling cadence. Reject absurdly fine cadence (which
-/// multiplies the frame count and the wall time) by requiring at least this.
-const MIN_WEB_FRAME_MS: f64 = 0.05;
+/// Frames per run (`duration_ms / frame_ms`): the work a cadence costs. A short
+/// window may sample as finely as the CLI allows; only the product is capped.
+const MAX_WEB_FRAMES: f64 = 40_000.0;
 /// `[fuzz]` seeds: initial-state fuzz members, each a full co-sim run.
 const MAX_WEB_FUZZ_SEEDS: i64 = 8;
 /// `[ensemble]` seeds: tolerance Monte-Carlo members, each a full co-sim run.
@@ -234,13 +234,17 @@ fn validate_web_limits(spec_fragment: &str) -> Result<(), String> {
         }
     }
 
-    // frame_ms: sampling cadence. Present-only (default is fine); reject cadence
-    // finer than the floor.
+    // frame_ms: sampling cadence, judged with the window it samples (100 ms when
+    // the spec leaves `duration_ms` to the runner's default).
     if let Some(ms) = table.get("frame_ms").and_then(as_number) {
-        if ms < MIN_WEB_FRAME_MS {
+        let window = table.get("duration_ms").and_then(as_number);
+        let frames = window.unwrap_or(100.0) / ms;
+        // A zero or negative cadence is the runner's error to word, not ours.
+        if ms > 0.0 && frames > MAX_WEB_FRAMES {
             return Err(format!(
-                "frame_ms = {ms} is finer than the web check limit of {MIN_WEB_FRAME_MS} ms. \
-                 A finer cadence multiplies the frame count; run it from the CLI for full density."
+                "frame_ms = {ms} makes {frames:.0} frames, over the web check limit of \
+                 {MAX_WEB_FRAMES}. Shorten duration_ms or coarsen frame_ms; run denser \
+                 campaigns from the CLI."
             ));
         }
     }
@@ -720,7 +724,7 @@ kind = "no_faults"
         let tolerances =
             "[[tolerance]]\nref = \"R*\"\npercent = 10.0\n".repeat(MAX_WEB_TOLERANCE_RULES);
         let spec = format!(
-            "duration_ms = {MAX_WEB_DURATION_MS}\nframe_ms = {MIN_WEB_FRAME_MS}\n\
+            "duration_ms = {MAX_WEB_DURATION_MS}\nframe_ms = 0.05\n\
              [fuzz]\nseeds = {MAX_WEB_FUZZ_SEEDS}\n\
              [ensemble]\nseeds = {MAX_WEB_ENSEMBLE_SEEDS}\n\
              {tolerances}\n{asserts}"
@@ -753,8 +757,14 @@ kind = "no_faults"
     #[test]
     fn frame_ms_too_fine_is_rejected() {
         let err = validate_web_limits("frame_ms = 0.001\n[[assert]]\nkind = \"no_faults\"\n")
-            .expect_err("0.001 ms is finer than the 0.05 ms floor");
+            .expect_err("0.001 ms over the default 100 ms window is 100000 frames");
         assert!(err.contains("frame_ms"), "names the key: {err}");
+        let short = "duration_ms = 30\nframe_ms = 0.01\n[[assert]]\nkind = \"no_faults\"\n";
+        assert_eq!(
+            validate_web_limits(short),
+            Ok(()),
+            "a short window may be fine"
+        );
     }
 
     #[test]

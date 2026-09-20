@@ -47,7 +47,9 @@ class SimavrProvenanceContract(unittest.TestCase):
         source = (ROOT / "crates/hauksbee-mcu/build.rs").read_text()
         self.assertIn(".hauksbee-simavr-payload.sha256", source)
         self.assertIn("simavr payload digest mismatch", source)
-        installer = (ROOT / "scripts/install-sims.sh").read_text()
+        installer = (
+            ROOT / "crates/hauksbee-engine/assets/scripts/install-sims.sh"
+        ).read_text()
         self.assertIn('simavr-payload-provenance.sh" record', installer)
         bundle = (ROOT / "scripts/bundle.sh").read_text()
         self.assertIn('simavr-payload-provenance.sh" verify', bundle)

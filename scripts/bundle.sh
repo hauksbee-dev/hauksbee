@@ -134,9 +134,9 @@ export HAUKSBEE_SOURCE_COMMIT="$HAUKSBEE_RELEASE_COMMIT"
 # guarantee that an ordinary local bundle builds an unattested binary and then
 # correctly refuses to package it.
 SIMAVR_COMMIT="$(sed -nE 's/^SIMAVR_COMMIT="([0-9a-f]+)"$/\1/p' \
-  "$HAUKSBEE_ROOT/scripts/install-sims.sh" | head -1)"
+  "$HAUKSBEE_ROOT/crates/hauksbee-engine/assets/scripts/install-sims.sh" | head -1)"
 [[ "$SIMAVR_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
-  || die "scripts/install-sims.sh does not name one immutable SIMAVR_COMMIT"
+  || die "the simulator installer does not name one immutable SIMAVR_COMMIT"
 
 if [ "$SHAPE" = default ] && [ "$DO_BUILD" -eq 1 ]; then
   export SIMAVR_COMMIT
@@ -364,8 +364,11 @@ cp -R "$HAUKSBEE_ROOT/integrations" "$ROOTDIR/integrations"
 # (release mirroring, benchmarking, demo capture) that has no business in a
 # user tarball.
 mkdir -p "$ROOTDIR/scripts"
-for s in install.sh doctor.sh ci.sh install-sims.sh common.sh simavr-payload-provenance.sh simulator-provenance.py; do
+for s in install.sh doctor.sh ci.sh common.sh simavr-payload-provenance.sh; do
   install -m 0755 "$HAUKSBEE_ROOT/scripts/$s" "$ROOTDIR/scripts/$s"
+done
+for s in install-sims.sh simulator-provenance.py; do
+  install -m 0755 "$HAUKSBEE_ROOT/crates/hauksbee-engine/assets/scripts/$s" "$ROOTDIR/scripts/$s"
 done
 for s in required-simulator-versions.env renode-checksums.txt espressif-qemu-checksums.txt; do
   install -m 0644 "$HAUKSBEE_ROOT/scripts/$s" "$ROOTDIR/scripts/$s"

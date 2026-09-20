@@ -2558,11 +2558,13 @@ impl Assertion {
                 None => format!("{net} toggles >= {} times", self.min_toggles.unwrap_or(0)),
             },
             "no_faults" => "no stress faults raised".into(),
-            "max_current" => format!(
-                "I({}) <= {} A",
-                self.reference.clone().unwrap_or_default(),
-                self.amps.unwrap_or(0.0)
-            ),
+            "max_current" => {
+                let reference = self.reference.clone().unwrap_or_default();
+                // No bound is a measurement, not a limit of 0 A.
+                self.amps.map_or(format!("I({reference})"), |a| {
+                    format!("I({reference}) <= {a} A")
+                })
+            }
             "max_temp" => {
                 let reference = self.reference.clone().unwrap_or_default();
                 match self.celsius {

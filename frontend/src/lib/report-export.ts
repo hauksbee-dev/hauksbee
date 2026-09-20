@@ -31,7 +31,7 @@ interface ReportExportInput {
   /** The composed spec, as the Checks pane last had it. */
   spec: { toml: string; fileName: string } | null
   /** Last run's counts, when a current run existed. */
-  checks: { passed: number; failed: number; invalid: number } | null
+  checks: { passed: number; failed: number; invalid: number; measured?: number } | null
   /** The saved session this report belongs to, when it has a name. */
   sessionName: string | null
   /** True when the report was restored from storage rather than just run: the
@@ -378,7 +378,8 @@ export function buildReportHtml(input: ReportExportInput): string {
 
   const checksLine = checks
     ? `${checks.passed} passed, ${checks.failed} failed${
-      checks.invalid > 0 ? `, ${checks.invalid} could not be judged` : ''}`
+      checks.invalid > 0 ? `, ${checks.invalid} could not be judged` : ''}${
+      checks.measured ? `, ${checks.measured} measured without a bound` : ''}`
     : null
 
   return `<!doctype html>

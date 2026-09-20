@@ -1194,6 +1194,23 @@ fn ref_prefix(reference: &str) -> String {
     letters.collect::<String>().to_ascii_uppercase()
 }
 
+/// Which passive ('R', 'C' or 'L') a designator's first letter claims. A word
+/// rather than a designator ("COIL", "LOAD") yields to a KiCad footprint family:
+/// a relay winding on `Resistor_SMD:R_0805` is 167 ohms, not a 167 F capacitor.
+fn passive_letter(comp: &Component) -> Option<char> {
+    let prefix = ref_prefix(&comp.reference);
+    let name = comp.footprint.rsplit(':').next().unwrap_or("");
+    let family = [("R_", 'R'), ("C_", 'C'), ("CP_", 'C'), ("L_", 'L')];
+    let by_footprint = family
+        .iter()
+        .find(|(f, _)| prefix.len() > 2 && name.starts_with(f));
+    let by_ref = prefix
+        .chars()
+        .next()
+        .filter(|c| matches!(c, 'R' | 'C' | 'L'));
+    by_ref.map(|c| by_footprint.map_or(c, |(_, letter)| *letter))
+}
+
 /// Connector-class prefixes: ports and mechanical parts, never simulated drivers.
 fn is_port_class(prefix: &str) -> bool {
     matches!(prefix, "J" | "P" | "X" | "JP" | "TP" | "MP" | "H")
@@ -1358,7 +1375,7 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
     // structured naming some teams use ("R_47k_0402", "C_22u_25V_0805",
     // "CTEB_2.2UF_35V_10%_...): the first underscore-separated token that
     // parses as a value wins.
-    let kind_pins: Option<(ComponentKind, [(&str, &str); 2])> = match prefix.chars().next() {
+    let kind_pins: Option<(ComponentKind, [(&str, &str); 2])> = match passive_letter(comp) {
         Some('R') => Some((ComponentKind::Passive, [("1", "a"), ("2", "b")])),
         Some('C') => Some((ComponentKind::Passive, [("1", "pos"), ("2", "neg")])),
         Some('L') => Some((ComponentKind::Passive, [("1", "a"), ("2", "b")])),
@@ -2781,9 +2798,8 @@ fn bind_passive(
     // thermal consumers all see the same physics. Arrays keep the per-element
     // path: a single pack-level ESR/DCR cannot be assigned to multiple elements
     // without a per-element schema.
-    let prefix = ref_prefix(&comp.reference);
     let is_inductor = model.passive_class == Some(hauksbee_models::schema::PassiveClass::Inductor)
-        || prefix.starts_with('L')
+        || passive_letter(comp) == Some('L')
         || p.unit
             .as_deref()
             .is_some_and(|unit| unit.eq_ignore_ascii_case("H"));
@@ -2820,7 +2836,7 @@ fn bind_passive(
 
     let is_capacitor = model.passive_class
         == Some(hauksbee_models::schema::PassiveClass::Capacitor)
-        || prefix.starts_with('C')
+        || passive_letter(comp) == Some('C')
         || p.unit
             .as_deref()
             .is_some_and(|unit| unit.eq_ignore_ascii_case("F"));
@@ -2956,8 +2972,8 @@ fn passive_device(
     p: &hauksbee_models::value::ParsedValue,
 ) -> (Device, Option<String>) {
     let unit = p.unit.as_deref().unwrap_or("");
-    let prefix = ref_prefix(&comp.reference);
-    if prefix.starts_with('C') || unit.eq_ignore_ascii_case("F") {
+    let letter = passive_letter(comp);
+    if letter == Some('C') || unit.eq_ignore_ascii_case("F") {
         (
             Device::Capacitor {
                 name,
@@ -2968,7 +2984,7 @@ fn passive_device(
             },
             None,
         )
-    } else if prefix.starts_with('L') || unit.eq_ignore_ascii_case("H") {
+    } else if letter == Some('L') || unit.eq_ignore_ascii_case("H") {
         (
             Device::Inductor {
                 name,
@@ -8042,6 +8058,20 @@ mod tests {
             c.footprint = footprint.into();
             assert_eq!(fallback_entry(&c).unwrap().kind, kind, "{footprint}");
         }
+    }
+
+    #[test]
+    fn a_word_reference_takes_its_passive_kind_from_the_footprint_family() {
+        let letter = |reference, footprint: &str| {
+            let mut c = comp(reference, "167");
+            c.footprint = footprint.into();
+            passive_letter(&c)
+        };
+        assert_eq!(letter("COIL", "Resistor_SMD:R_0805_2012Metric"), Some('R'));
+        assert_eq!(letter("COIL", ""), Some('C'));
+        // A real designator outranks a borrowed land pattern.
+        assert_eq!(letter("R1", "Capacitor_SMD:C_0603_1608Metric"), Some('R'));
+        assert_eq!(letter("U1", "Resistor_SMD:R_0805_2012Metric"), None);
     }
 
     #[test]

@@ -754,7 +754,7 @@ fn first_line(msg: &str) -> String {
 
 // ── install side ─────────────────────────────────────────────────────────────
 
-/// The installer script and the helper it sources, embedded at build time.
+/// The crate-owned installer script and its helpers, embedded at build time.
 ///
 /// Why: the shipped .app carries no `scripts/` directory, so on a stranger's
 /// machine `find_install_sims_script` finds nothing and the Environment page
@@ -766,9 +766,10 @@ fn first_line(msg: &str) -> String {
 /// The include paths point INSIDE this crate (`assets/scripts/`) because
 /// `cargo package` ships only files under the crate directory; a
 /// `../../../scripts/` include compiles from a git checkout and from nowhere
-/// else. The AUTHORITATIVE copies stay at repo-root `scripts/` (users and CI
-/// run them from there); `tests/packaged_asset_sync.rs` fails the build when
-/// the mirror drifts, and `scripts/sync-crate-assets.sh` refreshes it.
+/// else. The installer and Python provenance helper are authoritative here;
+/// their repo-root `scripts/` paths forward here for users and CI. The smaller
+/// sidecars remain mirrored, with `tests/packaged_asset_sync.rs` checking them
+/// and `scripts/sync-crate-assets.sh` refreshing them.
 #[cfg(not(windows))]
 const INSTALL_SIMS_SH: &str = include_str!("../assets/scripts/install-sims.sh");
 #[cfg(not(windows))]
