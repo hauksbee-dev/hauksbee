@@ -18,7 +18,6 @@
   ],
   "surfaces": [
     {"path": ".github/ISSUE_TEMPLATE/config.yml", "classification": "repository-policy", "occurrences": 1},
-    {"path": ".github/workflows/cla.yml", "classification": "workflow-metadata", "occurrences": 1},
     {"path": ".github/workflows/docker.yml", "classification": "release-artifact-metadata", "occurrences": 5, "required_fragments": ["IMAGE: ghcr.io/hauksbee-dev/hauksbee"]},
     {"path": ".github/workflows/release.yml", "classification": "release-workflow", "occurrences": 3},
     {"path": ".pre-commit-hooks.yaml", "classification": "package-metadata", "occurrences": 1},

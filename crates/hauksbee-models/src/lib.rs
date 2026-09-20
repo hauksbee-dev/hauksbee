@@ -424,10 +424,7 @@ impl ModelLibrary {
         }
         let home = std::env::var("HOME").ok().map(PathBuf::from);
         if let Some(h) = &home {
-            // The two user dirs load at DISTINCT layers so `~/.config/hauksbee/
-            // models` (a hand-corrected model) deterministically overrides a
-            // same-id auto-extracted one in `~/.hauksbee/models`. Loading both
-            // at one layer left a same-id collision to be resolved silently.
+            // Keep the hand-corrected config layer above extracted user models.
             for (dir, layer) in [
                 (h.join(".hauksbee").join("models"), SourceLayer::UserDir),
                 (
@@ -441,8 +438,8 @@ impl ModelLibrary {
             }
         }
         for dir in extra_dirs {
-            for e in lib.load_models_dir_flag(dir) {
-                eprintln!("[models] --models-dir {}: {e}", dir.display());
+            for error in lib.load_models_dir(dir) {
+                eprintln!("[models] --models-dir {}: {error}", dir.display());
             }
         }
         lib
@@ -461,7 +458,7 @@ impl ModelLibrary {
     /// and every part stayed unresolved with nothing on stderr to say why. A
     /// directory with nothing loadable in it now says so, for the same reason a
     /// missing one does.
-    fn load_models_dir_flag(&mut self, dir: &Path) -> Vec<ModelError> {
+    pub fn load_models_dir(&mut self, dir: &Path) -> Vec<ModelError> {
         if dir.join("pack.toml").is_file() && dir.join("models").is_dir() {
             return self.load_dir_layer(&dir.join("models"), SourceLayer::ModelsDirFlag);
         }
@@ -627,7 +624,7 @@ impl ModelLibrary {
                     file: name,
                     message,
                 }),
-                None => self.load_toml_str(&src, &name, layer),
+                None => self.load_toml_str(&src, &path.display().to_string(), layer),
             };
             errors.extend(result.err());
         }
@@ -794,7 +791,7 @@ impl ModelLibrary {
             let id = entry.id.clone();
             let invalid = |messages: String| ModelError::ValidationFailed {
                 id: id.clone(),
-                messages,
+                messages: format!("{}: {messages}", source_name),
             };
             // An all-None `[match]` block (an omitted section, or a typo'd key
             // serde silently drops) matches EVERY component at specificity 0;
@@ -805,6 +802,27 @@ impl ModelLibrary {
                      absent); at least one is required, else it would match every component"
                         .to_string(),
                 ));
+            }
+            if layer != SourceLayer::Builtin {
+                let mut errors = validation::validate(&entry)
+                    .err()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|error| error.message)
+                    .collect::<Vec<_>>();
+                errors.extend(
+                    behavioral::validate_behavioral(&entry.behavioral)
+                        .into_iter()
+                        .map(|error| format!("[models.behavioral]: {error}")),
+                );
+                if !entry.logic.is_empty() {
+                    if let Err(error) = entry.logic.validate() {
+                        errors.push(format!("[models.logic]: {error}"));
+                    }
+                }
+                if !errors.is_empty() {
+                    return Err(invalid(errors.join("; ")));
+                }
             }
             let compiled = CompiledEntry::compile(entry).map_err(|e| ModelError::InvalidRegex {
                 id: id.clone(),
@@ -1150,6 +1168,14 @@ mod tests {
             SourceLayer::UserDir,
         )
         .unwrap();
+        let source = "[[models]]\nid='bad_converter'\nkind='vreg'\n[models.match]\nvalue_re='BAD'\n[models.pins]\n1='in'\n2='out'\n[models.behal.converter]\ntopology='boost'\nout_pin='out'\nin_pin='in'\nvout_setpoint=-5\n".replace("behal", "behavioral");
+        let error = lib
+            .load_toml_str(&source, "bad.toml", SourceLayer::UserDir)
+            .unwrap_err()
+            .to_string();
+        for text in ["bad.toml", "bad_converter", "positive finite number"] {
+            assert!(error.contains(text), "{error}");
+        }
     }
 
     #[test]
@@ -1297,7 +1323,9 @@ mod tests {
     fn card_toml(id: &str) -> String {
         format!(
             "[[models]]\nid = \"{id}\"\nkind = \"digital\"\n[models.match]\n\
-             value_re = \"(?i)^{id}$\"\n[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
+             value_re = \"(?i)^{id}$\"\n[models.params]\nidentity_only = true\n\
+             warning = \"test identity only\"\nunlocked_by = \"test behavior\"\n\
+             [models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\
              [models.coverage]\nmissing = [\"executable_behavior\"]\n"
         )
     }
@@ -1347,7 +1375,7 @@ mod tests {
         let empty = tempfile::tempdir().unwrap();
         std::fs::write(empty.path().join("README.md"), "no cards here\n").unwrap();
         let mut l = lib();
-        let errs = l.load_models_dir_flag(empty.path());
+        let errs = l.load_models_dir(empty.path());
         assert!(
             errs.iter().any(|e| matches!(e, ModelError::NoCards { .. })),
             "{errs:?}"
@@ -1357,7 +1385,7 @@ mod tests {
             card_toml("quiet_dir_device"),
         )
         .unwrap();
-        assert!(l.load_models_dir_flag(empty.path()).is_empty());
+        assert!(l.load_models_dir(empty.path()).is_empty());
     }
 
     #[test]

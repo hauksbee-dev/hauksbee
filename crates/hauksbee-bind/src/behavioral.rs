@@ -1386,7 +1386,8 @@ impl BehavioralDevice {
         let command_ceiling = match c.cfg.topology {
             hauksbee_models::behavioral::Topology::Buck => c.cfg.vout_setpoint.min(vin),
             _ => c.cfg.vout_setpoint,
-        };
+        }
+        .max(0.0);
         v_cmd = v_cmd.clamp(0.0, command_ceiling);
         if let Some(ilim) = c.cfg.iout_limit_a {
             if iout > ilim && iout > 1e-9 {

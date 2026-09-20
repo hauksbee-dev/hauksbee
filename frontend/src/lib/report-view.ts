@@ -10,7 +10,7 @@
 // same `ReportView`, so they cannot disagree.
 
 import type {
-  ErrorBudget, ErrorBudgetWindow, EvidenceAssumption, EvidenceMap, JsonNote, ModelCoverageComponent,
+  CheckResult, ErrorBudget, ErrorBudgetWindow, EvidenceAssumption, EvidenceMap, JsonNote, ModelCoverageComponent,
   ModelCoverageSnapshot, ModelOnPath, RefusalContract, RunResponse, WebCosimSection, WebFallbackWindow, WebFinding,
   WebGpioNet, WebHeadsUp, WebImportObject, WebReport, WebSection, WebTimingCoverage,
 } from '../types/report'
@@ -101,6 +101,15 @@ export function assumptionsForEvidence(map: EvidenceMap, registry: readonly Evid
     const assumption = byId.get(id)
     return assumption ? [assumption] : []
   })
+}
+
+export function repeatedAssumptions(results: readonly (CheckResult | null)[]): Set<string>[] {
+  const seen = new Set<string>()
+  return results.map(result => new Set((result?.evidence?.assumptions ?? []).filter(id => {
+    if (seen.has(id)) return true
+    seen.add(id)
+    return false
+  })))
 }
 
 const ms = (seconds: number): string => (seconds * 1e3).toFixed(3)

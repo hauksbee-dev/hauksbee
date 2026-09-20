@@ -147,7 +147,7 @@ These bounds are the single source of truth in `crates/hauksbee-models/src/valid
 
 | param       | min    | max    | note                                  |
 |-------------|--------|--------|---------------------------------------|
-| is          | 1e-20  | 1e-3   | diode / BJT sat current               |
+| is          | 1e-30  | 1e-3   | diode saturation current (BJT min 1e-20) |
 | n / nf      | 0.5    | 3.0    | emission coefficient                  |
 | rs          | 0.0    | 1000.0 | diode series resistance (Ω)           |
 | cjo         | 0.0    | 1e-6   | diode junction capacitance (F)        |

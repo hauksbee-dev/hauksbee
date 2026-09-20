@@ -1,5 +1,5 @@
 import type { RunResponse } from '../../types/report'
-import { overallVerdict, refusalLines, type Overall } from '../../lib/report-view'
+import { overallVerdict, repeatedAssumptions, refusalLines, type Overall } from '../../lib/report-view'
 import { ArriveOnce } from '../../motion'
 import { AssertionEvidence, ResultChip } from './pieces'
 
@@ -33,6 +33,7 @@ export function RunResults({ result, runKey, stale, rawMode, reportSerious }: {
 }) {
   const results = result.ok ? result.results ?? [] : []
   const overall = overallVerdict(result)
+  const repeats = repeatedAssumptions(results)
   const uncovered = overall === 'passed' && reportSerious > 0
   const noteLines = (key: string, lines: string[] | undefined, prefix: string, color: string) =>
     (lines ?? []).map((line, i) => (
@@ -95,12 +96,13 @@ export function RunResults({ result, runKey, stale, rawMode, reportSerious }: {
                 <div className="flex flex-wrap gap-2">
                   <ResultChip result={x} stale={stale} />
                   <span style={{ color: 'var(--silk)' }}>{x.label}</span>
-                  <span style={{ color: 'var(--silk-faint)' }}>{x.detail}</span>
+                  <span style={{ color: 'var(--silk)' }}>{x.detail}</span>
                 </div>
                 <AssertionEvidence
                   result={x}
                   assumptions={result.assumptions ?? []}
                   inventory={result.inventory ?? []}
+                  repeats={repeats[i] ?? new Set()}
                   stale={stale}
                 />
               </div>

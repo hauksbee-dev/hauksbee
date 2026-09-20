@@ -200,8 +200,19 @@ fn union_across(
 pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let started = Instant::now();
     let spec = Spec::load(&cfg.spec)?;
-    let extra: Vec<&std::path::Path> = cfg.models_dir.as_deref().into_iter().collect();
-    let mut lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&extra);
+    let mut lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
+    if let Some(dir) = &cfg.models_dir {
+        let errors = lib.load_models_dir(dir);
+        if !errors.is_empty() {
+            return Err(SpecError::Invalid(
+                errors
+                    .into_iter()
+                    .map(|error| error.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ));
+        }
+    }
     for path in &cfg.spice_models {
         lib.load_spice_models(path)
             .map_err(|e| SpecError::Invalid(format!("{e:#}")))?;

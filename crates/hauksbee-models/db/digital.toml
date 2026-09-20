@@ -1168,6 +1168,9 @@ description = "CH340G USB-to-UART bridge, SOP-16, 5V operation, external 12MHz c
 value_re = "(?i)^CH340G([-_ ].*)?$"
 
 [models.params]
+identity_only = true
+warning = "ch340g has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for ch340g"
 # Source: WCH CH340 datasheet Version 3B, Section 6.2 (5 V column). See above.
 voh       = 4.4      # VCC - 0.6 V min @ 2 mA sourced, VCC = 5 V
 vol       = 0.5      # VOL max @ 6 mA sunk
@@ -1266,6 +1269,9 @@ description = "CP2102 USB-to-UART bridge, QFN-28, internal oscillator and 3.3V r
 value_re = "(?i)^CP2102(-[A-Z0-9]+)*$"
 
 [models.params]
+identity_only = true
+warning = "cp2102 has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for cp2102"
 # Source: Silicon Labs CP2102/9 datasheet Rev. 1.8, Table 4, CP2102 rows,
 # evaluated at the nominal VDD = 3.3 V. See above.
 voh       = 3.2      # VDD - 0.1 V min @ IOH = -10 uA (VDD - 0.7 V at -3 mA)
@@ -1632,15 +1638,9 @@ disable = [
 # MCP3008 entry takes. It is NOT modelled as a buffer, and its SO pin is not
 # driven by anything in the analogue solve.
 #
-# WHAT THIS COSTS, stated rather than hidden: a pad-map-only entry still binds
-# through the generic digital path and so counts as a RESOLVED part in the bind
-# report's coverage fraction, despite modelling no electrical behaviour. This
-# entry DOES add one such part, and a `model_coverage` assertion will count it as
-# covered. What is pre-existing is the binder's inability to tell the two apart:
-# six other logic-less entries (ch340g, cp2102, ltc6803_4, bq76952, lm5107,
-# lm5109) already sit in the same position. The fix is a binder-level distinction
-# between "bound" and "electrically modelled", which is a change to BindOutcome
-# and not to this file.
+# This pad-map-only entry is explicitly identity-only: generic binding leaves it
+# OPEN. A `spi_eeprom` CI peripheral still attaches the dedicated Spi25Eeprom
+# implementation using this card's identity and CS pin map.
 #
 # WHY THE MATCH IS NARROW. Restricted to the Microchip 25AA/25LC part numbers,
 # whose 8-pin pinout below is verified. Atmel/Microchip AT25 SPI EEPROM and most
@@ -1699,6 +1699,11 @@ footprint_re = '''(?ix)
 # datasheet's, for the reason crates/hauksbee-models/tests/pin_roles.rs records:
 # a model that names its pins in the datasheet's vocabulary matches, loads, and
 # then resolves to nothing.
+[models.params]
+identity_only = true
+warning = "eeprom_25xx_spi has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for eeprom_25xx_spi"
+
 [models.pins]
 "1" = "cs"
 "2" = "miso"
@@ -2139,6 +2144,8 @@ description = "FTDI FT231X USB-to-UART bridge, QFN-20 (pad map and VCCIO logic l
 value_re = "(?i)^FT231X[-_ ]?Q([A-Z0-9-]*)?$"
 
 [models.params]
+identity_only = true
+unlocked_by = "a validated FT231X USB/UART, internal-regulator, and configurable-I/O model"
 # Section 6, VCCIO = 3.3 V column. See the note above before trusting these on a
 # board with a lower I/O rail.
 voh   = 2.97     # min, at the table's IOH = 2 mA test current. The four VOH rows
@@ -2260,6 +2267,9 @@ description = "Bosch BME280 humidity/pressure/temperature sensor, LGA-8 (pad map
 value_re = "(?i)^BME280([-_ ].*)?$"
 
 [models.params]
+identity_only = true
+warning = "bme280 has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for bme280"
 # Table 32, evaluated at VDDIO = 3.3 V. The datasheet states all four as
 # PERCENTAGES of VDDIO and never in volts, so these are those percentages times
 # 3.3; see the note above before trusting them on a board with a different I/O rail.
@@ -2355,6 +2365,9 @@ description = "TI TPL5010 nano-power system timer / watchdog, SOT-23-6 (pad map 
 value_re = "(?i)^TPL5010[A-Z0-9-]*$"
 
 [models.params]
+identity_only = true
+warning = "tpl5010 has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for tpl5010"
 # Section 7.5, evaluated at VDD = 3.3 V. See the note above.
 voh   = 3.0      # VDD - 0.3 V min at IOUT = 100 uA, WAKE
 vol   = 0.3      # max at IOUT = 100 uA, WAKE (and RSTn at 1 mA)
@@ -2553,6 +2566,9 @@ description = "TI SN75176A RS-485 differential bus transceiver, SOIC-8 (pad map 
 value_re = "(?i)^SN75176[AB]?[A-Z0-9-]*$"
 
 [models.params]
+identity_only = true
+warning = "sn75176a has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for sn75176a"
 voh   = 2.7      # RECEIVER output R, VOH min at VID = 200 mV, IOH = -400 uA
 vol   = 0.45     # RECEIVER output R, VOL max at VID = 200 mV, IOL = 8 mA
 vih   = 2.0      # D / DE / RE, high-level input, Section 6.2
@@ -2665,6 +2681,9 @@ description = "TI TCA9535 16-bit I2C I/O expander, WQFN-24 (pad map and levels; 
 value_re = "(?i)^TCA9535(RTW|RGE)R?$"
 
 [models.params]
+identity_only = true
+warning = "tca9535 has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for tca9535"
 # Evaluated at VCC = 3.3 V. See the note above.
 voh   = 2.6      # VOH MIN at VCC = 3 V, IOH = -8 mA: the nearest tabulated rail
                  # below 3.3 V. At -10 mA the same rail gives 2.5 V.
@@ -3156,3 +3175,111 @@ only_in_state = "input_on"
 [models.coverage]
 implements = ["input_led_dc", "threshold_transfer", "inverting_output", "totem_pole_output", "supply_current"]
 missing = ["propagation_timing", "temperature_curve", "cmti_waveform", "isolation_capacitance", "led_reverse_breakdown"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# SN74AHCT14: drafted by `hauksbee models extract` from the TI datasheet, then
+# reviewed by hand against it (the first draft had no logic block and did nothing).
+# Source: Texas Instruments SN74AHCT14 datasheet SCLS246,
+#   https://www.ti.com/lit/ds/symlink/sn74ahct14.pdf (Tables 6.5 and 6.6).
+[[models]]
+id = "sn74ahct14"
+kind = "digital"
+description = "SN74AHCT14 hex Schmitt-trigger inverter with the common 14-pin commercial-package pinout; models conservative 4.5-V static thresholds, loaded output levels, and six independent inverters with state-retaining hysteresis; does not model supply- and load-dependent thresholds or delay, channel-to-channel variation, transition waveforms, input clamp behavior, dynamic noise, or power consumption"
+
+[models.source]
+tier = "datasheet-derived"
+validation = "physical-bounds-only"
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vih"
+low = 0.9
+high = 1.9
+unit = "V"
+kind = "specification-limits"
+basis = "Table 6.5 Electrical Characteristics, SN74AHCT14 VT+ limits at VCC = 4.5 V over the operating free-air temperature range"
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vil"
+low = 0.5
+high = 1.5
+unit = "V"
+kind = "specification-limits"
+basis = "Table 6.5 Electrical Characteristics, SN74AHCT14 VT- limits at VCC = 4.5 V over the operating free-air temperature range"
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "tpd_s"
+low = 1.0e-9
+high = 8.0e-9
+unit = "s"
+kind = "specification-limits"
+basis = "Table 6.6 Switching Characteristics, SN74AHCT14 tPLH and tPHL limits from A to Y with CL = 15 pF over the operating free-air temperature range"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "voh"
+reason = "datasheet publishes a finite minimum but no finite maximum VOH specification at the modeled load"
+
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "vol"
+reason = "datasheet publishes a finite maximum but no finite minimum VOL specification at the modeled load"
+
+[models.match]
+value_re = "(?i)^SN74AHCT14"
+
+[models.params]
+voh = 3.8 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 min, VCC = 4.5 V, IOH = -8 mA
+vol = 0.44 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 max, VCC = 4.5 V, IOL = 8 mA
+vih = 1.9 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 VT+ max, VCC = 4.5 V
+vil = 0.5 # Source: Table 6.5 Electrical Characteristics, SN74AHCT14 VT- min, VCC = 4.5 V
+tpd_s = 4.0e-9 # Source: Table 6.6 Switching Characteristics, TA = 25 C typ, A to Y, CL = 15 pF
+supply_pin = 14.0 # Source: Table 5-1 Pin Functions, VCC row
+gnd_pin = 7.0 # Source: Table 5-1 Pin Functions, GND row
+
+[models.ratings]
+max_current_a = 0.05 # Source: Table 6.1 Absolute Maximum Ratings, continuous current through VCC or GND, magnitude
+max_pin_current_a = 0.025 # Source: Table 6.1 Absolute Maximum Ratings, continuous output current, magnitude
+max_voltage_v = 7.0 # Source: Table 6.1 Absolute Maximum Ratings, VCC supply voltage range, max
+
+[models.pins]
+# Source: Table 5-1 Pin Functions; cross-checked against Figure 5-1 14-pin top view.
+"1" = "a1"
+"2" = "y1"
+"3" = "a2"
+"4" = "y2"
+"5" = "a3"
+"6" = "y3"
+"7" = "gnd"
+"8" = "y4"
+"9" = "a4"
+"10" = "y5"
+"11" = "a5"
+"12" = "y6"
+"13" = "a6"
+"14" = "vcc"
+
+[models.logic]
+# Table 5-1 identifies six A/Y channels; Section 3 states that each performs Y = !A.
+# The digital engine retains the prior input state between vil and vih, providing the Schmitt hysteresis.
+inputs = ["a1", "a2", "a3", "a4", "a5", "a6"]
+outputs = ["y1", "y2", "y3", "y4", "y5", "y6"]
+
+[models.logic.comb]
+"y1" = "!a1"
+"y2" = "!a2"
+"y3" = "!a3"
+"y4" = "!a4"
+"y5" = "!a5"
+"y6" = "!a6"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 4.5
+max_v = 5.5
+abs_max_v = 7.0
+basis = "Table 6.3 Recommended Operating Conditions, SN74AHCT14 VCC supply-voltage row; Table 6.1 Absolute Maximum Ratings, VCC supply-voltage row"

@@ -6,9 +6,11 @@ layer are deliberately separate; inspect both with `hauksbee models resolve`.
 
 Components may resolve to executable models, identity-only records, or an
 explicit unresolved/open result. Executable models arrive by **four** authoring
-routes. The resolver records both the semantic source tier
-and the six storage layers; semantic tier orders sources first, while layer and
-specificity make selection deterministic inside one tier.
+routes. The resolver records both the semantic source tier and the six storage
+layers; semantic tier orders sources first, while layer and specificity make
+selection deterministic inside one tier.
+
+Simple `vreg` cards may set `cout_min_f` and an optional `cout_esr_min_ohm`/`cout_esr_max_ohm` pair; fitted OUT-to-ground capacitance is summed and shortfalls violate an operating limit, while ESR remains a caveat because board files do not carry it and Hauksbee never guesses it.
 
 The four authoring routes:
 

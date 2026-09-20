@@ -384,8 +384,8 @@ iq_a = 0.0001
 "3" = "fb_n"
 "4" = "ss"
 "5" = "gnd"
-"6" = "sw"
-"7" = "vin"
+"6" = "out"
+"7" = "in"
 "8" = "vin2"
 [models.coverage]
 implements = ["nominal_dc_output"]

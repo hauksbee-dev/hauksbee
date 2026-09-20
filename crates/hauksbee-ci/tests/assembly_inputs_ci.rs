@@ -127,6 +127,11 @@ fn contributed(artifact: &serde_json::Value, what: &str, needle: &str) -> bool {
 fn bom_placement_and_variant_shape_the_gate_and_its_exact_evidence() {
     let dir = tempfile::tempdir().unwrap();
     let spec = write_fixture(dir.path());
+    std::fs::write(
+        dir.path().join("sensorless.variant.toml"),
+        "name = \"sensorless\"\nno_fit = [\"R2\", \"U4\"]\n",
+    )
+    .unwrap();
     let result = run(&crate::support::run_config(spec))
         .expect("the production runner accepts the reconciled assembly inputs");
     assert_eq!(result.exit_code(), 0, "{}", result.render_human());
@@ -150,7 +155,7 @@ fn bom_placement_and_variant_shape_the_gate_and_its_exact_evidence() {
     );
     let variant = artifact(&json, "variant");
     assert_eq!(variant["kind"], "toml");
-    for detail in ["sensorless", "left open [R2]"] {
+    for detail in ["sensorless", "left open [R2, U4]"] {
         assert!(
             variant["contributed"][0]["detail"]
                 .as_str()

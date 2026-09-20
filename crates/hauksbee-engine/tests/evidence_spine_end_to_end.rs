@@ -42,6 +42,57 @@ fn bound_evidence() -> BoardEvidence {
     BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::from_epoch_days(20_666)).unwrap()
 }
 
+#[test]
+fn output_capacitor_requirements_reach_evidence() {
+    let net = |code, name: &str| crate::support::net(code, name.into());
+    for (value, cap, expected) in [
+        (
+            "AMS1117-5.0",
+            "10u",
+            Some(("reduced_fidelity", "does not state")),
+        ),
+        (
+            "AMS1117-3.3",
+            "100n",
+            Some(("operating_limit_violated", "C1")),
+        ),
+        ("AMS1117-3.3", "22u", None),
+        (
+            "NCP1117-3.3_SOT223",
+            "10u",
+            Some(("reduced_fidelity", "ESR")),
+        ),
+    ] {
+        let board = ExtractedBoard {
+            name: value.into(),
+            nets: vec![net(1, "VIN"), net(2, "GND"), net(3, "VOUT")],
+            components: vec![part("U1", value, &[2, 3, 1]), part("C1", cap, &[3, 2])],
+        };
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        // The markers route the warning into evidence; the printed line never shows them.
+        let marked =
+            |text: &str| text.contains("[partial model]") || text.contains("[operating limit");
+        assert!(bound.report.warnings().all(|(_, text)| !marked(text)));
+        let evidence =
+            BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::unknown()).unwrap();
+        let about_u1: Vec<_> = evidence
+            .assumptions()
+            .iter()
+            .filter(|a| a.statement().contains("U1"))
+            .map(|a| (a.kind().as_str(), a.because()))
+            .collect();
+        match expected {
+            None => assert!(about_u1.is_empty(), "{value}: {about_u1:?}"),
+            Some((kind, needle)) => assert!(
+                about_u1
+                    .iter()
+                    .any(|(k, why)| *k == kind && why.contains(needle)),
+                "{value}: {about_u1:?}"
+            ),
+        }
+    }
+}
+
 fn map<'a>(evidence: &'a BoardEvidence, net: &str) -> &'a hauksbee_ir::evidence::EvidenceMap {
     evidence
         .maps()

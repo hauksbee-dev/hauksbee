@@ -150,7 +150,7 @@ pub struct SimpleRegulator {
     pub min_in_v: f64,
     /// Absolute-maximum input magnitude; infinite when the card has no rating.
     pub max_in_v: f64,
-    /// Typical dropout from the card; `None` means headroom is unverified.
+    /// Declared dropout limit from the card; `None` means headroom is unverified.
     pub dropout_v: Option<f64>,
     /// Present only on an ADJ-referenced (adjustable) regulator, where `source`
     /// carries Vref between OUT and ADJ rather than the rail against a return:
@@ -305,9 +305,12 @@ impl BindReport {
     pub fn warnings(&self) -> impl Iterator<Item = (&str, &str)> {
         self.rows.iter().filter_map(|r| {
             let w = r.warning.as_deref()?;
+            let w = w
+                .strip_prefix(Assumption::PARTIAL_MODEL_MARKER)
+                .unwrap_or(w);
             Some((
                 r.reference.as_str(),
-                w.strip_prefix(hauksbee_ir::evidence::Assumption::PARTIAL_MODEL_MARKER)
+                w.strip_prefix(Assumption::OPERATING_LIMIT_MARKER)
                     .unwrap_or(w),
             ))
         })

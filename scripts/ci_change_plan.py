@@ -52,7 +52,7 @@ def classify(paths: list[str], *, full: bool = False) -> dict[str, bool]:
                 result["rust"] = True
         elif top in {
             "README.md", "BETA.md", "COMPLIANCE.md", "CONTRIBUTING.md",
-            "LICENSE", "NOTICE", "SECURITY.md", "CLA.md", ".gitignore",
+            "LICENSE", "NOTICE", "SECURITY.md", ".gitignore",
             "deny.toml", "corpus.toml", "bun.lock",
         }:
             pass

@@ -21,7 +21,11 @@ mpn_re = "(?i)^TLV1117-18(?:[A-Z0-9+._/-]*)?$"
 
 [models.params]
 vout = 1.8       # fixed output option, datasheet Recommended Operating Conditions
-dropout_v = 1.3 # maximum VDO at 800 mA, datasheet Detailed Description §6.1
+dropout_v = 1.2 # maximum VDO at 800 mA, fixed-output new chip, Table 5-1
+# Source: TI TLV1117 SLVS561O, §5.3 Recommended Operating Conditions: ESR 2..500 mΩ.
+# No minimum COUT is specified there, so only the verified ESR window is recorded.
+cout_esr_min_ohm = 0.002
+cout_esr_max_ohm = 0.5
 iq_a = 65.0e-6  # typical fixed-output new-chip IQ at IOUT=0 mA, datasheet §5.6
 warning = "[partial model] TLV1117-18 nominal 1.8 V DC rail and sourced ratings are modeled; foldback current limit, thermal shutdown, dropout-vs-load, line/load regulation, and transients are not modeled"
 
@@ -113,7 +117,10 @@ value_re = "(?i)^(AMS|LM)1117.?3[._]?3"
 [models.params]
 # Source: Advanced Monolithic Systems AMS1117 datasheet (see above).
 vout      = 3.3     # 3.251 / 3.300 / 3.349 V @ VIN = 4.8 V, IOUT = 0 mA, TJ = 25 C
-dropout_v = 1.1     # VIN - VOUT typ @ IOUT = 0.8 A (1.3 V max at the same point)
+dropout_v = 1.3     # VIN - VOUT max @ IOUT = 0.8 A
+# Source: AMS1117 datasheet, Applications Hints/Stability: COUT >= 22 uF tantalum;
+# no guaranteed ESR interval is tabulated, so ESR bounds remain undeclared.
+cout_min_f = 22.0e-6
 iq_a      = 5.0e-3  # IQ typ @ (VIN - VOUT) = 1.5 V (11 mA max)
 
 [models.pins]
@@ -166,9 +173,13 @@ value_re = "(?i)^LP2985.*(3[._]?3)"
 mpn_re   = "(?i)LP2985"
 
 [models.params]
-# Source: Texas Instruments LP2985 datasheet (SNVS044I), Table 7.2
+# Source: TI LP2985 SLVS522S, §5.3 Recommended Operating Conditions and §5.5
+# Electrical Characteristics (new chip): effective COUT >= 1 uF; maximum dropout
+# at 150 mA over -40..125 C is 254 mV. Low-ESR ceramics are supported, so no ESR
+# window is declared.
 vout      = 3.3
-dropout_v = 0.3     # typ dropout @ 150mA (V)
+dropout_v = 0.254
+cout_min_f = 1.0e-6
 iq_a      = 1.0e-4  # quiescent current typ 100 µA
 
 [models.pins]
@@ -512,7 +523,9 @@ mpn_re   = "(?i)^RT9080N?-?33"
 [models.params]
 # Source: Richtek RT9080 datasheet DS9080-09 December 2024 (see above).
 vout      = 3.3      # output-voltage option "33"; accuracy +/-2% @ ILOAD = 1 mA
-dropout_v = 0.31     # VDROP typ @ ILOAD = 600 mA, 3 V <= VOUT (max is 0.53 V)
+dropout_v = 0.53     # VDROP max @ rated 600 mA, 3 V <= VOUT
+# Source: Richtek RT9080 DS9080-09, Typical Application and stability guidance: COUT = 1 uF ceramic.
+cout_min_f = 1.0e-6
 iq_a      = 2.0e-6   # IQ typ @ ILOAD = 0 mA, VIN >= VOUT + VDROP (max is 4 uA)
 
 [models.pins]
@@ -774,7 +787,9 @@ value_re = "(?i)^AP2112[KM]?[- ]?3[._]3([A-Z0-9-]*)?$"
 
 [models.params]
 vout      = 3.3      # +-1.5% @ VIN=4.3 V, 1 mA <= IOUT <= 30 mA
-dropout_v = 0.25     # VDROP typ @ IOUT = 600 mA (400 mV max; 125 mV at 300 mA)
+dropout_v = 0.4      # VDROP max @ rated 600 mA, AP2112-3.3 Electrical Characteristics
+# Source: Diodes AP2112 DS39724 Rev. 2-2, Typical Application and Note 4: COUT = 1 uF ceramic.
+cout_min_f = 1.0e-6
 iq_a      = 55.0e-6  # IQ typ @ VIN=4.3 V, IOUT=0 (80 uA max; ISTD 0.01 uA typ
                      # in shutdown)
 
@@ -816,7 +831,7 @@ value_re = "(?i)^MIC5205[- ]?3[._]3([A-Z0-9-]*)?$"
 
 [models.params]
 vout      = 3.3      # +-1% at TJ=25 C, +-2% over -40 to +125 C
-dropout_v = 0.165    # typ @ IL = 150 mA (275-350 mV max; 110 mV at 50 mA)
+dropout_v = 0.35     # max @ IL = 150 mA over temperature (275 mV max at 25 C)
 iq_a      = 80.0e-6  # Ground Pin Current typ @ IL = 100 uA (125 uA max). The
                      # datasheet's ground current rises with load (600 uA typ at
                      # 50 mA, 1300 uA at 150 mA); the no-load figure is the one
@@ -859,7 +874,9 @@ value_re = "(?i)^MCP1700[T]?[- ]?3302[A-Z0-9/_-]*$"
 
 [models.params]
 vout      = 3.3      # VR +-0.4% typ at 25 C (+-2.0/3.0% max over temperature)
-dropout_v = 0.178    # typ @ IOUT = 250 mA, VR >= 2.5 V (350 mV max)
+dropout_v = 0.35     # max @ rated 250 mA, VR >= 2.5 V, MCP1700 DS20001826F
+# Source: Microchip MCP1700 DS20001826F, Typical Application: COUT = 1 uF ceramic.
+cout_min_f = 1.0e-6
 iq_a      = 1.6e-6   # Iq typ @ IL = 0, VIN = VR + 1 V (4 uA max)
 
 [models.pins]
@@ -900,8 +917,11 @@ value_re = "(?i)^NC[PV]1117I?ST50[A-Z0-9]*$"
 
 [models.params]
 vout      = 5.0      # 4.950 to 5.050 V @ VIN=7.0 V, IOUT=10 mA, TA=25 C
-dropout_v = 1.01     # typ @ IOUT = 500 mA (1.15 V max; 1.07 V typ at 800 mA),
-                     # measured at VOUT - 100 mV
+dropout_v = 1.2      # max @ rated 800 mA, NCP1117/D Rev.31 electrical table
+# Source: onsemi NCP1117/D Rev.31, Applications Information: COUT >= 4.7 uF, ESR 33 mΩ..2.2 Ω.
+cout_min_f = 4.7e-6
+cout_esr_min_ohm = 0.033
+cout_esr_max_ohm = 2.2
 iq_a      = 6.0e-3   # Quiescent Current typ @ VIN = 15 V (10 mA max)
 
 [models.pins]
@@ -937,7 +957,9 @@ value_re = "(?i)^TLV755?33P?[A-Z]{0,4}[0-9]?R?$"
 
 [models.params]
 vout      = 3.3      # +-1% max accuracy, -40 to +85 C, DBV package
-dropout_v = 0.150    # VDO typ @ IOUT = 500 mA (238 mV max, -40 to +85 C)
+dropout_v = 0.238    # VDO max @ rated 500 mA, -40 to +85 C, TLV755P SBVS320D
+# Source: TI TLV755P SBVS320D, Recommended Operating Conditions: effective COUT >= 1 uF.
+cout_min_f = 1.0e-6
 iq_a      = 25.0e-6  # IGND typ @ IOUT = 0, TJ = 25 C (33 uA max over -40 to
                      # +85 C). Shutdown ISHDN is 0.1 uA typ.
 
@@ -1292,11 +1314,9 @@ max_power_w = 0.5      # Pd, SOT-89-5 as a bare package (1.3 W PCB-mounted)
 #   IOUT      = 50 mA guaranteed minimum
 #   ISC       = 100 mA, in the TYP column with no min or max stated
 #
-# `dropout_v` = 0.20 V, the 10 mA row. The part is rated to 50 mA and the sheet's
-# 50 mA row is 1.5 V, which is a different regime (the pass device is out of
-# saturation); a reference feeding a TCXO, which is what the MWGEN-G1 uses this
-# one for, sits in the milliamp decade, so the 10 mA row is the representative
-# one. The 0 mA figure of 60 mV would flatter it.
+# `dropout_v` = 0.40 V, the guaranteed maximum at 10 mA. The part is rated to
+# 50 mA and the sheet's 50 mA row is 1.5 V, so this card must not be used as a
+# guaranteed 50 mA headroom check. The 0 mA figure of 60 mV would flatter it.
 #
 # DELIBERATELY NOT MODELLED: the SHDN pin (bind_vreg has no enable, and this pin
 # is active LOW, so it is named `shdn` and NOT `en` — mapping it to an enable role
@@ -1328,7 +1348,7 @@ value_re = "(?i)^LT1461[A-D][ICHX]?S8[-_ ]?3[._]3$"
 
 [models.params]
 vout      = 3.3       # 3.300 V; +/-0.04% max initial on the A grade
-dropout_v = 0.2       # typ at IOUT = 10 mA (0.4 V max). See the note above.
+dropout_v = 0.4       # max at IOUT = 10 mA. See the note above.
 iq_a      = 3.5e-5    # IQ typ 35 uA at 25 C (50 uA max at 25 C, 70 uA over temp)
 
 [models.pins]
@@ -1384,6 +1404,10 @@ value_re = "(?i)^NCP1117-3[._]?3[_-]?SOT223$"
 [models.params]
 vout = 3.3
 dropout_v = 1.2
+# Source: onsemi NCP1117/D Rev.31, Applications Information: COUT >= 4.7 uF, ESR 33 mΩ..2.2 Ω.
+cout_min_f = 4.7e-6
+cout_esr_min_ohm = 0.033
+cout_esr_max_ohm = 2.2
 iq_a = 0.006
 warning = "source-bound nominal DC regulator; startup, load-dependent dropout, current limiting and thermal shutdown are not modeled"
 
@@ -1992,3 +2016,501 @@ min_current_a = 0.001
 # Cathode voltage, Absolute Maximum Ratings.
 max_voltage_v = 37.0
 max_junction_temp_c = 125.0
+
+# Sources: TI TPS782 SBVS115D §§5-6.5; ST STLQ015 DS6765 Rev.7 Tables 1/4/7;
+# ADI LT1763 1763fh pin functions/electrical characteristics/output capacitance;
+# TI TPS7A26 SBVS290B §§5-6.5. Package-specific maps prevent wrong-pad binding.
+[[models]]
+id="tps78233_ddc"
+kind="vreg"
+description="TI TPS78233 3.3 V, 150 mA, DDC TSOT23-5; loop/transients not simulated"
+[models.match]
+value_re="(?i)^TPS78233(?:DDC(?:R|T)(?:G4)?(?:\\.A)?)?$"
+footprint_re="(?i)(TSOT|SOT)[-_]?23[-_]?5"
+[models.params]
+vout=3.3
+dropout_v=0.25 # guaranteed max at 150 mA, SBVS115D §6.5
+cout_min_f=1e-6 # ceramic, SBVS115D §5 and §7.1
+iq_a=0.5e-6
+[models.pins]
+"1"="in"
+"2"="gnd"
+"3"="en"
+"4"="gnd"
+"5"="out"
+[models.ratings]
+max_current_a=0.15
+max_voltage_v=6.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=193.0
+theta_jc_c_per_w=40.1
+
+[[models]]
+id="tps78233_drv"
+kind="vreg"
+description="TI TPS78233 3.3 V, 150 mA, DRV WSON-6; loop/transients not simulated"
+[models.match]
+value_re="(?i)^TPS78233(?:DRV(?:R|T)(?:G4)?(?:\\.A)?)?$"
+footprint_re="(?i)(WSON|SON)[-_]?6"
+[models.params]
+vout=3.3
+dropout_v=0.25
+cout_min_f=1e-6
+iq_a=0.5e-6
+[models.pins]
+"1"="out"
+"2"="nc"
+"3"="gnd"
+"4"="en"
+"5"="gnd"
+"6"="in"
+"7"="gnd"
+[models.ratings]
+max_current_a=0.15
+max_voltage_v=6.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=65.9
+theta_jc_c_per_w=87.3
+
+[[models]]
+id="stlq015_3v3"
+kind="vreg"
+description="ST STLQ015 3.3 V, 150 mA, SOT23-5; ESR-dependent stability not simulated"
+[models.match]
+value_re="(?i)^STLQ015(?:M|XX)?33R?$"
+footprint_re="(?i)SOT[-_]?23[-_]?5"
+[models.params]
+vout=3.3
+dropout_v=0.3 # guaranteed max at 150 mA over -40..125 C, DS6765 Table 4
+cout_min_f=0.47e-6
+cout_esr_min_ohm=0.056
+cout_esr_max_ohm=6.0
+iq_a=1e-6
+[models.pins]
+"1"="in"
+"2"="gnd"
+"3"="en"
+"4"="nc"
+"5"="out"
+[models.ratings]
+max_current_a=0.15
+max_voltage_v=7.0
+max_junction_temp_c=150.0
+theta_ja_c_per_w=255.0
+theta_jc_c_per_w=81.0
+
+[[models]]
+id="lt1763_15_s8"
+kind="vreg"
+description="ADI LT1763 fixed 1.5 V, 500 mA, S8 package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?S8-1[._]?5(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(SOIC|SO)[-_]?0?8([^0-9]|$)"
+[models.params]
+vout=1.5
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="out"
+"2"="sense"
+"3"="gnd"
+"4"="byp"
+"5"="shdn"
+"6"="gnd"
+"7"="gnd"
+"8"="in"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=70.0
+theta_jc_c_per_w=35.0
+
+[[models]]
+id="lt1763_15_de"
+kind="vreg"
+description="ADI LT1763 fixed 1.5 V, 500 mA, DE package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?DE-1[._]?5(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(DFN|WSON)[-_]?12"
+[models.params]
+vout=1.5
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="nc"
+"2"="out"
+"3"="out"
+"4"="nc"
+"5"="sense"
+"6"="byp"
+"7"="gnd"
+"8"="shdn"
+"9"="nc"
+"10"="in"
+"11"="in"
+"12"="nc"
+"13"="gnd"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=40.0
+theta_jc_c_per_w=5.0
+
+[[models]]
+id="lt1763_18_s8"
+kind="vreg"
+description="ADI LT1763 fixed 1.8 V, 500 mA, S8 package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?S8-1[._]?8(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(SOIC|SO)[-_]?0?8([^0-9]|$)"
+[models.params]
+vout=1.8
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="out"
+"2"="sense"
+"3"="gnd"
+"4"="byp"
+"5"="shdn"
+"6"="gnd"
+"7"="gnd"
+"8"="in"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=70.0
+theta_jc_c_per_w=35.0
+
+[[models]]
+id="lt1763_18_de"
+kind="vreg"
+description="ADI LT1763 fixed 1.8 V, 500 mA, DE package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?DE-1[._]?8(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(DFN|WSON)[-_]?12"
+[models.params]
+vout=1.8
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="nc"
+"2"="out"
+"3"="out"
+"4"="nc"
+"5"="sense"
+"6"="byp"
+"7"="gnd"
+"8"="shdn"
+"9"="nc"
+"10"="in"
+"11"="in"
+"12"="nc"
+"13"="gnd"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=40.0
+theta_jc_c_per_w=5.0
+
+[[models]]
+id="lt1763_25_s8"
+kind="vreg"
+description="ADI LT1763 fixed 2.5 V, 500 mA, S8 package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?S8-2[._]?5(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(SOIC|SO)[-_]?0?8([^0-9]|$)"
+[models.params]
+vout=2.5
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="out"
+"2"="sense"
+"3"="gnd"
+"4"="byp"
+"5"="shdn"
+"6"="gnd"
+"7"="gnd"
+"8"="in"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=70.0
+theta_jc_c_per_w=35.0
+
+[[models]]
+id="lt1763_25_de"
+kind="vreg"
+description="ADI LT1763 fixed 2.5 V, 500 mA, DE package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?DE-2[._]?5(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(DFN|WSON)[-_]?12"
+[models.params]
+vout=2.5
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="nc"
+"2"="out"
+"3"="out"
+"4"="nc"
+"5"="sense"
+"6"="byp"
+"7"="gnd"
+"8"="shdn"
+"9"="nc"
+"10"="in"
+"11"="in"
+"12"="nc"
+"13"="gnd"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=40.0
+theta_jc_c_per_w=5.0
+
+[[models]]
+id="lt1763_30_s8"
+kind="vreg"
+description="ADI LT1763 fixed 3.0 V, 500 mA, S8 package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?S8-3(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(SOIC|SO)[-_]?0?8([^0-9]|$)"
+[models.params]
+vout=3.0
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="out"
+"2"="sense"
+"3"="gnd"
+"4"="byp"
+"5"="shdn"
+"6"="gnd"
+"7"="gnd"
+"8"="in"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=70.0
+theta_jc_c_per_w=35.0
+
+[[models]]
+id="lt1763_30_de"
+kind="vreg"
+description="ADI LT1763 fixed 3.0 V, 500 mA, DE package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?DE-3(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(DFN|WSON)[-_]?12"
+[models.params]
+vout=3.0
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="nc"
+"2"="out"
+"3"="out"
+"4"="nc"
+"5"="sense"
+"6"="byp"
+"7"="gnd"
+"8"="shdn"
+"9"="nc"
+"10"="in"
+"11"="in"
+"12"="nc"
+"13"="gnd"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=40.0
+theta_jc_c_per_w=5.0
+
+[[models]]
+id="lt1763_33_s8"
+kind="vreg"
+description="ADI LT1763 fixed 3.3 V, 500 mA, S8 package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?S8-3[._]?3(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(SOIC|SO)[-_]?0?8([^0-9]|$)"
+[models.params]
+vout=3.3
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="out"
+"2"="sense"
+"3"="gnd"
+"4"="byp"
+"5"="shdn"
+"6"="gnd"
+"7"="gnd"
+"8"="in"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=70.0
+theta_jc_c_per_w=35.0
+
+[[models]]
+id="lt1763_33_de"
+kind="vreg"
+description="ADI LT1763 fixed 3.3 V, 500 mA, DE package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?DE-3[._]?3(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(DFN|WSON)[-_]?12"
+[models.params]
+vout=3.3
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="nc"
+"2"="out"
+"3"="out"
+"4"="nc"
+"5"="sense"
+"6"="byp"
+"7"="gnd"
+"8"="shdn"
+"9"="nc"
+"10"="in"
+"11"="in"
+"12"="nc"
+"13"="gnd"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=40.0
+theta_jc_c_per_w=5.0
+
+[[models]]
+id="lt1763_50_s8"
+kind="vreg"
+description="ADI LT1763 fixed 5.0 V, 500 mA, S8 package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?S8-5(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(SOIC|SO)[-_]?0?8([^0-9]|$)"
+[models.params]
+vout=5.0
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="out"
+"2"="sense"
+"3"="gnd"
+"4"="byp"
+"5"="shdn"
+"6"="gnd"
+"7"="gnd"
+"8"="in"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=70.0
+theta_jc_c_per_w=35.0
+
+[[models]]
+id="lt1763_50_de"
+kind="vreg"
+description="ADI LT1763 fixed 5.0 V, 500 mA, DE package; loop/transients not simulated"
+[models.match]
+value_re="(?i)^LT1763(?:C|I|MP)?DE-5(?:(?:#|TR|PBF).*)?$"
+footprint_re="(?i)(DFN|WSON)[-_]?12"
+[models.params]
+vout=5.0
+dropout_v=0.45 # guaranteed max at 500 mA over temperature, 1763fh Electrical Characteristics
+cout_min_f=3.3e-6 # 1763fh Output Capacitance; max ESR 3 ohm, lower bound depends on BYP
+# No ESR pair: one global lower bound would be false because Figure 3 makes it BYP-dependent.
+iq_a=30e-6
+warning="output-capacitor ESR stability also depends on the fitted BYP capacitance (1763fh Figure 3), which the flat ESR fields cannot express; check both against that figure"
+[models.pins]
+"1"="nc"
+"2"="out"
+"3"="out"
+"4"="nc"
+"5"="sense"
+"6"="byp"
+"7"="gnd"
+"8"="shdn"
+"9"="nc"
+"10"="in"
+"11"="in"
+"12"="nc"
+"13"="gnd"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=40.0
+theta_jc_c_per_w=5.0
+[[models]]
+id="tps7a2633_drv"
+kind="vreg"
+description="TI TPS7A2633 3.3 V, 500 mA, DRV WSON-6; loop/transients not simulated"
+[models.match]
+value_re="(?i)^TPS7A2633DRVR(?:G4)?(?:\\.A)?$"
+footprint_re="(?i)WSON[-_]?6"
+[models.params]
+vout=3.3
+dropout_v=0.59 # guaranteed max at rated 500 mA, SBVS290B §6.5
+cout_min_f=1e-6 # effective minimum, SBVS290B §6.3 (50% nominal derating assumed)
+iq_a=2e-6
+[models.pins]
+"1"="out"
+"2"="nc"
+"3"="pg"
+"4"="en"
+"5"="gnd"
+"6"="in"
+"7"="gnd"
+[models.ratings]
+max_current_a=0.5
+max_voltage_v=20.0
+max_junction_temp_c=125.0
+theta_ja_c_per_w=73.3
+theta_jc_c_per_w=90.6

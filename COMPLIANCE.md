@@ -107,8 +107,9 @@ otherwise, is section 7 of
 and the "Records adapted from KiCad" section of
 [`docs/ingest/ALTIUM.md`](docs/ingest/ALTIUM.md) names the exact source files.
 
-**Contributions.** First-time contributors sign the contributor licence
-agreement in [`CLA.md`](CLA.md). Contributors keep their copyright.
+**Contributions.** There is no contributor licence agreement. A contribution
+is licensed to the project under the repository's own licence (Apache-2.0,
+section 5: inbound = outbound), and contributors keep their copyright.
 
 Questions this page does not answer, or a redistribution shape it does not
 cover: open an issue, or use the contact in [`SECURITY.md`](SECURITY.md) if the

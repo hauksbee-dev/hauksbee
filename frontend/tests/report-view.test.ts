@@ -5,9 +5,9 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
-  assumptionsForEvidence, describeModelSource, overallVerdict, refusalLines, summarizeErrorBudget, summarizeEvidence,
+  assumptionsForEvidence, describeModelSource, overallVerdict, repeatedAssumptions, refusalLines, summarizeErrorBudget, summarizeEvidence,
 } from '../src/lib/report-view'
-import type { ErrorBudget, RefusalContract, RunResponse } from '../src/types/report'
+import type { CheckResult, ErrorBudget, RefusalContract, RunResponse } from '../src/types/report'
 
 describe('C5.3 refusal contract', () => {
   test('the browser preserves all four answers from the CI result', () => {
@@ -38,6 +38,11 @@ describe('C5.3 refusal contract', () => {
     expect(boardView).toContain('data-testid="analysis-refusal-contract"')
     expect(checksRun).toContain('refusalLines(result.refusal)')
   })
+})
+
+test('repeated caveats preserve their id but not their explanation', () => {
+  const rows = [{ evidence: { assumptions: ['a'] } }, { evidence: { assumptions: ['a'] } }] as CheckResult[]
+  expect([...repeatedAssumptions(rows)[1]]).toEqual(['a'])
 })
 
 test('evidence summary counts each derived status and every caveated assertion', () => {

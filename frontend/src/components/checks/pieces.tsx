@@ -76,10 +76,11 @@ export function ResultChip({ result, stale }: { result: CheckResult; stale: bool
 /** Canonical assertion evidence from the CI runner. Wording is rendered
  * verbatim from the shared registry so web, CLI, JSON and CI artifacts cannot
  * drift into different explanations of the same limitation. */
-export function AssertionEvidence({ result, assumptions, inventory, stale }: {
+export function AssertionEvidence({ result, assumptions, inventory, repeats, stale }: {
   result: CheckResult
   assumptions: readonly EvidenceAssumption[]
   inventory: readonly ArtifactProvenance[]
+  repeats: ReadonlySet<string>
   stale: boolean
 }) {
   const map = result.evidence
@@ -113,8 +114,10 @@ export function AssertionEvidence({ result, assumptions, inventory, stale }: {
         <div key={assumption.id} className="mt-1.5">
           <code style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>{assumption.id}</code>
           <div style={{ color: 'var(--silk)' }}>{assumption.statement}</div>
-          <div>{assumption.because} {assumption.consequence}</div>
-          <div>To remove it: {assumption.replacement}</div>
+          {repeats.has(assumption.id) ? '(explained above)' : <>
+            <div>{assumption.because} {assumption.consequence}</div>
+            <div>To remove it: {assumption.replacement}</div>
+          </>}
         </div>
       ))}
       {artifacts.length > 0 && (

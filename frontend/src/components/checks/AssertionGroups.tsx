@@ -1,6 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import type { ArtifactProvenance, CheckResult, EvidenceAssumption } from '../../types/report'
 import { CHECK_KINDS, GROUP_ORDER, checkKind } from '../../lib/check-spec'
+import { repeatedAssumptions } from '../../lib/report-view'
 import type { CheckRow, RowIssue } from '../../lib/check-spec'
 import { ARRIVE, LEAVE, StaggerItem, ValueSettle } from '../../motion'
 import { PlusIcon } from '../Icons'
@@ -31,6 +32,8 @@ export function AssertionGroups({
       rows: checks.filter(c => checkKind(c.kind)?.group === group),
     }))
     .filter(g => g.rows.length > 0)
+  const displayRows = grouped.flatMap(group => group.rows)
+  const repeats = repeatedAssumptions(displayRows.map(row => resultForRow(row.id)))
 
   return (
     <>
@@ -145,6 +148,7 @@ export function AssertionGroups({
                         result={rowResult}
                         assumptions={assumptions}
                         inventory={inventory}
+                        repeats={repeats[displayRows.indexOf(c)] ?? new Set()}
                         stale={stale}
                       />
                     )}

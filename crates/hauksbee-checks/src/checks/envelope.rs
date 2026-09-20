@@ -266,6 +266,16 @@ pub fn envelope_lint_with_drives(
     lib: &ModelLibrary,
     drives: &BTreeMap<String, f64>,
 ) -> NetLintReport {
+    envelope_lint_with_tolerance(board, lib, drives, 0.0, 0.0)
+}
+
+fn envelope_lint_with_tolerance(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    drives: &BTreeMap<String, f64>,
+    reltol: f64,
+    vntol: f64,
+) -> NetLintReport {
     let resolver = RailResolver {
         board,
         drives,
@@ -310,7 +320,9 @@ pub fn envelope_lint_with_drives(
                             continue;
                         }
                     };
-                    if range.min_v >= *min_v && range.max_v <= *max_v {
+                    let min_tol = reltol * min_v.abs() + vntol;
+                    let max_tol = reltol * max_v.abs() + vntol;
+                    if range.min_v >= *min_v - min_tol && range.max_v <= *max_v + max_tol {
                         continue;
                     }
                     let mut severity = finding_severity(envelope.severity());
@@ -416,8 +428,10 @@ pub fn run_assumptions(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     solved: &BTreeMap<String, f64>,
+    reltol: f64,
+    vntol: f64,
 ) -> Vec<hauksbee_ir::evidence::Assumption> {
-    let found = envelope_lint_with_drives(board, lib, solved).findings;
+    let found = envelope_lint_with_tolerance(board, lib, solved, reltol, vntol).findings;
     let judged = found
         .into_iter()
         .filter(|f| f.nets.iter().all(|net| solved.contains_key(net)))
@@ -493,18 +507,24 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
     }
 
     #[test]
-    fn forced_level_has_priority_and_is_an_exact_range() {
+    fn solved_level_uses_solver_voltage_tolerance_at_envelope_edge() {
         let b = board(
             &[(1, "GND"), (2, "UNNAMED_SUPPLY")],
             vec![part("U1", "RANGE_PART", vec![pin("1", 2), pin("2", 1)])],
         );
+        let lib = library("drive", SUPPLY_CARD);
         let drives = BTreeMap::from([("UNNAMED_SUPPLY".to_string(), 3.8)]);
-        let report = envelope_lint_with_drives(&b, &library("drive", SUPPLY_CARD), &drives);
-        let finding = report
-            .of_check(LintCheck::OperatingEnvelope)
+        let report = envelope_lint_with_drives(&b, &lib, &drives);
+        let mut found = report.of_check(LintCheck::OperatingEnvelope);
+        let finding = found
             .next()
             .expect("an exact out-of-band forced level must fire");
         assert!(finding.message.contains("3.800..3.800"));
+        for (volts, should_fire) in [(3.2 - 1.0e-9, false), (3.2 - 0.01, true)] {
+            let solved = BTreeMap::from([("UNNAMED_SUPPLY".to_string(), volts)]);
+            let findings = run_assumptions(&b, &lib, &solved, 1.0e-3, 1.0e-6);
+            assert_eq!(!findings.is_empty(), should_fire, "volts={volts}");
+        }
     }
 
     #[test]

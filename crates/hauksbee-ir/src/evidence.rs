@@ -921,6 +921,7 @@ impl Assumption {
     /// Written by the binder at the front of the warning, read by `from_bound`, and
     /// stripped by `BindReport::warnings` so the printed line is unchanged.
     pub const PARTIAL_MODEL_MARKER: &'static str = "[partial model] ";
+    pub const OPERATING_LIMIT_MARKER: &'static str = "[operating limit violated] ";
 
     /// A part that bound, and counts as resolved, with some of what it does left
     /// unmodelled: one channel of a multi-channel switch, one throw of a mux, an

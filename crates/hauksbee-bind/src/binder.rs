@@ -473,7 +473,7 @@ pub fn bind_board_with(
                     &mut dacs,
                     &mut peripherals,
                     &mut report.regulators,
-                    &power_nets,
+                    (&board.components, &power_nets),
                     lib.pin_rules(),
                 );
                 (Some(kind_str), outcome, warning, guesses)
@@ -1943,17 +1943,20 @@ fn bind_component(
     dacs: &mut Vec<DacBinding>,
     peripherals: &mut Vec<PeripheralBinding>,
     regulators: &mut Vec<SimpleRegulator>,
-    power_nets: &HashMap<String, f64>,
+    board: (&[Component], &HashMap<String, f64>),
     pin_rules: &hauksbee_models::PinRuleTable,
 ) -> (BindOutcome, Option<String>, Vec<String>) {
     use ComponentKind::*;
+    let (components, power_nets) = board;
 
     // A source-bound identity is not executable behavior. Older identity cards
     // were represented as empty `digital` models; the digital binder accepted
     // them, so `critical_parts_bound` increased even though every functional
     // pin still floated. Preserve the exact winning model/source on the report
     // row, but leave the circuit OPEN and state the missing primitive.
-    if model.params.get_bool("identity_only").unwrap_or(false) {
+    if model.params.get_bool("identity_only").unwrap_or(false)
+        || (model.kind == Digital && !hauksbee_models::validation::digital_has_behavior(model))
+    {
         let because = model
             .params
             .get_str("warning")
@@ -2103,7 +2106,9 @@ fn bind_component(
         Diode => bind_diode(comp, model, circuit, &role_nets),
         BjtNpn | BjtPnp => bind_bjt(comp, model, circuit, &role_nets),
         Nmos | Pmos => bind_mosfet(comp, model, circuit, &role_nets),
-        Vreg => bind_vreg(comp, model, source, circuit, &role_nets, regulators),
+        Vreg => bind_vreg(
+            comp, model, source, circuit, &role_nets, regulators, components, node_of,
+        ),
         Opamp => bind_opamp(comp, model, circuit, &role_nets),
         Comparator => bind_comparator(comp, model, circuit, &role_nets),
         Timer => bind_timer_555(comp, model, circuit, &role_nets),
@@ -3453,6 +3458,75 @@ fn merge_bind_warnings(a: Option<String>, b: Option<String>) -> Option<String> {
     }
 }
 
+/// The control loop of a linear regulator is not simulated, so its datasheet
+/// output-capacitor requirement is either checked against the board or stated
+/// as a gap; ESR is never guessed because the board file does not carry it.
+fn vreg_stability_warning(
+    comp: &Component,
+    model: &ModelEntry,
+    (out, gnd): (NodeId, NodeId),
+    components: &[Component],
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> Option<String> {
+    let across_output = |cap: &Component| {
+        let pins = logical_passive_pins(cap).ok()?;
+        let nodes: Vec<_> = pins.iter().filter_map(|pin| node_of(pin.net)).collect();
+        let fitted = AssemblyState::of(cap).is_present() && passive_letter(cap) == Some('C');
+        let spans =
+            matches!(nodes.as_slice(), [a, b] if [*a, *b] == [out, gnd] || [*a, *b] == [gnd, out]);
+        let farads = parse_value(cap.value.trim()).map(|v| v.si)?;
+        (fitted && spans && farads.is_finite() && farads > 0.0).then_some(farads)
+    };
+    let caps: Vec<_> = components
+        .iter()
+        .filter_map(|cap| Some((cap.reference.as_str(), across_output(cap)?)))
+        .collect();
+    let found = caps.iter().map(|(_, farads)| farads).sum::<f64>();
+    let refs: Vec<_> = caps.iter().map(|(reference, _)| *reference).collect();
+    let counted = if refs.is_empty() {
+        "none".to_owned()
+    } else {
+        refs.join(", ")
+    };
+    let esr = |name| model.params.get_f64(name);
+    let (marker, gap) = match model.params.get_f64("cout_min_f") {
+        None => (
+            "",
+            "control-loop stability is not simulated and this card does not state the \
+             output-capacitor requirement; add `cout_min_f` and, when required, \
+             `cout_esr_min_ohm` plus `cout_esr_max_ohm` to the card"
+                .to_owned(),
+        ),
+        Some(required) if found < required => (
+            Assumption::OPERATING_LIMIT_MARKER,
+            format!(
+                "{} requires at least {} output capacitance for stability, but {} was found \
+                 directly from output to ground (counted: {counted})",
+                comp.reference,
+                fmt_eng(required, "F"),
+                fmt_eng(found, "F")
+            ),
+        ),
+        Some(_) if esr("cout_esr_min_ohm").is_some() => (
+            "",
+            format!(
+                "control-loop stability requires output-capacitor ESR in {}..{}, but the board \
+                 file does not carry capacitor ESR and it is not guessed from value or footprint \
+                 (counted: {counted})",
+                fmt_eng(esr("cout_esr_min_ohm")?, "Ω"),
+                fmt_eng(esr("cout_esr_max_ohm")?, "Ω")
+            ),
+        ),
+        Some(_) => return None,
+    };
+    Some(format!(
+        "{}{marker}{} ({}): {gap}",
+        Assumption::PARTIAL_MODEL_MARKER,
+        comp.reference,
+        comp.value
+    ))
+}
+
 fn bind_vreg(
     comp: &Component,
     model: &ModelEntry,
@@ -3460,6 +3534,8 @@ fn bind_vreg(
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
     regulators: &mut Vec<SimpleRegulator>,
+    components: &[Component],
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> (BindOutcome, Option<String>) {
     // A vreg whose model carries a behavioural converter is realised by the
     // behavioural layer, which owns the output net and reflects real input
@@ -3496,7 +3572,9 @@ fn bind_vreg(
     // ground pin of its own: it holds V(out) - V(adj) at Vref and the BOARD's
     // divider sets the rail. `vref` on the card selects that path.
     if let Some(vref) = model.params.get_f64("vref").filter(|v| v.is_finite()) {
-        return bind_adj_vreg(comp, model, circuit, roles, regulators, vref);
+        return bind_adj_vreg(
+            comp, model, circuit, roles, regulators, vref, components, node_of,
+        );
     }
     let Some(vout) = model.params.get_f64("vout").filter(|v| v.is_finite()) else {
         return open_warning(comp, "vreg requires an explicit finite `vout` param");
@@ -3522,8 +3600,8 @@ fn bind_vreg(
         n: gnd,
         kind: SourceKind::Dc(vout),
     });
-    // The headroom the ideal source silently assumes: the card's widest output
-    // endpoint plus typical dropout. A missing dropout is recorded, not invented.
+    // The headroom the ideal source assumes: the card's widest output endpoint
+    // plus its declared dropout limit. A missing dropout is recorded, not invented.
     let vout_limit = source
         .into_iter()
         .flat_map(ModelSource::uncertainty)
@@ -3584,10 +3662,14 @@ fn bind_vreg(
     // are joined rather than one silently winning. Each is a full sentence already;
     // the leading one keeps the marker that makes the whole string evidence, and the
     // followers drop their own "REF (VALUE): " so the reference is not repeated.
-    let mut caveats: Vec<String> = [entry_warning(comp, model), enable_warning]
-        .into_iter()
-        .flatten()
-        .collect();
+    let mut caveats: Vec<String> = [
+        vreg_stability_warning(comp, model, (out, gnd), components, node_of),
+        entry_warning(comp, model),
+        enable_warning,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     let warning = if caveats.is_empty() {
         None
     } else {
@@ -3635,6 +3717,8 @@ fn bind_adj_vreg(
     roles: &HashMap<String, NodeId>,
     regulators: &mut Vec<SimpleRegulator>,
     vref: f64,
+    components: &[Component],
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> (BindOutcome, Option<String>) {
     let Some(input) = roles.get("in").copied() else {
         return open_warning(comp, "vreg input not connected");
@@ -3693,7 +3777,10 @@ fn bind_adj_vreg(
         BindOutcome::Analog {
             device: format!("vreg {vref:.3}V adjustable reference"),
         },
-        entry_warning(comp, model),
+        merge_bind_warnings(
+            vreg_stability_warning(comp, model, (out, NodeId::GROUND), components, node_of),
+            entry_warning(comp, model),
+        ),
     )
 }
 
@@ -6897,7 +6984,7 @@ mod tests {
             &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
-            power_nets,
+            (std::slice::from_ref(c), power_nets),
             ModelLibrary::builtin().pin_rules(),
         );
         (outcome, warning)
@@ -7054,7 +7141,10 @@ mod tests {
             &mut Vec::new(),
             &mut peripherals,
             &mut Vec::new(),
-            &HashMap::from([("+3V3".to_string(), 3.3)]),
+            (
+                std::slice::from_ref(&component),
+                &HashMap::from([("+3V3".to_string(), 3.3)]),
+            ),
             lib.pin_rules(),
         );
         assert!(
@@ -7124,7 +7214,7 @@ mod tests {
             &mut Vec::new(),
             &mut Vec::new(),
             &mut Vec::new(),
-            &HashMap::new(),
+            (&[], &HashMap::new()),
             ModelLibrary::builtin().pin_rules(),
         );
         assert!(
@@ -7171,8 +7261,17 @@ mod tests {
         roles: &HashMap<String, NodeId>,
     ) -> (BindOutcome, Option<String>, Vec<SimpleRegulator>) {
         let mut regs = Vec::new();
-        let (outcome, warning) =
-            bind_vreg(&comp("U9", ""), model, source, circuit, roles, &mut regs);
+        let component = comp("U9", "");
+        let (outcome, warning) = bind_vreg(
+            &component,
+            model,
+            source,
+            circuit,
+            roles,
+            &mut regs,
+            std::slice::from_ref(&component),
+            &|_| None,
+        );
         (outcome, warning, regs)
     }
 
@@ -7826,11 +7925,13 @@ mod tests {
         }
     }
 
-    /// A `digital` entry's own `warning` param reaches the caller.
+    /// A behaviorless `digital` entry stays open and explains why.
     #[test]
-    fn a_logic_entry_that_models_only_a_pad_map_discloses_it() {
+    fn a_logic_entry_that_models_only_a_pad_map_stays_open() {
         let lib = ModelLibrary::builtin();
-        let model = resolve_value(&lib, "FT231X-Q", "");
+        let mut model = resolve_value(&lib, "FT231X-Q", "");
+        assert_eq!(model.params.get_bool("identity_only"), Some(true));
+        model.params.0.remove("identity_only");
         let mut c = comp("U2", "FT231X-Q");
         c.pins = vec![pin("12", 1), pin("3", 0), pin("17", 2), pin("20", 1)];
         let mut circuit = Circuit::new();
@@ -7843,14 +7944,11 @@ mod tests {
         };
         let (outcome, warning) = bind_one(&c, &model, &mut circuit, &node_of, &HashMap::new());
         assert!(
-            matches!(outcome, BindOutcome::Digital { .. }),
+            matches!(outcome, BindOutcome::Unresolved { .. }),
             "{outcome:?}"
         );
-        let w = warning.expect("a digital entry carrying a `warning` param must surface it");
-        assert!(
-            w.starts_with(Assumption::PARTIAL_MODEL_MARKER) && w.contains("USB stack"),
-            "{w}"
-        );
+        let w = warning.expect("the identity-only warning must surface");
+        assert!(w.contains("USB stack") && w.contains("remains OPEN"), "{w}");
     }
 
     /// When an entry names the switched pads and one is unwired, no path may

@@ -173,7 +173,7 @@ pub fn reason(
     let need = match reg.dropout_v {
         None => format!("{limit}; the model has no dropout figure"),
         Some(d) => format!(
-            "{:.3} V {limit} + {d:.3} V typical dropout",
+            "{:.3} V {limit} + {d:.3} V declared dropout",
             reg.min_in_v - d
         ),
     };

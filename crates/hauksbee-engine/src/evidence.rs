@@ -356,6 +356,9 @@ impl BoardEvidence {
             let Some(rest) = warning.strip_prefix(Assumption::PARTIAL_MODEL_MARKER) else {
                 continue;
             };
+            let (operating_limit, rest) = rest
+                .strip_prefix(Assumption::OPERATING_LIMIT_MARKER)
+                .map_or((false, rest), |rest| (true, rest));
             // The producers all write "REF (VALUE): gap", which is what the bind
             // report needs; the assumption carries the subject in its own fields, so
             // the prefix comes back off here rather than being said twice.
@@ -366,13 +369,22 @@ impl BoardEvidence {
                 .get(row_index)
                 .map(String::as_str)
                 .unwrap_or_else(|| row.reference.trim());
-            assumptions.push(Assumption::partial_model_for_component(
-                component_subject,
-                &row.reference,
-                &row.value,
-                gap,
-                "",
-            ));
+            assumptions.push(if operating_limit {
+                Assumption::operating_limit_violated(
+                    component_subject,
+                    &row.reference,
+                    gap,
+                    "meet the regulator card's output-capacitor requirement, then re-run",
+                )
+            } else {
+                Assumption::partial_model_for_component(
+                    component_subject,
+                    &row.reference,
+                    &row.value,
+                    gap,
+                    "",
+                )
+            });
         }
         let mut reader_contributions = Vec::new();
         let mut reader_ignored = Vec::new();

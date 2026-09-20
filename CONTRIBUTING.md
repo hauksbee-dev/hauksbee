@@ -320,13 +320,12 @@ The short version:
 | `hauksbee-mcp` | The stdio MCP server: the analyse/check/decompile flow as tools for AI agents |
 | `hauksbee-testkit` | Shared test plumbing: locates test assets and fixtures for the suites |
 
-## The CLA
+## Licensing of contributions
 
-First-time contributors sign a contributor licence agreement (`CLA.md`) by
-replying to a bot comment on their first pull request. It takes one sentence
-and one click. Short version: you keep your copyright, the project gets a
-licence broad enough to keep its options open, and the document states the
-reasoning plainly rather than burying it in legalese.
+There is no CLA and nothing to sign. By opening a pull request you license
+your contribution under the repository's licence (Apache-2.0, section 5:
+inbound = outbound), and you keep your copyright. Only submit work you have
+the right to license that way.
 
 ## Reporting bugs
 

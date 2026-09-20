@@ -38,6 +38,18 @@ fn has_role_ci(entry: &ModelEntry, role: &str) -> bool {
         .any(|known| known.eq_ignore_ascii_case(role))
 }
 
+/// True when the generic digital binder has executable logic for this card.
+pub fn digital_has_behavior(entry: &ModelEntry) -> bool {
+    entry.kind != ComponentKind::Digital
+        || !entry.logic.is_empty()
+        || !entry.behavioral.is_empty()
+        || entry.peripheral.is_some()
+        || entry.pins.values().any(|role| {
+            role.strip_prefix('a')
+                .is_some_and(|n| entry.pins.values().any(|other| other == &format!("y{n}")))
+        })
+}
+
 /// The per-kind parameter contract the solver reads: which params must be
 /// present, the physical bounds on the ones that are (by value, or by
 /// magnitude for a quantity whose sign carries meaning), and which pairs must
@@ -56,13 +68,28 @@ const NO_RULES: KindRules = KindRules {
     ordered: &[],
 };
 
+#[rustfmt::skip]
+fn validate_vreg_capacitor_params(entry: &ModelEntry, p: &mut Problems) {
+    if entry.kind != ComponentKind::Vreg || entry.behavioral.converter.is_some() { return; }
+    let params = &entry.params;
+    let keys = ["cout_min_f", "cout_esr_min_ohm", "cout_esr_max_ohm"];
+    for key in keys { if let Some(value) = params.0.get(key) {
+        p.require(value.as_f64().is_some_and(positive_finite), || format!("param '{key}' must be a positive finite number"));
+    }}
+    let (min, max) = (params.get_f64(keys[1]), params.get_f64(keys[2]));
+    p.require(min.is_some() == max.is_some(), || "vreg output-capacitor ESR requires both 'cout_esr_min_ohm' and 'cout_esr_max_ohm'".into());
+    if let (Some(min), Some(max)) = (min, max) {
+        p.require(min <= max, || format!("param '{}' = {min} must be less than or equal to '{}' = {max}", keys[1], keys[2]));
+    }
+}
+
 fn kind_rules(entry: &ModelEntry) -> KindRules {
     use ComponentKind::*;
     match entry.kind {
         Diode => KindRules {
             required: &["is", "n", "rs"],
             ranges: &[
-                ("is", 1e-20, 1e-3),
+                ("is", 1e-30, 1e-3),
                 ("n", 0.5, 3.0),
                 ("rs", 0.0, 1000.0),
                 ("cjo", 0.0, 1e-6),
@@ -70,7 +97,7 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
             ..NO_RULES
         },
         BjtNpn | BjtPnp => KindRules {
-            required: &["is", "bf", "nf", "vaf"],
+            required: &["is", "bf", "nf"],
             ranges: &[
                 ("is", 1e-20, 1e-3),
                 ("bf", 1.0, 2000.0),
@@ -93,6 +120,12 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
                 ("kp", 1e-6, 1000.0),
                 ("lambda", 0.0, 1.0),
             ],
+            ..NO_RULES
+        },
+        Vreg if entry.params.get_bool("shunt").unwrap_or(false) => KindRules {
+            required: &["vref", "zka_ohms", "ikmax_a"],
+            ranges: &[("zka_ohms", 1e-6, 1e6), ("ikmax_a", 1e-9, 1000.0)],
+            magnitude: &[("vref", 0.1, 5.0)],
             ..NO_RULES
         },
         // An ADJUSTABLE (ADJ-referenced) regulator has no output setpoint of its
@@ -129,6 +162,11 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
                 ("swing_hi", 0.0, 5.0),
             ],
             ordered: &[("rail_lo", "rail_hi")],
+            ..NO_RULES
+        },
+        Comparator if entry.params.get_bool("open_collector").unwrap_or(false) => KindRules {
+            required: &["ron_ohms", "leak_s"],
+            ranges: &[("ron_ohms", 1e-6, 1e9), ("leak_s", 0.0, 1.0)],
             ..NO_RULES
         },
         Comparator => KindRules {
@@ -258,6 +296,9 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         !params.0.contains_key("identity_only") || params.get_bool("identity_only").is_some(),
         || "params.identity_only must be a boolean".into(),
     );
+    if !identity_only && !digital_has_behavior(entry) {
+        p.push("digital model has no executable behavior; add [models.logic] (for example, the builtin 74hc14 card declares inputs, outputs, and [models.logic.comb]) or set params.identity_only = true with warning and unlocked_by so binding leaves the part open");
+    }
     if identity_only {
         for key in ["warning", "unlocked_by"] {
             p.require(
@@ -271,10 +312,6 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             || entry.peripheral.is_some()
             || entry.peripheral_power.is_some();
         p.require(!behaves, || "identity-only model cannot also declare logic, behavioral physics, current_program, a firmware peripheral, or peripheral power; remove identity_only only after that behavior is validated".into());
-        p.require(entry.coverage.implements.is_empty(), || {
-            "identity-only model cannot declare coverage.implements; it has no executable behavior"
-                .into()
-        });
     }
 
     if let Some(peripheral) = &entry.peripheral {
@@ -377,10 +414,13 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             });
         }
         for (key, lo, hi) in rules.ranges {
-            if let Some(v) = params.get_f64(key) {
-                p.require(v.is_finite() && v >= *lo && v <= *hi, || {
-                    format!("param '{key}' = {v} is outside physical range [{lo}, {hi}]")
-                });
+            if let Some(value) = params.0.get(*key) {
+                match value.as_f64() {
+                    Some(v) => p.require(v.is_finite() && v >= *lo && v <= *hi, || {
+                        format!("param '{key}' = {v} is outside physical range [{lo}, {hi}]")
+                    }),
+                    None => p.push(format!("param '{key}' must be numeric")),
+                }
             }
         }
         for (key, lo, hi) in rules.magnitude {
@@ -399,6 +439,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             "a vreg entry carries either 'vout' (fixed) or 'vref' (adjustable), not both"
                 .to_string()
         });
+        validate_vreg_capacitor_params(entry, &mut p);
         for (lo, hi) in rules.ordered {
             if let (Some(a), Some(b)) = (params.get_f64(lo), params.get_f64(hi)) {
                 p.require(a < b, || {
@@ -987,6 +1028,7 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn param_ranges_and_orderings() {
         use ComponentKind::*;
         accepts(&diode());
@@ -1023,6 +1065,17 @@ mod tests {
             ),
             "vout",
         );
+        let vreg = |extra: &[(&str, f64)]| { let mut p = vec![("vout", 3.3), ("dropout_v", 0.3), ("iq_a", 1e-3)]; p.extend_from_slice(extra); entry(Vreg, &p) };
+        let invalid = [
+            (vec![("cout_min_f", 0.0)], "cout_min_f"), (vec![("cout_min_f", f64::NAN)], "cout_min_f"),
+            (vec![("cout_esr_min_ohm", 0.0), ("cout_esr_max_ohm", 1.0)], "cout_esr_min_ohm"),
+            (vec![("cout_esr_min_ohm", 0.1)], "requires both"),
+            (vec![("cout_esr_min_ohm", 1.0), ("cout_esr_max_ohm", 0.1)], "less than or equal"),
+        ];
+        for (params, error) in invalid { rejects(&vreg(&params), error); }
+        for (min, max) in [(0.01, 1.0), (0.01, 0.01)] { accepts(&vreg(&[("cout_min_f", 1e-6), ("cout_esr_min_ohm", min), ("cout_esr_max_ohm", max)])); }
+        let mut wrong_type = vreg(&[]);
+        wrong_type.params.set_str("cout_min_f", "1u"); rejects(&wrong_type, "positive finite number");
 
         rejects(
             &entry(AnalogSwitch, &[("ron", 5000.0), ("roff", 2000.0)]),
@@ -1096,6 +1149,11 @@ mod tests {
         accepts(&e);
         e.logic.inputs.push("a".into());
         rejects(&e, "cannot also declare");
+    }
+
+    #[test]
+    fn behaviorless_digital_card_must_be_identity_only() {
+        rejects(&entry(ComponentKind::Digital, &[]), "identity_only = true");
     }
 
     #[test]

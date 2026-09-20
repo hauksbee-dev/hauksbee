@@ -4851,7 +4851,7 @@ impl Scheduler {
                     scope,
                     &format!(
                         "an ideal source held at its setpoint (input headroom checked against \
-                         typical dropout only; input current, current limit, enable, thermal and \
+                         declared dropout only; input current, current limit, enable, thermal and \
                          startup are not modelled){}",
                         if reg.dropout_v.is_some() { "" } else { UNVERIFIED_HEADROOM }
                     ),

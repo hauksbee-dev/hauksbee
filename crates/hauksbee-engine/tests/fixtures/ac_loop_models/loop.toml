@@ -9,8 +9,8 @@ value_re = "^AC_ERRAMP$"
 [models.params]
 gain = 100000.0
 pole_hz = 100.0
-rail_lo = -1000000000.0
-rail_hi = 1000000000.0
+rail_lo = -60.0
+rail_hi = 60.0
 
 [models.pins]
 "1" = "out"

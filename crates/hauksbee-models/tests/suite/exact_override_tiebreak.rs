@@ -72,20 +72,18 @@ fn exact_override_wins_regardless_of_load_order() {
 id = "zz_family"
 kind = "diode"
 description = "synthetic family"
+params = { is = 1e-14, n = 1.0, rs = 1.0, bv = 50.0 }
 [models.match]
 value_re = "(?i)^ZZ90[0-9]$"
-[models.params]
-bv = 50.0
 "#;
     let override_ = r#"
 [[models]]
 id = "zz904_override"
 kind = "diode"
 description = "synthetic exact override"
+params = { is = 1e-14, n = 1.0, rs = 1.0, bv = 400.0 }
 [models.match]
 value_re = "(?i)^ZZ904$"
-[models.params]
-bv = 400.0
 "#;
 
     let base = tempfile::tempdir().expect("tempdir");

@@ -1450,7 +1450,14 @@ fn production_assumptions(
         .nets
         .iter()
         .filter_map(|n| Some((n.name.clone(), solved(&n.name)?)));
-    let supply = hauksbee_engine::checks::envelope::run_assumptions(board, lib, &levels.collect());
+    let opts = engine.scheduler().opts;
+    let supply = hauksbee_engine::checks::envelope::run_assumptions(
+        board,
+        lib,
+        &levels.collect(),
+        opts.reltol,
+        opts.vntol,
+    );
     production_assumptions.extend(supply);
     let all_nets: Vec<&str> = board
         .nets

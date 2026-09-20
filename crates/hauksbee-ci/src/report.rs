@@ -5,10 +5,12 @@
 //! over-claims worst-case proof and a diverged co-sim refuses rather than
 //! reporting a fake verdict.
 
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use crate::assertions::AssertResult;
 use hauksbee_engine::result::Refusal;
+
+type ExplainedAssumptions = HashSet<hauksbee_ir::evidence::AssumptionId>;
 
 /// Published JSON shape for one evaluated assertion. Kept separate from the
 /// runtime [`AssertResult`] because subject nets/refs are internal waiver keys,
@@ -606,21 +608,24 @@ impl CiResult {
         self.evidence.iter().find(|map| map.assertion() == label)
     }
 
-    fn evidence_text(&self, label: &str) -> String {
+    fn evidence_text(&self, label: &str, explained: &mut ExplainedAssumptions) -> String {
         let Some(map) = self.evidence_for(label) else {
             return String::new();
         };
         let mut out = format!("evidence: {}", map.status());
         for id in map.assumptions() {
             if let Some(assumption) = self.assumptions.iter().find(|a| a.id() == id) {
-                out.push_str(&format!(
-                    "\n[{}] {} Why: {} Effect: {} Fix: {}",
-                    id,
-                    assumption.statement(),
-                    assumption.because(),
-                    assumption.consequence(),
-                    assumption.replacement()
-                ));
+                let explanation = if explained.insert(id.clone()) {
+                    format!(
+                        " Why: {} Effect: {} Fix: {}",
+                        assumption.because(),
+                        assumption.consequence(),
+                        assumption.replacement()
+                    )
+                } else {
+                    " (explained above)".into()
+                };
+                out.push_str(&format!("\n[{id}] {}{explanation}", assumption.statement()));
             }
         }
         if let Some(budget) = map.error_budget() {
@@ -720,6 +725,7 @@ impl CiResult {
         }
         out.push_str(&self.dead_rail_banner());
         out.push('\n');
+        let mut explained = ExplainedAssumptions::new();
         for r in &self.results {
             let mark = if r.invalid {
                 "INVALID"
@@ -733,7 +739,7 @@ impl CiResult {
                 "FAIL"
             };
             out.push_str(&format!("  [{mark}] {}\n        {}\n", r.label, r.detail));
-            for line in self.evidence_text(&r.label).lines() {
+            for line in self.evidence_text(&r.label, &mut explained).lines() {
                 out.push_str(&format!("        {line}\n"));
             }
             // On a real red (not a pass, not an INVALID refusal), add one
@@ -867,7 +873,7 @@ impl CiResult {
             self.elapsed.as_secs_f64()
         ));
         for r in &self.results {
-            let evidence = self.evidence_text(&r.label);
+            let evidence = self.evidence_text(&r.label, &mut Default::default());
             let gating = !r.passed && !r.invalid && r.waived.is_none();
             // The body is the measured detail, then (on a gating red) the
             // `why:` line, then the evidence. Plenty of people only ever read

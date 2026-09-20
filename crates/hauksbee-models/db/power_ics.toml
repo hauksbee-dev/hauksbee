@@ -323,6 +323,11 @@ description = "TI bq76952 battery AFE / monitor (minimal-resolve; internal AFE n
 [models.match]
 value_re = "(?i)^bq76952"
 
+[models.params]
+identity_only = true
+warning = "bq76952 has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for bq76952"
+
 [models.pins]
 # TQFP-64 / VQFN-64. Subset required for supply / voltage checking.
 # Source: bq76952 datasheet SLUSDX9C, Table 8.1 Pin Functions.
@@ -365,6 +370,9 @@ description = "TI LM5107 half-bridge gate driver 3A, non-inverting (minimal-reso
 value_re = "(?i)^LM5107"
 
 [models.params]
+identity_only = true
+warning = "lm5107 has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for lm5107"
 # Source: LM5107 datasheet SNVSA29B, Table 7.5 Electrical Characteristics.
 voh       = 11.5   # HO/LO output high (V) approx at VDD=12V (representative)
 vol       = 0.3    # HO/LO output low (V) typ
@@ -400,6 +408,9 @@ description = "TI LM5109 half-bridge gate driver 3A, LIN active-low (minimal-res
 value_re = "(?i)^LM5109"
 
 [models.params]
+identity_only = true
+warning = "lm5109 has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for lm5109"
 # Source: LM5109 datasheet SNVSA31C, Table 7.5 Electrical Characteristics.
 # Identical to LM5107 except LIN polarity is inverted (active-low).
 voh       = 11.5
@@ -960,6 +971,9 @@ description = "ST SR2 dual-push-button Smart Reset supervisor, UDFN6, open-drain
 value_re = "(?i)^SR2(HARU|LABU|LARU|PARU|UABU|UARU)$"
 
 [models.params]
+identity_only = true
+warning = "sr2 has no generic executable device behavior; only identity and sourced metadata are available"
+unlocked_by = "a validated executable model for sr2"
 # Table 4. vol/vih/vil are the datasheet numbers verbatim; the SR inputs have
 # FIXED thresholds, so unlike a CMOS part these do not move with the rail.
 vol   = 0.3      # VOL max at VCC >= 3.3 V, sinking 2.5 mA
