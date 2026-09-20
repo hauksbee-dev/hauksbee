@@ -380,7 +380,9 @@ fn render_spec_at_with_run_hint(
     for (net, v) in &supplies {
         let _ = writeln!(
             s,
-            "[[supply]]\nnet = \"{net}\"                   # detected supply rail"
+            "[[supply]]\nnet = \"{net}\"                   # detected supply rail\n\
+             # cold power-on: set ramp_ms (in ms) to bring this rail up from 0 V \
+             instead of starting it settled, so power-on RC timing is simulated"
         );
         if is_usb_port_rail(net, *v) {
             let _ = writeln!(

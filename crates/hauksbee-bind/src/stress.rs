@@ -236,26 +236,12 @@ impl DeviceMeta {
     }
 
     pub fn power_coverage_gap(&self) -> Option<String> {
-        if !matches!(self.kind, ComponentKind::Passive)
-            || self.ratings.max_power_w.is_some()
-            || !self.is_resistor_like()
-        {
-            return None;
-        }
-        let derived = resistor_power_from_footprint(&self.footprint);
-        if derived.basis != ResistorPowerBasis::Unknown {
-            return None;
-        }
+        let package = self.power_coverage_package()?;
         Some(format!(
-            "stress: {} has no power rating and no readable package \"{}\", so its \
+            "stress: {} has no power rating and no readable package \"{package}\", so its \
              overpower check did not run. Give the part a model with ratings.max_power_w, \
              or a footprint / BOM line naming the package, to cover it.",
             self.reference,
-            if self.footprint.is_empty() {
-                "(none)"
-            } else {
-                self.footprint.as_str()
-            },
         ))
     }
 
@@ -374,6 +360,10 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
         watts: Some(w),
         basis: ResistorPowerBasis::ChipPackage,
     };
+    let unknown = || ResistorPower {
+        watts: None,
+        basis: ResistorPowerBasis::Unknown,
+    };
     // A name carrying ONLY a metric code must be read as metric, before the
     // imperial pass gets to it. "R_0402Metric" is metric 0402, an imperial
     // 01005 at 1/32 W; letting `contains("0402")` claim it rates the part
@@ -388,12 +378,7 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
         // through: "R_2010Metric" is a 2.0 x 1.0 mm body, and letting the imperial
         // pass match its "2010" substring rates it as a 3/4 W imperial 2010, an
         // order of magnitude out, and suppresses real overpower findings.
-        MetricCode::Unrecognised => {
-            return ResistorPower {
-                watts: None,
-                basis: ResistorPowerBasis::Unknown,
-            };
-        }
+        MetricCode::Unrecognised => return unknown(),
         MetricCode::Absent => {}
     }
     // Match the imperial size token anywhere in the footprint string
@@ -422,10 +407,7 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
         // invents an overpower fault (if the floor is lower than the truth) or
         // suppresses a real one (if it is higher). It becomes a named coverage
         // gap instead, which is the honest form of not knowing.
-        ResistorPower {
-            watts: None,
-            basis: ResistorPowerBasis::Unknown,
-        }
+        unknown()
     }
 }
 
@@ -470,6 +452,13 @@ enum MetricCode {
     Absent,
 }
 
+/// The run of ASCII digits that ends `s`, in order ("R_0402" -> "0402").
+fn trailing_digits(s: &str) -> String {
+    let mut d: Vec<char> = s.chars().rev().take_while(char::is_ascii_digit).collect();
+    d.reverse();
+    d.into_iter().collect()
+}
+
 fn classify_metric_only(f: &str) -> MetricCode {
     // (metric code, imperial equivalent, rating W)
     const TABLE: &[(&str, f64)] = &[
@@ -489,17 +478,7 @@ fn classify_metric_only(f: &str) -> MetricCode {
     let Some(idx) = f.find("METRIC") else {
         return MetricCode::Absent;
     };
-    let metric: String = {
-        let head: Vec<char> = f[..idx].chars().collect();
-        let mut digits: Vec<char> = head
-            .iter()
-            .rev()
-            .take_while(|c| c.is_ascii_digit())
-            .copied()
-            .collect();
-        digits.reverse();
-        digits.into_iter().collect()
-    };
+    let metric = trailing_digits(&f[..idx]);
     if metric.is_empty() {
         return MetricCode::Absent;
     }
@@ -513,14 +492,7 @@ fn classify_metric_only(f: &str) -> MetricCode {
     // token immediately before the metric code, separated by a single '_'.
     let before = &f[..idx - metric.len()];
     if let Some(prev) = before.strip_suffix('_') {
-        let prev_token: String = prev
-            .chars()
-            .rev()
-            .take_while(|c| c.is_ascii_digit())
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
+        let prev_token = trailing_digits(prev);
         if !prev_token.is_empty() && imperial_chip_watts(|c| c == prev_token).is_some() {
             // The imperial token is authoritative; leave it to the imperial pass.
             return MetricCode::Absent;
@@ -567,18 +539,12 @@ fn din_axial_rating(f: &str) -> Option<f64> {
 /// an all-digit tail after the marker counts, so "SW1_heater" or "U1_qspi" are
 /// left alone (and "SW1" never claims "SW10"'s units).
 pub fn strip_unit_suffix(name: &str) -> &str {
-    name.rsplit_once("_q")
-        .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
-        .map(|(b, _)| b)
-        .or_else(|| {
-            name.rsplit_once("_s")
+    ["_q", "_s", "_e"]
+        .into_iter()
+        .find_map(|marker| {
+            name.rsplit_once(marker)
                 .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
-                .map(|(b, _)| b)
-        })
-        .or_else(|| {
-            name.rsplit_once("_e")
-                .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
-                .map(|(b, _)| b)
+                .map(|(base, _)| base)
         })
         .unwrap_or(name)
 }
@@ -649,8 +615,56 @@ pub struct StressMonitor {
     chunk_energy_j: Vec<f64>,
     /// Simulated time (s) the deposited energy covers. Zero means no deposit.
     chunk_elapsed_s: f64,
-    best_current_a: Vec<f64>,
+    /// Run-cumulative per-device evidence, index-aligned with `metas`.
+    run: Vec<RunStats>,
 }
+
+/// What the whole run saw of one device, as opposed to one chunk of it.
+///
+/// A CONTINUOUS current rating is a thermal limit, exactly like the wattage
+/// rating the module doc above already time-weights, so it is judged on a
+/// first-order lag of |I| rather than on a chunk endpoint: a start-up inrush
+/// into bulk capacitance is a real peak that the part's PULSED rating covers,
+/// and comparing it against the continuous rating reddens correct boards.
+/// A lag, not a run average: an average over however long the user happened to
+/// simulate hides a load step that arrives late in a long run.
+#[derive(Debug, Clone, Default)]
+struct RunStats {
+    /// Highest instantaneous |I| (A) any chunk endpoint sampled.
+    peak_a: f64,
+    /// |I| (A) through a one-pole lag of time constant [`IDM_PULSE_S`]: what
+    /// the continuous rating is judged on. Rises to a sustained level within a
+    /// few time constants and barely moves for an excursion shorter than one.
+    lagged_a: f64,
+    /// Whether [`Self::lagged_a`] ever reached the continuous current rating,
+    /// which is what separates a real overload from a pulse the card cannot
+    /// judge.
+    lag_over_limit: bool,
+    /// Lowest gate drive (V, folded into N-channel space) seen while a MOSFET
+    /// carried a meaningful current. `None` if it never conducted.
+    worst_vgs: Option<f64>,
+}
+
+/// The fraction of its continuous rating at which a MOSFET counts as
+/// CONDUCTING for the gate-drive check. Leakage and a decaying gate transient
+/// both put microamps through a channel, and judging the datasheet's gate
+/// drive against those would qualify every switched-off part on the board.
+/// A thousandth of the rating still sits three decades above the IDSS these
+/// datasheets quote (25 uA for a 33 A IRF540N), so nothing leaky reaches it,
+/// while a part switching a fraction of its rating is judged like any other.
+const CONDUCTING_ID_FRACTION: f64 = 1e-3;
+
+/// Time constant (s) of the lag a CONTINUOUS current rating is judged through.
+/// MOSFET and diode pulsed ratings are specified at a 300 us pulse width
+/// (Infineon IRF540NPbF Rev. 2.1 note 3, and the same convention across AOS,
+/// onsemi and Vishay parts), so anything shorter is pulsed by the datasheets'
+/// own definition. Rounded up to 1 ms, one order above the solver's chunk.
+const IDM_PULSE_S: f64 = 1e-3;
+
+/// Fraction of the specified VGS a gate may fall short by and still count as
+/// driven. A gate series resistor's static drop into the pulldown is a few mV,
+/// not a drive deficiency, and no datasheet specifies its test VGS finer.
+const GATE_DRIVE_TOLERANCE: f64 = 0.02;
 
 impl Default for StressMonitor {
     fn default() -> Self {
@@ -673,22 +687,28 @@ impl StressMonitor {
             temp_by_ref: HashMap::new(),
             chunk_energy_j: vec![0.0; n],
             chunk_elapsed_s: 0.0,
-            best_current_a: vec![0.0; n],
+            run: vec![RunStats::default(); n],
         }
     }
 
-    /// One disclosure per part that never reached the `min_current_a` its card
-    /// declares. NOT a fault: the model regulates below the floor where the real
-    /// part is not guaranteed to, which is a MEASURED datasheet-limit violation
-    /// on this board, so it undermines rather than merely qualifying.
-    pub fn under_minimum_current(&self) -> Vec<Assumption> {
-        self.metas
-            .iter()
-            .zip(&self.best_current_a)
-            .filter_map(|(m, &seen)| {
-                let floor = m.ratings.min_current_a.filter(|f| seen < *f)?;
-                let (r, ma, floor_ma) = (&m.reference, seen * 1e3, floor * 1e3);
-                Some(Assumption::operating_limit_violated(
+    /// What the run measured about a part that no per-chunk fault check can
+    /// say. NONE of these is a fault; each is evidence attached to the result.
+    ///
+    /// * A card's `min_current_a` never reached: the model regulates where the
+    ///   real part is not guaranteed to. MEASURED, so it undermines.
+    /// * A MOSFET conducting below its card's `rds_on_vgs`: the RDS(on) the
+    ///   model used is an extrapolation past the last gate voltage the vendor
+    ///   tested, so it qualifies; below `vgs_th_max` the datasheet does not
+    ///   guarantee the part is on at all, so that undermines.
+    /// * A current peak above a continuous rating on a card with NO pulsed
+    ///   rating to judge it against: qualified, naming how long it lasted.
+    pub fn run_disclosures(&self) -> Vec<Assumption> {
+        let mut out = Vec::new();
+        for (m, s) in self.metas.iter().zip(&self.run) {
+            let (r, rt) = (&m.reference, &m.ratings);
+            if let Some(floor) = rt.min_current_a.filter(|f| s.peak_a < *f) {
+                let (ma, floor_ma) = (s.peak_a * 1e3, floor * 1e3);
+                out.push(Assumption::operating_limit_violated(
                     &format!("{r}-min-current"),
                     r,
                     &format!(
@@ -700,9 +720,37 @@ impl StressMonitor {
                     // divider, and naming only the shunt's cure misdirects the other.
                     "raise its current above the card's minimum (a preload resistor, or a \
                      lower-value feed network), then re-run",
-                ))
-            })
-            .collect()
+                ));
+            }
+            let under_drive = s
+                .worst_vgs
+                .zip(rt.rds_on_vgs)
+                .filter(|(vgs, spec)| *vgs < spec * (1.0 - GATE_DRIVE_TOLERANCE));
+            if let Some((vgs, spec)) = under_drive {
+                let th = rt.vgs_th_max.unwrap_or(f64::NEG_INFINITY);
+                let (id, fix) = (format!("{r}-gate-drive"), "drive the gate to at least the VGS the card specifies RDS(on) at (a gate driver or a level shifter), or fit a logic-level part, then re-run");
+                let gap = format!("{r} conducts at VGS = {vgs:.2} V, below the {spec:.2} V its datasheet specifies RDS(on) at, so its on-resistance at this drive is not guaranteed by the datasheet");
+                out.push(if vgs < th {
+                    Assumption::operating_limit_violated(&id, r, &format!("{gap}; {vgs:.2} V is also below its {th:.2} V maximum VGS(th), so the datasheet does not guarantee it is on at all"), fix)
+                } else {
+                    Assumption::partial_model_for_component(&id, r, "", &gap, fix)
+                });
+            }
+            // The instantaneous peak went over the continuous rating but the
+            // lag never did, so no fault was raised: honest only while the card
+            // carries no pulsed rating to judge that peak against. A lag over
+            // the rating is the continuous fault's business, not a note's.
+            if let Some(cont) = rt
+                .max_current_a
+                .filter(|c| !s.lag_over_limit && rt.max_surge_current_a.is_none() && s.peak_a > *c)
+            {
+                let pk = s.peak_a;
+                out.push(Assumption::partial_model_for_component(&format!("{r}-peak-current"), r, "",
+                    &format!("{r} peaks at {pk:.3} A, above the {cont:.3} A its card rates CONTINUOUSLY, and the card carries no pulsed (IDM) rating for the peak to be judged against"),
+                    "add the datasheet's pulsed drain/forward current to the card, then re-run"));
+            }
+        }
+        out
     }
 
     /// Every device whose overpower check could not run because its package was
@@ -714,7 +762,14 @@ impl StressMonitor {
     /// callers holding a bound board rather than a live monitor; between them the
     /// CI report, the evidence map and the TUI all carry these.
     pub fn power_coverage_gaps(&self) -> Vec<String> {
-        aggregate_power_coverage_gaps(&self.metas)
+        let mut gaps = aggregate_power_coverage_gaps(&self.metas);
+        // A MOSFET that conducted but whose card states no VGS for its RDS(on)
+        // is NOT CHECKED for gate-drive adequacy, and an abstention nobody can
+        // see is indistinguishable from a pass.
+        gaps.extend(self.metas.iter().zip(&self.run)
+            .filter(|(m, s)| s.worst_vgs.is_some() && m.ratings.rds_on_vgs.is_none())
+            .map(|(m, _)| format!("stress: {} conducts, but its model card states no VGS for its RDS(on), so its gate-drive adequacy was not checked. Add ratings.rds_on_vgs and ratings.vgs_th_max from the datasheet to cover it.", m.reference)));
+        gaps
     }
 
     /// Number of monitored devices.
@@ -921,10 +976,27 @@ impl StressMonitor {
                 }
             })
             .collect();
-        // Each device's BEST current: a starved chunk must not outvote a healthy one.
+        // Run-cumulative evidence. The lag is stepped with the exact solution
+        // of dI/dt = (i - I)/tau over the chunk, so a variable chunk length
+        // changes nothing about what it reports: that is what turns the
+        // continuous current rating from an endpoint sample into a thermal one.
+        // No deposit means no timebase for this chunk, so the endpoint stands
+        // in for the lag exactly as it stands in for the deposited power below.
+        let alpha = if self.chunk_elapsed_s > 0.0 {
+            1.0 - (-self.chunk_elapsed_s / IDM_PULSE_S).exp()
+        } else {
+            1.0
+        };
         for (i, op) in ops.iter().enumerate() {
-            if let Some(op) = op {
-                self.best_current_a[i] = self.best_current_a[i].max(op.current_a);
+            let Some(op) = op else { continue };
+            let limit = self.metas[i].ratings.max_current_a;
+            let run = &mut self.run[i];
+            run.peak_a = run.peak_a.max(op.current_a);
+            run.lagged_a += (op.current_a - run.lagged_a) * alpha;
+            run.lag_over_limit |= limit.is_some_and(|c| run.lagged_a > c);
+            let conducting = op.current_a > limit.unwrap_or(0.0) * CONDUCTING_ID_FRACTION;
+            if let Some(v) = op.vgs.filter(|_| conducting) {
+                run.worst_vgs = Some(run.worst_vgs.map_or(v, |w: f64| w.min(v)));
             }
         }
         // Heating power per device. When the scheduler deposited accepted-step
@@ -984,13 +1056,14 @@ impl StressMonitor {
             // time-weighted average the junction estimate uses (endpoint
             // fallback when no deposit exists). Endpoint power would make a
             // sub-chunk PWM part's Overpower verdict depend on pulse phase.
+            let peak_a = op.current_a;
             let op = OperatingPoint {
-                current_a: op.current_a,
-                voltage_v: op.voltage_v,
+                current_a: self.run[i].lagged_a,
                 power_w: unit_avg_w[i],
+                ..*op
             };
             let op = &op;
-            let mut checks = build_checks(&meta, op);
+            let mut checks = build_checks(&meta, op, peak_a);
 
             // Thermal: turn the package's pooled dissipation into a
             // steady-state junction temperature and check it against the
@@ -1164,6 +1237,8 @@ impl StressMonitor {
 
 /// The live operating point of a device this chunk.
 struct OperatingPoint {
+    /// Gate drive (V) folded into N-channel space. `None` for a non-MOSFET.
+    vgs: Option<f64>,
     /// Through-current magnitude (A).
     current_a: f64,
     /// Across-voltage, signed (V): for diodes, anode−cathode; for caps, the
@@ -1171,6 +1246,18 @@ struct OperatingPoint {
     voltage_v: f64,
     /// Power dissipation (W).
     power_w: f64,
+}
+
+impl OperatingPoint {
+    /// A two-terminal point: `|I|`, the signed across-voltage, dissipation.
+    fn new(current_a: f64, voltage_v: f64, power_w: f64) -> Self {
+        Self {
+            vgs: None,
+            current_a,
+            voltage_v,
+            power_w,
+        }
+    }
 }
 
 /// Compute a device's operating point from the chunk's solved state.
@@ -1185,20 +1272,12 @@ fn operating_point(
         Some(Device::Resistor { a, b, ohms, .. }) => {
             let v = node_v(*a) - node_v(*b);
             let i = if *ohms > 0.0 { v / *ohms } else { 0.0 };
-            OperatingPoint {
-                current_a: i.abs(),
-                voltage_v: v,
-                power_w: (v * i).abs(),
-            }
+            OperatingPoint::new(i.abs(), v, (v * i).abs())
         }
         Some(Device::Diode { a, k, model, .. }) => {
             let vd = node_v(*a) - node_v(*k);
             let id = diode_current(model, vd, circuit.temp_c);
-            OperatingPoint {
-                current_a: id.abs(),
-                voltage_v: vd,
-                power_w: (vd * id).abs(),
-            }
+            OperatingPoint::new(id.abs(), vd, (vd * id).abs())
         }
         Some(Device::Capacitor { a, b, .. }) => {
             // An ideal capacitor's through-current is displacement current,
@@ -1206,11 +1285,7 @@ fn operating_point(
             // dissipates no real power. Every capacitor check (over-voltage,
             // reverse bias) is voltage-based, so the zeros disable nothing.
             let v = node_v(*a) - node_v(*b);
-            OperatingPoint {
-                current_a: 0.0,
-                voltage_v: v,
-                power_w: 0.0,
-            }
+            OperatingPoint::new(0.0, v, 0.0)
         }
         Some(Device::Inductor { a, b, .. }) => {
             // The winding current lives in the inductor's branch unknown
@@ -1220,11 +1295,7 @@ fn operating_point(
             // dissipating it, and reporting it as heat would false-trip the
             // power-gated thermal check on every energised coil.
             let i = branch_current(meta.device).unwrap_or(0.0);
-            OperatingPoint {
-                current_a: i.abs(),
-                voltage_v: node_v(*a) - node_v(*b),
-                power_w: 0.0,
-            }
+            OperatingPoint::new(i.abs(), node_v(*a) - node_v(*b), 0.0)
         }
         Some(Device::Bjt { c, b, e, model, .. }) => {
             // Gummel-Poon transport at the sampled node voltages, polarity
@@ -1248,11 +1319,11 @@ fn operating_point(
             let ib = cf / model.bf + cr / model.br;
             let vce = node_v(*c) - node_v(*e);
             let i_worst = ic.abs().max(ib.abs()).min(1e3);
-            OperatingPoint {
-                current_a: i_worst,
-                voltage_v: vce,
-                power_w: (vce * ic).abs().min(1e6) + (sign * vbe * ib).abs().min(1e6),
-            }
+            OperatingPoint::new(
+                i_worst,
+                vce,
+                (vce * ic).abs().min(1e6) + (sign * vbe * ib).abs().min(1e6),
+            )
         }
         Some(Device::VSwitch {
             a,
@@ -1269,11 +1340,7 @@ fn operating_point(
             let r = if vc >= *von { *ron } else { *roff };
             let v = node_v(*a) - node_v(*b);
             let i = (v / r.max(1e-3)).abs();
-            OperatingPoint {
-                current_a: i,
-                voltage_v: v,
-                power_w: v.abs() * i,
-            }
+            OperatingPoint::new(i, v, v.abs() * i)
         }
         Some(Device::Mosfet {
             d, g, s, b, model, ..
@@ -1345,10 +1412,11 @@ fn operating_point(
             // swap preserve its magnitude, so |vds·ids| is the channel
             // dissipation either way. Clamps mirror the BJT arm.
             let vds = node_v(*d) - node_v(*s);
+            // `vgs` rides along folded: it is what decides whether the card's
+            // RDS(on) applies at all, and only this arm can compute it.
             OperatingPoint {
-                current_a: ids.abs().min(1e3),
-                voltage_v: vds,
-                power_w: (vds_f * ids).abs().min(1e6),
+                vgs: Some(vgs),
+                ..OperatingPoint::new(ids.abs().min(1e3), vds, (vds_f * ids).abs().min(1e6))
             }
         }
         Some(Device::Vsource { .. }) => {
@@ -1361,17 +1429,9 @@ fn operating_point(
             // not carry. Only the Overcurrent check applies (see
             // `build_checks`'s Vreg arm).
             let i = branch_current(meta.device).unwrap_or(0.0);
-            OperatingPoint {
-                current_a: i.abs(),
-                voltage_v: 0.0,
-                power_w: 0.0,
-            }
+            OperatingPoint::new(i.abs(), 0.0, 0.0)
         }
-        _ => OperatingPoint {
-            current_a: 0.0,
-            voltage_v: 0.0,
-            power_w: 0.0,
-        },
+        _ => OperatingPoint::new(0.0, 0.0, 0.0),
     }
 }
 
@@ -1384,7 +1444,13 @@ struct Check {
 }
 
 /// Build the applicable limit checks for a device's operating point.
-fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
+///
+/// `op.current_a` is the [`IDM_PULSE_S`] LAG, which is what a continuous
+/// rating means; `peak_a` is the instantaneous sample, which is what the
+/// pulsed/surge ceiling means. Handing the peak to a continuous rating is how
+/// an inrush into bulk capacitance reddens a board whose settled current is
+/// comfortably inside its part's rating.
+fn build_checks(meta: &DeviceMeta, op: &OperatingPoint, peak_a: f64) -> Vec<Check> {
     let mut checks = Vec::new();
     let r = &meta.ratings;
 
@@ -1392,7 +1458,7 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
     if let Some(surge) = r.max_surge_current_a {
         checks.push(Check {
             kind: FaultKind::SurgeCurrent,
-            value: op.current_a,
+            value: peak_a,
             limit: surge,
             surge: true,
         });
@@ -1441,17 +1507,15 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
             check(FaultKind::Overpower, op.power_w, r.max_power_w);
         }
         ComponentKind::Vreg => check(FaultKind::Overcurrent, op.current_a, r.max_current_a),
-        ComponentKind::AnalogSwitch => {
-            check(FaultKind::PinOvercurrent, op.current_a, r.max_pin_current_a)
-        }
-        // These kinds get PER-PIN metas, not a package meta: an MCU or logic IC
+        // An analog switch is metered per package; the kinds after it get PER-PIN metas, not a package meta: an MCU or logic IC
         // has no single through-current, but every pin it drives is stamped as a
         // Thevenin PinDriver whose hidden Vsource's branch unknown IS that pin's
         // source/sink current. The binder monitors each driver Vsource
         // (reference "<ref>:<pin>", see `gather_device_meta`), so `op.current_a`
         // here is a genuine pin current and this check fires on a real per-pin
         // violation.
-        ComponentKind::Mcu
+        ComponentKind::AnalogSwitch
+        | ComponentKind::Mcu
         | ComponentKind::Digital
         | ComponentKind::ShiftRegister
         | ComponentKind::Dac
@@ -1561,49 +1625,6 @@ mod monitor_temp_tests {
     }
 
     #[test]
-    fn resistor_rating_reads_imperial_not_the_metric_collision() {
-        // The imperial size code is paired with its metric code, and a small
-        // part's metric code equals a larger part's imperial code: imperial 0201
-        // → metric 0603 ("R_0201_0603Metric"), imperial 01005 → metric 0402.
-        // A substring match on "0603"/"0402" first therefore over-rated the tiny
-        // parts by up to ~2× their real power, hiding genuine over-power faults.
-        let w = |f: &str| resistor_power_from_footprint(f).watts.unwrap();
-        assert!(
-            (w("Resistor_SMD:R_0201_0603Metric") - 1.0 / 20.0).abs() < 1e-12,
-            "0201 must rate at 1/20 W, not the 0603's 1/10 W"
-        );
-        assert!(
-            (w("Resistor_SMD:R_01005_0402Metric") - 1.0 / 32.0).abs() < 1e-12,
-            "01005 must rate at 1/32 W, not the 0402's 1/16 W"
-        );
-        // The larger imperial parts are unaffected (their metric suffix does not
-        // embed a smaller imperial token that wins first).
-        assert!((w("R_0402_1005Metric") - 1.0 / 16.0).abs() < 1e-12);
-        assert!((w("R_0603_1608Metric") - 1.0 / 10.0).abs() < 1e-12);
-        assert!((w("R_0805_2012Metric") - 1.0 / 8.0).abs() < 1e-12);
-        assert!((w("R_1206_3216Metric") - 1.0 / 4.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn an_unrecognised_smd_size_derives_nothing_rather_than_guessing() {
-        // A 1/4 W default exceeds a real 0402 (1/16 W) by 4x and suppresses
-        // genuine findings; a 1/16 W floor undercuts everything above the
-        // smallest and invents them. No direction is conservative, so the size is
-        // either read or the part abstains.
-        let r = resistor_power_from_footprint("Resistor_SMD:R_CustomHouseFootprint");
-        assert_eq!(r.basis, ResistorPowerBasis::Unknown);
-        assert!(
-            r.watts.is_none(),
-            "an unreadable size must derive no rating, got {:?}",
-            r.watts
-        );
-        // And the abstention is visible, naming the part and the unlock.
-        let meta = passive("R9", "Resistor_SMD:R_CustomHouseFootprint");
-        let gap = meta.power_coverage_gap().expect("a named gap");
-        assert!(gap.contains("R9") && gap.contains("BOM"), "{gap}");
-    }
-
-    #[test]
     fn a_metric_only_code_is_read_as_metric_not_imperial() {
         // "R_0402Metric" is metric 0402, an imperial 01005 at 1/32 W. Reading the
         // 0402 as imperial rates it 1/16 W, double its real limit, and suppresses
@@ -1613,14 +1634,17 @@ mod monitor_temp_tests {
             ("Resistor_SMD:R_0603Metric", 1.0 / 20.0),
             ("Resistor_SMD:R_1005Metric", 1.0 / 16.0),
             ("Resistor_SMD:R_3216Metric", 1.0 / 4.0),
+            // The imperial size code is paired with its metric code, and a small
+            // part's metric code equals a larger part's imperial code. Matching
+            // the metric suffix first over-rates tiny parts by up to 2x.
+            ("Resistor_SMD:R_0201_0603Metric", 1.0 / 20.0),
+            ("Resistor_SMD:R_01005_0402Metric", 1.0 / 32.0),
+            ("R_0402_1005Metric", 1.0 / 16.0),
+            ("R_0603_1608Metric", 1.0 / 10.0),
+            ("R_0805_2012Metric", 1.0 / 8.0),
+            ("R_1206_3216Metric", 1.0 / 4.0),
         ] {
-            let r = resistor_power_from_footprint(f);
-            assert_eq!(r.basis, ResistorPowerBasis::ChipPackage, "{f}");
-            assert!(
-                (r.watts.unwrap() - want).abs() < 1e-12,
-                "{f} must rate {want} W, got {:?}",
-                r.watts
-            );
+            assert_resistor_rating(f, ResistorPowerBasis::ChipPackage, Some(want));
         }
         // Real KiCad names carry pad dimensions after the size code. Treating
         // those digits as a second size code sent the name to the imperial pass,
@@ -1630,12 +1654,7 @@ mod monitor_temp_tests {
             ("Resistor_SMD:R_0603Metric_Pad0.98x0.95mm", 1.0 / 20.0),
             ("Resistor_SMD:R_3216Metric_Pad1.42x1.75mm", 1.0 / 4.0),
         ] {
-            let r = resistor_power_from_footprint(f);
-            assert!(
-                (r.watts.unwrap() - want).abs() < 1e-12,
-                "{f} must still read as metric-only and rate {want} W, got {:?}",
-                r.watts
-            );
+            assert_resistor_rating(f, ResistorPowerBasis::ChipPackage, Some(want));
         }
         // KiCad's dual form carries a separate imperial token, which stays
         // authoritative: 0201 imperial (1/20 W), NOT 0603 metric read as imperial.
@@ -1647,63 +1666,94 @@ mod monitor_temp_tests {
             ("Resistor_SMD:R_0402_1005Metric_Pad0.72x0.64mm", 1.0 / 16.0),
             ("Resistor_SMD:R_0201_0603Metric_Pad0.64x0.40mm", 1.0 / 20.0),
         ] {
-            let r = resistor_power_from_footprint(f);
-            assert!(
-                (r.watts.unwrap() - want).abs() < 1e-12,
-                "{f} must rate {want} W from its imperial token, got {:?}",
-                r.watts
-            );
+            assert_resistor_rating(f, ResistorPowerBasis::ChipPackage, Some(want));
         }
     }
 
     #[test]
-    fn an_unsupported_metric_code_abstains_instead_of_matching_an_imperial_substring() {
-        // "R_2010Metric" is a 2.0 x 1.0 mm body. Falling through to the imperial
-        // pass matches its "2010" and rates it as a 3/4 W imperial 2010, an order
-        // of magnitude out, which suppresses real overpower findings.
+    fn unreadable_resistor_packages_abstain_instead_of_guessing() {
+        // Metric 2010 is a 2.0 x 1.0 mm body, not imperial 2010; generic THT,
+        // vertical, cement, and uncoded axial bodies likewise give no wattage.
+        // Guessing in either direction invents or suppresses overpower findings.
         for f in [
             "Resistor_SMD:R_2010Metric",
             "Resistor_SMD:R_1020Metric_Pad0.5x0.5mm",
-        ] {
-            let r = resistor_power_from_footprint(f);
-            assert_eq!(r.basis, ResistorPowerBasis::Unknown, "{f}");
-            assert!(r.watts.is_none(), "{f} got {:?}", r.watts);
-        }
-    }
-
-    #[test]
-    fn a_generic_through_hole_body_is_not_assumed_axial() {
-        // A bare "THT" match claimed every through-hole resistor footprint. A
-        // vertical body or a cement power resistor is not a 1/4 W axial, and
-        // guessing that both suppresses faults on smaller parts and invents them
-        // on larger ones.
-        for f in [
             "Resistor_THT:R_Vertical",
             "Resistor_THT:R_Cement_L20mm_W7mm_Px15mm",
+            "Resistor_THT:R_Axial_Power_L11.9mm_W4.5mm_P15.24mm",
+            "Resistor_THT:R_Axial_Custom",
         ] {
-            let r = resistor_power_from_footprint(f);
-            assert_eq!(r.basis, ResistorPowerBasis::Unknown, "{f}");
-            assert!(r.watts.is_none(), "{f} got {:?}", r.watts);
+            assert_resistor_rating(f, ResistorPowerBasis::Unknown, None);
         }
     }
 
-    #[test]
-    fn a_power_axial_body_does_not_get_the_quarter_watt_default() {
-        // A "Power" axial is 1 W and up. Handing it 1/4 W invents faults on a
-        // correct design, so it abstains like any other unknown size.
-        let r = resistor_power_from_footprint("Resistor_THT:R_Axial_Power_L11.9mm_W4.5mm_P15.24mm");
-        assert_eq!(r.basis, ResistorPowerBasis::Unknown);
-        assert!(r.watts.is_none(), "got {:?}", r.watts);
-    }
-
-    fn passive(reference: &str, footprint: &str) -> DeviceMeta {
+    /// One monitored device: every test below wants the same carrier around a
+    /// reference, a kind, a footprint and some ratings.
+    fn meta(reference: &str, kind: ComponentKind, footprint: &str, ratings: Ratings) -> DeviceMeta {
         DeviceMeta {
             reference: reference.into(),
             device: DeviceId(0),
-            kind: ComponentKind::Passive,
+            kind,
             footprint: footprint.into(),
-            ratings: Ratings::default(),
+            ratings,
         }
+    }
+
+    fn passive(reference: &str, footprint: &str) -> DeviceMeta {
+        meta(
+            reference,
+            ComponentKind::Passive,
+            footprint,
+            Ratings::default(),
+        )
+    }
+
+    fn assert_resistor_rating(footprint: &str, basis: ResistorPowerBasis, watts: Option<f64>) {
+        let rating = resistor_power_from_footprint(footprint);
+        assert_eq!(rating.basis, basis, "{footprint}");
+        assert_eq!(rating.watts, watts, "{footprint}");
+    }
+
+    fn resistor_monitor(ohms: f64, ratings: Ratings) -> (Circuit, NodeId, StressMonitor) {
+        let mut circuit = Circuit::new();
+        let node = circuit.node("A");
+        let device = circuit.add(Device::Resistor {
+            name: "R1".into(),
+            a: node,
+            b: NodeId::GROUND,
+            ohms,
+            tc1: None,
+        });
+        let meta = DeviceMeta {
+            device,
+            ..meta("R1", ComponentKind::Passive, "", ratings)
+        };
+        (circuit, node, StressMonitor::new(vec![meta]))
+    }
+
+    fn supply_monitor(reference: &str, max_v: f64) -> (Circuit, NodeId, StressMonitor) {
+        let mut circuit = Circuit::new();
+        let node = circuit.node("VCC");
+        let mut monitor = StressMonitor::new(Vec::new());
+        monitor.set_supply_watches(vec![SupplyWatch {
+            reference: reference.into(),
+            node,
+            max_v,
+        }]);
+        (circuit, node, monitor)
+    }
+
+    fn drive(
+        monitor: &mut StressMonitor,
+        circuit: &mut Circuit,
+        node: NodeId,
+        volts: f64,
+        chunks: u32,
+    ) -> Vec<FaultEvent> {
+        let node_v = |n| if n == node { volts } else { 0.0 };
+        (0..chunks)
+            .flat_map(|k| monitor.evaluate(circuit, &node_v, &|_| None, f64::from(k) * 1e-3))
+            .collect()
     }
 
     #[test]
@@ -1756,30 +1806,6 @@ mod monitor_temp_tests {
     }
 
     #[test]
-    fn a_metric_only_chip_name_is_not_floored_to_one_sixteenth() {
-        // "R_3216Metric" is an imperial 1206, a 1/4 W part. Falling to the
-        // unknown-SMD floor under-rates it 4x and invents overpower faults.
-        let r = resistor_power_from_footprint("Resistor_SMD:R_3216Metric");
-        assert_eq!(r.basis, ResistorPowerBasis::ChipPackage);
-        assert!(
-            (r.watts.unwrap() - 0.25).abs() < 1e-12,
-            "metric 3216 is a 1206 at 1/4 W, got {:?}",
-            r.watts
-        );
-        // And the imperial pass still wins where both codes are present, so the
-        // 0201-is-metric-0603 collision stays correct.
-        assert!(
-            (resistor_power_from_footprint("Resistor_SMD:R_0201_0603Metric")
-                .watts
-                .unwrap()
-                - 1.0 / 20.0)
-                .abs()
-                < 1e-12,
-            "imperial must still be consulted first"
-        );
-    }
-
-    #[test]
     fn din_axial_bodies_rate_per_code_not_alike() {
         // The DIN codes are size evidence and they are NOT interchangeable:
         // DIN0204 is a 1/8 W body, DIN0207 a 1/4 W one. Rating them alike
@@ -1798,49 +1824,15 @@ mod monitor_temp_tests {
                 1.0,
             ),
         ] {
-            let r = resistor_power_from_footprint(f);
-            assert_eq!(r.basis, ResistorPowerBasis::ThtAxial, "{f}");
-            assert!(
-                (r.watts.unwrap() - want).abs() < 1e-12,
-                "{f} must rate {want} W, got {:?}",
-                r.watts
-            );
+            assert_resistor_rating(f, ResistorPowerBasis::ThtAxial, Some(want));
         }
-    }
-
-    #[test]
-    fn an_axial_body_without_a_din_code_abstains() {
-        // No code means no size evidence, and the codes span 0.125 W to 5 W, so
-        // there is no defensible blanket axial default.
-        for f in [
-            "Resistor_THT:R_Axial_Power_L11.9mm_W4.5mm_P15.24mm",
-            "Resistor_THT:R_Axial_Custom",
-        ] {
-            let r = resistor_power_from_footprint(f);
-            assert_eq!(r.basis, ResistorPowerBasis::Unknown, "{f}");
-            assert!(r.watts.is_none(), "{f} got {:?}", r.watts);
-        }
-    }
-
-    #[test]
-    fn no_package_evidence_abstains_instead_of_guessing() {
-        // Nothing to read: deriving either 1/4 W or 1/16 W would be an invention
-        // in opposite directions, so no rating is produced at all.
-        let r = resistor_power_from_footprint("");
-        assert_eq!(r.basis, ResistorPowerBasis::Unknown);
-        assert!(r.watts.is_none(), "an unreadable package rates nothing");
     }
 
     #[test]
     fn an_unreadable_package_is_a_named_coverage_gap() {
-        // And the abstention is loud: it names the part and what would close it.
-        let meta = DeviceMeta {
-            reference: "R7".into(),
-            device: DeviceId(0),
-            kind: ComponentKind::Passive,
-            footprint: String::new(),
-            ratings: Ratings::default(),
-        };
+        // No package derives no rating; the abstention names the part and unlock.
+        let meta = passive("R7", "");
+        assert_resistor_rating("", ResistorPowerBasis::Unknown, None);
         assert!(meta.power_rating_w().is_none());
         let gap = meta.power_coverage_gap().expect("gap must be reported");
         assert!(gap.contains("R7"), "names the part: {gap}");
@@ -1850,6 +1842,12 @@ mod monitor_temp_tests {
         );
         let mon = StressMonitor::new(vec![meta]);
         assert_eq!(mon.power_coverage_gaps().len(), 1);
+
+        // A custom SMD package is the same visible abstention, never a guess.
+        let custom = passive("R9", "Resistor_SMD:R_CustomHouseFootprint");
+        assert_resistor_rating(&custom.footprint, ResistorPowerBasis::Unknown, None);
+        let gap = custom.power_coverage_gap().expect("a named gap");
+        assert!(gap.contains("R9") && gap.contains("BOM"), "{gap}");
     }
 
     #[test]
@@ -1888,13 +1886,7 @@ mod monitor_temp_tests {
             "Resistor_SMD:R_3216Metric",
             "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
         ] {
-            let meta = DeviceMeta {
-                reference: "R1".into(),
-                device: DeviceId(0),
-                kind: ComponentKind::Passive,
-                footprint: f.into(),
-                ratings: Ratings::default(),
-            };
+            let meta = passive("R1", f);
             assert!(meta.power_coverage_gap().is_none(), "{f}");
             assert!(meta.power_rating_w().is_some(), "{f}");
         }
@@ -1909,19 +1901,9 @@ mod monitor_temp_tests {
             max_current_a: Some(2.0),
             ..Default::default()
         };
-        let meta = DeviceMeta {
-            reference: "L1".into(),
-            device: DeviceId(0),
-            kind: ComponentKind::Passive,
-            footprint: String::new(),
-            ratings,
-        };
-        let op = OperatingPoint {
-            current_a: 3.0,
-            voltage_v: 0.1,
-            power_w: 0.0,
-        };
-        let checks = build_checks(&meta, &op);
+        let meta = meta("L1", ComponentKind::Passive, "", ratings);
+        let op = OperatingPoint::new(3.0, 0.1, 0.0);
+        let checks = build_checks(&meta, &op, op.current_a);
         let oc = checks
             .iter()
             .find(|c| c.kind == FaultKind::Overcurrent && !c.surge)
@@ -1931,75 +1913,93 @@ mod monitor_temp_tests {
     }
 
     #[test]
+    fn a_continuous_current_rating_judges_a_lag_not_an_endpoint_or_a_run_average() {
+        // A 1 A part on a 1 ohm load, driven chunk by chunk at 50 us each.
+        // (name, per-chunk multiples of the rating, expect a fault). The first
+        // row is the c11 shape: 1.7x for 0.4 ms - eight chunks, twice what the
+        // sustain filter alone suppresses - then settled inside the rating. The
+        // last row is what a run-length AVERAGE hides: 22 ms of idle drags such
+        // a mean under the rating however hard the part is driven afterwards.
+        let dt = 5e-5;
+        for (name, amps, want) in [
+            (
+                "inrush then settle",
+                [vec![1.7; 8], vec![0.5; 60]].concat(),
+                false,
+            ),
+            ("steady overload", vec![2.0; 60], true),
+            (
+                "idle then a late 2x step",
+                [vec![0.0; 450], vec![2.0; 60]].concat(),
+                true,
+            ),
+        ] {
+            let ratings = Ratings {
+                max_current_a: Some(1.0),
+                ..Default::default()
+            };
+            let (mut circuit, node, mut monitor) = resistor_monitor(1.0, ratings);
+            let raised = amps.iter().enumerate().any(|(k, i)| {
+                monitor.deposit_chunk_energy(&[0.0], dt);
+                let v = *i;
+                monitor
+                    .evaluate(
+                        &mut circuit,
+                        &|n| if n == node { v } else { 0.0 },
+                        &|_| None,
+                        k as f64 * dt,
+                    )
+                    .iter()
+                    .any(|f| f.kind == FaultKind::Overcurrent)
+            });
+            assert_eq!(raised, want, "{name}");
+        }
+    }
+
+    #[test]
     fn reset_tracks_lets_a_sustained_fault_re_raise_on_replay() {
         // R17: the monitor accumulates `raised` / `over_chunks` across a run. A
         // replay (engine reset -> re-run the same chunks) must see the SAME
         // fault fire again. Before reset_tracks existed, the stale `raised` flag
         // silently swallowed the fault on the second run.
-        let mut c = Circuit::new();
-        let a = c.node("A");
-        let g = c.node("GND");
-        let id = c.add(Device::Resistor {
-            name: "R1".into(),
-            a,
-            b: g,
-            ohms: 100.0,
-            tc1: None,
-        });
-        let meta = DeviceMeta {
-            reference: "R1".into(),
-            device: id,
-            kind: ComponentKind::Passive,
-            // 1/10 W part carrying 10 V / 100 Ω = 1 W: a 10x sustained overpower.
-            footprint: String::new(),
-            ratings: Ratings {
-                max_power_w: Some(0.1),
-                ..Default::default()
-            },
+        // 1/10 W part carrying 10 V / 100 Ω = 1 W: a 10x sustained overpower.
+        let ratings = Ratings {
+            max_power_w: Some(0.1),
+            ..Default::default()
         };
-        let mut mon = StressMonitor::new(vec![meta]);
-        // 10 V across A->GND; the other node reads 0.
-        let node_v = |n: NodeId| if n == a { 10.0 } else { 0.0 };
-        let no_branch = |_: DeviceId| None;
-
-        // Drive the sustain filter to the raise point and count the fault.
-        let raise_once = |mon: &mut StressMonitor, c: &mut Circuit| -> usize {
-            let mut raises = 0;
-            for k in 0..(SUSTAIN_CHUNKS + 2) {
-                let faults = mon.evaluate(c, &node_v, &no_branch, k as f64 * 1e-3);
-                raises += faults
-                    .iter()
-                    .filter(|f| f.kind == FaultKind::Overpower && f.component == "R1")
-                    .count();
-            }
-            raises
+        let (mut circuit, node, mut monitor) = resistor_monitor(100.0, ratings);
+        let raise_once = |monitor: &mut StressMonitor, circuit: &mut Circuit| {
+            drive(monitor, circuit, node, 10.0, SUSTAIN_CHUNKS + 2)
+                .iter()
+                .filter(|f| f.kind == FaultKind::Overpower && f.component == "R1")
+                .count()
         };
 
         assert_eq!(
-            raise_once(&mut mon, &mut c),
+            raise_once(&mut monitor, &mut circuit),
             1,
             "first run raises the overpower fault once"
         );
         assert!(
-            mon.stress_by_ref().get("R1").copied().unwrap_or(0.0) >= 1.0,
+            monitor.stress_by_ref().get("R1").copied().unwrap_or(0.0) >= 1.0,
             "stress pegged"
         );
 
         // Without a reset the fault stays latched (raised) and does not re-fire.
         assert_eq!(
-            raise_once(&mut mon, &mut c),
+            raise_once(&mut monitor, &mut circuit),
             0,
             "latched: no re-raise without reset"
         );
 
         // reset_tracks clears the latch AND the live stress; the replay re-raises.
-        mon.reset_tracks();
+        monitor.reset_tracks();
         assert!(
-            mon.stress_by_ref().is_empty(),
+            monitor.stress_by_ref().is_empty(),
             "reset clears the live stress map"
         );
         assert_eq!(
-            raise_once(&mut mon, &mut c),
+            raise_once(&mut monitor, &mut circuit),
             1,
             "after reset the fault re-raises on replay"
         );
@@ -2012,34 +2012,21 @@ mod monitor_temp_tests {
         // NODE: a rail driven to 100 V on a 6 V-max part must raise a
         // sustained overvoltage fault naming the part, and a nominal rail
         // must raise nothing.
-        let mut c = Circuit::new();
-        let vcc = c.node("+5V");
-        let mut mon = StressMonitor::new(Vec::new());
-        mon.set_supply_watches(vec![SupplyWatch {
-            reference: "U1".into(),
-            node: vcc,
-            max_v: 6.0,
-        }]);
-        let no_branch = |_: DeviceId| None;
+        let (mut circuit, node, mut monitor) = supply_monitor("U1", 6.0);
 
         // Nominal 5 V: no fault, modest stress fraction.
-        let node_v5 = |n: NodeId| if n == vcc { 5.0 } else { 0.0 };
-        for k in 0..(SUSTAIN_CHUNKS + 2) {
-            let faults = mon.evaluate(&mut c, &node_v5, &no_branch, k as f64 * 1e-3);
-            assert!(faults.is_empty(), "5 V on a 6 V-max part is not a fault");
-        }
-        let frac = mon.stress_by_ref().get("U1").copied().unwrap_or(0.0);
+        assert!(
+            drive(&mut monitor, &mut circuit, node, 5.0, SUSTAIN_CHUNKS + 2).is_empty(),
+            "5 V on a 6 V-max part is not a fault"
+        );
+        let frac = monitor.stress_by_ref().get("U1").copied().unwrap_or(0.0);
         assert!(
             (frac - 5.0 / 6.0).abs() < 1e-9,
             "stress fraction 5/6: {frac}"
         );
 
         // 100 V: sustained overvoltage, raised exactly once, naming the part.
-        let node_v100 = |n: NodeId| if n == vcc { 100.0 } else { 0.0 };
-        let mut raised = Vec::new();
-        for k in 0..(SUSTAIN_CHUNKS + 2) {
-            raised.extend(mon.evaluate(&mut c, &node_v100, &no_branch, k as f64 * 1e-3));
-        }
+        let raised = drive(&mut monitor, &mut circuit, node, 100.0, SUSTAIN_CHUNKS + 2);
         assert_eq!(raised.len(), 1, "raised once, not per chunk");
         assert_eq!(raised[0].component, "U1");
         assert_eq!(raised[0].kind, FaultKind::Overvoltage);
@@ -2047,14 +2034,12 @@ mod monitor_temp_tests {
         assert_eq!(raised[0].value, 100.0);
 
         // reset_tracks clears the latch: a replay re-raises.
-        mon.reset_tracks();
-        let mut re_raised = 0;
-        for k in 0..(SUSTAIN_CHUNKS + 2) {
-            re_raised += mon
-                .evaluate(&mut c, &node_v100, &no_branch, k as f64 * 1e-3)
-                .len();
-        }
-        assert_eq!(re_raised, 1, "watch re-raises after reset_tracks");
+        monitor.reset_tracks();
+        assert_eq!(
+            drive(&mut monitor, &mut circuit, node, 100.0, SUSTAIN_CHUNKS + 2,).len(),
+            1,
+            "watch re-raises after reset_tracks"
+        );
     }
 
     /// Two-sided pin for [`OVER_LIMIT_NOISE_MARGIN`]: a rail sitting at its
@@ -2066,35 +2051,30 @@ mod monitor_temp_tests {
     /// unrelated numerics changes; that is a manufactured fault.
     #[test]
     fn over_limit_noise_is_not_a_fault_but_a_real_excursion_is() {
-        let mut c = Circuit::new();
-        let vcc = c.node("CHG");
-        let mut mon = StressMonitor::new(Vec::new());
-        mon.set_supply_watches(vec![SupplyWatch {
-            reference: "Q15".into(),
-            node: vcc,
-            max_v: 30.0,
-        }]);
-        let no_branch = |_: DeviceId| None;
+        let (mut circuit, node, mut monitor) = supply_monitor("Q15", 30.0);
 
         // Nanovolt-scale over the limit (measured on the mb3.0 fuzz:
         // +1.8e-9 V on 30 V, 6e-11 relative): numerical noise, no fault.
-        let noise = 30.0 * (1.0 + 1e-10);
-        let node_noise = |n: NodeId| if n == vcc { noise } else { 0.0 };
-        for k in 0..(SUSTAIN_CHUNKS + 2) {
-            let faults = mon.evaluate(&mut c, &node_noise, &no_branch, k as f64 * 1e-3);
-            assert!(
-                faults.is_empty(),
-                "an over-limit excursion below the solve's resolution must not fault"
-            );
-        }
+        assert!(
+            drive(
+                &mut monitor,
+                &mut circuit,
+                node,
+                30.0 * (1.0 + 1e-10),
+                SUSTAIN_CHUNKS + 2
+            )
+            .is_empty(),
+            "an over-limit excursion below the solve's resolution must not fault"
+        );
 
         // 0.01% over (30.003 V): a resolvable excursion, faults as before.
-        let real = 30.0 * 1.0001;
-        let node_real = |n: NodeId| if n == vcc { real } else { 0.0 };
-        let mut raised = Vec::new();
-        for k in 0..(SUSTAIN_CHUNKS + 2) {
-            raised.extend(mon.evaluate(&mut c, &node_real, &no_branch, k as f64 * 1e-3));
-        }
+        let raised = drive(
+            &mut monitor,
+            &mut circuit,
+            node,
+            30.0 * 1.0001,
+            SUSTAIN_CHUNKS + 2,
+        );
         assert_eq!(raised.len(), 1, "a real excursion still trips exactly once");
         assert_eq!(raised[0].component, "Q15");
     }
@@ -2114,12 +2094,10 @@ mod monitor_temp_tests {
                 k,
                 model: hauksbee_ir::DiodeModel::default(),
             });
+            let d = Ratings::default();
             let meta = DeviceMeta {
-                reference: "D1".into(),
                 device: id,
-                kind: ComponentKind::Diode,
-                footprint: String::new(),
-                ratings: Ratings::default(),
+                ..meta("D1", ComponentKind::Diode, "", d)
             };
             let mut mon = StressMonitor::new(vec![meta.clone()]);
             mon.destructive = true;

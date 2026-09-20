@@ -25,7 +25,78 @@
 //!
 //! Corpus-gated: skipped when the board-corpus symlink is absent.
 
+use std::path::{Path, PathBuf};
+
 use crate::support::{self, corpus_boards_root as corpus, require_corpus, run_body};
+
+/// The corpus board at `rel`, or `None` when this machine has no corpus: the
+/// suite is corpus-gated, and an absent board skips unless the run demands it.
+fn corpus_board(rel: &str, what: &str) -> Option<PathBuf> {
+    let board = corpus().join(rel);
+    if board.exists() {
+        return Some(board);
+    }
+    assert!(!require_corpus(), "corpus required but {what} missing");
+    eprintln!("corpus {what} missing; skipping");
+    None
+}
+
+/// A `voltage` assertion holding `net` inside `[min, max]` on every member.
+fn rail_holds(net: &str, min: f64, max: f64) -> String {
+    format!(
+        "[[assert]]\nkind = \"voltage\"\nname = \"{net} holds across all boot states\"\n\
+         net = \"{net}\"\nmin = {min}\nmax = {max}\n"
+    )
+}
+
+/// One boot-state fuzz, the shape every case in this file has: hold `supplies`,
+/// drive every undefined boot net in `nets` to its pulled level, fuzz them all
+/// across the undefined range (0 / 3.3 V) over `seeds` members, and require
+/// `asserts` plus `no_faults` to hold on EVERY member.
+///
+/// A fuzz over zero nets passes every assertion without exercising anything,
+/// which is the vacuous green this suite exists to refuse, so an empty net list
+/// fails rather than reporting a covered negative.
+fn boot_state_fuzz(
+    case: &str,
+    board: &Path,
+    supplies: &[(&str, f64)],
+    nets: &[String],
+    seeds: u32,
+    asserts: &str,
+) {
+    hauksbee_testkit::scanned(&format!("{case} boot-state fuzz (nets found)"), nets.len());
+    assert!(
+        !nets.is_empty(),
+        "{case}: a fuzz over no nets proves nothing"
+    );
+    let rails: String = supplies
+        .iter()
+        .map(|(net, v)| format!("[[supply]]\nnet = \"{net}\"\nkind = \"ideal\"\nvolts = {v}\n"))
+        .collect();
+    let drives: String = nets
+        .iter()
+        .map(|net| format!("[[net_drive]]\nnet = \"{net}\"\nvolts = 0.0\n"))
+        .collect();
+    let fuzzed: Vec<String> = nets.iter().map(|net| format!("\"{net}\"")).collect();
+    let body = format!(
+        "name = \"{case} boot-state fuzz\"\nboard = {}\nduration_ms = 1\n{rails}{drives}\
+         [fuzz]\nseeds = {seeds}\nnets = [{}]\nlevels = [0.0, 3.3]\n\
+         {asserts}[[assert]]\nkind = \"no_faults\"\n",
+        support::toml_path(board),
+        fuzzed.join(", "),
+    );
+    let result = run_body(&format!("{case}.toml"), &body);
+    assert!(
+        result.passed(),
+        "{case} boot-state fuzz must be GREEN across all seeds:\n{}",
+        result.render_human()
+    );
+    assert_eq!(
+        result.seeds, seeds,
+        "{case}: must hold across every boot seed"
+    );
+}
 
 /// LumenPnP motherboard: the low-side AO3400A MOSFET gates are driven by
 /// STM32F407 GPIOs that are Hi-Z at reset; only a 10k-to-GND pull holds each
@@ -42,12 +113,9 @@ use crate::support::{self, corpus_boards_root as corpus, require_corpus, run_bod
 /// behaviour that surfaced this.
 #[test]
 fn lumenpnp_motor_gate_boot_states_are_safe() {
-    let board = corpus().join("lumenpnp/mobo/mobo.kicad_sch");
-    if !board.exists() {
-        assert!(!require_corpus(), "corpus required but LumenPnP missing");
-        eprintln!("corpus LumenPnP missing; skipping");
+    let Some(board) = corpus_board("lumenpnp/mobo/mobo.kicad_sch", "LumenPnP") else {
         return;
-    }
+    };
     // The same enumeration the boot-state panel uses, filtered to the low-side
     // switching FETs this case is about, so the fuzz set is whatever the fetched
     // revision actually carries.
@@ -64,68 +132,18 @@ fn lumenpnp_motor_gate_boot_states_are_safe() {
         .filter(|(reference, _)| fets.contains(reference))
         .map(|(_, net)| net)
         .collect();
-    // A fuzz over zero nets passes every assertion without exercising anything,
-    // which is the vacuous green this suite exists to refuse. Say what was
-    // covered, and fail on a discovery that found nothing.
-    hauksbee_testkit::scanned("lumenpnp boot-gate fuzz (gate nets found)", gates.len());
     assert!(
         gates.len() >= 3,
         "expected the board's low-side AO3400A gates, found {gates:?} from FETs {fets:?}"
     );
-
-    let drives: String = gates
-        .iter()
-        .map(|net| format!("[[net_drive]]\nnet = \"{net}\"\nvolts = 0.0\n"))
-        .collect();
-    let fuzz_nets: String = gates
-        .iter()
-        .map(|net| format!("\"{net}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let body = format!(
-        r#"name = "lumenpnp boot-state fuzz (MOSFET gates undefined)"
-board = {}
-duration_ms = 1
-[[supply]]
-net = "VDC"
-kind = "ideal"
-volts = 24.0
-[[supply]]
-net = "+5V"
-kind = "ideal"
-volts = 5.0
-[[supply]]
-net = "+3.3V"
-kind = "ideal"
-volts = 3.3
-{drives}[fuzz]
-seeds = 16
-nets = [{fuzz_nets}]
-levels = [0.0, 3.3]
-[[assert]]
-kind = "voltage"
-name = "VDC motor rail holds across all boot gate states"
-net = "VDC"
-min = 23.0
-max = 25.0
-[[assert]]
-kind = "voltage"
-name = "+3.3V holds across all boot gate states"
-net = "+3.3V"
-min = 3.2
-max = 3.4
-[[assert]]
-kind = "no_faults"
-"#,
-        support::toml_path(&board)
+    boot_state_fuzz(
+        "lumenpnp_gates",
+        &board,
+        &[("VDC", 24.0), ("+5V", 5.0), ("+3.3V", 3.3)],
+        &gates,
+        16,
+        &(rail_holds("VDC", 23.0, 25.0) + &rail_holds("+3.3V", 3.2, 3.4)),
     );
-    let result = run_body("lumenpnp_gates.toml", &body);
-    assert!(
-        result.passed(),
-        "LumenPnP boot-state fuzz must be GREEN across all seeds:\n{}",
-        result.render_human()
-    );
-    assert_eq!(result.seeds, 16, "must hold across all 16 boot seeds");
 }
 
 /// Olimex ESP32-EVB (REV-L): GPIO32/REL1 and GPIO33/REL2 drive the BC817-40
@@ -136,58 +154,20 @@ kind = "no_faults"
 /// rails hold and nothing faults on any boot state.
 #[test]
 fn olimex_evb_relay_boot_states_are_safe() {
-    let board = corpus().join("olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch");
-    if !board.exists() {
-        assert!(!require_corpus(), "corpus required but Olimex EVB missing");
-        eprintln!("corpus Olimex EVB missing; skipping");
+    let Some(board) = corpus_board(
+        "olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch",
+        "Olimex EVB",
+    ) else {
         return;
-    }
-    let body = format!(
-        r#"name = "Olimex ESP32-EVB boot-state fuzz (relay NPN bases undefined)"
-board = {}
-duration_ms = 1
-[[supply]]
-net = "+3.3V"
-kind = "ideal"
-volts = 3.3
-[[supply]]
-net = "+5V"
-kind = "ideal"
-volts = 5.0
-[[net_drive]]
-net = "GPIO32/REL1"
-volts = 0.0
-[[net_drive]]
-net = "GPIO33/REL2"
-volts = 0.0
-[fuzz]
-seeds = 8
-nets = ["GPIO32/REL1", "GPIO33/REL2"]
-levels = [0.0, 3.3]
-[[assert]]
-kind = "voltage"
-name = "+3.3V holds across all boot relay states"
-net = "+3.3V"
-min = 3.2
-max = 3.4
-[[assert]]
-kind = "voltage"
-name = "+5V holds across all boot relay states"
-net = "+5V"
-min = 4.9
-max = 5.1
-[[assert]]
-kind = "no_faults"
-"#,
-        support::toml_path(&board)
+    };
+    boot_state_fuzz(
+        "olimex_relay",
+        &board,
+        &[("+3.3V", 3.3), ("+5V", 5.0)],
+        &["GPIO32/REL1".to_string(), "GPIO33/REL2".to_string()],
+        8,
+        &(rail_holds("+3.3V", 3.2, 3.4) + &rail_holds("+5V", 4.9, 5.1)),
     );
-    let result = run_body("olimex_relay.toml", &body);
-    assert!(
-        result.passed(),
-        "Olimex EVB boot-state fuzz must be GREEN across all seeds:\n{}",
-        result.render_human()
-    );
-    assert_eq!(result.seeds, 8);
 }
 
 /// MNT Reform motherboard 3.0: the LPC11U24 power supervisor (U18) PIO pins are
@@ -206,58 +186,28 @@ kind = "no_faults"
 /// extract/bind/solve path is exercised across every supervisor boot state.
 #[test]
 fn mnt_reform_supervisor_boot_states_raise_no_fault() {
-    let board =
-        corpus().join("mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_sch");
-    if !board.exists() {
-        assert!(!require_corpus(), "corpus required but MNT Reform missing");
-        eprintln!("corpus MNT Reform missing; skipping");
+    let Some(board) = corpus_board(
+        "mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_sch",
+        "MNT Reform",
+    ) else {
         return;
-    }
-    let body = format!(
-        r#"name = "MNT Reform mobo3.0 boot-state fuzz (LPC supervisor enables undefined)"
-board = {}
-duration_ms = 1
-[[supply]]
-net = "VIN"
-kind = "ideal"
-volts = 12.0
-[[supply]]
-net = "+5V"
-kind = "ideal"
-volts = 5.0
-[[supply]]
-net = "+3V3"
-kind = "ideal"
-volts = 3.3
-[[net_drive]]
-net = "3V3_PWR_EN"
-volts = 0.0
-[[net_drive]]
-net = "5V_PWR_EN"
-volts = 0.0
-[[net_drive]]
-net = "1V2_PWR_EN"
-volts = 0.0
-[[net_drive]]
-net = "PCIE1_PWR_EN"
-volts = 0.0
-[[net_drive]]
-net = "USB_PWR_EN"
-volts = 0.0
-[fuzz]
-seeds = 24
-nets = ["3V3_PWR_EN", "5V_PWR_EN", "1V2_PWR_EN", "PCIE1_PWR_EN", "USB_PWR_EN"]
-levels = [0.0, 3.3]
-[[assert]]
-kind = "no_faults"
-"#,
-        support::toml_path(&board)
+    };
+    let enables: Vec<String> = [
+        "3V3_PWR_EN",
+        "5V_PWR_EN",
+        "1V2_PWR_EN",
+        "PCIE1_PWR_EN",
+        "USB_PWR_EN",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    boot_state_fuzz(
+        "reform_supervisor",
+        &board,
+        &[("VIN", 12.0), ("+5V", 5.0), ("+3V3", 3.3)],
+        &enables,
+        24,
+        "",
     );
-    let result = run_body("reform_supervisor.toml", &body);
-    assert!(
-        result.passed(),
-        "MNT Reform boot-state fuzz must raise no fault across all seeds:\n{}",
-        result.render_human()
-    );
-    assert_eq!(result.seeds, 24);
 }

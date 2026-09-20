@@ -75,11 +75,7 @@ fn passes(case: &str, src: &str, end_ms: f64, assertion: &str) -> bool {
         "{case}: {:?}",
         r.coverage_warnings
     );
-    r.results
-        .iter()
-        .find(|x| x.label == "out")
-        .unwrap_or_else(|| panic!("{case}: no out result in {:?}", r.results))
-        .passed
+    support::row(&r, "out").passed
 }
 
 /// OUT's level over `[after_ms, end_ms]`: at VOH when `high`, else at VOL.
@@ -146,5 +142,35 @@ fn a_555_times_its_own_board_and_refuses_what_it_cannot_time() {
         0.05,
         0.2,
         true
+    ));
+}
+
+/// A width, not a rate: the astable's HIGH time is the datasheet's
+/// `ln(2)*(RA+RB)*C`, and `pulse_width` must read it off the same interpolated
+/// edges the frequency path uses. A board with no timing capacitor has no pulse
+/// at all, and that must REFUSE rather than report the run's length as a width.
+#[test]
+fn a_555_reports_its_high_time_as_a_width_and_refuses_when_there_is_no_pulse() {
+    let c_nf = 10.0_f64;
+    // Skip the first charge (to ln 3, not ln 2) so the pulse timed is a
+    // free-running one; +-10% absorbs the comparator smoothing, as elsewhere.
+    let t_high = 2.0_f64.ln() * 20e3 * c_nf * 1e-9 * 1e3;
+    let after = 1.5 * 3.0_f64.ln() * 20e3 * c_nf * 1e-9 * 1e3;
+    let width = format!(
+        "kind = \"pulse_width\"\nafter_ms = {after}\nmin = {}\nmax = {}\n",
+        t_high * 0.9,
+        t_high * 1.1
+    );
+    assert!(
+        passes("10n high width", &board(Some(c_nf), "VCC"), 2.0, &width),
+        "OUT's high time is not ln(2)*(RA+RB)*C = {t_high} ms"
+    );
+    // RESET at ground holds OUT at VOL for the whole run: no high pulse exists,
+    // so the check refuses and a refusal never passes.
+    assert!(!passes(
+        "no pulse",
+        &board(Some(c_nf), "GND"),
+        2.0,
+        "kind = \"pulse_width\"\n"
     ));
 }

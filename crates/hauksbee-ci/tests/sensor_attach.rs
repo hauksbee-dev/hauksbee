@@ -39,6 +39,28 @@ fn firmware_present() -> bool {
         .exists()
 }
 
+/// One declarative-LM75 thermostat run from `examples/<spec>`, asserted GREEN
+/// with the whole human report as the message. Holds the descriptor lock, and
+/// skips cleanly when Renode or the thermostat firmware is absent.
+fn lm75_run(case: &str, spec: &str, expect: &str) -> Option<hauksbee_ci::CiResult> {
+    let _guard = support::descriptor_env_lock();
+    if !renode_available() || !firmware_present() {
+        eprintln!(
+            "SKIP {case}: needs Renode and \
+             `make -C testdata/firmware/stm32_i2c_thermostat`"
+        );
+        return None;
+    }
+    let result = run(&support::run_config(example(spec))).expect("the spec loads and runs");
+    assert!(
+        result.passed(),
+        "{case}: {expect}:\n{}",
+        result.render_human()
+    );
+    eprintln!("{case}: PASS: {expect}, via the Renode I2C bridge");
+    Some(result)
+}
+
 /// The hot run: declarative LM75 at 40 C drives FLAG HIGH (boot-coverage PASS).
 ///
 /// This is the primary proof. It fails only if the Renode I2C bridge is not
@@ -46,42 +68,16 @@ fn firmware_present() -> bool {
 /// incorrectly (firmware reads != 40 C). Either failure is a clear signal.
 #[test]
 fn sensor_attach_lm75_hot_flag_goes_high() {
-    let _guard = support::descriptor_env_lock();
-    if !renode_available() {
-        eprintln!("SKIP sensor_attach_lm75_hot: Renode not installed");
+    let expect = "declarative LM75 at 40 C drove FLAG HIGH (boot-coverage PASS)";
+    let Some(result) = lm75_run("lm75_hot", "lm75_thermostat.toml", expect) else {
         return;
-    }
-    if !firmware_present() {
-        eprintln!(
-            "SKIP sensor_attach_lm75_hot: STM32 I2C thermostat firmware not built \
-             (run `make -C testdata/firmware/stm32_i2c_thermostat`)"
-        );
-        return;
-    }
-
-    let result = run(&support::run_config(example("lm75_thermostat.toml")))
-        .expect("lm75_thermostat spec should load and run");
-
-    assert!(
-        result.passed(),
-        "declarative LM75 at 40 C: FLAG should go HIGH (boot-coverage PASS):\n{}",
-        result.render_human()
-    );
-
+    };
     // Specifically the boot-coverage assertion must be green.
-    let bc = result
-        .results
-        .iter()
-        .find(|r| r.kind == "boot_coverage")
-        .expect("boot-coverage assertion must be present in lm75_thermostat.toml");
+    let bc = support::row(&result, "kind:boot_coverage");
     assert!(
         bc.passed,
         "boot-coverage on FLAG must pass at 40 C: {}",
         bc.detail
-    );
-
-    eprintln!(
-        "sensor_attach_lm75_hot: PASS: declarative LM75 at 40 C drove FLAG HIGH via Renode I2C bridge"
     );
 }
 
@@ -91,31 +87,8 @@ fn sensor_attach_lm75_hot_flag_goes_high() {
 /// The 4k7 pull-down holds the net at ~0 V the whole run.
 #[test]
 fn sensor_attach_lm75_cold_flag_stays_low() {
-    let _guard = support::descriptor_env_lock();
-    if !renode_available() {
-        eprintln!("SKIP sensor_attach_lm75_cold: Renode not installed");
-        return;
-    }
-    if !firmware_present() {
-        eprintln!(
-            "SKIP sensor_attach_lm75_cold: STM32 I2C thermostat firmware not built \
-             (run `make -C testdata/firmware/stm32_i2c_thermostat`)"
-        );
-        return;
-    }
-
-    let result = run(&support::run_config(example("lm75_thermostat_cold.toml")))
-        .expect("lm75_thermostat_cold spec should load and run");
-
-    assert!(
-        result.passed(),
-        "declarative LM75 at 20 C: FLAG should stay LOW (voltage PASS):\n{}",
-        result.render_human()
-    );
-
-    eprintln!(
-        "sensor_attach_lm75_cold: PASS: declarative LM75 at 20 C held FLAG LOW via Renode I2C bridge"
-    );
+    let expect = "declarative LM75 at 20 C held FLAG LOW (voltage PASS)";
+    lm75_run("lm75_cold", "lm75_thermostat_cold.toml", expect);
 }
 
 // ── Spec parsing tests (no Renode needed) ────────────────────────────────────
@@ -145,13 +118,13 @@ fn sensor_spec_inline_parses() {
     );
 }
 
-/// A `[[sensor]]` with neither `spec` nor `spec_file` is rejected at load.
-#[test]
-fn sensor_spec_missing_source_is_rejected() {
-    use hauksbee_ci::Spec;
-
-    // Write a minimal spec with a sensor that has no source.
-    let board_content = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+/// The smallest board a `[[sensor]]` load error can be raised against (one 10k
+/// between +3V3 and GND), plus a spec naming it, written to a fresh temp file.
+/// Both rejection cases below differ only in the `[[sensor]]` body they carry.
+fn sensor_spec(name: &str, sensor: &str) -> PathBuf {
+    let board = support::write_tmp(
+        "sensor_board.kicad_pcb",
+        r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
   (net 2 "+3V3")
@@ -163,31 +136,32 @@ fn sensor_spec_missing_source_is_rejected() {
     (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
   )
 )
-"#;
-    let dir = std::env::temp_dir().join("hauksbee_ci_sensor_tests");
-    std::fs::create_dir_all(&dir).unwrap();
-    let board_path = dir.join("test_board.kicad_pcb");
-    std::fs::write(&board_path, board_content).unwrap();
-
-    let spec_src = format!(
-        r#"name = "sensor test"
+"#,
+    );
+    support::write_tmp(
+        name,
+        &format!(
+            r#"name = "sensor test"
 board = {board}
 duration_ms = 10
 
-[[sensor]]
-id = "bad_sensor"
-
+{sensor}
 [[assert]]
 kind = "voltage"
 net = "+3V3"
 min = 3.0
 "#,
-        board = support::toml_path(&board_path)
-    );
-    let spec_path = dir.join("bad_sensor.toml");
-    std::fs::write(&spec_path, &spec_src).unwrap();
+            board = support::toml_path(&board)
+        ),
+    )
+}
 
-    let err = Spec::load(&spec_path).expect_err("spec with sourceless sensor must fail to load");
+/// A `[[sensor]]` with neither `spec` nor `spec_file` is rejected at load.
+#[test]
+fn sensor_spec_missing_source_is_rejected() {
+    let path = sensor_spec("bad_sensor.toml", "[[sensor]]\nid = \"bad_sensor\"\n");
+    let err =
+        hauksbee_ci::Spec::load(&path).expect_err("spec with sourceless sensor must fail to load");
     let msg = err.to_string();
     assert!(
         msg.contains("bad_sensor") && (msg.contains("spec") || msg.contains("spec_file")),
@@ -198,48 +172,13 @@ min = 3.0
 /// A `[[sensor]]` with both `spec` and `spec_file` is rejected at load.
 #[test]
 fn sensor_spec_both_sources_is_rejected() {
-    use hauksbee_ci::Spec;
-
-    let dir = std::env::temp_dir().join("hauksbee_ci_sensor_tests");
-    std::fs::create_dir_all(&dir).unwrap();
-    let board_content = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+3V3")
-  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
-    (at 100 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (net 2 "+3V3"))
-    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
-  )
-)
-"#;
-    let board_path = dir.join("test_board2.kicad_pcb");
-    std::fs::write(&board_path, board_content).unwrap();
-
-    let spec_src = format!(
-        r#"name = "sensor test"
-board = {board}
-duration_ms = 10
-
-[[sensor]]
-id = "both_sensor"
-spec = "[sensor]\nname=\"X\"\n"
-spec_file = "some.toml"
-
-[[assert]]
-kind = "voltage"
-net = "+3V3"
-min = 3.0
-"#,
-        board = support::toml_path(&board_path)
+    let path = sensor_spec(
+        "both_sources.toml",
+        "[[sensor]]\nid = \"both_sensor\"\n\
+         spec = \"[sensor]\\nname=\\\"X\\\"\\n\"\nspec_file = \"some.toml\"\n",
     );
-    let spec_path = dir.join("both_sources.toml");
-    std::fs::write(&spec_path, &spec_src).unwrap();
-
-    let err =
-        Spec::load(&spec_path).expect_err("spec with both spec and spec_file must fail to load");
+    let err = hauksbee_ci::Spec::load(&path)
+        .expect_err("spec with both spec and spec_file must fail to load");
     let msg = err.to_string();
     assert!(
         msg.contains("both_sensor") && msg.contains("mutually exclusive"),

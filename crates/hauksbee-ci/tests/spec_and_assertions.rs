@@ -6,14 +6,20 @@ use hauksbee_ci::{run, Spec};
 
 use crate::support;
 
+fn load_spec(body: &str) -> Spec {
+    Spec::load(&support::write_tmp("spec.toml", body)).expect("spec loads")
+}
+
+fn load_error(body: &str) -> String {
+    Spec::load(&support::write_tmp("invalid.toml", body))
+        .unwrap_err()
+        .to_string()
+}
+
 #[test]
 fn empty_assertions_is_rejected() {
-    let p = support::write_tmp(
-        "noassert.toml",
-        "name = \"x\"\nboard = \"b.kicad_pcb\"\nduration_ms = 1\n",
-    );
-    let err = Spec::load(&p).unwrap_err();
-    assert!(err.to_string().contains("no [[assert]]"), "got: {err}");
+    let err = load_error("name = \"x\"\nboard = \"b.kicad_pcb\"\nduration_ms = 1\n");
+    assert!(err.contains("no [[assert]]"), "got: {err}");
 }
 
 #[test]
@@ -42,128 +48,100 @@ fn asbuilt_field_parses_and_resolves_beside_the_spec() {
 }
 
 #[test]
-fn unknown_assertion_kind_is_rejected() {
-    let p = support::write_tmp(
-        "badkind.toml",
-        "board=\"b\"\nduration_ms=1\n[[assert]]\nkind=\"smoke\"\n",
-    );
-    let err = Spec::load(&p).unwrap_err();
-    assert!(
-        err.to_string().contains("unknown assertion kind"),
-        "got: {err}"
-    );
-}
-
-#[test]
-fn bad_regex_in_uart_assert_is_rejected() {
-    let p = support::write_tmp(
-        "badre.toml",
-        "board=\"b\"\nduration_ms=1\n[[assert]]\nkind=\"uart\"\nmatches=\"(unclosed\"\n",
-    );
-    let err = Spec::load(&p).unwrap_err();
-    assert!(err.to_string().contains("regex"), "got: {err}");
-}
-
-#[test]
-fn unknown_field_is_rejected() {
-    // deny_unknown_fields means a typo'd key is a loud error, not silent.
-    let p = support::write_tmp(
-        "typo.toml",
-        "board=\"b\"\ndurations_ms=1\n[[assert]]\nkind=\"no_faults\"\n",
-    );
-    let err = Spec::load(&p).unwrap_err();
-    assert!(
-        err.to_string().contains("durations_ms") || err.to_string().contains("unknown"),
-        "got: {err}"
-    );
-}
-
-#[test]
-fn unknown_net_lists_near_matches() {
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/board-as-code/starter.board");
-    let p = support::write_tmp(
-        "typonet.toml",
-        &format!(
-            "board={}\nduration_ms=1\n[[assert]]\nkind=\"voltage\"\nnet=\"+5VV\"\nmin=4.9\n",
-            support::toml_path(&board)
+fn malformed_assertions_and_unknown_fields_are_rejected() {
+    for (case, body, expected) in [
+        (
+            "unknown assertion kind",
+            "board=\"b\"\nduration_ms=1\n[[assert]]\nkind=\"smoke\"\n",
+            "unknown assertion kind",
         ),
-    );
-    let err = run(&support::run_config(p)).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("not found"), "got: {msg}");
-    assert!(msg.contains("+5V"), "should suggest the real net: {msg}");
+        (
+            "bad UART regex",
+            "board=\"b\"\nduration_ms=1\n[[assert]]\nkind=\"uart\"\nmatches=\"(unclosed\"\n",
+            "regex",
+        ),
+        // deny_unknown_fields makes a typo'd key a loud error, not silent.
+        (
+            "unknown field",
+            "board=\"b\"\ndurations_ms=1\n[[assert]]\nkind=\"no_faults\"\n",
+            "durations_ms",
+        ),
+    ] {
+        let err = load_error(body);
+        assert!(
+            err.contains(expected),
+            "{case}: expected {expected:?} in {err}"
+        );
+    }
 }
 
-#[test]
-fn typoed_max_current_ref_is_rejected_not_silently_green() {
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/board-as-code/starter.board");
-    let p = support::write_tmp(
-        "typoref.toml",
-        &format!(
-            "board={}\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"R11\"\namps=0.1\n",
-            support::toml_path(&board)
-        ),
-    );
-    let err = run(&support::run_config(p)).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("unknown component"), "got: {msg}");
-    assert!(msg.contains("R1"), "should suggest the real ref: {msg}");
+/// A fixture board under the repo root.
+fn fixture(rel: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
 }
 
+/// Four ways to point an assertion at something the run can never judge: a net
+/// that is not on the board, a component that is not on it, a component whose
+/// through-current is never measured, and one whose junction temperature never
+/// is. All four must be a LOUD rejection at load -- a guard that is never
+/// evaluated reads green, which is the failure mode worth spending a test on --
+/// and each rejection must name the offending token and say why.
 #[test]
-fn max_current_on_untracked_component_kind_is_rejected_not_green() {
-    // C1 is a real capacitor on the board, so the typo check passes, but peak
-    // current is only measured for resistors and diodes, so the guard would
-    // never be evaluated. That must be a loud rejection, never a green pass.
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/inkplate_class.net");
-    let p = support::write_tmp(
-        "untracked_current.toml",
-        &format!(
-            "board={}\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"C1\"\namps=1.0\n",
-            support::toml_path(&board)
+fn an_assertion_that_could_never_be_evaluated_is_rejected_not_silently_green() {
+    let starter = "examples/board-as-code/starter.board";
+    let inkplate = "testdata/inkplate_class.net";
+    for (case, board, assertion, wants) in [
+        (
+            "typo'd net",
+            starter,
+            "kind=\"voltage\"\nnet=\"+5VV\"\nmin=4.9",
+            ["not found", "+5V"],
         ),
-    );
-    let err = run(&support::run_config(p)).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("C1"), "should name the ref: {msg}");
-    assert!(
-        msg.contains("resistors and diodes"),
-        "should explain what is trackable: {msg}"
-    );
-}
-
-#[test]
-fn max_temp_on_component_without_thermal_model_is_rejected_not_green() {
-    // U1 (the ESP32 module) is a real component, but MCUs are not
-    // stress-monitored, so no junction temperature is ever estimated for it: a
-    // max_temp guard on it would report green without being evaluated.
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/inkplate_class.net");
-    let p = support::write_tmp(
-        "untracked_temp.toml",
-        &format!(
-            "board={}\nduration_ms=1\n[[assert]]\nkind=\"max_temp\"\nref=\"U1\"\ncelsius=85\n",
-            support::toml_path(&board)
+        (
+            "typo'd ref",
+            starter,
+            "kind=\"max_current\"\nref=\"R11\"\namps=0.1",
+            ["unknown component", "R1"],
         ),
-    );
-    let err = run(&support::run_config(p)).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("U1"), "should name the ref: {msg}");
-    assert!(
-        msg.contains("no thermal model"),
-        "should explain why it is untrackable: {msg}"
-    );
+        // C1 is a real capacitor, so the typo check passes, but peak current is
+        // only measured for resistors and diodes.
+        (
+            "untracked current",
+            inkplate,
+            "kind=\"max_current\"\nref=\"C1\"\namps=1.0",
+            ["C1", "resistors and diodes"],
+        ),
+        // U1 (the ESP32 module) is real, but MCUs are not stress-monitored, so
+        // no junction temperature is ever estimated for it.
+        (
+            "untracked temperature",
+            inkplate,
+            "kind=\"max_temp\"\nref=\"U1\"\ncelsius=85",
+            ["U1", "no thermal model"],
+        ),
+    ] {
+        let p = support::write_tmp(
+            &format!("{case}.toml"),
+            &format!(
+                "board={}\nduration_ms=1\n[[assert]]\n{assertion}\n",
+                support::toml_path(&fixture(board))
+            ),
+        );
+        let msg = run(&support::run_config(p)).unwrap_err().to_string();
+        for want in wants {
+            assert!(msg.contains(want), "{case}: expected {want:?} in: {msg}");
+        }
+    }
 }
 
 #[test]
 fn after_ms_on_toggle_is_rejected() {
-    let p = support::write_tmp(
-        "toggleafter.toml",
+    let err = load_error(
         "board=\"b\"\nduration_ms=1\n[[assert]]\nkind=\"toggle\"\nnet=\"D13\"\nfreq_hz=5.0\nafter_ms=50\n",
     );
-    let err = Spec::load(&p).unwrap_err();
-    assert!(err.to_string().contains("after_ms"), "got: {err}");
+    assert!(err.contains("after_ms"), "got: {err}");
 }
 
 #[test]
@@ -277,52 +255,37 @@ fn boot_coverage_requires_net_min_and_deadline() {
     assert!(err.to_string().contains("deadline_ms"), "got: {err}");
 }
 
-// E51: boot_coverage with NO firmware staged is a hollow gate; the net could
-// only reach its level passively (a board pull / bias settling), which is the
-// vacuous pass the check exists to prevent. The spec must refuse to LOAD.
+const BOOT_COVERAGE: &str =
+    "[[assert]]\nkind = \"boot_coverage\"\nnet = \"HB\"\nmin = 3.0\ndeadline_ms = 10.0\n";
+
+// E51: without firmware this is a hollow gate: the net could only reach its
+// level passively, which is the vacuous pass the check exists to prevent.
 #[test]
 fn boot_coverage_without_firmware_is_refused_at_load() {
-    let p = support::write_tmp(
-        "bootcov_no_fw.toml",
-        "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
-         [[assert]]\nkind = \"boot_coverage\"\nnet = \"RES\"\nmin = 2.6\ndeadline_ms = 5.0\n",
-    );
-    let err = Spec::load(&p).unwrap_err().to_string();
-    assert!(
-        err.contains("needs `firmware = ...`"),
-        "the refusal must say the fix (add firmware): {err}"
-    );
-    assert!(
-        err.contains("passively") && err.contains("voltage"),
-        "the refusal must explain the passive-reach trap and point at `voltage`: {err}"
-    );
+    let err = load_error(&format!(
+        "board = \"b.kicad_pcb\"\nduration_ms = 10\n{BOOT_COVERAGE}"
+    ));
+    for want in ["needs `firmware = ...`", "passively", "voltage"] {
+        assert!(err.contains(want), "expected {want:?} in: {err}");
+    }
 
     // Control: the same spec WITH a firmware line loads.
-    let p = support::write_tmp(
-        "bootcov_fw.toml",
-        "board = \"b.kicad_pcb\"\nfirmware = \"app.elf\"\nduration_ms = 10\n\
-         [[assert]]\nkind = \"boot_coverage\"\nnet = \"RES\"\nmin = 2.6\ndeadline_ms = 5.0\n",
-    );
-    Spec::load(&p).expect("boot_coverage with firmware loads");
+    load_spec(&format!(
+        "board = \"b.kicad_pcb\"\nfirmware = \"app.elf\"\nduration_ms = 10\n{BOOT_COVERAGE}"
+    ));
 }
 
 // E32: hold_ms parses on boot_coverage, and a negative value is a load error.
 #[test]
 fn boot_coverage_hold_ms_parses_and_rejects_negative() {
-    let p = support::write_tmp(
-        "bootcov_hold.toml",
-        "board = \"b.kicad_pcb\"\nfirmware = \"app.elf\"\nduration_ms = 10\n\
-         [[assert]]\nkind = \"boot_coverage\"\nnet = \"HB\"\nmin = 3.0\ndeadline_ms = 10.0\nhold_ms = 2.5\n",
+    let base = format!(
+        "board = \"b.kicad_pcb\"\nfirmware = \"app.elf\"\nduration_ms = 10\n{BOOT_COVERAGE}"
     );
-    let spec = Spec::load(&p).expect("hold_ms parses");
-    assert_eq!(spec.asserts[0].hold_ms, Some(2.5));
-
-    let p = support::write_tmp(
-        "bootcov_hold_neg.toml",
-        "board = \"b.kicad_pcb\"\nfirmware = \"app.elf\"\nduration_ms = 10\n\
-         [[assert]]\nkind = \"boot_coverage\"\nnet = \"HB\"\nmin = 3.0\ndeadline_ms = 10.0\nhold_ms = -1.0\n",
+    assert_eq!(
+        load_spec(&format!("{base}hold_ms = 2.5\n")).asserts[0].hold_ms,
+        Some(2.5)
     );
-    let err = Spec::load(&p).unwrap_err().to_string();
+    let err = load_error(&format!("{base}hold_ms = -1.0\n"));
     assert!(
         err.contains("hold_ms") && err.contains(">= 0"),
         "negative hold_ms must be a named load error: {err}"
@@ -337,63 +300,191 @@ fn boot_coverage_hold_ms_parses_and_rejects_negative() {
 // scenario window it claimed to judge, and the "never sampled in scenario
 // window" failure could never fire.
 
+const SCENARIO: &str = "[[scenario]]\nid=\"burst\"\npart=\"U1\"\nprofile=\"p\"\n\
+    supply_net=\"+3.3V\"\nstart_ms=1.0\n[[profile]]\nid=\"p\"\n\
+    [[profile.segment]]\nlevel_a=0.1\n";
+
 #[test]
-fn rail_window_scoped_to_undeclared_scenario_is_rejected() {
-    let p = support::write_tmp(
-        "railwin_badscope.toml",
-        "board=\"b.kicad_pcb\"\nduration_ms=10\n\
-         [[scenario]]\nid=\"burst\"\npart=\"U1\"\nprofile=\"p\"\nsupply_net=\"+3.3V\"\nstart_ms=1.0\n\
-         [[profile]]\nid=\"p\"\n[[profile.segment]]\nlevel_a=0.1\n\
-         [[assert]]\nkind=\"rail_window\"\nnet=\"+3.3V\"\nmin=3.0\nscenario=\"brust\"\n",
+fn assertion_scenario_scopes_are_validated() {
+    for (case, body, wants) in [
+        (
+            "typo'd declared scope",
+            format!(
+                "board=\"b.kicad_pcb\"\nduration_ms=10\n{SCENARIO}\
+                 [[assert]]\nkind=\"rail_window\"\nnet=\"+3.3V\"\nmin=3.0\nscenario=\"brust\"\n"
+            ),
+            &["'brust'", "burst", "whole run"][..],
+        ),
+        (
+            "scope without scenarios",
+            "board=\"b.kicad_pcb\"\nduration_ms=10\n[[assert]]\nkind=\"rail_window\"\n\
+             net=\"+3.3V\"\nmin=3.0\nscenario=\"burst\"\n"
+                .into(),
+            &["no [[scenario]]"],
+        ),
+        // The check covers every assertion kind carrying `scenario`, not just
+        // rail_window; no sibling may silently fall back to the whole run.
+        (
+            "other assertion kind",
+            "board=\"b.kicad_pcb\"\nduration_ms=10\n[[assert]]\nkind=\"protection_trip\"\n\
+             supply_net=\"VBAT\"\nexpect_trip=true\nscenario=\"nope\"\n"
+                .into(),
+            &["'nope'"],
+        ),
+    ] {
+        let msg = load_error(&body);
+        for want in wants {
+            assert!(msg.contains(want), "{case}: expected {want:?} in {msg}");
+        }
+    }
+
+    // A correctly-scoped rail_window still loads.
+    load_spec(&format!(
+        "board=\"b.kicad_pcb\"\nduration_ms=10\n{SCENARIO}\
+         [[assert]]\nkind=\"rail_window\"\nnet=\"+3.3V\"\nmin=3.0\nscenario=\"burst\"\n"
+    ));
+}
+
+/// The vendor-recommended ESP32 CHIP_PU delay, as a board: 10k from the rail to
+/// PU, 1 uF from PU to ground, so the crossing time is `R*C*ln(4)` = 13.86 ms.
+fn rc_delay_board() -> String {
+    let parts = support::comp(
+        "R",
+        "Resistor_SMD:R_0805_2012Metric",
+        "10k",
+        20,
+        support::pad(1, "V33") + &support::pad(2, "PU"),
+    ) + &support::comp(
+        "C",
+        "Capacitor_SMD:C_0805_2012Metric",
+        "1uF",
+        40,
+        support::pad(1, "PU") + &support::pad(2, "GND"),
     );
-    let err = Spec::load(&p).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("'brust'"), "must name the bad scope: {msg}");
-    assert!(msg.contains("burst"), "must list the declared ids: {msg}");
+    format!("board version 20171130\nfn main {{\nnet \"V33\"\nnet \"PU\"\nnet \"GND\"\n{parts}}}\n")
+}
+
+/// The RC-delay board with `supply` as its `[[supply]]` body and `asserts`
+/// appended, run for 40 ms.
+fn rc_delay_run(case: &str, supply: &str, asserts: &str) -> hauksbee_ci::CiResult {
+    let board = support::write_tmp(&format!("{case}.board"), &rc_delay_board());
+    support::run_body(
+        &format!("{case}.toml"),
+        &format!(
+            "name = \"{case}\"\nboard = {}\nduration_ms = 40\nframe_ms = 0.05\n\
+             [[supply]]\nnet = \"V33\"\nkind = \"ideal\"\nvolts = 3.3\n{supply}{asserts}",
+            support::toml_path(&board),
+        ),
+    )
+}
+
+/// An assertion with NO bound is a measurement: it reports its number on every
+/// surface, cannot fail, and -- crucially -- does not let a run of nothing but
+/// measurements borrow the word GREEN, which is what a reader gates on.
+#[test]
+fn an_unbounded_assertion_reports_a_number_and_judges_nothing() {
+    let probe = "[[assert]]\nkind = \"voltage\"\nname = \"pu\"\nnet = \"PU\"\n";
+    let r = rc_delay_run("measure", "", probe);
+    let pu = support::row(&r, "pu");
+    assert!(pu.measured && pu.passed && !pu.invalid, "{pu:?}");
     assert!(
-        msg.contains("whole run"),
-        "must explain the silent-whole-run hazard: {msg}"
+        pu.detail.contains("measured") && pu.detail.contains("3.300"),
+        "{}",
+        pu.detail
     );
-}
+    assert_eq!(r.exit_code(), 0, "a measurement cannot redden a run");
 
-#[test]
-fn scenario_scope_with_no_scenarios_declared_is_rejected() {
-    let p = support::write_tmp(
-        "railwin_noscenarios.toml",
-        "board=\"b.kicad_pcb\"\nduration_ms=10\n\
-         [[assert]]\nkind=\"rail_window\"\nnet=\"+3.3V\"\nmin=3.0\nscenario=\"burst\"\n",
-    );
-    let err = Spec::load(&p).unwrap_err();
-    let msg = err.to_string();
+    let human = r.render_human();
+    assert!(human.contains("[MEASURED]"), "{human}");
     assert!(
-        msg.contains("no [[scenario]]"),
-        "must say no scenarios are declared: {msg}"
+        human.contains("MEASURED - 1/1 measurement(s) reported, nothing judged"),
+        "a measurement-only run must not headline GREEN: {human}"
+    );
+    assert!(!human.contains("GREEN"), "{human}");
+    assert!(
+        r.render_json().contains("\"measured\":true"),
+        "{}",
+        r.render_json()
+    );
+    assert!(
+        r.render_junit().contains("<system-out>measured:"),
+        "{}",
+        r.render_junit()
+    );
+
+    // Mixed with a real bound, the run is judged on that bound as usual and the
+    // measurement rides along.
+    let mixed = rc_delay_run(
+        "mixed",
+        "",
+        &format!(
+            "{probe}[[assert]]\nkind = \"voltage\"\nname = \"rail\"\nnet = \"V33\"\nmin = 3.0\n"
+        ),
+    );
+    assert!(
+        mixed
+            .render_human()
+            .contains("GREEN - 2/2 assertions passed"),
+        "{}",
+        mixed.render_human()
     );
 }
 
-// The scope check covers every assertion kind that carries `scenario`, not
-// just rail_window: any sibling scoped to an unknown id is rejected the same
-// way rather than silently evaluated whole-run.
+/// A `[[supply]]` starts already settled, so an RC power-on delay reads 0 ms.
+/// `ramp_ms` is what makes the cold start real; without it, any result that
+/// reads a start-up time has to say the timing is not simulated.
 #[test]
-fn any_assert_kind_scoped_to_undeclared_scenario_is_rejected() {
-    let p = support::write_tmp(
-        "trip_badscope.toml",
-        "board=\"b.kicad_pcb\"\nduration_ms=10\n\
-         [[assert]]\nkind=\"protection_trip\"\nsupply_net=\"VBAT\"\nexpect_trip=true\nscenario=\"nope\"\n",
+fn ramp_ms_models_a_cold_power_on_and_its_absence_is_declared() {
+    // R*C*ln(4) = 13.86 ms from a step; the 0.5 ms ramp shifts it slightly
+    // later. `min` over a window starting at t is the level AT t on a rising RC.
+    let level = |after_ms: f64| {
+        format!(
+            "[[assert]]\nkind = \"voltage\"\nname = \"pu at {after_ms}\"\nnet = \"PU\"\n\
+             min = 2.475\nafter_ms = {after_ms}\n"
+        )
+    };
+    let bracket = format!("{}{}", level(12.5), level(16.0));
+    let ramped = rc_delay_run("ramped", "ramp_ms = 0.5\n", &bracket);
+    let held = |r: &hauksbee_ci::CiResult, label: &str| support::row(r, label).passed;
+    assert!(
+        !held(&ramped, "pu at 12.5") && held(&ramped, "pu at 16"),
+        "the 2.475 V crossing must land between 12.5 and 16 ms: {:?}",
+        ramped.results
     );
-    let err = Spec::load(&p).unwrap_err();
-    assert!(err.to_string().contains("'nope'"), "got: {err}");
-}
+    assert!(
+        !ramped
+            .render_human()
+            .contains("power-on timing is not simulated"),
+        "a ramped rail needs no note: {}",
+        ramped.render_human()
+    );
 
-// A correctly-scoped rail_window (declared id) still loads.
-#[test]
-fn rail_window_scoped_to_declared_scenario_loads() {
-    let p = support::write_tmp(
-        "railwin_goodscope.toml",
-        "board=\"b.kicad_pcb\"\nduration_ms=10\n\
-         [[scenario]]\nid=\"burst\"\npart=\"U1\"\nprofile=\"p\"\nsupply_net=\"+3.3V\"\nstart_ms=1.0\n\
-         [[profile]]\nid=\"p\"\n[[profile.segment]]\nlevel_a=0.1\n\
-         [[assert]]\nkind=\"rail_window\"\nnet=\"+3.3V\"\nmin=3.0\nscenario=\"burst\"\n",
+    // Without the ramp every window reads the settled rail, so the answer is a
+    // convention and the note has to say so, once per timing result.
+    let settled = rc_delay_run("settled", "", &bracket);
+    assert!(
+        held(&settled, "pu at 12.5") && held(&settled, "pu at 16"),
+        "{:?}",
+        settled.results
     );
-    Spec::load(&p).expect("declared scope loads");
+    for label in ["pu at 12.5", "pu at 16"] {
+        let row = support::row(&settled, label);
+        assert!(
+            row.detail.contains("power-on timing is not simulated")
+                && row.detail.contains("ramp_ms"),
+            "{label}: {}",
+            row.detail
+        );
+    }
+    // Cheap and precise: a window at t=0 asks no timing question, so no note.
+    let t0 = rc_delay_run(
+        "t0",
+        "",
+        "[[assert]]\nkind = \"voltage\"\nname = \"pu\"\nnet = \"PU\"\nmin = 2.475\n",
+    );
+    assert!(
+        !t0.render_human().contains("power-on timing"),
+        "{}",
+        t0.render_human()
+    );
 }

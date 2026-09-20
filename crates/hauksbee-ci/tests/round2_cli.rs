@@ -100,6 +100,24 @@ fn a_red_member_makes_the_set_red_but_runs_every_member() {
     assert!(stdout.contains("below your"), "{stdout}");
 }
 
+/// `hauksbee-ci init <board> [--out <where>]` from `cwd`, asserted to succeed
+/// with stderr as the failure message, returning its stdout. Every init case
+/// below differs only in where it points and what it then reads back.
+fn init_ok(cwd: &Path, board: &std::ffi::OsStr, out: Option<&std::ffi::OsStr>) -> String {
+    let mut cmd = Command::new(bin());
+    cmd.arg("init").arg(board);
+    if let Some(dest) = out {
+        cmd.arg("--out").arg(dest);
+    }
+    let out = cmd.current_dir(cwd).output().expect("binary runs");
+    assert!(
+        out.status.success(),
+        "init succeeds: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 #[test]
 fn init_defaults_to_the_current_directory_with_a_relative_board_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -110,17 +128,7 @@ fn init_defaults_to_the_current_directory_with_a_relative_board_path() {
     let cwd = dir.path().join("ci");
     std::fs::create_dir_all(&cwd).unwrap();
 
-    let out = Command::new(bin())
-        .arg("init")
-        .arg("../hardware/blinky.kicad_pcb")
-        .current_dir(&cwd)
-        .output()
-        .expect("binary runs");
-    assert!(
-        out.status.success(),
-        "init succeeds: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let stdout = init_ok(&cwd, "../hardware/blinky.kicad_pcb".as_ref(), None);
 
     // The spec landed where the user was standing, not beside the board.
     let spec_path = cwd.join("blinky.toml");
@@ -140,7 +148,6 @@ fn init_defaults_to_the_current_directory_with_a_relative_board_path() {
 
     // The guidance names where the file went rather than telling the user to
     // move it.
-    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("wrote starter spec to"), "{stdout}");
     assert!(stdout.contains("HAUKSBEE_CI_SPECS"), "{stdout}");
 }
@@ -153,19 +160,7 @@ fn init_out_accepts_a_directory_or_a_file_path() {
 
     // --out <dir>: <stem>.toml inside it, created on demand.
     let out_dir = dir.path().join("ci");
-    let out = Command::new(bin())
-        .arg("init")
-        .arg(&board)
-        .arg("--out")
-        .arg("ci/")
-        .current_dir(dir.path())
-        .output()
-        .expect("binary runs");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    init_ok(dir.path(), board.as_os_str(), Some("ci/".as_ref()));
     let spec_path = out_dir.join("blinky.toml");
     assert!(spec_path.exists(), "--out dir/ places <stem>.toml inside");
     assert!(Spec::load(&spec_path).is_ok(), "and it loads");
@@ -180,19 +175,7 @@ fn init_out_accepts_a_directory_or_a_file_path() {
     // right after it says specs are discovered in `ci/`, and resolving it to a
     // FILE named `ci` would scaffold a spec nothing ever picks up.
     let bare_dir = dir.path().join("checks");
-    let out = Command::new(bin())
-        .arg("init")
-        .arg(&board)
-        .arg("--out")
-        .arg(&bare_dir)
-        .current_dir(dir.path())
-        .output()
-        .expect("binary runs");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let stdout = init_ok(dir.path(), board.as_os_str(), Some(bare_dir.as_os_str()));
     assert!(
         bare_dir.is_dir(),
         "--out checks makes a directory, not a file named `checks`"
@@ -205,7 +188,6 @@ fn init_out_accepts_a_directory_or_a_file_path() {
     assert!(Spec::load(&bare_spec).is_ok(), "and it loads");
     // The printed path is the file, not the directory: a user who copies it
     // into `hauksbee-ci run <path>` must get a run.
-    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains(&bare_spec.display().to_string()),
         "the guidance names the file that was written, got: {stdout}"
@@ -213,19 +195,7 @@ fn init_out_accepts_a_directory_or_a_file_path() {
 
     // --out <file.toml>: exactly that file.
     let file_out = dir.path().join("power-up.toml");
-    let out = Command::new(bin())
-        .arg("init")
-        .arg(&board)
-        .arg("--out")
-        .arg(&file_out)
-        .current_dir(dir.path())
-        .output()
-        .expect("binary runs");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    init_ok(dir.path(), board.as_os_str(), Some(file_out.as_os_str()));
     assert!(file_out.exists(), "--out file.toml writes that file");
     assert!(Spec::load(&file_out).is_ok());
 
@@ -352,25 +322,24 @@ fn celsius_less_max_temp_on_a_fallback_bound_part_is_refused_at_load() {
 
 // ── waivers reach hauksbee-ci run (board-side hauksbee-waivers.toml) ────────
 
-fn write_waivers(dir: &Path, body: &str) {
-    std::fs::write(dir.join("hauksbee-waivers.toml"), body).unwrap();
+fn waived_run(tag: &str, body: &str) -> hauksbee_ci::CiResult {
+    let (dir, spec) = board_dir(tag, 100.0);
+    std::fs::write(dir.path().join("hauksbee-waivers.toml"), body).unwrap();
+    run(&crate::support::run_config(spec)).expect("run completes")
 }
 
 #[test]
 fn a_board_side_waiver_turns_a_red_run_green_but_stays_visible() {
-    let (dir, spec) = board_dir("waived", 100.0);
-    write_waivers(
-        dir.path(),
-        r#"
-[[waive]]
-check = "ci"
-kind = "voltage"
-nets = ["+5V"]
-reason = "bench-verified; staged rollout of the new rail spec"
-until = "2030-01-01"
-"#,
+    let result = waived_run(
+        "waived",
+        &crate::support::waive(
+            "ci",
+            "voltage",
+            "+5V",
+            "bench-verified; staged rollout of the new rail spec",
+            "2030-01-01",
+        ),
     );
-    let result = run(&crate::support::run_config(spec)).expect("run completes");
     assert_eq!(result.exit_code(), 0, "the waived failure does not gate");
     let human = result.render_human();
     assert!(human.contains("[WAIVED]"), "still visible: {human}");
@@ -379,19 +348,10 @@ until = "2030-01-01"
 
 #[test]
 fn an_expired_board_side_waiver_gates_again() {
-    let (dir, spec) = board_dir("expired", 100.0);
-    write_waivers(
-        dir.path(),
-        r#"
-[[waive]]
-check = "ci"
-kind = "voltage"
-nets = ["+5V"]
-reason = "lapsed on purpose"
-until = "2020-01-01"
-"#,
+    let result = waived_run(
+        "expired",
+        &crate::support::waive("ci", "voltage", "+5V", "lapsed on purpose", "2020-01-01"),
     );
-    let result = run(&crate::support::run_config(spec)).expect("run completes");
     assert_eq!(result.exit_code(), 1, "the finding comes back");
     assert!(
         result.waiver_notes.iter().any(|n| n.contains("lapsed")),
@@ -402,10 +362,7 @@ until = "2020-01-01"
 
 #[test]
 fn an_unparseable_waiver_file_warns_and_fails_toward_gating() {
-    let (dir, spec) = board_dir("garbage", 100.0);
-    write_waivers(dir.path(), "this is not toml [[[");
-    let result = run(&crate::support::run_config(spec))
-        .expect("run completes; a bad waiver file is a warning, not a crash");
+    let result = waived_run("garbage", "this is not toml [[[");
     assert_eq!(result.exit_code(), 1, "fails closed: the finding gates");
     assert!(
         result
@@ -419,19 +376,16 @@ fn an_unparseable_waiver_file_warns_and_fails_toward_gating() {
 
 #[test]
 fn a_waiver_scoped_to_another_net_does_not_cover_the_failure() {
-    let (dir, spec) = board_dir("scope", 100.0);
-    write_waivers(
-        dir.path(),
-        r#"
-[[waive]]
-check = "ci"
-kind = "voltage"
-nets = ["3V3"]
-reason = "a different rail entirely"
-until = "2030-01-01"
-"#,
+    let result = waived_run(
+        "scope",
+        &crate::support::waive(
+            "ci",
+            "voltage",
+            "3V3",
+            "a different rail entirely",
+            "2030-01-01",
+        ),
     );
-    let result = run(&crate::support::run_config(spec)).expect("run completes");
     assert_eq!(result.exit_code(), 1, "scope is per-finding, not per-rule");
     assert!(
         result

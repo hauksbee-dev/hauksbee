@@ -28,6 +28,7 @@ rd     = 2.2      # drain ohmic resistance (Ω), fitted jointly with kp
 rs     = 0.5      # source ohmic resistance (Ω), bond-wire/package share
 cgd    = 3.0e-13  # gate-drain capacitance (F)
 cgs    = 5.0e-13  # gate-source capacitance (F)
+warning = "the RDS(on) rows stop at VGS = 4.5 V, so a lower gate drive is an extrapolation, not a datasheet figure; the fit is to TYPICAL values, and a part anywhere in the 1.0-2.5 V VGS(th) band is not this card"
 
 [models.pins]
 "G" = "gate"
@@ -39,6 +40,8 @@ max_current_a = 0.3        # ID continuous (Nexperia)
 max_surge_current_a = 0.8  # ID pulsed
 max_power_w = 0.35
 max_voltage_v = 60.0  # VDS
+rds_on_vgs = 4.5   # lowest VGS the RDS(on) rows reach (10 V and 4.5 V)
+vgs_th_max = 2.5   # VGSth max (Nexperia Table 6)
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -74,6 +77,8 @@ cgs    = 4.0e-13
 max_current_a = 0.2
 max_power_w = 0.36
 max_voltage_v = 50.0
+rds_on_vgs = 4.5   # RDS(on) rows are VGS=10V (3.5 ohm) and VGS=4.5V (6.0 ohm)
+vgs_th_max = 1.5   # VGS(th) max @ VDS=VGS, ID=1mA (Fairchild Rev C(W), On Characteristics)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AO3400A: Alpha & Omega Semiconductor N-channel trench MOSFET, SOT-23.
@@ -145,6 +150,8 @@ max_power_w         = 1.4     # PD at TA=25C (W)
 max_voltage_v       = 30.0    # VDS (V)
 theta_ja_c_per_w    = 100.0   # RthJA steady-state typ (max 125; the t<=10s value is 70)
 max_junction_temp_c = 150.0   # TJ max (C)
+rds_on_vgs          = 2.5     # lowest RDS(on) row: 24 mOhm typ / 48 max @ VGS=2.5V, ID=3A
+vgs_th_max          = 1.45    # VGS(th) max @ VDS=VGS, ID=250mA
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -246,6 +253,8 @@ max_power_w         = 0.4     # PD (W)
 max_voltage_v       = 20.0    # |VDS| (V)
 theta_ja_c_per_w    = 312.5   # RthJA (C/W), datasheet value for t <= 5 s
 max_junction_temp_c = 150.0   # TJ max (C)
+rds_on_vgs          = 2.5     # lowest |VGS| RDS(on) row (110 mOhm typ @ VGS=-2.5V)
+vgs_th_max          = 1.0     # |VGS(th)| max (-1.0 V)
 
 # FDS4435BZ / FDS4435BZ_F085: Fairchild (now onsemi) P-channel PowerTrench
 # MOSFET, SO-8.  The pedalboard source uses the automotive-suffix sheet and the
@@ -339,6 +348,8 @@ max_voltage_v = 30.0
 # Copper-area evidence is not part of this model card, so use the conservative
 # minimum-pad value for a whole-board thermal screen.
 theta_ja_c_per_w = 125.0
+rds_on_vgs = 4.5   # lowest |VGS| RDS(on) row (26 mOhm typ / 35 max @ VGS=-4.5V)
+vgs_th_max = 3.0   # |VGS(th)| max (-3.0 V) @ ID=-250uA
 max_junction_temp_c = 150.0
 
 [models.coverage]
@@ -502,6 +513,8 @@ max_power_w         = 300.0   # Pd at Tc=25C (W), datasheet
 max_voltage_v       = 100.0   # Vds abs max (V), datasheet
 theta_ja_c_per_w    = 62.0    # theta_JA TO-220 PCB-mounted estimate (C/W), datasheet
 max_junction_temp_c = 175.0   # Tj max (C), datasheet (OptiMOS3 = 175C rated)
+rds_on_vgs          = 10.0    # RDS(on) 4.5 mOhm max is specified at VGS=10V only
+vgs_th_max          = 4.5     # Vgs(th) max (2.5-4.5 V band), datasheet Table 1
 
 # ─────────────────────────────────────────────────────────────────────────────
 # IRF9358: Infineon dual P-channel power MOSFET, SO-8
@@ -558,6 +571,8 @@ max_power_w         = 2.0     # Pd Ta=25C SO-8 (W), datasheet (or ~2.5W per chan
 max_voltage_v       = 30.0    # |Vds| abs max (V), datasheet
 theta_ja_c_per_w    = 62.5    # theta_JA SO-8 still-air (C/W), datasheet
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
+rds_on_vgs          = 10.0    # RDS(on) 16.3 mOhm max is specified at VGS=-10V only
+vgs_th_max          = 2.0     # |Vgs(th)| max (-2.0 V)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIR182DP: Vishay N-channel power MOSFET, PowerPAK SO-8
@@ -605,6 +620,91 @@ max_power_w         = 31.0    # Pd at Tc=25C (W), datasheet
 max_voltage_v       = 100.0   # Vds abs max (V), datasheet
 theta_ja_c_per_w    = 40.0    # theta_JA PCB mounted (C/W), datasheet
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
+rds_on_vgs          = 10.0    # RDS(on) is specified at VGS=10V only
+vgs_th_max          = 4.5     # VGS(th) max (2.5-4.5 V band), datasheet
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IRF540N: Infineon (International Rectifier) HEXFET power MOSFET, TO-220AB.
+# Source: Infineon "IRF540NPbF" datasheet Rev. 2.1, 2026-07-24, pages 1-2
+#   (Absolute Maximum Rating, Thermal Resistance, "Static @ TJ = 25 C" and
+#   "Dynamic Electrical Characteristics" tables).
+#
+# THIS IS NOT A LOGIC-LEVEL PART, and that is the single most important fact on
+# its card. The Static table gives VGS(th) as 2.0 V MINIMUM / 4.0 V MAXIMUM, and
+# the ONLY RDS(on) row on the sheet is 44 mOhm max at VGS = 10 V, ID = 16 A.
+# Driven from a 3.3 V rail a worst-case part is not guaranteed to be on at all,
+# and a typical one is nowhere near its 44 mOhm. `ratings.rds_on_vgs` and
+# `ratings.vgs_th_max` below carry exactly those two numbers so the run can say
+# so instead of quoting 44 mOhm at a gate voltage the vendor never tested.
+#
+# Datasheet figures used:
+#   VGS(th) = 2.0 / (no typ published) / 4.0 V  @ VDS = VGS, ID = 250 uA
+#   RDS(on) max 44 mOhm (no typ published)      @ VGS = 10 V, ID = 16 A
+#   gfs     min 21 S (no typ published)         @ VDS = 50 V, ID = 16 A
+#   Ciss 1960 / Coss 250 / Crss 40 pF           @ VGS = 0, VDS = 25 V, 1 MHz
+#
+# vto = 3.0 IS AN ASSUMPTION: the Static table publishes no typical threshold,
+#   so 3.0 V is the midpoint of the 2.0/4.0 V band, the same least-arbitrary
+#   choice the DMG1012T entry above documents.
+# kp: one route only, from transconductance, because the sheet has a single
+#   RDS(on) row and route (b) needs two: kp = gfs^2/(2*ID) = 21^2/32 = 13.781.
+# rd+rs = 0.044 - 1/(13.781*(10-3.0)) = 0.044 - 0.010366 = 33.634 mOhm, split
+#   evenly, so the VGS=10 V row is reproduced by construction.
+# NOT VALIDATED OUT OF SAMPLE, and the one cross-check available is a MISS in a
+#   known direction: at VGS = 5 V the fit saturates at 0.5*kp*(5-3)^2 = 27.6 A
+#   where Fig. 3 (Typical Transfer Characteristics, VDS = 50 V, TJ = 25 C) reads
+#   roughly 40-50 A. Both inputs to the fit are GUARANTEED LIMITS rather than
+#   typicals (gfs is a minimum, RDS(on) a maximum), so the model is a
+#   worst-case-part model that under-states drive and over-states on-resistance.
+#   For a gate-drive adequacy question that is the conservative direction; do
+#   not use this entry to predict a typical part's linear gain.
+# NOT MODELLED: the body diode, `lambda`, avalanche/SOA, and the RDS(on)
+#   temperature curve of Fig. 4 (x2.3 at TJ = 150 C).
+[[models]]
+id = "irf540n"
+kind = "nmos"
+description = "IRF540N N-channel HEXFET TO-220AB, 100V, 33A, Rds(on) 44mOhm max @ Vgs=10V (NOT logic level)"
+
+[models.match]
+# IRF540N, IRF540NPBF (the lead-free ordering code), IRF540NS (D2PAK) and
+# IRF540NL (TO-262) are the same die in different bodies. The OLDER IRF540
+# without the N is a different, higher-RDS(on) die, and the trailing-anchored
+# "IRF540N" prefix excludes it.
+value_re = "(?i)^IRF540N[A-Z0-9-]*$"
+
+[models.params]
+vto    = 3.0       # ASSUMED: midpoint of the 2.0/4.0 V VGS(th) band, no typ published
+kp     = 13.781    # A/V^2, from gfs min 21 S at ID = 16 A (see above)
+rd     = 0.016817  # half the 33.634 mOhm ohmic residue of RDS(on) @ VGS = 10 V
+rs     = 0.016817  # other half
+cgd    = 4.0e-11   # = Crss, 40 pF @ VGS = 0, VDS = 25 V, 1 MHz
+cgs    = 1.92e-9   # = Ciss - Crss = 1960 - 40 = 1920 pF, same test condition
+warning = "a standard-level (not logic-level) part: its 44 mOhm RDS(on) is specified only at VGS = 10 V and its VGS(th) runs to 4.0 V, so a 3.3 V or 5 V gate drive is outside what the datasheet guarantees"
+
+[models.pins]
+# Stated on datasheet page 1: Gate Pin 1, Drain Pin 2 (also the tab), Source
+# Pin 3. Given as numbers AND letters so a layout board with bare pads and a
+# netlist with G/D/S pin functions both bind without leaning on the pin rule.
+"1" = "gate"
+"2" = "drain"
+"3" = "source"
+"G" = "gate"
+"D" = "drain"
+"S" = "source"
+
+[models.ratings]
+# Source: Infineon IRF540NPbF Rev. 2.1, Absolute Maximum Rating + Thermal
+# Resistance tables.
+max_current_a       = 33.0    # ID continuous at TC = 25 C, VGS = 10 V (23 A at TC = 100 C)
+max_surge_current_a = 110.0   # IDM pulsed drain current
+max_power_w         = 130.0   # PD at TC = 25 C: a CASE-referenced figure that assumes a
+                              # heatsink. In still air the binding limit is the junction
+                              # temperature computed from theta_ja below, not this number.
+max_voltage_v       = 100.0   # V(BR)DSS min
+theta_ja_c_per_w    = 62.0    # RthJA max (RthJC max is 1.15)
+max_junction_temp_c = 175.0   # TJ max
+rds_on_vgs          = 10.0    # the only VGS the 44 mOhm RDS(on) row is specified at
+vgs_th_max          = 4.0     # VGS(th) max @ VDS = VGS, ID = 250 uA
 
 # ═════════════════════════════════════════════════════════════════════════════
 # The corpus batch. Nine SOT-23-class switches that between them account for the
@@ -699,6 +799,8 @@ max_power_w = 0.35
 max_voltage_v = 25.0        # VDS (VGS is -0.3 to +8 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 357.0
+rds_on_vgs = 2.7   # lowest RDS(on) row (3.8 ohm typ / 5 max @ VGS=2.7V)
+vgs_th_max = 1.06  # VGS(th) max @ VDS=VGS, ID=250uA
 
 # ── DMG1012T-7 ────────────────────────────────────────────────────────────────
 # Diodes Incorporated, N-channel, SOT-523. 25 instances on the KiCad demos.
@@ -754,6 +856,8 @@ max_power_w = 0.28          # FR-4, minimum recommended pad layout (Note 6)
 max_voltage_v = 20.0        # VDS (VGS is +-6 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 452.0
+rds_on_vgs = 1.8   # lowest RDS(on) row (0.5 ohm typ / 0.7 max @ VGS=1.8V)
+vgs_th_max = 1.0   # VGS(th) max @ VDS=VGS, ID=250uA
 
 # ── PMV50ENEAR ────────────────────────────────────────────────────────────────
 # Nexperia, N-channel trench, SOT-23, AEC-Q101. 14 instances on MNT Reform.
@@ -813,6 +917,8 @@ max_voltage_v = 30.0        # VDS (VGS is +-20 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 245.0    # Rth(j-a) max, standard footprint (211 typ;
                             # 120 max with a 6 cm^2 drain pad)
+rds_on_vgs = 4.5            # lowest RDS(on) row (39 mOhm typ / 60 max @ VGS=4.5V)
+vgs_th_max = 2.5            # VGS(th) max @ VDS=VGS, ID=250uA
 
 # ── PMV50EPEAR ────────────────────────────────────────────────────────────────
 # Nexperia, P-channel trench, SOT-23, AEC-Q101. 24 instances on MNT Reform, the
@@ -865,6 +971,8 @@ max_power_w = 0.48          # Ptot, standard footprint (1.2 W on a 6 cm^2 pad)
 max_voltage_v = 30.0        # |VDS| (VGS is +-20 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 261.0    # Rth(j-a) max, standard footprint (227 typ)
+rds_on_vgs = 4.5            # lowest |VGS| RDS(on) row (49 mOhm typ @ VGS=-4.5V)
+vgs_th_max = 3.0            # |VGS(th)| max (-3 V)
 
 # ── WPM2015-3 ─────────────────────────────────────────────────────────────────
 # Will Semiconductor (WillSemi), P-channel, SOT-23. 28 instances across all
@@ -924,6 +1032,8 @@ max_voltage_v = 20.0        # |VDS| (VGS is +-8 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 190.0    # max, minimum pad, steady state (145 typ)
 theta_jc_c_per_w = 75.0     # max, steady state (60 typ)
+rds_on_vgs = 2.5            # lowest |VGS| RDS(on) row (103 mOhm typ @ VGS=-2.5V)
+vgs_th_max = 0.81           # |VGS(th)| max (-0.81 V)
 
 # ── IRLML6402 ─────────────────────────────────────────────────────────────────
 # Infineon (International Rectifier) HEXFET, P-channel, SOT-23 / Micro3.
@@ -1002,6 +1112,8 @@ max_power_w = 1.3           # PD at TA=25 C, 1 in^2 single-layer 1 oz Cu FR4,
 max_voltage_v = 20.0        # |VDS| (VGS is +-12 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 100.0    # max (75 typ). RthJC is not on this datasheet.
+rds_on_vgs = 2.5            # lowest |VGS| RDS(on) row (80 mOhm typ @ VGS=-2.5V)
+vgs_th_max = 1.2            # |VGS(th)| max (-1.2 V)
 
 # ── AO3422 ────────────────────────────────────────────────────────────────────
 # Alpha & Omega Semiconductor, N-channel, SOT-23. Hunt boards.
@@ -1059,6 +1171,8 @@ max_junction_temp_c = 150.0
 theta_ja_c_per_w = 150.0    # max, steady state (115 typ; 100 max at t <= 10 s).
                             # AOS publishes RthJL 48 typ / 60 max rather than
                             # RthJC, so theta_jc is deliberately absent.
+rds_on_vgs = 2.5            # lowest RDS(on) row (157 mOhm typ / 200 max @ VGS=2.5V)
+vgs_th_max = 2.0            # VGS(th) max @ VDS=VGS, ID=250uA
 
 # ── PMZ550UNE ─────────────────────────────────────────────────────────────────
 # Nexperia, N-channel trench, SOT-883 / DFN1006-3. MNT Reform. The board value
@@ -1126,6 +1240,8 @@ max_voltage_v = 30.0        # VDS. NOTE VGS is only +-8 V on this part, much
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 405.0    # Rth(j-a) max, standard footprint (350 typ;
                             # 310 max with a 1 cm^2 drain pad)
+rds_on_vgs = 1.5            # lowest RDS(on) row (890 mOhm typ / 1500 max @ VGS=1.5V)
+vgs_th_max = 0.95           # VGS(th) max @ VDS=VGS, ID=250uA
 
 # ── CJ3134K ───────────────────────────────────────────────────────────────────
 # Jiangsu Changjing Electronics (JSCJ), N-channel, SOT-23. 20 instances on the
@@ -1192,6 +1308,8 @@ max_power_w = 0.35          # FR4, minimum recommended pad size (Note 1)
 max_voltage_v = 20.0        # VDS (VGS is +-12 V)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 357.0    # same min-pad FR4 condition
+rds_on_vgs = 1.8            # lowest RDS(on) row (800 mOhm max @ VGS=1.8V)
+vgs_th_max = 1.1            # VGS(th) max @ VDS=VGS, ID=250uA
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DMG3404L: Diodes Incorporated N-channel logic-level trench MOSFET, SOT-23.
@@ -1275,6 +1393,8 @@ max_power_w         = 0.78    # PD, Note 5 board (1.33 W on the Note 6 board)
 max_voltage_v       = 30.0    # BVDSS / VDSS
 theta_ja_c_per_w    = 164.0   # RthJA, Note 5 board (96 C/W on the Note 6 board)
 max_junction_temp_c = 150.0   # TJ
+rds_on_vgs          = 4.5     # lowest RDS(on) row (24 mOhm typ / 35 max @ VGS=4.5V)
+vgs_th_max          = 2.0     # VGS(th) max @ VDS=VGS, ID=250uA
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FDN360P: onsemi (ex-Fairchild) P-channel PowerTrench MOSFET, SuperSOT-3.
@@ -1373,3 +1493,5 @@ max_voltage_v       = 30.0    # |BVDSS|
 theta_ja_c_per_w    = 250.0   # RthJA, Note 1a
 theta_jc_c_per_w    = 75.0    # RthJC
 max_junction_temp_c = 150.0   # TJ
+rds_on_vgs          = 4.5     # lowest |VGS| RDS(on) row (100 mOhm typ @ VGS=-4.5V)
+vgs_th_max          = 3.0     # |VGS(th)| max (-3.0 V) @ ID=-250uA

@@ -423,7 +423,7 @@
           "default": null
         },
         "kind": {
-          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery and spike/settling bounds\nover a scenario window. `protection_trip`: battery protection trips (or\nmust not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset and held per `hold_ms` (the kebab-case\n`boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model.",
+          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery and spike/settling bounds\nover a scenario window. `protection_trip`: battery protection trips (or\nmust not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset and held per `hold_ms` (the kebab-case\n`boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model. `pulse_width`: the width (ms) of the\nfirst complete high (or `level = \"low\"`) pulse on `net` after `after_ms`.\nOn the numeric kinds, omitting every bound makes the assertion a\nMEASUREMENT: the value is reported, nothing is judged.",
           "type": "string",
           "enum": [
             "voltage",
@@ -440,7 +440,20 @@
             "phase_margin",
             "ac_gain",
             "hwtrace",
-            "model_coverage"
+            "model_coverage",
+            "pulse_width"
+          ]
+        },
+        "level": {
+          "description": "pulse_width: which pulse to time, `\"high\"` (the default) or `\"low\"`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "enum": [
+            "high",
+            "low"
           ]
         },
         "matches": {
@@ -1435,6 +1448,16 @@
           "format": "double",
           "default": null,
           "minimum": 0.0
+        },
+        "ramp_ms": {
+          "description": "Cold power-on: ramp this rail linearly from 0 V to `volts` over this many\nmilliseconds instead of stamping it already settled. Without it the\ntransient starts from the DC operating point, which pre-charges every\ncapacitor, so a power-on RC delay reads 0 ms.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null,
+          "exclusiveMinimum": 0
         },
         "ripple_hz": {
           "description": "Ripple frequency (Hz); pair it with `ripple_vpp`.",

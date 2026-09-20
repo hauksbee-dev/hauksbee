@@ -73,11 +73,7 @@ fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64),
     if refnet != "GND" {
         assert_eq!(r.exit_code(), i32::from(flag) * 3, "{case}: exit code");
     }
-    r.results
-        .iter()
-        .find(|x| x.label == "vka")
-        .unwrap_or_else(|| panic!("{case}: no vka result in {:?}", r.results))
-        .passed
+    support::row(&r, "vka").passed
 }
 
 /// The held-out prediction challenge's own acceptance band for the 5 V setter.

@@ -69,11 +69,7 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
             ),
         );
         let r = hauksbee_ci::run(&support::run_config(spec)).expect("run the spec");
-        let a = r
-            .results
-            .iter()
-            .find(|x| x.label == "vout regulates")
-            .unwrap_or_else(|| panic!("{case}: no VOUT assertion in {:?}", r.results));
+        let a = support::row(&r, "vout regulates");
         if supported {
             // SOLVED, not declared: the rail is the same 5.036 V either way, so
             // only the solved output current can tell these two rows apart. A
@@ -99,4 +95,37 @@ fn an_adjustable_regulator_solves_its_rail_and_refuses_what_it_cannot_support() 
             assert!(a.invalid && a.detail.contains(reason), "{case}: {a:?}");
         }
     }
+}
+
+/// An UNDERMINED measurement must say so. The divider-only board violates the
+/// LM317's minimum load current, which invalidates any voltage read off VOUT --
+/// and a measurement is not exempt: dropping the bounds removes the claim, not
+/// the reason the number cannot be trusted.
+#[test]
+fn a_measurement_is_undermined_by_the_same_evidence_a_bound_is() {
+    let board_path = support::write_tmp("starved.board", &board(Some(720.0), None));
+    let spec = support::write_tmp(
+        "starved-probe.toml",
+        &format!(
+            "name = \"starved probe\"\nboard = {}\nduration_ms = 3\n\
+             [[supply]]\nnet = \"VIN\"\nkind = \"bench\"\nvolts = 12.0\n\
+             current_limit_a = 0.5\nr_out_ohms = 0.1\n\
+             [[assert]]\nkind = \"voltage\"\nname = \"vout\"\nnet = \"VOUT\"\n\
+             after_ms = 1.0\n",
+            support::toml_path(&board_path),
+        ),
+    );
+    let r = hauksbee_ci::run(&support::run_config(spec)).expect("run the spec");
+    let a = support::row(&r, "vout");
+    assert!(a.invalid && a.measured, "{a:?}");
+    assert!(a.detail.starts_with("INVALID evidence"), "{a:?}");
+    assert!(
+        r.exit_code() == 3,
+        "an undermined number cannot exit 0: {a:?}"
+    );
+    assert!(
+        r.render_human().contains("requires for regulation"),
+        "the undermining reason must still be stated: {}",
+        r.render_human()
+    );
 }

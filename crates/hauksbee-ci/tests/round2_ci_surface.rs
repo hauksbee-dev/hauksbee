@@ -112,18 +112,10 @@ fn an_unknown_peripheral_type_gets_a_did_you_mean_hint() {
 
 fn result_named(label: &str, passed: bool) -> AssertResult {
     AssertResult {
-        label: label.to_string(),
-        kind: "voltage".to_string(),
         passed,
-        invalid: false,
         detail: format!("{label} detail"),
-        failing_seed: None,
-        failing_seeds: Vec::new(),
-        seeds_total: 1,
-        why: None,
-        waived: None,
         subject_nets: vec!["+5V".to_string()],
-        subject_refs: Vec::new(),
+        ..AssertResult::shell(label.to_string(), "voltage".to_string(), 1)
     }
 }
 
@@ -265,21 +257,27 @@ fn waiver_file(dir: &std::path::Path, body: &str) -> PathBuf {
     p
 }
 
-const CI_WAIVER: &str = r#"
-[[waive]]
-check = "ci"
-kind = "voltage"
-nets = ["+5V"]
-reason = "bench-verified; the model's ESR is pessimistic here"
-until = "2030-01-01"
-"#;
+/// The waiver every case below starts from: an active `ci` voltage waiver on
+/// `+5V`, matching what [`result_named`] builds.
+fn ci_waiver() -> String {
+    crate::support::waive(
+        "ci",
+        "voltage",
+        "+5V",
+        "bench-verified; the model's ESR is pessimistic here",
+        "2030-01-01",
+    )
+}
+
+/// The `WaiverSet` a waiver file with `body` loads to.
+fn waivers_from(dir: &std::path::Path, body: &str) -> hauksbee_engine::waiver::WaiverSet {
+    hauksbee_engine::waiver::WaiverSet::load(&waiver_file(dir, body)).unwrap()
+}
 
 #[test]
 fn an_active_ci_waiver_covers_the_matching_failure_and_nothing_else() {
     let dir = tempfile::tempdir().unwrap();
-    let p = waiver_file(dir.path(), CI_WAIVER);
-    let mut waivers = hauksbee_engine::waiver::WaiverSet::load(&p).unwrap();
-
+    let mut waivers = waivers_from(dir.path(), &ci_waiver());
     let mut results = vec![
         result_named("+5V holds", false), // matches: kind voltage, net +5V
         {
@@ -312,18 +310,8 @@ fn an_active_ci_waiver_covers_the_matching_failure_and_nothing_else() {
 #[test]
 fn an_expired_ci_waiver_gates_again_and_is_reported() {
     let dir = tempfile::tempdir().unwrap();
-    let p = waiver_file(
-        dir.path(),
-        r#"
-[[waive]]
-check = "ci"
-kind = "voltage"
-nets = ["+5V"]
-reason = "expired on purpose"
-until = "2020-01-01"
-"#,
-    );
-    let mut waivers = hauksbee_engine::waiver::WaiverSet::load(&p).unwrap();
+    let body = crate::support::waive("ci", "voltage", "+5V", "expired on purpose", "2020-01-01");
+    let mut waivers = waivers_from(dir.path(), &body);
     let mut results = vec![result_named("+5V holds", false)];
     apply_waivers(&mut results, &mut waivers);
     assert!(
@@ -342,8 +330,7 @@ fn an_invalid_result_can_never_be_waived() {
     // A waiver overrules a finding; an INVALID is the absence of one. Letting
     // a waiver green an untrustworthy run would fail open.
     let dir = tempfile::tempdir().unwrap();
-    let p = waiver_file(dir.path(), CI_WAIVER);
-    let mut waivers = hauksbee_engine::waiver::WaiverSet::load(&p).unwrap();
+    let mut waivers = waivers_from(dir.path(), &ci_waiver());
     let mut invalid = result_named("+5V holds", false);
     invalid.invalid = true;
     let mut results = vec![invalid];
@@ -356,25 +343,15 @@ fn an_invalid_result_can_never_be_waived() {
 #[test]
 fn a_stale_ci_waiver_is_reported_but_static_check_waivers_are_not_our_business() {
     let dir = tempfile::tempdir().unwrap();
-    let p = waiver_file(
-        dir.path(),
-        r#"
-[[waive]]
-check = "ci"
-kind = "voltage"
-nets = ["+5V"]
-reason = "matched nothing"
-until = "2030-01-01"
-
-[[waive]]
-check = "si"
-kind = "controlled_impedance"
-nets = ["USB_DP"]
-reason = "an SI waiver a CI run never consults"
-until = "2030-01-01"
-"#,
-    );
-    let waivers = hauksbee_engine::waiver::WaiverSet::load(&p).unwrap();
+    let body = crate::support::waive("ci", "voltage", "+5V", "matched nothing", "2030-01-01")
+        + &crate::support::waive(
+            "si",
+            "controlled_impedance",
+            "USB_DP",
+            "an SI waiver a CI run never consults",
+            "2030-01-01",
+        );
+    let waivers = waivers_from(dir.path(), &body);
     let notes = waiver_notes(&waivers);
     assert_eq!(notes.len(), 1, "only the ci waiver is reported: {notes:?}");
     assert!(notes[0].contains("matched nothing"), "{notes:?}");
@@ -392,18 +369,8 @@ until = "2030-01-01"
 #[test]
 fn a_waiver_naming_no_check_surface_is_reported_not_silently_inert() {
     let dir = tempfile::tempdir().unwrap();
-    let p = waiver_file(
-        dir.path(),
-        r#"
-[[waive]]
-check = "cl"
-kind = "voltage"
-nets = ["+5V"]
-reason = "meant ci, typed cl"
-until = "2030-01-01"
-"#,
-    );
-    let mut waivers = hauksbee_engine::waiver::WaiverSet::load(&p).unwrap();
+    let body = crate::support::waive("cl", "voltage", "+5V", "meant ci, typed cl", "2030-01-01");
+    let mut waivers = waivers_from(dir.path(), &body);
     // It really is inert: the failure it was meant to cover still gates.
     let mut results = vec![result_named("+5V holds", false)];
     apply_waivers(&mut results, &mut waivers);
@@ -428,15 +395,14 @@ fn a_real_static_check_surface_is_still_not_reported_here() {
     // run never consults.
     let dir = tempfile::tempdir().unwrap();
     for surface in ["si", "drc", "lint"] {
-        let p = waiver_file(
-            dir.path(),
-            &format!(
-                "\n[[waive]]\ncheck = \"{surface}\"\nkind = \"short\"\n\
-                 nets = [\"USB_DP\"]\nreason = \"not this run's business\"\n\
-                 until = \"2030-01-01\"\n"
-            ),
+        let body = crate::support::waive(
+            surface,
+            "short",
+            "USB_DP",
+            "not this run's business",
+            "2030-01-01",
         );
-        let waivers = hauksbee_engine::waiver::WaiverSet::load(&p).unwrap();
+        let waivers = waivers_from(dir.path(), &body);
         assert!(
             waiver_notes(&waivers).is_empty(),
             "a {surface} waiver must stay quiet here"
@@ -450,18 +416,14 @@ fn the_boot_coverage_alias_matches_a_canonical_waiver() {
     // failures carry kind "boot_coverage" and a waiver written canonically
     // covers them; nobody has to know the alias history to write a waiver.
     let dir = tempfile::tempdir().unwrap();
-    let p = waiver_file(
-        dir.path(),
-        r#"
-[[waive]]
-check = "ci"
-kind = "boot_coverage"
-nets = ["EN"]
-reason = "gate driven by an unmodelled supervisor"
-until = "2030-01-01"
-"#,
+    let body = crate::support::waive(
+        "ci",
+        "boot_coverage",
+        "EN",
+        "gate driven by an unmodelled supervisor",
+        "2030-01-01",
     );
-    let mut waivers = hauksbee_engine::waiver::WaiverSet::load(&p).unwrap();
+    let mut waivers = waivers_from(dir.path(), &body);
     let mut r = result_named("EN driven", false);
     r.kind = "boot_coverage".to_string();
     r.subject_nets = vec!["EN".to_string()];

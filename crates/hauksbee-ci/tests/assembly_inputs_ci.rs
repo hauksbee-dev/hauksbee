@@ -73,6 +73,56 @@ fn artifact<'a>(json: &'a serde_json::Value, role: &str) -> &'a serde_json::Valu
         .unwrap_or_else(|| panic!("missing {role} artifact: {}", json["inventory"]))
 }
 
+/// Run `hauksbee-ci <subcommand> <spec> <extra...>`, returning its exit code
+/// and stdout+stderr joined: a refusal's sentence can land on either stream, so
+/// every check below reads the pair as one diagnostic.
+fn cli(subcommand: &str, spec: &Path, extra: &[&str]) -> (Option<i32>, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
+        .arg(subcommand)
+        .arg(spec)
+        .args(extra)
+        .output()
+        .expect("hauksbee-ci runs");
+    (
+        output.status.code(),
+        format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    )
+}
+
+/// `check` and `run` must refuse the SAME input the SAME way (exit 2, naming
+/// every `wants` substring). The pair is the point: a refusal only `run` makes
+/// is one the fast pre-flight told the user they had passed.
+fn both_refuse(spec: &Path, extra: &[&str], wants: &[&str]) {
+    for subcommand in ["check", "run"] {
+        let (code, diagnostic) = cli(subcommand, spec, extra);
+        assert_eq!(code, Some(2), "{subcommand} must refuse: {diagnostic}");
+        for want in wants {
+            assert!(
+                diagnostic.contains(want),
+                "{subcommand} must say {want:?}: {diagnostic}"
+            );
+        }
+    }
+}
+
+/// Does `artifact`'s contribution list record a `what` whose detail mentions
+/// `needle`? Reconciliation that leaves no such record is an unreviewable
+/// pre-pass, which is what each caller is refusing.
+fn contributed(artifact: &serde_json::Value, what: &str, needle: &str) -> bool {
+    artifact["contributed"].as_array().is_some_and(|items| {
+        items.iter().any(|item| {
+            item["what"] == what
+                && item["detail"]
+                    .as_str()
+                    .is_some_and(|line| line.contains(needle))
+        })
+    })
+}
+
 #[test]
 fn bom_placement_and_variant_shape_the_gate_and_its_exact_evidence() {
     let dir = tempfile::tempdir().unwrap();
@@ -90,38 +140,24 @@ fn bom_placement_and_variant_shape_the_gate_and_its_exact_evidence() {
 
     let bom = artifact(&json, "bom");
     assert!(
-        bom["contributed"]
-            .as_array()
-            .is_some_and(|items| items.iter().any(|item| {
-                item["what"] == "part identity"
-                    && item["detail"]
-                        .as_str()
-                        .is_some_and(|line| line.contains("manufacturer part number"))
-            })),
+        contributed(bom, "part identity", "manufacturer part number"),
         "BOM reconciliation must be evidence, not an unrecorded pre-pass: {bom}"
     );
     let placement = artifact(&json, "placement");
     assert!(
-        placement["contributed"]
-            .as_array()
-            .is_some_and(|items| items.iter().any(|item| {
-                item["what"] == "assembly placement"
-                    && item["detail"]
-                        .as_str()
-                        .is_some_and(|line| line.contains("2 parts placed"))
-            })),
+        contributed(placement, "assembly placement", "2 parts placed"),
         "placement reconciliation must be evidence: {placement}"
     );
     let variant = artifact(&json, "variant");
     assert_eq!(variant["kind"], "toml");
-    assert!(
-        variant["contributed"][0]["detail"]
-            .as_str()
-            .is_some_and(|detail| {
-                detail.contains("sensorless") && detail.contains("left open [R2]")
-            }),
-        "the exact population decision must be reviewable: {variant}"
-    );
+    for detail in ["sensorless", "left open [R2]"] {
+        assert!(
+            variant["contributed"][0]["detail"]
+                .as_str()
+                .is_some_and(|line| line.contains(detail)),
+            "the exact population decision must be reviewable: {variant}"
+        );
+    }
 
     let evidence_artifacts = json["results"][0]["evidence"]["artifacts"]
         .as_array()
@@ -143,29 +179,7 @@ fn check_and_run_both_refuse_the_same_ambiguous_bom() {
     )
     .unwrap();
 
-    for subcommand in ["check", "run"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
-            .arg(subcommand)
-            .arg(&spec)
-            .output()
-            .expect("hauksbee-ci runs");
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{subcommand} must refuse; stdout={} stderr={}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let diagnostic = format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            diagnostic.contains("two columns that could be the manufacturer"),
-            "{subcommand} must name the same reader refusal: {diagnostic}"
-        );
-    }
+    both_refuse(&spec, &[], &["two columns that could be the manufacturer"]);
 }
 
 #[test]
@@ -231,30 +245,12 @@ fn an_assembly_that_leaves_every_component_open_is_invalid_not_green() {
     )
     .unwrap();
 
-    for subcommand in ["check", "run"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
-            .arg(subcommand)
-            .arg(&spec)
-            .output()
-            .expect("hauksbee-ci runs");
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{subcommand} must reject a vacuous empty assembly; stdout={} stderr={}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let diagnostic = format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            diagnostic.contains("leaves every board component open")
-                && diagnostic.contains("`no_faults`"),
-            "the refusal must explain the false-green risk: {diagnostic}"
-        );
-    }
+    // The refusal must explain the false-green risk, not just say no.
+    both_refuse(
+        &spec,
+        &[],
+        &["leaves every board component open", "`no_faults`"],
+    );
 }
 
 #[test]
@@ -278,25 +274,8 @@ cs_net = "VCC"
     );
     std::fs::write(&spec, body).unwrap();
 
-    for subcommand in ["check", "run"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
-            .arg(subcommand)
-            .arg(&spec)
-            .output()
-            .expect("hauksbee-ci runs");
-        assert_eq!(output.status.code(), Some(2), "{subcommand} must refuse");
-        let diagnostic = format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            diagnostic.contains("U4")
-                && diagnostic.contains("left open")
-                && diagnostic.contains("will not simulate"),
-            "the refusal must name the absent physical device: {diagnostic}"
-        );
-    }
+    // The refusal must name the absent physical device.
+    both_refuse(&spec, &[], &["U4", "left open", "will not simulate"]);
 }
 
 #[test]
@@ -377,38 +356,23 @@ value_override = "10k"
             .expect_err("the custom layout identity contradicts the BOM identity");
     assert!(direct_error.to_string().contains("U4"), "{direct_error}");
 
-    let plain_check = Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
-        .arg("check")
-        .arg(&spec)
-        .output()
-        .expect("hauksbee-ci check runs");
+    let (code, diagnostic) = cli("check", &spec, &[]);
     assert_eq!(
-        plain_check.status.code(),
+        code,
         Some(0),
-        "without the repository model, the custom layout identity is unknown: {}",
-        String::from_utf8_lossy(&plain_check.stderr)
+        "without the repository model, the custom layout identity is unknown: {diagnostic}"
     );
 
-    for subcommand in ["check", "run"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
-            .arg(subcommand)
-            .arg(&spec)
-            .arg("--models-dir")
-            .arg(&models)
-            .output()
-            .expect("hauksbee-ci runs");
-        assert_eq!(output.status.code(), Some(2), "{subcommand} must refuse");
-        let diagnostic = format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            diagnostic.contains("U4")
-                && diagnostic.contains("HB-CUSTOM-LAYOUT")
-                && diagnostic.contains("ATmega328P")
-                && diagnostic.contains("different revisions"),
-            "both commands must reconcile under the same custom model authority: {diagnostic}"
-        );
-    }
+    // Both commands must reconcile under the same custom model authority.
+    let models_dir = models.to_str().expect("models dir path");
+    both_refuse(
+        &spec,
+        &["--models-dir", models_dir],
+        &[
+            "U4",
+            "HB-CUSTOM-LAYOUT",
+            "ATmega328P",
+            "different revisions",
+        ],
+    );
 }

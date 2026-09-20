@@ -92,11 +92,7 @@ fn out_is(case: &str, rf: Option<&str>, after_ms: f64, end_ms: f64, high: bool) 
         human.contains("modelled only in part") && human.contains("response time"),
         "{case}: the LM393's unmodelled response time never reached the report"
     );
-    r.results
-        .iter()
-        .find(|x| x.label == "out")
-        .unwrap_or_else(|| panic!("{case}: no out result in {:?}", r.results))
-        .passed
+    support::row(&r, "out").passed
 }
 
 #[test]
@@ -151,9 +147,7 @@ fn opamp_out(case: &str, rail: f64, vsig: f64, band: (f64, f64)) -> bool {
         human.contains("modelled only in part") && human.contains("output current limit"),
         "{case}: the LM358's coverage note never reached the report"
     );
-    let out = r.results.iter().find(|x| x.label == "out");
-    out.unwrap_or_else(|| panic!("{case}: no out result in {:?}", r.results))
-        .passed
+    support::row(&r, "out").passed
 }
 
 #[test]

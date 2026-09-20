@@ -34,36 +34,24 @@ fn board() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/inkplate_class.net")
 }
 
-/// BATTERY side: cold-boot inrush trips the 1 A-class LiPo protection and the
-/// rail collapses. We assert the protection DID trip and the rail dipped well
-/// below 3.0 V during the cold-boot window.
-#[test]
-fn inkplate_class_battery_cold_boot_trips_protection() {
-    let body = format!(
-        r#"name = "Inkplate-class: LiPo cold-boot WiFi inrush trips protection"
+/// The head every spec in this module shares: the Inkplate-class fixture over a
+/// 60 ms run at a 0.2 ms frame, `supply` as the `[[supply]]` body on +3.3V,
+/// honest decoupling (real ESR/ESL on the bulk + bypass caps, so the rail sags
+/// the way the real board does; ideal caps would mask it), and the ESP32
+/// cold-boot RF surge attached to U1's 3V3 supply.
+fn cold_boot_spec(name: &str, supply: &str, asserts: &str) -> String {
+    format!(
+        r#"name = "{name}"
 board = {board}
 duration_ms = 60
 frame_ms = 0.2
 
-# A small protected 1S LiPo feeding the 3V3 rail. Protection trips at 1 A held
-# for 2 ms (a DW01-class cutoff on a small pack). r_internal models the cell.
 [[supply]]
 net = "+3.3V"
-kind = "battery"
-chemistry = "liion"
-cells = 1
-capacity_mah = 400
-soc = 1.0
-r_internal_ohms = 0.25
-protection_trip_a = 1.0
-protection_delay_ms = 2.0
-
-# Honest decoupling: real ESR/ESL on the bulk + bypass caps, so the rail sags
-# the way the real board does (ideal caps would mask it).
+{supply}
 [decoupling]
 parasitics = true
 
-# The ESP32 cold-boot RF surge attached to U1's 3V3 supply.
 [[scenario]]
 id = "coldboot"
 part = "U1"
@@ -71,7 +59,40 @@ profile = "esp32_cold_boot_inrush"
 supply_net = "+3.3V"
 start_ms = 2.0
 
-[[assert]]
+{asserts}"#,
+        board = support::toml_path(&board())
+    )
+}
+
+/// A small protected 1S LiPo feeding the 3V3 rail: protection trips at 1 A held
+/// for 2 ms (a DW01-class cutoff on a small pack), `r_internal` models the cell.
+const LIPO: &str = r#"kind = "battery"
+chemistry = "liion"
+cells = 1
+capacity_mah = 400
+soc = 1.0
+r_internal_ohms = 0.25
+protection_trip_a = 1.0
+protection_delay_ms = 2.0
+"#;
+
+/// USB-supplemented operation: the LDO is fed from stiff USB power instead of
+/// the small cell, so its 3.3 V OUTPUT is stiff. Modelled as a stiff bench
+/// supply at the rail's own 3.3 V: the fixture has no VBUS net (the LDO is
+/// abstracted away), and stamping the USB 5 V directly onto the 3V3 net put
+/// 5 V on the ESP32's VDD, which the stress monitor now correctly flags as an
+/// overvoltage (abs-max 3.6 V). No protection to trip.
+const STIFF_USB: &str = "kind = \"bench\"\nvolts = 3.3\ncurrent_limit_a = 3.0\n";
+
+/// BATTERY side: cold-boot inrush trips the 1 A-class LiPo protection and the
+/// rail collapses. We assert the protection DID trip and the rail dipped well
+/// below 3.0 V during the cold-boot window.
+#[test]
+fn inkplate_class_battery_cold_boot_trips_protection() {
+    let body = cold_boot_spec(
+        "Inkplate-class: LiPo cold-boot WiFi inrush trips protection",
+        LIPO,
+        r#"[[assert]]
 kind = "protection_trip"
 name = "LiPo protection trips on cold-boot inrush"
 supply_net = "+3.3V"
@@ -85,17 +106,12 @@ net = "+3.3V"
 dip_below = 3.0
 for_max_ms = 1.0
 "#,
-        board = support::toml_path(&board())
     );
     let result = run_body("battery.toml", &body);
     eprintln!("BATTERY side:\n{}", result.render_human());
 
     // The protection_trip assertion must PASS (it DID trip): the headline.
-    let trip = result
-        .results
-        .iter()
-        .find(|r| r.kind == "protection_trip")
-        .expect("protection_trip assertion present");
+    let trip = support::row(&result, "kind:protection_trip");
     assert!(
         trip.passed,
         "expected the LiPo protection to TRIP on cold-boot inrush:\n  {}",
@@ -104,11 +120,7 @@ for_max_ms = 1.0
     // The rail_window asserts the rail must NOT stay below 3.0 V for > 1 ms.
     // On the battery side it collapses for far longer once protection latches,
     // so this assertion FAILS by design: that red is the brownout being caught.
-    let window = result
-        .results
-        .iter()
-        .find(|r| r.kind == "rail_window")
-        .expect("rail_window assertion present");
+    let window = support::row(&result, "kind:rail_window");
     assert!(
         !window.passed,
         "battery-side rail_window should FAIL (rail collapses): {}",
@@ -132,50 +144,21 @@ for_max_ms = 1.0
 /// protection_trip, with no rail_window at all, so it must PASS.
 #[test]
 fn scoped_protection_trip_passes_without_a_matching_rail_window() {
-    let body = format!(
-        r#"name = "R17: scoped protection_trip, no rail_window"
-board = {board}
-duration_ms = 60
-frame_ms = 0.2
-
-[[supply]]
-net = "+3.3V"
-kind = "battery"
-chemistry = "liion"
-cells = 1
-capacity_mah = 400
-soc = 1.0
-r_internal_ohms = 0.25
-protection_trip_a = 1.0
-protection_delay_ms = 2.0
-
-[decoupling]
-parasitics = true
-
-[[scenario]]
-id = "coldboot"
-part = "U1"
-profile = "esp32_cold_boot_inrush"
-supply_net = "+3.3V"
-start_ms = 2.0
-
-# Scoped to the scenario, and there is deliberately NO rail_window on +3.3V.
-[[assert]]
+    // Scoped to the scenario, and there is deliberately NO rail_window on +3.3V.
+    let body = cold_boot_spec(
+        "R17: scoped protection_trip, no rail_window",
+        LIPO,
+        r#"[[assert]]
 kind = "protection_trip"
 name = "LiPo protection trips inside the coldboot window"
 supply_net = "+3.3V"
 expect_trip = true
 scenario = "coldboot"
 "#,
-        board = support::toml_path(&board())
     );
     let result = run_body("scoped_trip.toml", &body);
     eprintln!("SCOPED-TRIP side:\n{}", result.render_human());
-    let trip = result
-        .results
-        .iter()
-        .find(|r| r.kind == "protection_trip")
-        .expect("protection_trip assertion present");
+    let trip = support::row(&result, "kind:protection_trip");
     assert!(
         trip.passed,
         "a scenario-scoped protection_trip must be honored without a matching rail_window:\n  {}",
@@ -194,35 +177,10 @@ scenario = "coldboot"
 /// The rail holds; nothing trips. This side must be fully GREEN.
 #[test]
 fn inkplate_class_usb_supplemented_survives() {
-    let body = format!(
-        r#"name = "Inkplate-class: USB-supplemented cold boot survives"
-board = {board}
-duration_ms = 60
-frame_ms = 0.2
-
-# USB-supplemented operation: the LDO is fed from stiff USB power instead of
-# the small cell, so its 3.3 V OUTPUT is stiff. Modelled as a stiff bench
-# supply at the rail's own 3.3 V: the fixture has no VBUS net (the LDO is
-# abstracted away), and stamping the USB 5 V directly onto the 3V3 net put
-# 5 V on the ESP32's VDD, which the stress monitor now correctly flags as an
-# overvoltage (abs-max 3.6 V). No protection to trip.
-[[supply]]
-net = "+3.3V"
-kind = "bench"
-volts = 3.3
-current_limit_a = 3.0
-
-[decoupling]
-parasitics = true
-
-[[scenario]]
-id = "coldboot"
-part = "U1"
-profile = "esp32_cold_boot_inrush"
-supply_net = "+3.3V"
-start_ms = 2.0
-
-[[assert]]
+    let body = cold_boot_spec(
+        "Inkplate-class: USB-supplemented cold boot survives",
+        STIFF_USB,
+        r#"[[assert]]
 kind = "rail_window"
 name = "3V3 rail holds through cold boot on USB"
 scenario = "coldboot"
@@ -232,7 +190,6 @@ min = 3.0
 [[assert]]
 kind = "no_faults"
 "#,
-        board = support::toml_path(&board())
     );
     let result = run_body("usb.toml", &body);
     eprintln!("USB side:\n{}", result.render_human());

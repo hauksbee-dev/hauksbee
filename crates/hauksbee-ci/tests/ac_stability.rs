@@ -30,13 +30,16 @@ fn phase_margin_assertion_needs_ac_block() {
 }
 
 #[test]
-fn phase_margin_needs_a_bound() {
+fn phase_margin_without_a_bound_is_a_measurement_not_a_silent_gate() {
+    // An unbounded numeric assertion used to be a loud spec error. It now
+    // loads as a MEASUREMENT: it reports the margin and judges nothing, which
+    // is a different thing from a gate that passes without a bound.
     let p = support::write_tmp(
         "pm_no_bound.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=1\nfstop=1e6\npoints=10\n[[assert]]\nkind=\"phase_margin\"\nnet=\"FB\"\n",
     );
-    let err = Spec::load(&p).unwrap_err();
-    assert!(err.to_string().contains("min"), "got: {err}");
+    let spec = Spec::load(&p).expect("an unbounded phase_margin is a measurement");
+    assert!(spec.asserts[0].measurement(), "{:?}", spec.asserts[0]);
 }
 
 #[test]

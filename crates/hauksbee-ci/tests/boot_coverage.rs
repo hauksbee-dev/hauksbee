@@ -88,11 +88,7 @@ fn gate_driven_promptly_passes() {
         result.render_human()
     );
     // The boot-coverage assertion is present and green.
-    let bc = result
-        .results
-        .iter()
-        .find(|r| r.kind == "boot_coverage")
-        .expect("boot-coverage assertion present");
+    let bc = support::row(&result, "kind:boot_coverage");
     assert!(bc.passed, "boot-coverage must pass: {}", bc.detail);
     assert!(
         bc.detail.contains("GATE_CTRL"),
@@ -104,10 +100,6 @@ fn gate_driven_promptly_passes() {
 /// Variant B never drives the gate: the boot-coverage assertion FAILS, naming
 /// the control net that was left Hi-Z. This is the discriminating half - the
 /// check has teeth only because this case goes RED.
-// Runs AVR .hex firmware on the ATmega boot_gate board, so it needs the
-// GPL-gated `avr` feature (the GPL-free renode/qemu build refuses AVR
-// firmware by design). The Watchy QEMU rows below cover the external-backend
-// half of the mechanism.
 #[cfg(feature = "avr")]
 #[test]
 fn gate_left_floating_fails_naming_the_net() {
@@ -118,11 +110,7 @@ fn gate_left_floating_fails_naming_the_net() {
         "variant B never drives the gate, so boot-coverage must FAIL:\n{}",
         result.render_human()
     );
-    let bc = result
-        .results
-        .iter()
-        .find(|r| r.kind == "boot_coverage")
-        .expect("boot-coverage assertion present");
+    let bc = support::row(&result, "kind:boot_coverage");
     assert!(
         !bc.passed,
         "boot-coverage must fail for the never-driven gate"
@@ -219,26 +207,42 @@ fn corpus_or_skip(what: &str) -> Option<PathBuf> {
     }
 }
 
+/// One Watchy v1.5 boot-coverage run under QEMU: resolve the corpus board,
+/// rewrite `what`'s spec onto it, run it, and time the run. `None` is a clean
+/// skip (no corpus, or no Espressif QEMU).
+///
+/// The wall-clock ceiling guards the external-backend chunk coarsening
+/// (`Scheduler::has_external_backend` -> chunk_s about the frame size): without
+/// it this co-sim sub-divides into ~80 QMP cont/stop pairs per frame and takes
+/// ten MINUTES instead of ~3.5 s, a ~200x regression a 120 s ceiling catches
+/// while still tolerating a slow CI machine.
+fn watchy_run(what: &str, spec: &str) -> Option<hauksbee_ci::CiResult> {
+    let board = corpus_or_skip(what)?;
+    if !qemu_xtensa_available() {
+        eprintln!("skipping {what} (Espressif QEMU not installed)");
+        return None;
+    }
+    let (_spec_dir, spec) = resolved_spec(spec, &board);
+    let t0 = std::time::Instant::now();
+    let result = run(&support::run_config(spec)).expect("the Watchy spec runs");
+    let wall = t0.elapsed();
+    assert!(
+        wall.as_secs() < 120,
+        "Watchy QEMU co-sim took {wall:?}; the external-backend chunk \
+         coarsening in hauksbee-ci's runner has likely regressed"
+    );
+    Some(result)
+}
+
 /// PASS: the reduced display-init firmware drives the Watchy e-paper RES# net
 /// (GPIO9) HIGH within the boot window on the real v1.5 board under QEMU.
 #[test]
 fn watchy_v15_display_res_driven_passes() {
-    let Some(board) = corpus_or_skip("watchy_v15_display_res PASS") else {
+    let Some(result) = watchy_run("watchy_v15_display_res PASS", "watchy_v15_display_res.toml")
+    else {
         return;
     };
-    if !qemu_xtensa_available() {
-        eprintln!("skipping watchy_v15 boot-coverage (Espressif QEMU not installed)");
-        return;
-    }
-    let (_spec_dir, spec) = resolved_spec("watchy_v15_display_res.toml", &board);
-    let t0 = std::time::Instant::now();
-    let result = run(&support::run_config(spec)).expect("Watchy PASS spec runs");
-    let wall = t0.elapsed();
-    let bc = result
-        .results
-        .iter()
-        .find(|r| r.kind == "boot_coverage")
-        .expect("boot-coverage assertion present");
+    let bc = support::row(&result, "kind:boot_coverage");
     assert!(
         bc.passed,
         "display-init firmware must drive RES in time on the real Watchy board:\n{}",
@@ -249,18 +253,6 @@ fn watchy_v15_display_res_driven_passes() {
         "names the RES net: {}",
         bc.detail
     );
-    // Regression guard for the external-backend chunk coarsening
-    // (Scheduler::has_external_backend -> runner sets chunk_s ~ frame size).
-    // Without it, this 800 ms / 8 ms-frame co-sim sub-divides into ~80 QMP
-    // cont/stop pairs per frame at the 100 us AVR-default chunk and takes over
-    // ten MINUTES of wall time; with it, ~3.5 s. A generous 120 s ceiling
-    // tolerates slow CI machines while still failing hard if the coarsening is
-    // ever lost (the regression is a ~200x slowdown, not a marginal one).
-    assert!(
-        wall.as_secs() < 120,
-        "Watchy QEMU co-sim took {wall:?}; the external-backend chunk \
-         coarsening in hauksbee-ci's runner has likely regressed"
-    );
 }
 
 /// FAIL (negative control): firmware that drives GPIO2/4 but never GPIO9 leaves
@@ -269,20 +261,13 @@ fn watchy_v15_display_res_driven_passes() {
 /// drive the net.
 #[test]
 fn watchy_v15_display_res_undriven_fails() {
-    let Some(board) = corpus_or_skip("watchy_v15_display_res FAIL") else {
+    let Some(result) = watchy_run(
+        "watchy_v15_display_res FAIL",
+        "watchy_v15_display_res_undriven.toml",
+    ) else {
         return;
     };
-    if !qemu_xtensa_available() {
-        eprintln!("skipping watchy_v15 boot-coverage negative (Espressif QEMU not installed)");
-        return;
-    }
-    let (_spec_dir, spec) = resolved_spec("watchy_v15_display_res_undriven.toml", &board);
-    let result = run(&support::run_config(spec)).expect("Watchy FAIL spec runs");
-    let bc = result
-        .results
-        .iter()
-        .find(|r| r.kind == "boot_coverage")
-        .expect("boot-coverage assertion present");
+    let bc = support::row(&result, "kind:boot_coverage");
     assert!(
         !bc.passed,
         "a firmware that never drives RES must make boot-coverage FAIL:\n{}",

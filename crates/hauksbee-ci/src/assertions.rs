@@ -30,6 +30,11 @@ pub struct AssertResult {
     pub invalid: bool,
     /// One-line detail (the measured value, the offending seed, etc).
     pub detail: String,
+    /// This assertion carried no bound, so it is a MEASUREMENT: the value is
+    /// reported and nothing is judged. `passed` is true (a measurement cannot
+    /// fail) but every surface renders it "measured" rather than PASS, and a run
+    /// whose results are all measurements headlines as measurements reported.
+    pub measured: bool,
     /// If it failed, the first seed index that failed (for fuzzed runs).
     /// Always present in the JSON, `null` on a pass, unlike `why` and `waived`
     /// which are omitted.
@@ -70,13 +75,14 @@ impl AssertResult {
     /// A neutral result for one assertion: an unwaived, unexplained, non-invalid
     /// failure with no failing member and no subjects. Every construction site
     /// sets only the fields that differ, via struct-update syntax.
-    pub(crate) fn shell(label: String, kind: impl Into<String>, seeds_total: usize) -> Self {
+    pub fn shell(label: String, kind: impl Into<String>, seeds_total: usize) -> Self {
         Self {
             label,
             kind: kind.into(),
             passed: false,
             invalid: false,
             detail: String::new(),
+            measured: false,
             failing_seed: None,
             failing_seeds: Vec::new(),
             seeds_total: seeds_total as u32,
@@ -120,17 +126,31 @@ pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
     spec.asserts
         .iter()
         .flat_map(|a| {
-            if a.kind == "hwtrace" {
+            let mut results = if a.kind == "hwtrace" {
                 // One hwtrace assertion expands to one result per (channel,
                 // feature), so the report shows the per-feature table an EE
                 // can argue with, not a single opaque pass/fail.
                 evaluate_hwtrace(spec, a, outcomes, mode)
             } else {
                 vec![evaluate_one(a, outcomes, mode, spec.frame_ms)]
+            };
+            if a.times_startup() && spec.dc_initialised() {
+                for r in &mut results {
+                    r.detail.push_str(DC_INITIALISED_NOTE);
+                }
             }
+            results
         })
         .collect()
 }
+
+/// Appended to any result whose assertion reads a start-up time on a board
+/// where nothing makes the run time-varying (see [`Spec::dc_initialised`]).
+/// Cheap and narrowly aimed: on such a board the answer to a timing question is
+/// a convention, not a measurement, and it must not read as one.
+const DC_INITIALISED_NOTE: &str = " [supplies start settled at t=0 and nothing \
+in this spec makes the run time-varying, so power-on timing is not simulated; \
+set `ramp_ms` on the supply to model a cold start]";
 
 /// Evaluate one `hwtrace` assertion: load the trace, extract each declared
 /// feature from the captured waveform and from every seed's simulated
@@ -522,6 +542,7 @@ fn evaluate_one(
     );
     AssertResult {
         passed: true,
+        measured: a.measurement(),
         detail,
         subject_nets,
         subject_refs,
@@ -616,7 +637,7 @@ fn stale_overlap(a: &Assertion, out: &RunOutcome) -> Option<((f64, f64), (f64, f
 fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
     let end = out.sim_ms / 1000.0;
     match a.kind.as_str() {
-        "voltage" => Some((a.after_ms.unwrap_or(0.0) / 1000.0, end)),
+        "voltage" | "pulse_width" => Some((a.after_ms.unwrap_or(0.0) / 1000.0, end)),
         "toggle" => Some((0.0, end)),
         "max_current" | "max_temp" => Some((0.0, end)),
         "boot_coverage" | "boot-coverage" => {
@@ -645,6 +666,7 @@ fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, 
     }
     match a.kind.as_str() {
         "voltage" => check_voltage(a, out),
+        "pulse_width" => check_pulse_width(a, out, frame_ms),
         "uart" => plain(check_uart(a, out)),
         "toggle" => check_toggle(a, out, frame_ms),
         "no_faults" => plain(check_no_faults(out)),
@@ -807,7 +829,12 @@ impl Verdict {
         }
     }
 
+    /// The judged clauses, joined. With no clause at all nothing was bounded,
+    /// which is the measurement case: say so where a verdict would have gone.
     fn parts(&self) -> String {
+        if self.parts.is_empty() {
+            return "measured".to_string();
+        }
         self.parts.join(", ")
     }
 
@@ -868,83 +895,91 @@ fn check_rail_window(
             ),
         );
     }
+    // The four duration clauses are one shape: a measured interval in ms, the
+    // budget it must fit, the fragment that names it, and the sentence that
+    // names the excess. `dip`/`spike` bound how long the rail sat out of band;
+    // `recover`/`settle` bound how long it took to come back.
+    //
     // A duration needs at least two samples to measure (windows(2) yields
     // nothing from one point, so dip_duration_s folds to 0 and silently
     // auto-passes). A window that spans less than one frame is degenerate:
     // fail loudly rather than claim a timing spec we could not evaluate.
-    let too_few = |what: String| {
-        format!(
-            "{what}: window has {} sample(s), too few to measure a duration",
-            win.samples.len()
-        )
-    };
-    if let (Some(d), Some(for_ms)) = (a.dip_below, a.for_max_ms) {
-        if win.samples.len() < 2 {
-            v.fail(too_few(format!("dip<{d}V")), None);
-        } else {
-            let dip_ms = win.dip_duration_s(d) * 1000.0;
-            v.clause(
-                dip_ms <= for_ms + 1e-6,
-                format!("dip<{d}V for {dip_ms:.2}ms (<= {for_ms}ms)"),
-                format!("dip<{d}V for {dip_ms:.2}ms > allowed {for_ms}ms"),
+    let over = |ms: f64, budget: f64| ms - budget;
+    let durations = [
+        a.dip_below.zip(a.for_max_ms).map(|(d, budget)| {
+            let ms = win.dip_duration_s(d) * 1000.0;
+            (
+                format!("dip<{d}V for"),
+                ms,
+                budget,
                 format!(
-                    "{net} sat below {d} V for {dip_ms:.2} ms, {:.2} ms longer than your budget",
-                    dip_ms - for_ms
+                    "{net} sat below {d} V for {ms:.2} ms, {:.2} ms longer than your budget",
+                    over(ms, budget)
                 ),
-            );
-        }
-    }
-    if let (Some(d), Some(r), Some(within_ms)) = (a.dip_below, a.recover_to, a.recover_within_ms) {
-        if win.samples.len() < 2 {
-            v.fail(too_few(format!("recover-to-{r}V")), None);
-        } else {
-            let rec_ms = win.recovery_s(d, r) * 1000.0;
-            v.clause(
-                rec_ms <= within_ms + 1e-6,
-                format!("recover-to-{r}V in {rec_ms:.2}ms (<= {within_ms}ms)"),
-                format!("recover-to-{r}V in {rec_ms:.2}ms > allowed {within_ms}ms"),
+            )
+        }),
+        a.dip_below
+            .zip(a.recover_to)
+            .zip(a.recover_within_ms)
+            .map(|((d, r), budget)| {
+                let ms = win.recovery_s(d, r) * 1000.0;
+                (
+                    format!("recover-to-{r}V in"),
+                    ms,
+                    budget,
+                    format!(
+                        "{net} took {ms:.2} ms to climb back to {r} V after dipping below \
+                 {d} V, {:.2} ms past your recovery deadline",
+                        over(ms, budget)
+                    ),
+                )
+            }),
+        a.spike_above.zip(a.spike_for_max_ms).map(|(sp, budget)| {
+            let ms = win.spike_duration_s(sp) * 1000.0;
+            (
+                format!("spike>{sp}V for"),
+                ms,
+                budget,
                 format!(
-                    "{net} took {rec_ms:.2} ms to climb back to {r} V after dipping below \
-                     {d} V, {:.2} ms past your recovery deadline",
-                    rec_ms - within_ms
+                    "{net} stayed above {sp} V for {ms:.2} ms, {:.2} ms longer than your budget",
+                    over(ms, budget)
                 ),
-            );
-        }
-    }
-    if let (Some(sp), Some(for_ms)) = (a.spike_above, a.spike_for_max_ms) {
+            )
+        }),
+        a.spike_above
+            .zip(a.settle_to)
+            .zip(a.settle_within_ms)
+            .map(|((sp, settle), budget)| {
+                let ms = win.settling_s(sp, settle) * 1000.0;
+                (
+                    format!("settle-to-{settle}V in"),
+                    ms,
+                    budget,
+                    format!(
+                        "{net} took {ms:.2} ms to settle to {settle} V after spiking above \
+                 {sp} V, {:.2} ms past your settling deadline",
+                        over(ms, budget)
+                    ),
+                )
+            }),
+    ];
+    for (what, ms, budget, why) in durations.into_iter().flatten() {
         if win.samples.len() < 2 {
-            v.fail(too_few(format!("spike>{sp}V")), None);
-        } else {
-            let spike_ms = win.spike_duration_s(sp) * 1000.0;
-            v.clause(
-                spike_ms <= for_ms + 1e-6,
-                format!("spike>{sp}V for {spike_ms:.2}ms (<= {for_ms}ms)"),
-                format!("spike>{sp}V for {spike_ms:.2}ms > allowed {for_ms}ms"),
+            v.fail(
                 format!(
-                    "{net} stayed above {sp} V for {spike_ms:.2} ms, {:.2} ms longer than your budget",
-                    spike_ms - for_ms
+                    "{what}: window has {} sample(s), too few to measure a duration",
+                    win.samples.len()
                 ),
+                None,
             );
+            continue;
         }
-    }
-    if let (Some(sp), Some(settle), Some(within_ms)) =
-        (a.spike_above, a.settle_to, a.settle_within_ms)
-    {
-        if win.samples.len() < 2 {
-            v.fail(too_few(format!("settle-to-{settle}V")), None);
-        } else {
-            let settle_ms = win.settling_s(sp, settle) * 1000.0;
-            v.clause(
-                settle_ms <= within_ms + 1e-6,
-                format!("settle-to-{settle}V in {settle_ms:.2}ms (<= {within_ms}ms)"),
-                format!("settle-to-{settle}V in {settle_ms:.2}ms > allowed {within_ms}ms"),
-                format!(
-                    "{net} took {settle_ms:.2} ms to settle to {settle} V after spiking above \
-                     {sp} V, {:.2} ms past your settling deadline",
-                    settle_ms - within_ms
-                ),
-            );
-        }
+        v.clause(
+            ms <= budget + 1e-6,
+            format!("{what} {ms:.2}ms (<= {budget}ms)"),
+            format!("{what} {ms:.2}ms > allowed {budget}ms"),
+            why,
+        );
     }
     let detail = format!(
         "{net} window: {} [min={:.3}V max={:.3}V]",
@@ -1335,34 +1370,26 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
     // window; for a <= bound, the maximum it rose to. The `why` names the
     // observed shortfall in volts, which is the number the fix has to close.
     let mut v = Verdict::new();
-    let bounds = [
-        // (limit, worst-case sample, label, comparison, breach, excursion verb, side, noun)
-        (
-            a.min,
-            win.min_v,
-            "min",
-            ">=",
-            "< required",
-            "dipped to",
-            "below your",
-            "floor",
-        ),
-        (
-            a.max,
-            win.max_v,
-            "max",
-            "<=",
-            "> allowed",
-            "rose to",
-            "above your",
-            "ceiling",
-        ),
-    ];
-    for (limit, worst, label, cmp, breach, verb, side, noun) in bounds {
+    // The two bounds differ only in the direction they are breached and the
+    // words that name that direction, so `sign` picks both and one signed
+    // distance drives the arithmetic: positive means the sample is past the
+    // bound, whichever bound it is.
+    for (limit, worst, sign) in [(a.min, win.min_v, -1.0_f64), (a.max, win.max_v, 1.0)] {
         let Some(limit) = limit else { continue };
-        // One signed distance drives both directions: positive means the sample
-        // is past the bound, whichever bound it is.
-        let signed = |v: f64| if label == "min" { limit - v } else { v - limit };
+        // (label, comparison, breach, excursion verb, side, noun)
+        let (label, cmp, breach, verb, side, noun) = if sign < 0.0 {
+            (
+                "min",
+                ">=",
+                "< required",
+                "dipped to",
+                "below your",
+                "floor",
+            )
+        } else {
+            ("max", "<=", "> allowed", "rose to", "above your", "ceiling")
+        };
+        let signed = |v: f64| sign * (v - limit);
         let why = if signed(win.last_v) <= 1e-6 {
             format!(
                 "{net} {verb} {worst:.3} V, {:.3} V {side} {limit} V {noun}, \
@@ -1383,6 +1410,15 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
             format!("{label}={worst:.3}V {breach} {limit}V"),
             why,
         );
+    }
+    if a.min.is_none() && a.max.is_none() {
+        // A measurement has no clause to word, and the run-final `settled`
+        // level answers a different question than `after_ms` asked, so the
+        // window's own span IS the number.
+        v.pass(format!(
+            "min={:.3}V max={:.3}V measured",
+            win.min_v, win.max_v
+        ));
     }
     let when = if thr > 0.0 {
         format!(" after {thr}ms")
@@ -1500,7 +1536,104 @@ fn check_toggle(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String
             why,
         );
     }
-    (false, format!("{net}: toggle assertion incomplete"), None)
+    // No bound at all: report the net's own rate as a MEASUREMENT. The refusal
+    // when there are too few edges to time still holds -- an unmeasurable rate
+    // must not read as a measured one.
+    let dt_s = frame_ms.max(1e-3) / 1000.0;
+    let series = out.net_series.get(&net).map_or(&[][..], Vec::as_slice);
+    match edge_rate(series, dt_s) {
+        Ok((_, measured)) => (true, format!("{net}: {measured}"), None),
+        Err(e) => no_data(format!("{net}: {e}; no frequency measured")),
+    }
+}
+
+/// pulse_width: the width of the first COMPLETE pulse on `net` at or after
+/// `after_ms`, high by default and low under `level = "low"`, in milliseconds.
+///
+/// The threshold and the interpolation are the frequency path's
+/// ([`crate::hwtrace::detect_edges`] with the default rule), so a width and a
+/// rate read off the same net agree, and the reported +- is the same grid
+/// residual [`edge_rate`] quotes: one sample step at each end of the interval.
+/// An incomplete pulse (no opening edge, or none closing it before the run
+/// ends) is REFUSED, never truncated to the end of the run: a width the run did
+/// not contain must not be reported, and a refusal cannot pass.
+fn check_pulse_width(
+    a: &Assertion,
+    out: &RunOutcome,
+    frame_ms: f64,
+) -> (bool, String, Option<String>) {
+    let net = a.net.clone().unwrap_or_default();
+    let dt_s = frame_ms.max(1e-3) / 1000.0;
+    let t0 = a.after_ms.unwrap_or(0.0) / 1000.0;
+    let series: Vec<(f64, f64)> = out
+        .net_series
+        .get(&net)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .copied()
+        .filter(|&(t, _)| t >= t0)
+        .collect();
+    let opens = a.level.as_deref() != Some("low");
+    let level = if opens { "high" } else { "low" };
+    let edges = crate::hwtrace::detect_edges(&series, None);
+    let width = edges
+        .iter()
+        .position(|e| e.rising == opens)
+        .and_then(|i| {
+            edges[i + 1..]
+                .iter()
+                .find(|e| e.rising != opens)
+                .map(|e| e.t - edges[i].t)
+        })
+        .filter(|w| *w > 0.0);
+    let Some(w) = width else {
+        return no_data(format!(
+            "{net}: no complete {level} pulse after {:.3} ms (edges seen: {}); \
+             nothing to measure, so no width is reported",
+            t0 * 1e3,
+            edges.len()
+        ));
+    };
+    let (ms, err) = (w * 1e3, 200.0 * dt_s / w);
+    let mut v = Verdict::new();
+    bound_clauses(
+        &mut v,
+        (a.min, a.max),
+        ms,
+        "ms",
+        &format!("{net}'s {level} pulse"),
+    );
+    let detail = format!(
+        "{net}: {level} pulse {ms:.4} ms +-{err:.1}% (edge timing): {}",
+        v.parts()
+    );
+    v.finish(detail)
+}
+
+/// Judge `value` against an optional `(min, max)` window, adding one clause per
+/// bound present. With neither bound the [`Verdict`] keeps no clause at all,
+/// which is exactly the measurement case its `parts()` words. The two sides
+/// differ only in sign and wording, so both are written once.
+fn bound_clauses(
+    v: &mut Verdict,
+    (lo, hi): (Option<f64>, Option<f64>),
+    value: f64,
+    unit: &str,
+    subject: &str,
+) {
+    for (limit, label, cmp, sign, side) in [
+        (lo, "min", ">=", -1.0_f64, "short of your"),
+        (hi, "max", "<=", 1.0, "over your"),
+    ] {
+        let Some(limit) = limit else { continue };
+        let past = sign * (value - limit);
+        v.clause(
+            past <= 1e-6,
+            format!("{label}={limit}{unit} ({cmp})"),
+            format!("{value:.4}{unit} {cmp} {limit}{unit} does NOT hold"),
+            format!("{subject} measured {value:.4} {unit}, {past:.4} {unit} {side} {limit} {unit} bound"),
+        );
+    }
 }
 
 /// Time a net's rising threshold crossings and divide the whole periods by the
@@ -1548,29 +1681,13 @@ fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<
     };
     let fc = m.gain_crossover_hz.unwrap_or(f64::NAN);
     let mut v = Verdict::new();
-    if let Some(lo) = a.min {
-        v.clause(
-            pm >= lo - 1e-6,
-            format!(">= {lo}"),
-            format!("{pm:.2} deg < required {lo} deg"),
-            format!(
-                "the loop crossed 0 dB with {pm:.2} deg of phase in hand, {:.2} deg \
-                 less than your {lo} deg floor",
-                lo - pm
-            ),
-        );
-    }
-    if let Some(hi) = a.max {
-        v.clause(
-            pm <= hi + 1e-6,
-            format!("<= {hi}"),
-            format!("{pm:.2} deg > allowed {hi} deg"),
-            format!(
-                "the loop's phase margin came out {:.2} deg above your {hi} deg ceiling",
-                pm - hi
-            ),
-        );
-    }
+    bound_clauses(
+        &mut v,
+        (a.min, a.max),
+        pm,
+        "deg",
+        &format!("loop {net}'s phase margin"),
+    );
     let detail = format!(
         "loop {net}: phase margin {pm:.2} deg at fc={fc:.4} Hz ({})",
         v.parts()
@@ -1621,29 +1738,12 @@ fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Strin
         None => (band_min, band_max, "over band".to_string()),
     };
 
+    // The min is judged against the band's worst LOW and the max against its
+    // worst HIGH, so each bound sees the sample that could break it.
     let mut v = Verdict::new();
-    if let Some(lo) = a.min {
-        v.clause(
-            worst_lo >= lo - 1e-6,
-            format!("min={worst_lo:.3}dB (>= {lo})"),
-            format!("min={worst_lo:.3}dB < required {lo}dB"),
-            format!(
-                "{net} measured {worst_lo:.3} dB {where_str}, {:.3} dB below your {lo} dB floor",
-                lo - worst_lo
-            ),
-        );
-    }
-    if let Some(hi) = a.max {
-        v.clause(
-            worst_hi <= hi + 1e-6,
-            format!("max={worst_hi:.3}dB (<= {hi})"),
-            format!("max={worst_hi:.3}dB > allowed {hi}dB"),
-            format!(
-                "{net} measured {worst_hi:.3} dB {where_str}, {:.3} dB above your {hi} dB ceiling",
-                worst_hi - hi
-            ),
-        );
-    }
+    let subject = format!("{net} {where_str}");
+    bound_clauses(&mut v, (a.min, None), worst_lo, "dB", &subject);
+    bound_clauses(&mut v, (None, a.max), worst_hi, "dB", &subject);
     let detail = format!("{net} gain {where_str}: {}", v.parts());
     v.finish(detail)
 }
@@ -1689,7 +1789,6 @@ fn check_no_faults(out: &RunOutcome) -> (bool, String) {
 
 fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let reference = a.reference.clone().unwrap_or_default();
-    let limit = a.amps.unwrap_or(0.0);
     // No current data: the runner rejects a max_current on an untracked
     // component kind at bind time (`check_trackable_assert_refs`), so reaching
     // this branch means the tracked device never produced a sample; fail loud
@@ -1702,6 +1801,13 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<S
     };
     let unit = unit_note("peak unit", &key, &reference);
     let peak_s = format_amps(peak);
+    let Some(limit) = a.amps else {
+        return (
+            true,
+            format!("I({reference}) peak {peak_s} measured{unit}"),
+            None,
+        );
+    };
     if peak <= limit + 1e-9 {
         (
             true,
@@ -2326,28 +2432,11 @@ mod tests {
 
     #[test]
     fn rail_window_spike_with_one_sample_does_not_auto_pass() {
-        use super::check_rail_window;
-        use crate::runner::RunOutcome;
-        use crate::scenarios::RailWindow;
-
-        let mut win = RailWindow::new();
-        win.observe(0.099, 4.2);
-        let mut rail_windows = std::collections::HashMap::new();
-        rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
-        let out = RunOutcome {
-            rail_windows,
-            ..Default::default()
-        };
-        let a: crate::spec::Assertion = toml::from_str(
-            r#"kind = "rail_window"
-net = "VBUS"
-scenario = "load"
-spike_above = 3.5
-spike_for_max_ms = 1.0
-"#,
-        )
-        .unwrap();
-        let (ok, msg, _why) = check_rail_window(&a, &out);
+        let a = assertion(
+            "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\n\
+             spike_above = 3.5\nspike_for_max_ms = 1.0\n",
+        );
+        let (ok, msg, _why) = check_rail_window(&a, &rail_run(&[(0.099, 4.2)], None));
         assert!(!ok, "a 1-sample spike window must not auto-pass: {msg}");
         assert!(
             msg.contains("too few"),
@@ -2426,138 +2515,51 @@ spike_for_max_ms = 1.0
     // the frame's last chunk; the runner folds the scheduler's per-frame extremes
     // into RailWindow.min_v/max_v, exactly like the plain voltage path. Without the
     // fold (base bug), min_v is the settled 3.3 V and a min=3.0 floor false-passes
-    // the very sag it exists to catch (R49).
+    // the very sag it exists to catch (R49). The ceiling is the mirror case, and
+    // the SAMPLED spike-duration path must stay settled-frame based: a folded
+    // extreme is an envelope, not a sampled interval, and must not invent one.
     #[test]
-    fn rail_window_min_reflects_folded_intraframe_sag() {
-        use super::check_rail_window;
-        use crate::runner::RunOutcome;
-        use crate::scenarios::RailWindow;
-
-        // Reconstruct the window the runner builds: settled 3.3 V samples plus the
-        // scheduler's intra-frame minimum (2.9 V) folded into the envelope.
-        let mut win = RailWindow::new();
-        win.observe(0.000, 3.3);
-        win.observe(0.001, 3.3);
-        win.fold(2.9); // intra-frame sag from the load step, recovered by last chunk
-
-        let mut rail_windows = std::collections::HashMap::new();
-        rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
-        let out = RunOutcome {
-            rail_windows,
-            ..Default::default()
-        };
-
-        let a: crate::spec::Assertion = toml::from_str(
-            "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\nmin = 3.0\n",
-        )
-        .unwrap();
-        let (ok, msg, _why) = check_rail_window(&a, &out);
+    fn rail_window_bounds_see_folded_intraframe_extremes_without_inventing_durations() {
+        let settled = [(0.000, 3.3), (0.001, 3.3)];
+        let floor =
+            assertion("kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\nmin = 3.0\n");
+        let (ok, msg, _why) = check_rail_window(&floor, &rail_run(&settled, Some(2.9)));
         assert!(
             !ok,
             "a rail that sagged to 2.9V mid-frame must FAIL a 3.0V floor, not pass on the settled 3.3V: {msg}"
         );
+        assert!(
+            check_rail_window(&floor, &rail_run(&[(0.000, 3.3), (0.001, 3.25)], Some(3.1))).0,
+            "a rail that stayed above 3.0V must pass"
+        );
 
-        // Sanity: a window that never dipped below the floor still passes.
-        let mut win_ok = RailWindow::new();
-        win_ok.observe(0.000, 3.3);
-        win_ok.observe(0.001, 3.25);
-        win_ok.fold(3.1);
-        let mut rw2 = std::collections::HashMap::new();
-        rw2.insert(("load".to_string(), "VBUS".to_string()), win_ok);
-        let out_ok = RunOutcome {
-            rail_windows: rw2,
-            ..Default::default()
-        };
-        let (ok2, _msg2, _why) = check_rail_window(&a, &out_ok);
-        assert!(ok2, "a rail that stayed above 3.0V must pass");
-    }
-
-    #[test]
-    fn rail_window_max_reflects_folded_intraframe_spike() {
-        use super::check_rail_window;
-        use crate::runner::RunOutcome;
-        use crate::scenarios::RailWindow;
-
-        let mut win = RailWindow::new();
-        win.observe(0.000, 3.3);
-        win.observe(0.001, 3.3);
-        win.fold(4.2); // intra-frame spike, settled by the last chunk
-        let mut rail_windows = std::collections::HashMap::new();
-        rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
-        let out = RunOutcome {
-            rail_windows,
-            ..Default::default()
-        };
-        let a: crate::spec::Assertion = toml::from_str(
-            r#"kind = "rail_window"
-net = "VBUS"
-scenario = "load"
-max = 4.0
-"#,
-        )
-        .unwrap();
-        let (ok, msg, _why) = check_rail_window(&a, &out);
+        let ceiling =
+            assertion("kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\nmax = 4.0\n");
+        let (ok, msg, _why) = check_rail_window(&ceiling, &rail_run(&settled, Some(4.2)));
         assert!(!ok, "a folded 4.2V spike must fail a 4.0V ceiling: {msg}");
 
-        // The sampled spike-duration path intentionally remains settled-frame
-        // based: the same folded extreme does not create a synthetic spike time.
-        let mut win_ok = RailWindow::new();
-        win_ok.observe(0.000, 3.3);
-        win_ok.observe(0.001, 3.3);
-        win_ok.fold(4.2);
-        let mut rw2 = std::collections::HashMap::new();
-        rw2.insert(("load".to_string(), "VBUS".to_string()), win_ok);
-        let out_ok = RunOutcome {
-            rail_windows: rw2,
-            ..Default::default()
-        };
-        let a_spike: crate::spec::Assertion = toml::from_str(
-            r#"kind = "rail_window"
-net = "VBUS"
-scenario = "load"
-spike_above = 3.5
-spike_for_max_ms = 1.0
-"#,
-        )
-        .unwrap();
-        let (ok_spike, msg_spike, _why_spike) = check_rail_window(&a_spike, &out_ok);
+        let sampled = assertion(
+            "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\n\
+             spike_above = 3.5\nspike_for_max_ms = 1.0\n",
+        );
+        let (ok, msg, _why) = check_rail_window(&sampled, &rail_run(&settled, Some(4.2)));
         assert!(
-            ok_spike,
-            "folded intra-frame extrema must not invent sampled spike duration: {msg_spike}"
+            ok,
+            "folded intra-frame extrema must not invent sampled spike duration: {msg}"
         );
     }
 
     #[test]
     fn rail_window_spike_and_settling_assertions_render_and_fail_loud() {
-        use super::check_rail_window;
-        use crate::runner::RunOutcome;
-        use crate::scenarios::RailWindow;
-
-        let outcome_for = |points: &[(f64, f64)]| {
-            let mut win = RailWindow::new();
-            for &(t, v) in points {
-                win.observe(t, v);
-            }
-            let mut rail_windows = std::collections::HashMap::new();
-            rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
-            RunOutcome {
-                rail_windows,
-                ..Default::default()
-            }
+        let spec = |settle_within_ms: f64| {
+            assertion(&format!(
+                "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\n\
+                 spike_above = 3.5\nspike_for_max_ms = 2.5\nsettle_to = 3.4\n\
+                 settle_within_ms = {settle_within_ms}\n"
+            ))
         };
-        let a: crate::spec::Assertion = toml::from_str(
-            r#"kind = "rail_window"
-net = "VBUS"
-scenario = "load"
-spike_above = 3.5
-spike_for_max_ms = 2.5
-settle_to = 3.4
-settle_within_ms = 2.5
-"#,
-        )
-        .unwrap();
         let points = [(0.000, 3.3), (0.001, 3.8), (0.002, 3.8), (0.003, 3.3)];
-        let (ok, msg, why) = check_rail_window(&a, &outcome_for(&points));
+        let (ok, msg, why) = check_rail_window(&spec(2.5), &rail_run(&points, None));
         assert!(ok, "a finite spike and settling window should pass: {msg}");
         assert!(
             msg.contains("spike>") && msg.contains("settle-to-"),
@@ -2568,17 +2570,11 @@ settle_within_ms = 2.5
             "passing overvoltage checks should have no why: {why:?}"
         );
 
-        let a_tight: crate::spec::Assertion = toml::from_str(
-            r#"kind = "rail_window"
-net = "VBUS"
-scenario = "load"
-spike_above = 3.5
-settle_to = 3.4
-settle_within_ms = 1.0
-"#,
-        )
-        .unwrap();
-        let (ok_tight, msg_tight, why_tight) = check_rail_window(&a_tight, &outcome_for(&points));
+        // The same waveform against a 1 ms settling bound: the 2 ms it really
+        // took must fail loud, and a spike that never settles must read +inf
+        // rather than quietly truncating to the end of the window.
+        let tight = spec(1.0);
+        let (ok_tight, msg_tight, why_tight) = check_rail_window(&tight, &rail_run(&points, None));
         assert!(
             !ok_tight,
             "a 2 ms settling time must fail a 1 ms bound: {msg_tight}"
@@ -2588,7 +2584,7 @@ settle_within_ms = 1.0
 
         let never_settles = [(0.000, 3.3), (0.001, 3.8), (0.002, 3.6)];
         let (ok_never, msg_never, why_never) =
-            check_rail_window(&a_tight, &outcome_for(&never_settles));
+            check_rail_window(&tight, &rail_run(&never_settles, None));
         assert!(
             !ok_never,
             "a spike that never settles must fail: {msg_never}"

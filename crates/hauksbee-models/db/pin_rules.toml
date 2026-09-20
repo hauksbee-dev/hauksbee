@@ -112,3 +112,38 @@ footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
 kind = "pmos"
 pad_count = 3
 roles = { "1" = "gate", "2" = "source", "3" = "drain" }
+
+# ── TO-220 / TO-247 / DPAK (TO-252) / D2PAK (TO-263) 3-pin MOSFET ─────────────
+# 1 = gate, 2 = drain (the metal TAB is the drain and is tied to pad 2), 3 =
+# source. This is the de-facto standard vertical-power-MOSFET order and is
+# stated on the datasheets themselves: Infineon/IR IRF540NPbF Rev. 2.1 page 1
+# ("Gate Pin 1 / Drain Pin 2, Tab / Source Pin 3"), and the same G-D-S order is
+# carried by the IRLZ44N, IRFZ44N, IRF640/IRF740 family, the STMicro STP/STB
+# parts and the onsemi/Fairchild FQP/FDD DPAK and D2PAK ranges. KiCad's
+# TO-220-3 / TO-252-3_TabPin2 / TO-263-2_TabPin2 footprints number the tab pad
+# 2, which is why one rule covers the through-hole and the surface-mount bodies.
+#
+# SCOPED TO THE MOSFET KINDS ON PURPOSE. These packages are shared with parts
+# whose pad order is NOT this one and a blind rule would silently mis-wire them:
+# a TO-220 78xx regulator is 1=IN, 2=GND, 3=OUT; a TO-220 BJT (TIP120, BD139) is
+# 1=base, 2=collector, 3=emitter — the same tab, a different electrode. Only
+# `kind = "nmos"` / `"pmos"` parts, which the resolved model card establishes,
+# take these roles; everything else in the package falls through unmapped, which
+# is a visible "pins not all connected" rather than a wrong answer.
+#
+# TO-92 remains deliberately absent for the same reason it is absent above.
+[[pin_rules]]
+id = "nmos_to220_g1_d2_s3"
+description = "TO-220/TO-247/DPAK/D2PAK N-MOSFET: pad1=gate, pad2=drain (tab), pad3=source"
+footprint_re = "(?ix) TO-?220 | TO-?247 | TO-?252 | TO-?263 | DPAK | D2PAK"
+kind = "nmos"
+pad_count = 3
+roles = { "1" = "gate", "2" = "drain", "3" = "source" }
+
+[[pin_rules]]
+id = "pmos_to220_g1_d2_s3"
+description = "TO-220/TO-247/DPAK/D2PAK P-MOSFET: pad1=gate, pad2=drain (tab), pad3=source"
+footprint_re = "(?ix) TO-?220 | TO-?247 | TO-?252 | TO-?263 | DPAK | D2PAK"
+kind = "pmos"
+pad_count = 3
+roles = { "1" = "gate", "2" = "drain", "3" = "source" }

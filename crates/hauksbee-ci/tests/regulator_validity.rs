@@ -64,13 +64,6 @@ fn reason(r: &CiResult) -> String {
         .clone()
 }
 
-fn result<'a>(r: &'a CiResult, name: &str) -> &'a hauksbee_ci::assertions::AssertResult {
-    r.results
-        .iter()
-        .find(|x| x.label == name)
-        .unwrap_or_else(|| panic!("no assertion '{name}' in {:?}", r.results))
-}
-
 #[test]
 fn regulator_headroom_decides_whether_the_setpoint_is_a_result() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -82,7 +75,7 @@ fn regulator_headroom_decides_whether_the_setpoint_is_a_result() {
             Some(volts),
             (!supported).then_some(volts + 1.0),
         ));
-        let vout = result(&r, "vout regulates");
+        let vout = support::row(&r, "vout regulates");
         if supported {
             assert_eq!(r.exit_code(), 0, "{volts} V: {:?}", r.results);
             assert!(vout.passed && !vout.invalid, "{volts} V: {vout:?}");
@@ -101,7 +94,7 @@ fn regulator_headroom_decides_whether_the_setpoint_is_a_result() {
         assert!(reason.contains("U1") && reason.contains("VOUT"), "{reason}");
 
         for name in ["vout regulates", "no faults"] {
-            let a = result(&r, name);
+            let a = support::row(&r, name);
             assert!(a.invalid, "{volts} V: {name} should be INVALID: {a:?}");
             // Byte-identical, not merely similar: one wording per gap.
             assert!(
@@ -112,7 +105,7 @@ fn regulator_headroom_decides_whether_the_setpoint_is_a_result() {
         }
         // FAIL > INVALID: VIN is the supply rail the taint search stops at, so
         // a real failure there survives the refusal beside it.
-        let vin = result(&r, "vin high");
+        let vin = support::row(&r, "vin high");
         assert!(!vin.passed && !vin.invalid, "{volts} V: {vin:?}");
 
         let next = r.refusal().expect("an invalid run refuses").next_action;

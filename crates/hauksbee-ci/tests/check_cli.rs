@@ -39,6 +39,34 @@ fn json_diags(out: &std::process::Output) -> Vec<serde_json::Value> {
         .unwrap_or_else(|e| panic!("stdout must be one JSON array ({e}): {stdout}"))
 }
 
+/// `check --json` over a fresh spec that must be REFUSED: asserts the
+/// documented exit 2 and returns the diagnostics array. Every case below starts
+/// this way, so the exit code is checked once rather than per case.
+fn refused(tag: &str, body: &str, extra: &[&str]) -> Vec<serde_json::Value> {
+    let (_dir, spec) = spec_dir(tag, body);
+    let mut args = vec!["--json"];
+    args.extend_from_slice(extra);
+    let out = check(&spec, &args);
+    assert_eq!(out.status.code(), Some(2), "{tag}: check must exit 2");
+    json_diags(&out)
+}
+
+/// The ONE diagnostic a case expects, with its `code` already checked: a second
+/// diagnostic would mean the run found something the case is not about.
+fn one_refusal(tag: &str, body: &str, extra: &[&str], code: &str) -> serde_json::Value {
+    let diags = refused(tag, body, extra);
+    assert_eq!(diags.len(), 1, "{tag}: exactly one diagnostic: {diags:?}");
+    assert_eq!(diags[0]["code"], code, "{diags:?}");
+    diags[0].clone()
+}
+
+/// The near-miss twin of a refused case: the same spec, one field inside the
+/// run, must still check clean.
+fn accepted(tag: &str, body: &str) {
+    let (_dir, spec) = spec_dir(tag, body);
+    assert_eq!(check(&spec, &["--json"]).status.code(), Some(0), "{tag}");
+}
+
 const VALID: &str = "name = \"check-valid\"\nboard = \"blinky.kicad_pcb\"\nduration_ms = 20\n\n\
                      [[supply]]\nnet = \"+5V\"\nkind = \"ideal\"\nvolts = 5.0\n\n\
                      [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n";
@@ -68,11 +96,9 @@ fn check_on_a_valid_spec_loads_the_board_and_exits_zero() {
 fn no_board_skips_board_resolution_but_not_structure() {
     // The board file does not exist: --no-board must still pass a
     // structurally valid spec (the editor's board may not be checked out)...
-    let (_dir, spec) = spec_dir(
-        "noboard",
-        "board = \"missing.kicad_pcb\"\nduration_ms = 20\n\n\
-         [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n",
-    );
+    let body = "board = \"missing.kicad_pcb\"\nduration_ms = 20\n\n\
+                [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n";
+    let (_dir, spec) = spec_dir("noboard", body);
     let out = check(&spec, &["--no-board"]);
     assert_eq!(
         out.status.code(),
@@ -81,9 +107,7 @@ fn no_board_skips_board_resolution_but_not_structure() {
         String::from_utf8_lossy(&out.stderr)
     );
     // ...while the default (board-loading) mode reports it as board-load.
-    let out = check(&spec, &["--json"]);
-    assert_eq!(out.status.code(), Some(2));
-    let diags = json_diags(&out);
+    let diags = refused("noboard-load", body, &[]);
     assert_eq!(diags.len(), 1, "one board-load diagnostic: {diags:?}");
     assert_eq!(diags[0]["code"], "board-load");
     // ...and --no-board still rejects a structural error.
@@ -131,15 +155,8 @@ fn a_firmware_path_that_does_not_exist_fails_check_as_it_fails_run() {
 
     // The machine surface carries its own code, and points at the firmware line
     // (line 3 of the body above).
-    let out = check(&spec, &["--json"]);
-    assert_eq!(out.status.code(), Some(2));
-    let diags = json_diags(&out);
-    assert_eq!(diags.len(), 1, "one firmware diagnostic: {diags:?}");
-    assert_eq!(diags[0]["code"], "firmware-missing");
-    assert_eq!(
-        diags[0]["line"], 3,
-        "points at the firmware line: {diags:?}"
-    );
+    let diag = one_refusal("firmware-json", body, &[], "firmware-missing");
+    assert_eq!(diag["line"], 3, "points at the firmware line: {diag:?}");
 
     // --no-board is the documented opt-out for an editor loop where the firmware
     // is not built yet, and it covers the firmware as well as the board.
@@ -171,38 +188,31 @@ fn a_firmware_path_that_does_not_exist_fails_check_as_it_fails_run() {
 fn a_toml_parse_error_carries_the_exact_line_and_col() {
     // Line 3 redefines `name`: the parser's span points at the duplicate key,
     // line 3, column 1.
-    let (_dir, spec) = spec_dir(
+    let diag = one_refusal(
         "dupkey",
         "name = \"t\"\nboard = \"blinky.kicad_pcb\"\nname = \"u\"\nduration_ms = 20\n",
+        &["--no-board"],
+        "toml-parse",
     );
-    let out = check(&spec, &["--json", "--no-board"]);
-    assert_eq!(out.status.code(), Some(2));
-    let diags = json_diags(&out);
-    assert_eq!(diags.len(), 1, "{diags:?}");
-    assert_eq!(diags[0]["code"], "toml-parse");
-    assert_eq!(diags[0]["line"], 3, "duplicate key is on line 3: {diags:?}");
-    assert_eq!(diags[0]["col"], 1, "at column 1: {diags:?}");
+    assert_eq!(diag["line"], 3, "duplicate key is on line 3: {diag:?}");
+    assert_eq!(diag["col"], 1, "at column 1: {diag:?}");
 }
 
 #[test]
 fn an_unknown_field_gets_its_own_code_and_a_did_you_mean_fix() {
     // `durration_ms` (typo) on line 2: serde's deny_unknown_fields error comes
     // through the TOML parser with a span, and the fix suggests the real field.
-    let (_dir, spec) = spec_dir(
+    let diag = one_refusal(
         "unkfield",
         "board = \"blinky.kicad_pcb\"\ndurration_ms = 20\n\n\
          [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n",
+        &["--no-board"],
+        "unknown-field",
     );
-    let out = check(&spec, &["--json", "--no-board"]);
-    assert_eq!(out.status.code(), Some(2));
-    let diags = json_diags(&out);
-    assert_eq!(diags.len(), 1, "{diags:?}");
-    assert_eq!(diags[0]["code"], "unknown-field");
-    assert_eq!(diags[0]["line"], 2, "typo'd key is on line 2: {diags:?}");
-    let fix = diags[0]["fix"].as_str().unwrap_or("");
+    assert_eq!(diag["line"], 2, "typo'd key is on line 2: {diag:?}");
     assert!(
-        fix.contains("duration_ms"),
-        "fix suggests the real field: {diags:?}"
+        diag["fix"].as_str().unwrap_or("").contains("duration_ms"),
+        "fix suggests the real field: {diag:?}"
     );
 }
 
@@ -221,36 +231,28 @@ fn a_validation_error_resolves_to_the_identifiers_line() {
                 kind = \"peripheral\"\n\
                 field = \"writes\"\n\
                 min = 1\n";
-    let (_dir, spec) = spec_dir("identline", body);
-    let out = check(&spec, &["--json", "--no-board"]);
-    assert_eq!(out.status.code(), Some(2));
-    let diags = json_diags(&out);
-    assert_eq!(diags.len(), 1, "{diags:?}");
-    assert_eq!(diags[0]["code"], "unknown-id");
+    let diag = one_refusal("identline", body, &["--no-board"], "unknown-id");
     assert_eq!(
-        diags[0]["line"], 9,
-        "the diagnostic points at the line carrying \"TYPO\": {diags:?}"
+        diag["line"], 9,
+        "the diagnostic points at the line carrying \"TYPO\": {diag:?}"
     );
-    let msg = diags[0]["message"].as_str().unwrap();
+    let msg = diag["message"].as_str().unwrap();
     assert!(msg.contains("TYPO") && msg.contains("EE1"), "{msg}");
 }
 
 #[test]
 fn an_unknown_net_is_a_diagnostic_with_a_did_you_mean_fix() {
     // "+5W" is not on the blinky board; "+5V" is. Board-aware path.
-    let (_dir, spec) = spec_dir(
+    let diag = one_refusal(
         "unknet",
         "board = \"blinky.kicad_pcb\"\nduration_ms = 20\n\n\
          [[assert]]\nkind = \"voltage\"\nnet = \"+5W\"\nmin = 1.0\n",
+        &[],
+        "unknown-net",
     );
-    let out = check(&spec, &["--json"]);
-    assert_eq!(out.status.code(), Some(2));
-    let diags = json_diags(&out);
-    assert_eq!(diags.len(), 1, "{diags:?}");
-    assert_eq!(diags[0]["code"], "unknown-net");
-    assert_eq!(diags[0]["line"], 6, "net is on line 6: {diags:?}");
-    let fix = diags[0]["fix"].as_str().unwrap_or("");
-    assert!(fix.contains("+5V"), "fix suggests the real net: {diags:?}");
+    assert_eq!(diag["line"], 6, "net is on line 6: {diag:?}");
+    let fix = diag["fix"].as_str().unwrap_or("");
+    assert!(fix.contains("+5V"), "fix suggests the real net: {diag:?}");
 }
 
 #[test]
@@ -307,10 +309,7 @@ fn check_reports_all_unknown_component_refs_at_once() {
                 [[override]]\nref = \"R_NOPE1\"\nvalue = \"10k\"\n\n\
                 [[override]]\nref = \"R_NOPE2\"\nvalue = \"4k7\"\n\n\
                 [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n";
-    let (_dir, spec) = spec_dir("refs", body);
-    let out = check(&spec, &["--json"]);
-    assert_eq!(out.status.code(), Some(2));
-    let diags = json_diags(&out);
+    let diags = refused("refs", body, &[]);
     assert_eq!(diags.len(), 2, "both bad refs in one pass: {diags:?}");
     assert!(
         diags.iter().all(|d| d["code"] == "unknown-ref"),
@@ -335,23 +334,17 @@ fn check_reports_all_unknown_component_refs_at_once() {
 fn check_rejects_a_sample_window_that_starts_after_the_run_ends() {
     let body = "board = \"blinky.kicad_pcb\"\nduration_ms = 500\n\n\
                 [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\nafter_ms = 500\n";
-    let (_dir, spec) = spec_dir("after", body);
-    let out = check(&spec, &["--json"]);
-    assert_eq!(out.status.code(), Some(2));
-    let diags = json_diags(&out);
-    assert_eq!(diags.len(), 1, "{diags:?}");
-    assert_eq!(diags[0]["code"], "bad-bound", "{diags:?}");
-    let msg = diags[0]["message"].as_str().unwrap();
-    assert!(
-        msg.contains("after_ms") && msg.contains("duration_ms"),
-        "{msg}"
-    );
-    assert!(msg.contains("nothing would ever be measured"), "{msg}");
+    let diag = one_refusal("after", body, &[], "bad-bound");
+    let msg = diag["message"].as_str().unwrap();
+    for needle in ["after_ms", "duration_ms", "nothing would ever be measured"] {
+        assert!(msg.contains(needle), "{msg}");
+    }
 
     // One millisecond inside the run is legitimate and must stay accepted.
-    let ok = body.replace("after_ms = 500", "after_ms = 499");
-    let (_dir, spec) = spec_dir("after-ok", &ok);
-    assert_eq!(check(&spec, &["--json"]).status.code(), Some(0));
+    accepted(
+        "after-ok",
+        &body.replace("after_ms = 500", "after_ms = 499"),
+    );
 }
 
 #[test]
@@ -359,10 +352,7 @@ fn check_rejects_a_deadline_past_the_end_of_the_run() {
     let body = "board = \"blinky.kicad_pcb\"\nduration_ms = 100\n\n\
                 [[assert]]\nkind = \"toggle\"\nnet = \"D13\"\nmin_toggles = 3\n\
                 deadline_ms = 250\n";
-    let (_dir, spec) = spec_dir("deadline", body);
-    let out = check(&spec, &["--json"]);
-    assert_eq!(out.status.code(), Some(2));
-    let diags = json_diags(&out);
+    let diags = refused("deadline", body, &[]);
     assert!(
         diags.iter().any(|d| d["code"] == "bad-bound"
             && d["message"]
@@ -370,10 +360,10 @@ fn check_rejects_a_deadline_past_the_end_of_the_run() {
                 .is_some_and(|m| m.contains("deadline_ms") && m.contains("duration_ms"))),
         "{diags:?}"
     );
-
-    let ok = body.replace("deadline_ms = 250", "deadline_ms = 100");
-    let (_dir, spec) = spec_dir("deadline-ok", &ok);
-    assert_eq!(check(&spec, &["--json"]).status.code(), Some(0));
+    accepted(
+        "deadline-ok",
+        &body.replace("deadline_ms = 250", "deadline_ms = 100"),
+    );
 }
 
 #[test]
@@ -382,10 +372,7 @@ fn check_rejects_a_scenario_that_starts_after_the_run_ends() {
                 [[scenario]]\nid = \"late\"\npart = \"R1\"\nprofile = \"short\"\n\
                 start_ms = 50\n\n\
                 [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n";
-    let (_dir, spec) = spec_dir("scenario", body);
-    let out = check(&spec, &["--json"]);
-    assert_eq!(out.status.code(), Some(2));
-    let diags = json_diags(&out);
+    let diags = refused("scenario", body, &[]);
     assert!(
         diags.iter().any(|d| d["code"] == "bad-bound"
             && d["message"]
@@ -393,8 +380,8 @@ fn check_rejects_a_scenario_that_starts_after_the_run_ends() {
                 .is_some_and(|m| m.contains("start_ms") && m.contains("never fire"))),
         "{diags:?}"
     );
-
-    let ok = body.replace("start_ms = 50", "start_ms = 10");
-    let (_dir, spec) = spec_dir("scenario-ok", &ok);
-    assert_eq!(check(&spec, &["--json"]).status.code(), Some(0));
+    accepted(
+        "scenario-ok",
+        &body.replace("start_ms = 50", "start_ms = 10"),
+    );
 }

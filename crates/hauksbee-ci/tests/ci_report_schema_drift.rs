@@ -349,18 +349,10 @@ fn refusal_and_abort_documents_validate() {
     let v = validator();
 
     let invalid_assertion = AssertResult {
-        label: "VOUT >= 3.0 V".to_string(),
-        kind: "voltage".to_string(),
-        passed: false,
         invalid: true,
         detail: "INVALID: the evaluation window overlaps a failed analog span".to_string(),
-        failing_seed: None,
-        failing_seeds: Vec::new(),
-        seeds_total: 1,
-        why: None,
-        waived: None,
         subject_nets: vec!["VOUT".to_string()],
-        subject_refs: Vec::new(),
+        ..AssertResult::shell("VOUT >= 3.0 V".to_string(), "voltage".to_string(), 1)
     };
 
     // Two flavours of the refusal, because they reach exit 3 by different

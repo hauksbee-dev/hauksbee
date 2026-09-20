@@ -398,6 +398,10 @@
           "description": "The assertion's label: its `label` in the spec, or a generated one\nnaming the kind and subject.",
           "type": "string"
         },
+        "measured": {
+          "description": "The assertion carried no bound, so this row is a MEASUREMENT: `passed`\nis true but nothing was judged. Renderers show \"measured\", not PASS.",
+          "type": "boolean"
+        },
         "passed": {
           "description": "Did the assertion hold on every ensemble member. False on an ordinary\nred, on a waived red, and on an INVALID result.",
           "type": "boolean"
@@ -422,6 +426,7 @@
         "kind",
         "passed",
         "invalid",
+        "measured",
         "detail",
         "failing_seed",
         "failing_seeds",

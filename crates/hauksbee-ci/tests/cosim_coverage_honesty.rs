@@ -42,6 +42,21 @@ fn write_spec(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
     p
 }
 
+/// The same coverage hole on every surface a pipeline reads: a GREEN over an
+/// un-run co-sim path has to be qualified in all of them.
+fn hole_in_every_format(r: &hauksbee_ci::CiResult, subject: &str) {
+    for (what, text) in [
+        ("human", r.render_human()),
+        ("junit", r.render_junit()),
+        ("github", r.render_github_annotations()),
+    ] {
+        assert!(
+            text.contains("COVERAGE HOLE") && text.contains(subject),
+            "{what} must carry the hole: {text}"
+        );
+    }
+}
+
 #[test]
 fn dropped_adc_injection_reaches_every_ci_report_format() {
     let _guard = support::descriptor_env_lock();
@@ -96,21 +111,7 @@ contains = "hello from stm32"
         "the dropped channel must reach CiResult::coverage_warnings: {:?}",
         result.coverage_warnings
     );
-    let human = result.render_human();
-    assert!(
-        human.contains("COVERAGE HOLE") && human.contains("TEMP_SENSE"),
-        "human report must carry it: {human}"
-    );
-    let junit = result.render_junit();
-    assert!(
-        junit.contains("COVERAGE HOLE") && junit.contains("TEMP_SENSE"),
-        "junit must carry it: {junit}"
-    );
-    let gh = result.render_github_annotations();
-    assert!(
-        gh.contains("COSIM COVERAGE HOLE") && gh.contains("TEMP_SENSE"),
-        "github annotations must carry it: {gh}"
-    );
+    hole_in_every_format(&result, "TEMP_SENSE");
 }
 
 #[test]
@@ -216,19 +217,11 @@ max   = 45.0
         "the unexercised sensor must reach coverage_warnings: {:?}",
         result.coverage_warnings
     );
-    assert!(result.render_human().contains("COVERAGE HOLE"));
-    assert!(result.render_junit().contains("COVERAGE HOLE"));
-    assert!(result
-        .render_github_annotations()
-        .contains("COSIM COVERAGE HOLE"));
+    hole_in_every_format(&result, "U2_lm75");
 
     // The peripheral assertion FAILS loudly instead of green-passing on the
     // sensor's untouched default state.
-    let per = result
-        .results
-        .iter()
-        .find(|r| r.kind == "peripheral")
-        .expect("the peripheral assertion ran");
+    let per = support::row(&result, "kind:peripheral");
     assert!(
         !per.passed,
         "an unexercised sensor must fail its assertion: {}",

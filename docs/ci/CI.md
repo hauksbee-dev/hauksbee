@@ -35,13 +35,15 @@ PATH), or grab the prebuilt release bundle and skip the build entirely.
 - [Quick start](#quick-start)
 - [Spec format](#spec-format): [top-level keys](#top-level),
   [assembly inputs](#assembly-inputs-bom-placement-variant),
-  [`[[supply]]`](#power-supplies-supply), [`[[net_drive]]`](#net-drives-net_drive),
+  [`[[supply]]`](#power-supplies-supply), [`ramp_ms`](#cold-power-on-ramp_ms),
+  [`[[net_drive]]`](#net-drives-net_drive),
   [`suppress_rail`](#rail-suppression-suppress_rail),
   [`[[override]]`](#component-overrides-override),
   [the as-built overlay](#the-as-built-overlay-asbuilt),
   [`[fuzz]`](#initial-state-fuzzing-fuzz),
   [tolerances + `[ensemble]`](#component-tolerances-tolerance--ensemble)
-- [Assertions: `[[assert]]`](#assertions-assert)
+- [Assertions: `[[assert]]`](#assertions-assert), including
+  [measurements](#asking-for-a-number-measurements)
 - [Waiving a finding you have judged](#waiving-a-finding-you-have-judged)
 - [Output](#output)
 - [Boot coverage](#boot-coverage-watching-the-firmware-define-a-hi-z-control-net)
@@ -267,6 +269,45 @@ without it rather than assuming a voltage that could fabricate faults):
   (required), `cells`, `capacity_mah`, `soc`, `r_internal_ohms`.
 - `ideal` takes `volts` (required).
 
+Any kind that names a `volts` also takes `ramp_ms`.
+
+#### Cold power-on: `ramp_ms`
+
+**By default a supply starts already settled.** The transient march begins at
+the board's DC operating point, so every capacitor is pre-charged at `t = 0`
+and *there is no power-on transient at all*: an RC reset delay, a soft-start,
+an enable ramp and an inrush question all answer "0 ms" on the naive spec.
+
+`ramp_ms` models the cold start. The rail is driven from 0 V and ramps linearly
+to `volts` over that many milliseconds; because the operating point is seeded
+from the ramp's own starting value rather than from the setpoint, the
+capacitors really do start discharged.
+
+The ramp is sampled once per frame, so keep `ramp_ms` comfortably above
+`frame_ms`: the operating point is seeded at the level the ramp has reached
+after one frame, which is `frame_ms / ramp_ms` of the rail. At the 0.05 ms
+default frame a 1 ms ramp seeds the board at 5 % of the rail; a ramp shorter
+than a frame is indistinguishable from no ramp at all.
+
+```toml
+[[supply]]
+net = "V33"
+kind = "ideal"
+volts = 3.3
+ramp_ms = 0.5        # the LDO reaches 3.3 V 0.5 ms after power is applied
+```
+
+A ramped rail is driven directly rather than through a behavioural supply leg,
+so `ramp_ms` and the droop/ripple parameters of `bench` / `wall` / `usb` /
+`battery` do not compose: a leg that names `ramp_ms` is a stiff ramp.
+
+When a run asks a start-up-timing question (a `pulse_width`, or any `after_ms`
+above zero) on a board where nothing makes the run time-varying -- every supply
+un-ramped and `ideal`, no `[[peripheral]]` timeline, no `[[scenario]]`, no
+firmware -- each such result carries a note saying so and pointing at `ramp_ms`.
+The note is deliberately narrow: a spec with a stimulus, a scenario, firmware,
+a behavioural leg or a ramp never sees it.
+
 ### Net drives: `[[net_drive]]`
 
 Force a net to a fixed voltage for the whole run: external stimulus, a strap, or
@@ -458,6 +499,56 @@ after_ms = 50        # only sample at/after this time
 
 A `min` checks the worst (lowest) the net dipped to in the window. A `max`
 checks the worst (highest) it rose to.
+
+**`pulse_width`**: the width, in milliseconds, of the first COMPLETE pulse on a
+net at or after `after_ms`. The threshold and the interpolated crossing times
+are the ones the `toggle` frequency path uses, so a width and a rate read off
+the same net agree, and the reported `+-` is that path's grid residual (one
+sample step at each end of the interval).
+
+```toml
+[[assert]]
+kind = "pulse_width"
+net = "OUT"
+level = "high"       # or "low"; default "high"
+after_ms = 1.0       # optional: ignore everything before this
+min = 10.15          # optional, ms
+max = 11.44          # optional, ms
+```
+
+If the window holds no complete pulse -- no opening edge, or none closing it
+before the run ends -- the check REFUSES and reports no width. A refusal never
+passes; lengthen `duration_ms` or move `after_ms`.
+
+#### Asking for a number: measurements
+
+On the numeric kinds -- `voltage`, `toggle`, `max_current`, `pulse_width`,
+`phase_margin`, `ac_gain` -- **every bound is optional**. An assertion with no
+bound at all (`min`, `max`, `amps`, `freq_hz`, `min_toggles` all absent) is a
+MEASUREMENT: it reports the value, with the same uncertainty and the same
+evidence notes a judged assertion carries, and claims nothing.
+
+```toml
+[[assert]]
+kind = "voltage"
+net = "PU"
+after_ms = 13.0      # just tell me what PU is at 13 ms
+```
+
+- Human report: the row is marked `[MEASURED]`, not `[PASS]`.
+- JSON: the result carries `"measured": true` alongside `"passed": true`.
+- JUnit: a non-failing `<testcase>` whose `<system-out>` opens `measured:`.
+- Web: the row chip reads `MEASURED`.
+
+A measurement cannot fail, so it never reddens a run. It also never greens one
+by itself: **a run whose results are ALL measurements headlines `MEASURED -
+n/n measurement(s) reported, nothing judged` and exits 0**, not `GREEN`. Mix a
+real bound in and the run is judged on that bound as usual.
+
+Refusals and evidence still apply. A measurement whose evidence is undermined
+is reported as INVALID exactly like a bounded assertion, and a measurement the
+run could not take (no samples, too few edges) refuses rather than reporting a
+number it did not measure.
 
 **`uart`**: the firmware's serial output contains a string or matches a regex.
 

@@ -66,6 +66,31 @@ pub fn ci_result(
     }
 }
 
+/// One `[[waive]]` block, as a waiver file's body: the four fields every
+/// waiver carries, written once instead of a raw TOML literal per test.
+pub fn waive(check: &str, kind: &str, nets: &str, reason: &str, until: &str) -> String {
+    format!(
+        "\n[[waive]]\ncheck = \"{check}\"\nkind = \"{kind}\"\n\
+         nets = [\"{nets}\"]\nreason = \"{reason}\"\nuntil = \"{until}\"\n"
+    )
+}
+
+/// The one result a test is about: the row whose spec label is `name`, or --
+/// with a `kind:` prefix -- the first row of that assertion kind. Panics with
+/// the whole list, which is what a test needs to see when its row is missing.
+pub fn row<'a>(
+    r: &'a hauksbee_ci::CiResult,
+    name: &str,
+) -> &'a hauksbee_ci::assertions::AssertResult {
+    let (by_kind, want) = name
+        .strip_prefix("kind:")
+        .map_or((false, name), |k| (true, k));
+    r.results
+        .iter()
+        .find(|x| want == if by_kind { &x.kind } else { &x.label })
+        .unwrap_or_else(|| panic!("no assertion '{name}' in {:?}", r.results))
+}
+
 /// A committed example board/spec under this crate's `examples/` directory.
 #[allow(dead_code)]
 pub fn example(name: &str) -> PathBuf {

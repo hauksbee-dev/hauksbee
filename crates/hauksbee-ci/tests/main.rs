@@ -38,6 +38,8 @@ mod firmware_input_ci;
 mod flagship_brownout;
 #[path = "floating_net_verdict.rs"]
 mod floating_net_verdict;
+#[path = "gate_drive.rs"]
+mod gate_drive;
 #[path = "hook_gate_e2e.rs"]
 mod hook_gate_e2e;
 #[path = "hwtrace.rs"]

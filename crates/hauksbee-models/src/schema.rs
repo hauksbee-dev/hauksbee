@@ -721,6 +721,16 @@ pub struct Ratings {
     /// at (TL431 IKmin, an LDO minimum load); below it the run discloses, not answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_current_a: Option<f64>,
+
+    /// MOSFET: lowest |VGS| (V) the datasheet specifies RDS(on) at; under it the
+    /// card's fitted on-resistance is an extrapolation the vendor never guaranteed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rds_on_vgs: Option<f64>,
+
+    /// MOSFET: MAXIMUM |VGS(th)| (V) on the datasheet; under it a worst-case part
+    /// is not guaranteed to be enhanced at all, so conducting there breaks a limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vgs_th_max: Option<f64>,
 }
 
 /// Severity requested by a sourced operating-envelope entry.

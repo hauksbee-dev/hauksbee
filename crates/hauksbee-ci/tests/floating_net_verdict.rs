@@ -101,11 +101,7 @@ fn a_floating_net_fails_red_with_the_missing_pull_named() {
     let dir = tempfile::tempdir().expect("tempdir");
     let board = board(dir.path(), false);
     let result = run(dir.path(), &board);
-    let voltage = result
-        .results
-        .iter()
-        .find(|r| r.kind == "voltage")
-        .expect("voltage assertion evaluated");
+    let voltage = support::row(&result, "kind:voltage");
     assert!(!voltage.passed, "a floating net must not pass numerically");
     assert!(
         !voltage.invalid,
@@ -131,11 +127,7 @@ fn a_modeled_pulldown_defines_the_net_and_the_opens_become_a_caveat() {
     let dir = tempfile::tempdir().expect("tempdir");
     let board = board(dir.path(), true);
     let result = run(dir.path(), &board);
-    let voltage = result
-        .results
-        .iter()
-        .find(|r| r.kind == "voltage")
-        .expect("voltage assertion evaluated");
+    let voltage = support::row(&result, "kind:voltage");
     assert!(
         voltage.passed,
         "100k to GND defines the level; the open parts beside it are a \

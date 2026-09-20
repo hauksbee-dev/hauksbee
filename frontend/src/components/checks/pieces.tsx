@@ -46,10 +46,12 @@ export function Field({ label, value, onChange, width = 90, placeholder, invalid
   )
 }
 
-/** Inline PASS / FAIL / INVALID chip riding on a check row after a run. */
+/** Inline PASS / FAIL / INVALID / MEASURED chip riding on a check row. */
 export function ResultChip({ result, stale }: { result: CheckResult; stale: boolean }) {
   const tone = result.invalid
     ? { color: 'var(--warn)', bg: 'var(--warn-bg)', border: 'var(--warn-border)', label: 'INVALID' }
+    : result.measured
+    ? { color: 'var(--silk-faint)', bg: 'var(--surface-2)', border: 'var(--hairline)', label: 'MEASURED' }
     : result.passed
       ? { color: 'var(--ok)', bg: 'var(--ok-bg)', border: 'var(--ok-border)', label: 'PASS' }
       : { color: 'var(--err)', bg: 'var(--err-bg)', border: 'var(--err-border)', label: 'FAIL' }

@@ -972,3 +972,1483 @@ missing = ["output_current_limit", "input_common_mode_range", "input_offset_volt
 
 [models.ratings]
 max_voltage_v = 6.0   # supply abs max (2.5 to 5.5 V operating)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TL071 / TL072 / TL074 and TL081 / TL082 / TL084: the classic (ORIGINAL-DIE)
+# JFET-input op-amps, three pinouts, one set of electricals.
+#
+# Sources, read end to end for this batch:
+#   TI "TL071, TL071A, TL071B, TL071H, TL072..., TL074..." SLOS080W, September
+#     1978 - revised July 2025.
+#   TI "TL081, TL081A, TL081B, TL081H, TL082..., TL084..." SLOS081O, February
+#     1977 - revised September 2025.
+# The two documents print the SAME DC and AC tables for the original die (the
+# TL08x sheet's Section 5.8 / 5.9 differ from the TL07x sheet's only in the
+# noise rows, which this card does not carry), so one set of numbers with both
+# citations is not a shortcut: it is what the two sheets say.
+#
+# THESE CARDS ARE THE ORIGINAL DIE ONLY. SLOS080W Section 5 opens with a note
+# that the H-suffix parts are a NEW die on a modern process, described by
+# Sections 5.7/5.10, while Sections 5.8/5.9/5.11 describe the old one. The two
+# are different amplifiers: AOL 125 dB typ against 200 V/mV (106 dB), a
+# common-mode range that reaches VCC+ by specification, VOS 1 mV against 3 mV,
+# and a "No Phase Reversal" characterisation figure printed ONLY for the H die.
+# So `value_re` excludes the H suffix on every card below; an H part is left
+# unmatched (open, and reported as such) rather than answered with old-die
+# numbers. The M suffix is excluded for two reasons at once: its recommended
+# supply is 10 V to 30 V rather than 4.5 V to 40 V, its GBW is 3 MHz rather
+# than 5.25 MHz, and it is the only grade offered in the 10-pin CFP (U) and
+# 20-pin LCCC (FK) packages, whose pin maps are NOT the maps below.
+#
+# Figures used, all from SLOS080W Section 5.8 (DC) and 5.9 (AC) / SLOS081O
+# Sections 5.8 and 5.9, at VS = (VCC+) - (VCC-) = +/-15 V and TA = 25 C:
+#   AOL   25 V/mV MIN, 200 V/mV TYP          (TL07xC/TL08xC column)
+#   GBW   5.25 MHz TYP                       (all devices except NS/PS/M)
+#   SR    8 V/us MIN, 20 V/us TYP            (VI = 10 V, CL = 100 pF, RL = 2 k)
+#   VOM   +/-12 V MIN, +/-13.5 V TYP @ RL = 10 kOhm
+#         +/-10 V MIN @ RL >= 2 kOhm over the full temperature range
+#   VCM   +/-11 V MIN, -12 to +15 V TYP
+#   VS    4.5 V to 40 V recommended; 0 to 42 V absolute maximum
+#   VI    (VCC-) + 4 V to (VCC+) + 0.1 V recommended
+#
+# `gain` IS THE TYPICAL (200 V/mV = 200000), not the 25 V/mV guaranteed minimum,
+# for the reason the tsv914 entry above gives: open-loop gain enters a
+# closed-loop answer only as a small error term and the typical is the honest
+# central estimate. `swing_*` IS THE OPPOSITE CHOICE, the GUARANTEED MINIMUM
+# swing rather than the typical, because a swing limit is exactly the thing a
+# board can be wrong about: VOM MIN is +/-12 V at RL = 10 kOhm on a +/-15 V
+# supply, which is 3.0 V of headroom from each rail. The typical is 1.5 V of
+# headroom (+/-13.5 V) and a real part will usually do better than this card
+# claims, which is the direction to err in. At RL >= 2 kOhm over temperature
+# the guaranteed swing is only +/-10 V, i.e. 5.0 V of headroom, and this card
+# does NOT model the load dependence.
+#
+# `pole_hz` IS DERIVED, NOT PRINTED: 5.25 MHz / 200000 = 26.25 Hz is the
+# dominant pole implied by the typical gain-bandwidth product and the typical
+# open-loop gain. Both inputs to that division are typicals from the tables
+# above, so the pole is a typical too, and it is a SINGLE-POLE fit to a part
+# whose real open-loop response is only approximately one pole.
+#
+# THE PHASE-REVERSAL / SINGLE-5-V HAZARD. The original die's recommended input
+# voltage range starts at (VCC-) + 4 V (SLOS080W Section 5.3, "VI Input
+# voltage", all devices except NS/PS/M), and its guaranteed common-mode range
+# is only +/-11 V on a +/-15 V supply. Driving an input below that floor takes
+# the JFET front end out of its specified region; the classic reported symptom
+# is OUTPUT PHASE REVERSAL, the output slamming to the WRONG rail rather than
+# simply clipping, and the only place either datasheet characterises the
+# absence of that behaviour is Figure 5-26 "No Phase Reversal" in Section 5.10,
+# which covers the H die alone. Nothing in Sections 5.8/5.9/5.11 promises it
+# for the part this card models. Combine that floor with an output that cannot
+# get within 3 V of either rail and a TL072 on a single 5 V supply has no
+# usable input window and no usable output window: it effectively does not
+# work, however plausible the schematic looks. NEITHER of those two facts is
+# checked by the envelope below, which can only express the UPPER common-mode
+# limit; see the warning and coverage text on each card.
+
+[[models]]
+id = "tl07x_tl08x_dual"
+kind = "opamp"
+description = "TL072/TL082 dual JFET-input op-amp (original die), 8-pin, split or single supply"
+
+[models.match]
+# TL072/TL082 with the A and B offset grades and the C (0-70 C) and I
+# (-40-85 C) temperature grades, plus any package letters after them: CP, CD,
+# CDR, IDR, CDT, IDDFR, CN, IN. Figure 4-5 of SLOS080W puts the D, DDF, JG, P,
+# PS and PW packages on ONE pin map, which is the map below, so the package
+# letters need no gating here.
+#
+# H IS EXCLUDED (different die, see the note above) and so is M (different
+# recommended supply, different GBW, and the U/FK packages it alone comes in
+# have different pin maps). Both fall out of requiring the optional grade
+# letter to be A or B and the optional temperature letter to be C or I.
+value_re = "(?i)^TL0[78]2[AB]?([CI][A-Z0-9]*)?$"
+
+# VICR, one entry per channel, in the shape the lm358 entry above documents:
+# it fires only when BOTH inputs of a channel sit above V(VCC+) - 4 V.
+#
+# THIS UNDER-REPORTS IN TWO DIRECTIONS AT ONCE and that is deliberate. The
+# datasheet's guaranteed common-mode window is +/-11 V on a +/-15 V supply, so
+# 4 V of headroom below VCC+ is the top of it; but the TYPICAL column reaches
+# +15 V, i.e. VCC+ itself, so an input inside the top 4 V is outside the
+# GUARANTEED window rather than certainly broken. The far more dangerous end,
+# the (VCC-) + 4 V floor whose violation is the phase-reversal hazard, cannot
+# be expressed by this envelope kind at all: `input_common_mode` is a
+# supply-relative CEILING. A single-5-V board is caught here only because
+# mid-supply-biased inputs (2.5 V on a 5 V rail) sit above VCC+ - 4 V = 1 V.
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_a", "in_minus_a"]
+headroom_v = 4.0
+severity = "serious"
+basis = "TI SLOS080W Section 5.8 / SLOS081O Section 5.8, VCM common-mode voltage, MIN +/-11 V at VS = +/-15 V and TA = 25 C, i.e. 4 V of guaranteed headroom below VCC+ (the TYP column reaches -12 to +15 V)"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_b", "in_minus_b"]
+headroom_v = 4.0
+severity = "serious"
+basis = "TI SLOS080W Section 5.8 / SLOS081O Section 5.8, VCM common-mode voltage, MIN +/-11 V at VS = +/-15 V and TA = 25 C, i.e. 4 V of guaranteed headroom below VCC+ (the TYP column reaches -12 to +15 V)"
+
+[models.params]
+gain    = 200000.0  # AOL TYP 200 V/mV (MIN 25 V/mV on the C grade, 50 V/mV on
+                    # A/B/I), VO = 0 V, VS = +/-15 V, TA = 25 C
+pole_hz = 26.25     # DERIVED: GBW 5.25 MHz TYP / AOL 200000 TYP. Not a printed
+                    # row; see the note above.
+slew    = 20.0      # SR TYP 20 V/us (MIN 8 V/us), VI = 10 V, CL = 100 pF,
+                    # RL = 2 kOhm, VS = +/-15 V. V/us is the unit the binder
+                    # wants and the unit the datasheet prints.
+# HEADROOMS FROM THE SUPPLY PINS, not fixed levels: on a +/-12 V board the
+# output saturates at -9 V / +9 V, not at the +/-12 V the fallback names.
+swing_lo = 3.0      # VOM MIN +/-12 V at RL = 10 kOhm, VS = +/-15 V: 3.0 V of
+swing_hi = 3.0      # guaranteed headroom from each rail (TYP +/-13.5 V = 1.5 V)
+rail_lo = -12.0     # fallback levels only (deck `.model opamp(...)`, no pins):
+rail_hi = 12.0      # the same guaranteed VOM stated as levels on a +/-15 V rail
+warning = "this is the ORIGINAL-DIE TL072/TL082, not the TL07xH/TL08xH, which is a different amplifier on a modern process and is deliberately left unmatched. THE PART DOES NOT WORK ON A SINGLE 5 V SUPPLY and nothing in this model stops it being simulated there: the datasheet's recommended input voltage range starts at (VCC-) + 4 V (SLOS080W/SLOS081O Section 5.3) and the guaranteed output swing stops 3 V short of each rail, so a 5 V rail leaves no usable input window and no usable output window. Driving an input below the (VCC-) + 4 V floor also takes the JFET front end into the region where these parts are known for OUTPUT PHASE REVERSAL -- the output slamming to the wrong rail instead of clipping -- and the only 'No Phase Reversal' characterisation either sheet prints is for the H die. That lower limit and the phase reversal are NOT modelled and NOT checked; the input_common_mode envelope on this card checks only the UPPER end (both inputs of a channel above VCC+ - 4 V), and even there the typical common-mode range reaches VCC+ itself, so a finding means 'outside the guaranteed window', not 'certainly broken'. The output swing is bounded by the supply pins (V(VCC-)+3 V to V(VCC+)-3 V, the guaranteed VOM at RL = 10 kOhm on a +/-15 V supply) but nothing else about the output stage is: the load dependence is not modelled, and at RL >= 2 kOhm over temperature the guaranteed swing is only +/-10 V, i.e. 5 V of headroom, which this card would call clean. Output short-circuit current is not modelled. Input offset voltage (3 mV typ, 10 mV max on the C grade), input bias current (65 pA typ, 200 pA max at 25 C but 7 nA over temperature) and input offset current are taken as zero, and the gain is the 200 V/mV typ rather than the 25 V/mV min, so a computed output is the NOMINAL part at 25 C, not a bound over the datasheet's spread. The 26.25 Hz pole is DERIVED from the typical 5.25 MHz GBW and the typical open-loop gain, not printed, and is a single-pole fit."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "dominant_pole", "slew_rate_limit", "dual_channel",
+              "split_or_single_supply"]
+missing = ["output_phase_reversal", "negative_input_common_mode_limit",
+           "output_current_limit", "load_dependent_output_swing",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread", "supply_voltage_envelope"]
+# NO supply envelope: SLOS080W Section 5.3 bounds only the TOTAL supply
+# (4.5 V to 40 V), and the `supply_range` envelope kind is PER PIN against
+# ground. Restating a total as a per-pin limit would be a number the datasheet
+# does not print, so the recommended supply range is recorded in prose here and
+# nothing checks it. The 1.4 mA typ / 2.5 mA max quiescent current PER
+# AMPLIFIER is likewise prose only: `supply_static_ua` is unread for the opamp
+# kind.
+
+[models.pins]
+# SLOS080W Table 4-3 / SLOS081O Table 4-3, the 8-pin D, DDF, JG, P, PS and PW
+# packages, which share one pin allocation figure.
+"1" = "out_a"        # 1OUT
+"2" = "in_minus_a"   # 1IN-
+"3" = "in_plus_a"    # 1IN+
+"4" = "vss"          # VCC-
+"5" = "in_plus_b"    # 2IN+
+"6" = "in_minus_b"   # 2IN-
+"7" = "out_b"        # 2OUT
+"8" = "vcc"          # VCC+
+
+[models.ratings]
+max_voltage_v = 42.0          # VS absolute maximum, 0 to 42 V, Section 5.1
+                              # (all devices except NS/PS/M, which are 36 V and
+                              # are not matched by this card)
+max_pin_current_a = 0.010     # signal input pin current, +/-10 mA, Section 5.1
+max_junction_temp_c = 150.0   # TJ, Section 5.1
+theta_ja_c_per_w = 147.8      # RthJA, 8-pin D (SOIC), Section 5.5 Thermal
+                              # Information for Dual Channel (P/PDIP is 85)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "tl07x_tl08x_quad"
+kind = "opamp"
+description = "TL074/TL084 quad JFET-input op-amp (original die), 14-pin, split or single supply"
+
+[models.match]
+# The quad. H and M excluded as on the dual: the M grade is the only one in the
+# 20-pin FK (LCCC) package, whose map is not this one.
+value_re = "(?i)^TL0[78]4[AB]?([CI][A-Z0-9]*)?$"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_a", "in_minus_a"]
+headroom_v = 4.0
+severity = "serious"
+basis = "TI SLOS080W Section 5.8 / SLOS081O Section 5.8, VCM common-mode voltage, MIN +/-11 V at VS = +/-15 V and TA = 25 C, i.e. 4 V of guaranteed headroom below VCC+ (the TYP column reaches -12 to +15 V)"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_b", "in_minus_b"]
+headroom_v = 4.0
+severity = "serious"
+basis = "TI SLOS080W Section 5.8 / SLOS081O Section 5.8, VCM common-mode voltage, MIN +/-11 V at VS = +/-15 V and TA = 25 C, i.e. 4 V of guaranteed headroom below VCC+ (the TYP column reaches -12 to +15 V)"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_c", "in_minus_c"]
+headroom_v = 4.0
+severity = "serious"
+basis = "TI SLOS080W Section 5.8 / SLOS081O Section 5.8, VCM common-mode voltage, MIN +/-11 V at VS = +/-15 V and TA = 25 C, i.e. 4 V of guaranteed headroom below VCC+ (the TYP column reaches -12 to +15 V)"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_d", "in_minus_d"]
+headroom_v = 4.0
+severity = "serious"
+basis = "TI SLOS080W Section 5.8 / SLOS081O Section 5.8, VCM common-mode voltage, MIN +/-11 V at VS = +/-15 V and TA = 25 C, i.e. 4 V of guaranteed headroom below VCC+ (the TYP column reaches -12 to +15 V)"
+
+[models.params]
+gain    = 200000.0  # AOL TYP 200 V/mV (MIN 25 V/mV on the C grade)
+pole_hz = 26.25     # DERIVED: GBW 5.25 MHz TYP / AOL 200000 TYP
+slew    = 20.0      # SR TYP 20 V/us (MIN 8 V/us), RL = 2 kOhm, CL = 100 pF
+swing_lo = 3.0      # VOM MIN +/-12 V at RL = 10 kOhm, VS = +/-15 V
+swing_hi = 3.0      # (TYP +/-13.5 V, i.e. 1.5 V of headroom)
+rail_lo = -12.0     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 12.0
+warning = "this is the ORIGINAL-DIE TL074/TL084, not the TL07xH/TL08xH, which is a different amplifier and is deliberately left unmatched. THE PART DOES NOT WORK ON A SINGLE 5 V SUPPLY and nothing in this model stops it being simulated there: the recommended input voltage range starts at (VCC-) + 4 V (SLOS080W/SLOS081O Section 5.3) and the guaranteed output swing stops 3 V short of each rail. Driving an input below that floor takes the JFET front end into the region these parts are known for OUTPUT PHASE REVERSAL -- the output slamming to the wrong rail rather than clipping -- and the only 'No Phase Reversal' figure either sheet prints is for the H die; that behaviour is NOT modelled and the lower common-mode limit is NOT checked. The input_common_mode envelopes here check only the UPPER end, per channel, and even there the typical common-mode range reaches VCC+, so a finding means 'outside the guaranteed window'. The output swing is bounded by the supply pins (V(VCC-)+3 V to V(VCC+)-3 V, guaranteed VOM at RL = 10 kOhm on +/-15 V); the load dependence is not modelled and at RL >= 2 kOhm over temperature the guaranteed swing is only +/-10 V. Output short-circuit current is not modelled. Input offset voltage (3 mV typ, 10 mV max on the C grade), input bias current and input offset current are taken as zero, and the gain is the 200 V/mV typ rather than the 25 V/mV min. The 26.25 Hz pole is DERIVED from the typical GBW and typical gain, not printed. All four amplifiers share one supply leg and one pair of rails; nothing here distinguishes them beyond their nets."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "dominant_pole", "slew_rate_limit", "quad_channel",
+              "split_or_single_supply"]
+missing = ["output_phase_reversal", "negative_input_common_mode_limit",
+           "output_current_limit", "load_dependent_output_swing",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread", "supply_voltage_envelope"]
+
+[models.pins]
+# SLOS080W Table 4-6 / SLOS081O Table 4-5, the 14-pin D, DYY, J, N, NS, PW and W
+# packages. As on the LM324, the supplies are NOT at the corners: VCC+ is pin 4
+# and VCC- is pin 11.
+"1"  = "out_a"        # 1OUT
+"2"  = "in_minus_a"   # 1IN-
+"3"  = "in_plus_a"    # 1IN+
+"4"  = "vcc"          # VCC+
+"5"  = "in_plus_b"    # 2IN+
+"6"  = "in_minus_b"   # 2IN-
+"7"  = "out_b"        # 2OUT
+"8"  = "out_c"        # 3OUT
+"9"  = "in_minus_c"   # 3IN-
+"10" = "in_plus_c"    # 3IN+
+"11" = "vss"          # VCC-
+"12" = "in_plus_d"    # 4IN+
+"13" = "in_minus_d"   # 4IN-
+"14" = "out_d"        # 4OUT
+
+[models.ratings]
+max_voltage_v = 42.0          # VS absolute maximum, Section 5.1
+max_pin_current_a = 0.010     # signal input pin current, +/-10 mA
+max_junction_temp_c = 150.0   # TJ, Section 5.1
+theta_ja_c_per_w = 86.6       # RthJA, 14-pin N (PDIP), SLOS080W Section 5.6
+                              # Thermal Information for Quad Channel
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "tl07x_tl08x_single"
+kind = "opamp"
+description = "TL071/TL081 single JFET-input op-amp (original die), 8-pin, split or single supply"
+
+[models.match]
+# The single. Every ORIGINAL-DIE TL071/TL081 package is 8-pin (D SOIC, P PDIP,
+# PS SO, JG CDIP) and shares pins 2/3/4/6/7; the PS package puts OFFSET N1/N2
+# on pins 1 and 5 where D and P leave them unconnected, which is why this map
+# names neither. The 5-pin DBV (SOT-23) and DCK (SC70) packages, whose maps are
+# completely different, exist ONLY as TL071H/TL081H and are excluded with the
+# rest of the H die by the grade letters below.
+value_re = "(?i)^TL0[78]1[AB]?([CI][A-Z0-9]*)?$"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus", "in_minus"]
+headroom_v = 4.0
+severity = "serious"
+basis = "TI SLOS080W Section 5.8 / SLOS081O Section 5.8, VCM common-mode voltage, MIN +/-11 V at VS = +/-15 V and TA = 25 C, i.e. 4 V of guaranteed headroom below VCC+ (the TYP column reaches -12 to +15 V)"
+
+[models.params]
+gain    = 200000.0  # AOL TYP 200 V/mV (MIN 25 V/mV on the C grade)
+pole_hz = 26.25     # DERIVED: GBW 5.25 MHz TYP / AOL 200000 TYP
+slew    = 20.0      # SR TYP 20 V/us (MIN 8 V/us), RL = 2 kOhm, CL = 100 pF
+swing_lo = 3.0      # VOM MIN +/-12 V at RL = 10 kOhm, VS = +/-15 V
+swing_hi = 3.0      # (TYP +/-13.5 V, i.e. 1.5 V of headroom)
+rail_lo = -12.0     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 12.0
+warning = "this is the ORIGINAL-DIE TL071/TL081, not the TL07xH/TL08xH, which is a different amplifier and is deliberately left unmatched. THE PART DOES NOT WORK ON A SINGLE 5 V SUPPLY and nothing in this model stops it being simulated there: the recommended input voltage range starts at (VCC-) + 4 V (SLOS080W/SLOS081O Section 5.3) and the guaranteed output swing stops 3 V short of each rail. Driving an input below that floor takes the JFET front end into the region these parts are known for OUTPUT PHASE REVERSAL -- the output slamming to the wrong rail rather than clipping -- and the only 'No Phase Reversal' figure either sheet prints is for the H die; that behaviour is NOT modelled and the lower common-mode limit is NOT checked. The input_common_mode envelope here checks only the UPPER end, and the typical common-mode range reaches VCC+, so a finding means 'outside the guaranteed window'. The output swing is bounded by the supply pins (V(VCC-)+3 V to V(VCC+)-3 V, guaranteed VOM at RL = 10 kOhm on +/-15 V); the load dependence is not modelled and at RL >= 2 kOhm over temperature the guaranteed swing is only +/-10 V. Output short-circuit current is not modelled. Input offset voltage (3 mV typ, 10 mV max on the C grade), input bias current and input offset current are taken as zero, and the gain is the 200 V/mV typ rather than the 25 V/mV min. The 26.25 Hz pole is DERIVED from the typical GBW and typical gain, not printed. The offset-null pins (1 and 5 on the PS package) are not on this map and any trim network wired to them is not modelled."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "dominant_pole", "slew_rate_limit", "single_channel",
+              "split_or_single_supply"]
+missing = ["output_phase_reversal", "negative_input_common_mode_limit",
+           "output_current_limit", "load_dependent_output_swing",
+           "offset_null_trim", "input_offset_voltage", "input_bias_current",
+           "input_offset_current", "parameter_spread", "supply_voltage_envelope"]
+
+[models.pins]
+# SLOS080W Table 4-1 (D and P columns) / SLOS081O Table 4-1. Pins 1, 5 and 8 are
+# "do not connect" on D and P, and OFFSET N1 / OFFSET N2 / NC on PS; this map
+# claims none of them, so both packages bind correctly on the five pins that
+# matter.
+"2" = "in_minus"   # IN-
+"3" = "in_plus"    # IN+
+"4" = "vss"        # VCC-
+"6" = "out"        # OUT
+"7" = "vcc"        # VCC+
+
+[models.ratings]
+max_voltage_v = 42.0          # VS absolute maximum, Section 5.1
+max_pin_current_a = 0.010     # signal input pin current, +/-10 mA
+max_junction_temp_c = 150.0   # TJ, Section 5.1
+theta_ja_c_per_w = 158.8      # RthJA, 8-pin D (SOIC), SLOS080W Section 5.4
+                              # Thermal Information for Single Channel
+                              # (P/PDIP is 85, PS/SO is 95)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LM741: the original general-purpose bipolar op-amp, 8-pin, SPLIT SUPPLY ONLY.
+#
+# Source: TI "LM741 Operational Amplifier" SNOSC25D, May 1998 - revised October
+#   2015. All figures below are the LM741C column of Section 6.7 "Electrical
+#   Characteristics, LM741C" (the commercial grade, which is what a board
+#   marked LM741CN or LM741CP is), at VS = +/-15 V and TA = 25 C, plus Sections
+#   6.1, 6.3 and 6.4.
+#
+# THE SUPPLY ENVELOPE IS THE POINT OF THIS CARD. Section 6.3 Recommended
+# Operating Conditions gives the supply voltage PER RAIL and not as a total:
+# MIN +/-10 V, NOM +/-15 V, MAX +/-18 V for the LM741C. That is a genuine
+# per-pin range, so it goes in as two `supply_range` envelopes, and it catches
+# the single-supply mistake head on: an LM741 with V- on ground has its V- pin
+# at 0 V, outside -18 .. -10 V, and is reported rather than quietly answered.
+# The part has no single-supply mode at all; the datasheet never specifies one.
+#
+# NO `pole_hz` ON THIS CARD. SNOSC25D prints no gain-bandwidth product and no
+# unity-gain bandwidth row: the only dynamic figures are the 0.3 us rise time,
+# the 5% overshoot and the 0.5 V/us slew rate. The "1 MHz" everyone quotes for
+# a 741 is not in this document, so nothing is put in `pole_hz` and a
+# board-bound LM741 is rate-limited by its slew rate but has no modelled
+# bandwidth roll-off.
+[[models]]
+id = "lm741"
+kind = "opamp"
+description = "LM741C single bipolar op-amp, 8-pin, +/-10 to +/-18 V split supply only"
+
+[models.match]
+# LM741, LM741A, LM741C, LM741E and their package letters (LM741CN, LM741CP,
+# LM741CH). The uA741 is a DIFFERENT DOCUMENT with a different recommended
+# supply range (+/-5 to +/-15 rather than +/-10 to +/-18) and different thermal
+# figures, so it has its own entry below rather than being folded in here.
+value_re = "(?i)^LM741[A-Z0-9]*$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 10.0
+max_v = 18.0
+abs_max_v = 18.0
+severity = "serious"
+basis = "TI LM741 SNOSC25D Section 6.3 Recommended Operating Conditions, supply voltage LM741C MIN +/-10 V, NOM +/-15 V, MAX +/-18 V (Section 6.1 Absolute Maximum Ratings gives the same +/-18 V for the C grade)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vss"
+min_v = -18.0
+max_v = -10.0
+severity = "serious"
+basis = "TI LM741 SNOSC25D Section 6.3 Recommended Operating Conditions, supply voltage LM741C MIN +/-10 V, NOM +/-15 V, MAX +/-18 V; the negative rail is the same row read on the V- pin, and a V- pin on ground is outside it"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus", "in_minus"]
+headroom_v = 3.0
+severity = "serious"
+basis = "TI LM741 SNOSC25D Section 6.7 Electrical Characteristics LM741C, input voltage range MIN +/-12 V, TYP +/-13 V at VS = +/-15 V and TA = 25 C, i.e. 3 V of guaranteed headroom below V+"
+
+[models.params]
+gain    = 200000.0  # Large signal voltage gain TYP 200 V/mV (MIN 20 V/mV),
+                    # VS = +/-15 V, VO = +/-10 V, RL >= 2 kOhm, TA = 25 C
+slew    = 0.5       # Slew rate TYP 0.5 V/us, TA = 25 C, unity gain. No MIN or
+                    # MAX is printed.
+# HEADROOMS FROM THE SUPPLY PINS, not fixed levels.
+swing_lo = 3.0      # Output voltage swing at VS = +/-15 V, RL >= 10 kOhm:
+swing_hi = 3.0      # MIN +/-12 V (TYP +/-14). The guaranteed MIN is taken, so
+                    # 3.0 V of headroom from each rail; at RL >= 2 kOhm the
+                    # guaranteed swing is only +/-10 V (5 V of headroom) and
+                    # this card does not model the load dependence.
+rail_lo = -12.0     # fallback levels only (deck `.model opamp(...)`, no pins):
+rail_hi = 12.0      # the same guaranteed swing stated as levels on +/-15 V
+warning = "THIS PART IS SPLIT-SUPPLY ONLY. SNOSC25D specifies it at VS = +/-15 V and recommends +/-10 V to +/-18 V; there is no single-supply mode in the document, and the two supply_range envelopes on this card fire when either supply pin leaves its range, which is what an LM741 with V- on ground does. NO BANDWIDTH IS MODELLED: the datasheet prints no gain-bandwidth product and no unity-gain bandwidth, only a 0.3 us rise time and a 0.5 V/us slew rate, so `pole_hz` is deliberately absent and this model rolls off nowhere -- it is rate-limited in a transient by the slew rate and otherwise answers DC. The output swing is bounded by the supply pins (V(V-)+3 V to V(V+)-3 V, the guaranteed MIN swing at RL >= 10 kOhm on a +/-15 V supply); the load dependence is not modelled and at RL >= 2 kOhm the guaranteed swing is only +/-10 V, which this card would call clean. The 25 mA output short-circuit current is not modelled. Input offset voltage (2 mV typ, 6 mV max), input bias current (80 nA typ, 500 nA max) and input offset current (20 nA typ, 200 nA max) are taken as zero -- on a 741 those are large, and a high-impedance source will show an offset this model does not -- and the gain is the 200 V/mV typ rather than the 20 V/mV min. The offset-null pins (1 and 5) are on the map as no-ops for the binder and any trim network wired to them is not modelled."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "slew_rate_limit", "single_channel", "split_supply_envelope",
+              "input_common_mode_range"]
+missing = ["dominant_pole", "gain_bandwidth_product", "output_current_limit",
+           "load_dependent_output_swing", "offset_null_trim",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread"]
+
+[models.pins]
+# SNOSC25D Section 5 Pin Functions, the NAB (8-pin CDIP/PDIP) and LMC (8-pin
+# TO-99) packages, which share this numbering.
+"2" = "in_minus"   # INVERTING INPUT
+"3" = "in_plus"    # NONINVERTING INPUT
+"4" = "vss"        # V-
+"6" = "out"        # OUTPUT
+"7" = "vcc"        # V+
+# Pins 1 and 5 are OFFSET NULL and pin 8 is NC; none is claimed here.
+
+[models.ratings]
+max_voltage_v = 36.0          # +/-18 V supply, Section 6.1 Absolute Maximum
+                              # Ratings, LM741C, stated here as the total
+max_junction_temp_c = 100.0   # TJ, Section 6.1, LM741C (the LM741/LM741A
+                              # grades are 150 C; the commercial part is not)
+theta_ja_c_per_w = 100.0      # RthJA, P (PDIP) 8-pin, Section 6.4 Thermal
+                              # Information (TO-99 is 170)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ua741"
+kind = "opamp"
+description = "uA741C single bipolar op-amp, 8-pin, +/-5 to +/-15 V split supply only"
+
+[models.match]
+# The TI uA741, a separate document from the LM741 with a DIFFERENT recommended
+# supply range and different thermal figures. Board values seen: UA741CN,
+# UA741CP, UA741CD, uA741, A741.
+value_re = "(?i)^U?A741[A-Z0-9]*$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 5.0
+max_v = 15.0
+abs_max_v = 18.0
+severity = "serious"
+basis = "TI uA741 SLOS094H Section 5.2 Recommended Operating Conditions, VCC+ supply voltage MIN 5 V MAX 15 V (Section 5.1 Absolute Maximum Ratings gives -18 V to 18 V for the uA741C)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vss"
+min_v = -15.0
+max_v = -5.0
+severity = "serious"
+basis = "TI uA741 SLOS094H Section 5.2 Recommended Operating Conditions, VCC- supply voltage MIN -5 V MAX -15 V; a V- pin on ground is outside that row"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus", "in_minus"]
+headroom_v = 3.0
+severity = "serious"
+basis = "TI uA741 SLOS094H Section 5.4 Electrical Characteristics uA741C, VICR common-mode input voltage range MIN +/-12 V, TYP +/-13 V at VCC = +/-15 V and 25 C, i.e. 3 V of guaranteed headroom below VCC+"
+
+[models.params]
+gain    = 200000.0  # AVD large-signal differential voltage amplification TYP
+                    # 200 V/mV (MIN 20 V/mV), RL >= 2 kOhm, VO = +/-10 V, 25 C
+slew    = 0.5       # SR slew rate at unity gain TYP 0.5 V/us, VI = 10 V,
+                    # RL = 2 kOhm, CL = 100 pF, Section 5.6
+swing_lo = 3.0      # VOM maximum peak output voltage swing at RL = 10 kOhm,
+swing_hi = 3.0      # 25 C: MIN +/-12 V (TYP +/-14.95 V). The guaranteed MIN is
+                    # taken: 3.0 V of headroom from each rail. At RL = 2 kOhm
+                    # the guaranteed swing is +/-10 V, i.e. 5 V of headroom.
+rail_lo = -12.0     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 12.0
+warning = "THIS PART IS SPLIT-SUPPLY ONLY. SLOS094H Section 5.2 recommends VCC+ between 5 V and 15 V and VCC- between -5 V and -15 V, per rail, and the two supply_range envelopes on this card fire when either supply pin leaves its range -- which a uA741 with V- on ground does. NO BANDWIDTH IS MODELLED: the datasheet prints no gain-bandwidth product and no unity-gain bandwidth, only a 0.3 us rise time and a 0.5 V/us slew rate, so `pole_hz` is deliberately absent and this model rolls off nowhere. The output swing is bounded by the supply pins (V(VCC-)+3 V to V(VCC+)-3 V, the guaranteed MIN at RL = 10 kOhm on a +/-15 V supply); the load dependence is not modelled and at RL = 2 kOhm the guaranteed swing is only +/-10 V. The +/-80 mA short-circuit output current is not modelled. Input offset voltage (0.3 mV typ, 6 mV max), input bias current (500 nA max) and input offset current (200 nA max) are taken as zero, and the gain is the 200 V/mV typ rather than the 20 V/mV min. The offset-null pins (1 and 5) are not claimed by this map and any trim network wired to them is not modelled."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "slew_rate_limit", "single_channel", "split_supply_envelope",
+              "input_common_mode_range"]
+missing = ["dominant_pole", "gain_bandwidth_product", "output_current_limit",
+           "load_dependent_output_swing", "offset_null_trim",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread"]
+
+[models.pins]
+# SLOS094H Section 4, the D (SOIC), P (PDIP) and PS (SO) 8-pin packages: OFFSET
+# N1 on 1, OFFSET N2 on 5 and NC on 8, none of which is claimed here.
+"2" = "in_minus"   # IN-
+"3" = "in_plus"    # IN+
+"4" = "vss"        # VCC-
+"6" = "out"        # OUT
+"7" = "vcc"        # VCC+
+
+[models.ratings]
+max_voltage_v = 36.0          # VCC -18 V to 18 V, Section 5.1 Absolute Maximum
+                              # Ratings, uA741C, stated here as the total
+max_junction_temp_c = 150.0   # TJ, Section 5.1
+theta_ja_c_per_w = 138.7      # RthJA, D (SOIC) 8-pin, Section 5.3 Thermal
+                              # Information (P/PDIP is 87.4, PS/SO is 119.7)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NE5532: the audio dual, 8-pin, split supply.
+#
+# Sources. TWO documents, and which figure came from which matters, in the way
+# the tsv914 entry above spells out:
+#   TI "NE5532x, SA5532x Dual Low-Noise Operational Amplifiers" SLOS075K,
+#     November 1979 - revised December 2025, is the primary source and is where
+#     every figure below comes from EXCEPT the output swing.
+#   ON Semiconductor "NE5532, SA5532, SE5532, NE5532A, SE5532A" NE5532/D Rev 2,
+#     September 2013, supplies the OUTPUT SWING alone.
+# The reason for the second document is printed in the first one's revision
+# history: SLOS075K's change list records "Removed Maximum peak-to-peak output
+# voltage swing, Small-signal differential-voltage amplification". The current
+# TI sheet therefore has NO output-swing row at all, and `swing_lo`/`swing_hi`
+# would have had to be left out -- which, for the opamp kind, means falling
+# back to fixed rails that do not track the board's supply. Rather than invent
+# a headroom or lose the supply-relative swing, the onsemi sheet's own DC
+# ELECTRICAL CHARACTERISTICS "Output Swing" rows are used and cited as such.
+#
+# Figures used, VS = +/-15 V, TA = 25 C:
+#   AVD   25 V/mV MIN, 100 V/mV TYP @ RL >= 2 kOhm, VO = +/-10 V   (TI 5.5)
+#         15 V/mV MIN, 50 V/mV TYP  @ RL >= 600 Ohm                (TI 5.5)
+#   VICR  +/-12 V MIN, +/-13 V TYP                                 (TI 5.5)
+#   B1    12 MHz TYP unity-gain bandwidth                          (TI 5.5)
+#   SR    5 V/us TYP at unity gain                                 (TI 5.6)
+#   VOUT  +/-13 V MIN, +/-13.5 V TYP @ RL >= 2 kOhm                (onsemi)
+#         +/-12 V MIN, +/-13 V TYP   @ RL >= 600 Ohm               (onsemi)
+#   VCC+  5 to 15 V, VCC- -5 to -15 V recommended                  (TI 5.3)
+#
+# THE TWO SHEETS DISAGREE ON THE DYNAMICS and this card does not paper over it.
+# TI prints a 12 MHz unity-gain bandwidth and a 5 V/us slew rate; onsemi prints
+# a 10 MHz gain-bandwidth product (at CL = 100 pF, RL = 600 Ohm) and a 9 V/us
+# slew rate. TI is the primary source here, so 12 MHz and 5 V/us are what this
+# card carries; a board whose behaviour turns on the difference between 5 and
+# 9 V/us is one this card cannot settle.
+[[models]]
+id = "ne5532"
+kind = "opamp"
+description = "NE5532/SA5532 dual low-noise audio op-amp, 8-pin, +/-5 to +/-15 V split supply"
+
+[models.match]
+# NE5532, NE5532A, SA5532, SA5532A and their package letters (NE5532P,
+# NE5532D, NE5532DR, NE5532AP). The SE5532 is an onsemi grade that TI's
+# SLOS075K does not cover, so it is left out rather than given TI's numbers.
+value_re = "(?i)^(NE|SA)5532A?[A-Z0-9]*$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 5.0
+max_v = 15.0
+abs_max_v = 18.0
+severity = "serious"
+basis = "TI NE5532 SLOS075K Section 5.3 Recommended Operating Conditions, VCC+ supply voltage MIN 5 V MAX 15 V (Section 5.1 Absolute Maximum Ratings gives VCC+ 0 to +18 V)"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vss"
+min_v = -18.0
+max_v = -5.0
+severity = "serious"
+basis = "TI NE5532 SLOS075K Section 5.3 Recommended Operating Conditions, VCC- supply voltage MIN -5 V MAX -15 V; the -18 V floor here is Section 5.1's absolute maximum, so a rail between -15 and -18 V is reported by the max_v side of this row and a V- pin on ground is reported outright"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_a", "in_minus_a"]
+headroom_v = 3.0
+severity = "serious"
+basis = "TI NE5532 SLOS075K Section 5.5 Electrical Characteristics, VICR common-mode input-voltage range MIN +/-12 V, TYP +/-13 V at VCC = +/-15 V, i.e. 3 V of guaranteed headroom below VCC+"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_b", "in_minus_b"]
+headroom_v = 3.0
+severity = "serious"
+basis = "TI NE5532 SLOS075K Section 5.5 Electrical Characteristics, VICR common-mode input-voltage range MIN +/-12 V, TYP +/-13 V at VCC = +/-15 V, i.e. 3 V of guaranteed headroom below VCC+"
+
+[models.params]
+gain    = 100000.0  # AVD TYP 100 V/mV at RL >= 2 kOhm, VO = +/-10 V, 25 C
+                    # (MIN 25 V/mV on the NE/SA grade). At RL >= 600 Ohm the
+                    # typical is only 50 V/mV and this card does not model
+                    # the load dependence of the gain either.
+pole_hz = 120.0     # DERIVED: B1 12 MHz TYP unity-gain bandwidth / AVD 100000
+                    # TYP. Not a printed row.
+slew    = 5.0       # SR TYP 5 V/us at unity gain, SLOS075K Section 5.6
+                    # Operating Characteristics. onsemi NE5532/D Rev 2 prints
+                    # 9 V/us; TI is the primary source and 5 is the slower,
+                    # more conservative of the two.
+# HEADROOMS FROM THE SUPPLY PINS. NOT FROM THE TI SHEET: see the note above --
+# SLOS075K deleted its output-swing row, and these come from onsemi.
+swing_lo = 2.0      # onsemi NE5532/D Rev 2, DC ELECTRICAL CHARACTERISTICS,
+swing_hi = 2.0      # Output Swing, RL >= 2.0 kOhm at VS = +/-15 V: MIN +/-13 V
+                    # (TYP +/-13.5 V), i.e. 2.0 V of guaranteed headroom from
+                    # each rail. At RL >= 600 Ohm the same table gives +/-12 V
+                    # MIN, 3.0 V of headroom, which this card does not model.
+rail_lo = -13.0     # fallback levels only (deck `.model opamp(...)`, no pins):
+rail_hi = 13.0      # the same guaranteed swing stated as levels on +/-15 V
+warning = "THE OUTPUT SWING ON THIS CARD IS NOT FROM THE TI DATASHEET. TI SLOS075K deleted its 'Maximum peak-to-peak output voltage swing' row (the deletion is listed in its own revision history), so the 2 V headroom here is ON Semiconductor NE5532/D Rev 2's Output Swing row at RL >= 2.0 kOhm; every other number on the card is TI's. The load dependence is not modelled: at RL >= 600 Ohm the guaranteed swing is +/-12 V rather than +/-13 V, and the open-loop gain halves too (50 V/mV typ rather than 100 V/mV), so a 600 Ohm audio load gets an answer computed with the 2 kOhm figures. This part is SPLIT-SUPPLY ONLY -- SLOS075K recommends VCC+ 5 to 15 V and VCC- -5 to -15 V per rail -- and the two supply_range envelopes fire when either supply pin leaves that range. The 120 Hz pole is DERIVED from the 12 MHz typical unity-gain bandwidth and the typical gain, not printed, and TI and onsemi disagree on the dynamics (12 MHz / 5 V/us against 10 MHz / 9 V/us); TI's, the slower pair, is what is carried. The 38 mA output short-circuit current is not modelled. Input offset voltage (0.5 mV typ, 4 mV max), input bias current (200 nA typ, 800 nA max -- this is a bipolar input and that current is not negligible into a high-impedance source) and input offset current are taken as zero, and the gain is the typ rather than the min. Both amplifiers share one supply leg and one pair of rails."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "dominant_pole", "slew_rate_limit", "dual_channel",
+              "split_supply_envelope", "input_common_mode_range"]
+missing = ["output_current_limit", "load_dependent_output_swing",
+           "load_dependent_open_loop_gain", "input_offset_voltage",
+           "input_bias_current", "input_offset_current", "parameter_spread"]
+
+[models.pins]
+# SLOS075K Section 4 Pin Functions, the D (SOIC), P (PDIP) and PS (SO) 8-pin
+# packages: the standard dual-op-amp order.
+"1" = "out_a"        # 1OUT
+"2" = "in_minus_a"   # 1IN-
+"3" = "in_plus_a"    # 1IN+
+"4" = "vss"          # VCC-
+"5" = "in_plus_b"    # 2IN+
+"6" = "in_minus_b"   # 2IN-
+"7" = "out_b"        # 2OUT
+"8" = "vcc"          # VCC+
+
+[models.ratings]
+max_voltage_v = 36.0          # VCC+ 0 to +18 V and VCC- -18 to 0 V, Section 5.1
+                              # Absolute Maximum Ratings, stated as the total
+max_pin_current_a = 0.010     # input current, +/-10 mA, Section 5.1
+max_junction_temp_c = 150.0   # TJ operating virtual junction temperature
+theta_ja_c_per_w = 97.0       # RthJA, D (SOIC) 8-pin, Section 5.4 Thermal
+                              # Information (P/PDIP is 85, PS/SO is 95)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPA134 / OPA2134 / OPA4134: the audio FET-input family, three pinouts.
+#
+# Source: TI "OPA134, OPA2134, OPA4134 SoundPlus High Performance Audio
+#   Operational Amplifiers" SBOS058B, December 1997 - revised November 2024.
+#   Section 5.7 Electrical Characteristics, at TA = 25 C, VS = +/-15 V,
+#   RL = 2 kOhm to midsupply, VCM = VOUT = midsupply.
+#
+# THIS FAMILY'S OUTPUT ROWS ARE ALREADY SUPPLY-RELATIVE, which is unusual among
+# the parts in this file and makes `swing_lo`/`swing_hi` a direct transcription
+# rather than a subtraction:
+#   VO @ RL = 10 kOhm:  positive (V+) - 1.2 V MIN, negative (V-) + 0.5 V MAX
+#   VO @ RL = 2 kOhm:   positive (V+) - 1.5 V MIN, negative (V-) + 1.2 V MAX
+# The 10 kOhm pair is used. NOTE THE ASYMMETRY: 1.2 V of headroom at the top
+# and 0.5 V at the bottom, which is easy to get backwards and is worth checking
+# against the values below.
+#
+# Unlike the TL07x and the 741, this family IS specified on a single supply:
+# Section 5.3 Recommended Operating Conditions gives 5 V to 36 V single-supply
+# and +/-2.5 V to +/-18 V dual. So there is no supply envelope here; the
+# `supply_range` kind is per pin against ground and the datasheet's row is a
+# total, exactly as on the TL07x cards.
+[[models]]
+id = "opa2134"
+kind = "opamp"
+description = "TI OPA2134 dual FET-input audio op-amp, 8-pin, 5 to 36 V single or +/-2.5 to +/-18 V"
+
+[models.match]
+# The dual, D (SOIC) and P (PDIP), 8 pins, one map. The single (OPA134) and the
+# quad (OPA4134) share the die and the electricals but not the pinout and have
+# their own entries below.
+value_re = "(?i)^OPA2134[A-Z0-9]*$"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_a", "in_minus_a"]
+headroom_v = 3.5
+severity = "serious"
+basis = "TI SBOS058B Section 5.7 Electrical Characteristics, VCM common-mode voltage MAX (V+) - 3.5 V (MIN (V-) + 2.5 V, TYP +/-13 V) at VS = +/-15 V"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_b", "in_minus_b"]
+headroom_v = 3.5
+severity = "serious"
+basis = "TI SBOS058B Section 5.7 Electrical Characteristics, VCM common-mode voltage MAX (V+) - 3.5 V (MIN (V-) + 2.5 V, TYP +/-13 V) at VS = +/-15 V"
+
+[models.params]
+gain    = 1000000.0 # AOL TYP 120 dB = 1e6 V/V at RL = 10 kOhm,
+                    # -14.5 V <= VO <= 13.8 V (MIN 104 dB = 158489 V/V).
+                    # The typ is taken, as on the tsv914 entry.
+pole_hz = 8.0       # DERIVED: GBW 8 MHz TYP / AOL 1e6 TYP. Not a printed row.
+slew    = 20.0      # SR TYP +/-20 V/us (footnoted "proposed by design" in
+                    # SBOS058B, i.e. not production tested)
+# HEADROOMS FROM THE SUPPLY PINS, transcribed from supply-relative rows.
+# ASYMMETRIC: 1.2 V at the top, 0.5 V at the bottom.
+swing_hi = 1.2      # VO positive, RL = 10 kOhm: MIN (V+) - 1.2 V
+swing_lo = 0.5      # VO negative, RL = 10 kOhm: MAX (V-) + 0.5 V
+rail_lo = -14.5     # fallback levels only (deck `.model opamp(...)`, no pins):
+rail_hi = 13.8      # the same headrooms stated as levels on a +/-15 V supply
+warning = "the output swing is bounded by the supply pins (V(V-)+0.5 V to V(V+)-1.2 V, the datasheet's own supply-relative VO rows at RL = 10 kOhm) and IS ASYMMETRIC -- more headroom at the top than at the bottom. The load dependence is not modelled: at RL = 2 kOhm the guaranteed rows are (V+) - 1.5 V and (V-) + 1.2 V, so a 2 kOhm load gets a swing this card overstates by 0.3 V at the top and 0.7 V at the bottom, and a 600 Ohm audio load is further out still. The 36 mA sourcing / 30 mA sinking short-circuit current is not modelled. The 8 Hz pole is DERIVED from the typical 8 MHz gain-bandwidth product and the typical 120 dB open-loop gain, not printed, and the 20 V/us slew rate is footnoted in SBOS058B as proposed by design rather than production tested. Input offset voltage (1 mV typ, 3.5 mV max), input bias current (5 pA typ, 100 pA max at 25 C but 5 nA over temperature) and input offset current are taken as zero, and the gain is the 120 dB typ rather than the 104 dB min. The input common-mode envelope checks only the UPPER end ((V+) - 3.5 V); the (V-) + 2.5 V floor is not checked. Both amplifiers share one supply leg and one pair of rails."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "dominant_pole", "slew_rate_limit", "dual_channel",
+              "split_or_single_supply", "input_common_mode_range"]
+missing = ["negative_input_common_mode_limit", "output_current_limit",
+           "load_dependent_output_swing", "input_offset_voltage",
+           "input_bias_current", "input_offset_current", "parameter_spread",
+           "supply_voltage_envelope"]
+
+[models.pins]
+# SBOS058B Table 4-1 Pin Functions: OPA2134, the D (SOIC) and P (PDIP) 8-pin
+# packages.
+"1" = "out_a"        # OUT A
+"2" = "in_minus_a"   # -IN A
+"3" = "in_plus_a"    # +IN A
+"4" = "vss"          # V-
+"5" = "in_plus_b"    # +IN B
+"6" = "in_minus_b"   # -IN B
+"7" = "out_b"        # OUT B
+"8" = "vcc"          # V+
+
+[models.ratings]
+max_voltage_v = 36.0          # VS (V+) - (V-) single supply, 36 V, Section 5.1
+max_pin_current_a = 0.010     # input current, +/-10 mA, Section 5.1
+max_junction_temp_c = 150.0   # TJ, Section 5.1
+theta_ja_c_per_w = 160.0      # RthJA, D (SOIC) 8-pin, Section 5.5 Thermal
+                              # Information - OPA2134 (P/PDIP is 71)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "opa134"
+kind = "opamp"
+description = "TI OPA134 single FET-input audio op-amp, 8-pin, 5 to 36 V single or +/-2.5 to +/-18 V"
+
+[models.match]
+# The single. Anchored so it does not swallow OPA2134 or OPA4134, which have
+# their own maps: the digit after "OPA" is part of the literal here.
+value_re = "(?i)^OPA134[A-Z0-9]*$"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus", "in_minus"]
+headroom_v = 3.5
+severity = "serious"
+basis = "TI SBOS058B Section 5.7 Electrical Characteristics, VCM common-mode voltage MAX (V+) - 3.5 V (MIN (V-) + 2.5 V) at VS = +/-15 V"
+
+[models.params]
+gain    = 1000000.0 # AOL TYP 120 dB (MIN 104 dB), RL = 10 kOhm
+pole_hz = 8.0       # DERIVED: GBW 8 MHz TYP / AOL 1e6 TYP
+slew    = 20.0      # SR TYP +/-20 V/us ("proposed by design")
+swing_hi = 1.2      # VO positive, RL = 10 kOhm: MIN (V+) - 1.2 V
+swing_lo = 0.5      # VO negative, RL = 10 kOhm: MAX (V-) + 0.5 V
+rail_lo = -14.5     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 13.8
+warning = "the output swing is bounded by the supply pins (V(V-)+0.5 V to V(V+)-1.2 V, the datasheet's supply-relative VO rows at RL = 10 kOhm) and IS ASYMMETRIC. The load dependence is not modelled: at RL = 2 kOhm the guaranteed rows are (V+) - 1.5 V and (V-) + 1.2 V. The 36 mA sourcing / 30 mA sinking short-circuit current is not modelled. The 8 Hz pole is DERIVED from the typical 8 MHz GBW and typical 120 dB gain, not printed, and the 20 V/us slew rate is footnoted as proposed by design rather than production tested. Input offset voltage (1 mV typ, 3.5 mV max), input bias current and input offset current are taken as zero, and the gain is the typ rather than the 104 dB min. The input common-mode envelope checks only the UPPER end; the (V-) + 2.5 V floor is not checked. THE OFFSET TRIM PINS ARE NOT ON THIS MAP: SBOS058B's OPA134 pinout leaves pins 1, 5 and 8 unclaimed here, so a trim network wired to them is not modelled."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "dominant_pole", "slew_rate_limit", "single_channel",
+              "split_or_single_supply", "input_common_mode_range"]
+missing = ["negative_input_common_mode_limit", "output_current_limit",
+           "load_dependent_output_swing", "offset_null_trim",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread", "supply_voltage_envelope"]
+
+[models.pins]
+# SBOS058B Section 4, OPA134 D (SOIC) / P (PDIP) 8-pin: the standard single-
+# op-amp order, the same five load-bearing pins as a TL071 or a 741.
+"2" = "in_minus"   # -IN
+"3" = "in_plus"    # +IN
+"4" = "vss"        # V-
+"6" = "out"        # OUT
+"7" = "vcc"        # V+
+
+[models.ratings]
+max_voltage_v = 36.0
+max_pin_current_a = 0.010
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 160.0      # RthJA, D (SOIC) 8-pin, Section 5.4 Thermal
+                              # Information - OPA134 (P/PDIP is 73)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "opa4134"
+kind = "opamp"
+description = "TI OPA4134 quad FET-input audio op-amp, 14-pin SOIC, 5 to 36 V single or +/-2.5 to +/-18 V"
+
+[models.match]
+value_re = "(?i)^OPA4134[A-Z0-9]*$"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_a", "in_minus_a"]
+headroom_v = 3.5
+severity = "serious"
+basis = "TI SBOS058B Section 5.7 Electrical Characteristics, VCM common-mode voltage MAX (V+) - 3.5 V (MIN (V-) + 2.5 V) at VS = +/-15 V"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_b", "in_minus_b"]
+headroom_v = 3.5
+severity = "serious"
+basis = "TI SBOS058B Section 5.7 Electrical Characteristics, VCM common-mode voltage MAX (V+) - 3.5 V (MIN (V-) + 2.5 V) at VS = +/-15 V"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_c", "in_minus_c"]
+headroom_v = 3.5
+severity = "serious"
+basis = "TI SBOS058B Section 5.7 Electrical Characteristics, VCM common-mode voltage MAX (V+) - 3.5 V (MIN (V-) + 2.5 V) at VS = +/-15 V"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_d", "in_minus_d"]
+headroom_v = 3.5
+severity = "serious"
+basis = "TI SBOS058B Section 5.7 Electrical Characteristics, VCM common-mode voltage MAX (V+) - 3.5 V (MIN (V-) + 2.5 V) at VS = +/-15 V"
+
+[models.params]
+gain    = 1000000.0 # AOL TYP 120 dB (MIN 104 dB), RL = 10 kOhm
+pole_hz = 8.0       # DERIVED: GBW 8 MHz TYP / AOL 1e6 TYP
+slew    = 20.0      # SR TYP +/-20 V/us ("proposed by design")
+swing_hi = 1.2      # VO positive, RL = 10 kOhm: MIN (V+) - 1.2 V
+swing_lo = 0.5      # VO negative, RL = 10 kOhm: MAX (V-) + 0.5 V
+rail_lo = -14.5     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 13.8
+warning = "the output swing is bounded by the supply pins (V(V-)+0.5 V to V(V+)-1.2 V, the datasheet's supply-relative VO rows at RL = 10 kOhm) and IS ASYMMETRIC. The load dependence is not modelled: at RL = 2 kOhm the guaranteed rows are (V+) - 1.5 V and (V-) + 1.2 V. Short-circuit current is not modelled. The 8 Hz pole is DERIVED from the typical 8 MHz GBW and typical 120 dB gain, not printed, and the 20 V/us slew rate is footnoted as proposed by design. Input offset voltage, input bias current and input offset current are taken as zero, and the gain is the typ rather than the 104 dB min. The input common-mode envelopes check only the UPPER end; the (V-) + 2.5 V floor is not checked. All four amplifiers share one supply leg and one pair of rails; nothing here distinguishes them beyond their nets, and the 4 mA typ quiescent current is PER AMPLIFIER, so the package draws four times it."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "dominant_pole", "slew_rate_limit", "quad_channel",
+              "split_or_single_supply", "input_common_mode_range"]
+missing = ["negative_input_common_mode_limit", "output_current_limit",
+           "load_dependent_output_swing", "input_offset_voltage",
+           "input_bias_current", "input_offset_current", "parameter_spread",
+           "supply_voltage_envelope"]
+
+[models.pins]
+# SBOS058B Table 4-2 Pin Functions: OPA4134, the D (SOIC) 14-pin package. Same
+# corner-free supply placement as the LM324 and the TL074: V+ on 4, V- on 11.
+"1"  = "out_a"        # OUT A
+"2"  = "in_minus_a"   # -IN A
+"3"  = "in_plus_a"    # +IN A
+"4"  = "vcc"          # V+
+"5"  = "in_plus_b"    # +IN B
+"6"  = "in_minus_b"   # -IN B
+"7"  = "out_b"        # OUT B
+"8"  = "out_c"        # OUT C
+"9"  = "in_minus_c"   # -IN C
+"10" = "in_plus_c"    # +IN C
+"11" = "vss"          # V-
+"12" = "in_plus_d"    # +IN D
+"13" = "in_minus_d"   # -IN D
+"14" = "out_d"        # OUT D
+
+[models.ratings]
+max_voltage_v = 36.0
+max_pin_current_a = 0.010
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 97.0       # RthJA, D (SOIC) 14-pin, Section 5.6 Thermal
+                              # Information - OPA4134
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LMV321 / LMV358 / LMV324: TI's low-voltage rail-to-rail-OUTPUT singles, duals
+# and quads. SINGLE SUPPLY, 2.7 V to 5.5 V, and the negative supply pin is
+# literally called GND by the datasheet.
+#
+# Source: TI "LMV358, LMV321, LMV324, LMV324S Low-Voltage Rail-to-Rail Output
+#   Operational Amplifier" SLOS263Y, August 1999 - revised August 2023.
+#   Section 6.8 Electrical Characteristics: VCC+ = 5 V is where every number
+#   below comes from, plus Sections 6.1, 6.3 and the per-part thermal tables.
+#
+# RAIL-TO-RAIL OUTPUT, NOT RAIL-TO-RAIL INPUT. That distinction is the whole
+# hazard of this family and is what the input_common_mode envelope encodes: the
+# output gets within tens of millivolts of each rail, but VICR at VCC = 5 V is
+# guaranteed only to 4.0 V (4.2 V typ), so the top volt of the input range is
+# outside specification even though the output has no trouble there.
+#
+# Figures used at VCC+ = 5 V, TA = 25 C:
+#   VO high  VCC - 100 mV MIN, VCC - 10 mV TYP @ RL = 10 kOhm to 2.5 V
+#            VCC - 300 mV MIN, VCC -  40 mV TYP @ RL =  2 kOhm to 2.5 V
+#   VO low   65 mV TYP, 180 mV MAX @ RL = 10 kOhm
+#           120 mV TYP, 300 mV MAX @ RL =  2 kOhm
+#   AVD      15 V/mV MIN, 100 V/mV TYP @ RL = 2 kOhm
+#   VICR     0 V to 4.0 V MIN (-0.2 V to 4.2 V TYP), CMRR >= 50 dB
+#   B1       1 MHz TYP unity-gain bandwidth @ CL = 200 pF
+#   SR       1 V/us TYP
+#   VCC      2.7 V to 5.5 V recommended; 5.5 V absolute maximum
+#
+# THE SWING FIGURES MIX MIN AND MAX COLUMNS ON PURPOSE, and in both cases the
+# GUARANTEED direction: the high-side row is a MIN output level (so the largest
+# guaranteed headroom, 100 mV) and the low-side row is a MAX output level (so
+# again the largest guaranteed headroom, 180 mV). They are asymmetric -- 100 mV
+# at the top, 180 mV at the bottom -- which is easy to transpose.
+[[models]]
+id = "lmv358"
+kind = "opamp"
+description = "TI LMV358 dual rail-to-rail-output op-amp, 8-pin, 2.7 to 5.5 V single supply"
+
+[models.match]
+# The dual: D (SOIC), DDU/DGK (VSSOP) and PW (TSSOP), all 8-pin, one map.
+# Board values seen: LMV358M, LMV358IDGKR, LMV358IDR, LMV358QDR.
+value_re = "(?i)^LMV358[A-Z0-9]*$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 5.5
+severity = "serious"
+basis = "TI SLOS263Y Section 6.3 Recommended Operating Conditions, VCC supply voltage (single-supply operation) MIN 2.7 V MAX 5.5 V; Section 6.1 Absolute Maximum Ratings gives the same 5.5 V, so exceeding the recommended range is already at the damage limit"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_a", "in_minus_a"]
+headroom_v = 1.0
+severity = "serious"
+basis = "TI SLOS263Y Section 6.8 Electrical Characteristics VCC+ = 5 V, VICR common-mode input voltage range MIN 0 V to 4.0 V at CMRR >= 50 dB and 25 C (TYP -0.2 V to 4.2 V), i.e. 1.0 V of guaranteed headroom below VCC+"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_b", "in_minus_b"]
+headroom_v = 1.0
+severity = "serious"
+basis = "TI SLOS263Y Section 6.8 Electrical Characteristics VCC+ = 5 V, VICR common-mode input voltage range MIN 0 V to 4.0 V at CMRR >= 50 dB and 25 C (TYP -0.2 V to 4.2 V), i.e. 1.0 V of guaranteed headroom below VCC+"
+
+[models.params]
+gain    = 100000.0  # AVD large-signal differential voltage gain TYP 100 V/mV
+                    # at RL = 2 kOhm, 25 C (MIN 15 V/mV, 10 V/mV over -40..125)
+pole_hz = 10.0      # DERIVED: B1 1 MHz TYP unity-gain bandwidth (CL = 200 pF)
+                    # / AVD 100000 TYP. Not a printed row.
+slew    = 1.0       # SR TYP 1 V/us at 25 C. No MIN or MAX is printed.
+# HEADROOMS FROM THE SUPPLY PINS. ASYMMETRIC, and both are the guaranteed
+# column: 100 mV at the top, 180 mV at the bottom.
+swing_hi = 0.100    # VO high level, RL = 10 kOhm to 2.5 V, 25 C: MIN VCC - 100
+                    # mV (TYP VCC - 10 mV). Over -40 to 125 C the guaranteed
+                    # figure is VCC - 200 mV.
+swing_lo = 0.180    # VO low level, RL = 10 kOhm, 25 C: MAX 180 mV (TYP 65 mV).
+                    # Over -40 to 125 C the guaranteed figure is 280 mV.
+rail_lo = 0.180     # fallback levels only (deck `.model opamp(...)`, no pins):
+rail_hi = 4.900     # the same headrooms stated as levels on a 5 V rail
+warning = "this part is RAIL-TO-RAIL OUTPUT but NOT rail-to-rail input, and that asymmetry is the trap: the output reaches within 100 mV of VCC and 180 mV of GND at RL = 10 kOhm, but the guaranteed common-mode input range at VCC = 5 V stops at 4.0 V, so the top volt of the input range is outside specification even though the output swings there happily. The input_common_mode envelopes above catch a channel whose BOTH inputs sit in that top volt; a single input there is not flagged, and the 0 V lower end is not checked. The output swing is bounded by the supply pins but the LOAD DEPENDENCE IS NOT MODELLED: at RL = 2 kOhm the guaranteed headrooms are 300 mV and 300 mV rather than 100 mV and 180 mV, and over -40 to 125 C they are 200 mV and 400 mV, so a heavier load or a hot board gets a swing this card overstates. The 40 mA sourcing / sinking short-circuit current is not modelled. The 10 Hz pole is DERIVED from the typical 1 MHz unity-gain bandwidth (itself specified at CL = 200 pF) and the typical open-loop gain, not printed. Input offset voltage (1.7 mV typ, 7 mV max), input bias current (15 nA typ, 250 nA max) and input offset current are taken as zero, and the gain is the 100 V/mV typ rather than the 15 V/mV min. The datasheet calls the negative supply pin GND and specifies the part for single-supply operation only; it is mapped to the `vss` role here so the swing tracks it, but nothing checks that it is actually at ground. Both amplifiers share one supply leg and one pair of rails."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "rail_to_rail_output", "dominant_pole", "slew_rate_limit",
+              "dual_channel", "supply_voltage_envelope",
+              "input_common_mode_range"]
+missing = ["rail_to_rail_input", "output_current_limit",
+           "load_dependent_output_swing", "temperature_dependent_output_swing",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread"]
+
+[models.pins]
+# SLOS263Y Table 5-1 Pin Functions: LMV358, the D, DDU, DGK and PW 8-pin
+# packages. Standard dual order; pin 4 is named GND rather than VCC-.
+"1" = "out_a"        # OUT
+"2" = "in_minus_a"   # 1IN-
+"3" = "in_plus_a"    # 1IN+
+"4" = "vss"          # GND (negative supply)
+"5" = "in_plus_b"    # 2IN+
+"6" = "in_minus_b"   # 2IN-
+"7" = "out_b"        # 2OUT
+"8" = "vcc"          # VCC+
+
+[models.ratings]
+max_voltage_v = 5.5           # VCC, Section 6.1 Absolute Maximum Ratings
+max_junction_temp_c = 150.0   # TJ, Section 6.1
+theta_ja_c_per_w = 207.9      # RthJA, D (SOIC) 8-pin, Section 6.6 Thermal
+                              # Information: LMV358 (DGK 201.2, DDU 210,
+                              # PW 200.7 -- all within 5% of each other)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lmv321"
+kind = "opamp"
+description = "TI LMV321 single rail-to-rail-output op-amp, 5-pin SOT-23/SC-70, 2.7 to 5.5 V"
+
+[models.match]
+# The single, DBV (SOT-23-5) and DCK (SC-70-5). SLOS263Y prints ONE pin figure
+# for both packages, so no footprint gating is needed; the map below is that
+# figure and it is NOT the LMV358's order shifted -- a 5-pin single has its own
+# arrangement (IN+ on 1, GND on 2, IN- on 3, OUT on 4, VCC+ on 5).
+value_re = "(?i)^LMV321[A-Z0-9]*$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 5.5
+severity = "serious"
+basis = "TI SLOS263Y Section 6.3 Recommended Operating Conditions, VCC supply voltage (single-supply operation) MIN 2.7 V MAX 5.5 V; Section 6.1 Absolute Maximum Ratings gives the same 5.5 V"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus", "in_minus"]
+headroom_v = 1.0
+severity = "serious"
+basis = "TI SLOS263Y Section 6.8 Electrical Characteristics VCC+ = 5 V, VICR common-mode input voltage range MIN 0 V to 4.0 V at CMRR >= 50 dB and 25 C (TYP -0.2 V to 4.2 V), i.e. 1.0 V of guaranteed headroom below VCC+"
+
+[models.params]
+gain    = 100000.0  # AVD TYP 100 V/mV at RL = 2 kOhm, 25 C (MIN 15 V/mV)
+pole_hz = 10.0      # DERIVED: B1 1 MHz TYP / AVD 100000 TYP
+slew    = 1.0       # SR TYP 1 V/us at 25 C
+swing_hi = 0.100    # VO high, RL = 10 kOhm: MIN VCC - 100 mV (TYP VCC - 10 mV)
+swing_lo = 0.180    # VO low,  RL = 10 kOhm: MAX 180 mV (TYP 65 mV)
+rail_lo = 0.180     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 4.900
+warning = "this part is RAIL-TO-RAIL OUTPUT but NOT rail-to-rail input: the output reaches within 100 mV of VCC and 180 mV of GND at RL = 10 kOhm, but the guaranteed common-mode input range at VCC = 5 V stops at 4.0 V. The input_common_mode envelope catches BOTH inputs in that top volt; a single input there is not flagged and the 0 V lower end is not checked. The LOAD DEPENDENCE OF THE SWING IS NOT MODELLED: at RL = 2 kOhm the guaranteed headrooms are 300 mV and 300 mV, and over -40 to 125 C they are 200 mV and 400 mV. The 40 mA short-circuit current is not modelled. The 10 Hz pole is DERIVED from the typical 1 MHz unity-gain bandwidth (at CL = 200 pF) and the typical open-loop gain, not printed. Input offset voltage (1.7 mV typ, 7 mV max), input bias current and input offset current are taken as zero, and the gain is the typ rather than the min. The datasheet calls the negative supply pin GND and specifies single-supply operation only."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "rail_to_rail_output", "dominant_pole", "slew_rate_limit",
+              "single_channel", "supply_voltage_envelope",
+              "input_common_mode_range"]
+missing = ["rail_to_rail_input", "output_current_limit",
+           "load_dependent_output_swing", "temperature_dependent_output_swing",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread"]
+
+[models.pins]
+# SLOS263Y Table 5-2 Pin Functions: LMV321, the DBV (SOT-23) and DCK (SC-70)
+# 5-pin packages, one figure for both.
+"1" = "in_plus"    # 1IN+
+"2" = "vss"        # GND (negative supply)
+"3" = "in_minus"   # 1IN-
+"4" = "out"        # OUT
+"5" = "vcc"        # VCC+
+
+[models.ratings]
+max_voltage_v = 5.5           # VCC, Section 6.1 Absolute Maximum Ratings
+max_junction_temp_c = 150.0   # TJ, Section 6.1
+theta_ja_c_per_w = 232.9      # RthJA, DBV (SOT-23) 5-pin, Section 6.4 Thermal
+                              # Information: LMV321 (DCK/SC-70 is 239.6)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lmv324"
+kind = "opamp"
+description = "TI LMV324 quad rail-to-rail-output op-amp, 14-pin, 2.7 to 5.5 V single supply"
+
+[models.match]
+# The quad, D (SOIC) and PW (TSSOP), 14-pin. THE LMV324S IS EXCLUDED: SLOS263Y
+# names it in the title but prints its pin functions only for the LMV324, and
+# its own thermal table was deleted in the current revision, so there is no
+# document basis here for binding an S part to this map. It is left unmatched
+# (open, and reported) rather than assumed identical. The character class after
+# the digits is what does the excluding; Rust's regex has no lookahead.
+value_re = "(?i)^LMV324$|^LMV324[^Ss][A-Z0-9]*$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 5.5
+severity = "serious"
+basis = "TI SLOS263Y Section 6.3 Recommended Operating Conditions, VCC supply voltage (single-supply operation) MIN 2.7 V MAX 5.5 V; Section 6.1 Absolute Maximum Ratings gives the same 5.5 V"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_a", "in_minus_a"]
+headroom_v = 1.0
+severity = "serious"
+basis = "TI SLOS263Y Section 6.8 Electrical Characteristics VCC+ = 5 V, VICR MIN 0 V to 4.0 V at CMRR >= 50 dB and 25 C (TYP -0.2 V to 4.2 V), i.e. 1.0 V of guaranteed headroom below VCC+"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_b", "in_minus_b"]
+headroom_v = 1.0
+severity = "serious"
+basis = "TI SLOS263Y Section 6.8 Electrical Characteristics VCC+ = 5 V, VICR MIN 0 V to 4.0 V at CMRR >= 50 dB and 25 C (TYP -0.2 V to 4.2 V), i.e. 1.0 V of guaranteed headroom below VCC+"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_c", "in_minus_c"]
+headroom_v = 1.0
+severity = "serious"
+basis = "TI SLOS263Y Section 6.8 Electrical Characteristics VCC+ = 5 V, VICR MIN 0 V to 4.0 V at CMRR >= 50 dB and 25 C (TYP -0.2 V to 4.2 V), i.e. 1.0 V of guaranteed headroom below VCC+"
+
+[[models.envelope]]
+kind = "input_common_mode"
+supply = "vcc"
+inputs = ["in_plus_d", "in_minus_d"]
+headroom_v = 1.0
+severity = "serious"
+basis = "TI SLOS263Y Section 6.8 Electrical Characteristics VCC+ = 5 V, VICR MIN 0 V to 4.0 V at CMRR >= 50 dB and 25 C (TYP -0.2 V to 4.2 V), i.e. 1.0 V of guaranteed headroom below VCC+"
+
+[models.params]
+gain    = 100000.0  # AVD TYP 100 V/mV at RL = 2 kOhm, 25 C (MIN 15 V/mV)
+pole_hz = 10.0      # DERIVED: B1 1 MHz TYP / AVD 100000 TYP
+slew    = 1.0       # SR TYP 1 V/us at 25 C
+swing_hi = 0.100    # VO high, RL = 10 kOhm: MIN VCC - 100 mV (TYP VCC - 10 mV)
+swing_lo = 0.180    # VO low,  RL = 10 kOhm: MAX 180 mV (TYP 65 mV)
+rail_lo = 0.180     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 4.900
+warning = "this part is RAIL-TO-RAIL OUTPUT but NOT rail-to-rail input: the output reaches within 100 mV of VCC and 180 mV of GND at RL = 10 kOhm, but the guaranteed common-mode input range at VCC = 5 V stops at 4.0 V. The input_common_mode envelopes catch a channel whose BOTH inputs sit in that top volt; a single input there is not flagged and the 0 V lower end is not checked. The LOAD DEPENDENCE OF THE SWING IS NOT MODELLED: at RL = 2 kOhm the guaranteed headrooms are 300 mV and 300 mV, and over -40 to 125 C they are 200 mV and 400 mV. Short-circuit current is not modelled. The 10 Hz pole is DERIVED from the typical 1 MHz unity-gain bandwidth (at CL = 200 pF) and the typical open-loop gain, not printed. Input offset voltage (1.7 mV typ, 7 mV max), input bias current and input offset current are taken as zero, and the gain is the typ rather than the min. The LMV324S is deliberately NOT matched by this card. All four amplifiers share one supply leg and one pair of rails."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "rail_to_rail_output", "dominant_pole", "slew_rate_limit",
+              "quad_channel", "supply_voltage_envelope",
+              "input_common_mode_range"]
+missing = ["rail_to_rail_input", "output_current_limit",
+           "load_dependent_output_swing", "temperature_dependent_output_swing",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread"]
+
+[models.pins]
+# SLOS263Y Table 5-3 Pin Functions: LMV324, the D (SOIC) and PW (TSSOP) 14-pin
+# packages. VCC+ on 4 and GND on 11, the standard quad placement.
+"1"  = "out_a"        # OUT
+"2"  = "in_minus_a"   # 1IN-
+"3"  = "in_plus_a"    # 1IN+
+"4"  = "vcc"          # VCC+
+"5"  = "in_plus_b"    # 2IN+
+"6"  = "in_minus_b"   # 2IN-
+"7"  = "out_b"        # 2OUT
+"8"  = "out_c"        # 3OUT
+"9"  = "in_minus_c"   # 3IN-
+"10" = "in_plus_c"    # 3IN+
+"11" = "vss"          # GND (negative supply)
+"12" = "in_plus_d"    # 4IN+
+"13" = "in_minus_d"   # 4IN-
+"14" = "out_d"        # 4OUT
+
+[models.ratings]
+max_voltage_v = 5.5           # VCC, Section 6.1 Absolute Maximum Ratings
+max_junction_temp_c = 150.0   # TJ, Section 6.1
+theta_ja_c_per_w = 102.1      # RthJA, D (SOIC) 14-pin, Section 6.5 Thermal
+                              # Information: LMV324 (PW/TSSOP is 148.3)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MCP6001 / MCP6002 / MCP6004: Microchip's 1 MHz CMOS rail-to-rail-in-and-out
+# family, single supply 1.8 V to 6.0 V.
+#
+# Source: Microchip "MCP6001/1R/1U/2/4 1 MHz, Low-Power Op Amp" DS20001733L
+#   (2002-2020). DC ELECTRICAL SPECIFICATIONS and AC ELECTRICAL SPECIFICATIONS,
+#   at TA = +25 C, VSS = GND, RL = 10 kOhm to VDD/2, unless a row says
+#   otherwise.
+#
+# FIVE PART NUMBERS, FOUR PIN MAPS, and the suffix is the only thing that tells
+# them apart. Table 3-1 "Pin Function Table" of DS20001733L puts them side by
+# side:
+#                        MCP6001   MCP6001R  MCP6001U   MCP6002   MCP6004
+#                        5-lead    5-lead    5-lead     8-lead    14-lead
+#   VOUT / VOUTA            1         1         4          1         1
+#   VIN- / VINA-            4         4         3          2         2
+#   VIN+ / VINA+            3         3         1          3         3
+#   VDD                     5         2         5          8         4
+#   VSS                     2         5         2          4        11
+# The R and the U are NOT cosmetic: an MCP6001R bound to the plain MCP6001 map
+# would have its supply pins swapped end for end, and a U bound to either would
+# have its output on an input. Each therefore gets its own entry, and the
+# regexes below are written so that "MCP6001T-E/OT" matches the plain part
+# while "MCP6001RT-I/OT" and "MCP6001UT-I/OT" do not.
+#
+# Figures used:
+#   VDD    1.8 V MIN, 6.0 V MAX (Power Supply, DC table; 7.0 V abs max)
+#   AOL    88 dB MIN, 112 dB TYP @ VOUT = 0.3 V to VDD - 0.3 V, VCM = VSS
+#   VOL/VOH  VSS + 25 mV to VDD - 25 mV @ VDD = 5.5 V, 0.5 V input overdrive
+#   VCMR   VSS - 0.3 V MIN to VDD + 0.3 V MAX
+#   GBWP   1.0 MHz TYP
+#   SR     0.6 V/us TYP
+#
+# NO `input_common_mode` ENVELOPE ON THESE CARDS, and the absence is a fact
+# rather than an omission: VCMR runs from VSS - 0.3 V to VDD + 0.3 V, i.e. the
+# guaranteed common-mode range extends 300 mV BEYOND both rails. A
+# supply-relative headroom would have to be negative, which the envelope kind
+# does not accept and which would not describe a hazard if it did.
+[[models]]
+id = "mcp6002"
+kind = "opamp"
+description = "Microchip MCP6002 dual rail-to-rail CMOS op-amp, 8-pin, 1.8 to 6.0 V single supply"
+
+[models.match]
+# MCP6002T-I/SN, MCP6002-E/P, MCP6002T-E/MS, MCP6002T-E/MNY and the bare part
+# number. The 8-lead PDIP, SOIC, MSOP and 2x3 DFN share one map (Table 3-1).
+value_re = "(?i)^MCP6002[A-Z0-9]*([-/][A-Z0-9/]*)?$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 6.0
+abs_max_v = 7.0
+severity = "serious"
+basis = "Microchip MCP6001/2/4 DS20001733L, DC ELECTRICAL SPECIFICATIONS, Power Supply, VDD MIN 1.8 V MAX 6.0 V (Absolute Maximum Ratings give VDD - VSS 7.0 V); the note on that row records that only parts dated November 2007 and later are screened to 6.0 V and that all other limits are measured at 1.8 V and 5.5 V"
+
+[models.params]
+gain    = 398107.0  # AOL TYP 112 dB = 398107 V/V at VOUT = 0.3 V to VDD - 0.3 V
+                    # and VCM = VSS (MIN 88 dB = 25119 V/V). The typ is taken,
+                    # as on the tsv914 entry above.
+pole_hz = 2.512     # DERIVED: GBWP 1.0 MHz TYP / AOL 398107 TYP. Not a printed
+                    # row.
+slew    = 0.6       # SR TYP 0.6 V/us. No MIN or MAX is printed.
+# HEADROOMS FROM THE SUPPLY PINS. These are the MIN/MAX columns of the
+# "Maximum Output Voltage Swing" row, so they are guaranteed, not typical --
+# unusually for this file, Microchip prints no typical here at all.
+swing_lo = 0.025    # VOL: VSS + 25 mV, at VDD = 5.5 V, 0.5 V input overdrive,
+swing_hi = 0.025    # RL = 10 kOhm to VDD/2. VOH is the matching VDD - 25 mV.
+rail_lo = 0.025     # fallback levels only (deck `.model opamp(...)`, no pins):
+rail_hi = 5.475     # the same headrooms stated as levels on the 5.5 V rail the
+                    # swing row is specified at
+warning = "rail-to-rail input AND output: the output reaches within 25 mV of each supply pin at RL = 10 kOhm, and the guaranteed common-mode input range runs from VSS - 0.3 V to VDD + 0.3 V, which is why this card carries no input_common_mode envelope -- there is no supply-relative input ceiling to check. The output current limit is NOT modelled, so a load stiffer than 10 kOhm gets a swing the part cannot hold; the datasheet's only output-drive figure is the short-circuit current (6 mA typ at VDD = 1.8 V, 23 mA typ at 5.5 V) and there is no swing-versus-load row to model. The swing row is specified at VDD = 5.5 V with 0.5 V of input overdrive and this card applies it at every supply. The 2.512 Hz pole is DERIVED from the typical 1 MHz gain-bandwidth product and the typical 112 dB open-loop gain, not printed, and is a single-pole fit to a part the datasheet describes as having 90 degrees of phase margin. Input offset voltage (+/-4.5 mV max -- Microchip prints no typical) is taken as zero; the input bias current is genuinely negligible here (1 pA typ at 25 C, though 1100 pA at 125 C). The gain is the 112 dB typ rather than the 88 dB min. Both amplifiers share one supply leg and one pair of rails."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "rail_to_rail_output", "rail_to_rail_input", "dominant_pole",
+              "slew_rate_limit", "dual_channel", "supply_voltage_envelope"]
+missing = ["output_current_limit", "load_dependent_output_swing",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread"]
+
+[models.pins]
+# DS20001733L Table 3-1 Pin Function Table, the MCP6002 8-lead PDIP/SOIC/MSOP
+# and 2x3 DFN columns, which are identical except that the DFN adds the exposed
+# pad as pin 9.
+"1" = "out_a"        # VOUTA
+"2" = "in_minus_a"   # VINA-
+"3" = "in_plus_a"    # VINA+
+"4" = "vss"          # VSS
+"5" = "in_plus_b"    # VINB+
+"6" = "in_minus_b"   # VINB-
+"7" = "out_b"        # VOUTB
+"8" = "vcc"          # VDD
+"9" = "gnd"          # EP, the DFN's exposed thermal pad. Table 3-1 says it is
+                     # internally connected to VSS and MUST be tied to the same
+                     # potential on the board, so naming it a ground role is the
+                     # datasheet's own instruction, not an inference. A PDIP or
+                     # SOIC part simply has no pad 9 and this line does nothing.
+
+[models.ratings]
+max_voltage_v = 7.0           # VDD - VSS, Absolute Maximum Ratings
+max_pin_current_a = 0.002     # current at the analog input pins, +/-2 mA
+                              # (the output and supply pins are rated +/-30 mA)
+max_junction_temp_c = 150.0   # Maximum Junction Temperature, Absolute Maximum
+                              # Ratings
+theta_ja_c_per_w = 163.0      # Thermal Resistance, 8-Lead SOIC (150 mil),
+                              # TEMPERATURE SPECIFICATIONS (PDIP 85, MSOP 206,
+                              # 2x3 DFN 68)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp6001"
+kind = "opamp"
+description = "Microchip MCP6001 single rail-to-rail CMOS op-amp, 5-pin SC70/SOT-23, 1.8 to 6.0 V"
+
+[models.match]
+# The PLAIN MCP6001 only: VOUT on 1, VSS on 2, VDD on 5. The optional "T" is
+# the tape-and-reel letter and the tail is the temperature/package code, so
+# "MCP6001T-E/OT" and "MCP6001-I/LT" match while "MCP6001RT-I/OT" and
+# "MCP6001UT-I/OT" do not -- the letter after the digits must be a T or the
+# string must end or go straight into the dash. Those two have their own
+# entries below with their own maps; see the note above for why that matters.
+value_re = "(?i)^MCP6001T?([-/][A-Z0-9/]*)?$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 6.0
+abs_max_v = 7.0
+severity = "serious"
+basis = "Microchip MCP6001/2/4 DS20001733L, DC ELECTRICAL SPECIFICATIONS, Power Supply, VDD MIN 1.8 V MAX 6.0 V (Absolute Maximum Ratings give VDD - VSS 7.0 V)"
+
+[models.params]
+gain    = 398107.0  # AOL TYP 112 dB (MIN 88 dB), VOUT = 0.3 V to VDD - 0.3 V
+pole_hz = 2.512     # DERIVED: GBWP 1.0 MHz TYP / AOL 398107 TYP
+slew    = 0.6       # SR TYP 0.6 V/us
+swing_lo = 0.025    # VOL VSS + 25 mV / VOH VDD - 25 mV, at VDD = 5.5 V,
+swing_hi = 0.025    # 0.5 V input overdrive, RL = 10 kOhm to VDD/2
+rail_lo = 0.025     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 5.475
+warning = "rail-to-rail input AND output: the output reaches within 25 mV of each supply pin at RL = 10 kOhm, and the guaranteed common-mode input range runs from VSS - 0.3 V to VDD + 0.3 V, so this card carries no input_common_mode envelope. The output current limit is NOT modelled and there is no swing-versus-load row in the datasheet to model. The swing row is specified at VDD = 5.5 V with 0.5 V of input overdrive and this card applies it at every supply. The 2.512 Hz pole is DERIVED from the typical 1 MHz GBWP and the typical 112 dB gain, not printed. Input offset voltage (+/-4.5 mV max, no typical printed) is taken as zero. THE PIN MAP IS THE PLAIN MCP6001's: the MCP6001R swaps VDD and VSS between pins 2 and 5 and the MCP6001U moves the output to pin 4, and both are matched by their own entries rather than by this one."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "rail_to_rail_output", "rail_to_rail_input", "dominant_pole",
+              "slew_rate_limit", "single_channel", "supply_voltage_envelope"]
+missing = ["output_current_limit", "load_dependent_output_swing",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread"]
+
+[models.pins]
+# DS20001733L Table 3-1, the "MCP6001 5-Lead SC70, SOT-23" column.
+"1" = "out"        # VOUT
+"2" = "vss"        # VSS
+"3" = "in_plus"    # VIN+
+"4" = "in_minus"   # VIN-
+"5" = "vcc"        # VDD
+
+[models.ratings]
+max_voltage_v = 7.0
+max_pin_current_a = 0.002     # analog input pins, +/-2 mA
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 256.0      # Thermal Resistance, 5-Lead SOT-23 (SC70 is 331)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp6001r"
+kind = "opamp"
+description = "Microchip MCP6001R single rail-to-rail CMOS op-amp, 5-pin SOT-23 (VDD/VSS reversed), 1.8 to 6.0 V"
+
+[models.match]
+# The R variant ONLY. Same die and same electricals as the plain MCP6001; the
+# difference is the SUPPLY PINS, which are swapped end for end (VDD on 2, VSS
+# on 5). Binding one of these to the plain map would put the positive supply on
+# the negative-supply role and vice versa.
+value_re = "(?i)^MCP6001RT?([-/][A-Z0-9/]*)?$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 6.0
+abs_max_v = 7.0
+severity = "serious"
+basis = "Microchip MCP6001/2/4 DS20001733L, DC ELECTRICAL SPECIFICATIONS, Power Supply, VDD MIN 1.8 V MAX 6.0 V (Absolute Maximum Ratings give VDD - VSS 7.0 V)"
+
+[models.params]
+gain    = 398107.0  # AOL TYP 112 dB (MIN 88 dB)
+pole_hz = 2.512     # DERIVED: GBWP 1.0 MHz TYP / AOL 398107 TYP
+slew    = 0.6       # SR TYP 0.6 V/us
+swing_lo = 0.025    # VOL VSS + 25 mV / VOH VDD - 25 mV at VDD = 5.5 V
+swing_hi = 0.025
+rail_lo = 0.025     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 5.475
+warning = "rail-to-rail input AND output, within 25 mV of each supply pin at RL = 10 kOhm, with a guaranteed common-mode range from VSS - 0.3 V to VDD + 0.3 V, so there is no input_common_mode envelope on this card. THE SUPPLY PINS ON THIS VARIANT ARE THE REVERSE OF THE PLAIN MCP6001's -- VDD on pin 2 and VSS on pin 5 -- which is the only difference between the two parts and the reason this is a separate entry. The output current limit is NOT modelled and there is no swing-versus-load row to model; the swing row is specified at VDD = 5.5 V with 0.5 V of input overdrive and is applied here at every supply. The 2.512 Hz pole is DERIVED from the typical 1 MHz GBWP and typical 112 dB gain, not printed. Input offset voltage (+/-4.5 mV max) is taken as zero."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "rail_to_rail_output", "rail_to_rail_input", "dominant_pole",
+              "slew_rate_limit", "single_channel", "supply_voltage_envelope"]
+missing = ["output_current_limit", "load_dependent_output_swing",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread"]
+
+[models.pins]
+# DS20001733L Table 3-1, the "MCP6001R 5-Lead SOT-23" column. Note pins 2 and 5
+# against the plain part's map.
+"1" = "out"        # VOUT
+"2" = "vcc"        # VDD
+"3" = "in_plus"    # VIN+
+"4" = "in_minus"   # VIN-
+"5" = "vss"        # VSS
+
+[models.ratings]
+max_voltage_v = 7.0
+max_pin_current_a = 0.002
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 256.0      # Thermal Resistance, 5-Lead SOT-23
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp6001u"
+kind = "opamp"
+description = "Microchip MCP6001U single rail-to-rail CMOS op-amp, 5-pin SOT-23 (output on pin 4), 1.8 to 6.0 V"
+
+[models.match]
+# The U variant ONLY: VIN+ on 1, VIN- on 3, VOUT on 4. Bound to either of the
+# other two maps, its output pad would be read as an input.
+value_re = "(?i)^MCP6001UT?([-/][A-Z0-9/]*)?$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 6.0
+abs_max_v = 7.0
+severity = "serious"
+basis = "Microchip MCP6001/2/4 DS20001733L, DC ELECTRICAL SPECIFICATIONS, Power Supply, VDD MIN 1.8 V MAX 6.0 V (Absolute Maximum Ratings give VDD - VSS 7.0 V)"
+
+[models.params]
+gain    = 398107.0  # AOL TYP 112 dB (MIN 88 dB)
+pole_hz = 2.512     # DERIVED: GBWP 1.0 MHz TYP / AOL 398107 TYP
+slew    = 0.6       # SR TYP 0.6 V/us
+swing_lo = 0.025    # VOL VSS + 25 mV / VOH VDD - 25 mV at VDD = 5.5 V
+swing_hi = 0.025
+rail_lo = 0.025     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 5.475
+warning = "rail-to-rail input AND output, within 25 mV of each supply pin at RL = 10 kOhm, with a guaranteed common-mode range from VSS - 0.3 V to VDD + 0.3 V, so there is no input_common_mode envelope on this card. THIS VARIANT'S OUTPUT IS ON PIN 4 and its noninverting input on pin 1, which is the whole reason it is a separate entry from the plain MCP6001 and the MCP6001R. The output current limit is NOT modelled and there is no swing-versus-load row to model; the swing row is specified at VDD = 5.5 V with 0.5 V of input overdrive and is applied here at every supply. The 2.512 Hz pole is DERIVED from the typical 1 MHz GBWP and typical 112 dB gain, not printed. Input offset voltage (+/-4.5 mV max) is taken as zero."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "rail_to_rail_output", "rail_to_rail_input", "dominant_pole",
+              "slew_rate_limit", "single_channel", "supply_voltage_envelope"]
+missing = ["output_current_limit", "load_dependent_output_swing",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread"]
+
+[models.pins]
+# DS20001733L Table 3-1, the "MCP6001U 5-Lead SOT-23" column.
+"1" = "in_plus"    # VIN+
+"2" = "vss"        # VSS
+"3" = "in_minus"   # VIN-
+"4" = "out"        # VOUT
+"5" = "vcc"        # VDD
+
+[models.ratings]
+max_voltage_v = 7.0
+max_pin_current_a = 0.002
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 256.0      # Thermal Resistance, 5-Lead SOT-23
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "mcp6004"
+kind = "opamp"
+description = "Microchip MCP6004 quad rail-to-rail CMOS op-amp, 14-pin, 1.8 to 6.0 V single supply"
+
+[models.match]
+value_re = "(?i)^MCP6004[A-Z0-9]*([-/][A-Z0-9/]*)?$"
+
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 6.0
+abs_max_v = 7.0
+severity = "serious"
+basis = "Microchip MCP6001/2/4 DS20001733L, DC ELECTRICAL SPECIFICATIONS, Power Supply, VDD MIN 1.8 V MAX 6.0 V (Absolute Maximum Ratings give VDD - VSS 7.0 V)"
+
+[models.params]
+gain    = 398107.0  # AOL TYP 112 dB (MIN 88 dB)
+pole_hz = 2.512     # DERIVED: GBWP 1.0 MHz TYP / AOL 398107 TYP
+slew    = 0.6       # SR TYP 0.6 V/us
+swing_lo = 0.025    # VOL VSS + 25 mV / VOH VDD - 25 mV at VDD = 5.5 V
+swing_hi = 0.025
+rail_lo = 0.025     # fallback levels only (deck `.model opamp(...)`, no pins)
+rail_hi = 5.475
+warning = "rail-to-rail input AND output, within 25 mV of each supply pin at RL = 10 kOhm, with a guaranteed common-mode range from VSS - 0.3 V to VDD + 0.3 V, so this card carries no input_common_mode envelope. The output current limit is NOT modelled and there is no swing-versus-load row in the datasheet to model; the swing row is specified at VDD = 5.5 V with 0.5 V of input overdrive and is applied here at every supply. The 2.512 Hz pole is DERIVED from the typical 1 MHz GBWP and the typical 112 dB open-loop gain, not printed. Input offset voltage (+/-4.5 mV max, no typical printed) is taken as zero. All four amplifiers share one supply leg and one pair of rails, and the 100 uA typ quiescent current is PER AMPLIFIER, so the package draws four times it."
+
+[models.coverage]
+implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
+              "rail_to_rail_output", "rail_to_rail_input", "dominant_pole",
+              "slew_rate_limit", "quad_channel", "supply_voltage_envelope"]
+missing = ["output_current_limit", "load_dependent_output_swing",
+           "input_offset_voltage", "input_bias_current", "input_offset_current",
+           "parameter_spread"]
+
+[models.pins]
+# DS20001733L Table 3-1, the "MCP6004 14-Lead PDIP, SOIC, TSSOP" column. VDD on
+# 4 and VSS on 11, the same corner-free placement as the LM324 and the TL074.
+"1"  = "out_a"        # VOUTA
+"2"  = "in_minus_a"   # VINA-
+"3"  = "in_plus_a"    # VINA+
+"4"  = "vcc"          # VDD
+"5"  = "in_plus_b"    # VINB+
+"6"  = "in_minus_b"   # VINB-
+"7"  = "out_b"        # VOUTB
+"8"  = "out_c"        # VOUTC
+"9"  = "in_minus_c"   # VINC-
+"10" = "in_plus_c"    # VINC+
+"11" = "vss"          # VSS
+"12" = "in_plus_d"    # VIND+
+"13" = "in_minus_d"   # VIND-
+"14" = "out_d"        # VOUTD
+
+[models.ratings]
+max_voltage_v = 7.0
+max_pin_current_a = 0.002     # analog input pins, +/-2 mA
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 120.0      # Thermal Resistance, 14-Lead SOIC (PDIP 70,
+                              # TSSOP 100)

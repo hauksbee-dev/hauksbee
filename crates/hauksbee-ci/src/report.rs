@@ -32,6 +32,9 @@ pub struct CiJsonAssertion {
     /// a chunk the solver failed on. When `invalid` is true, `passed` is always
     /// false, but the run exits 3 (invalid-for-analysis) rather than 1.
     pub invalid: bool,
+    /// The assertion carried no bound, so this row is a MEASUREMENT: `passed`
+    /// is true but nothing was judged. Renderers show "measured", not PASS.
+    pub measured: bool,
     /// One-line detail (the measured value, the offending seed, etc).
     pub detail: String,
     /// If it failed, the first seed index that failed (for fuzzed runs).
@@ -544,6 +547,7 @@ impl CiResult {
                     kind: result.kind.clone(),
                     passed: result.passed,
                     invalid: result.invalid,
+                    measured: result.measured,
                     detail: result.detail.clone(),
                     failing_seed: result.failing_seed,
                     failing_seeds: result.failing_seeds.clone(),
@@ -719,6 +723,8 @@ impl CiResult {
         for r in &self.results {
             let mark = if r.invalid {
                 "INVALID"
+            } else if r.measured {
+                "MEASURED"
             } else if r.passed {
                 "PASS"
             } else if r.waived.is_some() {
@@ -761,12 +767,17 @@ impl CiResult {
         for (tag, msg) in self.honesty_notes() {
             out.push_str(&format!("  {tag}: {msg}\n"));
         }
+        // A run of nothing but measurements judged nothing, so it must not
+        // borrow the word a run of held assertions earns.
+        let all_measured = !self.results.is_empty() && self.results.iter().all(|r| r.measured);
         let verdict = if self.analog_invalid() {
             "INVALID (run or assertion evidence is not trustworthy)"
-        } else if self.passed() {
-            "GREEN"
-        } else {
+        } else if !self.passed() {
             "RED"
+        } else if all_measured {
+            "MEASURED"
+        } else {
+            "GREEN"
         };
         let waived = self.waived_count();
         let waived_note = if waived > 0 {
@@ -788,10 +799,15 @@ impl CiResult {
             ));
         } else {
             out.push_str(&format!(
-                "\n{} - {}/{} assertions passed in {:.2}s{}\n",
+                "\n{} - {}/{} {} in {:.2}s{}\n",
                 verdict,
                 passed,
                 total,
+                if all_measured {
+                    "measurement(s) reported, nothing judged"
+                } else {
+                    "assertions passed"
+                },
                 self.elapsed.as_secs_f64(),
                 waived_note
             ));
@@ -896,7 +912,8 @@ impl CiResult {
                     "      <failure message=\"{message}\">{body}</failure>\n"
                 ));
             } else {
-                out.push_str(&format!("      <system-out>{body}</system-out>\n"));
+                let tag = if r.measured { "measured: " } else { "" };
+                out.push_str(&format!("      <system-out>{tag}{body}</system-out>\n"));
             }
             out.push_str("    </testcase>\n");
         }

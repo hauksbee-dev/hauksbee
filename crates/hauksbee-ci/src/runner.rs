@@ -14,7 +14,7 @@ use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_ir::evidence::{
     ArtifactKind, ArtifactProvenance, ArtifactRole, Contribution, IgnoredInput,
 };
-use hauksbee_ir::{Device, NodeId, SourceKind};
+use hauksbee_ir::{Device, NodeId, PwlPoint, SourceKind};
 use hauksbee_models::ModelLibrary;
 
 use crate::error::SpecError;
@@ -1434,9 +1434,11 @@ fn production_assumptions(
             ));
         }
     }
-    // Parts the solve found below the minimum current their card guarantees
-    // regulation at: never a silent clean pass.
-    production_assumptions.extend(engine.scheduler().stress.under_minimum_current());
+    // What the run measured that no per-chunk fault check can say: a part below
+    // the minimum current its card guarantees regulation at, a MOSFET conducting
+    // below the gate drive its RDS(on) is specified at, a current peak the card
+    // carries no pulsed rating for. Never a silent clean pass.
+    production_assumptions.extend(engine.scheduler().stress.run_disclosures());
     // Analog inputs outside the window their card guarantees: a comparator
     // channel with every input above its common-mode ceiling (MEASURED, so it
     // undermines), an ADC pin behind too high a source impedance (qualifies).
@@ -1724,6 +1726,14 @@ fn run_one(
     // is unpowered for the whole run, and any analog number below has to be
     // read knowing it.
     let dead_rails = bias_bound(&mut bound, &board, spec, &fuzz_net_drives(spec, seed))?;
+    // A ramped rail is a COLD power-on, which a stamped leg cannot express: it
+    // sits at its setpoint from t=0 and the operating point pre-charges every
+    // capacitor, so an RC power-on delay reads 0 ms. Open the leg here (AFTER
+    // the census, so the rail still counts as powered) and let the ramp
+    // peripheral below drive the net from 0 V.
+    for s in spec.supplies.iter().filter(|s| s.ramp_ms.is_some()) {
+        open_supply_leg(&mut bound, &s.net);
+    }
 
     // How the modeled circuit defines each voltage-asserted net's DC level,
     // captured now that every supply and drive is attached, so a supplied or
@@ -1873,11 +1883,12 @@ fn run_one(
     // minutes) also validates them, so a malformed trace aborts the run with a
     // named error instead of failing every feature at evaluation time.
     let mut series_nets = crate::hwtrace::assert_nets(spec)?;
-    // A `toggle` frequency is TIMED from edges, so those nets need a waveform.
+    // A `toggle` rate and a `pulse_width` are both TIMED from edges, so those
+    // nets need a waveform (a `min_toggles` count does not).
     series_nets.extend(
         spec.asserts
             .iter()
-            .filter(|a| a.kind == "toggle" && a.freq_hz.is_some())
+            .filter(|a| a.kind == "pulse_width" || (a.kind == "toggle" && a.min_toggles.is_none()))
             .filter_map(|a| a.net.clone()),
     );
     let mut net_series: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
@@ -2677,6 +2688,23 @@ fn attach_peripherals(
 
     let mut vcd_targets = Vec::new();
 
+    // A `ramp_ms` supply drives its (opened) rail as a peripheral, not as a
+    // stamped waveform: the analog march restarts chunk-local time at 0, so a
+    // raw PWL would restart its ramp every chunk. A peripheral samples the
+    // ABSOLUTE timeline, which is what a power-on ramp is stated against.
+    for s in spec.supplies.iter().filter(|s| s.ramp_ms.is_some()) {
+        let Some(&net) = net_node.get(&s.net) else {
+            continue;
+        };
+        let kind = StimulusKind::Wave(ramp_source((
+            s.ramp_ms.unwrap_or_default() / 1e3,
+            s.volts.unwrap_or_default(),
+        )));
+        let id = format!("ramp_{}", s.net);
+        let ramp = Stimulus::voltage(sched.circuit_mut(), &id, net, kind);
+        sched.attach_peripheral(Box::new(ramp));
+    }
+
     for p in &spec.peripherals {
         let err = |m: &str| SpecError::Invalid(format!("peripheral '{}': {m}", p.id));
         // The named terminal (or, with `None`, the spec's `net` / `ref`+`pin`
@@ -3097,7 +3125,7 @@ fn bias_bound(
         .map(|d| (d.net.as_str(), d.volts))
         .chain(fuzz_drives.iter().map(|(n, v)| (n.as_str(), *v)))
     {
-        drive_net(bound, net, volts);
+        drive_net(bound, net, SourceKind::Dc(volts));
     }
     Ok(dead)
 }
@@ -3130,9 +3158,33 @@ fn hollow_gates<'a>(
         .collect()
 }
 
-/// Force `net` to a fixed DC voltage by stamping an ideal source (unless one is
+/// Open a stamped supply leg's series resistor, leaving the leg itself
+/// registered. The rail then follows whatever source drives its node, while
+/// everything downstream that asks which nets are declared supplies still gets
+/// the same answer it would without the ramp.
+fn open_supply_leg(bound: &mut BoundBoard, net: &str) {
+    let series = format!("Rsupply_{net}");
+    for dev in bound.circuit.devices.iter_mut() {
+        if let Device::Resistor { name, ohms, .. } = dev {
+            if name == &series {
+                *ohms = 1e12;
+            }
+        }
+    }
+}
+
+/// The two-knot PWL a `ramp_ms` supply drives: 0 V at t=0, `volts` at `t_s`,
+/// held flat after. Linear, because a rise time is all the spec states.
+fn ramp_source((t_s, volts): (f64, f64)) -> SourceKind {
+    SourceKind::Pwl(vec![
+        PwlPoint { t: 0.0, v: 0.0 },
+        PwlPoint { t: t_s, v: volts },
+    ])
+}
+
+/// Force `net` to a source waveform by stamping an ideal source (unless one is
 /// already present on that node).
-fn drive_net(bound: &mut BoundBoard, net: &str, volts: f64) {
+fn drive_net(bound: &mut BoundBoard, net: &str, kind: SourceKind) {
     let Some(node) = bound.node(net) else { return };
     if node.is_ground() {
         return;
@@ -3147,14 +3199,17 @@ fn drive_net(bound: &mut BoundBoard, net: &str, volts: f64) {
             name: format!("Vci_drive_{net}"),
             p: node,
             n: NodeId::GROUND,
-            kind: SourceKind::Dc(volts),
+            kind,
         });
     } else {
         // Retarget any existing CI drive source we own.
         for dev in bound.circuit.devices.iter_mut() {
-            if let Device::Vsource { name, p, kind, .. } = dev {
+            if let Device::Vsource {
+                name, p, kind: k, ..
+            } = dev
+            {
                 if *p == node && name == &format!("Vci_drive_{net}") {
-                    *kind = SourceKind::Dc(volts);
+                    *k = kind.clone();
                 }
             }
         }

@@ -672,6 +672,8 @@ export interface CheckResult {
   kind: string
   passed: boolean
   invalid: boolean
+  /** The check carried no bound, so it reports a value and judges nothing. */
+  measured?: boolean
   detail: string
   evidence?: EvidenceMap
 }

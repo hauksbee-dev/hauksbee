@@ -549,6 +549,13 @@ pub struct SupplySpec {
     /// rail may be negative (e.g. -12 V), only a non-finite value is illegal.
     #[serde(default)]
     pub volts: Option<f64>,
+    /// Cold power-on: ramp this rail linearly from 0 V to `volts` over this many
+    /// milliseconds instead of stamping it already settled. Without it the
+    /// transient starts from the DC operating point, which pre-charges every
+    /// capacitor, so a power-on RC delay reads 0 ms.
+    #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0))]
+    pub ramp_ms: Option<f64>,
     /// Current limit (A). Above it a bench/wall supply drops out of regulation
     /// into constant-current, which is how a brownout gets reproduced.
     #[serde(default)]
@@ -1109,7 +1116,10 @@ pub struct Assertion {
     /// `boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:
     /// small-signal loop checks (need an `[ac]` block). `hwtrace`: the run
     /// reproduces a captured hardware trace. `model_coverage`: enough of the
-    /// board bound to a real device model.
+    /// board bound to a real device model. `pulse_width`: the width (ms) of the
+    /// first complete high (or `level = "low"`) pulse on `net` after `after_ms`.
+    /// On the numeric kinds, omitting every bound makes the assertion a
+    /// MEASUREMENT: the value is reported, nothing is judged.
     // Both `boot_coverage` spellings are listed: the canonical snake_case one
     // and the `boot-coverage` alias Spec::normalize folds onto it. The editor
     // must accept a spec that was correct when it was written, so dropping the
@@ -1117,7 +1127,8 @@ pub struct Assertion {
     #[schemars(extend("enum" = [
         "voltage", "uart", "toggle", "no_faults", "max_current", "max_temp",
         "peripheral", "rail_window", "protection_trip", "boot_coverage",
-        "boot-coverage", "phase_margin", "ac_gain", "hwtrace", "model_coverage"
+        "boot-coverage", "phase_margin", "ac_gain", "hwtrace", "model_coverage",
+        "pulse_width"
     ]))]
     pub kind: String,
     /// Optional label (defaults to a generated description).
@@ -1138,6 +1149,10 @@ pub struct Assertion {
     /// Only sample at/after this time (ms), lets the rail settle first.
     #[serde(default)]
     pub after_ms: Option<f64>,
+    /// pulse_width: which pulse to time, `"high"` (the default) or `"low"`.
+    #[serde(default)]
+    #[schemars(extend("enum" = ["high", "low"]))]
+    pub level: Option<String>,
 
     /// uart: substring the UART output must contain.
     #[serde(default)]
@@ -1796,6 +1811,22 @@ impl Spec {
         !self.tolerances.is_empty() || self.overrides.iter().any(|o| o.tolerance.is_some())
     }
 
+    /// Does this run start at a settled DC operating point and stay there, so
+    /// that no clock reading can mean anything? True when no supply is ramped,
+    /// every declared leg is `ideal` (a bench/wall/usb/battery leg droops and
+    /// ripples, and an absent leg is an ideal auto-rail), and nothing in the
+    /// spec injects an event: no peripheral timeline, no scenario, no firmware.
+    /// Deliberately narrow, so the start-up-timing note lands on the specs it
+    /// is actually about and on no others.
+    pub fn dc_initialised(&self) -> bool {
+        self.supplies
+            .iter()
+            .all(|s| s.ramp_ms.is_none() && s.kind == "ideal")
+            && self.peripherals.iter().all(|p| p.events.is_empty())
+            && self.scenarios.is_empty()
+            && self.firmware.is_none()
+    }
+
     /// The ensemble mode in effect (defaults to Monte-Carlo when tolerances
     /// exist without an explicit `[ensemble]` block).
     pub fn ensemble_mode(&self) -> Result<crate::tolerance::Mode, SpecError> {
@@ -1987,7 +2018,7 @@ impl SupplySpec {
         let finite = |x: f64| x.is_finite();
         let positive = |x: f64| x.is_finite() && x > 0.0;
         let non_negative = |x: f64| x.is_finite() && x >= 0.0;
-        let ranges: [(&str, Option<f64>, &dyn Fn(f64) -> bool, &str); 10] = [
+        let ranges: [(&str, Option<f64>, &dyn Fn(f64) -> bool, &str); 11] = [
             ("volts", self.volts, &finite, "a finite number"),
             (
                 "current_limit_a",
@@ -2038,6 +2069,7 @@ impl SupplySpec {
                 &positive,
                 "a positive number",
             ),
+            ("ramp_ms", self.ramp_ms, &positive, "a positive number"),
         ];
         for (field, value, ok, wants) in ranges {
             need(
@@ -2053,6 +2085,12 @@ impl SupplySpec {
         need(
             self.cells != Some(0),
             format!("supply on '{net}': `cells` must be at least 1"),
+        )?;
+        // A ramp interpolates towards a stated end voltage, so it is only
+        // expressible on a leg that names one.
+        need(
+            self.ramp_ms.is_none() || self.volts.is_some(),
+            format!("supply on '{net}': `ramp_ms` needs an explicit `volts` to ramp up to"),
         )?;
 
         // No silent electrical assumptions: a supply's defining parameter must
@@ -2127,6 +2165,7 @@ const ASSERTION_KINDS: &[&str] = &[
     "ac_gain",
     "hwtrace",
     "model_coverage",
+    "pulse_width",
 ];
 
 impl Assertion {
@@ -2137,10 +2176,34 @@ impl Assertion {
         matches!(self.kind.as_str(), "boot_coverage" | "boot-coverage")
     }
 
+    /// Is this a MEASUREMENT: a kind that reduces the run to ONE number,
+    /// carrying no bound at all? It reports its value with the same uncertainty
+    /// and evidence notes a judged assertion carries, and claims nothing, so it
+    /// can neither pass nor fail. Every other kind (`uart`, `no_faults`,
+    /// `model_coverage`, ...) judges a condition and has nothing to report on
+    /// its own, so an unbounded one stays the loud spec error it always was.
+    pub fn measurement(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "voltage" | "toggle" | "max_current" | "phase_margin" | "ac_gain" | "pulse_width"
+        ) && [self.min, self.max, self.amps, self.freq_hz]
+            .iter()
+            .all(Option::is_none)
+            && self.min_toggles.is_none()
+    }
+
+    /// Does this assertion read a START-UP time off the transient, i.e. would a
+    /// rail that came up at t=0 instead of being ramped change its answer? A
+    /// pulse width is timed from edges, and any `after_ms` selects a window by
+    /// the clock; both are meaningless on a DC-initialised board.
+    pub fn times_startup(&self) -> bool {
+        self.kind == "pulse_width" || self.after_ms.is_some_and(|t| t > 0.0)
+    }
+
     fn validate(&self) -> Result<(), SpecError> {
         let kind = self.kind.as_str();
         let net = self.net.as_deref().unwrap_or("?");
-        let has_bound = self.min.is_some() || self.max.is_some();
+        let has_bound = self.min.is_some() || self.max.is_some() || self.measurement();
         // A non-finite time window must be rejected loud: TOML accepts `nan`, and
         // a NaN `after_ms` makes the threshold-bucket sort's `partial_cmp` return
         // None, so its `.unwrap()` PANICS (a crash, not the crate's fail-loud
@@ -2183,6 +2246,25 @@ impl Assertion {
                     format!("voltage assertion on '{net}' needs a `min` and/or `max`"),
                 )?;
             }
+            "pulse_width" => {
+                need(
+                    self.net.is_some(),
+                    "pulse_width assertion needs a `net`".into(),
+                )?;
+                need(
+                    self.level
+                        .as_deref()
+                        .is_none_or(|l| l == "high" || l == "low"),
+                    format!(
+                        "pulse_width assertion on '{net}': {}",
+                        unknown_token(
+                            "unknown level",
+                            self.level.as_deref().unwrap_or(""),
+                            &["high", "low"]
+                        )
+                    ),
+                )?;
+            }
             "uart" => {
                 need(
                     self.contains.is_some() || self.matches.is_some(),
@@ -2196,7 +2278,7 @@ impl Assertion {
             "toggle" => {
                 need(self.net.is_some(), "toggle assertion needs a `net`".into())?;
                 need(
-                    self.freq_hz.is_some() || self.min_toggles.is_some(),
+                    self.freq_hz.is_some() || self.min_toggles.is_some() || self.measurement(),
                     format!("toggle assertion on '{net}' needs `freq_hz` or `min_toggles`"),
                 )?;
                 // The two forms are mutually exclusive ("freq_hz OR
@@ -2236,7 +2318,7 @@ impl Assertion {
             }
             "no_faults" => {}
             "max_current" => need(
-                self.reference.is_some() && self.amps.is_some(),
+                self.reference.is_some() && (self.amps.is_some() || self.measurement()),
                 "max_current assertion needs `ref` and `amps`".into(),
             )?,
             // `celsius` is optional: absent means "use the device's own max
@@ -2595,6 +2677,20 @@ mod tests {
         spec
     }
 
+    fn validation_error(src: &str) -> String {
+        spec_from(src)
+            .validate()
+            .expect_err("spec must be rejected")
+            .to_string()
+    }
+
+    fn assert_invalid(src: &str, needles: &[&str]) {
+        let error = validation_error(src);
+        for needle in needles {
+            assert!(error.contains(needle), "expected {needle:?} in: {error}");
+        }
+    }
+
     #[test]
     fn well_formed_specs_validate() {
         let bodies = [
@@ -2706,17 +2802,7 @@ mod tests {
             ),
         ];
         for (body, needles) in cases {
-            let err = spec_from(&body)
-                .validate()
-                .err()
-                .unwrap_or_else(|| panic!("must be rejected:\n{body}"))
-                .to_string();
-            for needle in needles {
-                assert!(
-                    err.contains(needle),
-                    "expected `{needle}` for:\n{body}\ngot: {err}"
-                );
-            }
+            assert_invalid(&body, needles);
         }
     }
 
@@ -2811,27 +2897,11 @@ min = 3.0
     #[test]
     fn toggle_with_both_freq_and_count_is_rejected() {
         // Round-29: check_toggle evaluates min_toggles and ignores freq_hz when
-        // both are set, yet the label reports the ~N Hz frequency form, a spec
-        // that silently checks a count while claiming a frequency. The two forms
-        // are mutually exclusive; validation must reject both-at-once up front.
-        let src = r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 0.1
-
-[[assert]]
-kind = "toggle"
-net = "D13"
-freq_hz = 5
-min_toggles = 1
-"#;
-        let err = spec_from(src)
-            .validate()
-            .expect_err("toggle with both freq_hz and min_toggles must fail");
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("both") && m.contains("freq_hz")),
-            "expected a both-fields validation error, got {err:?}"
+        // both are set, yet the label reports the ~N Hz frequency form. Reject
+        // both-at-once instead of silently checking a count as a frequency.
+        assert_invalid(
+            &format!("{BASE}frame_ms=0.1\n[[assert]]\nkind=\"toggle\"\nnet=\"D13\"\nfreq_hz=5\nmin_toggles=1\n"),
+            &["both", "freq_hz"],
         );
         // Each form ALONE is still accepted.
         for one in ["freq_hz = 5", "min_toggles = 1"] {
@@ -2850,14 +2920,7 @@ min_toggles = 1
         // running ~1000x more frames than any real cadence and hanging the check with
         // no explanation. Validation must name it up front rather than clamp silently.
         for bad in ["0", "-0.5"] {
-            let src = spec_src(bad);
-            let err = spec_from(&src)
-                .validate()
-                .expect_err("non-positive frame_ms must fail validation");
-            assert!(
-                matches!(&err, SpecError::Invalid(m) if m.contains("frame_ms")),
-                "expected a frame_ms validation error, got {err:?}"
-            );
+            assert_invalid(&spec_src(bad), &["frame_ms"]);
         }
     }
     #[test]
@@ -2894,139 +2957,44 @@ min = 3.0
             ("10", "inf", "frame_ms"),
             ("10", "nan", "frame_ms"),
         ] {
-            let err = spec_from(&base(dur, frame))
-                .validate()
-                .expect_err("a non-finite time field must fail validation");
-            assert!(
-                matches!(&err, SpecError::Invalid(m) if m.contains(field)),
-                "expected a {field} validation error for {dur}/{frame}, got {err:?}"
-            );
+            assert_invalid(&base(dur, frame), &[field]);
         }
     }
     #[test]
     fn nan_after_ms_is_rejected_not_panicked() {
-        // R33: a NaN `after_ms` made the threshold-bucket sort's `partial_cmp`
-        // return None, so `.unwrap()` PANICKED, a crash instead of the crate's
-        // fail-loud SpecError. Assertion::validate now rejects a non-finite window.
-        let spec = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-
-[[assert]]
-kind = "voltage"
-net = "VCC"
-min = 3.0
-after_ms = nan
-"#,
-        );
-        let err = spec
-            .validate()
-            .expect_err("a NaN after_ms must fail validation, not panic later");
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("after_ms")),
-            "expected an after_ms validation error, got {err:?}"
+        // R33: a NaN made threshold sorting panic instead of returning a
+        // fail-loud SpecError. Validation rejects the non-finite window.
+        assert_invalid(
+            &format!("{BASE}[[assert]]\nkind=\"voltage\"\nnet=\"VCC\"\nmin=3.0\nafter_ms=nan\n"),
+            &["after_ms"],
         );
     }
+    const RAIL_WINDOW: &str = "[[assert]]\nkind=\"rail_window\"\nnet=\"VBUS\"\ndip_below=3.1\n";
+
     #[test]
-    fn rail_window_recover_to_without_recover_within_ms_is_rejected() {
-        // R35: check_rail_window only evaluates a recovery when all three of
-        // dip_below/recover_to/recover_within_ms are present. A spec that sets a
-        // recovery intent (dip_below + recover_to) but omits recover_within_ms
-        // must be REJECTED, even when a min/max is also present. Accepting it
-        // would let the recovery clause silently never run, a false GREEN on the
-        // recovery dimension.
-        let spec = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[[assert]]
-kind = "rail_window"
-net = "VBUS"
-min = 3.0
-dip_below = 3.1
-recover_to = 3.3
-"#,
+    fn rail_window_dip_and_recovery_fields_require_partners() {
+        // R35/R36: each field must be consumed by a complete duration clause;
+        // otherwise it silently does nothing and can false-GREEN a run. The
+        // `min` matters: it satisfies the has-a-check rule on its own, which is
+        // exactly how the unconsumed field used to slip through.
+        assert_invalid(
+            &format!("{BASE}{RAIL_WINDOW}min=3.0\nrecover_to=3.3\n"),
+            &["recover_to", "recover_within_ms"],
         );
-        let err = spec
-            .validate()
-            .expect_err("a recover_to with no recover_within_ms must fail, not silently no-op");
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("recover_to") && m.contains("recover_within_ms")),
-            "expected a recover_to/recover_within_ms validation error, got {err:?}"
+        assert_invalid(
+            &format!("{BASE}{RAIL_WINDOW}min=3.0\n"),
+            &["dip_below", "for_max_ms"],
         );
 
-        // The complete recovery spec still validates.
-        let ok = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[[assert]]
-kind = "rail_window"
-net = "VBUS"
-dip_below = 3.1
-recover_to = 3.3
-recover_within_ms = 5.0
-"#,
-        );
-        assert!(ok.validate().is_ok(), "a complete recovery spec must pass");
-    }
-    #[test]
-    fn rail_window_dip_below_without_a_partner_is_rejected() {
-        // R36: the dip_below sibling of the R35 recover_to gap. check_rail_window
-        // only reads dip_below inside guards that require for_max_ms or
-        // recover_within_ms, so a bare dip_below alongside a min/max (which
-        // satisfies has_check) silently does nothing, a rail at 3.1 V passes
-        // GREEN against a dip_below=3.2 the author wrote. Validation must reject
-        // the partnerless dip_below.
-        let spec = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[[assert]]
-kind = "rail_window"
-net = "VBUS"
-min = 3.0
-dip_below = 3.2
-"#,
-        );
-        let err = spec
-            .validate()
-            .expect_err("a dip_below with no for_max_ms/recover_within_ms must fail, not no-op");
-        assert!(
-            matches!(&err, SpecError::Invalid(m) if m.contains("dip_below") && (m.contains("for_max_ms") || m.contains("recover_within_ms"))),
-            "expected a dip_below partner validation error, got {err:?}"
-        );
-
-        // dip_below WITH a for_max_ms partner still validates.
-        let ok = spec_from(
-            r#"
-name = "t"
-board = "board.kicad_pcb"
-duration_ms = 10
-frame_ms = 1.0
-
-[[assert]]
-kind = "rail_window"
-net = "VBUS"
-dip_below = 3.2
-for_max_ms = 2.0
-"#,
-        );
-        assert!(
-            ok.validate().is_ok(),
-            "dip_below with a for_max_ms partner must pass"
-        );
+        // Each complete form still validates, with no `min` beside it.
+        for fields in [
+            "recover_to=3.3\nrecover_within_ms=5.0\n",
+            "for_max_ms=2.0\n",
+        ] {
+            assert!(spec_from(&format!("{BASE}{RAIL_WINDOW}{fields}"))
+                .validate()
+                .is_ok());
+        }
     }
     #[test]
     fn rail_window_spike_schema_requires_consuming_partners() {
