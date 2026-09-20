@@ -210,3 +210,46 @@ fn an_input_pair_above_the_common_mode_ceiling_refuses_instead_of_answering() {
         }
     }
 }
+
+/// A card's sourced supply envelope is judged on the rails the run SOLVED, not
+/// only by the static lint: an LM741 on +5 V sits under its 10 V minimum, a
+/// serious limit, so the run is INVALID; an LM339B at 31 V is past a Medium
+/// limit, which qualifies the pass. The legal control stays silent.
+#[test]
+fn sourced_supply_envelopes_follow_the_solved_rails() {
+    // U1 is a follower on OUT with its offset-null pads on stubs; U2 is idle.
+    let pads =
+        |nets: &[&str], at: u32| (at..).zip(nets).map(|(i, n)| pad(i, n)).collect::<String>();
+    let u1 = pads(&["N1", "OUT", "GND", "VN", "N5", "OUT", "VP"], 1);
+    let u2 = pads(&["VCC", "VCC", "GND", "GND"], 2) + &pad(12, "GND");
+    let parts = comp("U1", "Package_DIP:DIP-8_W7.62mm", "LM741", 20, u1)
+        + &comp("U2", "Package_DIP:DIP-14_W7.62mm", "LM339B", 40, u2);
+    let nets = ["VP", "VN", "VCC", "GND", "OUT", "N1", "N5"].map(|n| format!("net \"{n}\"\n"));
+    let board = format!(
+        "board version 20171130\nfn main {{\n{}{parts}}}\n",
+        nets.concat()
+    );
+    let path = support::write_tmp("envelopes.board", &board);
+    for (case, vp, vcc, net, want, says) in [
+        ("under minimum", 5.0, 5.0, "OUT", 3, "the 10.000..18.000 V"),
+        ("legal control", 12.0, 5.0, "OUT", 0, ""),
+        ("medium limit", 12.0, 31.0, "VCC", 0, "the 2.000..30.000 V"),
+    ] {
+        let rails = [("VP", vp), ("VN", -12.0), ("VCC", vcc)]
+            .map(|(n, v)| format!("[[supply]]\nnet = \"{n}\"\nkind = \"ideal\"\nvolts = {v}\n"));
+        let r = support::run_body(
+            &format!("{case}.toml"),
+            &format!(
+                "name = \"{case}\"\nboard = {}\nduration_ms = 1\n{}[[assert]]\nname = \"a\"\n\
+                 kind = \"voltage\"\nnet = \"{net}\"\nmin = -20.0\nmax = 40.0\n",
+                support::toml_path(&path),
+                rails.concat(),
+            ),
+        );
+        let (human, flagged) = (r.render_human(), !says.is_empty());
+        assert_eq!(r.exit_code(), want, "{case}: {human}");
+        assert_eq!(human.contains("[INVALID]"), want == 3, "{case}: {human}");
+        assert_eq!(human.contains("outside the"), flagged, "{case}: {human}");
+        assert!(human.contains(says), "{case}: {human}");
+    }
+}

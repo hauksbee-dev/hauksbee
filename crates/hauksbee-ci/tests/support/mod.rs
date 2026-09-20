@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// call (process id + a monotonic counter) rather than shared by name: two
 /// tests writing the same `name` (even across different modules) must never
 /// collide on one path.
-#[allow(dead_code)]
 pub fn write_tmp(name: &str, body: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -32,7 +31,6 @@ pub fn comp(r: &str, lib: &str, val: &str, x: usize, pads: String) -> String {
 }
 
 /// Write `body` to a spec file named `name` and run it with default config.
-#[allow(dead_code)]
 pub fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
     hauksbee_ci::run(&run_config(write_tmp(name, body))).expect("spec runs")
 }
@@ -92,7 +90,6 @@ pub fn row<'a>(
 }
 
 /// A committed example board/spec under this crate's `examples/` directory.
-#[allow(dead_code)]
 pub fn example(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
@@ -100,7 +97,6 @@ pub fn example(name: &str) -> PathBuf {
 }
 
 /// A path under the repository root, [`repo_root`] plus `rel`.
-#[allow(dead_code)]
 pub fn repo(rel: &str) -> PathBuf {
     repo_root().join(rel)
 }
@@ -109,13 +105,11 @@ pub fn repo(rel: &str) -> PathBuf {
 /// machine has (the hand-built `famous/<id>` tree or the flat `<id>` layout
 /// `scripts/fetch-corpus.sh` produces), or an empty default if the corpus is
 /// absent.
-#[allow(dead_code)]
 pub fn corpus_boards_root() -> PathBuf {
     hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR")).unwrap_or_default()
 }
 
 /// Whether an absent corpus board must hard-fail rather than skip.
-#[allow(dead_code)]
 pub fn require_corpus() -> bool {
     std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok()
 }
@@ -131,7 +125,6 @@ pub fn toml_path(path: &Path) -> String {
 
 /// A run configuration with only the spec path overridden.
 // Some integration modules compile this shared support file without using every helper.
-#[allow(dead_code)]
 pub fn run_config(spec: PathBuf) -> hauksbee_ci::RunConfig {
     hauksbee_ci::RunConfig {
         spec,
@@ -140,19 +133,16 @@ pub fn run_config(spec: PathBuf) -> hauksbee_ci::RunConfig {
 }
 
 /// The compiled `hauksbee-ci` binary (Cargo sets this for the crate's tests).
-#[allow(dead_code)]
 pub fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_hauksbee-ci")
 }
 
 /// The `blinky` example board shipped with this crate.
-#[allow(dead_code)]
 pub fn blinky_board() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/blinky.kicad_pcb")
 }
 
 /// The repo root, two levels up from this crate's manifest dir.
-#[allow(dead_code)]
 pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -162,7 +152,6 @@ pub fn repo_root() -> PathBuf {
 }
 
 /// Decode a captured `Output`'s stderr as UTF-8.
-#[allow(dead_code)]
 pub fn stderr(o: &std::process::Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
@@ -178,13 +167,11 @@ pub fn stderr(o: &std::process::Output) -> String {
 ///
 /// Take it for the whole body of any test that either publishes a descriptor
 /// dir or runs a spec expecting the stock descriptors.
-#[allow(dead_code)]
 pub static DESCRIPTOR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Take [`DESCRIPTOR_ENV_LOCK`], ignoring poisoning from an unrelated test's
 /// panic: the guarded resource is the environment, which a panicking test
 /// leaves no worse than it found.
-#[allow(dead_code)]
 pub fn descriptor_env_lock() -> std::sync::MutexGuard<'static, ()> {
     DESCRIPTOR_ENV_LOCK
         .lock()

@@ -120,9 +120,12 @@ fn an_oversized_sweep_is_refused_before_it_is_solved_and_the_cap_is_named() {
 
 #[test]
 fn a_deck_that_outlasts_the_browser_limit_is_refused_instead_of_holding_the_request() {
-    // A limit of zero proves the brake without waiting a minute for it.
+    // A limit of zero proves the brake without waiting a minute for it. The
+    // refused deck sits just under the point cap, so it cannot finish inside a
+    // scheduler hiccup between the spawn and the wait and read as a pass.
     let deck = "slow\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1n\n.tran 1n 1u\n.end\n";
-    let error = simulate_deck_within(deck, &[], std::time::Duration::ZERO)
+    let long = deck.replace(".tran 1n 1u\n", ".tran 1n 190u\n");
+    let error = simulate_deck_within(&long, &[], std::time::Duration::ZERO)
         .expect_err("a deck past the limit is refused");
     assert!(error.contains("still solving"), "{error}");
     assert!(error.contains("hauksbee sim <deck.cir>"), "{error}");

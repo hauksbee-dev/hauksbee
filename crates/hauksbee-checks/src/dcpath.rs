@@ -81,7 +81,17 @@ pub fn net_dc_definition(circuit: &Circuit, start: NodeId) -> NetDcDefinition {
                 has_any_noncap_device.insert(*b);
             }
             Device::Capacitor { .. } => {}
-            Device::Vsource { p, n, .. } | Device::Isource { p, n, .. } => {
+            // A controlled VOLTAGE source holds its output the way an independent
+            // one does: an unloaded follower's output is driven, not floating.
+            // (An open-collector comparator sinks through a behavioural current
+            // element instead, so its bare output still reads as floating.)
+            Device::OpAmp { out, .. } => {
+                reference.insert(*out);
+            }
+            Device::Vsource { p, n, .. }
+            | Device::Isource { p, n, .. }
+            | Device::Vcvs { p, n, .. }
+            | Device::Ccvs { p, n, .. } => {
                 reference.insert(*p);
                 reference.insert(*n);
                 has_any_noncap_device.insert(*p);

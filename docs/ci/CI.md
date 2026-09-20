@@ -1167,7 +1167,7 @@ because both used to read green:
 |---|---|---|
 | an unmodelled (open) ACTIVE part the run proved can drive it (the `co-sim COVERAGE HOLE` wording) | `undermined` | INVALID, exit 3 |
 | an unmodelled part the circuit shows cannot drive it (the net's DC level is defined through modeled elements) | `qualified` | PASS, exit 0, with the caveat stated |
-| a datasheet operating requirement this run MEASURED as violated (`operating_limit_violated`: a minimum load current, an input-range or source-impedance limit) | `undermined` | INVALID, exit 3 |
+| a datasheet operating requirement this run MEASURED as violated (`operating_limit_violated`: a minimum load current, supply envelope, rail order, input range, or source-impedance limit) | `undermined` | INVALID, exit 3 |
 | a documented omission of the model itself (`reduced_fidelity`: "temperature is not modelled", one channel of eight) | `qualified` | PASS, exit 0, with the caveat stated |
 
 There is no `--strict` on `hauksbee-ci run`, deliberately: a board used outside

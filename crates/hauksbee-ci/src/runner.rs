@@ -1445,6 +1445,13 @@ fn production_assumptions(
     let solved = |net: &str| engine.scheduler().net_voltage(net);
     let analog = hauksbee_engine::checks::analog_inputs::run_assumptions(board, lib, &solved);
     production_assumptions.extend(analog);
+    // Supply and rail-order envelopes, on the same solved levels.
+    let levels = board
+        .nets
+        .iter()
+        .filter_map(|n| Some((n.name.clone(), solved(&n.name)?)));
+    let supply = hauksbee_engine::checks::envelope::run_assumptions(board, lib, &levels.collect());
+    production_assumptions.extend(supply);
     let all_nets: Vec<&str> = board
         .nets
         .iter()

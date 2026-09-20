@@ -389,6 +389,7 @@ const ENFORCED_BOUNDS: Record<string, string[]> = {
     "protection_trip_a",
     "protection_delay_ms",
     "protection_reset_a",
+    "ramp_ms",
     "soc",
     "cells",
   ],
@@ -906,6 +907,7 @@ const GUARDED_FINITE: Record<string, string[]> = {
     "protection_trip_a",
     "protection_delay_ms",
     "protection_reset_a",
+    "ramp_ms",
     "soc",
   ],
   // NOT `tolerance`: Rust bounds it only inside the `kind = "toggle"` arm, so

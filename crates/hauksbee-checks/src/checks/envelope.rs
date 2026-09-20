@@ -409,6 +409,26 @@ pub fn envelope_lint_with_drives(
     report
 }
 
+/// The same limits as run evidence, judged on the levels the run SOLVED. A
+/// serious limit undermines whatever the part drives; a lesser one qualifies
+/// it. A rail the run did not solve is an abstention, never a violation.
+pub fn run_assumptions(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    solved: &BTreeMap<String, f64>,
+) -> Vec<hauksbee_ir::evidence::Assumption> {
+    let found = envelope_lint_with_drives(board, lib, solved).findings;
+    let judged = found
+        .into_iter()
+        .filter(|f| f.nets.iter().all(|net| solved.contains_key(net)))
+        .map(|f| {
+            let serious = f.severity == Severity::High;
+            (f, serious)
+        });
+    let fix = "bring the rail inside the envelope the card quotes, then re-run";
+    super::analog_inputs::as_evidence(judged.collect(), "supply-envelope", fix)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::{board, pin};

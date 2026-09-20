@@ -35,11 +35,12 @@ const schema = new SpecSchema(
 // a parity test must compare against THIS checkout's loader, and an installed
 // `hauksbee-ci` on PATH is routinely older than the source it is being compared
 // to. (That gap is also why the extension keeps its own lint layer instead of
-// trusting the binary alone.)
-const BIN = [
-  path.join(REPO, "target", "release", "hauksbee-ci"),
-  path.join(REPO, "target", "debug", "hauksbee-ci"),
-].find(isExecutableFile);
+// trusting the binary alone.) The NEWEST build wins for the same reason: a
+// release binary left over from last week is just as stale as one on PATH.
+const BIN = ["release", "debug"]
+  .map((profile) => path.join(REPO, "target", profile, "hauksbee-ci"))
+  .filter(isExecutableFile)
+  .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
 
 /** Fixtures the extension flags. Every one must fail the loader too. */
 const REJECTED = [

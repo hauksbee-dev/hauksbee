@@ -177,12 +177,22 @@ pub fn run_assumptions(
     volts: &dyn Fn(&str) -> Option<f64>,
 ) -> Vec<Assumption> {
     let fix = "bring the input inside the range the card quotes, then re-run";
+    as_evidence(flags(board, lib, volts), "analog-input-range", fix)
+}
+
+/// Findings as run evidence: `true` marks a limit the run MEASURED as violated
+/// (it undermines), `false` one that only qualifies the answer.
+pub(super) fn as_evidence(
+    found: Vec<(LintFinding, bool)>,
+    limit: &str,
+    fix: &str,
+) -> Vec<Assumption> {
     let mut seen = HashSet::new();
-    flags(board, lib, volts)
+    found
         .into_iter()
         .filter_map(|(f, bad)| {
             let r = f.refs.first().map(String::as_str).unwrap_or_default();
-            let id = format!("{r}-analog-input-range-{}", f.nets.join("-"));
+            let id = format!("{r}-{limit}-{}", f.nets.join("-"));
             let new = seen.insert(id.clone());
             new.then(|| {
                 if bad {
