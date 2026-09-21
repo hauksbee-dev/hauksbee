@@ -34,6 +34,27 @@ the default build shape is GPL-encumbered. The GPL-free shape is
 stays genuinely avr-free rather than merely compiling. Read
 `docs/about/release-and-licensing.md` before you touch the feature graph.
 
+### Keeping local builds warm
+
+For Unix development using `target/.build` for Cargo intermediates, use
+`scripts/dev-cargo.sh` in place of `cargo`, for example:
+
+```bash
+scripts/dev-cargo.sh check -p hauksbee-models
+scripts/dev-cargo.sh nextest run -p hauksbee-models
+```
+
+It removes abandoned loose `*.rcgu.o` linker inputs before and after Cargo,
+while preserving libraries, fingerprints, incremental caches and final binaries.
+Cleanup takes both Cargo directory locks and skips when a compiler or linker is
+active; do not launch standalone rustc during cleanup. Direct Cargo invocations
+are unchanged. Custom target directories and Windows are not cleaned.
+
+`python3 scripts/clean_abandoned_rust_objects.py` previews the count; add `--apply`
+to clean while idle. Receipts live in `target/build-cleanup/`. This deliberately
+uses Cargo's advisory locks and Python's standard library, not `cargo clean`,
+which would discard useful warm state too.
+
 ## Running the tests
 
 ```bash
