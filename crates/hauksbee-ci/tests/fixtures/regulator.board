@@ -1,8 +1,8 @@
 # Board-as-Code (hauksbee board DSL v1)
 # The minimal simple-regulator topology: an AMS1117-3.3 LDO from VIN to VOUT, a
-# 10uF output cap and a 330R load. The same three parts and three nets as the
-# KiCad schematic where the validity defect was first reproduced, in the compact
-# board DSL rather than 1400 lines of s-expression.
+# datasheet-compliant 22uF output cap and a 330R load. The same three parts and
+# three nets as the KiCad schematic where the validity defect was first reproduced,
+# in the compact board DSL rather than 1400 lines of s-expression.
 board version 20171130
 
 fn main {
@@ -14,7 +14,7 @@ fn main {
         pad "2" smd rect at -3.15 0 size 2 1.5 layers [F.Cu F.Paste F.Mask] net "VOUT"
         pad "3" smd rect at -3.15 2.3 size 2 1.5 layers [F.Cu F.Paste F.Mask] net "VIN"
     }
-    comp C1 lib "Capacitor_SMD:CP_Elec_6.3x5.4" val "10uF" layer "F.Cu" at 30 20 rot 0 {
+    comp C1 lib "Capacitor_SMD:CP_Elec_6.3x5.4" val "22uF" layer "F.Cu" at 30 20 rot 0 {
         pad "1" smd roundrect at -2.8 0 size 3.5 1.6 layers [F.Cu F.Paste F.Mask] net "VOUT"
         pad "2" smd roundrect at 2.8 0 size 3.5 1.6 layers [F.Cu F.Paste F.Mask] net "GND"
     }

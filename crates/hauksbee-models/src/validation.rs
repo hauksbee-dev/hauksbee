@@ -68,18 +68,35 @@ const NO_RULES: KindRules = KindRules {
     ordered: &[],
 };
 
-#[rustfmt::skip]
 fn validate_vreg_capacitor_params(entry: &ModelEntry, p: &mut Problems) {
-    if entry.kind != ComponentKind::Vreg || entry.behavioral.converter.is_some() { return; }
+    if entry.kind != ComponentKind::Vreg || entry.behavioral.converter.is_some() {
+        return;
+    }
     let params = &entry.params;
-    let keys = ["cout_min_f", "cout_esr_min_ohm", "cout_esr_max_ohm"];
-    for key in keys { if let Some(value) = params.0.get(key) {
-        p.require(value.as_f64().is_some_and(positive_finite), || format!("param '{key}' must be a positive finite number"));
-    }}
-    let (min, max) = (params.get_f64(keys[1]), params.get_f64(keys[2]));
-    p.require(min.is_some() == max.is_some(), || "vreg output-capacitor ESR requires both 'cout_esr_min_ohm' and 'cout_esr_max_ohm'".into());
+    if let Some(value) = params.0.get("cout_min_f") {
+        p.require(value.as_f64().is_some_and(nonneg_finite), || {
+            "param 'cout_min_f' must be a non-negative finite number".into()
+        });
+    }
+    let esr_keys = ["cout_esr_min_ohm", "cout_esr_max_ohm"];
+    for key in esr_keys {
+        if let Some(value) = params.0.get(key) {
+            p.require(value.as_f64().is_some_and(positive_finite), || {
+                format!("param '{key}' must be a positive finite number")
+            });
+        }
+    }
+    let (min, max) = (params.get_f64(esr_keys[0]), params.get_f64(esr_keys[1]));
+    p.require(min.is_some() == max.is_some(), || {
+        "vreg output-capacitor ESR requires both 'cout_esr_min_ohm' and 'cout_esr_max_ohm'".into()
+    });
     if let (Some(min), Some(max)) = (min, max) {
-        p.require(min <= max, || format!("param '{}' = {min} must be less than or equal to '{}' = {max}", keys[1], keys[2]));
+        p.require(min <= max, || {
+            format!(
+                "param '{}' = {min} must be less than or equal to '{}' = {max}",
+                esr_keys[0], esr_keys[1]
+            )
+        });
     }
 }
 
@@ -1065,17 +1082,40 @@ mod tests {
             ),
             "vout",
         );
-        let vreg = |extra: &[(&str, f64)]| { let mut p = vec![("vout", 3.3), ("dropout_v", 0.3), ("iq_a", 1e-3)]; p.extend_from_slice(extra); entry(Vreg, &p) };
-        let invalid = [
-            (vec![("cout_min_f", 0.0)], "cout_min_f"), (vec![("cout_min_f", f64::NAN)], "cout_min_f"),
-            (vec![("cout_esr_min_ohm", 0.0), ("cout_esr_max_ohm", 1.0)], "cout_esr_min_ohm"),
+        let vreg = |extra: &[(&str, f64)]| {
+            let mut p = vec![("vout", 3.3), ("dropout_v", 0.3), ("iq_a", 1e-3)];
+            p.extend_from_slice(extra);
+            entry(Vreg, &p)
+        };
+        for bad in [-1e-6, f64::NAN, f64::INFINITY] {
+            rejects(&vreg(&[("cout_min_f", bad)]), "cout_min_f");
+        }
+        for (params, error) in [
+            (
+                vec![("cout_esr_min_ohm", 0.0), ("cout_esr_max_ohm", 1.0)],
+                "cout_esr_min_ohm",
+            ),
             (vec![("cout_esr_min_ohm", 0.1)], "requires both"),
-            (vec![("cout_esr_min_ohm", 1.0), ("cout_esr_max_ohm", 0.1)], "less than or equal"),
-        ];
-        for (params, error) in invalid { rejects(&vreg(&params), error); }
-        for (min, max) in [(0.01, 1.0), (0.01, 0.01)] { accepts(&vreg(&[("cout_min_f", 1e-6), ("cout_esr_min_ohm", min), ("cout_esr_max_ohm", max)])); }
+            (
+                vec![("cout_esr_min_ohm", 1.0), ("cout_esr_max_ohm", 0.1)],
+                "less than or equal",
+            ),
+        ] {
+            rejects(&vreg(&params), error);
+        }
+        for cout in [0.0, 1e-6] {
+            accepts(&vreg(&[("cout_min_f", cout)]));
+            for (min, max) in [(0.01, 1.0), (0.01, 0.01)] {
+                accepts(&vreg(&[
+                    ("cout_min_f", cout),
+                    ("cout_esr_min_ohm", min),
+                    ("cout_esr_max_ohm", max),
+                ]));
+            }
+        }
         let mut wrong_type = vreg(&[]);
-        wrong_type.params.set_str("cout_min_f", "1u"); rejects(&wrong_type, "positive finite number");
+        wrong_type.params.set_str("cout_min_f", "1u");
+        rejects(&wrong_type, "non-negative finite number");
 
         rejects(
             &entry(AnalogSwitch, &[("ron", 5000.0), ("roff", 2000.0)]),

@@ -439,12 +439,18 @@ fn the_diode_out_of_sample_points_land_under_the_published_maximum() {
 
 #[test]
 fn the_ldo_outputs_and_dropouts_match_their_datasheets() {
+    // `dropout_v` is the guaranteed maximum at the card's rated load and stated
+    // temperature range, not the typical column: AP2112 DS39724 Rev. 2-2 p.7
+    // (600 mA, TA = 25 °C); MIC5205 DS20005785A table 1-1 (150 mA,
+    // TJ = -40..125 °C); MCP1700 DS20001826F table 1-1 (250 mA);
+    // NCP1117/D Rev.31 electrical table (800 mA, applicable operating ambient
+    // range); TLV755P SBVS320D §5.5 (3.3 V non-DYD, 500 mA, TJ = -40..125 °C).
     for (part, vout, dropout, iq) in [
-        ("AP2112K-3.3", 3.3, 0.25, 55.0e-6),
-        ("MIC5205-3.3", 3.3, 0.165, 80.0e-6),
-        ("MCP1700-3302E", 3.3, 0.178, 1.6e-6),
-        ("NCP1117ST50T3G", 5.0, 1.01, 6.0e-3),
-        ("TLV75533PDBV", 3.3, 0.150, 25.0e-6),
+        ("AP2112K-3.3", 3.3, 0.4, 55.0e-6),
+        ("MIC5205-3.3", 3.3, 0.35, 80.0e-6),
+        ("MCP1700-3302E", 3.3, 0.35, 1.6e-6),
+        ("NCP1117ST50T3G", 5.0, 1.2, 6.0e-3),
+        ("TLV75533PDBV", 3.3, 0.238, 25.0e-6),
     ] {
         let m = resolve(part);
         assert_eq!(m.kind, ComponentKind::Vreg, "{part}");

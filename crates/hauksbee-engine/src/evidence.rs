@@ -2046,9 +2046,10 @@ mod tests {
         assert!(contributions.iter().all(|r| r.what != "copper_geometry"));
     }
 
-    /// A PARTIAL_MODEL_MARKER warning becomes an assumption (reaching every
-    /// surface); an ordinary bind warning stays on the bind report; the
-    /// marker never leaks into user-facing text.
+    /// PARTIAL_MODEL_MARKER warnings become assumptions (reaching every
+    /// surface); a leading OPERATING_LIMIT_MARKER keeps its stronger kind even
+    /// when another regulator caveat follows. Ordinary warnings stay on the bind
+    /// report, and neither marker leaks into user-facing text.
     #[test]
     fn a_partial_model_warning_becomes_evidence_and_an_ordinary_one_does_not() {
         let marker = Assumption::PARTIAL_MODEL_MARKER;
@@ -2084,6 +2085,16 @@ mod tests {
                 Some("U6 (PART): analog-switch gate(s) 3 missing a connection, left open"),
             ),
             row("U7", "PART", Some("some_entry"), vswitch(), None),
+            row(
+                "U8",
+                "LDO",
+                Some("some_entry"),
+                vswitch(),
+                Some(&format!(
+                    "{marker}{}U8 (LDO): requires more output capacitance; its enable is not modelled",
+                    Assumption::OPERATING_LIMIT_MARKER
+                )),
+            ),
         ]);
         let evidence = evidence(&empty_board(), &report);
         let lifted: Vec<&str> = evidence
@@ -2094,6 +2105,22 @@ mod tests {
             .collect();
         assert_eq!(lifted.len(), 2, "{lifted:?}");
         assert!(lifted.iter().any(|h| h.contains("X1")) && lifted.iter().any(|h| h.contains("U5")));
+        assert_eq!(evidence.assumptions().len(), 3);
+        let limit = evidence
+            .assumptions()
+            .iter()
+            .find(|assumption| assumption.statement().contains("U8"))
+            .expect("output-capacitor violation becomes evidence");
+        assert_eq!(
+            limit.kind(),
+            hauksbee_ir::evidence::AssumptionKind::OperatingLimitViolated
+        );
+        assert!(
+            limit.because().contains("Requires more output capacitance")
+                && limit.because().contains("enable is not modelled"),
+            "{}",
+            limit.because()
+        );
         for a in evidence.assumptions() {
             for text in [a.statement(), a.because(), a.consequence(), a.replacement()] {
                 assert!(!text.contains(marker.trim()), "marker leaked: {text}");

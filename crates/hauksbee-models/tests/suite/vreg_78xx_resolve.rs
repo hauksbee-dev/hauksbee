@@ -55,8 +55,12 @@ fn mnt_pocket_tlv1117_18_is_voltage_specific_and_explicitly_partial() {
         .expect("the exact MNT TLV1117-18 must resolve (GREEN)");
     assert_eq!(model.id, "tlv1117_18");
     assert_eq!(model.params.get_f64("vout"), Some(1.8));
-    assert_eq!(model.params.get_f64("dropout_v"), Some(1.3));
-    assert_eq!(model.params.get_f64("iq_a"), Some(65.0e-6));
+    // TI TLV1117 SLVS561O Rev. O, §8.1.1 says this order code may ship
+    // legacy or new silicon. At IOUT = 800 mA the worst guaranteed maximum
+    // is therefore the legacy I-grade 1.4 V over TJ = -40..125 °C (§5.6).
+    assert_eq!(model.params.get_f64("dropout_v"), Some(1.4));
+    // Legacy fixed-output silicon is 5 mA typical; 65 µA is new-chip-only.
+    assert_eq!(model.params.get_f64("iq_a"), Some(5.0e-3));
     assert_eq!(model.ratings.max_current_a, Some(0.8));
     assert_eq!(model.ratings.max_voltage_v, Some(15.0));
     assert_eq!(model.ratings.max_junction_temp_c, Some(125.0));

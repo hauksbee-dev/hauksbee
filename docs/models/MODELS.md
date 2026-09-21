@@ -10,7 +10,7 @@ routes. The resolver records both the semantic source tier and the six storage
 layers; semantic tier orders sources first, while layer and specificity make
 selection deterministic inside one tier.
 
-Simple `vreg` cards may set `cout_min_f` and an optional `cout_esr_min_ohm`/`cout_esr_max_ohm` pair; fitted OUT-to-ground capacitance is summed and shortfalls violate an operating limit, while ESR remains a caveat because board files do not carry it and Hauksbee never guesses it.
+Simple `vreg` cards may set non-negative `cout_min_f` and an optional positive `cout_esr_min_ohm`/`cout_esr_max_ohm` pair. `cout_min_f = 0` records a sourced statement that no output capacitor is required for stability; omitting the field means the requirement is unknown. For positive minima, fitted OUT-to-ground capacitance is summed and shortfalls violate an operating limit. ESR remains a caveat because board files do not carry it and Hauksbee never guesses it.
 
 The four authoring routes:
 

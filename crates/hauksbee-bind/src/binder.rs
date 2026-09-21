@@ -7250,6 +7250,9 @@ mod tests {
         if let Some(vout) = vout {
             model.params.set_f64("vout", vout);
         }
+        // Synthetic ideal regulators have no physical loop or capacitor
+        // requirement; omitting this field would instead assert that it is unknown.
+        model.params.set_f64("cout_min_f", 0.0);
         model
     }
 
@@ -7351,10 +7354,40 @@ mod tests {
     #[test]
     fn simple_vreg_stamps_exact_voltage_between_output_and_return() {
         let lib = ModelLibrary::builtin();
-        for (case, card, vout, out, gnd, min_in_v, max_in_v) in [
-            ("card", Some("AMS1117-3.3"), 3.3, "OUT", "0", 4.499, 15.0),
-            ("offset", Some("LM7905"), -5.0, "OUT", "RET", 6.1, 25.0),
-            ("bare", None, 5.0, "0", "RET", 5.0, f64::INFINITY),
+        for (case, card, vout, out, gnd, dropout_v, min_in_v, max_in_v, warning_token) in [
+            (
+                "card",
+                Some("AMS1117-3.3"),
+                3.3,
+                "OUT",
+                "0",
+                Some(1.3),
+                4.699,
+                15.0,
+                Some("requires at least 22 µF output capacitance for stability"),
+            ),
+            (
+                "offset",
+                Some("LM7905"),
+                -5.0,
+                "OUT",
+                "RET",
+                Some(1.1),
+                6.1,
+                25.0,
+                Some("does not state the output-capacitor requirement"),
+            ),
+            (
+                "bare",
+                None,
+                5.0,
+                "0",
+                "RET",
+                None,
+                5.0,
+                f64::INFINITY,
+                None,
+            ),
         ] {
             let mut circuit = Circuit::new();
             let roles = HashMap::from([
@@ -7369,7 +7402,19 @@ mod tests {
             );
             let source = res.as_ref().and_then(|r| r.provenance.as_ref());
             let (outcome, warning, regs) = bind_u9(&model, source, &mut circuit, &roles);
-            assert!(warning.is_none(), "{case}");
+            match warning_token {
+                Some(token) => {
+                    let warning = warning
+                        .as_deref()
+                        .expect("the expected caveat must be present");
+                    assert!(
+                        warning.starts_with(Assumption::PARTIAL_MODEL_MARKER)
+                            && warning.contains(token),
+                        "{case}: {warning}"
+                    );
+                }
+                None => assert!(warning.is_none(), "{case}: {warning:?}"),
+            }
             assert!(
                 matches!(outcome, BindOutcome::Behavioral { device } if device == format!("vreg {vout:.1}V source")),
                 "{case}"
@@ -7382,7 +7427,7 @@ mod tests {
                 panic!("{case}: exactly one regulator is recorded");
             };
             assert_eq!((reg.reference.as_str(), reg.input), ("U9", roles["in"]));
-            assert_eq!((reg.source.0, reg.dropout_v), (0, card.map(|_| 1.1)));
+            assert_eq!((reg.source.0, reg.dropout_v), (0, dropout_v));
             assert!((reg.min_in_v - min_in_v).abs() < 1e-12, "{case}: {reg:?}");
             assert_eq!(reg.max_in_v, max_in_v, "{case}");
         }
@@ -7889,7 +7934,13 @@ mod tests {
     fn a_regulator_says_its_enable_is_not_modelled_and_a_plain_one_says_nothing() {
         let lib = ModelLibrary::builtin();
         for (value, expects_enable_caveat) in [("XC6204B332MR", true), ("LM7805", false)] {
-            let model = resolve_value(&lib, value, "");
+            let mut model = resolve_value(&lib, value, "");
+            if !expects_enable_caveat {
+                // TI LM340/LM7805 SNOSBT0L Rev. L, page 1 says no output
+                // capacitor is required for stability. Keep that vendor-specific
+                // fact local: the broad 7805 card also matches unrelated vendors.
+                model.params.set_f64("cout_min_f", 0.0);
+            }
             let mut c = comp("U1", value);
             let mut pins = vec![pin(pad_for(&model, "out").expect("an out pad"), 1)];
             if let Some(inp) = pad_for(&model, "in") {

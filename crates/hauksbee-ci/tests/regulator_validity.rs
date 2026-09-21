@@ -67,7 +67,7 @@ fn reason(r: &CiResult) -> String {
 #[test]
 fn regulator_headroom_decides_whether_the_setpoint_is_a_result() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // 5.0 V clears 3.399 + 1.1; 4.4 V clears 3.3 but NOT the real endpoint;
+    // 5.0 V clears 3.399 + 1.3; 4.4 V clears 3.3 but NOT the real endpoint;
     // 2.5 V is below the output itself.
     for (volts, supported) in [(5.0, true), (4.4, false), (2.5, false)] {
         let r = run(&spec_for(
@@ -80,7 +80,7 @@ fn regulator_headroom_decides_whether_the_setpoint_is_a_result() {
             assert_eq!(r.exit_code(), 0, "{volts} V: {:?}", r.results);
             assert!(vout.passed && !vout.invalid, "{volts} V: {vout:?}");
             // Supported is not CLEAN: an ideal source held at its setpoint,
-            // with only a typical-dropout headroom check, is QUALIFIED.
+            // with only a declared-dropout headroom check, is QUALIFIED.
             let map = r
                 .evidence
                 .iter()

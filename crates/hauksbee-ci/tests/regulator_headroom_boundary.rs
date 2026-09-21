@@ -5,10 +5,31 @@
 
 use crate::support;
 use hauksbee_ci::RunConfig;
+use hauksbee_ir::evidence::ModelUncertainty;
+use hauksbee_models::{ComponentQuery, ModelLibrary};
 use std::path::Path;
 
-/// AMS1117-3.3 spec-limit endpoint 3.399 V + its 1.1 V typical dropout.
-const MIN_IN_V: f64 = 4.499;
+fn minimum_input_v() -> f64 {
+    let resolved = ModelLibrary::builtin().resolve(&ComponentQuery::new(
+        None,
+        Some("AMS1117-3.3".into()),
+        None,
+    ));
+    let model = resolved.model.expect("fixture regulator card");
+    let upper_vout = resolved
+        .provenance
+        .as_ref()
+        .into_iter()
+        .flat_map(|source| source.uncertainty())
+        .find_map(|uncertainty| match uncertainty {
+            ModelUncertainty::Interval {
+                parameter, high, ..
+            } if parameter == "vout" => Some(*high),
+            _ => None,
+        })
+        .expect("AMS1117 card must preserve its upper output limit");
+    upper_vout + model.params.get_f64("dropout_v").expect("declared dropout")
+}
 
 fn exit_code_at(dir: &Path, volts: f64) -> i32 {
     let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regulator.board");
@@ -30,10 +51,11 @@ fn exit_code_at(dir: &Path, volts: f64) -> i32 {
 #[test]
 fn an_input_exactly_on_the_dropout_bound_is_supported() {
     let d = tempfile::tempdir().expect("tempdir");
+    let min_in_v = minimum_input_v();
     // The slack admits float noise, not a real shortfall: 100 uV under refuses.
     let seen = (
-        exit_code_at(d.path(), MIN_IN_V),
-        exit_code_at(d.path(), MIN_IN_V - 1e-4),
+        exit_code_at(d.path(), min_in_v),
+        exit_code_at(d.path(), min_in_v - 1e-4),
     );
     assert_eq!(seen, (0, 3), "equality must pass, a shortfall must refuse");
 }

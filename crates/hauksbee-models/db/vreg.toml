@@ -21,12 +21,16 @@ mpn_re = "(?i)^TLV1117-18(?:[A-Z0-9+._/-]*)?$"
 
 [models.params]
 vout = 1.8       # fixed output option, datasheet Recommended Operating Conditions
-dropout_v = 1.2 # maximum VDO at 800 mA, fixed-output new chip, Table 5-1
-# Source: TI TLV1117 SLVS561O, §5.3 Recommended Operating Conditions: ESR 2..500 mΩ.
-# No minimum COUT is specified there, so only the verified ESR window is recorded.
-cout_esr_min_ohm = 0.002
-cout_esr_max_ohm = 0.5
-iq_a = 65.0e-6  # typical fixed-output new-chip IQ at IOUT=0 mA, datasheet §5.6
+# The order code cannot identify the shipped die (datasheet §8.1.1 says either
+# legacy or new silicon may ship), so use the worst guaranteed 800 mA maximum:
+# 1.4 V for legacy I grade over TJ = -40..125 °C (§5.6, pp. 7-9).
+dropout_v = 1.4
+# The order code also cannot safely select the new-chip-only 2..500 mΩ ESR
+# range. Leave COUT/ESR unstated so the binder reports reduced fidelity rather
+# than claiming the unidentified legacy/new control loop has been checked.
+# Typical legacy fixed-output IQ is 5 mA for the C grade (§5.6); using the
+# new-chip-only 65 µA would understate the input current when legacy silicon ships.
+iq_a = 5.0e-3
 warning = "[partial model] TLV1117-18 nominal 1.8 V DC rail and sourced ratings are modeled; foldback current limit, thermal shutdown, dropout-vs-load, line/load regulation, and transients are not modeled"
 
 [models.pins]
@@ -957,7 +961,7 @@ value_re = "(?i)^TLV755?33P?[A-Z]{0,4}[0-9]?R?$"
 
 [models.params]
 vout      = 3.3      # +-1% max accuracy, -40 to +85 C, DBV package
-dropout_v = 0.238    # VDO max @ rated 500 mA, -40 to +85 C, TLV755P SBVS320D
+dropout_v = 0.238    # VDO max @ 500 mA, -40..125 C, 3.3 V DBV (non-DYD), §5.5
 # Source: TI TLV755P SBVS320D, Recommended Operating Conditions: effective COUT >= 1 uF.
 cout_min_f = 1.0e-6
 iq_a      = 25.0e-6  # IGND typ @ IOUT = 0, TJ = 25 C (33 uA max over -40 to

@@ -7281,7 +7281,11 @@ missing = ["measurement_registers"]
         for (volts, starved, says) in [
             (5.0, false, "declare the supply that feeds B"),
             (4.4, true, "+5V is 4.400 V above its return, with"),
-            (2.5, true, "needs (3.399 V upper output limit + 1.100 V"),
+            (
+                2.5,
+                true,
+                "needs (3.399 V upper output limit + 1.300 V declared dropout",
+            ),
         ] {
             let (mut sched, core) = regulator_sched(volts);
             sched.establish_regulation();
