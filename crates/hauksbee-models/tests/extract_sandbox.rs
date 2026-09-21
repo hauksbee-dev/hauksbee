@@ -11,6 +11,8 @@
 //! actually controls.
 
 use std::path::Path;
+#[cfg(unix)]
+use std::process::Command;
 
 /// A minimal PDF. Nothing in these tests reads it as a document.
 const STUB_PDF: &[u8] = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n";
@@ -92,6 +94,45 @@ fn the_answer_file_is_inside_the_sandbox() {
         answer.file_name().and_then(|n| n.to_str()),
         Some("model.toml")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_temp_root_has_one_canonical_workspace_path() {
+    use std::os::unix::fs::symlink;
+
+    let users_dir = tempfile::tempdir().unwrap();
+    let pdf = users_dir.path().join("part.pdf");
+    std::fs::write(&pdf, STUB_PDF).unwrap();
+
+    let temp_parent = tempfile::tempdir().unwrap();
+    let real_root = temp_parent.path().join("real-root");
+    std::fs::create_dir(&real_root).unwrap();
+    let linked_root = temp_parent.path().join("linked-root");
+    symlink(&real_root, &linked_root).unwrap();
+
+    let path = {
+        let ws = hauksbee_models::datasheet::sandbox_for_test_in(&pdf, &linked_root)
+            .expect("build sandbox through symlink root");
+        let canonical = ws.path().canonicalize().unwrap();
+        assert_eq!(ws.path(), canonical);
+        assert_eq!(ws.pdf, canonical.join("datasheet.pdf"));
+        assert_eq!(ws.answer_path(), canonical.join("model.toml"));
+        assert!(ws.pages.iter().all(|page| page.starts_with(&canonical)));
+
+        let status = Command::new("sh")
+            .args(["-c", "printf child-output > model.toml"])
+            .current_dir(ws.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(
+            std::fs::read_to_string(ws.answer_path()).unwrap(),
+            "child-output"
+        );
+        canonical
+    };
+    assert!(!path.exists(), "{} outlived the workspace", path.display());
 }
 
 #[test]

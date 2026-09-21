@@ -134,7 +134,12 @@ pub const AGENTS: [AgentSpec; 3] = [
         // codex's `--sandbox` level: writes confined to the sandbox, no network.
         permission_mode: "workspace-write",
         efforts: &["minimal", "low", "medium", "high", "xhigh"],
-        permission_modes: &["read-only", "workspace-write", "danger-full-access"],
+        permission_modes: &[
+            "read-only",
+            "workspace-write",
+            "approve-for-me",
+            "danger-full-access",
+        ],
         models: &["gpt-5.6-sol", "gpt-5.6", "gpt-5.5"],
     },
 ];
@@ -1360,6 +1365,10 @@ mod tests {
             ExtractConfig::default(),
             "a refused value leaves nothing behind"
         );
+        cfg.set("codex.permission_mode", "approve-for-me").unwrap();
+        assert_eq!(cfg.codex.permission_mode.as_deref(), Some("approve-for-me"));
+        cfg.set("codex.permission_mode", "").unwrap();
+        assert_eq!(cfg.codex.permission_mode, None);
         cfg.set_pair("claude-code.effort=max").unwrap();
         assert_eq!(cfg.claude_code.effort.as_deref(), Some("max"));
         cfg.set_pair("claude-code.effort=").unwrap();

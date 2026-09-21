@@ -1497,8 +1497,13 @@ mod tests {
     #[test]
     fn inconclusive_verdict_keeps_the_heads_up_pointer() {
         let mut r = PlainReport::new("signal-integrity");
-        r.unmodelled_critical = vec!["Q1".to_string()];
         r.heads_up.push(HeadsUp::note("USB pair off target"));
+        assert_eq!(
+            r.verdict(),
+            "No signal-integrity failures, but 1 thing worth a look (see below)."
+        );
+        assert!(r.render().contains("USB pair off target"));
+        r.unmodelled_critical = vec!["Q1".to_string()];
         let v = r.verdict();
         assert!(v.starts_with("INCONCLUSIVE"), "{v}");
         assert!(v.contains("1 thing worth a look (see below)"), "{v}");

@@ -678,7 +678,7 @@ export function SettingsView() {
                 />
               </Field>
             )}
-            {(selectedBackend === 'claude-code' || selectedBackend === 'agy') && (
+            {selectedBackend !== 'api' && (
               <Field label="Permission mode" hint={`blank = ${fields.permission || resolvedPermission(data.resolved, selectedBackend)}`}>
                 <select
                   data-testid="settings-permission-mode"
@@ -779,6 +779,7 @@ export function SettingsView() {
   )
 }
 
-function resolvedPermission(resolved: ExtractResolved, backend: 'claude-code' | 'agy'): string {
-  return (backend === 'claude-code' ? resolved.claude_code : resolved.agy).permission_mode ?? ''
+function resolvedPermission(resolved: ExtractResolved, backend: Exclude<BackendId, 'api'>): string {
+  if (backend === 'claude-code') return resolved.claude_code.permission_mode ?? ''
+  return resolved[backend].permission_mode ?? ''
 }

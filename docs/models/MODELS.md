@@ -142,6 +142,26 @@ The wrapper controls routing, authentication and charges; presets keep it.
 Missing/nonexecutable wrappers fail without fallback. Unset the command to
 restore the native CLI; ordinary defaults are unchanged.
 
+`backend check --send` checks an agent's access as well as connectivity: it
+must read the scratch prompt and write exactly `OK` to `model.toml`. An answer
+on stdout alone does not pass. The API check remains a connectivity call.
+A denied write is a backend-access failure, not evidence that the model cannot
+extract a datasheet. Scratch paths are canonicalized before launching the CLI.
+
+For an opt-in Claude Code automatic-permission trial, set
+`claude-code.permission_mode=auto`; unattended callers can add
+`extra_args = ["--permission-prompts", "none"]` in `[claude-code]`. Auto is not
+bypass mode: explicit denials still apply, and CLI version, account and model
+support determine availability. A successful read/write check alone does not
+prove the classifier was active. Keep the default until that is verified for
+your CLI-compatible wrapper. Codex CLI versions supporting `--approve-for-me`
+can opt into automatic approval review with `permission_mode = "approve-for-me"`
+in `[codex]`. Hauksbee emits that flag instead of `--sandbox`: the CLI selects
+workspace-write itself and rejects the two flags together. Do not append it to
+`extra_args` alongside a sandbox mode. This differs from deprecated `--full-auto`;
+check `codex exec --help` for support. Neither automatic reviewer is a promise
+that all filesystem reads are confined to the scratch directory.
+
 **Precedence**, per field, highest first: a command-line flag (`--backend`,
 `--model`, `--effort`, ...); a `HAUKSBEE_*` environment variable (below); this
 file; the built-in default. `hauksbee models backend show` prints exactly

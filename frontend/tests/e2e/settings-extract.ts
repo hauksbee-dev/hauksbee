@@ -25,6 +25,7 @@ import {
   consoleErrors, ok, settle, shotsInto, step, summarise, watchConsole, withFixture,
 } from './harness'
 import type { Browser } from 'playwright'
+import type { ExtractBackendsConfig } from '../../src/types/report'
 import { mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -99,7 +100,32 @@ async function main() {
       ok('clearing the command finishes before testing', !(await (await cleared).json()).config.agy.command)
       await shoot(page, '04-saved')
 
-      // ── 5. Test backend streams and reports ─────────────────────────────────
+      // ── 5. Codex permission mode is editable and persists ───────────────────
+      step('Codex approve-for-me saves and reloads')
+      await page.click('[data-testid="settings-backend-codex"]')
+      const permission = page.locator('[data-testid="settings-permission-mode"]')
+      ok('Codex renders the server-populated permission selector', await permission.isVisible())
+      ok('blank Codex permission uses the resolved default',
+        await permission.inputValue() === '' && (await permission.locator('option').allTextContents()).includes('approve-for-me'))
+      await permission.selectOption('approve-for-me')
+      const codexSave = page.waitForResponse(r => r.url().endsWith('/api/settings/extract') && r.request().method() === 'PUT')
+      await page.click('[data-testid="settings-save"]')
+      const codexResponse = await codexSave
+      const codexPayload = codexResponse.request().postDataJSON() as ExtractBackendsConfig
+      ok('Save sends approve-for-me in the Codex block', codexPayload.codex?.permission_mode === 'approve-for-me')
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await page.click('[data-testid="nav-settings"]')
+      await page.waitForSelector('[data-testid="settings-status"]')
+      await page.click('[data-testid="settings-backend-codex"]')
+      await page.click('[data-testid="settings-advanced-toggle"]')
+      ok('approve-for-me remains selected after reload',
+        await page.locator('[data-testid="settings-permission-mode"]').inputValue() === 'approve-for-me')
+      await page.click('[data-testid="settings-backend-api"]')
+      ok('the API backend has no permission selector',
+        await page.locator('[data-testid="settings-permission-mode"]').count() === 0)
+      await shoot(page, '05-codex-permission-saved')
+
+      // ── 6. Test backend streams and reports ─────────────────────────────────
       step('Test backend streams a reply')
       await page.click('[data-testid="settings-test"]')
       await page.waitForSelector('[data-testid="settings-test-done"]', { timeout: 15_000 })

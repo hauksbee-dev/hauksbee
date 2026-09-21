@@ -10,53 +10,43 @@ The plain report names each check it ran, states a verdict for each one in
 words a non-engineer can act on, says out loud where the analysis is
 incomplete, and closes by naming the next command. No struct field, JSON key,
 or Rust identifier appears anywhere in the text. Both verdict shapes are
-exercised: a fully-modelled board earns its clean bill, and a board with an
-unmodelled active IC is refused one in the INCONCLUSIVE vocabulary.
+exercised: Watchy's identity-only SR2 supervisor is honestly refused a clean
+bill, while an existing fully executable board earns one.
 """
 
 [[step]]
-name = "the whole static suite in plain language"
+name = "Watchy's unsupported active IC is refused a clean bill"
 do = "run"
 cmd = ["{bin}/hauksbee", "run", "{repo}/crates/hauksbee-ci/examples/boards/watchy.kicad_pcb", "--check", "--plain"]
 exit = 0
 max_seconds = 30
-# Every section a --check pass owes the reader, each with its own verdict line.
+# Every section a --check pass owes the reader, plus the honesty vocabulary on
+# the real board whose SR2 supervisor has identity metadata but no executable
+# behaviour. Static copper remains valid; model-dependent claims do not.
 contains = [
   "== Copper spacing (DRC) ==",
   "== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==",
   "== Signal integrity ==",
   "== What this pass did not check ==",
+  "active IC(s) are unresolved/open",
+  "INCOMPLETE",
   "Why it matters:",
   "What to do:",
-  # The SI heads-up notes survive underneath the clean verdict: a clean bill
-  # must not swallow the observations worth a look.
   "Heads up (worth knowing, not a failure):",
-  # And it must hand the reader the next command rather than stopping at a verdict.
   "hauksbee-ci init <board>",
 ]
 matches = [
-  # Per-section verdicts, worded for a person. Watchy ships with its own
-  # .kicad_pro (min clearance 0.15 mm), under which the copper is clean, so
-  # the DRC section reads healthy rather than listing warnings.
   "^Looks healthy: no copper spacing \\(drc\\) problems found\\.$",
-  # Every active IC on this board is modelled (the last two, the SR2 reset
-  # supervisor and the BMA423, got curated entries), so the model-dependent
-  # sections have EARNED their clean bills: no INCONCLUSIVE hedging where the
-  # evidence is complete would be the opposite failure of a vacuous clean.
-  "^Looks healthy: no connectivity problems found\\.$",
-  "^No signal-integrity failures, but [0-9]+ things? worth a look \\(see below\\)\\.$",
-  # The closing line owns the same claim.
-  "^VERDICT: clean: 0 serious, [0-9]+ worth a look",
+  # The model-dependent sections must say INCONCLUSIVE and name U1, rather than
+  # turning an identity-only SR2 card into a behavioural clean bill.
+  "^INCONCLUSIVE: 1 current-carrying / active part\\(s\\) have no model \\(U1\\)",
+  # Informational SI observations must remain visible under the inconclusive
+  # verdict even though Watchy can no longer exercise the clean wording.
+  "^INCONCLUSIVE: .* Plus 3 things worth a look \\(see below\\)\\.$",
+  "^VERDICT: inconclusive: 0 serious, 3 worth a look; 1 current-carrying / active part\\(s\\) have no model \\(U1\\)",
+  "run --report for the (bind table|[0-9]+-part bind table)",
 ]
-# The internals must not leak into the persona surface. These are the real
-# identifiers the JSON/struct layer uses; in plain text they are noise a
-# non-engineer cannot act on. A fully-bound board must also NOT carry the
-# incomplete-analysis banner: hedging over nothing erodes the same trust a
-# vacuous clean does.
 not_matches = [
-  "INCONCLUSIVE",
-  "INCOMPLETE",
-  "active IC\\(s\\) are unresolved/open",
   "critical_parts_bound",
   "active_path_unresolved",
   "serious_count",
@@ -69,47 +59,37 @@ not_matches = [
   "unwrap\\(\\)",
   "panicked at",
   "RUST_BACKTRACE",
-  # A doubled article is the classic template-assembly tell.
   "\\ba a\\b",
   "\\bthe the\\b",
 ]
 
 [[step]]
-name = "a board with an unmodelled active IC is refused a clean bill"
+name = "an executable existing board earns a clean bill"
 do = "run"
-cmd = ["{bin}/hauksbee", "run", "{repo}/crates/hauksbee-engine/tests/fixtures/plain_check_open_active_ic.kicad_pcb", "--check", "--plain"]
+cmd = ["{bin}/hauksbee", "run", "{repo}/crates/hauksbee-ci/examples/boards/blinky.kicad_pcb", "--check", "--plain"]
 exit = 0
 max_seconds = 30
-# The honesty vocabulary, on the board that has the condition. This board (the
-# engine's own plain-check fixture) exists to hold one unbound active IC, so
-# the INCONCLUSIVE surface stays under test now that the watchy sample earned
-# a full bind. One composition this fixture cannot produce: INCONCLUSIVE with
-# SI heads-up notes underneath ("Plus N things worth a look"), because the
-# board is too bare to generate a heads-up. That never-bury rule is pinned at
-# the unit layer instead: plain.rs, inconclusive_verdict_keeps_the_heads_up_pointer.
 contains = [
-  # The honesty banner: an active IC has no model, and the report says so up
-  # front rather than reading healthy.
-  "active IC(s) are unresolved/open",
-  "INCOMPLETE",
+  "== Copper spacing (DRC; DEFAULT rules, not your rules) ==",
+  "== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==",
+  "== Signal integrity ==",
+  "== What this pass did not check ==",
+  "hauksbee-ci init <board>",
 ]
 matches = [
-  # The copper check reads the layout and needs no device model, so it alone
-  # may still claim health while an IC is unmodelled.
   "^Looks healthy: no copper spacing \\(drc\\) problems found\\.$",
-  # The model-dependent sections must each say INCONCLUSIVE, count the
-  # unmodelled parts, name them, and say what unlocks a conclusive verdict.
-  "^INCONCLUSIVE: [0-9]+ current-carrying / active part\\(s\\) have no model \\(U[0-9]+",
-  # And the report's closing line refuses the clean claim too.
-  "^VERDICT: inconclusive: 0 serious, [0-9]+ worth a look; [0-9]+ current-carrying / active part\\(s\\) have no model",
-  # The banner points at `--report` for the bind table; the pointer must not
-  # invent a count the table cannot honour.
-  "run --report for the (bind table|[0-9]+-part bind table)",
+  "^Looks healthy: no connectivity problems found\\.$",
+  "^Looks healthy: no signal-integrity problems found\\.$",
+  "^VERDICT: clean: 0 serious, 0 worth a look$",
 ]
 not_matches = [
+  "INCONCLUSIVE",
+  "INCOMPLETE",
+  "active IC\\(s\\) are unresolved/open",
   "critical_parts_bound",
   "active_path_unresolved",
   "serious_count",
+  "actionable_count",
   "schema_version",
   "panicked at",
   "\\ba a\\b",
@@ -124,8 +104,11 @@ exit = 0
 max_seconds = 30
 contains = ["bind summary:", "Critical active devices discovered:"]
 matches = [
-  "^[0-9]+ of [0-9]+ non-ignored components resolved",
+  "^60 of 67 non-ignored components resolved",
   # The suggestion --check --plain makes about --report has to be true of the
-  # table --report actually prints; this pins the table's real size.
-  "^bind summary: extracted [0-9]+ non-ignored parts; [0-9]+ have executable/fallback models",
+  # table --report actually prints; pin both Watchy's whole bind and the
+  # identity-only SR2 gap rather than accepting an arbitrary count.
+  "^bind summary: extracted 67 non-ignored parts; 60 have executable/fallback models\\. Critical active devices discovered: 6; executable behavioural models: 5/6",
+  "^.*U1.*SR2HARU.*sr2.*UNRESOLVED \\(identity matched mode",
+  "^.*U1: U1 \\(SR2HARU\\): sr2 has no generic executable device behavior; only identity and sourced metadata are available; identity matched model 'sr2', but the part remains OPEN$",
 ]

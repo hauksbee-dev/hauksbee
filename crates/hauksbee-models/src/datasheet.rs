@@ -130,10 +130,11 @@ impl Workspace {
     /// An empty sandbox with no datasheet in it, for a connectivity check that
     /// runs the backend on a one-line prompt. Same isolation as a real run.
     pub fn scratch() -> Result<Self> {
-        let dir = tempfile::Builder::new()
-            .prefix("hauksbee-extract-check-")
-            .tempdir()
-            .context("creating the check sandbox")?;
+        let dir = workspace_tempdir(
+            &std::env::temp_dir(),
+            "hauksbee-extract-check-",
+            "creating the check sandbox",
+        )?;
         Ok(Workspace {
             pdf: dir.path().join("datasheet.pdf"),
             dir,
@@ -156,20 +157,39 @@ impl Workspace {
     }
 }
 
+/// Create a temporary directory whose retained path is the canonical absolute
+/// path used by every file operation, child cwd, and provider path argument.
+fn workspace_tempdir(root: &Path, prefix: &str, context: &str) -> Result<tempfile::TempDir> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("canonicalizing temporary root {}", root.display()))?;
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(root)
+        .with_context(|| context.to_string())
+}
+
 /// Build a sandbox, for the tests that check the boundary holds.
 ///
 /// The boundary is the whole security story of an agent running full-auto, so
 /// it is asserted rather than trusted. Exposed for `tests/extract_sandbox.rs`.
 pub fn sandbox_for_test(pdf: &Path) -> Result<Workspace> {
-    prepare_workspace(pdf)
+    prepare_workspace_in(pdf, &std::env::temp_dir())
+}
+
+/// Build a sandbox under an explicit temporary root, for path-invariant tests.
+#[doc(hidden)]
+pub fn sandbox_for_test_in(pdf: &Path, root: &Path) -> Result<Workspace> {
+    prepare_workspace_in(pdf, root)
 }
 
 /// Build the sandbox: copy the PDF in, render its pages, and write the text.
 fn prepare_workspace(pdf: &Path) -> Result<Workspace> {
-    let dir = tempfile::Builder::new()
-        .prefix("hauksbee-extract-")
-        .tempdir()
-        .context("creating the extraction sandbox")?;
+    prepare_workspace_in(pdf, &std::env::temp_dir())
+}
+
+fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
+    let dir = workspace_tempdir(root, "hauksbee-extract-", "creating the extraction sandbox")?;
 
     let copied = dir.path().join("datasheet.pdf");
     std::fs::copy(pdf, &copied)
@@ -2255,11 +2275,13 @@ fn require_tool(resolved: &Resolved) -> Result<()> {
 /// always named rather than inherited: a CLI's own default varies by plan and
 /// config and would silently decide how good the extraction is.
 ///
-///   * codex: `exec --sandbox <mode>` (writes confined to the sandbox, no
-///     network; reads are NOT confined, see `Workspace`), `--skip-git-repo-check`
-///     because the sandbox deliberately is not a repo, `--cd` so it opens the
-///     PDF directly, `--output-last-message` so a narrating reply does not
-///     leave two TOML blocks to choose between, and one `--image` per page.
+///   * codex: `exec --sandbox <mode>`, or `--approve-for-me` when that mode is
+///     selected (automatic review starts with workspace-write). By default writes
+///     are workspace-confined and network is disabled; other modes or approved
+///     escalations can relax this. Reads are not confined; see `Workspace`.
+///     `--skip-git-repo-check` is needed because the
+///     sandbox deliberately is not a repo, `--cd` makes it open the PDF directly,
+///     `--output-last-message` keeps narration separate, and each page is an image.
 ///   * claude: `-p --permission-mode <mode> --no-session-persistence`: a
 ///     datasheet run is not a conversation anyone resumes, and a transcript
 ///     per extraction would keep the datasheet's text around after the
@@ -2283,18 +2305,16 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
                 cmd.args(["-p", profile]);
             }
             let effort = format!("model_reasoning_effort=\"{}\"", a.effort);
-            cmd.args([
-                "--model",
-                &a.model,
-                "-c",
-                &effort,
-                "--sandbox",
-                &a.permission_mode,
-            ])
-            .args(["--skip-git-repo-check", "--cd"])
-            .arg(ws.path())
-            .arg("--output-last-message")
-            .arg(ws.path().join("last-message.txt"));
+            cmd.args(["--model", &a.model, "-c", &effort]);
+            if a.permission_mode == "approve-for-me" {
+                cmd.arg("--approve-for-me");
+            } else {
+                cmd.args(["--sandbox", &a.permission_mode]);
+            }
+            cmd.args(["--skip-git-repo-check", "--cd"])
+                .arg(ws.path())
+                .arg("--output-last-message")
+                .arg(ws.path().join("last-message.txt"));
             for page in &ws.pages {
                 cmd.arg("--image").arg(page);
             }
@@ -2365,16 +2385,21 @@ pub fn smoke_test(resolved: &Resolved, progress: &mut dyn FnMut(&str)) -> Result
         resolved.model()
     ));
     let prompt = format!("{PROMPT} Write that word to model.toml as well.");
-    let stdout = run_agent_once(resolved, &prompt, &ws)?;
-    let text = std::fs::read_to_string(ws.answer_path())
-        .ok()
-        .filter(|t| !t.trim().is_empty())
-        .unwrap_or(stdout);
+    run_agent_once(resolved, &prompt, &ws)?;
+    let text = std::fs::read_to_string(ws.answer_path()).with_context(|| {
+        format!(
+            "{} answered but failed the sandbox read/write check: model.toml was not created",
+            resolved.backend.label()
+        )
+    })?;
     let reply = text.trim();
-    if reply.is_empty() {
-        bail!("the backend ran but answered nothing");
+    if reply != "OK" {
+        bail!(
+            "{} failed the sandbox read/write check: model.toml must contain exactly OK",
+            resolved.backend.label()
+        );
     }
-    Ok(reply.chars().take(200).collect())
+    Ok(reply.to_string())
 }
 
 /// Run one sandboxed agent invocation to completion and return its stdout.
@@ -2430,9 +2455,10 @@ fn run_cli_agent(
 /// beside the PDF (codex also gets them attached with `--image`), so one
 /// pointer serves every CLI (agy gets it as the `--print` value instead).
 const AGENT_POINTER: &[u8] = b"Read prompt.md in your working directory and follow it exactly. \
-    The rendered datasheet pages (page-*.png) and datasheet.pdf are in the same directory; \
-    read values off the page images for anything that lives in a table or a pinout. \
-    Write your answer to model.toml.";
+    The supplied files and output location are in that working directory; use the file tools \
+    available to you, and report any denied required read or write instead of claiming success. \
+    Read values off the rendered page images (page-*.png) for anything that lives in a table \
+    or pinout, with datasheet.pdf available in the same directory. Write your answer to model.toml.";
 
 /// Poll a spawned CLI agent to completion, killing it at `CLI_BACKEND_TIMEOUT`,
 /// and return its stdout. On a non-zero exit the error quotes the last few
@@ -3191,7 +3217,7 @@ addr_mask = 0x7f
         let command = dir.path().join("custom wrapper");
         std::fs::write(
             &command,
-            "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \"$@\"\nprintf 'wrapper stderr' >&2\n",
+            "#!/bin/sh\ncat >/dev/null\nif grep -q 'connectivity check' prompt.md; then printf 'OK\\n' > model.toml; fi\nprintf '%s\\n' \"$@\"\nprintf 'wrapper stderr' >&2\n",
         )
         .unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -3207,33 +3233,97 @@ addr_mask = 0x7f
         assert_eq!(which_path(command.to_str().unwrap()), Some(command.clone()));
         require_tool(&resolved).unwrap();
         let ws = Workspace::scratch().unwrap();
-        let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
-        assert_eq!(
-            output.lines().collect::<Vec<_>>(),
-            [
-                "-p",
-                "--output-format",
-                "text",
-                "--permission-mode",
-                "acceptEdits",
-                "--model",
-                "gpt-5.6-sol",
-                "--effort",
-                "high",
-                "--no-session-persistence"
-            ]
-        );
+        for mode in ["acceptEdits", "auto", "dontAsk", "plan"] {
+            resolved.claude_code.permission_mode = mode.to_string();
+            let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
+            assert_eq!(
+                output.lines().collect::<Vec<_>>(),
+                [
+                    "-p",
+                    "--output-format",
+                    "text",
+                    "--permission-mode",
+                    mode,
+                    "--model",
+                    "gpt-5.6-sol",
+                    "--effort",
+                    "high",
+                    "--no-session-persistence"
+                ]
+            );
+        }
         assert_eq!(
             std::fs::read_to_string(ws.path().join("claude-code-stderr.log")).unwrap(),
             "wrapper stderr"
         );
+
+        resolved.backend = Backend::Codex;
+        resolved.codex.command = command.to_str().unwrap().into();
+        resolved.codex.profile = Some("trial-profile".into());
+        resolved.codex.model = "configured-model".into();
+        resolved.codex.effort = "xhigh".into();
+        resolved.codex.extra_args = vec!["--configured-extra".into()];
+        for (mode, permission_args) in [
+            ("read-only", vec!["--sandbox", "read-only"]),
+            ("workspace-write", vec!["--sandbox", "workspace-write"]),
+            ("approve-for-me", vec!["--approve-for-me"]),
+        ] {
+            resolved.codex.permission_mode = mode.into();
+            let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
+            let mut expected = vec![
+                "exec".to_string(),
+                "-p".into(),
+                "trial-profile".into(),
+                "--model".into(),
+                "configured-model".into(),
+                "-c".into(),
+                "model_reasoning_effort=\"xhigh\"".into(),
+            ];
+            expected.extend(permission_args.into_iter().map(str::to_string));
+            expected.extend([
+                "--skip-git-repo-check".into(),
+                "--cd".into(),
+                ws.path().display().to_string(),
+                "--output-last-message".into(),
+                ws.path().join("last-message.txt").display().to_string(),
+                "--configured-extra".into(),
+            ]);
+            let actual = output.lines().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(actual, expected, "codex permission mode {mode}");
+            assert_eq!(
+                actual.contains(&"--approve-for-me".into()),
+                mode == "approve-for-me"
+            );
+            assert_eq!(
+                actual.contains(&"--sandbox".into()),
+                mode != "approve-for-me"
+            );
+        }
+        resolved.backend = Backend::ClaudeCode;
         let relative = command
             .strip_prefix(std::env::current_dir().unwrap())
             .unwrap();
         resolved.claude_code.command = relative.to_str().unwrap().into();
-        assert!(smoke_test(&resolved, &mut |_| {})
-            .unwrap()
-            .contains("gpt-5.6-sol"));
+        assert_eq!(smoke_test(&resolved, &mut |_| {}).unwrap(), "OK");
+
+        std::fs::write(
+            &command,
+            "#!/bin/sh\ncat >/dev/null\nprintf 'not OK\\n' > model.toml\n",
+        )
+        .unwrap();
+        let invalid = smoke_test(&resolved, &mut |_| {}).unwrap_err().to_string();
+        assert!(
+            invalid.contains("must contain exactly OK"),
+            "unexpected error: {invalid}"
+        );
+
+        std::fs::write(&command, "#!/bin/sh\ncat >/dev/null\nprintf 'OK\\n'\n").unwrap();
+        let denied = smoke_test(&resolved, &mut |_| {}).unwrap_err().to_string();
+        assert!(
+            denied.contains("sandbox read/write check") && denied.contains("model.toml"),
+            "unexpected error: {denied}"
+        );
+
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(which_path(command.to_str().unwrap()).is_none());
         std::fs::remove_file(&command).unwrap();
