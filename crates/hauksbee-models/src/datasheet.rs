@@ -867,19 +867,21 @@ fn extract_pdf_text(path: &Path) -> Result<String> {
 
 fn extract_pdf_pages_text(path: &Path) -> Result<Vec<PdfPageText>> {
     let text = pdftotext(path, true)?;
-    let pages: Vec<PdfPageText> = text
-        .split('\u{000c}')
-        .enumerate()
-        .filter(|(index, page)| *index == 0 || !page.is_empty())
-        .map(|(index, page)| PdfPageText {
-            number: index + 1,
-            text: page.to_string(),
-        })
-        .collect();
+    let pages = split_pdf_pages_text(&text);
     if pages.is_empty() {
         bail!("the PDF text layer contained no pages");
     }
     Ok(pages)
+}
+
+fn split_pdf_pages_text(text: &str) -> Vec<PdfPageText> {
+    text.split_terminator('\u{000c}')
+        .enumerate()
+        .map(|(index, text)| PdfPageText {
+            number: index + 1,
+            text: text.to_string(),
+        })
+        .collect()
 }
 
 const PAGE_TOPICS: &[(&str, &[&str])] = &[
@@ -905,6 +907,10 @@ const PAGE_TOPICS: &[(&str, &[&str])] = &[
             "package pinout",
             "top view",
         ],
+    ),
+    (
+        "functional description or function table",
+        &["functional description", "function table", "truth table"],
     ),
     (
         "application information or programming equations",
@@ -1015,6 +1021,7 @@ fn select_relevant_pages(pages: &[PdfPageText], limit: usize) -> Vec<SelectedPag
                         "recommended operating conditions" | "absolute maximum ratings" => 80_000,
                         "switching characteristics" => 70_000,
                         "electrical characteristics" => 60_000,
+                        "functional description or function table" => 55_000,
                         "pin functions or package pinout" => 50_000,
                         "application information or programming equations" => 40_000,
                         _ => 0,
@@ -1791,6 +1798,16 @@ fn ratings_hint_for_kind(kind: &str) -> &'static str {
   max_voltage_v       # maximum input voltage (VIN abs max)
   max_junction_temp_c # TJ maximum junction temperature"
         }
+        "digital" | "shift_register" => {
+            "\
+  max_pin_current_a   # per-pin source/sink absolute limit
+  max_current_a       # whole-device or supply/ground current limit, not per-pin
+  max_voltage_v       # applicable maximum supply/terminal voltage stress
+  max_power_w         # package-specific total dissipation, when stated
+  max_junction_temp_c # TJ maximum junction temperature
+  theta_ja_c_per_w    # selected package/board/airflow condition only
+  theta_jc_c_per_w    # selected package and stated case reference only"
+        }
         _ => {
             "\
   max_current_a       # if a continuous current limit is stated
@@ -1866,6 +1883,13 @@ binder does not read them. For supply accounting it instead finds `[models.pins]
 ROLE names `vcc` or `vdd` and `gnd` or `vss`, so map those roles consistently.
 Use indexed functional roles (`a1`, `y1`, etc.) consistently for repeated
 channels; do not collapse multiple gates onto generic `in`/`out`.
+Choose `voh`, `vol`, `vih`, and `vil` at one cited supply/load/temperature corner;
+do not mix corners. State whether each source value is typical or guaranteed and
+that fixed simulation levels are not universal datasheet bounds. Inputs decide
+low at or below `vil`, high at or above `vih`, and hold their previous state in
+between: this model has hysteresis even when the datasheet calls that band
+undefined. `tpd_s` is metadata today; digital transitions occur without applying
+it, so say that propagation delay and timing races are not modeled.
 If a selected package's pad function is unresolved, keep the pad as
 `unknown_pad_<identifier>` and mark the ambiguity in its TOML comment. If the
 package variant itself is unresolved, do not combine variants or guess a map:
@@ -2906,6 +2930,57 @@ mod tests {
     }
 
     #[test]
+    fn pdf_pages_keep_interior_blanks_but_not_the_trailing_sentinel() {
+        let pages = split_pdf_pages_text("first\u{000c}\u{000c}third\u{000c}");
+        assert_eq!(
+            pages.iter().map(|page| page.number).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| page.text.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "", "third"]
+        );
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| page.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\u{000c}"),
+            "first\u{000c}\u{000c}third"
+        );
+    }
+
+    #[test]
+    fn page_selection_includes_function_tables_within_the_render_budget() {
+        let headings = [
+            "Features",
+            "Recommended Operating Conditions",
+            "Absolute Maximum Ratings",
+            "Switching Characteristics",
+            "Electrical Characteristics",
+            "Pin Functions",
+            "Functional Description",
+            "Application Information",
+        ];
+        let pages = headings
+            .iter()
+            .enumerate()
+            .map(|(index, text)| PdfPageText {
+                number: index + 1,
+                text: (*text).into(),
+            })
+            .collect::<Vec<_>>();
+        let selected = select_relevant_pages(&pages, MAX_RENDERED_PAGES);
+        assert_eq!(
+            selected.iter().map(|page| page.number).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5, 6, 7]
+        );
+    }
+
+    #[test]
     fn prompt_carries_kind_specific_guidance() {
         let bjt = build_prompt("BC847", "bjt_npn", "x");
         assert!(bjt.contains("is, bf, nf"));
@@ -2940,6 +3015,10 @@ mod tests {
                 prompt.contains("currently metadata; the executable\nbinder does not read them")
             );
             assert!(prompt.contains("explicit NCs"));
+            assert!(prompt.contains("max_pin_current_a"));
+            assert!(prompt.contains("whole-device or supply/ground current limit"));
+            assert!(prompt.contains("hold their previous state"));
+            assert!(prompt.contains("`tpd_s` is metadata today"));
             assert!(!prompt.contains("can be given\n  any descriptive name, or left out"));
         }
 
