@@ -444,6 +444,8 @@ RULES:
 3. Output ONLY the TOML, starting with `[sensor]`; no prose, no markdown fences.
 4. Use only values stated in the datasheet; do not invent register addresses.
 
+{source_quantity_guidance}
+
 DATASHEET TEXT (truncated):
 {datasheet_text_begin}
 {pdf_text}
@@ -454,6 +456,7 @@ OUTPUT (TOML only, starting with [sensor]):
         part = part,
         bus = bus,
         bus_specifics = bus_specifics,
+        source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
         datasheet_text_begin = DATASHEET_TEXT_BEGIN,
         datasheet_text_end = DATASHEET_TEXT_END,
         pdf_text = truncate_to_chars(&pdf_text, 40_000),
@@ -1248,6 +1251,26 @@ const DATASHEET_TEXT_BEGIN: &str = "<<<HAUKSBEE_DATASHEET_TEXT_BEGIN>>>";
 const DATASHEET_TEXT_END: &str = "<<<HAUKSBEE_DATASHEET_TEXT_END>>>";
 const PDF_TEXT_UNAVAILABLE: &str = "<<<HAUKSBEE_PDF_TEXT_UNAVAILABLE>>>";
 
+const SOURCE_QUANTITY_GUIDANCE: &str = r#"SOURCE QUANTITIES:
+- Define each destination quantity and its units before matching a datasheet row to it.
+- A typical value is not a guaranteed limit. A one-sided limit is not a two-sided interval.
+- Keep every number with its stated test conditions, supply, load, temperature, package,
+  and min/typ/max column; do not transplant it to another condition.
+- Omit unsupported facts, or mark them explicitly unknown only where the destination
+  schema provides that representation. Never invent a field or uncertainty schema."#;
+
+const PIN_ROLE_GUIDANCE: &str = r#"The listed names are canonical electrical aliases, not an exhaustive list of valid pin
+functions. I/O direction alone is not a function. For regulators only, `in`, `out`,
+and `gnd` mean supply input, regulated output, and ground; do not use them as generic
+input/output labels. Preserve source-named switching, programming, NC, rail, and
+exposed-pad functions as stable lowercase roles instead of coercing them into those
+aliases. Keep an executable binder's canonical electrical alias distinct from any
+additional freeform source name (record additional names in the pad comment); a
+freeform role does not imply an executable primitive binds it. Preserve every physical
+pad identifier exactly, including alphanumeric and exposed-pad identifiers. An
+identity-only card may use `unknown_pad_<identifier>` with a comment, but may not invent
+a pin role."#;
+
 /// Whether the API backend has anything to work from: it cannot open the local
 /// PDF, so a prompt carrying the no-text sentinel would reach it with nothing
 /// but the sentinel itself.
@@ -1390,6 +1413,8 @@ PIN ROLE NAMES for kind="{kind}": {pin_roles}
   and preserve other stated functions/aliases in that pad's TOML comment. Never
   merge or omit a pad merely because its function is unknown.
 
+{pin_role_guidance}
+
 For kind="{kind}", the required params are:
 {required_params}
 {digital_hint}
@@ -1421,6 +1446,8 @@ WHERE TO LOOK AND HOW TO READ IT:
   programming equations. Cite the equation and every stated validity condition.
 - Before answering, re-read every cited row and footnote, then double-check its
   units, sign, package variant, test bias, and min/typ/max column.
+
+{source_quantity_guidance}
 
 PIN NUMBERING, read this before you fill in [models.pins]:
 
@@ -1473,14 +1500,19 @@ IMPORTANT RULES:
      unit = "<unit>"
      kind = "specification-limits"
      basis = "<table/curve citation>"
-   If no defensible interval is published, add one explicit unknown record:
+   Parameter specification intervals and one-sided unknowns are independent
+   records; they describe source limits for that parameter, not model-form error.
+   Always add a separate record for model error. If the source publishes validated
+   model-error bounds, preserve them as `parameter = "model"`, `status = "interval"`,
+   and `kind = "empirical-error"`. Otherwise emit:
      [[models.source.uncertainty]]
      status = "unknown"
      parameter = "model"
      reason = "datasheet publishes no validated model error interval"
-   A min/typ row without a finite published max is NOT a two-sided interval:
-   emit unknown. Never invent a percentage, derive a bound from a typical
-   value, or substitute a model clamp for a published guarantee.
+   A min/typ row without a finite published max is NOT a two-sided parameter
+   interval: represent that parameter as unknown. Never invent a percentage,
+   derive a bound from a typical value, or substitute a model clamp for a
+   published guarantee.
 1. Add a comment on each param/rating line citing where in the datasheet you found
    the value, e.g.: `# Source: Table 6.3, typ column`
 2. Use only values explicitly stated in the datasheet; do NOT guess. For SPICE
@@ -1528,6 +1560,8 @@ OUTPUT (TOML only, starting with [[models]]):
         ratings_hint = ratings_hint_for_kind(kind),
         behavioral_hint = behavioral_hint_for_kind(kind),
         digital_hint = digital_hint_for_kind(kind),
+        pin_role_guidance = PIN_ROLE_GUIDANCE,
+        source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
         example_cards = example_cards,
     )
 }
@@ -1885,7 +1919,10 @@ Use indexed functional roles (`a1`, `y1`, etc.) consistently for repeated
 channels; do not collapse multiple gates onto generic `in`/`out`.
 Choose `voh`, `vol`, `vih`, and `vil` at one cited supply/load/temperature corner;
 do not mix corners. State whether each source value is typical or guaranteed and
-that fixed simulation levels are not universal datasheet bounds. Inputs decide
+that fixed simulation levels are not universal datasheet bounds. VT+ and VT- are
+static switching thresholds; do not substitute dynamic or noise values. Only when
+the requested scenario needs a guaranteed transition bound, use VT+ maximum for
+a high-going transition and VT- minimum for a low-going transition. Inputs decide
 low at or below `vil`, high at or above `vih`, and hold their previous state in
 between: this model has hysteresis even when the datasheet calls that band
 undefined. `tpd_s` is metadata today; digital transitions occur without applying
@@ -3019,6 +3056,10 @@ mod tests {
             assert!(prompt.contains("whole-device or supply/ground current limit"));
             assert!(prompt.contains("hold their previous state"));
             assert!(prompt.contains("`tpd_s` is metadata today"));
+            assert!(prompt.contains("static switching thresholds; do not substitute dynamic"));
+            assert!(prompt.contains("requested scenario needs a guaranteed transition bound"));
+            assert!(prompt.contains("VT+ maximum"));
+            assert!(prompt.contains("VT- minimum"));
             assert!(!prompt.contains("can be given\n  any descriptive name, or left out"));
         }
 
@@ -3368,9 +3409,28 @@ addr_mask = 0x7f
     fn every_supported_kind_binds_and_has_parameter_guidance() {
         let generic = required_params_for_kind("__definitely_not_a_kind__");
         for kind in SUPPORTED_KINDS {
-            if is_sensor_kind(kind) {
+            let sensor = is_sensor_kind(kind);
+            let prompt = if sensor {
+                build_sensor_prompt("SOURCE_FIXTURE", kind, "fixture text")
+            } else {
+                build_prompt("SOURCE_FIXTURE", kind, "fixture text")
+            };
+            assert_eq!(
+                prompt.matches(SOURCE_QUANTITY_GUIDANCE).count(),
+                1,
+                "{kind}"
+            );
+            assert!(!prompt.contains("{source_quantity_guidance}"));
+            if sensor {
+                assert!(!prompt.contains("models.source"), "{kind}");
                 continue;
             }
+            assert!(prompt.contains(PIN_ROLE_GUIDANCE), "{kind}");
+            assert!(prompt.contains("I/O direction alone is not a function"));
+            assert!(prompt.contains("Always add a separate record for model error"));
+            assert!(prompt.contains("kind = \"empirical-error\""));
+            assert!(prompt.contains("parameter = \"model\""));
+            assert!(!prompt.contains("If no defensible interval is published"));
             let base = behavioral_family_base_kind(kind).unwrap_or(kind);
             assert!(
                 kind_is_legal(base),
