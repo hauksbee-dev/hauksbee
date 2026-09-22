@@ -1375,15 +1375,17 @@ max_v = 2.0
 basis = "Recommended Operating Conditions, table and row"
 
 PIN ROLE NAMES for kind="{kind}": {pin_roles}
-  Use these exact spellings. They are looked up by exact string, so "output"
-  instead of "out", or "ground" instead of "gnd", makes the part bind OPEN: it
-  contributes nothing to the circuit and every result on its nets is wrong.
-  A pin with no role in the list (a NC, a tab, a second ground) can be given
-  any descriptive name, or left out.
+  Use these exact spellings where listed. They are looked up by exact string, so
+  "output" instead of "out", or "ground" instead of "gnd", can make the part
+  bind OPEN. Map every physical pad identity in the selected package, including
+  explicit NCs, exposed pads, and repeated supplies/grounds. Use one stable
+  lowercase role per pad (`_n` for active-low), use it verbatim everywhere else,
+  and preserve other stated functions/aliases in that pad's TOML comment. Never
+  merge or omit a pad merely because its function is unknown.
 
 For kind="{kind}", the required params are:
 {required_params}
-
+{digital_hint}
 [models.ratings]: pull these from the datasheet's "absolute maximum ratings" /
 "limiting values" table. Include every field the datasheet gives a number for;
 omit a field entirely if the datasheet does not state it (do NOT invent it):
@@ -1518,6 +1520,7 @@ OUTPUT (TOML only, starting with [[models]]):
         pin_roles = pin_roles_for_kind(kind),
         ratings_hint = ratings_hint_for_kind(kind),
         behavioral_hint = behavioral_hint_for_kind(kind),
+        digital_hint = digital_hint_for_kind(kind),
         example_cards = example_cards,
     )
 }
@@ -1812,8 +1815,62 @@ fn pin_roles_for_kind(kind: &str) -> &'static str {
         "vreg" | "charger" | "pmic" => "in, out, gnd  (and en / adj / fb when the part has them)",
         "opamp" | "comparator" => "in_plus, in_minus, out, vcc, vee",
         "analog_switch" => "in_out_a, in_out_b (SPST) or com, s0, s1 (SPDT)",
+        "digital" | "shift_register" => {
+            "vcc or vdd; gnd or vss; functional roles copied from the pin/function table, with repeated channels indexed consistently (for example a1, y1, a2, y2) and active-low roles suffixed _n"
+        }
         _ => "",
     }
+}
+
+fn digital_hint_for_kind(kind: &str) -> &'static str {
+    if !matches!(kind, "digital" | "shift_register") {
+        return "";
+    }
+    r#"
+DIGITAL BEHAVIOR (required unless this must be an explicit identity-only
+abstention): add `[models.logic]`. Its `inputs` and `outputs` arrays contain pin
+ROLE names from `[models.pins]`, not pad numbers. Every functional input and
+output must be listed; inputs, outputs, and registers share one UNIQUE namespace.
+Do not list a bidirectional signal in both arrays: that fails validation. This
+bounded contract does not describe memory buses; abstain if it cannot represent
+required behavior. Give every output one `[models.logic.comb]` expression, using
+only `!`, `&`, `^`, `|`, parentheses, 0/1, input/output names, and `register[bit]`.
+For sequential behavior add `[[models.logic.register]]` with a unique `name`,
+`bits` (1..64), and `clock = { pin = "role", edge = "rising" }` (or "falling")
+paired with `op`: "shift_left", "shift_right", "load", "count_up", or "count_down".
+Shifts require `data_in` naming an input; load requires a same-width register or
+an input for a 1-bit register. Count ops must omit `data_in`. Optional controls:
+`reset = { pin = "role", active = "low", value = 0 }`, `load = { pin = "role",
+active = "low", data = ["bit0_role", "bit1_role"] }` (one input per register bit),
+`clock_enable = { pin = "role", active = "high" }`. Either active polarity is
+allowed. Fixed priority: asynchronous reset, asynchronous load, enabled clock
+edge, else hold. Registers update simultaneously from pre-step values. Bit 0 is
+LSB; shift_left inserts at bit 0, shift_right at bits-1. Match the function table;
+abstain if its semantics differ, rather than inventing priority controls.
+For high-impedance outputs, `[models.logic.tristate]` maps each output name to
+`{ enable = "input_role", active = "low" }` (or "high"); inactive means high-Z.
+For a purely combinational part omit registers; this symbolic XOR example is
+valid syntax, not the target part's function:
+```toml
+[models.logic]
+inputs = ["left", "right"]
+outputs = ["result"]
+[models.logic.comb]
+result = "left ^ right"
+```
+
+In `[models.params]`, `supply_pin` and `gnd_pin` are STRINGS containing physical
+pad identifiers exactly as keyed in `[models.pins]` (for example `"pad_id"`), not
+numbers or role names. These fields are currently metadata; the executable
+binder does not read them. For supply accounting it instead finds `[models.pins]`
+ROLE names `vcc` or `vdd` and `gnd` or `vss`, so map those roles consistently.
+Use indexed functional roles (`a1`, `y1`, etc.) consistently for repeated
+channels; do not collapse multiple gates onto generic `in`/`out`.
+If a selected package's pad function is unresolved, keep the pad as
+`unknown_pad_<identifier>` and mark the ambiguity in its TOML comment. If the
+package variant itself is unresolved, do not combine variants or guess a map:
+use the identity-only abstention and name the unresolved package.
+"#
 }
 
 fn required_params_for_kind(kind: &str) -> &'static str {
@@ -1825,7 +1882,12 @@ fn required_params_for_kind(kind: &str) -> &'static str {
         "opamp" => "gain, rail_lo, rail_hi",
         "comparator" => "out_lo, out_hi, hysteresis, tpd_s",
         "analog_switch" => "ron, roff, vth",
-        "digital" | "shift_register" => "voh, vol, vih, vil, tpd_s, supply_pin, gnd_pin",
+        "digital" => {
+            "voh, vol, vih, vil, tpd_s; supply_pin and gnd_pin are quoted physical pad identifiers"
+        }
+        "shift_register" => {
+            "bits, voh, vol, vih, vil, tpd_s; supply_pin and gnd_pin are quoted physical pad identifiers"
+        }
         "dac" => "bits, vref_int, i2c_addr (or spi mode)",
         // These three were offered without guidance, so their prompts fell to
         // the generic hint and the model had to guess what hauksbee wanted.
@@ -2146,8 +2208,8 @@ pub const SUPPORTED_KINDS: &[&str] = &[
 /// and say out loud which values were never stated.
 fn verification_clause(ws: &Workspace) -> String {
     let pages = if ws.pages.is_empty() {
-        "No page images were rendered, so you have the extracted text only. Say \
-         so in `notes` for any value whose meaning depended on a table layout."
+        "No page images were rendered. If available text or diagnostic tools cannot \
+         resolve a table's layout, abstain from the affected value explicitly."
             .to_string()
     } else {
         let inventory = ws
@@ -2192,21 +2254,18 @@ fn verification_clause(ws: &Workspace) -> String {
     };
 
     format!(
-        "## Before you answer\n\n         {pages}\n\n         1. VERIFY EACH NUMBER. For every parameter you extracted, find it again on \
-            the page and check the units, the sign, and the conditions it was \
-            measured under. A value quoted at the wrong test condition is wrong.\n         2. CHECK IT IS PHYSICALLY POSSIBLE. Reject your own answer if it implies \
-            something that cannot happen: a bipolar transistor with a gain of 5, a \
-            silicon junction conducting at 0.2 V, a regulator whose dropout exceeds \
-            its input headroom, a package dissipating more than its thermal \
-            resistance allows. If the datasheet seems to say such a thing, you have \
-            misread which column or which part variant you are on.\n         3. SAY WHAT YOU ASSUMED. Any value the datasheet did not state outright \
-            goes in `notes` as an assumption, with what you based it on. A typical \
-            value used where the model wants a maximum is an assumption. A figure \
-            read off a graph is an assumption. Do not quietly fill a gap with a \
-            textbook default.\n         4. If the datasheet is genuinely ambiguous and you can search the web, \
-            check the vendor's page or an application note before guessing, and \
-            record what you used.\n\n         Write your final answer to `model.toml` in your working directory, as a \
-         single TOML document and nothing else."
+        "## Before you answer\n\n         {pages}\n\n         Prefer the supplied authoritative schema and datasheet. If evidence is \
+         missing or ambiguous, use available diagnostic tools or a vendor source, \
+         name the missing context, and record external provenance separately. Never \
+         let an external or stale schema override the supplied contract.\n\n         1. VERIFY EACH NUMBER against its source page: units, sign, package/part \
+            variant, test conditions, and min/typ/max column.\n         2. SANITY-CHECK WITHOUT OVERRULING THE SOURCE. A surprising but plausible \
+            value (including low transistor gain) is not proof of an error. Recheck \
+            the row and variant; abstain if the available evidence cannot resolve it.\n         3. DO NOT INVENT ASSUMPTIONS. For a missing required fact, use the \
+            prompt's identity-only form and a named `ABSTAIN:` in `description` or \
+            `[models.source.uncertainty]`; omit optional fields that are not stated. \
+            TOML comments may record pin/package \
+            ambiguity but must not turn a guess into data.\n\n         Write the final answer to `model.toml` in your working directory as one \
+         TOML document and nothing else."
     )
 }
 
@@ -2861,6 +2920,53 @@ mod tests {
         assert!(charger.contains("iin_program"));
         assert!(build_prompt("nPM1300", "pmic", "x").contains("pull_to"));
         assert!(build_prompt("LTC6803", "balancer", "x").contains("[[models.behavioral.laws]]"));
+    }
+
+    #[test]
+    fn digital_prompt_supplies_complete_bounded_scaffolding() {
+        for kind in ["digital", "shift_register"] {
+            let prompt = build_prompt("LOGIC_FIXTURE", kind, "fixture text");
+            assert!(prompt.contains("vcc or vdd; gnd or vss"));
+            assert!(prompt.contains("[models.logic]"));
+            assert!(prompt.contains("inputs` and `outputs` arrays"));
+            assert!(prompt.contains("[models.logic.comb]"));
+            assert!(prompt.contains("[[models.logic.register]]"));
+            assert!(prompt.contains("one UNIQUE namespace"));
+            assert!(prompt.contains("[models.logic.tristate]"));
+            assert!(prompt.contains("Count ops must omit `data_in`"));
+            assert!(prompt.contains("supply_pin` and `gnd_pin` are STRINGS"));
+            assert!(prompt.contains("physical\npad identifiers exactly as keyed"));
+            assert!(
+                prompt.contains("currently metadata; the executable\nbinder does not read them")
+            );
+            assert!(prompt.contains("explicit NCs"));
+            assert!(!prompt.contains("can be given\n  any descriptive name, or left out"));
+        }
+
+        let hint = digital_hint_for_kind("digital");
+        let example = hint
+            .split("```toml\n")
+            .nth(1)
+            .unwrap()
+            .split("```")
+            .next()
+            .unwrap();
+        let parsed: toml::Value = toml::from_str(example).unwrap();
+        let logic: crate::logic_spec::Logic = parsed["models"]["logic"].clone().try_into().unwrap();
+        logic
+            .validate()
+            .expect("the supplied logic example must validate");
+        let ws = Workspace::scratch().unwrap();
+        let footer = verification_clause(&ws);
+        assert!(footer.contains("Prefer the supplied authoritative schema and datasheet"));
+        assert!(footer.contains("use available diagnostic tools or a vendor source"));
+        assert!(footer.contains("record external provenance separately"));
+        assert!(
+            footer.contains("Never let an external or stale schema override the supplied contract")
+        );
+        assert!(footer.contains("abstain if the available evidence cannot resolve it"));
+        assert!(!footer.contains("bipolar transistor with a gain of 5"));
+        assert!(!footer.contains("`notes`"));
     }
 
     #[test]
