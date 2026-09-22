@@ -95,6 +95,9 @@ value_re = "(?i)^1N914TEST"
 is = 2.5e-9
 n = 1.75
 rs = 0.6
+[models.source]
+tier = "datasheet-derived"
+uncertainty = [{ status = "unknown", parameter = "model", reason = "stub" }]
 "#;
 
 /// Serve exactly one HTTP request, sending back a chat-completions reply

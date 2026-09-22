@@ -140,6 +140,10 @@ pub struct ModelEntry {
     /// their scope is explicitly `unspecified` on the coverage surface.
     #[serde(default, skip_serializing_if = "ModelCoverage::is_empty")]
     pub coverage: ModelCoverage,
+
+    /// `[models.source]`: provenance tier, citations and declared uncertainty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ModelSourceSpec>,
 }
 
 /// Declared executable scope of a model card.
@@ -274,6 +278,7 @@ impl ModelCoverage {
 /// the tier, whether the entry has been validated, and any declared numeric
 /// uncertainty. Feeds the evidence spine's `ModelSource` records.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelSourceSpec {
     pub tier: ModelSourceTier,
     #[serde(default = "unvalidated")]
@@ -294,6 +299,25 @@ pub struct ModelSourceReference {
     pub locator: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+}
+
+impl ModelSourceSpec {
+    /// Every citation and every uncertainty record must be well formed.
+    pub fn validate(&self) -> Result<(), String> {
+        for (index, reference) in self.references.iter().enumerate() {
+            reference
+                .validate()
+                .map_err(|e| format!("source reference {index} {e}"))?;
+        }
+        for (index, record) in self.uncertainty.iter().enumerate() {
+            let (ModelUncertainty::Interval { parameter, .. }
+            | ModelUncertainty::Unknown { parameter, .. }) = record;
+            record
+                .validate()
+                .map_err(|e| format!("uncertainty {index} ({parameter}): {e}"))?;
+        }
+        Ok(())
+    }
 }
 
 impl ModelSourceReference {

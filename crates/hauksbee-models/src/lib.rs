@@ -764,30 +764,7 @@ impl ModelLibrary {
         };
         let db_file: schema::DbFile = toml::from_str(src).map_err(parse)?;
 
-        // The model entry parser ignores the auxiliary `[models.source]` table,
-        // so provenance is parsed through its own typed schema and fails
-        // closed: swallowing an error here would leave executable physics in
-        // place while silently replacing its citations/uncertainty with a
-        // default unknown record, the worst direction of degradation.
-        #[derive(serde::Deserialize)]
-        struct SourceFile {
-            #[serde(default)]
-            models: Vec<SourceRow>,
-        }
-        #[derive(serde::Deserialize)]
-        struct SourceRow {
-            id: String,
-            source: Option<schema::ModelSourceSpec>,
-        }
-        let mut declarations: std::collections::HashMap<String, schema::ModelSourceSpec> =
-            toml::from_str::<SourceFile>(src)
-                .map_err(parse)?
-                .models
-                .into_iter()
-                .filter_map(|row| Some((row.id, row.source?)))
-                .collect();
-
-        for entry in db_file.models {
+        for mut entry in db_file.models {
             let id = entry.id.clone();
             let invalid = |messages: String| ModelError::ValidationFailed {
                 id: id.clone(),
@@ -824,20 +801,21 @@ impl ModelLibrary {
                     return Err(invalid(errors.join("; ")));
                 }
             }
+            // Taken before compiling so provenance is carried once, by
+            // `ModelSource`, not also inside the compiled entry. Builtin cards
+            // skip `validate` above, so their source is checked here too.
+            let declaration = entry.source.take();
+            if let Some(Err(e)) = declaration.as_ref().map(schema::ModelSourceSpec::validate) {
+                return Err(invalid(format!("[models.source]: {e}")));
+            }
             let compiled = CompiledEntry::compile(entry).map_err(|e| ModelError::InvalidRegex {
                 id: id.clone(),
                 error: e,
             })?;
-            let declaration = declarations.remove(&id);
             let references = declaration
                 .as_ref()
                 .map(|source| source.references.clone())
                 .unwrap_or_default();
-            for (index, reference) in references.iter().enumerate() {
-                reference
-                    .validate()
-                    .map_err(|e| invalid(format!("source reference {index} {e}")))?;
-            }
             // Pack-manifest provenance is authoritative: an entry in a
             // datasheet-derived pack cannot promote itself to a vendor tier.
             let declared = declaration.as_ref();
@@ -1132,19 +1110,24 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, ModelError::TomlParse { .. }), "{error:?}");
 
-        for reference in [
-            "url = \"http://vendor.example/device.pdf\"\ntitle = \"Device\"\nlocator = \"Table 1\"",
-            "url = \"https://vendor.example/device.pdf\"\ntitle = \"Device\"\nlocator = \"Table 1\"\nsha256 = \"abc\"",
+        for (layer, record) in [
+            (SourceLayer::UserDir, "references]]\nurl = \"http://vendor.example/device.pdf\"\ntitle = \"Device\"\nlocator = \"Table 1\""),
+            (SourceLayer::Builtin, "references]]\nurl = \"https://vendor.example/device.pdf\"\ntitle = \"Device\"\nlocator = \"Table 1\"\nsha256 = \"abc\""),
+            (SourceLayer::UserDir, "uncertainty]]\nstatus = \"interval\"\nparameter = \"ohms\"\nlow = 1100.0\nhigh = 900.0\nunit = \"ohm\"\nkind = \"specification-limits\"\nbasis = \"Table 1\""),
+            (SourceLayer::Builtin, "uncertainty]]\nstatus = \"unknown\"\nparameter = \"model\"\nreason = \" \""),
         ] {
             let source = format!(
                 "[[models]]\nid = \"bad\"\nkind = \"passive\"\n[models.match]\nvalue_re = \"^1k$\"\n\
                  [models.source]\ntier = \"user-model\"\nvalidation = \"unvalidated\"\n\
-                 [[models.source.references]]\n{reference}\n"
+                 [[models.source.{record}\n"
             );
             let error = ModelLibrary::empty()
-                .load_toml_str(&source, "bad-reference.toml", SourceLayer::UserDir)
+                .load_toml_str(&source, "bad-source.toml", layer)
                 .unwrap_err();
-            assert!(matches!(error, ModelError::ValidationFailed { .. }), "{error:?}");
+            assert!(
+                matches!(&error, ModelError::ValidationFailed { messages, .. } if messages.contains("[models.source]")),
+                "{error:?}"
+            );
         }
     }
 

@@ -1600,6 +1600,10 @@ validation = "physical-bounds-only"
 status = "unknown"
 parameter = "input_noise_density_at_125c"
 reason = "ABSTAIN: datasheet does not state this fact"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
 [models.match]
 value_re = "(?i)^TLV9001"
 [models.params]
@@ -1642,6 +1646,10 @@ validation = "physical-bounds-only"
 status = "unknown"
 parameter = "tpd_at_125c"
 reason = "ABSTAIN: datasheet does not state this fact"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
 [models.match]
 value_re = "(?i)^TLV3201"
 [models.params]
@@ -1684,6 +1692,10 @@ validation = "physical-bounds-only"
 status = "unknown"
 parameter = "propagation_delay"
 reason = "ABSTAIN: datasheet does not state a fixed propagation delay"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
 [models.match]
 value_re = "(?i)^PCA9306"
 [models.params]
@@ -2833,6 +2845,17 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
              block; the prompt asked for one"
         );
     }
+    let has_model_record = entry.source.iter().flat_map(|s| &s.uncertainty).any(|u| {
+        matches!(u, hauksbee_ir::evidence::ModelUncertainty::Interval { parameter, .. }
+            | hauksbee_ir::evidence::ModelUncertainty::Unknown { parameter, .. } if parameter == "model")
+    });
+    if !has_model_record {
+        bail!(
+            "reply for {part} has no model-error record (rule 0): add [models.source] with \
+             [[models.source.uncertainty]] status = \"unknown\" parameter = \"model\" \
+             reason = \"datasheet publishes no validated model error interval\""
+        );
+    }
     crate::validation::validate(&entry).map_err(|errs| {
         let msg: Vec<String> = errs.iter().map(ToString::to_string).collect();
         anyhow::anyhow!("validation failed: {}", msg.join("; "))
@@ -3158,7 +3181,7 @@ prog_ref_ohms = 7150.0
 v_sense_full = 0.0463
 ```"#;
         let entry = parse_and_validate_reply(
-            &extract_toml_block(reply, "[[models]]"),
+            &(extract_toml_block(reply, "[[models]]") + "\n" + MODEL_SOURCE),
             "LTC4020",
             "charger",
         )
@@ -3193,7 +3216,8 @@ max_v = 3.6
 abs_max_v = 4.0
 basis = "Recommended Operating Conditions, Table 6.3, VCC row"
 "#;
-        let entry = parse_and_validate_reply(reply, "ROC_SUPPLY", "digital").unwrap();
+        let reply = reply.to_owned() + MODEL_SOURCE;
+        let entry = parse_and_validate_reply(&reply, "ROC_SUPPLY", "digital").unwrap();
         let round_trip = toml::to_string(&crate::schema::DbFile {
             models: vec![entry],
         })
@@ -3311,6 +3335,9 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
         assert!(c.iin_program.is_some());
     }
 
+    const MODEL_SOURCE: &str = "[models.source]\ntier = \"datasheet-derived\"\n\
+        uncertainty = [{ status = \"unknown\", parameter = \"model\", reason = \"none\" }]\n";
+
     #[test]
     fn reply_validation_verdicts() {
         let good = r#"
@@ -3328,9 +3355,33 @@ vaf = 80.0
 "1" = "base"
 "2" = "emitter"
 "6" = "collector"
+[models.source]
+tier = "datasheet-derived"
+references = [{ url = "https://vendor.example/bcm847bs.pdf", title = "BCM847BS", locator = "p.3" }]
+uncertainty = [
+  { status = "unknown", parameter = "model", reason = "none published" },
+  { status = "interval", parameter = "bf", low = 100.0, high = 460.0, unit = "", kind = "specification-limits", basis = "Table 7" },
+]
 "#;
         let entry = parse_and_validate_reply(good, "BCM847BS", "bjt_npn").unwrap();
         assert_eq!(entry.id, "bcm847bs");
+        let no_source = &good[..good.find("[models.source]").unwrap()];
+        let error = parse_and_validate_reply(no_source, "BCM847BS", "bjt_npn").unwrap_err();
+        assert!(error.to_string().contains("rule 0"), "{error:#}");
+        for (from, to, needle) in [
+            ("\"model\"", "\"bf\"", "rule 0"),
+            ("low = 100.0", "low = 999.0", "uncertainty 1 (bf)"),
+            ("none published", " ", "uncertainty 0 (model)"),
+            ("specification-limits", "vibes", "deserialize"),
+            ("https://", "http://", "must use https://"),
+        ] {
+            let reply = good.replace(from, to);
+            let error = parse_and_validate_reply(&reply, "BCM847BS", "bjt_npn").unwrap_err();
+            assert!(
+                format!("{error:#}").contains(needle),
+                "{from} -> {to}: {error:#}"
+            );
+        }
 
         let bad_bf = good.replace("bf  = 150.0", "bf  = 99999.0");
         assert!(parse_and_validate_reply(&bad_bf, "BCM847BS", "bjt_npn").is_err());

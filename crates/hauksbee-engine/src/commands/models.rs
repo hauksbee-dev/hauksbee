@@ -2640,7 +2640,7 @@ fn editable_model_upgrade_fields(
         properties: Default::default(),
     };
 
-    let source = hauksbee_models::schema::ModelSourceSpec {
+    model.source = Some(hauksbee_models::schema::ModelSourceSpec {
         tier: ModelSourceTier::UserModel,
         validation: ModelValidation::Unvalidated,
         references: resolution.references.clone(),
@@ -2648,7 +2648,7 @@ fn editable_model_upgrade_fields(
             format!("{}.board_extension", model.id),
             "copied from a resolved model for local extension; edits have not yet been validated",
         )?],
-    };
+    });
     let missing = model.coverage.missing.join(", ");
     // Do not flatten ModelEntry into an auxiliary wrapper here. The TOML
     // serializer accepts the scalar fields and the first nested table from a
@@ -2656,13 +2656,8 @@ fn editable_model_upgrade_fields(
     // executable partial model that discarded pins, params, peripheral and
     // coverage while still returning syntactically valid TOML—the exact
     // opposite of an extension. Build the one `[[models]]` value explicitly,
-    // insert provenance as an ordinary sibling table, then serialize the whole
-    // tree. The loader parses this same shape back into ModelEntry + source.
-    let mut model_value = toml::Value::try_from(&model)?;
-    let model_table = model_value
-        .as_table_mut()
-        .ok_or_else(|| anyhow::anyhow!("model '{}' did not serialize as a TOML table", model.id))?;
-    model_table.insert("source".to_string(), toml::Value::try_from(&source)?);
+    // with provenance as its ordinary `source` field, then serialize the tree.
+    let model_value = toml::Value::try_from(&model)?;
     let mut root_table = toml::map::Map::new();
     root_table.insert("models".to_string(), toml::Value::Array(vec![model_value]));
     let root = toml::Value::Table(root_table);

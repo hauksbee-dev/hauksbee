@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use crate::check::{nonneg_finite, positive_finite, Problems};
 use crate::schema::{
     AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics,
-    ModelEntry, OperatingEnvelope, PeripheralSpec,
+    ModelEntry, ModelSourceSpec, OperatingEnvelope, PeripheralSpec,
 };
 use crate::sensor_spec::{Bus, SensorSpec};
 use thiserror::Error;
@@ -493,6 +493,9 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
 
     if let Some(program) = &entry.current_program {
         check_current_program(entry, program, &mut p);
+    }
+    if let Some(Err(m)) = entry.source.as_ref().map(ModelSourceSpec::validate) {
+        p.0.push(format!("[models.source]: {m}"));
     }
 
     if p.0.is_empty() {
