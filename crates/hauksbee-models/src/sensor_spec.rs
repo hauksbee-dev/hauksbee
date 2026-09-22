@@ -516,6 +516,9 @@ pub struct Sensor {
     #[serde(default)]
     pub read_frame: Option<ReadFrameSpec>,
     pub protocol: ProtocolSpec,
+    /// Provenance and uncertainty, the same contract as a card's `[models.source]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::schema::ModelSourceSpec>,
 }
 
 impl Sensor {
@@ -628,6 +631,13 @@ impl SensorSpec {
     pub fn validate(&self) -> Result<(), SensorSpecError> {
         let s = &self.sensor;
         check!(!s.name.trim().is_empty(), "sensor.name must not be empty");
+        if let Some(Err(e)) = s
+            .source
+            .as_ref()
+            .map(crate::schema::ModelSourceSpec::validate)
+        {
+            invalid!("sensor.source: {e}");
+        }
 
         // SPI mode is 0..=3 always (CPOL/CPHA are one bit each); a larger value
         // is a spec typo that must fail loud rather than be silently truncated
@@ -1150,5 +1160,20 @@ style = "i2c_pointer"
                 "case {i} must be rejected"
             );
         }
+        let sourced = format!(
+            "{LM75}[sensor.source]\ntier = \"datasheet-derived\"\nuncertainty = [{{ status = \"interval\", \
+             parameter = \"temperature_c\", low = 2.0, high = -2.0, unit = \"C\", \
+             kind = \"specification-limits\", basis = \"Table 1\" }}]\n"
+        );
+        let error = SensorSpec::from_toml(&sourced).unwrap_err().to_string();
+        assert!(error.contains("sensor.source: uncertainty 0"), "{error}");
+        let good = SensorSpec::from_toml(
+            &sourced.replace("low = 2.0, high = -2.0", "low = -2.0, high = 2.0"),
+        );
+        assert!(SensorSpec::from_toml(&good.unwrap().to_toml().unwrap())
+            .unwrap()
+            .sensor
+            .source
+            .is_some());
     }
 }

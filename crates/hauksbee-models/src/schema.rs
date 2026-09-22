@@ -318,6 +318,14 @@ impl ModelSourceSpec {
         }
         Ok(())
     }
+
+    /// Whether any uncertainty record covers model-form error (`parameter = "model"`).
+    pub fn declares_model_error(&self) -> bool {
+        self.uncertainty.iter().any(|u| {
+            matches!(u, ModelUncertainty::Interval { parameter, .. }
+                | ModelUncertainty::Unknown { parameter, .. } if parameter == "model")
+        })
+    }
 }
 
 impl ModelSourceReference {

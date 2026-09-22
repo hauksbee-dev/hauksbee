@@ -609,6 +609,11 @@ fn check_peripheral(entry: &ModelEntry, peripheral: &PeripheralSpec, p: &mut Pro
                     .is_some_and(|name| name.trim().is_empty()),
                 || "peripheral register-map controller must not be empty".into(),
             );
+            p.require(sensor.sensor.source.is_none(), || {
+                "peripheral register-map spec_toml must not carry [sensor.source]; \
+                 the card's [models.source] is its provenance"
+                    .into()
+            });
             let roles: &[(&str, &String)] = match sensor.sensor.bus {
                 Bus::I2c => &[("scl_role", scl_role), ("sda_role", sda_role)],
                 Bus::Spi => &[
@@ -1302,6 +1307,9 @@ mod tests {
         rejects(&e, "register-map");
         e.peripheral = make(spec, "missing_sda", Some(0x19));
         rejects(&e, "missing_sda");
+        let sourced = format!("{spec}[sensor.source]\ntier = \"datasheet-derived\"\n");
+        e.peripheral = make(&sourced, "sda", Some(0x19));
+        rejects(&e, "must not carry [sensor.source]");
     }
 
     #[test]

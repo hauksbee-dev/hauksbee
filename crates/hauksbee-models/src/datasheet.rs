@@ -443,6 +443,16 @@ RULES:
 2. Every `expr` may only reference names declared in a [[sensor.input]].
 3. Output ONLY the TOML, starting with `[sensor]`; no prose, no markdown fences.
 4. Use only values stated in the datasheet; do not invent register addresses.
+5. End with this provenance block (tier and model-error record are required):
+     [sensor.source]
+     tier = "datasheet-derived"
+     validation = "unvalidated"
+     [[sensor.source.uncertainty]]
+     status = "unknown"
+     parameter = "model"
+     reason = "datasheet publishes no validated model error interval"
+   Published min/max limits may be added as `status = "interval"` records with
+   `kind = "specification-limits"` and a `basis` table citation; never invent intervals.
 
 {source_quantity_guidance}
 
@@ -493,6 +503,18 @@ fn validate_sensor_reply(raw: &str, part: &str, kind: &str) -> Result<SensorSpec
         bail!(
             "bus mismatch for {part}: requested '{kind}' but the spec declares bus = {:?}",
             spec.sensor.bus
+        );
+    }
+    if !spec
+        .sensor
+        .source
+        .as_ref()
+        .is_some_and(crate::schema::ModelSourceSpec::declares_model_error)
+    {
+        bail!(
+            "reply for {part} has no model-error record (rule 5): add [sensor.source] \
+             tier = \"datasheet-derived\" with [[sensor.source.uncertainty]] status = \"unknown\" \
+             parameter = \"model\" reason = \"datasheet publishes no validated model error interval\""
         );
     }
     Ok(spec)
@@ -2845,11 +2867,11 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
              block; the prompt asked for one"
         );
     }
-    let has_model_record = entry.source.iter().flat_map(|s| &s.uncertainty).any(|u| {
-        matches!(u, hauksbee_ir::evidence::ModelUncertainty::Interval { parameter, .. }
-            | hauksbee_ir::evidence::ModelUncertainty::Unknown { parameter, .. } if parameter == "model")
-    });
-    if !has_model_record {
+    if !entry
+        .source
+        .as_ref()
+        .is_some_and(crate::schema::ModelSourceSpec::declares_model_error)
+    {
         bail!(
             "reply for {part} has no model-error record (rule 0): add [models.source] with \
              [[models.source.uncertainty]] status = \"unknown\" parameter = \"model\" \
@@ -3420,8 +3442,16 @@ addr = 0x01
 const = [0x00]
 [sensor.protocol]
 style = "i2c_pointer"
+[sensor.source]
+tier = "datasheet-derived"
+uncertainty = [{ status = "unknown", parameter = "model", reason = "none published" }]
 "#;
         let spec = validate_sensor_reply(i2c, "LM75", "i2c_sensor").unwrap();
+        let no_source = &i2c[..i2c.find("[sensor.source]").unwrap()];
+        let error = validate_sensor_reply(no_source, "LM75", "i2c_sensor").unwrap_err();
+        assert!(error.to_string().contains("rule 5"), "{error:#}");
+        let wrong = i2c.replace("\"model\"", "\"temperature_c\"");
+        assert!(validate_sensor_reply(&wrong, "LM75", "i2c_sensor").is_err());
         assert_eq!(spec.sensor.name, "LM75");
         assert_eq!(spec.sensor.i2c_address, Some(0x48));
         assert!(validate_sensor_reply(i2c, "LM75", "spi_sensor").is_err());
@@ -3445,6 +3475,9 @@ expr = "gyro_x"
 style = "spi_reg"
 rw_read_is_high = true
 addr_mask = 0x7f
+[sensor.source]
+tier = "datasheet-derived"
+uncertainty = [{ status = "unknown", parameter = "model", reason = "none published" }]
 "#;
         assert_eq!(
             validate_sensor_reply(spi, "MINIMU", "spi_sensor")
@@ -3474,6 +3507,9 @@ addr_mask = 0x7f
             assert!(!prompt.contains("{source_quantity_guidance}"));
             if sensor {
                 assert!(!prompt.contains("models.source"), "{kind}");
+                assert!(
+                    prompt.contains("[sensor.source]") && prompt.contains("parameter = \"model\"")
+                );
                 continue;
             }
             assert!(prompt.contains(PIN_ROLE_GUIDANCE), "{kind}");
