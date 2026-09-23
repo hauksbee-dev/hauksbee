@@ -471,14 +471,18 @@ The extractor pulls two things from the datasheet:
    for a BJT; `is`, `n`, `rs` for a diode; `vout`, `dropout_v`, `iq_a` for
    an LDO; and so on). Where a value is not stated verbatim, the model
    derives it from a stated operating point (e.g. `is` from VBE at a known
-   IC) and says so in a comment. If the required fact is absent, extraction
-   abstains or emits an identity-only draft; it does not invent a family value.
-2. **Absolute-maximum ratings** into `[models.ratings]`: `max_current_a`,
-   `max_surge_current_a`, `max_power_w`, `max_voltage_v`,
-   `max_junction_temp_c`. These feed the **stress monitor**
-   (`crates/hauksbee-bind/src/stress.rs`): it checks the live operating
-   point against them and raises faults when a part runs past its limits.
-   An omitted field means "no limit known".
+   IC) or fits it to a typical-characteristics figure, labelled typical with
+   the figure cited, and says so in a comment. If the required fact is absent,
+   extraction abstains or emits an identity-only draft; it does not invent a
+   family value.
+2. **Ratings** into `[models.ratings]`: the prompt offers every `Ratings` key
+   (`Ratings::KEY_GUIDE`), and an unknown key is a parse error. These feed the
+   **stress monitor** (`crates/hauksbee-bind/src/stress.rs`): it checks the
+   live operating point against them and raises faults when a part runs past
+   its limits. An omitted field means "no limit known".
+3. **Published characteristic rows** with no param or rating home, including
+   one-sided and typical-only rows, into `[[models.source.characteristic]]`
+   (see `SOURCE_LADDER.md`).
 
 Every numeric line carries a comment citing where in the datasheet it came
 from, so an extracted model stays auditable.

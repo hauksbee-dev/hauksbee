@@ -73,6 +73,24 @@ Hauksbee never turns `unknown` into an estimated percentage. These intervals
 are provenance/error-budget evidence; they do not claim that the current scalar
 solver has propagated every model interval through a transient result.
 
+A published row that is not a two-sided interval (max only, min only, typical
+only) or that has no param/rating home is kept on the card as a characteristic
+record carrying exactly the printed columns:
+
+```toml
+[[models.source.characteristic]]
+parameter = "VF forward voltage"
+max = 0.37
+unit = "V"
+conditions = "IF = 1 mA, pulsed, Tj = 25 C"
+basis = "Electrical Characteristics, VF row"
+```
+
+Validation requires at least one of `min`/`typ`/`max`, all finite, ordered
+`min <= typ <= max`, and a non-empty `parameter` and `basis`. The record is
+card data only: it never becomes a `ModelUncertainty` interval and never
+satisfies `--require-model-intervals`.
+
 ## Fail-closed validation switches
 
 Use the resolution surface before a high-accuracy run:

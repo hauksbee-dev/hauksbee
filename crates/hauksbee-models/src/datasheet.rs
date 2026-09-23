@@ -1440,9 +1440,12 @@ PIN ROLE NAMES for kind="{kind}": {pin_roles}
 For kind="{kind}", the required params are:
 {required_params}
 {digital_hint}
-[models.ratings]: pull these from the datasheet's "absolute maximum ratings" /
-"limiting values" table. Include every field the datasheet gives a number for;
-omit a field entirely if the datasheet does not state it (do NOT invent it):
+[models.ratings]: these are the ONLY valid keys (any other key fails
+validation). Read them from the Absolute Maximum Ratings / Limiting Values and
+Thermal Characteristics tables, or the table a line names. Include every key
+the datasheet states for the selected package; omit a key it does not state (do
+NOT invent it). A stated limit with no key here goes in a characteristic record
+(rule 0), never under an invented key:
 {ratings_hint}
 
 [[models.envelope]]: read the Recommended Operating Conditions and Absolute
@@ -1513,7 +1516,7 @@ IMPORTANT RULES:
      [models.source]
      tier = "datasheet-derived"
      validation = "physical-bounds-only"
-   For each parameter with source-published finite min/max bounds, add:
+   For each [models.params] parameter with published finite min AND max, add:
      [[models.source.uncertainty]]
      status = "interval"
      parameter = "<parameter>"
@@ -1522,8 +1525,8 @@ IMPORTANT RULES:
      unit = "<unit>"
      kind = "specification-limits"
      basis = "<table/curve citation>"
-   Parameter specification intervals and one-sided unknowns are independent
-   records; they describe source limits for that parameter, not model-form error.
+   A parameter specification interval describes source limits for that
+   parameter, not model-form error.
    Always add a separate record for model error. If the source publishes validated
    model-error bounds, preserve them as `parameter = "model"`, `status = "interval"`,
    and `kind = "empirical-error"`. Otherwise emit:
@@ -1531,16 +1534,28 @@ IMPORTANT RULES:
      status = "unknown"
      parameter = "model"
      reason = "datasheet publishes no validated model error interval"
-   A min/typ row without a finite published max is NOT a two-sided parameter
-   interval: represent that parameter as unknown. Never invent a percentage,
-   derive a bound from a typical value, or substitute a model clamp for a
-   published guarantee.
+   A row that prints only a min, only a max, or only a typ is NOT a two-sided
+   interval. Record it, and every other published characteristic row that has
+   no [models.params] or [models.ratings] key, as a characteristic record with
+   exactly the columns the row prints, also on an identity-only card:
+     [[models.source.characteristic]]
+     parameter = "<datasheet symbol and name>"
+     max = <number>  # only the printed columns among min, typ, max
+     unit = "<base unit of rule 6: V, A, W, F, s, ohm, ...>"
+     conditions = "<the row's test conditions>"
+     basis = "<table/row citation>"
+   Never invent a percentage, derive a bound from a typical value, or
+   substitute a model clamp for a published guarantee.
 1. Add a comment on each param/rating line citing where in the datasheet you found
    the value, e.g.: `# Source: Table 6.3, typ column`
 2. Use only values explicitly stated in the datasheet; do NOT guess. For SPICE
-   params not given verbatim (e.g. `is`), you may derive them from a stated
-   operating point (e.g. VBE at a known IC) and say so in the comment.
-3. If a required param is genuinely absent and cannot be derived, do not
+   params not given verbatim (e.g. `is`, `n`, `rs`), you may derive them from a
+   stated operating point (e.g. VBE at a known IC) or fit them to a
+   typical-characteristics figure (e.g. an IF-VF or ID-VDS curve) read across
+   its plotted range. Say so in the comment: label the value typical and cite
+   the figure, the points read, and its conditions. A curve reading is typical
+   only: never turn it into a min/max, a rating, or an uncertainty interval.
+3. If a required param is genuinely absent and cannot be derived or fitted, do not
    estimate it. Emit an identity-only card with `identity_only = true`, a
    `warning`, and `unlocked_by`, and name the missing fact as
    `ABSTAIN: datasheet does not state ...` in the description or an unknown
@@ -1579,7 +1594,7 @@ OUTPUT (TOML only, starting with [[models]]):
         pdf_text = truncate_to_chars(&pdf_text, 40_000),
         required_params = required_params_for_kind(kind),
         pin_roles = pin_roles_for_kind(kind),
-        ratings_hint = ratings_hint_for_kind(kind),
+        ratings_hint = crate::schema::Ratings::KEY_GUIDE,
         behavioral_hint = behavioral_hint_for_kind(kind),
         digital_hint = digital_hint_for_kind(kind),
         pin_role_guidance = PIN_ROLE_GUIDANCE,
@@ -1718,6 +1733,12 @@ reason = "ABSTAIN: datasheet does not state a fixed propagation delay"
 status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
+[[models.source.characteristic]]
+parameter = "VIK input clamp voltage"
+max = -1.2
+unit = "V"
+conditions = "II = -18 mA, EN = 0 V"
+basis = "Electrical Characteristics, VIK row, max column only"
 [models.match]
 value_re = "(?i)^PCA9306"
 [models.params]
@@ -1835,54 +1856,6 @@ number (pin functions table, electrical characteristics, typical application).
         _ => "",
     };
     format!("{common}{specific}\n")
-}
-
-/// Which absolute-maximum ratings fields are worth asking for, per kind. The
-/// stress monitor reads these from `[models.ratings]`.
-fn ratings_hint_for_kind(kind: &str) -> &'static str {
-    match kind {
-        "diode" => {
-            "\
-  max_current_a       # IF continuous forward current
-  max_surge_current_a # IFSM non-repetitive surge current
-  max_voltage_v       # VRRM repetitive peak reverse voltage"
-        }
-        "bjt_npn" | "bjt_pnp" => {
-            "\
-  max_current_a       # IC continuous collector current
-  max_surge_current_a # ICM peak collector current
-  max_power_w         # Ptot total power dissipation
-  max_voltage_v       # VCEO collector-emitter breakdown voltage"
-        }
-        "nmos" | "pmos" => {
-            "\
-  max_current_a       # ID continuous drain current
-  max_power_w         # Ptot total power dissipation
-  max_voltage_v       # VDS drain-source breakdown voltage"
-        }
-        "vreg" => {
-            "\
-  max_current_a       # IOUT maximum output current
-  max_voltage_v       # maximum input voltage (VIN abs max)
-  max_junction_temp_c # TJ maximum junction temperature"
-        }
-        "digital" | "shift_register" => {
-            "\
-  max_pin_current_a   # per-pin source/sink absolute limit
-  max_current_a       # whole-device or supply/ground current limit, not per-pin
-  max_voltage_v       # applicable maximum supply/terminal voltage stress
-  max_power_w         # package-specific total dissipation, when stated
-  max_junction_temp_c # TJ maximum junction temperature
-  theta_ja_c_per_w    # selected package/board/airflow condition only
-  theta_jc_c_per_w    # selected package and stated case reference only"
-        }
-        _ => {
-            "\
-  max_current_a       # if a continuous current limit is stated
-  max_voltage_v       # if a maximum voltage is stated
-  max_power_w         # if a power dissipation limit is stated"
-        }
-    }
 }
 
 /// The pin role names the BINDER accepts for a kind, verbatim.

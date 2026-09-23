@@ -290,6 +290,50 @@ pub struct ModelSourceSpec {
     pub references: Vec<ModelSourceReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uncertainty: Vec<ModelUncertainty>,
+    /// `[[models.source.characteristic]]`: published rows with no param or
+    /// rating home, kept as data. Card-level only; never an uncertainty interval.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub characteristic: Vec<Characteristic>,
+}
+
+/// One published characteristic row carrying only the min/typ/max columns the
+/// row prints, so a one-sided limit or a typical-only value keeps its number
+/// without becoming a two-sided interval.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Characteristic {
+    pub parameter: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typ: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    /// Empty only for a dimensionless row.
+    pub unit: String,
+    /// The row's test conditions (bias, temperature, frequency, pulse width).
+    pub conditions: String,
+    pub basis: String,
+}
+
+impl Characteristic {
+    /// At least one finite column, printed columns ordered, and a named row and source.
+    pub fn validate(&self) -> Result<(), String> {
+        let columns = [self.min, self.typ, self.max];
+        if columns.iter().all(Option::is_none) {
+            return Err("requires at least one of min, typ, max".to_string());
+        }
+        if columns.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("min, typ and max must be finite".to_string());
+        }
+        if !columns.iter().flatten().is_sorted() {
+            return Err("requires min <= typ <= max".to_string());
+        }
+        if self.parameter.trim().is_empty() || self.basis.trim().is_empty() {
+            return Err("requires non-empty parameter and basis".to_string());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -315,6 +359,10 @@ impl ModelSourceSpec {
             record
                 .validate()
                 .map_err(|e| format!("uncertainty {index} ({parameter}): {e}"))?;
+        }
+        for (index, row) in self.characteristic.iter().enumerate() {
+            row.validate()
+                .map_err(|e| format!("characteristic {index} ({}): {e}", row.parameter))?;
         }
         Ok(())
     }
@@ -693,8 +741,10 @@ impl StrapLevel {
 /// lower recommended-operating ceiling so a check fires before the part leaves
 /// its guaranteed region; those entries must say so beside the value. These
 /// are analysis thresholds, never proof that a board normally draws or drives
-/// the stated amount.
+/// the stated amount. Unknown keys are rejected: a misspelled rating is a
+/// limit the monitor would silently never check.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Ratings {
     /// Continuous current through the device (A): diode IF, transistor IC/ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -839,6 +889,23 @@ impl OperatingEnvelope {
 }
 
 impl Ratings {
+    /// Every rating key, one `  name  # meaning` line each, offered verbatim by
+    /// the extraction prompt; a test pins the names to the struct's serde fields.
+    pub const KEY_GUIDE: &str = "\
+  max_current_a        # continuous current (A): diode IF, BJT IC, MOSFET ID, regulator IOUT; for an IC the whole-device or supply/ground current limit, not per-pin
+  max_surge_current_a  # non-repetitive surge / pulsed peak current (A): diode IFSM, BJT ICM, MOSFET IDM
+  max_power_w          # total power dissipation (W): Ptot / PD for the selected package
+  max_voltage_v        # maximum blocking/working voltage (V): diode VRRM, capacitor rated voltage, BJT VCEO, MOSFET VDS, regulator VIN abs max, IC supply abs max
+  polarized            # true for a polarized (electrolytic/tantalum) capacitor, where reverse bias is a fault
+  max_pin_current_a    # per-pin source/sink absolute limit (A) for an IC or MCU
+  max_ripple_current_a # capacitor rated RMS ripple current (A) at its stated frequency/temperature
+  max_junction_temp_c  # TJ maximum junction temperature (C)
+  theta_ja_c_per_w     # Rth(j-a) junction-to-ambient thermal resistance (C/W = K/W), for the stated package/board/airflow condition only
+  theta_jc_c_per_w     # Rth(j-c) junction-to-case thermal resistance (C/W = K/W), selected package and stated case reference only
+  min_current_a        # FLOOR, not a ceiling (A): least current the datasheet guarantees regulation at (shunt-reference IKmin, LDO minimum load)
+  rds_on_vgs           # MOSFET: lowest |VGS| (V) at which the datasheet specifies RDS(on)
+  vgs_th_max           # MOSFET: MAXIMUM |VGS(th)| (V) from Electrical Characteristics";
+
     pub fn is_empty(&self) -> bool {
         *self == Ratings::default()
     }
@@ -1094,7 +1161,68 @@ impl ParamValue {
 
 #[cfg(test)]
 mod tests {
-    use super::{AboveDomainBehavior, CurrentProgram, Params};
+    use super::{AboveDomainBehavior, CurrentProgram, ModelSourceSpec, Params, Ratings};
+
+    #[test]
+    fn ratings_reject_unknown_keys_and_the_key_guide_names_every_field() {
+        let err = toml::from_str::<Ratings>("totally_made_up_rating = 7.0").unwrap_err();
+        let err = err.to_string();
+        assert!(
+            err.contains("unknown field `totally_made_up_rating`"),
+            "{err}"
+        );
+        // serde's own "expected one of" list is the struct's field set.
+        let listed = err.split("expected one of ").nth(1).unwrap();
+        let fields: Vec<&str> = listed.split('`').skip(1).step_by(2).collect();
+        let guide: Vec<&str> = Ratings::KEY_GUIDE
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+        assert_eq!(guide, fields);
+    }
+
+    #[test]
+    fn characteristic_rows_keep_printed_columns_and_validate() {
+        let spec = |columns: &str| {
+            let text = format!("tier = \"datasheet-derived\"\n[[characteristic]]\nparameter = \"VF\"\n{columns}\nunit = \"V\"\nconditions = \"IF = 1 mA, pulsed\"\nbasis = \"Table 5\"\n");
+            toml::from_str::<ModelSourceSpec>(&text).map_err(|e| e.to_string())
+        };
+        for (columns, error) in [
+            ("max = 0.37", None),
+            ("typ = 2e-12", None),
+            ("min = 1.0\ntyp = 1.0\nmax = 2.0", None),
+            ("min = 1.0\nmax = 1.0", None),
+            ("", Some("at least one of min, typ, max")),
+            ("max = nan", Some("finite")),
+            ("min = -inf", Some("finite")),
+            ("min = 2.0\ntyp = 1.0", Some("min <= typ <= max")),
+            ("typ = 3.0\nmax = 2.0", Some("min <= typ <= max")),
+            ("min = 3.0\nmax = 2.0", Some("min <= typ <= max")),
+            ("max = 1.0\nlow = 0.0", Some("unknown field `low`")),
+        ] {
+            let got = spec(columns).and_then(|s| s.validate().map(|()| s));
+            match (error, got) {
+                (None, Ok(s)) => {
+                    let text = toml::to_string(&s).unwrap();
+                    assert_eq!(toml::from_str::<ModelSourceSpec>(&text).unwrap(), s);
+                    let printed = ["min", "typ", "max"].map(|c| columns.contains(c));
+                    assert_eq!(
+                        printed,
+                        ["min =", "typ =", "max ="].map(|c| text.contains(c)),
+                        "{text}"
+                    );
+                }
+                (Some(needle), Err(e)) => assert!(e.contains(needle), "{columns}: {e}"),
+                (want, got) => panic!("{columns}: wanted {want:?}, got {got:?}"),
+            }
+        }
+        let mut blank = spec("typ = 2.0").unwrap();
+        blank.characteristic[0].basis = " ".into();
+        assert_eq!(
+            blank.validate().unwrap_err(),
+            "characteristic 0 (VF): requires non-empty parameter and basis"
+        );
+    }
 
     #[test]
     fn get_bool_distinguishes_false_from_absent() {
