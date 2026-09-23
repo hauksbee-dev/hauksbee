@@ -500,13 +500,19 @@ from, so an extracted model stays auditable.
    through `pdftoppm` at 200 DPI. At most seven pages are rendered: page one
    and the pages most relevant to pinout, ratings, and electrical tables. The
    complete copied PDF and text remain available to local agent backends.
-2. **Prompt** built per kind, listing the required params, the ratings to
+2. **Prompt** built per kind, listing the required and optional params, the ratings to
    pull, and the physical bounds each value must respect.
 3. **Backend call** (see the backend matrix above; which one runs comes from
    `hauksbee models backend show`, unless overridden by `--backend`):
    - **claude-code** (`--backend claude-code`): headless `claude -p` in the
      sandbox, with a prompt file, an answer file (`model.toml`), a timeout,
-     and the retry contract.
+     and the retry contract. The run is isolated from your own Claude Code
+     setup (`--restricted --strict-mcp-config`): your CLAUDE.md, memory,
+     custom agents, hooks, plugins, skills and MCP servers never reach the
+     extraction. It gets only the Bash, Read, Edit, Write, WebFetch and
+     WebSearch tools: no subagents, and no background tasks, which would keep
+     `claude -p` running after the answer is written. A `--settings` file
+     added by a wrapper command still applies.
    - **agy** (`--backend agy`): headless `agy --print`, the same contract
      again.
    - **codex** (`--backend codex`): `codex exec --sandbox workspace-write

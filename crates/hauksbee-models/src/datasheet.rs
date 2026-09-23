@@ -223,7 +223,7 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
     // than failing the command.
     let mut pages = Vec::new();
     let mut selected_pages = Vec::new();
-    if which("pdftoppm") {
+    if which_path("pdftoppm").is_some() {
         for selection in selections {
             let stem = dir.path().join(format!("page-{:03}", selection.number));
             let page = selection.number.to_string();
@@ -282,7 +282,7 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
 }
 
 /// Run one extraction end to end, as the CLI does.
-pub fn run(args: Args) -> Result<PathBuf> {
+pub fn run(mut args: Args) -> Result<PathBuf> {
     // Magic bytes rather than extension, and BEFORE any backend is chosen: a
     // non-PDF (a saved HTML page, a .docx) would otherwise be text-dumped and
     // shipped to the LLM, producing a confidently wrong model; a downloaded
@@ -305,7 +305,6 @@ pub fn run(args: Args) -> Result<PathBuf> {
     // moment: the datasheet says what the part is on its first page, and the
     // person asking for a model is precisely the one who may not know which
     // of our categories their part falls into.
-    let mut args = args;
     if args.kind_str.trim().is_empty() {
         args.kind_str = identify_kind(&args, &pdf_text)?;
         eprintln!(
@@ -849,7 +848,7 @@ ENVIRONMENT (each overrides the config file for one run):
 /// The PDF's text layer via poppler's `pdftotext` (`-layout` keeps table
 /// columns aligned, which page selection wants and the prompt does not).
 fn pdftotext(path: &Path, layout: bool) -> Result<String> {
-    if !which("pdftotext") {
+    if which_path("pdftotext").is_none() {
         bail!("pdftotext is unavailable");
     }
     let mut cmd = Command::new("pdftotext");
@@ -1211,10 +1210,6 @@ fn number_word(n: usize) -> String {
         .map_or_else(|| n.to_string(), |w| w.to_string())
 }
 
-fn which(cmd: &str) -> bool {
-    which_path(cmd).is_some()
-}
-
 /// Where `cmd` resolves on PATH, if anywhere. Shared with the config
 /// resolver so "is it installed" is answered the same way everywhere.
 pub(crate) fn which_path(cmd: &str) -> Option<PathBuf> {
@@ -1246,21 +1241,13 @@ fn command_extensions(cmd: &str, windows: bool, pathext: Option<&str>) -> Vec<St
 }
 
 fn executable_file(path: &Path) -> bool {
-    let Ok(metadata) = path.metadata() else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
+    let runnable = |m: &std::fs::Metadata| {
+        std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0
+    };
     #[cfg(not(unix))]
-    {
-        true
-    }
+    let runnable = |_: &std::fs::Metadata| true;
+    path.metadata().is_ok_and(|m| m.is_file() && runnable(&m))
 }
 
 fn truncate_to_chars(s: &str, max: usize) -> String {
@@ -1439,13 +1426,16 @@ PIN ROLE NAMES for kind="{kind}": {pin_roles}
 
 For kind="{kind}", the required params are:
 {required_params}
+{optional_params}
 {digital_hint}
 [models.ratings]: these are the ONLY valid keys (any other key fails
 validation). Read them from the Absolute Maximum Ratings / Limiting Values and
 Thermal Characteristics tables, or the table a line names. Include every key
 the datasheet states for the selected package; omit a key it does not state (do
-NOT invent it). A stated limit with no key here goes in a characteristic record
-(rule 0), never under an invented key:
+NOT invent it). Ratings are magnitudes: for a limit printed negative (PNP,
+negative rail) write |value| and keep the printed sign in the source comment.
+A stated limit with no key here goes in a characteristic record (rule 0), never
+under an invented key:
 {ratings_hint}
 
 [[models.envelope]]: read the Recommended Operating Conditions and Absolute
@@ -1545,7 +1535,11 @@ IMPORTANT RULES:
      conditions = "<the row's test conditions>"
      basis = "<table/row citation>"
    Never invent a percentage, derive a bound from a typical value, or
-   substitute a model clamp for a published guarantee.
+   substitute a model clamp for a published guarantee. A param the kind needs
+   as a nominal value may come from a typ column: cite it as typ; it gets no
+   interval record (the row may still get a characteristic record). A min-only
+   or max-only row is a bound, never a nominal: use it only for a param that is
+   that bound (e.g. an output level from VOL max).
 1. Add a comment on each param/rating line citing where in the datasheet you found
    the value, e.g.: `# Source: Table 6.3, typ column`
 2. Use only values explicitly stated in the datasheet; do NOT guess. For SPICE
@@ -1562,7 +1556,9 @@ IMPORTANT RULES:
    source record. A named abstention is correct; a guessed field is wrong.
 4. For every real behavior the selected schema and params do not represent,
    the description must say `does not model ...` and name that behavior. Do not
-   let a partial card read as a complete model of the component.
+   let a partial card read as a complete model of the component. Never delete a
+   sourced fact to pass validation: fix the record, or move the fact into a
+   characteristic record (rule 0).
 5. Output ONLY the TOML block, starting with [[models]]; no prose, no markdown
    fences, no leading or trailing text.
 6. Currents in AMPERES, voltages in VOLTS, power in WATTS (convert mA/mW yourself).
@@ -1594,6 +1590,7 @@ OUTPUT (TOML only, starting with [[models]]):
         datasheet_text_end = DATASHEET_TEXT_END,
         pdf_text = truncate_to_chars(&pdf_text, 40_000),
         required_params = required_params_for_kind(kind),
+        optional_params = optional_params_for_kind(kind),
         pin_roles = pin_roles_for_kind(kind),
         ratings_hint = crate::schema::Ratings::KEY_GUIDE,
         behavioral_hint = behavioral_hint_for_kind(kind),
@@ -1828,19 +1825,28 @@ captures the part's internal behaviour the SPICE kinds cannot. The schema:
   a = "<pin role>"  ; b = "<pin role>"
   expr = "<arithmetic over v_<role>, params>"   # e.g. "v_vplus / tie_ohms"
 
-Only include the blocks the datasheet supports. Cite the datasheet for each
-number (pin functions table, electrical characteristics, typical application).
+Only include the blocks the datasheet supports, each number cited (rule 1).
 "#
     );
     let specific = match kind {
         "charger" => {
             "\nFor a CHARGER specifically: identify the input pin (PVIN/VIN), the \
-             battery/charge-output pin (BAT/VBAT), the input current-sense pins and \
-             the ILIMIT / current-limit programming pin. Fill \
+             battery/charge-output pin (BAT/VBAT), and any current-sense or \
+             current-programming pins. A SWITCHING charger fills \
              [models.behavioral.converter] with topology and the regulated charge \
-             voltage, and [models.behavioral.converter.iin_program] with the \
-             current-sense and ILIMIT resistor relationship if the datasheet gives \
-             the input-current-limit programming equation."
+             voltage, and [models.behavioral.converter.iin_program] if the datasheet \
+             gives the sense-resistor input-current-limit equation. A LINEAR charger \
+             whose charge current is set by one resistor (I = K / R) needs no \
+             [models.behavioral] block; it takes, with K's published min/typ/max \
+             (or the programmed-current rows) as characteristic records:
+  [models.current_program]
+  pin = \"<programming pin role>\"
+  semantics = \"regulated_current\"
+  current_in_roles = [\"in\"]
+  current_out_roles = [\"out\"]
+  max_operating_current_a = <highest specified programmed current, A>
+  equation = \"inverse_resistance\"
+  k_volts = <typical K in volts>"
         }
         "pmic" => {
             "\nFor a PMIC specifically: identify any pin with an INTERNAL pull \
@@ -1944,11 +1950,19 @@ use the identity-only abstention and name the unresolved package.
 
 fn required_params_for_kind(kind: &str) -> &'static str {
     match kind {
-        "diode" => "is, n, rs  (also cjo, vj, m, bv if available)",
-        "bjt_npn" | "bjt_pnp" => "is, bf, nf, vaf, br  (also rb, rc, re, cje, cjc, tf)",
-        "nmos" | "pmos" => "vto, kp  (also lambda, rd, rs, cgd, cgs)",
-        "vreg" => "vout, dropout_v, iq_a",
-        "opamp" => "gain, rail_lo, rail_hi",
+        "diode" => "is, n, rs",
+        "bjt_npn" | "bjt_pnp" => "is, bf, nf",
+        "nmos" | "pmos" => "vto, kp",
+        "vreg" => {
+            "fixed: vout, dropout_v, iq_a; adjustable (ADJ/FB pin): vref (the reference, \
+             never the output), dropout_v and the quiescent current param the checker asks \
+             for, with no vout"
+        }
+        "opamp" => {
+            "gain, rail_lo, rail_hi (fixed fallback levels); swing_lo/swing_hi are the \
+             output headroom from each supply pin (max column), pole_hz is GBW / gain, \
+             slew is in V/us"
+        }
         "comparator" => "out_lo, out_hi, hysteresis, tpd_s",
         "analog_switch" => "ron, roff, vth",
         "digital" => {
@@ -1975,6 +1989,28 @@ fn required_params_for_kind(kind: &str) -> &'static str {
         "balancer" => "(the leak law is in [models.behavioral]; no required numeric params)",
         _ => "(see db/README.md for kind-specific requirements)",
     }
+}
+
+/// Every other param the kind's consumers read (`param_names`), so a datasheet
+/// fact with a home is not dropped because only the required ones were named.
+fn optional_params_for_kind(kind: &str) -> String {
+    let base = behavioral_family_base_kind(kind).unwrap_or(kind);
+    let named: Vec<&str> = required_params_for_kind(kind)
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .collect();
+    let rest: Vec<&str> = serde_json::from_value(serde_json::Value::from(base))
+        .map_or(&[][..], crate::param_names::known_param_names)
+        .iter()
+        .copied()
+        .filter(|n| !named.contains(n))
+        .collect();
+    if rest.is_empty() {
+        return String::new();
+    }
+    format!(
+        "Optional params it also reads (add each one the datasheet states): {}",
+        rest.join(", ")
+    )
 }
 
 // ── Backend dispatch ──────────────────────────────────────────────────────────
@@ -2062,9 +2098,6 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
 
     // An agent backend reads the sandboxed PDF, text dump and page renders
     // itself, so the embedded text comes back out of its instruction.
-    let prompt = prompt_for_agent_backend(prompt);
-    let prompt = prompt.as_str();
-
     // The sandbox is a scratch copy, never the user's own directory. See
     // `Workspace`: the agent runs full-auto, so what it can reach is the whole
     // of the security story.
@@ -2074,7 +2107,8 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
         ws.path().display(),
         ws.pages.len()
     );
-    let base_prompt = format!("{prompt}\n\n{}", verification_clause(&ws));
+    let agent_prompt = prompt_for_agent_backend(prompt);
+    let base_prompt = format!("{agent_prompt}\n\n{}", verification_clause(&ws));
     validated_attempts(resolved.retries, &base_prompt, reply, tool, |p| {
         let _ = std::fs::remove_file(ws.answer_path());
         let stdout = run_agent_once(&resolved, p, &ws)?;
@@ -2413,7 +2447,11 @@ fn require_tool(resolved: &Resolved) -> Result<()> {
 ///   * claude: `-p --permission-mode <mode> --no-session-persistence`: a
 ///     datasheet run is not a conversation anyone resumes, and a transcript
 ///     per extraction would keep the datasheet's text around after the
-///     sandbox is gone. It reads the PDF and page renders itself.
+///     sandbox is gone. It reads the PDF and page renders itself. `--restricted`
+///     drops the operator's settings, CLAUDE.md, memory, agents, hooks and
+///     skills (a wrapper's `--settings` still applies); `--tools` drops
+///     subagents; background tasks, which keep `-p` alive, are off. Never
+///     `--bare`: it skips the keychain, losing a subscription sign-in.
 ///   * agy: `--mode <mode> --add-dir <sandbox>`, and the pointer as the
 ///     `--print=` value because agy reads nothing from stdin.
 fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<String> {
@@ -2461,7 +2499,11 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
                 "--effort",
                 &a.effort,
                 "--no-session-persistence",
-            ]);
+            ])
+            .args(["--restricted", "--strict-mcp-config", "--tools"])
+            .arg("Bash,Read,Edit,Write,WebFetch,WebSearch")
+            .env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")
+            .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
         }
         Backend::Agy => {
             cmd.args(["--output-format", "text", "--mode", &a.permission_mode])
@@ -2680,7 +2722,7 @@ impl ApiRequest {
                  flag value and never stored."
             ),
         };
-        if !which("curl") {
+        if which_path("curl").is_none() {
             bail!("the api backend needs `curl`, which is not in PATH; install curl");
         }
         Ok(ApiRequest {
@@ -2835,10 +2877,11 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
              is '{got}'"
         );
     }
-    if behavioral_family_base_kind(want).is_some() && entry.behavioral.is_empty() {
+    let behaves = !entry.behavioral.is_empty() || entry.current_program.is_some();
+    if behavioral_family_base_kind(want).is_some() && !behaves {
         bail!(
             "behavioural extraction for {part} (kind '{want}') produced no [models.behavioral] \
-             block; the prompt asked for one"
+             or [models.current_program] block; the prompt asked for one"
         );
     }
     if !entry
@@ -2868,15 +2911,7 @@ fn kind_discriminant(kind: ComponentKind) -> String {
 }
 
 fn sanitise_filename(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || "-_".contains(c) {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    s.replace(|c: char| !(c.is_alphanumeric() || "-_".contains(c)), "_")
 }
 
 fn default_out_dir() -> PathBuf {
@@ -3039,9 +3074,11 @@ mod tests {
     #[test]
     fn prompt_carries_kind_specific_guidance() {
         let bjt = build_prompt("BC847", "bjt_npn", "x");
-        assert!(bjt.contains("is, bf, nf"));
-        assert!(bjt.contains("BC847"));
-        assert!(bjt.contains("VCEO"));
+        assert!(bjt.contains("BC847") && bjt.contains("is, bf, nf"));
+        assert!(bjt.contains("datasheet states): br, vaf, var, nr, rb"));
+        assert!(bjt.contains("VCEO") && bjt.contains("Ratings are magnitudes"));
+        assert!(bjt.contains("may come from a typ column") && bjt.contains("never a nominal"));
+        assert!(build_prompt("ADJ_FIXTURE", "vreg", "x").contains("adjustable (ADJ/FB pin): vref"));
         assert!(!bjt.contains("[models.behavioral.converter]"));
         assert!(build_prompt("1N4148", "diode", "x").contains("VRRM"));
         assert!(build_prompt("AMS1117", "vreg", "x").contains("max_junction_temp_c"));
@@ -3188,6 +3225,18 @@ v_sense_full = 0.0463
 
         let plain = "[[models]]\nid = \"x\"\nkind = \"vreg\"\n[models.params]\nvout = 5.0\ndropout_v = 1.0\niq_a = 0.001\n";
         assert!(parse_and_validate_reply(plain, "X", "charger").is_err());
+
+        // The linear-charger snippet the prompt teaches, placeholders filled,
+        // is accepted as the family's behaviour without a converter block.
+        let hint = behavioral_hint_for_kind("charger");
+        let snippet = hint[hint.find("[models.current_program]").unwrap()..]
+            .replace("<programming pin role>", "prog")
+            .replace("<highest specified programmed current, A>", "0.5")
+            .replace("<typical K in volts>", "1000.0");
+        let pins = "[models.pins]\n\"1\" = \"in\"\n\"2\" = \"out\"\n\"3\" = \"prog\"\n";
+        let linear = format!("{plain}{pins}{snippet}{MODEL_SOURCE}");
+        let entry = parse_and_validate_reply(&linear, "X", "charger").unwrap();
+        assert!(entry.behavioral.is_empty() && entry.current_program.is_some());
     }
 
     #[test]
@@ -3524,7 +3573,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let command = dir.path().join("custom wrapper");
         std::fs::write(
             &command,
-            "#!/bin/sh\ncat >/dev/null\nif grep -q 'connectivity check' prompt.md; then printf 'OK\\n' > model.toml; fi\nprintf '%s\\n' \"$@\"\nprintf 'wrapper stderr' >&2\n",
+            "#!/bin/sh\ncat >/dev/null\nif grep -q 'connectivity check' prompt.md; then printf 'OK\\n' > model.toml; fi\nprintf '%s\\n' \"$@\"\nprintf 'wrapper stderr' >&2\nprintf '%s' \"$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS$CLAUDE_CODE_DISABLE_AUTO_MEMORY\" > env.txt\n",
         )
         .unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -3555,9 +3604,15 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
                     "gpt-5.6-sol",
                     "--effort",
                     "high",
-                    "--no-session-persistence"
+                    "--no-session-persistence",
+                    "--restricted",
+                    "--strict-mcp-config",
+                    "--tools",
+                    "Bash,Read,Edit,Write,WebFetch,WebSearch"
                 ]
             );
+            let env = std::fs::read_to_string(ws.path().join("env.txt")).unwrap();
+            assert_eq!(env, "11", "background tasks and auto memory are off");
         }
         assert_eq!(
             std::fs::read_to_string(ws.path().join("claude-code-stderr.log")).unwrap(),
@@ -3597,15 +3652,20 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             ]);
             let actual = output.lines().map(str::to_string).collect::<Vec<_>>();
             assert_eq!(actual, expected, "codex permission mode {mode}");
-            assert_eq!(
-                actual.contains(&"--approve-for-me".into()),
-                mode == "approve-for-me"
-            );
-            assert_eq!(
-                actual.contains(&"--sandbox".into()),
-                mode != "approve-for-me"
-            );
         }
+        resolved.backend = Backend::Agy;
+        resolved.agy.command = command.to_str().unwrap().into();
+        let a = &resolved.agy;
+        let expected = format!(
+            "--output-format\ntext\n--mode\n{}\n--model\n{}\n--effort\n{}\n--add-dir\n{}\n--print={}",
+            a.permission_mode,
+            a.model,
+            a.effort,
+            ws.path().display(),
+            String::from_utf8_lossy(AGENT_POINTER)
+        );
+        let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
+        assert_eq!(output.trim_end(), expected);
         resolved.backend = Backend::ClaudeCode;
         let relative = command
             .strip_prefix(std::env::current_dir().unwrap())
@@ -3668,17 +3728,22 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
 
     #[test]
     fn local_agent_prompt_does_not_embed_layout_lost_pdf_text() {
-        let marker = "RAW_TABLE_NOISE_THAT_MUST_NOT_REACH_THE_AGENT".repeat(1_000);
+        let noise = "RAW_TABLE_NOISE_THAT_MUST_NOT_REACH_THE_AGENT";
+        let marker = noise.repeat(1_000);
         let model_prompt = build_prompt("TXB0101", "digital", &marker);
+        assert!(
+            model_prompt.contains(noise),
+            "the API backend keeps the text"
+        );
         let local = prompt_for_agent_backend(&model_prompt);
-        assert!(!local.contains(&marker));
+        assert!(!local.contains(noise));
         assert!(local.contains("Read the attached page images first"));
         assert!(local.contains("datasheet.txt or datasheet.pdf"));
         assert!(local.len() < model_prompt.len());
 
         let sensor_prompt = build_sensor_prompt("TMP117", "i2c_sensor", &marker);
         let local_sensor = prompt_for_agent_backend(&sensor_prompt);
-        assert!(!local_sensor.contains(&marker));
+        assert!(!local_sensor.contains(noise));
         assert!(local_sensor.contains("datasheet.txt or datasheet.pdf"));
 
         // Kind identification is a separate small call made before the
@@ -3686,14 +3751,5 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         // deliberately unchanged.
         let identify = "identify this part from the first-page text";
         assert_eq!(prompt_for_agent_backend(identify), identify);
-    }
-
-    #[test]
-    fn api_prompt_keeps_the_embedded_datasheet_source() {
-        let marker = "API_BACKEND_NEEDS_THIS_TEXT";
-        let prompt = build_prompt("TXB0101", "digital", marker);
-        assert!(prompt.contains(marker));
-        assert!(prompt.contains(DATASHEET_TEXT_BEGIN));
-        assert!(prompt.contains(DATASHEET_TEXT_END));
     }
 }

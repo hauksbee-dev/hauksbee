@@ -1,65 +1,9 @@
-//! The Claude Code and Antigravity runners honour the same contract as codex:
-//! the model and effort are always named, stderr is captured to a file, and
-//! the datasheet never rides on argv.
-//!
-//! Like `codex_prompt_delivery`, this reads the source, because the
-//! alternative is spending a real agent run on every CI build.
-
-use std::path::Path;
+//! Backend naming, consent and default contracts shared by every agent CLI.
+//! The exact argv each CLI receives is pinned in `datasheet.rs`'s
+//! `custom_command_runs_the_selected_protocol_and_never_falls_back`.
 
 use hauksbee_models::datasheet::{Backend, CONSENT_NOTICE};
 use hauksbee_models::extract_config::{presets, ExtractConfig, FakeHost};
-
-fn source() -> String {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/datasheet.rs");
-    std::fs::read_to_string(p).expect("read datasheet.rs")
-}
-
-fn body_of(function: &str) -> String {
-    let s = source();
-    let after = s
-        .split(&format!("fn {function}("))
-        .nth(1)
-        .unwrap_or_else(|| panic!("{function} exists"));
-    after[..after.find("\nfn ").unwrap_or(after.len())].to_string()
-}
-
-#[test]
-fn one_runner_names_model_and_effort_for_every_cli() {
-    let body = body_of("run_agent_once");
-    for arm in [
-        "Backend::Codex =>",
-        "Backend::ClaudeCode =>",
-        "Backend::Agy =>",
-    ] {
-        assert!(body.contains(arm), "run_agent_once must build {arm}");
-    }
-    for flag in [
-        "\"--model\"",
-        "\"--effort\"",
-        "\"--no-session-persistence\"",
-        "\"--permission-mode\"",
-        "\"--mode\"",
-        "\"--sandbox\"",
-        "\"--add-dir\"",
-        "--print=",
-        "model_reasoning_effort",
-    ] {
-        assert!(body.contains(flag), "run_agent_once must pass {flag}");
-    }
-    assert!(
-        body.contains("-stderr.log"),
-        "every CLI's stderr must be captured"
-    );
-    assert!(
-        !body.contains("--bare"),
-        "--bare skips the keychain, so claude would never be signed in"
-    );
-    assert!(
-        body.contains("AGENT_POINTER"),
-        "agy gets the same short pointer, never the prompt"
-    );
-}
 
 #[test]
 fn the_consent_notice_names_every_backend_it_could_send_to() {
