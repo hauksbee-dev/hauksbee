@@ -162,30 +162,24 @@ function Shell({ boot }: { boot: Boot }) {
   const { report } = session
   const reportOk = report?.ok === true
 
-  const driveLive = useCallback(() => {
-    session.launchLive(() => {
-      setSimMounted(true)
-      setView('sim')
-    })
-  }, [session])
+  const showSim = useCallback(() => {
+    setSimMounted(true)
+    setView('sim')
+  }, [])
+
+  const driveLive = useCallback(() => session.launchLive(showSim), [session, showSim])
 
   // Attach to the session ALREADY running server-side (a stale tab, a reload,
   // a session for another board) without launching anything: the sim view
   // binds its identity to what /ws streams and says which board that is.
   const openLiveSession = useCallback(() => {
     session.refreshLiveStatus()
-    setSimMounted(true)
-    setView('sim')
-  }, [session])
+    showSim()
+  }, [session, showSim])
 
   // Relaunch the session with the CURRENT board, replacing whatever runs now.
   // Used where the affordance's label already names the replacement.
-  const relaunchWithCurrent = useCallback(() => {
-    session.forceLaunch(() => {
-      setSimMounted(true)
-      setView('sim')
-    })
-  }, [session])
+  const relaunchWithCurrent = useCallback(() => session.forceLaunch(showSim), [session, showSim])
 
   const serverLiveActive = session.serverLive?.active === true
   const simEnabled = simMounted || deck !== null || (reportOk && session.liveMode !== 'none') || serverLiveActive
@@ -409,11 +403,7 @@ function Shell({ boot }: { boot: Boot }) {
         {session.launch.phase === 'confirm' && (
           <ReplaceLiveConfirm
             launch={session.launch}
-            onReplace={() => {
-              session.confirmReplace()
-              setSimMounted(true)
-              setView('sim')
-            }}
+            onReplace={() => { session.confirmReplace(); showSim() }}
             onOpenRunning={() => { session.cancelLaunch(); openLiveSession() }}
             onCancel={session.cancelLaunch}
           />

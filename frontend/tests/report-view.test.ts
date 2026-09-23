@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import {
   assumptionsForEvidence, describeModelSource, overallVerdict, repeatedAssumptions, refusalLines, summarizeErrorBudget, summarizeEvidence,
 } from '../src/lib/report-view'
-import type { CheckResult, ErrorBudget, RefusalContract, RunResponse } from '../src/types/report'
+import type { CheckResult, ErrorBudget, ModelOnPath, ModelUncertainty, RefusalContract, RunResponse } from '../src/types/report'
 
 describe('C5.3 refusal contract', () => {
   test('the browser preserves all four answers from the CI result', () => {
@@ -55,46 +55,41 @@ test('evidence summary counts each derived status and every caveated assertion',
   expect(summary).toEqual({ clean: 1, qualified: 1, undermined: 1, caveated: 2 })
 })
 
-test('frontend renders canonical model source and unknown accuracy without guessing a range', () => {
-  expect(describeModelSource({
-    reference: 'U2',
-    model_id: 'xc6206',
+/** A datasheet-derived, bounds-only model from `<model_id>.toml` with one
+ *  uncertainty record. */
+function boundedModel(reference: string, model_id: string, uncertainty: ModelUncertainty): ModelOnPath {
+  return {
+    reference,
+    model_id,
     confidence: 'exact',
     source: {
       tier: 'datasheet-derived',
       layer: 'user-dir',
-      origin: 'xc6206.toml',
+      origin: `${model_id}.toml`,
       validation: 'physical-bounds-only',
-      uncertainty: [{
-        status: 'unknown',
-        parameter: 'U2.model',
-        reason: 'the source publishes no validated error interval',
-      }],
+      uncertainty: [uncertainty],
     },
-  })).toContain('datasheet-derived · physical-bounds-only · uncertainty unknown')
+  }
+}
+
+test('frontend renders canonical model source and unknown accuracy without guessing a range', () => {
+  expect(describeModelSource(boundedModel('U2', 'xc6206', {
+    status: 'unknown',
+    parameter: 'U2.model',
+    reason: 'the source publishes no validated error interval',
+  }))).toContain('datasheet-derived · physical-bounds-only · uncertainty unknown')
 })
 
 test('frontend never presents a typical-only range as validated accuracy', () => {
-  expect(describeModelSource({
-    reference: 'U1',
-    model_id: 'switch',
-    confidence: 'exact',
-    source: {
-      tier: 'datasheet-derived',
-      layer: 'user-dir',
-      origin: 'switch.toml',
-      validation: 'physical-bounds-only',
-      uncertainty: [{
-        status: 'interval',
-        parameter: 'U1.ilim',
-        low: 0.75,
-        high: 1.0,
-        unit: 'A',
-        kind: 'typical-range',
-        basis: 'datasheet min/typ row with no maximum',
-      }],
-    },
-  })).toContain('non-guaranteed typical/estimated range')
+  expect(describeModelSource(boundedModel('U1', 'switch', {
+    status: 'interval',
+    parameter: 'U1.ilim',
+    low: 0.75,
+    high: 1.0,
+    unit: 'A',
+    kind: 'typical-range',
+    basis: 'datasheet min/typ row with no maximum',
+  }))).toContain('non-guaranteed typical/estimated range')
 })
 
 test('CI assertion evidence resolves canonical assumption records without inventing prose', () => {

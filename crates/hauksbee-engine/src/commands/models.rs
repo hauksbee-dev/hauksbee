@@ -1279,27 +1279,19 @@ pub fn extract(
     println!("{}", datasheet::CONSENT_NOTICE);
     println!();
 
-    if !assume_yes {
-        // A tty can answer. A pipe cannot, and guessing "yes" on its behalf
-        // would send someone's datasheet because they ran the wrong command.
-        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-            anyhow::bail!(
-                "refusing to send anything without consent. This is not a terminal, so \
-                 there is nobody to ask: pass --yes if you meant it."
-            );
-        }
-        print!("Send the datasheet and draft a model? [y/N] ");
-        use std::io::Write;
-        std::io::stdout().flush().ok();
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer)?;
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            println!("Nothing was sent.");
-            return Ok(());
-        }
+    if !assume_yes
+        && !datasheet::confirm(
+            &mut std::io::stdout(),
+            "Send the datasheet and draft a model?",
+            "refusing to send anything without consent. This is not a terminal, so \
+             there is nobody to ask: pass --yes if you meant it.",
+        )?
+    {
+        println!("Nothing was sent.");
+        return Ok(());
     }
 
-    let written = datasheet::run(args)?;
+    let written = hauksbee_models::extract_progress::with_spinner(|| datasheet::run(args))?;
 
     println!();
     println!(
@@ -2346,7 +2338,7 @@ pub fn prepare(
             )
         });
         let contents = if executable_upgrade {
-            editable_model_upgrade(board_path, comp, &resolution)?
+            editable_model_upgrade(&board_path.display().to_string(), comp, &resolution)?
         } else {
             let context = existing
                 .and_then(|row| row.model_id.as_deref().map(|model| (row, model)))
@@ -2511,32 +2503,14 @@ fn coverage_authoring_components<'a>(
     components
 }
 
-/// Start a partial-model upgrade from the exact winning executable card rather
-/// than an empty shell. Its match is narrowed to this board-observed identity,
-/// and its provenance is demoted to user-model/unvalidated: copied behavior
-/// keeps working, while any edits must earn validation before an accuracy gate
-/// can promote them.
-fn editable_model_upgrade(
-    board_path: &Path,
-    comp: &hauksbee_extract::Component,
-    resolution: &hauksbee_models::Resolution,
-) -> anyhow::Result<String> {
-    editable_model_upgrade_fields(
-        &board_path.display().to_string(),
-        &comp.reference,
-        &comp.value,
-        &comp.lib_id,
-        &comp.footprint,
-        resolution,
-    )
-}
-
-/// Build the same conservative partial-model extension used by `models
-/// prepare`, but from a browser-selected component. This function is
-/// read-only: it returns reviewable TOML and never writes or fetches anything.
-/// The expected winning id prevents a stale browser report from silently
-/// drafting against a different installed model library.
-pub fn draft_model_upgrade(
+/// Draft a model for a browser-selected component, read-only: it returns
+/// reviewable TOML and never creates a pack, saves a model, fetches a
+/// datasheet, or invokes an LLM. With no `expected_model_id` this is the
+/// unresolved, evidence-first scaffold of `models new`/`models prepare`;
+/// otherwise it is the conservative partial-model extension of `models
+/// prepare`, and the expected winning id prevents a stale browser report from
+/// silently drafting against a different installed model library.
+pub fn draft_model(
     board_label: &str,
     reference: &str,
     value: &str,
@@ -2545,7 +2519,6 @@ pub fn draft_model_upgrade(
     properties: &[(String, String)],
     expected_model_id: &str,
 ) -> anyhow::Result<String> {
-    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
     let component = hauksbee_extract::Component {
         reference: reference.to_string(),
         value: value.to_string(),
@@ -2557,6 +2530,10 @@ pub fn draft_model_upgrade(
         dnp: false,
         pins: Vec::new(),
     };
+    if expected_model_id.trim().is_empty() {
+        return scaffold_template(Path::new(board_label), &component, None);
+    }
+    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
     let resolution = crate::binder::library_resolution(&lib, &component);
     let actual = resolution.model.as_ref().map(|model| model.id.as_str());
     if actual != Some(expected_model_id) {
@@ -2566,70 +2543,36 @@ pub fn draft_model_upgrade(
             actual.unwrap_or("nothing")
         );
     }
-    editable_model_upgrade_fields(
-        board_label,
-        reference,
-        value,
-        lib_id,
-        footprint,
-        &resolution,
-    )
+    editable_model_upgrade(board_label, &component, &resolution)
 }
 
-/// Build the same unresolved, evidence-first scaffold used by `models new` and
-/// `models prepare`, but from a browser-selected component. This is deliberately
-/// read-only: it returns bytes for review and never creates a pack, saves a
-/// model, fetches a datasheet, or invokes an LLM.
-pub fn draft_model_scaffold(
+/// Start a partial-model upgrade from the exact winning executable card rather
+/// than an empty shell. Its match is narrowed to this board-observed identity,
+/// and its provenance is demoted to user-model/unvalidated: copied behavior
+/// keeps working, while any edits must earn validation before an accuracy gate
+/// can promote them.
+fn editable_model_upgrade(
     board_label: &str,
-    reference: &str,
-    value: &str,
-    lib_id: &str,
-    footprint: &str,
-    properties: &[(String, String)],
-) -> anyhow::Result<String> {
-    if reference.trim().is_empty() {
-        anyhow::bail!("the model scaffold needs a component reference");
-    }
-    let component = hauksbee_extract::Component {
-        reference: reference.to_string(),
-        value: value.to_string(),
-        lib_id: lib_id.to_string(),
-        footprint: footprint.to_string(),
-        position: None,
-        layer: String::new(),
-        properties: properties.to_vec(),
-        dnp: false,
-        pins: Vec::new(),
-    };
-    scaffold_template(Path::new(board_label), &component, None)
-}
-
-fn editable_model_upgrade_fields(
-    board_label: &str,
-    reference: &str,
-    value: &str,
-    lib_id: &str,
-    footprint: &str,
+    comp: &hauksbee_extract::Component,
     resolution: &hauksbee_models::Resolution,
 ) -> anyhow::Result<String> {
     let mut model = resolution.model.clone().ok_or_else(|| {
         anyhow::anyhow!(
             "{} was marked as an executable upgrade but no model resolved",
-            reference
+            comp.reference
         )
     })?;
     let base_id = model.id.clone();
     model.id = format!(
         "{}_board_extension",
-        sanitise_id(&format!("{}_{}", reference, value.trim()))
+        sanitise_id(&format!("{}_{}", comp.reference, comp.value.trim()))
     );
     model.r#match = hauksbee_models::schema::MatchRules {
-        lib_id: (!lib_id.trim().is_empty()).then(|| lib_id.to_string()),
-        value_re: (!value.trim().is_empty())
-            .then(|| format!("(?i)^{}$", escape_regex(value.trim()))),
-        footprint_re: (!footprint.trim().is_empty())
-            .then(|| format!("^{}$", escape_regex(footprint.trim()))),
+        lib_id: (!comp.lib_id.trim().is_empty()).then(|| comp.lib_id.clone()),
+        value_re: (!comp.value.trim().is_empty())
+            .then(|| format!("(?i)^{}$", escape_regex(comp.value.trim()))),
+        footprint_re: (!comp.footprint.trim().is_empty())
+            .then(|| format!("^{}$", escape_regex(comp.footprint.trim()))),
         mpn_re: None,
         properties: Default::default(),
     };
@@ -2663,8 +2606,8 @@ fn editable_model_upgrade_fields(
          # Close only source-supported gaps, then update [models.source] validation/uncertainty.\n\
          # Declared gaps at preparation time: {}.\n\
          # The exact board inventory and source hashes are retained in ../inventory.json.\n\n{}",
-        reference,
-        value,
+        comp.reference,
+        comp.value,
         board_label,
         if missing.is_empty() {
             "scope was unspecified"
@@ -2766,7 +2709,7 @@ fn shell_quote(text: &str) -> String {
 mod tests {
     use super::box_table;
     use super::{
-        draft_model_upgrade, escape_regex, prepare_approval, resolve_report, resolve_report_all,
+        draft_model, escape_regex, prepare_approval, resolve_report, resolve_report_all,
         sanitise_id, scaffold_property_match_rules, toml_quote,
     };
 
@@ -2805,7 +2748,7 @@ mod tests {
 
     #[test]
     fn browser_extension_preserves_every_executable_bma423_table() {
-        let draft = draft_model_upgrade(
+        let draft = draft_model(
             "watchy.kicad_pcb",
             "U6",
             "BMA423",

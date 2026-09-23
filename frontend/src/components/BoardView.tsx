@@ -6,7 +6,7 @@ import { WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { SelectionCard } from './SelectionCard'
 import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePanel'
-import { ConstraintModal } from './ConstraintModal'
+import { QueuedConstraintModal } from './ConstraintModal'
 import type { ConstraintDraft } from './ConstraintEditor'
 import { DatasheetExtract } from './DatasheetExtract'
 import { WritePart } from './WritePart'
@@ -488,20 +488,8 @@ export function BoardView({
         )}
 
         {constraintDraft && (
-          <ConstraintModal
-            initial={constraintDraft}
-            onSave={draft => onQueue({
-              ...draft,
-              type: 'check',
-              net: draft.net || undefined,
-              ref: draft.ref || undefined,
-            })}
-            onClose={() => setConstraintDraft(null)}
-            onOpenChecks={() => {
-              setConstraintDraft(null)
-              onOpenChecks()
-            }}
-          />
+          <QueuedConstraintModal initial={constraintDraft} onQueue={onQueue}
+            onClose={() => setConstraintDraft(null)} onOpenChecks={onOpenChecks} />
         )}
       </div>
     </div>

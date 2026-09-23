@@ -6,6 +6,7 @@ import type { BoardSession } from '../src/hooks/useBoardSession'
 import type { WebReport } from '../src/types/report'
 import { reportVerdictHeadline, reportVerdictTone } from '../src/lib/report-view'
 import { visibleImportMarkers } from '../src/lib/board-renderer'
+import { timingEvidence, timingRefusal } from './timing-fixture'
 
 // The real frontdoor report lives in the repository's demo/ tree; a checkout
 // without it skips the tests that need it rather than failing on a missing file.
@@ -27,23 +28,9 @@ function realFrontdoorReport(): WebReport {
   const report = startup.report
   report.cosim = {
     ...report.cosim!,
-    timing_coverage: [{
-      mcu_ref: 'U1', backend: 'simavr:atmega328p', cycle_exact: true,
-      timestamp_precision_s: 0.000001, minimum_guaranteed_pulse_s: 0.000002,
-      chunk_s: 0.001,
-    }],
-    timing_refusals: ['PWL replay refused on net /CLK: transition budget exceeded'],
-    fallback_windows: [{
-      start_s: 0.001, end_s: 0.002, method: 'backward-euler',
-      fidelity_note: 'first-order and numerically dissipative', error_estimate_v: 0.012,
-    }],
+    ...timingEvidence,
   }
-  report.refusal = {
-    claim: 'timing-sensitive firmware and electrical conclusions',
-    missing_prerequisite: 'PWL replay refused on net /CLK: transition budget exceeded',
-    valid_partial_conclusions: ['Static board analysis remains valid.'],
-    next_action: 'reduce transitions per solver chunk, then rerun',
-  }
+  report.refusal = timingRefusal
   return report
 }
 
@@ -272,7 +259,8 @@ test('visual bus-device builder embeds exact local spec bytes and round-trips in
 
 test('a component with a bus-model gap offers explicit register-map attachment', async () => {
   const { SelectionCard } = await import('../src/components/SelectionCard')
-  const html = renderToStaticMarkup(<SelectionCard
+  /** The same BMA423 card, differing only in what its model implements. */
+  const card = (owns: string[], missing: string[]) => renderToStaticMarkup(<SelectionCard
     net={null}
     component={{ ref: 'U7', value: 'BMA423', lib_id: 'Sensor:BMA423' }}
     modelCoverage={{
@@ -280,27 +268,16 @@ test('a component with a bus-model gap offers explicit register-map attachment',
       stage: 'executable_partial', actionable_behavior_gap: true, model_id: 'bma423',
       model_kind: 'digital', layer: 'builtin', origin: 'digital',
       source: { tier: 'vendor', layer: 'builtin', origin: 'digital', validation: 'datasheet-checked' },
-      implements: ['pin_roles'], missing: ['i2c_spi_register_map'], pins: [],
+      implements: owns, missing, pins: [],
     }}
     onQueue={() => {}}
     onClose={() => {}}
   />)
+  const html = card(['pin_roles'], ['i2c_spi_register_map'])
   expect(html).toContain('data-testid="selection-add-sensor"')
   expect(html).toContain('Open its register-map behavior builder')
 
-  const modelOwned = renderToStaticMarkup(<SelectionCard
-    net={null}
-    component={{ ref: 'U7', value: 'BMA423', lib_id: 'Sensor:BMA423' }}
-    modelCoverage={{
-      reference: 'U7', value: 'BMA423', lib_id: 'Sensor:BMA423', footprint: 'LGA-12',
-      stage: 'executable_partial', actionable_behavior_gap: true, model_id: 'bma423',
-      model_kind: 'digital', layer: 'builtin', origin: 'digital',
-      source: { tier: 'vendor', layer: 'builtin', origin: 'digital', validation: 'datasheet-checked' },
-      implements: ['register_map_subset', 'chip_id_read'], missing: ['full_register_map'], pins: [],
-    }}
-    onQueue={() => {}}
-    onClose={() => {}}
-  />)
+  const modelOwned = card(['register_map_subset', 'chip_id_read'], ['full_register_map'])
   expect(modelOwned).toContain('data-testid="selection-register-map-owned"')
   expect(modelOwned).toContain('already auto-attaches model-owned register behavior')
   expect(modelOwned).not.toContain('selection-add-sensor')
@@ -312,7 +289,7 @@ test('live input sliders require an explicit engine source, not an input-looking
     type: 'BoardInfo' as const, name: 'b', board_url: '/b', num_components: 0,
     num_nets: 1, nets: ['A0'], component_kinds: {}, mcus: [] as [string, string][],
   }
-  const guessed = renderToStaticMarkup(<InputSourcesPanel boardInfo={base} frame={null} send={() => {}} />)
+  const guessed = renderToStaticMarkup(<InputSourcesPanel boardInfo={base} send={() => {}} />)
   expect(guessed).toContain('No input sources detected')
   expect(guessed).toContain('arbitrary net names are never treated as sources')
   expect(guessed).not.toContain('type="range"')
@@ -322,7 +299,6 @@ test('live input sliders require an explicit engine source, not an input-looking
       ...base,
       input_sources: [{ id: 'A0', kind: 'voltage', min: 0, max: 3.3, initial: 1.65, unit: 'V' }],
     }}
-    frame={null}
     send={() => {}}
   />)
   expect(declared).toContain('type="range"')

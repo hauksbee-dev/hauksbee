@@ -38,13 +38,13 @@ const liveBoards = new Map<string, string>()
  *  everything landing in one chunk. Mirrors the shape `readSseStream` in
  *  lib/api.ts parses (the same framing the real deps-install and extraction
  *  endpoints use). */
-function sseResponse(frames: { event: string; data: string }[]): Response {
+function sseResponse(frames: { event: string; data: string; wait?: number }[]): Response {
   const encoder = new TextEncoder()
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       for (const f of frames) {
         controller.enqueue(encoder.encode(`event: ${f.event}\ndata: ${f.data}\n\n`))
-        await new Promise(resolve => setTimeout(resolve, 30))
+        await new Promise(resolve => setTimeout(resolve, f.wait ?? 30))
       }
       controller.close()
     },
@@ -119,8 +119,20 @@ async function api(req: Request, url: URL): Promise<Response | null> {
     return json({ ok: true, path: '/home/runner/.hauksbee/models/lint.toml' })
   }
   if (p === '/api/models/extract' && method === 'POST') {
-    // Extraction talks to an LLM backend. The lint renders the form, never a run.
-    return json({ ok: false, error: 'extraction is not available on the fixture server' })
+    // The real endpoint's stream, replayed over ~13 s against an 8 s estimate so
+    // a flow sees the bar early, near the estimate, and past it.
+    const phase = (data: string, wait: number) => ({ event: 'log', data: `phase: ${data}`, wait })
+    const card = { ok: true, reference: 'U1', part: 'XLOGIC9999', kind: 'digital', provenance: 'datasheet-extracted',
+      model_id: 'xlogic9999', description: 'Fixture draft', file_name: 'XLOGIC9999.toml', values: [], assumptions: [],
+      toml: '[[models]]\nid = "xlogic9999"\nkind = "digital"\n' }
+    return sseResponse([
+      { event: 'log', data: 'Extracting a digital model for XLOGIC9999 from datasheet.pdf (1 KiB).' },
+      { event: 'log', data: 'estimate: 8', wait: 1000 }, phase('reading the datasheet', 500),
+      phase('identifying the part kind (attempt 1 of 3)', 1500), phase('drafting the model (attempt 1 of 3)', 2000),
+      phase('checking the answer', 3000), phase("redrafting with the checker's feedback (attempt 2 of 3)", 2500),
+      { event: 'log', data: 'still working: redrafting, 10s elapsed', wait: 2500 }, phase('checking the answer', 1000),
+      { event: 'card', data: JSON.stringify(card) },
+    ])
   }
   if (p === '/api/live/launch' && method === 'POST') {
     return json({ ok: false, error: 'the fixture server does not run live sessions' })

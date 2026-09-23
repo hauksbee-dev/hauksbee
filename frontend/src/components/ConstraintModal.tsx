@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { ConstraintEditor, constraintIssues, emptyConstraint, type ConstraintDraft } from './ConstraintEditor'
+import type { BoardRequest } from '../types/report'
 
 const LABELS: Record<string, string> = {
   voltage: 'A net must sit at a voltage',
@@ -8,6 +9,24 @@ const LABELS: Record<string, string> = {
   'boot-coverage': 'Firmware must drive a net by a deadline',
   max_current: 'A part must stay under a current',
   max_temp: 'A part must stay cool',
+}
+
+/** The modal as the board map and the sim open it: saving queues one check, and
+ *  opening the Checks view closes the modal first. */
+export function QueuedConstraintModal({ initial, onQueue, onClose, onOpenChecks }: {
+  initial: Partial<ConstraintDraft> & Pick<ConstraintDraft, 'kind'>
+  onQueue: (request: BoardRequest) => void
+  onClose: () => void
+  onOpenChecks?: () => void
+}) {
+  return (
+    <ConstraintModal
+      initial={initial}
+      onSave={draft => onQueue({ ...draft, type: 'check', net: draft.net || undefined, ref: draft.ref || undefined })}
+      onClose={onClose}
+      onOpenChecks={() => { onClose(); onOpenChecks?.() }}
+    />
+  )
 }
 
 /**

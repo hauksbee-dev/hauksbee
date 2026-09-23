@@ -14,6 +14,7 @@ import { chromium } from 'playwright'
 import type { Browser } from 'playwright'
 import { buildReportHtml, reportJson } from '../src/lib/report-export'
 import type { WebReport } from '../src/types/report'
+import { TIMING_DIAGNOSIS, timingEvidence, timingRefusal } from './timing-fixture'
 
 // One browser for the file, started outside the test: a cold chromium launch is
 // a second or two on its own, and paying it inside a 5s test body is how a real
@@ -87,16 +88,7 @@ const hostile: WebReport = {
     findings: [],
     analog_valid: true,
     gpio_nets: [{ name: '<net>', volts: 3.3, driven: true }],
-    timing_coverage: [{
-      mcu_ref: 'U1', backend: 'simavr:atmega328p', cycle_exact: true,
-      timestamp_precision_s: 0.000001, minimum_guaranteed_pulse_s: 0.000002,
-      chunk_s: 0.001,
-    }],
-    timing_refusals: ['PWL replay refused on net /CLK: transition budget exceeded'],
-    fallback_windows: [{
-      start_s: 0.001, end_s: 0.002, method: 'backward-euler',
-      fidelity_note: 'first-order and numerically dissipative', error_estimate_v: 0.012,
-    }],
+    ...timingEvidence,
   },
 }
 
@@ -233,7 +225,6 @@ test('it still carries the report it is an export of', () => {
 })
 
 test('a typed timing refusal is rendered once while the wire keeps both fields', () => {
-  const diagnosis = 'PWL replay refused on net /CLK: transition budget exceeded'
   const report: WebReport = {
     ...hostile,
     serious: 0,
@@ -241,20 +232,15 @@ test('a typed timing refusal is rendered once while the wire keeps both fields',
     sections: [],
     evidence: [],
     bind: undefined,
-    refusal: {
-      claim: 'timing-sensitive firmware and electrical conclusions',
-      missing_prerequisite: diagnosis,
-      valid_partial_conclusions: ['Static board analysis remains valid.'],
-      next_action: 'reduce transitions per solver chunk, then rerun',
-    },
-    cosim: { ...hostile.cosim!, timing_refusals: [diagnosis] },
+    refusal: timingRefusal,
+    cosim: { ...hostile.cosim!, timing_refusals: [TIMING_DIAGNOSIS] },
   }
   const html = buildReportHtml({ ...input, report })
   expect(html).toContain('border:1px solid var(--warn-border)')
   expect(html.match(/PWL replay refused on net \/CLK/g)?.length).toBe(1)
   expect(html).not.toContain('TIMING INVALID')
-  expect(report.cosim?.timing_refusals).toEqual([diagnosis])
-  expect(report.refusal?.missing_prerequisite).toBe(diagnosis)
+  expect(report.cosim?.timing_refusals).toEqual([TIMING_DIAGNOSIS])
+  expect(report.refusal?.missing_prerequisite).toBe(TIMING_DIAGNOSIS)
 })
 
 test('the provenance block does not repeat one name three times', () => {

@@ -17,12 +17,8 @@
 //   HB_E2E_BASE=http://127.0.0.1:3001 bun run tests/e2e/layers-dismiss.ts
 //   bun run tests/e2e/layers-dismiss.ts          # spawns the fixture server
 
-import { chromium } from 'playwright'
-import {
-  consoleErrors, note, ok, settle, shotsInto, step, summarise, watchConsole, withFixture,
-} from './harness'
-import type { Browser, Page } from 'playwright'
-import { mkdirSync, rmSync } from 'node:fs'
+import { browserFlow, note, ok, openSample, settle, shotsInto, step } from './harness'
+import type { Page } from 'playwright'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -37,135 +33,106 @@ const triggerFocused = (page: Page) => page.evaluate(() =>
 
 const shoot = shotsInto(OUT)
 
-async function main() {
-  rmSync(OUT, { recursive: true, force: true })
-  mkdirSync(OUT, { recursive: true })
+await browserFlow({ out: OUT, viewport: { width: 1440, height: 900 }, notes: true }, async page => {
+  await openSample(page)
+  await page.click('[data-testid="nav-board"]')
+  await page.waitForSelector('[data-testid="layers-toggle"]', { timeout: 30_000 })
+  await settle(page, 900)
 
-  await withFixture(async base => {
-    const browser: Browser = await chromium.launch({ headless: true })
-    try {
-      const ctx = await browser.newContext({ baseURL: base, viewport: { width: 1440, height: 900 } })
-      const page = await ctx.newPage()
-      page.setDefaultTimeout(20_000)
-      watchConsole(page, 'app')
+  // ── 1. The trigger still opens and closes it ────────────────────────────
+  step('the trigger opens the panel')
+  ok('the panel starts closed', !(await panelOpen(page)))
+  await page.click('[data-testid="layers-toggle"]')
+  await page.waitForSelector('[data-testid="layers-panel"]')
+  ok('clicking the trigger opens the panel', await panelOpen(page))
+  ok('and the trigger reports itself expanded',
+    await page.locator('[data-testid="layers-toggle"]').getAttribute('aria-expanded') === 'true')
+  await shoot(page, '01-layers-open')
 
-      await page.goto('/', { waitUntil: 'domcontentloaded' })
-      await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 30_000 })
-      await page.click('[data-testid="sample-watchy"]')
-      await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 60_000 })
-      await page.click('[data-testid="nav-board"]')
-      await page.waitForSelector('[data-testid="layers-toggle"]', { timeout: 30_000 })
-      await settle(page, 900)
+  await page.click('[data-testid="layers-toggle"]')
+  await settle(page)
+  ok('re-clicking the trigger closes it (the behaviour that already worked)',
+    !(await panelOpen(page)))
 
-      // ── 1. The trigger still opens and closes it ────────────────────────────
-      step('the trigger opens the panel')
-      ok('the panel starts closed', !(await panelOpen(page)))
-      await page.click('[data-testid="layers-toggle"]')
-      await page.waitForSelector('[data-testid="layers-panel"]')
-      ok('clicking the trigger opens the panel', await panelOpen(page))
-      ok('and the trigger reports itself expanded',
-        await page.locator('[data-testid="layers-toggle"]').getAttribute('aria-expanded') === 'true')
-      await shoot(page, '01-layers-open')
+  // ── 2. Escape ───────────────────────────────────────────────────────────
+  step('Escape closes the panel and returns focus to the trigger')
+  await page.click('[data-testid="layers-toggle"]')
+  await page.waitForSelector('[data-testid="layers-panel"]')
+  // Move focus off the trigger first, the way tabbing into the panel would, so
+  // the focus assertion is about the Escape handler and not about the click.
+  await page.locator('[data-testid="layers-panel"] button').first().focus()
+  ok('focus is inside the panel before Escape', !(await triggerFocused(page)))
+  await page.keyboard.press('Escape')
+  await settle(page)
+  ok('Escape closes the panel', !(await panelOpen(page)))
+  ok('and focus lands back on the Layers trigger', await triggerFocused(page))
+  await shoot(page, '02-after-escape')
 
-      await page.click('[data-testid="layers-toggle"]')
-      await settle(page)
-      ok('re-clicking the trigger closes it (the behaviour that already worked)',
-        !(await panelOpen(page)))
+  // ── 3. Outside click ────────────────────────────────────────────────────
+  step('a click outside closes the panel, a click inside does not')
+  await page.click('[data-testid="layers-toggle"]')
+  await page.waitForSelector('[data-testid="layers-panel"]')
 
-      // ── 2. Escape ───────────────────────────────────────────────────────────
-      step('Escape closes the panel and returns focus to the trigger')
-      await page.click('[data-testid="layers-toggle"]')
-      await page.waitForSelector('[data-testid="layers-panel"]')
-      // Move focus off the trigger first, the way tabbing into the panel would, so
-      // the focus assertion is about the Escape handler and not about the click.
-      await page.locator('[data-testid="layers-panel"] button').first().focus()
-      ok('focus is inside the panel before Escape', !(await triggerFocused(page)))
-      await page.keyboard.press('Escape')
-      await settle(page)
-      ok('Escape closes the panel', !(await panelOpen(page)))
-      ok('and focus lands back on the Layers trigger', await triggerFocused(page))
-      await shoot(page, '02-after-escape')
+  // Inside first: toggling a layer has to leave the panel up, or the second
+  // toggle of a pair is impossible.
+  const rows = page.locator('[data-testid="layers-panel"] button')
+  const rowCount = await rows.count()
+  ok('the panel has layer rows to click', rowCount > 0, `${rowCount} rows`)
+  await rows.first().click()
+  await settle(page)
+  ok('toggling a layer inside the panel leaves it open', await panelOpen(page))
+  await rows.first().click()
+  await settle(page)
+  ok('and so does toggling it back', await panelOpen(page))
 
-      // ── 3. Outside click ────────────────────────────────────────────────────
-      step('a click outside closes the panel, a click inside does not')
-      await page.click('[data-testid="layers-toggle"]')
-      await page.waitForSelector('[data-testid="layers-panel"]')
+  // Outside: the map canvas itself, bottom left, well clear of the panel in the
+  // top right. Clamped into the viewport, because a click dispatched below the
+  // window lands on nothing and would pass without ever touching the map.
+  const mapBox = await page.locator('canvas').first().boundingBox()
+  if (!mapBox) throw new Error('the map canvas has no box to click')
+  const vp = page.viewportSize()!
+  const ox = Math.min(mapBox.x + 80, vp.width - 8)
+  const oy = Math.min(mapBox.y + mapBox.height - 80, vp.height - 8)
+  ok('the outside-click point is inside the map and inside the window',
+    ox > mapBox.x && ox < mapBox.x + mapBox.width
+    && oy > mapBox.y && oy < mapBox.y + mapBox.height
+    && ox < vp.width && oy < vp.height,
+    `${Math.round(ox)},${Math.round(oy)} in map ${JSON.stringify(mapBox)} window ${vp.width}x${vp.height}`)
+  await page.mouse.click(ox, oy)
+  await settle(page)
+  ok('a click on the map closes the panel', !(await panelOpen(page)), `at ${Math.round(ox)},${Math.round(oy)}`)
+  await shoot(page, '03-after-outside-click')
 
-      // Inside first: toggling a layer has to leave the panel up, or the second
-      // toggle of a pair is impossible.
-      const rows = page.locator('[data-testid="layers-panel"] button')
-      const rowCount = await rows.count()
-      ok('the panel has layer rows to click', rowCount > 0, `${rowCount} rows`)
-      await rows.first().click()
-      await settle(page)
-      ok('toggling a layer inside the panel leaves it open', await panelOpen(page))
-      await rows.first().click()
-      await settle(page)
-      ok('and so does toggling it back', await panelOpen(page))
+  // And a click on a surface outside the viewer entirely.
+  await page.click('[data-testid="layers-toggle"]')
+  await page.waitForSelector('[data-testid="layers-panel"]')
+  await page.click('[data-testid="nav-board"]')
+  await settle(page)
+  ok('a click on the nav rail closes the panel too', !(await panelOpen(page)))
 
-      // Outside: the map canvas itself, bottom left, well clear of the panel in the
-      // top right. Clamped into the viewport, because a click dispatched below the
-      // window lands on nothing and would pass without ever touching the map.
-      const mapBox = await page.locator('canvas').first().boundingBox()
-      if (!mapBox) throw new Error('the map canvas has no box to click')
-      const vp = page.viewportSize()!
-      const ox = Math.min(mapBox.x + 80, vp.width - 8)
-      const oy = Math.min(mapBox.y + mapBox.height - 80, vp.height - 8)
-      ok('the outside-click point is inside the map and inside the window',
-        ox > mapBox.x && ox < mapBox.x + mapBox.width
-        && oy > mapBox.y && oy < mapBox.y + mapBox.height
-        && ox < vp.width && oy < vp.height,
-        `${Math.round(ox)},${Math.round(oy)} in map ${JSON.stringify(mapBox)} window ${vp.width}x${vp.height}`)
-      await page.mouse.click(ox, oy)
-      await settle(page)
-      ok('a click on the map closes the panel', !(await panelOpen(page)), `at ${Math.round(ox)},${Math.round(oy)}`)
-      await shoot(page, '03-after-outside-click')
+  // ── 4. Escape precedence against the expanded view ──────────────────────
+  step('the panel takes the first Escape, the expanded view takes the second')
+  const fsCount = await page.locator('[data-testid="viewer-fullscreen"]').count()
+  if (fsCount === 0) {
+    note('this surface has no fullscreen toggle; Escape precedence not exercised here')
+  } else {
+    await page.click('[data-testid="viewer-fullscreen"]')
+    await settle(page, 600)
+    const expanded = async () =>
+      await page.locator('[data-testid="viewer-fullscreen"]').getAttribute('aria-pressed') === 'true'
+    ok('the map is expanded', await expanded())
+    await page.click('[data-testid="layers-toggle"]')
+    await page.waitForSelector('[data-testid="layers-panel"]')
+    await shoot(page, '04-expanded-with-panel')
 
-      // And a click on a surface outside the viewer entirely.
-      await page.click('[data-testid="layers-toggle"]')
-      await page.waitForSelector('[data-testid="layers-panel"]')
-      await page.click('[data-testid="nav-board"]')
-      await settle(page)
-      ok('a click on the nav rail closes the panel too', !(await panelOpen(page)))
+    await page.keyboard.press('Escape')
+    await settle(page, 500)
+    ok('the first Escape closes the panel', !(await panelOpen(page)))
+    ok('and leaves the map expanded', await expanded())
 
-      // ── 4. Escape precedence against the expanded view ──────────────────────
-      step('the panel takes the first Escape, the expanded view takes the second')
-      const fsCount = await page.locator('[data-testid="viewer-fullscreen"]').count()
-      if (fsCount === 0) {
-        note('this surface has no fullscreen toggle; Escape precedence not exercised here')
-      } else {
-        await page.click('[data-testid="viewer-fullscreen"]')
-        await settle(page, 600)
-        const expanded = async () =>
-          await page.locator('[data-testid="viewer-fullscreen"]').getAttribute('aria-pressed') === 'true'
-        ok('the map is expanded', await expanded())
-        await page.click('[data-testid="layers-toggle"]')
-        await page.waitForSelector('[data-testid="layers-panel"]')
-        await shoot(page, '04-expanded-with-panel')
-
-        await page.keyboard.press('Escape')
-        await settle(page, 500)
-        ok('the first Escape closes the panel', !(await panelOpen(page)))
-        ok('and leaves the map expanded', await expanded())
-
-        await page.keyboard.press('Escape')
-        await settle(page, 600)
-        ok('the second Escape collapses the map', !(await expanded()))
-        await shoot(page, '05-collapsed')
-      }
-
-      // ── 5. Console ──────────────────────────────────────────────────────────
-      step('console')
-      ok('no console errors anywhere in the run', consoleErrors.length === 0,
-        consoleErrors.slice(0, 5).join(' | '))
-
-      await ctx.close()
-    } finally {
-      await browser.close()
-    }
-
-    summarise(`screenshots: ${OUT}`, true)
-  })
-}
-
-await main()
+    await page.keyboard.press('Escape')
+    await settle(page, 600)
+    ok('the second Escape collapses the map', !(await expanded()))
+    await shoot(page, '05-collapsed')
+  }
+})

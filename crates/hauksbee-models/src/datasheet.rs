@@ -51,8 +51,14 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 
 use crate::extract_config::{self, ProcessHost, Resolved, ResolvedApi};
+use crate::extract_progress as progress;
 use crate::schema::{ComponentKind, ModelEntry};
 use crate::sensor_spec::{Bus, SensorSpec};
+
+/// Narration on stderr that never shares a line with the CLI spinner.
+macro_rules! say {
+    ($($arg:tt)*) => { progress::say(&format!($($arg)*)) };
+}
 
 // How long one agent-CLI run may take before it is killed is
 // `extract_config::DEFAULT_TIMEOUT_SECS` (ten minutes), configurable per
@@ -184,10 +190,6 @@ pub fn sandbox_for_test_in(pdf: &Path, root: &Path) -> Result<Workspace> {
 }
 
 /// Build the sandbox: copy the PDF in, render its pages, and write the text.
-fn prepare_workspace(pdf: &Path) -> Result<Workspace> {
-    prepare_workspace_in(pdf, &std::env::temp_dir())
-}
-
 fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
     let dir = workspace_tempdir(root, "hauksbee-extract-", "creating the extraction sandbox")?;
 
@@ -250,7 +252,7 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
                     }
                 }
                 Ok(o) => {
-                    eprintln!(
+                    say!(
                     "[model-extract] PDF page {page} failed to render, continuing without it: {}",
                     String::from_utf8_lossy(&o.stderr).lines().next().unwrap_or("")
                 )
@@ -259,7 +261,7 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
             }
         }
     } else {
-        eprintln!(
+        say!(
             "[model-extract] pdftoppm not found, so the model sees text only. Install poppler \
              for page images: the pinout and the ratings table survive a render far better \
              than a text dump."
@@ -298,6 +300,7 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
             args.pdf.display()
         );
     }
+    progress::start();
     let pdf_text = extract_pdf_text(&args.pdf)?;
 
     // An empty kind means "you work it out". Being made to classify a part
@@ -307,12 +310,13 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
     // of our categories their part falls into.
     if args.kind_str.trim().is_empty() {
         args.kind_str = identify_kind(&args, &pdf_text)?;
-        eprintln!(
+        say!(
             "[model-extract] identified {} as kind '{}'",
-            args.part, args.kind_str
+            args.part,
+            args.kind_str
         );
     }
-    eprintln!(
+    say!(
         "[model-extract] part={} kind={} pdf={}",
         args.part,
         args.kind_str,
@@ -354,8 +358,10 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
     let out_path = out_dir.join(format!("{}{suffix}", sanitise_filename(part)));
     std::fs::write(&out_path, &raw)
         .with_context(|| format!("writing output to {}", out_path.display()))?;
-    println!("[model-extract] written: {}", out_path.display());
-    println!("{id}");
+    progress::out(&format!(
+        "[model-extract] written: {}\n{id}",
+        out_path.display()
+    ));
     Ok(out_path)
 }
 
@@ -767,6 +773,24 @@ pub const CONSENT_NOTICE: &str =
      check, not a measurement: a model it writes carries provenance \
      \"datasheet-extracted\".";
 
+/// Ask a yes/no question on the terminal, the prompt going to `out`; only `y`
+/// or `yes` is a yes. A pipe cannot answer, and guessing "yes" on its behalf
+/// would act because someone ran the wrong command, so a non-terminal stdin
+/// fails with `refusal` instead.
+pub fn confirm(out: &mut dyn Write, question: &str, refusal: &str) -> Result<bool> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        bail!("{refusal}");
+    }
+    write!(out, "{question} [y/N] ")?;
+    out.flush().ok();
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
 pub fn parse_args() -> Result<Args> {
     parse_args_from(std::env::args().skip(1))
 }
@@ -897,11 +921,12 @@ fn pdftotext(path: &Path, layout: bool) -> Result<String> {
 /// which is why `api_source_available` refuses that combination outright.
 fn extract_pdf_text(path: &Path) -> Result<String> {
     if let Ok(text) = pdftotext(path, false) {
+        progress::pages(text.matches('\u{000c}').count());
         if !text.trim().is_empty() {
             return Ok(truncate_to_chars(&text, 60_000));
         }
     }
-    eprintln!("[model-extract] pdftotext unavailable or produced no text; local agent backends will read the copied PDF directly");
+    say!("[model-extract] pdftotext unavailable or produced no text; local agent backends will read the copied PDF directly");
     Ok(PDF_TEXT_UNAVAILABLE.to_string())
 }
 
@@ -2113,7 +2138,7 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
     // about what is about to read the datasheet.
     let resolved = resolve_settings(args)?;
     let chosen = resolved.backend;
-    eprintln!(
+    say!(
         "[model-extract] backend: {} ({})",
         resolved.summary(),
         resolved.backend_source.describe()
@@ -2144,8 +2169,9 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
     // The sandbox is a scratch copy, never the user's own directory. See
     // `Workspace`: the agent runs full-auto, so what it can reach is the whole
     // of the security story.
-    let ws = prepare_workspace(&args.pdf)?;
-    eprintln!(
+    progress::phase("rendering the datasheet pages");
+    let ws = prepare_workspace_in(&args.pdf, &std::env::temp_dir())?;
+    say!(
         "[model-extract] sandbox {} with {} page render(s)",
         ws.path().display(),
         ws.pages.len()
@@ -2186,8 +2212,15 @@ fn validated_attempts(
     let mut prompt = base_prompt.to_string();
     for attempt in 1..=retries + 1 {
         let started = Instant::now();
+        let doing = match (attempt, reply) {
+            (1, Reply::Word) => "identifying the part kind",
+            (1, _) => "drafting the model",
+            _ => "redrafting with the checker's feedback",
+        };
+        progress::phase(format!("{doing} (attempt {attempt} of {})", retries + 1));
         let raw = fetch(&prompt)?;
-        eprintln!(
+        progress::phase("checking the answer");
+        say!(
             "[model-extract] {tool} attempt {attempt} returned {} chars in {:.0}s",
             raw.len(),
             started.elapsed().as_secs_f64()
@@ -2195,9 +2228,7 @@ fn validated_attempts(
         match reply.check(&raw) {
             Ok(()) => return Ok(raw),
             Err(e) if attempt <= retries => {
-                eprintln!(
-                    "[model-extract] attempt {attempt} failed: {e:#}; retrying with feedback..."
-                );
+                say!("[model-extract] attempt {attempt} failed: {e:#}; retrying with feedback...");
                 prompt = format!(
                     "{base_prompt}\n\n{}",
                     retry_feedback(&raw, &format!("{e:#}"), reply.table())
@@ -2717,9 +2748,6 @@ fn wait_for_cli_backend(
     bail!("{tool} exited with status {}: {detail}", output.status)
 }
 
-/// The default base URL for the api backend.
-pub use crate::extract_config::DEFAULT_API_BASE;
-
 /// One prepared OpenAI-compatible chat-completions request: everything but
 /// the prompt, resolved once so every retry hits the same endpoint, model and
 /// key.
@@ -2939,7 +2967,8 @@ fn kind_discriminant(kind: ComponentKind) -> String {
         .unwrap_or_default()
 }
 
-fn sanitise_filename(s: &str) -> String {
+/// A part name as a file stem: anything but alphanumerics, `-` and `_` becomes `_`.
+pub fn sanitise_filename(s: &str) -> String {
     s.replace(|c: char| !(c.is_alphanumeric() || "-_".contains(c)), "_")
 }
 
@@ -3336,24 +3365,24 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
         .unwrap();
         std::env::set_var("HAUKSBEE_EXTRACT_MOCK_REPLY", &reply_path);
 
-        let args = Args::new(
-            dir.path().join("nonexistent.pdf"),
-            example.part.into(),
-            example.kind.into(),
-        );
-        let prompt = build_prompt(&args.part, &args.kind_str, "irrelevant");
-        let reply = Reply::Model {
-            part: &args.part,
-            kind: &args.kind_str,
-        };
-        let raw = call_backend(&prompt, &args, reply).expect("mock backend should succeed");
-        let entry = parse_and_validate_reply(&raw, &args.part, &args.kind_str).unwrap();
+        let pdf = dir.path().join("nonexistent.pdf");
+        let (raw, entry) = draft(pdf, "irrelevant", example.part, example.kind);
         std::env::remove_var("HAUKSBEE_EXTRACT_MOCK_REPLY");
 
         let expected = parse_and_validate_reply(example.card, example.part, example.kind).unwrap();
         assert_eq!(entry.kind, expected.kind);
         assert_eq!(entry.ratings.max_voltage_v, expected.ratings.max_voltage_v);
         assert!(raw.starts_with("[[models]]"), "fence should be stripped");
+    }
+
+    /// The prompt -> backend -> validated-entry chain `run` drives, minus the
+    /// output file.
+    fn draft(src: PathBuf, text: &str, part: &str, kind: &str) -> (String, ModelEntry) {
+        let prompt = build_prompt(part, kind, text);
+        let args = Args::new(src, part.into(), kind.into());
+        let raw = call_backend(&prompt, &args, Reply::Model { part, kind }).expect("backend call");
+        let entry = parse_and_validate_reply(&raw, part, kind).unwrap();
+        (raw, entry)
     }
 
     fn live_backend_available() -> bool {
@@ -3380,15 +3409,7 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
             return;
         }
         let text = extract_pdf_text(&pdf).expect("PDF text extraction");
-        let prompt = build_prompt("BC846", "bjt_npn", &text);
-        let args =
-            Args::new(pdf, "BC846".into(), "bjt_npn".into()).out_dir(Some(std::env::temp_dir()));
-        let reply = Reply::Model {
-            part: "BC846",
-            kind: "bjt_npn",
-        };
-        let raw = call_backend(&prompt, &args, reply).expect("backend call");
-        let entry = parse_and_validate_reply(&raw, "BC846", "bjt_npn").unwrap();
+        let (_, entry) = draft(pdf, &text, "BC846", "bjt_npn");
         let bf = entry.params.get_f64("bf").expect("bf present");
         assert!(
             (100.0..=460.0).contains(&bf),
@@ -3406,15 +3427,7 @@ basis = "Recommended Operating Conditions, Table 6.3, VCC row"
             return;
         }
         let text = extract_pdf_text(&src).expect("text");
-        let prompt = build_prompt("LTC4020", "charger", &text);
-        let args =
-            Args::new(src, "LTC4020".into(), "charger".into()).out_dir(Some(std::env::temp_dir()));
-        let reply = Reply::Model {
-            part: "LTC4020",
-            kind: "charger",
-        };
-        let raw = call_backend(&prompt, &args, reply).expect("backend call");
-        let entry = parse_and_validate_reply(&raw, "LTC4020", "charger").unwrap();
+        let (_, entry) = draft(src, &text, "LTC4020", "charger");
         assert_eq!(entry.kind, crate::ComponentKind::Vreg);
         let c = entry.behavioral.converter.expect("converter block");
         assert_eq!(c.in_pin, "pvin");

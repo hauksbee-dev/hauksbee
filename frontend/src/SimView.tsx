@@ -4,7 +4,7 @@ import { useSimSession } from './hooks/useSimSession'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './components/BoardViewer'
 import { TransportBar } from './components/TransportBar'
 import { SelectionCard } from './components/SelectionCard'
-import { ConstraintModal } from './components/ConstraintModal'
+import { QueuedConstraintModal } from './components/ConstraintModal'
 import type { ConstraintDraft } from './components/ConstraintEditor'
 import { NetPanel } from './components/NetPanel'
 import { SerialConsole } from './components/SerialConsole'
@@ -340,20 +340,8 @@ export default function SimView({
           )}
 
           {constraintDraft && onQueue && (
-            <ConstraintModal
-              initial={constraintDraft}
-              onSave={draft => onQueue({
-                ...draft,
-                type: 'check',
-                net: draft.net || undefined,
-                ref: draft.ref || undefined,
-              })}
-              onClose={() => setConstraintDraft(null)}
-              onOpenChecks={() => {
-                setConstraintDraft(null)
-                onOpenChecks?.()
-              }}
-            />
+            <QueuedConstraintModal initial={constraintDraft} onQueue={onQueue}
+              onClose={() => setConstraintDraft(null)} onOpenChecks={onOpenChecks} />
           )}
 
           {/* Board overlay hints. While an input has focus the keyboard
@@ -443,7 +431,7 @@ export default function SimView({
             ) : (
               <>
                 <RailCard id="inputs" title="Inputs" icon={<SlidersIcon size={13} />} cards={cards}>
-                  <InputSourcesPanel boardInfo={boardInfo} frame={frame} send={send} />
+                  <InputSourcesPanel boardInfo={boardInfo} send={send} />
                 </RailCard>
 
                 {hasSupplies && (
@@ -461,7 +449,6 @@ export default function SimView({
                 probes={probes}
                 onAddProbe={addProbe}
                 onRemoveProbe={removeProbe}
-                send={send}
               />
             </RailCard>
 

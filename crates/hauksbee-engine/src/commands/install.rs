@@ -48,7 +48,7 @@ pub fn esp_qemu(yes: bool) -> anyhow::Result<()> {
          over sockets, not a part of hauksbee.",
         root
     );
-    if !yes && !confirm("Proceed with download and install? [y/N] ")? {
+    if !yes && !confirm("Proceed with download and install?")? {
         anyhow::bail!(
             "install declined. Re-run `hauksbee install esp-qemu` (add --yes to \
              skip this prompt), or install manually: {}",
@@ -94,7 +94,7 @@ pub fn renode(yes: bool) -> anyhow::Result<()> {
          and unpacks it into ~/renode-portable; it is a separate program \
          hauksbee talks to over sockets, not a part of hauksbee."
     );
-    if !yes && !confirm("Proceed with download and install? [y/N] ")? {
+    if !yes && !confirm("Proceed with download and install?")? {
         anyhow::bail!(
             "install declined. Re-run `hauksbee install renode` (add --yes to \
              skip this prompt), or install manually: {}",
@@ -165,7 +165,7 @@ pub fn offer_esp_qemu_install(backends: &[String]) -> anyhow::Result<()> {
          from https://github.com/espressif/qemu/releases into {} now.",
         install_root
     );
-    if !confirm("Download and install it, then continue? [y/N] ")? {
+    if !confirm("Download and install it, then continue?")? {
         eprintln!("Skipping install; the run will fail with install guidance.");
         return Ok(());
     }
@@ -183,21 +183,12 @@ pub fn offer_esp_qemu_install(_backends: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// One-line y/N prompt on stderr, reading a line from stdin. Refuses (returns
-/// an error) when stdin is not a terminal, a piped stdin must never be able
-/// to "answer" a consent prompt.
-fn confirm(prompt: &str) -> anyhow::Result<bool> {
-    use std::io::{IsTerminal, Write};
-    if !std::io::stdin().is_terminal() {
-        anyhow::bail!(
-            "stdin is not a terminal, refusing to prompt; pass --yes for \
-             non-interactive installs"
-        );
-    }
-    eprint!("{prompt}");
-    std::io::stderr().flush().ok();
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line)?;
-    let ans = line.trim().to_ascii_lowercase();
-    Ok(ans == "y" || ans == "yes")
+/// One-line y/N prompt on stderr. Refuses (returns an error) when stdin is not
+/// a terminal: a piped stdin must never be able to "answer" a consent prompt.
+fn confirm(question: &str) -> anyhow::Result<bool> {
+    hauksbee_models::datasheet::confirm(
+        &mut std::io::stderr(),
+        question,
+        "stdin is not a terminal, refusing to prompt; pass --yes for non-interactive installs",
+    )
 }

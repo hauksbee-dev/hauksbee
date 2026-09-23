@@ -225,25 +225,19 @@ pub fn reset(yes: bool) -> anyhow::Result<()> {
         println!("No config file at {} (nothing to reset).", path.display());
         return Ok(());
     }
-    if !yes {
-        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-            anyhow::bail!(
+    if !yes
+        && !datasheet::confirm(
+            &mut std::io::stdout(),
+            &format!("Delete {} and go back to every default?", path.display()),
+            &format!(
                 "refusing to delete {} without approval: stdin is not a terminal; pass --yes \
                  for an explicit scripted opt-in",
                 path.display()
-            );
-        }
-        print!(
-            "Delete {} and go back to every default? [y/N] ",
-            path.display()
-        );
-        std::io::stdout().flush().ok();
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer)?;
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            println!("Nothing was deleted.");
-            return Ok(());
-        }
+            ),
+        )?
+    {
+        println!("Nothing was deleted.");
+        return Ok(());
     }
     std::fs::remove_file(&path).with_context(|| format!("deleting {}", path.display()))?;
     println!("Deleted {}", path.display());
@@ -520,12 +514,7 @@ mod tests {
     fn default_setup_choice_prefers_a_recommended_installed_preset() {
         // Only agy installed: agy (recommended) should win over claude-code
         // and codex, which are also recommended but not installed.
-        let host = FakeHost {
-            vars: Default::default(),
-            tools: [("agy".to_string(), "/usr/local/bin/agy".into())]
-                .into_iter()
-                .collect(),
-        };
+        let host = FakeHost::new(&[], &["agy"]);
         let cfg = extract_config::ExtractConfig::default();
         let resolved = cfg.resolve(&host, None);
         let backends = extract_config::availability(&host, &resolved);

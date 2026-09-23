@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, errorText } from '../lib/api'
 import type {
   ExtractAgentConfig, ExtractApiBackendConfig, ExtractBackendAvailability, ExtractBackendsConfig,
-  ExtractPreset, ExtractResolved, ExtractSettings,
+  ExtractPreset, ExtractResolved, ExtractResolvedApi, ExtractSettings,
 } from '../types/report'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 import { ChevronDownIcon, ChevronRightIcon } from './Icons'
@@ -38,12 +38,6 @@ interface DraftAgent {
   extra_args: string
 }
 
-interface DraftApi {
-  base_url: string
-  model: string
-  api_key_env: string
-}
-
 interface Draft {
   backend: string
   retries: string
@@ -51,7 +45,8 @@ interface Draft {
   codex: DraftAgent
   'claude-code': DraftAgent
   agy: DraftAgent
-  api: DraftApi
+  /** The same three strings the server resolves; blank means its default. */
+  api: ExtractResolvedApi
 }
 
 const agentDraft = (config?: ExtractAgentConfig): DraftAgent => ({
@@ -169,6 +164,26 @@ function Field({ label, hint, children }: { label: string; hint?: React.ReactNod
       {children}
       {hint && <span className="block mt-1 leading-relaxed">{hint}</span>}
     </label>
+  )
+}
+
+/** A monospace text field: paths, model ids and variable names read as code. */
+function MonoInput({ testId, width, onChange, ...rest }: {
+  testId: string
+  width: string
+  value: string
+  placeholder?: string
+  list?: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <input
+      data-testid={testId}
+      className="hb-input text-[12px] block w-full"
+      style={{ height: 30, maxWidth: width, fontFamily: 'var(--font-mono)' }}
+      {...rest}
+      onChange={e => onChange(e.target.value)}
+    />
   )
 }
 
@@ -568,25 +583,12 @@ export function SettingsView() {
         {selectedBackend === 'api' ? (
           <div className="flex flex-wrap gap-3.5">
             <Field label="Base URL" hint={`blank = ${data.resolved.api.base_url}`}>
-              <input
-                data-testid="settings-base-url"
-                className="hb-input text-[12px] block w-full"
-                style={{ height: 30, maxWidth: '20rem', fontFamily: 'var(--font-mono)' }}
-                value={draft.api.base_url}
-                placeholder={data.resolved.api.base_url}
-                onChange={e => setDraft(d => d && { ...d, api: { ...d.api, base_url: e.target.value } })}
-              />
+              <MonoInput testId="settings-base-url" width="20rem" value={draft.api.base_url}
+                placeholder={data.resolved.api.base_url} onChange={v => setDraft(d => d && { ...d, api: { ...d.api, base_url: v } })} />
             </Field>
             <Field label="Model" hint={`blank = ${data.resolved.api.model}`}>
-              <input
-                data-testid="settings-model"
-                list="settings-model-options"
-                className="hb-input text-[12px] block w-full"
-                style={{ height: 30, maxWidth: '17rem', fontFamily: 'var(--font-mono)' }}
-                value={draft.api.model}
-                placeholder={data.resolved.api.model}
-                onChange={e => setDraft(d => d && { ...d, api: { ...d.api, model: e.target.value } })}
-              />
+              <MonoInput testId="settings-model" width="17rem" list="settings-model-options" value={draft.api.model}
+                placeholder={data.resolved.api.model} onChange={v => setDraft(d => d && { ...d, api: { ...d.api, model: v } })} />
             </Field>
             <Field
               label="API key variable"
@@ -597,14 +599,8 @@ export function SettingsView() {
                 </>
               }
             >
-              <input
-                data-testid="settings-api-key-env"
-                className="hb-input text-[12px] block w-full"
-                style={{ height: 30, maxWidth: '14rem', fontFamily: 'var(--font-mono)' }}
-                value={draft.api.api_key_env}
-                placeholder={data.resolved.api.api_key_env}
-                onChange={e => setDraft(d => d && { ...d, api: { ...d.api, api_key_env: e.target.value } })}
-              />
+              <MonoInput testId="settings-api-key-env" width="14rem" value={draft.api.api_key_env}
+                placeholder={data.resolved.api.api_key_env} onChange={v => setDraft(d => d && { ...d, api: { ...d.api, api_key_env: v } })} />
             </Field>
             <datalist id="settings-model-options">
               {(data.options.models.api ?? []).map(m => <option key={m} value={m} />)}
@@ -614,15 +610,8 @@ export function SettingsView() {
           <div className="flex flex-col gap-3.5">
             <div className="flex flex-wrap gap-3.5 items-end">
               <Field label="Model" hint={`blank = ${resolvedForSelected.model}`}>
-                <input
-                  data-testid="settings-model"
-                  list="settings-model-options"
-                  className="hb-input text-[12px] block w-full"
-                  style={{ height: 30, maxWidth: '17rem', fontFamily: 'var(--font-mono)' }}
-                  value={fields.model}
-                  placeholder={resolvedForSelected.model}
-                  onChange={e => fields.setModel(e.target.value)}
-                />
+                <MonoInput testId="settings-model" width="17rem" list="settings-model-options" value={fields.model}
+                  placeholder={resolvedForSelected.model} onChange={fields.setModel} />
                 <datalist id="settings-model-options">
                   {(data.options.models[selectedBackend] ?? []).map(m => <option key={m} value={m} />)}
                 </datalist>
@@ -656,26 +645,14 @@ export function SettingsView() {
           <div className="mt-3 flex flex-wrap gap-3.5 items-end">
             {selectedBackend !== 'api' && (
               <Field label="Executable" hint="Optional CLI-compatible wrapper. Its configuration controls routing and charges.">
-                <input
-                  data-testid="settings-command"
-                  className="hb-input text-[12px] block w-full"
-                  style={{ height: 30, maxWidth: '20rem', fontFamily: 'var(--font-mono)' }}
-                  value={fields.command}
-                  placeholder="Default executable"
-                  onChange={e => fields.setCommand(e.target.value)}
-                />
+                <MonoInput testId="settings-command" width="20rem" value={fields.command}
+                  placeholder="Default executable" onChange={fields.setCommand} />
               </Field>
             )}
             {selectedBackend === 'codex' && (
               <Field label="Profile" hint="A named codex profile, if you use one.">
-                <input
-                  data-testid="settings-profile"
-                  className="hb-input text-[12px] block w-full"
-                  style={{ height: 30, maxWidth: '14rem', fontFamily: 'var(--font-mono)' }}
-                  value={fields.profile}
-                  placeholder={data.resolved.codex.profile ?? ''}
-                  onChange={e => fields.setProfile(e.target.value)}
-                />
+                <MonoInput testId="settings-profile" width="14rem" value={fields.profile}
+                  placeholder={data.resolved.codex.profile ?? ''} onChange={fields.setProfile} />
               </Field>
             )}
             {selectedBackend !== 'api' && (
@@ -694,13 +671,8 @@ export function SettingsView() {
             )}
             {selectedBackend !== 'api' && (
               <Field label="Extra arguments" hint="Space-separated, passed through to the backend's own CLI.">
-                <input
-                  data-testid="settings-extra-args"
-                  className="hb-input text-[12px] block w-full"
-                  style={{ height: 30, maxWidth: '20rem', fontFamily: 'var(--font-mono)' }}
-                  value={fields.extraArgs}
-                  onChange={e => fields.setExtraArgs(e.target.value)}
-                />
+                <MonoInput testId="settings-extra-args" width="20rem" value={fields.extraArgs}
+                  onChange={fields.setExtraArgs} />
               </Field>
             )}
             <Field label="Retries" hint={`blank = ${data.resolved.retries}`}>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type DragEvent } from 'react'
 import { CheckIcon, PlusIcon, CloseIcon, ChevronRightIcon } from './Icons'
 import { readFirmwareInfo, formatBytes, type FirmwareInfo } from '../lib/firmware-info'
 
@@ -143,6 +143,16 @@ function FirmwareDetail({ file }: { file: File }) {
 
 export function FirmwareJack({ firmware, placement, onFile, onClear, locked = false, cosimRan }: FirmwareJackProps) {
   const [open, setOpen] = useState(false)
+  // Both states take a dropped file; a locked jack swallows it.
+  const dropProps = {
+    onDragEnter: (e: DragEvent) => e.preventDefault(),
+    onDragOver: (e: DragEvent) => e.preventDefault(),
+    onDrop: (e: DragEvent) => {
+      e.preventDefault()
+      const f = e.dataTransfer.files[0]
+      if (f && !locked) onFile(f)
+    },
+  }
 
   // Empty: a drop target, the same gesture the board card takes.
   if (!firmware) {
@@ -156,14 +166,7 @@ export function FirmwareJack({ firmware, placement, onFile, onClear, locked = fa
         aria-disabled={locked}
         onKeyDown={locked ? undefined : activateFirmwareInput}
         onClick={e => { if (locked) e.preventDefault() }}
-        onDragEnter={e => e.preventDefault()}
-        onDragOver={e => e.preventDefault()}
-        onDrop={e => {
-          e.preventDefault()
-          if (locked) return
-          const f = e.dataTransfer.files[0]
-          if (f) onFile(f)
-        }}
+        {...dropProps}
         className={`fw-row flex items-center gap-2.5 px-4 py-3 text-[13px] ${
           locked ? 'cursor-default' : 'cursor-pointer'
         } ${placement === 'intake' ? 'mt-3' : 'flex-1'}`}
@@ -193,14 +196,7 @@ export function FirmwareJack({ firmware, placement, onFile, onClear, locked = fa
       className={`fw-row fw-slot ${placement === 'intake' ? 'mt-3' : 'flex-1'}`}
       style={locked ? { opacity: 0.5 } : undefined}
       data-active="true"
-      onDragEnter={e => e.preventDefault()}
-      onDragOver={e => e.preventDefault()}
-      onDrop={e => {
-        e.preventDefault()
-        if (locked) return
-        const f = e.dataTransfer.files[0]
-        if (f) onFile(f)
-      }}
+      {...dropProps}
     >
       <div className="flex items-center gap-2.5 px-4 py-3">
         <span style={{ color: 'var(--ok)', display: 'inline-flex', flexShrink: 0 }}>

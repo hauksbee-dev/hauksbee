@@ -9,6 +9,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Page } from 'playwright'
+import { composeChecks, openApp, openExportMenu } from '../e2e/harness'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -45,8 +46,7 @@ export const APP_SURFACES: Surface[] = [
     id: 'landing',
     what: 'the web front door: drop zone, firmware jack, the three samples',
     async reach(page) {
-      await page.goto('/', { waitUntil: 'domcontentloaded' })
-      await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 20_000 })
+      await openApp(page)
       await page.waitForSelector('[data-testid="samples"]')
       await settle(page)
     },
@@ -89,8 +89,7 @@ export const APP_SURFACES: Surface[] = [
       // The watchy sample is fully bound (no unbound active part), so its
       // report correctly renders no datasheet panel. Upload the engine's own
       // open-active-IC fixture board, whose report is the panel's habitat.
-      await page.goto('/', { waitUntil: 'domcontentloaded' })
-      await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 20_000 })
+      await openApp(page)
       const board = join(here, '../../../crates/hauksbee-engine/tests/fixtures/plain_check_open_active_ic.kicad_pcb')
       await page.setInputFiles('#board-file', board)
       await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 30_000 })
@@ -160,18 +159,8 @@ export const APP_SURFACES: Surface[] = [
     async reach(page) {
       const close = page.locator('[data-testid="write-part-close"]')
       if (await close.count() > 0) await close.click()
-      await page.click('[data-testid="nav-checks"]')
-      await page.waitForSelector('[data-testid="checks-panel"]', { timeout: 20_000 })
-      const empty = page.locator('[data-testid="checks-empty-add"]')
-      if (await empty.count() > 0) await empty.click()
-      // A second rule from the full vocabulary menu, filled in, so a row with
-      // a net field and numeric inputs is in the layout and the run is valid.
-      await page.click('[data-testid="add-check"]')
-      await page.locator('button', { hasText: 'A net must sit at a voltage' }).first().click()
-      await page.locator('input[list="net-options"]').last().fill('GND')
-      await page.locator('label', { hasText: 'min V' }).locator('input').last().fill('-0.1')
-      await page.locator('label', { hasText: 'max V' }).locator('input').last().fill('0.1')
-      await settle(page)
+      // The second rule puts a net field and numeric inputs in the layout.
+      await composeChecks(page, 350)
     },
   },
   {
@@ -210,9 +199,7 @@ export const APP_SURFACES: Surface[] = [
     what: 'the Export menu open under the report verdict: four files, each named',
     async reach(page) {
       await page.click('[data-testid="nav-board"]')
-      await page.locator('[data-testid="export-open"]').scrollIntoViewIfNeeded()
-      await page.click('[data-testid="export-open"]')
-      await page.waitForSelector('[data-testid="export-menu"]')
+      await openExportMenu(page)
       await settle(page)
     },
   },
