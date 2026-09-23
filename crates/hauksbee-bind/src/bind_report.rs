@@ -152,12 +152,12 @@ pub struct SimpleRegulator {
     pub max_in_v: f64,
     /// Declared dropout limit from the card; `None` means headroom is unverified.
     pub dropout_v: Option<f64>,
-    /// Present only on an ADJ-referenced (adjustable) regulator, where `source`
-    /// carries Vref between OUT and ADJ rather than the rail against a return:
-    /// the board return the rail and the headroom are measured against. The
+    /// Present only on an adjustable regulator, where `source` carries Vref from
+    /// OUT (to ADJ, or to a private node) rather than the rail against a return:
+    /// the return the rail and the headroom are measured against. The
     /// rail is then a SOLVED value, so `min_in_v` is not knowable at bind time.
     pub adj_return: Option<hauksbee_ir::NodeId>,
-    /// The CCCS and IADJ sources an adjustable stamp adds beside `source`: any
+    /// The CCCS, IADJ and IQ sources an adjustable stamp adds beside `source`: any
     /// pass that neutralises `source` must neutralise these with it, or the
     /// controlled source is left reading a branch that no longer exists.
     pub helpers: Vec<hauksbee_ir::DeviceId>,
@@ -1023,38 +1023,34 @@ mod tests {
         assert!(w.contains("generic_nmos_power_pkg"), "names the model: {w}");
     }
 
+    /// C1 and R1 bound to the generic `c_fallback` / `r_fallback` passives.
+    fn fallback_passives() -> BindReport {
+        let mut report = BindReport::default();
+        for (reference, id, device) in [
+            ("C1", "c_fallback", "capacitor"),
+            ("R1", "r_fallback", "resistor"),
+        ] {
+            let mut row = sourced_row(reference, id, ModelSourceTier::EstimatedFallback);
+            row.outcome = BindOutcome::Analog {
+                device: device.into(),
+            };
+            report.push(row);
+        }
+        report
+    }
+
     #[test]
     fn generic_passive_fallbacks_do_not_flood_the_channel() {
         // c_fallback / r_fallback bind on nearly every board and carry no
         // invented breakdown ratings for a verdict to rest on, so warning about
         // them would bury the FET case this exists for.
-        let mut report = BindReport::default();
-        let mut cap = sourced_row("C1", "c_fallback", ModelSourceTier::EstimatedFallback);
-        cap.outcome = BindOutcome::Analog {
-            device: "capacitor".into(),
-        };
-        report.push(cap);
-        let mut res = sourced_row("R1", "r_fallback", ModelSourceTier::EstimatedFallback);
-        res.outcome = BindOutcome::Analog {
-            device: "resistor".into(),
-        };
-        report.push(res);
+        let report = fallback_passives();
         assert!(report.estimated_fallback_warnings().is_empty());
     }
 
     #[test]
     fn compact_bind_table_rolls_up_only_bulk_fallback_passives() {
-        let mut report = BindReport::default();
-        let mut cap = sourced_row("C1", "c_fallback", ModelSourceTier::EstimatedFallback);
-        cap.outcome = BindOutcome::Analog {
-            device: "capacitor".into(),
-        };
-        report.push(cap);
-        let mut res = sourced_row("R1", "r_fallback", ModelSourceTier::EstimatedFallback);
-        res.outcome = BindOutcome::Analog {
-            device: "resistor".into(),
-        };
-        report.push(res);
+        let mut report = fallback_passives();
         report.push(row(
             "U1",
             Confidence::Unresolved,

@@ -492,20 +492,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         // geometry.
         let out = ExtractedBoard::from_gerber_with_stats(path)
             .map_err(|e| BoardInputError::Gerber(gerber_path_message(path, &e.to_string())))?;
-        let board = out.board;
-        if board.components.is_empty() {
-            return Err(BoardInputError::Gerber(gerber_without_parts_message(
-                path, &board,
-            )));
-        }
-        return Ok(normalized(
-            path,
-            board,
-            None,
-            Vec::new(),
-            InputKind::Gerber,
-            out.stats.coverage_notes(),
-        ));
+        return gerber_job(path, out, Vec::new());
     }
 
     // A KiCad PROJECT file (.kicad_pro settings / .kicad_prl local state) is
@@ -593,20 +580,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 BoardInputError::Gerber(gerber_path_message(path, &e.to_string()))
             }
         })?;
-        let board = out.board;
-        if board.components.is_empty() {
-            return Err(BoardInputError::Gerber(gerber_without_parts_message(
-                path, &board,
-            )));
-        }
-        return Ok(normalized(
-            path,
-            board,
-            None,
-            raw,
-            InputKind::Gerber,
-            out.stats.coverage_notes(),
-        ));
+        return gerber_job(path, out, raw);
     }
 
     // Binary board (Altium): auto-detected from the OLE2 magic + Altium
@@ -780,8 +754,8 @@ fn gerber_path_message(path: &Path, e: &str) -> String {
     )
 }
 
-/// Refuse a gerber job that reconstructed copper but no parts, saying exactly
-/// which half is missing.
+/// A gerber job's normalized input, or, when it reconstructed copper but no
+/// parts, a refusal saying exactly which half is missing.
 ///
 /// A fab archive holds copper, drill and films. It does not hold a part list, so
 /// the reverse extraction recovers nets and pad geometry but has nothing that
@@ -794,8 +768,16 @@ fn gerber_path_message(path: &Path, e: &str) -> String {
 /// "this board parsed, but is empty", about a folder holding a fully routed
 /// two-layer board. That sends the user looking for a corrupt file instead of
 /// the one input they are actually missing.
-fn gerber_without_parts_message(path: &Path, board: &ExtractedBoard) -> String {
-    format!(
+fn gerber_job(
+    path: &Path,
+    out: hauksbee_extract::gerber::GerberExtraction,
+    raw: Vec<u8>,
+) -> Result<NormalizedBoard, BoardInputError> {
+    let (board, notes) = (out.board, out.stats.coverage_notes());
+    if !board.components.is_empty() {
+        return Ok(normalized(path, board, None, raw, InputKind::Gerber, notes));
+    }
+    Err(BoardInputError::Gerber(format!(
         "'{}' is a gerber fab job: hauksbee reconstructed {} net(s) from the copper, \
          but a fab archive carries no part list, so there is nothing to bind or \
          simulate. Add the pick-and-place file (KiCad: 'Fabrication Outputs → \
@@ -805,7 +787,7 @@ fn gerber_without_parts_message(path: &Path, board: &ExtractedBoard) -> String {
         path.display(),
         board.nets.len(),
         hauksbee_ir::docs_url("docs/ingest/GERBER.md")
-    )
+    )))
 }
 
 /// Fall back to the source file stem when the layout carries no title-block

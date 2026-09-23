@@ -23,7 +23,7 @@ pub type Verdict = Result<f64, String>;
 
 /// `(output, return, signed setpoint)` read back from the stamped source. NaN
 /// when it is no longer a DC source, which no headroom check can pass. On an
-/// adjustable regulator the source's `n` is the ADJ net, not a return, so the
+/// adjustable regulator the source's `n` is ADJ or a private node, so the
 /// board return the card named is returned in its place: everything downstream
 /// measures the rail and its headroom against the same node.
 pub fn terminals(circuit: &Circuit, reg: &SimpleRegulator) -> (NodeId, NodeId, f64) {

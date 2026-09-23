@@ -1505,6 +1505,9 @@ missing = ["switching_ripple", "compensation_stability", "soft_start", "pfm_ldo_
 # ADJ, so the BOARD's divider sets the rail, which `bind_vreg` stamps as VREF
 # between OUT and ADJ plus a CCCS carrying the pass current onto IN. The solver
 # then produces VO = VREF*(1 + R2/R1) + IADJ*R2 from the R1/R2 actually fitted.
+# That law is chosen because this card maps no `gnd` pin: an adjustable card
+# that does is GROUND-referenced (the common LDO holding VFB - VGND at VREF, so
+# VO = VREF*(1 + R1/R2) with R1 on OUT-FB) and needs `iq_a` instead of `iadj_a`.
 # Primary source: TI LM317 datasheet SLVS044Y (3-Terminal Adjustable Regulator).
 # DELIBERATELY NOT MODELLED: the reference is ideal, so the output impedance is
 # exactly zero and load regulation reads 0%; line regulation, ripple rejection,

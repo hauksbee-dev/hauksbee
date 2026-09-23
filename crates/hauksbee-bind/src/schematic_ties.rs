@@ -424,8 +424,11 @@ mod tests {
         );
     }
 
+    /// A same-named schematic from a different design: refused when the user
+    /// names it, ignored (never run-fatal) when it is only an auto-discovered
+    /// stale sibling.
     #[test]
-    fn the_same_filename_from_a_different_design_is_refused() {
+    fn the_same_filename_from_a_different_design_is_refused_or_ignored() {
         let dir = tempfile::tempdir().expect("temp dir");
         let schematic = dir.path().join("design.sch");
         std::fs::write(
@@ -448,46 +451,15 @@ mod tests {
                 pins: Vec::new(),
             }],
         };
+        let layout = dir.path().join("design.brd");
 
-        let error = resolve(
-            &dir.path().join("design.brd"),
-            &board,
-            Some(&schematic),
-            true,
-        )
-        .expect_err("same basename alone cannot establish design identity");
+        let error = resolve(&layout, &board, Some(&schematic), true)
+            .expect_err("same basename alone cannot establish design identity");
         assert!(
             error.to_string().contains("reference/value sets differ"),
             "{error}"
         );
-    }
-
-    #[test]
-    fn a_stale_auto_discovered_sibling_is_ignored_not_run_fatal() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let schematic = dir.path().join("design.sch");
-        std::fs::write(
-            &schematic,
-            r#"<?xml version="1.0"?><eagle><drawing><schematic><libraries/><parts><part name="R1" library="device" deviceset="R" value="10k"/></parts><sheets/></schematic></drawing></eagle>"#,
-        )
-        .expect("write stale sibling");
-        let board = hauksbee_extract::ExtractedBoard {
-            name: "design".into(),
-            nets: Vec::new(),
-            components: vec![hauksbee_extract::Component {
-                reference: "U1".into(),
-                value: "MCU".into(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
-                layer: String::new(),
-                properties: Vec::new(),
-                dnp: false,
-                pins: Vec::new(),
-            }],
-        };
-
-        let resolved = resolve(&dir.path().join("design.brd"), &board, None, true)
+        let resolved = resolve(&layout, &board, None, true)
             .expect("an optional stale sibling cannot break the board run");
         assert!(resolved.is_none());
     }

@@ -302,17 +302,7 @@ until = "2030-01-01"
         let p = write(dir.path(), GOOD);
         let mut set = WaiverSet::load_at(&p, RunDate::from_epoch_days(20_663)).unwrap();
 
-        assert!(
-            set.take_waiver(
-                "si",
-                "controlled_impedance",
-                &["USB_DP".into()],
-                &[],
-                "USB_DP"
-            )
-            .is_some(),
-            "the finding it names is covered"
-        );
+        assert!(usb_dp(&mut set), "the finding it names is covered");
         assert!(
             set.take_waiver(
                 "si",
@@ -331,50 +321,25 @@ until = "2030-01-01"
         );
     }
 
-    #[test]
-    fn an_expired_waiver_stops_covering_anything() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = write(dir.path(), GOOD);
-        // One day after the 2030-01-01 expiry.
-        let mut set = WaiverSet::load_at(
-            &p,
-            RunDate::from_epoch_days(parse_ymd_epoch_days("2030-01-02").unwrap()),
-        )
-        .unwrap();
-        assert!(
-            set.take_waiver(
-                "si",
-                "controlled_impedance",
-                &["USB_DP".into()],
-                &[],
-                "USB_DP"
-            )
-            .is_none(),
-            "the whole point of an expiry is that the finding comes back"
-        );
-        assert_eq!(set.expired().len(), 1, "and the report can explain the red");
+    /// Whether `set` covers the one finding the GOOD file waives.
+    fn usb_dp(set: &mut WaiverSet) -> bool {
+        let nets = ["USB_DP".to_string()];
+        set.take_waiver("si", "controlled_impedance", &nets, &[], "USB_DP")
+            .is_some()
     }
 
+    /// 'Until Friday' includes Friday; the whole point of an expiry is that the
+    /// finding comes back the day after, and the report can explain the red.
     #[test]
-    fn a_waiver_is_in_force_on_its_expiry_date() {
+    fn a_waiver_is_in_force_through_its_expiry_date_and_not_after() {
         let dir = tempfile::tempdir().unwrap();
         let p = write(dir.path(), GOOD);
-        let mut set = WaiverSet::load_at(
-            &p,
-            RunDate::from_epoch_days(parse_ymd_epoch_days("2030-01-01").unwrap()),
-        )
-        .unwrap();
-        assert!(
-            set.take_waiver(
-                "si",
-                "controlled_impedance",
-                &["USB_DP".into()],
-                &[],
-                "USB_DP"
-            )
-            .is_some(),
-            "'until Friday' includes Friday"
-        );
+        for (day, in_force) in [("2030-01-01", true), ("2030-01-02", false)] {
+            let run = RunDate::from_epoch_days(parse_ymd_epoch_days(day).unwrap());
+            let mut set = WaiverSet::load_at(&p, run).unwrap();
+            assert_eq!(usb_dp(&mut set), in_force, "{day}");
+            assert_eq!(set.expired().len(), usize::from(!in_force), "{day}");
+        }
     }
 
     #[test]

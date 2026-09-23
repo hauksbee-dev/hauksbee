@@ -145,14 +145,24 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
             magnitude: &[("vref", 0.1, 5.0)],
             ..NO_RULES
         },
-        // An ADJUSTABLE (ADJ-referenced) regulator has no output setpoint of its
-        // own: it holds `vref` between OUT and ADJ and the BOARD's divider sets
-        // the rail, so requiring a `vout` here would be a false fact. Its only
-        // quiescent path is the ADJ terminal, so `iadj_a` stands in for `iq_a`.
+        // An ADJUSTABLE regulator has no output setpoint of its own: the BOARD's
+        // divider sets the rail, so requiring a `vout` here would be a false
+        // fact. With no `gnd` pin (LM317 class) it holds `vref` between OUT and
+        // ADJ, whose terminal is its only quiescent path, so `iadj_a` stands in
+        // for `iq_a`. A `gnd` pin makes it ground-referenced, the binder's same
+        // test: `vref` is held on FB above GND, IQ returns through GND, and the
+        // FB bias is usually tiny or unpublished, so `iq_a` is what it needs.
         Vreg if entry.behavioral.converter.is_none() && entry.params.get_f64("vref").is_some() => {
             KindRules {
-                required: &["vref", "dropout_v", "iadj_a"],
-                ranges: &[("dropout_v", 0.0, 10.0), ("iadj_a", 0.0, 1e-3)],
+                required: match has_role(entry, "gnd") {
+                    true => &["vref", "dropout_v", "iq_a"],
+                    false => &["vref", "dropout_v", "iadj_a"],
+                },
+                ranges: &[
+                    ("dropout_v", 0.0, 10.0),
+                    ("iadj_a", 0.0, 1e-3),
+                    ("iq_a", 0.0, 1.0),
+                ],
                 magnitude: &[("vref", 0.1, 5.0)],
                 ..NO_RULES
             }
@@ -1124,6 +1134,17 @@ mod tests {
         let mut wrong_type = vreg(&[]);
         wrong_type.params.set_str("cout_min_f", "1u");
         rejects(&wrong_type, "non-negative finite number");
+        // Adjustable: a `gnd` pin (ground-referenced) needs `iq_a`; without one
+        // (LM317 class) the ADJ current `iadj_a` is the quiescent path.
+        for (gnd, have, missing) in [(true, "iq_a", "iadj_a"), (false, "iadj_a", "iq_a")] {
+            let adj = |key| {
+                let mut e = entry(Vreg, &[("vref", 0.8), ("dropout_v", 0.3), (key, 5e-5)]);
+                pins(&mut e, &[("1", "in"), ("2", "out"), ("3", "fb"), ("4", if gnd { "gnd" } else { "nc" })]);
+                e
+            };
+            accepts(&adj(have));
+            rejects(&adj(missing), &format!("missing required param '{have}'"));
+        }
 
         rejects(
             &entry(AnalogSwitch, &[("ron", 5000.0), ("roff", 2000.0)]),

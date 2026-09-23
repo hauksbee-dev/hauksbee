@@ -467,6 +467,7 @@ struct CompiledTransition {
 
 /// A behavioural device bound onto the circuit: its stamped legs plus live FSM
 /// state. The scheduler iterates it each chunk via [`Self::update`].
+#[derive(Default)]
 pub struct BehavioralDevice {
     /// Component reference designator.
     pub reference: String,
@@ -554,23 +555,8 @@ impl BehavioralDevice {
             reference: reference.to_string(),
             role_nodes: role_nodes.clone(),
             params: params.clone(),
-            pulls: 0,
-            open_drains: Vec::new(),
-            drives: Vec::new(),
-            series_paths: Vec::new(),
-            profiled_loads: Vec::new(),
-            converter: None,
-            laws: Vec::new(),
-            fsm_states: Vec::new(),
-            fsm_transitions: Vec::new(),
-            transition_guard_true_s: Vec::new(),
-            state_pins: BTreeMap::new(),
-            state_idx: 0,
-            t_in_state: 0.0,
-            input_budget: None,
-            pending_faults: Vec::new(),
-            overdraw_latched: false,
             custom: Some(custom),
+            ..Self::default()
         }
     }
 
@@ -594,23 +580,7 @@ impl BehavioralDevice {
             reference: reference.to_string(),
             role_nodes: role_nodes.clone(),
             params: params.clone(),
-            pulls: 0,
-            open_drains: Vec::new(),
-            drives: Vec::new(),
-            series_paths: Vec::new(),
-            profiled_loads: Vec::new(),
-            converter: None,
-            laws: Vec::new(),
-            fsm_states: Vec::new(),
-            fsm_transitions: Vec::new(),
-            transition_guard_true_s: Vec::new(),
-            state_pins: BTreeMap::new(),
-            state_idx: 0,
-            t_in_state: 0.0,
-            input_budget: None,
-            pending_faults: Vec::new(),
-            overdraw_latched: false,
-            custom: None,
+            ..Self::default()
         };
 
         dev.stamp_pins(circuit, reference, model, role_nodes);

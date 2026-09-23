@@ -1,0 +1,20 @@
+analysis = "op"
+description = "Ground-referenced adjustable LDO stamp (VREF + unity VCVS + CCCS pass element + IQ)"
+
+[[probe]]
+expr = "V(out)"
+reltol = 2.0e-8
+
+[[probe.analytic]]
+value = 3.3
+reltol = 2.0e-8
+note = "VO = VREF*(1 + R1/R2) = 0.8*(1 + 31.25k/10k)"
+
+[[probe]]
+expr = "I(VIN)"
+reltol = 2.0e-8
+
+[[probe.analytic]]
+value = -0.10013
+reltol = 2.0e-8
+note = "the pass current is drawn from IN: 3.3/33 load + 3.3/41.25k divider + 50u IQ"

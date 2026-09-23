@@ -2786,15 +2786,7 @@ fn bind_passive(
     }
 
     let Some(p) = parsed else {
-        return (
-            BindOutcome::Unresolved {
-                reason: format!("unparseable value '{}'", comp.value),
-            },
-            Some(format!(
-                "{}: value '{}' not parseable, left open",
-                comp.reference, comp.value
-            )),
-        );
+        return unparseable(comp);
     };
 
     // Source-bound package parasitics are real circuit elements: `esr`/`esl` on
@@ -3059,15 +3051,7 @@ fn bind_passive_array(
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> (BindOutcome, Option<String>) {
     let Some(p) = parsed else {
-        return (
-            BindOutcome::Unresolved {
-                reason: format!("unparseable value '{}'", comp.value),
-            },
-            Some(format!(
-                "{}: value '{}' not parseable, left open",
-                comp.reference, comp.value
-            )),
-        );
+        return unparseable(comp);
     };
     // Natural pad order: numeric pads sort numerically ("2" before "10"), any
     // non-numeric pads after them lexicographically.
@@ -3450,6 +3434,16 @@ fn entry_warning(comp: &Component, model: &ModelEntry) -> Option<String> {
     ))
 }
 
+/// The open outcome for a passive whose value text does not parse.
+fn unparseable(comp: &Component) -> (BindOutcome, Option<String>) {
+    let reason = format!("unparseable value '{}'", comp.value);
+    let warning = format!(
+        "{}: value '{}' not parseable, left open",
+        comp.reference, comp.value
+    );
+    (BindOutcome::Unresolved { reason }, Some(warning))
+}
+
 fn merge_bind_warnings(a: Option<String>, b: Option<String>) -> Option<String> {
     match (a, b) {
         (Some(a), Some(b)) => Some(format!("{a}; {b}")),
@@ -3568,9 +3562,9 @@ fn bind_vreg(
     if model.params.get_bool("shunt").unwrap_or(false) {
         return bind_shunt_ref(comp, model, circuit, roles);
     }
-    // An ADJUSTABLE regulator (LM317 class) has no output setpoint and no
-    // ground pin of its own: it holds V(out) - V(adj) at Vref and the BOARD's
-    // divider sets the rail. `vref` on the card selects that path.
+    // An ADJUSTABLE regulator has no output setpoint: it holds Vref against its
+    // ADJ/FB pin and the BOARD's divider sets the rail. `vref` on the card
+    // selects that path, and its pin map the law (see `bind_adj_vreg`).
     if let Some(vref) = model.params.get_f64("vref").filter(|v| v.is_finite()) {
         return bind_adj_vreg(
             comp, model, circuit, roles, regulators, vref, components, node_of,
@@ -3701,12 +3695,18 @@ fn bind_vreg(
     )
 }
 
-/// The adjustable (ADJ-referenced) vreg stamp, from three primitives the IR
-/// already has: `Vref` between OUT and ADJ, a CCCS moving that branch current
-/// onto IN (what the pass element does, so the input draw is honest and ADJ
-/// carries only divider current), and IADJ out of the ADJ pin. KCL at ADJ then
-/// gives the datasheet's `Vout = Vref*(1 + R2/R1) + Iadj*R2` from the BOARD's
-/// own divider, solved by MNA rather than parsed out of the netlist.
+/// The adjustable vreg stamp, from primitives the IR already has. The LM317
+/// class (no `gnd` in the card's `[models.pins]`) holds `Vref` between OUT and
+/// ADJ; a CCCS moves that branch current onto IN (what the pass element does,
+/// so the input draw is honest and ADJ carries only divider current), and IADJ
+/// leaves the ADJ pin. KCL at ADJ then gives `Vout = Vref*(1 + R2/R1) + Iadj*R2`
+/// from the BOARD's own divider, solved by MNA rather than parsed out of the
+/// netlist. A card that maps a `gnd` pin is GROUND-referenced (the common LDO
+/// with ADJ/FB and GND): its error amplifier holds `V(fb) - V(gnd)` at `Vref`.
+/// That is the same `Vref` source, from OUT to a private node a unity VCVS holds
+/// `V(out) - V(fb)` above GND, with the pass current and IQ drawn from IN into
+/// GND, so MNA gives `Vout = Vref*(1 + R1/R2)` with R1 on OUT-FB. One divider
+/// is a different rail under each law, so the card's pin map decides which.
 ///
 /// The enable caveat `bind_vreg` emits does not apply: an adjustable
 /// three-terminal part has no enable pin to leave unmodelled.
@@ -3732,31 +3732,66 @@ fn bind_adj_vreg(
     let Some(adj) = roles.get("fb").or_else(|| roles.get("adj")).copied() else {
         return open_warning(comp, "adjustable vreg ADJ pin not connected");
     };
-    if out == adj || out == input || input == adj {
-        return open_warning(comp, "vreg input, output, and ADJ must be distinct");
+    // Read off the CARD, not the resolved roles: an unconnected GND pad must not
+    // silently move a ground-referenced part onto the LM317 law.
+    let grounded = model.pins.values().any(|r| r == "gnd");
+    let gnd = match roles.get("gnd") {
+        Some(&gnd) if grounded => gnd,
+        None if grounded => return open_warning(comp, "vreg local return not connected"),
+        _ => NodeId::GROUND,
+    };
+    // OUT on ADJ shorts an LM317's reference, but FB on OUT is a grounded part's
+    // unity setting (Vout = Vref); FB on GND leaves that part nothing to hold.
+    let tied = match grounded {
+        true => gnd == input || gnd == out || gnd == adj,
+        false => out == adj,
+    };
+    if tied || out == input || input == adj {
+        return open_warning(comp, "vreg input, output, ADJ and any GND must be distinct");
     }
+    // A grounded part's `Vref` ends on a private node the VCVS drives. The VCVS
+    // is no helper: it reads no branch, and left in place when `source` is
+    // swapped out it keeps that node defined.
+    let (low, ret) = match grounded {
+        true => (circuit.node(&format!("{}_vreg_drive", comp.reference)), gnd),
+        false => (adj, adj),
+    };
     let source = circuit.add(Device::Vsource {
         name: format!("Vref_{}", comp.reference),
         p: out,
-        n: adj,
+        n: low,
         kind: SourceKind::Dc(vref),
     });
+    if grounded {
+        circuit.add(Device::Vcvs {
+            name: format!("Evreg_{}", comp.reference),
+            p: low,
+            n: gnd,
+            cp: out,
+            cn: adj,
+            gain: 1.0,
+        });
+    }
     // `stamp_vsource` counts the branch current as LEAVING `p`, so delivering
     // I into OUT reads as -I on this branch; the gain is -1 so that the same I
-    // is drawn out of IN and returned to ADJ, cancelling there.
+    // is drawn out of IN and returned where `source` took it from.
     let mut helpers = vec![circuit.add(Device::Cccs {
         name: format!("Fpass_{}", comp.reference),
         p: input,
-        n: adj,
+        n: ret,
         ctrl_src: source,
         gain: -1.0,
     })];
-    if let Some(iadj) = model.params.get_f64("iadj_a").filter(|i| i.is_finite()) {
+    // IADJ leaves the ADJ pin; a grounded part's quiescent current runs IN -> GND.
+    for (prefix, key, to, on) in [("Iadj", "iadj_a", adj, true), ("Iq", "iq_a", gnd, grounded)] {
+        let Some(amps) = model.params.get_f64(key).filter(|i| on && i.is_finite()) else {
+            continue;
+        };
         helpers.push(circuit.add(Device::Isource {
-            name: format!("Iadj_{}", comp.reference),
+            name: format!("{prefix}_{}", comp.reference),
             p: input,
-            n: adj,
-            kind: SourceKind::Dc(iadj),
+            n: to,
+            kind: SourceKind::Dc(amps),
         }));
     }
     let dropout_v = model.params.get_f64("dropout_v");
@@ -3769,8 +3804,8 @@ fn bind_adj_vreg(
         min_in_v: f64::INFINITY,
         max_in_v: model.ratings.max_voltage_v.unwrap_or(f64::INFINITY),
         dropout_v,
-        // A three-terminal adjustable regulator has no return pin of its own.
-        adj_return: Some(NodeId::GROUND),
+        // The part's own GND, or board ground for a three-terminal part with none.
+        adj_return: Some(gnd),
         helpers,
     });
     (
@@ -3778,7 +3813,7 @@ fn bind_adj_vreg(
             device: format!("vreg {vref:.3}V adjustable reference"),
         },
         merge_bind_warnings(
-            vreg_stability_warning(comp, model, (out, NodeId::GROUND), components, node_of),
+            vreg_stability_warning(comp, model, (out, gnd), components, node_of),
             entry_warning(comp, model),
         ),
     )

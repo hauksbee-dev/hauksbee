@@ -118,18 +118,8 @@ const MOSFET: &[&str] = &[
 
 /// The logic-level and supply-accounting vocabulary shared by every digital
 /// kind. `supply_pin`/`gnd_pin` name pin roles rather than carrying physics.
-const DIGITAL_COMMON: &[&str] = &[
-    "vih",
-    "vil",
-    "voh",
-    "vol",
-    "ro",
-    "tpd_s",
-    "supply_static_ua",
-    "supply_cpd_pf",
-    "supply_pin",
-    "gnd_pin",
-];
+/// It is `SHIFT_REGISTER` after `bits`, so the two cannot drift apart.
+const DIGITAL_COMMON: &[&str] = SHIFT_REGISTER.split_at(1).1;
 
 /// A shift register is the digital vocabulary plus its stage count.
 const SHIFT_REGISTER: &[&str] = &[
@@ -146,8 +136,6 @@ const SHIFT_REGISTER: &[&str] = &[
     "gnd_pin",
 ];
 
-/// The converter vocabulary shared by the DAC and the ADC: resolution, the
-/// reference, the output impedance, and the bus wiring.
 /// An `adc` entry's vocabulary: the converter names PLUS the digital ones.
 ///
 /// This is not a convenience union. `bind_component` routes `ComponentKind::Adc`
@@ -179,19 +167,10 @@ const ADC_VOCAB: &[&str] = &[
     "supply_static_ua",
 ];
 
-const CONVERTER_COMMON: &[&str] = &[
-    "bits",
-    "gain",
-    "rout",
-    "vref_int",
-    "vref_ext",
-    "lsb_size_v",
-    "i2c_addr",
-    "scl_pin",
-    "sda_pin",
-    "supply_pin",
-    "gnd_pin",
-];
+/// The converter vocabulary shared by the DAC and the ADC: resolution, the
+/// reference, the output impedance, and the bus wiring. It is the 11 names
+/// heading `ADC_VOCAB` (before its digital ones), so they are spelled once.
+const CONVERTER_COMMON: &[&str] = ADC_VOCAB.split_at(11).0;
 
 /// The parameter names this kind's consumers read, beyond `UNIVERSAL`.
 ///
@@ -517,6 +496,15 @@ mod tests {
             assert_eq!(found.len(), 1, "{params}: {found:?}");
             assert_eq!(found[0].suggestion.as_deref(), Some("vout"), "{found:?}");
         }
+    }
+
+    #[test]
+    fn shared_vocabularies_split_where_their_docs_say() {
+        assert_eq!(
+            (DIGITAL_COMMON[0], CONVERTER_COMMON.last()),
+            ("vih", Some(&"gnd_pin"))
+        );
+        assert!(!CONVERTER_COMMON.contains(&"vih") && ADC_VOCAB.contains(&"vih"));
     }
 
     #[test]
