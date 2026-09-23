@@ -10,37 +10,7 @@
 //! pin->role map against the industry-standard pinout, so any future template
 //! regression fails loudly and names the pin.
 
-use hauksbee_models::{ComponentQuery, ModelLibrary};
-
-/// Resolve `value` through the builtin library and assert the entry id and the
-/// exact, complete pin->role map (no extra pins, no missing pins, no swaps).
-fn assert_pin_map(value: &str, id: &str, expected: &[(&str, &str)]) {
-    let lib = ModelLibrary::builtin();
-    let q = ComponentQuery {
-        value: Some(value.into()),
-        ..Default::default()
-    };
-    let m = lib
-        .resolve(&q)
-        .model
-        .unwrap_or_else(|| panic!("{value} did not resolve to any model"));
-    assert_eq!(m.id, id, "{value} resolved to the wrong model id");
-    for (pin, role) in expected {
-        assert_eq!(
-            m.pins.get(*pin).map(String::as_str),
-            Some(*role),
-            "{id}: pin {pin} must be role {role:?} (datasheet pinout), got {:?}",
-            m.pins.get(*pin),
-        );
-    }
-    assert_eq!(
-        m.pins.len(),
-        expected.len(),
-        "{id}: pin map has {} entries, datasheet package has {}",
-        m.pins.len(),
-        expected.len(),
-    );
-}
+use super::{assert_pin_map, expect_model, resolve_value};
 
 /// [`assert_pin_map`] for a package numbered 1..=N in order: `roles[i]` is the
 /// role the datasheet gives pin `i + 1`, so the list reads down the package.
@@ -51,65 +21,34 @@ fn assert_sequential_pin_map(value: &str, id: &str, roles: &[&str]) {
         .map(String::as_str)
         .zip(roles.iter().copied())
         .collect();
-    assert_pin_map(value, id, &expected);
+    assert_pin_map(&expect_model(value), id, &expected);
 }
 
 /// 74HC00/08/32/86 all share the standard TI quad-2-input-gate DIP/SOIC
 /// arrangement: left side ascends input-input-output (1A 1B 1Y on 1-3,
 /// 2A 2B 2Y on 4-6), GND 7, and the right side MIRRORS that order so the
 /// gates there are OUTPUT-first: 3Y 3A 3B on 8-10, 4Y 4A 4B on 11-13,
-/// VCC 14. Gate 4's output is pin 11, NOT pin 13.
-fn quad_gate_00_family(role: fn(u8, char) -> String) -> Vec<(String, String)> {
-    vec![
-        ("1", role(1, 'a')),
-        ("2", role(1, 'b')),
-        ("3", role(1, 'y')),
-        ("4", role(2, 'a')),
-        ("5", role(2, 'b')),
-        ("6", role(2, 'y')),
-        ("7", "gnd".into()),
-        ("8", role(3, 'y')),
-        ("9", role(3, 'a')),
-        ("10", role(3, 'b')),
-        ("11", role(4, 'y')),
-        ("12", role(4, 'a')),
-        ("13", role(4, 'b')),
-        ("14", "vcc".into()),
-    ]
-    .into_iter()
-    .map(|(p, r)| (p.to_string(), r))
-    .collect()
-}
-
-fn assert_quad_gate_00_family(value: &str, id: &str) {
-    // db/digital.toml names these roles a<n>/b<n>/y<n>.
-    let expected = quad_gate_00_family(|n, sig| format!("{sig}{n}"));
-    let expected_refs: Vec<(&str, &str)> = expected
-        .iter()
-        .map(|(p, r)| (p.as_str(), r.as_str()))
-        .collect();
-    assert_pin_map(value, id, &expected_refs);
-}
-
+/// VCC 14. Gate 4's output is pin 11, NOT pin 13. db/digital.toml names these
+/// roles a<n>/b<n>/y<n>.
 #[test]
-fn hc00_quad_nand_pin_map() {
-    assert_quad_gate_00_family("74HC00", "74hc00");
-}
-
-#[test]
-fn hc08_quad_and_pin_map() {
-    // The field-failure part: gate 4 output MUST be pin 11 (12/13 inputs).
-    assert_quad_gate_00_family("74HC08", "74hc08");
-}
-
-#[test]
-fn hc32_quad_or_pin_map() {
-    assert_quad_gate_00_family("74HC32", "74hc32");
-}
-
-#[test]
-fn hc86_quad_xor_pin_map() {
-    assert_quad_gate_00_family("74HC86", "74hc86");
+fn quad_gate_00_family_pin_maps() {
+    // 74HC08 is the field-failure part: gate 4 output MUST be pin 11 (12/13
+    // inputs).
+    for (value, id) in [
+        ("74HC00", "74hc00"),
+        ("74HC08", "74hc08"),
+        ("74HC32", "74hc32"),
+        ("74HC86", "74hc86"),
+    ] {
+        assert_sequential_pin_map(
+            value,
+            id,
+            &[
+                "a1", "b1", "y1", "a2", "b2", "y2", "gnd", "y3", "a3", "b3", "y4", "a4", "b4",
+                "vcc",
+            ],
+        );
+    }
 }
 
 #[test]
@@ -251,12 +190,7 @@ fn bma423_accelerometer_pin_map() {
 /// rating on a 3.3 V part: a 5 V rail reaching this pin is a fault.
 #[test]
 fn bma423_carries_the_ratiometric_levels_and_the_four_volt_ceiling() {
-    let lib = ModelLibrary::builtin();
-    let q = ComponentQuery {
-        value: Some("BMA423".into()),
-        ..Default::default()
-    };
-    let m = lib.resolve(&q).model.expect("BMA423 resolves");
+    let m = expect_model("BMA423");
     let vddio = 3.3_f64;
     for (key, factor) in [("vih", 0.7), ("vil", 0.3), ("voh", 0.8), ("vol", 0.2)] {
         let got = m.params.get_f64(key).unwrap_or_else(|| panic!("{key} set"));
@@ -279,12 +213,10 @@ fn bma423_carries_the_ratiometric_levels_and_the_four_volt_ceiling() {
     // A sibling with a different register map and pinout must not borrow this
     // entry's map.
     for sibling in ["BMA400", "BMA456", "BMA425"] {
-        let q = ComponentQuery {
-            value: Some(sibling.into()),
-            ..Default::default()
-        };
         assert!(
-            lib.resolve(&q).model.is_none_or(|m| m.id != "bma423"),
+            resolve_value(sibling)
+                .model
+                .is_none_or(|m| m.id != "bma423"),
             "{sibling} must not resolve to the BMA423 entry"
         );
     }

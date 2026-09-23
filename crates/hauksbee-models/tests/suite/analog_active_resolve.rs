@@ -1,14 +1,13 @@
-use hauksbee_models::{ComponentKind, ComponentQuery, ModelLibrary};
+use super::expect_query;
+use hauksbee_models::ComponentKind;
 
 #[test]
 fn ina186_family_resolves_to_current_sense_amplifier_model() {
-    let lib = ModelLibrary::builtin();
-    let res = lib.resolve(&ComponentQuery {
-        value: Some("INA186".to_string()),
-        footprint: Some("Package_TO_SOT_SMD:SOT-363_SC-70-6".to_string()),
-        ..Default::default()
-    });
-    let model = res.model.expect("INA186 should resolve");
+    let model = expect_query(
+        Some("INA186"),
+        None,
+        Some("Package_TO_SOT_SMD:SOT-363_SC-70-6"),
+    );
 
     assert_eq!(model.kind, ComponentKind::Opamp);
     assert_eq!(model.pins.get("1").map(String::as_str), Some("ref"));

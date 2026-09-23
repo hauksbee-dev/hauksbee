@@ -45,17 +45,111 @@ mod vreg_78xx_resolve;
 mod vreg_79xx_negative;
 mod zener_family;
 
-/// Resolve a value-only fixture without inventing MPN or footprint metadata.
-fn resolve_value(value: &str) -> hauksbee_models::Resolution {
-    hauksbee_models::ModelLibrary::builtin_shared().resolve(&hauksbee_models::ComponentQuery::new(
-        None,
-        Some(value.into()),
-        None,
-    ))
+use hauksbee_models::{ComponentQuery, ModelEntry, ModelLibrary, OperatingEnvelope, Resolution};
+
+/// Resolve against the shared built-in library with only the given fields set.
+fn resolve_query(value: Option<&str>, mpn: Option<&str>, footprint: Option<&str>) -> Resolution {
+    ModelLibrary::builtin_shared().resolve(&ComponentQuery {
+        value: value.map(Into::into),
+        mpn: mpn.map(Into::into),
+        footprint: footprint.map(Into::into),
+        ..Default::default()
+    })
 }
 
-fn expect_model(value: &str) -> hauksbee_models::ModelEntry {
+/// The model [`resolve_query`] binds, panicking with the query when none does.
+fn expect_query(value: Option<&str>, mpn: Option<&str>, footprint: Option<&str>) -> ModelEntry {
+    resolve_query(value, mpn, footprint)
+        .model
+        .unwrap_or_else(|| {
+            panic!("value {value:?} / mpn {mpn:?} / footprint {footprint:?} did not resolve")
+        })
+}
+
+/// The id of the model [`resolve_query`] binds, or `None` when nothing binds.
+fn query_id(value: Option<&str>, mpn: Option<&str>, footprint: Option<&str>) -> Option<String> {
+    resolve_query(value, mpn, footprint).model.map(|m| m.id)
+}
+
+/// Resolve a value-only fixture without inventing MPN or footprint metadata.
+fn resolve_value(value: &str) -> Resolution {
+    resolve_query(Some(value), None, None)
+}
+
+fn expect_model(value: &str) -> ModelEntry {
     resolve_value(value)
         .model
         .unwrap_or_else(|| panic!("{value} did not resolve to any model"))
+}
+
+/// Resolve exactly the way a layout-only board does. `mpn` is set to the value
+/// string as well as `value`, because that is what `binder.rs` does for a
+/// component with no MPN property, which is every component on a `.kicad_pcb`,
+/// a `.brd` or a gerber set. Match rules are ANDed, so leaving `mpn` empty would
+/// make every entry carrying an `mpn_re` resolve to nothing, testing a query
+/// shape no board produces.
+fn resolve_part(value: &str) -> Option<ModelEntry> {
+    resolve_query(Some(value), Some(value), None).model
+}
+
+/// A numeric param the entry must carry.
+fn param(m: &ModelEntry, k: &str) -> f64 {
+    m.params
+        .get_f64(k)
+        .unwrap_or_else(|| panic!("model {:?} has no param {k}", m.id))
+}
+
+/// Shockley forward voltage at `i` with series resistance, from the entry's own
+/// `n`/`is`/`rs` and the thermal voltage `vt` the caller's datasheet assumes.
+fn vf_at(m: &ModelEntry, i: f64, vt: f64) -> f64 {
+    param(m, "n") * vt * (i / param(m, "is")).ln() + i * param(m, "rs")
+}
+
+/// Assert each listed pad carries its role (other pads are not checked).
+fn assert_pins(m: &ModelEntry, pairs: &[(&str, &str)]) {
+    for (pad, role) in pairs {
+        assert_eq!(
+            m.pins.get(*pad).map(String::as_str),
+            Some(*role),
+            "{}: pad {pad} must be {role} (datasheet pinout), got {:?}",
+            m.id,
+            m.pins.get(*pad)
+        );
+    }
+}
+
+/// Assert the entry id and the exact, complete pad->role map (no extra pads,
+/// no missing pads, no swaps).
+fn assert_pin_map(m: &ModelEntry, id: &str, expected: &[(&str, &str)]) {
+    assert_eq!(m.id, id, "resolved to the wrong model id");
+    assert_pins(m, expected);
+    assert_eq!(
+        m.pins.len(),
+        expected.len(),
+        "{id}: pad map has {} entries, the datasheet package has {}",
+        m.pins.len(),
+        expected.len(),
+    );
+}
+
+/// Whether `m` declares a supply range on `pin` of exactly `min..=max` whose
+/// basis cites `cites`; `abs_max` is also checked when `Some`.
+fn has_supply_range(
+    m: &ModelEntry,
+    pin: &str,
+    (min, max): (f64, f64),
+    abs_max: Option<f64>,
+    cites: &str,
+) -> bool {
+    m.envelope.iter().any(|entry| {
+        matches!(
+            entry,
+            OperatingEnvelope::SupplyRange { pin: p, min_v, max_v, abs_max_v, basis, .. }
+                if p == pin
+                    && *min_v == min
+                    && *max_v == max
+                    && abs_max.is_none_or(|a| *abs_max_v == Some(a))
+                    && basis.contains(cites)
+        )
+    })
 }

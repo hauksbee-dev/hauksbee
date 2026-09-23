@@ -1,10 +1,10 @@
 //! Footprint-bound connector ratings used by the TPS25982 budget decoder.
 
-use hauksbee_models::{ComponentKind, ComponentQuery, ModelLibrary};
+use super::{expect_query, resolve_query};
+use hauksbee_models::ComponentKind;
 
 #[test]
 fn exact_jst_vh_and_ph_footprints_resolve_their_datasheet_current_ratings() {
-    let lib = ModelLibrary::builtin();
     let cases = [
         (
             "JST_B2P-VH",
@@ -21,14 +21,7 @@ fn exact_jst_vh_and_ph_footprints_resolve_their_datasheet_current_ratings() {
     ];
 
     for (value, footprint, id, current_a) in cases {
-        let model = lib
-            .resolve(&ComponentQuery::new(
-                None,
-                Some(value.to_string()),
-                Some(footprint.to_string()),
-            ))
-            .model
-            .unwrap_or_else(|| panic!("{value} / {footprint} must resolve"));
+        let model = expect_query(Some(value), None, Some(footprint));
         assert_eq!(model.id, id);
         assert_eq!(model.kind, ComponentKind::Connector);
         assert_eq!(model.ratings.max_current_a, Some(current_a));
@@ -37,12 +30,11 @@ fn exact_jst_vh_and_ph_footprints_resolve_their_datasheet_current_ratings() {
 
 #[test]
 fn family_name_without_the_matching_footprint_does_not_claim_a_rating() {
-    let lib = ModelLibrary::builtin();
-    let resolution = lib.resolve(&ComponentQuery::new(
+    let resolution = resolve_query(
+        Some("JST_B2P-VH"),
         None,
-        Some("JST_B2P-VH".to_string()),
-        Some("Connector_Generic:Conn_01x02".to_string()),
-    ));
+        Some("Connector_Generic:Conn_01x02"),
+    );
     assert!(
         resolution
             .model

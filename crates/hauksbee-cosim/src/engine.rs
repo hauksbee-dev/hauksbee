@@ -243,6 +243,28 @@ impl HauksbeeEngine {
             },
         });
     }
+
+    /// The node of board net `name`, refusing a net the board does not have.
+    fn board_net(&self, name: &str) -> Result<hauksbee_ir::NodeId, String> {
+        self.sched
+            .net_nodes
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("board net '{name}' does not exist"))
+    }
+
+    /// Refuse a live-peripheral `id` that is already attached.
+    fn refuse_taken_peripheral_id(&self, id: &str) -> Result<(), String> {
+        if self
+            .sched
+            .peripheral_infos()
+            .iter()
+            .any(|(taken, _)| taken == id)
+        {
+            return Err(format!("a live peripheral named '{id}' already exists"));
+        }
+        Ok(())
+    }
 }
 
 impl Engine for HauksbeeEngine {
@@ -413,31 +435,11 @@ impl Engine for HauksbeeEngine {
         if spec.id.trim().is_empty() || spec.id.len() > 96 {
             return Err("live peripheral id must be 1..=96 characters".into());
         }
-        if self
-            .sched
-            .peripheral_infos()
-            .iter()
-            .any(|(id, _)| id == &spec.id)
-        {
-            return Err(format!(
-                "a live peripheral named '{}' already exists",
-                spec.id
-            ));
-        }
-        let net = self
-            .sched
-            .net_nodes
-            .get(&spec.net)
-            .copied()
-            .ok_or_else(|| format!("board net '{}' does not exist", spec.net))?;
+        self.refuse_taken_peripheral_id(&spec.id)?;
+        let net = self.board_net(&spec.net)?;
         let to = match spec.to.as_deref() {
             None | Some("") | Some("GND") | Some("gnd") | Some("0") => NodeId::GROUND,
-            Some(name) => self
-                .sched
-                .net_nodes
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("board net '{name}' does not exist"))?,
+            Some(name) => self.board_net(name)?,
         };
         match spec.kind.as_str() {
             "stimulus" => {
@@ -496,17 +498,7 @@ impl Engine for HauksbeeEngine {
         {
             return Err("live register-map controller must be 1..=96 characters".into());
         }
-        if self
-            .sched
-            .peripheral_infos()
-            .iter()
-            .any(|(id, _)| id == &spec.id)
-        {
-            return Err(format!(
-                "a live peripheral named '{}' already exists",
-                spec.id
-            ));
-        }
+        self.refuse_taken_peripheral_id(&spec.id)?;
 
         let mut sensor = RegisterMapSensor::from_toml(&spec.spec_toml)
             .map_err(|error| format!("register-map spec refused: {error}"))?;
@@ -536,12 +528,7 @@ impl Engine for HauksbeeEngine {
             }
             Bus::Spi => {
                 let resolved_cs = if let Some(net_name) = spec.cs_net.as_deref() {
-                    let net = self
-                        .sched
-                        .net_nodes
-                        .get(net_name)
-                        .copied()
-                        .ok_or_else(|| format!("board net '{net_name}' does not exist"))?;
+                    let net = self.board_net(net_name)?;
                     let pin = self.sched.pin_driving_node(net).ok_or_else(|| {
                         format!(
                             "SPI chip-select net '{net_name}' is not driven by a modeled MCU pin"

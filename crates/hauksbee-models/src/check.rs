@@ -58,22 +58,26 @@ impl Problems {
         }
     }
 
-    /// `what` must be a positive finite number.
-    pub fn positive(&mut self, what: impl Display, v: f64) {
+    /// `what` must be a positive finite number. These checks take an
+    /// `Option` too and skip an absent value, so optional fields need no guard.
+    pub fn positive(&mut self, what: impl Display, v: impl Into<Option<f64>>) {
+        let Some(v) = v.into() else { return };
         self.require(positive_finite(v), || {
             format!("{what} must be a positive finite number, got {v}")
         });
     }
 
     /// `what` must be a non-negative finite number.
-    pub fn nonneg(&mut self, what: impl Display, v: f64) {
+    pub fn nonneg(&mut self, what: impl Display, v: impl Into<Option<f64>>) {
+        let Some(v) = v.into() else { return };
         self.require(nonneg_finite(v), || {
             format!("{what} must be a non-negative finite number, got {v}")
         });
     }
 
     /// `what` must be finite (either sign is legal).
-    pub fn finite(&mut self, what: impl Display, v: f64) {
+    pub fn finite(&mut self, what: impl Display, v: impl Into<Option<f64>>) {
+        let Some(v) = v.into() else { return };
         self.require(v.is_finite(), || format!("{what} must be finite, got {v}"));
     }
 

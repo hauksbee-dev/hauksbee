@@ -11,7 +11,7 @@
 
 use regex::Regex;
 
-use crate::schema::{MatchRules, ModelEntry};
+use crate::schema::ModelEntry;
 
 /// A model entry with pre-compiled regexes.
 pub struct CompiledEntry {
@@ -353,24 +353,6 @@ impl ComponentQuery {
             footprint: footprint.into(),
             ..Default::default()
         }
-    }
-}
-
-// ── MatchRules helpers ────────────────────────────────────────────────────────
-
-impl MatchRules {
-    /// Number of populated rule fields (for tie-breaking).
-    pub fn populated(&self) -> usize {
-        [
-            &self.lib_id,
-            &self.value_re,
-            &self.footprint_re,
-            &self.mpn_re,
-        ]
-        .iter()
-        .filter(|r| r.is_some())
-        .count()
-            + self.properties.len()
     }
 }
 

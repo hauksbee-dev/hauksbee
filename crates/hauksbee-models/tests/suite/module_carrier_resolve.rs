@@ -8,22 +8,17 @@
 //! descriptor exists. Either way, never a silent fall-through to the wrong-ISA
 //! simavr default and never an invented emulator string.
 
-use hauksbee_models::{ComponentKind, ComponentQuery, ModelLibrary};
+use super::{assert_pins, expect_query, resolve_query};
+use hauksbee_models::ComponentKind;
 
 fn resolve_value(value: &str) -> Option<hauksbee_models::ModelEntry> {
-    let lib = ModelLibrary::builtin();
-    lib.resolve(&ComponentQuery {
-        value: Some(value.to_string()),
-        ..Default::default()
-    })
-    .model
+    super::resolve_value(value).model
 }
 
 // ── RP2040 package map ───────────────────────────────────────────────────────
 
 #[test]
 fn rp2040_package_map_preserves_identity_fallback_and_scope() {
-    let lib = ModelLibrary::builtin();
     let identity = resolve_value("RP2040").expect("bare chip identity");
     assert!(identity
         .coverage
@@ -50,14 +45,8 @@ fn rp2040_package_map_preserves_identity_fallback_and_scope() {
             true,
         ),
     ] {
-        let model = lib
-            .resolve(&ComponentQuery {
-                value: Some("RP2040".into()),
-                footprint: footprint.map(str::to_owned),
-                ..Default::default()
-            })
-            .model
-            .expect("package uncertainty must not discard chip identity");
+        // Package uncertainty must not discard chip identity.
+        let model = expect_query(Some("RP2040"), None, footprint);
         assert_eq!(
             model.id,
             if full { "rp2040_qfn56" } else { "rp2040" },
@@ -72,11 +61,7 @@ fn rp2040_package_map_preserves_identity_fallback_and_scope() {
         assert_eq!(model.straps, identity.straps);
     }
     for value in ["RP2350", "RP2040_PLATFORM", "Pico", "RP2040 clone"] {
-        let resolved = lib.resolve(&ComponentQuery {
-            value: Some(value.into()),
-            footprint: Some("QFN-56".into()),
-            ..Default::default()
-        });
+        let resolved = resolve_query(Some(value), None, Some("QFN-56"));
         assert!(
             resolved.model.is_none_or(|m| m.id != "rp2040_qfn56"),
             "{value}"
@@ -86,14 +71,7 @@ fn rp2040_package_map_preserves_identity_fallback_and_scope() {
 
 #[test]
 fn rp2040_qfn_map_covers_sio_adc_and_non_gpio_pads() {
-    let model = ModelLibrary::builtin()
-        .resolve(&ComponentQuery {
-            value: Some("RP2040".into()),
-            footprint: Some("QFN-56".into()),
-            ..Default::default()
-        })
-        .model
-        .expect("known chip and package");
+    let model = expect_query(Some("RP2040"), None, Some("QFN-56"));
     assert_eq!(model.pins.len(), 57);
     assert!((1..=57).all(|pad| model.pins.contains_key(&pad.to_string())));
     assert_eq!(
@@ -242,13 +220,13 @@ fn daisy_seed_binds_with_honest_no_cosim_backend() {
 #[test]
 fn daisy_seed_header_pin_map_matches_datasheet() {
     let model = resolve_value("Daisy_Seed").expect("Daisy_Seed should resolve");
-    assert_eq!(model.pins.get("1").map(String::as_str), Some("pb12"));
-    assert_eq!(
-        model.pins.get("14").map(String::as_str),
-        Some("pb6_usart1_tx")
-    );
-    assert_eq!(model.pins.get("39").map(String::as_str), Some("vin"));
-    assert_eq!(model.pins.get("40").map(String::as_str), Some("gnd"));
+    let header = [
+        ("1", "pb12"),
+        ("14", "pb6_usart1_tx"),
+        ("39", "vin"),
+        ("40", "gnd"),
+    ];
+    assert_pins(&model, &header);
     assert!(
         model.straps.is_empty(),
         "the H750 BOOT pin stays on-module (BOOT button); no header strap"

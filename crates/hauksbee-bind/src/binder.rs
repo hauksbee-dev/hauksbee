@@ -25,6 +25,7 @@ use hauksbee_ir::{
     BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId, Polarity, Rail,
     SourceKind,
 };
+use hauksbee_models::sensor_spec::StrapTie;
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{
     Bus, ComponentKind, ComponentQuery, Confidence, ModelEntry, ModelLibrary, PeripheralPower,
@@ -112,6 +113,10 @@ pub struct PeripheralBinding {
     /// Address selected by an exact board strap. `None` means use the address
     /// embedded in the portable sensor spec.
     pub i2c_address_override: Option<u8>,
+    /// Why the override is the spec's default rather than what the board's
+    /// straps select (a floating or signal-net strap). Surfaced as a
+    /// partial-model assumption on the bind row.
+    pub i2c_address_assumed: Option<String>,
     /// Datasheet current envelope and the exact board rails that power this
     /// peripheral. `None` means the model deliberately makes no electrical
     /// current/power-gating claim; protocol behavior remains usable but cannot
@@ -127,6 +132,7 @@ pub struct BoundPeripheralPower {
 }
 
 /// The bound board: a ready-to-solve circuit plus the event-driven layer.
+#[derive(Default)]
 pub struct BoundBoard {
     pub name: String,
     pub circuit: Circuit,
@@ -535,7 +541,7 @@ pub fn bind_board_with(
     // not raw String Ord: byte-lexicographic ordering puts "U10" before "U2" and
     // would hand out addresses in the wrong order for non-uniform-width
     // designators.
-    dacs.sort_by(|a, b| natural_ref_key(&a.reference).cmp(&natural_ref_key(&b.reference)));
+    dacs.sort_by_key(|d| crate::bind_report::natural_ref_key(&d.reference));
     for (i, d) in dacs.iter_mut().enumerate() {
         d.address = 0x60 + i as u8;
     }
@@ -1996,8 +2002,19 @@ fn bind_component(
     // A model-declared firmware peripheral is executable behavior in its own
     // right, but only when the board actually wires the bus roles.
     if let Some(spec) = model.peripheral.clone() {
-        return match bind_model_peripheral(comp, model, spec, &role_nets, power_nets, circuit) {
+        return match bind_model_peripheral(
+            comp, model, spec, &role_nets, node_of, power_nets, circuit,
+        ) {
             Ok(binding) => {
+                let assumed = binding.i2c_address_assumed.as_ref().map(|why| {
+                    format!(
+                        "{}{} ({}): {why}",
+                        Assumption::PARTIAL_MODEL_MARKER,
+                        comp.reference,
+                        comp.value
+                    )
+                });
+                let warning = merge_bind_warnings(entry_warning(comp, model), assumed);
                 let device = match &binding.spec {
                     PeripheralSpec::I2cEeprom { .. } => "model-declared I2C EEPROM",
                     PeripheralSpec::SpiNorFlash { .. } => "model-declared SPI NOR flash",
@@ -2008,7 +2025,7 @@ fn bind_component(
                     BindOutcome::Behavioral {
                         device: device.to_string(),
                     },
-                    entry_warning(comp, model),
+                    warning,
                     guesses,
                 )
             }
@@ -2192,15 +2209,33 @@ fn bound_digital_outcome(
 /// `Err((reason, warning))` when the board does not wire the bus roles, the
 /// supply roles, or the strap levels the spec needs: a flash with no CS or an
 /// EEPROM with no SDA is left open, not counted as modelled because its part
-/// number was recognised.
+/// number was recognised. A register-map spec's own `[sensor.pins]` fills the
+/// roles the card's `[models.pins]` leaves out, and its address-select table
+/// picks the address from the board's straps.
 fn bind_model_peripheral(
     comp: &Component,
     model: &ModelEntry,
     spec: PeripheralSpec,
     role_nets: &HashMap<String, NodeId>,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
     power_nets: &HashMap<String, f64>,
     circuit: &Circuit,
 ) -> Result<PeripheralBinding, (String, String)> {
+    let sensor = match &spec {
+        PeripheralSpec::RegisterMap { spec_toml, .. } => Some(
+            SensorSpec::from_toml(spec_toml)
+                .expect("model validation guarantees a valid register-map spec")
+                .sensor,
+        ),
+        _ => None,
+    };
+    let mut role_nets = role_nets.clone();
+    for pins in sensor.iter().map(|s| &s.pins) {
+        for (role, node) in role_node_map_pins(comp, pins, None, node_of) {
+            role_nets.entry(role).or_insert(node);
+        }
+    }
+    let role_nets = &role_nets;
     // Every refusal reads the same way: the machine-facing reason, then the
     // human warning prefixed with which board part it is about.
     let refuse = |reason: String, detail: String| -> (String, String) {
@@ -2237,6 +2272,7 @@ fn bind_model_peripheral(
         None => None,
     };
 
+    let mut i2c_address_assumed = None;
     let (cs_net, i2c_address_override) = match &spec {
         PeripheralSpec::I2cEeprom { .. } => {
             if !all_connected(&["scl", "sda"]) {
@@ -2282,7 +2318,6 @@ fn bind_model_peripheral(
             (Some(cs_net), None)
         }
         PeripheralSpec::RegisterMap {
-            spec_toml,
             scl_role,
             sda_role,
             cs_role,
@@ -2296,8 +2331,7 @@ fn bind_model_peripheral(
             address_when_high,
             ..
         } => {
-            let sensor = SensorSpec::from_toml(spec_toml)
-                .expect("model validation guarantees a valid register-map spec");
+            let sensor = sensor.as_ref().expect("parsed above for a register map");
             // A strap role must resolve to ground or to a rail the board's own
             // power-net resolution accepted; anything else is not a level.
             let strap_level = |role: &str| -> Result<bool, String> {
@@ -2363,9 +2397,18 @@ fn bind_model_peripheral(
                         ))
                     }
                 },
-                _ => None,
+                _ if sensor.address_selects.is_empty() => None,
+                _ => sensor
+                    .resolve_address(|role| {
+                        strap_level(role)
+                            .map(|high| if high { StrapTie::High } else { StrapTie::Low })
+                    })
+                    .map(|choice| {
+                        i2c_address_assumed = choice.assumed;
+                        choice.address
+                    }),
             };
-            match sensor.sensor.bus {
+            match sensor.bus {
                 Bus::I2c => {
                     if !all_connected(&[scl_role, sda_role]) {
                         return Err(refuse(
@@ -2414,6 +2457,7 @@ fn bind_model_peripheral(
         spec,
         cs_net,
         i2c_address_override,
+        i2c_address_assumed,
         power,
     })
 }
@@ -4369,6 +4413,34 @@ fn bind_comparator(
     )
 }
 
+/// Stamp one SPDT as two complementary `VSwitch` legs named `{name}_s1` and
+/// `{name}_s0`: select high closes com<->s1; the s0 leg conducts when the
+/// select is LOW by sensing (vcc - select) against the rail voltage `vcc_v`.
+fn stamp_spdt(
+    circuit: &mut Circuit,
+    name: &str,
+    [com, s0, s1]: [NodeId; 3],
+    [sel, vss, vcc]: [NodeId; 3],
+    vcc_v: f64,
+    [ron, roff, vth]: [f64; 3],
+) {
+    for (leg, b, ctrl_p, ctrl_n, von) in
+        [("s1", s1, sel, vss, vth), ("s0", s0, vcc, sel, vcc_v - vth)]
+    {
+        circuit.add(Device::VSwitch {
+            name: format!("{name}_{leg}"),
+            a: com,
+            b,
+            ctrl_p,
+            ctrl_n,
+            von: von + 0.25,
+            voff: von - 0.25,
+            ron,
+            roff,
+        });
+    }
+}
+
 fn bind_analog_switch(
     comp: &Component,
     model: &ModelEntry,
@@ -4384,6 +4456,9 @@ fn bind_analog_switch(
     let vss = pick(roles, &["vss", "gnd"])
         .copied()
         .unwrap_or(NodeId::GROUND);
+    let ron = model.params.get_f64("ron").unwrap_or(50.0);
+    let roff = model.params.get_f64("roff").unwrap_or(1e9);
+    let vth = model.params.get_f64("vth").unwrap_or(1.5);
     let shared_dpdt = (
         roles.get("com_1").copied(),
         roles.get("s0_1").copied(),
@@ -4418,9 +4493,6 @@ fn bind_analog_switch(
                 "shared-select DPDT has a dynamic OE_N input; the current switch primitive has one control and cannot combine select with output-enable, so both lanes are left open rather than modeled as always enabled",
             );
         }
-        let ron = model.params.get_f64("ron").unwrap_or(50.0);
-        let roff = model.params.get_f64("roff").unwrap_or(1e9);
-        let vth = model.params.get_f64("vth").unwrap_or(1.5);
         let (vcc_v, vcc_warning) = match power_nets.get(circuit.node_name(vcc)).copied() {
             Some(value) => (value, None),
             None => (
@@ -4434,28 +4506,15 @@ fn bind_analog_switch(
             ),
         };
         for (lane, com, s0, s1) in [(1, com_1, s0_1, s1_1), (2, com_2, s0_2, s1_2)] {
-            circuit.add(Device::VSwitch {
-                name: format!("{}_l{lane}_s1", comp.reference),
-                a: com,
-                b: s1,
-                ctrl_p: sel,
-                ctrl_n: vss,
-                von: vth + 0.25,
-                voff: vth - 0.25,
-                ron,
-                roff,
-            });
-            circuit.add(Device::VSwitch {
-                name: format!("{}_l{lane}_s0", comp.reference),
-                a: com,
-                b: s0,
-                ctrl_p: vcc,
-                ctrl_n: sel,
-                von: vcc_v - vth + 0.25,
-                voff: vcc_v - vth - 0.25,
-                ron,
-                roff,
-            });
+            let name = format!("{}_l{lane}", comp.reference);
+            stamp_spdt(
+                circuit,
+                &name,
+                [com, s0, s1],
+                [sel, vss, vcc],
+                vcc_v,
+                [ron, roff, vth],
+            );
         }
         let warning = [entry_warning(comp, model), vcc_warning]
             .into_iter()
@@ -4481,9 +4540,6 @@ fn bind_analog_switch(
     if let (Some(com), Some(s0), Some(s1), Some(sel), Some(vcc)) =
         (com, s0, s1, sel, pick(roles, &["vcc"]).copied())
     {
-        let ron = model.params.get_f64("ron").unwrap_or(50.0);
-        let roff = model.params.get_f64("roff").unwrap_or(1e9);
-        let vth = model.params.get_f64("vth").unwrap_or(1.5);
         // The s0 leg senses (vcc - select), so its thresholds must be
         // referenced to the ACTUAL rail on the vcc net. A hardcoded 5 V rail
         // put von at 3.75 V on a 3.3 V board, unreachable (vcc - select
@@ -4509,29 +4565,15 @@ fn bind_analog_switch(
                 )),
             ),
         };
-        circuit.add(Device::VSwitch {
-            name: format!("{}_s1", comp.reference),
-            a: com,
-            b: s1,
-            ctrl_p: sel,
-            ctrl_n: vss,
-            von: vth + 0.25,
-            voff: vth - 0.25,
-            ron,
-            roff,
-        });
-        circuit.add(Device::VSwitch {
-            name: format!("{}_s0", comp.reference),
-            a: com,
-            b: s0,
-            // Conducts when the select is LOW: sense vcc - select.
-            ctrl_p: vcc,
-            ctrl_n: sel,
-            von: vcc_v - vth + 0.25,
-            voff: vcc_v - vth - 0.25,
-            ron,
-            roff,
-        });
+        let params = [ron, roff, vth];
+        stamp_spdt(
+            circuit,
+            &comp.reference,
+            [com, s0, s1],
+            [sel, vss, vcc],
+            vcc_v,
+            params,
+        );
         return (
             BindOutcome::Analog {
                 device: "spdt x2".to_string(),
@@ -4547,9 +4589,6 @@ fn bind_analog_switch(
     // names use the `_s<n>` key the CI thermal aggregation matches (the same
     // family as the SPDT's `_s0`/`_s1` legs above).
     {
-        let ron = model.params.get_f64("ron").unwrap_or(50.0);
-        let roff = model.params.get_f64("roff").unwrap_or(1e9);
-        let vth = model.params.get_f64("vth").unwrap_or(1.5);
         let mut stamped = 0;
         let mut partial: Vec<usize> = Vec::new();
         for n in 1..=4 {
@@ -4658,15 +4697,9 @@ fn bind_analog_switch(
         }
     };
     let ctrl = pick(roles, &["ctrl", "ctrl_1", "in"]).copied();
-    let ctrl_n = pick(roles, &["vss", "gnd"])
-        .copied()
-        .unwrap_or(NodeId::GROUND);
     let Some(ctrl) = ctrl else {
         return open_warning(comp, "analog switch control not connected");
     };
-    let ron = model.params.get_f64("ron").unwrap_or(50.0);
-    let roff = model.params.get_f64("roff").unwrap_or(1e9);
-    let vth = model.params.get_f64("vth").unwrap_or(1.5);
     // The `s0` / NC throw conducts when the control is LOW (role_from_pinfunction
     // maps nc->s0 with exactly this contract, and the true-SPDT branch honours it).
     // The default control-HIGH polarity below would invert it, modelling the
@@ -4674,9 +4707,9 @@ fn bind_analog_switch(
     // sense the inverted control (vss - ctrl) so com<->s0 closes on control LOW.
     let b_is_control_low = pick(roles, &["s0"]).copied() == Some(b);
     let (cp, cn, von, voff) = if b_is_control_low {
-        (ctrl_n, ctrl, -vth + 0.1, -vth - 0.1)
+        (vss, ctrl, -vth + 0.1, -vth - 0.1)
     } else {
-        (ctrl, ctrl_n, vth + 0.1, vth - 0.1)
+        (ctrl, vss, vth + 0.1, vth - 0.1)
     };
     circuit.add(Device::VSwitch {
         name: comp.reference.clone(),
@@ -6935,25 +6968,6 @@ fn value_disagreement(layout: &str, artifact: &str) -> Option<String> {
     ((l.si - a.si).abs() / scale > 1e-3).then(|| format!("{layout} against {artifact}"))
 }
 
-/// A natural-order sort key for a reference designator: the leading alpha
-/// prefix, then the parsed trailing integer, then the raw string as a
-/// tie-break. Ordering by this puts "U2" before "U10" (2 < 10), unlike raw
-/// byte-lexicographic `String` Ord which puts "U10" before "U2" because '1' <
-/// '2'. Used to assign MCP4728 addresses in ascending device order regardless
-/// of designator width.
-fn natural_ref_key(reference: &str) -> (String, u64, String) {
-    let prefix: String = reference
-        .chars()
-        .take_while(|c| !c.is_ascii_digit())
-        .collect();
-    let digits: String = reference[prefix.len()..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    let num = digits.parse::<u64>().unwrap_or(0);
-    (prefix.to_ascii_uppercase(), num, reference.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7131,44 +7145,24 @@ mod tests {
         );
     }
 
-    #[test]
-    fn natural_key_orders_numerically_not_lexicographically() {
-        let mut refs = vec!["U10", "U2", "U1", "U100"];
-        refs.sort_by(|a, b| natural_ref_key(a).cmp(&natural_ref_key(b)));
-        assert_eq!(refs, vec!["U1", "U2", "U10", "U100"]);
-    }
-
-    #[test]
-    fn register_map_address_and_bus_personality_come_from_exact_board_straps() {
+    /// Bind one peripheral card on a board of SDA/+3V3/SCL/IRQ nets (board
+    /// nets 0/1 ground, 2 SDA, 3 +3V3, 4 SCL, 5 a signal net).
+    fn bind_peripheral(
+        component: &Component,
+        model: &ModelEntry,
+    ) -> (BindOutcome, Option<String>, Vec<PeripheralBinding>) {
         let lib = ModelLibrary::builtin();
-        let model = resolve_value(&lib, "BMA423", "");
-        let mut component = comp("U6", "BMA423");
-        // SDO -> ground selects 0x18; CSB -> +3V3 selects I2C.
-        component.pins = vec![
-            pin("1", 1),
-            pin("2", 2),
-            pin("3", 3),
-            pin("7", 3),
-            pin("8", 0),
-            pin("9", 0),
-            pin("10", 3),
-            pin("12", 4),
-        ];
         let mut circuit = Circuit::new();
-        let sda = circuit.node("SDA");
-        let rail = circuit.node("+3V3");
-        let scl = circuit.node("SCL");
+        let nodes = ["SDA", "+3V3", "SCL", "IRQ"].map(|name| circuit.node(name));
         let node_of = |n: Option<i64>| match n {
             Some(0 | 1) => Some(NodeId::GROUND),
-            Some(2) => Some(sda),
-            Some(3) => Some(rail),
-            Some(4) => Some(scl),
+            Some(n @ 2..=5) => nodes.get(usize::try_from(n - 2).ok()?).copied(),
             _ => None,
         };
         let mut peripherals = Vec::new();
         let (outcome, warning, _) = bind_component(
-            &component,
-            &model,
+            component,
+            model,
             None,
             &mut circuit,
             &node_of,
@@ -7178,17 +7172,125 @@ mod tests {
             &mut peripherals,
             &mut Vec::new(),
             (
-                std::slice::from_ref(&component),
+                std::slice::from_ref(component),
                 &HashMap::from([("+3V3".to_string(), 3.3)]),
             ),
             lib.pin_rules(),
         );
+        (outcome, warning, peripherals)
+    }
+
+    fn pins_on(wiring: &[(&str, i64)]) -> Vec<Pin> {
+        wiring.iter().map(|&(pad, net)| pin(pad, net)).collect()
+    }
+
+    #[test]
+    fn register_map_address_and_bus_personality_come_from_exact_board_straps() {
+        let model = resolve_value(&ModelLibrary::builtin(), "BMA423", "");
+        let mut component = comp("U6", "BMA423");
+        // SDO -> ground selects 0x18; CSB -> +3V3 selects I2C.
+        component.pins = pins_on(&[
+            ("1", 1),
+            ("2", 2),
+            ("3", 3),
+            ("7", 3),
+            ("8", 0),
+            ("9", 0),
+            ("10", 3),
+            ("12", 4),
+        ]);
+        let (outcome, warning, peripherals) = bind_peripheral(&component, &model);
         assert!(
             matches!(outcome, BindOutcome::Behavioral { .. }),
             "{outcome:?} / {warning:?}"
         );
         assert_eq!(peripherals.len(), 1);
         assert_eq!(peripherals[0].i2c_address_override, Some(0x18));
+    }
+
+    /// A card whose register map carries its own `[sensor.pins]` and a
+    /// two-strap address table: the pad map finds the bus, the board's straps
+    /// pick the address, and a strap on a signal net leaves it assumed.
+    #[test]
+    fn sensor_pin_map_binds_the_bus_and_straps_select_the_address() {
+        let card = r#"
+[[models]]
+id = "sensor_fixture"
+kind = "digital"
+[models.peripheral]
+kind = "register_map"
+spec_toml = '''
+[sensor]
+name = "SENSOR_FIXTURE"
+bus = "i2c"
+i2c_address = 0x40
+[[sensor.register]]
+addr = 0x00
+const = [0x13]
+[sensor.pins]
+1 = "scl"
+2 = "sda"
+3 = "a0"
+4 = "a1"
+5 = "gnd"
+6 = "vdd"
+7 = "int"
+[[sensor.address_select]]
+address = 0x40
+straps = { a0 = "low", a1 = "low" }
+[[sensor.address_select]]
+address = 0x41
+straps = { a0 = "high", a1 = "low" }
+[[sensor.address_select]]
+address = 0x44
+straps = { a0 = "low", a1 = "high" }
+[sensor.protocol]
+style = "i2c_pointer"
+'''
+"#;
+        let mut db: hauksbee_models::schema::DbFile = toml::from_str(card).unwrap();
+        let model = db.models.remove(0);
+        hauksbee_models::validation::validate(&model).expect("the card validates");
+        let mut component = comp("U9", "SENSOR_FIXTURE");
+        // SCL, SDA, A0 -> `a0_net`, A1 -> GND, GND, VDD -> +3V3, INT -> IRQ.
+        let wire = |a0_net| {
+            pins_on(&[
+                ("1", 4),
+                ("2", 2),
+                ("3", a0_net),
+                ("4", 0),
+                ("5", 0),
+                ("6", 3),
+                ("7", 5),
+            ])
+        };
+        component.pins = wire(3);
+        let (outcome, warning, peripherals) = bind_peripheral(&component, &model);
+        assert!(
+            matches!(outcome, BindOutcome::Behavioral { .. }),
+            "{outcome:?} / {warning:?}"
+        );
+        assert_eq!(peripherals[0].i2c_address_override, Some(0x41));
+        assert_eq!(peripherals[0].i2c_address_assumed, None);
+        assert_eq!(warning, None);
+
+        component.pins = wire(5);
+        let (outcome, warning, peripherals) = bind_peripheral(&component, &model);
+        assert!(matches!(outcome, BindOutcome::Behavioral { .. }));
+        assert_eq!(peripherals[0].i2c_address_override, Some(0x40));
+        let warning = warning.expect("an assumed address is disclosed");
+        assert!(
+            warning.starts_with(Assumption::PARTIAL_MODEL_MARKER)
+                && warning.contains("0x40 is assumed")
+                && warning.contains("strap role 'a0' is on 'IRQ'"),
+            "{warning}"
+        );
+
+        // Without SCL wired the bus personality is not attached.
+        component.pins.retain(|p| p.number != "1");
+        let (outcome, _, peripherals) = bind_peripheral(&component, &model);
+        assert!(matches!(outcome, BindOutcome::Unresolved { .. }));
+        assert!(peripherals.is_empty());
     }
 
     #[test]

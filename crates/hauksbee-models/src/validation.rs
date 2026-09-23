@@ -624,6 +624,16 @@ fn check_peripheral(entry: &ModelEntry, peripheral: &PeripheralSpec, p: &mut Pro
                  the card's [models.source] is its provenance"
                     .into()
             });
+            // The spec's [sensor.pins] supplies roles too, so it must agree with
+            // the card's pad map wherever both name a pad.
+            for (pad, role) in &sensor.sensor.pins {
+                if let Some(card) = entry.pins.get(pad).filter(|card| *card != role) {
+                    p.push(format!("pad '{pad}' is '{card}' in [models.pins] but '{role}' in the register-map [sensor.pins]"));
+                }
+            }
+            let has_role = |entry: &ModelEntry, role: &str| {
+                has_role(entry, role) || sensor.sensor.pins.values().any(|known| known == role)
+            };
             let roles: &[(&str, &String)] = match sensor.sensor.bus {
                 Bus::I2c => &[("scl_role", scl_role), ("sda_role", sda_role)],
                 Bus::Spi => &[
@@ -659,6 +669,10 @@ fn check_peripheral(entry: &ModelEntry, peripheral: &PeripheralSpec, p: &mut Pro
             // a floating strap instead of choosing a plausible address.
             match (address_select_role, address_when_low, address_when_high) {
                 (None, None, None) => {}
+                (Some(_), Some(_), Some(_)) if !sensor.sensor.address_selects.is_empty() => p.push(
+                    "peripheral register-map address_select_role and the spec's [[sensor.address_select]] \
+                     both choose the address; keep one",
+                ),
                 (Some(role), Some(low), Some(high)) => {
                     p.require(sensor.sensor.bus == Bus::I2c, || {
                         "peripheral register-map address selection is only valid for I2C".into()
@@ -868,7 +882,14 @@ fn check_behavioral_roles(entry: &ModelEntry, p: &mut Problems) {
 /// legitimately-declared power/NC pin (an op-amp's `vcc`/`vee`) is fine. An
 /// empty pins map is the footprint/pin-rules inference path and is left alone.
 fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
-    if entry.kind == ComponentKind::Digital && entry.pins.is_empty() {
+    // A register map's own `[sensor.pins]` declares the roles it binds.
+    let sensor_pins = || match &entry.peripheral {
+        Some(PeripheralSpec::RegisterMap { spec_toml, .. }) => {
+            SensorSpec::from_toml(spec_toml).is_ok_and(|spec| !spec.sensor.pins.is_empty())
+        }
+        _ => false,
+    };
+    if entry.kind == ComponentKind::Digital && entry.pins.is_empty() && !sensor_pins() {
         p.push("digital model has no [models.pins]; without declared roles it can bind cleanly while driving and observing nothing");
         return;
     }
@@ -1361,6 +1382,18 @@ mod tests {
         let sourced = format!("{spec}[sensor.source]\ntier = \"datasheet-derived\"\n");
         e.peripheral = make(&sourced, "sda", Some(0x19));
         rejects(&e, "must not carry [sensor.source]");
+        let pinned = spec.replace(
+            "[sensor.protocol]",
+            "[sensor.pins]\n1 = \"scl\"\n3 = \"sda\"\n7 = \"a0\"\n[sensor.protocol]",
+        );
+        e.peripheral = make(&pinned, "sda", Some(0x19));
+        accepts(&e);
+        let swapped = pinned.replace("1 = \"scl\"\n3 = \"sda\"", "1 = \"sda\"\n3 = \"scl\"");
+        e.peripheral = make(&swapped, "sda", Some(0x19));
+        rejects(&e, "'sda' in the register-map [sensor.pins]");
+        let table = "[[sensor.address_select]]\naddress = 0x18\nstraps = { a0 = \"low\" }\n";
+        e.peripheral = make(&format!("{pinned}{table}"), "sda", Some(0x19));
+        rejects(&e, "keep one");
     }
 
     #[test]

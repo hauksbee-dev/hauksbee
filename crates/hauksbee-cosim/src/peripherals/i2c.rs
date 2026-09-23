@@ -781,12 +781,7 @@ mod tests {
         }
         let mut circuit = Circuit::default();
         let volts: Vec<f64> = Vec::new();
-        bus.flush_stops(&mut TickCtx {
-            circuit: &mut circuit,
-            node_volts: &volts,
-            t: 0.0,
-            dt: 1e-3,
-        });
+        bus.flush_stops(&mut TickCtx::new(&mut circuit, &volts, 0.0, 1e-3));
         assert_eq!(
             bus.slave::<StopSpy>(0x60).unwrap().stops,
             1,
@@ -797,12 +792,7 @@ mod tests {
         // Same-address repeated START (the register-read idiom): exactly one
         // delivery, not one per leg.
         i2c_read_burst(&mut bus, 0x48, 0x00, 1);
-        bus.flush_stops(&mut TickCtx {
-            circuit: &mut circuit,
-            node_volts: &volts,
-            t: 0.0,
-            dt: 1e-3,
-        });
+        bus.flush_stops(&mut TickCtx::new(&mut circuit, &volts, 0.0, 1e-3));
         assert_eq!(
             bus.slave::<StopSpy>(0x48).unwrap().stops,
             2,

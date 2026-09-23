@@ -1019,12 +1019,26 @@ impl SpiSlave for Mcp3008 {
 mod tests {
     use super::*;
 
-    /// WREN is its own CS transaction: select, send 0x06, deselect.
-    fn wren(flash: &mut SpiNorFlash) {
+    /// One CS-framed flash transaction: select, clock out `bytes`, deselect.
+    fn txn(flash: &mut SpiNorFlash, bytes: &[u8]) {
         flash.select();
-        flash.transfer(0x06);
+        for &byte in bytes {
+            flash.transfer(byte);
+        }
         flash.deselect();
     }
+
+    /// The same framing through the bus's chip-select.
+    fn bus_txn(bus: &mut SpiBus, bytes: &[u8]) {
+        bus.cs_assert();
+        for &byte in bytes {
+            bus.transfer(byte);
+        }
+        bus.cs_deassert();
+    }
+
+    /// WREN is its own CS transaction.
+    const WREN: [u8; 1] = [0x06];
 
     #[test]
     fn eeprom_write_read_roundtrip() {
@@ -1067,23 +1081,15 @@ mod tests {
 
         // WREN is its own transaction. Program at the final byte of an 8-byte
         // page; the second byte wraps to the first byte of that same page.
-        wren(&mut flash);
-        flash.select();
-        for byte in [0x02, 0x00, 0x00, 0x07, 0xaa, 0x55] {
-            flash.transfer(byte);
-        }
-        flash.deselect();
+        txn(&mut flash, &WREN);
+        txn(&mut flash, &[0x02, 0x00, 0x00, 0x07, 0xaa, 0x55]);
         assert_eq!(flash.contents()[7], 0xaa);
         assert_eq!(flash.contents()[0], 0x55);
 
         // A second program can clear more bits, but cannot turn a zero back to
         // one without erase: 0x55 & 0xff remains 0x55.
-        wren(&mut flash);
-        flash.select();
-        for byte in [0x02, 0x00, 0x00, 0x00, 0xff] {
-            flash.transfer(byte);
-        }
-        flash.deselect();
+        txn(&mut flash, &WREN);
+        txn(&mut flash, &[0x02, 0x00, 0x00, 0x00, 0xff]);
         assert_eq!(flash.contents()[0], 0x55);
     }
 
@@ -1091,28 +1097,16 @@ mod tests {
     fn spi_nor_sector_erase_requires_write_enable() {
         let mut flash = SpiNorFlash::new(8192, 256, 4096, [0xef, 0x40, 0x18], 0);
 
-        wren(&mut flash);
-        flash.select();
-        for byte in [0x02, 0x00, 0x00, 0x10, 0x00] {
-            flash.transfer(byte);
-        }
-        flash.deselect();
+        txn(&mut flash, &WREN);
+        txn(&mut flash, &[0x02, 0x00, 0x00, 0x10, 0x00]);
         assert_eq!(flash.contents()[0x10], 0x00);
 
         // No WREN: erase is ignored.
-        flash.select();
-        for byte in [0x20, 0x00, 0x00, 0x10] {
-            flash.transfer(byte);
-        }
-        flash.deselect();
+        txn(&mut flash, &[0x20, 0x00, 0x00, 0x10]);
         assert_eq!(flash.contents()[0x10], 0x00);
 
-        wren(&mut flash);
-        flash.select();
-        for byte in [0x20, 0x00, 0x00, 0x10] {
-            flash.transfer(byte);
-        }
-        flash.deselect();
+        txn(&mut flash, &WREN);
+        txn(&mut flash, &[0x20, 0x00, 0x00, 0x10]);
         assert_eq!(flash.contents()[0x10], 0xff);
     }
 
@@ -1139,28 +1133,18 @@ mod tests {
         assert_eq!(read.read_units, 3);
         assert_eq!(read.write_units, 0);
 
-        bus.cs_assert();
-        bus.transfer(0x06);
-        bus.cs_deassert();
-        bus.cs_assert();
-        for byte in [0x02, 0x00, 0x00, 0x10, 0xaa] {
-            bus.transfer(byte);
-        }
-        bus.cs_deassert();
+        bus_txn(&mut bus, &WREN);
+        bus_txn(&mut bus, &[0x02, 0x00, 0x00, 0x10, 0xaa]);
         let write = bus.take_activity();
         assert_eq!(write.write_units, 1);
         assert_eq!(bus.slave::<SpiNorFlash>().unwrap().contents()[0x10], 0xaa);
 
-        bus.cs_assert();
-        bus.transfer(0xb9);
-        bus.cs_deassert();
+        bus_txn(&mut bus, &[0xb9]);
         assert!(
             bus.low_power_mode(),
             "deep-power-down is observable by the rail model"
         );
-        bus.cs_assert();
-        bus.transfer(0xab);
-        bus.cs_deassert();
+        bus_txn(&mut bus, &[0xab]);
         assert!(
             !bus.low_power_mode(),
             "release command restores the active current class"

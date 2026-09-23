@@ -132,12 +132,7 @@ mod tests {
         let volts = vec![0.0; c.node_count()];
         // Burst train starts ~1 ms in (after the 1 ms baseline ramp); hold peak
         // around t = 1ms + 0.5ms.
-        load.pre_solve(&mut TickCtx {
-            circuit: &mut c,
-            node_volts: &volts,
-            t: 0.0016,
-            dt: 1e-5,
-        });
+        load.pre_solve(&mut TickCtx::new(&mut c, &volts, 0.0016, 1e-5));
         assert!(
             (load.last_i - 0.240).abs() < 1e-3,
             "expected ~240 mA TX burst, got {}",

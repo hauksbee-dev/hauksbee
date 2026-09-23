@@ -88,7 +88,18 @@ pub struct TickCtx<'a> {
     pub dt: f64,
 }
 
-impl TickCtx<'_> {
+impl<'a> TickCtx<'a> {
+    /// A context over `circuit` with solved `node_volts`, at time `t` for a
+    /// chunk of `dt` seconds.
+    pub const fn new(circuit: &'a mut Circuit, node_volts: &'a [f64], t: f64, dt: f64) -> Self {
+        Self {
+            circuit,
+            node_volts,
+            t,
+            dt,
+        }
+    }
+
     /// Voltage on a node from the last solve (0 if out of range).
     pub fn volts(&self, node: NodeId) -> f64 {
         self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0)

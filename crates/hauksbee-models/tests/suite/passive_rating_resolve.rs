@@ -4,15 +4,8 @@ use hauksbee_models::{ComponentQuery, ModelLibrary};
 
 #[test]
 fn exact_ucc_ekyb_bulk_cap_resolves_its_datasheet_ripple_rating() {
-    let lib = ModelLibrary::builtin();
-    let resolved = lib.resolve(&ComponentQuery {
-        value: Some("1200uF".into()),
-        mpn: Some("EKYB630ELL122MLN3S".into()),
-        ..Default::default()
-    });
-    let model = resolved
-        .model
-        .expect("the exact UCC capacitor MPN resolves");
+    // The exact UCC capacitor MPN resolves.
+    let model = super::expect_query(Some("1200uF"), Some("EKYB630ELL122MLN3S"), None);
 
     assert_eq!(model.id, "ucc_ekyb630ell122mln3s");
     assert_eq!(model.ratings.max_voltage_v, Some(63.0));
@@ -22,7 +15,7 @@ fn exact_ucc_ekyb_bulk_cap_resolves_its_datasheet_ripple_rating() {
 
 #[test]
 fn exact_littelfuse_order_code_unlocks_the_executable_trip_envelope() {
-    let lib = ModelLibrary::builtin();
+    let lib = ModelLibrary::builtin_shared();
     let board_query = ComponentQuery {
         value: Some("Polyfuse 1.8A".into()),
         footprint: Some("Fuse:Fuse_1812_4532Metric".into()),

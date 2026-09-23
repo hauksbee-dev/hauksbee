@@ -1114,38 +1114,16 @@ impl SpiSlave for RegisterMapSensor {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::peripherals::i2c::{I2cBus, Lm75};
     use crate::peripherals::spi::SpiBus;
     use crate::peripherals::test_support::{i2c_read_burst, i2c_write};
     use hauksbee_mcu::I2cEvent;
 
-    const LM75_SPEC: &str = r#"
-[sensor]
-name = "LM75"
-bus = "i2c"
-i2c_address = 0x48
+    const LM75_SPEC: &str = include_str!("../../../../testdata/sensor-specs/lm75.toml");
 
-[[sensor.input]]
-name = "temperature_c"
-default = 25.0
-
-[[sensor.register]]
-addr = 0x00
-bytes = 2
-encoding = "q7.1_be"
-expr = "temperature_c"
-
-[[sensor.register]]
-addr = 0x01
-const = [0x00]
-
-[sensor.protocol]
-style = "i2c_pointer"
-"#;
-
-    const SPI_IMU_SPEC: &str = r#"
+    pub(crate) const SPI_IMU_SPEC: &str = r#"
 [sensor]
 name = "MINIMU"
 bus = "spi"
@@ -1533,7 +1511,7 @@ style = "i2c_pointer"
 
     /// A command-framed 2-channel DAC: match, greedy 2-byte groups, auto
     /// channel increment with START reset, field extraction and output laws.
-    const MINI_DAC_SPEC: &str = r#"
+    pub(crate) const MINI_DAC_SPEC: &str = r#"
 [sensor]
 name = "MINIDAC"
 bus = "i2c"
@@ -1651,8 +1629,9 @@ style = "i2c_pointer"
     /// flush, where the output law lands on the bound driver.
     #[test]
     fn on_stop_drives_bound_output_net() {
+        use crate::peripherals::test_support::dc_source_volts;
         use crate::peripherals::TickCtx;
-        use hauksbee_ir::{Circuit, Device, SourceKind};
+        use hauksbee_ir::Circuit;
 
         let mut circuit = Circuit::default();
         let net = circuit.node("VOUT_A");
@@ -1663,21 +1642,10 @@ style = "i2c_pointer"
         let mut bus = i2c_bus(s);
         i2c_write(&mut bus, 0x60, &[0x08, 0x00]);
 
-        let src_volts = |c: &Circuit| match c.devices[vsource.0 as usize] {
-            Device::Vsource {
-                kind: SourceKind::Dc(v),
-                ..
-            } => v,
-            _ => panic!("driver vsource"),
-        };
+        let src_volts = |c: &Circuit| dc_source_volts(c, vsource);
         assert_eq!(src_volts(&circuit), 0.0, "not driven before flush");
         let volts = vec![0.0; 4];
-        bus.flush_stops(&mut TickCtx {
-            circuit: &mut circuit,
-            node_volts: &volts,
-            t: 0.0,
-            dt: 1e-3,
-        });
+        bus.flush_stops(&mut TickCtx::new(&mut circuit, &volts, 0.0, 1e-3));
         assert!((src_volts(&circuit) - 2.048).abs() < 1e-9);
     }
 

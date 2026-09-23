@@ -447,8 +447,16 @@ OPTIONAL BLOCKS (add one only when the datasheet specifies every field it needs)
     [[sensor.write_command.field]] name, bits; [sensor.write_command.update] state = "expr"
   [[sensor.output]] name, channel, expr   # driven-voltage law over state
   [sensor.read_frame] per_channel, bytes = ["expr", ...]   # instead of registers
-  write_register and write_command are mutually exclusive. The spec has no pin
-  map or alternate-address field: note address-strap options in a TOML comment.
+  write_register and write_command are mutually exclusive.
+  [sensor.pins] "<pad number>" = "<role>"   # the package's pin table, every pad
+    # Bus roles: scl, sda (I2C) or cs, sck, mosi, miso (SPI), named exactly so.
+    # Other roles: supplies (vdd, vddio), gnd, address straps (a0, a1, ...),
+    # interrupt/alert outputs (int, int1, alert), each lowercase from the table.
+  [[sensor.address_select]] address = 0x??, straps = {{ a0 = "low", a1 = "high" }}
+    # one row per strap combination the datasheet lists; each strap is a
+    # [sensor.pins] role tied "low" (GND) or "high" (VDD), every row names the
+    # same straps, and i2c_address is one of the rows. I2C only; omit when the
+    # address is fixed.
 
 RULES:
 1. Include the WHO_AM_I / device-ID register if the part has one (with its exact
@@ -1831,6 +1839,9 @@ captures the part's internal behaviour the SPICE kinds cannot. The schema:
   kind = "current" | "voltage"
   a = "<pin role>"  ; b = "<pin role>"
   expr = "<arithmetic over v_<role>, params>"   # e.g. "v_vplus / tie_ohms"
+  # Units are checked: v_<role> is volts, a param's suffix is its unit (_v, _a,
+  # _ohms, _s, _f, _hz, _w), a bare number is dimensionless, and the result must
+  # be amps (current) or volts (voltage). Give a unit-bearing constant a param.
 
 Only include the blocks the datasheet supports, each number cited (rule 1).
 "#
@@ -3494,6 +3505,16 @@ expr = "temperature_c"
 [[sensor.register]]
 addr = 0x01
 const = [0x00]
+[sensor.pins]
+1 = "sda"
+2 = "scl"
+3 = "a0"
+[[sensor.address_select]]
+address = 0x48
+straps = { a0 = "low" }
+[[sensor.address_select]]
+address = 0x49
+straps = { a0 = "high" }
 [sensor.protocol]
 style = "i2c_pointer"
 [sensor.source]

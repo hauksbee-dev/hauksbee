@@ -335,6 +335,13 @@ struct ModelPeripheralPowerLeg {
 }
 
 impl ModelPeripheralPowerLeg {
+    /// Supply-minus-return rail voltage at the `node_volts` operating point
+    /// (an out-of-range node reads 0 V).
+    fn supply_v(&self, node_volts: &[f64]) -> f64 {
+        let v = |node: NodeId| node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
+        v(self.supply_node) - v(self.return_node)
+    }
+
     /// Supply current with no transaction in flight: zero while the rail is
     /// below the power-on threshold, else the datasheet idle (or deep-power-down)
     /// envelope.
@@ -1539,12 +1546,7 @@ impl Scheduler {
         // Seed the analog nets with the DACs' power-on VOUT (code 0 -> ~0 V),
         // the way the first flush_stops otherwise would after a transaction.
         let volts = self.node_volts.clone();
-        let mut ctx = TickCtx {
-            circuit: &mut self.circuit,
-            node_volts: &volts,
-            t: self.sim_time,
-            dt: self.chunk_s,
-        };
+        let mut ctx = TickCtx::new(&mut self.circuit, &volts, self.sim_time, self.chunk_s);
         bus.lock_or_recover().drive_all(&mut ctx);
     }
 
@@ -1708,16 +1710,7 @@ impl Scheduler {
     /// established a powered rail.
     fn gate_model_peripherals_from_rails(&mut self) {
         for leg in &mut self.model_peripheral_power {
-            let supply_v = self
-                .node_volts
-                .get(leg.supply_node.0 as usize)
-                .copied()
-                .unwrap_or(0.0)
-                - self
-                    .node_volts
-                    .get(leg.return_node.0 as usize)
-                    .copied()
-                    .unwrap_or(0.0);
+            let supply_v = leg.supply_v(&self.node_volts);
             let powered = supply_v.is_finite() && supply_v >= leg.power_on_threshold_v;
             leg.powered = powered;
             leg.set_bus_powered(powered);
@@ -2939,16 +2932,7 @@ impl Scheduler {
             m.insert(b.id().to_string(), b.state());
         }
         for leg in &self.model_peripheral_power {
-            let supply_v = self
-                .node_volts
-                .get(leg.supply_node.0 as usize)
-                .copied()
-                .unwrap_or(0.0)
-                - self
-                    .node_volts
-                    .get(leg.return_node.0 as usize)
-                    .copied()
-                    .unwrap_or(0.0);
+            let supply_v = leg.supply_v(&self.node_volts);
             let fields = m.entry(leg.reference.clone()).or_default();
             fields.insert("supply_v".into(), supply_v);
             fields.insert("supply_current_a".into(), leg.last_current_a);
@@ -3399,12 +3383,7 @@ impl Scheduler {
         if !self.i2c_buses.is_empty() {
             let buses = self.i2c_buses.clone();
             let volts = self.node_volts.clone();
-            let mut ctx = TickCtx {
-                circuit: &mut self.circuit,
-                node_volts: &volts,
-                t: self.sim_time,
-                dt: chunk,
-            };
+            let mut ctx = TickCtx::new(&mut self.circuit, &volts, self.sim_time, chunk);
             for b in buses {
                 b.lock_or_recover().flush_stops(&mut ctx);
             }
@@ -3430,12 +3409,7 @@ impl Scheduler {
         if !self.peripherals.is_empty() {
             self.peripherals.fire_due_events(self.sim_time);
             let volts = self.node_volts.clone();
-            let mut ctx = TickCtx {
-                circuit: &mut self.circuit,
-                node_volts: &volts,
-                t: self.sim_time,
-                dt: chunk,
-            };
+            let mut ctx = TickCtx::new(&mut self.circuit, &volts, self.sim_time, chunk);
             self.peripherals.pre_solve(&mut ctx);
         }
 
@@ -3505,12 +3479,7 @@ impl Scheduler {
         // happened.
         if !self.peripherals.is_empty() {
             let volts = self.node_volts.clone();
-            let mut ctx = TickCtx {
-                circuit: &mut self.circuit,
-                node_volts: &volts,
-                t: self.sim_time,
-                dt: chunk,
-            };
+            let mut ctx = TickCtx::new(&mut self.circuit, &volts, self.sim_time, chunk);
             self.peripherals.post_solve(&mut ctx);
         }
 
@@ -6758,6 +6727,8 @@ fn adc_channel_promoted(binding: &McuBinding, ch: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::peripherals::controls::stamp_resistor;
+    use crate::responders::tests::one_bit_spec;
     use hauksbee_ir::SourceKind;
 
     /// A small valid AVR image for tests that exercise firmware-coupled pin
@@ -8222,54 +8193,32 @@ data_out = ["io0"]
     /// cannot seed. None may be claimed.
     #[test]
     fn memories_without_a_reachable_trigger_are_not_claimed() {
-        const GROUNDED_WRITE: &str = r#"
-inputs = ["gnd"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "gnd", edge = "rising" }
-read_gates = [{ pin = "gnd", active = "high" }]
-data_in = ["gnd"]
-data_out = ["io0"]
-"#;
-        const ALL_STATIC: &str = r#"
-inputs = ["gnd"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "gnd", edge = "rising" }
-read_gates = [{ pin = "gnd", active = "low" }]
-data_in = ["gnd"]
-data_out = ["io0"]
-"#;
-        const POWER_ON_READ: &str = r#"
-inputs = ["gnd", "we_n"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "we_n", edge = "rising" }
-read_gates = [{ pin = "we_n", active = "low" }]
-data_in = ["gnd"]
-data_out = ["io0"]
-"#;
+        let gnd_write = r#"{ pin = "gnd", edge = "rising" }"#;
+        let we_write = r#"{ pin = "we_n", edge = "rising" }"#;
+        let grounded_write = one_bit_spec(
+            gnd_write,
+            "",
+            r#"{ pin = "gnd", active = "high" }"#,
+            r#""gnd""#,
+        );
+        let all_static = one_bit_spec(
+            gnd_write,
+            "",
+            r#"{ pin = "gnd", active = "low" }"#,
+            r#""gnd""#,
+        );
+        let power_on_read = one_bit_spec(
+            we_write,
+            "",
+            r#"{ pin = "we_n", active = "low" }"#,
+            r#""gnd", "we_n""#,
+        );
         for (spec, roles, gpio) in [
-            (GROUNDED_WRITE, &["gnd", "io0"][..], &["gnd", "io0"][..]),
-            (ALL_STATIC, &["gnd", "io0"], &["io0"]),
-            (POWER_ON_READ, &["gnd", "we_n", "io0"], &["we_n", "io0"]),
+            (grounded_write, &["gnd", "io0"][..], &["gnd", "io0"][..]),
+            (all_static, &["gnd", "io0"], &["io0"]),
+            (power_on_read, &["gnd", "we_n", "io0"], &["we_n", "io0"]),
         ] {
-            let mut m = scheduler_with_legacy_memory(spec, roles, gpio);
+            let mut m = scheduler_with_legacy_memory(&spec, roles, gpio);
             m.sched.build_and_install_parallel_memories();
             assert!(m.sched.parallel_memory_chips.is_empty(), "{spec}");
         }
@@ -8279,21 +8228,8 @@ data_out = ["io0"]
     /// not be responder-owned.
     #[test]
     fn static_high_node_is_not_claimed_from_the_unsolved_zero_snapshot() {
-        const SPEC: &str = r#"
-inputs = ["vcc", "we_n"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["vcc"]
-write = { pin = "we_n", edge = "rising" }
-read_gates = [{ pin = "we_n", active = "high" }]
-data_in = ["vcc"]
-data_out = ["io0"]
-"#;
-        let mut m = scheduler_with_legacy_memory(SPEC, &["vcc", "we_n", "io0"], &["we_n", "io0"]);
+        let spec = ONE_PIN_MEMORY.replace("gnd", "vcc");
+        let mut m = scheduler_with_legacy_memory(&spec, &["vcc", "we_n", "io0"], &["we_n", "io0"]);
         m.sched.build_and_install_parallel_memories();
         assert!(m.sched.parallel_memory_chips.is_empty());
     }
@@ -8307,13 +8243,8 @@ data_out = ["io0"]
             } else {
                 NodeId::GROUND
             };
-            m.sched.circuit.add(Device::Resistor {
-                name: format!("Rbias{index}"),
-                a,
-                b: m.sched.net_nodes["we_n"],
-                ohms,
-                tc1: None,
-            });
+            let we_n = m.sched.net_nodes["we_n"];
+            stamp_resistor(&mut m.sched.circuit, format!("Rbias{index}"), a, we_n, ohms);
         }
         m.sched.build_and_install_parallel_memories();
         m.sched
@@ -8325,24 +8256,13 @@ data_out = ["io0"]
     /// does not provide.
     #[test]
     fn only_one_unambiguous_weak_pull_seeds_a_responder_input() {
-        const SEEDED: &str = r#"
-inputs = ["gnd", "we_n"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "we_n", edge = "rising" }
-read_gates = [
-  { pin = "we_n", active = "high" },
-  { pin = "gnd", active = "high" },
-]
-data_in = ["gnd"]
-data_out = ["io0"]
-"#;
-        assert!(pulled_memory(SEEDED, &[(true, 10_000.0)])
+        let seeded = one_bit_spec(
+            r#"{ pin = "we_n", edge = "rising" }"#,
+            "",
+            r#"{ pin = "we_n", active = "high" }, { pin = "gnd", active = "high" }"#,
+            r#""gnd", "we_n""#,
+        );
+        assert!(pulled_memory(&seeded, &[(true, 10_000.0)])
             .parallel_memory_chips
             .contains(&0));
         assert!(pulled_memory(ONE_PIN_MEMORY, &[(true, 10_000.0)])
@@ -9220,13 +9140,7 @@ data_out = ["io0"]
                     period: 0.0,
                 },
             });
-            let q = circuit.add(Device::Resistor {
-                name: "Q1".into(),
-                a,
-                b: NodeId::GROUND,
-                ohms: 1.0,
-                tc1: None,
-            });
+            let q = stamp_resistor(&mut circuit, "Q1".into(), a, NodeId::GROUND, 1.0);
             let meta = DeviceMeta {
                 reference: "Q1".into(),
                 device: q,
@@ -9308,13 +9222,13 @@ data_out = ["io0"]
     fn pwl_transition_budget_is_an_explicit_timing_refusal() {
         let mut sched = pulse_scheduler(&PULSE_BOARD, &[(('B', 1), "STROBE")]);
         let strobe = sched.net_nodes["STROBE"];
-        sched.circuit.add(Device::Resistor {
-            name: "Rload".into(),
-            a: strobe,
-            b: NodeId::GROUND,
-            ohms: 10_000.0,
-            tc1: None,
-        });
+        stamp_resistor(
+            &mut sched.circuit,
+            "Rload".into(),
+            strobe,
+            NodeId::GROUND,
+            10_000.0,
+        );
         sched.relayout();
         let transitions: Vec<(u64, bool)> =
             (0..=10_000).map(|cycle| (cycle, cycle % 2 == 0)).collect();

@@ -2,8 +2,7 @@
 //! voltage; the family must not collapse onto the +5V model (which silently
 //! simulated 9V/12V/15V rails as 5V).
 
-use super::{expect_model, resolve_value};
-use hauksbee_models::{ComponentQuery, ModelLibrary};
+use super::{expect_model, expect_query, resolve_value};
 
 #[test]
 fn seven_eight_xx_family_resolves_to_its_own_voltage() {
@@ -37,22 +36,14 @@ fn seven_eight_xx_family_resolves_to_its_own_voltage() {
 /// steady-state DC slice, not a claim about protection or transients.
 #[test]
 fn mnt_pocket_tlv1117_18_is_voltage_specific_and_explicitly_partial() {
-    let lib = ModelLibrary::builtin();
-
     let red = resolve_value("TLV1117-33");
     assert!(
         red.model.is_none(),
         "the unfitted TLV1117-33 option must stay unresolved (RED)"
     );
 
-    let green = lib.resolve(&ComponentQuery {
-        value: Some("TLV1117-18".into()),
-        mpn: Some("TLV1117-18CDCYR".into()),
-        ..Default::default()
-    });
-    let model = green
-        .model
-        .expect("the exact MNT TLV1117-18 must resolve (GREEN)");
+    // The exact MNT TLV1117-18 must resolve (GREEN).
+    let model = expect_query(Some("TLV1117-18"), Some("TLV1117-18CDCYR"), None);
     assert_eq!(model.id, "tlv1117_18");
     assert_eq!(model.params.get_f64("vout"), Some(1.8));
     // TI TLV1117 SLVS561O Rev. O, §8.1.1 says this order code may ship

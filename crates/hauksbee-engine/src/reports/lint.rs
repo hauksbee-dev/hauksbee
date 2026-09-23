@@ -378,29 +378,12 @@ mod tests {
         assert!(!res.contains("net-lint:"), "{res}");
     }
     use crate::binder::BoundBoard;
-    use crate::reports::bind::BindReport;
     use hauksbee_extract::NetLintReport;
-    use hauksbee_ir::Circuit;
-    use std::collections::HashMap;
 
     fn empty_bound() -> BoundBoard {
         BoundBoard {
             name: "t".to_string(),
-            circuit: Circuit::new(),
-            net_nodes: HashMap::new(),
-            net_names: Vec::new(),
-            digital: Vec::new(),
-            mcus: Vec::new(),
-            dnp_mcus: Vec::new(),
-            component_kinds: HashMap::new(),
-            input_sources: HashMap::new(),
-            supplies: Vec::new(),
-            behavioral: Vec::new(),
-            device_meta: Vec::new(),
-            latching_switches: false,
-            dacs: Vec::new(),
-            peripherals: Vec::new(),
-            report: BindReport::default(),
+            ..BoundBoard::default()
         }
     }
 

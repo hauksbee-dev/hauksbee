@@ -23,10 +23,16 @@ pub const CONTACT_RON: f64 = 1.0;
 /// Open contact resistance (ohms); effectively an open circuit.
 pub const CONTACT_ROFF: f64 = 1e9;
 
-/// Stamp a controllable resistor between two nodes and return its device id.
-fn stamp_contact(circuit: &mut Circuit, a: NodeId, b: NodeId, tag: &str, ohms: f64) -> DeviceId {
+/// Stamp resistor `name` between `a` and `b`; its id is the control handle.
+pub(crate) fn stamp_resistor(
+    circuit: &mut Circuit,
+    name: String,
+    a: NodeId,
+    b: NodeId,
+    ohms: f64,
+) -> DeviceId {
     circuit.add(Device::Resistor {
-        name: format!("Rsw_{tag}"),
+        name,
         a,
         b,
         ohms,
@@ -75,7 +81,7 @@ impl Pushbutton {
     /// Stamp a button between `net` and `to` (`NodeId::GROUND` for a
     /// pull-to-ground button). `bounce_ms` of 0 disables the bounce model.
     pub fn new(circuit: &mut Circuit, id: &str, net: NodeId, to: NodeId, bounce_ms: f64) -> Self {
-        let contact = stamp_contact(circuit, net, to, id, CONTACT_ROFF);
+        let contact = stamp_resistor(circuit, format!("Rsw_{id}"), net, to, CONTACT_ROFF);
         Pushbutton {
             id: id.to_string(),
             contact,
@@ -184,7 +190,7 @@ pub struct ToggleSwitch {
 impl ToggleSwitch {
     pub fn new(circuit: &mut Circuit, id: &str, net: NodeId, to: NodeId, closed: bool) -> Self {
         let r = if closed { CONTACT_RON } else { CONTACT_ROFF };
-        let contact = stamp_contact(circuit, net, to, id, r);
+        let contact = stamp_resistor(circuit, format!("Rsw_{id}"), net, to, r);
         ToggleSwitch {
             id: id.to_string(),
             contact,
@@ -255,20 +261,10 @@ impl Potentiometer {
         let pos = pos.clamp(0.0, 1.0);
         let r_total = r_total.max(1.0);
         // Avoid a hard zero-ohm leg (singular); floor each at 1 mΩ.
-        let r_aw = circuit.add(Device::Resistor {
-            name: format!("Rpot_{id}_aw"),
-            a,
-            b: w,
-            ohms: (r_total * pos).max(1e-3),
-            tc1: None,
-        });
-        let r_wb = circuit.add(Device::Resistor {
-            name: format!("Rpot_{id}_wb"),
-            a: w,
-            b,
-            ohms: (r_total * (1.0 - pos)).max(1e-3),
-            tc1: None,
-        });
+        let aw_ohms = (r_total * pos).max(1e-3);
+        let r_aw = stamp_resistor(circuit, format!("Rpot_{id}_aw"), a, w, aw_ohms);
+        let wb_ohms = (r_total * (1.0 - pos)).max(1e-3);
+        let r_wb = stamp_resistor(circuit, format!("Rpot_{id}_wb"), w, b, wb_ohms);
         Potentiometer {
             id: id.to_string(),
             r_aw,
@@ -570,13 +566,7 @@ fn stamp_driver(circuit: &mut Circuit, net: NodeId, tag: &str, v0: f64) -> Devic
         n: NodeId::GROUND,
         kind: SourceKind::Dc(v0),
     });
-    circuit.add(Device::Resistor {
-        name: format!("Rctrl_{tag}"),
-        a: drv_node,
-        b: net,
-        ohms: 50.0,
-        tc1: None,
-    });
+    stamp_resistor(circuit, format!("Rctrl_{tag}"), drv_node, net, 50.0);
     vsource
 }
 
@@ -604,12 +594,7 @@ mod tests {
         ]));
         let mut stim = Stimulus::voltage(&mut c, "S1", net, kind);
         let volts = vec![0.0; c.node_count()];
-        stim.pre_solve(&mut TickCtx {
-            circuit: &mut c,
-            node_volts: &volts,
-            t: 0.0,
-            dt: 0.1,
-        });
+        stim.pre_solve(&mut TickCtx::new(&mut c, &volts, 0.0, 0.1));
         assert!(
             (stim.last_value - 1.0).abs() < 1e-9,
             "stimulus must sample at chunk end (t+dt=0.1 → 1.0), got {}",
@@ -623,12 +608,7 @@ mod tests {
         let net = c.node("BTN");
         let mut b = Pushbutton::new(&mut c, "BTN1", net, NodeId::GROUND, 0.0);
         let volts = vec![0.0; c.node_count()];
-        b.pre_solve(&mut TickCtx {
-            circuit: &mut c,
-            node_volts: &volts,
-            t: 0.0,
-            dt: 1e-4,
-        });
+        b.pre_solve(&mut TickCtx::new(&mut c, &volts, 0.0, 1e-4));
         // Released = open (high resistance).
         if let Device::Resistor { ohms, .. } = &c.devices[b.contact.0 as usize] {
             assert!(*ohms > 1e6, "released button should be open");
@@ -637,12 +617,7 @@ mod tests {
         }
         b.set_value(1.0);
         let volts = vec![0.0; c.node_count()];
-        b.pre_solve(&mut TickCtx {
-            circuit: &mut c,
-            node_volts: &volts,
-            t: 1e-4,
-            dt: 1e-4,
-        });
+        b.pre_solve(&mut TickCtx::new(&mut c, &volts, 1e-4, 1e-4));
         if let Device::Resistor { ohms, .. } = &c.devices[b.contact.0 as usize] {
             assert!(*ohms < 10.0, "pressed button should be closed, got {ohms}");
         }
@@ -706,12 +681,7 @@ mod tests {
             }),
         );
         let volts = vec![0.0; c.node_count()];
-        s.pre_solve(&mut TickCtx {
-            circuit: &mut c,
-            node_volts: &volts,
-            t: 250e-6,
-            dt: 1e-5,
-        });
+        s.pre_solve(&mut TickCtx::new(&mut c, &volts, 250e-6, 1e-5));
         // Quarter period of a 1 kHz sine -> peak ~5.0 V.
         assert!(
             (s.last_value - 5.0).abs() < 0.1,

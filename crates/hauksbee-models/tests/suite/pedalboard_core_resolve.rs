@@ -2,14 +2,7 @@
 //! resolve from the built-in library. A user should not need to discover and
 //! install that campaign pack merely to make an ordinary board executable.
 
-use hauksbee_models::{ComponentQuery, ModelLibrary};
-
-fn resolve(value: &str) -> hauksbee_models::Resolution {
-    ModelLibrary::builtin().resolve(&ComponentQuery {
-        value: Some(value.into()),
-        ..Default::default()
-    })
-}
+use super::{expect_model, resolve_value as resolve};
 
 #[test]
 fn pedalboard_core_devices_are_builtin_and_executable() {
@@ -52,12 +45,12 @@ fn pedalboard_core_devices_are_builtin_and_executable() {
         );
     }
 
-    let buck = resolve("AP64501SP-13").model.unwrap();
+    let buck = expect_model("AP64501SP-13");
     assert!(buck.behavioral.converter.is_some());
-    let optocoupler = resolve("TLP2761").model.unwrap();
+    let optocoupler = expect_model("TLP2761");
     assert!(optocoupler.behavioral.fsm.is_some());
     assert_eq!(optocoupler.behavioral.laws.len(), 4);
-    let gate = resolve("74AHCT1G32SE-7").model.unwrap();
+    let gate = expect_model("74AHCT1G32SE-7");
     assert_eq!(gate.logic.inputs, ["a", "b"]);
     assert_eq!(gate.logic.outputs, ["y1"]);
 }

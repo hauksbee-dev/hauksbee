@@ -648,22 +648,7 @@ impl InputResponder for ParallelMemoryResponder {
         port_high: bool,
         cycle: u64,
     ) -> Vec<InputDrive> {
-        let previous = self.pin_levels.get(&pin).copied();
-        self.pin_outputs.insert(pin, output);
-        let level = output
-            .then_some(port_high)
-            .or_else(|| self.initial_pin_levels.get(&pin).copied());
-        match (previous, level) {
-            (Some(_), Some(level)) => self.process_edges(&[(pin, level)], Some(cycle)),
-            (None, Some(level)) => {
-                self.establish_pin(pin, level);
-                self.process_edges(&[], Some(cycle))
-            }
-            (_, None) => {
-                self.pin_levels.remove(&pin);
-                self.process_edges(&[], Some(cycle))
-            }
-        }
+        self.on_directions_at(&[(pin, output, port_high)], cycle)
     }
 
     fn on_directions_at(
@@ -1473,7 +1458,7 @@ impl InputResponder for SoftI2cResponder {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::peripherals::register_map::RegisterMapSensor;
     use crate::peripherals::spi::SpiSlave;
@@ -1615,7 +1600,12 @@ mod tests {
         })
     }
 
-    fn one_bit_spec(write: &str, write_gates: &str, read_gates: &str, inputs: &str) -> String {
+    pub(crate) fn one_bit_spec(
+        write: &str,
+        write_gates: &str,
+        read_gates: &str,
+        inputs: &str,
+    ) -> String {
         format!(
             r#"
 inputs = [{inputs}]
@@ -2144,30 +2134,7 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         cs_n: ('B', 0),
     };
 
-    const SPI_SPEC: &str = r#"
-[sensor]
-name = "MINIMU"
-bus = "spi"
-
-[[sensor.input]]
-name = "gyro_x"
-default = 0.0
-
-[[sensor.register]]
-addr = 0x0f
-const = [0x42]
-
-[[sensor.register]]
-addr = 0x22
-bytes = 2
-encoding = "i16_le"
-expr = "gyro_x"
-
-[sensor.protocol]
-style = "spi_reg"
-rw_read_is_high = true
-addr_mask = 0x7f
-"#;
+    use crate::peripherals::register_map::tests::SPI_IMU_SPEC as SPI_SPEC;
 
     /// A bit-level SPI master clocking the declared mode the way firmware
     /// would: idle clock at CPOL, MOSI changed on the shift edge, MISO
@@ -2368,38 +2335,7 @@ expr = "val"
 style = "i2c_pointer"
 "#;
 
-    /// A DAC-style spec: a fast_write command latches the code and the output
-    /// law drives VOUT.
-    const I2C_DAC_SPEC: &str = r#"
-[sensor]
-name = "MINIDAC"
-bus = "i2c"
-i2c_address = 0x60
-
-[[sensor.state]]
-name = "code"
-default = 0.0
-
-[[sensor.write_command]]
-name = "fast_write"
-match_mask = 0xC0
-match_value = 0x00
-group_bytes = 2
-
-[[sensor.write_command.field]]
-name = "code_bits"
-bits = [11, 0]
-
-[sensor.write_command.update]
-code = "code_bits"
-
-[[sensor.output]]
-name = "vout"
-expr = "code / 4096 * 4.096"
-
-[sensor.protocol]
-style = "i2c_pointer"
-"#;
+    use crate::peripherals::register_map::tests::MINI_DAC_SPEC as I2C_DAC_SPEC;
 
     /// A bit-level soft-I2C master: push-pull SDA for master bits, sampling
     /// the responder's SDA drive (last drive wins) for ACKs and read bytes.
@@ -2523,9 +2459,10 @@ style = "i2c_pointer"
     /// net at the chunk-boundary flush.
     #[test]
     fn soft_i2c_stop_reaches_first_leg_after_address_change() {
+        use crate::peripherals::test_support::dc_source_volts;
         use crate::peripherals::TickCtx;
         use hauksbee_bind::drivers::PinDriver;
-        use hauksbee_ir::{Circuit, Device, SourceKind};
+        use hauksbee_ir::Circuit;
 
         let mut circuit = Circuit::default();
         let net = circuit.node("VOUT");
@@ -2547,21 +2484,12 @@ style = "i2c_pointer"
         );
         m.stop();
 
-        let src_volts = |c: &Circuit| match c.devices[vsource.0 as usize] {
-            Device::Vsource {
-                kind: SourceKind::Dc(v),
-                ..
-            } => v,
-            _ => panic!("driver vsource"),
-        };
+        let src_volts = |c: &Circuit| dc_source_volts(c, vsource);
         assert_eq!(src_volts(&circuit), 0.0, "not driven before flush");
         let volts = vec![0.0; 4];
-        bus.lock().unwrap().flush_stops(&mut TickCtx {
-            circuit: &mut circuit,
-            node_volts: &volts,
-            t: 0.0,
-            dt: 1e-3,
-        });
+        bus.lock()
+            .unwrap()
+            .flush_stops(&mut TickCtx::new(&mut circuit, &volts, 0.0, 1e-3));
         assert!((src_volts(&circuit) - 2.048).abs() < 1e-9);
     }
 }

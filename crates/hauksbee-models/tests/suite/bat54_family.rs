@@ -1,25 +1,12 @@
-use hauksbee_models::{ComponentQuery, ModelEntry, ModelLibrary};
+use super::assert_pins;
+use hauksbee_models::ModelEntry;
 
 fn resolve(value: &str, footprint: &str) -> ModelEntry {
-    ModelLibrary::builtin()
-        .resolve(&ComponentQuery {
-            value: Some(value.to_string()),
-            footprint: Some(footprint.to_string()),
-            ..Default::default()
-        })
-        .model
-        .unwrap_or_else(|| panic!("{value} / {footprint} did not resolve to any model"))
+    super::expect_query(Some(value), None, Some(footprint))
 }
 
 fn resolved_id(value: &str, footprint: &str) -> Option<String> {
-    ModelLibrary::builtin()
-        .resolve(&ComponentQuery {
-            value: Some(value.to_string()),
-            footprint: Some(footprint.to_string()),
-            ..Default::default()
-        })
-        .model
-        .map(|model| model.id)
+    super::query_id(Some(value), None, Some(footprint))
 }
 
 #[test]
@@ -63,8 +50,7 @@ fn dual_variants_are_excluded_from_bat54_cards() {
 #[test]
 fn two_pin_card_reverses_the_sod_body_pad_roles() {
     let model = resolve("BAT54XV2T1G", "Diode_SMD:D_SOD-523");
-    assert_eq!(model.pins.get("1").map(String::as_str), Some("cathode"));
-    assert_eq!(model.pins.get("2").map(String::as_str), Some("anode"));
+    assert_pins(&model, &[("1", "cathode"), ("2", "anode")]);
 }
 
 #[test]

@@ -5,16 +5,7 @@
 //! model can be made to sit on one point. Sitting on both is what says the part
 //! will behave at the current a board actually runs it at.
 
-use super::expect_model as resolve;
-
-/// The Shockley forward voltage the entry's own parameters imply at `i`.
-fn vf_at(m: &hauksbee_models::ModelEntry, i: f64) -> f64 {
-    let vt = 0.02585;
-    let is = m.params.get_f64("is").expect("is");
-    let n = m.params.get_f64("n").expect("n");
-    let rs = m.params.get_f64("rs").expect("rs");
-    n * vt * (i / is).ln() + i * rs
-}
+use super::{expect_model as resolve, vf_at};
 
 #[test]
 fn each_part_sits_on_both_published_forward_points() {
@@ -26,7 +17,8 @@ fn each_part_sits_on_both_published_forward_points() {
     ] {
         let m = resolve(part);
         for (i, want) in [(1.0, vf1), (3.1, vf31)] {
-            let got = vf_at(&m, i);
+            // The Shockley forward voltage the entry's own parameters imply.
+            let got = vf_at(&m, i, 0.02585);
             assert!(
                 (got - want).abs() < 2e-3,
                 "{part} at {i} A: model says {got:.4} V, datasheet says {want} V"

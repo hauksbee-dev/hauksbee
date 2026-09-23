@@ -52,6 +52,7 @@ pub mod profile;
 pub mod schema;
 pub mod sensor_spec;
 pub mod spice_input;
+mod units;
 pub mod unmodelled;
 pub mod validation;
 pub mod value;
