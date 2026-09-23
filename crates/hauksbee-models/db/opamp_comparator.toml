@@ -489,10 +489,11 @@ out_hi     = 4.95   # output high typ at 5V supply (V)
 # full band this param means. VOS (the trip points' average) is not modelled.
 hysteresis = 0.0075
 tpd_s      = 7.0e-9 # propagation delay 7 ns typ @ 5V (Table 6.3)
-# Supply draw: LMV7219 supply current 0.9 mA typical / 1.1 mA max at 5 V
-# (SNOS561). Stamped as a constant quiescent pull on the VCC pin net so a
-# metering shunt in series with the part's rail reads it.
-supply_static_ua = 900.0
+# Supply draw: IS 1.1 mA typ / 1.8 mA max at V+ = 5 V, no load (0.9 mA typ
+# is the 2.7 V table), TI SNOS458I Electrical Characteristics 5 V. Stamped as
+# a constant quiescent pull on the VCC pin net so a metering shunt in series
+# with the part's rail reads it.
+supply_static_ua = 1100.0
 warning = "the output HIGH level on this card is fixed at 4.95 V, the datasheet typical for a 5 V supply, and does NOT follow the voltage on the board's rail: the binder hard-codes it rather than reading the VCC pad, so this part on a 3.3 V board is still answered as swinging to 4.95 V, above its own supply. The low level (50 mV) is fixed the same way. Treat any result that turns on the output level of a LMV7219 on a rail other than 5 V as unanswered."
 
 [models.pins]
