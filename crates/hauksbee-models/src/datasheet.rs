@@ -1735,11 +1735,11 @@ status = "unknown"
 parameter = "model"
 reason = "datasheet publishes no validated model error interval"
 [[models.source.characteristic]]
-parameter = "VIK input clamp voltage"
-max = -1.2
-unit = "V"
-conditions = "II = -18 mA, EN = 0 V"
-basis = "Electrical Characteristics, VIK row, max column only"
+parameter = "IIH input leakage current"
+max = 5.0e-6
+unit = "A"
+conditions = "VI = 5 V, EN = 0 V"
+basis = "Electrical Characteristics, IIH row, max column only"
 [models.match]
 value_re = "(?i)^PCA9306"
 [models.params]
