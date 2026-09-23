@@ -288,20 +288,6 @@ pub fn si_gate_items(report: &hauksbee_extract::SiReport) -> Vec<String> {
         .collect()
 }
 
-/// One label per GATING copper short: clearance-only findings do not gate, and
-/// neither does a contact backed by board-local physical authority. Schematic
-/// net names alone do not locate an intended join and therefore stay gating.
-pub fn drc_gate_items_with_ties(
-    report: &hauksbee_extract::DrcReport,
-    qualification: Option<&hauksbee_extract::DrcTieQualification>,
-) -> Vec<String> {
-    report
-        .shorts()
-        .filter(|finding| qualification.is_none_or(|ties| ties.tie_for(finding).is_none()))
-        .map(|f| format!("drc-short {}/{}", f.net_a_name, f.net_b_name))
-        .collect()
-}
-
 /// One label per short whose final structured severity is serious. Unlike the
 /// raw-report helper, this sees pair-specific KiCad-oracle promotion on an
 /// otherwise unvalidated board format.

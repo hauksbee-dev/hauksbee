@@ -4,6 +4,11 @@
 //! 0402 resistor over-power) plus a direct stress-monitor unit for polarized
 //! capacitor reverse bias, and a healthy-board no-false-positive check.
 
+#[cfg(feature = "avr")]
+mod common;
+#[cfg(feature = "avr")]
+use common::{demo_firmware, SYNTH_BOARD};
+
 use crate::support::{capacitor, vsource};
 
 use hauksbee_engine::stress::{resistor_power_from_footprint, DeviceMeta, StressMonitor};
@@ -335,89 +340,6 @@ fn healthy_board_raises_no_faults() {
         max_stress < 1.0,
         "no component should be at its limit ({max_stress:.2})"
     );
-}
-
-/// Path to the demo firmware (mirrors tests/common but kept local so this test
-/// file is self-contained; the brief asks for distinct new test files).
-#[cfg(feature = "avr")]
-fn demo_firmware() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/demo/demo.hex")
-}
-
-/// The synthetic demo board fixture (same topology as tests/common::SYNTH_BOARD).
-#[cfg(feature = "avr")]
-const SYNTH_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "D13")
-  (net 4 "LED_A")
-  (net 5 "ADC0")
-
-  (module Package_QFP:TQFP-32_7x7mm_P0.8mm (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U1 (at 0 0) (layer F.SilkS))
-    (fp_text value ATmega328P (at 0 2) (layer F.Fab))
-    (pad 7  smd rect (at -3 0) (net 2 "+5V"))
-    (pad 8  smd rect (at -3 1) (net 1 "GND"))
-    (pad 19 smd rect (at 3 0) (net 3 "D13"))
-    (pad 20 smd rect (at 3 1) (net 2 "+5V"))
-    (pad 22 smd rect (at 3 2) (net 1 "GND"))
-    (pad 23 smd rect (at 3 3) (net 5 "ADC0"))
-  )
-
-  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 330 (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (net 3 "D13"))
-    (pad 2 thru_hole circle (at 2 0) (net 4 "LED_A"))
-  )
-
-  (module LED_THT:LED_D5.0mm (layer F.Cu)
-    (at 112 100)
-    (fp_text reference D1 (at 0 0) (layer F.SilkS))
-    (fp_text value RED_LED (at 0 2) (layer F.Fab))
-    (pad A thru_hole circle (at 0 0) (net 4 "LED_A"))
-    (pad K thru_hole circle (at 2 0) (net 1 "GND"))
-  )
-
-  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
-    (at 105 110)
-    (fp_text reference R2 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (net 2 "+5V"))
-    (pad 2 thru_hole circle (at 2 0) (net 5 "ADC0"))
-  )
-
-  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
-    (at 105 115)
-    (fp_text reference R3 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 thru_hole circle (at 0 0) (net 5 "ADC0"))
-    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
-  )
-)
-"#;
-
-#[test]
-fn dbg_led() {
-    let mut engine = engine_for(&led_board("47"), false);
-    for i in 0..20 {
-        let frame = engine.step(1e-4);
-        let v = *frame.net_voltages.get("LED_A").unwrap_or(&0.0);
-        let stress = frame
-            .component_states
-            .get("D1")
-            .and_then(|m| m.get("stress"))
-            .copied()
-            .unwrap_or(-1.0);
-        eprintln!(
-            "step {i}: LED_A={v:.3} stress(D1)={stress:.3} faults={}",
-            frame.faults.len()
-        );
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
