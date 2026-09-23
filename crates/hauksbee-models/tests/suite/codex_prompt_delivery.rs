@@ -18,6 +18,16 @@ fn source() -> String {
     std::fs::read_to_string(p).expect("read datasheet.rs")
 }
 
+/// The source of `fn run_agent_once`, up to the next top-level fn.
+fn run_agent_once_source() -> String {
+    let s = source();
+    let spawn = s
+        .split("fn run_agent_once")
+        .nth(1)
+        .expect("run_agent_once exists");
+    spawn[..spawn.find("\nfn ").unwrap_or(spawn.len())].to_string()
+}
+
 #[test]
 fn the_instruction_is_written_to_stdin() {
     let s = source();
@@ -37,12 +47,7 @@ fn the_instruction_is_written_to_stdin() {
 fn the_instruction_is_not_also_a_trailing_argument() {
     // Belt and braces: if someone re-adds the positional form later, the two
     // copies disagree and codex sees the prompt twice or not at all.
-    let s = source();
-    let spawn = s
-        .split("fn run_agent_once")
-        .nth(1)
-        .expect("run_agent_once exists");
-    let spawn = &spawn[..spawn.find("\nfn ").unwrap_or(spawn.len())];
+    let spawn = run_agent_once_source();
     assert!(
         !spawn.contains(".arg(\n            \"Read prompt.md"),
         "the prompt must not be passed as a positional argument as well"
@@ -53,12 +58,7 @@ fn the_instruction_is_not_also_a_trailing_argument() {
 fn codex_stderr_is_captured_not_discarded() {
     // The reason this bug took a real run to find: the only explanation codex
     // gave went to /dev/null.
-    let s = source();
-    let spawn = s
-        .split("fn run_agent_once")
-        .nth(1)
-        .expect("run_agent_once exists");
-    let spawn = &spawn[..spawn.find("\nfn ").unwrap_or(spawn.len())];
+    let spawn = run_agent_once_source();
     assert!(
         !spawn.contains("stderr(Stdio::null())"),
         "codex's stderr carries the reason it failed; discarding it turns every \
@@ -72,12 +72,7 @@ fn codex_stderr_is_captured_not_discarded() {
 
 #[test]
 fn the_model_is_chosen_explicitly() {
-    let s = source();
-    let spawn = s
-        .split("fn run_agent_once")
-        .nth(1)
-        .expect("run_agent_once exists");
-    let spawn = &spawn[..spawn.find("\nfn ").unwrap_or(spawn.len())];
+    let spawn = run_agent_once_source();
     assert!(
         spawn.contains("\"--model\""),
         "the run must name its model rather than inherit whatever the user's \

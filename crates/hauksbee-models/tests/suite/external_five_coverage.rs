@@ -982,6 +982,23 @@ fn models_in(path: &std::path::Path, text: &str) -> Vec<hauksbee_models::ModelEn
     }
 }
 
+/// Every `db/*.toml` file, sorted, for the library-wide sweeps below.
+fn db_files() -> Vec<std::path::PathBuf> {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
+    let mut files: Vec<_> = std::fs::read_dir(&db)
+        .expect("the db directory is part of the crate")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no db/*.toml found under {}",
+        db.display()
+    );
+    files
+}
+
 /// The P-channel threshold sign, swept over the WHOLE model database rather than
 /// the entries this file added.
 ///
@@ -998,23 +1015,10 @@ fn models_in(path: &std::path::Path, text: &str) -> Vec<hauksbee_models::ModelEn
 /// find it in an entry nobody thought to write one for. So this walks the TOML.
 #[test]
 fn every_mosfet_states_its_threshold_with_the_sign_its_polarity_needs() {
-    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
     let mut checked = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
-    let mut files: Vec<_> = std::fs::read_dir(&db)
-        .expect("the db directory is part of the crate")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
-        .collect();
-    files.sort();
-    assert!(
-        !files.is_empty(),
-        "no db/*.toml found under {}",
-        db.display()
-    );
-
-    for path in files {
+    for path in db_files() {
         let text = std::fs::read_to_string(&path).expect("readable db file");
         for m in models_in(&path, &text) {
             let polarity_is_p = match m.kind {
@@ -1081,23 +1085,10 @@ fn every_mosfet_states_its_threshold_with_the_sign_its_polarity_needs() {
 /// behaves like a device.
 #[test]
 fn no_entry_names_a_driven_output_it_has_no_logic_to_drive() {
-    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
     let mut with_logic = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
-    let mut files: Vec<_> = std::fs::read_dir(&db)
-        .expect("the db directory is part of the crate")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
-        .collect();
-    files.sort();
-    assert!(
-        !files.is_empty(),
-        "no db/*.toml found under {}",
-        db.display()
-    );
-
-    for path in files {
+    for path in db_files() {
         let text = std::fs::read_to_string(&path).expect("readable db file");
         for m in models_in(&path, &text) {
             let y_roles: Vec<&String> = m.pins.values().filter(|r| r.starts_with('y')).collect();
@@ -1308,18 +1299,10 @@ fn a_switch_naming_com_and_only_the_high_throw_has_no_pickable_pair() {
 
 #[test]
 fn no_single_throw_switch_names_the_control_low_throw() {
-    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
     let mut checked = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
-    let mut files: Vec<_> = std::fs::read_dir(&db)
-        .expect("the db directory is part of the crate")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
-        .collect();
-    files.sort();
-
-    for path in files {
+    for path in db_files() {
         let text = std::fs::read_to_string(&path).expect("readable db file");
         for m in models_in(&path, &text) {
             if m.kind != ComponentKind::AnalogSwitch {

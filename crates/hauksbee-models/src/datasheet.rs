@@ -333,13 +333,13 @@ pub fn run(mut args: Args) -> Result<PathBuf> {
         // on vreg, balancer on digital) is legal: the prompt appends the
         // `[models.behavioral]` guidance and the draft comes back under the
         // base kind, which the schema accepts.
-        if !kind_is_legal(kind) && behavioral_family_base_kind(kind).is_none() {
+        if component_kind(kind).is_none() {
             bail!(
                 "hauksbee has no '{kind}' model kind. Legal kinds: {}; behavioral families \
                  (drafted on a base kind with a [models.behavioral] block): charger, pmic, \
                  balancer. Pick the closest and declare the unmodeled behavior in the \
                  description, or omit --kind and let the extraction choose.",
-                legal_kinds().join(", ")
+                crate::validation::KIND_NAMES.join(", ")
             );
         }
         let prompt = build_prompt(part, kind, &pdf_text);
@@ -383,6 +383,7 @@ fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     rw_read_is_high = true     # true if a READ sets the high command bit to 1
                                # (most ST / InvenSense parts). false otherwise.
     addr_mask = 0x7f           # mask to recover the register address
+    spi_mode = 0               # CPOL/CPHA mode 0..3 from the timing diagram
   Do NOT set i2c_address."#
     } else {
         r#"This is an I2C sensor. Set:
@@ -436,13 +437,27 @@ ENCODINGS (pick the one matching the datasheet's register format):
                                          into a big-endian 16-bit word
   raw                                  - const-only register (no expr/encoding)
 
+OPTIONAL BLOCKS (add one only when the datasheet specifies every field it needs):
+  channels = N                            # independent copies of each state
+  [[sensor.state]] name, default          # per-channel state a write updates
+  [[sensor.write_register]] addr, encoding (fixed-width), store = "<var>",
+    default = <POR value>; [[sensor.write_register.field]] name, bits = [high, low]
+  [[sensor.write_command]] name, match_mask, match_value, prefix, group_bytes,
+    channel = {{ source = "auto" | "prefix_bits" | "group_bits", bits = [high, low] }},
+    [[sensor.write_command.field]] name, bits; [sensor.write_command.update] state = "expr"
+  [[sensor.output]] name, channel, expr   # driven-voltage law over state
+  [sensor.read_frame] per_channel, bytes = ["expr", ...]   # instead of registers
+  write_register and write_command are mutually exclusive. The spec has no pin
+  map or alternate-address field: note address-strap options in a TOML comment.
+
 RULES:
 1. Include the WHO_AM_I / device-ID register if the part has one (with its exact
    constant), plus the primary data register(s) firmware actually reads.
 2. Every `expr` may only reference names declared in a [[sensor.input]].
 3. Output ONLY the TOML, starting with `[sensor]`; no prose, no markdown fences.
 4. Use only values stated in the datasheet; do not invent register addresses.
-5. End with this provenance block (tier and model-error record are required):
+5. End with this provenance block. The tier and the model-error record are
+   required; the model-error record is not the only record allowed:
      [sensor.source]
      tier = "datasheet-derived"
      validation = "unvalidated"
@@ -450,25 +465,21 @@ RULES:
      status = "unknown"
      parameter = "model"
      reason = "datasheet publishes no validated model error interval"
-   Published min/max limits may be added as `status = "interval"` records with
-   `kind = "specification-limits"` and a `basis` table citation; never invent intervals.
+   Add a `status = "interval"` record (parameter, low, high, unit, `kind =
+   "specification-limits"`, `basis` table citation) for every published row with
+   finite min AND max, such as the supply range or accuracy. A one-sided or
+   typ-only row goes in a `[[sensor.source.characteristic]]` record: parameter,
+   only the printed min/typ/max columns, unit, conditions, basis. Never invent
+   an interval.
 
 {source_quantity_guidance}
 
-DATASHEET TEXT (truncated):
-{datasheet_text_begin}
-{pdf_text}
-{datasheet_text_end}
+{datasheet_text}
 
 OUTPUT (TOML only, starting with [sensor]):
 "#,
-        part = part,
-        bus = bus,
-        bus_specifics = bus_specifics,
         source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
-        datasheet_text_begin = DATASHEET_TEXT_BEGIN,
-        datasheet_text_end = DATASHEET_TEXT_END,
-        pdf_text = truncate_to_chars(&pdf_text, 40_000),
+        datasheet_text = datasheet_text_block(pdf_text),
     )
 }
 
@@ -805,13 +816,9 @@ OPTIONS:
     --pdf <path>          Path to (or URL of) the datasheet PDF
     --part <name>         Manufacturer part number (e.g. BCM847BS)
     --kind <kind>         Component kind hint (omit it and the model works it
-                          out from the datasheet)
-                          passive|diode|bjt_npn|bjt_pnp|nmos|pmos|
-                          vreg|opamp|comparator|analog_switch|digital|
-                          dac|adc|shift_register|mcu|connector|ignore|
-                          charger|pmic|balancer  (behavioural families)|
-                          i2c_sensor|spi_sensor  (declarative register-map
-                          sensors → a [sensor] spec, not a SPICE model)
+                          out from the datasheet): {kinds}
+                          (charger|pmic|balancer are behavioural families;
+                          i2c_sensor|spi_sensor give a [sensor] spec, not SPICE)
     --out-dir <dir>       Output directory (default: ~/.hauksbee/models/)
     --model <id>          Model for the extraction agent (default: the
                           backend's own, e.g. claude-opus-5 for claude-code,
@@ -839,7 +846,8 @@ ENVIRONMENT (each overrides the config file for one run):
                               that backend when nothing else chose one)
     HAUKSBEE_LLM_MODEL        Model ID for the api backend
     HAUKSBEE_LLM_BASE_URL     Base URL (default: https://api.openai.com/v1)
-"
+",
+        kinds = supported_kinds().join("|"),
     );
 }
 
@@ -1260,6 +1268,12 @@ const DATASHEET_TEXT_BEGIN: &str = "<<<HAUKSBEE_DATASHEET_TEXT_BEGIN>>>";
 const DATASHEET_TEXT_END: &str = "<<<HAUKSBEE_DATASHEET_TEXT_END>>>";
 const PDF_TEXT_UNAVAILABLE: &str = "<<<HAUKSBEE_PDF_TEXT_UNAVAILABLE>>>";
 
+/// Both prompts' datasheet section, marked so an agent backend can swap it out.
+fn datasheet_text_block(pdf_text: &str) -> String {
+    let text = truncate_to_chars(pdf_text, 40_000);
+    format!("DATASHEET TEXT (truncated):\n{DATASHEET_TEXT_BEGIN}\n{text}\n{DATASHEET_TEXT_END}")
+}
+
 const SOURCE_QUANTITY_GUIDANCE: &str = r#"SOURCE QUANTITIES:
 - Define each destination quantity and its units before matching a datasheet row to it.
 - A typical value is not a guaranteed limit. A one-sided limit is not a two-sided interval.
@@ -1307,22 +1321,6 @@ fn prompt_for_agent_backend(prompt: &str) -> String {
     )
 }
 
-/// The kinds the schema deserializes. The extraction surface must speak the
-/// same closed vocabulary the validator enforces: a backend that invents
-/// "charger" burns every attempt against a parser that was never going to
-/// accept it. `kind_vocabulary_and_suggestions` pins this list to the enum.
-pub fn legal_kinds() -> Vec<String> {
-    crate::validation::KIND_NAMES
-        .iter()
-        .map(|k| (*k).to_string())
-        .collect()
-}
-
-/// Is this kind string one the schema accepts?
-pub fn kind_is_legal(kind: &str) -> bool {
-    crate::validation::KIND_NAMES.contains(&kind)
-}
-
 fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     let examples = format_examples_for_kind(kind);
     let example_cards = examples
@@ -1368,10 +1366,7 @@ is a WRONG ANSWER.
 
 {example_cards}
 
-DATASHEET TEXT (truncated):
-{datasheet_text_begin}
-{pdf_text}
-{datasheet_text_end}
+{datasheet_text}
 
 Produce a TOML model entry that exactly conforms to the hauksbee-models schema.
 The entry must use [[models]] array syntax and include:
@@ -1539,7 +1534,13 @@ IMPORTANT RULES:
    as a nominal value may come from a typ column: cite it as typ; it gets no
    interval record (the row may still get a characteristic record). A min-only
    or max-only row is a bound, never a nominal: use it only for a param that is
-   that bound (e.g. an output level from VOL max).
+   that bound (e.g. an output level from VOL max). A row printing min and max
+   but no typ (a gain bin, a threshold band) still supplies a required nominal:
+   write the midpoint (min + max) / 2, comment it `midpoint of printed min/max,
+   no typ published`, and add the interval record above with the printed
+   bounds. That midpoint is a labelled nominal, not a typical; do not abstain
+   for want of a typ column. No rule requires a param to be validated:
+   `physical-bounds-only` is the whole validation claim of the card.
 1. Add a comment on each param/rating line citing where in the datasheet you found
    the value, e.g.: `# Source: Table 6.3, typ column`
 2. Use only values explicitly stated in the datasheet; do NOT guess. For SPICE
@@ -1562,49 +1563,55 @@ IMPORTANT RULES:
 5. Output ONLY the TOML block, starting with [[models]]; no prose, no markdown
    fences, no leading or trailing text.
 6. Currents in AMPERES, voltages in VOLTS, power in WATTS (convert mA/mW yourself).
-7. Param values must be within these physical bounds:
-   - is: 1e-20 to 1e-3
-   - bf/beta: 1 to 2000
-   - n/nf (emission): 0.5 to 3.0
-   - vaf (Early V): 1 to 500
-   - vto (MOSFET threshold): -10 to +10
-   - kp (transconductance): 1e-6 to 1.0
-   - vout (LDO): magnitude 0.5 to 30, EITHER SIGN. Write the signed output
-     voltage as the datasheet states it: a negative regulator (79xx, and any
-     part whose output is below GND) takes a NEGATIVE vout, e.g. -5.0 for an
-     LM7905. It is stamped as a source against ground, so writing the magnitude
-     instead produces a part that regulates the wrong side of ground and turns
-     a negative supply into a second positive one.
-   - ron (switch): 0.01 to 10000
-   - roff (switch): 1e3 to 1e12
+7. The checker rejects params outside these physical bounds. A |x| bound is on
+   the magnitude and accepts EITHER SIGN: write a signed value as the datasheet
+   states it. A negative regulator (79xx, any output below GND) takes a NEGATIVE
+   vout, e.g. -5.0 for an LM7905: it is stamped as a source against ground, so
+   the magnitude would make a negative supply into a second positive one.
+{param_bounds}
 {behavioral_hint}
 OUTPUT (TOML only, starting with [[models]]):
 "#,
-        part = part,
         part_lower = part.to_lowercase(),
         part_upper = part.to_uppercase(),
-        legal_kinds = legal_kinds().join(", "),
-        kind = kind,
+        legal_kinds = crate::validation::KIND_NAMES.join(", "),
         entry_kind = behavioral_family_base_kind(kind).unwrap_or(kind),
-        datasheet_text_begin = DATASHEET_TEXT_BEGIN,
-        datasheet_text_end = DATASHEET_TEXT_END,
-        pdf_text = truncate_to_chars(&pdf_text, 40_000),
+        datasheet_text = datasheet_text_block(pdf_text),
         required_params = required_params_for_kind(kind),
         optional_params = optional_params_for_kind(kind),
         pin_roles = pin_roles_for_kind(kind),
         ratings_hint = crate::schema::Ratings::KEY_GUIDE,
+        param_bounds = param_bounds_for_kind(kind),
         behavioral_hint = behavioral_hint_for_kind(kind),
         digital_hint = digital_hint_for_kind(kind),
         pin_role_guidance = PIN_ROLE_GUIDANCE,
         source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
-        example_cards = example_cards,
     )
+}
+
+/// Rule 7, from the checker's own rules: a hand copy once capped `kp` at 1.0
+/// while the checker (rightly, for power FETs) allowed 1000.
+fn param_bounds_for_kind(kind: &str) -> String {
+    let lines = component_kind(kind).map_or_else(Vec::new, crate::validation::param_bounds);
+    if lines.is_empty() {
+        return "   (none for this kind)".into();
+    }
+    format!("   - {}", lines.join("\n   - "))
+}
+
+/// The schema kind a prompt kind resolves to (a behavioural family to its base).
+/// The prompt names only these: a backend that invents "charger" as the entry
+/// kind burns every attempt against a parser that was never going to accept it.
+fn component_kind(kind: &str) -> Option<ComponentKind> {
+    let base = behavioral_family_base_kind(kind).unwrap_or(kind);
+    serde_json::from_value(serde_json::Value::from(base)).ok()
 }
 
 /// A complete shape demonstration from a different component class.
 ///
-/// Each candidate teaches all four failure-prone shapes. Filtering out the
-/// requested kind still leaves at least two examples from other part classes.
+/// Each candidate teaches all four failure-prone shapes. The requested kind is
+/// filtered out on purpose: a same-class card offers its numbers to copy
+/// (4f94d9cf), and at least two examples from other part classes remain.
 #[derive(Clone, Copy)]
 struct FormatExample {
     part: &'static str,
@@ -1914,14 +1921,20 @@ LSB; shift_left inserts at bit 0, shift_right at bits-1. Match the function tabl
 abstain if its semantics differ, rather than inventing priority controls.
 For high-impedance outputs, `[models.logic.tristate]` maps each output name to
 `{ enable = "input_role", active = "low" }` (or "high"); inactive means high-Z.
-For a purely combinational part omit registers; this symbolic XOR example is
-valid syntax, not the target part's function:
+An open-drain or open-collector output has no VOH (the board pull-up sets its
+high level): give it the constant `0` and a tristate entry enabled exactly while
+it sinks, as `od_out` below; abstain if no single input decides that. For a
+purely combinational part omit registers; this symbolic example is valid
+syntax, not the target part's function:
 ```toml
 [models.logic]
 inputs = ["left", "right"]
-outputs = ["result"]
+outputs = ["result", "od_out"]
 [models.logic.comb]
 result = "left ^ right"
+od_out = "0"
+[models.logic.tristate]
+od_out = { enable = "right", active = "low" }
 ```
 
 In `[models.params]`, `supply_pin` and `gnd_pin` are STRINGS containing physical
@@ -1952,7 +1965,18 @@ fn required_params_for_kind(kind: &str) -> &'static str {
     match kind {
         "diode" => "is, n, rs",
         "bjt_npn" | "bjt_pnp" => "is, bf, nf",
-        "nmos" | "pmos" => "vto, kp",
+        // Never the word "is" here: optional_params_for_kind would drop the `is` param.
+        "nmos" | "pmos" => {
+            "vto, kp. Level-1 square law with w_over_l unset (1): vto keeps the SPICE sign \
+             (negative for an enhancement PMOS), kp in A/V^2, and rd/rs are the drain and source \
+             ohmic series resistances, not the channel. Small-VDS on-resistance here equals \
+             1/(kp*(|VGS| - |vto|)) + rd + rs, so an RDS(on) typ row fixes kp and rd + rs \
+             together. With rows at two VGS values, solve kp from their difference and split the \
+             residue at the higher-VGS row evenly between rd and rs; with one row, take kp from \
+             gFS at its ID (kp = gFS^2 / (2*ID)) and put the residue in rd + rs, or, without \
+             gFS, derive kp from that row alone with rd = rs = 0. Comment each value `derived \
+             from RDS(on) row at VGS=..., ID=..., typ column`"
+        }
         "vreg" => {
             "fixed: vout, dropout_v, iq_a; adjustable (ADJ/FB pin): vref (the reference, \
              never the output), dropout_v and the quiescent current param the checker asks \
@@ -1963,10 +1987,17 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              output headroom from each supply pin (max column), pole_hz is GBW / gain, \
              slew is in V/us"
         }
-        "comparator" => "out_lo, out_hi, hysteresis, tpd_s",
+        "comparator" => {
+            "out_lo, out_hi, hysteresis (V). With no hysteresis row, write hysteresis = 0.0 (none \
+             designed in) plus an `unknown` record for `hysteresis` whose reason names the \
+             absence; that never makes the card identity-only. An open-collector or open-drain \
+             output instead sets open_collector = true with ron_ohms and leak_s, and the board \
+             pull-up supplies its high level"
+        }
         "analog_switch" => "ron, roff, vth",
         "digital" => {
-            "voh, vol, vih, vil, tpd_s; supply_pin and gnd_pin are quoted physical pad identifiers"
+            "voh (omit for an open-drain output), vol, vih, vil, tpd_s; supply_pin and gnd_pin \
+             are quoted physical pad identifiers"
         }
         "shift_register" => {
             "bits, voh, vol, vih, vil, tpd_s; supply_pin and gnd_pin are quoted physical pad identifiers"
@@ -1994,11 +2025,10 @@ fn required_params_for_kind(kind: &str) -> &'static str {
 /// Every other param the kind's consumers read (`param_names`), so a datasheet
 /// fact with a home is not dropped because only the required ones were named.
 fn optional_params_for_kind(kind: &str) -> String {
-    let base = behavioral_family_base_kind(kind).unwrap_or(kind);
     let named: Vec<&str> = required_params_for_kind(kind)
         .split(|c: char| !(c.is_alphanumeric() || c == '_'))
         .collect();
-    let rest: Vec<&str> = serde_json::from_value(serde_json::Value::from(base))
+    let rest: Vec<&str> = component_kind(kind)
         .map_or(&[][..], crate::param_names::known_param_names)
         .iter()
         .copied()
@@ -2108,7 +2138,8 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
         ws.pages.len()
     );
     let agent_prompt = prompt_for_agent_backend(prompt);
-    let base_prompt = format!("{agent_prompt}\n\n{}", verification_clause(&ws));
+    let clause = verification_clause(&ws, reply.table());
+    let base_prompt = format!("{agent_prompt}\n\n{clause}");
     validated_attempts(resolved.retries, &base_prompt, reply, tool, |p| {
         let _ = std::fs::remove_file(ws.answer_path());
         let stdout = run_agent_once(&resolved, p, &ws)?;
@@ -2219,52 +2250,47 @@ fn retry_feedback(raw: &str, validation_error: &str, table: &str) -> String {
 /// it, and a mis-identified kind is the one error they are best placed to
 /// catch.
 fn identify_kind(args: &Args, pdf_text: &str) -> Result<String> {
+    let part = &args.part;
     // The front of the datasheet is where the part describes itself. Sending
     // the whole thing to answer one question would cost far more for no gain.
     let prompt = format!(
         "You are identifying what kind of electronic part a datasheet describes, so a \
          simulator can pick the right model schema.\n\n\
-         Part number: {}\n\n\
+         Part number: {part}\n\n\
          Answer with EXACTLY ONE of these identifiers and nothing else:\n\
          {}\n\n\
          If the part does not fit any of them, answer exactly: unsupported\n\n\
          Do not explain. Do not add punctuation. One word.\n\n\
          Datasheet (first pages):\n{}",
-        args.part,
-        SUPPORTED_KINDS.join("\n"),
+        supported_kinds().join("\n"),
         truncate_to_chars(pdf_text, 6000)
     );
     let reply = call_backend(&prompt, args, Reply::Word)?.to_ascii_lowercase();
     // The model may answer with surrounding prose despite the instruction, so
     // look for a supported kind rather than trusting the whole reply.
-    let found: Vec<&str> = SUPPORTED_KINDS
-        .iter()
-        .copied()
+    let found: Vec<&str> = supported_kinds()
+        .into_iter()
         .filter(|k| {
             reply
                 .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
                 .any(|w| w == *k)
         })
         .collect();
+    let kinds = supported_kinds().join(", ");
     match found.as_slice() {
         [one] => Ok((*one).to_string()),
         [] if reply.contains("unsupported") => bail!(
-            "the datasheet for {} does not describe a part hauksbee models yet. That is an \
+            "the datasheet for {part} does not describe a part hauksbee models yet. That is an \
              honest answer rather than a failure: forcing it into the nearest kind would \
-             produce a confident model of the wrong device. Supported kinds: {}",
-            args.part,
-            SUPPORTED_KINDS.join(", ")
+             produce a confident model of the wrong device. Supported kinds: {kinds}"
         ),
         [] => bail!(
-            "could not identify what kind of part {} is from its datasheet. Say so \
-             explicitly with --kind <one of: {}>.",
-            args.part,
-            SUPPORTED_KINDS.join(", ")
+            "could not identify what kind of part {part} is from its datasheet. Say so \
+             explicitly with --kind <one of: {kinds}>."
         ),
         many => bail!(
-            "the datasheet for {} matched several part kinds ({}), so the choice is not \
+            "the datasheet for {part} matched several part kinds ({}), so the choice is not \
              ours to guess. Pick one with --kind.",
-            args.part,
             many.join(", ")
         ),
     }
@@ -2274,32 +2300,17 @@ fn identify_kind(args: &Args, pdf_text: &str) -> Result<String> {
 ///
 /// One list, used by the identification prompt, the CLI help and the web
 /// picker, so the three cannot drift into disagreeing about what is possible.
-pub const SUPPORTED_KINDS: &[&str] = &[
-    "passive",
-    "diode",
-    "bjt_npn",
-    "bjt_pnp",
-    "nmos",
-    "pmos",
-    "vreg",
-    "opamp",
-    "comparator",
-    "analog_switch",
-    "digital",
-    "dac",
-    "adc",
-    "shift_register",
-    "mcu",
-    "connector",
-    "i2c_sensor",
-    "spi_sensor",
-    // Behavioural families. They resolve to a base kind (charger and pmic to
-    // vreg, balancer to digital) but carry their own parameter guidance, so a
-    // caller naming one gets a better prompt than naming the base.
-    "charger",
-    "pmic",
-    "balancer",
-];
+/// It is the schema's own vocabulary, less the two kinds with no extraction
+/// guidance (`timer`, `ignore`), plus the sensor specs and the behavioural
+/// families, which resolve to a base kind (charger and pmic to vreg, balancer
+/// to digital) but carry their own parameter guidance.
+pub fn supported_kinds() -> Vec<&'static str> {
+    let schema = crate::validation::KIND_NAMES.iter().copied();
+    let schema = schema.filter(|k| !matches!(*k, "timer" | "ignore"));
+    schema
+        .chain(["i2c_sensor", "spi_sensor", "charger", "pmic", "balancer"])
+        .collect()
+}
 
 /// The part of the prompt that tells the model to check its own work.
 ///
@@ -2309,7 +2320,14 @@ pub const SUPPORTED_KINDS: &[&str] = &[
 /// not "be accurate", which asks for nothing, but three specific acts: read
 /// each number back against the page it came from, test it against physics,
 /// and say out loud which values were never stated.
-fn verification_clause(ws: &Workspace) -> String {
+fn verification_clause(ws: &Workspace, table: &str) -> String {
+    let abstain = if table == "[sensor]" {
+        "omit that register or field and name it in a `status = \"unknown\"` \
+         `[[sensor.source.uncertainty]]` record whose reason starts `ABSTAIN:`"
+    } else {
+        "use the prompt's identity-only form and a named `ABSTAIN:` in `description` \
+         or `[models.source.uncertainty]`"
+    };
     let pages = if ws.pages.is_empty() {
         "No page images were rendered. If available text or diagnostic tools cannot \
          resolve a table's layout, abstain from the affected value explicitly."
@@ -2363,11 +2381,9 @@ fn verification_clause(ws: &Workspace) -> String {
          let an external or stale schema override the supplied contract.\n\n         1. VERIFY EACH NUMBER against its source page: units, sign, package/part \
             variant, test conditions, and min/typ/max column.\n         2. SANITY-CHECK WITHOUT OVERRULING THE SOURCE. A surprising but plausible \
             value (including low transistor gain) is not proof of an error. Recheck \
-            the row and variant; abstain if the available evidence cannot resolve it.\n         3. DO NOT INVENT ASSUMPTIONS. For a missing required fact, use the \
-            prompt's identity-only form and a named `ABSTAIN:` in `description` or \
-            `[models.source.uncertainty]`; omit optional fields that are not stated. \
-            TOML comments may record pin/package \
-            ambiguity but must not turn a guess into data.\n\n         Write the final answer to `model.toml` in your working directory as one \
+            the row and variant; abstain if the available evidence cannot resolve it.\n         3. DO NOT INVENT ASSUMPTIONS. For a missing required fact, {abstain}; \
+            omit optional fields that are not stated. TOML comments may record \
+            pin/package ambiguity but must not turn a guess into data.\n\n         Write the final answer to `model.toml` in your working directory as one \
          TOML document and nothing else."
     )
 }
@@ -3082,6 +3098,14 @@ mod tests {
         assert!(!bjt.contains("[models.behavioral.converter]"));
         assert!(build_prompt("1N4148", "diode", "x").contains("VRRM"));
         assert!(build_prompt("AMS1117", "vreg", "x").contains("max_junction_temp_c"));
+        assert!(bjt.contains("(min + max) / 2") && bjt.contains("   - bf: 1 to 2000\n"));
+        let nmos = build_prompt("FET_FIXTURE", "nmos", "x");
+        assert!(nmos.contains("   - kp: 1e-6 to 1000\n") && nmos.contains("cgd, is, cbd"));
+        assert!(nmos.contains("1/(kp*(|VGS| - |vto|)) + rd + rs"));
+        let comparator = build_prompt("CMP_FIXTURE", "comparator", "x");
+        assert!(comparator.contains("hysteresis = 0.0") && comparator.contains("leak_s: 0 to 1"));
+        assert!(build_prompt("REG_FIXTURE", "vreg", "x").contains("   - vout: |x| 0.5 to 30\n"));
+        assert!(build_prompt("CONN_FIXTURE", "connector", "x").contains("(none for this kind)"));
 
         let charger = build_prompt("LTC4020", "charger", "x");
         assert!(charger.contains("[models.behavioral.converter]"));
@@ -3134,7 +3158,10 @@ mod tests {
             .validate()
             .expect("the supplied logic example must validate");
         let ws = Workspace::scratch().unwrap();
-        let footer = verification_clause(&ws);
+        let sensor = verification_clause(&ws, "[sensor]");
+        assert!(sensor.contains("[[sensor.source.uncertainty]]"));
+        assert!(!sensor.contains("models.source") && !sensor.contains("identity-only"));
+        let footer = verification_clause(&ws, "[[models]]");
         assert!(footer.contains("Prefer the supplied authoritative schema and datasheet"));
         assert!(footer.contains("use available diagnostic tools or a vendor source"));
         assert!(footer.contains("record external provenance separately"));
@@ -3471,6 +3498,15 @@ tier = "datasheet-derived"
 uncertainty = [{ status = "unknown", parameter = "model", reason = "none published" }]
 "#;
         let spec = validate_sensor_reply(i2c, "LM75", "i2c_sensor").unwrap();
+        let json = serde_json::json!(spec.sensor);
+        let prompt = build_sensor_prompt("X", "spi_sensor", "");
+        let protocol = json["protocol"].as_object().unwrap().keys();
+        for key in json.as_object().unwrap().keys().chain(protocol) {
+            assert!(
+                prompt.contains(key.as_str()),
+                "the prompt never names `{key}`"
+            );
+        }
         let no_source = &i2c[..i2c.find("[sensor.source]").unwrap()];
         let error = validate_sensor_reply(no_source, "LM75", "i2c_sensor").unwrap_err();
         assert!(error.to_string().contains("rule 5"), "{error:#}");
@@ -3516,7 +3552,9 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
     #[test]
     fn every_supported_kind_binds_and_has_parameter_guidance() {
         let generic = required_params_for_kind("__definitely_not_a_kind__");
-        for kind in SUPPORTED_KINDS {
+        assert!(!crate::validation::KIND_NAMES.contains(&"charger"));
+        assert_eq!(component_kind("charger"), Some(ComponentKind::Vreg));
+        for kind in supported_kinds() {
             let sensor = is_sensor_kind(kind);
             let prompt = if sensor {
                 build_sensor_prompt("SOURCE_FIXTURE", kind, "fixture text")
@@ -3531,6 +3569,8 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             assert!(!prompt.contains("{source_quantity_guidance}"));
             if sensor {
                 assert!(!prompt.contains("models.source"), "{kind}");
+                assert!(prompt.contains("not the only record allowed"));
+                assert!(prompt.contains("[[sensor.source.characteristic]]"));
                 assert!(
                     prompt.contains("[sensor.source]") && prompt.contains("parameter = \"model\"")
                 );
@@ -3542,26 +3582,13 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             assert!(prompt.contains("kind = \"empirical-error\""));
             assert!(prompt.contains("parameter = \"model\""));
             assert!(!prompt.contains("If no defensible interval is published"));
-            let base = behavioral_family_base_kind(kind).unwrap_or(kind);
-            assert!(
-                kind_is_legal(base),
-                "{kind} does not resolve to a component kind"
-            );
+            assert!(component_kind(kind).is_some(), "{kind} has no schema kind");
             assert_ne!(
                 required_params_for_kind(kind),
                 generic,
                 "{kind} has only the generic hint"
             );
         }
-    }
-
-    #[test]
-    fn legal_kinds_match_the_schema() {
-        let kinds = legal_kinds();
-        assert!(kinds.len() >= 10, "extraction broke: {kinds:?}");
-        assert!(kinds.iter().all(|k| kind_is_legal(k)));
-        assert!(kinds.iter().any(|k| k == "vreg"));
-        assert!(!kind_is_legal("charger"));
     }
 
     #[cfg(unix)]

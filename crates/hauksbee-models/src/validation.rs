@@ -938,7 +938,7 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
 // ── Kind vocabulary help ──────────────────────────────────────────────────────
 
 /// Every TOML spelling [`ComponentKind`] accepts, in declaration order. Kept
-/// in lockstep with the enum by `kind_names_cover_the_enum` below.
+/// in lockstep with the enum by `kind_vocabulary_and_suggestions` below.
 pub const KIND_NAMES: &[&str] = &[
     "passive",
     "diode",
@@ -959,6 +959,36 @@ pub const KIND_NAMES: &[&str] = &[
     "connector",
     "ignore",
 ];
+
+/// Every bound [`validate`] holds `kind`'s params to, across the variants a param
+/// selects, so the extraction prompt quotes the checker, not a drifting copy.
+pub fn param_bounds(kind: ComponentKind) -> Vec<String> {
+    let num = |v: f64| match v.abs() {
+        a if a == 0.0 || (1e-3..1e5).contains(&a) => v.to_string(),
+        _ => format!("{v:e}"),
+    };
+    let mut lines = Vec::new();
+    for probe in [None, Some("vref"), Some("shunt"), Some("open_collector")] {
+        let mut entry = ModelEntry {
+            kind,
+            ..ModelEntry::default()
+        };
+        match probe {
+            Some("vref") => entry.params.set_f64("vref", 1.0),
+            Some(flag) => entry.params.set_bool(flag, true),
+            None => {}
+        }
+        let rules = kind_rules(&entry);
+        let by_value = rules.ranges.iter().map(|range| (range, ""));
+        for (&(key, lo, hi), how) in by_value.chain(rules.magnitude.iter().map(|m| (m, "|x| "))) {
+            let line = format!("{key}: {how}{} to {}", num(lo), num(hi));
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+    }
+    lines
+}
 
 /// A did-you-mean for a kind name the schema rejected. Common industry
 /// synonyms map directly (an author typing `ldo` should be told `vreg`, not
@@ -1489,31 +1519,12 @@ high_offset = 1.3333333333333333
 
     #[test]
     fn kind_vocabulary_and_suggestions() {
-        #[derive(Debug, serde::Deserialize)]
-        struct Probe {
-            #[allow(dead_code)]
-            kind: ComponentKind,
-        }
-        for name in KIND_NAMES {
-            assert!(
-                toml::from_str::<Probe>(&format!("kind = \"{name}\"")).is_ok(),
-                "{name}"
-            );
-        }
-        // Lockstep with the enum: serde's own "expected one of" list, which
-        // enumerates every variant, must be exactly KIND_NAMES.
-        let err = toml::from_str::<Probe>("kind = \"__not_a_kind__\"")
-            .expect_err("sentinel kind must not deserialize")
-            .to_string();
-        let listed: Vec<&str> = err
-            .split("expected one of ")
-            .nth(1)
-            .expect("serde names the variants")
-            .split(',')
-            .map(|t| t.trim().trim_matches(|c| c == '`' || c == '.'))
-            .filter(|t| !t.is_empty())
-            .collect();
-        assert_eq!(listed, KIND_NAMES, "KIND_NAMES drifted from ComponentKind");
+        // serde's unknown-variant error lists every variant in order, so this
+        // pins both the order and the completeness of KIND_NAMES.
+        let err = serde_json::from_value::<ComponentKind>("__not_a_kind__".into()).unwrap_err();
+        let listed: Vec<String> = KIND_NAMES.iter().map(|k| format!("`{k}`")).collect();
+        let expected = format!("expected one of {}", listed.join(", "));
+        assert!(err.to_string().contains(&expected), "{err}");
         assert_eq!(kind_suggestion("LDO"), Some("vreg"));
         assert_eq!(kind_suggestion("npn"), Some("bjt_npn"));
         assert_eq!(kind_suggestion("led"), Some("diode"));

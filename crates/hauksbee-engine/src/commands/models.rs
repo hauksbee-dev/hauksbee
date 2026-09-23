@@ -1417,12 +1417,8 @@ fn scaffold_template(
         value_display = value,
         board = board_display,
         description = description_toml,
-        id = id,
-        kind = kind,
-        kind_note = kind_note,
         kinds = hauksbee_models::validation::KIND_NAMES.join(", "),
         value_re = value_re_toml,
-        property_rules = property_rules,
     );
     Ok(format!(
         "{template}\n\
@@ -1623,9 +1619,7 @@ pub fn new_with_kind(
          hauksbee models resolve {board} --models-dir {dir}   # {ref_} should bind to '{id}'",
         out = out_path.display(),
         board = board_path.display(),
-        dir = dir,
         ref_ = comp.reference,
-        id = id,
     );
     Ok(())
 }

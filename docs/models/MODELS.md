@@ -503,7 +503,14 @@ from, so an extracted model stays auditable.
    and the pages most relevant to pinout, ratings, and electrical tables. The
    complete copied PDF and text remain available to local agent backends.
 2. **Prompt** built per kind, listing the required and optional params, the ratings to
-   pull, and the physical bounds each value must respect.
+   pull, and the physical bounds each value must respect. The bounds are
+   generated from the checker's own `KindRules` (`validation::param_bounds`),
+   so the prompt and the validator cannot disagree. The prompt also says how
+   a min/max row with no typ supplies a required nominal (the labelled
+   midpoint, with the printed bounds as an interval record), how a MOSFET
+   RDS(on) row fixes `kp` and `rd + rs`, and, for sensors, which optional
+   blocks exist and which interval and characteristic records sit beside the
+   model-error record.
 3. **Backend call** (see the backend matrix above; which one runs comes from
    `hauksbee models backend show`, unless overridden by `--backend`):
    - **claude-code** (`--backend claude-code`): headless `claude -p` in the

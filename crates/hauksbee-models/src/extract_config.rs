@@ -272,24 +272,27 @@ fn check_model(what: &str, value: &Option<String>) -> Result<()> {
     }
 }
 
+/// The one backend -> per-agent slot mapping, for config sections and resolved settings.
+fn agent_slot<T>(backend: Backend, [claude_code, agy, codex]: [T; 3]) -> Option<T> {
+    match backend {
+        Backend::ClaudeCode => Some(claude_code),
+        Backend::Agy => Some(agy),
+        Backend::Codex => Some(codex),
+        Backend::Api => None,
+    }
+}
+
 impl ExtractConfig {
     /// The section for an agent backend; `None` for the API.
     pub fn agent(&self, backend: Backend) -> Option<&AgentConfig> {
-        match backend {
-            Backend::ClaudeCode => Some(&self.claude_code),
-            Backend::Agy => Some(&self.agy),
-            Backend::Codex => Some(&self.codex),
-            Backend::Api => None,
-        }
+        agent_slot(backend, [&self.claude_code, &self.agy, &self.codex])
     }
 
     pub fn agent_mut(&mut self, backend: Backend) -> Option<&mut AgentConfig> {
-        match backend {
-            Backend::ClaudeCode => Some(&mut self.claude_code),
-            Backend::Agy => Some(&mut self.agy),
-            Backend::Codex => Some(&mut self.codex),
-            Backend::Api => None,
-        }
+        agent_slot(
+            backend,
+            [&mut self.claude_code, &mut self.agy, &mut self.codex],
+        )
     }
 
     pub fn normalise(&mut self) {
@@ -916,21 +919,14 @@ pub struct Resolved {
 impl Resolved {
     /// The effective settings for an agent backend; `None` for the API.
     pub fn agent(&self, backend: Backend) -> Option<&ResolvedAgent> {
-        match backend {
-            Backend::ClaudeCode => Some(&self.claude_code),
-            Backend::Agy => Some(&self.agy),
-            Backend::Codex => Some(&self.codex),
-            Backend::Api => None,
-        }
+        agent_slot(backend, [&self.claude_code, &self.agy, &self.codex])
     }
 
     fn agent_mut(&mut self, backend: Backend) -> Option<&mut ResolvedAgent> {
-        match backend {
-            Backend::ClaudeCode => Some(&mut self.claude_code),
-            Backend::Agy => Some(&mut self.agy),
-            Backend::Codex => Some(&mut self.codex),
-            Backend::Api => None,
-        }
+        agent_slot(
+            backend,
+            [&mut self.claude_code, &mut self.agy, &mut self.codex],
+        )
     }
 
     /// The active backend's model.

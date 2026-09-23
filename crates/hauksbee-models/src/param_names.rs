@@ -116,37 +116,21 @@ const MOSFET: &[&str] = &[
     "pb", "mj", "rd", "rs",
 ];
 
-/// The logic-level and supply-accounting vocabulary shared by every digital
-/// kind. `supply_pin`/`gnd_pin` name pin roles rather than carrying physics.
-/// It is `SHIFT_REGISTER` after `bits`, so the two cannot drift apart.
-const DIGITAL_COMMON: &[&str] = SHIFT_REGISTER.split_at(1).1;
-
-/// A shift register is the digital vocabulary plus its stage count.
-const SHIFT_REGISTER: &[&str] = &[
-    "bits",
-    "vih",
-    "vil",
-    "voh",
-    "vol",
-    "ro",
-    "tpd_s",
-    "supply_static_ua",
-    "supply_cpd_pf",
-    "supply_pin",
-    "gnd_pin",
-];
-
-/// An `adc` entry's vocabulary: the converter names PLUS the digital ones.
+/// The converter and digital vocabularies, ordered so each kind's names are one
+/// contiguous slice (see [`known_param_names`]): the converter names (resolution,
+/// reference, output impedance, bus wiring), then `bits`, then the logic-level and
+/// supply-accounting names every digital kind shares. `supply_pin`/`gnd_pin` name
+/// pin roles rather than carrying physics.
 ///
-/// This is not a convenience union. `bind_component` routes `ComponentKind::Adc`
-/// through `bind_digital`, which reads `voh`/`vol`/`vih`/`vil` (via
+/// An `adc` takes the converter names PLUS the digital ones, and that is not a
+/// convenience union. `bind_component` routes `ComponentKind::Adc` through
+/// `bind_digital`, which reads `voh`/`vol`/`vih`/`vil` (via
 /// `LogicLevels::from_params`) and `supply_static_ua` exactly as it does for a
 /// `digital` entry. Listing only the converter names made the lint report those as
 /// "not read for this kind, so it is silently ignored", which is the opposite of
 /// true: the engine reads them and the LINT was the thing that did not know. An
 /// entry author who believed the warning would strip a bus level the solver wanted.
-const ADC_VOCAB: &[&str] = &[
-    "bits",
+static CONVERTER_AND_DIGITAL: [&str; 19] = [
     "gain",
     "rout",
     "vref_int",
@@ -155,9 +139,9 @@ const ADC_VOCAB: &[&str] = &[
     "i2c_addr",
     "scl_pin",
     "sda_pin",
+    "bits",
     "supply_pin",
     "gnd_pin",
-    // Read by bind_digital, which is what an adc binds through.
     "vih",
     "vil",
     "voh",
@@ -165,12 +149,15 @@ const ADC_VOCAB: &[&str] = &[
     "ro",
     "tpd_s",
     "supply_static_ua",
+    "supply_cpd_pf",
 ];
 
-/// The converter vocabulary shared by the DAC and the ADC: resolution, the
-/// reference, the output impedance, and the bus wiring. It is the 11 names
-/// heading `ADC_VOCAB` (before its digital ones), so they are spelled once.
-const CONVERTER_COMMON: &[&str] = ADC_VOCAB.split_at(11).0;
+// Where each kind's slice of `CONVERTER_AND_DIGITAL` starts or ends; pinned by
+// `converter_and_digital_splits_fall_on_their_named_boundaries`.
+const SHIFT_REGISTER_FROM: usize = 8; // `bits`
+const DIGITAL_FROM: usize = 9; // `supply_pin`
+const DAC_TO: usize = 11; // through `gnd_pin`
+const ADC_TO: usize = 18; // everything before `supply_cpd_pf`
 
 /// The parameter names this kind's consumers read, beyond `UNIVERSAL`.
 ///
@@ -242,10 +229,11 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
             "latch_hold",
         ],
         ComponentKind::AnalogSwitch => &["ron", "roff", "vth"],
-        ComponentKind::Digital => DIGITAL_COMMON,
-        ComponentKind::ShiftRegister => SHIFT_REGISTER,
-        ComponentKind::Dac => CONVERTER_COMMON,
-        ComponentKind::Adc => ADC_VOCAB,
+        ComponentKind::Digital => &CONVERTER_AND_DIGITAL[DIGITAL_FROM..],
+        // A shift register is the digital vocabulary plus its stage count.
+        ComponentKind::ShiftRegister => &CONVERTER_AND_DIGITAL[SHIFT_REGISTER_FROM..],
+        ComponentKind::Dac => &CONVERTER_AND_DIGITAL[..DAC_TO],
+        ComponentKind::Adc => &CONVERTER_AND_DIGITAL[..ADC_TO],
         ComponentKind::Mcu => &["backend", "module", "max_adc_source_impedance_ohms"],
         ComponentKind::Connector | ComponentKind::Ignore => &[],
     }
@@ -499,12 +487,14 @@ mod tests {
     }
 
     #[test]
-    fn shared_vocabularies_split_where_their_docs_say() {
-        assert_eq!(
-            (DIGITAL_COMMON[0], CONVERTER_COMMON.last()),
-            ("vih", Some(&"gnd_pin"))
-        );
-        assert!(!CONVERTER_COMMON.contains(&"vih") && ADC_VOCAB.contains(&"vih"));
+    fn converter_and_digital_splits_fall_on_their_named_boundaries() {
+        let names = known_param_names;
+        assert_eq!(names(ComponentKind::Digital)[0], "supply_pin");
+        assert_eq!(names(ComponentKind::ShiftRegister)[0], "bits");
+        assert_eq!(names(ComponentKind::Dac).last(), Some(&"gnd_pin"));
+        assert!(!names(ComponentKind::Dac).contains(&"vih"));
+        assert!(names(ComponentKind::Adc).contains(&"vih"));
+        assert!(!names(ComponentKind::Adc).contains(&"supply_cpd_pf"));
     }
 
     #[test]
