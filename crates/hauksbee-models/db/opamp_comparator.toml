@@ -484,7 +484,10 @@ value_re = "(?i)^LMV7219"
 # Source: Texas Instruments LMV7219 datasheet (SNOS561D), Table 6.3 / 6.5
 out_lo     = 0.05   # output low typ at 5V supply (V)
 out_hi     = 4.95   # output high typ at 5V supply (V)
-hysteresis = 0.003  # input offset voltage ±3 mV typ
+# VHYST typ 7.5 mV at V+ = 5 V (7 mV at 2.7 V), TI SNOS458I Electrical
+# Characteristics 5 V; its footnote (4) defines it as Vtrip+ minus Vtrip-, the
+# full band this param means. VOS (the trip points' average) is not modelled.
+hysteresis = 0.0075
 tpd_s      = 7.0e-9 # propagation delay 7 ns typ @ 5V (Table 6.3)
 # Supply draw: LMV7219 supply current 0.9 mA typical / 1.1 mA max at 5 V
 # (SNOS561). Stamped as a constant quiescent pull on the VCC pin net so a

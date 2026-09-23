@@ -319,7 +319,7 @@ mod tests {
         let (a1, a2, b1, b2) = (c.node("a1"), c.node("a2"), c.node("b1"), c.node("b2"));
         vdc(&mut c, "VA", a1, 5.0);
         res(&mut c, "RA", a1, a2, 1e3);
-        comparator(&mut c, "CMP", b1, a2, a1, 1e-3);
+        comparator(&mut c, "CMP", b1, a2, a1, 2e-3);
         res(&mut c, "RB", b1, b2, 1e3);
         let g = ConductionGraph::analyze(&c);
         assert_eq!(g.islands.len(), 2, "{g:?}");
@@ -363,7 +363,7 @@ mod tests {
             (1.0, 2.0),
             (10.0, 1e9),
         );
-        let cmp = comparator(&mut circuit, "K1", ko, ki, kn, 1e-3);
+        let cmp = comparator(&mut circuit, "K1", ko, ki, kn, 2e-3);
         let siblings = HashMap::from([(s0, s1), (s1, s0)]);
         let cmp_frozen = HashMap::from([(cmp, true)]);
         let sw_frozen = HashMap::from([(s0, true), (s1, false)]);

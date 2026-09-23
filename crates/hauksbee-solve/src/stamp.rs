@@ -2794,6 +2794,13 @@ fn stamp_opamp<S: StampSink>(
     }
 }
 
+/// The differential input `V(inp) - V(inn)` at which a comparator whose output
+/// is `high` flips. `hysteresis` is the FULL band width, the datasheet VHYS
+/// (VT+ minus VT-), so the two trip points sit at plus/minus half of it.
+pub(crate) fn comparator_trip(high: bool, hysteresis: f64) -> f64 {
+    0.5 * if high { -hysteresis } else { hysteresis }
+}
+
 fn stamp_comparator<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -2807,7 +2814,8 @@ fn stamp_comparator<S: StampSink>(
 ) {
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
-    let prev_out = ctx.v(out);
+    // Hysteresis: the trip point depends on the current output state.
+    let high = ctx.v(out) > 0.5 * (out_lo + out_hi);
     let gout = 1.0;
 
     // Event-driven staged path: the outer loop supplies a FROZEN decision for
@@ -2817,11 +2825,7 @@ fn stamp_comparator<S: StampSink>(
     // state fixed, the inner circuit is smooth and Newton converges; the outer
     // loop re-evaluates and re-solves if any decision flipped.
     if let Some(freeze) = ctx.cmp_freeze {
-        let _ = (vp, vn, hyst);
-        let high = freeze
-            .get(&id)
-            .copied()
-            .unwrap_or(prev_out > 0.5 * (out_lo + out_hi));
+        let high = freeze.get(&id).copied().unwrap_or(high);
         // PIN the output to its frozen rail with a CONSTANT target (no input
         // dependence). A smooth input-dependent transfer still swings the output
         // whenever the comparator inputs pass near threshold, which makes the
@@ -2841,9 +2845,7 @@ fn stamp_comparator<S: StampSink>(
         return;
     }
 
-    // Hysteresis: threshold depends on current output state.
-    let high = prev_out > 0.5 * (out_lo + out_hi);
-    let thresh = if high { -hyst } else { hyst };
+    let thresh = comparator_trip(high, hyst);
 
     // Staged-DC path (branch_reg > 0) without an event-freeze map: the bare
     // bang-bang transfer below has no tangent, so on a stiff board where a

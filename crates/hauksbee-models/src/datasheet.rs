@@ -1988,11 +1988,13 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              slew is in V/us"
         }
         "comparator" => {
-            "out_lo, out_hi, hysteresis (V). With no hysteresis row, write hysteresis = 0.0 (none \
-             designed in) plus an `unknown` record for `hysteresis` whose reason names the \
-             absence; that never makes the card identity-only. An open-collector or open-drain \
-             output instead sets open_collector = true with ron_ohms and leak_s, and the board \
-             pull-up supplies its high level"
+            "out_lo, out_hi, hysteresis (V). hysteresis is the datasheet VHYS, the FULL width \
+             between the rising and falling trip points (VT+ minus VT-), never the input offset \
+             VOS. With no hysteresis row, write hysteresis = 0.0 (none designed in) plus an \
+             `unknown` record for `hysteresis` whose reason names the absence; that never makes \
+             the card identity-only. An open-collector or open-drain output instead sets \
+             open_collector = true with ron_ohms and leak_s, and the board pull-up supplies its \
+             high level"
         }
         "analog_switch" => "ron, roff, vth",
         "digital" => {
@@ -3104,6 +3106,7 @@ mod tests {
         assert!(nmos.contains("1/(kp*(|VGS| - |vto|)) + rd + rs"));
         let comparator = build_prompt("CMP_FIXTURE", "comparator", "x");
         assert!(comparator.contains("hysteresis = 0.0") && comparator.contains("leak_s: 0 to 1"));
+        assert!(comparator.contains("(VT+ minus VT-), never the input offset"));
         assert!(build_prompt("REG_FIXTURE", "vreg", "x").contains("   - vout: |x| 0.5 to 30\n"));
         assert!(build_prompt("CONN_FIXTURE", "connector", "x").contains("(none for this kind)"));
 

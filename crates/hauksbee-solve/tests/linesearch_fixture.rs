@@ -51,14 +51,14 @@ fn spiking_board() -> Circuit {
     // firing is guaranteed, so there is no DC fixed point and the board is
     // the honest FromZero shape.
     add_resistor(&mut c, "RL", m, NodeId::GROUND, 1e5);
-    comparator(&mut c, "K1", spk, m, th, 0.2);
+    comparator(&mut c, "K1", spk, m, th, 0.4);
     // Complementary select for the idle leg. The two throws must be driven by
     // OPPOSITE controls (as real SPDT select wiring is): with a shared control
     // the BBM winner-take-all margins tie exactly (the sibling margin is
     // span-absolute), the discharge leg gets halved forever, and the membrane
     // servos at threshold instead of firing; measured on the first cut of this
     // fixture.
-    comparator(&mut c, "K2", spkb, th, m, 0.2);
+    comparator(&mut c, "K2", spkb, th, m, 0.4);
     // SPDT: names differ only in the `_s0`/`_s1` suffix and share the common
     // node `com`, exactly the shape `SpdtPairs::analyze` pairs up, so the
     // break-before-make winner-take-all code runs on every stamp.

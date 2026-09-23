@@ -163,7 +163,7 @@ These bounds are the single source of truth in `crates/hauksbee-models/src/valid
 | gain        | 1.0    | 1e9    | op-amp open-loop gain                 |
 | rail_lo/hi  | -60.0  | 60.0   | op-amp output rails (V, lo < hi)      |
 | out_lo/hi   | -60.0  | 60.0   | comparator output levels (V, lo < hi) |
-| hysteresis  | 0.0    | 5.0    | comparator hysteresis (V)             |
+| hysteresis  | 0.0    | 5.0    | comparator hysteresis (V): the datasheet VHYS, the FULL width VT+ − VT− between the trip points (they sit at ±hysteresis/2), not the offset VOS; 0 if none |
 | ron         | 0.01   | 10000.0| switch on-resistance (Ω, ron < roff)  |
 | roff        | 1e3    | 1e12   | switch off-resistance (Ω)             |
 

@@ -167,8 +167,8 @@ fn spiking_board() -> Circuit {
     idc(&mut c, "IIN", NodeId::GROUND, m, 5e-5);
     add_capacitor(&mut c, "CM", m, NodeId::GROUND, 1e-9, None);
     crate::shared::add_resistor(&mut c, "RL", m, NodeId::GROUND, 1e5);
-    comparator(&mut c, "K1", spk, m, th, 0.2);
-    comparator(&mut c, "K2", spkb, th, m, 0.2);
+    comparator(&mut c, "K1", spk, m, th, 0.4);
+    comparator(&mut c, "K2", spkb, th, m, 0.4);
     vswitch(
         &mut c,
         "GATE_s1",
@@ -336,7 +336,7 @@ fn high_z_board(drive_v: f64) -> Circuit {
     // The high-Z anchor: 1 GΩ to ground. Charging current is nA-scale.
     crate::shared::add_resistor(&mut c, "RLEAK", mem, NodeId::GROUND, 1e9);
     add_vdc(&mut c, "VTH", th, NodeId::GROUND, 0.4);
-    comparator(&mut c, "K1", out, mem, th, 0.05);
+    comparator(&mut c, "K1", out, mem, th, 0.1);
     // The masked-convergence stressor: an UNRELATED stiff junction branch on
     // the same board. The Newton iterations are GLOBAL (one monolithic
     // matrix), so this sine-walked diode forces 3+ iterations on every step,

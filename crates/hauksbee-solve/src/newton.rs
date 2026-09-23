@@ -1041,9 +1041,10 @@ fn newton_solve_core(
             // no step could ever satisfy the test and every iteration walked to
             // the floor.
             ws.x.copy_from_slice(&ws.lin_point);
-            let anchor_node = residual_inf_norm_at(
+            let anchor_node = residual_argmax_at(
                 ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
-            );
+            )
+            .0;
             let f_norm_lin = merit(ws, anchor_node, opts);
             let mut alpha = 1.0;
             let mut best_alpha = 1.0;
@@ -1053,9 +1054,10 @@ fn newton_solve_core(
                 for i in 0..ws.x.len() {
                     ws.x[i] = ws.lin_point[i] + alpha * dx[i];
                 }
-                let node_norm = residual_inf_norm_at(
+                let node_norm = residual_argmax_at(
                     ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
-                );
+                )
+                .0;
                 let trial_norm = merit(ws, node_norm, opts);
                 if trial_norm < best_norm {
                     best_norm = trial_norm;
@@ -1098,7 +1100,7 @@ fn newton_solve_core(
             }
             // After globalizing, re-stamp must happen for the next iteration's
             // matrix anyway, so nothing else to restore here. The scratch ws.matrix
-            // / ws.rhs were overwritten by residual_inf_norm_at and will be
+            // / ws.rhs were overwritten by residual_argmax_at and will be
             // re-stamped at the top of the next loop.
         }
 
@@ -1321,33 +1323,7 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) {
     }
 }
 
-/// Stamp the full nonlinear system at `ws.x` (a trial point) with the SAME
-/// integration/freeze/regularizer context as the live Newton iteration, and
-/// return the infinity-norm of the residual `F = g*x - rhs` over the NODE block.
-/// Used by the opt-in Armijo line-search in [`newton_solve`] to evaluate a
-/// backtracked trial point. Clobbers `ws.matrix` and `ws.rhs` (scratch that the
-/// next Newton iteration re-stamps anyway). A non-finite entry returns +inf so a
-/// poisoned trial point is never accepted.
-fn residual_inf_norm_at(
-    ws: &mut Workspace,
-    circuit: &Circuit,
-    opts: &SolverOptions,
-    time: f64,
-    coeffs: IntegCoeffs,
-    state: &ReactiveState,
-    dc: bool,
-    use_ic: bool,
-    gmin: f64,
-    src_scale: f64,
-    branch_reg: f64,
-) -> f64 {
-    residual_argmax_at(
-        ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
-    )
-    .0
-}
-
-/// The line-search merit at the point `residual_inf_norm_at` just stamped into
+/// The line-search merit at the point `residual_argmax_at` just stamped into
 /// `ws`: every row's residual in units of the tolerance that governs it,
 /// `abstol` (amps) for the KCL rows it already reduced to `node_norm` and
 /// `vntol` (volts) for the BRANCH rows added here. One inf-norm then spans both
@@ -1376,6 +1352,14 @@ fn merit(ws: &Workspace, node_norm: f64, opts: &SolverOptions) -> f64 {
     worst
 }
 
+/// Stamp the full nonlinear system at `ws.x` (a trial point) with the SAME
+/// integration/freeze/regularizer context as the live Newton iteration, and
+/// return the infinity-norm of the residual `F = g*x - rhs` over the NODE block
+/// and the row it peaks on.
+/// Used by the opt-in Armijo line-search in [`newton_solve`] to evaluate a
+/// backtracked trial point. Clobbers `ws.matrix` and `ws.rhs` (scratch that the
+/// next Newton iteration re-stamps anyway). A non-finite entry returns +inf so a
+/// poisoned trial point is never accepted.
 fn residual_argmax_at(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1503,13 +1487,14 @@ fn residual_rel_inf_norm_at(
     // rail-sized "imbalance" (relative residual exactly 1.0) at a true root of
     // the system actually being integrated, which rejected every fire step.
     let branch_reg = ws.staged_branch_reg;
-    let abs = residual_inf_norm_at(
+    let abs = residual_argmax_at(
         ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
-    );
+    )
+    .0;
     if !abs.is_finite() {
         return f64::INFINITY;
     }
-    // `residual_inf_norm_at` leaves the assembled system in ws.matrix/ws.rhs, so
+    // `residual_argmax_at` leaves the assembled system in ws.matrix/ws.rhs, so
     // the scale is read back from the same stamp the residual was measured on.
     //
     // The scale per node is the LARGEST INDIVIDUAL TERM in the node's KCL sum,
@@ -2059,14 +2044,7 @@ fn eval_comparator_states(
             let vn = layout.node(*inn).map(|i| x[i]).unwrap_or(0.0);
             let d = vp - vn;
             let was_high = prev.get(&id).copied().unwrap_or(d > 0.0);
-            // Hysteresis: need to exceed +hyst to go high, drop below -hyst to go
-            // low; otherwise hold. Matches stamp_comparator's threshold sign.
-            let high = if was_high {
-                d > -*hysteresis
-            } else {
-                d > *hysteresis
-            };
-            out.insert(id, high);
+            out.insert(id, d > crate::stamp::comparator_trip(was_high, *hysteresis));
         }
     }
     out
@@ -2711,7 +2689,9 @@ mod tests {
     use crate::options::{RobustnessLadder, SolverOptions, Strategy, SwitchModel};
     use crate::stamp::IntegCoeffs;
     use crate::system::{Layout, ReactiveState};
-    use crate::test_fixtures::{cap, cap_ic, diode, divider, res, sw, vdc, vswitch, GND};
+    use crate::test_fixtures::{
+        cap, cap_ic, comparator, diode, divider, res, sw, vdc, vpulse, vswitch, GND,
+    };
     use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, DiodeModel, NodeId};
     use std::collections::HashMap;
 
@@ -2898,6 +2878,43 @@ mod tests {
         assert!(!eval(&x, &HashMap::from([(id, false)])));
         x[ci] = 0.5;
         assert!(!eval(&x, &HashMap::new()));
+    }
+
+    /// `hysteresis` is the FULL band (datasheet VHYS = VT+ - VT-): 10 mV trips
+    /// at +5 mV rising and -5 mV falling, in the state rule and in a transient.
+    #[test]
+    fn comparator_trips_at_half_the_hysteresis_band() {
+        let mut c = Circuit::new();
+        let (inp, out) = (c.node("inp"), c.node("out"));
+        // Triangle -20 -> +20 -> -20 mV over 2 ms: d = +/-5 mV at 0.625/1.625 ms.
+        vpulse(&mut c, "VIN", inp, (-0.02, 0.02), 0.0, (1e-3, 1e-3), 0.0);
+        let id = comparator(&mut c, "K", out, inp, GND, 0.01);
+        let layout = Layout::new(&c);
+        let mut x = vec![0.0; layout.size];
+        for (was_high, d, high) in [
+            (false, 4.9e-3, false),
+            (false, 5.1e-3, true),
+            (true, -4.9e-3, true),
+            (true, -5.1e-3, false),
+        ] {
+            x[layout.node(inp).unwrap()] = d;
+            let prev = HashMap::from([(id, was_high)]);
+            assert_eq!(
+                eval_comparator_states(&c, &layout, &x, &prev)[&id],
+                high,
+                "{was_high} at {d}"
+            );
+        }
+        // Fixed 1 us steps: the adaptive event locator bisects toward d = 0, not the trip.
+        let tran = crate::transient::Transient::new(SolverOptions::fixed(1e-6));
+        let w = tran.run(&c, 2e-3).expect("triangle transient");
+        let v = &w.node_voltages[out.0 as usize];
+        let edge = |rising: bool| {
+            w.time[(1..v.len())
+                .find(|&k| (v[k] > 2.5) == rising && (v[k - 1] > 2.5) != rising)
+                .unwrap()]
+        };
+        assert!((edge(true) - 0.625e-3).abs() <= 1e-6 && (edge(false) - 1.625e-3).abs() <= 1e-6);
     }
 
     /// The event-freeze outer loop on a switch + floating-diode core with a

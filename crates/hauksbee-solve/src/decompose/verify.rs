@@ -480,7 +480,7 @@ mod tests {
         let vin = c.node("vin");
         vdc(&mut c, "V1", vin, 3.0);
         let cmp_out = c.node("cmp_out");
-        comparator(&mut c, "K1", cmp_out, vin, GND, 1e-3);
+        comparator(&mut c, "K1", cmp_out, vin, GND, 2e-3);
         switch_island(&mut c, cmp_out);
         let d = Decomposition::analyze(&c, TearMotive::Profit);
         assert!(d.certificate.sound(), "{}", d.certificate.summary(&c));

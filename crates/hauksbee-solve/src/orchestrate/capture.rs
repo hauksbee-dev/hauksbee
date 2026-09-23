@@ -1967,7 +1967,7 @@ mod tests {
             let vref = c.node("vref");
             vdc(&mut c, "VREF", vref, 2.5);
             let (osc, vc) = (c.node("osc"), c.node("vc"));
-            comparator(&mut c, "CMP_AST", osc, vref, vc, 0.5);
+            comparator(&mut c, "CMP_AST", osc, vref, vc, 1.0);
             res(&mut c, "Rosc", osc, GND, 10e3);
             res(&mut c, "Rf", osc, vc, 10e3);
             cap(&mut c, "Cf", vc, GND, 1e-9); // tau = 10 us
@@ -2212,12 +2212,12 @@ mod tests {
         let vref = c.node("vref");
         vdc(&mut c, "Vref", vref, 1.0);
         let vcmp = c.node("vcmp");
-        comparator(&mut c, "Kcmp", vcmp, vmem, vref, 0.5);
+        comparator(&mut c, "Kcmp", vcmp, vmem, vref, 1.0);
         sw(&mut c, "SWr", vmem, GND, vcmp, (2.5, 1.5), 200.0);
         let vref2 = c.node("vref2");
         vdc(&mut c, "Vref2", vref2, 0.6);
         let vko = c.node("vko");
-        comparator(&mut c, "Kout", vko, vmem, vref2, 0.05);
+        comparator(&mut c, "Kout", vko, vmem, vref2, 0.1);
         let vspk = c.node("vspk");
         res(&mut c, "R_str", vko, vspk, 1e3);
         let vload = c.node("vload");
@@ -2226,7 +2226,7 @@ mod tests {
         let vref3 = c.node("vref3");
         vdc(&mut c, "Vref3", vref3, 2.5);
         let vsyn = c.node("vsyn");
-        comparator(&mut c, "Ksyn", vsyn, vspk, vref3, 0.05);
+        comparator(&mut c, "Ksyn", vsyn, vspk, vref3, 0.1);
         res(&mut c, "Rsyn", vsyn, GND, 1e3);
         (c, vspk, vdd, 5.0)
     }
@@ -2324,7 +2324,7 @@ mod tests {
         let vref4 = c.node("vref4");
         vdc(&mut c, "Vref4", vref4, 0.6);
         let vko2 = c.node("vko2");
-        comparator(&mut c, "Kout2", vko2, vmem, vref4, 0.05);
+        comparator(&mut c, "Kout2", vko2, vmem, vref4, 0.1);
         let vspk2 = c.node("vspk2");
         res(&mut c, "R_str2", vko2, vspk2, 1e3);
         let vload2 = c.node("vload2");

@@ -357,6 +357,9 @@ pub enum Device {
         inn: NodeId,
         out_lo: f64,
         out_hi: f64,
+        /// FULL band width in volts, the datasheet VHYS (VT+ minus VT-), not
+        /// the offset: the output rises at `V(inp) - V(inn) > +hysteresis/2`
+        /// and falls below `-hysteresis/2`. `0` is a bare zero-crossing.
         hysteresis: f64,
     },
     /// Voltage-controlled voltage source (SPICE `E` card):

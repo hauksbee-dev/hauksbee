@@ -95,7 +95,7 @@ two disagree, `validation.rs` is what runs.
 | `nmos` / `pmos` | `vto`, `kp` | `kp` runs into the tens to hundreds for power FETs |
 | `vreg` | `vout`, `dropout_v`, `iq_a` | LDO / regulator |
 | `opamp` | `gain`, `rail_lo`, `rail_hi` | `rail_lo < rail_hi` |
-| `comparator` | `out_lo`, `out_hi`, `hysteresis` | `out_lo < out_hi` |
+| `comparator` | `out_lo`, `out_hi`, `hysteresis` | `out_lo < out_hi`; `hysteresis` is the datasheet VHYS, the full width VT+ − VT− (trip points at ±`hysteresis`/2), never the offset VOS, and 0 for a part without any |
 | `analog_switch` | `ron`, `roff` | `ron < roff` |
 
 ## Pin roles (what to put on the right of `[models.pins]`)

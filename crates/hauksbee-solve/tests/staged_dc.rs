@@ -236,7 +236,7 @@ fn build_comparator_diode_chatter() -> Circuit {
     let out = c.node("OUT");
     let d_a = c.node("D_A");
     let fb = c.node("FB");
-    comparator(&mut c, "UCHAT", out, vref, fb, 0.003);
+    comparator(&mut c, "UCHAT", out, vref, fb, 0.006);
     // out -> 1k -> diode -> fb -> 10k -> gnd: with out HIGH the diode conducts
     // and fb rises above vref (flipping out LOW); with out LOW fb rests at 0
     // (flipping out HIGH). No consistent static state exists.

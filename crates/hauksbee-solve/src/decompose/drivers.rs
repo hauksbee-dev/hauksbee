@@ -204,7 +204,7 @@ mod tests {
         }
         let cmp_out = c.node("cmp_out");
         res(&mut c, "RCMP", cmp_out, GND, 1e3);
-        comparator(&mut c, "CMP", cmp_out, last, GND, 1e-3);
+        comparator(&mut c, "CMP", cmp_out, last, GND, 2e-3);
         let (dag, asn, _) = assignments(&c);
         assert_eq!(dag.groups.len(), 2);
         assert!(

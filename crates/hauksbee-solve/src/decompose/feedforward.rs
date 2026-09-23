@@ -268,7 +268,7 @@ mod tests {
     fn watcher(c: &mut Circuit, name: &str, watch: NodeId, home: NodeId) {
         let o = c.node(&format!("cmp_{name}"));
         res(c, &format!("R{name}"), o, home, 1e3);
-        comparator(c, &format!("CMP{name}"), o, watch, GND, 1e-3);
+        comparator(c, &format!("CMP{name}"), o, watch, GND, 2e-3);
     }
 
     fn dag(c: &Circuit) -> StageDag {
@@ -307,7 +307,7 @@ mod tests {
         let out = rc_stage(&mut c, "osc");
         let reset = c.node("reset");
         res(&mut c, "Rreset", reset, out, 10e3);
-        comparator(&mut c, "CMPOSC", reset, out, GND, 1e-3);
+        comparator(&mut c, "CMPOSC", reset, out, GND, 2e-3);
         let d = dag(&c);
         assert_eq!(d.groups.len(), 1, "{d:?}");
         assert!(d.free_tears.is_empty());

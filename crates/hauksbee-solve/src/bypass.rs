@@ -368,7 +368,7 @@ mod tests {
             model: Default::default(),
         });
         sw(&mut c, "S1", n1, n4, n2, (2.0, 1.0), 10.0);
-        comparator(&mut c, "K1", n4, n1, n2, 0.05);
+        comparator(&mut c, "K1", n4, n1, n2, 0.1);
         (c, n1)
     }
 
@@ -401,11 +401,11 @@ mod tests {
             }
         }
 
-        /// One bypass-armed assembly; returns the rows and RHS.
+        /// One assembly, bypass-armed with `(state, force)` or the interpreted
+        /// walk for `None`; returns the rows and RHS.
         fn assemble(
             &mut self,
-            st: &mut BypassState,
-            force: bool,
+            bypass: Option<(&mut BypassState, bool)>,
         ) -> (Vec<Vec<(usize, f64)>>, Vec<f64>) {
             let mut ctx = stamp_ctx(
                 &self.c,
@@ -419,29 +419,10 @@ mod tests {
             ctx.gmin = 1e-12;
             self.m.clear_values();
             let mut rhs = vec![0.0f64; self.layout.size];
-            stamp_all_bypass(&ctx, st, &mut self.m, &mut rhs, force);
-            (
-                (0..self.layout.size)
-                    .map(|i| self.m.row(i).to_vec())
-                    .collect(),
-                rhs,
-            )
-        }
-
-        fn interpreted(&mut self) -> (Vec<Vec<(usize, f64)>>, Vec<f64>) {
-            let mut ctx = stamp_ctx(
-                &self.c,
-                &self.layout,
-                &self.opts,
-                &self.x,
-                &self.state,
-                trapz(1e-7),
-            );
-            ctx.time = 1e-6;
-            ctx.gmin = 1e-12;
-            self.m.clear_values();
-            let mut rhs = vec![0.0f64; self.layout.size];
-            stamp_all(&ctx, &mut self.m, &mut rhs);
+            match bypass {
+                Some((st, force)) => stamp_all_bypass(&ctx, st, &mut self.m, &mut rhs, force),
+                None => stamp_all(&ctx, &mut self.m, &mut rhs),
+            }
             (
                 (0..self.layout.size)
                     .map(|i| self.m.row(i).to_vec())
@@ -471,10 +452,10 @@ mod tests {
         for (i, v) in rig.state.x1.iter_mut().enumerate() {
             *v = 0.2 * (i as f64 + 1.0);
         }
-        let reference = rig.interpreted();
+        let reference = rig.assemble(None);
         let mut st = BypassState::build(&rig.c, &rig.layout);
         st.begin_solve();
-        let fresh = rig.assemble(&mut st, true);
+        let fresh = rig.assemble(Some((&mut st, true)));
         assert_bit_identical(&fresh, &reference);
         assert_eq!(
             st.counters(),
@@ -482,20 +463,20 @@ mod tests {
             "diode+bjt+mosfet evaluated, none skipped"
         );
 
-        let replayed = rig.assemble(&mut st, false);
+        let replayed = rig.assemble(Some((&mut st, false)));
         assert_bit_identical(&replayed, &fresh);
         assert_eq!(st.counters(), (3, 3));
 
         let n1_idx = rig.layout.node(rig.n1).unwrap();
         rig.x[n1_idx] += 0.5;
-        rig.assemble(&mut st, false);
+        rig.assemble(Some((&mut st, false)));
         let (evals, _) = st.counters();
         assert!(
             evals > 3 && evals < 6,
             "moving one node re-evaluates its readers only (evals={evals})"
         );
         st.begin_solve();
-        rig.assemble(&mut st, false);
+        rig.assemble(Some((&mut st, false)));
         assert_eq!(
             st.counters().0 - evals,
             3,
@@ -505,9 +486,9 @@ mod tests {
         let mut rig = Rig::new(|_| 0.4);
         let mut st = BypassState::build(&rig.c, &rig.layout);
         st.begin_solve();
-        rig.assemble(&mut st, true);
+        rig.assemble(Some((&mut st, true)));
         rig.x.iter_mut().for_each(|v| *v = f64::NAN);
-        rig.assemble(&mut st, false);
+        rig.assemble(Some((&mut st, false)));
         assert_eq!(
             st.counters(),
             (6, 0),

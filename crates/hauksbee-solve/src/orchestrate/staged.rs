@@ -920,7 +920,7 @@ mod tests {
 
         let mut cmp = dio.clone();
         let o = cmp.node("o");
-        comparator(&mut cmp, "K", o, b, c, 0.1);
+        comparator(&mut cmp, "K", o, b, c, 0.2);
         let sel = select_group_ladder(&cmp, &full);
         assert!(sel.ladder.has(Strategy::EventFreeze) && sel.ladder.has(Strategy::LineSearch));
 
@@ -955,7 +955,7 @@ mod tests {
         cap(&mut c, "C1", a, GND, 1e-9);
         let cmp_out = c.node("cmp_out");
         res(&mut c, "Rc", cmp_out, GND, 10e3);
-        comparator(&mut c, "CMP", cmp_out, a, GND, 1e-3);
+        comparator(&mut c, "CMP", cmp_out, a, GND, 2e-3);
         let (s, o) = (c.node("s"), c.node("o"));
         vdc(&mut c, "V2", s, 3.3);
         sw(&mut c, "SW", s, o, cmp_out, (2.0, 1.0), 10.0);
@@ -1031,7 +1031,7 @@ mod tests {
         let (mut c, rail, _, _, blocks) = shunt_array(24, 1e3);
         let cmp_out = c.node("cmp_out");
         res(&mut c, "Rcmp", cmp_out, GND, 10e3);
-        comparator(&mut c, "CMP", cmp_out, blocks[0].1, GND, 1e-3);
+        comparator(&mut c, "CMP", cmp_out, blocks[0].1, GND, 2e-3);
         let (s, o) = (c.node("s"), c.node("o"));
         vdc(&mut c, "V2", s, 3.3);
         sw(&mut c, "SW", s, o, cmp_out, (2.0, 1.0), 10.0);
@@ -1177,7 +1177,7 @@ mod tests {
             vpulse(c, "VP", vin, (0.0, 5.0), 1e-6, (0.5e-6, 0.5e-6), 10e-6);
             let cmp_out = c.node("cmp_out");
             res(c, "Rcmp", cmp_out, GND, 10e3);
-            comparator(c, "CMP", cmp_out, vin, GND, 1e-3);
+            comparator(c, "CMP", cmp_out, vin, GND, 2e-3);
             let ret = c.node("b0_ret");
             res(c, "Rb0", base, ret, 100e3);
             sw(c, "SW0", ret, GND, cmp_out, (2.0, 1.0), 10.0);

@@ -40,7 +40,7 @@ fn comparator_astable() -> Circuit {
     let osc = c.node("osc");
     let vc = c.node("vc");
     // inverting: reference on +, cap on -
-    comparator(&mut c, "CMP", osc, vref, vc, 0.5);
+    comparator(&mut c, "CMP", osc, vref, vc, 1.0);
     crate::shared::add_resistor(&mut c, "Rload", osc, NodeId::GROUND, 10e3);
     crate::shared::add_resistor(&mut c, "Rf", osc, vc, 10e3);
     add_capacitor(&mut c, "Cf", vc, NodeId::GROUND, 10e-9, None);
@@ -210,7 +210,7 @@ fn run_staged_power_ramps_the_no_dc_group() {
     add_vdc(&mut c, "VREF", vref, NodeId::GROUND, 2.5);
     let osc = c.node("osc");
     let vc = c.node("vc");
-    comparator(&mut c, "CMP", osc, vref, vc, 0.5);
+    comparator(&mut c, "CMP", osc, vref, vc, 1.0);
     crate::shared::add_resistor(&mut c, "Rload", osc, NodeId::GROUND, 10e3);
     crate::shared::add_resistor(&mut c, "Rf", osc, vc, 10e3);
     add_capacitor(&mut c, "Cf", vc, NodeId::GROUND, 10e-9, None);

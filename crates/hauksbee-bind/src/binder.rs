@@ -4284,7 +4284,8 @@ fn bind_comparator(
 ) -> (BindOutcome, Option<String>) {
     let out_lo = model.params.get_f64("out_lo").unwrap_or(0.0);
     let out_hi = model.params.get_f64("out_hi").unwrap_or(5.0);
-    let hyst = model.params.get_f64("hysteresis").unwrap_or(0.005);
+    // Full-band VHYS (see `Device::Comparator`); validation requires it on checked cards.
+    let hyst = model.params.get_f64("hysteresis").unwrap_or(0.01);
 
     // Static supply draw (`supply_static_ua`, default 0 = nothing stamped):
     // the part's quiescent ICC pulled from its supply pin net, so a metering

@@ -30,6 +30,35 @@ fn max_rel_err(
         .fold(0.0f64, f64::max)
 }
 
+/// A 1 ns step of `i_step` drawn out of `node` to ground at `t_edge`.
+fn add_load_step(circuit: &mut Circuit, node: NodeId, t_edge: f64, i_step: f64) {
+    let pwl = [
+        (0.0, 0.0),
+        (t_edge, 0.0),
+        (t_edge + 1e-9, i_step),
+        (1.0, i_step),
+    ];
+    circuit.add(Device::Isource {
+        name: "Iload".into(),
+        p: node,
+        n: NodeId::GROUND,
+        kind: SourceKind::Pwl(pwl.map(|(t, v)| PwlPoint { t, v }).to_vec()),
+    });
+}
+
+/// Ideal rail `v0` behind `r_s` feeding `NODE`, decoupled by `cap` pre-charged
+/// to `v0` (the no-load operating point), with the load step out of `NODE`.
+fn supplied_rail(v0: f64, r_s: f64, cap: f64, i_step: f64, t_edge: f64) -> Circuit {
+    let mut circuit = Circuit::new();
+    let rail = circuit.node("VIN");
+    let node = circuit.node("NODE");
+    add_vdc(&mut circuit, "V0", rail, NodeId::GROUND, v0);
+    add_resistor(&mut circuit, "Rs", rail, node, r_s);
+    add_capacitor(&mut circuit, "Cbulk", node, NodeId::GROUND, cap, Some(v0));
+    add_load_step(&mut circuit, node, t_edge, i_step);
+    circuit
+}
+
 #[test]
 fn ideal_cap_constant_current_discharge_with_esr() {
     // A capacitor C (with series ESR R_esr) initially charged to V0, discharged
@@ -58,23 +87,8 @@ fn ideal_cap_constant_current_discharge_with_esr() {
     add_resistor(&mut circuit, "Resr", node, cap_top, r_esr);
     // Ideal capacitor, pre-charged to V0.
     add_capacitor(&mut circuit, "C1", cap_top, NodeId::GROUND, cap, Some(v0));
-    // Constant current step I drawn out of the node: Isource p->n internal, so
-    // p = node, n = GROUND pulls I out of the node. PWL: 0 until 1 us, then I.
     let t_edge = 1e-6;
-    circuit.add(Device::Isource {
-        name: "Iload".into(),
-        p: node,
-        n: NodeId::GROUND,
-        kind: SourceKind::Pwl(vec![
-            PwlPoint { t: 0.0, v: 0.0 },
-            PwlPoint { t: t_edge, v: 0.0 },
-            PwlPoint {
-                t: t_edge + 1e-9,
-                v: i_step,
-            },
-            PwlPoint { t: 1.0, v: i_step },
-        ]),
-    });
+    add_load_step(&mut circuit, node, t_edge, i_step);
 
     // Run only over the linear ramp region (well before the cap empties).
     let tstop = 20e-6;
@@ -146,28 +160,8 @@ fn supplied_rail_step_sag_first_order() {
     let i_step = 0.3;
     let tau = r_s * cap;
 
-    let mut circuit = Circuit::new();
-    let rail = circuit.node("VIN");
-    let node = circuit.node("NODE");
-    add_vdc(&mut circuit, "V0", rail, NodeId::GROUND, v0);
-    add_resistor(&mut circuit, "Rs", rail, node, r_s);
-    // Cap starts at V0 (the pre-step operating point: no load => no R_s drop).
-    add_capacitor(&mut circuit, "Cbulk", node, NodeId::GROUND, cap, Some(v0));
     let t_edge = 1e-6;
-    circuit.add(Device::Isource {
-        name: "Iload".into(),
-        p: node,
-        n: NodeId::GROUND,
-        kind: SourceKind::Pwl(vec![
-            PwlPoint { t: 0.0, v: 0.0 },
-            PwlPoint { t: t_edge, v: 0.0 },
-            PwlPoint {
-                t: t_edge + 1e-9,
-                v: i_step,
-            },
-            PwlPoint { t: 1.0, v: i_step },
-        ]),
-    });
+    let circuit = supplied_rail(v0, r_s, cap, i_step, t_edge);
 
     let tstop = 6.0 * tau;
     let opts = SolverOptions {
@@ -216,29 +210,7 @@ fn profile_isource_agrees_in_both_solver_paths() {
     let i_step = 0.4;
     let t_edge = 1e-6;
 
-    let build = || {
-        let mut circuit = Circuit::new();
-        let rail = circuit.node("VIN");
-        let node = circuit.node("NODE");
-        add_vdc(&mut circuit, "V0", rail, NodeId::GROUND, v0);
-        add_resistor(&mut circuit, "Rs", rail, node, r_s);
-        add_capacitor(&mut circuit, "Cbulk", node, NodeId::GROUND, cap, Some(v0));
-        circuit.add(Device::Isource {
-            name: "Iload".into(),
-            p: node,
-            n: NodeId::GROUND,
-            kind: SourceKind::Pwl(vec![
-                PwlPoint { t: 0.0, v: 0.0 },
-                PwlPoint { t: t_edge, v: 0.0 },
-                PwlPoint {
-                    t: t_edge + 1e-9,
-                    v: i_step,
-                },
-                PwlPoint { t: 1.0, v: i_step },
-            ]),
-        });
-        circuit
-    };
+    let build = || supplied_rail(v0, r_s, cap, i_step, t_edge);
 
     let tau = r_s * cap;
     let tstop = 6.0 * tau;

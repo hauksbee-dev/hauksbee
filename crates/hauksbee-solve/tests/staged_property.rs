@@ -132,7 +132,7 @@ fn random_board(seed: u64) -> Circuit {
                     out,
                     tails[up],
                     NodeId::GROUND,
-                    1e-3,
+                    2e-3,
                 );
             } else {
                 // Switch in `down` gated by `up`'s tail.
