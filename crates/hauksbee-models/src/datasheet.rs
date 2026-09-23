@@ -1389,7 +1389,7 @@ DATASHEET TEXT (truncated):
 Produce a TOML model entry that exactly conforms to the hauksbee-models schema.
 The entry must use [[models]] array syntax and include:
 - id: lowercase part number (e.g. "{part_lower}")
-- kind: "{kind}"
+- kind: "{entry_kind}"
 - description: brief human-readable description
 - [models.match] section with at least value_re or mpn_re
 - [models.params] section with all required numeric params for the kind
@@ -1404,7 +1404,7 @@ as written:
 
 [[models]]
 id = "{part_lower}"
-kind = "{kind}"
+kind = "{entry_kind}"
 description = "one line"
 
 [models.match]
@@ -1589,6 +1589,7 @@ OUTPUT (TOML only, starting with [[models]]):
         part_upper = part.to_uppercase(),
         legal_kinds = legal_kinds().join(", "),
         kind = kind,
+        entry_kind = behavioral_family_base_kind(kind).unwrap_or(kind),
         datasheet_text_begin = DATASHEET_TEXT_BEGIN,
         datasheet_text_end = DATASHEET_TEXT_END,
         pdf_text = truncate_to_chars(&pdf_text, 40_000),
@@ -3048,6 +3049,7 @@ mod tests {
         let charger = build_prompt("LTC4020", "charger", "x");
         assert!(charger.contains("[models.behavioral.converter]"));
         assert!(charger.contains("iin_program"));
+        assert!(charger.contains("kind = \"vreg\"") && !charger.contains("kind = \"charger\""));
         assert!(build_prompt("nPM1300", "pmic", "x").contains("pull_to"));
         assert!(build_prompt("LTC6803", "balancer", "x").contains("[[models.behavioral.laws]]"));
     }
