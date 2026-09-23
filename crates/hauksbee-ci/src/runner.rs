@@ -474,9 +474,11 @@ fn assertion_timing_refusals(
         return Vec::new();
     }
 
+    // Chunk-sampled logic does not coarsen a toggle count: analog nets are
+    // counted on the chunk grid anyway, and that grid has its own aliasing check.
     let mut poll_backends: Vec<String> = coverage
         .iter()
-        .filter(|c| !c.cycle_exact)
+        .filter(|c| !c.cycle_exact && c.backend != hauksbee_engine::scheduler::CHUNK_SAMPLED_LOGIC)
         .map(|c| format!("{} ({})", c.mcu_ref, c.backend))
         .collect();
     poll_backends.sort();

@@ -69,6 +69,11 @@ pub struct AssertResult {
     /// Component references this assertion judges, for waiver matching.
     #[serde(skip)]
     pub subject_refs: Vec<String>,
+    /// The `[[peripheral]]` / `[[sensor]]` id a `peripheral` assertion reads,
+    /// so its evidence names that sensor's model. Kept out of `subject_refs`,
+    /// which feeds waiver matching.
+    #[serde(skip)]
+    pub subject_peripheral: Option<String>,
 }
 
 impl AssertResult {
@@ -90,6 +95,7 @@ impl AssertResult {
             waived: None,
             subject_nets: Vec::new(),
             subject_refs: Vec::new(),
+            subject_peripheral: None,
         }
     }
 }
@@ -132,7 +138,9 @@ pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
                 // can argue with, not a single opaque pass/fail.
                 evaluate_hwtrace(spec, a, outcomes, mode)
             } else {
-                vec![evaluate_one(a, outcomes, mode, spec.frame_ms)]
+                let mut result = evaluate_one(a, outcomes, mode, spec.frame_ms);
+                result.subject_peripheral = a.id.clone().filter(|_| a.kind == "peripheral");
+                vec![result]
             };
             if a.times_startup() && spec.dc_initialised() {
                 for r in &mut results {

@@ -56,6 +56,9 @@ pub const DEFAULT_CHUNK_S: f64 = 100e-6;
 /// manufacture precision the bridge does not have.
 pub const POLL_BACKEND_QUANTUM_S: f64 = 1e-6;
 
+/// [`TimingCoverage::backend`] of the chunk-sampled digital logic row.
+pub const CHUNK_SAMPLED_LOGIC: &str = "chunk-sampled logic, tpd not applied";
+
 /// A timing claim requested by a CI spec or another strict caller.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TimingRequirement {
@@ -65,9 +68,11 @@ pub struct TimingRequirement {
     pub max_edge_error_s: Option<f64>,
 }
 
-/// Measured timing capability of one live MCU backend at the configured chunk.
+/// Measured timing capability of one live MCU backend, or of the digital
+/// logic evaluated once per chunk, at the configured chunk.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
 pub struct TimingCoverage {
+    /// The MCU reference, or the comma-joined chunk-sampled logic references.
     pub mcu_ref: String,
     pub backend: String,
     /// Push callbacks carry exact cycles; poll backends carry slice boundaries.
@@ -1408,6 +1413,29 @@ impl Scheduler {
         Ok(sched)
     }
 
+    /// Digital parts that see every MCU edge in cycle order: 595 chain chips,
+    /// generalized replay chips, parallel memories and 165 read-chain chips.
+    /// Every other part is evaluated once per chunk.
+    fn edge_exact_chips(&self) -> std::collections::HashSet<usize> {
+        let mut edge_exact: std::collections::HashSet<usize> =
+            self.chain_chips.iter().copied().collect();
+        edge_exact.extend(self.replay_chips.iter().copied());
+        edge_exact.extend(self.parallel_memory_chips.iter().copied());
+        for c in &self.hc165_chains {
+            edge_exact.extend(c.lock_or_recover().order.iter().copied());
+        }
+        edge_exact
+    }
+
+    /// References of the digital parts evaluated once per chunk.
+    fn chunk_sampled_logic(&self) -> Vec<&str> {
+        let edge_exact = self.edge_exact_chips();
+        (0..self.digital.len())
+            .filter(|i| !edge_exact.contains(i))
+            .map(|i| self.digital[i].reference.as_str())
+            .collect()
+    }
+
     /// Rebuild [`Scheduler::tick_sequential_nets`]: net node -> references of
     /// sequential digital parts evaluated on the once-per-chunk tick path,
     /// keyed by the nets their spec-declared sequential inputs
@@ -1418,14 +1446,7 @@ impl Scheduler {
     /// warning about it would be a false positive (a bit-banged SRCLK train is
     /// the NORMAL way those parts are driven).
     fn rebuild_tick_sequential_nets(&mut self) {
-        let mut edge_exact: std::collections::HashSet<usize> =
-            self.chain_chips.iter().copied().collect();
-        edge_exact.extend(self.replay_chips.iter().copied());
-        edge_exact.extend(self.parallel_memory_chips.iter().copied());
-        for c in &self.hc165_chains {
-            let c = c.lock_or_recover();
-            edge_exact.extend(c.order.iter().copied());
-        }
+        let edge_exact = self.edge_exact_chips();
         let mut map: HashMap<u32, Vec<String>> = HashMap::new();
         for (i, d) in self.digital.iter().enumerate() {
             if edge_exact.contains(&i) || !d.is_sequential() {
@@ -2982,7 +3003,19 @@ impl Scheduler {
     /// Report the timing accuracy actually available at the current chunk.
     /// Values come from the live core's frequency/callback tier and the chunk
     /// the scheduler will really execute; no part-family limits are guessed.
+    /// Chunk-sampled logic gets one row: its outputs follow inputs sampled at
+    /// the previous chunk boundary, so an edge lands up to one chunk late and
+    /// the datasheet propagation delay is not applied.
     pub fn timing_coverage(&self) -> Vec<TimingCoverage> {
+        let logic = self.chunk_sampled_logic();
+        let logic_row = (!logic.is_empty()).then(|| TimingCoverage {
+            mcu_ref: logic.join(", "),
+            backend: CHUNK_SAMPLED_LOGIC.to_string(),
+            cycle_exact: false,
+            timestamp_precision_s: self.chunk_s,
+            minimum_guaranteed_pulse_s: 2.0 * self.chunk_s,
+            chunk_s: self.chunk_s,
+        });
         self.mcus
             .iter()
             .map(|m| {
@@ -3002,6 +3035,7 @@ impl Scheduler {
                     chunk_s: self.chunk_s,
                 }
             })
+            .chain(logic_row)
             .collect()
     }
 
@@ -3078,7 +3112,8 @@ impl Scheduler {
             }
         }
 
-        if self.mcus.iter().any(|m| !m.core.cycle_exact()) {
+        let polled = self.mcus.iter().any(|m| !m.core.cycle_exact());
+        if polled || !self.chunk_sampled_logic().is_empty() {
             let mut requested_chunk = self.chunk_s;
             if let Some(pulse) = req.min_pulse_s {
                 requested_chunk = requested_chunk.min(pulse / 2.0);
@@ -3087,7 +3122,7 @@ impl Scheduler {
                 requested_chunk = requested_chunk.min(error);
             }
             anyhow::ensure!(
-                requested_chunk + f64::EPSILON >= POLL_BACKEND_QUANTUM_S,
+                !polled || requested_chunk + f64::EPSILON >= POLL_BACKEND_QUANTUM_S,
                 "timing request refused for poll backend(s): {} requires a {:.3} us slice, below the measured 1.000 us run_micros bridge quantum",
                 match (req.min_pulse_s, req.max_edge_error_s) {
                     (Some(p), Some(e)) => format!("minimum pulse {:.3} us / maximum edge error {:.3} us", p * 1e6, e * 1e6),
@@ -9329,7 +9364,8 @@ data_out = ["io0"]
 
     #[test]
     fn timing_policy_uses_measured_backend_resolution_and_adapts_poll_chunks() {
-        let mut exact = pulse_scheduler(&PULSE_BOARD, &[(('B', 1), "STROBE")]);
+        // No logic on this board, so only the push backend's resolution counts.
+        let mut exact = pulse_scheduler(&PLAIN_INPUT_BOARD, &[(('B', 1), "BTN_HI")]);
         let exact_cov = exact.timing_coverage();
         assert_eq!(exact_cov.len(), 1);
         assert!(exact_cov[0].cycle_exact);
@@ -9355,6 +9391,24 @@ data_out = ["io0"]
         assert!(!coarse_cov[0].cycle_exact);
         assert!((coarse_cov[0].timestamp_precision_s - 4e-6).abs() < 1e-15);
         assert!((coarse_cov[0].minimum_guaranteed_pulse_s - 8e-6).abs() < 1e-15);
+    }
+
+    #[test]
+    fn chunk_sampled_logic_reports_its_resolution_and_tightens_the_chunk() {
+        let mut sched = pulse_scheduler(&CONTENTION_BOARD, &[(('B', 1), "SHARED")]);
+        let logic = sched.timing_coverage().pop().expect("the 74HC08 row");
+        assert_eq!(logic.mcu_ref, "U1");
+        assert!(!logic.cycle_exact);
+        assert!((logic.timestamp_precision_s - DEFAULT_CHUNK_S).abs() < 1e-15);
+        sched
+            .configure_timing(TimingRequirement {
+                min_pulse_s: None,
+                max_edge_error_s: Some(200e-9),
+            })
+            .expect("chunk-sampled logic tightens below the poll bridge quantum");
+        assert!((sched.chunk_s - 200e-9).abs() < 1e-18);
+        let logic = sched.timing_coverage().pop().unwrap();
+        assert!((logic.minimum_guaranteed_pulse_s - 400e-9).abs() < 1e-18);
     }
 
     #[test]

@@ -2405,7 +2405,7 @@
       "type": "object"
     },
     "TimingCoverage": {
-      "description": "Measured timing capability of one live MCU backend at the configured chunk.",
+      "description": "Measured timing capability of one live MCU backend, or of the digital\nlogic evaluated once per chunk, at the configured chunk.",
       "properties": {
         "backend": {
           "type": "string"
@@ -2420,6 +2420,7 @@
           "type": "boolean"
         },
         "mcu_ref": {
+          "description": "The MCU reference, or the comma-joined chunk-sampled logic references.",
           "type": "string"
         },
         "minimum_guaranteed_pulse_s": {

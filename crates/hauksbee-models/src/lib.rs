@@ -816,31 +816,14 @@ impl ModelLibrary {
                 .as_ref()
                 .map(|source| source.references.clone())
                 .unwrap_or_default();
-            // Pack-manifest provenance is authoritative: an entry in a
-            // datasheet-derived pack cannot promote itself to a vendor tier.
-            let declared = declaration.as_ref();
-            let tier = default_tier
-                .or(declared.map(|s| s.tier))
-                .unwrap_or_else(|| default_source_tier(layer));
-            let validation = declared
-                .map(|s| s.validation)
-                .unwrap_or_else(|| default_validation(layer));
-            let uncertainty = declaration
-                .map(|s| s.uncertainty)
-                .filter(|values| !values.is_empty())
-                .unwrap_or_else(|| {
-                    vec![ModelUncertainty::unknown(
-                        format!("{id}.model"),
-                        "the source publishes no validated numeric error interval",
-                    )
-                    .expect("static unknown uncertainty is valid")]
-                });
-            let provenance = ModelSource::new(
-                tier,
+            let provenance = model_source(
+                declaration.as_ref(),
+                default_tier,
+                default_source_tier(layer),
+                default_validation(layer),
                 model_layer(layer),
                 source_name,
-                validation,
-                uncertainty,
+                &id,
             )
             .map_err(|error| invalid(format!("invalid [models.source]: {error}")))?;
             self.entries.push(LayeredEntry {
@@ -917,6 +900,41 @@ impl ModelLibrary {
             references: Vec::new(),
         }
     }
+}
+
+/// Provenance for a model with an optional `[models.source]` or
+/// `[sensor.source]`. A pack-manifest `pack_tier` is authoritative: an entry in
+/// a datasheet-derived pack cannot promote itself to a vendor tier. Omitted
+/// fields take the defaults, and an omitted uncertainty is an explicit UNKNOWN.
+pub fn model_source(
+    declared: Option<&schema::ModelSourceSpec>,
+    pack_tier: Option<ModelSourceTier>,
+    default_tier: ModelSourceTier,
+    default_validation: ModelValidation,
+    layer: ModelLayer,
+    origin: &str,
+    id: &str,
+) -> Result<ModelSource, String> {
+    let uncertainty = declared
+        .map(|s| s.uncertainty.clone())
+        .filter(|values| !values.is_empty())
+        .unwrap_or_else(|| {
+            vec![ModelUncertainty::unknown(
+                format!("{id}.model"),
+                "the source publishes no validated numeric error interval",
+            )
+            .expect("static unknown uncertainty is valid")]
+        });
+    ModelSource::new(
+        pack_tier
+            .or(declared.map(|s| s.tier))
+            .unwrap_or(default_tier),
+        layer,
+        origin,
+        declared.map_or(default_validation, |s| s.validation),
+        uncertainty,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn model_layer(layer: SourceLayer) -> ModelLayer {

@@ -1329,7 +1329,8 @@ fn failure_hint(kind: &str) -> Option<String> {
     })
 }
 
-/// One MCU's timing resolution, in the wording every report format uses.
+/// One MCU's (or the chunk-sampled logic's) timing resolution, in the wording
+/// every report format uses.
 fn timing_coverage_note(t: &hauksbee_engine::scheduler::TimingCoverage) -> String {
     format!(
         "{} ({}): edge timestamps +/-{:.3} us; pulses >= {:.3} us guaranteed; \

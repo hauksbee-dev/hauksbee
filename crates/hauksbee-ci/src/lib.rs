@@ -23,6 +23,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use hauksbee_ir::evidence::{EvidenceMap, MatchConfidence, ModelLayer, ModelOnPath};
+
 pub mod assertions;
 pub mod check;
 pub mod error;
@@ -429,6 +431,11 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         transient_budget = transient_budget.with_residual(residual.clone());
     }
     let coverage_description = coverage.as_ref().map(report::EnsembleCoverage::describe);
+    let sensor_models = spec
+        .sensors
+        .iter()
+        .map(|sa| spec_sensor_model(&sa.id, &sa.toml_source(&spec.base_dir)?))
+        .collect::<Result<Vec<_>, SpecError>>()?;
     let mut maps = Vec::with_capacity(results.len());
     for result in &results {
         let budget = if matches!(result.kind.as_str(), "phase_margin" | "ac_gain") {
@@ -457,20 +464,20 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                     .flat_map(|taint| taint.refs.iter().cloned()),
             );
         }
-        maps.push(
-            evidence
-                .ci_assertion_map(
-                    &result.label,
-                    &result.subject_nets,
-                    &subject_refs,
-                    budget,
-                    coverage_description.as_deref(),
-                )
-                .map_err(SpecError::invalid(format!(
-                    "building evidence for assertion '{}'",
-                    result.label
-                )))?,
-        );
+        let map = evidence
+            .ci_assertion_map(
+                &result.label,
+                &result.subject_nets,
+                &subject_refs,
+                budget,
+                coverage_description.as_deref(),
+            )
+            .map_err(SpecError::invalid(format!(
+                "building evidence for assertion '{}'",
+                result.label
+            )))?;
+        let peripheral = result.subject_peripheral.as_deref();
+        maps.push(with_sensor_model(map, &sensor_models, peripheral));
     }
     // Circuit-aware refinement for voltage assertions (see
     // hauksbee_engine::dcpath): a numeric band claim on a net NOTHING
@@ -630,6 +637,43 @@ fn result_kind_is_numeric(kind: &str, peripheral_has_field: bool) -> bool {
     }
 }
 
+/// The model record for one CI-spec `[[sensor]]`: its `[sensor.source]`, or
+/// absent that, what a user-supplied card gets (user-model, unvalidated,
+/// UNKNOWN uncertainty).
+fn spec_sensor_model(id: &str, toml_src: &str) -> Result<ModelOnPath, SpecError> {
+    use hauksbee_ir::evidence::{ModelSourceTier, ModelValidation};
+    let invalid = |m: String| SpecError::Invalid(format!("sensor '{id}': {m}"));
+    let sensor = hauksbee_models::SensorSpec::from_toml(toml_src)
+        .map_err(|e| invalid(format!("failed to parse sensor spec: {e}")))?
+        .sensor;
+    let source = hauksbee_models::model_source(
+        sensor.source.as_ref(),
+        None,
+        ModelSourceTier::UserModel,
+        ModelValidation::Unvalidated,
+        ModelLayer::Unspecified,
+        &format!("ci spec [[sensor]] {id}"),
+        id,
+    )
+    .map_err(|e| invalid(format!("invalid [sensor.source]: {e}")))?;
+    let subject = format!("sensor:{id}");
+    ModelOnPath::for_subject(subject, id, sensor.name, source, MatchConfidence::Exact)
+        .map_err(|e| invalid(e.to_string()))
+}
+
+/// A `peripheral` assertion reads its sensor's register map, so that model is
+/// on its causal path. A UART line the firmware may or may not derive from a
+/// reading is not credited with a sensor it cannot be shown to depend on.
+fn with_sensor_model(map: EvidenceMap, sensors: &[ModelOnPath], id: Option<&str>) -> EvidenceMap {
+    match sensors.iter().find(|m| Some(m.reference()) == id) {
+        Some(model) => {
+            let models = [map.models(), std::slice::from_ref(model)].concat();
+            map.with_models(models)
+        }
+        None => map,
+    }
+}
+
 #[cfg(test)]
 mod evidence_budget_tests {
     use super::result_kind_is_numeric;
@@ -645,6 +689,40 @@ mod evidence_budget_tests {
         // A peripheral assertion is numeric only when it reads a field.
         assert!(result_kind_is_numeric("peripheral", true));
         assert!(!result_kind_is_numeric("peripheral", false));
+    }
+}
+
+#[cfg(test)]
+mod sensor_provenance_tests {
+    use super::*;
+    use hauksbee_ir::evidence::{CausalPathIndex, EvidenceRegistry, NetScope, RunDate};
+    use hauksbee_ir::evidence::{ModelSourceTier, ModelUncertainty};
+
+    const SENSOR: &str = "[sensor]\nname = \"LM75\"\nbus = \"i2c\"\ni2c_address = 0x48\n\
+        [[sensor.register]]\naddr = 0x01\nconst = [0x00]\n[sensor.protocol]\nstyle = \"i2c_pointer\"\n";
+
+    #[test]
+    fn spec_sensor_provenance_reaches_peripheral_assertion_map() {
+        let registry = EvidenceRegistry::new(Vec::new()).unwrap();
+        let paths = CausalPathIndex::from_net_parts([("SDA", ["U2"].as_slice())]).unwrap();
+        let scope = NetScope::new(["SDA"], None).unwrap();
+        let traversal = paths.traverse(&scope, &registry).unwrap();
+        let map =
+            EvidenceMap::from_traversal("t", traversal, &registry, RunDate::unknown()).unwrap();
+        let sensors = [spec_sensor_model("U2_temp", SENSOR).unwrap()];
+        let unrelated = with_sensor_model(map.clone(), &sensors, None);
+        assert!(unrelated.models().is_empty());
+        let map = with_sensor_model(map, &sensors, Some("U2_temp"));
+        let model = &map.models()[0];
+        assert_eq!(map.models().len(), 1);
+        assert_eq!(model.subject(), "sensor:U2_temp");
+        assert_eq!(model.source().tier(), ModelSourceTier::UserModel);
+        assert!(matches!(model.source().uncertainty(),
+            [ModelUncertainty::Unknown { parameter, .. }] if parameter == "U2_temp.model"));
+        let sourced = format!("{SENSOR}[sensor.source]\ntier = \"datasheet-derived\"\n");
+        let model = spec_sensor_model("U2_temp", &sourced).unwrap();
+        assert_eq!(model.source().tier(), ModelSourceTier::DatasheetDerived);
+        assert!(spec_sensor_model("U2_temp", "[sensor]\n").is_err());
     }
 }
 
