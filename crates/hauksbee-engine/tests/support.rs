@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 use hauksbee_engine::binder::BoundBoard;
-use hauksbee_engine::reports::bind::BindReport;
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::{Component, Net, Pin};
 use hauksbee_frontdoor_api::engine::Engine;
@@ -145,18 +144,7 @@ pub fn bound_board(
         circuit,
         net_nodes,
         net_names,
-        digital: Vec::new(),
-        mcus: Vec::new(),
-        dnp_mcus: Vec::new(),
-        component_kinds: HashMap::new(),
-        input_sources: HashMap::new(),
-        supplies: Vec::new(),
-        behavioral: Vec::new(),
-        device_meta: Vec::new(),
-        latching_switches: false,
-        dacs: Vec::new(),
-        peripherals: Vec::new(),
-        report: BindReport::default(),
+        ..BoundBoard::default()
     }
 }
 

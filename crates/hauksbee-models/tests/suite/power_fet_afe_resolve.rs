@@ -11,107 +11,121 @@
 //! The generic power-FET fallback is also checked: an unknown FET value in a
 //! DPAK footprint should bind by footprint when no value match exists.
 
-use super::resolve_value;
-use hauksbee_models::{ComponentKind, ComponentQuery, ModelLibrary};
+use super::{assert_pins, expect_model, expect_query};
+use hauksbee_models::ComponentKind::{self, Digital, Nmos, Opamp, Pmos};
 
-fn lib() -> ModelLibrary {
-    ModelLibrary::builtin()
-}
+/// A datasheet-derived sanity bound on one rating, `None` when unchecked.
+type Bound = Option<fn(f64) -> bool>;
 
-// ── 6b: Specific datasheet-sourced FET entries ────────────────────────────────
+// ── 6b/6c: Specific datasheet-sourced FETs, AFE, gate drivers, CSAs ───────────
 
+/// Every value spelling resolves to its entry, with its kind, and each checked
+/// rating (max_voltage_v, max_current_a, max_junction_temp_c) is present and
+/// inside the bound its datasheet figure (in the row comment) implies.
 #[test]
-fn ipa045n10n3g_resolves_nmos_with_correct_ratings() {
-    let r = resolve_value("IPA045N10N3G");
-    let m = r.model.expect("IPA045N10N3G must resolve");
-    assert_eq!(m.id, "ipa045n10n3g");
-    assert_eq!(m.kind, ComponentKind::Nmos, "IPA045N10N3G must be nmos");
-
-    let vmax = m
-        .ratings
-        .max_voltage_v
-        .expect("IPA045N10N3G: max_voltage_v must be present");
-    assert!(
-        (90.0..=110.0).contains(&vmax),
-        "IPA045N10N3G: max_voltage_v should be ~100V, got {vmax}"
-    );
-
-    let imax = m
-        .ratings
-        .max_current_a
-        .expect("IPA045N10N3G: max_current_a must be present");
-    assert!(
-        imax > 50.0,
-        "IPA045N10N3G: max_current_a should be >50A (datasheet 100A), got {imax}"
-    );
-}
-
-#[test]
-fn irf9358_resolves_pmos_with_correct_ratings() {
-    let r = resolve_value("IRF9358");
-    let m = r.model.expect("IRF9358 must resolve");
-    assert_eq!(m.id, "irf9358");
-    assert_eq!(m.kind, ComponentKind::Pmos, "IRF9358 must be pmos");
-
-    let vmax = m
-        .ratings
-        .max_voltage_v
-        .expect("IRF9358: max_voltage_v must be present");
-    assert!(
-        (25.0..=35.0).contains(&vmax),
-        "IRF9358: max_voltage_v should be ~30V, got {vmax}"
-    );
-
-    let imax = m
-        .ratings
-        .max_current_a
-        .expect("IRF9358: max_current_a must be present");
-    assert!(
-        (5.0..=15.0).contains(&imax),
-        "IRF9358: max_current_a should be ~9.2A, got {imax}"
-    );
-}
-
-#[test]
-fn sir182dp_resolves_nmos_with_correct_ratings() {
-    let r = resolve_value("SIR182DP");
-    let m = r.model.expect("SIR182DP must resolve");
-    assert_eq!(m.id, "sir182dp");
-    assert_eq!(m.kind, ComponentKind::Nmos, "SIR182DP must be nmos");
-
-    let vmax = m
-        .ratings
-        .max_voltage_v
-        .expect("SIR182DP: max_voltage_v must be present");
-    assert!(
-        (90.0..=110.0).contains(&vmax),
-        "SIR182DP: max_voltage_v should be ~100V, got {vmax}"
-    );
-
-    let imax = m
-        .ratings
-        .max_current_a
-        .expect("SIR182DP: max_current_a must be present");
-    assert!(
-        (15.0..=30.0).contains(&imax),
-        "SIR182DP: max_current_a should be ~21A, got {imax}"
-    );
+fn specific_parts_resolve_with_their_kind_and_datasheet_ratings() {
+    let rows: [(&[&str], &str, ComponentKind, Bound, Bound, Bound); 8] = [
+        // 100 V, 100 A
+        (
+            &["IPA045N10N3G"],
+            "ipa045n10n3g",
+            Nmos,
+            Some(|v| (90.0..=110.0).contains(&v)),
+            Some(|i| i > 50.0),
+            None,
+        ),
+        // 30 V, 9.2 A
+        (
+            &["IRF9358"],
+            "irf9358",
+            Pmos,
+            Some(|v| (25.0..=35.0).contains(&v)),
+            Some(|i| (5.0..=15.0).contains(&i)),
+            None,
+        ),
+        // 100 V, 21 A
+        (
+            &["SIR182DP"],
+            "sir182dp",
+            Nmos,
+            Some(|v| (90.0..=110.0).contains(&v)),
+            Some(|i| (15.0..=30.0).contains(&i)),
+            None,
+        ),
+        // 85 V stack, Tj >= 100 C
+        (
+            &["bq76952"],
+            "bq76952",
+            Digital,
+            Some(|v| v >= 80.0),
+            None,
+            Some(|t| t >= 100.0),
+        ),
+        // VDD 15 V; the mppt-1210 board uses the LM5109BMA variant
+        (
+            &["LM5109", "LM5109BMA", "LM5109BSD"],
+            "lm5109",
+            Digital,
+            Some(|v| (12.0..=18.0).contains(&v)),
+            None,
+            None,
+        ),
+        (
+            &["LM5107", "LM5107SD", "LM5107SDX"],
+            "lm5107",
+            Digital,
+            None,
+            None,
+            None,
+        ),
+        // 26 V common-mode supply rating
+        (
+            &["INA181", "INA181A1", "INA181A3", "INA181A4IDBVR"],
+            "ina181",
+            Opamp,
+            Some(|v| (24.0..=28.0).contains(&v)),
+            None,
+            None,
+        ),
+        // dual CSA, 26 V
+        (
+            &["INA2181", "INA2181A1", "INA2181A3IDGSR"],
+            "ina2181",
+            Opamp,
+            Some(|v| (24.0..=28.0).contains(&v)),
+            None,
+            None,
+        ),
+    ];
+    for (values, id, kind, vmax, imax, tj) in rows {
+        for &val in values {
+            let m = expect_model(val);
+            assert_eq!(m.id, id, "{val} must resolve to {id}");
+            assert_eq!(m.kind, kind, "{val} must be {kind:?}");
+            let r = &m.ratings;
+            for (name, bound, got) in [
+                ("max_voltage_v", vmax, r.max_voltage_v),
+                ("max_current_a", imax, r.max_current_a),
+                ("max_junction_temp_c", tj, r.max_junction_temp_c),
+            ] {
+                if let Some(ok) = bound {
+                    let got = got.unwrap_or_else(|| panic!("{val}: {name} must be present"));
+                    assert!(
+                        ok(got),
+                        "{val}: {name} {got} is outside its datasheet bound"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
 fn fds4435bz_resolves_exact_grouped_so8_and_reproduces_datasheet_dc_points() {
-    let lib = lib();
-    let q = ComponentQuery {
-        value: Some("FDS4435BZ".into()),
-        footprint: Some("Pedalboard Library:SO08-E3".into()),
-        ..Default::default()
-    };
-    let m = lib.resolve(&q).model.expect("FDS4435BZ must resolve");
+    let m = expect_query(Some("FDS4435BZ"), None, Some("Pedalboard Library:SO08-E3"));
     assert_eq!(m.id, "fds4435bz");
-    assert_eq!(m.kind, ComponentKind::Pmos);
-    assert_eq!(m.pins.get("1-3").map(String::as_str), Some("source"));
-    assert_eq!(m.pins.get("4").map(String::as_str), Some("gate"));
-    assert_eq!(m.pins.get("5-8").map(String::as_str), Some("drain"));
+    assert_eq!(m.kind, Pmos);
+    assert_pins(&m, &[("1-3", "source"), ("4", "gate"), ("5-8", "drain")]);
 
     // The card's recorded derivation uses the level-1 channel resistance plus
     // the sourced ohmic residue. Pin the two fit rows and the independent gFS
@@ -132,132 +146,23 @@ fn fds4435bz_resolves_exact_grouped_so8_and_reproduces_datasheet_dc_points() {
     assert!(m.coverage.missing.contains(&"switching_loss".into()));
 }
 
-// ── 6c: AFE + gate drivers + current-sense amps ───────────────────────────────
-
-#[test]
-fn bq76952_resolves_with_stack_voltage_rating() {
-    let r = resolve_value("bq76952");
-    let m = r.model.expect("bq76952 must resolve");
-    assert_eq!(m.id, "bq76952");
-    assert_eq!(
-        m.kind,
-        ComponentKind::Digital,
-        "bq76952 must be digital kind"
-    );
-
-    let vmax = m
-        .ratings
-        .max_voltage_v
-        .expect("bq76952: max_voltage_v must be present");
-    assert!(
-        vmax >= 80.0,
-        "bq76952: max_voltage_v should be >=80V (datasheet 85V), got {vmax}"
-    );
-
-    let tj = m
-        .ratings
-        .max_junction_temp_c
-        .expect("bq76952: max_junction_temp_c must be present");
-    assert!(
-        tj >= 100.0,
-        "bq76952: max_junction_temp_c should be >=100C, got {tj}"
-    );
-}
-
-#[test]
-fn lm5109_resolves_as_digital() {
-    // The mppt-1210 board uses LM5109BMA variant
-    for val in ["LM5109", "LM5109BMA", "LM5109BSD"] {
-        let r = resolve_value(val);
-        let m = r.model.unwrap_or_else(|| panic!("{val} must resolve"));
-        assert_eq!(m.id, "lm5109", "{val} must resolve to lm5109");
-        assert_eq!(m.kind, ComponentKind::Digital, "{val} must be digital");
-
-        let vmax = m
-            .ratings
-            .max_voltage_v
-            .expect("{val}: max_voltage_v required");
-        assert!(
-            (12.0..=18.0).contains(&vmax),
-            "{val}: VDD max_voltage_v should be ~15V, got {vmax}"
-        );
-    }
-}
-
-#[test]
-fn lm5107_resolves_as_digital() {
-    for val in ["LM5107", "LM5107SD", "LM5107SDX"] {
-        let r = resolve_value(val);
-        let m = r.model.unwrap_or_else(|| panic!("{val} must resolve"));
-        assert_eq!(m.id, "lm5107", "{val} must resolve to lm5107");
-        assert_eq!(m.kind, ComponentKind::Digital, "{val} must be digital");
-    }
-}
-
-#[test]
-fn ina181_resolves_as_opamp_with_supply_rating() {
-    for val in ["INA181", "INA181A1", "INA181A3", "INA181A4IDBVR"] {
-        let r = resolve_value(val);
-        let m = r.model.unwrap_or_else(|| panic!("{val} must resolve"));
-        assert_eq!(m.id, "ina181", "{val} must resolve to ina181");
-        assert_eq!(m.kind, ComponentKind::Opamp, "{val} must be opamp");
-
-        let vmax = m
-            .ratings
-            .max_voltage_v
-            .expect("{val}: max_voltage_v required");
-        assert!(
-            (24.0..=28.0).contains(&vmax),
-            "{val}: max_voltage_v should be ~26V, got {vmax}"
-        );
-    }
-}
-
-#[test]
-fn ina2181_resolves_dual_opamp_with_supply_rating() {
-    for val in ["INA2181", "INA2181A1", "INA2181A3IDGSR"] {
-        let r = resolve_value(val);
-        let m = r.model.unwrap_or_else(|| panic!("{val} must resolve"));
-        assert_eq!(m.id, "ina2181", "{val} must resolve to ina2181");
-        assert_eq!(
-            m.kind,
-            ComponentKind::Opamp,
-            "{val} must be opamp (dual CSA)"
-        );
-
-        let vmax = m
-            .ratings
-            .max_voltage_v
-            .expect("{val}: max_voltage_v required");
-        assert!(
-            (24.0..=28.0).contains(&vmax),
-            "{val}: max_voltage_v should be ~26V, got {vmax}"
-        );
-    }
-}
-
 // ── 6a: Generic power-FET fallback ────────────────────────────────────────────
 
 #[test]
 fn generic_nmos_fallback_binds_unknown_fet_in_dpak_footprint() {
-    let lib = lib();
     // An unknown N-ch FET with a DPAK footprint: no value match exists, but
     // the generic_nmos_power_pkg catch-all should bind by footprint.
-    let q = ComponentQuery {
-        value: Some("UNKNOWN_FET_XYZ_N".into()),
-        footprint: Some("Package_TO_SOT_SMD:TO-252-2".into()),
-        ..Default::default()
-    };
-    let r = lib.resolve(&q);
-    let m = r
-        .model
-        .expect("unknown FET in DPAK footprint should bind to generic fallback");
+    let m = expect_query(
+        Some("UNKNOWN_FET_XYZ_N"),
+        None,
+        Some("Package_TO_SOT_SMD:TO-252-2"),
+    );
     assert_eq!(
         m.id, "generic_nmos_power_pkg",
         "unknown N-ch FET in DPAK should bind to generic_nmos_power_pkg, got '{}'",
         m.id
     );
-    assert_eq!(m.kind, ComponentKind::Nmos);
+    assert_eq!(m.kind, Nmos);
 
     // Ratings must be present (the whole point of the fallback is to enable Tj computation)
     assert!(
@@ -274,14 +179,11 @@ fn generic_nmos_fallback_binds_unknown_fet_in_dpak_footprint() {
 fn specific_fet_beats_generic_fallback() {
     // When both the generic fallback footprint and a specific value match fire,
     // the specific value entry should win (higher specificity score).
-    let lib = lib();
-    let q = ComponentQuery {
-        value: Some("SIR182DP".into()),
-        footprint: Some("Package_TO_SOT_SMD:PowerPAK_SO-8".into()),
-        ..Default::default()
-    };
-    let r = lib.resolve(&q);
-    let m = r.model.expect("SIR182DP with DPAK footprint must resolve");
+    let m = expect_query(
+        Some("SIR182DP"),
+        None,
+        Some("Package_TO_SOT_SMD:PowerPAK_SO-8"),
+    );
     assert_eq!(
         m.id, "sir182dp",
         "specific SIR182DP entry must beat the generic fallback when both match"

@@ -1,9 +1,9 @@
-//! Shared I2C test-only transaction helpers used by both `i2c::tests` and
-//! `register_map::tests` (the hand-coded and declarative sensor test suites
-//! drive the same bus protocol against different slave implementations), so a
-//! framing mistake shows up in both suites at once.
+//! Shared test-only helpers. The I2C transactions serve both `i2c::tests` and
+//! `register_map::tests` (the hand-coded and declarative sensor suites drive
+//! the same bus protocol), so a framing mistake shows up in both at once.
 
 use crate::peripherals::i2c::I2cBus;
+use hauksbee_ir::{Circuit, Device, DeviceId, SourceKind};
 use hauksbee_mcu::I2cEvent;
 
 /// One pointer-framed write transaction: START, `bytes`, STOP.
@@ -25,4 +25,15 @@ pub(crate) fn i2c_read_burst(bus: &mut I2cBus, addr: u8, reg: u8, n: usize) -> V
         .collect();
     bus.dispatch(I2cEvent::Stop { addr });
     out
+}
+
+/// The DC level currently programmed on a bound output driver's Vsource.
+pub(crate) fn dc_source_volts(circuit: &Circuit, vsource: DeviceId) -> f64 {
+    match circuit.devices[vsource.0 as usize] {
+        Device::Vsource {
+            kind: SourceKind::Dc(v),
+            ..
+        } => v,
+        _ => panic!("driver vsource"),
+    }
 }

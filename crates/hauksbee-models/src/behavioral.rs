@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::check::{is_identifier, Problems};
 use crate::profile::Segment;
+use crate::units;
 
 /// The optional behavioural block of a model entry.
 ///
@@ -473,19 +474,11 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         p.require(!has_pull || pin.pull_ohms.is_some(), || {
             format!("pin '{role}': pull target set but pull_ohms missing")
         });
-        if let Some(r) = pin.pull_ohms {
-            p.positive(format!("pin '{role}': pull_ohms"), r);
-        }
-        if let Some(v) = pin.pull_to_volts {
-            p.finite(format!("pin '{role}': pull_to_volts"), v);
-        }
+        p.positive(format!("pin '{role}': pull_ohms"), pin.pull_ohms);
+        p.finite(format!("pin '{role}': pull_to_volts"), pin.pull_to_volts);
         if pin.open_drain {
-            if let Some(r) = pin.od_ohms {
-                p.positive(format!("pin '{role}': od_ohms"), r);
-            }
-            if let Some(v) = pin.od_to_volts {
-                p.finite(format!("pin '{role}': od_to_volts"), v);
-            }
+            p.positive(format!("pin '{role}': od_ohms"), pin.od_ohms);
+            p.finite(format!("pin '{role}': od_to_volts"), pin.od_to_volts);
         }
     }
 
@@ -511,13 +504,14 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             p.require(!tr.guard.trim().is_empty(), || {
                 format!("fsm transition {i}: empty guard")
             });
+            if let Err(e) = units::check_dimensions(&tr.guard, None) {
+                p.push(format!("fsm transition {i}: guard {e}"));
+            }
             for (name, dwell) in [
                 ("min_dwell_s", tr.min_dwell_s),
                 ("guard_dwell_s", tr.guard_dwell_s),
             ] {
-                if let Some(d) = dwell {
-                    p.nonneg(format!("fsm transition {i}: {name}"), d);
-                }
+                p.nonneg(format!("fsm transition {i}: {name}"), dwell);
             }
         }
         for (st, pins) in &fsm.state_pins {
@@ -525,12 +519,14 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
                 format!("fsm state_pins: unknown state '{st}'")
             });
             for (role, ov) in pins {
-                if let Some(v) = ov.drive_volts {
-                    p.finite(format!("fsm state_pins '{st}.{role}': drive_volts"), v);
-                }
-                if let Some(r) = ov.drive_ohms {
-                    p.positive(format!("fsm state_pins '{st}.{role}': drive_ohms"), r);
-                }
+                p.finite(
+                    format!("fsm state_pins '{st}.{role}': drive_volts"),
+                    ov.drive_volts,
+                );
+                p.positive(
+                    format!("fsm state_pins '{st}.{role}': drive_ohms"),
+                    ov.drive_ohms,
+                );
             }
         }
     }
@@ -591,9 +587,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         for (j, s) in load.segments.iter().enumerate() {
             let seg = format!("{what} segment {j}");
             p.nonneg(format!("{seg}: level_a"), s.level_a);
-            if let Some(idle) = s.idle_a {
-                p.nonneg(format!("{seg}: idle_a"), idle);
-            }
+            p.nonneg(format!("{seg}: idle_a"), s.idle_a);
             for (name, v) in [
                 ("rise_s", s.rise_s),
                 ("duration_s", s.duration_s),
@@ -635,9 +629,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             ("iout_limit_a", c.iout_limit_a),
             ("iin_limit_a", c.iin_limit_a),
         ] {
-            if let Some(v) = lim {
-                p.positive(format!("converter: {name}"), v);
-            }
+            p.positive(format!("converter: {name}"), lim);
         }
         if let Some(sp) = &c.iin_program {
             p.require(
@@ -662,9 +654,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             // so a sign typo balloons the limit to ~50 kA; the reference constants
             // are divisors, so a zero/inf collapses it to 0 A. Both silently.
             for (name, v) in [("rsense_ohms", sp.rsense_ohms), ("prog_ohms", sp.prog_ohms)] {
-                if let Some(v) = v {
-                    p.positive(format!("converter.iin_program: {name}"), v);
-                }
+                p.positive(format!("converter.iin_program: {name}"), v);
             }
             for (name, v) in [
                 ("prog_ref_ohms", sp.prog_ref_ohms),
@@ -687,6 +677,13 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         p.require(law.kind != LawKind::Current || law.b.is_some(), || {
             format!("law '{}': current law needs a 'b' sink pin", law.name)
         });
+        let unit = match law.kind {
+            LawKind::Current => units::CURRENT,
+            LawKind::Voltage => units::VOLTAGE,
+        };
+        if let Err(e) = units::check_dimensions(&law.expr, Some(unit)) {
+            p.push(format!("law '{}': {e}", law.name));
+        }
     }
 
     p.0

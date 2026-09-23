@@ -1,85 +1,52 @@
 //! The behavioural power-IC models resolve and carry their behavioural blocks.
 
-use hauksbee_models::{
-    schema::CurrentProgramSemantics, ComponentQuery, ModelLibrary, OperatingEnvelope,
+use super::{
+    assert_pin_map, assert_pins, expect_model, expect_query, has_supply_range, resolve_value,
 };
+use hauksbee_models::schema::CurrentProgramSemantics;
 
 #[test]
 fn bq24075_identity_card_carries_the_sourced_battery_and_pin_contracts() {
-    let lib = ModelLibrary::builtin();
     for value in ["BQ24075", "BQ24075RGT", "BQ24075RGTR", "BQ24075RGTT"] {
-        let model = lib
-            .resolve(&ComponentQuery {
-                value: Some(value.into()),
-                ..Default::default()
-            })
-            .model
-            .unwrap_or_else(|| panic!("{value} must resolve"));
+        let model = expect_model(value);
         assert_eq!(model.id, "bq24075_identity", "{value}");
         assert_eq!(model.params.get_bool("identity_only"), Some(true));
         assert_eq!(model.params.get_str("battery_chemistry"), Some("liion"));
         assert_eq!(model.params.get_f64("vout_setpoint_low"), Some(4.16));
         assert_eq!(model.params.get_f64("vout_setpoint_high"), Some(4.23));
-        assert_eq!(model.pins.get("1").map(String::as_str), Some("ts"));
-        assert_eq!(model.pins.get("2").map(String::as_str), Some("bat"));
-        assert_eq!(model.pins.get("3").map(String::as_str), Some("bat"));
-        assert_eq!(model.pins.get("13").map(String::as_str), Some("vbus"));
+        assert_pins(
+            &model,
+            &[("1", "ts"), ("2", "bat"), ("3", "bat"), ("13", "vbus")],
+        );
         assert!(model.params.get_str("unlocked_by").is_some());
-        assert!(model.envelope.iter().any(|entry| matches!(
-            entry,
-            OperatingEnvelope::SupplyRange {
-                pin,
-                min_v,
-                max_v,
-                abs_max_v,
-                basis,
-                ..
-            } if pin == "vbus"
-                && *min_v == 4.35
-                && *max_v == 6.4
-                && *abs_max_v == Some(28.0)
-                && basis.contains("Section 8.3 Recommended Operating Conditions")
-        )));
-        assert!(model.envelope.iter().any(|entry| matches!(
-            entry,
-            OperatingEnvelope::SupplyRange {
-                pin,
-                min_v,
-                max_v,
-                basis,
-                ..
-            } if pin == "bat"
-                && *min_v == -0.3
-                && *max_v == 5.0
-                && basis.contains("Section 8.1 Absolute Maximum Ratings")
-        )));
+        let rec = "Section 8.3 Recommended Operating Conditions";
+        assert!(has_supply_range(
+            &model,
+            "vbus",
+            (4.35, 6.4),
+            Some(28.0),
+            rec
+        ));
+        let abs = "Section 8.1 Absolute Maximum Ratings";
+        assert!(has_supply_range(&model, "bat", (-0.3, 5.0), None, abs));
     }
 
     assert!(
-        lib.resolve(&ComponentQuery {
-            value: Some("BQ24075T".into()),
-            ..Default::default()
-        })
-        .model
-        .is_none_or(|model| model.id != "bq24075_identity"),
+        resolve_value("BQ24075T")
+            .model
+            .is_none_or(|model| model.id != "bq24075_identity"),
         "the voltage-based-TS BQ24075T sibling must not borrow this current-based-TS card"
     );
 }
 
 #[test]
 fn power_ics_resolve_and_carry_behavioral() {
-    let lib = ModelLibrary::builtin();
     for (val, id) in [
         ("LTC4020EUHFPBF", "ltc4020"),
         ("LTC6803-4", "ltc6803_4"),
         ("nPM1300-QEXX", "npm1300"),
     ] {
-        let q = ComponentQuery {
-            value: Some(val.into()),
-            ..Default::default()
-        };
-        let r = lib.resolve(&q);
-        let m = r.model.unwrap_or_else(|| panic!("{val} did not resolve"));
+        let m = expect_model(val);
         assert_eq!(m.id, id, "{val} resolved to wrong id");
         assert!(
             !m.behavioral.is_empty(),
@@ -90,11 +57,7 @@ fn power_ics_resolve_and_carry_behavioral() {
     // The dynamic LTC4020 converter reads R8 (ILIMIT) and R49 off the board.
     // Its declarative protection law records both exact Kelvin pairs but is not
     // promoted to a steady-state ampacity load.
-    let q = ComponentQuery {
-        value: Some("LTC4020EUHFPBF".into()),
-        ..Default::default()
-    };
-    let m = lib.resolve(&q).model.unwrap();
+    let m = expect_model("LTC4020EUHFPBF");
     let conv = m.behavioral.converter.as_ref().expect("converter");
     let sp = conv.iin_program.as_ref().expect("iin_program");
     assert_eq!(sp.prog_ref.as_deref(), Some("R8"));
@@ -114,20 +77,12 @@ fn power_ics_resolve_and_carry_behavioral() {
     assert_eq!(m.behavioral.fsm.as_ref().unwrap().states.len(), 2);
 
     // nPM1300 SHPHLD pulls to vsys.
-    let q = ComponentQuery {
-        value: Some("nPM1300-QEXX".into()),
-        ..Default::default()
-    };
-    let m = lib.resolve(&q).model.unwrap();
+    let m = expect_model("nPM1300-QEXX");
     let pin = m.behavioral.pins.get("shphld").expect("shphld pin");
     assert_eq!(pin.pull_to.as_deref(), Some("vsys"));
 
     // LTC6803 leak law reads the tie resistor by ref.
-    let q = ComponentQuery {
-        value: Some("LTC6803-4".into()),
-        ..Default::default()
-    };
-    let m = lib.resolve(&q).model.unwrap();
+    let m = expect_model("LTC6803-4");
     assert_eq!(m.behavioral.laws.len(), 1);
     assert_eq!(m.behavioral.laws[0].name, "absent_cell_leak");
     assert_eq!(m.params.get_str("tie_ohms_from_ref"), Some("R52"));
@@ -139,16 +94,10 @@ fn power_ics_resolve_and_carry_behavioral() {
 /// coverage without claiming that the gauge or charger has been simulated.
 #[test]
 fn mnt_pocket_exact_gauge_and_charger_identity_resolution() {
-    let lib = ModelLibrary::builtin();
-
     let red = ["MAX17320G20+missing", "MP2650-missing"];
     for value in red {
-        let resolution = lib.resolve(&ComponentQuery {
-            value: Some(value.into()),
-            ..Default::default()
-        });
         assert!(
-            resolution.model.is_none(),
+            resolve_value(value).model.is_none(),
             "a non-fitted MNT value must remain unresolved (RED): {value:?}"
         );
     }
@@ -158,14 +107,7 @@ fn mnt_pocket_exact_gauge_and_charger_identity_resolution() {
         ("MP2650", "mp2650", 30usize),
     ];
     for (value, id, expected_pins) in green {
-        let resolution = lib.resolve(&ComponentQuery {
-            value: Some(value.into()),
-            mpn: Some(value.into()),
-            ..Default::default()
-        });
-        let model = resolution
-            .model
-            .unwrap_or_else(|| panic!("exact MNT value must resolve (GREEN): {value:?}"));
+        let model = expect_query(Some(value), Some(value), None);
         assert_eq!(model.id, id, "{value} resolved to the wrong model");
         assert_eq!(model.pins.len(), expected_pins, "{value} pin map drifted");
         let warning = model
@@ -189,14 +131,7 @@ fn mnt_pocket_exact_gauge_and_charger_identity_resolution() {
 
 #[test]
 fn tp4054_uses_the_current_datasheets_piecewise_programming_law() {
-    let lib = ModelLibrary::builtin();
-    let model = lib
-        .resolve(&ComponentQuery {
-            value: Some("TP4054".into()),
-            ..Default::default()
-        })
-        .model
-        .expect("TP4054 resolves");
+    let model = expect_model("TP4054");
     let program = model
         .current_program
         .as_ref()
@@ -247,14 +182,7 @@ fn tp4054_uses_the_current_datasheets_piecewise_programming_law() {
 
 #[test]
 fn bl4054b_keeps_its_single_inverse_resistance_law() {
-    let lib = ModelLibrary::builtin();
-    let model = lib
-        .resolve(&ComponentQuery {
-            value: Some("BL4054B-42TPRN".into()),
-            ..Default::default()
-        })
-        .model
-        .expect("BL4054B resolves");
+    let model = expect_model("BL4054B-42TPRN");
     let program = model.current_program.as_ref().expect("BL4054B law");
 
     assert_eq!(model.id, "bl4054b_42");
@@ -267,14 +195,7 @@ fn bl4054b_keeps_its_single_inverse_resistance_law() {
 
 #[test]
 fn ap22615_exposes_its_ocp_threshold_without_recasting_it_as_load_current() {
-    let lib = ModelLibrary::builtin();
-    let model = lib
-        .resolve(&ComponentQuery {
-            value: Some("AP22615A".into()),
-            ..Default::default()
-        })
-        .model
-        .expect("AP22615A resolves");
+    let model = expect_model("AP22615A");
     let program = model.current_program.as_ref().expect("RLIM law");
 
     assert_eq!(program.equation_current_a(6_800.0), Some(1.0));
@@ -290,14 +211,7 @@ fn ap22615_exposes_its_ocp_threshold_without_recasting_it_as_load_current() {
 
 #[test]
 fn ltc4020_exposes_its_two_resistor_protection_limit_to_simulation() {
-    let lib = ModelLibrary::builtin();
-    let model = lib
-        .resolve(&ComponentQuery {
-            value: Some("LTC4020EUHFPBF".into()),
-            ..Default::default()
-        })
-        .model
-        .expect("LTC4020 resolves");
+    let model = expect_model("LTC4020EUHFPBF");
 
     let rail_program = model
         .current_program
@@ -350,57 +264,35 @@ fn ltc4020_exposes_its_two_resistor_protection_limit_to_simulation() {
 /// asserted here because they are what makes a Watchy's U1 bind at all.
 #[test]
 fn the_sr2_family_binds_every_ordering_option_to_one_udfn6_map() {
-    let lib = ModelLibrary::builtin();
     for value in [
         "SR2HARU", "SR2LABU", "SR2LARU", "SR2PARU", "SR2UABU", "SR2UARU",
     ] {
-        let q = ComponentQuery {
-            value: Some(value.into()),
-            ..Default::default()
-        };
-        let m = lib
-            .resolve(&q)
-            .model
-            .unwrap_or_else(|| panic!("{value} did not resolve"));
+        let m = expect_model(value);
         assert_eq!(m.id, "sr2", "{value} resolved to the wrong entry");
     }
 
     // Neither the 4-pin SR1 nor an ordering code ST does not build may borrow
     // this map: the SR1 has a different package and pinout entirely.
     for value in ["SR1HARU", "SR2HABU", "SR2PABU", "SR2"] {
-        let q = ComponentQuery {
-            value: Some(value.into()),
-            ..Default::default()
-        };
         assert!(
-            lib.resolve(&q).model.is_none_or(|m| m.id != "sr2"),
+            resolve_value(value).model.is_none_or(|m| m.id != "sr2"),
             "{value} must not resolve to the SR2 entry"
         );
     }
 
-    let q = ComponentQuery {
-        value: Some("SR2HARU".into()),
-        ..Default::default()
-    };
-    let m = lib.resolve(&q).model.expect("SR2HARU resolves");
+    let m = expect_model("SR2HARU");
     // Table 1 Signal names. Pad 3 is the reset OUTPUT and pads 2/5 are the two
     // push-button inputs; swapping them would make the model read the ESP32's
     // EN net as a button press.
-    for (pad, role) in [
+    let udfn6 = [
         ("1", "vss"),
         ("2", "sr1_n"),
         ("3", "rst_n"),
         ("4", "nc"),
         ("5", "sr0_n"),
         ("6", "vcc"),
-    ] {
-        assert_eq!(
-            m.pins.get(pad).map(String::as_str),
-            Some(role),
-            "SR2 pad {pad} must be {role}"
-        );
-    }
-    assert_eq!(m.pins.len(), 6, "UDFN6 has six pads");
+    ];
+    assert_pin_map(&m, "sr2", &udfn6);
 
     // Table 4. The SR inputs have FIXED thresholds, not VCC fractions: 0.85 V
     // VIH min and 0.3 V VIL max regardless of a 1.65 to 5.5 V rail. Rounding

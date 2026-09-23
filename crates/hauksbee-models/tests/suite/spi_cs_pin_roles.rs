@@ -21,10 +21,10 @@
 //! So each test asserts the COMPLETE map against the datasheet pinout, not just
 //! the presence of `cs`.
 
-use hauksbee_models::{ComponentQuery, ModelLibrary};
+use super::{expect_query, query_id, resolve_query};
 
-/// Resolve `value` and assert the entry id plus the exact, complete pad->role
-/// map (no extra pads, no missing pads, no swaps).
+/// Resolve `value` in `footprint` and assert the entry id plus the exact,
+/// complete pad->role map.
 ///
 /// Sets `mpn` as well as `value`, because both entries match on `mpn_re` and a
 /// bare `ModelLibrary::resolve` does no fallback. The engine's real query path
@@ -32,46 +32,19 @@ use hauksbee_models::{ComponentQuery, ModelLibrary};
 /// passing the same string as both is what a component like that looks like by
 /// the time the matcher sees it.
 fn assert_pin_map(value: &str, footprint: &str, id: &str, expected: &[(&str, &str)]) {
-    let lib = ModelLibrary::builtin();
-    let q = ComponentQuery {
-        value: Some(value.into()),
-        mpn: Some(value.into()),
-        footprint: Some(footprint.into()),
-        ..Default::default()
-    };
-    let m = lib
-        .resolve(&q)
-        .model
-        .unwrap_or_else(|| panic!("{value} did not resolve to any model"));
-    assert_eq!(m.id, id, "{value} resolved to the wrong model id");
-    for (pad, role) in expected {
-        assert_eq!(
-            m.pins.get(*pad).map(String::as_str),
-            Some(*role),
-            "{id}: pad {pad} must be role {role:?} (datasheet pinout), got {:?}",
-            m.pins.get(*pad),
-        );
-    }
-    assert_eq!(
-        m.pins.len(),
-        expected.len(),
-        "{id}: pad map has {} entries, the datasheet package has {}",
-        m.pins.len(),
-        expected.len(),
-    );
+    let m = expect_query(Some(value), Some(value), Some(footprint));
+    super::assert_pin_map(&m, id, expected);
+}
+
+/// The id `value` (as value and MPN) binds in `footprint`, if any.
+fn id(value: &str, footprint: &str) -> Option<String> {
+    query_id(Some(value), Some(value), Some(footprint))
 }
 
 /// The pad carrying the `cs` role, or `None` when the entry declares no such
 /// role. This is exactly the lookup `binder::model_role_cs_net` performs.
 fn cs_pad(value: &str, footprint: &str) -> Option<String> {
-    let lib = ModelLibrary::builtin();
-    let q = ComponentQuery {
-        value: Some(value.into()),
-        mpn: Some(value.into()),
-        footprint: Some(footprint.into()),
-        ..Default::default()
-    };
-    let m = lib.resolve(&q).model?;
+    let m = resolve_query(Some(value), Some(value), Some(footprint)).model?;
     m.pins
         .iter()
         .find(|(_, role)| *role == "cs")
@@ -159,19 +132,12 @@ fn every_spi_slave_entry_offers_a_cs_pad_under_real_part_numbers() {
 /// wrong pad. Unresolved is a gap; resolved-and-wrong is a lie.
 #[test]
 fn a_six_pin_sot23_eeprom_does_not_bind_the_eight_pin_map() {
-    let lib = ModelLibrary::builtin();
     for footprint in [
         "Package_TO_SOT_SMD:SOT-23-6",
         "Package_TO_SOT_SMD:SOT-23-6_Handsoldering",
     ] {
-        let q = ComponentQuery {
-            value: Some("25AA010A-I/OT".into()),
-            mpn: Some("25AA010A-I/OT".into()),
-            footprint: Some(footprint.into()),
-            ..Default::default()
-        };
         assert_eq!(
-            lib.resolve(&q).model.map(|m| m.id.clone()),
+            id("25AA010A-I/OT", footprint),
             None,
             "a SOT-23-6 25AA010A must not bind the 8-pin pad map ({footprint})"
         );
@@ -184,16 +150,7 @@ fn a_six_pin_sot23_eeprom_does_not_bind_the_eight_pin_map() {
 /// map is NOT (SOT-23-6, and the 14/16-pin members of the same families) do not.
 #[test]
 fn the_package_gate_admits_eight_pin_spellings_and_nothing_else() {
-    let lib = ModelLibrary::builtin();
-    let resolves = |footprint: &str| {
-        let q = ComponentQuery {
-            value: Some("25LC256".into()),
-            mpn: Some("25LC256".into()),
-            footprint: Some(footprint.into()),
-            ..Default::default()
-        };
-        lib.resolve(&q).model.map(|m| m.id.clone()) == Some("eeprom_25xx_spi".to_string())
-    };
+    let resolves = |footprint| id("25LC256", footprint).as_deref() == Some("eeprom_25xx_spi");
 
     for footprint in [
         "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", // KiCad
@@ -235,17 +192,6 @@ fn the_package_gate_admits_eight_pin_spellings_and_nothing_else() {
 /// prefix of a longer part number.
 #[test]
 fn the_bare_ic_maps_do_not_bind_modules_or_longer_part_numbers() {
-    let lib = ModelLibrary::builtin();
-    let id = |value: &str, footprint: &str| {
-        let q = ComponentQuery {
-            value: Some(value.into()),
-            mpn: Some(value.into()),
-            footprint: Some(footprint.into()),
-            ..Default::default()
-        };
-        lib.resolve(&q).model.map(|m| m.id.clone())
-    };
-
     assert_eq!(
         id("MCP3008", "Package_DIP:DIP-16_W7.62mm").as_deref(),
         Some("mcp3008"),
@@ -284,7 +230,6 @@ fn the_bare_ic_maps_do_not_bind_modules_or_longer_part_numbers() {
 /// Value, so both shapes resolve.
 #[test]
 fn a_generic_value_with_the_part_number_in_the_mpn_still_resolves() {
-    let lib = ModelLibrary::builtin();
     for (value, mpn, footprint, expected) in [
         (
             "ADC",
@@ -299,14 +244,8 @@ fn a_generic_value_with_the_part_number_in_the_mpn_still_resolves() {
             "eeprom_25xx_spi",
         ),
     ] {
-        let q = ComponentQuery {
-            value: Some(value.into()),
-            mpn: Some(mpn.into()),
-            footprint: Some(footprint.into()),
-            ..Default::default()
-        };
         assert_eq!(
-            lib.resolve(&q).model.map(|m| m.id.clone()).as_deref(),
+            query_id(Some(value), Some(mpn), Some(footprint)).as_deref(),
             Some(expected),
             "Value={value:?} with MPN={mpn:?} must resolve; a `value_re` ANDed onto \
              the mpn rule is what breaks this shape"
@@ -320,16 +259,8 @@ fn a_generic_value_with_the_part_number_in_the_mpn_still_resolves() {
 #[test]
 fn the_match_rules_do_not_swallow_neighbouring_part_numbers() {
     for value in ["24LC256", "24AA256", "2512", "25LC", "25"] {
-        let lib = ModelLibrary::builtin();
-        let q = ComponentQuery {
-            value: Some(value.into()),
-            mpn: Some(value.into()),
-            footprint: Some("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm".into()),
-            ..Default::default()
-        };
-        let id = lib.resolve(&q).model.map(|m| m.id.clone());
         assert_ne!(
-            id.as_deref(),
+            id(value, "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm").as_deref(),
             Some("eeprom_25xx_spi"),
             "{value} must not resolve to the 25xx SPI EEPROM: binding it would put a `cs` \
              role on a pad that is not chip-select, and the co-sim would then report exact \

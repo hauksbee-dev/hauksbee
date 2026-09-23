@@ -8,7 +8,7 @@
 //! family". If this map ever drifts to match the 78xx, hauksbee stops being
 //! able to see that mistake and starts endorsing it.
 
-use super::expect_model as resolve;
+use super::{assert_pins, expect_model as resolve};
 
 #[test]
 fn each_negative_code_resolves_to_its_own_voltage() {
@@ -49,30 +49,13 @@ fn the_rail_is_actually_below_ground() {
 fn the_pinout_is_not_the_78xx_pinout() {
     // TI SNOSBQ7C Figure 1, un-rotated: 1 = GROUND, 2 = INPUT, 3 = OUTPUT.
     for id in ["7905", "7912", "7915"] {
-        let m = resolve(id);
-        assert_eq!(
-            m.pins.get("1").map(String::as_str),
-            Some("gnd"),
-            "{id} pin 1"
-        );
-        assert_eq!(
-            m.pins.get("2").map(String::as_str),
-            Some("in"),
-            "{id} pin 2"
-        );
-        assert_eq!(
-            m.pins.get("3").map(String::as_str),
-            Some("out"),
-            "{id} pin 3"
-        );
+        assert_pins(&resolve(id), &[("1", "gnd"), ("2", "in"), ("3", "out")]);
     }
 
     // And the positive part it is confused with really does differ, so this is
     // a live distinction rather than two copies of the same map.
     let pos = resolve("7805");
-    assert_eq!(pos.pins.get("1").map(String::as_str), Some("in"));
-    assert_eq!(pos.pins.get("2").map(String::as_str), Some("gnd"));
-    assert_eq!(pos.pins.get("3").map(String::as_str), Some("out"));
+    assert_pins(&pos, &[("1", "in"), ("2", "gnd"), ("3", "out")]);
 }
 
 #[test]

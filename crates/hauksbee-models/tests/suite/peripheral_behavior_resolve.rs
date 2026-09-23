@@ -1,14 +1,10 @@
 //! Exact memory/hub cards combine firmware-visible protocol behavior with
 //! analogue power behavior and retain machine-readable datasheet citations.
 
-use hauksbee_models::{ComponentQuery, ModelLibrary};
+use super::resolve_query;
 
 fn resolve(value: &str, footprint: Option<&str>) -> hauksbee_models::Resolution {
-    ModelLibrary::builtin().resolve(&ComponentQuery {
-        value: Some(value.into()),
-        footprint: footprint.map(str::to_string),
-        ..Default::default()
-    })
+    resolve_query(Some(value), None, footprint)
 }
 
 #[test]

@@ -91,8 +91,32 @@
 //! I2C (`i2c_pointer`) uses a full 8-bit register pointer with no folded
 //! direction bit, so its `addr` values are used raw (unmasked).
 //!
+//! ## Pins and strap-selected addresses
+//!
+//! ```toml
+//! [sensor.pins]               # pad -> role, the shape of a card's [models.pins]
+//! 1 = "sda"
+//! 2 = "scl"
+//! 3 = "a0"                    # address strap
+//! 4 = "gnd"
+//! 5 = "vdd"
+//! 6 = "int"                   # interrupt / alert output
+//!
+//! [[sensor.address_select]]   # strap levels -> the 7-bit address they select
+//! address = 0x48              # i2c_address must be one of the rows
+//! straps = { a0 = "low" }
+//! [[sensor.address_select]]
+//! address = 0x49
+//! straps = { a0 = "high" }
+//! ```
+//!
+//! The bus roles are `scl`/`sda` (I2C) or `cs`/`sck`/`mosi`/`miso` (SPI), the
+//! register-map peripheral's default roles, so a card embedding this spec binds
+//! them without restating the pad map. [`Sensor::resolve_address`] turns the
+//! board's strap levels into the address, or into the default marked assumed.
+//!
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -470,6 +494,30 @@ pub struct ProtocolSpec {
     pub spi_mode: u8,
 }
 
+/// A board-strap level an address-select row names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StrapTie {
+    Low,
+    High,
+}
+
+/// One `[[sensor.address_select]]` row: the strap levels that select `address`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddressSelect {
+    pub address: u8,
+    /// `[sensor.pins]` role -> the level it is tied to.
+    pub straps: BTreeMap<String, StrapTie>,
+}
+
+/// The I2C address a board's wiring selects. `assumed` says why the address
+/// is the spec's default rather than one the board's straps determined.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressChoice {
+    pub address: u8,
+    pub assumed: Option<String>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -489,6 +537,16 @@ pub struct Sensor {
     /// Required iff `bus = "i2c"`.
     #[serde(default)]
     pub i2c_address: Option<u8>,
+    /// `[sensor.pins]`: pad number -> role, the shape of `[models.pins]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pins: BTreeMap<String, String>,
+    /// Strap-selected alternate I2C addresses.
+    #[serde(
+        default,
+        rename = "address_select",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub address_selects: Vec<AddressSelect>,
     #[serde(default, rename = "input")]
     pub inputs: Vec<InputSpec>,
     #[serde(default, rename = "register")]
@@ -541,6 +599,57 @@ impl Sensor {
         } else {
             addr
         }
+    }
+
+    /// The bus roles `[sensor.pins]` must name for this bus.
+    pub fn bus_roles(&self) -> &'static [&'static str] {
+        match self.bus {
+            Bus::I2c => &["scl", "sda"],
+            Bus::Spi => &["cs", "sck", "mosi", "miso"],
+        }
+    }
+
+    /// The address the board's straps select. `level_of(role)` reports how the
+    /// board ties a strap role, or why it cannot tell (floating, on a signal
+    /// net). Without `[[sensor.address_select]]` the address is `i2c_address`;
+    /// with it, an undeterminable strap or a combination the table does not list
+    /// yields `i2c_address` marked assumed, never a silently chosen row. `None`
+    /// for an SPI sensor.
+    pub fn resolve_address(
+        &self,
+        level_of: impl Fn(&str) -> Result<StrapTie, String>,
+    ) -> Option<AddressChoice> {
+        let address = self.i2c_address?;
+        let Some(first) = self.address_selects.first() else {
+            return Some(AddressChoice {
+                address,
+                assumed: None,
+            });
+        };
+        let assume = |why: String| AddressChoice {
+            address,
+            assumed: Some(format!(
+                "I2C address 0x{address:02x} is assumed (the spec default): {why}"
+            )),
+        };
+        let mut levels = BTreeMap::new();
+        for role in first.straps.keys() {
+            match level_of(role) {
+                Ok(level) => levels.insert(role.clone(), level),
+                Err(why) => return Some(assume(why)),
+            };
+        }
+        Some(
+            match self.address_selects.iter().find(|row| row.straps == levels) {
+                Some(row) => AddressChoice {
+                    address: row.address,
+                    assumed: None,
+                },
+                None => assume(format!(
+                    "the board's strap levels {levels:?} match no [[sensor.address_select]] row"
+                )),
+            },
+        )
     }
 }
 
@@ -693,6 +802,7 @@ impl SensorSpec {
              [[sensor.write_command]], or a [sensor.read_frame]"
         );
 
+        self.validate_pins()?;
         self.validate_write_side()?;
         // Names a read expression may reference: every variable is bound as a
         // float at evaluation time, and `i2c_address` is a builtin the
@@ -775,6 +885,62 @@ impl SensorSpec {
                 ),
             }
         }
+        Ok(())
+    }
+
+    /// `[sensor.pins]` names the bus roles; every address-select row is a
+    /// distinct 7-bit address over the same `[sensor.pins]` strap roles, and
+    /// one of them is `i2c_address`.
+    fn validate_pins(&self) -> Result<(), SensorSpecError> {
+        let s = &self.sensor;
+        let has_role = |role: &str| s.pins.values().any(|r| r == role);
+        for (pad, role) in &s.pins {
+            check!(
+                !pad.trim().is_empty() && !role.trim().is_empty(),
+                "sensor.pins: pad '{pad}' -> role '{role}' must both be non-empty"
+            );
+        }
+        if !s.pins.is_empty() {
+            for role in s.bus_roles() {
+                check!(
+                    has_role(role),
+                    "sensor.pins declares no '{role}' pin, which bus = \"{}\" needs",
+                    if s.bus == Bus::I2c { "i2c" } else { "spi" }
+                );
+            }
+        }
+        let Some(first) = s.address_selects.first() else {
+            return Ok(());
+        };
+        check!(
+            s.bus == Bus::I2c,
+            "sensor.address_select is only valid for bus = \"i2c\""
+        );
+        let (mut addresses, mut combos) = (HashSet::new(), HashSet::new());
+        for row in &s.address_selects {
+            let what = format!("sensor.address_select 0x{:02x}", row.address);
+            check!(row.address <= 0x7f, "{what} is not a 7-bit address");
+            check!(addresses.insert(row.address), "{what} is listed twice");
+            check!(!row.straps.is_empty(), "{what} names no straps");
+            check!(
+                row.straps.keys().eq(first.straps.keys()),
+                "{what} must name the same strap roles as the first row"
+            );
+            check!(
+                combos.insert(&row.straps),
+                "{what} repeats another row's strap levels"
+            );
+            for role in row.straps.keys() {
+                check!(
+                    has_role(role),
+                    "{what}: strap '{role}' is not a role in [sensor.pins]"
+                );
+            }
+        }
+        check!(
+            s.i2c_address.is_some_and(|a| addresses.contains(&a)),
+            "i2c_address must be one of the sensor.address_select addresses"
+        );
         Ok(())
     }
 
@@ -1077,6 +1243,48 @@ expr = "if(pd == 0.0, code / 4096 * 4.096, 0.0)"
 style = "i2c_pointer"
 "#;
 
+    /// LM75 plus a pad map and a two-strap address table (three of the four
+    /// combinations listed).
+    fn strapped() -> String {
+        LM75.replace(
+            "[sensor.protocol]",
+            "[sensor.pins]\n1 = \"sda\"\n2 = \"scl\"\n3 = \"alert\"\n4 = \"gnd\"\n5 = \"a1\"\n\
+             6 = \"a0\"\n8 = \"vdd\"\n\
+             [[sensor.address_select]]\naddress = 0x48\nstraps = { a0 = \"low\", a1 = \"low\" }\n\
+             [[sensor.address_select]]\naddress = 0x49\nstraps = { a0 = \"high\", a1 = \"low\" }\n\
+             [[sensor.address_select]]\naddress = 0x4a\nstraps = { a0 = \"low\", a1 = \"high\" }\n\
+             [sensor.protocol]",
+        )
+    }
+
+    #[test]
+    fn pins_and_address_select_round_trip_and_resolve_from_straps() {
+        let spec = SensorSpec::from_toml(&strapped()).unwrap();
+        let back = SensorSpec::from_toml(&spec.to_toml().unwrap()).unwrap();
+        assert_eq!(back.sensor.pins, spec.sensor.pins);
+        assert_eq!(back.sensor.address_selects, spec.sensor.address_selects);
+        assert_eq!(back.sensor.pins.get("3").map(String::as_str), Some("alert"));
+        let s = &spec.sensor;
+        let tied = |a0, a1| move |role: &str| Ok(if role == "a0" { a0 } else { a1 });
+        let chosen = s
+            .resolve_address(tied(StrapTie::High, StrapTie::Low))
+            .unwrap();
+        assert_eq!((chosen.address, chosen.assumed), (0x49, None));
+        let unlisted = s
+            .resolve_address(tied(StrapTie::High, StrapTie::High))
+            .unwrap();
+        assert_eq!(unlisted.address, 0x48);
+        assert!(unlisted.assumed.unwrap().contains("match no"));
+        let floating = s
+            .resolve_address(|role: &str| Err(format!("strap role '{role}' is floating")))
+            .unwrap();
+        assert_eq!(floating.address, 0x48);
+        assert!(floating.assumed.unwrap().contains("assumed"));
+        let plain = SensorSpec::from_toml(LM75).unwrap().sensor;
+        let unstrapped = plain.resolve_address(|_: &str| Err(String::new())).unwrap();
+        assert_eq!((unstrapped.address, unstrapped.assumed), (0x48, None));
+    }
+
     fn spi_spec(protocol_extra: &str) -> String {
         format!(
             "[sensor]\nname = \"MINIMAG\"\nbus = \"spi\"\n[[sensor.input]]\nname = \"x\"\ndefault = 0.0\n\
@@ -1150,6 +1358,11 @@ style = "i2c_pointer"
             spi_spec("spi_mode = 4"),
             LM75.replace("style = \"i2c_pointer\"", "style = \"i2c_pointer\"\nspi_mode = 2"),
             LM75.replace("[sensor.protocol]", "[sensor.read_frame]\nbytes = [\"1.0\"]\n[sensor.protocol]"),
+            strapped().replace("address = 0x48\nstraps", "address = 0x4b\nstraps"),
+            strapped().replace("6 = \"a0\"", "6 = \"addr\""),
+            strapped().replace("2 = \"scl\"", "2 = \"clk\""),
+            strapped().replace("a0 = \"high\", a1 = \"low\"", "a0 = \"high\""),
+            strapped().replace("a0 = \"high\", a1 = \"low\"", "a0 = \"low\", a1 = \"high\""),
             "[sensor]\nname = \"X\"\nbus = \"spi\"\n[[sensor.write_register]]\naddr = 0x01\nencoding = \"u8\"\n\
              store = \"cfg\"\n[sensor.protocol]\nstyle = \"spi_reg\"\n"
                 .to_string(),

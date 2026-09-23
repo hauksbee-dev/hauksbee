@@ -36,6 +36,14 @@ fn write_pack(dir: &Path, manifest: &str, model: Option<&str>) {
     }
 }
 
+/// Write a pack with the good manifest and `model` (if any), and return why it
+/// fails to load.
+fn load_err(model: Option<&str>) -> PackError {
+    let tmp = tempfile::tempdir().unwrap();
+    write_pack(tmp.path(), GOOD_MANIFEST, model);
+    Pack::load(tmp.path()).unwrap_err()
+}
+
 #[test]
 fn valid_pack_loads() {
     let tmp = tempfile::tempdir().unwrap();
@@ -98,56 +106,48 @@ fn each_missing_field_is_named() {
     }
 }
 
+/// Each single manifest mutation fails with its own named `PackError`.
 #[test]
-fn bad_name_is_named() {
-    let src = GOOD_MANIFEST.replace("\"acme-diodes\"", "\"Acme Diodes!\"");
-    let e = PackManifest::from_toml(&src, HAUKSBEE_VERSION).unwrap_err();
-    assert!(matches!(e, PackError::InvalidName(_)), "got {e:?}");
-}
-
-#[test]
-fn vendor_pack_needs_an_explicit_nonblank_license() {
-    let src = GOOD_MANIFEST
-        .replace("license = \"MIT\"", "license = \"   \"")
-        .replace("provenance = \"hand-written\"", "provenance = \"vendor\"");
-    let e = PackManifest::from_toml(&src, HAUKSBEE_VERSION).unwrap_err();
-    assert!(matches!(e, PackError::InvalidLicense), "got {e:?}");
-}
-
-#[test]
-fn bad_version_syntax_is_named() {
+fn each_bad_manifest_mutation_is_named() {
+    let edit = |from: &str, to: &str| GOOD_MANIFEST.replace(from, to);
+    let cases: [(&str, String, fn(&PackError) -> bool); 4] = [
+        (
+            "bad name",
+            edit("\"acme-diodes\"", "\"Acme Diodes!\""),
+            |e| matches!(e, PackError::InvalidName(_)),
+        ),
+        (
+            "vendor pack with a blank license",
+            edit("license = \"MIT\"", "license = \"   \"")
+                .replace("provenance = \"hand-written\"", "provenance = \"vendor\""),
+            |e| matches!(e, PackError::InvalidLicense),
+        ),
+        (
+            "unknown provenance",
+            edit("\"hand-written\"", "\"scraped-from-a-forum\""),
+            |e| matches!(e, PackError::UnknownProvenance(_)),
+        ),
+        (
+            "min version newer than the build",
+            edit(
+                "min_hauksbee_version = \"0.1.0\"",
+                "min_hauksbee_version = \"999.0.0\"",
+            ),
+            |e| matches!(e, PackError::IncompatibleVersion { .. }),
+        ),
+    ];
+    for (case, src, named) in cases {
+        let e = PackManifest::from_toml(&src, HAUKSBEE_VERSION).unwrap_err();
+        assert!(named(&e), "{case}: got {e:?}");
+    }
     for bad in ["1.2", "1.2.x", "v1.2.0", "1.2.3.4", ""] {
-        let src = GOOD_MANIFEST.replace("version = \"1.2.0\"", &format!("version = \"{bad}\""));
+        let src = edit("version = \"1.2.0\"", &format!("version = \"{bad}\""));
         let e = PackManifest::from_toml(&src, HAUKSBEE_VERSION).unwrap_err();
         assert!(
             matches!(e, PackError::InvalidVersion { .. }),
             "version {bad:?} gave {e:?}"
         );
     }
-}
-
-#[test]
-fn unknown_provenance_is_named() {
-    let src = GOOD_MANIFEST.replace("\"hand-written\"", "\"scraped-from-a-forum\"");
-    let e = PackManifest::from_toml(&src, HAUKSBEE_VERSION).unwrap_err();
-    assert!(matches!(e, PackError::UnknownProvenance(_)), "got {e:?}");
-}
-
-#[test]
-fn min_version_newer_than_build_is_named() {
-    let src = GOOD_MANIFEST.replace(
-        "min_hauksbee_version = \"0.1.0\"",
-        "min_hauksbee_version = \"999.0.0\"",
-    );
-    let e = PackManifest::from_toml(&src, HAUKSBEE_VERSION).unwrap_err();
-    assert!(
-        matches!(e, PackError::IncompatibleVersion { .. }),
-        "got {e:?}"
-    );
-}
-
-#[test]
-fn unknown_manifest_field_is_rejected() {
     // Typos ("licence") must not silently vanish.
     let src = format!("{GOOD_MANIFEST}\nsigned_by = \"nobody\"\n");
     let e = PackManifest::from_toml(&src, HAUKSBEE_VERSION).unwrap_err();
@@ -156,9 +156,7 @@ fn unknown_manifest_field_is_rejected() {
 
 #[test]
 fn pack_without_models_is_named() {
-    let tmp = tempfile::tempdir().unwrap();
-    write_pack(tmp.path(), GOOD_MANIFEST, None); // models/ exists but empty
-    let e = Pack::load(tmp.path()).unwrap_err();
+    let e = load_err(None); // models/ exists but empty
     assert!(matches!(e, PackError::NoModels(_)), "got {e:?}");
 }
 
@@ -173,9 +171,7 @@ kind = "diode"
 [models.match]
 value_re = "BROKEN1"
 "#;
-    let tmp = tempfile::tempdir().unwrap();
-    write_pack(tmp.path(), GOOD_MANIFEST, Some(bad));
-    let e = Pack::load(tmp.path()).unwrap_err();
+    let e = load_err(Some(bad));
     match e {
         PackError::ModelFileInvalid { file, message } => {
             assert_eq!(file, "diodes.toml");
@@ -197,9 +193,7 @@ kind = "diode"
 [models.match]
 value_re = "S8050"
 "#;
-    let tmp = tempfile::tempdir().unwrap();
-    write_pack(tmp.path(), GOOD_MANIFEST, Some(bad));
-    let e = Pack::load(tmp.path()).unwrap_err();
+    let e = load_err(Some(bad));
     let rendered = e.to_string();
     assert_eq!(
         rendered.matches("model 's8050'").count(),
@@ -210,16 +204,12 @@ value_re = "S8050"
 
 #[test]
 fn model_file_bad_toml_is_named() {
-    let tmp = tempfile::tempdir().unwrap();
-    write_pack(tmp.path(), GOOD_MANIFEST, Some("[[models]\nnot toml"));
-    let e = Pack::load(tmp.path()).unwrap_err();
+    let e = load_err(Some("[[models]\nnot toml"));
     assert!(matches!(e, PackError::ModelFileInvalid { .. }), "got {e:?}");
 }
 
 #[test]
 fn model_file_with_no_entries_is_named() {
-    let tmp = tempfile::tempdir().unwrap();
-    write_pack(tmp.path(), GOOD_MANIFEST, Some("# empty\n"));
-    let e = Pack::load(tmp.path()).unwrap_err();
+    let e = load_err(Some("# empty\n"));
     assert!(matches!(e, PackError::ModelFileInvalid { .. }), "got {e:?}");
 }

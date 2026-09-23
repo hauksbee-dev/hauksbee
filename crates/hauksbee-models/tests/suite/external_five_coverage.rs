@@ -21,44 +21,18 @@
 //! be WRONG rather than merely absent, because absent is the safe failure and
 //! this library's job is to avoid the other one.
 
-use hauksbee_models::{ComponentKind, ComponentQuery, ModelLibrary};
+use super::{assert_pins, resolve_part as resolve};
+use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
-/// Resolve exactly the way a layout-only board does. `mpn` is set to the value
-/// string as well as `value`, because that is what `binder.rs` does for a
-/// component with no MPN property, which is every component on a `.kicad_pcb`,
-/// a `.brd` or a gerber set. Leaving `mpn` empty here would make every entry that
-/// carries an `mpn_re` alongside its `value_re` resolve to nothing (the rules are
-/// ANDed), and this file would then be testing a query shape no board produces.
-fn resolve(value: &str) -> Option<hauksbee_models::ModelEntry> {
-    let lib = ModelLibrary::builtin();
-    lib.resolve(&ComponentQuery {
-        value: Some(value.to_string()),
-        mpn: Some(value.to_string()),
-        ..Default::default()
-    })
-    .model
-}
-
-fn expect(value: &str) -> hauksbee_models::ModelEntry {
+/// Resolve the layout-only way (value doubled into `mpn`), or panic.
+fn expect(value: &str) -> ModelEntry {
     resolve(value).unwrap_or_else(|| panic!("{value} did not resolve"))
 }
 
-fn expect_id(value: &str, id: &str) -> hauksbee_models::ModelEntry {
+fn expect_id(value: &str, id: &str) -> ModelEntry {
     let m = expect(value);
     assert_eq!(m.id, id, "{value} resolved to the wrong entry");
     m
-}
-
-fn assert_pins(m: &hauksbee_models::ModelEntry, pairs: &[(&str, &str)]) {
-    for (pad, role) in pairs {
-        assert_eq!(
-            m.pins.get(*pad).map(String::as_str),
-            Some(*role),
-            "{}: pad {pad} must be {role} (got {:?})",
-            m.id,
-            m.pins.get(*pad)
-        );
-    }
 }
 
 // ── 1. The spelling no CAD tool writes ───────────────────────────────────────
@@ -357,10 +331,10 @@ fn the_voltage_references_carry_their_own_rail() {
     }
     // SHDN is active LOW. Naming it `en` would invert its sense the moment
     // anything gates on the role.
-    assert_eq!(m.pins.get("3").map(String::as_str), Some("shdn"));
-    assert_eq!(m.pins.get("2").map(String::as_str), Some("in"));
-    assert_eq!(m.pins.get("4").map(String::as_str), Some("gnd"));
-    assert_eq!(m.pins.get("6").map(String::as_str), Some("out"));
+    assert_pins(
+        &m,
+        &[("3", "shdn"), ("2", "in"), ("4", "gnd"), ("6", "out")],
+    );
     for value in ["LT1461AIS8-2.5", "LT1461AIS8-5", "LT1461AIS8-4.096"] {
         assert!(
             resolve(value).is_none_or(|m| m.id != "lt1461a_3v3"),
@@ -954,36 +928,20 @@ fn an_mcu_with_no_cosim_platform_binds_but_cannot_run_firmware() {
 /// named here before the sweeps will pass, which is the point.
 const NON_MODEL_DB_FILES: &[&str] = &["pin_rules.toml", "load_profiles.toml", "unmodelled.toml"];
 
-/// Every `[[models]]` entry in one db file, for the three library-wide sweeps below.
+/// Every `[[models]]` entry in every sorted `db/*.toml` model file, with its file
+/// name, for the three library-wide sweeps below.
 ///
 /// A model file that fails to deserialize must FAIL the sweep rather than be skipped.
 /// The sweeps below exist to catch a class of silently-wrong entry, and an entry in an
 /// unparsed file is exactly as unswept as an entry nobody wrote a test for. Each
 /// sweep used to `continue` past that case, so one typo'd key anywhere in a file
 /// would switch the invariant off for every entry in it and still pass green.
-fn models_in(path: &std::path::Path, text: &str) -> Vec<hauksbee_models::ModelEntry> {
+fn all_db_models() -> Vec<(String, ModelEntry)> {
     #[derive(serde::Deserialize)]
     struct DbFile {
         #[serde(default)]
-        models: Vec<hauksbee_models::ModelEntry>,
+        models: Vec<ModelEntry>,
     }
-    let name = path.file_name().unwrap().to_string_lossy().to_string();
-    if NON_MODEL_DB_FILES.contains(&name.as_str()) {
-        return Vec::new();
-    }
-    match toml::from_str::<DbFile>(text) {
-        Ok(parsed) => parsed.models,
-        Err(e) => panic!(
-            "{name} is a model db file that does not deserialize, so every entry in \
-             it would go unswept by the library-wide invariants. Either fix it, or if \
-             it is a new schema rather than a model file, name it in \
-             NON_MODEL_DB_FILES: {e}"
-        ),
-    }
-}
-
-/// Every `db/*.toml` file, sorted, for the library-wide sweeps below.
-fn db_files() -> Vec<std::path::PathBuf> {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("db");
     let mut files: Vec<_> = std::fs::read_dir(&db)
         .expect("the db directory is part of the crate")
@@ -996,7 +954,24 @@ fn db_files() -> Vec<std::path::PathBuf> {
         "no db/*.toml found under {}",
         db.display()
     );
-    files
+    let mut models = Vec::new();
+    for path in files {
+        let text = std::fs::read_to_string(&path).expect("readable db file");
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if NON_MODEL_DB_FILES.contains(&name.as_str()) {
+            continue;
+        }
+        match toml::from_str::<DbFile>(&text) {
+            Ok(parsed) => models.extend(parsed.models.into_iter().map(|m| (name.clone(), m))),
+            Err(e) => panic!(
+                "{name} is a model db file that does not deserialize, so every entry in \
+                 it would go unswept by the library-wide invariants. Either fix it, or if \
+                 it is a new schema rather than a model file, name it in \
+                 NON_MODEL_DB_FILES: {e}"
+            ),
+        }
+    }
+    models
 }
 
 /// The P-channel threshold sign, swept over the WHOLE model database rather than
@@ -1018,36 +993,32 @@ fn every_mosfet_states_its_threshold_with_the_sign_its_polarity_needs() {
     let mut checked = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
-    for path in db_files() {
-        let text = std::fs::read_to_string(&path).expect("readable db file");
-        for m in models_in(&path, &text) {
-            let polarity_is_p = match m.kind {
-                ComponentKind::Pmos => true,
-                ComponentKind::Nmos => false,
-                _ => continue,
-            };
-            let Some(vto) = m.params.get_f64("vto") else {
-                failures.push(format!(
-                    "{}: {} states no vto; a MOSFET without a threshold binds at \
-                     the solver's default, which is nobody's part",
-                    path.file_name().unwrap().to_string_lossy(),
-                    m.id
-                ));
-                continue;
-            };
-            checked += 1;
-            let ok = if polarity_is_p { vto < 0.0 } else { vto > 0.0 };
-            if !ok {
-                failures.push(format!(
-                    "{}: {} is {:?} with vto = {vto}. The binder folds vto by the \
-                     polarity sign, so this reaches the solver as {} V and models a \
-                     DEPLETION device that conducts with its gate at its source.",
-                    path.file_name().unwrap().to_string_lossy(),
-                    m.id,
-                    m.kind,
-                    if polarity_is_p { -vto } else { vto },
-                ));
-            }
+    for (file, m) in all_db_models() {
+        let polarity_is_p = match m.kind {
+            ComponentKind::Pmos => true,
+            ComponentKind::Nmos => false,
+            _ => continue,
+        };
+        let Some(vto) = m.params.get_f64("vto") else {
+            failures.push(format!(
+                "{}: {} states no vto; a MOSFET without a threshold binds at \
+                 the solver's default, which is nobody's part",
+                file, m.id
+            ));
+            continue;
+        };
+        checked += 1;
+        let ok = if polarity_is_p { vto < 0.0 } else { vto > 0.0 };
+        if !ok {
+            failures.push(format!(
+                "{}: {} is {:?} with vto = {vto}. The binder folds vto by the \
+                 polarity sign, so this reaches the solver as {} V and models a \
+                 DEPLETION device that conducts with its gate at its source.",
+                file,
+                m.id,
+                m.kind,
+                if polarity_is_p { -vto } else { vto },
+            ));
         }
     }
 
@@ -1088,49 +1059,45 @@ fn no_entry_names_a_driven_output_it_has_no_logic_to_drive() {
     let mut with_logic = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
-    for path in db_files() {
-        let text = std::fs::read_to_string(&path).expect("readable db file");
-        for m in models_in(&path, &text) {
-            let y_roles: Vec<&String> = m.pins.values().filter(|r| r.starts_with('y')).collect();
-            if y_roles.is_empty() {
-                continue;
-            }
-            let behavioral_voltage_roles: std::collections::HashSet<&str> = m
-                .behavioral
-                .laws
+    for (file, m) in all_db_models() {
+        let y_roles: Vec<&String> = m.pins.values().filter(|r| r.starts_with('y')).collect();
+        if y_roles.is_empty() {
+            continue;
+        }
+        let behavioral_voltage_roles: std::collections::HashSet<&str> = m
+            .behavioral
+            .laws
+            .iter()
+            .filter(|law| law.kind == hauksbee_models::behavioral::LawKind::Voltage)
+            .map(|law| law.a.as_str())
+            .collect();
+        if m.logic.is_empty()
+            && !y_roles
                 .iter()
-                .filter(|law| law.kind == hauksbee_models::behavioral::LawKind::Voltage)
-                .map(|law| law.a.as_str())
-                .collect();
-            if m.logic.is_empty()
-                && !y_roles
-                    .iter()
-                    .all(|role| behavioral_voltage_roles.contains(role.as_str()))
-            {
-                failures.push(format!(
-                    "{}: {} names {y_roles:?} but neither [models.logic] nor a \
-                     behavioral voltage law drives every output role",
-                    path.file_name().unwrap().to_string_lossy(),
-                    m.id
-                ));
-            } else if !m.logic.is_empty() {
-                with_logic += 1;
-                // And where there IS a logic block, every `y` pin must be one of
-                // its declared outputs, or the role name promises a driver the
-                // logic never assigns to.
-                for role in y_roles {
-                    assert!(
-                        m.logic.outputs.iter().any(|o| o == role),
-                        "{}: {} names pin role {role} but its [models.logic] \
-                         outputs are {:?}",
-                        path.file_name().unwrap().to_string_lossy(),
-                        m.id,
-                        m.logic.outputs
-                    );
-                }
-            } else {
-                with_logic += 1;
+                .all(|role| behavioral_voltage_roles.contains(role.as_str()))
+        {
+            failures.push(format!(
+                "{}: {} names {y_roles:?} but neither [models.logic] nor a \
+                 behavioral voltage law drives every output role",
+                file, m.id
+            ));
+        } else if !m.logic.is_empty() {
+            with_logic += 1;
+            // And where there IS a logic block, every `y` pin must be one of
+            // its declared outputs, or the role name promises a driver the
+            // logic never assigns to.
+            for role in y_roles {
+                assert!(
+                    m.logic.outputs.iter().any(|o| o == role),
+                    "{}: {} names pin role {role} but its [models.logic] \
+                     outputs are {:?}",
+                    file,
+                    m.id,
+                    m.logic.outputs
+                );
             }
+        } else {
+            with_logic += 1;
         }
     }
 
@@ -1302,38 +1269,33 @@ fn no_single_throw_switch_names_the_control_low_throw() {
     let mut checked = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
-    for path in db_files() {
-        let text = std::fs::read_to_string(&path).expect("readable db file");
-        for m in models_in(&path, &text) {
-            if m.kind != ComponentKind::AnalogSwitch {
-                continue;
-            }
-            checked += 1;
-            let roles: std::collections::HashSet<&str> =
-                m.pins.values().map(String::as_str).collect();
-            let file = path.file_name().unwrap().to_string_lossy();
+    for (file, m) in all_db_models() {
+        if m.kind != ComponentKind::AnalogSwitch {
+            continue;
+        }
+        checked += 1;
+        let roles: std::collections::HashSet<&str> = m.pins.values().map(String::as_str).collect();
 
-            // A true SPDT names both throws and is fine.
-            if roles.contains("s0") && !roles.contains("s1") {
-                failures.push(format!(
-                    "{file}: {} names `s0` with no `s1`, so it binds through the \
-                     single-throw path, which senses the INVERTED control and \
-                     conducts when the enable is LOW. If this part's enable is \
-                     active high, rename its two terminals in_out_a / in_out_b.",
-                    m.id
-                ));
-                continue;
-            }
-            // And an entry that names neither pair has nothing for the binder to
-            // stamp between, which would fall to the scan-two-nodes fallback and
-            // pick whatever the board happened to wire.
-            if !names_a_pickable_pair(&roles) && !names_a_complete_shared_select_dpdt(&roles) {
-                failures.push(format!(
-                    "{file}: {} names no switch-terminal pair, so the binder falls \
-                     back to picking two arbitrary non-power nodes",
-                    m.id
-                ));
-            }
+        // A true SPDT names both throws and is fine.
+        if roles.contains("s0") && !roles.contains("s1") {
+            failures.push(format!(
+                "{file}: {} names `s0` with no `s1`, so it binds through the \
+                 single-throw path, which senses the INVERTED control and \
+                 conducts when the enable is LOW. If this part's enable is \
+                 active high, rename its two terminals in_out_a / in_out_b.",
+                m.id
+            ));
+            continue;
+        }
+        // And an entry that names neither pair has nothing for the binder to
+        // stamp between, which would fall to the scan-two-nodes fallback and
+        // pick whatever the board happened to wire.
+        if !names_a_pickable_pair(&roles) && !names_a_complete_shared_select_dpdt(&roles) {
+            failures.push(format!(
+                "{file}: {} names no switch-terminal pair, so the binder falls \
+                 back to picking two arbitrary non-power nodes",
+                m.id
+            ));
         }
     }
 

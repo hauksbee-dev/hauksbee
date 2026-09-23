@@ -16,30 +16,12 @@
 //! every one of them resolved nothing at all until that was caught. The test
 //! below is what keeps it caught.
 
-use hauksbee_models::{ComponentKind, ComponentQuery, ModelEntry, ModelLibrary};
+use super::{expect_model as resolve, expect_query, param as p, vf_at};
+use hauksbee_models::{ComponentKind, ModelEntry};
 
 /// Resolve by value alone, the way a layout-only board queries the library.
 fn by_value(value: &str) -> Option<ModelEntry> {
-    let lib = ModelLibrary::builtin();
-    lib.resolve(&ComponentQuery {
-        value: Some(value.into()),
-        ..Default::default()
-    })
-    .model
-}
-
-fn resolve(value: &str) -> ModelEntry {
-    by_value(value).unwrap_or_else(|| panic!("{value:?} did not resolve to any model"))
-}
-
-fn id_of(value: &str) -> String {
-    resolve(value).id.clone()
-}
-
-fn p(m: &ModelEntry, k: &str) -> f64 {
-    m.params
-        .get_f64(k)
-        .unwrap_or_else(|| panic!("model {:?} has no param {k}", m.id))
+    super::resolve_value(value).model
 }
 
 // ─── match rules ─────────────────────────────────────────────────────────────
@@ -96,7 +78,7 @@ fn value_strings_from_the_corpus_bind_to_the_right_entry() {
         ("0157004.DR", "fuse_nano2_157"),
     ] {
         assert_eq!(
-            id_of(value),
+            resolve(value).id,
             want,
             "value {value:?} bound to the wrong entry"
         );
@@ -213,15 +195,7 @@ fn a_net_tie_is_a_short_and_not_an_open() {
     // The distinction the entry exists for. Ignoring a net tie splits a ground
     // plane in two in simulation and then reports the consequences as faults on
     // a board that is electrically fine.
-    let lib = ModelLibrary::builtin();
-    let m = lib
-        .resolve(&ComponentQuery {
-            value: Some("NetTie_2".into()),
-            footprint: Some("NetTie:NetTie-2_SMD_Pad0.5mm".into()),
-            ..Default::default()
-        })
-        .model
-        .expect("a net tie must resolve");
+    let m = expect_query(Some("NetTie_2"), None, Some("NetTie:NetTie-2_SMD_Pad0.5mm"));
     assert_eq!(
         m.kind,
         ComponentKind::Passive,
@@ -376,11 +350,8 @@ fn the_irlml6402_carries_infineons_own_level_1_card() {
     }
 }
 
-/// Shockley forward voltage with series resistance, from the entry's own params.
-fn vf_at(m: &ModelEntry, i: f64) -> f64 {
-    let vt = 0.025852;
-    p(m, "n") * vt * (i / p(m, "is")).ln() + i * p(m, "rs")
-}
+/// Thermal voltage for the Shockley forward-voltage checks below.
+const VT: f64 = 0.025852;
 
 #[test]
 fn the_new_diodes_sit_on_their_published_forward_points() {
@@ -394,7 +365,7 @@ fn the_new_diodes_sit_on_their_published_forward_points() {
         ("BAV70", 0.150, 1.250),
     ] {
         let m = resolve(part);
-        let got = vf_at(&m, i);
+        let got = vf_at(&m, i, VT);
         assert!(
             (got - want).abs() < 2e-3,
             "{part} at {i} A: datasheet {want} V, model {got:.4} V"
@@ -414,7 +385,7 @@ fn the_diode_out_of_sample_points_land_under_the_published_maximum() {
         ("BAV70", 0.050, 1.000), // entry records -5.1%
     ] {
         let m = resolve(part);
-        let got = vf_at(&m, i);
+        let got = vf_at(&m, i, VT);
         assert!(
             got <= limit,
             "{part} at {i} A: model says {got:.4} V, above the datasheet MAXIMUM \

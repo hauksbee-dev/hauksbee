@@ -3818,21 +3818,7 @@ i2c_address = 0x76
     fn protection_trip_on_unprotected_supply_refuses_at_load() {
         let bound = BoundBoard {
             name: "prot-guard".to_string(),
-            circuit: hauksbee_ir::Circuit::new(),
-            net_nodes: HashMap::new(),
-            net_names: Vec::new(),
-            digital: Vec::new(),
-            mcus: Vec::new(),
-            dnp_mcus: Vec::new(),
-            component_kinds: HashMap::new(),
-            input_sources: HashMap::new(),
-            supplies: Vec::new(),
-            behavioral: Vec::new(),
-            device_meta: Vec::new(),
-            dacs: Vec::new(),
-            peripherals: Vec::new(),
-            latching_switches: false,
-            report: hauksbee_engine::reports::bind::BindReport::default(),
+            ..BoundBoard::default()
         };
         let check = |supply: &str| {
             let s = spec(&format!(

@@ -2,19 +2,7 @@
 //! the browser, MCP and authoring tools present to a user. Merely resolving a
 //! model kind is not an assertion that the entire datasheet is simulated.
 
-use hauksbee_models::{ComponentQuery, ModelLibrary};
-
-fn resolve(value: &str) -> hauksbee_models::Resolution {
-    ModelLibrary::builtin().resolve(&ComponentQuery {
-        value: Some(value.into()),
-        // Layout-only inputs promote the value to the MPN slot when no BOM
-        // property exists. Mirror the production query shape: match rules are
-        // conjunctive, so leaving this empty would make exact value+MPN cards
-        // look unresolved only in the test.
-        mpn: Some(value.into()),
-        ..Default::default()
-    })
-}
+use super::resolve_part;
 
 #[test]
 fn multi_board_reference_models_declare_runs_and_omissions() {
@@ -74,11 +62,8 @@ fn multi_board_reference_models_declare_runs_and_omissions() {
             "full_register_map",
         ),
     ] {
-        let resolution = resolve(value);
-        let model = resolution
-            .model
-            .as_ref()
-            .unwrap_or_else(|| panic!("{value} did not resolve"));
+        // The layout-only query shape: value promoted to the MPN slot.
+        let model = resolve_part(value).unwrap_or_else(|| panic!("{value} did not resolve"));
         assert_eq!(model.id, id, "{value} resolved to a different model");
         assert!(
             model

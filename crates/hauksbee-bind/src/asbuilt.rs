@@ -918,25 +918,13 @@ mod tests {
     /// the named nets, mirroring the runner's own test literal.
     fn test_board(nets: &[(&str, u32)]) -> BoundBoard {
         BoundBoard {
-            latching_switches: false,
             name: "asbuilt-test".to_string(),
-            circuit: hauksbee_ir::Circuit::new(),
             net_nodes: nets
                 .iter()
                 .map(|(n, id)| (n.to_string(), NodeId(*id)))
                 .collect(),
             net_names: nets.iter().map(|(n, _)| n.to_string()).collect(),
-            digital: Vec::new(),
-            mcus: Vec::new(),
-            dnp_mcus: Vec::new(),
-            component_kinds: std::collections::HashMap::new(),
-            input_sources: std::collections::HashMap::new(),
-            supplies: Vec::new(),
-            behavioral: Vec::new(),
-            device_meta: Vec::new(),
-            dacs: Vec::new(),
-            peripherals: Vec::new(),
-            report: crate::bind_report::BindReport::default(),
+            ..BoundBoard::default()
         }
     }
 
@@ -1050,10 +1038,9 @@ mod tests {
     /// stale they point at the orphaned node.
     #[test]
     fn jumper_remaps_cached_mcu_and_dac_node_ids() {
-        use crate::bind_report::BindReport;
         use crate::binder::{BoundBoard, DacBinding, McuBinding};
         use crate::drivers::PinDriver;
-        use hauksbee_ir::{Circuit, DeviceId, NodeId};
+        use hauksbee_ir::{DeviceId, NodeId};
         use std::collections::HashMap;
 
         let bus = NodeId(1);
@@ -1123,22 +1110,11 @@ mod tests {
         net_nodes.insert("N".to_string(), n);
 
         let mut bound = BoundBoard {
-            latching_switches: false,
-            name: String::new(),
-            circuit: Circuit::new(),
             net_nodes,
-            net_names: Vec::new(),
             digital: vec![digital],
             mcus: vec![mcu],
-            dnp_mcus: Vec::new(),
-            component_kinds: HashMap::new(),
-            input_sources: HashMap::new(),
-            supplies: Vec::new(),
-            behavioral: Vec::new(),
-            device_meta: Vec::new(),
             dacs: vec![dac],
-            peripherals: Vec::new(),
-            report: BindReport::default(),
+            ..BoundBoard::default()
         };
 
         let overlay =
