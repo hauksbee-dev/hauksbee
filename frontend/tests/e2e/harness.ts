@@ -1,6 +1,8 @@
 import { fileURLToPath } from 'node:url'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ConsoleMessage, Page } from 'playwright'
+import { chromium } from 'playwright'
+import type { Browser, ConsoleMessage, Page } from 'playwright'
 
 const FIXTURE_URL = /\[visual-lint fixture server\]\s+(http:\/\/127\.0\.0\.1:\d+)/
 
@@ -204,4 +206,80 @@ export function shotsInto(dir: string) {
     await settle(page, 500)
     await page.screenshot({ path: join(dir, `${name}.png`), fullPage: false })
   }
+}
+
+/** Open the app on its landing page and wait for the drop zone. */
+export async function openApp(page: Page) {
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 30_000 })
+}
+
+/** Open the app and load the Watchy sample board through to its verdict. */
+export async function openSample(page: Page) {
+  await openApp(page)
+  await page.click('[data-testid="sample-watchy"]')
+  await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 60_000 })
+}
+
+/** Scroll the report's Export trigger into view and open its menu. */
+export async function openExportMenu(page: Page) {
+  await page.locator('[data-testid="export-open"]').scrollIntoViewIfNeeded()
+  await page.click('[data-testid="export-open"]')
+  await page.waitForSelector('[data-testid="export-menu"]')
+}
+
+/** Compose two checks from the Checks view, so a run has a real spec in it: the
+ *  starter rule plus a net-voltage rule from the full vocabulary menu. */
+export async function composeChecks(page: Page, settleMs?: number) {
+  await page.click('[data-testid="nav-checks"]')
+  await page.waitForSelector('[data-testid="checks-panel"]', { timeout: 20_000 })
+  const empty = page.locator('[data-testid="checks-empty-add"]')
+  if (await empty.count() > 0) await empty.click()
+  await page.click('[data-testid="add-check"]')
+  await page.locator('button', { hasText: 'A net must sit at a voltage' }).first().click()
+  await page.locator('input[list="net-options"]').last().fill('GND')
+  await page.locator('label', { hasText: 'min V' }).locator('input').last().fill('-0.1')
+  await page.locator('label', { hasText: 'max V' }).locator('input').last().fill('0.1')
+  await settle(page, settleMs)
+}
+
+type FlowOptions = {
+  /** Evidence directory, emptied before the run. */
+  out: string
+  viewport: { width: number; height: number }
+  timeout?: number
+  /** Console noise to ignore on the main page. */
+  ignore?: RegExp
+  acceptDownloads?: boolean
+  /** Count notes in the summary. */
+  notes?: boolean
+  /** Serves the app for the run; the fixture server by default. */
+  host?: (run: (base: string) => Promise<void>) => Promise<void>
+}
+
+/** One browser flow: a fresh evidence directory, a served app, one watched page
+ *  (more contexts can come from `browser`), a final console check and the
+ *  summary. A flow that returns early still gets the console check. */
+export async function browserFlow(
+  o: FlowOptions,
+  run: (page: Page, env: { base: string; browser: Browser }) => Promise<void>,
+) {
+  rmSync(o.out, { recursive: true, force: true })
+  mkdirSync(o.out, { recursive: true })
+  await (o.host ?? withFixture)(async base => {
+    const browser = await chromium.launch({ headless: true })
+    try {
+      const ctx = await browser.newContext({ baseURL: base, viewport: o.viewport, acceptDownloads: o.acceptDownloads })
+      const page = await ctx.newPage()
+      page.setDefaultTimeout(o.timeout ?? 20_000)
+      watchConsole(page, 'app', o.ignore)
+      await run(page, { base, browser })
+      step('console')
+      ok('no console errors anywhere in the run', consoleErrors.length === 0, consoleErrors.slice(0, 5).join(' | '))
+      await ctx.close()
+    } finally {
+      await browser.close()
+    }
+    summarise(`screenshots: ${o.out}`, o.notes)
+  })
 }

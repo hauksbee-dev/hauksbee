@@ -165,21 +165,27 @@ export function Sidebar({
         </div>
       )}
 
-      {/* Theme toggle */}
-      <div className="px-2.5 pb-3">
-        <button
-          type="button"
-          data-testid="theme-toggle"
-          className="nav-item"
-          onClick={onToggleTheme}
-          aria-label={theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
-        >
-          <span style={{ display: 'inline-flex', flexShrink: 0 }}>
-            {theme === 'dark' ? <SunIcon size={15} /> : <MoonIcon size={15} />}
-          </span>
-          <span className="sidebar-label">{theme === 'dark' ? 'Light theme' : 'Dark theme'}</span>
-        </button>
-      </div>
+      <ThemeToggle theme={theme} onToggle={onToggleTheme} />
     </nav>
+  )
+}
+
+/** The rail's footer button that flips between the light and dark themes. */
+export function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  return (
+    <div className="px-2.5 pb-3">
+      <button
+        type="button"
+        data-testid="theme-toggle"
+        className="nav-item"
+        onClick={onToggle}
+        aria-label={theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
+      >
+        <span style={{ display: 'inline-flex', flexShrink: 0 }}>
+          {theme === 'dark' ? <SunIcon size={15} /> : <MoonIcon size={15} />}
+        </span>
+        <span className="sidebar-label">{theme === 'dark' ? 'Light theme' : 'Dark theme'}</span>
+      </button>
+    </div>
   )
 }

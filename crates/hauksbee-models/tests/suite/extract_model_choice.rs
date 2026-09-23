@@ -18,19 +18,6 @@ use hauksbee_models::datasheet::{
 };
 use hauksbee_models::extract_config::{load_from, ExtractConfig, FakeHost};
 
-fn host(vars: &[(&str, &str)], tools: &[&str]) -> FakeHost {
-    FakeHost {
-        vars: vars
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect(),
-        tools: tools
-            .iter()
-            .map(|t| (t.to_string(), PathBuf::from(format!("/bin/{t}"))))
-            .collect(),
-    }
-}
-
 fn args() -> Args {
     Args::new(PathBuf::from("x.pdf"), "PART".into(), String::new())
 }
@@ -38,7 +25,7 @@ fn args() -> Args {
 #[test]
 fn every_backend_defaults_to_its_strong_model_at_high_effort() {
     let cfg = ExtractConfig::default();
-    let h = host(&[], &[]);
+    let h = FakeHost::new(&[], &[]);
     for (backend, model, effort) in [
         (Backend::Codex, DEFAULT_CODEX_MODEL, DEFAULT_CODEX_EFFORT),
         (
@@ -66,7 +53,7 @@ fn every_backend_defaults_to_its_strong_model_at_high_effort() {
 fn an_explicit_choice_wins_over_everything() {
     let mut cfg = ExtractConfig::default();
     cfg.set("codex.model", "from-file").unwrap();
-    let h = host(&[("HAUKSBEE_CODEX_MODEL", "from-env")], &[]);
+    let h = FakeHost::new(&[("HAUKSBEE_CODEX_MODEL", "from-env")], &[]);
     let a = args()
         .backend(Some(Backend::Codex))
         .model(Some("from-flag".into()))
@@ -87,10 +74,14 @@ fn the_environment_wins_over_the_file_which_wins_over_the_default() {
     cfg.set("codex.effort", "low").unwrap();
     cfg.set("claude-code.model", "claude-from-file").unwrap();
 
-    let r = resolve_with(&cfg, &host(&[], &[]), &args().backend(Some(Backend::Codex)));
+    let r = resolve_with(
+        &cfg,
+        &FakeHost::new(&[], &[]),
+        &args().backend(Some(Backend::Codex)),
+    );
     assert_eq!((r.model(), r.effort()), ("from-file", Some("low")));
 
-    let h = host(&[("HAUKSBEE_CODEX_MODEL", "from-env")], &[]);
+    let h = FakeHost::new(&[("HAUKSBEE_CODEX_MODEL", "from-env")], &[]);
     let r = resolve_with(&cfg, &h, &args().backend(Some(Backend::Codex)));
     assert_eq!(r.model(), "from-env", "the environment beats the file");
     assert_eq!(
@@ -99,7 +90,7 @@ fn the_environment_wins_over_the_file_which_wins_over_the_default() {
         "a field the environment leaves alone still comes from the file"
     );
 
-    let h = host(&[("HAUKSBEE_CLAUDE_EFFORT", "medium")], &[]);
+    let h = FakeHost::new(&[("HAUKSBEE_CLAUDE_EFFORT", "medium")], &[]);
     let r = resolve_with(&cfg, &h, &args().backend(Some(Backend::ClaudeCode)));
     assert_eq!(
         (r.model(), r.effort()),
@@ -113,7 +104,7 @@ fn an_empty_setting_is_not_a_choice() {
     // second is what a shell script that forgot to fill a value produces. It
     // must not send `--model ""` to the CLI.
     let cfg = ExtractConfig::default();
-    let h = host(
+    let h = FakeHost::new(
         &[
             ("HAUKSBEE_CODEX_MODEL", ""),
             ("HAUKSBEE_CODEX_EFFORT", "   "),
@@ -130,7 +121,7 @@ fn an_empty_setting_is_not_a_choice() {
         .backend(Some(Backend::Codex))
         .model(Some("".into()))
         .effort(Some(" ".into()));
-    let r = resolve_with(&cfg, &host(&[], &[]), &a);
+    let r = resolve_with(&cfg, &FakeHost::new(&[], &[]), &a);
     assert_eq!(
         (r.model(), r.effort()),
         (DEFAULT_CODEX_MODEL, Some(DEFAULT_CODEX_EFFORT))
@@ -143,10 +134,10 @@ fn the_backend_itself_follows_the_same_precedence() {
     cfg.set("backend", "agy").unwrap();
     let everything = ["codex", "claude", "agy"];
 
-    let r = resolve_with(&cfg, &host(&[], &everything), &args());
+    let r = resolve_with(&cfg, &FakeHost::new(&[], &everything), &args());
     assert_eq!(r.backend, Backend::Agy, "the file beats auto-detection");
 
-    let h = host(&[("HAUKSBEE_EXTRACT_BACKEND", "claude-code")], &everything);
+    let h = FakeHost::new(&[("HAUKSBEE_EXTRACT_BACKEND", "claude-code")], &everything);
     let r = resolve_with(&cfg, &h, &args());
     assert_eq!(
         r.backend,
@@ -157,7 +148,11 @@ fn the_backend_itself_follows_the_same_precedence() {
     let r = resolve_with(&cfg, &h, &args().backend(Some(Backend::Codex)));
     assert_eq!(r.backend, Backend::Codex, "--backend beats everything");
 
-    let r = resolve_with(&ExtractConfig::default(), &host(&[], &["claude"]), &args());
+    let r = resolve_with(
+        &ExtractConfig::default(),
+        &FakeHost::new(&[], &["claude"]),
+        &args(),
+    );
     assert_eq!(
         r.backend,
         Backend::ClaudeCode,
@@ -175,7 +170,7 @@ fn a_saved_file_is_read_back_into_the_same_resolution() {
     )
     .unwrap();
     let loaded = load_from(&path).unwrap();
-    let r = resolve_with(&loaded.config, &host(&[], &[]), &args());
+    let r = resolve_with(&loaded.config, &FakeHost::new(&[], &[]), &args());
     assert_eq!(r.backend, Backend::ClaudeCode);
     assert_eq!((r.model(), r.effort()), ("claude-sonnet-5", Some("high")));
     assert_eq!(r.summary(), "Claude Code (claude-sonnet-5, high effort)");

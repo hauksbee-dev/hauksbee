@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { BoardInfoMsg, SimFrame, ClientMessage } from '../types/protocol'
+import type { BoardInfoMsg, SimFrame } from '../types/protocol'
 import { CloseIcon, PlusIcon, EyeIcon, EyeOffIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
 import { netReadoutText, readNet } from '../lib/net-state'
@@ -31,7 +31,6 @@ interface ProbeScopePanelProps {
   probes: string[]
   onAddProbe: (net: string) => void
   onRemoveProbe: (net: string) => void
-  send: (msg: ClientMessage) => void
 }
 
 export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemoveProbe }: ProbeScopePanelProps) {

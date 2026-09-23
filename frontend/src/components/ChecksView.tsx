@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CheckResult, QueuedRequest, RunResponse, SensorCatalogEntry, WebReport } from '../types/report'
+import type { CheckResult, QueuedLiveRegisterMap, QueuedRequest, RunResponse, SensorCatalogEntry, WebReport } from '../types/report'
 import type { ActionResultMsg } from '../types/protocol'
 import type { SelectedComponent } from './SelectionCard'
 import { PlusIcon } from './Icons'
@@ -169,13 +169,7 @@ export function ChecksView({
   liveRegisterMapAvailable?: boolean
   /** Explicit user action after local row validation; never automatic on
    * paste/select and never invokes a network or LLM model-extraction path. */
-  onAttachRegisterMapLive?: (request: {
-    id: string
-    spec_toml: string
-    inputs: Record<string, number>
-    controller?: string
-    cs_net?: string
-  }) => number
+  onAttachRegisterMapLive?: (request: Omit<QueuedLiveRegisterMap, 'seq'>) => number
   /** Latest engine receipt. It is correlated by request_id before being shown,
    * so editing/re-attaching a reused device id cannot surface stale success. */
   liveActionResult?: ActionResultMsg | null

@@ -448,21 +448,15 @@ impl ExtractConfig {
             )
         };
         let Some((section, field)) = key.split_once('.') else {
-            return match key {
+            match key {
                 "backend" => {
                     self.backend = opt.filter(|v| v != "auto").map(|v| v.parse()).transpose()?;
-                    Ok(())
                 }
-                "retries" => {
-                    self.retries = number("retries")?.map(|n| n as usize);
-                    Ok(())
-                }
-                "timeout_secs" => {
-                    self.timeout_secs = number("timeout_secs")?;
-                    Ok(())
-                }
-                _ => Err(unknown()),
-            };
+                "retries" => self.retries = number("retries")?.map(|n| n as usize),
+                "timeout_secs" => self.timeout_secs = number("timeout_secs")?,
+                _ => return Err(unknown()),
+            }
+            return Ok(());
         };
         if section == "api" {
             let slot = match field {
@@ -849,6 +843,22 @@ pub struct FakeHost {
     pub tools: BTreeMap<String, PathBuf>,
 }
 
+impl FakeHost {
+    /// A host with these environment variables and these tools installed.
+    pub fn new(vars: &[(&str, &str)], tools: &[&str]) -> Self {
+        Self {
+            vars: vars
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            tools: tools
+                .iter()
+                .map(|t| (t.to_string(), PathBuf::from(format!("/usr/local/bin/{t}"))))
+                .collect(),
+        }
+    }
+}
+
 impl Host for FakeHost {
     fn var(&self, name: &str) -> Option<String> {
         self.vars.get(name).cloned()
@@ -992,21 +1002,6 @@ impl Resolved {
             .map(|_| format!("; {}", self.sends_data_to(self.backend)))
             .unwrap_or_default();
         format!("{} ({detail}{routing})", self.backend.label())
-    }
-
-    /// Per-run protocol/model flags; command overrides still require the same
-    /// config or `HAUKSBEE_*_COMMAND` environment variable.
-    pub fn as_flags(&self) -> String {
-        let mut s = format!("--backend {} --model {}", self.backend.name(), self.model());
-        if let Some(e) = self.effort() {
-            s.push_str(&format!(" --effort {e}"));
-        } else {
-            s.push_str(&format!(
-                " --api-base {} --api-key-env {}",
-                self.api.base_url, self.api.api_key_env
-            ));
-        }
-        s
     }
 }
 
@@ -1174,22 +1169,9 @@ pub fn save(config: &ExtractConfig, path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn host(vars: &[(&str, &str)], tools: &[&str]) -> FakeHost {
-        FakeHost {
-            vars: vars
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            tools: tools
-                .iter()
-                .map(|t| (t.to_string(), PathBuf::from(format!("/usr/local/bin/{t}"))))
-                .collect(),
-        }
-    }
-
     #[test]
     fn an_empty_config_resolves_to_the_documented_defaults() {
-        let r = ExtractConfig::default().resolve(&host(&[], &["claude"]), None);
+        let r = ExtractConfig::default().resolve(&FakeHost::new(&[], &["claude"]), None);
         assert_eq!(r.backend, Backend::ClaudeCode);
         assert_eq!(r.backend_source, BackendSource::Auto);
         for (backend, model, effort, permission) in [
@@ -1226,14 +1208,19 @@ mod tests {
             (&["agy"][..], Backend::Agy),
             (&[][..], Backend::Codex),
         ] {
-            assert_eq!(cfg.resolve(&host(&[], tools), None).backend, backend);
+            assert_eq!(
+                cfg.resolve(&FakeHost::new(&[], tools), None).backend,
+                backend
+            );
         }
     }
 
     #[test]
     fn an_exported_llm_key_still_selects_the_api_backend() {
-        let r = ExtractConfig::default()
-            .resolve(&host(&[("HAUKSBEE_LLM_API_KEY", "k")], &["codex"]), None);
+        let r = ExtractConfig::default().resolve(
+            &FakeHost::new(&[("HAUKSBEE_LLM_API_KEY", "k")], &["codex"]),
+            None,
+        );
         assert_eq!(r.backend, Backend::Api);
         assert_eq!(r.api.api_key_env, "HAUKSBEE_LLM_API_KEY");
     }
@@ -1243,7 +1230,7 @@ mod tests {
         let mut cfg = ExtractConfig::default();
         cfg.set("backend", "agy").unwrap();
         cfg.set("claude-code.model", "from-file").unwrap();
-        let h = host(
+        let h = FakeHost::new(
             &[("HAUKSBEE_CLAUDE_MODEL", "from-env")],
             &["codex", "claude", "agy"],
         );
@@ -1262,7 +1249,7 @@ mod tests {
         );
 
         let r = cfg.resolve(
-            &host(&[("HAUKSBEE_EXTRACT_BACKEND", "codex")], &["codex"]),
+            &FakeHost::new(&[("HAUKSBEE_EXTRACT_BACKEND", "codex")], &["codex"]),
             None,
         );
         assert_eq!(
@@ -1280,7 +1267,7 @@ mod tests {
         let mut cfg = ExtractConfig::default();
         cfg.set("claude-code.command", "claude-mix").unwrap();
         cfg.set("claude-code.model", "gpt-5.6-sol").unwrap();
-        let h = host(&[], &["claude-mix"]);
+        let h = FakeHost::new(&[], &["claude-mix"]);
         let r = cfg.resolve(&h, None);
         assert_eq!(r.backend, Backend::ClaudeCode);
         assert_eq!(r.claude_code.command, "claude-mix");
@@ -1290,7 +1277,7 @@ mod tests {
         assert!(row.available && row.sends_data_to.contains("claude-mix"));
         assert!(!row.sends_data_to.contains("Anthropic"));
         cfg.set("backend", "claude-code").unwrap();
-        let h = host(
+        let h = FakeHost::new(
             &[("HAUKSBEE_CLAUDE_COMMAND", "missing wrapper")],
             &["claude"],
         );
@@ -1468,16 +1455,16 @@ mod tests {
         ];
         for (vars, expected) in cases {
             assert_eq!(
-                config_path_in(&host(vars, &[])).unwrap(),
+                config_path_in(&FakeHost::new(vars, &[])).unwrap(),
                 PathBuf::from(expected)
             );
         }
-        assert!(config_path_in(&host(&[], &[])).is_err());
+        assert!(config_path_in(&FakeHost::new(&[], &[])).is_err());
     }
 
     #[test]
     fn availability_reports_each_backend_against_the_machine() {
-        let h = host(&[("OPENAI_API_KEY", "k")], &["agy"]);
+        let h = FakeHost::new(&[("OPENAI_API_KEY", "k")], &["agy"]);
         let r = ExtractConfig::default().resolve(&h, None);
         let rows = availability(&h, &r);
         let ok = |id: &str| rows.iter().find(|s| s.id == id).unwrap().available;
@@ -1485,9 +1472,9 @@ mod tests {
 
         let mut local = ExtractConfig::default();
         local.apply_preset("ollama").unwrap();
-        let r = local.resolve(&host(&[], &[]), None);
+        let r = local.resolve(&FakeHost::new(&[], &[]), None);
         assert!(
-            availability(&host(&[], &[]), &r)
+            availability(&FakeHost::new(&[], &[]), &r)
                 .iter()
                 .find(|s| s.id == "api")
                 .unwrap()
@@ -1497,7 +1484,7 @@ mod tests {
 
     #[test]
     fn flag_overrides_apply_to_the_active_backend_only() {
-        let mut r = ExtractConfig::default().resolve(&host(&[], &["claude"]), None);
+        let mut r = ExtractConfig::default().resolve(&FakeHost::new(&[], &["claude"]), None);
         r.override_model(Some("sonnet"), Some(""));
         assert_eq!(
             (r.claude_code.model.as_str(), r.claude_code.effort.as_str()),
@@ -1505,8 +1492,8 @@ mod tests {
         );
         assert_eq!(r.codex.model, DEFAULT_CODEX_MODEL);
         assert_eq!(
-            r.as_flags(),
-            "--backend claude-code --model sonnet --effort high"
+            (r.backend, r.model(), r.effort()),
+            (Backend::ClaudeCode, "sonnet", Some("high"))
         );
     }
 }

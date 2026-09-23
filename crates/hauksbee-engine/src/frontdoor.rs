@@ -70,6 +70,25 @@ impl From<&HeadsUp> for WebHeadsUp {
     }
 }
 
+impl WebFinding {
+    /// A finding that points at no single spot on the board.
+    fn unplaced(
+        level: &str,
+        what: impl Into<String>,
+        why: impl Into<String>,
+        fix: impl Into<String>,
+    ) -> Self {
+        Self {
+            level: level.to_string(),
+            what: what.into(),
+            why: why.into(),
+            fix: fix.into(),
+            x: None,
+            y: None,
+        }
+    }
+}
+
 impl From<&PlainFinding> for WebFinding {
     fn from(f: &PlainFinding) -> Self {
         WebFinding {
@@ -236,7 +255,7 @@ pub struct WebGpioNet {
 /// findings reuse the exact same `{what, why, fix}` cards as the static sections
 /// (via [`crate::plain::plain_faults`]), so the web and CLI co-sim surfaces can
 /// never disagree.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct WebCosimSection {
     /// Whether a co-sim actually executed against the firmware.
     pub ran: bool,
@@ -479,7 +498,7 @@ pub struct WebImportFailure {
 }
 
 /// The whole payload sent back to the browser after an upload.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct WebReport {
     pub ok: bool,
     /// Set when extraction failed; `ok` is false and the rest is empty.
@@ -854,32 +873,10 @@ fn unreadable_with_import_failure(
     WebReport {
         ok: false,
         error: Some(error),
-        board_name: String::new(),
         file_name: file_name.to_string(),
-        num_components: 0,
-        num_nets: 0,
-        clearance_rule_source: None,
-        triage: None,
         headline: "Could not read the file.".to_string(),
-        run_level_undermined: false,
-        serious: 0,
-        total: 0,
-        sections: Vec::new(),
-        components: Vec::new(),
-        import_diagnostics: None,
         import_failure,
-        bind: None,
-        model_coverage: None,
-        inventory: Vec::new(),
-        assumptions: Vec::new(),
-        evidence: Vec::new(),
-        notes: Vec::new(),
-        nets: Vec::new(),
-        component_kinds: std::collections::BTreeMap::new(),
-        component_assertions: std::collections::BTreeMap::new(),
-        supplies: Vec::new(),
-        cosim: None,
-        refusal: None,
+        ..WebReport::default()
     }
 }
 
@@ -944,15 +941,25 @@ pub(crate) fn unreadable_input_json(
     contents: &[u8],
     error: crate::board_input::BoardInputError,
 ) -> String {
+    to_json_or_failure(&unreadable_input(file_name, contents, error))
+}
+
+fn unreadable_input(
+    file_name: &str,
+    contents: &[u8],
+    error: crate::board_input::BoardInputError,
+) -> WebReport {
     let failure = web_import_failure(&error, contents);
-    serde_json::to_string(&unreadable_with_import_failure(
-        file_name,
-        error.web_message(),
-        Some(failure),
-    ))
-    .unwrap_or_else(|serialize_error| {
-        format!("{{\"ok\":false,\"error\":\"failed to serialize report: {serialize_error}\"}}")
-    })
+    unreadable_with_import_failure(file_name, error.web_message(), Some(failure))
+}
+
+/// The minimal `{ok,error}` document for a report that failed to serialize.
+fn serialize_failure(error: &serde_json::Error) -> String {
+    format!("{{\"ok\":false,\"error\":\"failed to serialize report: {error}\"}}")
+}
+
+fn to_json_or_failure(value: &impl Serialize) -> String {
+    serde_json::to_string(value).unwrap_or_else(|e| serialize_failure(&e))
 }
 
 /// Run the full front-door analysis on an uploaded board file.
@@ -969,35 +976,21 @@ pub(crate) fn unreadable_input_json(
 /// board file is.
 pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     match crate::board_input::from_bytes(file_name, contents) {
-        Ok(norm) => analyze_normalized(file_name, &norm).0,
-        Err(e) => {
-            let failure = web_import_failure(&e, contents);
-            unreadable_with_import_failure(file_name, e.web_message(), Some(failure))
-        }
+        Ok(norm) => analyze_normalized_with_ties(file_name, &norm, None).0,
+        Err(e) => unreadable_input(file_name, contents, e),
     }
 }
 
-/// The static analysis on an already-normalized board. Split from [`analyze`]
-/// so [`analyze_with_firmware`] can normalize ONCE and hand the same
+/// The static analysis on an already-normalized board, with an optional
+/// companion schematic's declared net ties. Split from [`analyze`] so
+/// [`analyze_with_firmware`] can normalize ONCE and hand the same
 /// [`crate::board_input::NormalizedBoard`] to both the static report and the
-/// co-sim, instead of re-reading the original bytes with a weaker sniffer
-/// (re-reading fails co-sim on any `.board` or gerber zip that has just
-/// produced a clean static report).
-///
+/// co-sim, instead of re-reading the original bytes with a weaker sniffer.
 /// Also returns the DRC report it computed, so the firmware path can bridge
 /// the REAL copper shorts into the co-sim circuit instead of simulating a
 /// board the DRC section (on the same page) says is shorted.
-fn analyze_normalized(
-    file_name: &str,
-    norm: &crate::board_input::NormalizedBoard,
-) -> (WebReport, hauksbee_extract::DrcReport) {
-    analyze_normalized_with_ties(file_name, norm, None)
-}
-
-/// [`analyze_normalized`] with an optional companion schematic's declared net
-/// ties.
 ///
-/// Split out rather than folded into `analyze`, because the two entries have
+/// The ties are a parameter rather than read inside `analyze`, because the two entries have
 /// genuinely different inputs. A file DROPPED on the web UI arrives as bytes with
 /// no filesystem beside it, so there is no companion to read and the report keeps
 /// the "supply the .sch" hint. A `--serve` run was pointed at a path, so the
@@ -1387,7 +1380,6 @@ fn analyze_normalized_with_context(
 
     let report = WebReport {
         ok: true,
-        error: None,
         board_name: board.name.clone(),
         file_name: file_name.to_string(),
         num_components: board.components.len(),
@@ -1401,7 +1393,6 @@ fn analyze_normalized_with_context(
         sections,
         components,
         import_diagnostics: Some(web_import_diagnostics(norm)),
-        import_failure: None,
         bind: Some(bind_web),
         model_coverage: Some(crate::commands::models::coverage_snapshot(board, &lib)),
         inventory: evidence.inventory().to_vec(),
@@ -1416,8 +1407,7 @@ fn analyze_normalized_with_context(
             .collect(),
         component_assertions: component_assertion_capabilities(board, &bound),
         supplies,
-        cosim: None,
-        refusal: None,
+        ..WebReport::default()
     };
     (report, drc)
 }
@@ -1448,17 +1438,6 @@ pub fn analyze_with_firmware(
     analyze_with_firmware_detailed(file_name, contents, fw_name, fw_bytes).report
 }
 
-pub fn analyze_with_firmware_with_ties(
-    file_name: &str,
-    contents: &[u8],
-    fw_name: &str,
-    fw_bytes: &[u8],
-    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
-) -> WebReport {
-    analyze_with_firmware_detailed_with_ties(file_name, contents, fw_name, fw_bytes, schematic_ties)
-        .report
-}
-
 pub fn analyze_with_firmware_detailed(
     file_name: &str,
     contents: &[u8],
@@ -1475,18 +1454,6 @@ pub fn analyze_with_firmware_detailed_with_ties(
     fw_bytes: &[u8],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> WebFirmwareAnalysis {
-    let (report, coverage) =
-        analyze_with_firmware_parts(file_name, contents, fw_name, fw_bytes, schematic_ties);
-    WebFirmwareAnalysis { report, coverage }
-}
-
-fn analyze_with_firmware_parts(
-    file_name: &str,
-    contents: &[u8],
-    fw_name: &str,
-    fw_bytes: &[u8],
-    schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
-) -> (WebReport, WebCosimCoverage) {
     // Normalize ONCE; the static analysis and the co-sim share the same
     // extracted board. Re-reading the ORIGINAL bytes for co-sim with only the
     // text/binary sniffers fails with "could not re-read the board" on a
@@ -1495,18 +1462,17 @@ fn analyze_with_firmware_parts(
         Ok(n) => n,
         // No board to co-sim against; return the normalization error as-is.
         Err(e) => {
-            let failure = web_import_failure(&e, contents);
-            return (
-                unreadable_with_import_failure(file_name, e.web_message(), Some(failure)),
-                WebCosimCoverage::default(),
-            );
+            return WebFirmwareAnalysis {
+                report: unreadable_input(file_name, contents, e),
+                coverage: WebCosimCoverage::default(),
+            }
         }
     };
     let lib = ModelLibrary::builtin_with_user_dirs(&[]);
     let static_bound = bind_board(&norm.board, &lib);
     let cosim_bound = bind_board(&norm.board, &lib);
     let evidence_bound = bind_board(&norm.board, &lib);
-    analyze_with_firmware_context(
+    let (report, coverage) = analyze_with_firmware_context(
         file_name,
         &norm,
         fw_name,
@@ -1517,7 +1483,8 @@ fn analyze_with_firmware_parts(
         cosim_bound,
         &evidence_bound,
         &[],
-    )
+    );
+    WebFirmwareAnalysis { report, coverage }
 }
 
 fn analyze_with_firmware_context(
@@ -1681,15 +1648,12 @@ fn analyze_with_firmware_context(
         // so a wrong-env surprise is diagnosable from the report itself.
         cosim.findings.insert(
             0,
-            WebFinding {
-                level: "note".to_string(),
-                what: format!("Firmware resolved from '{fw_name}'."),
-                why: note.clone(),
-                fix: "Upload the exact .elf/.hex directly if this is not the image you meant."
-                    .to_string(),
-                x: None,
-                y: None,
-            },
+            WebFinding::unplaced(
+                "note",
+                format!("Firmware resolved from '{fw_name}'."),
+                note.clone(),
+                "Upload the exact .elf/.hex directly if this is not the image you meant.",
+            ),
         );
     }
     // Fold co-sim electrical FAULTS into the top-level verdict: analyze()
@@ -1884,29 +1848,21 @@ fn cosim_caveat_headline(
 fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
     WebCosimSection {
         ran: false,
-        seconds_simulated: 0.0,
-        uart_output: String::new(),
-        findings: vec![WebFinding {
-            level: "note".to_string(),
-            what: "Co-sim not available for this board.".to_string(),
-            why: reason.into(),
-            fix: "Drop a board with a supported in-process MCU and a matching firmware build to run the firmware co-sim.".to_string(),
-            x: None,
-            y: None,
-        }],
-        gpio_nets: Vec::new(),
+        findings: vec![WebFinding::unplaced(
+            "note",
+            "Co-sim not available for this board.",
+            reason,
+            "Drop a board with a supported in-process MCU and a matching firmware build to run the firmware co-sim.",
+        )],
         // A co-sim that never ran cannot have failed an analog chunk: report the
         // clean, backward-compatible shape (valid, no windows).
         analog_valid: true,
-        failed_windows: Vec::new(),
-        spi_framing: Vec::new(),
-        boot_gates: Vec::new(),
         // ran == false: the headline demotion is gated on `ran`, so these remain
         // neutral defaults inside the co-sim section. The containing WebReport's
         // refusal field, not these compatibility booleans, carries the refusal.
         firmware_exercised: true,
         substituted: false,
-        error_budget: None,
+        ..WebCosimSection::default()
     }
 }
 
@@ -1956,10 +1912,10 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
     // where only the solver failed to converge, contradicting both this contract
     // and the CLI `--plain` path, which surfaces it as a heads-up note. The prose
     // below stays loud (it leads the co-sim card); only the severity is honest.
-    WebFinding {
-        level: "note".to_string(),
-        what: "Analog co-sim did not converge: electrical results are not trustworthy".to_string(),
-        why: format!(
+    WebFinding::unplaced(
+        "note",
+        "Analog co-sim did not converge: electrical results are not trustworthy",
+        format!(
             "The analog solver failed on {failed_chunks} {chunk_word} covering {spans}, \
              and no fallback integration rung (reduced step, backward Euler, cold-start \
              continuation, subdivision) could carry them. Over those windows the co-sim \
@@ -1967,14 +1923,11 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
              fault reading there is fiction (see {}: refuse rather than fake).{diagnosis}",
             hauksbee_ir::docs_url("docs/about/LIMITATIONS.md"),
         ),
-        fix: "Treat electrical results inside those windows as unknown. A stiff or \
-              structurally singular section (conflicting rails, an unconverging \
-              nonlinear stage) usually causes it; simplify the offending section or \
-              relax the operating point, then re-run."
-            .to_string(),
-        x: None,
-        y: None,
-    }
+        "Treat electrical results inside those windows as unknown. A stiff or \
+         structurally singular section (conflicting rails, an unconverging \
+         nonlinear stage) usually causes it; simplify the offending section or \
+         relax the operating point, then re-run.",
+    )
 }
 
 /// The actual firmware co-sim for the web path. Mirrors `run_headless` in the
@@ -2020,14 +1973,7 @@ fn coverage_findings_for_web(
                     | CoverageClass::TimingLimitation
             )
         })
-        .map(|c| WebFinding {
-            level: "note".to_string(),
-            what: c.headline.clone(),
-            why: c.message.clone(),
-            fix: c.fix.clone(),
-            x: None,
-            y: None,
-        })
+        .map(|c| WebFinding::unplaced("note", c.headline.clone(), c.message.clone(), c.fix.clone()))
         .collect()
 }
 
@@ -2257,23 +2203,19 @@ fn run_web_cosim_with_bound(
         };
         findings.insert(
             0,
-            WebFinding {
-                level: "note".to_string(),
-                what: format!(
+            WebFinding::unplaced(
+                "note",
+                format!(
                     "This co-sim ran WITH the board's {shorts_applied} physical copper {connection_word} \
                      bridged into the circuit."
                 ),
-                why: "The DRC section above determines whether a contact has board-local physical \
-                      authorization. The co-sim applies every validated-format copper contact \
-                      before simulating, so the rail and GPIO voltages reflect the board as built; \
-                      schematic net names alone do not suppress short faults."
-                    .to_string(),
-                fix: "Follow the DRC section: repair serious contacts, or provide board-local \
-                      authority for the exact intended join."
-                    .to_string(),
-                x: None,
-                y: None,
-            },
+                "The DRC section above determines whether a contact has board-local physical \
+                 authorization. The co-sim applies every validated-format copper contact \
+                 before simulating, so the rail and GPIO voltages reflect the board as built; \
+                 schematic net names alone do not suppress short faults.",
+                "Follow the DRC section: repair serious contacts, or provide board-local \
+                 authority for the exact intended join.",
+            ),
         );
     }
     // A net whose voltage is decided by something other than what the user
@@ -2284,31 +2226,25 @@ fn run_web_cosim_with_bound(
     for msg in sched.drive_conflicts() {
         findings.insert(
             0,
-            WebFinding {
-                level: "note".to_string(),
-                what: "A requested drive was overridden on its net".to_string(),
-                why: msg,
-                fix: "Remove the losing source, or suppress the rail that pins the net, so                       the drive you asked for is the one that takes effect."
-                    .to_string(),
-                x: None,
-                y: None,
-            },
+            WebFinding::unplaced(
+                "note",
+                "A requested drive was overridden on its net",
+                msg,
+                "Remove the losing source, or suppress the rail that pins the net, so                       the drive you asked for is the one that takes effect.",
+            ),
         );
     }
     // Chip-substitution: the firmware was emulated on a less-specific core.
     for sub in sched.substitutions() {
         findings.insert(
             0,
-            WebFinding {
-                level: "note".to_string(),
-                what: "MCU modelled on a substitute core".to_string(),
-                why: sub.message(),
-                fix: "Peripherals/clock/flash may differ on the real part; treat \
-                      the co-sim as approximate for this MCU."
-                    .to_string(),
-                x: None,
-                y: None,
-            },
+            WebFinding::unplaced(
+                "note",
+                "MCU modelled on a substitute core",
+                sub.message(),
+                "Peripherals/clock/flash may differ on the real part; treat \
+                 the co-sim as approximate for this MCU.",
+            ),
         );
     }
     // Runtime driver contention (the model-vs-MCU case the static lint
@@ -2317,17 +2253,14 @@ fn run_web_cosim_with_bound(
     for c in sched.driver_contentions() {
         findings.insert(
             0,
-            WebFinding {
-                level: "serious".to_string(),
-                what: format!("Driver contention on net '{}'", c.net),
-                why: c.message(),
-                fix: "Check the model pin mapping (`hauksbee models resolve`) and the \
-                      firmware's pin-direction writes; two push-pull drivers must never \
-                      share a net without a series element."
-                    .to_string(),
-                x: None,
-                y: None,
-            },
+            WebFinding::unplaced(
+                "serious",
+                format!("Driver contention on net '{}'", c.net),
+                c.message(),
+                "Check the model pin mapping (`hauksbee models resolve`) and the \
+                 firmware's pin-direction writes; two push-pull drivers must never \
+                 share a net without a series element.",
+            ),
         );
     }
     // Sub-chunk pulses swallowed by tick-evaluated sequential parts (friction
@@ -2337,19 +2270,16 @@ fn run_web_cosim_with_bound(
     for p in sched.short_pulses() {
         findings.insert(
             0,
-            WebFinding {
-                level: "note".to_string(),
-                what: format!(
+            WebFinding::unplaced(
+                "note",
+                format!(
                     "A GPIO pulse on net '{}' is too short for the co-sim to observe",
                     p.net
                 ),
-                why: p.message(),
-                fix: "Rerun from the command line with --chunk-us at or below half the \
-                      pulse width, or widen the pulse in firmware."
-                    .to_string(),
-                x: None,
-                y: None,
-            },
+                p.message(),
+                "Rerun from the command line with --chunk-us at or below half the \
+                 pulse width, or widen the pulse in firmware.",
+            ),
         );
     }
     // The co-sim coverage caveats this surface did not carry, on the same
@@ -2390,17 +2320,14 @@ fn run_web_cosim_with_bound(
     if total_toggles == 0 && uart_empty && !any_gpio_driven {
         findings.insert(
             0,
-            WebFinding {
-                level: "note".to_string(),
-                what: "Firmware was not exercised".to_string(),
-                why: "Co-sim saw zero net toggles and no UART output; this result \
-                      cannot vouch for firmware behaviour (the MCU may have stalled \
-                      at boot, run no I/O, or the firmware may not match this board)."
-                    .to_string(),
-                fix: "Confirm the firmware matches this MCU and actually drives I/O.".to_string(),
-                x: None,
-                y: None,
-            },
+            WebFinding::unplaced(
+                "note",
+                "Firmware was not exercised",
+                "Co-sim saw zero net toggles and no UART output; this result \
+                 cannot vouch for firmware behaviour (the MCU may have stalled \
+                 at boot, run no I/O, or the firmware may not match this board).",
+                "Confirm the firmware matches this MCU and actually drives I/O.",
+            ),
         );
     }
     // Analog-validity refusal: if any chunk's analog solve failed, the
@@ -2447,17 +2374,15 @@ fn run_web_cosim_with_bound(
         };
         findings.insert(
             0,
-            WebFinding {
-                level: "note".to_string(),
-                what: format!(
+            WebFinding::unplaced(
+                "note",
+                format!(
                     "{}{what} not a simulated result",
                     taint.refs.first().map_or("A regulator", String::as_str)
                 ),
-                why: taint.reason.clone(),
-                fix: fix.into(),
-                x: None,
-                y: None,
-            },
+                taint.reason.clone(),
+                fix,
+            ),
         );
     }
     let net_volts = sched.net_voltages();
@@ -2497,21 +2422,18 @@ fn run_web_cosim_with_bound(
     for net in &boot_advisory.held_high_control_nets {
         findings.insert(
             0,
-            WebFinding {
-                level: "note".to_string(),
-                what: format!("Control net '{net}' may be energised at power-up"),
-                why: format!(
+            WebFinding::unplaced(
+                "note",
+                format!("Control net '{net}' may be energised at power-up"),
+                format!(
                     "'{net}' drives a transistor/relay, is driven HIGH and held from power-up, \
                      and has no resistor setting a safe default. If a HIGH turns the switched \
                      load ON when it must stay OFF until firmware enables it, it is energised at \
                      power-up."
                 ),
-                fix: "Confirm the polarity is intended, or add a pull resistor that holds the \
-                      gate at its safe (OFF) level until the firmware drives it."
-                    .to_string(),
-                x: None,
-                y: None,
-            },
+                "Confirm the polarity is intended, or add a pull resistor that holds the \
+                 gate at its safe (OFF) level until the firmware drives it.",
+            ),
         );
     }
     let boot_gates: Vec<WebBootGate> = boot_advisory
@@ -2559,15 +2481,12 @@ fn run_web_cosim_with_bound(
         Err(error) => {
             findings.insert(
                 0,
-                WebFinding {
-                    level: "serious".to_string(),
-                    what: "Co-sim result has no valid numerical qualification.".to_string(),
-                    why: error.to_string(),
-                    fix: "Use finite, positive solver tolerances and run the co-simulation again."
-                        .to_string(),
-                    x: None,
-                    y: None,
-                },
+                WebFinding::unplaced(
+                    "serious",
+                    "Co-sim result has no valid numerical qualification.",
+                    error.to_string(),
+                    "Use finite, positive solver tolerances and run the co-simulation again.",
+                ),
             );
             None
         }
@@ -2626,14 +2545,9 @@ fn usbc_web_section(usbc: &crate::checks::usb_c::UsbcReport) -> Option<WebSectio
     // rendered a lone word under the USB-C card while siblings showed sentences.
     if usbc.is_serious() {
         section.verdict = "1 issue found, 1 serious.".to_string();
-        section.findings.push(WebFinding {
-            level: "serious".to_string(),
-            what,
-            why,
-            fix,
-            x: None,
-            y: None,
-        });
+        section
+            .findings
+            .push(WebFinding::unplaced("serious", what, why, fix));
     } else {
         section.verdict =
             "No usb-c cc compliance failures, but 1 thing worth a look (see below).".to_string();
@@ -2681,9 +2595,7 @@ pub fn analyze_json_with_ties(
         Ok(norm) => analyze_normalized_with_ties(file_name, &norm, schematic_ties).0,
         Err(e) => return unreadable_input_json(file_name, contents, e),
     };
-    serde_json::to_string(&report).unwrap_or_else(|e| {
-        format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}")
-    })
+    to_json_or_failure(&report)
 }
 
 /// Serialize an [`analyze_with_firmware`] result to a JSON string for the HTTP
@@ -2713,24 +2625,17 @@ pub fn analyze_with_firmware_json_with_ties(
         fw_bytes,
         schematic_ties,
     );
-    let value = match analysis.to_json_value() {
-        Ok(value) => value,
-        Err(e) => return format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}"),
-    };
-    serde_json::to_string(&value).unwrap_or_else(|e| {
-        format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}")
-    })
+    analysis.to_json_value().map_or_else(
+        |e| serialize_failure(&e),
+        |value| to_json_or_failure(&value),
+    )
 }
 
 /// Analyze the complete browser design bundle with the same manufacturing and
 /// model context used by Live Sim. Supplemental parse/apply errors are returned
 /// as the ordinary web error document, never silently ignored.
 pub fn analyze_design_json(upload: hauksbee_frontdoor_api::frontdoor::DesignUpload) -> String {
-    let error_json = |name: &str, message: String| {
-        serde_json::to_string(&unreadable(name, message)).unwrap_or_else(|error| {
-            format!("{{\"ok\":false,\"error\":\"failed to serialize report: {error}\"}}")
-        })
-    };
+    let error_json = |name: &str, message: String| to_json_or_failure(&unreadable(name, message));
     let name = upload.board.name.clone();
     let prepared = match crate::web_design::prepare(upload) {
         Ok(prepared) => prepared,
@@ -3176,13 +3081,14 @@ fn main {
             ties: declarations,
             auto_discovered: false,
         };
-        let report = analyze_with_firmware_with_ties(
+        let report = analyze_with_firmware_detailed_with_ties(
             "blinky.kicad_pcb",
             board_text.as_bytes(),
             "nowdt.elf",
             firmware,
             Some(&ties),
-        );
+        )
+        .report;
         let report_json = serde_json::to_value(&report).expect("web report serializes");
         let inventory = report_json["inventory"].as_array().expect("inventory");
         let schematic = inventory
@@ -3892,28 +3798,14 @@ fn main {
         WebCosimSection {
             ran: true,
             seconds_simulated: 0.1,
-            uart_output: String::new(),
-            findings: Vec::new(),
-            gpio_nets: Vec::new(),
             analog_valid: true,
-            failed_windows: Vec::new(),
-            spi_framing: Vec::new(),
-            boot_gates: Vec::new(),
             firmware_exercised: true,
-            substituted: false,
-            error_budget: None,
+            ..WebCosimSection::default()
         }
     }
 
     fn finding(level: &str, what: &str) -> WebFinding {
-        WebFinding {
-            level: level.to_string(),
-            what: what.to_string(),
-            why: "why".to_string(),
-            fix: "fix".to_string(),
-            x: None,
-            y: None,
-        }
+        WebFinding::unplaced(level, what, "why", "fix")
     }
 
     fn diverged_window() -> WebFailedWindow {

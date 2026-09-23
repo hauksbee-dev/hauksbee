@@ -445,9 +445,17 @@ fixed in this order, and the order is the contract:
    and the kind (a picker generated from the engine's own kind list, so it
    cannot offer a kind the extractor rejects).
 4. **Progress**, streamed from `POST /api/models/extract` as Server-Sent
-   events, the same framing the dependency installs use. codex is silent for
-   one to three minutes, so the stream heartbeats elapsed time rather than
-   inventing a percentage.
+   events, the same framing the dependency installs use. The agent is silent
+   for minutes, so the stream carries `phase: <what>` lines (reading, rendering
+   pages, identifying the kind, drafting, checking, redrafting with feedback)
+   and an `estimate: <secs>` line: the median of recent successful runs,
+   scaled by page count (0.5-2x), kept in `extract-history.txt` beside
+   `extract.toml`; 180 s with no history. The page shows an estimated bar that
+   eases to 90% by the estimate and then creeps, labelled "about N min left
+   (estimate)" and then "taking longer than usual"; it fills only when the
+   draft arrives. `hauksbee models extract` shows the same phase and typical
+   time on a stderr spinner at a terminal, or a plain line every 30 s when
+   stderr is not one.
 5. **Review**. The draft comes back as a model card: every value with the
    datasheet citation beside it, every value the model admitted it assumed
    flagged separately, the provenance shown as `datasheet-extracted`, and the

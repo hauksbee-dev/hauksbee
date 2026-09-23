@@ -37,6 +37,44 @@ function Toggle({ label, value, onChange, description }: {
   )
 }
 
+/** A labelled range with its current value and the meaning of each end. */
+function Slider({ label, aria, readout, min, max, step, ends, value, onChange }: {
+  label: string
+  aria: string
+  readout: string
+  min: number
+  max: number
+  step: number
+  ends: [string, string]
+  value: number
+  onChange: (v: number) => void
+}) {
+  return (
+    <div className="py-1">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[11px]" style={{ color: 'var(--silk)' }}>{label}</span>
+        <span className="text-[11px] tnum" style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>
+          {readout}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={e => onChange(parseFloat(e.target.value))}
+        aria-label={aria}
+        className="w-full h-1 rounded cursor-pointer"
+        style={{ accentColor: 'var(--copper)' }}
+      />
+      <div className="flex justify-between text-[9px] mt-0.5" style={{ color: 'var(--silk-faint)' }}>
+        <span>{ends[0]}</span><span>{ends[1]}</span>
+      </div>
+    </div>
+  )
+}
+
 export function SolverControlsPanel({ controls, send }: SolverControlsPanelProps) {
   const [local, setLocal] = useState<SolverControls>(controls ?? DEFAULT_CONTROLS)
 
@@ -55,32 +93,11 @@ export function SolverControlsPanel({ controls, send }: SolverControlsPanelProps
 
   return (
     <div className="flex flex-col gap-1 px-3 py-2.5">
-      {/* Temperature */}
-      <div className="py-1">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[11px]" style={{ color: 'var(--silk)' }}>Temperature</span>
-          <span
-            className="text-[11px] tnum"
-            style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}
-          >
-            {local.temperature_c.toFixed(0)}°C
-          </span>
-        </div>
-        <input
-          type="range"
-          min={-40}
-          max={125}
-          step={1}
-          value={local.temperature_c}
-          onChange={e => update({ temperature_c: parseFloat(e.target.value) })}
-          aria-label="Ambient temperature in Celsius"
-          className="w-full h-1 rounded cursor-pointer"
-          style={{ accentColor: 'var(--copper)' }}
-        />
-        <div className="flex justify-between text-[9px] mt-0.5" style={{ color: 'var(--silk-faint)' }}>
-          <span>-40°C</span><span>125°C</span>
-        </div>
-      </div>
+      <Slider
+        label="Temperature" aria="Ambient temperature in Celsius" readout={`${local.temperature_c.toFixed(0)}°C`}
+        min={-40} max={125} step={1} ends={['-40°C', '125°C']}
+        value={local.temperature_c} onChange={v => update({ temperature_c: v })}
+      />
 
       <div className="w-full h-px my-1" style={{ background: 'var(--rule)' }} />
 
@@ -147,32 +164,11 @@ export function SolverControlsPanel({ controls, send }: SolverControlsPanelProps
         />
       </div>
 
-      {/* Granularity */}
-      <div className="py-1">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[11px]" style={{ color: 'var(--silk)' }}>Granularity</span>
-          <span
-            className="text-[11px] tnum"
-            style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}
-          >
-            {local.granularity.toFixed(2)}
-          </span>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.01}
-          value={local.granularity}
-          onChange={e => update({ granularity: parseFloat(e.target.value) })}
-          aria-label="Solver granularity"
-          className="w-full h-1 rounded cursor-pointer"
-          style={{ accentColor: 'var(--copper)' }}
-        />
-        <div className="flex justify-between text-[9px] mt-0.5" style={{ color: 'var(--silk-faint)' }}>
-          <span>fast</span><span>accurate</span>
-        </div>
-      </div>
+      <Slider
+        label="Granularity" aria="Solver granularity" readout={local.granularity.toFixed(2)}
+        min={0} max={1} step={0.01} ends={['fast', 'accurate']}
+        value={local.granularity} onChange={v => update({ granularity: v })}
+      />
     </div>
   )
 }

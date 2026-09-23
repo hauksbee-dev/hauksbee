@@ -509,6 +509,23 @@ async function finishDrop(page: Page) {
   })
 }
 
+/** A staged image's record before the co-sim has shown anything. */
+function pendingFirmware(plan: FirmwarePlan, staged: { loaded: boolean; detail: string | null }): FirmwareResult {
+  return {
+    staged: true,
+    loaded: staged.loaded,
+    expect: plan.expect,
+    file: basename(plan.path),
+    detail: staged.detail,
+    cosim_ran: false,
+    cosim_seconds: null,
+    pin_activity: false,
+    serial_activity: false,
+    pin_activity_rendered: null,
+    analog_valid: null,
+  }
+}
+
 async function runBoard(page: Page, path: string, index: number): Promise<BoardResult> {
   const file = basename(path)
   const inputSha256 = fileDigests[resolvedFiles.indexOf(path)]
@@ -522,23 +539,7 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
   await page.goto(base!, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 30_000 })
 
-  let firmware: FirmwareResult | null = null
-  if (plan !== null) {
-    const staged = await stageFirmware(page, plan, failures)
-    firmware = {
-      staged: true,
-      loaded: staged.loaded,
-      expect: plan.expect,
-      file: basename(plan.path),
-      detail: staged.detail,
-      cosim_ran: false,
-      cosim_seconds: null,
-      pin_activity: false,
-      serial_activity: false,
-      pin_activity_rendered: null,
-      analog_valid: null,
-    }
-  }
+  const firmware = plan === null ? null : pendingFirmware(plan, await stageFirmware(page, plan, failures))
 
   await prepareDrop(page, path)
   const zone = page.locator('[data-testid="drop-zone"]')
@@ -760,19 +761,8 @@ try {
         live_started: false,
         sim_time_before_s: null,
         sim_time_after_s: null,
-        firmware: firmwarePlans[index] === null ? null : {
-          staged: true,
-          loaded: false,
-          expect: firmwarePlans[index]!.expect,
-          file: basename(firmwarePlans[index]!.path),
-          detail: null,
-          cosim_ran: false,
-          cosim_seconds: null,
-          pin_activity: false,
-          serial_activity: false,
-          pin_activity_rendered: null,
-          analog_valid: null,
-        },
+        firmware: firmwarePlans[index] === null ? null
+          : pendingFirmware(firmwarePlans[index]!, { loaded: false, detail: null }),
         wire_events: [],
         console_errors: [],
         failures: [`journey crashed: ${error instanceof Error ? error.message : String(error)}`],

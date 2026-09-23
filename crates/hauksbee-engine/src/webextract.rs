@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 use hauksbee_frontdoor_api::frontdoor::{DatasheetHooks, DatasheetJob};
 use hauksbee_models::datasheet;
 use hauksbee_models::extract_config::{self, ProcessHost, Resolved};
+use hauksbee_models::extract_progress;
 
 /// The provenance every model drafted this way carries. The string is the one
 /// `pack.toml` validates against (`hauksbee_models::pack::Provenance`), so a
@@ -140,18 +141,7 @@ fn draft_upgrade(body: &str) -> Result<String, String> {
     if request.reference.trim().is_empty() {
         return Err("the model draft request needs a component reference".to_string());
     }
-    if request.model_id.trim().is_empty() {
-        return crate::commands::models::draft_model_scaffold(
-            &request.board_label,
-            &request.reference,
-            &request.value,
-            &request.lib_id,
-            &request.footprint,
-            &request.properties,
-        )
-        .map_err(|error| error.to_string());
-    }
-    crate::commands::models::draft_model_upgrade(
+    crate::commands::models::draft_model(
         &request.board_label,
         &request.reference,
         &request.value,
@@ -429,7 +419,7 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
     );
     progress(
         "Sent. The model reads the pages, checks each value against the page it came from, and \
-         writes the draft. This usually takes one to three minutes.",
+         writes the draft; the estimate comes from your recent runs.",
     );
 
     // The resolved backend rides into the engine explicitly: `datasheet::run`
@@ -450,15 +440,28 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
             .map_err(|e| format!("{e:#}"));
         let _ = tx.send(outcome);
     });
-    let started = Instant::now();
+    // Polled each second: a phase or estimate change goes out as a `phase: ` /
+    // `estimate: <secs>` line the page reads for its progress bar.
+    let (started, mut beat, mut shown) = (Instant::now(), Instant::now(), (String::new(), 0));
     loop {
-        match rx.recv_timeout(HEARTBEAT) {
+        match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(Ok(())) => break,
             Ok(Err(e)) => return Err(e),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => progress(&format!(
-                "still working ... {}s elapsed",
-                started.elapsed().as_secs()
-            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let now = extract_progress::snapshot();
+                if now.1 != shown.1 {
+                    progress(&format!("estimate: {}", now.1));
+                }
+                if now.0 != shown.0 {
+                    progress(&format!("phase: {}", now.0));
+                }
+                if beat.elapsed() >= HEARTBEAT {
+                    beat = Instant::now();
+                    let secs = started.elapsed().as_secs();
+                    progress(&format!("still working: {}, {secs}s elapsed", now.0));
+                }
+                shown = now;
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(
                     "the extraction stopped without reporting a result; see the server log"
@@ -468,6 +471,7 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
         }
     }
 
+    extract_progress::record(started.elapsed());
     let (path, toml_text) = read_draft(&out_dir)?;
     progress(&format!(
         "Draft written after {}s. Nothing has been saved: review it below.",
@@ -664,36 +668,26 @@ fn build_card(job: &DatasheetJob, toml_text: &str, is_model_entry: bool) -> Mode
     // text; the TOML parse (not the line scan) is used because a notes array
     // spans lines.
     let parsed: Option<toml::Value> = toml_text.parse().ok();
-    if let Some(root) = &parsed {
-        let notes = root
-            .get("models")
-            .and_then(|m| m.as_array())
-            .and_then(|a| a.first())
-            .or_else(|| root.get("sensor"))
-            .and_then(|entry| entry.get("notes"));
-        match notes {
-            Some(toml::Value::String(s)) => assumptions.push(s.clone()),
-            Some(toml::Value::Array(items)) => {
-                for item in items {
-                    if let Some(s) = item.as_str() {
-                        assumptions.push(s.to_string());
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
     let entry = parsed.as_ref().and_then(|root| {
         root.get("models")
             .and_then(|m| m.as_array())
             .and_then(|a| a.first())
             .or_else(|| root.get("sensor"))
-            .cloned()
     });
+    match entry.and_then(|entry| entry.get("notes")) {
+        Some(toml::Value::String(s)) => assumptions.push(s.clone()),
+        Some(toml::Value::Array(items)) => {
+            for item in items {
+                if let Some(s) = item.as_str() {
+                    assumptions.push(s.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+
     let field = |name: &str| -> String {
         entry
-            .as_ref()
             .and_then(|e| e.get(name))
             .and_then(|v| v.as_str())
             .unwrap_or("")
@@ -736,16 +730,7 @@ fn is_sensor(toml_text: &str) -> bool {
 /// The library file name for a part. Mirrors `datasheet::run`'s own naming so a
 /// model saved from the browser lands where the CLI would have put it.
 fn file_name_for(part: &str, spice_entry: bool) -> String {
-    let stem: String = part
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
+    let stem = datasheet::sanitise_filename(part);
     if spice_entry {
         format!("{stem}.toml")
     } else {
@@ -1192,17 +1177,8 @@ max_current_a = 0.5 # Source: absolute maximum ratings
             .into_iter()
             .map(|thread| thread.join().expect("save thread"))
             .collect::<Vec<_>>();
-        assert_eq!(
-            outcomes.iter().filter(|(_, result)| result.is_ok()).count(),
-            1
-        );
-        assert_eq!(
-            outcomes
-                .iter()
-                .filter(|(_, result)| result.is_err())
-                .count(),
-            1
-        );
+        let (won, lost): (Vec<_>, Vec<_>) = outcomes.iter().partition(|(_, result)| result.is_ok());
+        assert_eq!((won.len(), lost.len()), (1, 1));
         let winner = outcomes
             .iter()
             .find(|(_, result)| result.is_ok())
@@ -1279,30 +1255,25 @@ max_current_a = 0.5 # Source: absolute maximum ratings
     /// A wrong pin map does not make a simulation inaccurate, it makes it a
     /// simulation of a different circuit, and it binds cleanly either way, so
     /// this is the one field where the caveat matters more than the value.
-    #[test]
-    fn an_unsettled_pin_map_is_flagged_not_buried() {
-        for comment in [
-            "UNRESOLVED: Figure 1 says pin 1 = GND, the application circuit says pin 1 = IN",
-            "LOW CONFIDENCE: only a rotated front-view drawing, no pin table",
-            "low confidence, package outline is a bottom view",
-        ] {
-            assert!(
-                looks_assumed(comment),
-                "must be surfaced as an assumption: {comment}"
-            );
-        }
-    }
-
     /// And the detector still has to say no to an ordinary citation, or every
     /// value arrives flagged and the flag stops meaning anything.
     #[test]
-    fn a_real_citation_is_not_flagged() {
-        for comment in [
-            "Source: Table 6.5, typ column",
-            "Source: Pin Functions table, TO-220 column",
-            "Source: Absolute Maximum Ratings",
+    fn an_unsettled_pin_map_is_flagged_but_a_real_citation_is_not() {
+        for (comment, assumed) in [
+            (
+                "UNRESOLVED: Figure 1 says pin 1 = GND, the application circuit says pin 1 = IN",
+                true,
+            ),
+            (
+                "LOW CONFIDENCE: only a rotated front-view drawing, no pin table",
+                true,
+            ),
+            ("low confidence, package outline is a bottom view", true),
+            ("Source: Table 6.5, typ column", false),
+            ("Source: Pin Functions table, TO-220 column", false),
+            ("Source: Absolute Maximum Ratings", false),
         ] {
-            assert!(!looks_assumed(comment), "false positive on: {comment}");
+            assert_eq!(looks_assumed(comment), assumed, "misclassified: {comment}");
         }
     }
 }

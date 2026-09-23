@@ -9,8 +9,6 @@
 //! entry point that skipped the notice would make the notice decorative:
 //! anybody wanting to avoid it would simply call this instead.
 
-use std::io::IsTerminal;
-
 fn main() -> anyhow::Result<()> {
     let args = hauksbee_models::datasheet::parse_args()?;
 
@@ -22,22 +20,19 @@ fn main() -> anyhow::Result<()> {
     // parser is hand-rolled and shared with older scripts, and adding a
     // positional-sensitive flag to it would break them.
     let assumed = std::env::var_os("HAUKSBEE_EXTRACT_YES").is_some();
-    if !assumed {
-        if !std::io::stdin().is_terminal() {
-            anyhow::bail!(
-                "refusing to send anything without consent. This is not a terminal, so \
-                 there is nobody to ask: set HAUKSBEE_EXTRACT_YES=1 if you meant it, or \
-                 use `hauksbee models extract --yes`."
-            );
-        }
-        eprint!("Send the datasheet and draft a model? [y/N] ");
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer)?;
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            eprintln!("Nothing was sent.");
-            return Ok(());
-        }
+    if !assumed
+        && !hauksbee_models::datasheet::confirm(
+            &mut std::io::stderr(),
+            "Send the datasheet and draft a model?",
+            "refusing to send anything without consent. This is not a terminal, so \
+             there is nobody to ask: set HAUKSBEE_EXTRACT_YES=1 if you meant it, or \
+             use `hauksbee models extract --yes`.",
+        )?
+    {
+        eprintln!("Nothing was sent.");
+        return Ok(());
     }
 
-    hauksbee_models::datasheet::run(args).map(|_| ())
+    hauksbee_models::extract_progress::with_spinner(|| hauksbee_models::datasheet::run(args))
+        .map(|_| ())
 }

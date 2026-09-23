@@ -44,7 +44,7 @@ test('no surface prints a number for a net nobody simulated', () => {
   expect(nets).not.toContain('3.300V')
 
   const scope = renderToStaticMarkup(createElement(ProbeScopePanel, {
-    boardInfo: null, frame, probes: ['VOUT', 'VIN'], send: () => undefined,
+    boardInfo: null, frame, probes: ['VOUT', 'VIN'],
     onAddProbe: () => undefined, onRemoveProbe: () => undefined,
   }))
   expect(scope).toContain('unsupported — not a simulated value')

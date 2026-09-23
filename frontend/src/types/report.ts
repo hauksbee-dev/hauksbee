@@ -275,13 +275,7 @@ export interface ModelCoverageComponent {
   model_kind?: string | null
   layer: string
   origin: string
-  source: {
-    tier: string
-    layer: string
-    origin: string
-    validation: string
-    uncertainty?: unknown[]
-  }
+  source: Omit<ModelSource, 'uncertainty'> & { uncertainty?: unknown[] }
   references?: ModelCoverageReference[]
   properties?: Array<{ name: string; value: string }>
   static_contracts?: string[]
@@ -628,15 +622,6 @@ export interface QueuedLiveRegisterMap {
   inputs: Record<string, number>
   controller?: string
   cs_net?: string
-}
-
-/** An ideal scenario supply queued from clicked copper. It is not a live
- * post-solve voltage force; the checks runner rebuilds the circuit with this
- * source on the next run. */
-export interface QueuedSupply {
-  seq: number
-  net: string
-  volts?: number
 }
 
 /** One optional co-sim backend or oracle, from `GET /api/deps` (the engine's

@@ -4,6 +4,7 @@ import { CheckIcon, WarningIcon } from './Icons'
 import { api, errorText } from '../lib/api'
 import { BusyLine, Callout, LogWell, TerminalCommand } from './ui'
 import { ReviewCard } from './extract/ReviewCard'
+import { DEFAULT_ESTIMATE_SECS, ExtractProgress } from './extract/ExtractProgress'
 
 // Drafting a device model from a datasheet, offered where the user learns they
 // need one: the report's list of parts that could not be bound.
@@ -28,8 +29,8 @@ import { ReviewCard } from './extract/ReviewCard'
 type Flow =
   | { step: 'consent' }
   | { step: 'attach' }
-  | { step: 'running'; log: string[] }
-  | { step: 'review'; card: ModelCard }
+  | { step: 'running'; log: string[]; phase: string; estimate: number; started: number }
+  | { step: 'review'; card: ModelCard; started: number; finished: number }
   | { step: 'saved'; card: ModelCard; result: ModelSaveResult }
   | { step: 'failed'; message: string; log: string[] }
 
@@ -98,11 +99,16 @@ export function DatasheetExtract({
 
   const run = useCallback(async () => {
     if (!active || !file) return
-    const log: string[] = []
-    setFlow({ step: 'running', log: [] })
+    const live = { step: 'running' as const, log: [] as string[], phase: 'sending the datasheet', estimate: DEFAULT_ESTIMATE_SECS, started: Date.now() }
+    setFlow({ ...live })
+    // `phase: ` and `estimate: <secs>` lines drive the progress bar; heartbeats
+    // are redundant beside its clock, so only the phases stay in the log.
     const append = (line: string) => {
-      log.push(line)
-      setFlow({ step: 'running', log: [...log] })
+      const [, key, value] = /^(phase|estimate): (.*)$/.exec(line) ?? []
+      if (key === 'estimate') live.estimate = Number(value) || live.estimate
+      else if (!line.startsWith('still working')) live.log = [...live.log, line]
+      if (key === 'phase') live.phase = value
+      setFlow({ ...live })
     }
     const form = new FormData()
     form.append('datasheet', file, file.name)
@@ -117,24 +123,24 @@ export function DatasheetExtract({
         else if (event === 'card') {
           try {
             settled = true
-            setFlow({ step: 'review', card: JSON.parse(data) as ModelCard })
+            setFlow({ step: 'review', card: JSON.parse(data) as ModelCard, started: live.started, finished: Date.now() })
           } catch {
-            setFlow({ step: 'failed', message: 'the server sent a model card this page could not read', log })
+            setFlow({ step: 'failed', message: 'the server sent a model card this page could not read', log: live.log })
           }
         } else if (event === 'error') {
           settled = true
-          setFlow({ step: 'failed', message: data, log })
+          setFlow({ step: 'failed', message: data, log: live.log })
         }
       })
       if (!settled) {
         setFlow({
           step: 'failed',
           message: 'the connection closed before the extraction reported a result. It may still be running on the server.',
-          log,
+          log: live.log,
         })
       }
     } catch (e) {
-      setFlow({ step: 'failed', message: `the extraction request failed: ${errorText(e)}`, log })
+      setFlow({ step: 'failed', message: `the extraction request failed: ${errorText(e)}`, log: live.log })
     }
   }, [active, file, part, kind, model])
 
@@ -436,20 +442,19 @@ export function DatasheetExtract({
               </div>
             )}
 
-            {/* Step 3: progress. Codex is silent for minutes, so the stream
-                heartbeats rather than pretending to know how far along it is. */}
+            {/* Step 3: progress. The agent is silent for minutes, so the bar is
+                an estimate from past runs, labelled as one. */}
             {flow.step === 'running' && (
               <div className="mt-2.5">
-                <LogWell lines={flow.log} testId="extract-log" maxHeight={160} />
-                <BusyLine className="mt-1.5">
-                  Drafting the model; this usually takes one to three minutes.
-                </BusyLine>
+                <ExtractProgress phase={flow.phase} estimate={flow.estimate} started={flow.started} />
+                <div className="mt-1.5"><LogWell lines={flow.log} testId="extract-log" maxHeight={160} /></div>
                 <div className="mt-1 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
                   Keep this panel open. Closing the page cannot cancel work already sent to the model service.
                 </div>
               </div>
             )}
 
+            {flow.step === 'review' && <ExtractProgress phase="" estimate={1} started={flow.started} finished={flow.finished} />}
             {flow.step === 'review' && (
               <ReviewCard
                 card={flow.card}

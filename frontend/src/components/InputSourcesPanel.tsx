@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import type { BoardInfoMsg, SimFrame, ClientMessage } from '../types/protocol'
+import type { BoardInfoMsg, ClientMessage } from '../types/protocol'
 
 // Virtual peripherals for the sim rail's "Inputs" card. Scalar inputs are
 // listed only when BoardInfo explicitly exposes a SetInput id/range; a net name
@@ -7,7 +7,6 @@ import type { BoardInfoMsg, SimFrame, ClientMessage } from '../types/protocol'
 
 interface InputSourcesPanelProps {
   boardInfo: BoardInfoMsg | null
-  frame: SimFrame | null
   send: (msg: ClientMessage) => void
 }
 

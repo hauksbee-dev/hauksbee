@@ -40,6 +40,13 @@ async function audit(body: string): Promise<Finding[]> {
 
 const rules = (fs: Finding[]) => fs.filter(f => f.severity === 'error').map(f => f.rule)
 
+/** The detail of the finding `rule` produced, failing when it produced none. */
+function detailOf(found: Finding[], rule: string): string {
+  const f = found.find(x => x.rule === rule)
+  expect(f).toBeDefined()
+  return f!.detail
+}
+
 // ── 1. An inline parent is measured, not skipped ───────────────────────────
 
 test('a child escaping an INLINE parent is caught', async () => {
@@ -70,11 +77,10 @@ test('a control escaping a CARD through three bare divs is caught', async () => 
         <button style="width:320px;height:30px">wide</button>
       </div></div></div>
     </div>`)
-  const escape = found.find(f => f.rule === 'escapes-container')
-  expect(escape).toBeDefined()
+  const detail = detailOf(found, 'escapes-container')
   // Named the ancestor it escaped, not the bare div it sits in.
-  expect(escape!.detail).toContain('ancestor')
-  expect(escape!.detail).toContain('#card')
+  expect(detail).toContain('ancestor')
+  expect(detail).toContain('#card')
 })
 
 test('the same control inside a SCROLLING ancestor is not', async () => {
@@ -95,9 +101,7 @@ test('a control CUT OFF by a clipping ancestor is reported as clipped', async ()
         <button style="width:320px;height:30px">wide</button>
       </div></div>
     </div>`)
-  const f = found.find(x => x.rule === 'escapes-clipper')
-  expect(f).toBeDefined()
-  expect(f!.detail).toContain('clipped')
+  expect(detailOf(found, 'escapes-clipper')).toContain('clipped')
 })
 
 // ── 3. A control whose own label does not fit it ───────────────────────────
@@ -109,9 +113,7 @@ test('a fixed-height button whose label wraps out of it is caught', async () => 
         a label far too long for a twenty pixel tall button
       </button>
     </div>`)
-  const f = found.find(x => x.rule === 'control-label-overflows')
-  expect(f).toBeDefined()
-  expect(f!.detail).toContain('in a 120x20 control')
+  expect(detailOf(found, 'control-label-overflows')).toContain('in a 120x20 control')
 })
 
 test('a clipped fixed-height button says it is clipped', async () => {
@@ -121,9 +123,7 @@ test('a clipped fixed-height button says it is clipped', async () => {
         a label far too long for a twenty pixel tall button
       </button>
     </div>`)
-  const f = found.find(x => x.rule === 'control-label-overflows')
-  expect(f).toBeDefined()
-  expect(f!.detail).toContain('clipped by overflow:hidden')
+  expect(detailOf(found, 'control-label-overflows')).toContain('clipped by overflow:hidden')
 })
 
 test('a nowrap label wider than its fixed-width button is caught', async () => {
@@ -133,9 +133,7 @@ test('a nowrap label wider than its fixed-width button is caught', async () => {
     <div style="width:300px">
       <button style="width:80px;height:28px"><span style="white-space:nowrap">a long single line</span></button>
     </div>`)
-  const f = found.find(x => x.rule === 'control-label-overflows')
-  expect(f).toBeDefined()
-  expect(f!.detail).toContain('in x')
+  expect(detailOf(found, 'control-label-overflows')).toContain('in x')
 })
 
 test('a comfortable button, and an icon-only one, stay quiet', async () => {
@@ -155,9 +153,7 @@ test('an absolutely positioned panel pushed off the window is caught', async () 
     <div style="position:relative;width:300px">
       <button style="position:absolute;left:360px;top:10px;width:200px;height:30px">off</button>
     </div>`)
-  const f = found.find(x => x.rule === 'offscreen')
-  expect(f).toBeDefined()
-  expect(f!.detail).toContain('outside the 400px window')
+  expect(detailOf(found, 'offscreen')).toContain('outside the 400px window')
 })
 
 test('a fixed bar wider than the window is caught', async () => {
@@ -173,9 +169,7 @@ test('an absolute panel CLIPPED by its containing block is caught', async () => 
     <div style="position:relative;width:120px;height:60px;overflow:hidden;border:1px solid #333">
       <button style="position:absolute;left:0;top:8px;width:300px;height:24px">cut</button>
     </div>`)
-  const f = found.find(x => x.rule === 'escapes-offset-parent')
-  expect(f).toBeDefined()
-  expect(f!.detail).toContain('cut off')
+  expect(detailOf(found, 'escapes-offset-parent')).toContain('cut off')
 })
 
 test('an anchored dropdown wider than its trigger, fully on screen, stays quiet', async () => {
