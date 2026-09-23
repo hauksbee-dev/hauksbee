@@ -10,7 +10,6 @@
 //! contests a net is silent.
 
 use crate::support::{resistor, vsource};
-use std::collections::HashMap;
 
 use hauksbee_engine::binder::BoundBoard;
 use hauksbee_engine::scheduler::Scheduler;
@@ -18,16 +17,7 @@ use hauksbee_ir::{Circuit, NodeId, SourceKind};
 use hauksbee_solve::SolverOptions;
 
 fn board(circuit: Circuit, nets: &[(&str, NodeId)]) -> BoundBoard {
-    let mut net_nodes = HashMap::new();
-    for (name, id) in nets {
-        net_nodes.insert((*name).to_string(), *id);
-    }
-    crate::support::bound_board(
-        "drive_override".to_string(),
-        circuit,
-        net_nodes,
-        nets.iter().map(|(n, _)| (*n).to_string()).collect(),
-    )
+    crate::support::bound_board("drive_override", circuit, nets)
 }
 
 /// The reported shape: a 3.3 V rail on RES, and a 20 V drive stamped on the same

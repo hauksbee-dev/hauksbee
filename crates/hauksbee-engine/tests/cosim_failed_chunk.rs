@@ -11,52 +11,14 @@
 //!
 //! Gate name in `docs/dev-plans/08-validation-and-test-campaign.md` §2.
 
-use crate::support::{resistor, vsource};
-use std::collections::HashMap;
+use crate::support::{impossible_board, resistor, vsource};
 
-use hauksbee_engine::binder::BoundBoard;
 use hauksbee_engine::result::{
     strict_analog_exit_code, CosimFailedWindow, CosimJson, EXIT_INVALID_FOR_ANALYSIS,
 };
 use hauksbee_engine::scheduler::{Scheduler, STRICT_CONSECUTIVE_FAILED_ABORT};
 use hauksbee_ir::{Circuit, NodeId, SourceKind};
 use hauksbee_solve::SolverOptions;
-
-/// Build a board whose single chunk solve cannot converge. The forcing is an
-/// *impossible boundary*: two ideal voltage sources drive the same node to two
-/// different, contradictory voltages (5 V and 3 V) with no series impedance
-/// between them. That is a structurally singular MNA system with no DC operating
-/// point, so the transient's DC solve fails every chunk regardless of warm-start
-/// or gmin stepping (gmin regularizes floating nodes, not conflicting hard
-/// sources). No firmware and no MCU are needed: the scheduler still runs the
-/// analog solve each chunk, which is the code path under test.
-fn impossible_board() -> BoundBoard {
-    let mut circuit = Circuit::new();
-    let n1 = circuit.node("n1");
-    // Two conflicting ideal sources on n1 -> GROUND: 5 V and 3 V at once.
-    circuit.add(vsource(
-        "V1".to_string(),
-        n1,
-        NodeId::GROUND,
-        SourceKind::Dc(5.0),
-    ));
-    circuit.add(vsource(
-        "V2".to_string(),
-        n1,
-        NodeId::GROUND,
-        SourceKind::Dc(3.0),
-    ));
-
-    let mut net_nodes = HashMap::new();
-    net_nodes.insert("n1".to_string(), n1);
-
-    crate::support::bound_board(
-        "impossible".to_string(),
-        circuit,
-        net_nodes,
-        vec!["n1".to_string()],
-    )
-}
 
 /// Mirror the CLI's `build_cosim_json` field wiring so the test exercises the
 /// real JSON serialization shape (the binary's builder is not reachable from an
@@ -274,14 +236,7 @@ fn cosim_valid_run_reports_analog_valid_true() {
         SourceKind::Dc(5.0),
     ));
     circuit.add(resistor("R1".to_string(), n1, NodeId::GROUND, 1_000.0));
-    let mut net_nodes = HashMap::new();
-    net_nodes.insert("n1".to_string(), n1);
-    let board = crate::support::bound_board(
-        "valid".to_string(),
-        circuit,
-        net_nodes,
-        vec!["n1".to_string()],
-    );
+    let board = crate::support::bound_board("valid", circuit, &[("n1", n1)]);
 
     let mut sched =
         Scheduler::new(board, None, SolverOptions::default()).expect("build valid scheduler");

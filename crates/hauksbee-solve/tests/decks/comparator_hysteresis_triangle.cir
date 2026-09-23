@@ -1,0 +1,21 @@
+Push-pull comparator: a 0.25 V hysteresis band crossed by a triangle, both ways
+* hysteresis is the FULL datasheet band (VHYS = VT+ - VT-), so the output rises
+* when d = V(inp) - V(inn) passes +0.125 V and falls when it passes -0.125 V.
+* d = -0.5 + t/1us up to 1 us, then 0.5 - (t - 1us)/1us, so the trips are at
+* EXACTLY t = 0.625 us (rising) and t = 1.625 us (falling). d = 0 at 0.5 and
+* 1.5 us is mid-band: a comparator tripping there has no hysteresis, and one
+* reading the value as a half-width trips at 0.75 and 1.75 us instead.
+*
+* The output is a 1 ohm Norton source (stamp_comparator's gout = 1 S) swinging
+* 1 V / 5 V; RF-CF (tau = (1k + 1) * 100p = 100.1 ns) turns each step into an
+* exponential, so an edge-timing error becomes a voltage error of at most
+* 4 V * dt / tau there, rather than a full-swing miss at one sample.
+Vin inp 0 PWL(0 0.5 1u 1.5 2u 0.5)
+Vref inn 0 DC 1
+A1 out inp inn KCMP
+.model KCMP comparator(out_lo=1 out_hi=5 hysteresis=0.25)
+RF out f 1k
+CF f 0 100p
+.tran 1n 2u 0 0.1n
+.print tran v(out) v(f)
+.end

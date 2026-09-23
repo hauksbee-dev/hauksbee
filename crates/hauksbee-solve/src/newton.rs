@@ -2905,8 +2905,9 @@ mod tests {
                 "{was_high} at {d}"
             );
         }
-        // Fixed 1 us steps: the adaptive event locator bisects toward d = 0, not the trip.
-        let tran = crate::transient::Transient::new(SolverOptions::fixed(1e-6));
+        // Adaptive, capped at 100 us: the event locator must land each edge on
+        // its live trip (aimed at d = 0, the edges sat on the grid at 0.7/1.7 ms).
+        let tran = crate::transient::Transient::new(SolverOptions::adaptive(1e-4, 1e-4));
         let w = tran.run(&c, 2e-3).expect("triangle transient");
         let v = &w.node_voltages[out.0 as usize];
         let edge = |rising: bool| {
@@ -2914,7 +2915,11 @@ mod tests {
                 .find(|&k| (v[k] > 2.5) == rising && (v[k - 1] > 2.5) != rising)
                 .unwrap()]
         };
-        assert!((edge(true) - 0.625e-3).abs() <= 1e-6 && (edge(false) - 1.625e-3).abs() <= 1e-6);
+        let (rise, fall) = (edge(true), edge(false));
+        assert!(
+            (rise - 0.625e-3).abs() <= 1e-12 && (fall - 1.625e-3).abs() <= 1e-12,
+            "{rise:e} {fall:e}"
+        );
     }
 
     /// The event-freeze outer loop on a switch + floating-diode core with a

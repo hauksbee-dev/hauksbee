@@ -20,7 +20,7 @@
 //!     form cannot express fails honestly instead of poisoning the run.
 
 use crate::support::vsource;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use hauksbee_engine::behavioral::BehavioralDevice;
@@ -34,13 +34,12 @@ use hauksbee_solve::SolverOptions;
 /// Wrap a hand-built circuit + behavioural devices as a minimal BoundBoard.
 fn board_with(
     circuit: Circuit,
-    net_nodes: HashMap<String, NodeId>,
+    nets: &[(&str, NodeId)],
     behavioral: Vec<BehavioralDevice>,
 ) -> BoundBoard {
-    let net_names = net_nodes.keys().cloned().collect();
     BoundBoard {
         behavioral,
-        ..crate::support::bound_board("clamp-fixture".to_string(), circuit, net_nodes, net_names)
+        ..crate::support::bound_board("clamp-fixture", circuit, nets)
     }
 }
 
@@ -83,10 +82,7 @@ expr = "max(0.0, (v_gnd - v_io - vt_clamp) / rd_clamp)"
     roles.insert("gnd".to_string(), NodeId::GROUND);
     let dev = BehavioralDevice::stamp(&mut c, "U6", &model, &params, &roles, &|_| None)
         .expect("clamp laws stamp a device");
-    let mut net_nodes = HashMap::new();
-    net_nodes.insert("IO".to_string(), io);
-    net_nodes.insert("VBUS".to_string(), vbus);
-    (board_with(c, net_nodes, vec![dev]), io)
+    (board_with(c, &[("IO", io), ("VBUS", vbus)], vec![dev]), io)
 }
 
 /// The clamp pair compiles to solver-implicit behavioral devices (no
@@ -155,9 +151,7 @@ expr = "2.0 + 0.0 * t_in_state"
     roles.insert("gnd".to_string(), NodeId::GROUND);
     let dev = BehavioralDevice::stamp(&mut c, "U9", &model, &Params::default(), &roles, &|_| None)
         .expect("blast law stamps a device");
-    let mut net_nodes = HashMap::new();
-    net_nodes.insert("IO".to_string(), io);
-    board_with(c, net_nodes, vec![dev])
+    board_with(c, &[("IO", io)], vec![dev])
 }
 
 /// The pathological side: a law the implicit form cannot express (it reads

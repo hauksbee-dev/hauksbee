@@ -3,9 +3,9 @@
 //! limitation).
 //!
 //! Side one: a board whose primary chunk march genuinely fails (an
-//! integrate-and-fire comparator/SPDT loop whose fire step kills the bare
-//! Newton; measured: `Newton failed at t=2.45e-5 even at dt_min=1e-18` under
-//! the default options) is RESCUED by a fallback rung, and the rescue is
+//! integrate-and-fire comparator/SPDT loop marched at a fixed 100 ns step,
+//! which has no self-consistent comparator/switch state at the fire step) is
+//! RESCUED by a fallback rung, and the rescue is
 //! RECORDED: the chunk counts as solved (`analog_valid` stays true, no strict
 //! abort), and the window carries the method that produced it plus that
 //! method's qualitative fidelity note, in the scheduler record and co-sim JSON.
@@ -16,8 +16,7 @@
 //! window invented for it. The ladder shrinks the set of windows the run
 //! cannot vouch for; it never manufactures a number for one.
 
-use crate::support::{capacitor, resistor, vsource};
-use std::collections::HashMap;
+use crate::support::{bound_board, capacitor, impossible_board, resistor, vsource};
 
 use hauksbee_engine::binder::BoundBoard;
 use hauksbee_engine::result::{strict_analog_exit_code, EXIT_INVALID_FOR_ANALYSIS};
@@ -25,25 +24,33 @@ use hauksbee_engine::scheduler::{ChunkFallbackMethod, Scheduler, STRICT_CONSECUT
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind::Dc, SourceKind::Pulse};
 use hauksbee_solve::SolverOptions;
 
-fn board_from(name: &str, circuit: Circuit, nets: &[(&str, NodeId)]) -> BoundBoard {
-    let mut net_nodes = HashMap::new();
-    let mut net_names = Vec::new();
-    for &(n, id) in nets {
-        net_nodes.insert(n.to_string(), id);
-        net_names.push(n.to_string());
+/// Every test steps 100 us chunks.
+const CHUNK: f64 = 1e-4;
+
+/// A scheduler on `board` stepping [`CHUNK`]s, optionally forced onto the
+/// backward-Euler rung.
+fn scheduler(board: BoundBoard, opts: SolverOptions, force_be: bool) -> Scheduler {
+    let mut sched = Scheduler::new(board, None, opts).expect("build scheduler");
+    sched.chunk_s = CHUNK;
+    if force_be {
+        sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
     }
-    crate::support::bound_board(name.to_string(), circuit, net_nodes, net_names)
+    sched
 }
 
 /// An integrate-and-fire relaxation loop with a resting DC point: a pulsed
 /// charge current drives a 1 nF membrane into a hysteretic comparator whose
 /// output flips an SPDT switch pair, shorting the membrane through a fast
-/// discharge leg. The rest state (pulse low) has a clean DC solution, so the
-/// chunk's operating point converges; the FIRE inside the chunk is what the
-/// bare per-step Newton cannot resolve (the comparator/switch flip), which
-/// makes this the primary-fails / fallback-succeeds witness. Backward Euler
-/// at the bounded step carries it (the L-stable damping keeps the post-flip
-/// discharge integrable), measured before the assert below was written.
+/// discharge leg (1 ohm switch into 1 ohm, a ~2 ns time constant). The rest
+/// state (pulse low) has a clean DC solution, so the chunk's operating point
+/// converges; the FIRE inside the chunk is what a fixed 100 ns primary cannot
+/// resolve: the discharge is 50x faster than the step, so no comparator/switch
+/// state is consistent at the fire step and the march fails at it. The
+/// reduced-step rung (100 ns / 16) resolves it, measured before the asserts
+/// below were written. A fixed step keeps the witness independent of the
+/// adaptive event locator: an adaptive primary used to fail here only because
+/// the locator bisected the comparator-driven SPDT controls, which step
+/// rail to rail, down to 1e-17 s; it now solves the board.
 fn firing_board() -> BoundBoard {
     let mut c = Circuit::new();
     let m = c.node("m");
@@ -96,7 +103,7 @@ fn firing_board() -> BoundBoard {
         ctrl_n: NodeId::GROUND,
         von: 3.0,
         voff: 2.0,
-        ron: 10.0,
+        ron: 1.0,
         roff: 1e9,
     });
     c.add(Device::VSwitch {
@@ -107,33 +114,18 @@ fn firing_board() -> BoundBoard {
         ctrl_n: NodeId::GROUND,
         von: 3.0,
         voff: 2.0,
-        ron: 10.0,
+        ron: 1.0,
         roff: 1e9,
     });
-    c.add(resistor("RD".into(), com, NodeId::GROUND, 50.0));
-    let m_id = m;
-    board_from("firing", c, &[("m", m_id)])
-}
-
-/// Two ideal sources driving one node to contradictory voltages: structurally
-/// singular, no rung of any ladder can solve it (same board as the
-/// failed-chunk gate).
-fn impossible_board() -> BoundBoard {
-    let mut c = Circuit::new();
-    let n1 = c.node("n1");
-    c.add(vsource("V1".into(), n1, NodeId::GROUND, Dc(5.0)));
-    c.add(vsource("V2".into(), n1, NodeId::GROUND, Dc(3.0)));
-    board_from("impossible", c, &[("n1", n1)])
+    c.add(resistor("RD".into(), com, NodeId::GROUND, 1.0));
+    bound_board("firing", c, &[("m", m)])
 }
 
 #[test]
 fn failed_primary_is_rescued_by_a_recorded_fallback() {
-    let mut sched = Scheduler::new(firing_board(), None, SolverOptions::default())
-        .expect("build scheduler for the firing board");
-    let chunk = 1e-4_f64;
-    sched.chunk_s = chunk;
+    let mut sched = scheduler(firing_board(), SolverOptions::fixed(1e-7), false);
 
-    sched.step(chunk);
+    sched.step(CHUNK);
 
     // The chunk is SOLVED: no failed chunk, no stale window, analog stays
     // valid, and the strict abort is untouched.
@@ -148,8 +140,8 @@ fn failed_primary_is_rescued_by_a_recorded_fallback() {
 
     // ...and the rescue is RECORDED: exactly one fallback window covering the
     // chunk, naming the rung that produced it. The rung is asserted exactly:
-    // if a future solver change lets an earlier (more accurate) rung carry
-    // this board, this assert should be re-pointed consciously, not loosened.
+    // if a future solver change lets the primary carry this board, the board
+    // should be re-measured and rebuilt consciously, not the assert loosened.
     assert_eq!(sched.fallback_chunk_count(), 1);
     let windows = sched.fallback_windows();
     assert_eq!(
@@ -159,23 +151,25 @@ fn failed_primary_is_rescued_by_a_recorded_fallback() {
     );
     let window = windows[0];
     assert!(
-        window.start_s.abs() < 1e-12 && (window.end_s - chunk).abs() < chunk * 1e-6,
+        window.start_s.abs() < 1e-12 && (window.end_s - CHUNK).abs() < CHUNK * 1e-6,
         "the fallback window covers the rescued chunk, got {windows:?}"
     );
     assert_eq!(
         window.method,
-        ChunkFallbackMethod::BackwardEuler,
-        "the firing board is carried by the backward-Euler rung"
+        ChunkFallbackMethod::ReducedStep,
+        "the firing board is carried by the reduced-step rung"
     );
     assert!(
-        window.method.fidelity_note().contains("first-order")
+        window
+            .method
+            .fidelity_note()
+            .contains("smaller maximum step")
             && window.method.fidelity_note().contains("error_estimate_v"),
         "the recorded method states the known trade-off and points at the \
          measured estimate field"
     );
     // B12: the window carries a MEASURED error estimate, not a disclaimer.
-    // The firing board's rescue must produce one (the refinement companion is
-    // the same BE march at a tighter bound, which converges here), and it must
+    // The firing board's rescue must produce one (measured 0.030 V), and it must
     // be a sane voltage for a 5 V-scale board: positive (the tolerance floor
     // alone guarantees that) and far below the signal scale.
     let est = window
@@ -188,7 +182,7 @@ fn failed_primary_is_rescued_by_a_recorded_fallback() {
 
     // The membrane voltage in the rescued window is a real number, not a
     // stale hold: the rest membrane is ~0 V pre-pulse, and the chunk end sits
-    // mid-oscillation well above it (measured 2.65 V; asserted loosely, the
+    // mid-oscillation well above it (measured 2.70 V; asserted loosely, the
     // point is that the fallback PRODUCED a solved trajectory).
     let m = sched.net_voltage("m").expect("membrane net exists");
     assert!(
@@ -199,13 +193,10 @@ fn failed_primary_is_rescued_by_a_recorded_fallback() {
 
 #[test]
 fn unrescuable_board_still_refuses_loudly() {
-    let mut sched = Scheduler::new(impossible_board(), None, SolverOptions::default())
-        .expect("build scheduler for the impossible board");
-    let chunk = 1e-4_f64;
-    sched.chunk_s = chunk;
+    let mut sched = scheduler(impossible_board(), SolverOptions::default(), false);
 
     for _ in 0..STRICT_CONSECUTIVE_FAILED_ABORT {
-        sched.step(chunk);
+        sched.step(CHUNK);
     }
 
     // No rung can solve a structurally singular board, and none may pretend
@@ -266,8 +257,7 @@ fn rlc_ringing_board() -> BoundBoard {
         ic: None,
     });
     c.add(capacitor("C1".into(), vc, NodeId::GROUND, RLC_C));
-    let vc_id = vc;
-    board_from("rlc-ringing", c, &[("vc", vc_id)])
+    bound_board("rlc-ringing", c, &[("vc", vc)])
 }
 
 const RLC_V0: f64 = 5.0;
@@ -305,13 +295,9 @@ fn estimate_brackets_analytic(reported: f64, estimate_v: f64, analytic: f64) -> 
 /// "bound" wider than the whole signal says nothing).
 #[test]
 fn forced_rlc_fallback_estimate_brackets_the_analytic_answer() {
-    let mut sched = Scheduler::new(rlc_ringing_board(), None, SolverOptions::default())
-        .expect("build scheduler for the RLC board");
-    let chunk = 1e-4_f64;
-    sched.chunk_s = chunk;
-    sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
+    let mut sched = scheduler(rlc_ringing_board(), SolverOptions::default(), true);
 
-    sched.step(chunk);
+    sched.step(CHUNK);
 
     let windows = sched.fallback_windows();
     assert_eq!(
@@ -325,7 +311,7 @@ fn forced_rlc_fallback_estimate_brackets_the_analytic_answer() {
         .error_estimate_v
         .expect("the BE rung's refinement companion converges on this board");
     let reported = sched.net_voltage("vc").expect("vc net exists");
-    let analytic = rlc_analytic_vc(chunk);
+    let analytic = rlc_analytic_vc(CHUNK);
     assert!(
         estimate_brackets_analytic(reported, est, analytic),
         "estimate must bracket the analytic answer: reported={reported:.6} \
@@ -350,16 +336,11 @@ fn forced_smooth_fallback_reports_a_small_estimate() {
     c.add(vsource("V1".into(), vin, NodeId::GROUND, Dc(5.0)));
     c.add(resistor("R1".into(), vin, out, 1e3));
     c.add(capacitor("C1".into(), out, NodeId::GROUND, 100e-9));
-    let out_id = out;
-    let board = board_from("rc-smooth", c, &[("out", out_id)]);
+    let board = bound_board("rc-smooth", c, &[("out", out)]);
 
-    let mut sched = Scheduler::new(board, None, SolverOptions::default())
-        .expect("build scheduler for the smooth RC board");
-    let chunk = 1e-4_f64;
-    sched.chunk_s = chunk;
-    sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
+    let mut sched = scheduler(board, SolverOptions::default(), true);
 
-    sched.step(chunk);
+    sched.step(CHUNK);
 
     let windows = sched.fallback_windows();
     assert_eq!(
@@ -383,14 +364,10 @@ fn forced_smooth_fallback_reports_a_small_estimate() {
 /// that stops measuring fails it, it does not slip through.
 #[test]
 fn broken_estimator_is_caught_by_the_bracket_check() {
-    let mut sched = Scheduler::new(rlc_ringing_board(), None, SolverOptions::default())
-        .expect("build scheduler for the RLC board");
-    let chunk = 1e-4_f64;
-    sched.chunk_s = chunk;
-    sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
+    let mut sched = scheduler(rlc_ringing_board(), SolverOptions::default(), true);
     sched.debug_zero_fallback_error_estimate = true;
 
-    sched.step(chunk);
+    sched.step(CHUNK);
 
     let windows = sched.fallback_windows();
     assert_eq!(windows.len(), 1);
@@ -399,7 +376,7 @@ fn broken_estimator_is_caught_by_the_bracket_check() {
         .expect("the broken hook still records an estimate (that is the point)");
     assert_eq!(est, 0.0, "the tamper hook zeroes the estimate");
     let reported = sched.net_voltage("vc").expect("vc net exists");
-    let analytic = rlc_analytic_vc(chunk);
+    let analytic = rlc_analytic_vc(CHUNK);
     assert!(
         !estimate_brackets_analytic(reported, est, analytic),
         "the bracket check must CATCH a zeroed estimator: reported={reported:.6} \
@@ -415,14 +392,10 @@ fn broken_estimator_is_caught_by_the_bracket_check() {
 /// here against the analytic answer.
 #[test]
 fn coarse_companion_estimate_still_brackets_the_analytic_answer() {
-    let mut sched = Scheduler::new(rlc_ringing_board(), None, SolverOptions::default())
-        .expect("build scheduler for the RLC board");
-    let chunk = 1e-4_f64;
-    sched.chunk_s = chunk;
-    sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
+    let mut sched = scheduler(rlc_ringing_board(), SolverOptions::default(), true);
     sched.debug_skip_refined_companion = true;
 
-    sched.step(chunk);
+    sched.step(CHUNK);
 
     let windows = sched.fallback_windows();
     assert_eq!(
@@ -434,7 +407,7 @@ fn coarse_companion_estimate_still_brackets_the_analytic_answer() {
         .error_estimate_v
         .expect("the coarse companion converges on this board");
     let reported = sched.net_voltage("vc").expect("vc net exists");
-    let analytic = rlc_analytic_vc(chunk);
+    let analytic = rlc_analytic_vc(CHUNK);
     assert!(
         estimate_brackets_analytic(reported, est, analytic),
         "coarse-leg estimate must bracket the analytic answer: reported={reported:.6} \
@@ -452,18 +425,14 @@ fn coarse_companion_estimate_still_brackets_the_analytic_answer() {
 /// last one, never a sum).
 #[test]
 fn merged_window_keeps_the_worst_per_chunk_estimate() {
-    let mut sched = Scheduler::new(rlc_ringing_board(), None, SolverOptions::default())
-        .expect("build scheduler for the RLC board");
-    let chunk = 1e-4_f64;
-    sched.chunk_s = chunk;
-    sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
+    let mut sched = scheduler(rlc_ringing_board(), SolverOptions::default(), true);
 
-    sched.step(chunk);
+    sched.step(CHUNK);
     let first = sched.fallback_windows()[0]
         .error_estimate_v
         .expect("first chunk carries an estimate");
 
-    sched.step(chunk);
+    sched.step(CHUNK);
     let windows = sched.fallback_windows();
     assert_eq!(
         windows.len(),
@@ -472,7 +441,7 @@ fn merged_window_keeps_the_worst_per_chunk_estimate() {
     );
     let window = windows[0];
     assert!(
-        (window.end_s - 2.0 * chunk).abs() < chunk * 1e-6,
+        (window.end_s - 2.0 * CHUNK).abs() < CHUNK * 1e-6,
         "the merged window spans both chunks, got {windows:?}"
     );
     let merged = window
