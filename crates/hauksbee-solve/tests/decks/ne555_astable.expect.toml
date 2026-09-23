@@ -15,7 +15,7 @@ skip_initial = 3.0e-4
 
 [[probe]]
 expr = "V(thres)"
-reltol = 6.0e-2
+reltol = 1.0e-2
 
 [[probe.analytic]]
 at = 4.6e-4

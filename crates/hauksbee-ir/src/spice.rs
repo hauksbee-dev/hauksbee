@@ -1126,30 +1126,57 @@ impl<'a> Build<'a> {
             // `Axxx out inp inn <model>` + `.model <name> opamp(...)`: the
             // finite-gain rail-clamped amplifier, stamped with an ANALYTIC tangent
             // where a `B` source's is exactly 0. Gain and rails have no defaults.
+            // `comparator(out_lo out_hi hysteresis)` is the push-pull comparator;
+            // `hysteresis` is the full VHYS band, 0 when absent.
             'A' => {
                 exact(line, &toks, 5, "out, inp, inn, model")?;
                 let [out, inp, inn] = self.nodes(&toks, scope);
-                let (m, id) = (self.model(line, &toks[4], &["opamp"])?, &toks[4]);
-                const KEYS: [&str; 5] = ["gain", "rail_lo", "rail_hi", "pole_hz", "slew"];
-                if let Some(k) = m.params.keys().find(|k| !KEYS.contains(&k.as_str())) {
-                    bail!(line, "`.model {id} opamp` takes {KEYS:?}, not `{k}`");
+                let m = self.model(line, &toks[4], &["opamp", "comparator"])?;
+                let (card, cmp) = (
+                    format!("`.model {} {}`", toks[4], m.kind),
+                    m.kind == "comparator",
+                );
+                let keys: &[&str] = if cmp {
+                    &["out_lo", "out_hi", "hysteresis"]
+                } else {
+                    &["rail_lo", "rail_hi", "gain", "pole_hz", "slew"]
+                };
+                if let Some(k) = m.params.keys().find(|k| !keys.contains(&k.as_str())) {
+                    bail!(line, "{card} takes {keys:?}, not `{k}`");
                 }
-                let miss = |k: &str| line.err(format!("`.model {id} opamp` is missing `{k}`"));
-                let need = |k: &str| m.get(k).ok_or_else(|| miss(k));
-                if need("rail_lo")? >= need("rail_hi")? {
-                    bail!(line, "`.model {id} opamp` needs rail_lo below rail_hi");
+                let need = |k: &str| {
+                    m.get(k)
+                        .ok_or_else(|| line.err(format!("{card} is missing `{k}`")))
+                };
+                let (kl, kh, hyst) = (keys[0], keys[1], m.get("hysteresis").unwrap_or(0.0));
+                let (lo, hi) = (need(kl)?, need(kh)?);
+                if lo >= hi || hyst < 0.0 {
+                    bail!(line, "{card} needs {kl} below {kh} and hysteresis >= 0");
                 }
-                Device::OpAmp {
-                    name,
-                    out,
-                    inp,
-                    inn,
-                    reference: None,
-                    gain: need("gain")?,
-                    pole_hz: m.get("pole_hz"),
-                    slew: m.get("slew"),
-                    rail_lo: crate::Rail::fixed(need("rail_lo")?),
-                    rail_hi: crate::Rail::fixed(need("rail_hi")?),
+                if cmp {
+                    let (out_lo, out_hi, hysteresis) = (lo, hi, hyst);
+                    Device::Comparator {
+                        name,
+                        out,
+                        inp,
+                        inn,
+                        out_lo,
+                        out_hi,
+                        hysteresis,
+                    }
+                } else {
+                    Device::OpAmp {
+                        name,
+                        out,
+                        inp,
+                        inn,
+                        reference: None,
+                        gain: need("gain")?,
+                        pole_hz: m.get("pole_hz"),
+                        slew: m.get("slew"),
+                        rail_lo: crate::Rail::fixed(lo),
+                        rail_hi: crate::Rail::fixed(hi),
+                    }
                 }
             }
             'B' => return self.behavioral(line, &toks, scope),
@@ -1880,10 +1907,11 @@ mod tests {
         assert!(SpiceLoader::load("t\n.model X D(IS=1)\n.model X D(IS=1)\n").is_ok());
     }
 
-    /// The deck op-amp: one good card, and the ways of writing a bad one. A
-    /// missing gain or rail REFUSES: an invented rail answers wrongly, silently.
+    /// The deck op-amp and comparator: one good card each, and the ways of
+    /// writing a bad one. A missing gain or rail REFUSES: an invented rail
+    /// answers wrongly, silently.
     #[test]
-    fn opamp_card_and_its_refusals() {
+    fn opamp_and_comparator_cards_and_their_refusals() {
         let ok = "t\nA1 o p n OPA\n.model OPA opamp(gain=1e5 rail_lo=0 rail_hi=10.5 pole_hz=7)\n";
         let got = format!("{:?}", dev(&SpiceLoader::load(ok).unwrap(), "A1"));
         let want = "reference: None, gain: 100000.0, pole_hz: Some(7.0), slew: None, \
@@ -1893,8 +1921,22 @@ mod tests {
         for (net, want) in [
             (ok.replace("gain=1e5 ", ""), "is missing `gain`"),
             (ok.replace("pole_hz=7", "gbw=7e5"), "not `gbw`"),
-            (ok.replace("opamp(", "sw("), "not one of opamp"),
+            (ok.replace("opamp(", "sw("), "not one of opamp/comparator"),
             (ok.replace("rail_lo=0", "rail_lo=12"), "below rail_hi"),
+        ] {
+            assert!(err(&net).contains(want), "{net} -> {}", err(&net));
+        }
+        let cmp = "t\nA1 o p n K\n.model K comparator(out_lo=0 out_hi=5 hysteresis=0.25)\n";
+        let got = format!("{:?}", dev(&SpiceLoader::load(cmp).unwrap(), "A1"));
+        assert!(
+            got.contains("out_lo: 0.0, out_hi: 5.0, hysteresis: 0.25"),
+            "{got}"
+        );
+        for (net, want) in [
+            (cmp.replace("out_hi=5 ", ""), "is missing `out_hi`"),
+            (cmp.replace("out_lo=0", "gain=1e5"), "not `gain`"),
+            (cmp.replace("out_lo=0", "out_lo=6"), "below out_hi"),
+            (cmp.replace("=0.25", "=-1"), "hysteresis >= 0"),
         ] {
             assert!(err(&net).contains(want), "{net} -> {}", err(&net));
         }

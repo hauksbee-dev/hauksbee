@@ -14,8 +14,8 @@ full_scale = 24.0
 
 [[probe]]
 expr = "v(sw)"
-reltol = 3.0e-1
-loose_reason = "the open edge is a one-step event in both engines: a single sample of switch-event timing skew at a node slewing from 0.1 V to 24 V reads as O(1) pointwise relative error however accurate both clamps are; the closed-form points below hold the plateau to 2e-3 and the settle to 1e-3"
+reltol = 4.0e-1
+loose_reason = "the open edge is a one-step event in both engines: a single sample of switch-event timing skew at a node slewing from 0.1 V to 24 V reads as O(1) pointwise relative error however accurate both clamps are; the closed-form points below hold the plateau to 2e-3 and the settle to 1e-3. Measured 0.362 with the relay edge located on its live voff; against a 0.5 ns-tmax ngspice that edge reads 2.1e-3 (0.65 before) and this oracle 0.35, so the skew is the oracle's own edge lag"
 
 # On-state, long before the edge: pure algebra.
 [[probe.analytic]]

@@ -1,0 +1,20 @@
+# Comparator trip points against ngspice's own hysteretic device (SW, built into a comparator in the .ngspice.cir twin) and in closed form.
+# Trips at d = +/-0.125 V are t = 0.625 us (rising) and 1.625 us (falling); the output settles through tau = 100.1 ns (see the deck).
+analysis = "tran"
+description = "push-pull comparator with a 0.25 V full hysteresis band, crossed rising and falling by a triangle: trip instants and output rails"
+full_scale = 5.0
+[[probe]]
+expr = "v(out)"
+reltol = 1.0
+loose_reason = "a rail-to-rail step compared sample by sample: ngspice's relay acts at its first timepoint past the threshold, up to 0.1 ns late, so the one sample on each edge interpolates across the swing; v(f) carries the oracle timing bar and the points below the closed-form one"
+analytic = [
+  {at = 0.62e-6, value = 1.0, reltol = 1.0e-6, note = "5 ns before the rising trip, d = +0.12 V is inside the band, so the output still sits on its 1 V rail (no current flows in the settled RC)"},
+  {at = 0.63e-6, value = 4.9961987, reltol = 1.0e-6, note = "5 ns after the rising trip: 5 V behind 1 ohm into RF-CF, v = 5 - (5 - v(f))/1001 with v(f) = 5 - 4*exp(-5 ns/100.1 ns)"},
+  {at = 1.62e-6, value = 4.9999998, reltol = 1.0e-6, note = "5 ns before the falling trip, d = -0.12 V is inside the band, so the output holds 5 V; v(f) = 5 - 4*exp(-995/100.1) and v = 5 - (5 - v(f))/1001"},
+  {at = 1.63e-6, value = 1.0038011, reltol = 1.0e-6, note = "5 ns after the falling trip: v = 1 + (v(f) - 1)/1001 with v(f) = 1 + (4.9998166 - 1)*exp(-5/100.1), 4.9998166 being v(f) at the trip"}]
+[[probe]]
+expr = "v(f)"
+reltol = 1.0e-2
+analytic = [
+  {at = 7.251e-7, value = 3.5284822, reltol = 1.0e-6, note = "one tau after the rising trip: 5 - 4/e. The RC turns trip timing into voltage at 4 V/tau = 40 mV/ns, so this pins the rising trip instant"},
+  {at = 1.7251e-6, value = 2.4714503, reltol = 1.0e-6, note = "one tau after the falling trip: 1 + (4.9998166 - 1)/e, pinning the falling trip instant the same way"}]

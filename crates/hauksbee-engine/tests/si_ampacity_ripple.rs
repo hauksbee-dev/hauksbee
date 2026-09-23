@@ -75,18 +75,26 @@ k_volts = 10000.0
     ModelLibrary::builtin_with_user_dirs(&[models.path()])
 }
 
-fn exact_rated_ripple_fixture(extra_input_caps: &str) -> (ExtractedBoard, String) {
+/// Rails named as a nominal duty's evidence: 5 V in, 2.5 V out.
+const NAMED_RAILS: (&str, &str) = ("VIN_5V", "VOUT_2V5");
+
+/// A buck stage (1200 uF exact-MPN input cap, 10 A programmed load) plus
+/// `extra_input_caps`, its rails named `vin` and `vout`.
+fn exact_rated_ripple_fixture(
+    extra_input_caps: &str,
+    (vin, vout): (&str, &str),
+) -> (ExtractedBoard, String) {
     board_and_text(&format!(
         r#"
-  (net 1 "VIN_5V")
+  (net 1 "{vin}")
   (net 2 "SW_NODE")
-  (net 3 "VOUT_2V5")
+  (net 3 "{vout}")
   (net 4 "GND")
   (net 5 "PROG")
   (net 6 "LOAD_OUT")
   (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 0 0)
     (property "Reference" "Q1") (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VIN_5V"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "{vin}"))
     (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE")))
   (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 5 0)
     (property "Reference" "Q2") (property "Value" "PSMN5R2-60YLX")
@@ -95,16 +103,16 @@ fn exact_rated_ripple_fixture(extra_input_caps: &str) -> (ExtractedBoard, String
   (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 10 0)
     (property "Reference" "L1") (property "Value" "47uH")
     (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT_2V5")))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "{vout}")))
   (footprint "Capacitor_SMD:CP_Elec_16x31.5" (layer "F.Cu") (at 0 5)
     (property "Reference" "C1") (property "Value" "1200uF")
     (property "MPN" "EKYB630ELL122MLN3S")
-    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "VIN_5V"))
+    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "{vin}"))
     (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
   {extra_input_caps}
   (footprint "Package_QFN:QFN-4" (layer "F.Cu") (at 20 0)
     (property "Reference" "U1") (property "Value" "TEST_PROGRAMMED_LOAD")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT_2V5"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "{vout}"))
     (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND"))
     (pad "3" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
     (pad "4" smd rect (at 3 0) (size 1 1) (layers "F.Cu") (net 6 "LOAD_OUT")))
@@ -486,49 +494,7 @@ fn si_ripple_uses_programmed_load_but_not_capability_or_invented_rating() {
 #[test]
 fn si_ripple_fires_from_shipped_exact_cap_rating_and_named_nominal_duty() {
     let lib = test_programmed_load_library();
-    let (board, text) = board_and_text(
-        r#"
-  (net 1 "VIN_5V")
-  (net 2 "SW_NODE")
-  (net 3 "VOUT_2V5")
-  (net 4 "GND")
-  (net 5 "PROG")
-  (net 6 "LOAD_OUT")
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 0 0)
-    (property "Reference" "Q1")
-    (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VIN_5V"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE")))
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 5 0)
-    (property "Reference" "Q2")
-    (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
-  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 10 0)
-    (property "Reference" "L1")
-    (property "Value" "47uH")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT_2V5")))
-  (footprint "Capacitor_SMD:CP_Elec_16x31.5" (layer "F.Cu") (at 0 5)
-    (property "Reference" "C1")
-    (property "Value" "1200uF")
-    (property "MPN" "EKYB630ELL122MLN3S")
-    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "VIN_5V"))
-    (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
-  (footprint "Package_QFN:QFN-4" (layer "F.Cu") (at 20 0)
-    (property "Reference" "U1")
-    (property "Value" "TEST_PROGRAMMED_LOAD")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT_2V5"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND"))
-    (pad "3" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
-    (pad "4" smd rect (at 3 0) (size 1 1) (layers "F.Cu") (net 6 "LOAD_OUT")))
-  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 25 0)
-    (property "Reference" "R1")
-    (property "Value" "1k")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
-"#,
-    );
+    let (board, text) = exact_rated_ripple_fixture("", NAMED_RAILS);
 
     let report = run_si_with_library(&board, &text, &lib);
     let findings = findings_of(&report, SiCheck::InputCapRipple);
@@ -552,43 +518,7 @@ fn si_ripple_fires_from_shipped_exact_cap_rating_and_named_nominal_duty() {
 #[test]
 fn si_ripple_does_not_assume_half_duty_when_rail_voltages_are_unknown() {
     let lib = test_programmed_load_library();
-    let (board, text) = board_and_text(
-        r#"
-  (net 1 "VIN")
-  (net 2 "SW_NODE")
-  (net 3 "VOUT")
-  (net 4 "GND")
-  (net 5 "PROG")
-  (net 6 "LOAD_OUT")
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 0 0)
-    (property "Reference" "Q1") (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VIN"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE")))
-  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 5 0)
-    (property "Reference" "Q2") (property "Value" "PSMN5R2-60YLX")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
-  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 10 0)
-    (property "Reference" "L1") (property "Value" "47uH")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT")))
-  (footprint "Capacitor_SMD:CP_Elec_16x31.5" (layer "F.Cu") (at 0 5)
-    (property "Reference" "C1") (property "Value" "1200uF")
-    (property "MPN" "EKYB630ELL122MLN3S")
-    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "VIN"))
-    (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
-  (footprint "Package_QFN:QFN-4" (layer "F.Cu") (at 20 0)
-    (property "Reference" "U1") (property "Value" "TEST_PROGRAMMED_LOAD")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND"))
-    (pad "3" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
-    (pad "4" smd rect (at 3 0) (size 1 1) (layers "F.Cu") (net 6 "LOAD_OUT")))
-  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 25 0)
-    (property "Reference" "R1") (property "Value" "1k")
-    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
-    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
-"#,
-    );
+    let (board, text) = exact_rated_ripple_fixture("", ("VIN", "VOUT"));
     let report = run_si_with_library(&board, &text, &lib);
     assert!(findings_of(&report, SiCheck::InputCapRipple).is_empty());
     let note = report
@@ -613,6 +543,7 @@ fn si_ripple_abstains_when_parallel_input_caps_make_current_sharing_unknown() {
     (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "VIN_5V"))
     (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
 "#,
+        NAMED_RAILS,
     );
 
     let report = run_si_with_library(&board, &text, &lib);
@@ -651,6 +582,7 @@ fn si_ripple_abstains_when_two_stages_supply_the_same_output_load() {
     (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 7 "VIN2_5V"))
     (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
 "#,
+        NAMED_RAILS,
     );
 
     let report = run_si_with_library(&board, &text, &lib);

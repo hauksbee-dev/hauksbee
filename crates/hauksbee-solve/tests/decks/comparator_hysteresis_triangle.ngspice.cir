@@ -1,0 +1,22 @@
+ngspice reference for comparator_hysteresis_triangle, from ngspice primitives
+* ngspice has no comparator element. E makes the differential input d; the SW
+* relay is ngspice's own hysteretic threshold device, and VH is a HALF-width
+* (switch_sw_thresholds pins that), so VT=0 VH=0.125 closes at d > +0.125 and
+* opens at d < -0.125: the 0.25 V full band. The relay pulls sp to ground when
+* closed, and B maps that state to the 1 V / 5 V rails behind the same 1 ohm
+* output resistance. The relay acts at the first timepoint past the threshold
+* (it does not bisect), so its edges are late by up to the 0.1 ns tmax.
+Vin inp 0 PWL(0 0.5 1u 1.5 2u 0.5)
+Vref inn 0 DC 1
+Ed d 0 inp inn 1
+V1 one 0 DC 1
+Rsp one sp 1Meg
+S1 sp 0 d 0 SCMP
+.model SCMP SW(VT=0 VH=0.125 RON=1 ROFF=1e12)
+Bo o 0 V = V(sp) < 0.5 ? 5 : 1
+Ro o out 1
+RF out f 1k
+CF f 0 100p
+.tran 1n 2u 0 0.1n
+.print tran v(out) v(f)
+.end

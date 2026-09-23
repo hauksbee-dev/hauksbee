@@ -133,18 +133,13 @@ pub fn vsource(name: String, p: NodeId, n: NodeId, kind: SourceKind) -> Device {
     Device::Vsource { name, p, n, kind }
 }
 
-/// Minimal runtime layers; preserve the supplied net map and net-name order.
-pub fn bound_board(
-    name: String,
-    circuit: Circuit,
-    net_nodes: HashMap<String, NodeId>,
-    net_names: Vec<String>,
-) -> BoundBoard {
+/// Minimal runtime layers over `nets`, whose order is the net-name order.
+pub fn bound_board(name: &str, circuit: Circuit, nets: &[(&str, NodeId)]) -> BoundBoard {
     BoundBoard {
-        name,
+        name: name.to_string(),
         circuit,
-        net_nodes,
-        net_names,
+        net_nodes: nets.iter().map(|&(n, id)| (n.to_string(), id)).collect(),
+        net_names: nets.iter().map(|&(n, _)| n.to_string()).collect(),
         digital: Vec::new(),
         mcus: Vec::new(),
         dnp_mcus: Vec::new(),
@@ -158,6 +153,30 @@ pub fn bound_board(
         peripherals: Vec::new(),
         report: BindReport::default(),
     }
+}
+
+/// A board whose every chunk solve fails: two ideal voltage sources drive
+/// `n1` to 5 V and 3 V at once with no series impedance between them. That
+/// MNA system is structurally singular with no DC operating point, so the
+/// transient's DC solve fails regardless of warm-start or gmin stepping (gmin
+/// regularizes floating nodes, not conflicting hard sources). No firmware or
+/// MCU is needed: the scheduler still runs the analog solve each chunk.
+pub fn impossible_board() -> BoundBoard {
+    let mut c = Circuit::new();
+    let n1 = c.node("n1");
+    c.add(vsource(
+        "V1".into(),
+        n1,
+        NodeId::GROUND,
+        SourceKind::Dc(5.0),
+    ));
+    c.add(vsource(
+        "V2".into(),
+        n1,
+        NodeId::GROUND,
+        SourceKind::Dc(3.0),
+    ));
+    bound_board("impossible", c, &[("n1", n1)])
 }
 
 /// Unpositioned fixture pin; PCB-only and passive kinds remain distinct.

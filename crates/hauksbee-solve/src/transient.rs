@@ -12,10 +12,11 @@
 
 use crate::error::{SolveError, SolvePhase, SolveResult};
 use crate::newton::{dc_operating_point_seeded, newton_solve, newton_solve_event, Workspace};
-use crate::options::{DcInit, Integration, SolverOptions, StepControl, Strategy};
+use crate::options::{DcInit, Integration, SolverOptions, StepControl, Strategy, SwitchModel};
 use crate::stamp::IntegCoeffs;
 use crate::system::ReactiveState;
-use hauksbee_ir::{Circuit, Device, NodeId};
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use std::collections::HashMap;
 
 /// Collected transient results.
 #[derive(Debug, Clone, Default)]
@@ -108,13 +109,13 @@ pub struct TransientDiagnostics {
     pub final_residual: Option<(f64, usize)>,
     /// The relay latch at that final point, for a caller that continues the
     /// SAME circuit in a later run (a co-sim chunk); `None` when none is tracked.
-    pub switch_latch: Option<std::collections::HashMap<hauksbee_ir::DeviceId, bool>>,
+    pub switch_latch: Option<HashMap<DeviceId, bool>>,
 }
 
 /// The transient engine.
 pub struct Transient {
     opts: SolverOptions,
-    switch_latch_seed: Option<std::collections::HashMap<hauksbee_ir::DeviceId, bool>>,
+    switch_latch_seed: Option<HashMap<DeviceId, bool>>,
 }
 
 impl Transient {
@@ -130,10 +131,7 @@ impl Transient {
     /// state, exactly like a capacitor's charge: a co-sim that builds a fresh
     /// workspace per chunk would otherwise reset a 555's SR latch every chunk.
     #[must_use]
-    pub fn with_switch_latch(
-        mut self,
-        latch: Option<std::collections::HashMap<hauksbee_ir::DeviceId, bool>>,
-    ) -> Self {
+    pub fn with_switch_latch(mut self, latch: Option<HashMap<DeviceId, bool>>) -> Self {
         self.switch_latch_seed = latch;
         self
     }
@@ -477,6 +475,14 @@ impl Transient {
             StepControl::Fixed { .. } => Vec::new(),
         };
         let mut next_bp = 0usize;
+        let adaptive = matches!(opts.step, StepControl::Adaptive { .. });
+        let stepped: Vec<NodeId> = circuit
+            .iter()
+            .filter_map(|(_, d)| match d {
+                Device::Comparator { out, .. } => Some(*out),
+                _ => None,
+            })
+            .collect();
 
         // Extrapolated trial seed. Seeding the bare trial Newton from the
         // previous ACCEPTED point starts a full step away from the root on a
@@ -562,6 +568,11 @@ impl Transient {
                 }
             }
 
+            // The relay latch this step enters with: the trial commits its own,
+            // and the (adaptive-only) event locator must aim at the threshold
+            // live BEFORE it.
+            let latch0 = (adaptive && opts.effects.switch_model == SwitchModel::Hysteretic)
+                .then(|| ws.switch_latch().cloned().unwrap_or_default());
             // Trial solve at t + h, seeded from the previous accepted point,
             // or from the clamped linear extrapolation when armed (above).
             ws.x.copy_from_slice(&x_accepted);
@@ -674,11 +685,13 @@ impl Transient {
             // away that converged solution and re-seed a mid-transition step the
             // bare Newton can't solve; the exact dt_min thrash that re-opened the
             // wall. With the event loop owning the discontinuity, accept the step.
-            if !used_event {
+            if !used_event && adaptive {
+                let latch = latch0.as_ref().map(|l0| (l0, ws.switch_latch()));
+                let xs = (x_accepted.as_slice(), ws.x.as_slice());
                 if let Some(frac) =
-                    crossing_fraction(circuit, &x_accepted, &ws.x, &ws.layout_nodes())
+                    crossing_fraction(circuit, xs, &ws.layout_nodes(), latch, &stepped)
                 {
-                    if matches!(opts.step, StepControl::Adaptive { .. }) && h > dt_min * 4.0 {
+                    if h > dt_min * 4.0 {
                         // Bisect toward the crossing for a sharper edge.
                         let refined = (h * frac).clamp(dt_min, h);
                         if (refined - h).abs() > dt_min {
@@ -1001,7 +1014,7 @@ fn diode_q(model: &hauksbee_ir::DiodeModel, vd: f64, opts: &SolverOptions) -> f6
 /// voltages, measured at the intrinsic nodes when series resistance applies).
 fn bjt_q(
     ws: &Workspace,
-    id: hauksbee_ir::DeviceId,
+    id: DeviceId,
     c: NodeId,
     b: NodeId,
     e: NodeId,
@@ -1019,7 +1032,7 @@ fn bjt_q(
 /// voltage the stamp linearised, or the co-simulation stops converging rather
 /// than merely drifting.
 #[inline]
-fn diode_vj(ws: &Workspace, id: hauksbee_ir::DeviceId, a: NodeId, k: NodeId) -> f64 {
+fn diode_vj(ws: &Workspace, id: DeviceId, a: NodeId, k: NodeId) -> f64 {
     let anode = match ws.layout.diode_internal(id) {
         Some(i) => ws.x[i],
         None => node_v(ws, a),
@@ -1035,7 +1048,7 @@ pub(crate) fn node_v(ws: &Workspace, node: NodeId) -> f64 {
 }
 
 /// A device's branch current at the solution in `ws` (0 when it owns none).
-pub(crate) fn branch_i(ws: &Workspace, id: hauksbee_ir::DeviceId) -> f64 {
+pub(crate) fn branch_i(ws: &Workspace, id: DeviceId) -> f64 {
     ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0)
 }
 
@@ -1207,33 +1220,82 @@ fn push_source_corners(kind: &hauksbee_ir::SourceKind, tstop: f64, corners: &mut
 
 // --- event detection --------------------------------------------------------
 
-/// If any comparator/switch control voltage crosses its midpoint between the
-/// accepted state and the trial state, return the approximate fraction of the
-/// step at which it happens (for bisection). `None` if nothing crosses.
+/// If a comparator or relay control crossed the threshold LIVE at the accepted
+/// point `x0`, or the device switched, on the way to the trial `x1`: the
+/// approximate fraction of the step at which it crossed (for bisection).
+///
+/// Live, not central: a hysteretic device only acts at the edge of its band on
+/// the side it is leaving, so aiming at the band centre put a sample where
+/// nothing happens and left the real edge on the step grid (measured: an
+/// adaptive march capped at 100 us flipped a 0.25 V-band comparator at 0.7 ms
+/// against a 0.625 ms trip). A comparator's side is its output rail, exactly as
+/// `stamp_comparator` decides it. A hysteretic relay's is its latch, `latch`
+/// holding the one the step ENTERED with and the one the trial left; `None` is
+/// the memoryless smooth switch, located at its centred ramp's midpoint. An
+/// event is the control crossing that trip OR the device changing state: Newton
+/// can converge on an iterate whose comparator has not yet re-read its moved
+/// input, leaving the control a hair past the trip at the accepted point, and
+/// the flip then arrives in a step whose control never crosses (measured: a
+/// falling edge landed one 0.1 ns step late). Such a step is cut back to the
+/// accepted point (`frac` clamps to 0), so the flip lands there instead.
+///
+/// A control driven by a comparator output (`stepped`) is skipped: it is a
+/// rail-to-rail step, so every trial straddling it interpolates to the same
+/// fraction and bisection halves `h` down to `dt_min` (measured: 1e-17 s on
+/// an integrate-and-fire loop). Its edge is the driving comparator's, which
+/// this locates on that comparator's own continuous input.
 fn crossing_fraction(
     circuit: &Circuit,
-    x0: &[f64],
-    x1: &[f64],
+    (x0, x1): (&[f64], &[f64]),
     node_idx: &dyn Fn(NodeId) -> Option<usize>,
+    latch: Option<(&HashMap<DeviceId, bool>, Option<&HashMap<DeviceId, bool>>)>,
+    stepped: &[NodeId],
 ) -> Option<f64> {
     let mut earliest: Option<f64> = None;
-    let vat = |x: &[f64], n: NodeId| node_idx(n).map(|i| x[i]).unwrap_or(0.0);
-    for (_, dev) in circuit.iter() {
-        let (cp, cn, mid) = match dev {
-            Device::Comparator { inp, inn, .. } => (*inp, *inn, 0.0),
+    let vat = |x: &[f64], n: NodeId| node_idx(n).map_or(0.0, |i| x[i]);
+    for (id, dev) in circuit.iter() {
+        let (cp, cn, trip, flipped) = match dev {
+            Device::Comparator {
+                out,
+                inp,
+                inn,
+                out_lo,
+                out_hi,
+                hysteresis,
+                ..
+            } => {
+                let high = |x: &[f64]| vat(x, *out) > 0.5 * (out_lo + out_hi);
+                let trip = crate::stamp::comparator_trip(high(x0), *hysteresis);
+                (*inp, *inn, trip, high(x0) != high(x1))
+            }
             Device::VSwitch {
                 ctrl_p,
                 ctrl_n,
                 von,
                 voff,
                 ..
-            } => (*ctrl_p, *ctrl_n, 0.5 * (von + voff)),
+            } => {
+                let on =
+                    |l: Option<&HashMap<DeviceId, bool>>| l.and_then(|l| l.get(&id)) == Some(&true);
+                match latch {
+                    Some((l0, l1)) if on(Some(l0)) => (*ctrl_p, *ctrl_n, *voff, !on(l1)),
+                    Some((_, l1)) => (*ctrl_p, *ctrl_n, *von, on(l1)),
+                    None => (*ctrl_p, *ctrl_n, 0.5 * (von + voff), false),
+                }
+            }
             _ => continue,
         };
-        let d0 = vat(x0, cp) - vat(x0, cn) - mid;
-        let d1 = vat(x1, cp) - vat(x1, cn) - mid;
-        if d0.signum() != d1.signum() && (d1 - d0).abs() > 1e-15 {
-            let frac = (d0 / (d0 - d1)).clamp(0.0, 1.0);
+        if [cp, cn].iter().any(|n| stepped.contains(n)) {
+            continue;
+        }
+        let d0 = vat(x0, cp) - vat(x0, cn) - trip;
+        let d1 = vat(x1, cp) - vat(x1, cn) - trip;
+        if flipped || ((d0 > 0.0) != (d1 > 0.0) && (d1 - d0).abs() > 1e-15) {
+            let frac = if d0 == d1 {
+                0.0
+            } else {
+                (d0 / (d0 - d1)).clamp(0.0, 1.0)
+            };
             earliest = Some(earliest.map_or(frac, |e| e.min(frac)));
         }
     }
