@@ -140,7 +140,7 @@ pub const AGENTS: [AgentSpec; 3] = [
             "approve-for-me",
             "danger-full-access",
         ],
-        models: &["gpt-5.6-sol", "gpt-5.6", "gpt-5.5"],
+        models: &["gpt-5.6-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.5"],
     },
 ];
 
@@ -212,7 +212,7 @@ pub struct AgentConfig {
     /// Claude's `--permission-mode`, agy's `--mode`, codex's `--sandbox`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
-    /// A CLI auth/config profile (`codex -p NAME`); ignored by the others.
+    /// `codex -p NAME`; inert, as codex runs with `--ignore-user-config`. Others ignore it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     /// Extra arguments appended to the command line, verbatim.
@@ -381,7 +381,7 @@ impl ExtractConfig {
                     a.permission_modes.join(" | "),
                     a.permission_mode,
                 ),
-                ("profile", "codex auth profile (codex -p NAME)".into(), ""),
+                ("profile", "codex -p NAME (inert: codex ignores user config)".into(), ""),
                 (
                     "extra_args",
                     "extra CLI arguments, space-separated".into(),
