@@ -386,6 +386,8 @@ fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
     bus = "spi"
   and a [sensor.protocol] block:
     style = "spi_reg"          # first transfer byte = (rw_bit<<7 | register_addr)
+                               # in value bits, MSB first: an R/W a datasheet numbers "bit 0"
+                               # in clocking order is still rw_bit<<7; map before abstaining.
     rw_read_is_high = true     # true if a READ sets the high command bit to 1
                                # (most ST / InvenSense parts). false otherwise.
     addr_mask = 0x7f           # mask to recover the register address
@@ -480,11 +482,12 @@ RULES:
      status = "unknown"
      parameter = "model"
      reason = "datasheet publishes no validated model error interval"
-   Every published row (the supply range, the accuracy) is a
-   `[[sensor.source.characteristic]]` record: parameter, only the printed
+   Every printed row of the electrical, timing and ratings tables (supply and
+   standby currents, timing, temperature ranges, I/O levels), field or not, is
+   a `[[sensor.source.characteristic]]` record: parameter, only the printed
    min/typ/max columns, the printed unit, conditions, and a basis naming the
-   printed columns. A row printing min and max yields its interval, so never
-   write one: a missing column is never 0 and a typ is never a bound.
+   printed columns; {printed_reference}. A row printing min and max yields its
+   interval, never write one: no column is 0 and a typ is never a bound.
 6. A control/config register firmware reads back is a const register holding
    its power-on (reset) value bytes.
 
@@ -495,6 +498,7 @@ RULES:
 OUTPUT (TOML only, starting with [sensor]):
 "#,
         source_quantity_guidance = SOURCE_QUANTITY_GUIDANCE,
+        printed_reference = crate::schema::PRINTED_REFERENCE,
         datasheet_text = datasheet_text_block(pdf_text),
     )
 }
@@ -537,11 +541,7 @@ fn validate_sensor_reply(raw: &str, part: &str, kind: &str) -> Result<SensorSpec
         .as_ref()
         .is_some_and(crate::schema::ModelSourceSpec::declares_model_error)
     {
-        bail!(
-            "reply for {part} has no model-error record (rule 5): add [sensor.source] \
-             tier = \"datasheet-derived\" with [[sensor.source.uncertainty]] status = \"unknown\" \
-             parameter = \"model\" reason = \"datasheet publishes no validated model error interval\""
-        );
+        bail!("reply for {part} has no model-error record (rule 5)");
     }
     Ok(spec)
 }
@@ -2066,12 +2066,13 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              what matters is which pin is which"
         }
         "mcu" => "backend (e.g. simavr:atmega328p)",
-        "charger" => {
-            "vout, dropout_v, iq_a  (the converter behaviour is in [models.behavioral]). With \
-             [models.current_program], an iq_a printed only as a limit may be omitted: add an \
-             `unknown` record for iq_a naming that row, which stays a characteristic record"
+        "charger" | "pmic" => {
+            "vout, dropout_v, iq_a (the behaviour is in [models.behavioral] or \
+             [models.current_program]). A dropout_v or iq_a printed as no single value (no \
+             dropout row; only a limit or several supply-current rows) is omitted with an \
+             `unknown` record for it naming why, its rows staying characteristic records: never \
+             a reason for identity-only"
         }
-        "pmic" => "vout, dropout_v, iq_a  (the pin pulls are in [models.behavioral])",
         "balancer" => "(the leak law is in [models.behavioral]; no required numeric params)",
         _ => "(see db/README.md for kind-specific requirements)",
     }
@@ -2133,6 +2134,46 @@ impl Reply<'_> {
         }
     }
 
+    /// The reply with the conservative unknown model-error record added where
+    /// one is missing (never replaced): it only qualifies results; a retry costs a run.
+    fn complete(self, raw: String) -> String {
+        use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
+        let (path, validation) = match self {
+            Reply::Model { .. } => ("models", "physical-bounds-only"),
+            Reply::Sensor { .. } => ("sensor", "unvalidated"),
+            Reply::Word => return raw,
+        };
+        let Ok(mut doc) = raw.parse::<DocumentMut>() else {
+            return raw;
+        };
+        let blank = Table::from_iter([("tier", "datasheet-derived"), ("validation", validation)]);
+        let is_model = |r: &Table| r.get("parameter").and_then(Item::as_str) == Some("model");
+        let why = "datasheet publishes no validated model error interval";
+        let record = std::iter::zip(["status", "parameter", "reason"], ["unknown", "model", why]);
+        let mut inserted = false;
+        let tables: Vec<&mut Table> = match doc.get_mut(path) {
+            Some(Item::ArrayOfTables(a)) => a.iter_mut().collect(),
+            t => t.and_then(Item::as_table_mut).into_iter().collect(),
+        };
+        for table in tables {
+            let source = table.entry("source").or_insert(Item::Table(blank.clone()));
+            let records = source.as_table_mut().map(|t| t.entry("uncertainty"));
+            let records = records.map(|e| e.or_insert(ArrayOfTables::new().into()));
+            match records {
+                Some(Item::ArrayOfTables(a)) if !a.iter().any(is_model) => {
+                    a.push(Table::from_iter(record.clone()))
+                }
+                _ => continue,
+            }
+            inserted = true;
+        }
+        if inserted {
+            say!("[model-extract] warning: model-error record missing; inserted the conservative unknown record");
+            return doc.to_string();
+        }
+        raw
+    }
+
     fn check(self, raw: &str) -> Result<()> {
         match self {
             Reply::Model { part, kind } => parse_and_validate_reply(raw, part, kind).map(drop),
@@ -2151,7 +2192,7 @@ fn call_backend(prompt: &str, args: &Args, reply: Reply<'_>) -> Result<String> {
     if let Ok(path) = std::env::var("HAUKSBEE_EXTRACT_MOCK_REPLY") {
         let canned = std::fs::read_to_string(&path)
             .with_context(|| format!("reading mock reply from {path}"))?;
-        let raw = extract_toml_block(&canned, reply.table());
+        let raw = reply.complete(extract_toml_block(&canned, reply.table()));
         reply.check(&raw)?;
         return Ok(raw);
     }
@@ -2241,7 +2282,7 @@ fn validated_attempts(
             _ => "redrafting with the checker's feedback",
         };
         progress::phase(format!("{doing} (attempt {attempt} of {})", retries + 1));
-        let raw = fetch(&prompt)?;
+        let raw = reply.complete(fetch(&prompt)?);
         progress::phase("checking the answer");
         say!(
             "[model-extract] {tool} attempt {attempt} returned {} chars in {:.0}s",
@@ -3005,11 +3046,7 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
         .as_ref()
         .is_some_and(crate::schema::ModelSourceSpec::declares_model_error)
     {
-        bail!(
-            "reply for {part} has no model-error record (rule 0): add [models.source] with \
-             [[models.source.uncertainty]] status = \"unknown\" parameter = \"model\" \
-             reason = \"datasheet publishes no validated model error interval\""
-        );
+        bail!("reply for {part} has no model-error record (rule 0)");
     }
     crate::validation::validate(entry).map_err(|errs| {
         let msg: Vec<String> = errs.iter().map(ToString::to_string).collect();
@@ -3347,6 +3384,18 @@ v_sense_full = 0.0463
         let linear = format!("{plain}{pins}{snippet}{MODEL_SOURCE}");
         let entry = parse_and_validate_reply(&linear, "X", "charger").unwrap();
         assert!(entry.behavioral.is_empty() && entry.current_program.is_some());
+        // Absent dropout/Iq rows abstain by record, never identity-only; lint agrees.
+        let unknown =
+            |k| format!("{{ status = \"unknown\", parameter = \"{k}\", reason = \"-\" }}, ");
+        let records = format!("uncertainty = [{}{}", unknown("dropout_v"), unknown("iq_a"));
+        let cut = linear.replace("dropout_v = 1.0\niq_a = 0.001\n", "");
+        let abstained = cut.replace("uncertainty = [", &records);
+        let entry = parse_and_validate_reply(&abstained, "X", "charger").unwrap();
+        let root = toml::from_str(&abstained).unwrap();
+        assert!(crate::validation::source_shape_findings(&root).is_empty());
+        assert!(crate::schema::model_error_warning(entry.source.as_ref()).is_none());
+        let named = abstained.replace("\"dropout_v\"", "\"x\"");
+        assert!(parse_and_validate_reply(&named, "X", "charger").is_err());
     }
 
     #[test]
@@ -3517,6 +3566,14 @@ uncertainty = [
         let no_source = &good[..good.find("[models.source]").unwrap()];
         let error = parse_and_validate_reply(no_source, "BCM847BS", "bjt_npn").unwrap_err();
         assert!(error.to_string().contains("rule 0"), "{error:#}");
+        // Completion adds the record to every entry lacking one, keeps the rest.
+        let (part, kind) = ("X", "bjt_npn");
+        let model = Reply::Model { part, kind };
+        let second = no_source.replace("\"bcm847bs\"", "\"b\"");
+        let filled = model.complete(format!("{no_source}{second}"));
+        assert!(parse_and_validate_reply(&filled, part, kind).is_ok());
+        assert_eq!(filled.matches("\"model\"").count(), 2);
+        assert_eq!(model.complete(good.to_string()), good);
         for (from, to, needle) in [
             ("\"model\"", "\"bf\"", "rule 0"),
             ("low = 100.0", "low = 999.0", "uncertainty 1 (bf)"),
@@ -3611,6 +3668,15 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
         let no_source = &i2c[..i2c.find("[sensor.source]").unwrap()];
         let error = validate_sensor_reply(no_source, "LM75", "i2c_sensor").unwrap_err();
         assert!(error.to_string().contains("rule 5"), "{error:#}");
+        // Completion adds it (rule 5), also beside a rail-relative row, once.
+        let (part, kind) = ("X", "i2c_sensor");
+        let sensor = Reply::Sensor { part, kind };
+        let row = "[sensor.source]\ntier = \"datasheet-derived\"\n[[sensor.source.characteristic]]\nparameter = \"VIH\"\nmin = 0.7\nunit = \"VDDIO\"\nconditions = \"\"\nbasis = \"T1, min\"\n";
+        for draft in ["", row] {
+            let filled = sensor.complete(format!("{no_source}{draft}"));
+            assert!(validate_sensor_reply(&filled, part, kind).is_ok());
+            assert_eq!(filled.matches("\"model\"").count(), 1);
+        }
         let wrong = i2c.replace("\"model\"", "\"temperature_c\"");
         assert!(validate_sensor_reply(&wrong, "LM75", "i2c_sensor").is_err());
         assert_eq!(spec.sensor.name, "LM75");
