@@ -3193,6 +3193,10 @@ description = "SN74AHCT14 hex Schmitt-trigger inverter with the common 14-pin co
 [models.source]
 tier = "datasheet-derived"
 validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
 
 [[models.source.uncertainty]]
 status = "interval"
