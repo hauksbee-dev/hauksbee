@@ -2523,14 +2523,22 @@ fn role_node_map_guessed(
 
 /// Two pads of one signal role on two nets: the role map keeps one, floating a
 /// unit. (One pad on two nets is a board contradiction, refused elsewhere.)
+/// Only multi-unit kinds: elsewhere a repeated role is one internal node (an
+/// SOT-223 tab, a flow-through ESD pin) that a board may leave on its own net.
 fn split_role(
     comp: &Component,
     model: &ModelEntry,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> Option<String> {
+    use ComponentKind::{BjtNpn, BjtPnp, Comparator, Diode, Opamp};
+    let unit_role = |r: &&String| match model.kind {
+        Opamp | Comparator | BjtNpn | BjtPnp => !repeatable_role(r),
+        Diode => matches!(r.as_str(), "anode" | "cathode"),
+        _ => false,
+    };
     let mut first = HashMap::new();
     comp.pins.iter().find_map(|pin| {
-        let role = model.pins.get(&pin.number).filter(|r| !repeatable_role(r))?;
+        let role = model.pins.get(&pin.number).filter(unit_role)?;
         let node = node_of(pin.net)?;
         let (pad, at) = *first.entry(role).or_insert((&pin.number, node));
         let why = "sit on different nets, so only one would be bound: a multi-unit part needs per-unit roles";
