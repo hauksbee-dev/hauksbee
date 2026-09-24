@@ -492,6 +492,10 @@ pub struct ProtocolSpec {
     /// specs that omit it are unchanged.
     #[serde(default)]
     pub spi_mode: u8,
+    /// SPI only: every mode the datasheet allows (a part sampling on the
+    /// rising edge often accepts 0 and 3); `spi_mode` is the one simulated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spi_modes: Vec<u8>,
 }
 
 /// A board-strap level an address-select row names.
@@ -761,6 +765,13 @@ impl SensorSpec {
         check!(
             s.bus == Bus::Spi || s.protocol.spi_mode == 0,
             "protocol.spi_mode = {} is SPI-only, but bus = \"i2c\"",
+            s.protocol.spi_mode
+        );
+        let modes = &s.protocol.spi_modes;
+        check!(
+            modes.is_empty()
+                || modes.contains(&s.protocol.spi_mode) && modes.iter().all(|m| *m <= 3),
+            "protocol.spi_modes {modes:?} must list modes 0..=3 including spi_mode {}",
             s.protocol.spi_mode
         );
         match s.bus {
@@ -1338,7 +1349,7 @@ style = "i2c_pointer"
         assert!(spec.sensor.protocol.rw_read_is_high);
         assert_eq!(spec.sensor.protocol.addr_mask, 0x7f);
         assert_eq!(spec.sensor.protocol.spi_mode, 0);
-        let spec = SensorSpec::from_toml(&spi_spec("spi_mode = 3")).unwrap();
+        let spec = SensorSpec::from_toml(&spi_spec("spi_mode = 3\nspi_modes = [0, 3]")).unwrap();
         assert_eq!(spec.sensor.protocol.spi_mode, 3);
     }
 
@@ -1356,6 +1367,7 @@ style = "i2c_pointer"
             WRITE_REG_SPEC.replace("store = \"config\"", "store = \"a0\""),
             WRITE_REG_SPEC.replace("encoding = \"u16_be\"\nstore", "encoding = \"q7.1_be\"\nstore"),
             spi_spec("spi_mode = 4"),
+            spi_spec("spi_mode = 1\nspi_modes = [0, 3]"),
             LM75.replace("style = \"i2c_pointer\"", "style = \"i2c_pointer\"\nspi_mode = 2"),
             LM75.replace("[sensor.protocol]", "[sensor.read_frame]\nbytes = [\"1.0\"]\n[sensor.protocol]"),
             strapped().replace("address = 0x48\nstraps", "address = 0x4b\nstraps"),
