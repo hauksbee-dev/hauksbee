@@ -438,11 +438,12 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
 }
 
 /// A param or current-program constant grossly off every row printing it. A
-/// row prints `name` when its unit converts to the param's and its leading
-/// symbol is the name, its stem (less the unit suffix) or, for a one-letter
-/// stem, a subscripted symbol (`k_volts` is KISET's K). Off: every column is
-/// a decade slip of 10^3 or more (over 10^2.5), or the value is outside min..max
-/// and 3x or more past the nearer bound. One agreeing row clears it.
+/// row prints `name` when its unit converts to the param's and any symbol in
+/// its text (a run with no lowercase letter) is the name, its stem (less the
+/// unit suffix) or, for a one-letter stem, that letter subscripted (`k_volts`
+/// is KISET's K). Off: every column is a decade slip of 10^3 or more (over
+/// 10^2.5), or the value is outside min..max and 3x or more past the nearer
+/// bound. One agreeing row clears it.
 fn row_slips(entry: &ModelEntry, rows: &[Characteristic]) -> Vec<String> {
     let program = toml::Table::try_from(&entry.current_program).unwrap_or_default();
     let named = entry.params.0.iter().map(|(k, v)| (k, v.as_f64()));
@@ -456,10 +457,11 @@ fn row_slips(entry: &ModelEntry, rows: &[Characteristic]) -> Vec<String> {
         let stem =
             words[..words.len() - usize::from(crate::units::suffix_unit(name).is_some())].concat();
         let slip = |row: &Characteristic| {
-            let s = row.parameter.split(|c: char| !c.is_alphanumeric()).next()?;
-            let sub = stem.len() == 1 && !s.bytes().any(|c| c.is_ascii_lowercase());
-            let cited = s.eq_ignore_ascii_case(name) || s.eq_ignore_ascii_case(&stem);
-            let cited = cited || (sub && s.to_ascii_lowercase().starts_with(&stem));
+            let symbols = row.parameter.split(|c: char| !c.is_alphanumeric());
+            let symbols = symbols.filter(|s| !s.is_empty() && !s.chars().any(char::is_lowercase));
+            let cited = symbols
+                .map(str::to_lowercase)
+                .any(|s| s == *name || s == stem || (stem.len() == 1 && s.starts_with(&stem)));
             let scale = crate::units::scale_between(&row.unit, unit).filter(|_| cited)?;
             let cols = [("typ", row.typ), ("min", row.min), ("max", row.max)];
             let cols = cols.map(|(c, x)| (c, x.unwrap_or(0.0)));
@@ -769,6 +771,8 @@ mod tests {
             "digital | voh = 2.4 | min = 2.4 | V | ",
             "diode | rs = 1.0 | max = 1.0 | V | ",
             "vreg | KP0.54 | KISET k: min = 490, typ = 540, max = 590 | AΩ | = 540 V: 1000× apart",
+            "vreg | KP0.54 | ISET current factor KISET: typ = 540 | AΩ | = 540 V: 1000× apart",
+            "vreg | iq_a = 6.5e-5 | ISD shutdown IQSD: typ = 0.05 | uA | ",
             "vreg | KP540 | KISET k: min = 490, typ = 540, max = 590 | AΩ | ",
             "vreg | KP0.52 | KISET k: typ = 520 | mA·kΩ | typ 520 mA·kΩ = 520 V: 1000× apart",
             "vreg | vout = 0.0033 | VOUT out: typ = 3.3 | V | 1000× apart, a power-of-ten slip",
