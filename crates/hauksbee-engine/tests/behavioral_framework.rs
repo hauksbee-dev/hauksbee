@@ -780,12 +780,12 @@ impl CustomBehavior for RunawaySink {
     ) {
         if let Some(&out) = role_nodes.get("out") {
             self.out = Some(out);
-            self.isrc = Some(circuit.add(Device::Isource {
-                name: format!("Icustom_{reference}"),
-                p: out,
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(0.0),
-            }));
+            self.isrc = Some(circuit.add(Device::isource(
+                format!("Icustom_{reference}"),
+                out,
+                NodeId::GROUND,
+                SourceKind::Dc(0.0),
+            )));
         }
     }
 

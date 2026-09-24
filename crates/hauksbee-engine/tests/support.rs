@@ -106,23 +106,11 @@ pub fn repo_root() -> PathBuf {
 
 /// Return a device without changing the caller's insertion order or DeviceId.
 pub fn resistor(name: String, a: NodeId, b: NodeId, ohms: f64) -> Device {
-    Device::Resistor {
-        name,
-        a,
-        b,
-        ohms,
-        tc1: None,
-    }
+    Device::resistor(name, a, b, ohms)
 }
 
 pub fn capacitor(name: String, a: NodeId, b: NodeId, farads: f64) -> Device {
-    Device::Capacitor {
-        name,
-        a,
-        b,
-        farads,
-        ic: None,
-    }
+    Device::capacitor(name, a, b, farads)
 }
 
 pub fn vsource(name: String, p: NodeId, n: NodeId, kind: SourceKind) -> Device {

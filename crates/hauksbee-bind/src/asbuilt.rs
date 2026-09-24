@@ -449,23 +449,11 @@ impl AsBuiltOverlay {
         }
         let (device, described) = match (fit.ohms, fit.farads) {
             (Some(ohms), None) => (
-                Device::Resistor {
-                    name: reference.to_string(),
-                    a,
-                    b,
-                    ohms,
-                    tc1: None,
-                },
+                Device::resistor(reference.to_string(), a, b, ohms),
                 format!("{ohms} ohm resistor"),
             ),
             (None, Some(farads)) => (
-                Device::Capacitor {
-                    name: reference.to_string(),
-                    a,
-                    b,
-                    farads,
-                    ic: None,
-                },
+                Device::capacitor(reference.to_string(), a, b, farads),
                 format!("{farads} F capacitor"),
             ),
             _ => {

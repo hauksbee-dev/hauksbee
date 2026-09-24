@@ -1221,13 +1221,7 @@ impl StressMonitor {
                     FaultKind::Overvoltage => 1e-2, // reverse breakdown fails CLOSED
                     _ => 1e12,                      // over-current burns OPEN
                 };
-                *dev = Device::Resistor {
-                    name,
-                    a,
-                    b: k,
-                    ohms,
-                    tc1: None,
-                };
+                *dev = Device::resistor(name, a, k, ohms);
                 true
             }
             _ => false,
@@ -1717,13 +1711,7 @@ mod monitor_temp_tests {
     fn resistor_monitor(ohms: f64, ratings: Ratings) -> (Circuit, NodeId, StressMonitor) {
         let mut circuit = Circuit::new();
         let node = circuit.node("A");
-        let device = circuit.add(Device::Resistor {
-            name: "R1".into(),
-            a: node,
-            b: NodeId::GROUND,
-            ohms,
-            tc1: None,
-        });
+        let device = circuit.add(Device::resistor("R1", node, NodeId::GROUND, ohms));
         let meta = DeviceMeta {
             device,
             ..meta("R1", ComponentKind::Passive, "", ratings)

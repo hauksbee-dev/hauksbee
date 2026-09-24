@@ -158,12 +158,12 @@ const STIFF_R_OHMS: f64 = 1e-3;
 /// (a pull target or an open-drain sink) the board itself does not name.
 fn hidden_dc_node(circuit: &mut Circuit, reference: &str, tag: &str, volts: f64) -> NodeId {
     let node = circuit.node(&format!("__beh_{reference}_{tag}"));
-    circuit.add(Device::Vsource {
-        name: format!("Vbeh_{reference}_{tag}"),
-        p: node,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(volts),
-    });
+    circuit.add(Device::vsource(
+        format!("Vbeh_{reference}_{tag}"),
+        node,
+        NodeId::GROUND,
+        SourceKind::Dc(volts),
+    ));
     node
 }
 
@@ -626,13 +626,12 @@ impl BehavioralDevice {
                     None
                 };
                 if let Some(rail_node) = rail {
-                    circuit.add(Device::Resistor {
-                        name: format!("Rbeh_{reference}_{role}_pull"),
-                        a: pin_node,
-                        b: rail_node,
+                    circuit.add(Device::resistor(
+                        format!("Rbeh_{reference}_{role}_pull"),
+                        pin_node,
+                        rail_node,
                         ohms,
-                        tc1: None,
-                    });
+                    ));
                     self.pulls += 1;
                 }
             }
@@ -645,13 +644,12 @@ impl BehavioralDevice {
                     hidden_dc_node(circuit, reference, &format!("{role}_odsink"), sink)
                 };
                 let on_ohms = pin.od_ohms.unwrap_or(20.0);
-                let r = circuit.add(Device::Resistor {
-                    name: format!("Rbeh_{reference}_{role}_od"),
-                    a: pin_node,
-                    b: sink_node,
-                    ohms: OFF_OHMS,
-                    tc1: None,
-                });
+                let r = circuit.add(Device::resistor(
+                    format!("Rbeh_{reference}_{role}_od"),
+                    pin_node,
+                    sink_node,
+                    OFF_OHMS,
+                ));
                 self.open_drains.push(OpenDrainLeg {
                     pin_role: role.clone(),
                     resistor: r,
@@ -720,19 +718,18 @@ impl BehavioralDevice {
                     continue;
                 };
                 let drv = circuit.node(&format!("__beh_{reference}_{role}_drv"));
-                let vsource = circuit.add(Device::Vsource {
-                    name: format!("Vbeh_{reference}_{role}_drv"),
-                    p: drv,
-                    n: NodeId::GROUND,
-                    kind: SourceKind::Dc(0.0),
-                });
-                let resistor = circuit.add(Device::Resistor {
-                    name: format!("Rbeh_{reference}_{role}_drv"),
-                    a: drv,
-                    b: pin_node,
-                    ohms: OFF_OHMS,
-                    tc1: None,
-                });
+                let vsource = circuit.add(Device::vsource(
+                    format!("Vbeh_{reference}_{role}_drv"),
+                    drv,
+                    NodeId::GROUND,
+                    SourceKind::Dc(0.0),
+                ));
+                let resistor = circuit.add(Device::resistor(
+                    format!("Rbeh_{reference}_{role}_drv"),
+                    drv,
+                    pin_node,
+                    OFF_OHMS,
+                ));
                 self.drives.push(DriveLeg {
                     pin_role: role,
                     vsource,
@@ -762,13 +759,12 @@ impl BehavioralDevice {
                 .get(active)
                 .copied()
                 .unwrap_or(path.default_ohms);
-            let resistor = circuit.add(Device::Resistor {
-                name: format!("Rbeh_{reference}_{}", path.name),
+            let resistor = circuit.add(Device::resistor(
+                format!("Rbeh_{reference}_{}", path.name),
                 a,
                 b,
-                ohms: initial_ohms,
-                tc1: None,
-            });
+                initial_ohms,
+            ));
             self.series_paths.push(SeriesPathLeg {
                 name: path.name.clone(),
                 a,
@@ -810,12 +806,12 @@ impl BehavioralDevice {
                 segments: load.segments.clone(),
             };
             let initial_i = profile.current_at(-1.0, load.seed);
-            let source = circuit.add(Device::Isource {
-                name: format!("Ibeh_{reference}_load_{}", load.name),
-                p: supply,
-                n: return_node,
-                kind: SourceKind::Dc(initial_i),
-            });
+            let source = circuit.add(Device::isource(
+                format!("Ibeh_{reference}_load_{}", load.name),
+                supply,
+                return_node,
+                SourceKind::Dc(initial_i),
+            ));
             self.profiled_loads.push(ProfiledLoadLeg {
                 name: load.name.clone(),
                 source,
@@ -855,26 +851,25 @@ impl BehavioralDevice {
                     } else {
                         c.vout_setpoint
                     };
-                    let out_vsource = circuit.add(Device::Vsource {
-                        name: format!("Vbeh_{reference}_conv"),
-                        p: drv,
-                        n: NodeId::GROUND,
-                        kind: SourceKind::Dc(initial_vout),
-                    });
-                    circuit.add(Device::Resistor {
-                        name: format!("Rbeh_{reference}_conv_out"),
-                        a: drv,
-                        b: out_node,
-                        ohms: out_r,
-                        tc1: None,
-                    });
+                    let out_vsource = circuit.add(Device::vsource(
+                        format!("Vbeh_{reference}_conv"),
+                        drv,
+                        NodeId::GROUND,
+                        SourceKind::Dc(initial_vout),
+                    ));
+                    circuit.add(Device::resistor(
+                        format!("Rbeh_{reference}_conv_out"),
+                        drv,
+                        out_node,
+                        out_r,
+                    ));
                     // Reflected input draw: an Isource pulling from in_node to GND.
-                    let in_isource = circuit.add(Device::Isource {
-                        name: format!("Ibeh_{reference}_conv_in"),
-                        p: in_node,
-                        n: NodeId::GROUND,
-                        kind: SourceKind::Dc(0.0),
-                    });
+                    let in_isource = circuit.add(Device::isource(
+                        format!("Ibeh_{reference}_conv_in"),
+                        in_node,
+                        NodeId::GROUND,
+                        SourceKind::Dc(0.0),
+                    ));
                     self.converter = Some(ConverterLeg {
                         cfg: c.clone(),
                         out_vsource,
@@ -957,30 +952,29 @@ impl BehavioralDevice {
             }
             let (source, series_r): (DeviceId, Option<(DeviceId, f64)>) = match law.kind {
                 LawKind::Current => (
-                    circuit.add(Device::Isource {
-                        name: format!("Ibeh_{reference}_{}", law.name),
-                        p: a_node,
-                        n: b_node,
-                        kind: SourceKind::Dc(0.0),
-                    }),
+                    circuit.add(Device::isource(
+                        format!("Ibeh_{reference}_{}", law.name),
+                        a_node,
+                        b_node,
+                        SourceKind::Dc(0.0),
+                    )),
                     None,
                 ),
                 LawKind::Voltage => {
                     let drv = circuit.node(&format!("__beh_{reference}_{}_law", law.name));
-                    let vs = circuit.add(Device::Vsource {
-                        name: format!("Vbeh_{reference}_{}", law.name),
-                        p: drv,
-                        n: b_node,
-                        kind: SourceKind::Dc(0.0),
-                    });
+                    let vs = circuit.add(Device::vsource(
+                        format!("Vbeh_{reference}_{}", law.name),
+                        drv,
+                        b_node,
+                        SourceKind::Dc(0.0),
+                    ));
                     let on_ohms = law.r_ohms.unwrap_or(STIFF_R_OHMS).max(STIFF_R_OHMS);
-                    let r = circuit.add(Device::Resistor {
-                        name: format!("Rbeh_{reference}_{}_law", law.name),
-                        a: drv,
-                        b: a_node,
-                        ohms: on_ohms,
-                        tc1: None,
-                    });
+                    let r = circuit.add(Device::resistor(
+                        format!("Rbeh_{reference}_{}_law", law.name),
+                        drv,
+                        a_node,
+                        on_ohms,
+                    ));
                     (vs, Some((r, on_ohms)))
                 }
             };

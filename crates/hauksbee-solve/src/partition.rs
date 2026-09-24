@@ -691,22 +691,16 @@ mod tests {
     fn rc_ladder_is_one_linear_island() {
         let mut c = Circuit::new();
         let n0 = c.node("n0");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: n0,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
+        c.add(Device::vsource(
+            "V1",
+            n0,
+            NodeId::GROUND,
+            SourceKind::Dc(1.0),
+        ));
         let mut prev = n0;
         for i in 0..5 {
             let next = c.node(&format!("n{}", i + 1));
-            c.add(Device::Resistor {
-                name: format!("R{}", i + 1),
-                a: prev,
-                b: next,
-                ohms: 1e3,
-                tc1: None,
-            });
+            c.add(Device::resistor(format!("R{}", i + 1), prev, next, 1e3));
             c.add(Device::Capacitor {
                 name: format!("C{}", i + 1),
                 a: next,
@@ -732,19 +726,13 @@ mod tests {
         let rail = c.node("rail");
         let a = c.node("a");
         let b = c.node("b");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: rail,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "Ra".into(),
-            a: rail,
-            b: a,
-            ohms: 1e3,
-            tc1: None,
-        });
+        c.add(Device::vsource(
+            "V1",
+            rail,
+            NodeId::GROUND,
+            SourceKind::Dc(1.0),
+        ));
+        c.add(Device::resistor("Ra", rail, a, 1e3));
         c.add(Device::Capacitor {
             name: "Ca".into(),
             a,
@@ -752,13 +740,7 @@ mod tests {
             farads: 1e-9,
             ic: Some(0.0),
         });
-        c.add(Device::Resistor {
-            name: "Rb".into(),
-            a: rail,
-            b,
-            ohms: 1e3,
-            tc1: None,
-        });
+        c.add(Device::resistor("Rb", rail, b, 1e3));
         c.add(Device::Capacitor {
             name: "Cb".into(),
             a: b,
@@ -777,20 +759,14 @@ mod tests {
     fn diode_taints_its_island() {
         let mut c = Circuit::new();
         let n = c.node("n");
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: n,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
+        c.add(Device::vsource(
+            "V1",
+            n,
+            NodeId::GROUND,
+            SourceKind::Dc(1.0),
+        ));
         let d = c.node("d");
-        c.add(Device::Resistor {
-            name: "R".into(),
-            a: n,
-            b: d,
-            ohms: 1e3,
-            tc1: None,
-        });
+        c.add(Device::resistor("R", n, d, 1e3));
         c.add(Device::Diode {
             name: "D".into(),
             a: d,

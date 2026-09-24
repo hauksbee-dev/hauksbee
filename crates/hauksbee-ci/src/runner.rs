@@ -3098,13 +3098,7 @@ fn suppress_rail(bound: &mut BoundBoard, net: &str) {
                     && (name == &format!("Vsupply_{net}") || name.starts_with("Vrail")) =>
             {
                 let (nm, a, b) = (name.clone(), *p, NodeId::GROUND);
-                *dev = Device::Resistor {
-                    name: nm,
-                    a,
-                    b,
-                    ohms: 1e12,
-                    tc1: None,
-                };
+                *dev = Device::resistor(nm, a, b, 1e12);
             }
             _ => {}
         }
@@ -3214,12 +3208,12 @@ fn drive_net(bound: &mut BoundBoard, net: &str, kind: SourceKind) {
         .iter()
         .any(|d| matches!(d, Device::Vsource { p, .. } if *p == node));
     if !already {
-        bound.circuit.add(Device::Vsource {
-            name: format!("Vci_drive_{net}"),
-            p: node,
-            n: NodeId::GROUND,
+        bound.circuit.add(Device::vsource(
+            format!("Vci_drive_{net}"),
+            node,
+            NodeId::GROUND,
             kind,
-        });
+        ));
     } else {
         // Retarget any existing CI drive source we own.
         for dev in bound.circuit.devices.iter_mut() {

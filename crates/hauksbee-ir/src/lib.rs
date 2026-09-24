@@ -463,6 +463,64 @@ pub enum Device {
 }
 
 impl Device {
+    /// A linear resistor with no temperature coefficient.
+    #[must_use]
+    pub fn resistor(name: impl Into<String>, a: NodeId, b: NodeId, ohms: f64) -> Self {
+        Self::Resistor {
+            name: name.into(),
+            a,
+            b,
+            ohms,
+            tc1: None,
+        }
+    }
+
+    /// A linear capacitor with no initial condition.
+    #[must_use]
+    pub fn capacitor(name: impl Into<String>, a: NodeId, b: NodeId, farads: f64) -> Self {
+        Self::Capacitor {
+            name: name.into(),
+            a,
+            b,
+            farads,
+            ic: None,
+        }
+    }
+
+    /// A linear inductor with no initial condition.
+    #[must_use]
+    pub fn inductor(name: impl Into<String>, a: NodeId, b: NodeId, henries: f64) -> Self {
+        Self::Inductor {
+            name: name.into(),
+            a,
+            b,
+            henries,
+            ic: None,
+        }
+    }
+
+    /// An independent voltage source driving `p` relative to `n`.
+    #[must_use]
+    pub fn vsource(name: impl Into<String>, p: NodeId, n: NodeId, kind: SourceKind) -> Self {
+        Self::Vsource {
+            name: name.into(),
+            p,
+            n,
+            kind,
+        }
+    }
+
+    /// An independent current source pushing current from `p` to `n`.
+    #[must_use]
+    pub fn isource(name: impl Into<String>, p: NodeId, n: NodeId, kind: SourceKind) -> Self {
+        Self::Isource {
+            name: name.into(),
+            p,
+            n,
+            kind,
+        }
+    }
+
     /// Reference designator (`R1`, `Q3`, ...).
     pub fn name(&self) -> &str {
         match self {
@@ -961,39 +1019,11 @@ impl Device {
     /// probe structure, not accuracy).
     pub fn examples(n: [NodeId; 4]) -> Vec<Device> {
         let out = vec![
-            Device::Resistor {
-                name: "Rex".into(),
-                a: n[0],
-                b: n[1],
-                ohms: 1e3,
-                tc1: None,
-            },
-            Device::Capacitor {
-                name: "Cex".into(),
-                a: n[0],
-                b: n[1],
-                farads: 1e-9,
-                ic: None,
-            },
-            Device::Inductor {
-                name: "Lex".into(),
-                a: n[0],
-                b: n[1],
-                henries: 1e-6,
-                ic: None,
-            },
-            Device::Vsource {
-                name: "Vex".into(),
-                p: n[0],
-                n: n[1],
-                kind: SourceKind::Dc(1.0),
-            },
-            Device::Isource {
-                name: "Iex".into(),
-                p: n[0],
-                n: n[1],
-                kind: SourceKind::Dc(1e-3),
-            },
+            Device::resistor("Rex", n[0], n[1], 1e3),
+            Device::capacitor("Cex", n[0], n[1], 1e-9),
+            Device::inductor("Lex", n[0], n[1], 1e-6),
+            Device::vsource("Vex", n[0], n[1], SourceKind::Dc(1.0)),
+            Device::isource("Iex", n[0], n[1], SourceKind::Dc(1e-3)),
             Device::Diode {
                 name: "Dex".into(),
                 a: n[0],

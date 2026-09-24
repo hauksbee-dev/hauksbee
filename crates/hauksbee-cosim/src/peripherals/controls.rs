@@ -31,13 +31,7 @@ pub(crate) fn stamp_resistor(
     b: NodeId,
     ohms: f64,
 ) -> DeviceId {
-    circuit.add(Device::Resistor {
-        name,
-        a,
-        b,
-        ohms,
-        tc1: None,
-    })
+    circuit.add(Device::resistor(name, a, b, ohms))
 }
 
 fn set_resistor(circuit: &mut Circuit, id: DeviceId, value: f64) {
@@ -456,12 +450,12 @@ impl Stimulus {
 
     /// Stamp a current stimulus injecting into `net` from ground.
     pub fn current(circuit: &mut Circuit, id: &str, net: NodeId, kind: StimulusKind) -> Self {
-        let device = circuit.add(Device::Isource {
-            name: format!("Istim_{id}"),
-            p: NodeId::GROUND,
-            n: net,
-            kind: SourceKind::Dc(kind.value_at(0.0)),
-        });
+        let device = circuit.add(Device::isource(
+            format!("Istim_{id}"),
+            NodeId::GROUND,
+            net,
+            SourceKind::Dc(kind.value_at(0.0)),
+        ));
         Stimulus {
             id: id.to_string(),
             device,
@@ -560,12 +554,12 @@ impl Peripheral for Stimulus {
 /// the source directly.
 fn stamp_driver(circuit: &mut Circuit, net: NodeId, tag: &str, v0: f64) -> DeviceId {
     let drv_node = circuit.node(&format!("__ctrl_{tag}"));
-    let vsource = circuit.add(Device::Vsource {
-        name: format!("Vctrl_{tag}"),
-        p: drv_node,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(v0),
-    });
+    let vsource = circuit.add(Device::vsource(
+        format!("Vctrl_{tag}"),
+        drv_node,
+        NodeId::GROUND,
+        SourceKind::Dc(v0),
+    ));
     stamp_resistor(circuit, format!("Rctrl_{tag}"), drv_node, net, 50.0);
     vsource
 }

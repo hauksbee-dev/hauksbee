@@ -1296,12 +1296,12 @@ fn solve_composed(
             .zip(train)
             .map(|(&t, &v)| PwlPoint { t, v })
             .collect();
-        subp.add(Device::Vsource {
-            name: format!("VSTIFF_{}", sub.node_name(*s)),
-            p: *s,
-            n: NodeId::GROUND,
-            kind: SourceKind::Pwl(points),
-        });
+        subp.add(Device::vsource(
+            format!("VSTIFF_{}", sub.node_name(*s)),
+            *s,
+            NodeId::GROUND,
+            SourceKind::Pwl(points),
+        ));
     }
 
     let part = Partition::analyze_imposing_tears(&subp, rails.to_vec());
@@ -1627,12 +1627,12 @@ impl CaptureGroup<'_> {
                 Pin::Rail(gn) => ("VRAIL_", gn),
             };
             if let Some(p) = cap.local(NodeId(gn)) {
-                let sid = cap.add(Device::Vsource {
-                    name: format!("{prefix}{}", self.sub.node_name(NodeId(gn))),
+                let sid = cap.add(Device::vsource(
+                    format!("{prefix}{}", self.sub.node_name(NodeId(gn))),
                     p,
-                    n: NodeId::GROUND,
-                    kind: SourceKind::Dc(0.0),
-                });
+                    NodeId::GROUND,
+                    SourceKind::Dc(0.0),
+                ));
                 pins.push((sid, pin));
             }
         }

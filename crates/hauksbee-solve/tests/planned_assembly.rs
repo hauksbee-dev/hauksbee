@@ -122,13 +122,7 @@ fn planned_matches_interpreted_adaptive_rlc() {
     let out = c.node("out");
     add_vdc(&mut c, "V1", vin, NodeId::GROUND, 1.0);
     add_resistor(&mut c, "R1", vin, n1, 50.0);
-    c.add(Device::Inductor {
-        name: "L1".into(),
-        a: n1,
-        b: out,
-        henries: 1e-6,
-        ic: None,
-    });
+    c.add(Device::inductor("L1", n1, out, 1e-6));
     add_capacitor(&mut c, "C1", out, NodeId::GROUND, 1e-9, None);
     // ~5x the RLC settling time so both runs reach the same steady state.
     let tstop = 2e-6;

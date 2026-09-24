@@ -296,12 +296,12 @@ impl SupplyDraw {
         static_ua: f64,
         cpd_pf: f64,
     ) -> Self {
-        let isource = circuit.add(Device::Isource {
-            name: format!("Iq_{tag}"),
-            p: vcc,
-            n: gnd,
-            kind: SourceKind::Dc(0.0),
-        });
+        let isource = circuit.add(Device::isource(
+            format!("Iq_{tag}"),
+            vcc,
+            gnd,
+            SourceKind::Dc(0.0),
+        ));
         SupplyDraw {
             isource,
             vcc,
@@ -1568,12 +1568,12 @@ mod tests {
             for input in ["a", "b", "c", "d", "e", "f", "g", "h"] {
                 let n = circuit.node(&format!("{refn}_{input}"));
                 r.insert(input.into(), n);
-                circuit.add(hauksbee_ir::Device::Vsource {
-                    name: format!("V_{refn}_{input}"),
-                    p: n,
-                    n: NodeId::GROUND,
-                    kind: hauksbee_ir::SourceKind::Dc(if hi.contains(&input) { 5.0 } else { 0.0 }),
-                });
+                circuit.add(hauksbee_ir::Device::vsource(
+                    format!("V_{refn}_{input}"),
+                    n,
+                    NodeId::GROUND,
+                    hauksbee_ir::SourceKind::Dc(if hi.contains(&input) { 5.0 } else { 0.0 }),
+                ));
             }
             DigitalComponent::new(refn.into(), &model, r, HashMap::new())
                 .expect("builtin 165 logic compiles")

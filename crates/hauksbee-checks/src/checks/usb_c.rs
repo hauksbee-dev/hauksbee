@@ -288,38 +288,26 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
 
     // Sink Rd terminations to GND (the board's pulldowns).
     if let Some(r) = term.cc1_rd_ohms {
-        c.add(Device::Resistor {
-            name: "Rd1".into(),
-            a: cc1_sink,
-            b: NodeId::GROUND,
-            ohms: r,
-            tc1: None,
-        });
+        c.add(Device::resistor("Rd1", cc1_sink, NodeId::GROUND, r));
     }
     // When shared, cc2's resistor is the same physical R79 already added via
     // cc1; adding it again would halve the resistance. Only add cc2's Rd when
     // it is an independent net.
     if !term.shared_net {
         if let Some(r) = term.cc2_rd_ohms {
-            c.add(Device::Resistor {
-                name: "Rd2".into(),
-                a: cc2_sink,
-                b: NodeId::GROUND,
-                ohms: r,
-                tc1: None,
-            });
+            c.add(Device::resistor("Rd2", cc2_sink, NodeId::GROUND, r));
         }
     }
 
     // Source Rp on CC1: a current source from GND into the CC1 node (current
     // flows p->n internally, so p=GND, n=CC1 injects current *into* CC1).
     // The cable wires CC1 through in both passive and e-marked cases.
-    c.add(Device::Isource {
-        name: "Rp1".into(),
-        p: NodeId::GROUND,
-        n: cc1_sink,
-        kind: SourceKind::Dc(rp.current_a()),
-    });
+    c.add(Device::isource(
+        "Rp1",
+        NodeId::GROUND,
+        cc1_sink,
+        SourceKind::Dc(rp.current_a()),
+    ));
 
     // CC2 path depends on the cable.
     match cable {
@@ -334,19 +322,13 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
         Cable::EMarked { ra_ohms } => {
             // E-marked: CC2 wires through, source asserts Rp on it, and the
             // e-marker presents Ra from CC2 to GND.
-            c.add(Device::Isource {
-                name: "Rp2".into(),
-                p: NodeId::GROUND,
-                n: cc2_sink,
-                kind: SourceKind::Dc(rp.current_a()),
-            });
-            c.add(Device::Resistor {
-                name: "Ra".into(),
-                a: cc2_sink,
-                b: NodeId::GROUND,
-                ohms: ra_ohms,
-                tc1: None,
-            });
+            c.add(Device::isource(
+                "Rp2",
+                NodeId::GROUND,
+                cc2_sink,
+                SourceKind::Dc(rp.current_a()),
+            ));
+            c.add(Device::resistor("Ra", cc2_sink, NodeId::GROUND, ra_ohms));
         }
     }
 

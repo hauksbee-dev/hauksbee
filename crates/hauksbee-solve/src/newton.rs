@@ -2546,13 +2546,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
     for dev in relaxed.devices.iter_mut() {
         if let Device::Diode { name, a, k, .. } = dev {
             any = true;
-            *dev = Device::Resistor {
-                name: format!("{name}__relaxed_off"),
-                a: *a,
-                b: *k,
-                ohms: DIODE_OFF_OHMS,
-                tc1: None,
-            };
+            *dev = Device::resistor(format!("{name}__relaxed_off"), *a, *k, DIODE_OFF_OHMS);
         }
     }
     if !any {

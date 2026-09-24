@@ -54,20 +54,8 @@ fn transformer(k: f64, l1_h: f64, l2_h: f64) -> (Circuit, DeviceId, DeviceId) {
         },
     });
     add_resistor(&mut c, "Rs", vin, pri, 50.0);
-    let l1 = c.add(Device::Inductor {
-        name: "L1".into(),
-        a: pri,
-        b: NodeId::GROUND,
-        henries: l1_h,
-        ic: None,
-    });
-    let l2 = c.add(Device::Inductor {
-        name: "L2".into(),
-        a: sec,
-        b: NodeId::GROUND,
-        henries: l2_h,
-        ic: None,
-    });
+    let l1 = c.add(Device::inductor("L1", pri, NodeId::GROUND, l1_h));
+    let l2 = c.add(Device::inductor("L2", sec, NodeId::GROUND, l2_h));
     c.add(Device::Coupling {
         name: "K1".into(),
         l1,

@@ -39,19 +39,13 @@ impl PinDriver {
     pub fn stamp(circuit: &mut Circuit, net: NodeId, net_name: &str, tag: &str, ro: f64) -> Self {
         let drv_node_name = format!("__drv_{tag}_{net_name}");
         let drv = circuit.node(&drv_node_name);
-        let vsource = circuit.add(Device::Vsource {
-            name: format!("Vdrv_{tag}"),
-            p: drv,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(0.0),
-        });
-        let resistor = circuit.add(Device::Resistor {
-            name: format!("Rdrv_{tag}"),
-            a: drv,
-            b: net,
-            ohms: ro,
-            tc1: None,
-        });
+        let vsource = circuit.add(Device::vsource(
+            format!("Vdrv_{tag}"),
+            drv,
+            NodeId::GROUND,
+            SourceKind::Dc(0.0),
+        ));
+        let resistor = circuit.add(Device::resistor(format!("Rdrv_{tag}"), drv, net, ro));
         PinDriver {
             vsource,
             net,
