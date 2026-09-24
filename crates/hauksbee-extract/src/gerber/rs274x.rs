@@ -33,7 +33,7 @@ use std::sync::Arc;
 use ::geo::algorithm::orient::{Direction, Orient};
 use ::geo::{
     unary_union, BooleanOps, Buffer, Coord, InteriorPoint, Intersects, LineString, MultiPolygon,
-    Polygon, Validation,
+    Polygon,
 };
 use gerber_types::{
     Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity, StepAndRepeat,
@@ -44,7 +44,7 @@ use gerber_types::{
 use gerber_types::{Circle, Polygon as GPolygon, Rectangular};
 use gerber_types::{CoordinateNumber, CoordinateOffset, Coordinates, InterpolationMode};
 
-use super::geo::{point_in_polygon, Capsule, Shape};
+use super::geo::{point_in_polygon, BoundsLeaf, Capsule, Shape};
 use super::macros::instantiate_macro;
 
 /// Arc flattening resolution (matches drc's ARC_SEGMENTS).
@@ -309,7 +309,7 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: Vec<Clear>) {
                 batch_bounds[3] = batch_bounds[3].max(y);
             }
             match contours_to_geo_polygon(clear.contours) {
-                Some(polygon) if polygon.is_valid() => {
+                Some(polygon) if polygon_is_valid(&polygon) => {
                     clear_polygons.push((clear.statement, polygon.orient(Direction::Default)));
                 }
                 _ => invalid_statements.push(clear.statement),
@@ -472,6 +472,96 @@ fn contours_to_geo_polygon(mut contours: Vec<Vec<(f64, f64)>>) -> Option<Polygon
     Some(Polygon::new(outer, holes))
 }
 
+/// Closed bounding box of a segment: `[minx, miny, maxx, maxy]`.
+fn line_box(l: &::geo::Line<f64>) -> [f64; 4] {
+    [
+        l.start.x.min(l.end.x),
+        l.start.y.min(l.end.y),
+        l.start.x.max(l.end.x),
+        l.start.y.max(l.end.y),
+    ]
+}
+
+/// Whether `hit` holds for any pair of boxes whose closed extents meet, found
+/// by a sweep over the boxes sorted by left edge. Two segments can only meet
+/// inside both boxes, so this visits every pair an all-pairs scan could find
+/// true. The boxes must be finite. Each unordered pair is offered once.
+fn any_meeting_pair(boxes: &[[f64; 4]], mut hit: impl FnMut(usize, usize) -> bool) -> bool {
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    order.sort_unstable_by(|&a, &b| boxes[a][0].total_cmp(&boxes[b][0]));
+    order.iter().enumerate().any(|(k, &i)| {
+        let bi = boxes[i];
+        order[k + 1..]
+            .iter()
+            .take_while(|&&j| boxes[j][0] <= bi[2])
+            .any(|&j| boxes[j][1] <= bi[3] && bi[1] <= boxes[j][3] && hit(i, j))
+    })
+}
+
+/// Exactly geo's `Polygon::is_valid`, with its quadratic ring scans swept.
+///
+/// geo 0.33 tests every ordered pair of a ring's edges for self-intersection,
+/// so a painter-replay pour of a few thousand vertices, re-validated before
+/// every clear pass and every region contact test, dominated a large Eagle
+/// film's read. [`any_meeting_pair`] offers every pair geo could reject, and
+/// each is judged by geo's own predicate in both orders. Hole pairs whose
+/// boxes are disjoint cannot relate at all.
+fn polygon_is_valid(polygon: &Polygon<f64>) -> bool {
+    use ::geo::{coordinate_position::CoordPos, dimensions::Dimensions, PreparedGeometry, Relate};
+    use ::geo::{BoundingRect, HasDimensions, Line, RemoveRepeatedPoints};
+    let ring_ok = |ring: &LineString<f64>| {
+        if ring.0.is_empty() {
+            return true;
+        }
+        if ring.remove_repeated_points().0.len() < 4
+            || ring.0.iter().any(|c| !c.x.is_finite() || !c.y.is_finite())
+        {
+            return false;
+        }
+        let lines: Vec<Line<f64>> = ring.lines().collect();
+        let boxes: Vec<[f64; 4]> = lines.iter().map(line_box).collect();
+        let hit =
+            |a: &Line<f64>, b: &Line<f64>| a.intersects(b) && a.start != b.end && a.end != b.start;
+        !any_meeting_pair(&boxes, |i, j| {
+            hit(&lines[i], &lines[j]) || hit(&lines[j], &lines[i])
+        })
+    };
+    if polygon.is_empty() {
+        return true;
+    }
+    if !std::iter::once(polygon.exterior())
+        .chain(polygon.interiors())
+        .all(ring_ok)
+    {
+        return false;
+    }
+    let holes: Vec<_> = polygon
+        .interiors()
+        .iter()
+        .filter_map(|ring| Some((ring, ring.bounding_rect()?)))
+        .collect();
+    if holes.is_empty() {
+        return true;
+    }
+    let exterior = Polygon::new(polygon.exterior().clone(), vec![]);
+    let exterior = PreparedGeometry::from(&exterior);
+    holes.iter().enumerate().all(|(k, (ring, b))| {
+        let hole = Polygon::new((*ring).clone(), vec![]);
+        let hole = PreparedGeometry::from(&hole);
+        let m = exterior.relate(&hole);
+        m.is_contains()
+            && m.get(CoordPos::OnBoundary, CoordPos::OnBoundary) != Dimensions::OneDimensional
+            && holes[k + 1..].iter().all(|(other, ob)| {
+                !b.intersects(ob) || {
+                    let m = hole.relate(&Polygon::new((*other).clone(), vec![]));
+                    m.get(CoordPos::Inside, CoordPos::Inside) != Dimensions::TwoDimensional
+                        && m.get(CoordPos::OnBoundary, CoordPos::OnBoundary)
+                            != Dimensions::OneDimensional
+                }
+            })
+    })
+}
+
 fn shape_to_geo(shape: &Shape) -> Option<MultiPolygon<f64>> {
     match shape {
         Shape::Capsule(capsule) => {
@@ -481,12 +571,12 @@ fn shape_to_geo(shape: &Shape) -> Option<MultiPolygon<f64>> {
             let mut conservative = capsule.clone();
             conservative.r *= 1.0 / (std::f64::consts::PI / 32.0).cos();
             contours_to_geo_polygon(vec![stadium_outline(&conservative)])
-                .filter(Validation::is_valid)
+                .filter(polygon_is_valid)
                 .map(|polygon| MultiPolygon::new(vec![polygon.orient(Direction::Default)]))
         }
         Shape::Polygon { pts, r } => {
             let polygon = contours_to_geo_polygon(vec![pts.clone()])?;
-            if !polygon.is_valid() {
+            if !polygon_is_valid(&polygon) {
                 return None;
             };
             if *r <= 0.0 {
@@ -505,7 +595,7 @@ fn shape_to_geo(shape: &Shape) -> Option<MultiPolygon<f64>> {
                 return None;
             }
             contours_to_geo_polygon(contours.clone())
-                .filter(Validation::is_valid)
+                .filter(polygon_is_valid)
                 .map(|polygon| MultiPolygon::new(vec![polygon.orient(Direction::Default)]))
         }
     }
@@ -2474,22 +2564,6 @@ impl<'a> Plotter<'a> {
     }
 }
 
-/// An index entry for [`group_contours_into_pieces`]: a contour's bounding box.
-struct BoundsLeaf {
-    bounds: [f64; 4],
-    idx: usize,
-}
-
-impl rstar::RTreeObject for BoundsLeaf {
-    type Envelope = rstar::AABB<[f64; 2]>;
-    fn envelope(&self) -> Self::Envelope {
-        rstar::AABB::from_corners(
-            [self.bounds[0], self.bounds[1]],
-            [self.bounds[2], self.bounds[3]],
-        )
-    }
-}
-
 /// Split a set of closed contours into the physically-connected pieces of copper
 /// they fill, one [`Shape`] per piece.
 ///
@@ -2673,7 +2747,73 @@ pub(super) fn filled_regions_touch(a: &Shape, b: &Shape) -> bool {
     let (Some(a), Some(b)) = (shape_to_geo(a), shape_to_geo(b)) else {
         return false;
     };
-    a.intersects(&b)
+    // geo's MultiPolygon test reduces to this pairing and argument order.
+    let touch = a
+        .iter()
+        .any(|pa| b.iter().any(|pb| polygons_intersect(pb, pa)));
+    touch
+}
+
+/// Exactly geo's `Polygon::intersects(Polygon)`, with its ring-edge pairs swept.
+///
+/// geo tests every exterior edge of one pour against every exterior edge of the
+/// other, so two neighbouring pours of a few thousand vertices cost millions of
+/// segment tests. [`any_meeting_pair`] offers every pair geo could find
+/// crossing, each judged by geo's own predicate in geo's argument order. The
+/// pairings are geo's: exterior with exterior, and each hole with the other
+/// exterior.
+fn polygons_intersect(q: &Polygon<f64>, p: &Polygon<f64>) -> bool {
+    use ::geo::{BoundingRect, Line};
+    fn rings(g: &Polygon<f64>) -> Vec<&LineString<f64>> {
+        std::iter::once(g.exterior()).chain(g.interiors()).collect()
+    }
+    let (q_rings, p_rings) = (rings(q), rings(p));
+    // A one-point ring is geo's degenerate point case, and the sweep needs
+    // finite boxes; leave either to geo.
+    if q_rings
+        .iter()
+        .chain(&p_rings)
+        .any(|r| r.0.len() == 1 || r.0.iter().any(|c| !c.x.is_finite() || !c.y.is_finite()))
+    {
+        return q.intersects(p);
+    }
+    // geo's box test sees only the exteriors, so it is part of the answer
+    // (a stray hole outside its exterior is never reached), not a shortcut.
+    if let (Some(a), Some(b)) = (q.bounding_rect(), p.bounding_rect()) {
+        if !a.intersects(&b) {
+            return false;
+        }
+    }
+    let first_inside = |a: &Polygon<f64>, b: &Polygon<f64>| {
+        a.exterior().0.first().is_some_and(|c| b.intersects(c))
+    };
+    if first_inside(q, p) || first_inside(p, q) {
+        return true;
+    }
+    // Every q edge, then every p edge, tagged with its ring (0 = exterior).
+    let edges: Vec<(bool, usize, Line<f64>)> = [(true, &q_rings), (false, &p_rings)]
+        .into_iter()
+        .flat_map(|(is_q, rings)| {
+            rings
+                .iter()
+                .enumerate()
+                .flat_map(move |(ring, r)| r.lines().map(move |l| (is_q, ring, l)))
+        })
+        .collect();
+    let boxes: Vec<[f64; 4]> = edges.iter().map(|(_, _, l)| line_box(l)).collect();
+    any_meeting_pair(&boxes, |i, j| {
+        let (a, b) = (&edges[i], &edges[j]);
+        let ((_, q_ring, ql), (_, p_ring, pl)) = match (a.0, b.0) {
+            (true, false) => (a, b),
+            (false, true) => (b, a),
+            _ => return false,
+        };
+        match (q_ring, p_ring) {
+            (_, 0) => ql.intersects(pl),
+            (0, _) => pl.intersects(ql),
+            _ => false,
+        }
+    })
 }
 
 /// Group closed contours into one bucket per connected piece of copper, each
@@ -2805,6 +2945,63 @@ fn regular_polygon(cx: f64, cy: f64, r: f64, vertices: u8, rot_deg: f64) -> Shap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The indexed validity check must agree with geo's on every polygon,
+    /// including the degenerate ones a small integer grid produces: collinear
+    /// overlaps, spikes, repeated points, touching and crossing holes.
+    #[test]
+    fn indexed_validity_and_contact_match_geo_exactly() {
+        use ::geo::Validation;
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move |m: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        let mut ring = |n: u64, off: u64, span: u64| {
+            (0..3 + next(n))
+                .map(|_| ((off + next(span)) as f64, (off + next(span)) as f64))
+                .collect::<Vec<_>>()
+        };
+        let (mut valid, mut invalid, mut touching) = (0, 0, 0);
+        for round in 0..4000 {
+            let mut contours = vec![if round % 3 == 0 {
+                vec![(0.0, 0.0), (8.0, 0.0), (8.0, 8.0), (0.0, 8.0)]
+            } else {
+                ring(6, 0, 9)
+            }];
+            for _ in 0..round % 4 {
+                contours.push(ring(3, 1, 6));
+            }
+            let polygon = contours_to_geo_polygon(contours).unwrap();
+            let other = contours_to_geo_polygon(vec![ring(5, 5, 8), ring(2, 7, 3)]).unwrap();
+            assert_eq!(
+                polygons_intersect(&polygon, &other),
+                polygon.intersects(&other)
+            );
+            touching += usize::from(polygon.intersects(&other));
+            assert_eq!(
+                polygons_intersect(&other, &polygon),
+                other.intersects(&polygon)
+            );
+            let expected = polygon.is_valid();
+            assert_eq!(polygon_is_valid(&polygon), expected, "{polygon:?}");
+            if expected {
+                valid += 1;
+            } else {
+                invalid += 1;
+            }
+        }
+        assert!(
+            valid > 200 && invalid > 200,
+            "{valid} valid, {invalid} invalid"
+        );
+        assert!(
+            (200..3800).contains(&touching),
+            "{touching} of 4000 pairs touch"
+        );
+    }
 
     #[test]
     fn unsupported_dark_contour_weights_are_preserved_fail_closed() {

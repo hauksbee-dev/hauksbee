@@ -36,7 +36,7 @@ use rstar::{RTree, AABB};
 use crate::dsu::Dsu;
 use crate::{Component, ExtractedBoard, Net, Pin};
 
-use super::geo::{shape_gap, BoundsLeaf, Shape};
+use super::geo::{shape_gap_within, BoundsLeaf, Shape};
 use super::placement::Placement;
 use super::rs274x::{CopperPrim, PrimKind, X2Attrs};
 
@@ -253,7 +253,7 @@ pub fn reconstruct(
                 if gj <= gi {
                     continue;
                 }
-                if shape_gap(&prims[gi].shape, &prims[gj].shape) <= TOUCH_EPS {
+                if shape_gap_within(&prims[gi].shape, &prims[gj].shape, TOUCH_EPS) <= TOUCH_EPS {
                     dsu.union(gi, gj);
                 }
             }
@@ -469,7 +469,11 @@ pub fn reconstruct(
                                 let bp = prims[gi].bounds;
                                 !(bp[2] < b[0] || bp[0] > b[2] || bp[3] < b[1] || bp[1] > b[3])
                                     && grid.is_none_or(|g| g.near_boundary(bp))
-                                    && shape_gap(&prims[gi].shape, &prims[rgi].shape) <= TOUCH_EPS
+                                    && shape_gap_within(
+                                        &prims[gi].shape,
+                                        &prims[rgi].shape,
+                                        TOUCH_EPS,
+                                    ) <= TOUCH_EPS
                             };
                         // Boolean painter replay emits valid region polygons, so
                         // exact filled-area overlap between two regions is a real
