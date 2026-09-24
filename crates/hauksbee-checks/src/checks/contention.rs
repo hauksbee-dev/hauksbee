@@ -309,25 +309,15 @@ pub fn contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::board;
+    use super::super::test_support::{board, part};
     use super::*;
-    use hauksbee_extract::{Component, Pin};
+    use hauksbee_extract::Component;
 
     /// A component whose pads are wired by `(pad number, net id)`.
     fn comp(reference: &str, value: &str, pads: &[(&str, i64)]) -> Component {
         Component {
-            reference: reference.to_string(),
-            value: value.to_string(),
             lib_id: "Logic:X".to_string(),
-            pins: pads
-                .iter()
-                .map(|(n, net)| Pin {
-                    number: (*n).to_string(),
-                    net: Some(*net),
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
+            ..part(reference, value, pads)
         }
     }
 

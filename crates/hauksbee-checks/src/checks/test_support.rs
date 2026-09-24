@@ -9,16 +9,10 @@
 //! Gated by `#[cfg(test)]` on the `mod test_support;` declaration in
 //! `checks/mod.rs`, not here, to avoid a duplicated-attribute lint.
 
-use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+use hauksbee_extract::{Component, ExtractedBoard};
 
 /// A pin at `number` wired to `net`.
-pub(crate) fn pin(number: &str, net: i64) -> Pin {
-    Pin {
-        number: number.into(),
-        net: Some(net),
-        ..Default::default()
-    }
-}
+pub(crate) use crate::test_support::pin;
 
 /// A component at `reference`/`value` whose pads are `(pad number, net id)`.
 pub(crate) fn part(reference: &str, value: &str, pads: &[(&str, i64)]) -> Component {
@@ -32,9 +26,5 @@ pub(crate) fn part(reference: &str, value: &str, pads: &[(&str, i64)]) -> Compon
 
 /// A board named `"t"` built from `(net id, net name)` pairs plus components.
 pub(crate) fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
-    ExtractedBoard {
-        name: "t".into(),
-        nets: nets.iter().map(|(id, name)| Net::new(*id, *name)).collect(),
-        components,
-    }
+    crate::test_support::board("t", nets, components)
 }

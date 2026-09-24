@@ -89,6 +89,12 @@ pub struct SensorAttach {
     /// names are rejected with the rest of the spec's board references.
     #[serde(default)]
     pub cs_net: Option<String>,
+    /// The I2C address the board straps this part to, for a part whose
+    /// sensor spec lists `[[sensor.address_select]]` rows; it must be one of
+    /// them. Without it the spec default is used and the run says so.
+    #[serde(default)]
+    #[schemars(range(min = 0, max = 127))]
+    pub address: Option<u8>,
 }
 
 /// What a spec does with the Do-Not-Populate parts it does not name in `fit`

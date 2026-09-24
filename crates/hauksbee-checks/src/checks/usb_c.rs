@@ -650,7 +650,7 @@ fn net_resistance_to_grounds(
 // ---------------------------------------------------------------------------
 
 /// What a single CC pin presents at the receptacle.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CcPinTermination {
     /// The discrete external Rd-to-GND resistance found on the receptacle CC net
     /// (parallel of every resistor that bridges the net to GND). `None` if the
@@ -1260,24 +1260,33 @@ impl UsbcReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{pin, pin_fn};
+    use crate::test_support::{board, pin, pin_fn};
+    use hauksbee_extract::Component;
 
     // --- DC-bridge predicate (#10) ------------------------------------------
 
-    fn bridge_part(reference: &str, value: &str, lib_id: &str) -> hauksbee_extract::Component {
-        hauksbee_extract::Component {
+    fn bridge_part(reference: &str, value: &str, lib_id: &str) -> Component {
+        Component {
             reference: reference.into(),
             value: value.into(),
             lib_id: lib_id.into(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: vec![],
-            dnp: false,
             // Two netted pads: the classification ladder's first rung is the
             // terminal count, and every real bridge/pulldown candidate reaches
             // these fns with both pads on nets.
             pins: vec![pin("1", 1), pin("2", 2)],
+            ..Default::default()
+        }
+    }
+
+    /// A USB-C receptacle on `footprint` with its CC1/CC2 pads on the given nets.
+    fn receptacle(reference: &str, footprint: &str, cc1: i64, cc2: i64) -> Component {
+        Component {
+            reference: reference.into(),
+            value: "USB-C".into(),
+            lib_id: "Connector:USB_C_Receptacle".into(),
+            footprint: footprint.into(),
+            pins: vec![pin_fn("A5", cc1, "CC1"), pin_fn("B5", cc2, "CC2")],
+            ..Default::default()
         }
     }
 
@@ -1322,24 +1331,16 @@ mod tests {
         // later, receptacles[0] (the "primary" the detail list and audit report)
         // described a DIFFERENT connector than the verdict. all_receptacle_cc_nets
         // must return the max-score receptacle first.
-        let recep = |reference: &str, fp: &str, cc1: i64, cc2: i64| hauksbee_extract::Component {
-            reference: reference.into(),
-            value: "USB-C".into(),
-            lib_id: "Connector:USB_C_Receptacle".into(),
-            footprint: fp.into(),
-            pins: vec![pin_fn("A5", cc1, "CC1"), pin_fn("B5", cc2, "CC2")],
-            ..Default::default()
-        };
         // J_early (board-order first, score 100+5=105) then J_late (later, but
         // "receptacle" in the footprint → 100+40+5=145).
-        let board = ExtractedBoard {
-            name: "b".into(),
-            nets: vec![],
-            components: vec![
-                recep("J_early", "USB_C_Plug_only", 10, 11),
-                recep("J_late", "USB_C_Receptacle_HRO", 20, 21),
+        let board = board(
+            "b",
+            &[],
+            vec![
+                receptacle("J_early", "USB_C_Plug_only", 10, 11),
+                receptacle("J_late", "USB_C_Receptacle_HRO", 20, 21),
             ],
-        };
+        );
         let ordered = all_receptacle_cc_nets(&board);
         assert_eq!(ordered.len(), 2, "both receptacles present");
         assert_eq!(
@@ -1350,50 +1351,48 @@ mod tests {
 
     #[test]
     fn dc_bridge_matches_inductors_and_ferrites_not_leds_or_ldos() {
-        // Real inductor / ferrite refs bridge (DC shorts).
-        assert!(is_dc_bridge(&bridge_part("L1", "600R@100MHz", "Device:L")));
-        assert!(is_dc_bridge(&bridge_part("L23", "10uH", "Device:L")));
-        assert!(is_dc_bridge(&bridge_part(
-            "FB1",
-            "600R@100MHz",
-            "Device:FerriteBead"
-        )));
-        // A ferrite-naming library bridges even with an odd reference.
-        assert!(is_dc_bridge(&bridge_part(
-            "Z1",
-            "BLM18",
-            "Device:Ferrite_Bead"
-        )));
-        // LED1 / LDO1 are NOT DC shorts: a bare `L*` prefix match would union
-        // their far nets into the CC reachable set.
-        assert!(!is_dc_bridge(&bridge_part("LED1", "RED", "Device:LED")));
-        assert!(!is_dc_bridge(&bridge_part(
-            "LDO1",
-            "AP2112K",
-            "Regulator_Linear:AP2112K"
-        )));
-        // A 0-ohm resistor still bridges; a 5.1k Rd does not.
-        assert!(is_dc_bridge(&bridge_part("R5", "0R", "Device:R")));
-        assert!(!is_dc_bridge(&bridge_part("R6", "5.1k", "Device:R")));
-        // R42: the R-as-decimal-point zero markings "0R0" and "0.0R" (IEC 60062)
-        // are 0 Ω too; they fall through a literal zero-value list, so a CC
-        // bridge labelled "0R0" is not unioned and the termination reads as
-        // absent.
-        assert!(is_dc_bridge(&bridge_part("R7", "0R0", "Device:R")));
-        assert!(is_dc_bridge(&bridge_part("R8", "0.0R", "Device:R")));
-        assert!(is_dc_bridge(&bridge_part("R9", "0.0", "Device:R")));
-        // A genuine non-zero R-notation resistor is still not a bridge.
-        assert!(!is_dc_bridge(&bridge_part("R10", "4R7", "Device:R")));
-        assert!(!is_dc_bridge(&bridge_part("R11", "0R1", "Device:R")));
-        // R55: the unicode ohm sign and the plural "Ohms" are real KiCad value
-        // spellings; a 0 Ω bridge marked "0Ω" / "0 Ohms" was not recognised, so a
-        // double-terminated CC net went silent. Strip every ohm spelling.
-        assert!(is_dc_bridge(&bridge_part("R12", "0Ω", "Device:R")));
-        assert!(is_dc_bridge(&bridge_part("R13", "0 Ω", "Device:R")));
-        assert!(is_dc_bridge(&bridge_part("R14", "0 Ohms", "Device:R")));
-        assert!(is_dc_bridge(&bridge_part("R15", "0OHMS", "Device:R")));
-        // A non-zero ohm value in these spellings is still not a bridge.
-        assert!(!is_dc_bridge(&bridge_part("R16", "5.1kΩ", "Device:R")));
+        // (reference, value, lib_id, bridges?)
+        let cases = [
+            // Real inductor / ferrite refs bridge (DC shorts).
+            ("L1", "600R@100MHz", "Device:L", true),
+            ("L23", "10uH", "Device:L", true),
+            ("FB1", "600R@100MHz", "Device:FerriteBead", true),
+            // A ferrite-naming library bridges even with an odd reference.
+            ("Z1", "BLM18", "Device:Ferrite_Bead", true),
+            // LED1 / LDO1 are NOT DC shorts: a bare `L*` prefix match would union
+            // their far nets into the CC reachable set.
+            ("LED1", "RED", "Device:LED", false),
+            ("LDO1", "AP2112K", "Regulator_Linear:AP2112K", false),
+            // A 0-ohm resistor still bridges; a 5.1k Rd does not.
+            ("R5", "0R", "Device:R", true),
+            ("R6", "5.1k", "Device:R", false),
+            // R42: the R-as-decimal-point zero markings "0R0" and "0.0R" (IEC 60062)
+            // are 0 Ω too; they fall through a literal zero-value list, so a CC
+            // bridge labelled "0R0" is not unioned and the termination reads as
+            // absent.
+            ("R7", "0R0", "Device:R", true),
+            ("R8", "0.0R", "Device:R", true),
+            ("R9", "0.0", "Device:R", true),
+            // A genuine non-zero R-notation resistor is still not a bridge.
+            ("R10", "4R7", "Device:R", false),
+            ("R11", "0R1", "Device:R", false),
+            // R55: the unicode ohm sign and the plural "Ohms" are real KiCad value
+            // spellings; a 0 Ω bridge marked "0Ω" / "0 Ohms" was not recognised, so a
+            // double-terminated CC net went silent. Strip every ohm spelling.
+            ("R12", "0Ω", "Device:R", true),
+            ("R13", "0 Ω", "Device:R", true),
+            ("R14", "0 Ohms", "Device:R", true),
+            ("R15", "0OHMS", "Device:R", true),
+            // A non-zero ohm value in these spellings is still not a bridge.
+            ("R16", "5.1kΩ", "Device:R", false),
+        ];
+        for (reference, value, lib_id, bridges) in cases {
+            assert_eq!(
+                is_dc_bridge(&bridge_part(reference, value, lib_id)),
+                bridges,
+                "{reference} = {value:?} ({lib_id})"
+            );
+        }
     }
 
     // --- Spec constants (Tables 4-20, 4-21, 4-22) ---------------------------
@@ -1551,8 +1550,7 @@ mod tests {
     fn external_only_or_internal_only_is_not_doubled() {
         let ext = CcPinTermination {
             external_rd_ohms: Some(5100.0),
-            internal_rd_ohms: None,
-            controller_ref: None,
+            ..Default::default()
         };
         assert!(!ext.is_double_terminated());
         assert_eq!(ext.effective_rd_ohms(), Some(5100.0));
@@ -1659,22 +1657,11 @@ mod tests {
         // double-terminated board (external 5.1k + nPM1300 internal 5.1k) the JSON
         // read a nominal-looking 5100 while the effective (and the headline) is the
         // out-of-spec ~2550, a cross-surface disagreement. The JSON must match.
-        let board = ExtractedBoard {
-            name: "dt".into(),
-            nets: vec![
-                hauksbee_extract::Net::new(0, "GND"),
-                hauksbee_extract::Net::new(1, "CC1"),
-                hauksbee_extract::Net::new(2, "CC2"),
-            ],
-            components: vec![
-                hauksbee_extract::Component {
-                    reference: "J1".into(),
-                    value: "USB-C".into(),
-                    lib_id: "Connector:USB_C_Receptacle".into(),
-                    footprint: "USB_C_Receptacle_HRO".into(),
-                    pins: vec![pin_fn("A5", 1, "CC1"), pin_fn("B5", 2, "CC2")],
-                    ..Default::default()
-                },
+        let board = board(
+            "dt",
+            &[(0, "GND"), (1, "CC1"), (2, "CC2")],
+            vec![
+                receptacle("J1", "USB_C_Receptacle_HRO", 1, 2),
                 // External discrete 5.1k Rd on CC1 -> GND.
                 hauksbee_extract::Component {
                     reference: "R1".into(),
@@ -1692,7 +1679,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
-        };
+        );
         let report = usb_c_report(&board).expect("a USB-C receptacle is present");
         // External 5.1k ∥ internal 5.1k = 2550 Ω (the effective, out-of-spec value).
         let cc1 = report.cc1_rd_ohms.expect("CC1 has a termination");
@@ -1713,14 +1700,9 @@ mod tests {
                 reference: "J1".into(),
                 cc1: CcPinTermination {
                     external_rd_ohms: Some(5100.0),
-                    internal_rd_ohms: None,
-                    controller_ref: None,
+                    ..Default::default()
                 },
-                cc2: CcPinTermination {
-                    external_rd_ohms: None,
-                    internal_rd_ohms: None,
-                    controller_ref: None,
-                },
+                cc2: CcPinTermination::default(),
             }],
             shared_net: true,
             cc1_rd_ohms: Some(5100.0),
