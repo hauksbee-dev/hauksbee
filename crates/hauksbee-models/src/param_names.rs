@@ -434,6 +434,7 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
         }
     }
     out.extend(row_slips(entry, rows));
+    out.extend(law_warning(entry, rows));
     out
 }
 
@@ -483,6 +484,105 @@ fn row_slips(entry: &ModelEntry, rows: &[Characteristic]) -> Vec<String> {
         out.extend(slips.and_then(|s| s.into_iter().next()));
     }
     out
+}
+
+/// A diode is/n/rs over 10% off a cited VF row, or a bf outside every hFE row.
+fn law_warning(entry: &ModelEntry, rows: &[Characteristic]) -> Option<String> {
+    if matches!(entry.kind, ComponentKind::BjtNpn | ComponentKind::BjtPnp) {
+        let bf = entry.params.get_f64("bf")?;
+        let hfe: Vec<_> = rows.iter().filter(|r| symbol(r, "HFE")).collect();
+        let off = |r: &&Characteristic| !(r.min.unwrap_or(bf)..=r.max.unwrap_or(bf)).contains(&bf);
+        let off = !hfe.is_empty() && hfe.iter().all(off);
+        return off.then(|| format!("bf = {bf} is outside the printed min..max of every hFE row"));
+    }
+    let law = diode_law(entry).filter(|_| entry.kind == ComponentKind::Diode)?;
+    let points = vf_points(rows)?;
+    let (miss, i, v) = worst_miss(law, &points);
+    let at = diode_vf(law, i);
+    (miss > 0.1).then(|| format!("diode is/n/rs give VF = {at:.3} V at IF = {i} A where a cited VF row prints {v} V, over 10% off"))
+}
+
+/// Whether a row's parameter text has the word `sym` (`HFE` in "hFE gain").
+fn symbol(row: &Characteristic, sym: &str) -> bool {
+    let mut words = row.parameter.split(|c: char| !c.is_alphanumeric());
+    words.any(|w| w.eq_ignore_ascii_case(sym))
+}
+
+fn diode_law(entry: &ModelEntry) -> Option<[f64; 3]> {
+    let p = &entry.params;
+    Some([p.get_f64("is")?, p.get_f64("n")?, p.get_f64("rs")?])
+}
+
+/// VF of `[is, n, rs]` at `i` amperes and the solver's nominal 27 °C.
+fn diode_vf([is, n, rs]: [f64; 3], i: f64) -> f64 {
+    n * hauksbee_ir::thermal_voltage_c(27.0) * (i / is).ln_1p() + i * rs
+}
+
+fn worst_miss(law: [f64; 3], points: &[(f64, f64)]) -> (f64, f64, f64) {
+    let miss = |&(i, v): &(f64, f64)| ((diode_vf(law, i) - v).abs() / v, i, v);
+    points
+        .iter()
+        .map(miss)
+        .fold((0.0, 0.0, 0.0), |a, b| if b.0 > a.0 { b } else { a })
+}
+
+/// Cited `(IF, VF)` in A and V: VF rows at the IF their conditions name, at 25 °C
+/// or unstated, read typ, else max (the column a curated card fits without typ).
+fn vf_points(rows: &[Characteristic]) -> Option<Vec<(f64, f64)>> {
+    let current = regex::Regex::new(r"\bI_?F\s*[=≈:]?\s*(\d*\.?\d+)\s*([µμu]?A|mA)\b").ok()?;
+    let celsius = regex::Regex::new(r"([-+]?\d*\.?\d+)\s*°\s*C").ok()?;
+    let point = |row: &Characteristic| {
+        let at_25 = celsius
+            .captures_iter(&row.conditions)
+            .all(|t| t[1].parse() == Ok(25));
+        let c = current.captures(&row.conditions).filter(|_| at_25)?;
+        let i = c[1].parse::<f64>().ok()? * crate::units::scale_between(&c[2], "A")?;
+        let v = row.typ.or(row.max)? * crate::units::scale_between(&row.unit, "V")?;
+        (i > 0.0).then_some((i, v))
+    };
+    let vf = rows.iter().filter(|r| symbol(r, "VF"));
+    Some(vf.filter_map(point).collect())
+}
+
+/// Slope and intercept of `y` on `x`, by least squares.
+fn line(x: &[f64], y: &[f64]) -> (f64, f64) {
+    let mean = |v: &[f64]| v.iter().sum::<f64>() / v.iter().map(|_| 1.0).sum::<f64>();
+    let (mx, my) = (mean(x), mean(y));
+    let sxy: f64 = x.iter().zip(y).map(|(a, b)| (a - mx) * (b - my)).sum();
+    let slope = sxy / x.iter().map(|a| (a - mx).powi(2)).sum::<f64>();
+    (slope, my - slope * mx)
+}
+
+/// `VF = n·VT·ln(IF/is) + IF·rs` is linear in `ln IF` and `IF`: `rs` is the `IF`
+/// coefficient by Frisch-Waugh (3+ points over two decades, ln 100 = 4.6, else 0),
+/// then `VF - IF·rs` gives n and is. `None` unless physical and within 10%.
+fn diode_fit(points: &[(f64, f64)]) -> Option<[f64; 3]> {
+    let (i, v): (Vec<f64>, Vec<f64>) = points.iter().copied().unzip();
+    let ln: Vec<f64> = i.iter().map(|x| x.ln()).collect();
+    let residual = |y: &[f64]| -> Vec<f64> {
+        let (a, b) = line(&ln, y);
+        y.iter().zip(&ln).map(|(y, x)| y - a * x - b).collect()
+    };
+    let (ri, rv) = (residual(&i), residual(&v));
+    let fw =
+        ri.iter().zip(&rv).map(|(a, b)| a * b).sum::<f64>() / ri.iter().map(|a| a * a).sum::<f64>();
+    let spans = points.len() >= 3 && ln.iter().any(|a| ln.iter().any(|b| a - b >= 4.6));
+    let rs = if spans { fw.max(0.0) } else { 0.0 };
+    let drop: Vec<f64> = v.iter().zip(&i).map(|(v, i)| v - i * rs).collect();
+    let (a, b) = line(&ln, &drop);
+    let law = [(-b / a).exp(), a / hauksbee_ir::thermal_voltage_c(27.0), rs];
+    let physical = (1e-30..=1e-3).contains(&law[0]) && (0.5..=3.0).contains(&law[1]);
+    (points.len() >= 2 && physical && worst_miss(law, points).0 <= 0.1).then_some(law)
+}
+
+/// The fit an executable diode card must take: its law is absent or over 10% off
+/// its own VF rows, and the fit is not.
+pub(crate) fn diode_refit(entry: &ModelEntry) -> Option<[f64; 3]> {
+    let identity = entry.params.get_bool("identity_only") == Some(true);
+    let diode = entry.kind == ComponentKind::Diode && !identity;
+    let points = vf_points(&entry.source.as_ref().filter(|_| diode)?.characteristic)?;
+    let (fit, fits) = (diode_fit(&points)?, |law| worst_miss(law, &points).0 <= 0.1);
+    (!diode_law(entry).is_some_and(fits)).then_some(fit)
 }
 
 /// One parameter name outside the entry's vocabulary.
@@ -795,6 +895,26 @@ mod tests {
                 "{case}: {found:?}"
             );
         }
+    }
+
+    /// VF rows cut from a known law refit to it; a bf outside hFE warns.
+    #[test]
+    #[rustfmt::skip]
+    fn a_drafted_law_is_checked_against_its_cited_rows() {
+        let law = [1e-8, 1.2, 0.5];
+        let row = |name: &str, cols: String, conditions: String| format!("[[models.source.characteristic]]\nparameter = \"{name}\"\n{cols}\nunit = \"V\"\nconditions = \"{conditions}\"\nbasis = \"b\"\n");
+        let vf = |ma: f64| row("VF forward voltage", format!("typ = {}", diode_vf(law, ma / 1e3)), format!("IF = {ma} mA, TA = 25 \u{b0}C"));
+        let source = |rows: String| format!("[models.source]\ntier = \"datasheet-derived\"\n{rows}");
+        let rows = source([1.0, 10.0, 100.0, 1000.0].map(vf).concat());
+        let drafted = entry("diode", "is = 1e-8\nn = 1.2\nrs = 0.5", &rows);
+        assert!(source_warnings(&drafted).is_empty() && diode_refit(&drafted).is_none());
+        let off = entry("diode", "is = 1e-14\nn = 1.0\nrs = 0.0", &rows);
+        let fit = diode_refit(&off).expect("the rows fit their own law");
+        assert!(fit.iter().zip(law).all(|(a, b)| (a / b - 1.0).abs() < 1e-3), "{fit:?}");
+        assert!(source_warnings(&off)[0].ends_with("over 10% off"));
+        let hfe = source(row("hFE DC current gain", "min = 110\nmax = 220".into(), "c".into()));
+        let bjt = |bf: f64| source_warnings(&entry("bjt_npn", &format!("is = 1e-14\nbf = {bf}\nnf = 1.0"), &hfe));
+        assert!(bjt(300.0)[0].contains("bf = 300 is outside the printed min..max") && bjt(200.0).is_empty());
     }
 
     #[test]
