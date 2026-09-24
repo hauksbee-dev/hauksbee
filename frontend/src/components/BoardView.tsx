@@ -69,6 +69,10 @@ export function BoardView({
   onOpenSettings?: () => void
 }) {
   const r = session.report!
+  // A part with variant cards waiting on a pick is the picker's to settle, not
+  // a datasheet draft's: the open-selections banner above already offers it.
+  const awaitingPick = new Set(r.bind?.open_selections?.map(s => s.reference))
+  const openParts = (r.bind?.open_parts ?? []).filter(p => !awaitingPick.has(p.reference))
   const {
     boardUrl, selectedNet, selectedComponent, setSelectedNet, setSelectedComponent,
     busy, uploadError, uploadNotice, dismissNotice, firmwareFile,
@@ -340,14 +344,14 @@ export function BoardView({
         {!restoredFrom && (
           <>
             <DatasheetExtract
-              openParts={r.bind?.open_parts ?? []}
+              openParts={openParts}
               onSaved={session.reanalyzeCurrent}
               onOpenSettings={onOpenSettings}
             />
             <div className="mt-3" ref={authoringRef}>
               <WritePart
                 onSaved={session.reanalyzeCurrent}
-                suggested={authoringComponent ?? r.bind?.open_parts?.find(part => !part.bound)}
+                suggested={authoringComponent ?? openParts.find(part => !part.bound)}
                 openSignal={authoringSignal > 0 ? `${authoringComponent?.reference}:${authoringSignal}` : null}
                 boardLabel={boardLabel ?? r.file_name}
               />
