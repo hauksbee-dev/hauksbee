@@ -121,7 +121,7 @@ pub fn settings_save(body: &str) -> Result<String, String> {
 /// backend plus that backend's own model/effort) on top of whatever is
 /// already saved, and keep it.
 pub fn settings_preset(id: &str) -> Result<String, String> {
-    let loaded = extract_config::load().map_err(|e| format!("{e:#}"))?;
+    let loaded = extract_config::load_for_edit().map_err(|e| format!("{e:#}"))?;
     let mut cfg = loaded.config;
     cfg.apply_preset(id).map_err(|e| format!("{e:#}"))?;
     extract_config::save(&cfg, &loaded.path).map_err(|e| format!("{e:#}"))?;
@@ -164,7 +164,9 @@ mod tests {
 
     #[test]
     fn settings_json_parses_and_lists_every_backend_and_preset() {
-        let (_guard, _dir, _path) = with_config_path();
+        let (_guard, _dir, path) = with_config_path();
+        assert!(settings_json().contains("extract.toml, which does not exist"));
+        std::fs::write(&path, "").unwrap();
         let text = settings_json();
         let value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
         assert!(value.get("load_error").is_none(), "{text}");

@@ -2489,6 +2489,24 @@ fn require_tool(resolved: &Resolved) -> Result<()> {
     Ok(())
 }
 
+/// Features that reach outside the sandbox or pull in operator state; codex rejects unknown names.
+const CODEX_DISABLED_FEATURES: &[&str] = &[
+    "apps",
+    "browser_use",
+    "browser_use_external",
+    "computer_use",
+    "image_generation",
+    "memories",
+    "plugins",
+    "remote_plugin",
+    "skill_search",
+    "skill_mcp_dependency_install",
+    "hooks",
+    "goals",
+    "multi_agent",
+    "multi_agent_v2",
+];
+
 /// One sandboxed run of whichever agent CLI the settings name.
 ///
 /// The three CLIs differ only in how they spell the same four things: the
@@ -2497,13 +2515,14 @@ fn require_tool(resolved: &Resolved) -> Result<()> {
 /// always named rather than inherited: a CLI's own default varies by plan and
 /// config and would silently decide how good the extraction is.
 ///
-///   * codex: `exec --sandbox <mode>`, or `--approve-for-me` when that mode is
-///     selected (automatic review starts with workspace-write). By default writes
-///     are workspace-confined and network is disabled; other modes or approved
-///     escalations can relax this. Reads are not confined; see `Workspace`.
-///     `--skip-git-repo-check` is needed because the
-///     sandbox deliberately is not a repo, `--cd` makes it open the PDF directly,
-///     `--output-last-message` keeps narration separate, and each page is an image.
+///   * codex: `exec --sandbox <mode>` or `--approve-for-me` (review from workspace-write):
+///     writes stay in the workspace, network is off unless a mode or approval relaxes
+///     it; reads are not confined (see `Workspace`). `--skip-git-repo-check` as the
+///     sandbox is no repo, `--cd` to open the PDF, `--output-last-message` keeps
+///     narration apart, pages as images. `--ephemeral` keeps no transcript,
+///     `--ignore-user-config` drops `config.toml` (MCP servers, trusted projects;
+///     sign-in stays) unless a profile is set: that is the operator choosing their
+///     codex config, which a profile layers on. `--ignore-rules` drops execpolicy rules.
 ///   * claude: `-p --permission-mode <mode> --no-session-persistence`: a
 ///     datasheet run is not a conversation anyone resumes, and a transcript
 ///     per extraction would keep the datasheet's text around after the
@@ -2540,7 +2559,13 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
             cmd.args(["--skip-git-repo-check", "--cd"])
                 .arg(ws.path())
                 .arg("--output-last-message")
-                .arg(ws.path().join("last-message.txt"));
+                .arg(ws.path().join("last-message.txt"))
+                .arg("--ephemeral")
+                .args(a.profile.is_none().then_some("--ignore-user-config"))
+                .arg("--ignore-rules");
+            for feature in CODEX_DISABLED_FEATURES {
+                cmd.args(["--disable", feature]);
+            }
             for page in &ws.pages {
                 cmd.arg("--image").arg(page);
             }
@@ -3712,11 +3737,20 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
                 ws.path().display().to_string(),
                 "--output-last-message".into(),
                 ws.path().join("last-message.txt").display().to_string(),
-                "--configured-extra".into(),
             ]);
+            // A profile opts into the operator's codex config: no --ignore-user-config.
+            expected.extend(["--ephemeral", "--ignore-rules"].map(Into::into));
+            for feature in CODEX_DISABLED_FEATURES {
+                expected.extend(["--disable".into(), (*feature).into()]);
+            }
+            expected.push("--configured-extra".into());
             let actual = output.lines().map(str::to_string).collect::<Vec<_>>();
             assert_eq!(actual, expected, "codex permission mode {mode}");
         }
+        resolved.codex.profile = None;
+        let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
+        assert!(output.contains("--ephemeral\n--ignore-user-config\n--ignore-rules\n--disable"));
+        assert!(output.starts_with("exec\n--model\n"), "{output}");
         resolved.backend = Backend::Agy;
         resolved.agy.command = command.to_str().unwrap().into();
         let a = &resolved.agy;

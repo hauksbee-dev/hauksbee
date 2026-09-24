@@ -164,6 +164,17 @@ workspace-write itself and rejects the two flags together. Do not append it to
 check `codex exec --help` for support. Neither automatic reviewer is a promise
 that all filesystem reads are confined to the scratch directory.
 
+Codex fast mode: `extra_args = ["-c", "service_tier=\"priority\""]` in `[codex]`.
+Codex runs with `--ephemeral --ignore-user-config --ignore-rules` and with apps,
+browser/computer use, plugins, skills, memories, hooks, goals and subagents
+disabled, so `~/.codex/config.toml` (MCP servers, trusted projects) does not
+apply; sign-in still does. Setting `codex.profile` / `HAUKSBEE_CODEX_PROFILE`
+drops `--ignore-user-config`: your codex config and that profile then apply
+(the backend summary says so); the other flags stay.
+
+`HAUKSBEE_EXTRACT_CONFIG` naming a file that does not exist is an error for
+extraction, `show` and `check`; `set`, `use`, `setup` and Settings create it.
+
 **Precedence**, per field, highest first: a command-line flag (`--backend`,
 `--model`, `--effort`, ...); a `HAUKSBEE_*` environment variable (below); this
 file; the built-in default. `hauksbee models backend show` prints exactly
