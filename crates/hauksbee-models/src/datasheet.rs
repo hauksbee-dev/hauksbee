@@ -480,14 +480,11 @@ RULES:
      status = "unknown"
      parameter = "model"
      reason = "datasheet publishes no validated model error interval"
-   Add a `status = "interval"` record (parameter, low, high, unit, `kind =
-   "specification-limits"`, `basis` table citation) for every published row with
-   finite min AND max, such as the supply range or accuracy. A one-sided or
-   typ-only row goes in a `[[sensor.source.characteristic]]` record: parameter,
-   only the printed min/typ/max columns, unit, conditions, basis. Never invent
-   an interval: a missing column is never 0 and a typ is never a bound. Name
-   the printed columns in each basis. An interval has no typ: a min/typ/max row
-   also gets a characteristic record carrying all three.
+   Every published row (the supply range, the accuracy) is a
+   `[[sensor.source.characteristic]]` record: parameter, only the printed
+   min/typ/max columns, the printed unit, conditions, and a basis naming the
+   printed columns. A row printing min and max yields its interval, so never
+   write one: a missing column is never 0 and a typ is never a bound.
 6. A control/config register firmware reads back is a const register holding
    its power-on (reset) value bytes.
 
@@ -1391,7 +1388,9 @@ Component kind: {kind_line}
 
 If the request names a family of variants (output voltages, packages, grades),
 model the variant the request implies; if it is ambiguous, say in
-`description` which variant was modelled and why. Never merge variants.
+`description` which variant was modelled and why. Never merge variants, and
+widen `value_re` only to that variant's ordering-table codes, never to a
+family root its siblings share.
 
 The `kind` FIELD inside your entry must come from this closed list (the
 schema accepts nothing else): {legal_kinds}.
@@ -1435,7 +1434,7 @@ kind = "{entry_kind}"
 description = "one line"
 
 [models.match]
-value_re = "(?i)^{part_upper}"
+value_re = '(?i)^{part_re}$'
 
 [models.params]
 # the required params for this kind, listed below
@@ -1546,53 +1545,34 @@ IMPORTANT RULES:
      [models.source]
      tier = "datasheet-derived"
      validation = "physical-bounds-only"
-   For each [models.params] parameter with published finite min AND max, add:
-     [[models.source.uncertainty]]
-     status = "interval"
-     parameter = "<parameter>"
-     low = <finite lower bound>
-     high = <finite upper bound>
-     unit = "<unit>"
-     kind = "specification-limits"
-     basis = "<table/curve citation>"
-   A parameter specification interval describes source limits for that
-   parameter, not model-form error.
-   Always add a separate record for model error. If the source publishes validated
-   model-error bounds, preserve them as `parameter = "model"`, `status = "interval"`,
-   and `kind = "empirical-error"`. Otherwise emit:
      [[models.source.uncertainty]]
      status = "unknown"
      parameter = "model"
      reason = "datasheet publishes no validated model error interval"
-   A row that prints only a min, only a max, or only a typ is NOT a two-sided
-   interval. Record it, and every other published characteristic row that has
-   no [models.params] or [models.ratings] key, as a characteristic record with
-   exactly the columns the row prints, also on an identity-only card:
+   (Validated model-error bounds the source publishes replace that record with
+   `status = "interval"`, `kind = "empirical-error"`, low, high, unit and basis.)
+   A param read from a printed row is written as that whole row, with only the
+   columns it prints, in its printed unit:
+     iq_a = {{ typ = 65, max = 90, unit = "uA", conditions = "VIN = 5 V", basis = "Table 7.5, IQ, typ/max" }}
+   Hauksbee converts the unit, picks the column each param reads (the typ, else
+   the min/max midpoint; a guaranteed level such as vol or dropout_v its limit)
+   and derives the min/max interval: never pick a column, convert a unit or
+   write an interval yourself. A one-sided row is never a nominal. Every other
+   printed row (another condition, a limit with no ratings key, a breakdown row,
+   which is not an absolute-maximum rating) is a characteristic record with the
+   same fields, also on an identity-only card:
      [[models.source.characteristic]]
      parameter = "<datasheet symbol and name>"
-     max = <number>  # only the printed columns among min, typ, max
-     unit = "<base unit of rule 6: V, A, W, F, s, ohm, ...>"
+     max = 0.4  # only the printed columns among min, typ, max
+     unit = "<printed unit>"
      conditions = "<the row's test conditions>"
      basis = "<table/row citation>, <printed columns, e.g. typ/max>"
    Each number keeps its printed sign in its printed column, min <= typ <= max
    by signed value (a row printed negative may keep its magnitude order); a
    threshold printed as an offset from another spec is a signed offset,
-   ascending, with that spec named in conditions. A limit at a second
-   condition, or with no ratings key, is a characteristic record; a breakdown
-   row is not an absolute-maximum rating. When a param takes one column of a
-   row (e.g. a typ), the full row also gets a characteristic record.
-   Never invent a percentage, derive a bound from a typical value, or
-   substitute a model clamp for a published guarantee. A param the kind needs
-   as a nominal value may come from a typ column: cite it as typ; it gets no
-   interval record (the row may still get a characteristic record). A min-only
-   or max-only row is a bound, never a nominal: use it only for a param that is
-   that bound (e.g. an output level from VOL max). A row printing min and max
-   but no typ (a gain bin, a threshold band) still supplies a required nominal:
-   write the midpoint (min + max) / 2, comment it `midpoint of printed min/max,
-   no typ published`, and add the interval record above with the printed
-   bounds. That midpoint is a labelled nominal, not a typical; do not abstain
-   for want of a typ column. No rule requires a param to be validated:
-   `physical-bounds-only` is the whole validation claim of the card.
+   ascending, with that spec named in conditions. Never invent a percentage,
+   derive a bound from a typical value, or substitute a model clamp for a
+   published guarantee. `physical-bounds-only` is the card's whole validation claim.
 1. Add a comment on each param/rating line citing where in the datasheet you found
    the value, e.g.: `# Source: Table 6.3, typ column`
 2. Use only values explicitly stated in the datasheet; do NOT guess. For SPICE
@@ -1614,7 +1594,8 @@ IMPORTANT RULES:
    record, or move the fact into a characteristic record (rule 0).
 5. Output ONLY the TOML block, starting with [[models]]; no prose, no markdown
    fences, no leading or trailing text.
-6. Currents in AMPERES, voltages in VOLTS, power in WATTS (convert mA/mW yourself).
+6. A plain number (a rating, a derived or fitted value) is in the unit its key
+   or the param meanings name, else in A, V, W, s, F or ohm.
 7. The checker rejects params outside these physical bounds. A |x| bound is on
    the magnitude and accepts EITHER SIGN: write a signed value as the datasheet
    states it. A negative regulator (79xx, any output below GND) takes a NEGATIVE
@@ -1625,7 +1606,7 @@ IMPORTANT RULES:
 OUTPUT (TOML only, starting with [[models]]):
 "#,
         part_lower = part.to_lowercase(),
-        part_upper = part.to_uppercase(),
+        part_re = regex::escape(&part.to_uppercase()),
         legal_kinds = crate::validation::KIND_NAMES.join(", "),
         entry_kind = behavioral_family_base_kind(kind).unwrap_or(kind),
         kind_line = match behavioral_family_base_kind(kind) {
@@ -1753,7 +1734,7 @@ reason = "datasheet publishes no validated model error interval"
 [models.match]
 value_re = "(?i)^TLV3201"
 [models.params]
-out_lo = 0.1 # Source: Electrical Characteristics, VOL max, VS=5 V, ISINK=4 mA
+out_lo = { max = 100, unit = "mV", conditions = "VS=5 V, ISINK=4 mA", basis = "Electrical Characteristics, VOL max" }
 out_hi = 4.9 # Source: Electrical Characteristics, VOH min, VS=5 V, ISOURCE=-4 mA
 hysteresis = 0.0012 # Source: Electrical Characteristics, typ, VS=5 V, VCM=2.5 V
 tpd_s = 4.0e-8 # Source: Switching Characteristics, typ, VS=5 V, overdrive=100 mV, CL=15 pF
@@ -1798,8 +1779,8 @@ parameter = "model"
 reason = "datasheet publishes no validated model error interval"
 [[models.source.characteristic]]
 parameter = "IIH input leakage current"
-max = 5.0e-6
-unit = "A"
+max = 5.0
+unit = "uA"
 conditions = "VI = 5 V, EN = 0 V"
 basis = "Electrical Characteristics, IIH row, max column only"
 [models.match]
@@ -2976,12 +2957,19 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
              cause below names the exact field and line)"
         )
     })?;
-    let entry = db
-        .models
-        .into_iter()
+    let mut entries = db.models.into_iter();
+    let first = entries
         .next()
         .with_context(|| format!("no [[models]] entry in reply for {part}"))?;
+    // The whole reply is written to disk, so every entry is checked.
+    for entry in std::iter::once(&first).chain(entries.as_slice()) {
+        check_reply_entry(entry, part, kind_str)
+            .map_err(|e| anyhow::anyhow!("[[models]] entry '{}': {e:#}", entry.id))?;
+    }
+    Ok(first)
+}
 
+fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<()> {
     // Guard against the backend returning the wrong device kind, which would
     // bind nonsense (a diode card stamped as a BJT). A behavioural family
     // (charger/pmic/balancer) is satisfied by its BASE kind in the TOML, and
@@ -3013,11 +3001,10 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
              reason = \"datasheet publishes no validated model error interval\""
         );
     }
-    crate::validation::validate(&entry).map_err(|errs| {
+    crate::validation::validate(entry).map_err(|errs| {
         let msg: Vec<String> = errs.iter().map(ToString::to_string).collect();
         anyhow::anyhow!("validation failed: {}", msg.join("; "))
-    })?;
-    Ok(entry)
+    })
 }
 
 /// The snake_case name a kind serialises as (the serde `rename_all`).
@@ -3196,12 +3183,14 @@ mod tests {
         assert!(bjt.contains("BC847") && bjt.contains("is, bf, nf"));
         assert!(bjt.contains("datasheet states): br, vaf, var, nr, rb"));
         assert!(bjt.contains("VCEO") && bjt.contains("Ratings are magnitudes"));
-        assert!(bjt.contains("may come from a typ column") && bjt.contains("never a nominal"));
+        assert!(
+            bjt.contains("picks the column each param reads") && bjt.contains("never a nominal")
+        );
         assert!(build_prompt("ADJ_FIXTURE", "vreg", "x").contains("adjustable (ADJ/FB pin): vref"));
         assert!(!bjt.contains("[models.behavioral.converter]"));
         assert!(build_prompt("1N4148", "diode", "x").contains("VRRM"));
         assert!(build_prompt("AMS1117", "vreg", "x").contains("max_junction_temp_c"));
-        assert!(bjt.contains("(min + max) / 2") && bjt.contains("   - bf: 1 to 2000\n"));
+        assert!(bjt.contains("   - bf: 1 to 2000\n"));
         let nmos = build_prompt("FET_FIXTURE", "nmos", "x");
         assert!(nmos.contains("   - kp: 1e-6 to 1000\n") && nmos.contains("cgd, is, cbd"));
         assert!(nmos.contains("1/(kp*(|VGS| - |vto|)) + rd + rs"));
@@ -3554,6 +3543,21 @@ uncertainty = [
 
         let bad_bf = good.replace("bf  = 150.0", "bf  = 99999.0");
         assert!(parse_and_validate_reply(&bad_bf, "BCM847BS", "bjt_npn").is_err());
+        // Every entry is checked, not just the first; a row param is checked too.
+        let second = |bf: &str| {
+            let b = good.replace("\"bcm847bs\"", "\"bcm847bs_b\"");
+            format!("{good}{}", b.replace("bf  = 150.0", bf))
+        };
+        let row = "bf = { min = 100, typ = 150, max = 460, unit = \"\", conditions = \"c\", basis = \"b\" }";
+        let entry = parse_and_validate_reply(&second(row), "BCM847BS", "bjt_npn").unwrap();
+        assert_eq!(entry.id, "bcm847bs");
+        for bf in ["bf  = 99999.0", &row.replace("typ = 150", "typ = 99999")] {
+            let error = parse_and_validate_reply(&second(bf), "BCM847BS", "bjt_npn").unwrap_err();
+            assert!(
+                format!("{error:#}").contains("entry 'bcm847bs_b'"),
+                "{error:#}"
+            );
+        }
         assert!(parse_and_validate_reply("   \n  ", "BC847", "bjt_npn").is_err());
         assert!(
             parse_and_validate_reply("I couldn't find the parameters.", "BC847", "bjt_npn")
@@ -3684,7 +3688,7 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             }
             assert!(prompt.contains(PIN_ROLE_GUIDANCE), "{kind}");
             assert!(prompt.contains("I/O direction alone is not a function"));
-            assert!(prompt.contains("Always add a separate record for model error"));
+            assert!(prompt.contains("Validated model-error bounds"));
             assert!(prompt.contains("kind = \"empirical-error\""));
             assert!(prompt.contains("parameter = \"model\""));
             assert!(!prompt.contains("If no defensible interval is published"));
