@@ -797,68 +797,34 @@ fn check_current_program(
         }
     }
 
-    let positive = |p: &mut Problems, name: &str, v: f64| {
+    // Every numeric constant of the equation, named as the TOML names it.
+    let mut valid = true;
+    let fields = toml::Table::try_from(&program.equation).unwrap_or_default();
+    for (name, v) in fields.iter().filter_map(|(k, v)| Some((k, v.as_float()?))) {
         p.positive(format!("current_program.{name}"), v);
-        positive_finite(v)
-    };
+        valid &= positive_finite(v);
+    }
     match &program.equation {
-        CurrentProgramEquation::InverseResistance { k_volts } => {
-            positive(p, "k_volts", *k_volts);
-        }
-        CurrentProgramEquation::PowerLawResistance {
-            coefficient_a,
-            resistance_scale_ohms,
-            exponent,
-        } => {
-            for (name, v) in [
-                ("coefficient_a", *coefficient_a),
-                ("resistance_scale_ohms", *resistance_scale_ohms),
-                ("exponent", *exponent),
-            ] {
-                positive(p, name, v);
-            }
-        }
         CurrentProgramEquation::PiecewiseInverseResistance {
             low_k_volts,
             transition_current_a,
             high_numerator_a,
             resistance_scale_ohms,
             high_offset,
-        } => {
-            let mut valid = true;
-            for (name, v) in [
-                ("low_k_volts", *low_k_volts),
-                ("transition_current_a", *transition_current_a),
-                ("high_numerator_a", *high_numerator_a),
-                ("resistance_scale_ohms", *resistance_scale_ohms),
-                ("high_offset", *high_offset),
-            ] {
-                valid &= positive(p, name, v);
-            }
-            if valid {
-                let transition_ohms = low_k_volts / transition_current_a;
-                let high_at_transition =
-                    high_numerator_a / (transition_ohms / resistance_scale_ohms + high_offset);
-                let gap = (high_at_transition - transition_current_a).abs() / transition_current_a;
-                p.require(gap <= 0.01, || {
-                    format!("current_program piecewise branches are not continuous at {transition_current_a} A (high branch gives {high_at_transition} A)")
-                });
-            }
+        } if valid => {
+            let transition_ohms = low_k_volts / transition_current_a;
+            let high_at_transition =
+                high_numerator_a / (transition_ohms / resistance_scale_ohms + high_offset);
+            let gap = (high_at_transition - transition_current_a).abs() / transition_current_a;
+            p.require(gap <= 0.01, || {
+                format!("current_program piecewise branches are not continuous at {transition_current_a} A (high branch gives {high_at_transition} A)")
+            });
         }
         CurrentProgramEquation::SenseScaledResistance {
             sense_roles,
             sense_far_roles,
-            program_bias_a,
-            program_full_scale_v,
-            sense_full_scale_v,
+            ..
         } => {
-            for (name, v) in [
-                ("program_bias_a", *program_bias_a),
-                ("program_full_scale_v", *program_full_scale_v),
-                ("sense_full_scale_v", *sense_full_scale_v),
-            ] {
-                positive(p, name, v);
-            }
             p.require(!sense_roles.is_empty(), || {
                 "current_program.sense_roles must name at least one role".into()
             });
@@ -887,6 +853,7 @@ fn check_current_program(
                 );
             }
         }
+        _ => {}
     }
 }
 
