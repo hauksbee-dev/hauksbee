@@ -69,7 +69,7 @@ pub struct CiJsonAssertion {
 
 /// The full result of a CI run: the spec name, per-assertion results, the seed
 /// count, and timing.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CiResult {
     pub spec_name: String,
     pub board: String,
@@ -1369,7 +1369,6 @@ pub fn gh_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::assertions::AssertResult;
-    use std::time::Duration;
 
     fn result(label: &str, kind: &str, passed: bool, detail: &str) -> AssertResult {
         AssertResult {
@@ -1389,18 +1388,7 @@ mod tests {
             board: "b.kicad_pcb".into(),
             results,
             seeds: 1,
-            elapsed: Duration::ZERO,
-            analog_abort: false,
-            coverage: None,
-            substitutions: Vec::new(),
-            coverage_warnings: Vec::new(),
-            timing_coverage: Vec::new(),
-            timing_refusals: Vec::new(),
-            dead_rails: Vec::new(),
-            waiver_notes: Vec::new(),
-            inventory: Vec::new(),
-            assumptions: Vec::new(),
-            evidence: Vec::new(),
+            ..Default::default()
         }
     }
 

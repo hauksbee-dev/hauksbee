@@ -6,7 +6,7 @@
 //! optional, a C library's opinion leaking through unattributed, findings in
 //! phase order rather than file order, and a frequency computed from one edge.
 
-use crate::support::{bin, blinky_board, stderr};
+use crate::support::{bin, blinky_board, stderr, stdout};
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -18,6 +18,22 @@ fn dir_with_board() -> tempfile::TempDir {
     dir
 }
 
+/// [`dir_with_board`] plus `s.toml`: a 5 ms blinky spec with `body` after the header.
+fn dir_with_spec(body: &str) -> tempfile::TempDir {
+    let dir = dir_with_board();
+    let head = "board = \"blinky.kicad_pcb\"\nduration_ms = 5\n";
+    std::fs::write(dir.path().join("s.toml"), format!("{head}{body}")).unwrap();
+    dir
+}
+
+/// The spec body that boots `firmware` on the blinky ATmega and checks `+5V`.
+fn firmware_body(firmware: &str) -> String {
+    format!(
+        "firmware = \"{firmware}\"\nmcu = \"atmega328p\"\n\n\
+         [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n"
+    )
+}
+
 fn run_in(dir: &Path, args: &[&str]) -> Output {
     Command::new(bin())
         .args(args)
@@ -26,22 +42,12 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
         .expect("binary runs")
 }
 
-fn stdout(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stdout).into_owned()
-}
-
 // L1: `Path::parent()` on a bare filename is `Some("")`, not `None`, so the
 // `unwrap_or(".")` never fired and the message ended "resolved relative to the
 // spec file at )".
 #[test]
 fn a_bare_filename_spec_names_a_real_directory_in_its_firmware_error() {
-    let dir = dir_with_board();
-    std::fs::write(
-        dir.path().join("s.toml"),
-        "board = \"blinky.kicad_pcb\"\nduration_ms = 5\nfirmware = \"missing.elf\"\n\
-         mcu = \"atmega328p\"\n\n[[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n",
-    )
-    .unwrap();
+    let dir = dir_with_spec(&firmware_body("missing.elf"));
     let err = stderr(&run_in(dir.path(), &["run", "s.toml"]));
     assert!(err.contains("no firmware file at"), "{err}");
     assert!(
@@ -81,17 +87,11 @@ fn an_ordinary_missing_spec_does_not_get_the_glob_advice() {
 // type" from nowhere, followed by an error naming neither the format nor the fix.
 #[test]
 fn a_hex_renamed_elf_is_named_as_intel_hex_by_both_run_and_check() {
-    let dir = dir_with_board();
+    let dir = dir_with_spec(&firmware_body("app.elf"));
     // A minimal but real Intel HEX file: one data record, one EOF record.
     std::fs::write(
         dir.path().join("app.elf"),
         ":10010000214601360121470136007EFE09D2190140\n:00000001FF\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.path().join("s.toml"),
-        "board = \"blinky.kicad_pcb\"\nduration_ms = 5\nfirmware = \"app.elf\"\n\
-         mcu = \"atmega328p\"\n\n[[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n",
     )
     .unwrap();
 
@@ -120,14 +120,8 @@ fn a_hex_renamed_elf_is_named_as_intel_hex_by_both_run_and_check() {
 
 #[test]
 fn an_elf_renamed_hex_is_caught_the_same_way() {
-    let dir = dir_with_board();
+    let dir = dir_with_spec(&firmware_body("app.hex"));
     std::fs::write(dir.path().join("app.hex"), b"\x7fELF\x02\x01\x01\x00").unwrap();
-    std::fs::write(
-        dir.path().join("s.toml"),
-        "board = \"blinky.kicad_pcb\"\nduration_ms = 5\nfirmware = \"app.hex\"\n\
-         mcu = \"atmega328p\"\n\n[[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n",
-    )
-    .unwrap();
     let err = stderr(&run_in(dir.path(), &["run", "s.toml"]));
     assert!(err.contains("ELF binary"), "{err}");
     assert!(err.contains("Rename it to .elf"), "{err}");
@@ -168,14 +162,10 @@ fn example_alone_is_still_a_complete_invocation() {
 // and a reader working down their spec had to jump backwards.
 #[test]
 fn check_reports_findings_in_file_order() {
-    let dir = dir_with_board();
-    std::fs::write(
-        dir.path().join("s.toml"),
-        "board = \"blinky.kicad_pcb\"\nduration_ms = 5\n\n\
-         [[assert]]\nkind = \"voltage\"\nnet = \"NOPE_NET\"\nmin = 1.0\n\n\
+    let dir = dir_with_spec(
+        "\n[[assert]]\nkind = \"voltage\"\nnet = \"NOPE_NET\"\nmin = 1.0\n\n\
          [[assert]]\nkind = \"voltage\"\nnet = \"D13\"\nafter_ms = 500\nmin = 1.0\n",
-    )
-    .unwrap();
+    );
     let out = run_in(dir.path(), &["check", "s.toml", "--json"]);
     assert_eq!(out.status.code(), Some(2));
     let diags: Vec<serde_json::Value> =
@@ -195,10 +185,7 @@ fn check_reports_findings_in_file_order() {
 // TOML-level error stops deserialization and hides the rest.
 #[test]
 fn check_help_admits_that_a_toml_level_error_reports_alone() {
-    let out = Command::new(bin())
-        .args(["check", "--help"])
-        .output()
-        .expect("binary runs");
+    let out = run_in(Path::new("."), &["check", "--help"]);
     let help = stdout(&out);
     assert!(
         help.contains("reported alone"),
@@ -211,15 +198,11 @@ fn check_help_admits_that_a_toml_level_error_reports_alone() {
 // arithmetic happily divided anyway and reported "~0.50 Hz from 1 toggles".
 #[test]
 fn a_frequency_is_refused_when_there_are_too_few_toggles_to_measure_one() {
-    let dir = dir_with_board();
     // No firmware, so nothing drives D13 and the net never toggles.
-    std::fs::write(
-        dir.path().join("s.toml"),
-        "board = \"blinky.kicad_pcb\"\nduration_ms = 5\n\n\
-         [[supply]]\nnet = \"+5V\"\nkind = \"bench\"\nvolts = 5.0\n\n\
+    let dir = dir_with_spec(
+        "\n[[supply]]\nnet = \"+5V\"\nkind = \"bench\"\nvolts = 5.0\n\n\
          [[assert]]\nkind = \"toggle\"\nnet = \"D13\"\nfreq_hz = 5.0\n",
-    )
-    .unwrap();
+    );
     let out = run_in(dir.path(), &["run", "s.toml"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     let report = stdout(&out);

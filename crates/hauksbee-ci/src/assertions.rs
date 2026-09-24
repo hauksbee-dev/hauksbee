@@ -10,7 +10,7 @@ use crate::spec::{Assertion, Spec};
 /// schema is generated from this type: see
 /// `crates/hauksbee-ci/tests/ci_report_schema_drift.rs`. `why` and `waived` are
 /// the only two fields a consumer may find ABSENT rather than null.
-#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, serde::Serialize, schemars::JsonSchema)]
 pub struct AssertResult {
     /// The assertion's label: its `label` in the spec, or a generated one
     /// naming the kind and subject.
@@ -84,18 +84,8 @@ impl AssertResult {
         Self {
             label,
             kind: kind.into(),
-            passed: false,
-            invalid: false,
-            detail: String::new(),
-            measured: false,
-            failing_seed: None,
-            failing_seeds: Vec::new(),
             seeds_total: seeds_total as u32,
-            why: None,
-            waived: None,
-            subject_nets: Vec::new(),
-            subject_refs: Vec::new(),
-            subject_peripheral: None,
+            ..Default::default()
         }
     }
 }

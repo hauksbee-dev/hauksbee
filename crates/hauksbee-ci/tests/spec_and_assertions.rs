@@ -1,7 +1,5 @@
 //! Spec parsing, validation, output formats, and the firmware demo run.
 
-use std::path::PathBuf;
-
 use hauksbee_ci::{run, Spec};
 
 use crate::support;
@@ -75,13 +73,6 @@ fn malformed_assertions_and_unknown_fields_are_rejected() {
     }
 }
 
-/// A fixture board under the repo root.
-fn fixture(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(rel)
-}
-
 /// Four ways to point an assertion at something the run can never judge: a net
 /// that is not on the board, a component that is not on it, a component whose
 /// through-current is never measured, and one whose junction temperature never
@@ -126,7 +117,7 @@ fn an_assertion_that_could_never_be_evaluated_is_rejected_not_silently_green() {
             &format!("{case}.toml"),
             &format!(
                 "board={}\nduration_ms=1\n[[assert]]\n{assertion}\n",
-                support::toml_path(&fixture(board))
+                support::toml_path(&support::repo(board))
             ),
         );
         let msg = run(&support::run_config(p)).unwrap_err().to_string();
@@ -241,8 +232,7 @@ fn main {
 
 #[test]
 fn boot_coverage_requires_net_min_and_deadline() {
-    let board =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_brownout_cell.net");
+    let board = support::repo("testdata/tarski_brownout_cell.net");
     // Missing deadline_ms.
     let p = support::write_tmp(
         "bootcov_bad.toml",

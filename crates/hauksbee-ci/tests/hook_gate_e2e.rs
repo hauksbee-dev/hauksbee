@@ -15,10 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use crate::support::blinky_board as board;
-
-fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_hauksbee-ci"))
-}
+use crate::support::{bin, stderr, stdout};
 
 /// A git repo with an identity, so `git commit` works unattended.
 fn repo() -> tempfile::TempDir {
@@ -55,50 +52,52 @@ fn git(dir: &Path, args: &[&str]) -> Output {
         .expect("git runs")
 }
 
-/// `git commit` with the built binary on PATH, so the hook finds `hauksbee-ci`
-/// the way a user's shell would.
-fn commit(dir: &Path) -> Output {
-    let bin_dir = bin().parent().unwrap().to_path_buf();
-    let mut paths = vec![bin_dir];
-    paths.extend(
-        std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()),
-    );
-    let path = std::env::join_paths(paths).expect("compose PATH");
-    Command::new("git")
-        .args(["commit", "-m", "hardware change"])
+/// `git commit -m <message>` with the built binary on PATH, so the hook finds
+/// `hauksbee-ci` the way a user's shell would, and `HAUKSBEE_CI_SPECS` set to
+/// `specs` (or cleared).
+fn commit_with(dir: &Path, message: &str, specs: Option<&str>) -> Output {
+    let bin_dir = Path::new(bin()).parent().unwrap().to_path_buf();
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let paths = std::iter::once(bin_dir).chain(std::env::split_paths(&inherited));
+    let mut cmd = Command::new("git");
+    cmd.args(["commit", "-m", message])
         .current_dir(dir)
-        .env("PATH", path)
+        .env("PATH", std::env::join_paths(paths).expect("compose PATH"))
         .env_remove("GIT_DIR")
         .env_remove("GIT_INDEX_FILE")
-        .env_remove("HAUKSBEE_CI_HOOK_OPTIONAL")
-        .output()
-        .expect("git commit runs")
+        .env_remove("HAUKSBEE_CI_HOOK_OPTIONAL");
+    match specs {
+        Some(s) => cmd.env("HAUKSBEE_CI_SPECS", s),
+        None => cmd.env_remove("HAUKSBEE_CI_SPECS"),
+    };
+    cmd.output().expect("git commit runs")
 }
 
-/// The canonical existing-hook shape: does its own work, then `exit 0`. Records
+fn commit(dir: &Path) -> Output {
+    commit_with(dir, "hardware change", None)
+}
+
+/// An existing pre-commit hook: `body` after the shebang. Each one records
 /// that it ran, so the test can tell whether chaining actually happened.
-fn write_existing_hook(dir: &Path) {
+fn write_hook(dir: &Path, body: &str) {
     let hook = dir.join(".git/hooks/pre-commit");
     std::fs::write(
         &hook,
-        "#!/bin/sh\n# somebody else's gate\necho ran > legacy-hook-ran.txt\nexit 0\n",
+        format!("#!/bin/sh\necho ran > legacy-hook-ran.txt\n{body}"),
     )
     .unwrap();
     make_executable(&hook);
+}
+
+/// The canonical existing-hook shape: does its own work, then `exit 0`.
+fn write_existing_hook(dir: &Path) {
+    write_hook(dir, "# somebody else's gate\nexit 0\n");
 }
 
 /// Same shape, but it REJECTS the commit: the chained hook's nonzero exit has
 /// to propagate through ours.
 fn write_rejecting_hook(dir: &Path) {
-    let hook = dir.join(".git/hooks/pre-commit");
-    std::fs::write(
-        &hook,
-        "#!/bin/sh\necho ran > legacy-hook-ran.txt\necho 'legacy hook says no' >&2\nexit 1\n",
-    )
-    .unwrap();
-    make_executable(&hook);
+    write_hook(dir, "echo 'legacy hook says no' >&2\nexit 1\n");
 }
 
 #[cfg(unix)]
@@ -158,7 +157,7 @@ fn install(dir: &Path) -> Output {
     assert!(
         out.status.success(),
         "hook install failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+        stderr(&out)
     );
     out
 }
@@ -170,16 +169,15 @@ fn a_red_spec_blocks_the_commit_even_with_an_existing_exit_0_hook() {
     write_existing_hook(dir);
     write_red_spec(dir);
     let installed = install(dir);
+    let said = stdout(&installed);
     assert!(
-        String::from_utf8_lossy(&installed.stdout).contains("discovered 1 spec"),
-        "install must see the spec: {}",
-        String::from_utf8_lossy(&installed.stdout)
+        said.contains("discovered 1 spec"),
+        "install must see the spec: {said}"
     );
 
     git(dir, &["add", "-A"]);
     let out = commit(dir);
-    let err = String::from_utf8_lossy(&out.stderr).into_owned();
-    let log = String::from_utf8_lossy(&out.stdout).into_owned();
+    let (err, log) = (stderr(&out), stdout(&out));
 
     assert!(
         !out.status.success(),
@@ -213,8 +211,8 @@ fn a_green_spec_lets_the_commit_through_and_still_runs_the_existing_hook() {
     assert!(
         out.status.success(),
         "a GREEN spec must not block the commit:\n{}\n{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
+        stdout(&out),
+        stderr(&out)
     );
     assert!(
         dir.join("legacy-hook-ran.txt").exists(),
@@ -232,7 +230,7 @@ fn the_chained_hooks_nonzero_exit_propagates() {
 
     git(dir, &["add", "-A"]);
     let out = commit(dir);
-    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    let err = stderr(&out);
     assert!(
         !out.status.success(),
         "the chained hook's rejection must block the commit:\n{err}"
@@ -268,7 +266,7 @@ fn a_missing_binary_blocks_the_commit_unless_the_opt_out_is_set() {
     };
 
     let blocked = bare(None);
-    let err = String::from_utf8_lossy(&blocked.stderr).into_owned();
+    let err = stderr(&blocked);
     assert!(
         !blocked.status.success(),
         "a missing binary must block, not pass: {err}"
@@ -280,8 +278,8 @@ fn a_missing_binary_blocks_the_commit_unless_the_opt_out_is_set() {
     assert!(
         opted_out.status.success(),
         "HAUKSBEE_CI_HOOK_OPTIONAL=1 must skip the check:\n{}\n{}",
-        String::from_utf8_lossy(&opted_out.stdout),
-        String::from_utf8_lossy(&opted_out.stderr)
+        stdout(&opted_out),
+        stderr(&opted_out)
     );
 }
 
@@ -304,26 +302,12 @@ fn the_hook_honours_hauksbee_ci_specs() {
     install(dir);
     git(dir, &["add", "-A"]);
 
-    let bin_dir = bin().parent().unwrap().to_path_buf();
-    let mut paths = vec![bin_dir];
-    paths.extend(
-        std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()),
-    );
-    let path = std::env::join_paths(paths).expect("compose PATH");
     // Default discovery: the spec is invisible, so nothing gates.
-    let ignored = Command::new("git")
-        .args(["commit", "-m", "invisible"])
-        .current_dir(dir)
-        .env("PATH", &path)
-        .env_remove("HAUKSBEE_CI_SPECS")
-        .output()
-        .unwrap();
+    let ignored = commit_with(dir, "invisible", None);
     assert!(
         ignored.status.success(),
         "a spec outside ci:. must not be found by default:\n{}",
-        String::from_utf8_lossy(&ignored.stderr)
+        stderr(&ignored)
     );
 
     // Now point the env var at it and change the board again: the RED spec gates.
@@ -333,14 +317,8 @@ fn the_hook_honours_hauksbee_ci_specs() {
     )
     .unwrap();
     git(dir, &["add", "-A"]);
-    let gated = Command::new("git")
-        .args(["commit", "-m", "now visible"])
-        .current_dir(dir)
-        .env("PATH", &path)
-        .env("HAUKSBEE_CI_SPECS", "hardware")
-        .output()
-        .unwrap();
-    let err = String::from_utf8_lossy(&gated.stderr).into_owned();
+    let gated = commit_with(dir, "now visible", Some("hardware"));
+    let err = stderr(&gated);
     assert!(
         !gated.status.success(),
         "HAUKSBEE_CI_SPECS must make the hook find the spec:\n{err}"

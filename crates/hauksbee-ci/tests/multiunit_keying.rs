@@ -17,17 +17,8 @@ use std::collections::HashMap;
 
 use hauksbee_ci::assertions::evaluate;
 use hauksbee_ci::runner::{RunFault, RunOutcome};
-use hauksbee_ci::spec::Spec;
 
-/// Write a spec TOML to a uniquely-named temp file and load it (tests run in
-/// parallel, so the file name is per-test).
-fn load_spec(name: &str, toml: &str) -> Spec {
-    let dir = std::env::temp_dir().join("hauksbee_ci_multiunit_keying_tests");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(name);
-    std::fs::write(&path, toml).unwrap();
-    Spec::load(&path).expect("spec loads")
-}
+use crate::support::load_spec;
 
 /// A minimal clean one-seed outcome carrying only the supplied thermal peaks
 /// and faults. Everything else is empty / valid.

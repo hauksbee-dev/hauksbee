@@ -24,13 +24,27 @@ fn spec_dir(tag: &str, body: &str) -> (tempfile::TempDir, PathBuf) {
     (dir, spec)
 }
 
+fn cli(sub: &str, spec: &std::path::Path, extra: &[&str]) -> std::process::Output {
+    let out = Command::new(bin()).arg(sub).arg(spec).args(extra).output();
+    out.expect("binary runs")
+}
+
 fn check(spec: &std::path::Path, extra: &[&str]) -> std::process::Output {
-    Command::new(bin())
-        .arg("check")
-        .arg(spec)
-        .args(extra)
-        .output()
-        .expect("binary runs")
+    cli("check", spec, extra)
+}
+
+/// `refused` for a spec whose one impossible window must come back `bad-bound`
+/// naming every `needles` word; `ok` is the near-miss twin that must pass.
+fn refused_bad_bound(tag: &str, body: &str, needles: &[&str], ok: &str) {
+    let diags = refused(tag, body, &[]);
+    let names_all = |m: &str| needles.iter().all(|n| m.contains(n));
+    assert!(
+        diags
+            .iter()
+            .any(|d| d["code"] == "bad-bound" && d["message"].as_str().is_some_and(names_all)),
+        "{diags:?}"
+    );
+    accepted(&format!("{tag}-ok"), ok);
 }
 
 fn json_diags(out: &std::process::Output) -> Vec<serde_json::Value> {
@@ -170,11 +184,11 @@ fn a_firmware_path_that_does_not_exist_fails_check_as_it_fails_run() {
 
     // A spec whose firmware IS on disk still passes, so this is not a blanket
     // "any firmware key fails" regression.
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::copy(blinky_board(), dir.path().join("blinky.kicad_pcb")).unwrap();
+    let (dir, ok_spec) = spec_dir(
+        "firmware-present",
+        &body.replace("firmware/nope.hex", "real.hex"),
+    );
     std::fs::write(dir.path().join("real.hex"), ":00000001FF\n").unwrap();
-    let ok_spec = dir.path().join("firmware-present.toml");
-    std::fs::write(&ok_spec, body.replace("firmware/nope.hex", "real.hex")).unwrap();
     let out = check(&ok_spec, &[]);
     assert_eq!(
         out.status.code(),
@@ -287,11 +301,7 @@ fn every_independent_error_is_reported_in_one_invocation() {
 
     // The `run` path loads through the same validation, so its exit-2 error
     // message carries all three too.
-    let out = Command::new(bin())
-        .arg("run")
-        .arg(&spec)
-        .output()
-        .expect("binary runs");
+    let out = cli("run", &spec, &[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     for needle in ["benchh", "min_toggles", "percent"] {
@@ -352,18 +362,8 @@ fn check_rejects_a_deadline_past_the_end_of_the_run() {
     let body = "board = \"blinky.kicad_pcb\"\nduration_ms = 100\n\n\
                 [[assert]]\nkind = \"toggle\"\nnet = \"D13\"\nmin_toggles = 3\n\
                 deadline_ms = 250\n";
-    let diags = refused("deadline", body, &[]);
-    assert!(
-        diags.iter().any(|d| d["code"] == "bad-bound"
-            && d["message"]
-                .as_str()
-                .is_some_and(|m| m.contains("deadline_ms") && m.contains("duration_ms"))),
-        "{diags:?}"
-    );
-    accepted(
-        "deadline-ok",
-        &body.replace("deadline_ms = 250", "deadline_ms = 100"),
-    );
+    let ok = body.replace("deadline_ms = 250", "deadline_ms = 100");
+    refused_bad_bound("deadline", body, &["deadline_ms", "duration_ms"], &ok);
 }
 
 #[test]
@@ -372,16 +372,6 @@ fn check_rejects_a_scenario_that_starts_after_the_run_ends() {
                 [[scenario]]\nid = \"late\"\npart = \"R1\"\nprofile = \"short\"\n\
                 start_ms = 50\n\n\
                 [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n";
-    let diags = refused("scenario", body, &[]);
-    assert!(
-        diags.iter().any(|d| d["code"] == "bad-bound"
-            && d["message"]
-                .as_str()
-                .is_some_and(|m| m.contains("start_ms") && m.contains("never fire"))),
-        "{diags:?}"
-    );
-    accepted(
-        "scenario-ok",
-        &body.replace("start_ms = 50", "start_ms = 10"),
-    );
+    let ok = body.replace("start_ms = 50", "start_ms = 10");
+    refused_bad_bound("scenario", body, &["start_ms", "never fire"], &ok);
 }
