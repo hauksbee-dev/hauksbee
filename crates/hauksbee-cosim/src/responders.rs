@@ -503,37 +503,23 @@ impl ParallelMemoryResponder {
             chain.replay(&chain_edges);
         }
 
+        // Detached while evaluated so each write's edge state can advance
+        // through the same `source_level`/`gates_active` the read side uses.
+        let mut writes = std::mem::take(&mut self.writes);
         let volts_guard = self.volts.lock_or_recover();
         let volts = volts_guard.as_slice();
-        let levels = self.levels;
-        let pin_levels = &self.pin_levels;
-        let chains = &self.chains;
-        let source_level = |source: ParallelSignal| match source {
-            ParallelSignal::Mcu(pin) => pin_levels.get(&pin).copied(),
-            ParallelSignal::Hc595 { chain, chip, bit } => chains
-                .get(chain)
-                .and_then(|c| c.latched.get(chip))
-                .map(|byte| byte & (1 << bit) != 0),
-            ParallelSignal::Node(node) => {
-                let v = volts.get(node.0 as usize).copied().unwrap_or(0.0);
-                Some(levels.decide(v, false))
-            }
-        };
-
         let mut qualified = false;
-        for write in &mut self.writes {
-            let cur = source_level(write.signal);
+        for write in &mut writes {
+            let cur = self.source_level(write.signal, volts);
             let fired = match (write.prev, cur, write.edge) {
                 (Some(previous), Some(current), Edge::Rising) => current && !previous,
                 (Some(previous), Some(current), Edge::Falling) => !current && previous,
                 _ => false,
             };
             write.prev = cur;
-            let gates_active = write.gates.iter().all(|&(source, active)| {
-                source_level(source).is_some_and(|level| active.is_active(level))
-            });
-            qualified |= fired && gates_active;
+            qualified |= fired && self.gates_active(&write.gates, volts);
         }
+        self.writes = writes;
 
         if qualified {
             if let (Some(address), Some(value)) = (self.address(volts), self.data_value(volts)) {
