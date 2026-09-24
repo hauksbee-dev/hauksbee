@@ -360,7 +360,7 @@ impl Characteristic {
         let values: Vec<f64> = columns.iter().flatten().copied().collect();
         let mut out = Vec::new();
         if values.is_empty() {
-            out.push("requires at least one of min, typ, max; a row that prints no number (\"see note\", a curve) gets no record: cite it in a comment".to_string());
+            out.push("requires at least one of min, typ, max: record each printed number with its reference (0.7 VDD is 0.7 with unit = \"VDD\", ±5 is min = -5 and max = 5), never delete the record; only a row printing no number at all (\"see note\", a curve) is cited in a comment instead".to_string());
         } else if values.iter().any(|v| !v.is_finite()) {
             out.push("min, typ and max must be finite".to_string());
         } else {
@@ -1368,6 +1368,9 @@ mod tests {
                 (want, got) => panic!("{columns}: wanted {want:?}, got {got:?}"),
             }
         }
+        let rail = "[[characteristic]]\nparameter = \"VIH\"\nmin = 0.7\nunit = \"VDD\"\nconditions = \"c\"\nbasis = \"b\"";
+        let rail = parse(rail).map(|s| s.validate());
+        assert_eq!(rail, Ok(Ok(())), "a rail-relative bound validates");
         let mut blank = spec("typ = 2.0", "").unwrap();
         blank.characteristic[0].basis = " ".into();
         assert_eq!(

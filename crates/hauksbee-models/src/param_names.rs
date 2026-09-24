@@ -280,32 +280,22 @@ pub fn param_unit(name: &str) -> Option<&'static str> {
         .or_else(|| crate::units::suffix_unit(name).map(|(_, base)| base))
 }
 
-/// Which printed column of a row param the simulator reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Column {
-    /// The typ, else the midpoint of a row printing min and max; never a
-    /// one-sided bound.
-    Nominal,
-    /// A guaranteed level: that limit, else the typ of a row printing none.
-    Min,
-    Max,
-}
-
-/// The column table. A param that IS a guaranteed limit reads its worst-case
-/// column: an input threshold or output level (VIH/VOH min, VIL/VOL max), a
-/// headroom or dropout (max), and any name carrying a `min` or `max` word.
-/// Everything else is a nominal.
-pub fn row_column(name: &str) -> Column {
+/// The column table: the printed column (`min`, `typ` or `max`) a row param
+/// reads. A param that IS a guaranteed limit reads its worst case: an input
+/// threshold or output level (VIH/VOH min, VIL/VOL max), a headroom or dropout
+/// (max), and any name carrying a `min` or `max` word. Everything else reads
+/// its nominal, the typ.
+pub fn row_column(name: &str) -> &'static str {
     const MIN: &[&str] = &["vih", "voh", "out_hi", "rail_hi"];
     const MAX: &[&str] = &["vil", "vol", "out_lo", "rail_lo", "vol_v", "voh_drop_v"];
     const MAX_HEADROOM: &[&str] = &["dropout_v", "swing_lo", "swing_hi"];
     let has = |word| name.split('_').any(|w| w == word);
     if MIN.contains(&name) || has("min") {
-        Column::Min
+        "min"
     } else if MAX.contains(&name) || MAX_HEADROOM.contains(&name) || has("max") {
-        Column::Max
+        "max"
     } else {
-        Column::Nominal
+        "typ"
     }
 }
 
@@ -320,7 +310,10 @@ fn row_scale(name: &str, unit: &str) -> Result<f64, String> {
     };
     scale.ok_or_else(|| {
         let want = want.map_or("no unit".to_string(), |u| format!("{u}, by its name"));
-        format!("unit '{unit}' does not fit '{name}', which is read in {want}")
+        format!(
+            "unit '{unit}' does not fit '{name}', which is read in {want}: keep a rail-relative \
+             or other such row as a characteristic in its printed unit, never drop it"
+        )
     })
 }
 
@@ -331,13 +324,18 @@ pub fn row_value(name: &str, row: &Characteristic) -> Result<f64, String> {
     let suffix = crate::units::suffix_unit(name).map_or(1.0, |(scale, _)| scale);
     let scale = row_scale(name, &row.unit)? / suffix;
     let midpoint = row.min.zip(row.max).map(|(a, b)| (a + b) / 2.0);
-    let (value, reads) = match row_column(name) {
-        Column::Nominal => (row.typ.or(midpoint), "the typ, or the min/max midpoint"),
-        Column::Min => (row.min.or(row.typ), "the min, or the typ"),
-        Column::Max => (row.max.or(row.typ), "the max, or the typ"),
+    // A limit falls back to the typ; a nominal to the midpoint, never one bound.
+    let (column, else_) = match row_column(name) {
+        "min" => (row.min.or(row.typ), "the typ"),
+        "max" => (row.max.or(row.typ), "the typ"),
+        _ => (row.typ.or(midpoint), "the min/max midpoint"),
     };
-    value.map(|v| v * scale).ok_or_else(|| {
-        format!("the row prints no column '{name}' reads ({reads}): record it as a characteristic")
+    column.map(|v| v * scale).ok_or_else(|| {
+        let reads = row_column(name);
+        format!(
+            "'{name}' reads the {reads} column, else {else_}, and the row prints neither: \
+             keep the row as a characteristic, never drop it"
+        )
     })
 }
 
@@ -425,7 +423,7 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
                 && !printed_typ
                 && row.typ.is_none()
                 // A bound param (VOL max) equalling the column it reads is its meaning.
-                && !matches!((row_column(name), column), (Column::Min, "min") | (Column::Max, "max"))
+                && row_column(name) != column
             {
                 out.push(format!(
                     "param '{name}' equals the {column} of characteristic '{row_name}', which \
@@ -712,42 +710,26 @@ mod tests {
         let row = |cols: &str, unit: &str| {
             format!("[models.source]\ntier = \"datasheet-derived\"\n[[models.source.characteristic]]\nparameter = \"ROW\"\n{cols}\nunit = \"{unit}\"\nconditions = \"c\"\nbasis = \"b\"\n")
         };
-        let (leak, leak_ok) = (format!("{oc}1e-10"), format!("{oc}2e-11"));
-        for (kind, params, source, want) in [
-            (
-                "comparator",
-                &*leak,
-                row("max = 0.1", "nA"),
-                "documented in S",
-            ),
-            ("comparator", &leak_ok, row("max = 0.1", "nA"), ""),
-            ("vreg", "vout = 0.5", row("max = 0.5", "V"), "prints no typ"),
-            (
-                "vreg",
-                "dropout_v = 0.5",
-                row("min = 0.5\nmax = 0.9", "V"),
-                "no typ",
-            ),
-            (
-                "vreg",
-                "dropout_v = 0.3",
-                row("typ = 0.3\nmax = 0.5", "V"),
-                "",
-            ),
-            (
-                "vreg",
-                "dropout_v = 0.3",
-                row("min = 0.1\nmax = 0.5", "V"),
-                "",
-            ),
-            ("digital", "voh = 2.4", row("min = 2.4", "V"), ""),
-            ("diode", "rs = 1.0", row("max = 1.0", "V"), ""),
+        for case in [
+            "comparator | OC1e-10 | max = 0.1 | nA | documented in S",
+            "comparator | OC2e-11 | max = 0.1 | nA | ",
+            "vreg | vout = 0.5 | max = 0.5 | V | prints no typ",
+            "vreg | dropout_v = 0.5 | min = 0.5, max = 0.9 | V | no typ",
+            "vreg | dropout_v = 0.5 | max = 0.5 | V | ",
+            "vreg | dropout_v = 0.3 | typ = 0.3, max = 0.5 | V | ",
+            "vreg | dropout_v = 0.3 | min = 0.1, max = 0.5 | V | ",
+            "digital | voh = 2.4 | min = 2.4 | V | ",
+            "diode | rs = 1.0 | max = 1.0 | V | ",
         ] {
-            let found = source_warnings(&entry(kind, params, &source));
-            let ok = found.len() == usize::from(!want.is_empty());
+            let [kind, params, cols, unit, want] = case.split(" | ").collect::<Vec<_>>()[..] else {
+                panic!("{case}")
+            };
+            let source = row(&cols.replace(", ", "\n"), unit);
+            let found = source_warnings(&entry(kind, &params.replace("OC", oc), &source));
+            let all = found.iter().all(|w| w.contains(want));
             assert!(
-                ok && found.iter().all(|w| w.contains(want)),
-                "{params}: {found:?}"
+                all && found.len() == usize::from(!want.is_empty()),
+                "{case}: {found:?}"
             );
         }
     }
@@ -762,27 +744,21 @@ mod tests {
             "voh | min = 2.4, typ = 3, unit = \"V\" | 2.400000e0",
             "vol | typ = 0.1, unit = \"V\" | 1.000000e-1",
             "gain | typ = 1e5, unit = \"\" | 1.000000e5",
-            "vout | min = 3.2, unit = \"V\" | reads (the typ, or the min/max midpoint)",
-            "vol | min = 0.1, unit = \"V\" | reads (the max, or the typ)",
+            "vout | min = 3.2, unit = \"V\" | reads the typ column, else the min/max midpoint",
+            "vol | min = 0.1, unit = \"V\" | reads the max column, else the typ",
             "iq_a | typ = 5, unit = \"mV/\u{b0}C\" | which is read in A, by its name",
             "gain | typ = 5, unit = \"V\" | which is read in no unit",
         ] {
             let [name, cols, want] = case.splitn(3, " | ").collect::<Vec<_>>()[..] else {
                 panic!("{case}")
             };
-            let src = format!(
-                "{}\nconditions = \"c\"\nbasis = \"b\"",
-                cols.replace(", ", "\n")
-            );
+            let src = cols.replace(", ", "\n") + "\nconditions = \"c\"\nbasis = \"b\"";
             let row: Characteristic = toml::from_str(&src).expect("row parses");
             let got = row_value(name, &row).map_or_else(|e| e, |v| format!("{v:.6e}"));
             assert!(got.contains(want), "{case}: {got}");
         }
         let columns = ["vih", "i_max_a", "rail_lo", "iq_a"].map(row_column);
-        assert_eq!(
-            columns,
-            [Column::Min, Column::Max, Column::Max, Column::Nominal]
-        );
+        assert_eq!(columns, ["min", "max", "max", "typ"]);
     }
 
     #[test]

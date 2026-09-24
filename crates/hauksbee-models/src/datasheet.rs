@@ -1311,7 +1311,8 @@ fn datasheet_text_block(pdf_text: &str) -> String {
 
 const SOURCE_QUANTITY_GUIDANCE: &str = r#"SOURCE QUANTITIES:
 - Define each destination quantity and its units before matching a datasheet row to it.
-- A typical value is not a guaranteed limit. A one-sided limit is not a two-sided interval.
+- Every printed row gets a record, whether or not a key exists for it; never delete a
+  sourced record to pass the checker. A typical value is never a guaranteed limit.
 - Keep every number with its stated test conditions, supply, load, temperature, package,
   and min/typ/max column; do not transplant it to another condition.
 - Every condition variant of a row (temperature range, supply, package, bias) is its
@@ -1558,21 +1559,22 @@ IMPORTANT RULES:
    the min/max midpoint; a guaranteed level such as vol or dropout_v its limit)
    and derives the min/max interval: never pick a column, convert a unit or
    write an interval yourself. A one-sided row is never a nominal. Every other
-   printed row (another condition, a limit with no ratings key, a breakdown row,
-   which is not an absolute-maximum rating) is a characteristic record with the
-   same fields, also on an identity-only card:
+   printed row of any table (ratings, thermal, each condition), key or no key,
+   is a characteristic record with the same fields, also on an identity-only
+   card (a breakdown row is not an absolute-maximum rating):
      [[models.source.characteristic]]
      parameter = "<datasheet symbol and name>"
      max = 0.4  # only the printed columns among min, typ, max
      unit = "<printed unit>"
      conditions = "<the row's test conditions>"
      basis = "<table/row citation>, <printed columns, e.g. typ/max>"
-   Each number keeps its printed sign in its printed column, min <= typ <= max
-   by signed value (a row printed negative may keep its magnitude order); a
-   threshold printed as an offset from another spec is a signed offset,
-   ascending, with that spec named in conditions. Never invent a percentage,
-   derive a bound from a typical value, or substitute a model clamp for a
-   published guarantee. `physical-bounds-only` is the card's whole validation claim.
+   Each number keeps its printed sign and reference in its printed column (±5
+   is min = -5, max = 5; 0.7 VDD is 0.7 with unit = "VDD"; a "—" column stays
+   out), min <= typ <= max by signed value (a row printed negative may keep its
+   magnitude order); a threshold printed as an offset from another spec is a
+   signed offset, ascending, with that spec named in conditions. Never invent a
+   percentage, derive a bound from a typical value, or substitute a model clamp
+   for a published guarantee. `physical-bounds-only` is the whole validation claim.
 1. Add a comment on each param/rating line citing where in the datasheet you found
    the value, e.g.: `# Source: Table 6.3, typ column`
 2. Use only values explicitly stated in the datasheet; do NOT guess. For SPICE
@@ -3183,9 +3185,7 @@ mod tests {
         assert!(bjt.contains("BC847") && bjt.contains("is, bf, nf"));
         assert!(bjt.contains("datasheet states): br, vaf, var, nr, rb"));
         assert!(bjt.contains("VCEO") && bjt.contains("Ratings are magnitudes"));
-        assert!(
-            bjt.contains("picks the column each param reads") && bjt.contains("never a nominal")
-        );
+        assert!(bjt.contains("picks the column each param") && bjt.contains("never a nominal"));
         assert!(build_prompt("ADJ_FIXTURE", "vreg", "x").contains("adjustable (ADJ/FB pin): vref"));
         assert!(!bjt.contains("[models.behavioral.converter]"));
         assert!(build_prompt("1N4148", "diode", "x").contains("VRRM"));
@@ -3220,56 +3220,36 @@ mod tests {
     fn digital_prompt_supplies_complete_bounded_scaffolding() {
         for kind in ["digital", "shift_register"] {
             let prompt = build_prompt("LOGIC_FIXTURE", kind, "fixture text");
-            assert!(prompt.contains("vcc or vdd; gnd or vss"));
-            assert!(prompt.contains("[models.logic]"));
-            assert!(prompt.contains("inputs` and `outputs` arrays"));
-            assert!(prompt.contains("[models.logic.comb]"));
-            assert!(prompt.contains("[[models.logic.register]]"));
-            assert!(prompt.contains("one UNIQUE namespace"));
-            assert!(prompt.contains("[models.logic.tristate]"));
-            assert!(prompt.contains("Count ops must omit `data_in`"));
-            assert!(prompt.contains("supply_pin` and `gnd_pin` are STRINGS"));
-            assert!(prompt.contains("physical\npad identifiers exactly as keyed"));
-            assert!(
-                prompt.contains("currently metadata; the executable\nbinder does not read them")
-            );
-            assert!(prompt.contains("explicit NCs"));
-            assert!(prompt.contains("max_pin_current_a"));
-            assert!(prompt.contains("whole-device or supply/ground current limit"));
-            assert!(prompt.contains("hold their previous state"));
-            assert!(prompt.contains("`tpd_s` is metadata today"));
-            assert!(prompt.contains("static switching thresholds; do not substitute dynamic"));
-            assert!(prompt.contains("requested scenario needs a guaranteed transition bound"));
-            assert!(prompt.contains("VT+ maximum"));
-            assert!(prompt.contains("VT- minimum"));
+            let needles = "vcc or vdd; gnd or vss | [models.logic] | inputs` and `outputs` arrays \
+                | [models.logic.comb] | [[models.logic.register]] | one UNIQUE namespace \
+                | [models.logic.tristate] | Count ops must omit `data_in` | explicit NCs \
+                | supply_pin` and `gnd_pin` are STRINGS | physical\npad identifiers exactly as keyed \
+                | currently metadata; the executable\nbinder does not read them | max_pin_current_a \
+                | whole-device or supply/ground current limit | hold their previous state \
+                | `tpd_s` is metadata today | static switching thresholds; do not substitute dynamic \
+                | requested scenario needs a guaranteed transition bound | VT+ maximum | VT- minimum";
+            for needle in needles.split(" | ") {
+                assert!(prompt.contains(needle), "{kind}: {needle}");
+            }
             assert!(!prompt.contains("can be given\n  any descriptive name, or left out"));
         }
 
         let hint = digital_hint_for_kind("digital");
-        let example = hint
-            .split("```toml\n")
-            .nth(1)
-            .unwrap()
-            .split("```")
-            .next()
-            .unwrap();
+        let (_, rest) = hint.split_once("```toml\n").unwrap();
+        let (example, _) = rest.split_once("```").unwrap();
         let parsed: toml::Value = toml::from_str(example).unwrap();
         let logic: crate::logic_spec::Logic = parsed["models"]["logic"].clone().try_into().unwrap();
-        logic
-            .validate()
-            .expect("the supplied logic example must validate");
+        logic.validate().expect("the logic example validates");
         let ws = Workspace::scratch().unwrap();
         let sensor = verification_clause(&ws, "[sensor]");
         assert!(sensor.contains("[[sensor.source.uncertainty]]"));
         assert!(!sensor.contains("models.source") && !sensor.contains("identity-only"));
         let footer = verification_clause(&ws, "[[models]]");
-        assert!(footer.contains("Prefer the supplied authoritative schema and datasheet"));
-        assert!(footer.contains("use available diagnostic tools or a vendor source"));
-        assert!(footer.contains("record external provenance separately"));
-        assert!(
-            footer.contains("Never let an external or stale schema override the supplied contract")
-        );
-        assert!(footer.contains("abstain if the available evidence cannot resolve it"));
+        let needles = "Prefer the supplied authoritative schema and datasheet \
+            | use available diagnostic tools or a vendor source | record external provenance separately \
+            | Never let an external or stale schema override the supplied contract \
+            | abstain if the available evidence cannot resolve it";
+        assert!(needles.split(" | ").all(|n| footer.contains(n)), "{footer}");
         assert!(!footer.contains("bipolar transistor with a gain of 5"));
         assert!(!footer.contains("`notes`"));
     }
@@ -3293,15 +3273,9 @@ mod tests {
 
     #[test]
     fn fragment_replies_are_recognised() {
-        assert!(reply_is_kind_or_fragment("digital", "[[models]]"));
-        assert!(reply_is_kind_or_fragment(
-            "model = \"digital\"",
-            "[[models]]"
-        ));
-        assert!(reply_is_kind_or_fragment(
-            "answer = \"digital\"",
-            "[[models]]"
-        ));
+        for reply in ["digital", "model = \"digital\"", "answer = \"digital\""] {
+            assert!(reply_is_kind_or_fragment(reply, "[[models]]"), "{reply}");
+        }
         assert!(!reply_is_kind_or_fragment(
             FORMAT_EXAMPLES[0].card,
             "[[models]]"
