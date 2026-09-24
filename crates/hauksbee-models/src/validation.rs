@@ -1100,6 +1100,117 @@ pub fn kind_error_note(err_text: &str) -> Option<String> {
     })
 }
 
+const SOURCE_KEYS: &[&str] = &[
+    "tier",
+    "validation",
+    "references",
+    "uncertainty",
+    "characteristic",
+];
+const RECORD_KINDS: &str = " ([[...source.uncertainty]] status = \"interval\" bounds one \
+    parameter by printed min AND max as low/high; [[...source.characteristic]] keeps a \
+    printed row's min/typ/max columns as printed)";
+
+/// Every missing and unknown key of every `[models.source]` / `[sensor.source]`
+/// record, read from the raw TOML so one lint run names them all (a parse stops
+/// at the first, and an uncertainty record drops an unknown key silently, so a
+/// `typ` written there would otherwise vanish).
+pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
+    let models = root.get("models").and_then(toml::Value::as_array);
+    let sources = models.into_iter().flatten().enumerate();
+    let sources = sources
+        .filter_map(|(i, m)| Some((format!("models[{i}].source"), m.get("source")?)))
+        .chain(
+            root.get("sensor")
+                .and_then(|s| s.get("source"))
+                .map(|s| ("sensor.source".into(), s)),
+        );
+    let mut out = Vec::new();
+    for (path, table) in sources.filter_map(|(p, s)| Some((p, s.as_table()?))) {
+        for (key, value) in table {
+            if !SOURCE_KEYS.contains(&key.as_str()) {
+                out.push(format!(
+                    "{path}: unknown key '{key}'{}",
+                    key_hint(key, SOURCE_KEYS)
+                ));
+                continue;
+            }
+            let records = value.as_array().filter(|_| key != "references");
+            for (i, fields) in records.into_iter().flatten().enumerate() {
+                let Some(fields) = fields.as_table() else {
+                    continue;
+                };
+                let status = fields.get("status").and_then(toml::Value::as_str);
+                let (required, optional): (&[&str], &[&str]) = match (key.as_str(), status) {
+                    ("characteristic", _) => (
+                        &["parameter", "unit", "conditions", "basis"],
+                        &["min", "typ", "max"],
+                    ),
+                    (_, Some("interval")) => (
+                        &[
+                            "status",
+                            "parameter",
+                            "low",
+                            "high",
+                            "unit",
+                            "kind",
+                            "basis",
+                        ],
+                        &[],
+                    ),
+                    (_, Some("unknown")) => (&["status", "parameter", "reason"], &[]),
+                    _ => (
+                        &["status"],
+                        &[
+                            "parameter",
+                            "low",
+                            "high",
+                            "unit",
+                            "kind",
+                            "basis",
+                            "reason",
+                        ],
+                    ),
+                };
+                let at = format!("{path}.{key}[{i}]");
+                for missing in required.iter().filter(|k| !fields.contains_key(**k)) {
+                    out.push(format!("{at}: missing required key '{missing}'"));
+                }
+                let known: Vec<&str> = required.iter().chain(optional).copied().collect();
+                for extra in fields.keys().filter(|k| !known.contains(&k.as_str())) {
+                    out.push(format!(
+                        "{at}: unknown key '{extra}'{}",
+                        key_hint(extra, &known)
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The key an unknown one probably meant, and for a column or interval word
+/// used in the wrong record, the one-line difference between the two records.
+fn key_hint(key: &str, known: &[&str]) -> String {
+    const SWAPS: &[(&str, &str)] = &[
+        ("low", "min"),
+        ("high", "max"),
+        ("min", "low"),
+        ("max", "high"),
+    ];
+    let swap = SWAPS
+        .iter()
+        .find(|(from, to)| *from == key && known.contains(to));
+    let near = swap.map(|(_, to)| *to).or_else(|| {
+        let distance = |k: &str| hauksbee_ir::levenshtein(key, k);
+        let near = known.iter().copied().filter(|k| distance(k) <= 2);
+        near.min_by_key(|k| distance(k))
+    });
+    let near = near.map_or(String::new(), |k| format!("; did you mean '{k}'?"));
+    let explain = ["interval", "typ"].contains(&key);
+    format!("{near}{}", if explain { RECORD_KINDS } else { "" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1492,6 +1603,33 @@ high_offset = 1.3333333333333333
         let mut e = programmed_vreg();
         f(e.current_program.as_mut().unwrap());
         e
+    }
+
+    #[test]
+    fn source_shape_names_every_missing_and_misplaced_key() {
+        let card = |source: &str| -> toml::Value {
+            toml::from_str(&format!(
+                "[[models]]\nid = \"x\"\n[models.source]\ntier = \"datasheet-derived\"\n{source}"
+            ))
+            .unwrap()
+        };
+        let row =
+            "parameter = \"VF\"\nunit = \"V\"\nconditions = \"IF = 1 mA\"\nbasis = \"Table 1\"";
+        let good = format!("[[models.source.characteristic]]\n{row}\nmax = 0.4\n[[models.source.uncertainty]]\nstatus = \"unknown\"\nparameter = \"model\"\nreason = \"none\"");
+        assert_eq!(source_shape_findings(&card(&good)), Vec::<String>::new());
+        let bad = "[[models.source.characteristic]]\nparameter = \"VF\"\nlow = 0.3\n\
+                   [[models.source.uncertainty]]\nstatus = \"interval\"\nparameter = \"is\"\nlow = 1.0\nhigh = 2.0\ntyp = 1.5\nunit = \"A\"\nkind = \"specification-limits\"\nbasis = \"b\"\n\
+                   [[models.source.interval]]\nparameter = \"vdd\"";
+        let found = source_shape_findings(&card(bad)).join("\n");
+        for needle in [
+            "characteristic[0]: missing required key 'unit'",
+            "characteristic[0]: missing required key 'basis'",
+            "characteristic[0]: unknown key 'low'; did you mean 'min'?",
+            "uncertainty[0]: unknown key 'typ' ([[...source.uncertainty]]",
+            "models[0].source: unknown key 'interval' (",
+        ] {
+            assert!(found.contains(needle), "{needle}\n{found}");
+        }
     }
 
     #[test]
