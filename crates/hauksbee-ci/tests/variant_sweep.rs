@@ -1,7 +1,6 @@
-//! A part whose name does not pin one orderable variant is never simulated as
-//! whichever sibling sorts first: CI sweeps a same-pinout set and passes only
-//! if every member passes, and refuses a different-pinout set until the spec
-//! selects one.
+//! A part whose name pins no one orderable variant is never simulated as whichever
+//! sibling sorts first: CI sweeps a same-pinout set and passes only if every member
+//! passes, and refuses a different-pinout set until the spec selects one.
 
 use crate::support;
 
@@ -28,7 +27,7 @@ fn an_undetermined_variant_set_is_swept_or_refused_never_guessed() {
     let r1 = pad(1, "VOUT") + &pad(2, "GND");
     let r1 = comp("R1", "Resistor_SMD:R_0805_2012Metric", "1k", 20, r1);
     let board = format!("board version 1\nfn main {{\n{u3}{r1}}}\n");
-    let board = support::write_tmp("xyz.board", &board);
+    let board = support::toml_path(&support::write_tmp("xyz.board", &board));
     let same = "\"1\" = \"in\"\n\"2\" = \"gnd\"\n\"3\" = \"out\"";
     let other = "\"1\" = \"out\"\n\"2\" = \"gnd\"\n\"3\" = \"in\"";
     let select = "[[override]]\nref = \"U3\"\nselect = \"xyz1234A\"\n";
@@ -42,16 +41,12 @@ fn an_undetermined_variant_set_is_swept_or_refused_never_guessed() {
     ];
     for (case, b_pins, max, extra, passed, invalid, seeds, detail) in rows {
         let models = support::write_tmp("xyz.toml", &card(b_pins));
-        let spec = support::write_tmp(
-            "spec.toml",
-            &format!(
-                "name = \"xyz\"\nboard = {}\nduration_ms = 3\n{extra}\
-                 [[supply]]\nnet = \"VIN\"\nkind = \"bench\"\nvolts = 9.0\ncurrent_limit_a = 1.0\n\
-                 [[assert]]\nkind = \"voltage\"\nname = \"vout\"\nnet = \"VOUT\"\nmin = 3.2\nmax = {max}\nafter_ms = 2\n",
-                support::toml_path(&board)
-            ),
+        let spec = format!(
+            "name = \"xyz\"\nboard = {board}\nduration_ms = 3\n{extra}\
+             [[supply]]\nnet = \"VIN\"\nkind = \"bench\"\nvolts = 9.0\ncurrent_limit_a = 1.0\n\
+             [[assert]]\nkind = \"voltage\"\nname = \"vout\"\nnet = \"VOUT\"\nmin = 3.2\nmax = {max}\nafter_ms = 2\n"
         );
-        let mut config = support::run_config(spec);
+        let mut config = support::run_config(support::write_tmp("spec.toml", &spec));
         config.models_dir = models.parent().map(Into::into);
         let r = hauksbee_ci::run(&config).expect(case);
         let row = support::row(&r, "vout");
@@ -59,10 +54,8 @@ fn an_undetermined_variant_set_is_swept_or_refused_never_guessed() {
         assert_eq!(got, (passed, invalid, seeds), "{case}: {row:?}");
         let unlock = "Unlocked by: Add `[[override]] ref=\"U3\" select=\"xyz1234A\"` to the spec";
         let text = &row.detail;
-        assert!(
-            text.contains(detail) && (!invalid || text.contains(unlock)),
-            "{case}: {text}"
-        );
+        let said = text.contains(detail) && (!invalid || text.contains(unlock));
+        assert!(said, "{case}: {text}");
         let chosen = r.render_json().contains("xyz1234A, selected in the spec");
         assert!(extra.is_empty() || chosen, "{case}: provenance row");
     }

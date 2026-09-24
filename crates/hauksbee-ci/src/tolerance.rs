@@ -177,10 +177,9 @@ pub struct SeedPlan {
     pub variants: Vec<(String, String)>,
 }
 
-/// Cross every plan with every combination of the undetermined same-pinout
-/// variant sets `(reference, member ids)`, so the ensemble passes only if every
-/// member does. `None` above 2^[`CORNER_CAP`] runs: the part then keeps its
-/// flagged stand-in.
+/// Cross every plan with every combination of the undetermined same-pinout variant
+/// sets `(reference, member ids)`, so the ensemble passes only if every member does.
+/// `None` above 2^[`CORNER_CAP`] runs: the part then keeps its flagged stand-in.
 pub fn with_variants(
     mut runs: Vec<SeedPlan>,
     axes: &[(String, Vec<String>)],
@@ -191,10 +190,8 @@ pub fn with_variants(
             plan.variants.push((reference.clone(), id.clone()));
             plan
         };
-        runs = runs
-            .iter()
-            .flat_map(|p| ids.iter().map(|id| member(p, id)))
-            .collect();
+        let cross = |p: &SeedPlan| ids.iter().map(|id| member(p, id)).collect::<Vec<_>>();
+        runs = runs.iter().flat_map(cross).collect();
         if runs.len() > 1 << CORNER_CAP {
             return None;
         }
@@ -808,10 +805,8 @@ mod tests {
         let swept = with_variants(plans.clone(), &axes).unwrap();
         let runs: BTreeSet<_> = swept.iter().map(|p| (p.seed, &p.variants)).collect();
         assert_eq!((swept.len(), runs.len()), (12, 12), "{runs:?}");
-        assert_eq!(
-            format!("{:?}", swept[4].variants),
-            r#"[("U3", "b"), ("U4", "y")]"#
-        );
+        let fifth = format!("{:?}", swept[4].variants);
+        assert_eq!(fifth, r#"[("U3", "b"), ("U4", "y")]"#);
         let wide = [("U3".to_string(), (0..1025).map(|i| i.to_string()).collect())];
         assert!(with_variants(plans, &wide).is_none());
     }

@@ -148,24 +148,20 @@ pub fn select(family: &str, siblings: &[&ModelEntry], q: &ComponentQuery) -> Sel
         (None, None) => (None, Via::Board, ""),
     };
     let patterns: Vec<Option<Regex>> = siblings.iter().map(|e| orderable_re(e)).collect();
-    let hits = |text: &str| -> Vec<usize> {
-        let hit = |i: &usize| patterns[*i].as_ref().is_some_and(|re| re.is_match(text));
-        (0..siblings.len()).filter(hit).collect()
-    };
+    let hit = |i: usize, text: &str| patterns[i].as_ref().is_some_and(|re| re.is_match(text));
     // The first identity text (MPN, value, then properties) some member's code matches.
     let own = |(k, _): &&(String, String)| k != SELECT_PROPERTY && k != SWEEP_PROPERTY;
     let props = q.properties.iter().filter(own).map(|(_, v)| v.as_str());
     let texts = [q.mpn.as_deref(), q.value.as_deref()];
     let mut texts = texts.into_iter().flatten().chain(props).map(str::trim);
-    let identity = texts.find_map(|text| Some((text, hits(text))).filter(|(_, h)| !h.is_empty()));
+    let identity = texts.find(|text| (0..siblings.len()).any(|i| hit(i, text)));
     let footprint = q.footprint.as_deref().and_then(|f| f.rsplit(':').next());
     let missing = |pad: &&String| !q.pads.is_empty() && !q.pads.contains(pad);
     let score = |(i, e): (usize, &&ModelEntry)| {
         let v = e.variant.clone().unwrap_or_default();
         let mut facts: Vec<(bool, String)> = Vec::new();
         facts.extend(picked.map(|id| (id == e.id, format!("{who} selects {id}"))));
-        let code = |(text, hits): &(&str, Vec<usize>)| (hits.contains(&i), format!("code {text}"));
-        facts.extend(identity.as_ref().map(code));
+        facts.extend(identity.map(|text| (hit(i, text), format!("code {text}"))));
         let package = v.package.as_deref().zip(footprint);
         let package = package.and_then(|(p, f)| Some((p, package_family(p)?, package_family(f)?)));
         let fits = |(p, want, got)| (want == got, format!("package {p}, {got} footprint"));
@@ -203,10 +199,7 @@ pub fn select(family: &str, siblings: &[&ModelEntry], q: &ComponentQuery) -> Sel
     }
 }
 
-/// Variant-set findings over the entries of one file: a family is two or more
-/// entries sharing `variant_of` and the family match, each with a
-/// `[models.variant]`, and every orderable code matches its own `orderable_re`
-/// and the family match and no sibling's.
+/// Variant-set findings over the entries of one file; the rules are the messages below.
 pub fn lint(entries: &[ModelEntry]) -> Vec<String> {
     let mut out = Vec::new();
     let mut families = std::collections::BTreeMap::<&str, Vec<&ModelEntry>>::new();
@@ -235,10 +228,8 @@ pub fn lint(entries: &[ModelEntry]) -> Vec<String> {
                 let others = (0..siblings.len()).filter(|&j| j != i && hit(&patterns[j]));
                 let others: Vec<&str> = others.map(|j| siblings[j].id.as_str()).collect();
                 if !hit(&patterns[i]) || !hit(&family_re) || !others.is_empty() {
-                    let (id, others) = (&e.id, others.join(", "));
-                    out.push(format!(
-                        "model '{id}': orderable code {code} {OWN} {others})"
-                    ));
+                    let (id, also) = (&e.id, others.join(", "));
+                    out.push(format!("model '{id}': orderable code {code} {OWN} {also})"));
                 }
             }
         }
@@ -298,13 +289,11 @@ mod tests {
             ("select contradicts the mpn", SAME, "XYZ1234", Some("XYZ1234ADBV"), None, Some("xyz1234b"), &pads, None, false, Via::Spec, "fits none of the 2"),
             ("package contradicts the mpn", SAME, "XYZ1234", Some("XYZ1234BDBV"), sot, None, &pads, None, false, Via::Board, "fits none of the 2"),
         ];
-        for (case, b_pins, value, mpn, footprint, select, pads, bound, determined, via, text) in
-            cases
-        {
+        for (case, b_pins, value, mpn, fp, select, pads, bound, determined, via, text) in cases {
             let lib = load(&family(b_pins, "SOIC-8")).unwrap();
             let owned = |t: Option<&str>| t.map(String::from);
             let mut q = ComponentQuery::default();
-            (q.value, q.mpn, q.footprint) = (owned(Some(value)), owned(mpn), owned(footprint));
+            (q.value, q.mpn, q.footprint) = (owned(Some(value)), owned(mpn), owned(fp));
             q.pads.clone_from(pads);
             q.properties
                 .extend(select.map(|id| (SELECT_PROPERTY.into(), id.into())));

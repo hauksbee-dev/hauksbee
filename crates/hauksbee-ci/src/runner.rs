@@ -1393,10 +1393,8 @@ fn apply_plan(board: &mut ExtractedBoard, plan: &SeedPlan) {
     }
 }
 
-/// Cross the plans with every member of each fitted part's undetermined
-/// same-pinout variant set, when that stays within the corner cap; otherwise
-/// (or with nothing to sweep) the plans stand and such parts bind a flagged
-/// stand-in.
+/// Cross the plans with each fitted part's undetermined same-pinout variant set
+/// ([`crate::tolerance::with_variants`]); past the cap the plans stand.
 fn sweep_variants(
     spec: &Spec,
     base: &ExtractedBoard,
