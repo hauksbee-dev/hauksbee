@@ -6,8 +6,6 @@
 //! ground planes is the electrical decision itself, and fitting it would merge
 //! nets the designer split on purpose. Both halves are reported, never assumed.
 
-mod common;
-
 use hauksbee_engine::binder::{bind_board, no_processor_message, FitRemedy};
 use hauksbee_extract::dnp::{DnpPolicy, DnpReason};
 use hauksbee_extract::ExtractedBoard;

@@ -1237,27 +1237,25 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         ));
     }
 
-    if let Some(route) = route_mcu_family(comp) {
-        if let McuFamilyRoute::Backend { family, backend } = route {
-            let mut params = hauksbee_models::Params::default();
-            params.set_str("backend", backend);
-            params.set_str("auto_bind", "family_router");
-            params.set_str("auto_bind_family", family);
-            let derived = derive_mcu_pin_roles(comp);
-            params.set_int("auto_bind_pin_names", derived.named_pin_count as i64);
-            params.set_int("auto_bind_derived_pins", derived.roles.len() as i64);
-            params.set_str("auto_bind_pin_summary", pin_role_summary(&derived.roles));
-            return Some(make_entry(
-                &format!(
-                    "{}_family_router",
-                    family.to_ascii_lowercase().replace('-', "_")
-                ),
-                ComponentKind::Mcu,
-                &format!("{family} MCU (engine family-router fallback)"),
-                params,
-                derived.roles,
-            ));
-        }
+    if let Some(McuFamilyRoute::Backend { family, backend }) = route_mcu_family(comp) {
+        let mut params = hauksbee_models::Params::default();
+        params.set_str("backend", backend);
+        params.set_str("auto_bind", "family_router");
+        params.set_str("auto_bind_family", family);
+        let derived = derive_mcu_pin_roles(comp);
+        params.set_int("auto_bind_pin_names", derived.named_pin_count as i64);
+        params.set_int("auto_bind_derived_pins", derived.roles.len() as i64);
+        params.set_str("auto_bind_pin_summary", pin_role_summary(&derived.roles));
+        return Some(make_entry(
+            &format!(
+                "{}_family_router",
+                family.to_ascii_lowercase().replace('-', "_")
+            ),
+            ComponentKind::Mcu,
+            &format!("{family} MCU (engine family-router fallback)"),
+            params,
+            derived.roles,
+        ));
     }
 
     // Connector-class references: not simulatable parts; classify so they
@@ -3254,7 +3252,7 @@ fn bind_bjt(
                 c,
                 b,
                 e,
-                model: m.clone(),
+                model: m,
             });
             stamped += 1;
         }

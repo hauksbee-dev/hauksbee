@@ -104,7 +104,7 @@ pub fn bjt(
         c: col,
         b: base,
         e: emit,
-        model: model.clone(),
+        model: *model,
     })
 }
 

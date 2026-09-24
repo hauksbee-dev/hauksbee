@@ -7,7 +7,7 @@
 //! round-trip preserves the bind: decompiling a board to `.board` and binding
 //! the recompiled result reproduces the original board's stamped devices.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeSet;
 

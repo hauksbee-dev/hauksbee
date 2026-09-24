@@ -237,7 +237,7 @@ pub struct NetWindow {
 }
 
 impl NetWindow {
-    fn new() -> Self {
+    fn empty() -> Self {
         NetWindow {
             min_v: f64::INFINITY,
             max_v: f64::NEG_INFINITY,
@@ -2051,7 +2051,7 @@ fn run_one(
                 for (name, &v) in &frame.net_voltages {
                     let w = windows
                         .entry((name.clone(), thr.to_bits()))
-                        .or_insert_with(NetWindow::new);
+                        .or_insert_with(NetWindow::empty);
                     w.observe(v);
                     extremes(name).for_each(|x| w.fold(x));
                 }
@@ -3755,7 +3755,7 @@ fn main {
 
     #[test]
     fn net_window_last_v_is_the_settled_value_not_the_peak() {
-        let mut w = NetWindow::new();
+        let mut w = NetWindow::empty();
         w.observe(3.30);
         w.fold(0.0);
         w.fold(5.0);

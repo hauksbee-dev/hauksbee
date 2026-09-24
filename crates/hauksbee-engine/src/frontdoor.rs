@@ -3241,8 +3241,10 @@ fn main {
 
     #[test]
     fn from_plain_carries_heads_up_and_serializes() {
-        let mut p = PlainReport::default();
-        p.subject = "signal-integrity".to_string();
+        let mut p = PlainReport {
+            subject: "signal-integrity".to_string(),
+            ..PlainReport::default()
+        };
         p.heads_up.push(HeadsUp::glossed(
             "USB trace impedance is 171 ohm, +71% from target (90 ohm).",
             "reflections can make the link marginal",

@@ -159,7 +159,7 @@ fn no_branch(d: &str) -> SolveError {
 /// A `.temp` card sets the analysis temperature unless the caller already moved
 /// `temperature_c` off the 27 C default (an explicit control outranks the deck).
 fn opts_with_deck_temp(circuit: &Circuit, opts: &SolverOptions) -> SolverOptions {
-    let mut o = opts.clone();
+    let mut o = *opts;
     if o.temperature_c == 27.0 && circuit.temp_c != 27.0 {
         o.temperature_c = circuit.temp_c;
     }

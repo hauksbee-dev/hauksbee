@@ -221,6 +221,13 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// True if a Monitor response reports a Renode-side failure. See
+/// [`Monitor::run`] for why prose is the only signal available.
+pub fn response_failed(resp: &str) -> bool {
+    let lower = resp.to_lowercase();
+    lower.contains("error") || lower.contains("exception") || lower.contains("failed")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,11 +273,4 @@ mod tests {
         let cleaned = clean_response("start", raw);
         assert_eq!(cleaned, "Starting emulation...");
     }
-}
-
-/// True if a Monitor response reports a Renode-side failure. See
-/// [`Monitor::run`] for why prose is the only signal available.
-pub fn response_failed(resp: &str) -> bool {
-    let lower = resp.to_lowercase();
-    lower.contains("error") || lower.contains("exception") || lower.contains("failed")
 }

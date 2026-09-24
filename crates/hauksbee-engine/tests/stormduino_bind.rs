@@ -5,7 +5,7 @@
 //! resolves and binds with a fully-connected /D13 net, we run the demo
 //! firmware and assert the D13/SCK net toggles.
 
-mod common;
+use crate::common;
 
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::HauksbeeEngine;

@@ -71,6 +71,7 @@ mod cli_sim_help_honesty;
 mod cli_strict_plain;
 #[path = "cli_watch.rs"]
 mod cli_watch;
+mod common;
 #[path = "contention_lint_corpus.rs"]
 mod contention_lint_corpus;
 #[path = "cosim_failed_chunk.rs"]

@@ -159,9 +159,10 @@ fn whatif_short_rail_to_ground_overdrives_series_resistor() {
 )
 "#;
     let mut engine = HauksbeeEngine::from_board_file(board, None, "/b.kicad_pcb").expect("engine");
-    let mut controls = SolverControls::default();
-    controls.destructive_faults = false;
-    engine.set_controls(controls);
+    engine.set_controls(SolverControls {
+        destructive_faults: false,
+        ..SolverControls::default()
+    });
 
     // Warm up healthy: no fault.
     for _ in 0..10 {

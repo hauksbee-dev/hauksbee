@@ -281,12 +281,14 @@ fn numeric_simulation_assertions_carry_budget_and_semantic_substitution_only() {
                 modelled_core: "stand-in-core".into(),
             }])
             .unwrap();
-    let mut options = SolverOptions::default();
-    options.integration = Integration::Gear2;
-    options.reltol = 2e-4;
-    options.vntol = 7e-7;
-    options.abstol = 3e-13;
-    options.chgtol = 9e-15;
+    let options = SolverOptions {
+        integration: Integration::Gear2,
+        reltol: 2e-4,
+        vntol: 7e-7,
+        abstol: 3e-13,
+        chgtol: 9e-15,
+        ..SolverOptions::default()
+    };
     let budget = BoardEvidence::transient_error_budget(
         &options,
         0.0,

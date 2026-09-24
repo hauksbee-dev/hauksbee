@@ -7,8 +7,6 @@
 //! (datasheet-grounded params), the same way it falls back to generic R/C/L
 //! for unresolved passives.
 
-mod common;
-
 use hauksbee_engine::binder::bind_board;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::Device;

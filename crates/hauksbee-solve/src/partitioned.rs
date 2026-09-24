@@ -1045,9 +1045,7 @@ impl PartitionedTransient {
 
     /// Gather the exchange buffer into a global unknown vector (node block).
     fn gather_into(&self, x: &mut [f64]) {
-        for ni in 1..=self.n_nodes {
-            x[ni - 1] = self.vbuf[ni];
-        }
+        x[..self.n_nodes].copy_from_slice(&self.vbuf[1..=self.n_nodes]);
     }
 }
 

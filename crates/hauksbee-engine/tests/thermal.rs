@@ -477,9 +477,10 @@ fn healthy_board_no_overtemp() {
     .to_string();
     let mut engine =
         HauksbeeEngine::from_board_file(&text, None, "/boards/thermal.kicad_pcb").expect("engine");
-    let mut controls = SolverControls::default();
-    controls.destructive_faults = false;
-    engine.set_controls(controls);
+    engine.set_controls(SolverControls {
+        destructive_faults: false,
+        ..SolverControls::default()
+    });
     engine.scheduler_mut().set_ambient_c(25.0);
 
     let mut overtemp = 0usize;

@@ -5,7 +5,7 @@
 //! capacitor reverse bias, and a healthy-board no-false-positive check.
 
 #[cfg(feature = "avr")]
-mod common;
+use crate::common;
 #[cfg(feature = "avr")]
 use common::{demo_firmware, SYNTH_BOARD};
 
@@ -50,9 +50,10 @@ fn led_board(series_ohms: &str) -> String {
 fn engine_for(text: &str, destructive: bool) -> HauksbeeEngine {
     let mut engine =
         HauksbeeEngine::from_board_file(text, None, "/boards/fault.kicad_pcb").expect("engine");
-    let mut controls = SolverControls::default();
-    controls.destructive_faults = destructive;
-    engine.set_controls(controls);
+    engine.set_controls(SolverControls {
+        destructive_faults: destructive,
+        ..SolverControls::default()
+    });
     engine
 }
 
@@ -180,9 +181,11 @@ fn polarized_cap_reverse_bias_faults() {
     // Hold CAP_NEG at +2 V, CAP_POS at ground → reverse bias of 2 V.
     let cap = circuit.add(capacitor("C1".into(), pos, neg, 1e-6));
 
-    let mut ratings = Ratings::default();
-    ratings.polarized = true;
-    ratings.max_voltage_v = Some(16.0);
+    let ratings = Ratings {
+        polarized: true,
+        max_voltage_v: Some(16.0),
+        ..Ratings::default()
+    };
     let meta = DeviceMeta {
         reference: "C1".into(),
         device: cap,
@@ -244,8 +247,10 @@ fn overloaded_nmos_overcurrent_faults() {
         },
     });
 
-    let mut ratings = Ratings::default();
-    ratings.max_current_a = Some(1.0);
+    let ratings = Ratings {
+        max_current_a: Some(1.0),
+        ..Ratings::default()
+    };
     let meta = DeviceMeta {
         reference: "Q1".into(),
         device: fet,
@@ -318,9 +323,10 @@ fn healthy_board_raises_no_faults() {
     let mut engine =
         HauksbeeEngine::from_board_file(SYNTH_BOARD, Some(&demo_firmware()), "/b.kicad_pcb")
             .expect("engine");
-    let mut controls = SolverControls::default();
-    controls.destructive_faults = false;
-    engine.set_controls(controls);
+    engine.set_controls(SolverControls {
+        destructive_faults: false,
+        ..SolverControls::default()
+    });
 
     let mut total_faults = 0usize;
     let mut max_stress = 0.0f64;

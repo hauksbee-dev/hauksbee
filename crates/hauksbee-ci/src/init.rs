@@ -586,6 +586,22 @@ fn render_spec_at_with_run_hint(
     Ok(s)
 }
 
+/// Round to one decimal place.
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
+/// Format a voltage with one decimal place ("5.0", "3.3"), so TOML always reads
+/// as a float rather than an int the user might mistake for a count.
+fn fmt1(v: f64) -> String {
+    format!("{v:.1}")
+}
+
+/// Format a voltage bound with two decimals ("4.75", "5.25").
+fn fmt2(v: f64) -> String {
+    format!("{v:.2}")
+}
+
 #[cfg(test)]
 mod relative_path_tests {
     use super::{relative_path, toml_path};
@@ -622,20 +638,4 @@ mod relative_path_tests {
             Some(r"..\hardware\blinky.kicad_pcb")
         );
     }
-}
-
-/// Round to one decimal place.
-fn round1(v: f64) -> f64 {
-    (v * 10.0).round() / 10.0
-}
-
-/// Format a voltage with one decimal place ("5.0", "3.3"), so TOML always reads
-/// as a float rather than an int the user might mistake for a count.
-fn fmt1(v: f64) -> String {
-    format!("{v:.1}")
-}
-
-/// Format a voltage bound with two decimals ("4.75", "5.25").
-fn fmt2(v: f64) -> String {
-    format!("{v:.2}")
 }

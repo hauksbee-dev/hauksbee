@@ -3241,7 +3241,7 @@ mod tests {
             rc: 10.0,
             ..BjtModel::default()
         };
-        let (layout_on, m_on, _, _) = run(model.clone(), true);
+        let (layout_on, m_on, _, _) = run(model, true);
         let (_, m_off, _, _) = run(model, false);
         assert_eq!(layout_on.n_nodes, 2 + 3);
         assert_eq!(
@@ -3322,11 +3322,8 @@ mod tests {
             vaf: 100.0,
             ..BjtModel::default()
         };
-        let m_fin = BjtModel {
-            var: 15.0,
-            ..m_inf.clone()
-        };
-        let (fb_inf, fc_inf) = bjt_residual(m_inf.clone(), vb, vc, vb);
+        let m_fin = BjtModel { var: 15.0, ..m_inf };
+        let (fb_inf, fc_inf) = bjt_residual(m_inf, vb, vc, vb);
         let (fb_fin, fc_fin) = bjt_residual(m_fin, vb, vc, vb);
         assert_eq!(fb_inf.to_bits(), fb_fin.to_bits());
         let (vbe, vbc) = (vb, vb - vc);
@@ -3358,7 +3355,7 @@ mod tests {
         assert!(vcrit_f < 1.0 && 1.0 < vcrit_r);
         assert_eq!(pnjlim(1.0, 0.9, m.nr * vt, vcrit_r), 1.0);
         assert_ne!(pnjlim(1.0, 0.9, m.nr * vt, vcrit_f), 1.0);
-        let (fb, _) = bjt_residual(m.clone(), 1.0, 0.0, 0.9);
+        let (fb, _) = bjt_residual(m, 1.0, 0.0, 0.9);
         let (nvf, nvr) = (m.nf * vt, m.nr * vt);
         let vbe_lim = pnjlim(1.0, 0.9, nvf, vcrit_f);
         let ef = (vbe_lim / nvf).clamp(-40.0, 40.0).exp();

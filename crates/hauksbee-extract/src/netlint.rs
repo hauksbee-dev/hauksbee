@@ -602,12 +602,9 @@ fn footprint_family(footprint: &str) -> Option<char> {
 
 fn package_code(footprint: &str) -> Option<&'static str> {
     let fp = footprint.to_ascii_lowercase();
-    for code in ["0201", "0402", "0603", "0805", "1206", "1210"] {
-        if fp.contains(code) {
-            return Some(code);
-        }
-    }
-    None
+    ["0201", "0402", "0603", "0805", "1206", "1210"]
+        .into_iter()
+        .find(|code| fp.contains(code))
 }
 
 fn parse_capacitance_uf(value: &str) -> Option<f64> {

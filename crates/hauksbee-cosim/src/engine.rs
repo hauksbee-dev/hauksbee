@@ -732,15 +732,16 @@ pub fn controls_to_options(c: &SolverControls) -> SolverOptions {
 
     // Start from defaults so new solver knobs (partitioning, ...) keep their
     // sensible values, then override what the UI controls.
-    let mut opts = SolverOptions::default();
-    opts.integration = integration;
-    opts.step = step;
-    opts.reltol = 1e-3 * scale;
-    opts.vntol = 1e-6 * scale;
-    opts.abstol = 1e-12 * scale;
-    opts.chgtol = 1e-14 * scale;
-    opts.temperature_c = c.temperature_c;
-    opts.effects = effects;
-    opts.granularity = g;
-    opts
+    SolverOptions {
+        integration,
+        step,
+        reltol: 1e-3 * scale,
+        vntol: 1e-6 * scale,
+        abstol: 1e-12 * scale,
+        chgtol: 1e-14 * scale,
+        temperature_c: c.temperature_c,
+        effects,
+        granularity: g,
+        ..SolverOptions::default()
+    }
 }

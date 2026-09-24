@@ -60,23 +60,12 @@ rust-version = "1.92"
 # lints once rewrote the solver into silently returning a collapsed rail, so
 # they get fixed by hand, with the tests watched.
 [workspace.lints.clippy]
-assertions_on_constants = "allow"
-assign_op_pattern = "allow"
-clone_on_copy = "allow"
-collapsible_match = "allow"
-duplicate_mod = "allow"
-field_reassign_with_default = "allow"
-items_after_test_module = "allow"
 large_enum_variant = "allow"
 manual_clamp = "allow"
-manual_find = "allow"
-manual_memcpy = "allow"
 needless_range_loop = "allow"
 neg_cmp_op_on_partial_ord = "allow"
-question_mark = "allow"
 should_implement_trait = "allow"
 type_complexity = "allow"
-unwrap_or_default = "allow"
 vec_init_then_push = "allow"
 
 [workspace.dependencies]

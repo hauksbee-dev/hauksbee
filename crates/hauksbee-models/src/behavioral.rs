@@ -793,19 +793,21 @@ mod tests {
 
     #[test]
     fn series_path_and_continuous_guard_dwell_validate_fail_closed() {
-        let mut b = Behavioral::default();
-        b.fsm = Some(Fsm {
-            states: vec!["closed".into(), "tripped".into()],
-            initial: Some("closed".into()),
-            transitions: vec![Transition {
-                from: "closed".into(),
-                to: "tripped".into(),
-                guard: "i_fuse * i_fuse >= 64.0".into(),
-                min_dwell_s: None,
-                guard_dwell_s: Some(1.5),
-            }],
-            state_pins: BTreeMap::new(),
-        });
+        let mut b = Behavioral {
+            fsm: Some(Fsm {
+                states: vec!["closed".into(), "tripped".into()],
+                initial: Some("closed".into()),
+                transitions: vec![Transition {
+                    from: "closed".into(),
+                    to: "tripped".into(),
+                    guard: "i_fuse * i_fuse >= 64.0".into(),
+                    min_dwell_s: None,
+                    guard_dwell_s: Some(1.5),
+                }],
+                state_pins: BTreeMap::new(),
+            }),
+            ..Behavioral::default()
+        };
         b.series_paths.push(SeriesPath {
             name: "fuse".into(),
             a: "a".into(),

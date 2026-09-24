@@ -552,30 +552,6 @@ fn backend_probes() -> Vec<Value> {
     out
 }
 
-#[cfg(test)]
-mod coverage_contract_tests {
-    use super::*;
-
-    #[test]
-    fn analyze_board_description_names_every_timing_qualification() {
-        let tools = definitions();
-        let description = tools
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|tool| tool["name"] == "analyze_board")
-            .unwrap()["description"]
-            .as_str()
-            .unwrap();
-        for field in ["timing_coverage", "timing_refusals", "fallback_windows"] {
-            assert!(
-                description.contains(field),
-                "missing {field}: {description}"
-            );
-        }
-    }
-}
-
 /// `board_to_code`: the editable Board-as-Code text form, via the engine's
 /// decompiler. Text formats only; a binary board has no text to decompile and
 /// gets a plain error saying so instead of a mangled lossy rendering.
@@ -615,5 +591,29 @@ fn run_script(args: &Value) -> ToolResult {
             value,
             is_error: true,
         },
+    }
+}
+
+#[cfg(test)]
+mod coverage_contract_tests {
+    use super::*;
+
+    #[test]
+    fn analyze_board_description_names_every_timing_qualification() {
+        let tools = definitions();
+        let description = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "analyze_board")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap();
+        for field in ["timing_coverage", "timing_refusals", "fallback_windows"] {
+            assert!(
+                description.contains(field),
+                "missing {field}: {description}"
+            );
+        }
     }
 }

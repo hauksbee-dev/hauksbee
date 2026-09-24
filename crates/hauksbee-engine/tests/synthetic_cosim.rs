@@ -7,7 +7,7 @@
 //!   - ADC in + UART: the firmware's 'v' command reports the RC divider
 //!     voltage (2.5 V) within 10%.
 
-mod common;
+use crate::common;
 
 use hauksbee_engine::binder::bind_board;
 #[cfg(feature = "avr")]

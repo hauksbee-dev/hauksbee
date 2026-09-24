@@ -1588,11 +1588,11 @@ mod tests {
         // I2C cell: request data ends exactly at the response seq; response
         // data ends before the SPI cell.
         assert_eq!(I2C_REQ_DATA + BUS_DATA_MAX, I2C_RSP_SEQ);
-        assert!(I2C_RSP_DATA + BUS_DATA_MAX <= SPI_REQ_SEQ);
+        const { assert!(I2C_RSP_DATA + BUS_DATA_MAX <= SPI_REQ_SEQ) };
         // SPI cell: request data ends exactly at the response seq; the whole
         // mailbox stays comfortably inside the 8 KiB RTC slow memory.
         assert_eq!(SPI_REQ_DATA + BUS_DATA_MAX, SPI_RSP_SEQ);
-        assert!(SPI_RSP_DATA + BUS_DATA_MAX <= BASE + 0x2000);
+        const { assert!(SPI_RSP_DATA + BUS_DATA_MAX <= BASE + 0x2000) };
     }
 
     // ── run_window: the boot-only floor/cap (R8 #5) ──────────────────────────

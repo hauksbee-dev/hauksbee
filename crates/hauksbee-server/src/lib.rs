@@ -681,6 +681,388 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
     }
 }
 
+/// The engine's BoardInfo with the session's wire name applied (see the
+/// fallback rationale in [`LiveHub::launch`]).
+fn named_board_info(engine: &dyn Engine, wire_name: &str) -> BoardInfo {
+    let mut info = engine.board_info();
+    if info.name.trim().is_empty() {
+        info.name = wire_name.to_string();
+    }
+    info
+}
+
+/// A server message as the one JSON line the socket carries. The protocol
+/// types are plain data, so serialization cannot fail.
+fn wire_json(msg: &ServerMessage) -> String {
+    serde_json::to_string(msg).expect("protocol messages serialize")
+}
+
+/// One engine step, run on the blocking pool.
+///
+/// `Engine::step` is CPU-bound solver work of UNBOUNDED duration: a board
+/// whose analog solve is struggling grinds the retry ladder for minutes per
+/// step. Run inline on a runtime worker, such a step doesn't just occupy one
+/// worker: the worker that currently holds tokio's I/O + timer driver never
+/// parks, so no thread polls the reactor and the WHOLE server stops answering
+/// (measured on the lily58 corpus board: every page load and websocket timed
+/// out while 7 of 8 workers sat idle). The blocking pool is where this work
+/// belongs; it also puts an await point under the step, so a session
+/// replacement's `task.abort()` ENDS THE SESSION mid-step (sockets close, the
+/// new session takes over) instead of waiting the step out. The orphaned
+/// blocking task itself cannot be interrupted: it runs its current step to
+/// completion in the background and drops the engine when it returns, so a
+/// replaced diverging solve costs at most one in-flight step of background
+/// CPU, exactly the bound the old inline form had, without its wedge.
+///
+/// Returns `None` when the step panicked (the engine is gone); the caller
+/// must end the session honestly.
+async fn step_on_blocking_pool(
+    engine: Box<dyn Engine>,
+    dt: f64,
+) -> Option<(Box<dyn Engine>, SimFrame)> {
+    tokio::task::spawn_blocking(move || {
+        let mut engine = engine;
+        let frame = engine.step(dt);
+        (engine, frame)
+    })
+    .await
+    .ok()
+}
+
+/// The honest end of a session whose engine panicked mid-step.
+const ENGINE_PANIC_REASON: &str = "the simulation engine crashed while stepping; this session \
+     has ended (relaunch the board to start a new one)";
+
+/// Terminal-failure bookkeeping: put the reason on the wire for anyone
+/// listening NOW, and into the session backlog for anyone who connects (or
+/// reloads) LATER; the broadcast alone is dropped when no receiver is
+/// subscribed at that instant, which is exactly when a page reload is in
+/// flight.
+fn end_session_fatally(shared: &Shared, broadcast: &impl Fn(&ServerMessage), reason: &str) {
+    shared.backlog.lock().expect("backlog lock").fatal = Some(reason.to_string());
+    broadcast(&ServerMessage::Error {
+        message: reason.to_string(),
+    });
+}
+
+async fn sim_loop(
+    mut engine: Box<dyn Engine>,
+    wire_name: String,
+    tx: broadcast::Sender<String>,
+    mut cmd_rx: mpsc::Receiver<ClientMessage>,
+    shared: Arc<Shared>,
+) {
+    let mut running = false;
+    let mut speed = 1.0f64;
+    // Latched after an irrecoverable solve or refused reset. While set,
+    // Play/Step repeat the reason without advancing a dead or partially reset
+    // run. Only successful Reset clears this and the engine's failure state.
+    let mut fatal: Option<String> = None;
+    // Last simulation time seen from the engine, so the Status broadcast after
+    // a command reports the real clock instead of resetting the UI to 0.0.
+    let mut sim_time = 0.0f64;
+    let frame_dt = 1.0 / FRAME_RATE_HZ;
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs_f64(frame_dt));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Honest rate accounting: what the loop DELIVERS (rolling window) and the
+    // sustainable ceiling it paces to, kept strictly apart from `speed` (what
+    // the user ASKED for). Cleared on pause/reset so idle wall time never
+    // counts against the achieved rate. The wall axis is this loop's start.
+    let mut meter = crate::rate::RateMeter::new();
+    let loop_started = std::time::Instant::now();
+
+    let broadcast_msg = |msg: &ServerMessage| {
+        if tx.receiver_count() > 0 {
+            let _ = tx.send(wire_json(msg));
+        }
+    };
+    // An irrecoverably failing analog solve must STOP this session with the
+    // reason on the wire. Left running, it grinds the dead solve at 100% CPU
+    // forever while the client watches a clock that never advances; that is
+    // the dishonest outcome. Pause (Reset clears the streak, a relaunch
+    // replaces the session), and say why. Shared by the ticker step and a
+    // manual step of a dead solve.
+    let dead_solve = |engine: &dyn Engine,
+                      running: &mut bool,
+                      meter: &mut crate::rate::RateMeter,
+                      fatal: &mut Option<String>| {
+        if let Some(reason) = engine.run_failure() {
+            *running = false;
+            meter.clear();
+            let message = format!(
+                "live simulation stopped: {reason}. Press reset to \
+                 retry, or fix the board/model and relaunch."
+            );
+            end_session_fatally(&shared, &broadcast_msg, &message);
+            *fatal = Some(message);
+        }
+    };
+    // Correlated receipt for an explicit live-session mutation. A refused
+    // attachment is a local action result, not evidence that the simulation
+    // itself died; a success also refreshes the control list, which is part
+    // of the live session contract, so the newly attached device appears in
+    // the rail and can be manipulated without a reconnect.
+    let action_result = |engine: &dyn Engine,
+                         action: &str,
+                         id: String,
+                         request_id: Option<u64>,
+                         outcome: Result<String, String>| {
+        if outcome.is_ok() {
+            broadcast_msg(&ServerMessage::BoardInfo(engine.board_info()));
+        }
+        let (ok, message) = match outcome {
+            Ok(m) => (true, m),
+            Err(m) => (false, m),
+        };
+        broadcast_msg(&ServerMessage::ActionResult {
+            action: action.into(),
+            id,
+            request_id,
+            ok,
+            message,
+        });
+    };
+
+    // Embedders may hand the server an engine whose run already failed.
+    dead_solve(&*engine, &mut running, &mut meter, &mut fatal);
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                if running {
+                    // Pace at the measured sustainable ceiling when the
+                    // requested factor exceeds it: one honest small step per
+                    // tick keeps frames flowing and commands responsive, where
+                    // an oversized step would block this loop for its full
+                    // solve time and still not deliver the requested rate.
+                    let (paced, rate_limited) = meter.paced_factor(speed);
+                    // Never shrink a step below the engine's own floor: for an
+                    // external emulator the per-step round-trip costs the same
+                    // whatever the step buys, so a smaller step buys less at
+                    // the same price and the pacer's own measurement then
+                    // reports a still-worse cost. That feedback drove the
+                    // ESP32 live sim to the pacer's minimum factor and 0.0008x
+                    // realtime. Below the floor the loop simply takes longer
+                    // than one tick per step, which is honest: frames arrive
+                    // slower, and each one carries real simulated time.
+                    let step_dt = (frame_dt * paced).max(engine.min_step_dt());
+                    let step_started = std::time::Instant::now();
+                    // On the blocking pool, never inline: an inline step of
+                    // unbounded solve time wedges the runtime's I/O driver and
+                    // with it the whole server (see `step_on_blocking_pool`).
+                    let Some((stepped, mut frame)) =
+                        step_on_blocking_pool(engine, step_dt).await
+                    else {
+                        end_session_fatally(&shared, &broadcast_msg, ENGINE_PANIC_REASON);
+                        return;
+                    };
+                    engine = stepped;
+                    // Account the DELIVERED sim time, not the requested step:
+                    // a live step that ended early at the dead-solve abort
+                    // streak delivered a fraction of `step_dt`, and crediting
+                    // the request would overstate the terminal frame's rate.
+                    let delivered_dt = (frame.t - sim_time).max(0.0);
+                    meter.record(
+                        loop_started.elapsed().as_secs_f64(),
+                        frame.t,
+                        step_started.elapsed().as_secs_f64(),
+                        delivered_dt,
+                    );
+                    // The wire carries BOTH numbers: the measured achieved
+                    // rate (clamped to the paced factor: tick pacing bounds
+                    // delivery, and the clamp also covers the first fraction
+                    // of a second before the window can measure) and the
+                    // user's requested factor, so no UI has to conflate them.
+                    frame.realtime_factor =
+                        meter.achieved().unwrap_or(f64::INFINITY).min(paced);
+                    frame.requested_factor = speed;
+                    frame.rate_limited = rate_limited;
+                    sim_time = frame.t;
+                    // Record BEFORE broadcasting (and regardless of receiver
+                    // count): a fault raised while nobody is connected must
+                    // still be in the backlog a later subscriber replays.
+                    shared.record_faults(&frame);
+                    broadcast_msg(&ServerMessage::SimFrame(frame));
+                    dead_solve(&*engine, &mut running, &mut meter, &mut fatal);
+                    broadcast_msg(&ServerMessage::Status(Status {
+                        running, sim_time, requested_factor: speed,
+                        options: engine.controls(),
+                    }));
+                }
+            }
+            cmd = cmd_rx.recv() => {
+                let Some(cmd) = cmd else { return };
+                match cmd {
+                    // Play and Pause both restart the rate window: wall time
+                    // spent paused must never count against the achieved rate,
+                    // and stale pre-pause samples must not shape the first
+                    // post-resume ceiling.
+                    ClientMessage::Play => {
+                        if let Some(reason) = &fatal {
+                            broadcast_msg(&ServerMessage::Error {
+                                message: reason.clone(),
+                            });
+                        } else {
+                            running = true;
+                            meter.clear();
+                        }
+                    }
+                    ClientMessage::Pause => {
+                        running = false;
+                        meter.clear();
+                    }
+                    ClientMessage::Step { dt } if fatal.is_none() => {
+                        // Clamp the client-supplied step like SetSpeed clamps
+                        // factor: an unbounded dt (e.g. `1e9`) is ~1e13 chunks
+                        // that the single sim_loop task runs synchronously,
+                        // wedging every client until restart. A manual step is
+                        // milliseconds; 1 s is already a generous ceiling.
+                        let step_dt = if dt > 0.0 { dt.min(1.0) } else { frame_dt };
+                        let step_started = std::time::Instant::now();
+                        // Blocking pool for the same reason as the ticker's
+                        // step: solve time is unbounded and must never sit on
+                        // a runtime worker (see `step_on_blocking_pool`).
+                        let Some((stepped, mut frame)) =
+                            step_on_blocking_pool(engine, step_dt).await
+                        else {
+                            end_session_fatally(&shared, &broadcast_msg, ENGINE_PANIC_REASON);
+                            return;
+                        };
+                        engine = stepped;
+                        // A manual step has no continuous rate to report; the
+                        // honest per-step number is what THIS step delivered
+                        // (sim seconds per wall second of the solve), which is
+                        // NOT the requested dt when the step ended early at
+                        // the dead-solve abort streak. It does not feed the
+                        // pacing meter: the sim is paused.
+                        let step_wall = step_started.elapsed().as_secs_f64();
+                        let delivered_dt = (frame.t - sim_time).max(0.0);
+                        frame.realtime_factor = if step_wall > 0.0 {
+                            delivered_dt / step_wall
+                        } else {
+                            0.0
+                        };
+                        frame.requested_factor = speed;
+                        sim_time = frame.t;
+                        shared.record_faults(&frame);
+                        broadcast_msg(&ServerMessage::SimFrame(frame));
+                        dead_solve(&*engine, &mut running, &mut meter, &mut fatal);
+                    }
+                    // Fatal latch: stepping a solve already declared dead just
+                    // re-grinds it; repeat the reason instead.
+                    ClientMessage::Step { .. } => {
+                        if let Some(reason) = &fatal {
+                            broadcast_msg(&ServerMessage::Error {
+                                message: reason.clone(),
+                            });
+                        }
+                    }
+                    ClientMessage::Reset => {
+                        running = false;
+                        meter.clear();
+                        match engine.reset() {
+                            Ok(()) => {
+                                sim_time = 0.0;
+                                fatal = None;
+                                let cleared = {
+                                    let mut backlog = shared.backlog.lock().expect("backlog lock");
+                                    backlog.faults.clear();
+                                    backlog.fatal = None;
+                                    backlog.clone()
+                                };
+                                // Only an acknowledged reset starts a new fault story.
+                                broadcast_msg(&ServerMessage::Backlog(cleared));
+                            }
+                            Err(reason) => {
+                                let message = format!("live simulation reset refused: {reason}");
+                                // Preserve the old clock, faults and original fatal cause.
+                                let held = fatal.get_or_insert_with(|| message.clone());
+                                shared.backlog.lock().expect("backlog lock").fatal = Some(held.clone());
+                                broadcast_msg(&ServerMessage::Error { message });
+                            }
+                        }
+                    }
+                    ClientMessage::SetSpeed { factor } => {
+                        speed = factor.clamp(0.001, 1000.0);
+                    }
+                    ClientMessage::SetControls(c) => engine.set_controls(c),
+                    ClientMessage::Serial { mcu, data } => engine.serial(&mcu, &data),
+                    ClientMessage::SetInput { source, value } => {
+                        // Route to a bound input source first; if nothing
+                        // matched, fall back to a peripheral of that id so a
+                        // frontend slider wired to a peripheral works as-is.
+                        engine.set_input(&source, value);
+                        engine.set_peripheral(&source, value);
+                    }
+                    ClientMessage::SetPowerSupply { net, supply } => {
+                        engine.set_power_supply(&net, supply);
+                    }
+                    ClientMessage::SetPeripheral { id, value } => {
+                        engine.set_peripheral(&id, value);
+                    }
+                    ClientMessage::AttachPeripheral(spec) => {
+                        let id = spec.id.clone();
+                        let outcome = engine
+                            .attach_peripheral(spec)
+                            .map(|()| format!("Attached {id} to the live circuit."));
+                        action_result(&*engine, "attach_peripheral", id, None, outcome);
+                    }
+                    ClientMessage::AttachRegisterMap(spec) => {
+                        let (id, request_id) = (spec.id.clone(), spec.request_id);
+                        let outcome = engine.attach_register_map(spec).map(|()| {
+                            format!(
+                                "Attached exact register-map bytes for {id} to the live co-simulation."
+                            )
+                        });
+                        action_result(&*engine, "attach_register_map", id, request_id, outcome);
+                    }
+                    // Probe DATA is client-derived from the frame stream, but
+                    // the active probe SET is session state: holding it here
+                    // lets a rejoining client restore its probes from the
+                    // backlog instead of losing them on reload.
+                    ClientMessage::AddProbe { net } => {
+                        let mut backlog = shared.backlog.lock().expect("backlog lock");
+                        // Bounded because `net` is an arbitrary client string and
+                        // the whole list is replayed to every new subscriber, so an
+                        // uncapped list is both unbounded memory and unbounded work
+                        // per reconnect. A board with more nets than this does not
+                        // exist, so the cap only ever bites on a client sending
+                        // rubbish.
+                        const MAX_PROBES: usize = 512;
+                        if backlog.probes.len() >= MAX_PROBES {
+                            continue;
+                        }
+                        if net.len() > 256 {
+                            continue;
+                        }
+                        if !backlog.probes.contains(&net) {
+                            backlog.probes.push(net);
+                        }
+                    }
+                    ClientMessage::RemoveProbe { net } => {
+                        shared
+                            .backlog
+                            .lock()
+                            .expect("backlog lock")
+                            .probes
+                            .retain(|p| p != &net);
+                    }
+                    ClientMessage::LoadBoard { .. } => {
+                        // Wired up with the full engine integration.
+                    }
+                }
+                *shared.board_info_json.lock().await =
+                    wire_json(&ServerMessage::BoardInfo(named_board_info(&*engine, &wire_name)));
+                broadcast_msg(&ServerMessage::Status(Status {
+                    running,
+                    sim_time,
+                    requested_factor: speed,
+                    options: engine.controls(),
+                }));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod rate_honesty_tests {
     //! The sim loop against controllable engines: the streamed
@@ -1068,387 +1450,5 @@ mod rate_honesty_tests {
             .fatal
             .is_none());
         s.task.abort();
-    }
-}
-
-/// The engine's BoardInfo with the session's wire name applied (see the
-/// fallback rationale in [`LiveHub::launch`]).
-fn named_board_info(engine: &dyn Engine, wire_name: &str) -> BoardInfo {
-    let mut info = engine.board_info();
-    if info.name.trim().is_empty() {
-        info.name = wire_name.to_string();
-    }
-    info
-}
-
-/// A server message as the one JSON line the socket carries. The protocol
-/// types are plain data, so serialization cannot fail.
-fn wire_json(msg: &ServerMessage) -> String {
-    serde_json::to_string(msg).expect("protocol messages serialize")
-}
-
-/// One engine step, run on the blocking pool.
-///
-/// `Engine::step` is CPU-bound solver work of UNBOUNDED duration: a board
-/// whose analog solve is struggling grinds the retry ladder for minutes per
-/// step. Run inline on a runtime worker, such a step doesn't just occupy one
-/// worker: the worker that currently holds tokio's I/O + timer driver never
-/// parks, so no thread polls the reactor and the WHOLE server stops answering
-/// (measured on the lily58 corpus board: every page load and websocket timed
-/// out while 7 of 8 workers sat idle). The blocking pool is where this work
-/// belongs; it also puts an await point under the step, so a session
-/// replacement's `task.abort()` ENDS THE SESSION mid-step (sockets close, the
-/// new session takes over) instead of waiting the step out. The orphaned
-/// blocking task itself cannot be interrupted: it runs its current step to
-/// completion in the background and drops the engine when it returns, so a
-/// replaced diverging solve costs at most one in-flight step of background
-/// CPU, exactly the bound the old inline form had, without its wedge.
-///
-/// Returns `None` when the step panicked (the engine is gone); the caller
-/// must end the session honestly.
-async fn step_on_blocking_pool(
-    engine: Box<dyn Engine>,
-    dt: f64,
-) -> Option<(Box<dyn Engine>, SimFrame)> {
-    tokio::task::spawn_blocking(move || {
-        let mut engine = engine;
-        let frame = engine.step(dt);
-        (engine, frame)
-    })
-    .await
-    .ok()
-}
-
-/// The honest end of a session whose engine panicked mid-step.
-const ENGINE_PANIC_REASON: &str = "the simulation engine crashed while stepping; this session \
-     has ended (relaunch the board to start a new one)";
-
-/// Terminal-failure bookkeeping: put the reason on the wire for anyone
-/// listening NOW, and into the session backlog for anyone who connects (or
-/// reloads) LATER; the broadcast alone is dropped when no receiver is
-/// subscribed at that instant, which is exactly when a page reload is in
-/// flight.
-fn end_session_fatally(shared: &Shared, broadcast: &impl Fn(&ServerMessage), reason: &str) {
-    shared.backlog.lock().expect("backlog lock").fatal = Some(reason.to_string());
-    broadcast(&ServerMessage::Error {
-        message: reason.to_string(),
-    });
-}
-
-async fn sim_loop(
-    mut engine: Box<dyn Engine>,
-    wire_name: String,
-    tx: broadcast::Sender<String>,
-    mut cmd_rx: mpsc::Receiver<ClientMessage>,
-    shared: Arc<Shared>,
-) {
-    let mut running = false;
-    let mut speed = 1.0f64;
-    // Latched after an irrecoverable solve or refused reset. While set,
-    // Play/Step repeat the reason without advancing a dead or partially reset
-    // run. Only successful Reset clears this and the engine's failure state.
-    let mut fatal: Option<String> = None;
-    // Last simulation time seen from the engine, so the Status broadcast after
-    // a command reports the real clock instead of resetting the UI to 0.0.
-    let mut sim_time = 0.0f64;
-    let frame_dt = 1.0 / FRAME_RATE_HZ;
-    let mut ticker = tokio::time::interval(std::time::Duration::from_secs_f64(frame_dt));
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // Honest rate accounting: what the loop DELIVERS (rolling window) and the
-    // sustainable ceiling it paces to, kept strictly apart from `speed` (what
-    // the user ASKED for). Cleared on pause/reset so idle wall time never
-    // counts against the achieved rate. The wall axis is this loop's start.
-    let mut meter = crate::rate::RateMeter::new();
-    let loop_started = std::time::Instant::now();
-
-    let broadcast_msg = |msg: &ServerMessage| {
-        if tx.receiver_count() > 0 {
-            let _ = tx.send(wire_json(msg));
-        }
-    };
-    // An irrecoverably failing analog solve must STOP this session with the
-    // reason on the wire. Left running, it grinds the dead solve at 100% CPU
-    // forever while the client watches a clock that never advances; that is
-    // the dishonest outcome. Pause (Reset clears the streak, a relaunch
-    // replaces the session), and say why. Shared by the ticker step and a
-    // manual step of a dead solve.
-    let dead_solve = |engine: &dyn Engine,
-                      running: &mut bool,
-                      meter: &mut crate::rate::RateMeter,
-                      fatal: &mut Option<String>| {
-        if let Some(reason) = engine.run_failure() {
-            *running = false;
-            meter.clear();
-            let message = format!(
-                "live simulation stopped: {reason}. Press reset to \
-                 retry, or fix the board/model and relaunch."
-            );
-            end_session_fatally(&shared, &broadcast_msg, &message);
-            *fatal = Some(message);
-        }
-    };
-    // Correlated receipt for an explicit live-session mutation. A refused
-    // attachment is a local action result, not evidence that the simulation
-    // itself died; a success also refreshes the control list, which is part
-    // of the live session contract, so the newly attached device appears in
-    // the rail and can be manipulated without a reconnect.
-    let action_result = |engine: &dyn Engine,
-                         action: &str,
-                         id: String,
-                         request_id: Option<u64>,
-                         outcome: Result<String, String>| {
-        if outcome.is_ok() {
-            broadcast_msg(&ServerMessage::BoardInfo(engine.board_info()));
-        }
-        let (ok, message) = match outcome {
-            Ok(m) => (true, m),
-            Err(m) => (false, m),
-        };
-        broadcast_msg(&ServerMessage::ActionResult {
-            action: action.into(),
-            id,
-            request_id,
-            ok,
-            message,
-        });
-    };
-
-    // Embedders may hand the server an engine whose run already failed.
-    dead_solve(&*engine, &mut running, &mut meter, &mut fatal);
-    loop {
-        tokio::select! {
-            _ = ticker.tick() => {
-                if running {
-                    // Pace at the measured sustainable ceiling when the
-                    // requested factor exceeds it: one honest small step per
-                    // tick keeps frames flowing and commands responsive, where
-                    // an oversized step would block this loop for its full
-                    // solve time and still not deliver the requested rate.
-                    let (paced, rate_limited) = meter.paced_factor(speed);
-                    // Never shrink a step below the engine's own floor: for an
-                    // external emulator the per-step round-trip costs the same
-                    // whatever the step buys, so a smaller step buys less at
-                    // the same price and the pacer's own measurement then
-                    // reports a still-worse cost. That feedback drove the
-                    // ESP32 live sim to the pacer's minimum factor and 0.0008x
-                    // realtime. Below the floor the loop simply takes longer
-                    // than one tick per step, which is honest: frames arrive
-                    // slower, and each one carries real simulated time.
-                    let step_dt = (frame_dt * paced).max(engine.min_step_dt());
-                    let step_started = std::time::Instant::now();
-                    // On the blocking pool, never inline: an inline step of
-                    // unbounded solve time wedges the runtime's I/O driver and
-                    // with it the whole server (see `step_on_blocking_pool`).
-                    let Some((stepped, mut frame)) =
-                        step_on_blocking_pool(engine, step_dt).await
-                    else {
-                        end_session_fatally(&shared, &broadcast_msg, ENGINE_PANIC_REASON);
-                        return;
-                    };
-                    engine = stepped;
-                    // Account the DELIVERED sim time, not the requested step:
-                    // a live step that ended early at the dead-solve abort
-                    // streak delivered a fraction of `step_dt`, and crediting
-                    // the request would overstate the terminal frame's rate.
-                    let delivered_dt = (frame.t - sim_time).max(0.0);
-                    meter.record(
-                        loop_started.elapsed().as_secs_f64(),
-                        frame.t,
-                        step_started.elapsed().as_secs_f64(),
-                        delivered_dt,
-                    );
-                    // The wire carries BOTH numbers: the measured achieved
-                    // rate (clamped to the paced factor: tick pacing bounds
-                    // delivery, and the clamp also covers the first fraction
-                    // of a second before the window can measure) and the
-                    // user's requested factor, so no UI has to conflate them.
-                    frame.realtime_factor =
-                        meter.achieved().unwrap_or(f64::INFINITY).min(paced);
-                    frame.requested_factor = speed;
-                    frame.rate_limited = rate_limited;
-                    sim_time = frame.t;
-                    // Record BEFORE broadcasting (and regardless of receiver
-                    // count): a fault raised while nobody is connected must
-                    // still be in the backlog a later subscriber replays.
-                    shared.record_faults(&frame);
-                    broadcast_msg(&ServerMessage::SimFrame(frame));
-                    dead_solve(&*engine, &mut running, &mut meter, &mut fatal);
-                    broadcast_msg(&ServerMessage::Status(Status {
-                        running, sim_time, requested_factor: speed,
-                        options: engine.controls(),
-                    }));
-                }
-            }
-            cmd = cmd_rx.recv() => {
-                let Some(cmd) = cmd else { return };
-                match cmd {
-                    // Play and Pause both restart the rate window: wall time
-                    // spent paused must never count against the achieved rate,
-                    // and stale pre-pause samples must not shape the first
-                    // post-resume ceiling.
-                    ClientMessage::Play => {
-                        if let Some(reason) = &fatal {
-                            broadcast_msg(&ServerMessage::Error {
-                                message: reason.clone(),
-                            });
-                        } else {
-                            running = true;
-                            meter.clear();
-                        }
-                    }
-                    ClientMessage::Pause => {
-                        running = false;
-                        meter.clear();
-                    }
-                    ClientMessage::Step { dt } if fatal.is_none() => {
-                        // Clamp the client-supplied step like SetSpeed clamps
-                        // factor: an unbounded dt (e.g. `1e9`) is ~1e13 chunks
-                        // that the single sim_loop task runs synchronously,
-                        // wedging every client until restart. A manual step is
-                        // milliseconds; 1 s is already a generous ceiling.
-                        let step_dt = if dt > 0.0 { dt.min(1.0) } else { frame_dt };
-                        let step_started = std::time::Instant::now();
-                        // Blocking pool for the same reason as the ticker's
-                        // step: solve time is unbounded and must never sit on
-                        // a runtime worker (see `step_on_blocking_pool`).
-                        let Some((stepped, mut frame)) =
-                            step_on_blocking_pool(engine, step_dt).await
-                        else {
-                            end_session_fatally(&shared, &broadcast_msg, ENGINE_PANIC_REASON);
-                            return;
-                        };
-                        engine = stepped;
-                        // A manual step has no continuous rate to report; the
-                        // honest per-step number is what THIS step delivered
-                        // (sim seconds per wall second of the solve), which is
-                        // NOT the requested dt when the step ended early at
-                        // the dead-solve abort streak. It does not feed the
-                        // pacing meter: the sim is paused.
-                        let step_wall = step_started.elapsed().as_secs_f64();
-                        let delivered_dt = (frame.t - sim_time).max(0.0);
-                        frame.realtime_factor = if step_wall > 0.0 {
-                            delivered_dt / step_wall
-                        } else {
-                            0.0
-                        };
-                        frame.requested_factor = speed;
-                        sim_time = frame.t;
-                        shared.record_faults(&frame);
-                        broadcast_msg(&ServerMessage::SimFrame(frame));
-                        dead_solve(&*engine, &mut running, &mut meter, &mut fatal);
-                    }
-                    // Fatal latch: stepping a solve already declared dead just
-                    // re-grinds it; repeat the reason instead.
-                    ClientMessage::Step { .. } => {
-                        if let Some(reason) = &fatal {
-                            broadcast_msg(&ServerMessage::Error {
-                                message: reason.clone(),
-                            });
-                        }
-                    }
-                    ClientMessage::Reset => {
-                        running = false;
-                        meter.clear();
-                        match engine.reset() {
-                            Ok(()) => {
-                                sim_time = 0.0;
-                                fatal = None;
-                                let cleared = {
-                                    let mut backlog = shared.backlog.lock().expect("backlog lock");
-                                    backlog.faults.clear();
-                                    backlog.fatal = None;
-                                    backlog.clone()
-                                };
-                                // Only an acknowledged reset starts a new fault story.
-                                broadcast_msg(&ServerMessage::Backlog(cleared));
-                            }
-                            Err(reason) => {
-                                let message = format!("live simulation reset refused: {reason}");
-                                // Preserve the old clock, faults and original fatal cause.
-                                let held = fatal.get_or_insert_with(|| message.clone());
-                                shared.backlog.lock().expect("backlog lock").fatal = Some(held.clone());
-                                broadcast_msg(&ServerMessage::Error { message });
-                            }
-                        }
-                    }
-                    ClientMessage::SetSpeed { factor } => {
-                        speed = factor.clamp(0.001, 1000.0);
-                    }
-                    ClientMessage::SetControls(c) => engine.set_controls(c),
-                    ClientMessage::Serial { mcu, data } => engine.serial(&mcu, &data),
-                    ClientMessage::SetInput { source, value } => {
-                        // Route to a bound input source first; if nothing
-                        // matched, fall back to a peripheral of that id so a
-                        // frontend slider wired to a peripheral works as-is.
-                        engine.set_input(&source, value);
-                        engine.set_peripheral(&source, value);
-                    }
-                    ClientMessage::SetPowerSupply { net, supply } => {
-                        engine.set_power_supply(&net, supply);
-                    }
-                    ClientMessage::SetPeripheral { id, value } => {
-                        engine.set_peripheral(&id, value);
-                    }
-                    ClientMessage::AttachPeripheral(spec) => {
-                        let id = spec.id.clone();
-                        let outcome = engine
-                            .attach_peripheral(spec)
-                            .map(|()| format!("Attached {id} to the live circuit."));
-                        action_result(&*engine, "attach_peripheral", id, None, outcome);
-                    }
-                    ClientMessage::AttachRegisterMap(spec) => {
-                        let (id, request_id) = (spec.id.clone(), spec.request_id);
-                        let outcome = engine.attach_register_map(spec).map(|()| {
-                            format!(
-                                "Attached exact register-map bytes for {id} to the live co-simulation."
-                            )
-                        });
-                        action_result(&*engine, "attach_register_map", id, request_id, outcome);
-                    }
-                    // Probe DATA is client-derived from the frame stream, but
-                    // the active probe SET is session state: holding it here
-                    // lets a rejoining client restore its probes from the
-                    // backlog instead of losing them on reload.
-                    ClientMessage::AddProbe { net } => {
-                        let mut backlog = shared.backlog.lock().expect("backlog lock");
-                        // Bounded because `net` is an arbitrary client string and
-                        // the whole list is replayed to every new subscriber, so an
-                        // uncapped list is both unbounded memory and unbounded work
-                        // per reconnect. A board with more nets than this does not
-                        // exist, so the cap only ever bites on a client sending
-                        // rubbish.
-                        const MAX_PROBES: usize = 512;
-                        if backlog.probes.len() >= MAX_PROBES {
-                            continue;
-                        }
-                        if net.len() > 256 {
-                            continue;
-                        }
-                        if !backlog.probes.contains(&net) {
-                            backlog.probes.push(net);
-                        }
-                    }
-                    ClientMessage::RemoveProbe { net } => {
-                        shared
-                            .backlog
-                            .lock()
-                            .expect("backlog lock")
-                            .probes
-                            .retain(|p| p != &net);
-                    }
-                    ClientMessage::LoadBoard { .. } => {
-                        // Wired up with the full engine integration.
-                    }
-                }
-                *shared.board_info_json.lock().await =
-                    wire_json(&ServerMessage::BoardInfo(named_board_info(&*engine, &wire_name)));
-                broadcast_msg(&ServerMessage::Status(Status {
-                    running,
-                    sim_time,
-                    requested_factor: speed,
-                    options: engine.controls(),
-                }));
-            }
-        }
     }
 }

@@ -524,10 +524,12 @@ mod tests {
         let coeffs =
             IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let run = |bypass: NewtonBypass| {
-            let mut opts = SolverOptions::default();
-            opts.newton_bypass = bypass;
-            opts.ladder =
-                crate::options::RobustnessLadder::none().with(crate::options::Strategy::LineSearch);
+            let opts = SolverOptions {
+                newton_bypass: bypass,
+                ladder: crate::options::RobustnessLadder::none()
+                    .with(crate::options::Strategy::LineSearch),
+                ..SolverOptions::default()
+            };
             let mut ws = Workspace::new(&c);
             let state = ReactiveState::new(c.devices.len());
             crate::newton::dc_operating_point(&mut ws, &c, &opts).expect("dc converges");

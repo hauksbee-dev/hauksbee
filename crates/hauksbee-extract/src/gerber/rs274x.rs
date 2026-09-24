@@ -568,7 +568,7 @@ fn shape_to_geo(shape: &Shape) -> Option<MultiPolygon<f64>> {
             // `stadium_outline` samples a half-circle in 16 chords. Expanding by
             // sec(half the chord angle) circumscribes the exact capsule, so the
             // conversion cannot erase dark copper merely through tessellation.
-            let mut conservative = capsule.clone();
+            let mut conservative = *capsule;
             conservative.r *= 1.0 / (std::f64::consts::PI / 32.0).cos();
             contours_to_geo_polygon(vec![stadium_outline(&conservative)])
                 .filter(polygon_is_valid)

@@ -13,11 +13,13 @@ fn divider() -> Circuit {
 
 #[test]
 fn operating_point_reports_the_options_used_and_the_measured_kcl_residual() {
-    let mut options = SolverOptions::default();
-    options.reltol = 2e-4;
-    options.vntol = 7e-7;
-    options.abstol = 3e-13;
-    options.chgtol = 9e-15;
+    let options = SolverOptions {
+        reltol: 2e-4,
+        vntol: 7e-7,
+        abstol: 3e-13,
+        chgtol: 9e-15,
+        ..SolverOptions::default()
+    };
 
     let output = run_op(&divider(), &options, &[Probe::NodeVoltage("rail".into())]).unwrap();
     let tolerance = output.error_budget.tolerance();
