@@ -110,18 +110,9 @@ pub(crate) fn si_unit(unit: &str) -> Option<(f64, &'static str)> {
 /// to `V/s` is 1e6), or `None` unless both name the same quantity over the same
 /// denominator: `mV/°C` or `dB` is refused, never read as volts.
 pub(crate) fn scale_between(unit: &str, want: &str) -> Option<f64> {
-    let parts = |unit: &str| {
-        let (num, den) = unit.trim().split_once('/').unwrap_or((unit.trim(), ""));
-        let (n, top) = prefixed_unit(num)?;
-        let (d, bottom) = if den.is_empty() {
-            (1.0, "")
-        } else {
-            prefixed_unit(den)?
-        };
-        Some((n / d, top, bottom))
-    };
-    let ((a, top, bottom), (b, want_top, want_bottom)) = (parts(unit)?, parts(want)?);
-    (top == want_top && bottom == want_bottom).then_some(a / b)
+    let den = |u: &str| Option::map(u.split_once('/'), |(_, d)| prefixed_unit(d).map(|p| p.1));
+    let ((a, top), (b, want_top)) = (si_unit(unit)?, si_unit(want)?);
+    (top == want_top && den(unit) == den(want)).then_some(a / b)
 }
 
 fn prefixed_unit(token: &str) -> Option<(f64, &'static str)> {

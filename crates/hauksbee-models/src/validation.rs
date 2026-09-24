@@ -8,8 +8,8 @@ use std::collections::HashSet;
 
 use crate::check::{nonneg_finite, positive_finite, Problems};
 use crate::schema::{
-    AboveDomainBehavior, Characteristic, ComponentKind, CurrentProgramEquation,
-    CurrentProgramSemantics, ModelEntry, OperatingEnvelope, ParamValue, PeripheralSpec,
+    AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics,
+    ModelEntry, OperatingEnvelope, ParamValue, PeripheralSpec,
 };
 use crate::sensor_spec::{Bus, SensorSpec};
 use hauksbee_ir::evidence::ModelUncertainty;
@@ -75,10 +75,10 @@ fn validate_vreg_capacitor_params(entry: &ModelEntry, p: &mut Problems) {
     }
     let params = &entry.params;
     if params.0.contains_key("cout_min_f") {
-        p.require(
-            params.get_f64("cout_min_f").is_some_and(nonneg_finite),
-            || "param 'cout_min_f' must be a non-negative finite number".into(),
-        );
+        let ok = params.get_f64("cout_min_f").is_some_and(nonneg_finite);
+        p.require(ok, || {
+            "param 'cout_min_f' must be a non-negative finite number".into()
+        });
     }
     let esr_keys = ["cout_esr_min_ohm", "cout_esr_max_ohm"];
     for key in esr_keys {
@@ -523,10 +523,8 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // A param written as its printed row: the row's own shape, then a unit and
     // column the simulator can read.
     for (key, row) in params.rows() {
-        let named = Characteristic {
-            parameter: key.into(),
-            ..row.clone()
-        };
+        let mut named = row.clone();
+        named.parameter = key.into();
         let read = crate::param_names::row_value(key, row).err();
         let problems = named.problems().into_iter().chain(read);
         p.0.extend(problems.map(|m| format!("param '{key}': {m}")));

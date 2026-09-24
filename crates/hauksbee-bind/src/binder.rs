@@ -7350,49 +7350,23 @@ style = "i2c_pointer"
 
     #[test]
     fn simple_vreg_requires_finite_voltage_and_all_roles() {
-        for (case, vout, names, warning_token) in [
-            (
-                "missing vout",
-                None,
-                &["in", "out", "gnd"][..],
-                "finite `vout`",
-            ),
-            (
-                "NaN vout",
-                Some(f64::NAN),
-                &["in", "out", "gnd"],
-                "finite `vout`",
-            ),
-            (
-                "infinite vout",
-                Some(f64::INFINITY),
-                &["in", "out", "gnd"],
-                "finite `vout`",
-            ),
-            (
-                "missing input",
-                Some(3.3),
-                &["out", "gnd"],
-                "input not connected",
-            ),
-            (
-                "missing output",
-                Some(3.3),
-                &["in", "gnd"],
-                "output not connected",
-            ),
-            (
-                "missing return",
-                Some(3.3),
-                &["in", "out"],
-                "local return not connected",
-            ),
+        for case in [
+            "missing vout | - | in out gnd | finite `vout`",
+            "NaN vout | NaN | in out gnd | finite `vout`",
+            "infinite vout | inf | in out gnd | finite `vout`",
+            "missing input | 3.3 | out gnd | input not connected",
+            "missing output | 3.3 | in gnd | output not connected",
+            "missing return | 3.3 | in out | local return not connected",
         ] {
+            let [_, vout, names, token] = case.split(" | ").collect::<Vec<_>>()[..] else {
+                panic!("{case}")
+            };
             let mut circuit = Circuit::new();
-            let roles = roles(&mut circuit, names);
-            let (outcome, warning, regs) = bind_u9(&simple_vreg(vout), None, &mut circuit, &roles);
+            let roles = roles(&mut circuit, &names.split(' ').collect::<Vec<_>>());
+            let model = simple_vreg(vout.parse().ok());
+            let (outcome, warning, regs) = bind_u9(&model, None, &mut circuit, &roles);
             assert!(matches!(outcome, BindOutcome::Unresolved { .. }), "{case}");
-            assert!(warning.is_some_and(|w| w.contains(warning_token)), "{case}");
+            assert!(warning.is_some_and(|w| w.contains(token)), "{case}");
             assert!(circuit.devices.is_empty() && regs.is_empty(), "{case}");
         }
     }
@@ -7413,10 +7387,8 @@ style = "i2c_pointer"
             ]);
             let (outcome, warning, regs) = bind_u9(&model, None, &mut circuit, &roles);
             assert!(matches!(outcome, BindOutcome::Unresolved { .. }), "{case}");
-            assert!(
-                warning.is_some_and(|w| w.contains("must be distinct")),
-                "{case}"
-            );
+            let distinct = warning.is_some_and(|w| w.contains("must be distinct"));
+            assert!(distinct, "{case}");
             assert!(circuit.devices.is_empty() && regs.is_empty(), "{case}");
         }
     }
@@ -7424,41 +7396,20 @@ style = "i2c_pointer"
     #[test]
     fn simple_vreg_stamps_exact_voltage_between_output_and_return() {
         let lib = ModelLibrary::builtin();
-        for (case, card, vout, out, gnd, dropout_v, min_in_v, max_in_v, warning_token) in [
-            (
-                "card",
-                Some("AMS1117-3.3"),
-                3.3,
-                "OUT",
-                "0",
-                Some(1.3),
-                4.699,
-                15.0,
-                Some("requires at least 22 µF output capacitance for stability"),
-            ),
-            (
-                "offset",
-                Some("LM7905"),
-                -5.0,
-                "OUT",
-                "RET",
-                Some(1.1),
-                6.1,
-                25.0,
-                Some("does not state the output-capacitor requirement"),
-            ),
-            (
-                "bare",
-                None,
-                5.0,
-                "0",
-                "RET",
-                None,
-                5.0,
-                f64::INFINITY,
-                None,
-            ),
+        for case in [
+            "card | AMS1117-3.3 | 3.3 | OUT 0 | 1.3 | 4.699 | 15 | at least 22 µF output capacitance",
+            "offset | LM7905 | -5 | OUT RET | 1.1 | 6.1 | 25 | does not state the output-capacitor",
+            "bare | - | 5 | 0 RET | - | 5 | inf | -",
         ] {
+            let [_, card, vout, pins, dropout_v, min_in_v, max_in_v, token] =
+                case.split(" | ").collect::<Vec<_>>()[..]
+            else {
+                panic!("{case}")
+            };
+            let (out, gnd) = pins.split_once(' ').expect("two pins");
+            let parse = |v: &str| v.parse::<f64>().unwrap_or(f64::NAN);
+            let [vout, min_in_v, max_in_v] = [vout, min_in_v, max_in_v].map(parse);
+            let (card, dropout_v) = ((card != "-").then_some(card), dropout_v.parse().ok());
             let mut circuit = Circuit::new();
             let roles = HashMap::from([
                 ("in".into(), circuit.node("IN")),
@@ -7472,19 +7423,9 @@ style = "i2c_pointer"
             );
             let source = res.as_ref().and_then(|r| r.provenance.as_ref());
             let (outcome, warning, regs) = bind_u9(&model, source, &mut circuit, &roles);
-            match warning_token {
-                Some(token) => {
-                    let warning = warning
-                        .as_deref()
-                        .expect("the expected caveat must be present");
-                    assert!(
-                        warning.starts_with(Assumption::PARTIAL_MODEL_MARKER)
-                            && warning.contains(token),
-                        "{case}: {warning}"
-                    );
-                }
-                None => assert!(warning.is_none(), "{case}: {warning:?}"),
-            }
+            let marked = |w: &str| w.starts_with(Assumption::PARTIAL_MODEL_MARKER) && w.contains(token);
+            let caveat = warning.as_deref().map(marked);
+            assert_eq!(caveat, (token != "-").then_some(true), "{case}: {warning:?}");
             assert!(
                 matches!(outcome, BindOutcome::Behavioral { device } if device == format!("vreg {vout:.1}V source")),
                 "{case}"
@@ -7514,10 +7455,8 @@ style = "i2c_pointer"
         let limits = "[[models.source.uncertainty]]\nstatus = \"interval\"\nparameter = \"vout\"\n\
              low = 3.2\nhigh = 3.4\nunit = \"V\"\nkind = \"specification-limits\"\nbasis = \"b\"\n";
         let tie = "{}\nvout = 3.3\ndropout_v = 0.25";
-        let (scalar, row) = (
-            limits.to_owned() + tie,
-            format!("{{}}\nvout = {vout}\ndropout_v = {dropout}"),
-        );
+        let scalar = limits.to_owned() + tie;
+        let row = format!("{{}}\nvout = {vout}\ndropout_v = {dropout}");
         for (id, value, body) in [
             ("zz_scalar", "ZZ_SCALAR", &*scalar),
             ("zz_row", "ZZ_ROW", &row),
@@ -7532,12 +7471,10 @@ style = "i2c_pointer"
             let card = head + &body.replace("{}", "[models.params]\ncout_min_f = 0.0\niq_a = 1e-5");
             std::fs::write(dir.path().join(format!("{id}.toml")), card).expect("card written");
         }
-        let lib = ModelLibrary::builtin().with_user_dir(dir.path());
-        let resolve = |v: &str| {
-            lib.as_ref()
-                .expect("cards load")
-                .resolve(&ComponentQuery::new(None, Some(v.into()), None))
-        };
+        let lib = ModelLibrary::builtin()
+            .with_user_dir(dir.path())
+            .expect("cards load");
+        let resolve = |v: &str| lib.resolve(&ComponentQuery::new(None, Some(v.into()), None));
         let [scalar, row] = ["ZZ_SCALAR", "ZZ_ROW"].map(|value| {
             let (res, mut circuit) = (resolve(value), Circuit::new());
             let roles = roles(&mut circuit, &["in", "out", "gnd"]);
@@ -7545,10 +7482,8 @@ style = "i2c_pointer"
             let (outcome, warning, regs) =
                 bind_u9(&model, res.provenance.as_ref(), &mut circuit, &roles);
             let limits = format!("{:.9?} {:.9}", regs[0].dropout_v, regs[0].min_in_v);
-            (
-                format!("{outcome:?} {warning:?} {:?}", circuit.devices),
-                limits,
-            )
+            let bound = format!("{outcome:?} {warning:?} {:?}", circuit.devices);
+            (bound, limits)
         });
         assert_eq!(scalar, row);
         assert_eq!(row.1, "Some(0.250000000) 3.650000000");
@@ -7559,10 +7494,8 @@ style = "i2c_pointer"
         let tie = "U9 (ZZ_TIE): matched library entries zz_tie_a, zz_tie_b equally well; bound 'zz_tie_a'";
         assert!(bare.starts_with(&format!("{marker}{tie}")), "{bare}");
         let other = Some(format!("{marker}U9 (ZZ_TIE): enable off"));
-        assert_eq!(
-            with_tie_warning(&component, &res, other),
-            Some(format!("{bare}; also enable off"))
-        );
+        let combined = with_tie_warning(&component, &res, other);
+        assert_eq!(combined, Some(format!("{bare}; also enable off")));
     }
 
     fn analog_switch_entry(description: &str) -> ModelEntry {
