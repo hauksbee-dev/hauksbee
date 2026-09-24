@@ -174,20 +174,15 @@ fn inkplate6_reconstruction_count_is_stable_not_an_oracle() {
 /// The SparkFun RP2040 Thing Plus panel, an Eagle export whose films draw copper as
 /// filled regions and ring every off-net pad with clearance.
 ///
-/// It is the second board the negative-pour cut moved. Eagle's clearance rings
-/// are exactly the clear painter operations that were being dropped, but this
-/// published set has no drill and no placement map, so its total cannot serve as
-/// a native connectivity oracle. The exact output is retained only as a
-/// deterministic whole-board regression pin.
+/// It is the second board the negative-pour cut moved. The set ships an
+/// Excellon `RP2040_Thing_Plus-Panel.TXT` that never states its plating, so it
+/// is inferred from pad rings: 2052 of 2124 hits sit under two-layer pad flashes
+/// (vias and plated pads) and stitch; the other 72 (the 3.302 mm mounting holes
+/// and 0.650 mm panel hits) stitch nothing. With no placement map the total is
+/// not a native connectivity oracle, only a deterministic whole-board drift pin.
 ///
-/// This board also ships `RP2040_Thing_Plus-Panel.brd` beside its gerbers. The
-/// differential gate in `gerber_native_partition.rs` now synthesises placement
-/// probes from that native layout and checks every reconstructed net that reaches a
-/// shared pad centre against the Eagle net partition. The published set has no
-/// drill, so the gate can prove that clear-polarity reconstruction merged no native
-/// nets; it deliberately does not call gerber-side splits an error when missing
-/// barrels are sufficient to explain them. This exact count remains a separate
-/// drift pin, not a correctness oracle.
+/// The partition gate in `gerber_native_partition.rs` checks the same films and
+/// drill against the shipped Eagle `.brd` and requires zero false merges.
 #[test]
 fn sparkfun_rp2040_panel_count_is_stable_not_an_oracle() {
     let Some(dir) = hauksbee_testkit::corpus_board(
@@ -198,15 +193,22 @@ fn sparkfun_rp2040_panel_count_is_stable_not_an_oracle() {
     };
     let g = from_gerber_dir(&dir).expect("SparkFun panel gerbers must reverse-extract");
     assert_eq!(g.stats.n_layers, 2, "the published set is GTL plus GBL");
-    assert_eq!(
-        g.stats.n_holes, 0,
-        "no drill ships with it, so the two layers cannot stitch"
+    assert!(
+        g.stats
+            .notes
+            .iter()
+            .any(|n| n.contains("2052 of its 2124 hit(s)") && n.contains("read as plated")),
+        "the Excellon plating must be inferred from pad rings: {:?}",
+        g.stats.notes
     );
-    // The earlier signed/enclosure implementation yielded 3,438. The exact
-    // painter/contact implementation yields 3,378; without drill, placement, or
-    // native partition data neither number is an accuracy claim.
     assert_eq!(
-        g.stats.n_nets, 3378,
+        g.stats.n_holes, 2052,
+        "hits under two-layer pad rings are plated; the other 72 stay unstitched"
+    );
+    // Exact painter/contact output with the ring-inferred drill stitching front
+    // and back copper (3,378 before the drill was read). A drift pin, not an oracle.
+    assert_eq!(
+        g.stats.n_nets, 1842,
         "the exact published-film regression pin moved"
     );
 }
