@@ -68,26 +68,27 @@ min = 2.4
 max = 2.6
 "#;
 
-/// Write the board + a spec into a per-test temp dir and load the spec.
+/// Write the board + a spec into a fresh temp dir and return the spec's path.
 fn write_spec(test: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee_ci_tolerance_{test}_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let board = dir.join("divider.kicad_pcb");
-    std::fs::write(&board, BOARD).unwrap();
-    let spec = dir.join(format!("{test}.toml"));
+    let spec = crate::support::write_tmp("divider.kicad_pcb", BOARD)
+        .with_file_name(format!("{test}.toml"));
     std::fs::write(&spec, format!("board = \"divider.kicad_pcb\"\n{body}")).unwrap();
     spec
 }
 
-/// The settled VOUT for one outcome (threshold-0 window).
+/// [`write_spec`], loaded.
+fn load(test: &str, body: &str) -> Spec {
+    Spec::load(&write_spec(test, body)).expect("spec loads")
+}
+
+/// The settled level of `net` for one outcome (threshold-0 window).
+fn settled(out: &hauksbee_ci::runner::RunOutcome, net: &str) -> f64 {
+    let window = out.windows.get(&(net.to_string(), 0.0f64.to_bits()));
+    window.unwrap_or_else(|| panic!("{net} sampled")).last_v
+}
+
 fn vout(out: &hauksbee_ci::runner::RunOutcome) -> f64 {
-    out.windows
-        .get(&("VOUT".to_string(), 0.0f64.to_bits()))
-        .expect("VOUT sampled")
-        .last_v
+    settled(out, "VOUT")
 }
 
 fn mc_spec(test: &str, seeds: u32) -> Spec {
@@ -95,7 +96,7 @@ fn mc_spec(test: &str, seeds: u32) -> Spec {
         "{SPEC_COMMON}\n[[tolerance]]\nref = \"R1\"\npercent = 10.0\n\n\
          [[tolerance]]\nref = \"R2\"\npercent = 10.0\n\n[ensemble]\nseeds = {seeds}\n"
     );
-    Spec::load(&write_spec(test, &body)).expect("spec loads")
+    load(test, &body)
 }
 
 // ── The analytic envelope (gate e) ─────────────────────────────────────────
@@ -136,7 +137,7 @@ fn corners_land_on_the_analytic_envelope() {
         "{SPEC_COMMON}\n[[tolerance]]\nref = \"R*\"\npercent = 10.0\n\n\
          [ensemble]\nmode = \"corners\"\n"
     );
-    let spec = Spec::load(&write_spec("corners_envelope", &body)).expect("spec loads");
+    let spec = load("corners_envelope", &body);
     let outcomes = run_spec(&spec).expect("runs");
     // R1, R2, R3 toleranced by the pattern -> 2^3 = 8 corners (R3 is on its own
     // net and does not move VOUT), plus the interior monotonicity probes.
@@ -279,29 +280,19 @@ fn ensemble_is_deterministic_across_runs() {
 fn tolerances_do_not_perturb_the_fuzz_stream() {
     let fuzz_block = "\n[[net_drive]]\nnet = \"SPARE\"\nvolts = 0.0\n\n\
                       [fuzz]\nseeds = 6\nnets = [\"SPARE\"]\nlevels = [0.0, 5.0]\n";
-    let plain = Spec::load(&write_spec(
-        "fuzz_plain",
-        &format!("{SPEC_COMMON}{fuzz_block}"),
-    ))
-    .expect("plain spec loads");
-    let with_tol = Spec::load(&write_spec(
+    let plain = load("fuzz_plain", &format!("{SPEC_COMMON}{fuzz_block}"));
+    let with_tol = load(
         "fuzz_with_tol",
         &format!(
             "{SPEC_COMMON}{fuzz_block}\n[[tolerance]]\nref = \"R1\"\npercent = 10.0\n\n\
              [ensemble]\nseeds = 6\n"
         ),
-    ))
-    .expect("tol spec loads");
+    );
 
     let a = run_spec(&plain).expect("plain runs");
     let b = run_spec(&with_tol).expect("tol runs");
     assert_eq!(a.len(), b.len());
-    let spare = |o: &hauksbee_ci::runner::RunOutcome| {
-        o.windows
-            .get(&("SPARE".to_string(), 0.0f64.to_bits()))
-            .expect("SPARE sampled")
-            .last_v
-    };
+    let spare = |o| settled(o, "SPARE");
     for (x, y) in a.iter().zip(&b) {
         assert!(
             (spare(x) - spare(y)).abs() < 1e-9,
@@ -334,7 +325,7 @@ fn spec_validation_rejects_bad_ensembles() {
     assert!(err.to_string().contains("nothing to sample"), "{err}");
 
     let bad_ref = format!("{SPEC_COMMON}\n[[tolerance]]\nref = \"R9\"\npercent = 5.0\n");
-    let spec = Spec::load(&write_spec("bad_tol_ref", &bad_ref)).expect("loads");
+    let spec = load("bad_tol_ref", &bad_ref);
     let err = run_spec(&spec).unwrap_err();
     assert!(err.to_string().contains("matches no component"), "{err}");
 }

@@ -8,6 +8,8 @@ use std::process::Command;
 
 use hauksbee_ci::run;
 
+use crate::support::{bin, stderr, stdout};
+
 const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
@@ -64,6 +66,14 @@ kind = "no_faults"
     spec
 }
 
+/// A fresh [`write_fixture`] dir whose `file` is then replaced by `body`.
+fn fixture_with(file: &str, body: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = write_fixture(dir.path());
+    std::fs::write(dir.path().join(file), body).unwrap();
+    (dir, spec)
+}
+
 fn artifact<'a>(json: &'a serde_json::Value, role: &str) -> &'a serde_json::Value {
     json["inventory"]
         .as_array()
@@ -77,20 +87,14 @@ fn artifact<'a>(json: &'a serde_json::Value, role: &str) -> &'a serde_json::Valu
 /// and stdout+stderr joined: a refusal's sentence can land on either stream, so
 /// every check below reads the pair as one diagnostic.
 fn cli(subcommand: &str, spec: &Path, extra: &[&str]) -> (Option<i32>, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_hauksbee-ci"))
+    let output = Command::new(bin())
         .arg(subcommand)
         .arg(spec)
         .args(extra)
-        .output()
-        .expect("hauksbee-ci runs");
-    (
-        output.status.code(),
-        format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ),
-    )
+        .output();
+    let output = output.expect("hauksbee-ci runs");
+    let text = format!("{}\n{}", stdout(&output), stderr(&output));
+    (output.status.code(), text)
 }
 
 /// `check` and `run` must refuse the SAME input the SAME way (exit 2, naming
@@ -125,13 +129,8 @@ fn contributed(artifact: &serde_json::Value, what: &str, needle: &str) -> bool {
 
 #[test]
 fn bom_placement_and_variant_shape_the_gate_and_its_exact_evidence() {
-    let dir = tempfile::tempdir().unwrap();
-    let spec = write_fixture(dir.path());
-    std::fs::write(
-        dir.path().join("sensorless.variant.toml"),
-        "name = \"sensorless\"\nno_fit = [\"R2\", \"U4\"]\n",
-    )
-    .unwrap();
+    let variant = "name = \"sensorless\"\nno_fit = [\"R2\", \"U4\"]\n";
+    let (_dir, spec) = fixture_with("sensorless.variant.toml", variant);
     let result = run(&crate::support::run_config(spec))
         .expect("the production runner accepts the reconciled assembly inputs");
     assert_eq!(result.exit_code(), 0, "{}", result.render_human());
@@ -176,27 +175,15 @@ fn bom_placement_and_variant_shape_the_gate_and_its_exact_evidence() {
 
 #[test]
 fn check_and_run_both_refuse_the_same_ambiguous_bom() {
-    let dir = tempfile::tempdir().unwrap();
-    let spec = write_fixture(dir.path());
-    std::fs::write(
-        dir.path().join("bom.csv"),
-        "Designator,Value,Manufacturer,Manufacturer Name\nR1,10k,Yageo,Other\n",
-    )
-    .unwrap();
-
+    let bom = "Designator,Value,Manufacturer,Manufacturer Name\nR1,10k,Yageo,Other\n";
+    let (_dir, spec) = fixture_with("bom.csv", bom);
     both_refuse(&spec, &[], &["two columns that could be the manufacturer"]);
 }
 
 #[test]
 fn ci_refuses_a_bom_whose_part_dimension_contradicts_the_layout() {
-    let dir = tempfile::tempdir().unwrap();
-    let spec = write_fixture(dir.path());
-    std::fs::write(
-        dir.path().join("bom.csv"),
-        "Designator,Value,MPN,Manufacturer\nR1,10uH,LQH32CN100K23,Murata\n",
-    )
-    .unwrap();
-
+    let bom = "Designator,Value,MPN,Manufacturer\nR1,10uH,LQH32CN100K23,Murata\n";
+    let (_dir, spec) = fixture_with("bom.csv", bom);
     let error = run(&crate::support::run_config(spec))
         .expect_err("a resistor/inductor identity contradiction must fail closed");
     let diagnostic = error.to_string();
@@ -231,9 +218,7 @@ fn a_variant_cannot_silently_name_an_unknown_or_contradictory_reference() {
             "names no `fit` or `no_fit` references",
         ),
     ] {
-        let dir = tempfile::tempdir().unwrap();
-        let spec = write_fixture(dir.path());
-        std::fs::write(dir.path().join("sensorless.variant.toml"), body).unwrap();
+        let (_dir, spec) = fixture_with("sensorless.variant.toml", body);
         let error = run(&crate::support::run_config(spec))
             .expect_err("a variant typo or contradiction must fail closed");
         assert!(error.to_string().contains(expected), "{name}: {error}");
@@ -242,14 +227,8 @@ fn a_variant_cannot_silently_name_an_unknown_or_contradictory_reference() {
 
 #[test]
 fn an_assembly_that_leaves_every_component_open_is_invalid_not_green() {
-    let dir = tempfile::tempdir().unwrap();
-    let spec = write_fixture(dir.path());
-    std::fs::write(
-        dir.path().join("sensorless.variant.toml"),
-        "name = \"empty\"\nno_fit = [\"R1\", \"R2\", \"U4\"]\n",
-    )
-    .unwrap();
-
+    let variant = "name = \"empty\"\nno_fit = [\"R1\", \"R2\", \"U4\"]\n";
+    let (_dir, spec) = fixture_with("sensorless.variant.toml", variant);
     // The refusal must explain the false-green risk, not just say no.
     both_refuse(
         &spec,
@@ -260,13 +239,8 @@ fn an_assembly_that_leaves_every_component_open_is_invalid_not_green() {
 
 #[test]
 fn a_variant_absent_spi_part_cannot_be_reintroduced_as_a_virtual_peripheral() {
-    let dir = tempfile::tempdir().unwrap();
-    let spec = write_fixture(dir.path());
-    std::fs::write(
-        dir.path().join("sensorless.variant.toml"),
-        "name = \"without-eeprom\"\nno_fit = [\"U4\"]\n",
-    )
-    .unwrap();
+    let variant = "name = \"without-eeprom\"\nno_fit = [\"U4\"]\n";
+    let (_dir, spec) = fixture_with("sensorless.variant.toml", variant);
     let mut body = std::fs::read_to_string(&spec).unwrap();
     body.push_str(
         r#"
@@ -285,10 +259,8 @@ cs_net = "VCC"
 
 #[test]
 fn check_and_run_use_the_same_explicit_model_layer_for_bom_identity() {
-    let dir = tempfile::tempdir().unwrap();
-    let spec = write_fixture(dir.path());
     let board = BOARD.replace("25LC256", "HB-CUSTOM-LAYOUT");
-    std::fs::write(dir.path().join("board.kicad_pcb"), &board).unwrap();
+    let (dir, spec) = fixture_with("board.kicad_pcb", &board);
     std::fs::write(
         dir.path().join("bom.csv"),
         format!("{BOM}U4,ATmega328P-AU,ATmega328P,Microchip,\n"),

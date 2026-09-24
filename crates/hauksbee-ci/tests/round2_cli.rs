@@ -20,20 +20,26 @@ use hauksbee_ci::{run, Spec};
 /// `+5V >= min_v` with no firmware (pure analog, fast). `min_v = 1.0` passes
 /// at the 5 V rail; `min_v = 100.0` cannot.
 fn board_dir(tag: &str, min_v: f64) -> (tempfile::TempDir, PathBuf) {
+    let asserts = format!("[[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = {min_v}\n");
+    blinky_spec(tag, &format!("{IDEAL_5V}{asserts}"))
+}
+
+/// The ideal 5 V `[[supply]]` block most specs here start from.
+const IDEAL_5V: &str = "[[supply]]\nnet = \"+5V\"\nkind = \"ideal\"\nvolts = 5.0\n\n";
+
+/// A fresh dir holding a copy of the blinky board plus `<tag>.toml`: a 20 ms
+/// spec named `tag` on that board, with `body` after the header.
+fn blinky_spec(tag: &str, body: &str) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let board = dir.path().join("blinky.kicad_pcb");
-    std::fs::copy(blinky_board(), &board).unwrap();
+    std::fs::copy(blinky_board(), dir.path().join("blinky.kicad_pcb")).unwrap();
     let spec = dir.path().join(format!("{tag}.toml"));
-    std::fs::write(
-        &spec,
-        format!(
-            "name = \"{tag}\"\nboard = \"blinky.kicad_pcb\"\nduration_ms = 20\n\n\
-             [[supply]]\nnet = \"+5V\"\nkind = \"ideal\"\nvolts = 5.0\n\n\
-             [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = {min_v}\n"
-        ),
-    )
-    .unwrap();
+    let head = format!("name = \"{tag}\"\nboard = \"blinky.kicad_pcb\"\nduration_ms = 20\n");
+    std::fs::write(&spec, head + body).unwrap();
     (dir, spec)
+}
+
+fn run_ok(spec: PathBuf) -> hauksbee_ci::CiResult {
+    run(&crate::support::run_config(spec)).expect("run completes")
 }
 
 #[test]
@@ -70,18 +76,8 @@ fn multi_spec_run_merges_junit_and_exits_with_the_worst_code() {
 
 #[test]
 fn a_red_member_makes_the_set_red_but_runs_every_member() {
-    let (dir, green_spec) = board_dir("green", 1.0);
-    let red_spec = {
-        let spec = dir.path().join("red.toml");
-        std::fs::write(
-            &spec,
-            "name = \"red\"\nboard = \"blinky.kicad_pcb\"\nduration_ms = 20\n\n\
-             [[supply]]\nnet = \"+5V\"\nkind = \"ideal\"\nvolts = 5.0\n\n\
-             [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 100.0\n",
-        )
-        .unwrap();
-        spec
-    };
+    let (_dir, green_spec) = board_dir("green", 1.0);
+    let (_red_dir, red_spec) = board_dir("red", 100.0);
     let out = Command::new(bin())
         .arg("run")
         .arg(&red_spec)
@@ -219,18 +215,11 @@ fn a_suppressed_rail_with_no_declared_supply_reads_dead() {
     // node behind Rsupply_<net>, so the old device match never fired and a
     // "suppressed" rail still read nominal. Post-fix, suppressing the only
     // feed leaves the rail at ~0 V.
-    let dir = tempfile::tempdir().unwrap();
-    let board = dir.path().join("blinky.kicad_pcb");
-    std::fs::copy(blinky_board(), &board).unwrap();
-    let spec = dir.path().join("suppressed.toml");
-    std::fs::write(
-        &spec,
-        "name = \"suppressed\"\nboard = \"blinky.kicad_pcb\"\nduration_ms = 20\n\
-         suppress_rail = [\"+5V\"]\n\n\
-         [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmax = 0.5\n",
-    )
-    .unwrap();
-    let result = run(&crate::support::run_config(spec)).expect("run completes");
+    let (_dir, spec) = blinky_spec(
+        "suppressed",
+        "suppress_rail = [\"+5V\"]\n\n[[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmax = 0.5\n",
+    );
+    let result = run_ok(spec);
     let human = result.render_human();
     assert_eq!(
         result.exit_code(),
@@ -243,19 +232,13 @@ fn a_suppressed_rail_with_no_declared_supply_reads_dead() {
 fn a_stimulus_outranks_the_rail_inferred_from_its_nets_name() {
     // Held-out c17: the name-inferred ideal 5 V rail won against the spec's own
     // stimulus, so a commanded step never reached the net and read back clean.
-    let dir = tempfile::tempdir().unwrap();
-    let board = dir.path().join("blinky.kicad_pcb");
-    std::fs::copy(blinky_board(), &board).unwrap();
-    let spec = dir.path().join("stepped.toml");
-    std::fs::write(
-        &spec,
-        "name = \"stepped\"\nboard = \"blinky.kicad_pcb\"\nduration_ms = 20\n\n\
-         [[peripheral]]\nid = \"SRC\"\ntype = \"stimulus\"\nnet = \"+5V\"\noffset = 5\n\
+    let (_dir, spec) = blinky_spec(
+        "stepped",
+        "\n[[peripheral]]\nid = \"SRC\"\ntype = \"stimulus\"\nnet = \"+5V\"\noffset = 5\n\
          [[peripheral.event]]\nt_ms = 5\nvalue = 4\n\n\
          [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nafter_ms = 10\nmax = 4.2\n",
-    )
-    .unwrap();
-    let result = run(&crate::support::run_config(spec)).expect("run completes");
+    );
+    let result = run_ok(spec);
     assert_eq!(result.exit_code(), 0, "{}", result.render_human());
 }
 
@@ -267,7 +250,7 @@ fn asserting_on_an_ideal_fed_net_is_flagged_as_a_hollow_gate() {
     // holds +5V at 5.0: that check cannot fail for a board reason, and the
     // report must say so.
     let (_dir, spec) = board_dir("hollow", 1.0);
-    let result = run(&crate::support::run_config(spec)).expect("run completes");
+    let result = run_ok(spec);
     assert_eq!(result.exit_code(), 0);
     assert!(
         result
@@ -279,18 +262,12 @@ fn asserting_on_an_ideal_fed_net_is_flagged_as_a_hollow_gate() {
     );
     // A behavioral (usb) supply on the same net is exactly what the assertion
     // tests, so it must NOT be flagged.
-    let dir = tempfile::tempdir().unwrap();
-    let board = dir.path().join("blinky.kicad_pcb");
-    std::fs::copy(blinky_board(), &board).unwrap();
-    let spec = dir.path().join("behavioral.toml");
-    std::fs::write(
-        &spec,
-        "name = \"behavioral\"\nboard = \"blinky.kicad_pcb\"\nduration_ms = 20\n\n\
-         [[supply]]\nnet = \"+5V\"\nkind = \"usb\"\nusb = \"5v0.5a\"\n\n\
+    let (_dir, spec) = blinky_spec(
+        "behavioral",
+        "\n[[supply]]\nnet = \"+5V\"\nkind = \"usb\"\nusb = \"5v0.5a\"\n\n\
          [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 4.5\n",
-    )
-    .unwrap();
-    let result = run(&crate::support::run_config(spec)).expect("run completes");
+    );
+    let result = run_ok(spec);
     assert!(
         !result
             .coverage_warnings
@@ -305,20 +282,11 @@ fn asserting_on_an_ideal_fed_net_is_flagged_as_a_hollow_gate() {
 
 #[test]
 fn celsius_less_max_temp_on_a_fallback_bound_part_is_refused_at_load() {
-    let dir = tempfile::tempdir().unwrap();
-    let board = dir.path().join("blinky.kicad_pcb");
-    std::fs::copy(blinky_board(), &board).unwrap();
-    let spec = dir.path().join("maxtemp.toml");
     // R1 (the blinky LED resistor) binds to a generic fallback: no datasheet
     // Tj(max), so "<= device max" could never fail (the overpower monitor
     // front-runs the per-package default ceiling).
-    std::fs::write(
-        &spec,
-        "name = \"maxtemp\"\nboard = \"blinky.kicad_pcb\"\nduration_ms = 20\n\n\
-         [[supply]]\nnet = \"+5V\"\nkind = \"ideal\"\nvolts = 5.0\n\n\
-         [[assert]]\nkind = \"max_temp\"\nref = \"R1\"\n",
-    )
-    .unwrap();
+    let max_temp = format!("\n{IDEAL_5V}[[assert]]\nkind = \"max_temp\"\nref = \"R1\"\n");
+    let (_dir, spec) = blinky_spec("maxtemp", &max_temp);
     let err = run(&crate::support::run_config(spec.clone()))
         .expect_err("the unfalsifiable form must be refused at load");
     let msg = err.to_string();
@@ -327,13 +295,7 @@ fn celsius_less_max_temp_on_a_fallback_bound_part_is_refused_at_load() {
         "the refusal names the fix and the part: {msg}"
     );
     // With an explicit ceiling the same assert loads and runs.
-    std::fs::write(
-        &spec,
-        "name = \"maxtemp\"\nboard = \"blinky.kicad_pcb\"\nduration_ms = 20\n\n\
-         [[supply]]\nnet = \"+5V\"\nkind = \"ideal\"\nvolts = 5.0\n\n\
-         [[assert]]\nkind = \"max_temp\"\nref = \"R1\"\ncelsius = 125\n",
-    )
-    .unwrap();
+    let (_dir, spec) = blinky_spec("maxtemp", &format!("{max_temp}celsius = 125\n"));
     assert!(
         run(&crate::support::run_config(spec)).is_ok(),
         "the explicit-celsius form still runs"
@@ -345,7 +307,7 @@ fn celsius_less_max_temp_on_a_fallback_bound_part_is_refused_at_load() {
 fn waived_run(tag: &str, body: &str) -> hauksbee_ci::CiResult {
     let (dir, spec) = board_dir(tag, 100.0);
     std::fs::write(dir.path().join("hauksbee-waivers.toml"), body).unwrap();
-    run(&crate::support::run_config(spec)).expect("run completes")
+    run_ok(spec)
 }
 
 #[test]

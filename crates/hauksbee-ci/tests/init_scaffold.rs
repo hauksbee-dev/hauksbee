@@ -8,15 +8,16 @@
 
 use std::path::PathBuf;
 
-use hauksbee_ci::{init::init_to, run, RunConfig, Spec};
+use hauksbee_ci::{init::init_to, run, Spec};
 
 /// A board with a detectable MCU (atmega328p) and a named +5V rail.
 use crate::support::blinky_board as blinky;
+use crate::support::{example, repo, run_config};
 
 /// The shipped Watchy board: a USB-fed VBUS rail plus a +3V3 rail the board
 /// derives from it, so the scaffold has both a source rail and a derived one.
 fn watchy() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/watchy.kicad_pcb")
+    example("boards/watchy.kicad_pcb")
 }
 
 /// An STM32F103 blue pill board: its MCU binds to the external `renode:stm32f103`
@@ -24,23 +25,14 @@ fn watchy() -> PathBuf {
 /// so it CAN report pin drive direction and boot-coverage scaffolds without the
 /// backend-gap note.
 fn stm32_bluepill() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/boards/stm32_bluepill_demo.kicad_pcb")
+    repo("testdata/boards/stm32_bluepill_demo.kicad_pcb")
 }
 
 /// An ESP32 devkit board: its MCU binds to the `qemu:esp32` backend, which
 /// observes GPIO through a RAM mailbox carrying LEVELS only; it cannot report
 /// pin drive direction, so boot-coverage keeps the honest backend-gap note.
 fn esp32_devkit() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/boards/esp32_devkit_demo.kicad_pcb")
-}
-
-/// Copy `blinky.kicad_pcb` into a fresh per-test temp dir and return the copy's
-/// path, so init writes its `.toml` there rather than polluting the source tree.
-/// The `tag` keeps parallel tests off each other's directory.
-fn board_in_tempdir(tag: &str) -> PathBuf {
-    copy_board_to_tempdir(&blinky(), tag)
+    repo("testdata/boards/esp32_devkit_demo.kicad_pcb")
 }
 
 /// Copy `src` (a `.kicad_pcb`) into a fresh per-test temp dir, returning the
@@ -60,7 +52,7 @@ fn copy_board_to_tempdir(src: &std::path::Path, tag: &str) -> PathBuf {
 
 #[test]
 fn init_generates_a_spec_the_loader_accepts() {
-    let board = board_in_tempdir("load");
+    let board = copy_board_to_tempdir(&blinky(), "load");
     let spec_path = init_to(&board, board.parent()).expect("init scaffolds a spec");
 
     // It landed beside the board as <stem>.toml.
@@ -190,37 +182,27 @@ fn init_omits_the_backend_gap_note_for_direction_mapped_renode_parts() {
 fn uncomment_scaffold(text: &str) -> String {
     let mut out = String::new();
     for line in text.lines() {
-        let Some(rest) = line.strip_prefix("# ") else {
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        };
-        let t = rest.trim_start();
+        // Uncommented lines have nothing to strip: an empty `t` keeps them as-is.
+        let t = line.strip_prefix("# ").map_or("", str::trim_start);
         let is_table = t.starts_with("[[") || (t.starts_with('[') && t.contains(']'));
-        let key = t.split('=').next().unwrap_or("").trim();
-        let is_kv = t.contains('=')
-            && !key.is_empty()
+        let (key, value) = t.split_once('=').unwrap_or_default();
+        let key = key.trim();
+        let is_kv = !key.is_empty()
             && key
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
-        if is_table {
-            out.push_str(t);
-            out.push('\n');
-        } else if is_kv {
-            // The unpowered-rail block deliberately leaves `volts =` blank and
-            // tells the user to fill it in; do what the user would.
-            let value_part = t.split_once('=').map_or("", |(_, v)| v);
-            let value = value_part.split('#').next().unwrap_or("").trim();
-            if value.is_empty() {
-                out.push_str(&format!("{key} = 3.3\n"));
-            } else {
-                out.push_str(t);
-                out.push('\n');
-            }
+        // The unpowered-rail block deliberately leaves `volts =` blank and
+        // tells the user to fill it in; do what the user would.
+        let blank = value.split('#').next().unwrap_or("").trim().is_empty();
+        let kept = if is_kv && blank {
+            format!("{key} = 3.3")
+        } else if is_table || is_kv {
+            t.to_string()
         } else {
-            out.push_str(line);
-            out.push('\n');
-        }
+            line.to_string()
+        };
+        out.push_str(&kept);
+        out.push('\n');
     }
     out
 }
@@ -270,7 +252,7 @@ fn every_commented_scaffold_block_parses_when_uncommented() {
 /// checked nothing without ever saying so.
 #[test]
 fn out_without_a_toml_suffix_is_a_directory_even_when_it_does_not_exist_yet() {
-    let board = board_in_tempdir("out_shapes");
+    let board = copy_board_to_tempdir(&blinky(), "out_shapes");
     let root = board.parent().unwrap().to_path_buf();
 
     // A bare name, no trailing slash, nothing on disk.
@@ -339,8 +321,8 @@ fn uncommenting_the_scaffolded_rail_blocks_gates_for_real() {
         let board = copy_board_to_tempdir(&src, tag);
         let text = hauksbee_ci::init::render_spec(&board).expect("render scaffolds a spec");
         let spec_path = board.with_extension("rails.toml");
-        std::fs::write(&spec_path, uncomment_board_blocks(&text)).unwrap();
-        let spec_text = std::fs::read_to_string(&spec_path).unwrap();
+        let spec_text = uncomment_board_blocks(&text);
+        std::fs::write(&spec_path, &spec_text).unwrap();
 
         // The rail check is really live, otherwise this test would pass on a
         // spec that asserts nothing.
@@ -359,11 +341,8 @@ fn uncommenting_the_scaffolded_rail_blocks_gates_for_real() {
             "{tag}: the scaffolded supply leg is live"
         );
 
-        let result = run(&RunConfig {
-            spec: spec_path.clone(),
-            ..Default::default()
-        })
-        .unwrap_or_else(|e| panic!("{tag}: the uncommented rail spec runs, got: {e}"));
+        let result = run(&run_config(spec_path.clone()))
+            .unwrap_or_else(|e| panic!("{tag}: the uncommented rail spec runs, got: {e}"));
         let human = result.render_human();
         let undermined = result.evidence.iter().any(|map| map.is_undermined());
         assert_eq!(
@@ -413,7 +392,7 @@ fn uncommenting_the_scaffolded_rail_blocks_gates_for_real() {
 
 #[test]
 fn init_refuses_to_overwrite_an_existing_spec() {
-    let board = board_in_tempdir("overwrite");
+    let board = copy_board_to_tempdir(&blinky(), "overwrite");
     init_to(&board, board.parent()).expect("first init writes the spec");
     let err = init_to(&board, board.parent()).expect_err("second init must refuse to overwrite");
     assert!(

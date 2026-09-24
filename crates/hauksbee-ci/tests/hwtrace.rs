@@ -14,9 +14,8 @@
 //! pipeline, not the simulator.
 
 #[cfg(feature = "avr")]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-#[cfg(feature = "avr")]
 use crate::support;
 
 #[cfg(feature = "avr")]
@@ -24,11 +23,7 @@ use hauksbee_ci::run;
 
 #[cfg(feature = "avr")]
 fn hwtraces_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join("testdata/hwtraces")
+    support::repo("testdata/hwtraces")
 }
 
 /// Every scenario spec under `testdata/hwtraces/<board>/<scenario>/spec.toml`.
@@ -73,7 +68,7 @@ fn hwtrace_corpus() {
             .unwrap()
             .display()
             .to_string();
-        let result = run(&crate::support::run_config(spec.clone()))
+        let result = run(&support::run_config(spec.clone()))
             .unwrap_or_else(|e| panic!("{scenario}: run failed: {e}"));
 
         for r in &result.results {
@@ -101,10 +96,6 @@ fn hwtrace_corpus() {
 #[cfg(feature = "avr")]
 #[test]
 fn hwtrace_deliberate_mismatch_names_feature_and_values() {
-    let dir =
-        std::env::temp_dir().join(format!("hauksbee_hwtrace_mismatch_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
-
     // A clean 300 ms-period square-wave "capture", 1 s at 1 kSa/s.
     let mut csv = String::from("time_s,volts\n");
     let mut t = 0.0_f64;
@@ -114,7 +105,10 @@ fn hwtrace_deliberate_mismatch_names_feature_and_values() {
         csv.push_str(&format!("{t:.4},{v:.3}\n"));
         t += 0.001;
     }
-    std::fs::write(dir.join("d13.csv"), csv).expect("write csv");
+    let dir = support::write_tmp("d13.csv", &csv)
+        .parent()
+        .unwrap()
+        .to_path_buf();
 
     std::fs::write(
         dir.join("trace.toml"),
@@ -136,7 +130,6 @@ reltol = 0.10
     )
     .expect("write trace");
 
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
     std::fs::write(
         dir.join("spec.toml"),
         format!(
@@ -155,13 +148,13 @@ usb = "5v0.5a"
 kind = "hwtrace"
 trace = "trace.toml"
 "#,
-            support::toml_path(&repo.join("examples/boards/blinky.kicad_pcb")),
-            support::toml_path(&repo.join("../../testdata/firmware/demo/demo.hex")),
+            support::toml_path(&support::blinky_board()),
+            support::toml_path(&support::repo("testdata/firmware/demo/demo.hex")),
         ),
     )
     .expect("write spec");
 
-    let result = run(&crate::support::run_config(dir.join("spec.toml"))).expect("run");
+    let result = run(&support::run_config(dir.join("spec.toml"))).expect("run");
 
     let period = result
         .results
@@ -198,17 +191,7 @@ trace = "trace.toml"
 // ── honesty rules, no sim required ───────────────────────────────────────────
 
 fn load_trace_str(body: &str) -> Result<hauksbee_ci::hwtrace::Trace, hauksbee_ci::SpecError> {
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee_hwtrace_load_{}_{}",
-        std::process::id(),
-        body.len()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("trace.toml");
-    std::fs::write(&path, body).unwrap();
-    let r = hauksbee_ci::hwtrace::Trace::load(&path);
-    let _ = std::fs::remove_dir_all(&dir);
-    r
+    hauksbee_ci::hwtrace::Trace::load(&support::write_tmp("trace.toml", body))
 }
 
 /// The provenance rule is mandatory: a trace that does not say whether it is

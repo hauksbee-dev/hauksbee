@@ -21,19 +21,8 @@ use std::collections::HashMap;
 
 use hauksbee_ci::assertions::evaluate;
 use hauksbee_ci::runner::{NetWindow, RunOutcome};
-use hauksbee_ci::spec::Spec;
 
-use crate::support::ci_result;
-
-/// Write a spec TOML to a uniquely-named temp file and load it (tests run in
-/// parallel, so the file name is per-test).
-fn load_spec(name: &str, toml: &str) -> Spec {
-    let dir = std::env::temp_dir().join("hauksbee_ci_analog_invalid_tests");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(name);
-    std::fs::write(&path, toml).unwrap();
-    Spec::load(&path).expect("spec loads")
-}
+use crate::support::{ci_result, load_spec};
 
 /// A minimal one-seed outcome carrying a single settled voltage window on `net`
 /// (a value that would PASS a `>= 3.0 V` check) plus a caller-supplied analog

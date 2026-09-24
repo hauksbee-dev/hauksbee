@@ -29,14 +29,8 @@ use hauksbee_ci::run;
 
 use crate::support::{self, example};
 
-fn renode_available() -> bool {
-    hauksbee_mcu::renode::is_available()
-}
-
 fn firmware_present() -> bool {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/stm32_i2c_thermostat/thermostat.elf")
-        .exists()
+    support::repo("testdata/firmware/stm32_i2c_thermostat/thermostat.elf").exists()
 }
 
 /// One declarative-LM75 thermostat run from `examples/<spec>`, asserted GREEN
@@ -44,7 +38,7 @@ fn firmware_present() -> bool {
 /// skips cleanly when Renode or the thermostat firmware is absent.
 fn lm75_run(case: &str, spec: &str, expect: &str) -> Option<hauksbee_ci::CiResult> {
     let _guard = support::descriptor_env_lock();
-    if !renode_available() || !firmware_present() {
+    if !hauksbee_mcu::renode::is_available() || !firmware_present() {
         eprintln!(
             "SKIP {case}: needs Renode and \
              `make -C testdata/firmware/stm32_i2c_thermostat`"
@@ -189,8 +183,7 @@ fn sensor_spec_both_sources_is_rejected() {
 #[test]
 fn unknown_sensor_input_is_refused_before_simulation() {
     let dir = tempfile::tempdir().expect("temporary spec directory");
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples/boards/tolerance_divider.kicad_pcb");
+    let board = example("boards/tolerance_divider.kicad_pcb");
     let spec = format!(
         r#"name = "bad sensor input"
 board = {}
