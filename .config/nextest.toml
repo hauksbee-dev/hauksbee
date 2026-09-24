@@ -7,3 +7,9 @@ max-threads = 1
 [[profile.default.overrides]]
 filter = "test(renode)"
 test-group = "renode"
+
+# speed_gate times the solver against ngspice; sharing the CPU with the rest of
+# the suite measures the machine, not the solver. It takes every thread.
+[[profile.default.overrides]]
+filter = "binary(speed_gate)"
+threads-required = "num-test-threads"
