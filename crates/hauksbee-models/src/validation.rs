@@ -437,12 +437,13 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // state exists to prevent.
     if !identity_only {
         let rules = kind_rules(entry);
-        // A programmed-current (charger) vreg may abstain on `iq_a`, which the
-        // binder tolerates absent, when its datasheet prints only a limit: an
-        // `unknown` source record names it and the row stays a characteristic.
+        // A programmed-current or behavioural vreg (charger, pmic) may abstain
+        // on an `iq_a` or `dropout_v` printed as no single value by an `unknown`
+        // source record; the rows stay characteristics. The binder then stamps
+        // no Iq and flags the rail's headroom as unverified, never assumed.
         let abstains = |key: &str| {
-            key == "iq_a"
-                && entry.current_program.is_some()
+            matches!(key, "iq_a" | "dropout_v")
+                && (entry.current_program.is_some() || !entry.behavioral.is_empty())
                 && entry.source.as_ref().is_some_and(|s| {
                     s.uncertainty.iter().any(|u| {
                         matches!(u, ModelUncertainty::Unknown { parameter, .. } if parameter == key)
