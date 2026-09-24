@@ -47,12 +47,7 @@ fn inferred_same_hierarchy_altium_merge_stays_unbound_end_to_end() {
     );
 
     let bound = bind_board(&board, &ModelLibrary::builtin());
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|row| row.reference == "R1")
-        .expect("R1 bind row");
+    let row = bound.report.row("R1").expect("R1 bind row");
     assert_eq!(row.model_id, None, "inferred identity must remain open");
     assert!(matches!(row.outcome, BindOutcome::Unresolved { .. }));
 }
@@ -228,9 +223,7 @@ fn dnp_component_is_not_stamped() {
     // And the report says so, as a skip, not a bound or unresolved row.
     let row = bound
         .report
-        .rows
-        .iter()
-        .find(|r| r.reference == "R1")
+        .row("R1")
         .expect("DNP part still gets a bind row");
     assert!(
         matches!(&row.outcome, BindOutcome::Skipped { reason } if reason.contains("DNP")),
@@ -391,12 +384,7 @@ fn spdt_unresolved_vcc_rail_warns() {
         vec![sw],
     );
     let bound = bind_board(&b, &ModelLibrary::builtin());
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|r| r.reference == "SW1")
-        .expect("SW1 gets a bind row");
+    let row = bound.report.row("SW1").expect("SW1 gets a bind row");
     let w = row.warning.as_deref().unwrap_or("");
     assert!(
         w.contains("assumed") && w.contains("VDD_MUX"),
@@ -539,12 +527,7 @@ fn contradictory_duplicate_passive_pad_nets_are_refused() {
             .any(|device| device.name() == "R8" || device.name().starts_with("R8_e")),
         "a contradictory logical terminal must not stamp guessed connectivity"
     );
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|row| row.reference == "R8")
-        .expect("R8 gets a bind row");
+    let row = bound.report.row("R8").expect("R8 gets a bind row");
     assert!(
         matches!(&row.outcome, BindOutcome::Unresolved { reason } if reason.contains("pad 1") && reason.contains("conflicting nets")),
         "the unresolved reason identifies the contradictory pad: {:?}",
@@ -646,9 +629,7 @@ fn reference_ambiguous_merge_without_source_uid_is_left_open() {
     );
     let row = bound
         .report
-        .rows
-        .iter()
-        .find(|row| row.reference == "C9")
+        .row("C9")
         .expect("ambiguous C9 gets a visible bind row");
     assert!(
         matches!(&row.outcome, BindOutcome::Unresolved { reason }
@@ -701,12 +682,7 @@ fn reference_ambiguous_merge_with_source_uid_binds_one_scalar() {
         .collect();
     assert_eq!(capacitors.len(), 1, "one UID means one scalar capacitor");
     assert_eq!(capacitors[0].name(), "C10");
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|row| row.reference == "C10")
-        .expect("C10 gets a bind row");
+    let row = bound.report.row("C10").expect("C10 gets a bind row");
     assert!(
         matches!(row.outcome, BindOutcome::Analog { .. }),
         "authoritative UID identity should bind normally: {:?}",
@@ -778,12 +754,7 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
     // R5: the 1-2/3-4 sequential pairing is a convention (a mirror-pinout array
     // would pair differently), so the even-count path must say so in the bind
     // report, matching the odd-count branch, not a silent guess.
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|r| r.reference == "RN1")
-        .expect("RN1 gets a bind row");
+    let row = bound.report.row("RN1").expect("RN1 gets a bind row");
     let w = row.warning.as_deref().unwrap_or("");
     assert!(
         w.contains("sequential"),
@@ -839,12 +810,7 @@ fn bussed_passive_array_binds_all_elements_with_a_loud_warning() {
         );
     }
     // And the assumption is loud, not silent.
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|r| r.reference == "RN2")
-        .expect("RN2 gets a bind row");
+    let row = bound.report.row("RN2").expect("RN2 gets a bind row");
     let w = row.warning.as_deref().unwrap_or("");
     assert!(
         w.contains("BUSSED"),
@@ -896,9 +862,7 @@ fn negative_rails_get_supply_legs_at_negative_voltage() {
     for (name, v) in [("-5V", -5.0), ("-12V", -12.0)] {
         let row = bound
             .report
-            .rows
-            .iter()
-            .find(|r| r.reference == format!("RAIL:{name}"))
+            .row(&format!("RAIL:{name}"))
             .unwrap_or_else(|| panic!("RAIL:{name} row expected"));
         assert!(
             matches!(row.outcome, BindOutcome::PowerRail { volts } if volts == v),

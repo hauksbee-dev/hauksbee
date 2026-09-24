@@ -56,12 +56,7 @@ fn refdes_shaped_names_never_become_magnitudes() {
     let bound = bind_board(&board, &ModelLibrary::builtin());
 
     // R74 has no value and no other evidence: it must bind UNRESOLVED.
-    let r74 = bound
-        .report
-        .rows
-        .iter()
-        .find(|row| row.reference == "R74")
-        .expect("R74 has a bind row");
+    let r74 = bound.report.row("R74").expect("R74 has a bind row");
     assert!(
         matches!(r74.outcome, BindOutcome::Unresolved { .. }),
         "R74: a missing value must bind UNRESOLVED, got {:?}",

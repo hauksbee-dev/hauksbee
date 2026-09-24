@@ -7126,12 +7126,7 @@ mod tests {
         };
 
         let bound = bind_board(&board, &ModelLibrary::builtin());
-        let row = bound
-            .report
-            .rows
-            .iter()
-            .find(|row| row.reference == "R1")
-            .unwrap();
+        let row = bound.report.row("R1").unwrap();
         assert_eq!(row.model_id, None);
         assert_eq!(row.confidence, Confidence::Unresolved);
         assert!(matches!(

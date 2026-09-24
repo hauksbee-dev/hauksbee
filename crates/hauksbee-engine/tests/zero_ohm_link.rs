@@ -53,12 +53,7 @@ fn zero_ohm_resistor_stamps_the_link_resistance_with_a_warning() {
         "a 0-ohm value stamps the shared link resistance, not the raw floor"
     );
 
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|r| r.reference == "R12")
-        .expect("R12 has a bind row");
+    let row = bound.report.row("R12").expect("R12 has a bind row");
     let warning = row.warning.as_deref().expect("the 0-ohm stamp is loud");
     assert_eq!(
         warning,
@@ -67,12 +62,7 @@ fn zero_ohm_resistor_stamps_the_link_resistance_with_a_warning() {
     );
 
     // The real 1k next to it is untouched and unwarned.
-    let r2 = bound
-        .report
-        .rows
-        .iter()
-        .find(|r| r.reference == "R2")
-        .expect("R2 has a bind row");
+    let r2 = bound.report.row("R2").expect("R2 has a bind row");
     assert!(r2.warning.is_none(), "R2 must not warn: {:?}", r2.warning);
 }
 

@@ -89,9 +89,7 @@ fn identify(
 fn outcome_of(board: &ExtractedBoard, reference: &str) -> BindOutcome {
     bind_board(board, &ModelLibrary::builtin())
         .report
-        .rows
-        .iter()
-        .find(|r| r.reference == reference)
+        .row(reference)
         .map(|r| r.outcome.clone())
         .unwrap_or_else(|| panic!("{reference} has no bind row"))
 }
