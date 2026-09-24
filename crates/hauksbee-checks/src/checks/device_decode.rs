@@ -1220,33 +1220,30 @@ mod tests {
         let r12 = 10_000.0;
         // detent5 open: permanent R12 alone -> 2185 mV
         assert!((divider_mv(rpu, r12) - 2185).abs() <= 2, "open leg");
-        // detent4: R12 || 5.1k = 3400 -> 1315 mV
-        assert!(
-            (divider_mv(rpu, parallel(r12, 5100.0)) - 1315).abs() <= 2,
-            "5.1k leg"
-        );
-        // detent3: R12 || 2.4k -> 908 mV
-        assert!(
-            (divider_mv(rpu, parallel(r12, 2400.0)) - 908).abs() <= 2,
-            "2.4k leg"
-        );
-        // detent2: R12 || 1k -> 499 mV
-        assert!(
-            (divider_mv(rpu, parallel(r12, 1000.0)) - 499).abs() <= 2,
-            "1k leg"
-        );
+        // detent4: R12 || 5.1k = 3400 -> 1315 mV; detent3: R12 || 2.4k -> 908 mV;
+        // detent2: R12 || 1k -> 499 mV.
+        for (leg, want_mv) in [(5100.0, 1315), (2400.0, 908), (1000.0, 499)] {
+            let got = divider_mv(rpu, parallel(r12, leg));
+            assert!((got - want_mv).abs() <= 2, "{leg} ohm leg: {got} mV");
+        }
         // detent1: direct GND (0 ohm) -> 0 mV
         assert_eq!(divider_mv(rpu, parallel(r12, 0.0)), 0, "GND-direct leg");
     }
 
     // ── 4a. Synthetic board: VBUS_MIN hard-wired to 19V band while VBUS_MAX
     //        tops out below it -> the Note-1 override finding must fire. ──────
-    fn cypd_board(min_pd: &str, max_extra_leg_pd: &str) -> String {
+    fn cypd_board(min_pd: &str, max_extra_leg_pd: &str, dnp_r9_r12: bool) -> String {
         // U1 CYPD3177: pad 1 = VBUS_MIN, pad 2 = VBUS_MAX.
         // VBUS_MAX net 21: R11 5.1k pull-up to +3.3V (net 5), R12 10k pull-down to
         //   GND (net 1), plus a slide switch SW1 whose common (pad 6) is on net 21
         //   and whose pad 4 reaches GND via R15 (`max_extra_leg_pd`), pad 5 open.
         // VBUS_MIN net 20: R9 5.1k pull-up to +3.3V, R10 `min_pd` pull-down to GND.
+        // `dnp_r9_r12` gives R9 and R12 the KiCad DNP attribute.
+        let dnp = if dnp_r9_r12 {
+            "\n    (attr smd exclude_from_bom dnp)"
+        } else {
+            ""
+        };
         format!(
             r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
@@ -1265,7 +1262,7 @@ mod tests {
   )
   (module R (layer F.Cu) (at 110 100)
     (fp_text reference R9 (at 0 0) (layer F.SilkS))
-    (fp_text value 5k1 (at 0 2) (layer F.Fab))
+    (fp_text value 5k1 (at 0 2) (layer F.Fab)){dnp}
     (pad 1 smd rect (at 0 0) (net 5 "+3.3V"))
     (pad 2 smd rect (at 2 0) (net 20 "Net-(U1-VBUS_MIN)"))
   )
@@ -1283,7 +1280,7 @@ mod tests {
   )
   (module R (layer F.Cu) (at 110 106)
     (fp_text reference R12 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (fp_text value 10k (at 0 2) (layer F.Fab)){dnp}
     (pad 1 smd rect (at 0 0) (net 21 "VBUS_max"))
     (pad 2 smd rect (at 2 0) (net 1 "GND"))
   )
@@ -1308,7 +1305,7 @@ mod tests {
     fn device_decode_findings_flow_through_engine_lint() {
         // Chokepoint fix: device_decode must run INSIDE engine_lint so
         // --check/--json/TUI/frontdoor surface these faults, not only --lint.
-        let text = cypd_board("10k", "5k1");
+        let text = cypd_board("10k", "5k1", false);
         let board = ExtractedBoard::from_kicad_pcb(&text).expect("parse synthetic board");
         let lib = ModelLibrary::builtin();
         assert!(
@@ -1333,7 +1330,7 @@ mod tests {
         //   its lower detents (5.1k leg -> 1315 mV = 12V) sit below VBUS_MIN. The
         //   top reachable band equals 19V, and the 15V/20V finding plus the Note-1
         //   finding both apply. We assert the Note-1 (High) finding fires.
-        let r = lint(&cypd_board("10k", "5k1"));
+        let r = lint(&cypd_board("10k", "5k1", false));
         let note1: Vec<_> = r
             .of_check(LintCheck::DeviceDecode)
             .filter(|f| matches!(f.severity, Severity::High))
@@ -1349,7 +1346,7 @@ mod tests {
         // The selector cannot reach 20V (no detent grounds the pull-up / opens the
         // pull-down to give >= 2779 mV), so the Medium "unreachable top band"
         // finding fires regardless of the Note-1 case.
-        let r = lint(&cypd_board("10k", "5k1"));
+        let r = lint(&cypd_board("10k", "5k1", false));
         let med: Vec<_> = r
             .of_check(LintCheck::DeviceDecode)
             .filter(|f| matches!(f.severity, Severity::Medium))
@@ -1504,62 +1501,9 @@ mod tests {
     fn dnp_permanent_pulldown_makes_check_silent() {
         // Same as the faulting board, but R12 (VBUS_MAX permanent pull-down) and
         // R9 (VBUS_MIN pull-up) carry the KiCad DNP attribute.
-        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 5 "+3.3V")
-  (net 20 "Net-(U1-VBUS_MIN)")
-  (net 21 "VBUS_max")
-  (net 24 "Net-(R15-Pad1)")
-  (net 31 "unconnected-(SW1-Pad5)")
-  (module Package_DFN_QFN:QFN24 (layer F.Cu) (at 100 100)
-    (fp_text reference U1 (at 0 0) (layer F.SilkS))
-    (fp_text value CYPD3177-24LQ (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 20 "Net-(U1-VBUS_MIN)") (pinfunction "VBUS_MIN"))
-    (pad 2 smd rect (at 0 1) (net 21 "VBUS_max") (pinfunction "VBUS_MAX"))
-  )
-  (module R (layer F.Cu) (at 110 100)
-    (fp_text reference R9 (at 0 0) (layer F.SilkS))
-    (fp_text value 5k1 (at 0 2) (layer F.Fab))
-    (attr smd exclude_from_bom dnp)
-    (pad 1 smd rect (at 0 0) (net 5 "+3.3V"))
-    (pad 2 smd rect (at 2 0) (net 20 "Net-(U1-VBUS_MIN)"))
-  )
-  (module R (layer F.Cu) (at 110 102)
-    (fp_text reference R10 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 20 "Net-(U1-VBUS_MIN)"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-  (module R (layer F.Cu) (at 110 104)
-    (fp_text reference R11 (at 0 0) (layer F.SilkS))
-    (fp_text value 5k1 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 5 "+3.3V"))
-    (pad 2 smd rect (at 2 0) (net 21 "VBUS_max"))
-  )
-  (module R (layer F.Cu) (at 110 106)
-    (fp_text reference R12 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (attr smd exclude_from_bom dnp)
-    (pad 1 smd rect (at 0 0) (net 21 "VBUS_max"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-  (module R (layer F.Cu) (at 110 108)
-    (fp_text reference R15 (at 0 0) (layer F.SilkS))
-    (fp_text value 5k1 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 24 "Net-(R15-Pad1)"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-  (module SW (layer F.Cu) (at 120 100)
-    (fp_text reference SW1 (at 0 0) (layer F.SilkS))
-    (fp_text value SS-10-15SPE (at 0 2) (layer F.Fab))
-    (pad 4 smd rect (at 0 0) (net 24 "Net-(R15-Pad1)"))
-    (pad 5 smd rect (at 1 0) (net 31 "unconnected-(SW1-Pad5)"))
-    (pad 6 smd rect (at 2 0) (net 21 "VBUS_max"))
-  )
-)"#;
+        let text = cypd_board("10k", "5k1", true);
         assert_eq!(
-            lint(text).of_check(LintCheck::DeviceDecode).count(),
+            lint(&text).of_check(LintCheck::DeviceDecode).count(),
             0,
             "with the permanent pull-down DNP the static divider is uncomputable; the check must stay silent"
         );
