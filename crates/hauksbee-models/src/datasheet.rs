@@ -2520,8 +2520,9 @@ const CODEX_DISABLED_FEATURES: &[&str] = &[
 ///     it; reads are not confined (see `Workspace`). `--skip-git-repo-check` as the
 ///     sandbox is no repo, `--cd` to open the PDF, `--output-last-message` keeps
 ///     narration apart, pages as images. `--ephemeral` keeps no transcript,
-///     `--ignore-user-config` drops `config.toml` (MCP servers, trusted projects, any
-///     `-p` profile layered on it; sign-in stays) and `--ignore-rules` execpolicy rules.
+///     `--ignore-user-config` drops `config.toml` (MCP servers, trusted projects;
+///     sign-in stays) unless a profile is set: that is the operator choosing their
+///     codex config, which a profile layers on. `--ignore-rules` drops execpolicy rules.
 ///   * claude: `-p --permission-mode <mode> --no-session-persistence`: a
 ///     datasheet run is not a conversation anyone resumes, and a transcript
 ///     per extraction would keep the datasheet's text around after the
@@ -2559,7 +2560,9 @@ fn run_agent_once(resolved: &Resolved, prompt: &str, ws: &Workspace) -> Result<S
                 .arg(ws.path())
                 .arg("--output-last-message")
                 .arg(ws.path().join("last-message.txt"))
-                .args(["--ephemeral", "--ignore-user-config", "--ignore-rules"]);
+                .arg("--ephemeral")
+                .args(a.profile.is_none().then_some("--ignore-user-config"))
+                .arg("--ignore-rules");
             for feature in CODEX_DISABLED_FEATURES {
                 cmd.args(["--disable", feature]);
             }
@@ -3735,8 +3738,8 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
                 "--output-last-message".into(),
                 ws.path().join("last-message.txt").display().to_string(),
             ]);
-            expected
-                .extend(["--ephemeral", "--ignore-user-config", "--ignore-rules"].map(Into::into));
+            // A profile opts into the operator's codex config: no --ignore-user-config.
+            expected.extend(["--ephemeral", "--ignore-rules"].map(Into::into));
             for feature in CODEX_DISABLED_FEATURES {
                 expected.extend(["--disable".into(), (*feature).into()]);
             }
@@ -3744,6 +3747,10 @@ uncertainty = [{ status = "unknown", parameter = "model", reason = "none publish
             let actual = output.lines().map(str::to_string).collect::<Vec<_>>();
             assert_eq!(actual, expected, "codex permission mode {mode}");
         }
+        resolved.codex.profile = None;
+        let output = run_agent_once(&resolved, "fake prompt", &ws).unwrap();
+        assert!(output.contains("--ephemeral\n--ignore-user-config\n--ignore-rules\n--disable"));
+        assert!(output.starts_with("exec\n--model\n"), "{output}");
         resolved.backend = Backend::Agy;
         resolved.agy.command = command.to_str().unwrap().into();
         let a = &resolved.agy;

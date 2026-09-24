@@ -212,7 +212,7 @@ pub struct AgentConfig {
     /// Claude's `--permission-mode`, agy's `--mode`, codex's `--sandbox`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
-    /// `codex -p NAME`; inert, as codex runs with `--ignore-user-config`. Others ignore it.
+    /// `codex -p NAME`; setting it also applies `~/.codex/config.toml`. Others ignore it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     /// Extra arguments appended to the command line, verbatim.
@@ -381,7 +381,7 @@ impl ExtractConfig {
                     a.permission_modes.join(" | "),
                     a.permission_mode,
                 ),
-                ("profile", "codex -p NAME (inert: codex ignores user config)".into(), ""),
+                ("profile", "codex -p NAME and its codex config".into(), ""),
                 (
                     "extra_args",
                     "extra CLI arguments, space-separated".into(),
@@ -997,10 +997,13 @@ impl Resolved {
             Some(effort) => format!("{}, {effort} effort", self.model()),
             None => format!("{} at {}", self.model(), self.api.base_url),
         };
-        let routing = self
+        let mut routing = self
             .custom_command(self.backend)
             .map(|_| format!("; {}", self.sends_data_to(self.backend)))
             .unwrap_or_default();
+        if let (Some(p), Backend::Codex) = (&self.codex.profile, self.backend) {
+            routing += &format!("; profile {p}: your codex config applies");
+        }
         format!("{} ({detail}{routing})", self.backend.label())
     }
 }
@@ -1121,7 +1124,25 @@ pub struct Loaded {
 /// file that exists but cannot be parsed IS an error, with the path in it:
 /// silently ignoring it would run an extraction on settings the user did not
 /// choose.
+/// So is a missing file that `$HAUKSBEE_EXTRACT_CONFIG` names: never silent defaults.
 pub fn load() -> Result<Loaded> {
+    load_in(&ProcessHost)
+}
+
+fn load_in(host: &dyn Host) -> Result<Loaded> {
+    let loaded = load_from(&config_path_in(host)?)?;
+    let named = host
+        .var(ENV_CONFIG_PATH)
+        .is_some_and(|p| !p.trim().is_empty());
+    if named && !loaded.exists {
+        let path = loaded.path.display();
+        bail!("${ENV_CONFIG_PATH} names {path}, which does not exist; create it or unset it");
+    }
+    Ok(loaded)
+}
+
+/// `load` for a command about to write the file: a missing one is created.
+pub fn load_for_edit() -> Result<Loaded> {
     load_from(&config_path()?)
 }
 
@@ -1197,6 +1218,19 @@ mod tests {
                 a.efforts.contains(&a.effort) && a.permission_modes.contains(&a.permission_mode)
             );
         }
+    }
+
+    #[test]
+    fn an_explicit_config_path_that_is_missing_is_an_error_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("absent.toml");
+        let host = FakeHost::new(&[(ENV_CONFIG_PATH, path.to_str().unwrap())], &[]);
+        let err = load_in(&host).unwrap_err().to_string();
+        assert!(err.contains("absent.toml, which does not exist"), "{err}");
+        std::fs::write(&path, "backend = \"agy\"\n").unwrap();
+        assert_eq!(load_in(&host).unwrap().config.backend, Some(Backend::Agy));
+        let home = FakeHost::new(&[("HOME", dir.path().to_str().unwrap())], &[]);
+        assert!(!load_in(&home).unwrap().exists); // the default path may be absent
     }
 
     #[test]

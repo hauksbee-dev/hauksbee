@@ -171,7 +171,7 @@ fn classify_use_target(target: &str) -> Option<UseTarget> {
 
 /// `hauksbee models backend use <PRESET-OR-BACKEND>`
 pub fn use_target(target: &str) -> anyhow::Result<()> {
-    let mut loaded = extract_config::load()?;
+    let mut loaded = extract_config::load_for_edit()?;
     match classify_use_target(target) {
         Some(UseTarget::Preset(id)) => {
             loaded.config.apply_preset(id)?;
@@ -201,7 +201,7 @@ pub fn use_target(target: &str) -> anyhow::Result<()> {
 /// `hauksbee models backend set KEY=VALUE...` (and `unset KEY`, which calls
 /// this with `"KEY="`). Stops at the first bad pair and writes nothing.
 pub fn set(pairs: &[String]) -> anyhow::Result<()> {
-    let mut loaded = extract_config::load()?;
+    let mut loaded = extract_config::load_for_edit()?;
     for pair in pairs {
         loaded.config.set_pair(pair).with_context(|| {
             format!(
@@ -352,7 +352,7 @@ pub fn setup() -> anyhow::Result<()> {
         );
     }
 
-    let mut loaded = extract_config::load()?;
+    let mut loaded = extract_config::load_for_edit()?;
     let resolved_now = loaded.config.resolve(&ProcessHost, None);
     let backends = extract_config::availability(&ProcessHost, &resolved_now);
 
