@@ -448,6 +448,9 @@ pub struct Scheduler {
     /// requested span.
     pub stop_when_dead: bool,
     pub sim_time: f64,
+    /// When the board is powered: a cold power-on ramp ends here, so a net's
+    /// [`Self::net_range`] floor counts only samples from then on.
+    pub powered_from_s: f64,
     /// Sub-microsecond remainder carried between chunks. `run_micros` takes an
     /// integer microsecond count, so a chunk whose duration is not a whole
     /// number of microseconds (e.g. a 1.5 µs chunk, or any chunk under 0.5 µs
@@ -1081,6 +1084,8 @@ pub struct ChunkPinEdges {
 pub struct NetStat {
     pub min_v: f64,
     pub max_v: f64,
+    /// The minimum once the board is powered (see `Scheduler::powered_from_s`).
+    pub powered_min_v: f64,
     pub toggles: u64,
     last_logic: Option<bool>,
 }
@@ -1090,6 +1095,7 @@ impl Default for NetStat {
         NetStat {
             min_v: f64::INFINITY,
             max_v: f64::NEG_INFINITY,
+            powered_min_v: f64::INFINITY,
             toggles: 0,
             last_logic: None,
         }
@@ -1325,6 +1331,7 @@ impl Scheduler {
             stop_when_dead: false,
             opts,
             sim_time: 0.0,
+            powered_from_s: 0.0,
             micros_carry: 0.0,
             stats: HashMap::new(),
             firmware_edge_toggles: HashMap::new(),
@@ -1777,16 +1784,7 @@ impl Scheduler {
                         cycle,
                     )
                     .into_iter()
-                    .map(|update| {
-                        let pin = PinId {
-                            port: update.pin.0,
-                            bit: update.pin.1,
-                        };
-                        match update.level {
-                            Some(high) => hauksbee_mcu::PinDrive::drive(pin, high),
-                            None => hauksbee_mcu::PinDrive::release(pin),
-                        }
-                    })
+                    .map(pin_drive)
                     .collect()
             },
         ));
@@ -1805,15 +1803,7 @@ impl Scheduler {
                         cycle,
                     )
                     .into_iter()
-                    .map(|update| match update.level {
-                        Some(high) => hauksbee_mcu::PinDrive::drive(
-                            PinId::new(update.pin.0, update.pin.1),
-                            high,
-                        ),
-                        None => {
-                            hauksbee_mcu::PinDrive::release(PinId::new(update.pin.0, update.pin.1))
-                        }
-                    })
+                    .map(pin_drive)
                     .collect()
             },
         ));
@@ -1836,17 +1826,7 @@ impl Scheduler {
         // (possibly tri-stated) gpio driver, so this map covers both the control
         // outputs (PL/SCLK) and the MISO *input* pin (its driver stays disabled
         // because the firmware never drives it, but the mapping is what we need).
-        let gpio_maps: Vec<HashMap<i64, (char, u8)>> = self
-            .mcus
-            .iter()
-            .map(|m| {
-                m.binding
-                    .gpio_drivers
-                    .iter()
-                    .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
-                    .collect()
-            })
-            .collect();
+        let gpio_maps = gpio_net_maps(&self.mcus);
 
         for order in order_165_chains(&self.digital) {
             for (mi, gpio_node) in gpio_maps.iter().enumerate() {
@@ -2428,28 +2408,14 @@ impl Scheduler {
     /// pending-buffer overflow or an external backend transport/configuration
     /// failure. Zero everywhere on a healthy run. Ordered by MCU reference.
     pub fn uart_rx_overflow(&self) -> Vec<(String, u64)> {
-        let mut out: Vec<(String, u64)> = self
-            .mcus
-            .iter()
-            .map(|m| (m.binding.reference.clone(), m.core.uart_rx_overflow()))
-            .filter(|(_, n)| *n > 0)
-            .collect();
-        out.sort();
-        out
+        self.per_mcu(|core| Some(core.uart_rx_overflow()).filter(|&n| n > 0))
     }
 
     /// Host serial bytes accepted by a backend but not yet presented to its
     /// emulated UART. A non-empty result at session teardown is undelivered
     /// input, even when the backend's overflow count is zero.
     pub fn uart_rx_pending(&self) -> Vec<(String, usize)> {
-        let mut out: Vec<(String, usize)> = self
-            .mcus
-            .iter()
-            .map(|m| (m.binding.reference.clone(), m.core.uart_rx_pending()))
-            .filter(|(_, n)| *n > 0)
-            .collect();
-        out.sort();
-        out
+        self.per_mcu(|core| Some(core.uart_rx_pending()).filter(|&n| n > 0))
     }
 
     /// Per-MCU statements of how the backend's watchdog fidelity falls short of
@@ -2464,17 +2430,7 @@ impl Scheduler {
     /// reboots the core the way silicon does (simavr) are absent: the silence is
     /// what makes the warning mean something. Ordered by MCU reference.
     pub fn watchdog_limitations(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
-            .mcus
-            .iter()
-            .filter_map(|m| {
-                m.core
-                    .watchdog_limitation()
-                    .map(|l| (m.binding.reference.clone(), l))
-            })
-            .collect();
-        out.sort();
-        out
+        self.per_mcu(|core| core.watchdog_limitation())
     }
 
     /// Per-MCU statements of how the backend's TIMING fidelity falls short of
@@ -2487,17 +2443,7 @@ impl Scheduler {
     /// backends are absent: the silence is the claim the gate measures. Ordered
     /// by MCU reference.
     pub fn timing_limitations(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
-            .mcus
-            .iter()
-            .filter_map(|m| {
-                m.core
-                    .timing_limitation()
-                    .map(|l| (m.binding.reference.clone(), l))
-            })
-            .collect();
-        out.sort();
-        out
+        self.per_mcu(|core| core.timing_limitation())
     }
 
     /// Times an unserviced watchdog rebooted each MCU's core during this run,
@@ -2507,11 +2453,16 @@ impl Scheduler {
     /// [`Scheduler::watchdog_limitations`], since a backend that cannot reboot
     /// at all reports zero here and says so there. Ordered by MCU reference.
     pub fn watchdog_resets(&self) -> Vec<(String, u64)> {
-        let mut out: Vec<(String, u64)> = self
+        self.per_mcu(|core| Some(core.watchdog_resets()).filter(|&n| n > 0))
+    }
+
+    /// `(MCU reference, value)` for every live MCU whose core yields a value,
+    /// ordered by MCU reference: the shape every per-MCU finding above shares.
+    fn per_mcu<T: Ord>(&self, value: impl Fn(&dyn Mcu) -> Option<T>) -> Vec<(String, T)> {
+        let mut out: Vec<(String, T)> = self
             .mcus
             .iter()
-            .map(|m| (m.binding.reference.clone(), m.core.watchdog_resets()))
-            .filter(|(_, n)| *n > 0)
+            .filter_map(|m| value(m.core.as_ref()).map(|v| (m.binding.reference.clone(), v)))
             .collect();
         out.sort();
         out
@@ -3054,10 +3005,11 @@ impl Scheduler {
     /// poll slice, so this adaptively does so. A request below the integer-
     /// microsecond MCU bridge quantum is refused before mutating the scheduler.
     pub fn configure_timing(&mut self, req: TimingRequirement) -> anyhow::Result<()> {
-        for (label, value) in [
+        let limits = [
             ("minimum pulse", req.min_pulse_s),
             ("maximum edge error", req.max_edge_error_s),
-        ] {
+        ];
+        for (label, value) in limits {
             if let Some(v) = value {
                 anyhow::ensure!(
                     v.is_finite() && v > 0.0,
@@ -3069,28 +3021,16 @@ impl Scheduler {
         // Exact cores have a measured one-cycle floor. Check it before changing
         // a shared chunk for any coarse core, so a mixed-backend refusal is
         // transactional.
-        for m in &self.mcus {
-            if !m.core.cycle_exact() {
-                continue;
-            }
+        for m in self.mcus.iter().filter(|m| m.core.cycle_exact()) {
             let cycle_s = 1.0 / m.core.frequency().max(1) as f64;
-            if let Some(pulse) = req.min_pulse_s {
+            for (label, value) in limits {
+                let Some(v) = value else { continue };
                 anyhow::ensure!(
-                    pulse + f64::EPSILON >= cycle_s,
-                    "timing request refused for {} ({}): minimum pulse {:.3} us is below its measured one-cycle resolution {:.3} us",
+                    v + f64::EPSILON >= cycle_s,
+                    "timing request refused for {} ({}): {label} {:.3} us is below its measured one-cycle resolution {:.3} us",
                     m.binding.reference,
                     m.binding.backend,
-                    pulse * 1e6,
-                    cycle_s * 1e6,
-                );
-            }
-            if let Some(error) = req.max_edge_error_s {
-                anyhow::ensure!(
-                    error + f64::EPSILON >= cycle_s,
-                    "timing request refused for {} ({}): maximum edge error {:.3} us is below its measured one-cycle resolution {:.3} us",
-                    m.binding.reference,
-                    m.binding.backend,
-                    error * 1e6,
+                    v * 1e6,
                     cycle_s * 1e6,
                 );
             }
@@ -5029,11 +4969,15 @@ impl Scheduler {
             }
         };
         let (vih, vil) = (0.6 * vhigh, 0.4 * vhigh);
+        let powered = self.sim_time >= self.powered_from_s;
         for (name, &node) in &self.net_nodes {
             let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
             let st = self.stats.entry(name.clone()).or_default();
             st.min_v = st.min_v.min(v);
             st.max_v = st.max_v.max(v);
+            if powered {
+                st.powered_min_v = st.powered_min_v.min(v);
+            }
             // Logic level with a rail-scaled midpoint and hysteresis band.
             let logic = if v > vih {
                 Some(true)
@@ -5221,6 +5165,14 @@ impl Scheduler {
     pub fn net_voltage(&self, net: &str) -> Option<f64> {
         let node = self.net_nodes.get(net)?;
         self.node_volts.get(node.0 as usize).copied()
+    }
+
+    /// The (min, max) a net covered across the run's converged chunks, the
+    /// floor counted once the board is powered and the ceiling throughout (a
+    /// power-on overshoot is real). `None` before any powered sample.
+    pub fn net_range(&self, net: &str) -> Option<(f64, f64)> {
+        let st = self.stats.get(net)?;
+        (st.powered_min_v <= st.max_v).then_some((st.powered_min_v, st.max_v))
     }
 
     /// The name of the net on `node`, or `"node N"` for an unnamed one.
@@ -6522,16 +6474,7 @@ fn build_595_chains(
     let mut owned = std::collections::HashSet::new();
 
     // Precompute each MCU's net-node -> (port, bit) GPIO map once.
-    let gpio_maps: Vec<HashMap<i64, (char, u8)>> = mcus
-        .iter()
-        .map(|m| {
-            m.binding
-                .gpio_drivers
-                .iter()
-                .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
-                .collect()
-        })
-        .collect();
+    let gpio_maps = gpio_net_maps(mcus);
 
     for order in order_595_chains(digital) {
         // Bind this chain to whichever MCU drives its head's control pins.
@@ -6547,6 +6490,20 @@ fn build_595_chains(
         }
     }
     (chains, chain_mcu, owned)
+}
+
+/// Each MCU's net-node -> (port, bit) GPIO map, the shape the 595 and 165
+/// chain builders match a chain's control nets against.
+fn gpio_net_maps(mcus: &[LiveMcu]) -> Vec<HashMap<i64, (char, u8)>> {
+    mcus.iter()
+        .map(|m| {
+            m.binding
+                .gpio_drivers
+                .iter()
+                .map(|(&pin, drv)| (i64::from(drv.net.0), pin))
+                .collect()
+        })
+        .collect()
 }
 
 /// Whether every 595 chain whose parallel outputs feed a synchronous memory
@@ -6634,6 +6591,15 @@ fn build_generic_replay_chips(
         }
     }
     (chips, pin_nets)
+}
+
+/// A responder's pin update in the MCU backend's drive vocabulary.
+fn pin_drive(update: crate::responders::InputDrive) -> hauksbee_mcu::PinDrive {
+    let pin = PinId::new(update.pin.0, update.pin.1);
+    match update.level {
+        Some(high) => hauksbee_mcu::PinDrive::drive(pin, high),
+        None => hauksbee_mcu::PinDrive::release(pin),
+    }
 }
 
 /// Wire `on_pin_change` / `on_uart` hooks into a shared capture buffer.
@@ -6728,6 +6694,7 @@ fn adc_channel_promoted(binding: &McuBinding, ch: u8) -> bool {
 mod tests {
     use super::*;
     use crate::peripherals::controls::stamp_resistor;
+    use crate::peripherals::test_support::FixedSpiSlave;
     use crate::responders::tests::one_bit_spec;
     use hauksbee_ir::SourceKind;
 
@@ -7655,6 +7622,12 @@ missing = ["measurement_registers"]
 
     // ── AVR-bound electrical proofs (need the in-process simavr core) ────────
 
+    /// The Arduino Nano module "A1" at x = 100 with the given pads.
+    #[cfg(feature = "avr")]
+    fn nano(pads: &'static [(u8, u8, usize)]) -> FixturePart<'static> {
+        ("Module:Arduino_Nano", "A1", "Arduino_Nano", 100, pads)
+    }
+
     /// A Nano module driving net CLK from A2 (PC2) into an RC integrator
     /// (10k into 100 nF, tau = 1 ms).
     #[cfg(feature = "avr")]
@@ -7662,13 +7635,7 @@ missing = ["measurement_registers"]
         pcb_fixture(
             &["", "GND", "+5V", "CLK", "MID"],
             &[
-                (
-                    "Module:Arduino_Nano",
-                    "A1",
-                    "Arduino_Nano",
-                    100,
-                    &[(4, 4, 1), (27, 27, 2), (21, 21, 3)],
-                ),
+                nano(&[(4, 4, 1), (27, 27, 2), (21, 21, 3)]),
                 ("Resistor:R", "R1", "10k", 110, &[(1, 0, 3), (2, 2, 4)]),
                 ("Capacitor:C", "C1", "100nF", 120, &[(1, 0, 4), (2, 2, 1)]),
             ],
@@ -7682,19 +7649,13 @@ missing = ["measurement_registers"]
         pcb_fixture(
             &["", "GND", "+5V", "SER", "SRCLK", "RCLK", "Q0", "Q7"],
             &[
-                (
-                    "Module:Arduino_Nano",
-                    "A1",
-                    "Arduino_Nano",
-                    100,
-                    &[
-                        (4, 4, 1),
-                        (27, 27, 2),
-                        (14, 14, 3),
-                        (16, 16, 4),
-                        (15, 15, 5),
-                    ],
-                ),
+                nano(&[
+                    (4, 4, 1),
+                    (27, 27, 2),
+                    (14, 14, 3),
+                    (16, 16, 4),
+                    (15, 15, 5),
+                ]),
                 (
                     "Logic:SN74HC595",
                     "U2",
@@ -7722,13 +7683,7 @@ missing = ["measurement_registers"]
         pcb_fixture(
             &["", "GND", "+5V", "BUS"],
             &[
-                (
-                    "Module:Arduino_Nano",
-                    "A1",
-                    "Arduino_Nano",
-                    100,
-                    &[(4, 4, 1), (27, 27, 2), (21, 21, 3)],
-                ),
+                nano(&[(4, 4, 1), (27, 27, 2), (21, 21, 3)]),
                 ("Resistor:R", "R1", "10k", 110, &[(1, 0, 3), (2, 2, 1)]),
             ],
         )
@@ -8087,22 +8042,12 @@ data_out = ["io0"]
 
     #[test]
     fn memory_with_another_mcus_mutable_node_is_not_claimed() {
-        const SPEC: &str = r#"
-inputs = ["gnd", "data", "we_n"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "we_n", edge = "rising" }
-read_gates = [{ pin = "we_n", active = "high" }]
-data_in = ["data"]
-data_out = ["io0"]
-"#;
+        // ONE_PIN_MEMORY with its data input moved onto its own "data" net.
+        let spec = ONE_PIN_MEMORY
+            .replace(r#"["gnd", "we_n"]"#, r#"["gnd", "data", "we_n"]"#)
+            .replace(r#"data_in = ["gnd"]"#, r#"data_in = ["data"]"#);
         let mut m =
-            scheduler_with_legacy_memory(SPEC, &["gnd", "data", "we_n", "io0"], &["we_n", "io0"]);
+            scheduler_with_legacy_memory(&spec, &["gnd", "data", "we_n", "io0"], &["we_n", "io0"]);
         let data_node = m.sched.net_nodes["data"];
         add_second_mcu_on(&mut m, data_node);
         m.sched.build_and_install_parallel_memories();
@@ -8167,23 +8112,15 @@ data_out = ["io0"]
     /// component with unrelated comb logic must stay on the ordinary path.
     #[test]
     fn memory_fast_path_does_not_suppress_unrelated_logic_on_the_same_component() {
-        const SPEC: &str = r#"
-inputs = ["gnd", "we_n"]
-outputs = ["io0", "status"]
-comb = { status = "we_n" }
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "we_n", edge = "rising" }
-read_gates = [{ pin = "we_n", active = "high" }]
-data_in = ["gnd"]
-data_out = ["io0"]
-"#;
-        let mut m =
-            scheduler_with_legacy_memory(SPEC, &["gnd", "we_n", "io0", "status"], &["we_n", "io0"]);
+        let spec = ONE_PIN_MEMORY.replace(
+            "outputs = [\"io0\"]",
+            "outputs = [\"io0\", \"status\"]\ncomb = { status = \"we_n\" }",
+        );
+        let mut m = scheduler_with_legacy_memory(
+            &spec,
+            &["gnd", "we_n", "io0", "status"],
+            &["we_n", "io0"],
+        );
         m.sched.build_and_install_parallel_memories();
         assert!(m.sched.parallel_memory_chips.is_empty());
     }
@@ -8317,19 +8254,6 @@ data_out = ["io0"]
         assert!(for_pin(('C', 3)).is_empty(), "{calls:?}");
     }
 
-    struct Opaque;
-    impl crate::peripherals::spi::SpiSlave for Opaque {
-        fn transfer(&mut self, _mosi: u8) -> u8 {
-            0
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
-    }
-
     fn cs_frames(sched: &Scheduler, m: usize) -> usize {
         sched.mcus[m].shared.lock_or_recover().cs_frames.len()
     }
@@ -8349,7 +8273,10 @@ data_out = ["io0"]
                 binding("U1", "simavr:test", drivers),
             );
         }
-        let bus = Arc::new(Mutex::new(SpiBus::new("U9", Box::new(Opaque))));
+        let bus = Arc::new(Mutex::new(SpiBus::new(
+            "U9",
+            Box::new(FixedSpiSlave::new(0)),
+        )));
         sched.register_cs_frame(&bus, Some(cs_pin), None);
         assert_eq!(cs_frames(&sched, 0) + cs_frames(&sched, 1), 1);
 
@@ -8366,7 +8293,10 @@ data_out = ["io0"]
                 binding(&format!("U{idx}"), "simavr:test", drivers),
             );
         }
-        let bus = Arc::new(Mutex::new(SpiBus::new("U9", Box::new(Opaque))));
+        let bus = Arc::new(Mutex::new(SpiBus::new(
+            "U9",
+            Box::new(FixedSpiSlave::new(0)),
+        )));
         sched.register_cs_frame(&bus, Some(cs_pin), Some(cs_net));
         assert_eq!(cs_frames(&sched, 0), 0);
         assert_eq!(cs_frames(&sched, 1), 1);
@@ -8425,6 +8355,22 @@ data_out = ["io0"]
         );
         assert!((sched.mcus[1].logic_high_v - 3.3).abs() < 1e-6);
         assert!(count_toggles(&mut sched, "BLINK33", &[2.7, 0.0, 2.7, 0.0]) >= 3);
+    }
+
+    /// `net_range` keeps a sag that recovers, and its floor skips a power-on
+    /// ramp (samples before `powered_from_s`) while its ceiling does not.
+    #[test]
+    fn net_range_keeps_a_recovered_sag_but_not_the_power_on_ramp() {
+        let (mut sched, _h) = sched_with_core(MockCore::default(), &[]);
+        count_toggles(&mut sched, "VDD", &[3.3, 2.9, 3.3]);
+        assert_eq!(sched.net_range("VDD"), Some((2.9, 3.3)));
+        let (mut sched, _h) = sched_with_core(MockCore::default(), &[]);
+        sched.powered_from_s = 1e-3;
+        count_toggles(&mut sched, "VDD", &[0.0, 1.6]);
+        assert_eq!(sched.net_range("VDD"), None);
+        sched.sim_time = 1e-3;
+        count_toggles(&mut sched, "VDD", &[3.3, 3.2]);
+        assert_eq!(sched.net_range("VDD"), Some((3.2, 3.3)));
     }
 
     // ── Backend limitation and coverage honesty ──────────────────────────────
@@ -8579,37 +8525,12 @@ data_out = ["io0"]
     /// currently asserted.
     #[test]
     fn attach_two_spi_buses_routes_bytes_to_the_cs_selected_bus() {
-        struct RecSlave {
-            got: Arc<Mutex<Vec<u8>>>,
-            miso: u8,
-        }
-        impl crate::peripherals::spi::SpiSlave for RecSlave {
-            fn transfer(&mut self, mosi: u8) -> u8 {
-                self.got.lock_or_recover().push(mosi);
-                self.miso
-            }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
-        }
-
         let cs1 = ('C', 0u8);
         let cs2 = ('C', 1u8);
         let (mut sched, h) = sched_with_core(MockCore::default(), &[cs1, cs2]);
-        let got1 = Arc::new(Mutex::new(Vec::new()));
-        let got2 = Arc::new(Mutex::new(Vec::new()));
-        let bus = |got: &Arc<Mutex<Vec<u8>>>, miso| {
-            Arc::new(Mutex::new(SpiBus::new(
-                "U",
-                Box::new(RecSlave {
-                    got: got.clone(),
-                    miso,
-                }),
-            )))
-        };
+        let (slave1, slave2) = (FixedSpiSlave::new(0x5A), FixedSpiSlave::new(0xA5));
+        let (got1, got2) = (slave1.got.clone(), slave2.got.clone());
+        let bus = |slave: FixedSpiSlave| Arc::new(Mutex::new(SpiBus::new("U", Box::new(slave))));
         let resolved = |pin| {
             Some(ResolvedCs {
                 pin,
@@ -8617,8 +8538,8 @@ data_out = ["io0"]
                 provenance: CsProvenance::SpecDeclared,
             })
         };
-        sched.attach_spi_bus(bus(&got1, 0x5A), resolved(cs1));
-        sched.attach_spi_bus(bus(&got2, 0xA5), resolved(cs2));
+        sched.attach_spi_bus(bus(slave1), resolved(cs1));
+        sched.attach_spi_bus(bus(slave2), resolved(cs2));
 
         let edge = |pin: (char, u8), high: bool| {
             let mut slot = h.pin_cb.lock_or_recover();

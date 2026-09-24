@@ -1441,17 +1441,40 @@ fn production_assumptions(
     // below the gate drive its RDS(on) is specified at, a current peak the card
     // carries no pulsed rating for. Never a silent clean pass.
     production_assumptions.extend(engine.scheduler().stress.run_disclosures());
+    // A junction temperature on a package-guessed theta_JA qualifies the
+    // max_temp claim on that part, and a no_faults pass the guess decides.
+    let thermal_claims = |reference: &str, decisive: bool| {
+        let feeds = |a: &&crate::spec::Assertion| match a.kind.as_str() {
+            "max_temp" => a
+                .reference
+                .as_deref()
+                .is_some_and(|r| crate::assertions::key_belongs_to_ref(r, reference)),
+            "no_faults" => decisive,
+            _ => false,
+        };
+        let scope = |a: &crate::spec::Assertion| hauksbee_ir::evidence::Scope::Check {
+            check: "ci".into(),
+            kind: Some(a.label()),
+        };
+        spec.asserts.iter().filter(feeds).map(scope).collect()
+    };
+    production_assumptions.extend(engine.scheduler().stress.inferred_theta_ja(thermal_claims));
     // Analog inputs outside the window their card guarantees: a comparator
     // channel with every input above its common-mode ceiling (MEASURED, so it
     // undermines), an ADC pin behind too high a source impedance (qualifies).
     let solved = |net: &str| engine.scheduler().net_voltage(net);
     let analog = hauksbee_engine::checks::analog_inputs::run_assumptions(board, lib, &solved);
     production_assumptions.extend(analog);
-    // Supply and rail-order envelopes, on the same solved levels.
-    let levels = board
-        .nets
-        .iter()
-        .filter_map(|n| Some((n.name.clone(), solved(&n.name)?)));
+    // Supply and rail-order envelopes, on the span each net covered in the run
+    // (a sag that recovers is still a violation), or its final level.
+    let levels = board.nets.iter().filter_map(|n| {
+        let span = engine.scheduler().net_range(&n.name);
+        let (min_v, max_v) = span.or_else(|| solved(&n.name).map(|v| (v, v)))?;
+        Some((
+            n.name.clone(),
+            hauksbee_engine::checks::envelope::RailRange { min_v, max_v },
+        ))
+    });
     let opts = engine.scheduler().opts;
     let supply = hauksbee_engine::checks::envelope::run_assumptions(
         board,
@@ -1777,7 +1800,7 @@ fn run_one(
             )
         })
         .collect();
-    let hollow_assumptions = hollow
+    let mut hollow_assumptions: Vec<_> = hollow
         .iter()
         .map(|(_, net)| hauksbee_ir::evidence::Assumption::held_by_ideal_source(net))
         .collect();
@@ -1817,8 +1840,9 @@ fn run_one(
         vcd_seed,
     )?;
 
-    // Attach declarative sensors (RegisterMapSensor) to their buses.
-    attach_sensors(spec, engine.scheduler_mut())?;
+    // Attach declarative sensors (RegisterMapSensor) to their buses; an
+    // assumed strap-selected address joins the run's assumptions.
+    hollow_assumptions.extend(attach_sensors(spec, engine.scheduler_mut())?);
 
     // The QEMU I2C/SPI bus bridge is not implemented, so a bus slave attached on
     // a QEMU backend is a no-op whose firmware transactions time out or read
@@ -2717,6 +2741,10 @@ fn attach_peripherals(
         let id = format!("ramp_{}", s.net);
         let ramp = Stimulus::voltage(sched.circuit_mut(), &id, net, kind);
         sched.attach_peripheral(Box::new(ramp));
+        // A rail below its envelope while it ramps is power-on, not a sag.
+        sched.powered_from_s = sched
+            .powered_from_s
+            .max(s.ramp_ms.unwrap_or_default() / 1e3);
     }
 
     for p in &spec.peripherals {
@@ -2894,26 +2922,60 @@ fn attach_peripherals(
 /// and the declarative co-sim tests (`declarative_sensor_cosim.rs`) wire it.
 /// The Renode / simavr I2C+SPI bridge picks them up automatically without any
 /// further changes.
+///
+/// A part whose I2C address is strap-selected answers at the spec's `address`
+/// (one of its `[[sensor.address_select]]` rows); without one it answers at the
+/// sensor spec's default, returned as an assumed-address assumption worded as
+/// the binder words the same gap for a model-declared part.
 fn attach_sensors(
     spec: &Spec,
     sched: &mut hauksbee_engine::scheduler::Scheduler,
-) -> Result<(), SpecError> {
+) -> Result<Vec<hauksbee_ir::evidence::Assumption>, SpecError> {
     use std::sync::{Arc, Mutex};
 
     use hauksbee_engine::{I2cBus, RegisterMapSensor, SpiBus};
-    use hauksbee_models::sensor_spec::Bus;
+    use hauksbee_models::sensor_spec::{Bus, SensorSpec};
 
+    let mut assumptions = Vec::new();
     for sa in &spec.sensors {
         let toml_src = sa.toml_source(&spec.base_dir)?;
-
-        let mut sensor = RegisterMapSensor::from_toml(&toml_src).map_err(|e| {
-            SpecError::Invalid(format!(
-                "sensor '{}': failed to parse sensor spec: {e}",
-                sa.id
-            ))
-        })?;
-
         let err = |m: String| SpecError::Invalid(format!("sensor '{}': {m}", sa.id));
+        let parse_err = |e| err(format!("failed to parse sensor spec: {e}"));
+        let mut sensor = RegisterMapSensor::from_toml(&toml_src).map_err(parse_err)?;
+        let card = SensorSpec::from_toml(&toml_src).map_err(parse_err)?.sensor;
+        let rows = card.address_selects.iter().map(|row| row.address);
+        let valid: Vec<u8> = rows
+            .chain(card.i2c_address.filter(|_| card.address_selects.is_empty()))
+            .collect();
+        let listed = valid
+            .iter()
+            .map(|a| format!("0x{a:02x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let name = &card.name;
+        match sa.address {
+            Some(_) if card.bus != Bus::I2c => return Err(err("`address` is I2C-only".into())),
+            Some(address) if valid.contains(&address) => sensor.set_i2c_address(address),
+            Some(a) => {
+                return Err(err(format!(
+                    "`address` 0x{a:02x} is not one {name} answers at; set one of {listed}"
+                )))
+            }
+            None if !card.address_selects.is_empty() => {
+                let why = format!(
+                    "this [[sensor]] sets no `address`, and {name} is strap-selectable to {listed}"
+                );
+                let gap = card
+                    .resolve_address(|_| Err(why.clone()))
+                    .and_then(|c| c.assumed)
+                    .unwrap_or(why);
+                let fix = format!("set `address` on [[sensor]] '{}' to the one the board straps ({listed}), then re-run", sa.id);
+                assumptions.push(hauksbee_ir::evidence::Assumption::partial_model(
+                    &sa.id, name, &gap, &fix,
+                ));
+            }
+            None => {}
+        }
         // Apply per-run input overrides.
         for (name, &value) in &sa.inputs {
             if !value.is_finite() {
@@ -2966,7 +3028,7 @@ fn attach_sensors(
         }
     }
 
-    Ok(())
+    Ok(assumptions)
 }
 
 /// Return warning strings for any bus-slave peripheral or declarative sensor
@@ -3800,6 +3862,45 @@ i2c_address = 0x76
         about("U2_bme280");
         // No QEMU backend (Renode / AVR boards): nothing to warn about.
         assert!(qemu_bus_slave_warnings(&s, &[]).is_empty());
+    }
+
+    /// A strap-selected I2C address comes from `[[sensor]] address`, which must
+    /// be one of the part's rows; without it the default is assumed, visibly.
+    #[test]
+    fn sensor_address_is_a_listed_row_or_an_assumption() {
+        let card = "[sensor]\nname = \"STRAPPED\"\nbus = \"i2c\"\ni2c_address = 0x40\n\
+                    [[sensor.register]]\naddr = 0x00\nconst = [0x13]\n\
+                    [sensor.pins]\n1 = \"scl\"\n2 = \"sda\"\n3 = \"a0\"\n\
+                    [[sensor.address_select]]\naddress = 0x40\nstraps = { a0 = \"low\" }\n\
+                    [[sensor.address_select]]\naddress = 0x41\nstraps = { a0 = \"high\" }\n\
+                    [sensor.protocol]\nstyle = \"i2c_pointer\"\n";
+        let attach = |address: &str| {
+            let s = spec(&format!(
+                "{MINIMAL}{VCC_ASSERT}[[sensor]]\nid = \"U9\"\nspec = '''\n{card}'''\n{address}"
+            ));
+            let mut sched = hauksbee_engine::scheduler::Scheduler::new(
+                BoundBoard::default(),
+                None,
+                Default::default(),
+            )
+            .unwrap();
+            attach_sensors(&s, &mut sched).map_err(|e| e.to_string())
+        };
+        assert!(attach("address = 0x41\n").unwrap().is_empty());
+        let refused = attach("address = 0x42\n").unwrap_err();
+        assert!(
+            refused.contains("0x42") && refused.contains("set one of 0x40, 0x41"),
+            "{refused}"
+        );
+        let assumed = format!("{:?}", attach("").unwrap());
+        for needle in [
+            "0x40 is assumed",
+            "sets no `address`",
+            "0x40, 0x41",
+            "`address` on [[sensor]] 'U9' to the one the board straps",
+        ] {
+            assert!(assumed.contains(needle), "{needle}: {assumed}");
+        }
     }
 
     /// `protection_trip` on a supply leg with no protection model is refused

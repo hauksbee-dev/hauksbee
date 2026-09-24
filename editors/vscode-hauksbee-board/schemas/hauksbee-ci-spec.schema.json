@@ -1283,6 +1283,17 @@
       "description": "A declarative I2C or SPI sensor attached to the co-sim for one run.\n\nThe sensor is described by a `[sensor]` TOML spec (parsed by\n`RegisterMapSensor::from_toml`). Exactly one of `spec` (inline string) or\n`spec_file` (path relative to the CI spec file) must be present.\n\n```toml\n[[sensor]]\nid          = \"U2_temp\"\nspec_file   = \"sensors/lm75.toml\"      # or: spec = \"\"\" ... \"\"\"\n\n[sensor.inputs]\ntemperature_c = 40.0                   # override the default for this run\n```",
       "type": "object",
       "properties": {
+        "address": {
+          "description": "The I2C address the board straps this part to, for a part whose\nsensor spec lists `[[sensor.address_select]]` rows; it must be one of\nthem. Without it the spec default is used and the run says so.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "default": null,
+          "maximum": 127,
+          "minimum": 0
+        },
         "controller": {
           "description": "Optional SPI controller name (e.g. `\"spi2\"`). When set, the sensor is\nattached to that specific controller via `attach_spi_bus_on` so it only\nreceives traffic from that bus. When absent (the default), `attach_spi_bus`\nis used, which routes to the MCU's first/only SPI controller.\nOnly meaningful for SPI sensors (`bus = \"spi\"` in the sensor spec).",
           "type": [

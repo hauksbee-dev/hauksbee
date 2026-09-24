@@ -718,6 +718,11 @@ max_voltage_v = 3.6
 role = "gpio0"
 level = "high"
 boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
+# VIL max 0.25 x VDD, VIH min 0.75 x VDD (VDD = the pad's I/O supply): ESP32
+# Datasheet v5.3, Table 5-3 "DC Characteristics (3.3 V, 25 °C)",
+# https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
 note = "GPIO0 high = SPI boot (normal); low = download/UART boot. A 50 MHz clock here randomly enters download mode (Olimex ESP32-EVB)"
 
 [[models.straps]]
@@ -779,6 +784,11 @@ backend = "qemu:esp32"
 role = "gpio0"
 level = "high"
 boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
+# The ESP32 die's thresholds: ESP32 Datasheet v5.3, Table 5-3, VIL max 0.25 x
+# VDD, VIH min 0.75 x VDD,
+# https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
 note = "GPIO0 high = SPI boot (normal); low = download/UART boot"
 
 [[models.straps]]
@@ -821,6 +831,11 @@ backend = "qemu:esp32s3"
 role = "gpio0"
 level = "high"
 boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
+# ESP32-S3 Datasheet v2.2, Table 5-4 "DC Characteristics (3.3 V, 25 °C)": VIL
+# max 0.25 x VDD, VIH min 0.75 x VDD,
+# https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
 note = "GPIO0 high = SPI boot (normal); low with GPIO46=0 = download boot"
 
 [[models.straps]]
@@ -860,6 +875,11 @@ value_re = "(?i)^ESP32[- ]?S2([- ]?WROOM.*)?$"
 role = "gpio0"
 level = "high"
 boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
+# ESP32-S2 Datasheet v1.9, Table 5-4 "DC Characteristics (3.3 V, 25 °C)": VIL
+# max 0.25 x VDD, VIH min 0.75 x VDD,
+# https://www.espressif.com/sites/default/files/documentation/esp32-s2_datasheet_en.pdf
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
 note = "GPIO0 high = SPI boot (normal); low = download boot"
 
 [[models.straps]]
@@ -921,6 +941,11 @@ max_voltage_v = 3.6
 role = "gpio9"
 level = "high"
 boot_select = true   # the C3 BOOT pin; latches SPI-vs-download boot
+# ESP32-C3 Datasheet v2.4, Table 5-4 "DC Characteristics (3.3 V, 25 °C)": VIL
+# max 0.25 x VDD, VIH min 0.75 x VDD,
+# https://www.espressif.com/sites/default/files/documentation/esp32-c3_datasheet_en.pdf
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
 note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"
 
 [[models.straps]]

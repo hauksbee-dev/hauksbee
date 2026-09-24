@@ -222,6 +222,9 @@ A CI spec attaches declarative sensors per run
 [[sensor]]
 id        = "bme0"
 spec_file = "sensors/bme280.toml"   # relative to the CI spec file
+# address = 0x77                    # for a spec with [[sensor.address_select]]
+                                    # rows: the one the board straps. Omitted, the
+                                    # default is used and reported as assumed.
 [sensor.inputs]
 adc_temp = 519888.0                 # override any input's default
 ```

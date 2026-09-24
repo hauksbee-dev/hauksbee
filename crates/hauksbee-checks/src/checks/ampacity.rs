@@ -1041,10 +1041,11 @@ pub fn append_ampacity(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::pin;
+    use super::super::test_support::{part, pin};
     use super::*;
+    use crate::test_support::board;
 
-    use hauksbee_extract::{Component, Net, Pin};
+    use hauksbee_extract::{Component, Net};
 
     /// A one-entry library holding `toml`, written to a temp dir keyed on `tag`.
     fn lib_from(tag: &str, toml_src: &str) -> ModelLibrary {
@@ -1157,13 +1158,11 @@ program_full_scale_v = 1.0
 sense_full_scale_v = 0.05
 "#;
 
-    fn comp(reference: &str, value: &str, footprint: &str, pins: Vec<Pin>) -> Component {
+    /// A component on `footprint` whose pads are `(pad number, net id)`.
+    fn comp(reference: &str, value: &str, footprint: &str, pads: &[(&str, i64)]) -> Component {
         Component {
-            reference: reference.into(),
-            value: value.into(),
             footprint: footprint.into(),
-            pins,
-            ..Default::default()
+            ..part(reference, value, pads)
         }
     }
 
@@ -1173,35 +1172,26 @@ sense_full_scale_v = 0.05
             reference,
             value,
             "Resistor_SMD:R_0603",
-            vec![pin("1", a), pin("2", b)],
+            &[("1", a), ("2", b)],
         )
     }
 
-    /// A TESTCHARGER U-reference with pins in/gnd/prog/out on the given nets.
-    fn charger(reference: &str, nets: [i64; 4]) -> Component {
+    /// A two-terminal current shunt on a 2512 footprint between nets `a` and `b`.
+    fn shunt(reference: &str, value: &str, a: i64, b: i64) -> Component {
         comp(
             reference,
-            "TESTCHARGER",
-            "",
-            vec![
-                pin("1", nets[0]),
-                pin("2", nets[1]),
-                pin("3", nets[2]),
-                pin("4", nets[3]),
-            ],
+            value,
+            "Resistor_SMD:R_2512",
+            &[("1", a), ("2", b)],
         )
     }
 
-    fn net(id: i64, name: &str) -> Net {
-        Net::new(id, name)
-    }
+    const POT: &str = "Potentiometer_THT:Potentiometer";
 
-    fn board(name: &str, nets: Vec<Net>, components: Vec<Component>) -> ExtractedBoard {
-        ExtractedBoard {
-            name: name.into(),
-            nets,
-            components,
-        }
+    /// A TESTCHARGER U-reference with pins in/gnd/prog/out on the given nets.
+    fn charger(reference: &str, [vin, gnd, prog, out]: [i64; 4]) -> Component {
+        let pads = [("1", vin), ("2", gnd), ("3", prog), ("4", out)];
+        comp(reference, "TESTCHARGER", "", &pads)
     }
 
     /// Nets: 1 = +5V (in), 2 = GND, 3 = PROG, 4 = VBAT (out), 5 = the node
@@ -1211,26 +1201,22 @@ sense_full_scale_v = 0.05
         components.extend(prog_network);
         board(
             "charger",
-            vec![
-                net(1, "+5V"),
-                net(2, "GND"),
-                net(3, "PROG"),
-                net(4, "VBAT"),
-                net(5, "PROG_LINK"),
+            &[
+                (1, "+5V"),
+                (2, "GND"),
+                (3, "PROG"),
+                (4, "VBAT"),
+                (5, "PROG_LINK"),
             ],
             components,
         )
     }
 
     fn prog_4k99_via_jumper(jumper: &str) -> Vec<Component> {
+        let footprint = format!("OLIMEX_Jumpers-FP:SJ_{jumper}");
         vec![
             two_pin("R10", "4.99k/1%/R0603", 3, 5),
-            comp(
-                "E1",
-                jumper,
-                &format!("OLIMEX_Jumpers-FP:SJ_{jumper}"),
-                vec![pin("1", 5), pin("2", 2)],
-            ),
+            comp("E1", jumper, &footprint, &[("1", 5), ("2", 2)]),
         ]
     }
 
@@ -1323,9 +1309,9 @@ sense_full_scale_v = 0.05
             ]);
             let mut board = charger_board(first_hop);
             board.nets.extend([
-                net(6, "SLOW_BRANCH"),
-                net(7, "FAST_BRANCH"),
-                net(8, "CONVERGED"),
+                Net::new(6, "SLOW_BRANCH"),
+                Net::new(7, "FAST_BRANCH"),
+                Net::new(8, "CONVERGED"),
             ]);
             board
         };
@@ -1352,12 +1338,8 @@ sense_full_scale_v = 0.05
     /// Repeated physical pad records are one electrical terminal each.
     #[test]
     fn repeated_physical_pad_records_still_form_two_electrical_terminals() {
-        let board = charger_board(vec![comp(
-            "R10",
-            "10k",
-            "Resistor_SMD:R_0603",
-            vec![pin("1", 3), pin("1", 3), pin("2", 2), pin("2", 2)],
-        )]);
+        let pads = [("1", 3), ("1", 3), ("2", 2), ("2", 2)];
+        let board = charger_board(vec![comp("R10", "10k", "Resistor_SMD:R_0603", &pads)]);
         let got = attribute_currents(&board, &lib_from("physical_pads", CHARGER_TOML));
         let (current, citation) = got.cited.get("VBAT").expect("VBAT attributed");
         assert!((*current - 0.1).abs() < 1e-12, "{current}: {citation}");
@@ -1381,50 +1363,31 @@ sense_full_scale_v = 0.05
             hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.into(),
             "same hierarchy, no authoritative source UID".into(),
         ));
+        let prog_gnd = &[("1", 3), ("2", 2)];
         let mut cases: Vec<(&str, Vec<Component>)> = vec![
             ("ambiguous", vec![ambiguous]),
             ("inferred", vec![inferred]),
             (
                 "cap_nf",
-                vec![comp(
-                    "C7",
-                    "100nF",
-                    "Capacitor_SMD:C_0402",
-                    vec![pin("1", 3), pin("2", 2)],
-                )],
+                vec![comp("C7", "100nF", "Capacitor_SMD:C_0402", prog_gnd)],
             ),
             (
                 "cap_u",
-                vec![comp(
-                    "C7",
-                    "10u",
-                    "Capacitor_SMD:C_0402",
-                    vec![pin("1", 3), pin("2", 2)],
-                )],
+                vec![comp("C7", "10u", "Capacitor_SMD:C_0402", prog_gnd)],
             ),
             ("fuse", vec![two_pin("F1", "1", 3, 2)]),
             ("relay", vec![two_pin("RLY1", "1", 3, 2)]),
             ("rf", vec![two_pin("RF1", "1", 3, 2)]),
             (
                 "con",
-                vec![comp(
-                    "CON1",
-                    "1",
-                    "Capacitor_SMD:C_0603",
-                    vec![pin("1", 3), pin("2", 2)],
-                )],
+                vec![comp("CON1", "1", "Capacitor_SMD:C_0603", prog_gnd)],
             ),
             ("thermistor", vec![two_pin("RT1", "10k", 3, 2)]),
             (
                 "trim_pot",
                 vec![
                     two_pin("R10", "10k", 3, 2),
-                    comp(
-                        "RV1",
-                        "10k",
-                        "Potentiometer_THT:Potentiometer",
-                        vec![pin("1", 3), pin("2", 2), pin("3", 2)],
-                    ),
+                    comp("RV1", "10k", POT, &[("1", 3), ("2", 2), ("3", 2)]),
                 ],
             ),
             ("out_of_domain", vec![two_pin("R10", "100R", 3, 2)]),
@@ -1449,13 +1412,13 @@ sense_full_scale_v = 0.05
     fn regulated_stages_sum_on_shared_rails_and_do_not_double_count_cascades() {
         let two = board(
             "two_chargers",
-            vec![
-                net(1, "+5V"),
-                net(2, "GND"),
-                net(3, "PROG_A"),
-                net(4, "BAT_A"),
-                net(5, "PROG_B"),
-                net(6, "BAT_B"),
+            &[
+                (1, "+5V"),
+                (2, "GND"),
+                (3, "PROG_A"),
+                (4, "BAT_A"),
+                (5, "PROG_B"),
+                (6, "BAT_B"),
             ],
             vec![
                 charger("U1", [1, 2, 3, 4]),
@@ -1476,13 +1439,13 @@ sense_full_scale_v = 0.05
 
         let cascaded = board(
             "cascaded_chargers",
-            vec![
-                net(1, "SOURCE"),
-                net(2, "GND"),
-                net(3, "PROG_A"),
-                net(4, "MIDDLE"),
-                net(5, "PROG_B"),
-                net(6, "SINK"),
+            &[
+                (1, "SOURCE"),
+                (2, "GND"),
+                (3, "PROG_A"),
+                (4, "MIDDLE"),
+                (5, "PROG_B"),
+                (6, "SINK"),
             ],
             vec![
                 charger("U1", [1, 2, 3, 4]),
@@ -1509,27 +1472,20 @@ sense_full_scale_v = 0.05
         let load_switch = |rset: &str| {
             board(
                 "load_switch",
-                vec![
-                    net(1, "+5V"),
-                    net(2, "GND"),
-                    net(3, "ISET"),
-                    net(4, "SWITCHED_5V"),
-                    net(5, "ENABLE"),
-                    net(6, "FAULT_N"),
+                &[
+                    (1, "+5V"),
+                    (2, "GND"),
+                    (3, "ISET"),
+                    (4, "SWITCHED_5V"),
+                    (5, "ENABLE"),
+                    (6, "FAULT_N"),
                 ],
                 vec![
                     comp(
                         "U1",
                         "AP22615A",
                         "Package_TO_SOT_SMD:TSOT-26",
-                        vec![
-                            pin("1", 4),
-                            pin("2", 2),
-                            pin("3", 6),
-                            pin("4", 5),
-                            pin("5", 3),
-                            pin("6", 1),
-                        ],
+                        &[("1", 4), ("2", 2), ("3", 6), ("4", 5), ("5", 3), ("6", 1)],
                     ),
                     two_pin("RSET", rset, 3, 2),
                 ],
@@ -1542,40 +1498,24 @@ sense_full_scale_v = 0.05
 
         let ltc4020 = board(
             "ltc4020_program",
-            vec![
-                net(1, "VIN"),
-                net(2, "GND"),
-                net(3, "SENSE_TOP"),
-                net(4, "SENSE_BOT"),
-                net(5, "ILIMIT"),
-                net(6, "BAT"),
+            &[
+                (1, "VIN"),
+                (2, "GND"),
+                (3, "SENSE_TOP"),
+                (4, "SENSE_BOT"),
+                (5, "ILIMIT"),
+                (6, "BAT"),
             ],
             vec![
                 comp(
                     "U2",
                     "LTC4020",
                     "Package_DFN_QFN:QFN-38",
-                    vec![
-                        pin("5", 4),
-                        pin("6", 3),
-                        pin("20", 6),
-                        pin("25", 5),
-                        pin("36", 1),
-                    ],
+                    &[("5", 4), ("6", 3), ("20", 6), ("25", 5), ("36", 1)],
                 ),
                 two_pin("R8", "7.15k", 5, 2),
-                comp(
-                    "R49",
-                    "0.01",
-                    "Resistor_SMD:R_2512",
-                    vec![pin("1", 3), pin("2", 1)],
-                ),
-                comp(
-                    "R50",
-                    "0.01",
-                    "Resistor_SMD:R_2512",
-                    vec![pin("1", 4), pin("2", 2)],
-                ),
+                shunt("R49", "0.01", 3, 1),
+                shunt("R50", "0.01", 4, 2),
             ],
         );
         let got = attribute_currents(&ltc4020, &ModelLibrary::builtin());
@@ -1585,47 +1525,26 @@ sense_full_scale_v = 0.05
     #[test]
     fn sense_scaled_regulation_requires_exact_equal_declared_shunt_paths() {
         let make_board = |second_shunt: &str, wrong_far: bool, extra_branch: bool| {
+            let pads = [("1", 1), ("2", 2), ("3", 3), ("4", 4), ("5", 5), ("6", 6)];
             let mut components = vec![
-                comp(
-                    "U1",
-                    "TESTSENSE",
-                    "",
-                    vec![
-                        pin("1", 1),
-                        pin("2", 2),
-                        pin("3", 3),
-                        pin("4", 4),
-                        pin("5", 5),
-                        pin("6", 6),
-                    ],
-                ),
+                comp("U1", "TESTSENSE", "", &pads),
                 two_pin("R1", "10k", 3, 2),
-                comp(
-                    "R2",
-                    "0.01",
-                    "Resistor_SMD:R_2512",
-                    vec![pin("1", 5), pin("2", if wrong_far { 4 } else { 1 })],
-                ),
-                comp(
-                    "R3",
-                    second_shunt,
-                    "Resistor_SMD:R_2512",
-                    vec![pin("1", 6), pin("2", 2)],
-                ),
+                shunt("R2", "0.01", 5, if wrong_far { 4 } else { 1 }),
+                shunt("R3", second_shunt, 6, 2),
             ];
             if extra_branch {
                 components.push(two_pin("R4", "0.001", 5, 7));
             }
             board(
                 "sense_regulator",
-                vec![
-                    net(1, "VIN"),
-                    net(2, "GND"),
-                    net(3, "PROG"),
-                    net(4, "VOUT"),
-                    net(5, "KELVIN_A"),
-                    net(6, "KELVIN_B"),
-                    net(7, "FILTER_NODE"),
+                &[
+                    (1, "VIN"),
+                    (2, "GND"),
+                    (3, "PROG"),
+                    (4, "VOUT"),
+                    (5, "KELVIN_A"),
+                    (6, "KELVIN_B"),
+                    (7, "FILTER_NODE"),
                 ],
                 components,
             )
@@ -1644,12 +1563,8 @@ sense_full_scale_v = 0.05
         }
 
         let mut multi_terminal_sense = make_board("0.01", false, false);
-        multi_terminal_sense.components.push(comp(
-            "RV1",
-            "10k",
-            "Potentiometer_THT:Potentiometer",
-            vec![pin("1", 5), pin("2", 1), pin("3", 7)],
-        ));
+        let pot = comp("RV1", "10k", POT, &[("1", 5), ("2", 1), ("3", 7)]);
+        multi_terminal_sense.components.push(pot);
         for (label, board) in [
             ("mismatched shunts", make_board("0.02", false, false)),
             ("wrong far-side role", make_board("0.01", true, false)),
@@ -1711,13 +1626,8 @@ max_current_a = 1.0
 "#;
         let board = board(
             "ldo",
-            vec![net(1, "+5V"), net(2, "GND"), net(3, "+3V3")],
-            vec![comp(
-                "U2",
-                "TESTLDO",
-                "",
-                vec![pin("1", 1), pin("2", 2), pin("3", 3)],
-            )],
+            &[(1, "+5V"), (2, "GND"), (3, "+3V3")],
+            vec![comp("U2", "TESTLDO", "", &[("1", 1), ("2", 2), ("3", 3)])],
         );
         let got = attribute_currents(&board, &lib_from("plain_ldo", toml_src));
         assert!(got.undetermined.is_empty());
@@ -1751,26 +1661,16 @@ max_current_a = 1.0
         )
         .expect("valid model toml");
         let program = model.current_program.as_ref().unwrap();
-        let ldo = comp(
-            "U1",
-            "LP2985-3.3",
-            "",
-            vec![
-                pin("1", 10),
-                pin("2", 11),
-                pin("3", 12),
-                pin("4", 13),
-                pin("5", 14),
-            ],
-        );
+        let ldo_pads = [("1", 10), ("2", 11), ("3", 12), ("4", 13), ("5", 14)];
+        let ldo = comp("U1", "LP2985-3.3", "", &ldo_pads);
         let board = board(
             "t",
-            vec![
-                net(10, "VIN"),
-                net(11, "GND"),
-                net(12, "EN"),
-                net(13, "BYP"),
-                net(14, "+3V3"),
+            &[
+                (10, "VIN"),
+                (11, "GND"),
+                (12, "EN"),
+                (13, "BYP"),
+                (14, "+3V3"),
             ],
             vec![ldo.clone()],
         );
@@ -1783,12 +1683,7 @@ max_current_a = 1.0
 
         let lib = lib_from("incomplete_pads", CHARGER_TOML);
         let board = charger_board(Vec::new());
-        let missing_out = comp(
-            "U1",
-            "TESTCHARGER",
-            "",
-            vec![pin("1", 1), pin("2", 2), pin("3", 3)],
-        );
+        let missing_out = comp("U1", "TESTCHARGER", "", &[("1", 1), ("2", 2), ("3", 3)]);
         let mut conflicting = charger("U1", [1, 2, 3, 4]);
         conflicting.pins.insert(1, pin("1", 5));
         for (label, component) in [
