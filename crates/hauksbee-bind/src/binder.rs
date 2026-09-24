@@ -452,8 +452,16 @@ pub fn bind_board_with(
         let (kind_str, outcome, warning, guesses) = match (&model, &res.selection) {
             (None, Some(selection)) => {
                 let reason = selection.open_reason(&comp.reference);
-                let warning = format!("cannot bind '{}' ({}): {reason}", comp.reference, comp.value);
-                (None, BindOutcome::Unresolved { reason }, Some(warning), Vec::new())
+                let warning = format!(
+                    "cannot bind '{}' ({}): {reason}",
+                    comp.reference, comp.value
+                );
+                (
+                    None,
+                    BindOutcome::Unresolved { reason },
+                    Some(warning),
+                    Vec::new(),
+                )
             }
             (None, None) => {
                 let (kind_str, outcome, warning) = unresolved_outcome(comp, &node_of, lib);

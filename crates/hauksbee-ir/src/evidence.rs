@@ -1272,7 +1272,13 @@ impl Assumption {
 
     /// An orderable-variant set the board could not narrow to one member, all
     /// sharing one pinout: `bound` stands in for every member for simulation only.
-    pub fn undetermined_variant(subject: &str, reference: &str, bound: &str, members: &str, fix: &str) -> Self {
+    pub fn undetermined_variant(
+        subject: &str,
+        reference: &str,
+        bound: &str,
+        members: &str,
+        fix: &str,
+    ) -> Self {
         Self::build(
             AssumptionKind::SubstituteModel,
             AssumptionSource::Binder,

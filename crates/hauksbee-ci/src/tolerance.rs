@@ -181,8 +181,13 @@ pub struct SeedPlan {
 /// variant sets `(reference, member ids)`, so the ensemble passes only if every
 /// member does. `None` above 2^[`CORNER_CAP`] runs: the part then keeps its
 /// flagged stand-in.
-pub fn with_variants(plans: Vec<SeedPlan>, axes: &[(String, Vec<String>)]) -> Option<Vec<SeedPlan>> {
-    let combos = axes.iter().try_fold(1usize, |n, (_, ids)| n.checked_mul(ids.len()))?;
+pub fn with_variants(
+    plans: Vec<SeedPlan>,
+    axes: &[(String, Vec<String>)],
+) -> Option<Vec<SeedPlan>> {
+    let combos = axes
+        .iter()
+        .try_fold(1usize, |n, (_, ids)| n.checked_mul(ids.len()))?;
     if plans.len().checked_mul(combos)? > 1 << CORNER_CAP {
         return None;
     }
@@ -195,7 +200,12 @@ pub fn with_variants(plans: Vec<SeedPlan>, axes: &[(String, Vec<String>)]) -> Op
         axes.iter().map(pick).collect()
     };
     let pick = &pick;
-    let expand = |plan: SeedPlan| (0..combos).map(move |k| SeedPlan { variants: pick(k), ..plan.clone() });
+    let expand = |plan: SeedPlan| {
+        (0..combos).map(move |k| SeedPlan {
+            variants: pick(k),
+            ..plan.clone()
+        })
+    };
     Some(plans.into_iter().flat_map(expand).collect())
 }
 
@@ -793,6 +803,34 @@ mod tests {
             assert_eq!(interior_probe_count(n), 8, "n = {n}");
         }
         assert!(interior_probe_count(CORNER_CAP) * 100 < 1usize << CORNER_CAP);
+    }
+
+    /// Every seed runs every variant combination, and a sweep past the cap is refused.
+    #[test]
+    fn variant_axes_cross_every_plan_within_the_cap() {
+        let ids = |ids: &[&str]| ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let axes = [
+            ("U3".to_string(), ids(&["a", "b"])),
+            ("U4".to_string(), ids(&["x", "y", "z"])),
+        ];
+        let plans = build_plans(Mode::MonteCarlo, 2, &[]).unwrap();
+        let swept = with_variants(plans.clone(), &axes).unwrap();
+        let runs: Vec<(u32, String)> = swept
+            .iter()
+            .map(|p| (p.seed, format!("{:?}", p.variants)))
+            .collect();
+        assert_eq!(runs.len(), 12);
+        assert_eq!(
+            runs.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            12,
+            "{runs:?}"
+        );
+        assert_eq!(
+            swept[1].variants,
+            [("U3".into(), "b".into()), ("U4".into(), "x".into())]
+        );
+        let wide = [("U3".to_string(), (0..1025).map(|i| i.to_string()).collect())];
+        assert!(with_variants(plans, &wide).is_none());
     }
 
     /// `below` must be free of the modulo bias `next_u64() % n` carries: over

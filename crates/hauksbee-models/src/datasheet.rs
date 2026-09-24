@@ -3505,6 +3505,23 @@ uncertainty = [
 "#;
         let entry = parse_and_validate_reply(good, "BCM847BS", "bjt_npn").unwrap();
         assert_eq!(entry.id, "bcm847bs");
+        // A variant reply is checked as a set: a code two members match is refused.
+        let pair = |y_re: &str| {
+            let member = |(id, re, code): (&str, &str, &str)| {
+                let variant = format!("[models.variant]\norderable_re = \"{re}\"\norderable = [\"BCM847BS,{code}\"]\nbasis = \"p. 2\"\n");
+                let entry = good.replace(
+                    "\"bcm847bs\"",
+                    &format!("\"{id}\"\nvariant_of = \"BCM847BS\""),
+                );
+                entry.replace("[models.source]", &format!("{variant}[models.source]"))
+            };
+            [("x", "115$", "115"), ("y", y_re, "135")]
+                .map(member)
+                .concat()
+        };
+        assert!(parse_and_validate_reply(&pair("135$"), "BCM847BS", "bjt_npn").is_ok());
+        let error = parse_and_validate_reply(&pair("1.5$"), "BCM847BS", "bjt_npn").unwrap_err();
+        assert!(error.to_string().contains("variant set"), "{error:#}");
         let no_source = &good[..good.find("[models.source]").unwrap()];
         let error = parse_and_validate_reply(no_source, "BCM847BS", "bjt_npn").unwrap_err();
         assert!(error.to_string().contains("rule 0"), "{error:#}");

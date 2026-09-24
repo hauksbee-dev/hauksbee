@@ -845,7 +845,13 @@ pub fn run_spec_with_lib(
         .any(|p| !fuzz_net_drives(spec, p.seed).is_empty());
     let swept = plans.iter().any(|p| !p.variants.is_empty());
     let shared_ac = if spec.ac.is_some() && tols.is_empty() && !fuzz_straps_present && !swept {
-        Some(compute_ac(spec, &base, &crate::tolerance::SeedPlan::default(), &[], lib)?)
+        Some(compute_ac(
+            spec,
+            &base,
+            &crate::tolerance::SeedPlan::default(),
+            &[],
+            lib,
+        )?)
     } else {
         None
     };
@@ -1360,7 +1366,10 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> ExtractedBoard {
             .find(|c| c.reference == ov.reference)
         {
             comp.value = ov.value.clone().unwrap_or_else(|| comp.value.clone());
-            let select = ov.select.iter().map(|id| (SELECT_PROPERTY.to_string(), id.clone()));
+            let select = ov
+                .select
+                .iter()
+                .map(|id| (SELECT_PROPERTY.to_string(), id.clone()));
             comp.properties.extend(select);
         }
     }
@@ -1386,7 +1395,9 @@ fn apply_plan(board: &mut ExtractedBoard, plan: &crate::tolerance::SeedPlan) {
             comp.value = format!("{:?}", sv.si);
         }
         let ids = plan.variants.iter().filter(|(r, _)| r == reference);
-        let sweep = ids.map(|(_, id)| (SWEEP_PROPERTY.to_string(), id.clone())).collect::<Vec<_>>();
+        let sweep = ids
+            .map(|(_, id)| (SWEEP_PROPERTY.to_string(), id.clone()))
+            .collect::<Vec<_>>();
         comp.properties.extend(sweep);
     }
 }
@@ -1407,7 +1418,8 @@ fn sweep_variants(
         let part = AssemblyState::of(comp).fitted()?;
         let selection = hauksbee_engine::binder::resolve(lib, part).selection?;
         let ids = selection.survivors().map(|m| m.id.clone()).collect();
-        (selection.determined.is_none() && selection.same_pinout).then(|| (comp.reference.clone(), ids))
+        (selection.determined.is_none() && selection.same_pinout)
+            .then(|| (comp.reference.clone(), ids))
     };
     let axes: Vec<(String, Vec<String>)> = board.components.iter().filter_map(open).collect();
     if axes.is_empty() {

@@ -718,7 +718,10 @@ impl ModelLibrary {
             // scores them against the component and binds one, a stand-in, or none.
             let family = le.compiled.entry.variant_of.as_deref();
             let sibling = |o: &LayeredEntry| {
-                family.is_some() && o.compiled.entry.variant_of.as_deref() == family && rank(o).0 == top.0 && rank(o).1 == top.1
+                family.is_some()
+                    && o.compiled.entry.variant_of.as_deref() == family
+                    && rank(o).0 == top.0
+                    && rank(o).1 == top.1
             };
             let mut siblings: Vec<&LayeredEntry> = matched().filter(|o| sibling(o)).collect();
             siblings.sort_by(|a, b| a.compiled.entry.id.cmp(&b.compiled.entry.id));
@@ -726,12 +729,19 @@ impl ModelLibrary {
             let selection = family.map(|family| variants::select(family, &entries, q));
             let chosen = match selection.as_ref().map(variants::Selection::bound) {
                 None => Some(le),
-                Some(bound) => siblings.into_iter().find(|o| Some(o.compiled.entry.id.as_str()) == bound),
+                Some(bound) => siblings
+                    .into_iter()
+                    .find(|o| Some(o.compiled.entry.id.as_str()) == bound),
             };
             let Some(le) = chosen else {
-                return Resolution { selection, ..Resolution::unresolved(q.clone()) };
+                return Resolution {
+                    selection,
+                    ..Resolution::unresolved(q.clone())
+                };
             };
-            let tie = |other: &&LayeredEntry| rank(other) == top && other.compiled.entry.id != *id && !sibling(other);
+            let tie = |other: &&LayeredEntry| {
+                rank(other) == top && other.compiled.entry.id != *id && !sibling(other)
+            };
             let ids = matched().filter(tie).map(|o| o.compiled.entry.id.clone());
             return Resolution {
                 selection,
@@ -784,7 +794,10 @@ impl ModelLibrary {
         let db_file: schema::DbFile = toml::from_str(src).map_err(parse)?;
         if let Some(problem) = variants::lint(&db_file.models).into_iter().next() {
             let id = source_name.to_string();
-            return Err(ModelError::ValidationFailed { id, messages: problem });
+            return Err(ModelError::ValidationFailed {
+                id,
+                messages: problem,
+            });
         }
 
         for mut entry in db_file.models {

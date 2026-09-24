@@ -1189,9 +1189,17 @@ fn analyze_normalized_with_context(
     // this would let a board with every active IC open show "Looks healthy".
     let mut bind_web = BindSummaryWeb::from_summary(&bind_summary);
     let rows = &bound.report.rows;
-    let open = bound.report.selections.iter().filter(|(_, s)| s.determined.is_none());
+    let open = bound
+        .report
+        .selections
+        .iter()
+        .filter(|(_, s)| s.determined.is_none());
     bind_web.open_selections = (open.map(|(&i, s)| (&rows[i], s)))
-        .map(|(row, s)| WebSelection { reference: row.reference.clone(), value: row.value.clone(), selection: s.clone() })
+        .map(|(row, s)| WebSelection {
+            reference: row.reference.clone(),
+            value: row.value.clone(),
+            selection: s.clone(),
+        })
         .collect();
     // Reader notes plus the binder's own coverage gaps, so an overpower check
     // that never ran is visible on the human report, not only in CI.
