@@ -182,21 +182,53 @@ fn battery_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, O
     ranges
 }
 
-struct RailResolver<'a> {
+pub(crate) struct RailResolver<'a> {
     board: &'a ExtractedBoard,
     drives: &'a BTreeMap<String, f64>,
     regulators: BTreeMap<i64, RailRange>,
     batteries: BTreeMap<i64, Option<RailRange>>,
 }
 
-impl RailResolver<'_> {
+impl<'a> RailResolver<'a> {
+    pub(crate) fn new(
+        board: &'a ExtractedBoard,
+        lib: &ModelLibrary,
+        drives: &'a BTreeMap<String, f64>,
+    ) -> Self {
+        let (regulators, batteries) = (regulator_ranges(board, lib), battery_ranges(board, lib));
+        Self {
+            board,
+            drives,
+            regulators,
+            batteries,
+        }
+    }
+
+    fn solved(&self, net_id: i64) -> Option<f64> {
+        self.drives.get(&self.board.net(net_id)?.name).copied()
+    }
+
+    /// Every level a net is judged at: the solved one when a run gave it, plus
+    /// both corners of its declared range. Empty when neither is known.
+    pub(crate) fn corners(&self, net_id: i64) -> Vec<f64> {
+        let declared = match self.declared(net_id) {
+            RailKnowledge::Known(r) => vec![r.min_v, r.max_v],
+            _ => Vec::new(),
+        };
+        self.solved(net_id).into_iter().chain(declared).collect()
+    }
+
     fn range(&self, net_id: i64) -> RailKnowledge {
+        self.solved(net_id).map_or_else(
+            || self.declared(net_id),
+            |volts| RailKnowledge::Known(RailRange::point(volts)),
+        )
+    }
+
+    fn declared(&self, net_id: i64) -> RailKnowledge {
         let Some(net) = self.board.net(net_id) else {
             return RailKnowledge::Unknown;
         };
-        if let Some(volts) = self.drives.get(&net.name).copied() {
-            return RailKnowledge::Known(RailRange::point(volts));
-        }
         if let Some(range) = self.regulators.get(&net_id).copied() {
             return RailKnowledge::Known(range);
         }
@@ -276,12 +308,7 @@ fn envelope_lint_with_tolerance(
     reltol: f64,
     vntol: f64,
 ) -> NetLintReport {
-    let resolver = RailResolver {
-        board,
-        drives,
-        regulators: regulator_ranges(board, lib),
-        batteries: battery_ranges(board, lib),
-    };
+    let resolver = RailResolver::new(board, lib, drives);
     let mut report = NetLintReport::default();
     let mut abstained_nets = BTreeSet::new();
 

@@ -22,7 +22,10 @@
 //!       clock is, by definition, free-running at reset;
 //!   (b) the strap net is *resistively biased to the wrong level* for normal
 //!       boot (a pull-up where the part needs LOW, or a pull-down where it needs
-//!       HIGH) -> MEDIUM;
+//!       HIGH) -> MEDIUM. Pulls both ways form a divider, solved from the
+//!       pulls' conductances at every rail and tolerance corner against the
+//!       card's sourced VIL/VIH: consistently wrong -> MEDIUM, mid-band or
+//!       corner-dependent -> HIGH, no thresholds or values -> a LOW abstention;
 //!   (c) (deliberately NOT fired on "no external bias": every ESP32 strap has a
 //!       documented internal pull, so a bare strap pin held by the internal pull
 //!       is correct - firing there would be a confident false positive on Watchy
@@ -36,15 +39,29 @@
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
-use hauksbee_models::value::parse_value;
-use hauksbee_models::{ModelLibrary, StrapInternalPull, StrapLevel};
+use std::collections::BTreeMap;
 
+use hauksbee_models::value::parse_value;
+use hauksbee_models::{ModelEntry, ModelLibrary, StrapInternalPull, StrapLevel, StrapPin};
+
+use super::envelope::{role_net_id, RailResolver};
 use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
 
 /// Run the strap-pin lint over an extracted board, resolving each component
 /// against `lib` to find MCUs that carry a strap table.
 pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
+    strap_lint_with_drives(board, lib, &BTreeMap::new())
+}
+
+/// [`strap_lint`] with solved (or spec-forced) net levels, which a pull
+/// divider is judged at alongside each rail's declared corners.
+pub fn strap_lint_with_drives(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    drives: &BTreeMap<String, f64>,
+) -> NetLintReport {
+    let rails = RailResolver::new(board, lib, drives);
     let mut report = NetLintReport::default();
     for comp in &board.components {
         // The three-state contract: only a present part's strap table runs.
@@ -107,17 +124,7 @@ pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
                 }
                 continue;
             }
-            examine_strap(
-                board,
-                comp,
-                strap.role.as_str(),
-                strap.level,
-                strap.boot_select,
-                &strap.note,
-                net_id,
-                &net.name,
-                &mut report,
-            );
+            examine_strap(board, &rails, (comp, model), strap, net_id, &mut report);
         }
     }
     report
@@ -127,68 +134,92 @@ pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
 /// required level at reset.
 fn examine_strap(
     board: &ExtractedBoard,
-    mcu: &Component,
-    role: &str,
-    level: StrapLevel,
-    boot_select: bool,
-    note: &str,
+    rails: &RailResolver<'_>,
+    (mcu, model): (&Component, &ModelEntry),
+    strap: &StrapPin,
     net_id: i64,
-    net_name: &str,
     report: &mut NetLintReport,
 ) {
-    let members = board.net_members(net_id);
+    let (role, note, net_name) = (
+        &strap.role,
+        &strap.note,
+        &board.net(net_id).map_or("", |n| &n.name),
+    );
+    let mut push = |severity, message: String, mut refs: Vec<String>| {
+        refs.insert(0, mcu.reference.clone());
+        let nets = vec![net_name.to_string()];
+        let message = format!(
+            "{} strap pin {role} net '{net_name}' {message} ({note})",
+            mcu.reference
+        );
+        report.findings.push(LintFinding {
+            check: LintCheck::StrapPin,
+            severity,
+            message,
+            refs,
+            nets,
+        });
+    };
 
     // (a) A free-running clock source on the strap net. This is the Olimex GPIO0
     //     fault: a powered oscillator reaches the pin (here through a small
     //     series resistor), so a clock is present at the reset latch window. We
     //     look across the net AND one series-resistor hop, because the real
     //     board puts a 10R between the oscillator and GPIO0.
-    if let Some(osc) = clock_source_reaching(board, net_id) {
-        if osc.reference != mcu.reference {
-            report.findings.push(LintFinding {
-                check: LintCheck::StrapPin,
-                severity: Severity::High,
-                message: format!(
-                    "{} strap pin {} ({role}) net '{net_name}' carries a free-running clock source {} ({}): a clock present at the reset latch can mis-strap the part ({note})",
-                    mcu.reference, role, osc.reference, osc.value
-                ),
-                refs: vec![mcu.reference.clone(), osc.reference.clone()],
-                nets: vec![net_name.to_string()],
-            });
-            return; // one finding per strap; the clock is the dominant fault
-        }
+    if let Some(osc) = clock_source_reaching(board, net_id).filter(|o| o.reference != mcu.reference)
+    {
+        let what = format!("carries a free-running clock source {} ({}): a clock present at the reset latch can mis-strap the part", osc.reference, osc.value);
+        return push(Severity::High, what, vec![osc.reference.clone()]); // the clock is the dominant fault
     }
 
-    // (b) A pull resistor biasing the strap to the WRONG level for normal boot.
-    //     Only fire when the required level is a hard HIGH or LOW (not the
-    //     "defined" case), AND only for a *boot-select* strap whose wrong level
-    //     is unrecoverable (BOOT0, GPIO0, GPIO9, QSPI_SS). A cosmetic or
+    // (b) Pull resistors biasing the strap to the WRONG level for normal boot.
+    //     Only for a hard HIGH/LOW *boot-select* strap whose wrong level is
+    //     unrecoverable (BOOT0, GPIO0, GPIO9, QSPI_SS). A cosmetic or
     //     flash-voltage strap (ESP32 GPIO15 boot-log, GPIO2, GPIO12) may be
     //     legitimately repurposed as an ordinary GPIO with a pull on a shipped
     //     board, so a wrong-bias finding there would be a confident false
-    //     positive on a correct design - exactly the cardinal sin. Gating on
-    //     boot_select keeps this arm to the pins where "wrong pull" == "won't
-    //     boot".
-    let want_high = matches!(level, StrapLevel::High);
-    let want_low = matches!(level, StrapLevel::Low);
-    if boot_select && (want_high || want_low) {
-        if let Some((rref, to_ground)) = wrong_pull(board, net_id, &members, want_high) {
-            let dir = if to_ground {
-                "pull-down to ground"
-            } else {
-                "pull-up to a rail"
-            };
-            report.findings.push(LintFinding {
-                check: LintCheck::StrapPin,
-                severity: Severity::Medium,
-                message: format!(
-                    "{} strap pin {} ({role}) net '{net_name}' has a {dir} ({rref}) but normal boot needs {}: the strap is biased to the wrong level ({note})",
-                    mcu.reference, role, level.as_str()
+    //     positive on a correct design - exactly the cardinal sin.
+    let want_high = strap.level == StrapLevel::High;
+    if !strap.boot_select || !(want_high || strap.level == StrapLevel::Low) {
+        return;
+    }
+    let pulls = pulls_on(board, net_id);
+    if pulls.iter().any(|p| p.up == want_high) && pulls.iter().any(|p| p.up != want_high) {
+        // Pulls both ways: a divider sets the level, not "a correct pull exists".
+        return match judge_divider(board, rails, (mcu, model), strap, &pulls) {
+            Ok(None) => {}
+            Ok(Some((severity, what))) => push(
+                severity,
+                what,
+                pulls.into_iter().map(|p| p.reference).collect(),
+            ),
+            Err(why) => push(
+                Severity::Low,
+                format!(
+                    "cannot judge divider ({}): {why}, so its boot level is unchecked",
+                    describe(&pulls)
                 ),
-                refs: vec![mcu.reference.clone(), rref],
-                nets: vec![net_name.to_string()],
-            });
-        }
+                Vec::new(),
+            ),
+        };
+    }
+    // One-sided: a wrong pull only counts when it is *strong* against the
+    // part's internal pull (~45 kOhm on ESP32); <= 20 kOhm is a real pull.
+    if let Some(p) = pulls
+        .iter()
+        .find(|p| p.up != want_high && p.ohms.is_some_and(|r| r <= 20_000.0))
+    {
+        let dir = if p.up {
+            "pull-up to a rail"
+        } else {
+            "pull-down to ground"
+        };
+        let what = format!(
+            "has a {dir} ({}) but normal boot needs {}: the strap is biased to the wrong level",
+            p.reference,
+            strap.level.as_str()
+        );
+        push(Severity::Medium, what, vec![p.reference.clone()]);
     }
 }
 
@@ -317,57 +348,164 @@ fn oscillator_driving_net(board: &ExtractedBoard, net_id: i64) -> Option<&Compon
     None
 }
 
-/// If the strap net carries an assembled pull resistor whose far pad biases it
-/// to the WRONG level for normal boot, return (resistor ref, to_ground). A
-/// pull-up when LOW is wanted, or a pull-down when HIGH is wanted, is wrong.
-fn wrong_pull(
-    board: &ExtractedBoard,
-    net_id: i64,
-    members: &[(&Component, &hauksbee_extract::Pin)],
-    want_high: bool,
-) -> Option<(String, bool)> {
-    // Collect the strong (<= 20 kOhm) pulls on the net, in each direction. A net
-    // can carry both (a divider); we only fire on a wrong-direction pull when
-    // there is NO opposing correct-direction pull to net it out (a divider that
-    // resolves the strap to its correct level, plus the part's internal pull, is
-    // not a fault). This is the split-divider guard.
-    let mut wrong: Option<(String, bool)> = None; // (ref, to_ground)
-    let mut has_correct = false;
-    for (c, _p) in members {
-        if !is_assembled_resistor(c) {
-            continue;
-        }
-        // A pull only counts if it is a *strong* bias relative to the part's
-        // internal pull (~45 kOhm on ESP32). A weak/large series resistor into a
-        // load is not a bias. Treat <= 20 kOhm as a real pull. Unknown value:
-        // be conservative and do not count it.
-        let ohms = parse_value(&c.value).map(|p| p.si).unwrap_or(f64::INFINITY);
-        if !(ohms.is_finite() && ohms <= 20_000.0) {
-            continue;
-        }
-        for op in &c.pins {
-            if op.net == Some(net_id) {
+/// One assembled resistor from the strap net to a rail (`up`) or to ground.
+struct Pull {
+    reference: String,
+    value: String,
+    far: i64,
+    up: bool,
+    /// `None` when the value string does not parse to ohms.
+    ohms: Option<f64>,
+    /// Fractional tolerance when the part states one ("10k 1%", or a
+    /// `Tolerance` property); zero when unknown.
+    tol: f64,
+}
+
+fn pulls_on(board: &ExtractedBoard, net_id: i64) -> Vec<Pull> {
+    let mut pulls = Vec::new();
+    for (c, _) in board
+        .net_members(net_id)
+        .into_iter()
+        .filter(|(c, _)| is_assembled_resistor(c))
+    {
+        for far in c
+            .pins
+            .iter()
+            .filter_map(|p| p.net)
+            .filter(|id| *id != net_id)
+        {
+            let Some(name) = board.net(far).map(|n| n.name.as_str()) else {
+                continue;
+            };
+            if !(is_ground_name(name) || is_rail_name(name)) {
                 continue;
             }
-            let Some(oid) = op.net else { continue };
-            let Some(on) = board.net(oid) else { continue };
-            let to_ground = is_ground_name(&on.name);
-            let to_rail = is_rail_name(&on.name);
-            // A pull toward the level the strap needs is "correct".
-            let correct = (want_high && to_rail) || (!want_high && to_ground);
-            let is_wrong = (want_high && to_ground) || (!want_high && to_rail);
-            if correct {
-                has_correct = true;
-            }
-            if is_wrong && wrong.is_none() {
-                wrong = Some((c.reference.clone(), to_ground));
-            }
+            let ohms =
+                parse_value(&c.value).filter(|v| matches!(v.unit.as_deref(), None | Some("Ω")));
+            let tol = c
+                .properties
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("tolerance"))
+                .map(|(_, v)| v.as_str());
+            let tol = tol
+                .chain(c.value.split_whitespace())
+                .find_map(|t| t.trim().strip_suffix('%')?.parse::<f64>().ok());
+            let (reference, value, up) =
+                (c.reference.clone(), c.value.clone(), !is_ground_name(name));
+            pulls.push(Pull {
+                reference,
+                value,
+                far,
+                up,
+                ohms: ohms.map(|v| v.si),
+                tol: tol.unwrap_or(0.0) / 100.0,
+            });
         }
     }
-    if has_correct {
-        return None; // an opposing correct pull resolves the strap; not a fault
+    pulls
+}
+
+fn describe(pulls: &[Pull]) -> String {
+    let side = |p: &Pull| if p.up { "up" } else { "down" };
+    pulls
+        .iter()
+        .map(|p| format!("{} {} {}", p.reference, p.value, side(p)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Judge a pull divider on a boot-select strap: the pin voltage from the
+/// pulls' conductances, at every combination of each rail's solved level and
+/// declared corners and at both resistor-tolerance extremes, against the
+/// card's sourced VIL/VIH at that corner's VDD. `Ok(None)` when every corner
+/// reads the required level; `Err` names what is missing to judge it at all.
+fn judge_divider(
+    board: &ExtractedBoard,
+    rails: &RailResolver<'_>,
+    (mcu, model): (&Component, &ModelEntry),
+    strap: &StrapPin,
+    pulls: &[Pull],
+) -> Result<Option<(Severity, String)>, String> {
+    if let Some(p) = pulls.iter().find(|p| p.ohms.is_none()) {
+        return Err(format!(
+            "{} value '{}' is not a resistance",
+            p.reference, p.value
+        ));
     }
-    wrong
+    let (Some([il_k, il_v]), Some([ih_k, ih_v])) = (strap.vil, strap.vih) else {
+        return Err(format!(
+            "the '{}' card carries no sourced VIL/VIH for {}",
+            model.id, strap.role
+        ));
+    };
+    let vdd = role_net_id(mcu, model, "vdd")
+        .ok_or_else(|| format!("the '{}' card names no vdd pin to scale VIL/VIH", model.id))?;
+    // The rails in play (the vdd net shares a corner with a pull to it).
+    let mut nets: Vec<(i64, Vec<f64>)> = Vec::new();
+    for id in pulls.iter().filter(|p| p.up).map(|p| p.far).chain([vdd]) {
+        let name = board.net(id).map_or("?", |n| n.name.as_str());
+        let corners = rails.corners(id);
+        if corners.is_empty() {
+            return Err(format!("rail '{name}' has no known voltage"));
+        }
+        if !nets.iter().any(|(n, _)| *n == id) {
+            nets.push((id, corners));
+        }
+    }
+    let combos: usize = nets.iter().map(|(_, c)| c.len()).product();
+    let widen = |(a, b): (f64, f64), v: f64| (a.min(v), b.max(v));
+    let empty = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut pin, mut il, mut ih) = (empty, empty, empty);
+    let mut reads = [false; 3]; // low, undefined, high
+    for mut k in 0..combos {
+        let mut level = BTreeMap::new();
+        for (id, corners) in &nets {
+            level.insert(*id, corners[k % corners.len()]);
+            k /= corners.len();
+        }
+        let (vil, vih) = (il_k * level[&vdd] + il_v, ih_k * level[&vdd] + ih_v);
+        (il, ih) = (widen(il, vil), widen(ih, vih));
+        for skew in [-1.0, 1.0] {
+            // A 0 Ohm part is a short: a micro-ohm pins the net to its far side.
+            let (mut g, mut i) = (0.0, 0.0);
+            for p in pulls {
+                let r = (p.ohms.unwrap_or_default()
+                    * (1.0 + skew * p.tol * if p.up { -1.0 } else { 1.0 }))
+                .max(1e-6);
+                g += 1.0 / r;
+                i += level.get(&p.far).copied().unwrap_or(0.0) / r;
+            }
+            let v = i / g;
+            pin = widen(pin, v);
+            reads[if v <= vil {
+                0
+            } else if v >= vih {
+                2
+            } else {
+                1
+            }] = true;
+        }
+    }
+    let want_high = strap.level == StrapLevel::High;
+    let (verdict, severity) = match reads {
+        [true, false, false] if !want_high => return Ok(None),
+        [false, false, true] if want_high => return Ok(None),
+        [true, false, false] => ("LOW at every corner", Severity::Medium),
+        [false, false, true] => ("HIGH at every corner", Severity::Medium),
+        [false, true, false] => ("an undefined level (between VIL and VIH)", Severity::High),
+        _ => ("an undefined, corner-dependent level", Severity::High),
+    };
+    let span = |(a, b): (f64, f64)| {
+        if (b - a).abs() < 5e-3 {
+            format!("{a:.2} V")
+        } else {
+            format!("{a:.2}-{b:.2} V")
+        }
+    };
+    Ok(Some((severity, format!(
+        "is a pull divider ({}) at {} across {combos} rail corner(s) and the resistor tolerances, against VIL <= {} and VIH >= {}: it reads {verdict}, but normal boot needs {}",
+        describe(pulls), span(pin), span(il), span(ih), strap.level.as_str()
+    ))))
 }
 
 // ── Small net-name helpers (local copies; the extract versions are private) ──
@@ -430,424 +568,289 @@ fn net_is_isolated_to(board: &ExtractedBoard, net_id: i64, mcu: &Component) -> b
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::{board, part};
     use super::*;
-    use hauksbee_extract::LintCheck;
+    use Severity::{High, Low, Medium};
 
-    /// A constructed ESP32 board whose GPIO0 strap (ESP-WROOM-32 pad 25) carries
-    /// a 50 MHz oscillator through a 10R series resistor - the Olimex fault shape
-    /// in miniature. `clean` swaps the oscillator for a plain 10k pull-up to
-    /// +3V3 (the correct strap bias).
-    fn esp32_strap_board(clean: bool) -> String {
-        // GPIO0 net = 3. Oscillator output net = 4 (faulty) bridged by R36 (10R).
-        let driver = if clean {
-            // 10k pull-up R36 from GPIO0 (net 3) to +3V3 (net 5): correct bias.
-            r#"
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 120 100)
-    (fp_text reference R36 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 3 "/GPIO0"))
-    (pad 2 smd rect (at 2 0) (net 5 "+3V3"))
-  )"#
-        } else {
-            // CR1 50 MHz oscillator: out(net 4)/gnd/oe/vdd(+3V3), out -> R36 10R
-            // -> GPIO0 (net 3). Free-running clock on the strap pin.
-            r#"
-  (module Oscillator:Oscillator_SMD_4Pin (layer F.Cu)
-    (at 130 100)
-    (fp_text reference CR1 (at 0 0) (layer F.SilkS))
-    (fp_text value Q50MHz/25ppm/3V/4P (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 6 "/OSC_EN"))
-    (pad 2 smd rect (at 1 0) (net 1 "GND"))
-    (pad 3 smd rect (at 2 0) (net 4 "Net-(CR1-OUT)"))
-    (pad 4 smd rect (at 3 0) (net 5 "+3V3"))
-  )
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 120 100)
-    (fp_text reference R36 (at 0 0) (layer F.SilkS))
-    (fp_text value 10R (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 4 "Net-(CR1-OUT)"))
-    (pad 2 smd rect (at 2 0) (net 3 "/GPIO0"))
-  )"#
+    /// A test MCU whose active-low boot strap carries absolute thresholds
+    /// (VIL 0.9 V, VIH 2.0 V), so divider corners are easy to place by hand.
+    const STRAP_CARD: &str = r#"
+[[models]]
+id = "strap_test_mcu"
+kind = "mcu"
+description = "divider fixture"
+[models.match]
+value_re = "^STRAPTEST$"
+[models.pins]
+"1" = "vdd"
+"2" = "boot0"
+[[models.straps]]
+role = "boot0"
+level = "low"
+boot_select = true
+internal_pull = "none"
+vil = [0.0, 0.9]
+vih = [0.0, 2.0]
+"#;
+
+    fn library() -> ModelLibrary {
+        let dir = std::env::temp_dir().join(format!("hauksbee_straps_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("models.toml"), STRAP_CARD).unwrap();
+        let mut lib = ModelLibrary::builtin();
+        assert!(lib.load_user_dir(&dir).is_empty(), "test card must load");
+        lib
+    }
+
+    /// Nets: 1 GND, 2 the rail, 3 the strap, 4/7 oscillator outputs, 6 enable.
+    fn strap_board(rail: &str, strap: &str, parts: Vec<Component>) -> ExtractedBoard {
+        let nets = [
+            (1, "GND"),
+            (2, rail),
+            (3, strap),
+            (4, "Net-(CR1-OUT)"),
+            (6, "/OSC_EN"),
+            (7, "Net-(CR2-OUT)"),
+        ];
+        board(&nets, parts)
+    }
+    /// A pull from the strap (net 3) to `far` (1 = GND, 2 = the rail).
+    fn pull(reference: &str, value: &str, far: i64) -> Component {
+        part(reference, value, &[("1", 3), ("2", far)])
+    }
+    fn osc(reference: &str, out: i64) -> Component {
+        part(
+            reference,
+            "Q50MHz/25ppm/3V/4P",
+            &[("1", 6), ("2", 1), ("3", out), ("4", 2)],
+        )
+    }
+    fn esp32(strap_pad: &str) -> Component {
+        part("U3", "ESP-WROOM-32", &[("2", 2), (strap_pad, 3)])
+    }
+    fn stm32() -> Component {
+        part("U1", "STM32F103C8T6", &[("9", 2), ("8", 1), ("44", 3)])
+    }
+    fn test_mcu() -> Component {
+        part("U9", "STRAPTEST", &[("1", 2), ("2", 3)])
+    }
+
+    fn check(
+        name: &str,
+        b: &ExtractedBoard,
+        drives: &BTreeMap<String, f64>,
+        want: &[(Severity, &[&str])],
+    ) {
+        let report = strap_lint_with_drives(b, &library(), drives);
+        let got: Vec<_> = report.of_check(LintCheck::StrapPin).collect();
+        assert_eq!(got.len(), want.len(), "{name}: {got:#?}");
+        for (finding, (severity, needles)) in got.iter().zip(want) {
+            assert_eq!(finding.severity, *severity, "{name}: {}", finding.message);
+            for needle in *needles {
+                assert!(
+                    finding.message.contains(needle),
+                    "{name}: '{needle}' not in {}",
+                    finding.message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn strap_cases() {
+        let none = BTreeMap::new();
+        let with_unrelated_osc = |rail| {
+            strap_board(
+                rail,
+                "/GPIO0",
+                vec![esp32("25"), pull("R36", "10k", 2), osc("CR2", 7)],
+            )
         };
-        format!(
-            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "/GPIO0")
-  (net 4 "Net-(CR1-OUT)")
-  (net 5 "+3V3")
-  (net 6 "/OSC_EN")
-  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U3 (at 0 0) (layer F.SilkS))
-    (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 5 "+3V3"))
-    (pad 25 smd rect (at 0 5) (net 3 "/GPIO0"))
-  ){driver}
-)"#
-        )
-    }
-
-    fn strap_findings(text: &str) -> NetLintReport {
-        let board = ExtractedBoard::from_kicad_pcb(text).expect("parse synthetic board");
-        let lib = ModelLibrary::builtin();
-        strap_lint(&board, &lib)
-    }
-
-    #[test]
-    fn clock_on_gpio0_strap_fires_high() {
-        let r = strap_findings(&esp32_strap_board(false));
-        let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
-        assert_eq!(strap.len(), 1, "exactly the GPIO0 clock finding");
-        assert!(matches!(strap[0].severity, Severity::High));
-        assert!(strap[0].message.contains("gpio0"));
-        assert!(strap[0].message.contains("CR1"));
-        assert!(strap[0].nets.iter().any(|n| n.contains("GPIO0")));
-    }
-
-    #[test]
-    fn pulled_gpio0_strap_is_clean() {
-        // The fixed shape: a 10k pull-up to +3V3, no oscillator. Must be silent.
-        let r = strap_findings(&esp32_strap_board(true));
-        assert_eq!(
-            r.of_check(LintCheck::StrapPin).count(),
-            0,
-            "a correctly-pulled strap raises no strap finding"
+        let jumper = board(
+            &[(1, "GND"), (2, "+3V3"), (3, "/BOOT0"), (4, "/BOOT0_SEL")],
+            vec![
+                part("U1", "STM32F401CCU6", &[("44", 3)]),
+                pull("R1", "1k", 4),
+                part("J1", "BOOT_SEL", &[("1", 2), ("2", 4), ("3", 1)]),
+            ],
         );
-    }
-
-    fn strap_board_with_unrelated_oscillator() -> String {
-        let mut text = esp32_strap_board(true);
-        // Insert an oscillator powered from +3V3 (net 5) but whose OUTPUT goes to
-        // an unrelated net 7, not the strap. Sharing only the rail must not fire.
-        let osc = r#"
-  (module Oscillator:Oscillator_SMD_4Pin (layer F.Cu)
-    (at 140 100)
-    (fp_text reference CR2 (at 0 0) (layer F.SilkS))
-    (fp_text value Q25MHz/25ppm/3V/4P (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 6 "/OSC_EN"))
-    (pad 2 smd rect (at 1 0) (net 1 "GND"))
-    (pad 3 smd rect (at 2 0) (net 7 "Net-(CR2-OUT)"))
-    (pad 4 smd rect (at 3 0) (net 5 "+3V3"))
-  )
-)"#;
-        // Replace the trailing ")" with the oscillator block + ")".
-        text = text.trim_end().trim_end_matches(')').to_string();
-        text.push_str(osc);
-        text
-    }
-
-    #[test]
-    fn strap_pullup_to_rail_does_not_reach_oscillator_vdd() {
-        // Regression for the GPIO15 false fire: a strap with a pull-up to +3V3
-        // must NOT "reach" an oscillator that merely shares the +3V3 rail via its
-        // VDD pin. The clean board has the pull-up to +3V3 and (here) we add an
-        // oscillator on an unrelated net sharing only +3V3. Still clean.
-        let text = strap_board_with_unrelated_oscillator();
-        let r = strap_findings(&text);
-        assert_eq!(
-            r.of_check(LintCheck::StrapPin).count(),
-            0,
-            "sharing only the +3V3 rail with an oscillator must not fire"
+        let cases: Vec<(&str, ExtractedBoard, &[(Severity, &[&str])])> = vec![
+            // The Olimex fault: a 50 MHz oscillator through a 10R onto GPIO0.
+            (
+                "clock on GPIO0",
+                strap_board(
+                    "+3V3",
+                    "/GPIO0",
+                    vec![
+                        esp32("25"),
+                        osc("CR1", 4),
+                        part("R36", "10R", &[("1", 4), ("2", 3)]),
+                    ],
+                ),
+                &[(High, &["gpio0", "CR1", "GPIO0"])],
+            ),
+            (
+                "pulled GPIO0",
+                strap_board("+3V3", "/GPIO0", vec![esp32("25"), pull("R36", "10k", 2)]),
+                &[],
+            ),
+            // Sharing only the rail with an oscillator's VDD is not a clock path,
+            // whether the rail is named +3V3 or VBAT (bug #19).
+            ("osc shares +3V3", with_unrelated_osc("+3V3"), &[]),
+            ("osc shares VBAT", with_unrelated_osc("VBAT"), &[]),
+            (
+                "BOOT0 pulled up",
+                strap_board("+3V3", "/BOOT0", vec![stm32(), pull("R1", "10k", 2)]),
+                &[(Medium, &["boot0", "wrong level"])],
+            ),
+            (
+                "BOOT0 pulled to VBAT (bug #20)",
+                strap_board("VBAT", "/BOOT0", vec![stm32(), pull("R1", "10k", 2)]),
+                &[(Medium, &["boot0", "wrong level"])],
+            ),
+            (
+                "BOOT0 pulled down",
+                strap_board("+3V3", "/BOOT0", vec![stm32(), pull("R1", "10k", 1)]),
+                &[],
+            ),
+            // STM32 BOOT0 has no internal pull: floating is undefined at reset,
+            // whether KiCad names the net unconnected-* or it is merely isolated.
+            (
+                "floating BOOT0",
+                strap_board(
+                    "+3V3",
+                    "unconnected-(U1-Pad44)",
+                    vec![part("U1", "STM32F401CCU6", &[("44", 3)])],
+                ),
+                &[(High, &["floating", "Pad44"])],
+            ),
+            (
+                "isolated BOOT0",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![part("U1", "STM32F401CCU6", &[("44", 3)])],
+                ),
+                &[(High, &["floating"])],
+            ),
+            ("jumper-selected BOOT0", jumper, &[]),
+            // ESP32 straps have an internal pull, so an undriven GPIO0 is defined.
+            (
+                "floating GPIO0",
+                strap_board("+3V3", "unconnected-(U3-Pad25)", vec![esp32("25")]),
+                &[],
+            ),
+            // GPIO15 is not boot_select: a board may repurpose it with a pull.
+            (
+                "GPIO15 pulled down",
+                strap_board(
+                    "+3V3",
+                    "/GPIO15_LED",
+                    vec![esp32("23"), pull("R1", "10k", 1)],
+                ),
+                &[],
+            ),
+            (
+                "AVR has no straps",
+                strap_board(
+                    "+5V",
+                    "PC6_RESET",
+                    vec![part("U1", "ATmega328P", &[("1", 3), ("7", 2), ("8", 1)])],
+                ),
+                &[],
+            ),
+            // Dividers. A strong correct pull against a weak opposing one: GPIO0
+            // sits at 2.85-3.15 V over the +3V3 corners, above 0.75 x VDD.
+            (
+                "GPIO0 1k up / 10k down",
+                strap_board(
+                    "+3V3",
+                    "/GPIO0",
+                    vec![esp32("25"), pull("R1", "1k", 2), pull("R2", "10k", 1)],
+                ),
+                &[],
+            ),
+            (
+                "active-low 1k down / 10k up",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![test_mcu(), pull("R1", "10k", 2), pull("R2", "1k", 1)],
+                ),
+                &[],
+            ),
+            // The audit case: 1k up and 10k down on an active-low strap reads HIGH.
+            (
+                "active-low 1k up / 10k down",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![test_mcu(), pull("R1", "1k", 2), pull("R2", "10k", 1)],
+                ),
+                &[(
+                    Medium,
+                    &["2.85-3.15 V", "reads HIGH at every corner", "needs low"],
+                )],
+            ),
+            (
+                "mid-band 10k / 10k",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![test_mcu(), pull("R1", "10k", 2), pull("R2", "10k", 1)],
+                ),
+                &[(
+                    High,
+                    &["1.57-1.73 V", "VIL <= 0.90 V", "VIH >= 2.00 V", "undefined"],
+                )],
+            ),
+            // 27k/10k crosses VIL inside the +3V3 envelope: 0.85 V at 3.135 V but
+            // 0.94 V at 3.465 V, so the level depends on the corner.
+            (
+                "corner-dependent 27k / 10k",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![test_mcu(), pull("R1", "27k 1%", 2), pull("R2", "10k 1%", 1)],
+                ),
+                &[(High, &["corner-dependent"])],
+            ),
+            (
+                "unreadable divider value",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![test_mcu(), pull("R1", "10k", 2), pull("R2", "XYZ", 1)],
+                ),
+                &[(Low, &["cannot judge divider", "R2 value 'XYZ'"])],
+            ),
+            // STM32F103's card has no sourced BOOT0 thresholds: abstain, visibly.
+            (
+                "no thresholds",
+                strap_board(
+                    "+3V3",
+                    "/BOOT0",
+                    vec![stm32(), pull("R1", "1k", 2), pull("R2", "10k", 1)],
+                ),
+                &[(Low, &["cannot judge divider", "no sourced VIL/VIH"])],
+            ),
+        ];
+        for (name, b, want) in &cases {
+            check(name, b, &none, want);
+        }
+        // A solved rail joins the declared corners: +3V3 solved at 2.6 V pulls
+        // the 1k/10k active-low divider down to 2.36 V, still HIGH.
+        let solved = BTreeMap::from([("+3V3".to_string(), 2.6)]);
+        let faulty = strap_board(
+            "+3V3",
+            "/BOOT0",
+            vec![test_mcu(), pull("R1", "1k", 2), pull("R2", "10k", 1)],
         );
-    }
-
-    /// A boot-select strap (STM32 BOOT0, which needs LOW) pulled to the WRONG
-    /// level (a pull-up to +3V3) must fire medium; the correct pull-down is
-    /// silent. STM32F103 pad 44 = BOOT0.
-    fn stm32_boot0_board(pull_to_rail: bool) -> String {
-        let (pull_net, pull_name) = if pull_to_rail {
-            (2, "+3V3") // pull-up: WRONG for BOOT0 (needs low)
-        } else {
-            (1, "GND") // pull-down: correct
-        };
-        format!(
-            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+3V3")
-  (net 3 "/BOOT0")
-  (module Package_QFP:LQFP-48 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U1 (at 0 0) (layer F.SilkS))
-    (fp_text value STM32F103C8T6 (at 0 2) (layer F.Fab))
-    (pad 9  smd rect (at 0 0) (net 2 "+3V3"))
-    (pad 8  smd rect (at 0 1) (net 1 "GND"))
-    (pad 44 smd rect (at 0 2) (net 3 "/BOOT0"))
-  )
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 3 "/BOOT0"))
-    (pad 2 smd rect (at 2 0) (net {pull_net} "{pull_name}"))
-  )
-)"#
-        )
-    }
-
-    #[test]
-    fn strap_pullup_to_vbat_rail_does_not_reach_oscillator_vdd() {
-        // Bug #19 regression: same shape as the +3V3 test above, but the rail
-        // is named "VBAT", a name an exact-name rail table misses, and then the
-        // series-R hop walks onto the rail, finds the oscillator's VDD, and
-        // fires a spurious HIGH "free-running clock" finding on a correct
-        // pull-up. VBAT must count as a rail; the board is clean.
-        let text = strap_board_with_unrelated_oscillator()
-            .replace("\n\n", "\n")
-            .replace("+3V3", "VBAT")
-            .replace("  (net 2 \"+5V\")\n", "")
-            .replace("  (net 4 \"Net-(CR1-OUT)\")\n", "")
-            .replace(
-                "  (net 6 \"/OSC_EN\")\n",
-                "  (net 6 \"/OSC_EN\")\n  (net 7 \"Net-(CR2-OUT)\")\n",
-            );
-        let r = strap_findings(&text);
-        assert_eq!(
-            r.of_check(LintCheck::StrapPin).count(),
-            0,
-            "a pull-up to a VBAT-named rail shared with an oscillator's VDD must not fire"
+        check(
+            "solved rail",
+            &faulty,
+            &solved,
+            &[(Medium, &["2.36-3.15 V", "3 rail corner(s)"])],
         );
-    }
-
-    #[test]
-    fn boot0_pulled_to_vbat_rail_fires_medium() {
-        // Bug #20 regression: BOOT0 needs LOW, and here it is pulled up to a
-        // rail named "VBAT". A rail table that returns None for VBAT makes the
-        // wrong-direction pull read as "not a rail", silently missing a genuine
-        // mis-strap. It must fire the Medium wrong-pull finding.
-        let text = stm32_boot0_board(true).replace("+3V3", "VBAT");
-        let r = strap_findings(&text);
-        let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
-        assert_eq!(
-            strap.len(),
-            1,
-            "BOOT0 pulled high to VBAT is wrong (needs low)"
-        );
-        assert!(matches!(strap[0].severity, Severity::Medium));
-        assert!(strap[0].message.contains("boot0"));
-        assert!(strap[0].message.contains("wrong level"));
-    }
-
-    #[test]
-    fn boot0_pulled_to_wrong_level_fires_medium() {
-        let r = strap_findings(&stm32_boot0_board(true));
-        let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
-        assert_eq!(strap.len(), 1, "BOOT0 pulled high is wrong (needs low)");
-        assert!(matches!(strap[0].severity, Severity::Medium));
-        assert!(strap[0].message.contains("boot0"));
-        assert!(strap[0].message.contains("wrong level"));
-    }
-
-    #[test]
-    fn boot0_pulled_to_correct_level_is_clean() {
-        let r = strap_findings(&stm32_boot0_board(false));
-        assert_eq!(
-            r.of_check(LintCheck::StrapPin).count(),
-            0,
-            "BOOT0 pulled low is correct, no finding"
-        );
-    }
-
-    fn floating_boot0_board(net_id: u8, net_name: &str) -> String {
-        format!(
-            r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+3V3")
-  (net {net_id} "{net_name}")
-  (module Package_QFP:LQFP-48 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U1 (at 0 0) (layer F.SilkS))
-    (fp_text value STM32F401CCU6 (at 0 2) (layer F.Fab))
-    (pad 9  smd rect (at 0 0) (net 2 "+3V3"))
-    (pad 8  smd rect (at 0 1) (net 1 "GND"))
-    (pad 44 smd rect (at 0 2) (net {net_id} "{net_name}"))
-  )
-)"#
-        )
-    }
-
-    #[test]
-    fn floating_boot0_no_internal_pull_fires_high() {
-        // The flight-controller bug shape (explosion33/RCS_Hardware): an STM32
-        // BOOT0 pad left UNCONNECTED, with no pull resistor anywhere. STM32 BOOT0
-        // has no internal pull, so the boot source is undefined at reset; the
-        // part can come up in the bootloader instead of the application. Must fire
-        // a SERIOUS strap finding.
-        let text = floating_boot0_board(38, "unconnected-(U1-Pad44)");
-        let r = strap_findings(&text);
-        let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
-        assert_eq!(
-            strap.len(),
-            1,
-            "a floating BOOT0 with no internal pull must fire"
-        );
-        assert!(matches!(strap[0].severity, Severity::High));
-        assert!(strap[0].message.contains("floating"));
-        assert!(strap[0].nets.iter().any(|n| n.contains("Pad44")));
-    }
-
-    #[test]
-    fn isolated_named_boot0_net_fires_via_net_is_isolated_to() {
-        // The `net_is_isolated_to` branch (not the unconnected-* name branch): a
-        // BOOT0 net that carries a real name but has nothing on it except the MCU
-        // pin (someone labelled it, then forgot the pulldown) is just as floating.
-        let text = floating_boot0_board(3, "/BOOT0");
-        let r = strap_findings(&text);
-        let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
-        assert_eq!(strap.len(), 1, "a named-but-isolated BOOT0 must fire");
-        assert!(matches!(strap[0].severity, Severity::High));
-        assert!(strap[0].message.contains("floating"));
-    }
-
-    #[test]
-    fn jumper_selectable_boot0_does_not_fire() {
-        // The zero-false-positive guarantee: a BOOT0 routed through a resistor to a
-        // 3-pin selector header (the standard dev-board boot-mode jumper) has a
-        // non-MCU member on its net, so it is NOT isolated and must NOT fire, even
-        // though no static pull resolves it (the jumper does, at assembly).
-        let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+3V3")
-  (net 3 "/BOOT0")
-  (net 4 "/BOOT0_SEL")
-  (module Package_QFP:LQFP-48 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U1 (at 0 0) (layer F.SilkS))
-    (fp_text value STM32F401CCU6 (at 0 2) (layer F.Fab))
-    (pad 44 smd rect (at 0 2) (net 3 "/BOOT0"))
-  )
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 1k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 3 "/BOOT0"))
-    (pad 2 smd rect (at 2 0) (net 4 "/BOOT0_SEL"))
-  )
-  (module Connector:Conn_01x03 (layer F.Cu)
-    (at 120 100)
-    (fp_text reference J1 (at 0 0) (layer F.SilkS))
-    (fp_text value BOOT_SEL (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 2 "+3V3"))
-    (pad 2 smd rect (at 1 0) (net 4 "/BOOT0_SEL"))
-    (pad 3 smd rect (at 2 0) (net 1 "GND"))
-  )
-)"#;
-        let r = strap_findings(text);
-        assert_eq!(
-            r.of_check(LintCheck::StrapPin).count(),
-            0,
-            "a jumper-selectable BOOT0 (resistor to a 3-pin header) must NOT fire"
-        );
-    }
-
-    #[test]
-    fn floating_esp32_strap_does_not_fire() {
-        // The symmetric negative: an ESP32 GPIO0 left undriven must NOT fire; the
-        // ESP32 strap has a documented internal pull, so a floating net settles to
-        // a defined level. This is the calibration the floating arm must respect.
-        let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 5 "+3V3")
-  (net 9 "unconnected-(U3-Pad25)")
-  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U3 (at 0 0) (layer F.SilkS))
-    (fp_text value ESP32-WROOM-32 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 5 "+3V3"))
-    (pad 25 smd rect (at 0 5) (net 9 "unconnected-(U3-Pad25)"))
-  )
-)"#;
-        let r = strap_findings(text);
-        assert_eq!(
-            r.of_check(LintCheck::StrapPin).count(),
-            0,
-            "a floating ESP32 strap (internal pull) must not fire"
-        );
-    }
-
-    #[test]
-    fn boot0_with_an_opposing_correct_pull_does_not_fire() {
-        // Split-divider guard: BOOT0 (needs low) with BOTH a pull-up and a
-        // pull-down. The wrong-direction pull (the pull-up) must NOT fire,
-        // because the pull-down is present to resolve the strap correctly.
-        let mut text = stm32_boot0_board(true);
-        text.pop();
-        text.push_str(
-            r#"  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 110 105)
-    (fp_text reference R2 (at 0 0) (layer F.SilkS))
-    (fp_text value 4k7 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 3 "/BOOT0"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-)"#,
-        );
-        let r = strap_findings(&text);
-        assert_eq!(
-            r.of_check(LintCheck::StrapPin).count(),
-            0,
-            "an opposing correct pull resolves the strap; not a fault"
-        );
-    }
-
-    #[test]
-    fn non_boot_select_strap_with_a_pull_does_not_fire_wrong_level() {
-        // The cardinal-sin guard: an ESP32 GPIO15 (boot-log strap, level=high,
-        // NOT boot_select) reused as an ordinary GPIO with a pull-DOWN must NOT
-        // be flagged as "wrong level". A board may legitimately repurpose it.
-        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+3V3")
-  (net 3 "/GPIO15_LED")
-  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U3 (at 0 0) (layer F.SilkS))
-    (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 2 "+3V3"))
-    (pad 23 smd rect (at 0 5) (net 3 "/GPIO15_LED"))
-  )
-  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
-    (at 110 100)
-    (fp_text reference R1 (at 0 0) (layer F.SilkS))
-    (fp_text value 10k (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 3 "/GPIO15_LED"))
-    (pad 2 smd rect (at 2 0) (net 1 "GND"))
-  )
-)"#;
-        let r = strap_findings(text);
-        assert_eq!(
-            r.of_check(LintCheck::StrapPin).count(),
-            0,
-            "GPIO15 is not boot_select; a pull there is the board's choice, not a fault"
-        );
-    }
-
-    #[test]
-    fn avr_has_no_straps_examined() {
-        // An ATmega328P board: the AVR entry carries no strap table, so the
-        // strap lint must examine nothing and stay silent.
-        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
-  (net 0 "")
-  (net 1 "GND")
-  (net 2 "+5V")
-  (net 3 "PC6_RESET")
-  (module Package_QFP:TQFP-32_7x7mm_P0.8mm (layer F.Cu)
-    (at 100 100)
-    (fp_text reference U1 (at 0 0) (layer F.SilkS))
-    (fp_text value ATmega328P (at 0 2) (layer F.Fab))
-    (pad 1 smd rect (at 0 0) (net 3 "PC6_RESET"))
-    (pad 7 smd rect (at 0 5) (net 2 "+5V"))
-    (pad 8 smd rect (at 0 6) (net 1 "GND"))
-  )
-)"#;
-        let r = strap_findings(text);
-        assert_eq!(r.of_check(LintCheck::StrapPin).count(), 0);
     }
 }

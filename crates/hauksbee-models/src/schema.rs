@@ -762,7 +762,7 @@ impl CurrentProgram {
 /// the lint can find which pad/net carries the strap. `level` is what the pin
 /// must read at the reset latch window for *normal* boot. Cite the RM in the
 /// TOML comment next to each entry.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct StrapPin {
     /// Pin role, matching an entry in [`ModelEntry::pins`] (e.g. "gpio0").
     pub role: String,
@@ -793,6 +793,13 @@ pub struct StrapPin {
     /// behaviour (never fire on a floating net).
     #[serde(default)]
     pub internal_pull: StrapInternalPull,
+    /// Sourced input thresholds in the datasheet's affine form
+    /// `[per_vdd, offset_v]`: VIL max and VIH min are `per_vdd * VDD + offset_v`
+    /// on the part's `vdd` pin. Without both, a pull divider is not judged.
+    #[serde(default)]
+    pub vil: Option<[f64; 2]>,
+    #[serde(default)]
+    pub vih: Option<[f64; 2]>,
 }
 
 /// The internal (on-die) pull a strap pin has, which determines whether leaving
