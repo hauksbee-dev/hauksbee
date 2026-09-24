@@ -322,6 +322,10 @@ pub struct Characteristic {
 
 const COLUMNS: [&str; 3] = ["min", "typ", "max"];
 
+/// How a rail-relative or signed row is recorded (the lint and the prompts).
+pub const PRINTED_REFERENCE: &str = "record each printed number with its reference (0.7 VDD \
+    is 0.7 with unit = \"VDD\", ±5 is min = -5 and max = 5), never delete the record";
+
 /// Which of min, typ, max a record's own text cites ("typ/max columns"); a
 /// negated mention ("no typ published") cites nothing.
 fn cited_columns(texts: &[&str]) -> [bool; 3] {
@@ -360,7 +364,7 @@ impl Characteristic {
         let values: Vec<f64> = columns.iter().flatten().copied().collect();
         let mut out = Vec::new();
         if values.is_empty() {
-            out.push("requires at least one of min, typ, max: record each printed number with its reference (0.7 VDD is 0.7 with unit = \"VDD\", ±5 is min = -5 and max = 5), never delete the record; only a row printing no number at all (\"see note\", a curve) is cited in a comment instead".to_string());
+            out.push(format!("requires at least one of min, typ, max: {PRINTED_REFERENCE}; only a row printing no number at all (\"see note\", a curve) is cited in a comment instead"));
         } else if values.iter().any(|v| !v.is_finite()) {
             out.push("min, typ and max must be finite".to_string());
         } else {
@@ -485,6 +489,13 @@ impl ModelSourceSpec {
                 | ModelUncertainty::Unknown { parameter, .. } if parameter == "model")
         })
     }
+}
+
+/// The lint warning for a datasheet-derived source with no model-error record.
+pub fn model_error_warning(source: Option<&ModelSourceSpec>) -> Option<&'static str> {
+    let source = source.filter(|s| s.tier == ModelSourceTier::DatasheetDerived)?;
+    let warning = "model-error record missing (extraction inserts the unknown record)";
+    (!source.declares_model_error()).then_some(warning)
 }
 
 impl ModelSourceReference {
