@@ -449,12 +449,17 @@ pub fn bind_board_with(
         let source = res.provenance.clone();
         let model_id = model.as_ref().map(|m| m.id.clone());
 
-        let (kind_str, outcome, warning, guesses) = match &model {
-            None => {
+        let (kind_str, outcome, warning, guesses) = match (&model, &res.selection) {
+            (None, Some(selection)) => {
+                let reason = selection.open_reason(&comp.reference);
+                let warning = format!("cannot bind '{}' ({}): {reason}", comp.reference, comp.value);
+                (None, BindOutcome::Unresolved { reason }, Some(warning), Vec::new())
+            }
+            (None, None) => {
                 let (kind_str, outcome, warning) = unresolved_outcome(comp, &node_of, lib);
                 (kind_str, outcome, warning, Vec::new())
             }
-            Some(m) => {
+            (Some(m), _) => {
                 let kind_str = format!("{:?}", m.kind).to_ascii_lowercase();
                 let (outcome, warning, guesses) = bind_component(
                     comp,
@@ -492,6 +497,9 @@ pub fn bind_board_with(
                 value: comp.value.clone(),
                 pins: comp.pins.iter().filter_map(pin).collect(),
             });
+        }
+        if let Some(selection) = res.selection {
+            report.selections.insert(report.rows.len(), selection);
         }
         report.push(BindRow {
             reference: comp.reference.clone(),
@@ -1100,21 +1108,13 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
     );
     q.reference = Some(comp.reference.clone());
     q.properties = comp.properties.clone();
+    let pads = comp.pins.iter().map(|pin| pin.number.trim().to_string());
+    q.pads = pads.filter(|number| !number.is_empty()).collect();
     // A refused identity is not a model match even here: the record cannot say
     // WHICH part it is, so no identity string in it is evidence. The extractor
     // keeps the record so connectivity/DRC remain available.
     if matches!(AssemblyState::of(comp), AssemblyState::IdentityUnknown(_)) {
-        return hauksbee_models::Resolution {
-            model: None,
-            confidence: Confidence::Unresolved,
-            query: q,
-            source: None,
-            layer: None,
-            origin: None,
-            provenance: None,
-            references: Vec::new(),
-            tied: Vec::new(),
-        };
+        return hauksbee_models::Resolution::unresolved(q);
     }
     // Pull a likely manufacturer part-number out of properties for mpn match.
     // Prefer a dedicated manufacturer-PN field; distributor part numbers
@@ -1146,7 +1146,8 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
         })
         .or_else(|| non_empty(&comp.value));
     let res = lib.resolve(&q);
-    if res.confidence != Confidence::Unresolved {
+    // An open variant set is the library's answer too: no fallback may guess past it.
+    if res.confidence != Confidence::Unresolved || res.selection.is_some() {
         return res;
     }
     // ── Engine-layer fallbacks ──────────────────────────────────────────────
@@ -1178,7 +1179,7 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
                 )
                 .expect("static fallback provenance is valid"),
             ),
-            references: Vec::new(), tied: Vec::new(),
+            references: Vec::new(), tied: Vec::new(), selection: None,
         };
     }
     res
@@ -6657,8 +6658,8 @@ fn contradiction_between(
             }
         }
         if let (Some(layout_family), Some(artifact_family)) = (
-            package_family(&comp.footprint),
-            package_family(artifact_package),
+            hauksbee_models::variants::package_family(&comp.footprint),
+            hauksbee_models::variants::package_family(artifact_package),
         ) {
             if layout_family != artifact_family {
                 return Some(format!(
@@ -6844,15 +6845,6 @@ fn explicit_manufacturer(comp: &Component) -> Option<&str> {
         )
         .then_some(value.as_str())
     })
-}
-
-fn package_family(package: &str) -> Option<&'static str> {
-    let package = normalise_identity_text(package);
-    [
-        "TSSOP", "SSOP", "SOIC", "TQFP", "LQFP", "QFN", "DFN", "BGA", "DIP", "SOT",
-    ]
-    .into_iter()
-    .find(|family| package.contains(family))
 }
 
 /// Number of electrical pads explicitly described by a package name.

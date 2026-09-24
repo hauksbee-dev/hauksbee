@@ -160,6 +160,19 @@ pub struct BindSummaryWeb {
     /// drafting a second would not help).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_parts: Vec<WebOpenPart>,
+    /// Orderable-variant sets the board does not settle, for the app's picker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_selections: Vec<WebSelection>,
+}
+
+/// One unsettled variant set: the part, and every member with its selector,
+/// source and S/C/U reason.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebSelection {
+    pub reference: String,
+    pub value: String,
+    #[serde(flatten)]
+    pub selection: hauksbee_models::variants::Selection,
 }
 
 /// One part on the open-active-path list, in the shape the browser renders.
@@ -226,6 +239,7 @@ impl BindSummaryWeb {
             // detail can never name different parts in a different order.
             active_path_unresolved: open_parts.iter().map(|p| p.reference.clone()).collect(),
             open_parts,
+            open_selections: Vec::new(),
         }
     }
 
@@ -1173,7 +1187,12 @@ fn analyze_normalized_with_context(
     // The bind-role honesty data the CLI/JSON surfaces carry, in the web
     // shape, from the SAME bind computed above the sections. The web dropping
     // this would let a board with every active IC open show "Looks healthy".
-    let bind_web = BindSummaryWeb::from_summary(&bind_summary);
+    let mut bind_web = BindSummaryWeb::from_summary(&bind_summary);
+    let rows = &bound.report.rows;
+    let open = bound.report.selections.iter().filter(|(_, s)| s.determined.is_none());
+    bind_web.open_selections = (open.map(|(&i, s)| (&rows[i], s)))
+        .map(|(row, s)| WebSelection { reference: row.reference.clone(), value: row.value.clone(), selection: s.clone() })
+        .collect();
     // Reader notes plus the binder's own coverage gaps, so an overpower check
     // that never ran is visible on the human report, not only in CI.
     let mut notes = norm.notes.clone();

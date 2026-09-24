@@ -1270,6 +1270,22 @@ impl Assumption {
         )
     }
 
+    /// An orderable-variant set the board could not narrow to one member, all
+    /// sharing one pinout: `bound` stands in for every member for simulation only.
+    pub fn undetermined_variant(subject: &str, reference: &str, bound: &str, members: &str, fix: &str) -> Self {
+        Self::build(
+            AssumptionKind::SubstituteModel,
+            AssumptionSource::Binder,
+            subject.trim(),
+            part_scope(subject),
+            format!("{reference} is simulated as variant {bound}, one of {members}."),
+            format!("Nothing on the board says which of the variants the card lists ({members}) is fitted; they share a pinout, so {bound} stands in."),
+            format!("Every result touching {reference} describes {bound}; wherever the variants differ in values or output form, it may describe the wrong part."),
+            fix.to_string(),
+            None,
+        )
+    }
+
     /// A pin's role was inferred from the pin-rule table rather than read from
     /// the schematic.
     pub fn inferred_pin_role(reference: &str, pin: &str, role: &str) -> Self {

@@ -33,6 +33,7 @@ use hauksbee_ir::evidence::{
     ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, RunDate, Scope, Subject,
     SubjectSet, ValueOrigin,
 };
+use hauksbee_models::variants::{Selection, Via};
 use hauksbee_models::Confidence;
 use sha2::{Digest, Sha256};
 
@@ -214,6 +215,24 @@ fn component_occurrence_subjects(
 /// copy of the id crate's normalisation rules, so the two cannot drift. Ordering
 /// is bind-row order, which follows `board.components`, so the ids are identical
 /// on every run of the same input.
+fn variant_members(selection: &Selection) -> String {
+    selection.members.iter().map(|m| m.id.as_str()).collect::<Vec<_>>().join(", ")
+}
+
+/// The `REF.variant` provenance value and origin: who chose the bound member.
+fn variant_value(model_id: &str, selection: &Selection, model: ValueOrigin) -> (String, ValueOrigin) {
+    let members = variant_members(selection);
+    match (selection.determined.is_some(), selection.via) {
+        (false, _) => (format!("{model_id}, standing in for {members}"), model),
+        (true, Via::Spec) => {
+            let origin = ValueOrigin::UserOverride { via: hauksbee_ir::evidence::OverrideSource::Spec };
+            (format!("{model_id}, selected in the spec"), origin)
+        }
+        (true, Via::Sweep) => (format!("{model_id}, one run of the sweep over {members}"), model),
+        (true, Via::Board) => (format!("{model_id}, determined by the board"), model),
+    }
+}
+
 fn open_part_assumptions(report: &BindReport, row_subjects: &[String]) -> Vec<Assumption> {
     // The claim a row makes, keyed by EVERY sentence a reader would see plus the id.
     // Two rows merge only when a reader could not tell the resulting entries apart.
@@ -299,6 +318,20 @@ impl BoardEvidence {
         let (component_subjects, row_subjects) = component_occurrence_subjects(board, report);
         let mut assumptions = Vec::new();
         assumptions.extend(open_part_assumptions(report, &row_subjects));
+        // A variant set the board could not narrow bound a same-pinout stand-in.
+        for (&index, selection) in report.selections.iter().filter(|(_, s)| s.determined.is_none()) {
+            let row = &report.rows[index];
+            let subject = row_subjects.get(index).map_or(row.reference.trim(), String::as_str);
+            if let Some(bound) = &row.model_id {
+                let fix = format!(
+                    "add `{}` to the spec, or put the orderable code in the BOM; `hauksbee-ci` \
+                     simulates every variant and passes only if all pass",
+                    selection.override_line(&row.reference)
+                );
+                let members = variant_members(selection);
+                assumptions.push(Assumption::undetermined_variant(subject, &row.reference, bound, &members, &fix));
+            }
+        }
         // A part bound to a generic estimated-fallback model is running on
         // invented ratings. Recorded here rather than only in the CI report's
         // coverage_warnings, so it reaches every surface that renders the evidence
@@ -481,6 +514,9 @@ impl BoardEvidence {
             .zip(&row_subjects)
             .map(|(row, subject)| (subject.as_str(), row))
             .collect();
+        let selections: BTreeMap<&str, _> = (report.selections.iter())
+            .filter_map(|(index, selection)| Some((row_subjects.get(*index)?.as_str(), selection)))
+            .collect();
         let mut maps = Vec::with_capacity(owned.len());
         for (net, refs) in &owned {
             let scope = NetScope::new([net.as_str()], None)?;
@@ -515,15 +551,21 @@ impl BoardEvidence {
                             source.clone(),
                             confidence,
                         )?);
+                        let origin = ValueOrigin::Model {
+                            model_id: model_id.to_string(),
+                            layer: source.layer(),
+                            confidence,
+                        };
+                        if let Some(selection) = selections.get(reference.as_str()) {
+                            let (value, origin) = variant_value(model_id, selection, origin.clone());
+                            let parameter = format!("{provenance_reference}.variant");
+                            parameters.push(ParameterProvenance::for_subject(reference, parameter, value, origin)?);
+                        }
                         parameters.push(ParameterProvenance::for_subject(
                             reference,
                             format!("{provenance_reference}.model"),
                             model_id,
-                            ValueOrigin::Model {
-                                model_id: model_id.to_string(),
-                                layer: source.layer(),
-                                confidence,
-                            },
+                            origin,
                         )?);
                     }
                 }
