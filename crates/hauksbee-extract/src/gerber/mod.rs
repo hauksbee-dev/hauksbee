@@ -332,20 +332,31 @@ fn read_drill_film(text: &str, fname: &str, notes: &mut Vec<String>) -> DrillRea
 /// draws around a via or a plated pad, and never around a mounting hole.
 /// Pours and tracks do not count; a mechanical hole through two planes is
 /// exactly the phantom short this rule must not create.
+///
+/// Each layer's flashes are indexed by bounds once, so a hit tests only the
+/// pads over it; scanning every primitive per hit was hits x film vertices.
 fn hits_under_pad_rings(hits: Vec<Hole>, layers: &[Vec<rs274x::CopperPrim>]) -> Vec<Hole> {
+    let flash_trees: Vec<rstar::RTree<geo::BoundsLeaf>> = layers
+        .iter()
+        .map(|prims| {
+            let leaves = prims.iter().enumerate().filter_map(|(idx, p)| {
+                let bounds = p.shape.bounds();
+                // Inverted or NaN bounds never admit a point; keep them out of the tree.
+                (p.kind == rs274x::PrimKind::Flash
+                    && bounds[0] <= bounds[2]
+                    && bounds[1] <= bounds[3])
+                    .then_some(geo::BoundsLeaf { bounds, idx })
+            });
+            rstar::RTree::bulk_load(leaves.collect())
+        })
+        .collect();
     let ringed = |x: f64, y: f64| {
-        layers
+        flash_trees
             .iter()
-            .filter(|prims| {
-                prims.iter().any(|p| {
-                    let b = p.shape.bounds();
-                    p.kind == rs274x::PrimKind::Flash
-                        && x >= b[0]
-                        && x <= b[2]
-                        && y >= b[1]
-                        && y <= b[3]
-                        && geo::shape_contains_point(&p.shape, x, y)
-                })
+            .zip(layers)
+            .filter(|(tree, prims)| {
+                tree.locate_in_envelope_intersecting(rstar::AABB::from_point([x, y]))
+                    .any(|leaf| geo::shape_contains_point(&prims[leaf.idx].shape, x, y))
             })
             .count()
             >= 2

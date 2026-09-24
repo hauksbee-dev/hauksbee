@@ -393,16 +393,43 @@ fn nearest_exposed_gap(
     contours: &[Vec<(f64, f64)>],
     weights: &[i16],
 ) -> Option<(f64, (f64, f64))> {
+    // The stable sort would put the earliest minimum first, and that one is
+    // nearly always exposed; test it before sorting thousands of pour edges.
+    if candidates.iter().all(|c| !c.0.is_nan()) {
+        let first = candidates
+            .iter()
+            .copied()
+            .reduce(|best, c| if c.0 < best.0 { c } else { best });
+        if let Some(first) = first.filter(|(_, p)| weighted_copper_near(*p, contours, weights)) {
+            return Some(first);
+        }
+    }
     candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     candidates
         .into_iter()
         .find(|(_, point)| weighted_copper_near(*point, contours, weights))
 }
 
+/// Boxes `[minx, miny, maxx, maxy]` apart by more than `limit` plus a
+/// rounding margin, so nothing in one lies within `limit` of the other.
+fn boxes_farther_than(a: [f64; 4], b: [f64; 4], limit: f64) -> bool {
+    let separation = (b[0] - a[2])
+        .max(a[0] - b[2])
+        .max(b[1] - a[3])
+        .max(a[1] - b[3]);
+    separation > limit + 1e-6
+}
+
+fn segment_box(a: (f64, f64), b: (f64, f64)) -> [f64; 4] {
+    [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]
+}
+
+/// Candidates above `reach` are dropped unexamined (see [`shape_gap_within`]).
 fn capsule_weighted_gap(
     c: &Capsule,
     contours: &[Vec<(f64, f64)>],
     weights: &[i16],
+    reach: f64,
 ) -> Option<(f64, (f64, f64))> {
     let (a, b) = ((c.ax, c.ay), (c.bx, c.by));
     if let Some(p) = [a, b, ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5)]
@@ -411,9 +438,11 @@ fn capsule_weighted_gap(
     {
         return Some((-c.r.max(0.0) - 1e-6, p));
     }
+    let capsule_box = segment_box(a, b);
     let candidates = contours
         .iter()
         .flat_map(|contour| contour_edges(contour))
+        .filter(|&(e1, e2)| !boxes_farther_than(segment_box(e1, e2), capsule_box, reach + c.r))
         .map(|(e1, e2)| {
             let (distance, q, _) = seg_seg_closest(e1, e2, a, b);
             (distance - c.r, q)
@@ -422,11 +451,13 @@ fn capsule_weighted_gap(
     nearest_exposed_gap(candidates, contours, weights)
 }
 
+/// Candidates above `reach` are dropped unexamined (see [`shape_gap_within`]).
 fn polygon_weighted_gap(
     polygon: &[(f64, f64)],
     radius: f64,
     contours: &[Vec<(f64, f64)>],
     weights: &[i16],
+    reach: f64,
 ) -> Option<(f64, (f64, f64))> {
     if let Some(&p) = polygon
         .iter()
@@ -435,14 +466,19 @@ fn polygon_weighted_gap(
         return Some((-radius.max(0.0) - 1e-6, p));
     }
     let mut candidates = Vec::new();
+    let polygon_box = polygon_bounds(polygon);
     for contour in contours {
-        if let Some(&(x, y)) = contour
-            .iter()
-            .find(|&&(x, y)| point_reaches_polygon((x, y), polygon, radius))
-        {
+        // A vertex off the polygon's box by more than its radius cannot reach it.
+        if let Some(&(x, y)) = contour.iter().find(|&&(x, y)| {
+            !boxes_farther_than([x, y, x, y], polygon_box, radius.abs())
+                && point_reaches_polygon((x, y), polygon, radius)
+        }) {
             candidates.push((-1e-6, (x, y)));
         }
         for (a, b) in contour_edges(contour) {
+            if boxes_farther_than(segment_box(a, b), polygon_box, reach + radius) {
+                continue;
+            }
             let mut nearest = (f64::INFINITY, a);
             for (pa, pb) in contour_edges(polygon) {
                 let (distance, q, _) = seg_seg_closest(a, b, pa, pb);
@@ -494,6 +530,42 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
     shape_gap_at(a, b).0
 }
 
+/// [`shape_gap`] where only a gap up to `reach` matters: exact whenever the
+/// gap is at most `reach`, and some value above `reach` otherwise.
+///
+/// Connectivity asks only "within touching distance?", yet a pad against a
+/// pour of thousands of edges measured and sorted every edge to find the
+/// nearest. Dropping candidates whose bounding boxes already sit beyond
+/// `reach` keeps every candidate that could decide the answer, in order, so
+/// the nearest exposed one is unchanged whenever it is within `reach`.
+pub fn shape_gap_within(a: &Shape, b: &Shape, reach: f64) -> f64 {
+    let finite = |s: &Shape| match s {
+        Shape::Capsule(c) => [c.ax, c.ay, c.bx, c.by, c.r].iter().all(|v| v.is_finite()),
+        Shape::Polygon { pts, r } => {
+            r.is_finite() && pts.iter().all(|p| p.0.is_finite() && p.1.is_finite())
+        }
+        Shape::MultiPolygon { contours, .. } => contours
+            .iter()
+            .flatten()
+            .all(|p| p.0.is_finite() && p.1.is_finite()),
+    };
+    // A NaN candidate makes the sort order ill-defined; take no shortcut then.
+    if !reach.is_finite() || !finite(a) || !finite(b) {
+        return shape_gap(a, b);
+    }
+    match (a, b) {
+        (Shape::Capsule(c), Shape::MultiPolygon { contours, weights })
+        | (Shape::MultiPolygon { contours, weights }, Shape::Capsule(c)) => {
+            capsule_weighted_gap(c, contours, weights, reach).map_or(f64::INFINITY, |g| g.0)
+        }
+        (Shape::Polygon { pts, r }, Shape::MultiPolygon { contours, weights })
+        | (Shape::MultiPolygon { contours, weights }, Shape::Polygon { pts, r }) => {
+            polygon_weighted_gap(pts, *r, contours, weights, reach).map_or(f64::INFINITY, |g| g.0)
+        }
+        _ => shape_gap(a, b),
+    }
+}
+
 /// [`shape_gap`] plus the point of closest approach (see
 /// `closest_approach_point`; for full containment, a point of the contained
 /// copper), which is where a DRC finding is reported.
@@ -540,11 +612,13 @@ pub fn shape_gap_at(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
         // capsule endpoint sitting in a hole is NOT contained; the hole is empty).
         (Shape::Capsule(c), Shape::MultiPolygon { contours, weights })
         | (Shape::MultiPolygon { contours, weights }, Shape::Capsule(c)) => {
-            capsule_weighted_gap(c, contours, weights).unwrap_or((f64::INFINITY, a.center()))
+            capsule_weighted_gap(c, contours, weights, f64::INFINITY)
+                .unwrap_or((f64::INFINITY, a.center()))
         }
         (Shape::Polygon { pts, r }, Shape::MultiPolygon { contours, weights })
         | (Shape::MultiPolygon { contours, weights }, Shape::Polygon { pts, r }) => {
-            polygon_weighted_gap(pts, *r, contours, weights).unwrap_or((f64::INFINITY, a.center()))
+            polygon_weighted_gap(pts, *r, contours, weights, f64::INFINITY)
+                .unwrap_or((f64::INFINITY, a.center()))
         }
         (
             Shape::MultiPolygon {
@@ -923,6 +997,57 @@ impl<'a> PolyGrid<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pruning by `reach` must never change a gap at or under `reach`, and must
+    /// keep every larger gap above it, for pads and tracks against holed pours.
+    #[test]
+    fn gap_within_reach_is_the_exact_gap() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move |m: f64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 10_000) as f64 / 10_000.0 * m
+        };
+        let square = |x: f64, y: f64, s: f64| vec![(x, y), (x + s, y), (x + s, y + s), (x, y + s)];
+        let (mut near, mut far) = (0, 0);
+        for round in 0..3000 {
+            let pour = Shape::MultiPolygon {
+                contours: vec![
+                    square(0.0, 0.0, 10.0),
+                    square(next(8.0), next(8.0), 0.5 + next(1.5)),
+                ],
+                weights: vec![1, if round % 5 == 0 { 1 } else { -1 }],
+            };
+            let (x, y) = (next(14.0) - 2.0, next(14.0) - 2.0);
+            let other = if round % 2 == 0 {
+                Shape::Capsule(Capsule {
+                    ax: x,
+                    ay: y,
+                    bx: x + next(1.0),
+                    by: y,
+                    r: next(0.3),
+                })
+            } else {
+                Shape::Polygon {
+                    pts: square(x, y, next(0.8)),
+                    r: next(0.1),
+                }
+            };
+            let reach = [0.0, 0.005, 0.2][round % 3];
+            for (a, b) in [(&other, &pour), (&pour, &other)] {
+                let (exact, within) = (shape_gap(a, b), shape_gap_within(a, b, reach));
+                if exact <= reach {
+                    assert_eq!(exact.to_bits(), within.to_bits(), "{a:?} {b:?}");
+                    near += 1;
+                } else {
+                    assert!(within > reach, "{exact} vs {within}: {a:?} {b:?}");
+                    far += 1;
+                }
+            }
+        }
+        assert!(near > 500 && far > 500, "{near} near, {far} far");
+    }
 
     #[test]
     fn poly_grid_matches_exact() {
