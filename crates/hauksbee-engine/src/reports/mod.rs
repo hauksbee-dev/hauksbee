@@ -239,6 +239,68 @@ impl KicadClearanceInput {
     }
 }
 
+/// Run the geometric DRC: Altium's own rules, else KiCad's with the sibling
+/// project/custom-rule clearances (returned too, for provenance and coverage;
+/// `None` exactly on Altium). Shared by `--drc`, `--check` and the CI finding
+/// gatherer so they can never run different DRCs over one board.
+pub(crate) fn run_drc(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    altium_present: bool,
+) -> anyhow::Result<(Option<KicadClearanceInput>, hauksbee_extract::DrcReport)> {
+    let clearance_input = (!altium_present)
+        .then(|| KicadClearanceInput::load(board_path, board))
+        .transpose()?;
+    let report = if altium_present {
+        ExtractedBoard::altium_drc(raw)?
+    } else {
+        // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
+        // concrete net names here (the CLI has both the board path and the
+        // extracted netlist), then hand the DRC a pairwise clearance resolver.
+        ExtractedBoard::drc_with_clearance_rules(
+            text,
+            clearance_input
+                .as_ref()
+                .and_then(|input| input.rules.clone()),
+        )?
+    };
+    Ok((clearance_input, report))
+}
+
+/// Where the DRC's clearance rule came from: the tool default on Altium, else
+/// the KiCad inputs [`run_drc`] loaded.
+pub(crate) fn clearance_provenance(
+    input: Option<&KicadClearanceInput>,
+    board_path: &Path,
+    text: &str,
+    clearance_mm: f64,
+) -> crate::result::ClearanceRuleProvenance {
+    input.map_or_else(
+        || crate::result::ClearanceRuleProvenance::tool_default(clearance_mm),
+        |input| input.provenance(board_path, text, clearance_mm),
+    )
+}
+
+/// The schematic contributed to the verdict, so it enters the inventory with
+/// its own hash and what it did. A reader who sees a contact reported as a
+/// declared tie must be able to find the file that declared it.
+pub(crate) fn with_schematic_evidence(
+    evidence: crate::evidence::BoardEvidence,
+    ties: Option<&crate::schematic_ties::SchematicTies>,
+    qualification: Option<&hauksbee_extract::DrcTieQualification>,
+) -> Result<crate::evidence::BoardEvidence, hauksbee_ir::evidence::EvidenceError> {
+    match (ties, qualification) {
+        (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
+            &ties.path,
+            &ties.raw,
+            ties.contribution(qualification),
+        ),
+        _ => Ok(evidence),
+    }
+}
+
 /// Strict-mode predicate for the connectivity/resource lint: any high/medium
 /// finding fails the gate.
 ///

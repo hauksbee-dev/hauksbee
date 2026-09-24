@@ -49,15 +49,7 @@ pub(crate) fn emit_quiet(
     // a board `--check --strict` passes. Same key as check.rs, so one waiver
     // file covers both commands.
     let mut waivers = super::check::load_waivers(board_path);
-    let (kept, waived) = waivers.partition("si", std::mem::take(&mut report.findings), |f| {
-        (
-            f.check.as_str().to_string(),
-            f.nets.clone(),
-            f.refs.clone(),
-            f.message.clone(),
-        )
-    });
-    report.findings = kept;
+    let waived = super::check::waive_si(&mut waivers, &mut report);
     let bound = bind_board(board, lib);
     let evidence = crate::evidence::board_evidence(
         board,

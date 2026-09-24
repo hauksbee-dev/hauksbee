@@ -35,22 +35,8 @@ pub(crate) fn emit_with_schematic_quiet(
     inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
-    let clearance_input = (!altium_present)
-        .then(|| KicadClearanceInput::load(board_path, board))
-        .transpose()?;
-    let mut report = if altium_present {
-        ExtractedBoard::altium_drc(raw)?
-    } else {
-        // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
-        // concrete net names here (the CLI has both the board path and the
-        // extracted netlist), then hand the DRC a pairwise clearance resolver.
-        ExtractedBoard::drc_with_clearance_rules(
-            text,
-            clearance_input
-                .as_ref()
-                .and_then(|input| input.rules.clone()),
-        )?
-    };
+    let (clearance_input, mut report) =
+        super::run_drc(board_path, board, text, raw, altium_present)?;
     // The companion schematic's declarations, applied before waivers and before
     // anything reads the findings. Reclassifies, never deletes.
     let qualification = schematic_ties.map(|ties| ties.qualify(&report));
@@ -60,19 +46,7 @@ pub(crate) fn emit_with_schematic_quiet(
     // mirrors check.rs exactly: only a true short is waivable; a clearance
     // violation does not gate on its own, so it has nothing to be excused from.
     let mut waivers = super::check::load_waivers(board_path);
-    let (kept, waived) = waivers.partition("drc", std::mem::take(&mut report.findings), |f| {
-        let kind = match f.kind {
-            hauksbee_extract::ViolationKind::Short => "short",
-            _ => "clearance-not-waivable",
-        };
-        (
-            kind.to_string(),
-            vec![f.net_a_name.clone(), f.net_b_name.clone()],
-            Vec::new(),
-            format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
-        )
-    });
-    report.findings = kept;
+    let waived = super::check::waive_drc(&mut waivers, &mut report);
     // Zero routed copper: a pads-only board passes the spacing check
     // vacuously, so `UNROUTED_COPPER_NOTE` is printed by the two surfaces that
     // read this flag, `--drc` and `--check`.
@@ -91,25 +65,14 @@ pub(crate) fn emit_with_schematic_quiet(
             .as_ref()
             .and_then(KicadClearanceInput::custom_coverage),
     )?;
-    // The schematic contributed to the verdict, so it enters the inventory with
-    // its own hash and what it did. A reader who sees a contact reported as a
-    // declared tie must be able to find the file that declared it.
-    let evidence = match (schematic_ties, &qualification) {
-        (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
-            &ties.path,
-            &ties.raw,
-            ties.contribution(qualification),
-        )?,
-        _ => evidence,
-    };
-    let provenance = if altium_present {
-        crate::result::ClearanceRuleProvenance::tool_default(report.clearance_mm)
-    } else {
-        clearance_input
-            .as_ref()
-            .expect("non-Altium DRC loaded KiCad clearance inputs")
-            .provenance(board_path, text, report.clearance_mm)
-    };
+    let evidence =
+        super::with_schematic_evidence(evidence, schematic_ties, qualification.as_ref())?;
+    let provenance = super::clearance_provenance(
+        clearance_input.as_ref(),
+        board_path,
+        text,
+        report.clearance_mm,
+    );
     let mut structured = DrcStructured::from_report_with_ties(
         &report,
         qualification.as_ref(),

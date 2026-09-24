@@ -40,7 +40,7 @@ pub(crate) fn emit_quiet(
     // `--lint --strict` red on a board that `--check --strict` passes, and the
     // narrower command looks like it lost the waiver.
     let mut waivers = super::check::load_waivers(board_path);
-    let waived = partition_lint_waivers(&mut report, &mut waivers);
+    let waived = super::check::waive_lint(&mut waivers, &mut report);
     // Bind once: both the JSON header and the pin-role guess surfacing read it.
     let bound = bind_board(board, lib);
     let evidence = crate::evidence::board_evidence(
@@ -120,26 +120,6 @@ pub(crate) fn emit_quiet(
         super::exit_invalid_for_analysis(&blockers);
     }
     Ok(())
-}
-
-/// Apply the board's `lint`-scoped waivers to `report`, returning what was
-/// excused. Resource conflicts are lint-class findings and ride the same check
-/// name inside `--check`, so one waiver file covers `--lint`, `--resources` and
-/// the combined report; keying them differently here would split it.
-fn partition_lint_waivers(
-    report: &mut hauksbee_extract::NetLintReport,
-    waivers: &mut crate::waiver::WaiverSet,
-) -> Vec<crate::waiver::WaivedFinding> {
-    let (kept, waived) = waivers.partition("lint", std::mem::take(&mut report.findings), |f| {
-        (
-            f.check.as_str().to_string(),
-            f.nets.clone(),
-            f.refs.clone(),
-            f.message.clone(),
-        )
-    });
-    report.findings = kept;
-    waived
 }
 
 /// Guesses beyond this many collapse to a per-pattern summary. A correct guess
@@ -249,7 +229,7 @@ pub(crate) fn emit_resources_quiet(
 ) -> anyhow::Result<()> {
     let mut report = crate::checks::resources_lint(board, lib);
     let mut waivers = super::check::load_waivers(board_path);
-    let waived = partition_lint_waivers(&mut report, &mut waivers);
+    let waived = super::check::waive_lint(&mut waivers, &mut report);
     let bound = bind_board(board, lib);
     let evidence = crate::evidence::board_evidence(
         board,

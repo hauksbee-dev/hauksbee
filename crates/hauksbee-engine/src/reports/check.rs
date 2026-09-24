@@ -118,40 +118,20 @@ impl CheckReport<'_> {
             raw,
             input_kind,
         )?;
-        let clearance_input = (!altium_present)
-            .then(|| KicadClearanceInput::load(board_path, board))
-            .transpose()?;
+        let (clearance_input, mut drc) =
+            super::run_drc(board_path, board, text, raw, altium_present)?;
         let evidence = evidence.with_custom_rules_coverage(
             clearance_input
                 .as_ref()
                 .and_then(KicadClearanceInput::custom_coverage),
         )?;
-        let mut drc = if altium_present {
-            ExtractedBoard::altium_drc(raw)?
-        } else {
-            ExtractedBoard::drc_with_clearance_rules(
-                text,
-                clearance_input
-                    .as_ref()
-                    .and_then(|input| input.rules.clone()),
-            )?
-        };
 
         // The companion schematic's declarations, applied before anything reads the
         // findings. Reclassifies, never deletes: a covered contact keeps its layer,
         // location and measured gap and gains the declaration that qualifies it.
         let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
-        // The schematic contributed to the verdict, so it enters the inventory with
-        // its own hash and what it did. A reader who sees a contact reported as a
-        // declared tie must be able to find the file that declared it.
-        let evidence = match (schematic_ties, &qualification) {
-            (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
-                &ties.path,
-                &ties.raw,
-                ties.contribution(qualification),
-            )?,
-            _ => evidence,
-        };
+        let evidence =
+            super::with_schematic_evidence(evidence, schematic_ties, qualification.as_ref())?;
         let lint = crate::checks::engine_lint(board, lib);
         let geo_text = if altium_present { None } else { Some(text) };
         // Route through the single SI chokepoint so this aggregate surface carries
@@ -168,14 +148,12 @@ impl CheckReport<'_> {
         let mut waivers = load_waivers(board_path);
         let mut lint = lint;
         let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
-        let provenance = if altium_present {
-            crate::result::ClearanceRuleProvenance::tool_default(drc.clearance_mm)
-        } else {
-            clearance_input
-                .as_ref()
-                .expect("non-Altium check loaded KiCad clearance inputs")
-                .provenance(board_path, text, drc.clearance_mm)
-        };
+        let provenance = super::clearance_provenance(
+            clearance_input.as_ref(),
+            board_path,
+            text,
+            drc.clearance_mm,
+        );
         let mut drc_structured = DrcStructured::from_report_with_ties(
             &drc,
             qualification.as_ref(),
@@ -567,19 +545,7 @@ pub fn gather_findings_with_schematic(
     lib: &ModelLibrary,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
-    let clearance_input = (!altium_present)
-        .then(|| KicadClearanceInput::load(board_path, board))
-        .transpose()?;
-    let mut drc = if altium_present {
-        ExtractedBoard::altium_drc(raw)?
-    } else {
-        ExtractedBoard::drc_with_clearance_rules(
-            text,
-            clearance_input
-                .as_ref()
-                .and_then(|input| input.rules.clone()),
-        )?
-    };
+    let (_, mut drc) = super::run_drc(board_path, board, text, raw, altium_present)?;
 
     // The companion schematic's declarations, applied before anything reads the
     // findings. Reclassifies, never deletes: a covered contact keeps its layer,
@@ -626,17 +592,21 @@ pub(crate) fn apply_static_waivers(
     si: &mut hauksbee_extract::SiReport,
     drc: &mut hauksbee_extract::DrcReport,
 ) -> Vec<crate::waiver::WaivedFinding> {
-    let (kept_lint, waived_lint) =
-        waivers.partition("lint", std::mem::take(&mut lint.findings), |f| {
-            (
-                f.check.as_str().to_string(),
-                f.nets.clone(),
-                f.refs.clone(),
-                f.message.clone(),
-            )
-        });
-    lint.findings = kept_lint;
-    let (kept_si, waived_si) = waivers.partition("si", std::mem::take(&mut si.findings), |f| {
+    let mut waived = waive_lint(waivers, lint);
+    waived.extend(waive_si(waivers, si));
+    waived.extend(waive_drc(waivers, drc));
+    waived
+}
+
+/// Apply the board's `lint`-scoped waivers to `report`, returning what was
+/// excused. Resource conflicts are lint-class findings and ride the same check
+/// name inside `--check`, so one waiver file covers `--lint`, `--resources` and
+/// the combined report; keying them differently would split it.
+pub(crate) fn waive_lint(
+    waivers: &mut crate::waiver::WaiverSet,
+    report: &mut hauksbee_extract::NetLintReport,
+) -> Vec<crate::waiver::WaivedFinding> {
+    let (kept, waived) = waivers.partition("lint", std::mem::take(&mut report.findings), |f| {
         (
             f.check.as_str().to_string(),
             f.nets.clone(),
@@ -644,26 +614,48 @@ pub(crate) fn apply_static_waivers(
             f.message.clone(),
         )
     });
-    si.findings = kept_si;
-    let (kept_drc, waived_shorts) =
-        waivers.partition("drc", std::mem::take(&mut drc.findings), |f| {
-            let kind = match f.kind {
-                hauksbee_extract::ViolationKind::Short => "short",
-                _ => "clearance-not-waivable",
-            };
-            (
-                kind.to_string(),
-                vec![f.net_a_name.clone(), f.net_b_name.clone()],
-                Vec::new(),
-                format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
-            )
-        });
-    drc.findings = kept_drc;
-    waived_lint
-        .into_iter()
-        .chain(waived_si)
-        .chain(waived_shorts)
-        .collect()
+    report.findings = kept;
+    waived
+}
+
+/// Apply the board's `si`-scoped waivers to `report`, returning what was excused.
+pub(crate) fn waive_si(
+    waivers: &mut crate::waiver::WaiverSet,
+    report: &mut hauksbee_extract::SiReport,
+) -> Vec<crate::waiver::WaivedFinding> {
+    let (kept, waived) = waivers.partition("si", std::mem::take(&mut report.findings), |f| {
+        (
+            f.check.as_str().to_string(),
+            f.nets.clone(),
+            f.refs.clone(),
+            f.message.clone(),
+        )
+    });
+    report.findings = kept;
+    waived
+}
+
+/// Apply the board's `drc`-scoped waivers to `report`, returning what was
+/// excused. Only a true short is waivable; a clearance violation does not gate
+/// on its own, so it has nothing to be excused from.
+pub(crate) fn waive_drc(
+    waivers: &mut crate::waiver::WaiverSet,
+    report: &mut hauksbee_extract::DrcReport,
+) -> Vec<crate::waiver::WaivedFinding> {
+    let (kept, waived) = waivers.partition("drc", std::mem::take(&mut report.findings), |f| {
+        let kind = match f.kind {
+            hauksbee_extract::ViolationKind::Short => "short",
+            _ => "clearance-not-waivable",
+        };
+        (
+            kind.to_string(),
+            vec![f.net_a_name.clone(), f.net_b_name.clone()],
+            Vec::new(),
+            format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
+        )
+    });
+    report.findings = kept;
+    waived
 }
 
 /// The copper shorts as machine findings.
