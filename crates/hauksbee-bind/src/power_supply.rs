@@ -458,19 +458,18 @@ impl SupplyLeg {
     pub fn stamp(circuit: &mut Circuit, net: NodeId, net_name: &str, supply: PowerSupply) -> Self {
         let drv_node = circuit.node(&format!("__supply_{net_name}"));
         let v0 = supply.nominal_volts();
-        let vsource = circuit.add(Device::Vsource {
-            name: format!("Vsupply_{net_name}"),
-            p: drv_node,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(v0),
-        });
-        let resistor = circuit.add(Device::Resistor {
-            name: format!("Rsupply_{net_name}"),
-            a: drv_node,
-            b: net,
-            ohms: supply.series_r(),
-            tc1: None,
-        });
+        let vsource = circuit.add(Device::vsource(
+            format!("Vsupply_{net_name}"),
+            drv_node,
+            NodeId::GROUND,
+            SourceKind::Dc(v0),
+        ));
+        let resistor = circuit.add(Device::resistor(
+            format!("Rsupply_{net_name}"),
+            drv_node,
+            net,
+            supply.series_r(),
+        ));
         SupplyLeg {
             net_name: net_name.to_string(),
             net,

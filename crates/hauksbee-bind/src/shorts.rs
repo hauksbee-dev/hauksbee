@@ -66,13 +66,7 @@ pub fn stamp_bridge(
         return None;
     }
     let device_name = format!("SHORT_{name_a}_{name_b}_n{}_n{}", lo.0, hi.0);
-    circuit.add(Device::Resistor {
-        name: device_name.clone(),
-        a,
-        b,
-        ohms: BRIDGE_OHMS,
-        tc1: None,
-    });
+    circuit.add(Device::resistor(device_name.clone(), a, b, BRIDGE_OHMS));
     Some(device_name)
 }
 

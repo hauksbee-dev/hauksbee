@@ -179,10 +179,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     net_ids.sort_unstable();
     let nets: Vec<Net> = net_ids
         .iter()
-        .map(|&id| Net {
-            id: id + 1,
-            name: net_names[&id].clone(),
-        })
+        .map(|&id| Net::new(id + 1, net_names[&id].clone()))
         .collect();
     let net_id = |file_id: Option<i64>| -> Option<i64> {
         file_id
@@ -232,9 +229,8 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                     .map(|p| Pin {
                         number: p.name.clone(),
                         net: net_id(p.net),
-                        function: String::new(),
-                        kind: String::new(),
                         position: Some((p.x_mm, p.y_mm)),
+                        ..Default::default()
                     })
                     .collect()
             })

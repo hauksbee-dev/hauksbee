@@ -15,9 +15,7 @@ pub(crate) fn pin(number: &str, net: i64) -> Pin {
     Pin {
         number: number.into(),
         net: Some(net),
-        function: String::new(),
-        kind: String::new(),
-        position: None,
+        ..Default::default()
     }
 }
 
@@ -38,11 +36,9 @@ pub(crate) fn two_pin_resistor(reference: &str, value: &str) -> Component {
         value: value.into(),
         lib_id: "Device:R".into(),
         footprint: "R_0603".into(),
-        position: None,
         layer: "F.Cu".into(),
-        properties: Vec::new(),
-        dnp: false,
         pins: vec![pin("1", 1), pin("2", 2)],
+        ..Default::default()
     }
 }
 
@@ -55,13 +51,7 @@ pub(crate) fn board(
 ) -> ExtractedBoard {
     ExtractedBoard {
         name: name.into(),
-        nets: nets
-            .iter()
-            .map(|(id, n)| Net {
-                id: *id,
-                name: (*n).into(),
-            })
-            .collect(),
+        nets: nets.iter().map(|(id, n)| Net::new(*id, *n)).collect(),
         components,
     }
 }

@@ -601,43 +601,25 @@ mod tests {
             Component {
                 reference: reference.into(),
                 value: value.into(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
                 layer: "F.Cu".into(),
-                properties: vec![],
-                dnp: false,
                 pins: pins
                     .into_iter()
                     .map(|(number, net)| Pin {
                         number: number.into(),
                         net: Some(net),
-                        function: String::new(),
-                        kind: String::new(),
-                        position: None,
+                        ..Default::default()
                     })
                     .collect(),
+                ..Default::default()
             }
         };
         ExtractedBoard {
             name: name.into(),
             nets: vec![
-                hauksbee_extract::Net {
-                    id: 1,
-                    name: inductor_rail.into(),
-                },
-                hauksbee_extract::Net {
-                    id: 2,
-                    name: "SW".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 3,
-                    name: fet_rail.into(),
-                },
-                hauksbee_extract::Net {
-                    id: 4,
-                    name: "GND".into(),
-                },
+                hauksbee_extract::Net::new(1, inductor_rail),
+                hauksbee_extract::Net::new(2, "SW"),
+                hauksbee_extract::Net::new(3, fet_rail),
+                hauksbee_extract::Net::new(4, "GND"),
             ],
             components: vec![
                 component("L1", "10uH", vec![("1", 1), ("2", 2)]),

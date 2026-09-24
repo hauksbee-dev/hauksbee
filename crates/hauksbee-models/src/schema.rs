@@ -15,7 +15,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use hauksbee_ir::evidence::{ModelSourceTier, ModelUncertainty, ModelValidation};
+use hauksbee_ir::evidence::{
+    ModelIntervalKind, ModelSourceTier, ModelUncertainty, ModelValidation,
+};
 
 use crate::check::positive_finite;
 
@@ -316,23 +318,76 @@ pub struct Characteristic {
     pub basis: String,
 }
 
+const COLUMNS: [&str; 3] = ["min", "typ", "max"];
+
+/// Which of min, typ, max a record's own text cites ("typ/max columns"); a
+/// negated mention ("no typ published") cites nothing.
+fn cited_columns(texts: &[&str]) -> [bool; 3] {
+    let mut cited = [false; 3];
+    for text in texts {
+        let words: Vec<String> = text
+            .split(|c: char| !c.is_alphanumeric())
+            .map(str::to_ascii_lowercase)
+            .collect();
+        for (i, word) in words.iter().enumerate() {
+            let negated = i > 0 && matches!(words[i - 1].as_str(), "no" | "not" | "without");
+            if let Some(slot) = COLUMNS.iter().position(|c| c == word) {
+                cited[slot] |= !negated;
+            }
+        }
+    }
+    cited
+}
+
+fn column_list(which: [bool; 3]) -> String {
+    let names = COLUMNS.iter().zip(which).filter(|(_, on)| *on);
+    names.map(|(c, _)| *c).collect::<Vec<_>>().join("/")
+}
+
 impl Characteristic {
-    /// At least one finite column, printed columns ordered, and a named row and source.
-    pub fn validate(&self) -> Result<(), String> {
+    /// Every problem with the row: at least one finite column, columns in the
+    /// sign convention below, the columns its text cites, a conversion its text
+    /// claims, and a named row and source.
+    ///
+    /// Sign convention: each value keeps its printed sign in its printed column,
+    /// ordered min <= typ <= max by signed value; a row printed as negative
+    /// values may instead keep the datasheet's magnitude order (PNP and
+    /// negative-rail tables print |min| <= |max|), never a mix of the two.
+    pub fn problems(&self) -> Vec<String> {
         let columns = [self.min, self.typ, self.max];
-        if columns.iter().all(Option::is_none) {
-            return Err("requires at least one of min, typ, max".to_string());
-        }
-        if columns.iter().flatten().any(|v| !v.is_finite()) {
-            return Err("min, typ and max must be finite".to_string());
-        }
-        if !columns.iter().flatten().is_sorted() {
-            return Err("requires min <= typ <= max".to_string());
+        let values: Vec<f64> = columns.iter().flatten().copied().collect();
+        let mut out = Vec::new();
+        if values.is_empty() {
+            out.push("requires at least one of min, typ, max; a row that prints no number (\"see note\", a curve) gets no record: cite it in a comment".to_string());
+        } else if values.iter().any(|v| !v.is_finite()) {
+            out.push("min, typ and max must be finite".to_string());
+        } else {
+            let negative = values.iter().all(|v| *v < 0.0);
+            let magnitude_order = negative && values.iter().map(|v| v.abs()).is_sorted();
+            if !(values.is_sorted() || magnitude_order) {
+                let offsets = match negative || values.iter().all(|v| *v > 0.0) {
+                    true => "; a threshold printed as an offset from another spec is a signed offset (negative below it), ascending, with that spec named in conditions",
+                    false => "",
+                };
+                out.push(format!("requires min <= typ <= max by signed value (a row printed negative may keep its magnitude order); keep each printed sign in its printed column{offsets}"));
+            }
         }
         if self.parameter.trim().is_empty() || self.basis.trim().is_empty() {
-            return Err("requires non-empty parameter and basis".to_string());
+            out.push("requires non-empty parameter and basis".to_string());
         }
-        Ok(())
+        let cited = cited_columns(&[&self.parameter, &self.basis]);
+        let filled = columns.map(|c| c.is_some());
+        if cited[1] && (self.typ.is_none() || (0..3).any(|i| filled[i] && !cited[i])) {
+            out.push(format!(
+                "its text cites the {} column(s) but the record fills {}: a typ value belongs in `typ`, never in min or max, and a column the row does not print stays out",
+                column_list(cited),
+                column_list(filled)
+            ));
+        }
+        let texts = [self.parameter.as_str(), &self.conditions, &self.basis];
+        let named = [("min", self.min), ("typ", self.typ), ("max", self.max)];
+        out.extend(crate::units::conversion_problem(&texts, &self.unit, &named));
+        out
     }
 }
 
@@ -346,25 +401,71 @@ pub struct ModelSourceReference {
 }
 
 impl ModelSourceSpec {
-    /// Every citation and every uncertainty record must be well formed.
+    /// Every citation and every uncertainty and characteristic record must be
+    /// well formed; all problems at once, `; `-joined (see [`Self::problems`]).
     pub fn validate(&self) -> Result<(), String> {
+        let problems = self.problems();
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(problems.join("; "))
+        }
+    }
+
+    /// Every problem with every record, each naming its record, so one lint run
+    /// reports them all. An interval whose basis cites columns must cite both a
+    /// min and a max: a typ never becomes a bound, and an absent column is
+    /// never an invented 0.
+    pub fn problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
         for (index, reference) in self.references.iter().enumerate() {
-            reference
-                .validate()
-                .map_err(|e| format!("source reference {index} {e}"))?;
+            if let Err(e) = reference.validate() {
+                out.push(format!("source reference {index} {e}"));
+            }
         }
         for (index, record) in self.uncertainty.iter().enumerate() {
             let (ModelUncertainty::Interval { parameter, .. }
             | ModelUncertainty::Unknown { parameter, .. }) = record;
-            record
-                .validate()
-                .map_err(|e| format!("uncertainty {index} ({parameter}): {e}"))?;
+            let mut push = |e: String| out.push(format!("uncertainty {index} ({parameter}): {e}"));
+            if let Err(e) = record.validate() {
+                push(e.to_string());
+            }
+            if let ModelUncertainty::Interval {
+                low,
+                high,
+                unit,
+                kind,
+                basis,
+                ..
+            } = record
+            {
+                // A zero bound the basis declares physical is stated, not invented.
+                let cited = cited_columns(&[basis]);
+                let declared = *low == 0.0 && basis.contains("physical lower bound");
+                let limits = *kind == ModelIntervalKind::SpecificationLimits && !declared;
+                if limits && cited.contains(&true) && !(cited[0] && cited[2]) {
+                    push(format!(
+                        "its basis cites only the {} column(s); specification limits need a \
+                         printed min AND max (a typ is never a bound, a missing column never \
+                         0): record the row as a characteristic",
+                        column_list(cited)
+                    ));
+                }
+                let named = [("low", Some(*low)), ("high", Some(*high))];
+                if let Some(e) = crate::units::conversion_problem(&[basis], unit, &named) {
+                    push(e);
+                }
+            }
         }
         for (index, row) in self.characteristic.iter().enumerate() {
-            row.validate()
-                .map_err(|e| format!("characteristic {index} ({}): {e}", row.parameter))?;
+            let name = &row.parameter;
+            out.extend(
+                row.problems()
+                    .into_iter()
+                    .map(|e| format!("characteristic {index} ({name}): {e}")),
+            );
         }
-        Ok(())
+        out
     }
 
     /// Whether any uncertainty record covers model-form error (`parameter = "model"`).
@@ -1183,45 +1284,90 @@ mod tests {
 
     #[test]
     fn characteristic_rows_keep_printed_columns_and_validate() {
-        let spec = |columns: &str| {
-            let text = format!("tier = \"datasheet-derived\"\n[[characteristic]]\nparameter = \"VF\"\n{columns}\nunit = \"V\"\nconditions = \"IF = 1 mA, pulsed\"\nbasis = \"Table 5\"\n");
+        let parse = |records: &str| {
+            let text = format!("tier = \"datasheet-derived\"\n{records}");
             toml::from_str::<ModelSourceSpec>(&text).map_err(|e| e.to_string())
         };
-        for (columns, error) in [
-            ("max = 0.37", None),
-            ("typ = 2e-12", None),
-            ("min = 1.0\ntyp = 1.0\nmax = 2.0", None),
-            ("min = 1.0\nmax = 1.0", None),
-            ("", Some("at least one of min, typ, max")),
-            ("max = nan", Some("finite")),
-            ("min = -inf", Some("finite")),
-            ("min = 2.0\ntyp = 1.0", Some("min <= typ <= max")),
-            ("typ = 3.0\nmax = 2.0", Some("min <= typ <= max")),
-            ("min = 3.0\nmax = 2.0", Some("min <= typ <= max")),
-            ("max = 1.0\nlow = 0.0", Some("unknown field `low`")),
+        let spec = |columns: &str, basis: &str| {
+            parse(&format!("[[characteristic]]\nparameter = \"VF\"\n{columns}\nunit = \"V\"\nconditions = \"IF = 1 mA, pulsed\"\nbasis = \"Table 5{basis}\"\n"))
+        };
+        for (columns, basis, error) in [
+            ("max = 0.37", "", ""),
+            ("typ = 2e-12", "", ""),
+            ("min = 1.0\ntyp = 1.0\nmax = 2.0", "", ""),
+            ("min = 1.0\nmax = 1.0", "", ""),
+            ("min = -0.85\nmax = -0.65", "", ""),
+            ("min = -0.65\ntyp = -0.7\nmax = -0.85", "", ""),
+            (
+                "min = 0.3\nmax = 0.4",
+                ", min/max columns, no typ published",
+                "",
+            ),
+            ("typ = 0.3\nmax = 0.4", ", typ/max columns", ""),
+            ("typ = 2e-6", ", typ column, converted from µV to V", ""),
+            ("", "", "at least one of min, typ, max"),
+            ("max = nan", "", "finite"),
+            ("min = -inf", "", "finite"),
+            ("min = 2.0\ntyp = 1.0", "", "min <= typ <= max"),
+            ("typ = 3.0\nmax = 2.0", "", "signed offset"),
+            ("min = -0.6\ntyp = 0.1\nmax = -0.8", "", "by signed value"),
+            ("max = 1.0\nlow = 0.0", "", "unknown field `low`"),
+            (
+                "min = 0.01\nmax = 0.08",
+                ", min/typ columns",
+                "fills min/max",
+            ),
+            ("max = 0.4", ", typ column", "cites the typ column"),
+            (
+                "typ = 2.0",
+                ", typ, converted from µV to V",
+                "converted from µV",
+            ),
         ] {
-            let got = spec(columns).and_then(|s| s.validate().map(|()| s));
-            match (error, got) {
-                (None, Ok(s)) => {
+            match (
+                error,
+                spec(columns, basis).and_then(|s| s.validate().map(|()| s)),
+            ) {
+                ("", Ok(s)) => {
                     let text = toml::to_string(&s).unwrap();
                     assert_eq!(toml::from_str::<ModelSourceSpec>(&text).unwrap(), s);
-                    let printed = ["min", "typ", "max"].map(|c| columns.contains(c));
+                    let printed = ["min =", "typ =", "max ="];
                     assert_eq!(
-                        printed,
-                        ["min =", "typ =", "max ="].map(|c| text.contains(c)),
-                        "{text}"
+                        printed.map(|c| columns.contains(c)),
+                        printed.map(|c| text.contains(c))
                     );
                 }
-                (Some(needle), Err(e)) => assert!(e.contains(needle), "{columns}: {e}"),
+                (needle, Err(e)) if !needle.is_empty() => {
+                    assert!(e.contains(needle), "{columns}: {e}")
+                }
                 (want, got) => panic!("{columns}: wanted {want:?}, got {got:?}"),
             }
         }
-        let mut blank = spec("typ = 2.0").unwrap();
+        let mut blank = spec("typ = 2.0", "").unwrap();
         blank.characteristic[0].basis = " ".into();
         assert_eq!(
             blank.validate().unwrap_err(),
             "characteristic 0 (VF): requires non-empty parameter and basis"
         );
+        // Every bad record is reported, each by name, in one pass.
+        let unordered = spec("min = 2.0\ntyp = 1.0", "").unwrap();
+        blank.characteristic.extend(unordered.characteristic);
+        let interval = |basis: &str| {
+            parse(&format!("[[uncertainty]]\nstatus = \"interval\"\nparameter = \"idd\"\nlow = 0.0\nhigh = 2e-3\nunit = \"A\"\nkind = \"specification-limits\"\nbasis = \"{basis}\"\n")).unwrap()
+        };
+        for (basis, bad) in [
+            ("typ/max columns", true),
+            ("min/max columns", false),
+            ("maximum; zero is the physical lower bound", false),
+        ] {
+            let problems = interval(basis).problems();
+            let flagged = problems
+                .iter()
+                .any(|p| p.contains("need a printed min AND max"));
+            assert_eq!(flagged, bad, "{basis}");
+        }
+        blank.uncertainty = interval("typ/max").uncertainty;
+        assert_eq!(blank.problems().len(), 3, "{:?}", blank.problems());
     }
 
     #[test]

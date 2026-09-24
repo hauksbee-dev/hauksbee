@@ -273,52 +273,32 @@ fn esp32s3_test_board() -> hauksbee_engine::binder::BoundBoard {
 
     let board = ExtractedBoard {
         name: "esp32s3-wiring-test".to_string(),
-        nets: vec![
-            Net {
-                id: 1,
-                name: "BOOT".to_string(),
-            },
-            Net {
-                id: 2,
-                name: "+3V3".to_string(),
-            },
-            Net {
-                id: 3,
-                name: "GND".to_string(),
-            },
-        ],
+        nets: vec![Net::new(1, "BOOT"), Net::new(2, "+3V3"), Net::new(3, "GND")],
         components: vec![Component {
             reference: "U1".to_string(),
             value: "ESP32-S3".to_string(),
             lib_id: "RF_Module:ESP32-S3-WROOM-1".to_string(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
             pins: vec![
                 Pin {
                     number: "27".to_string(),
                     net: Some(1),
                     function: "GPIO0".to_string(),
-                    kind: String::new(),
-                    position: None,
+                    ..Default::default()
                 },
                 Pin {
                     number: "2".to_string(),
                     net: Some(2),
                     function: "3V3".to_string(),
-                    kind: String::new(),
-                    position: None,
+                    ..Default::default()
                 },
                 Pin {
                     number: "1".to_string(),
                     net: Some(3),
                     function: "GND".to_string(),
-                    kind: String::new(),
-                    position: None,
+                    ..Default::default()
                 },
             ],
+            ..Default::default()
         }],
     };
     bind_board(&board, &ModelLibrary::builtin())

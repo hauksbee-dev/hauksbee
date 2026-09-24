@@ -390,6 +390,7 @@ fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
                                # (most ST / InvenSense parts). false otherwise.
     addr_mask = 0x7f           # mask to recover the register address
     spi_mode = 0               # CPOL/CPHA mode 0..3 from the timing diagram
+    spi_modes = [0, 3]         # every mode the datasheet allows, when it names several
   Do NOT set i2c_address."#
     } else {
         r#"This is an I2C sensor. Set:
@@ -484,7 +485,11 @@ RULES:
    finite min AND max, such as the supply range or accuracy. A one-sided or
    typ-only row goes in a `[[sensor.source.characteristic]]` record: parameter,
    only the printed min/typ/max columns, unit, conditions, basis. Never invent
-   an interval.
+   an interval: a missing column is never 0 and a typ is never a bound. Name
+   the printed columns in each basis. An interval has no typ: a min/typ/max row
+   also gets a characteristic record carrying all three.
+6. A control/config register firmware reads back is a const register holding
+   its power-on (reset) value bytes.
 
 {source_quantity_guidance}
 
@@ -1312,6 +1317,9 @@ const SOURCE_QUANTITY_GUIDANCE: &str = r#"SOURCE QUANTITIES:
 - A typical value is not a guaranteed limit. A one-sided limit is not a two-sided interval.
 - Keep every number with its stated test conditions, supply, load, temperature, package,
   and min/typ/max column; do not transplant it to another condition.
+- Every condition variant of a row (temperature range, supply, package, bias) is its
+  own record. Where two places state different values for one quantity, record each
+  with its own basis plus an `unknown` record for it naming the conflict.
 - Omit unsupported facts, or mark them explicitly unknown only where the destination
   schema provides that representation. Never invent a field or uncertainty schema."#;
 
@@ -1379,7 +1387,11 @@ model.toml. There is no shorter valid answer. In particular, a component
 kind, a classification, a summary, or any single field on its own is NOT an
 answer and fails validation.
 
-Component kind: {kind}
+Component kind: {kind_line}
+
+If the request names a family of variants (output voltages, packages, grades),
+model the variant the request implies; if it is ambiguous, say in
+`description` which variant was modelled and why. Never merge variants.
 
 The `kind` FIELD inside your entry must come from this closed list (the
 schema accepts nothing else): {legal_kinds}.
@@ -1441,7 +1453,7 @@ min_v = 1.0
 max_v = 2.0
 basis = "Recommended Operating Conditions, table and row"
 
-PIN ROLE NAMES for kind="{kind}": {pin_roles}
+PIN ROLE NAMES for kind="{entry_kind}": {pin_roles}
   Use these exact spellings where listed. They are looked up by exact string, so
   "output" instead of "out", or "ground" instead of "gnd", can make the part
   bind OPEN. Map every physical pad identity in the selected package, including
@@ -1452,7 +1464,7 @@ PIN ROLE NAMES for kind="{kind}": {pin_roles}
 
 {pin_role_guidance}
 
-For kind="{kind}", the required params are:
+For kind="{entry_kind}", the required params are:
 {required_params}
 {optional_params}
 {digital_hint}
@@ -1561,7 +1573,14 @@ IMPORTANT RULES:
      max = <number>  # only the printed columns among min, typ, max
      unit = "<base unit of rule 6: V, A, W, F, s, ohm, ...>"
      conditions = "<the row's test conditions>"
-     basis = "<table/row citation>"
+     basis = "<table/row citation>, <printed columns, e.g. typ/max>"
+   Each number keeps its printed sign in its printed column, min <= typ <= max
+   by signed value (a row printed negative may keep its magnitude order); a
+   threshold printed as an offset from another spec is a signed offset,
+   ascending, with that spec named in conditions. A limit at a second
+   condition, or with no ratings key, is a characteristic record; a breakdown
+   row is not an absolute-maximum rating. When a param takes one column of a
+   row (e.g. a typ), the full row also gets a characteristic record.
    Never invent a percentage, derive a bound from a typical value, or
    substitute a model clamp for a published guarantee. A param the kind needs
    as a nominal value may come from a typ column: cite it as typ; it gets no
@@ -1591,8 +1610,8 @@ IMPORTANT RULES:
 4. For every real behavior the selected schema and params do not represent,
    the description must say `does not model ...` and name that behavior. Do not
    let a partial card read as a complete model of the component. Never delete a
-   sourced fact to pass validation: fix the record, or move the fact into a
-   characteristic record (rule 0).
+   sourced fact or drop a record between drafts to pass validation: fix the
+   record, or move the fact into a characteristic record (rule 0).
 5. Output ONLY the TOML block, starting with [[models]]; no prose, no markdown
    fences, no leading or trailing text.
 6. Currents in AMPERES, voltages in VOLTS, power in WATTS (convert mA/mW yourself).
@@ -1609,6 +1628,12 @@ OUTPUT (TOML only, starting with [[models]]):
         part_upper = part.to_uppercase(),
         legal_kinds = crate::validation::KIND_NAMES.join(", "),
         entry_kind = behavioral_family_base_kind(kind).unwrap_or(kind),
+        kind_line = match behavioral_family_base_kind(kind) {
+            Some(base) => format!(
+                "{base} (the {kind} family, written as a {base} entry; see its notes below)"
+            ),
+            None => kind.to_string(),
+        },
         datasheet_text = datasheet_text_block(pdf_text),
         required_params = required_params_for_kind(kind),
         optional_params = optional_params_for_kind(kind),
@@ -2030,7 +2055,8 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              `unknown` record for `hysteresis` whose reason names the absence; that never makes \
              the card identity-only. An open-collector or open-drain output instead sets \
              open_collector = true with ron_ohms and leak_s, and the board pull-up supplies its \
-             high level"
+             high level. The binder ignores out_lo/out_hi/hysteresis when open_collector = true, \
+             and ron_ohms/leak_s otherwise"
         }
         "analog_switch" => "ron, roff, vth",
         "digital" => {
@@ -2053,7 +2079,11 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              what matters is which pin is which"
         }
         "mcu" => "backend (e.g. simavr:atmega328p)",
-        "charger" => "vout, dropout_v, iq_a  (the converter behaviour is in [models.behavioral])",
+        "charger" => {
+            "vout, dropout_v, iq_a  (the converter behaviour is in [models.behavioral]). With \
+             [models.current_program], an iq_a printed only as a limit may be omitted: add an \
+             `unknown` record for iq_a naming that row, which stays a characteristic record"
+        }
         "pmic" => "vout, dropout_v, iq_a  (the pin pulls are in [models.behavioral])",
         "balancer" => "(the leak law is in [models.behavioral]; no required numeric params)",
         _ => "(see db/README.md for kind-specific requirements)",
@@ -2072,11 +2102,17 @@ fn optional_params_for_kind(kind: &str) -> String {
         .copied()
         .filter(|n| !named.contains(n))
         .collect();
+    let meanings = component_kind(kind).map(crate::param_names::param_meanings);
+    let meanings = meanings
+        .filter(|m| !m.is_empty())
+        .map_or(String::new(), |m| {
+            format!("\nParam meanings and units (write each in that unit): {m}")
+        });
     if rest.is_empty() {
-        return String::new();
+        return meanings;
     }
     format!(
-        "Optional params it also reads (add each one the datasheet states): {}",
+        "Optional params it also reads (add each one the datasheet states): {}{meanings}",
         rest.join(", ")
     )
 }
@@ -3172,6 +3208,10 @@ mod tests {
         let comparator = build_prompt("CMP_FIXTURE", "comparator", "x");
         assert!(comparator.contains("hysteresis = 0.0") && comparator.contains("leak_s: 0 to 1"));
         assert!(comparator.contains("(VT+ minus VT-), never the input offset"));
+        assert!(comparator.contains("leak_s = output-off conductance (IOH / VOH) (S)"));
+        assert!(
+            build_prompt("D", "diode", "x").contains("cjo = zero-bias junction capacitance (F)")
+        );
         assert!(build_prompt("REG_FIXTURE", "vreg", "x").contains("   - vout: |x| 0.5 to 30\n"));
         assert!(build_prompt("CONN_FIXTURE", "connector", "x").contains("(none for this kind)"));
 
@@ -3179,6 +3219,10 @@ mod tests {
         assert!(charger.contains("[models.behavioral.converter]"));
         assert!(charger.contains("iin_program"));
         assert!(charger.contains("kind = \"vreg\"") && !charger.contains("kind = \"charger\""));
+        assert!(charger.contains("Component kind: vreg (the charger family"));
+        assert!(
+            !charger.contains("for kind=\"charger\"") && charger.contains("Never merge variants")
+        );
         assert!(build_prompt("nPM1300", "pmic", "x").contains("pull_to"));
         assert!(build_prompt("LTC6803", "balancer", "x").contains("[[models.behavioral.laws]]"));
     }

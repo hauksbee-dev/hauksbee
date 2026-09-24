@@ -442,13 +442,7 @@ mod tests {
             components: vec![hauksbee_extract::Component {
                 reference: "U1".into(),
                 value: "MCU".into(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
-                layer: String::new(),
-                properties: Vec::new(),
-                dnp: false,
-                pins: Vec::new(),
+                ..Default::default()
             }],
         };
         let layout = dir.path().join("design.brd");
@@ -491,40 +485,27 @@ mod tests {
         let board = hauksbee_extract::ExtractedBoard {
             name: "design".into(),
             nets: vec![
-                hauksbee_extract::Net {
-                    id: 1,
-                    name: "GND".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 2,
-                    name: "SIGNAL".into(),
-                },
+                hauksbee_extract::Net::new(1, "GND"),
+                hauksbee_extract::Net::new(2, "SIGNAL"),
             ],
             components: vec![hauksbee_extract::Component {
                 reference: "R1".into(),
                 value: "10k".into(),
                 lib_id: "device:R0603".into(),
                 footprint: "R0603".into(),
-                position: None,
-                layer: String::new(),
-                properties: Vec::new(),
-                dnp: false,
                 pins: vec![
                     hauksbee_extract::Pin {
                         number: "1".into(),
                         net: Some(1),
-                        function: String::new(),
-                        kind: String::new(),
-                        position: None,
+                        ..Default::default()
                     },
                     hauksbee_extract::Pin {
                         number: "2".into(),
                         net: Some(2),
-                        function: String::new(),
-                        kind: String::new(),
-                        position: None,
+                        ..Default::default()
                     },
                 ],
+                ..Default::default()
             }],
         };
 

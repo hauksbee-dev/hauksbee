@@ -168,6 +168,12 @@ impl BindReport {
         self.rows.push(row);
     }
 
+    /// The first row bound for `reference`, if the report has one.
+    #[must_use]
+    pub fn row(&self, reference: &str) -> Option<&BindRow> {
+        self.rows.iter().find(|row| row.reference == reference)
+    }
+
     /// One warning per **active** component whose device parameters and safety
     /// ratings come from a generic estimated-fallback model rather than a real
     /// part.

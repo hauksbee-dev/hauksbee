@@ -16,23 +16,11 @@ use hauksbee_ir::{BjtModel, Circuit, Device, DeviceId, DiodeModel, NodeId, Polar
 pub const GND: NodeId = NodeId::GROUND;
 
 pub fn res(c: &mut Circuit, name: &str, a: NodeId, b: NodeId, ohms: f64) -> DeviceId {
-    c.add(Device::Resistor {
-        name: name.into(),
-        a,
-        b,
-        ohms,
-        tc1: None,
-    })
+    c.add(Device::resistor(name, a, b, ohms))
 }
 
 pub fn cap(c: &mut Circuit, name: &str, a: NodeId, b: NodeId, farads: f64) -> DeviceId {
-    c.add(Device::Capacitor {
-        name: name.into(),
-        a,
-        b,
-        farads,
-        ic: None,
-    })
+    c.add(Device::capacitor(name, a, b, farads))
 }
 
 pub fn cap_ic(c: &mut Circuit, name: &str, a: NodeId, b: NodeId, farads: f64, ic: f64) -> DeviceId {
@@ -60,21 +48,11 @@ pub fn vdc(c: &mut Circuit, name: &str, p: NodeId, volts: f64) -> DeviceId {
 }
 
 pub fn vdc_between(c: &mut Circuit, name: &str, p: NodeId, n: NodeId, volts: f64) -> DeviceId {
-    c.add(Device::Vsource {
-        name: name.into(),
-        p,
-        n,
-        kind: SourceKind::Dc(volts),
-    })
+    c.add(Device::vsource(name, p, n, SourceKind::Dc(volts)))
 }
 
 pub fn idc(c: &mut Circuit, name: &str, p: NodeId, n: NodeId, amps: f64) -> DeviceId {
-    c.add(Device::Isource {
-        name: name.into(),
-        p,
-        n,
-        kind: SourceKind::Dc(amps),
-    })
+    c.add(Device::isource(name, p, n, SourceKind::Dc(amps)))
 }
 
 /// A one-shot pulse source `p -> GND`: `v1` until `delay`, then a `rise` ramp

@@ -784,12 +784,12 @@ fn extract_subcircuit(
     }
     for (gn, points) in replay {
         let p = sub.map(circuit, *gn);
-        sub.add(Device::Vsource {
-            name: format!("VREPLAY_{}", circuit.node_name(*gn)),
+        sub.add(Device::vsource(
+            format!("VREPLAY_{}", circuit.node_name(*gn)),
             p,
-            n: NodeId::GROUND,
-            kind: SourceKind::Pwl(points.clone()),
-        });
+            NodeId::GROUND,
+            SourceKind::Pwl(points.clone()),
+        ));
     }
     sub.into_parts()
 }

@@ -45,7 +45,7 @@
 //!    Non-finding terminal outcomes use a typed refusal testcase/result;
 //!    `--strict-boot` is promoted to a typed co-sim finding when armed.
 
-use crate::support::{bin, stderr, stdout};
+use crate::support::{bin, read_json, stderr, stdout};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -919,9 +919,7 @@ fn junit_and_sarif_agree_with_a_specialist_surfaces_verdict() {
             junit_root(&xml)
         );
 
-        let doc: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
-                .expect("valid SARIF JSON");
+        let doc = read_json(&sarif);
         let results = doc["runs"][0]["results"].as_array().expect("results array");
         assert_eq!(
             results
@@ -1083,9 +1081,7 @@ fn a_gating_medium_finding_is_red_in_the_archived_artifact_too() {
         "the failing testcase is the gating finding itself:\n{xml}"
     );
 
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
-            .expect("valid SARIF JSON");
+    let doc = read_json(&sarif);
     assert!(
         sarif_levels(&doc).contains(&("lint/placeholder_value".into(), "error".into())),
         "SARIF must raise the gating finding at error level:\n{:?}",
@@ -1218,9 +1214,7 @@ fn specialist_artifacts_and_annotations_grade_only_the_selected_surface() {
             && !xml.contains("testsuite name=\"si\""),
         "an unselected check must not appear as if it ran:\n{xml}"
     );
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
-            .expect("valid SARIF JSON");
+    let doc = read_json(&sarif);
     assert!(
         sarif_levels(&doc).iter().all(|(_, level)| level != "error"),
         "selected DRC SARIF must not contain an unselected lint error: {doc}"
@@ -1294,9 +1288,7 @@ fn a_cosim_fault_run_archives_a_failing_testcase() {
         "a `fail` verdict must not archive an all-green report: {}",
         junit_root(&xml)
     );
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
-            .expect("valid SARIF JSON");
+    let doc = read_json(&sarif);
     assert!(
         sarif_levels(&doc).contains(&("cosim/overpower".into(), "error".into())),
         "SARIF raises the fault at error level:\n{:?}",
@@ -1369,9 +1361,7 @@ fn an_invalid_verdict_keeps_the_invalid_shape_in_the_artifact() {
     // two red shapes stay distinct.
     assert!(junit_root(&xml).contains("errors=\"0\""), "{xml}");
 
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
-            .expect("valid SARIF JSON");
+    let doc = read_json(&sarif);
     let levels = sarif_levels(&doc);
     assert!(
         levels.contains(&("evidence/undermined".into(), "error".into())),
@@ -1566,9 +1556,7 @@ fn the_cosim_refusal_rewrite_keeps_every_finding_the_complete_artifact_carried()
 
     // SARIF is rewritten from the same findings list, so it owes the same
     // superset plus the refusal rule.
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&refused_sarif).expect("sarif written"))
-            .expect("valid SARIF JSON");
+    let doc = read_json(&refused_sarif);
     let results = doc["runs"][0]["results"].as_array().expect("results array");
     assert!(
         results.iter().any(|r| r["ruleId"] == "cosim/overpower"),
@@ -1656,9 +1644,7 @@ fn strict_boot_verdict_agrees_with_the_strict_boot_exit() {
             .any(|case| case.contains("boot_control_net") && case.contains("GATE_CTRL")),
         "the strict-boot gate itself must be a failing testcase:\n{xml}"
     );
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
-            .expect("valid SARIF JSON");
+    let doc = read_json(&sarif);
     assert!(
         sarif_levels(&doc).contains(&("cosim/boot_control_net".into(), "error".into())),
         "strict-boot must be an error-level SARIF result: {doc}"
@@ -1702,9 +1688,7 @@ board version 20241229\n\nfn main {\n}\n";
         junit_root(&xml).contains("errors=\"1\"") && xml.contains("no components"),
         "the refusal must replace the stale artifact:\n{xml}"
     );
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif replaced"))
-            .expect("valid replacement SARIF");
+    let doc = read_json(&sarif);
     assert!(
         sarif_levels(&doc).contains(&("hauksbee/invalid-for-analysis".into(), "error".into())),
         "the refusal must replace stale SARIF: {doc}"
@@ -1753,9 +1737,7 @@ fn missing_processor_refusal_finalizes_every_requested_surface() {
             && !xml.contains("did not reach its final outcome"),
         "the concrete missing-processor refusal must replace the pending marker:\n{xml}"
     );
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif finalized"))
-            .expect("valid SARIF");
+    let doc = read_json(&sarif);
     assert!(
         doc["runs"][0]["results"]
             .as_array()
@@ -1901,9 +1883,7 @@ fn unsafe_artifact_alias_still_invalidates_every_other_safe_requested_surface() 
         original,
         "unsafe artifact path must never clobber the board"
     );
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif replaced"))
-            .expect("valid replacement SARIF");
+    let doc = read_json(&sarif);
     assert!(
         doc["runs"][0]["results"]
             .as_array()
@@ -1937,9 +1917,7 @@ fn clap_usage_error_invalidates_requested_artifacts_before_exiting() {
         junit_root(&xml).contains("errors=\"1\"") && xml.contains("not-a-real-run-flag"),
         "clap failure must replace stale JUnit:\n{xml}"
     );
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif replaced"))
-            .expect("valid SARIF");
+    let doc = read_json(&sarif);
     assert!(
         doc["runs"][0]["results"]
             .as_array()
@@ -2021,9 +1999,7 @@ fn unknown_embedded_example_replaces_seeded_artifacts() {
         junit_root(&xml).contains("errors=\"1\"") && xml.contains("definitely-not-an-example"),
         "unknown-example resolution must finalize JUnit:\n{xml}"
     );
-    let doc: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif replaced"))
-            .expect("valid replacement SARIF");
+    let doc = read_json(&sarif);
     assert!(
         doc["runs"][0]["results"]
             .as_array()

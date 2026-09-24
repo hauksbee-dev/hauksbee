@@ -52,12 +52,12 @@ impl DynamicLoad {
         // pulls current out of the net (a sink / load). Seed it at the profile's
         // pre-start level so the DC operating point is consistent.
         let i0 = profile.current_at(-1.0, seed);
-        let sink = circuit.add(Device::Isource {
-            name: format!("Iload_{id}"),
-            p: net,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(i0),
-        });
+        let sink = circuit.add(Device::isource(
+            format!("Iload_{id}"),
+            net,
+            NodeId::GROUND,
+            SourceKind::Dc(i0),
+        ));
         DynamicLoad {
             id: id.to_string(),
             sink,

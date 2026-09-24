@@ -592,16 +592,12 @@ mod jumper_class_tests {
                 crate::Pin {
                     number: "1".into(),
                     net: Some(1),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
+                    ..Default::default()
                 },
                 crate::Pin {
                     number: "2".into(),
                     net: Some(2),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
+                    ..Default::default()
                 },
             ];
             c

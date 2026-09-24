@@ -9,9 +9,10 @@ use std::collections::HashSet;
 use crate::check::{nonneg_finite, positive_finite, Problems};
 use crate::schema::{
     AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics,
-    ModelEntry, ModelSourceSpec, OperatingEnvelope, PeripheralSpec,
+    ModelEntry, OperatingEnvelope, PeripheralSpec,
 };
 use crate::sensor_spec::{Bus, SensorSpec};
+use hauksbee_ir::evidence::ModelUncertainty;
 use thiserror::Error;
 
 /// A validation error.
@@ -435,8 +436,20 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // state exists to prevent.
     if !identity_only {
         let rules = kind_rules(entry);
+        // A programmed-current (charger) vreg may abstain on `iq_a`, which the
+        // binder tolerates absent, when its datasheet prints only a limit: an
+        // `unknown` source record names it and the row stays a characteristic.
+        let abstains = |key: &str| {
+            key == "iq_a"
+                && entry.current_program.is_some()
+                && entry.source.as_ref().is_some_and(|s| {
+                    s.uncertainty.iter().any(|u| {
+                        matches!(u, ModelUncertainty::Unknown { parameter, .. } if parameter == key)
+                    })
+                })
+        };
         for key in rules.required {
-            p.require(params.get_f64(key).is_some(), || {
+            p.require(params.get_f64(key).is_some() || abstains(key), || {
                 format!("missing required param '{key}'")
             });
         }
@@ -504,8 +517,30 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     if let Some(program) = &entry.current_program {
         check_current_program(entry, program, &mut p);
     }
-    if let Some(Err(m)) = entry.source.as_ref().map(ModelSourceSpec::validate) {
-        p.0.push(format!("[models.source]: {m}"));
+    if let Some(source) = &entry.source {
+        p.0.extend(
+            source
+                .problems()
+                .into_iter()
+                .map(|m| format!("[models.source]: {m}")),
+        );
+        // No semiconductor or IC row reaches a farad: a printed pF/nF number
+        // stored under `F` unconverted. A passive (a supercapacitor) may.
+        for (i, row) in source.characteristic.iter().enumerate() {
+            let farads = crate::units::si_unit(&row.unit).filter(|(_, base)| *base == "F");
+            let big = [row.min, row.typ, row.max].into_iter().flatten();
+            let big = big.filter(|v| farads.is_some_and(|(s, _)| (v * s).abs() >= 1.0));
+            if let Some(v) = big
+                .max_by(f64::total_cmp)
+                .filter(|_| entry.kind != ComponentKind::Passive)
+            {
+                p.push(format!(
+                    "[models.source]: characteristic {i} ({}): {v} {} is a farad or more, not a \
+                     semiconductor capacitance: convert the printed pF/nF value",
+                    row.parameter, row.unit
+                ));
+            }
+        }
     }
 
     if p.0.is_empty() {
@@ -1065,6 +1100,91 @@ pub fn kind_error_note(err_text: &str) -> Option<String> {
     })
 }
 
+const SOURCE_KEYS: &str = "tier validation references uncertainty characteristic";
+const RECORD_KINDS: &str = " ([[...source.uncertainty]] status = \"interval\" bounds one \
+    parameter by printed min AND max as low/high; [[...source.characteristic]] keeps a \
+    printed row's min/typ/max columns as printed)";
+
+/// Every missing and unknown key of every `[models.source]` / `[sensor.source]`
+/// record, read from the raw TOML so one lint run names them all (a parse stops
+/// at the first, and an uncertainty record drops an unknown key silently, so a
+/// `typ` written there would otherwise vanish).
+pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
+    let models = root.get("models").and_then(toml::Value::as_array);
+    let sources = models.into_iter().flatten().enumerate();
+    let sources = sources
+        .filter_map(|(i, m)| Some((format!("models[{i}].source"), m.get("source")?)))
+        .chain(
+            root.get("sensor")
+                .and_then(|s| s.get("source"))
+                .map(|s| ("sensor.source".into(), s)),
+        );
+    let source_keys: Vec<&str> = SOURCE_KEYS.split_whitespace().collect();
+    let mut out = Vec::new();
+    for (path, table) in sources.filter_map(|(p, s)| Some((p, s.as_table()?))) {
+        for (key, value) in table {
+            if !source_keys.contains(&key.as_str()) {
+                out.push(format!(
+                    "{path}: unknown key '{key}'{}",
+                    key_hint(key, &source_keys)
+                ));
+                continue;
+            }
+            let records = value.as_array().filter(|_| key != "references");
+            for (i, fields) in records.into_iter().flatten().enumerate() {
+                let Some(fields) = fields.as_table() else {
+                    continue;
+                };
+                let status = fields.get("status").and_then(toml::Value::as_str);
+                let (required, optional) = match (key.as_str(), status) {
+                    ("characteristic", _) => ("parameter unit conditions basis", "min typ max"),
+                    (_, Some("interval")) => ("status parameter low high unit kind basis", ""),
+                    (_, Some("unknown")) => ("status parameter reason", ""),
+                    _ => ("status", "parameter low high unit kind basis reason"),
+                };
+                let required: Vec<&str> = required.split_whitespace().collect();
+                let at = format!("{path}.{key}[{i}]");
+                for missing in required.iter().filter(|k| !fields.contains_key(**k)) {
+                    out.push(format!("{at}: missing required key '{missing}'"));
+                }
+                let known: Vec<&str> = required
+                    .iter()
+                    .copied()
+                    .chain(optional.split_whitespace())
+                    .collect();
+                for extra in fields.keys().filter(|k| !known.contains(&k.as_str())) {
+                    out.push(format!(
+                        "{at}: unknown key '{extra}'{}",
+                        key_hint(extra, &known)
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The key an unknown one probably meant, and for a column or interval word
+/// used in the wrong record, the one-line difference between the two records.
+fn key_hint(key: &str, known: &[&str]) -> String {
+    let swap = match key {
+        "low" => "min",
+        "high" => "max",
+        "min" => "low",
+        "max" => "high",
+        _ => "",
+    };
+    let swap = known.contains(&swap).then_some(swap);
+    let near = swap.or_else(|| {
+        let distance = |k: &str| hauksbee_ir::levenshtein(key, k);
+        let near = known.iter().copied().filter(|k| distance(k) <= 2);
+        near.min_by_key(|k| distance(k))
+    });
+    let near = near.map_or(String::new(), |k| format!("; did you mean '{k}'?"));
+    let explain = ["interval", "typ"].contains(&key);
+    format!("{near}{}", if explain { RECORD_KINDS } else { "" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1457,6 +1577,60 @@ high_offset = 1.3333333333333333
         let mut e = programmed_vreg();
         f(e.current_program.as_mut().unwrap());
         e
+    }
+
+    #[test]
+    fn source_shape_names_every_missing_and_misplaced_key() {
+        let card = |source: &str| -> toml::Value {
+            toml::from_str(&format!(
+                "[[models]]\nid = \"x\"\n[models.source]\ntier = \"datasheet-derived\"\n{source}"
+            ))
+            .unwrap()
+        };
+        let row =
+            "parameter = \"VF\"\nunit = \"V\"\nconditions = \"IF = 1 mA\"\nbasis = \"Table 1\"";
+        let good = format!("[[models.source.characteristic]]\n{row}\nmax = 0.4\n[[models.source.uncertainty]]\nstatus = \"unknown\"\nparameter = \"model\"\nreason = \"none\"");
+        assert_eq!(source_shape_findings(&card(&good)), Vec::<String>::new());
+        let bad = "[[models.source.characteristic]]\nparameter = \"VF\"\nlow = 0.3\n\
+                   [[models.source.uncertainty]]\nstatus = \"interval\"\nparameter = \"is\"\nlow = 1.0\nhigh = 2.0\ntyp = 1.5\nunit = \"A\"\nkind = \"specification-limits\"\nbasis = \"b\"\n\
+                   [[models.source.interval]]\nparameter = \"vdd\"";
+        let found = source_shape_findings(&card(bad)).join("\n");
+        for needle in [
+            "characteristic[0]: missing required key 'unit'",
+            "characteristic[0]: missing required key 'basis'",
+            "characteristic[0]: unknown key 'low'; did you mean 'min'?",
+            "uncertainty[0]: unknown key 'typ' ([[...source.uncertainty]]",
+            "models[0].source: unknown key 'interval' (",
+        ] {
+            assert!(found.contains(needle), "{needle}\n{found}");
+        }
+    }
+
+    #[test]
+    fn charger_iq_abstains_by_record_and_capacitance_rows_stay_below_a_farad() {
+        let source = |extra: &str| -> Option<crate::schema::ModelSourceSpec> {
+            Some(toml::from_str(&format!("tier = \"datasheet-derived\"\n{extra}")).expect("parses"))
+        };
+        let unknown =
+            "[[uncertainty]]\nstatus = \"unknown\"\nparameter = \"iq_a\"\nreason = \"max only\"";
+        let mut e = programmed_vreg();
+        e.params.0.remove("iq_a");
+        rejects(&e, "missing required param 'iq_a'");
+        e.source = source(unknown);
+        accepts(&e);
+        let mut plain = entry(ComponentKind::Vreg, &[("vout", 3.3), ("dropout_v", 0.3)]);
+        plain.source = source(unknown);
+        rejects(&plain, "missing required param 'iq_a'");
+
+        let row = |value: &str| {
+            let text = format!("[[characteristic]]\nparameter = \"CT\"\ntyp = {value}\nconditions = \"VR = 0 V\"\nbasis = \"Table 1\"");
+            source(&text)
+        };
+        let mut d = diode();
+        d.source = row("2.0\nunit = \"pF\"");
+        accepts(&d);
+        d.source = row("2.0\nunit = \"F\"");
+        rejects(&d, "a farad or more");
     }
 
     #[test]

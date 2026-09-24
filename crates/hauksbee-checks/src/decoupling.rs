@@ -227,24 +227,22 @@ pub fn apply_parasitics(circuit: &mut Circuit, cap_name: &str, p: EsrEsl) -> boo
     let mut left = a;
     if p.esr_ohms > 0.0 {
         let n1 = circuit.node(&format!("__esr_{cap_name}"));
-        circuit.add(Device::Resistor {
-            name: format!("{cap_name}_esr"),
-            a: left,
-            b: n1,
-            ohms: p.esr_ohms,
-            tc1: None,
-        });
+        circuit.add(Device::resistor(
+            format!("{cap_name}_esr"),
+            left,
+            n1,
+            p.esr_ohms,
+        ));
         left = n1;
     }
     if p.esl_henries > 0.0 {
         let n2 = circuit.node(&format!("__esl_{cap_name}"));
-        circuit.add(Device::Inductor {
-            name: format!("{cap_name}_esl"),
-            a: left,
-            b: n2,
-            henries: p.esl_henries,
-            ic: None,
-        });
+        circuit.add(Device::inductor(
+            format!("{cap_name}_esl"),
+            left,
+            n2,
+            p.esl_henries,
+        ));
         left = n2;
     }
     // Rewrite the original capacitor in place to span the (possibly new) left
@@ -351,13 +349,7 @@ mod tests {
     fn ideal_leaves_capacitor_untouched() {
         let mut c = Circuit::new();
         let a = c.node("A");
-        c.add(Device::Capacitor {
-            name: "C1".into(),
-            a,
-            b: NodeId::GROUND,
-            farads: 1e-6,
-            ic: None,
-        });
+        c.add(Device::capacitor("C1", a, NodeId::GROUND, 1e-6));
         let before = c.devices.len();
         assert!(apply_parasitics(&mut c, "C1", EsrEsl::IDEAL));
         assert_eq!(c.devices.len(), before, "ideal must add no devices");
@@ -367,13 +359,7 @@ mod tests {
     fn parasitics_insert_series_rlc() {
         let mut c = Circuit::new();
         let a = c.node("RAIL");
-        c.add(Device::Capacitor {
-            name: "C1".into(),
-            a,
-            b: NodeId::GROUND,
-            farads: 10e-6,
-            ic: None,
-        });
+        c.add(Device::capacitor("C1", a, NodeId::GROUND, 10e-6));
         let p = EsrEsl {
             esr_ohms: 0.02,
             esl_henries: 1e-9,

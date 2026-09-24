@@ -61,23 +61,117 @@ fn name_dim(name: &str) -> Dim {
     if name.contains("_per_") {
         return Dim::Unknown;
     }
-    const SUFFIXES: &[(&str, Exponents)] = &[
-        ("_v", VOLT),
-        ("_a", AMP),
-        ("_ma", AMP),
-        ("_ua", AMP),
-        ("_ohm", OHM),
-        ("_ohms", OHM),
-        ("_s", SECOND),
-        ("_f", [-1, 1, 1]),
-        ("_pf", [-1, 1, 1]),
-        ("_hz", [0, 0, -1]),
-        ("_w", [1, 1, 0]),
+    let base = suffix_unit(name).map(|(_, base)| base);
+    [
+        ("V", VOLT),
+        ("A", AMP),
+        ("ohm", OHM),
+        ("s", SECOND),
+        ("F", [-1, 1, 1]),
+    ]
+    .into_iter()
+    .chain([("Hz", [0, 0, -1]), ("W", [1, 1, 0])])
+    .find(|(unit, _)| Some(*unit) == base)
+    .map_or(Dim::Unknown, |(_, e)| Dim::Known(e))
+}
+
+/// The unit a param name's suffix declares: the multiplier to the base unit, and
+/// that base unit (`supply_static_ua` is 1e-6 A).
+pub(crate) fn suffix_unit(name: &str) -> Option<(f64, &'static str)> {
+    const SUFFIXES: &[(&str, f64, &str)] = &[
+        ("_v", 1.0, "V"),
+        ("_a", 1.0, "A"),
+        ("_ma", 1e-3, "A"),
+        ("_ua", 1e-6, "A"),
+        ("_ohm", 1.0, "ohm"),
+        ("_ohms", 1.0, "ohm"),
+        ("_s", 1.0, "s"),
+        ("_f", 1.0, "F"),
+        ("_pf", 1e-12, "F"),
+        ("_hz", 1.0, "Hz"),
+        ("_w", 1.0, "W"),
     ];
-    SUFFIXES
+    let hit = SUFFIXES.iter().find(|(suffix, ..)| name.ends_with(suffix));
+    hit.map(|&(_, scale, base)| (scale, base))
+}
+
+// ── Datasheet row units ───────────────────────────────────────────────────────
+
+/// `mA` is (1e-3, "A"), `µV/°C` (1e-6, "V"), `V/µs` (1e6, "V"), `Ω` (1, "ohm"):
+/// the multiplier to base units, and the numerator's base unit. A `PP`/`rms`
+/// suffix (`µVPP`) is read through; an unknown denominator (`°C`, `√Hz`) is 1.
+pub(crate) fn si_unit(unit: &str) -> Option<(f64, &'static str)> {
+    let (num, den) = unit.trim().split_once('/').unwrap_or((unit.trim(), ""));
+    let (scale, base) = prefixed_unit(num)?;
+    Some((scale / prefixed_unit(den).map_or(1.0, |(s, _)| s), base))
+}
+
+fn prefixed_unit(token: &str) -> Option<(f64, &'static str)> {
+    const BASES: &[&str] = &["V", "A", "W", "F", "s", "Hz", "ohm", "S", "H"];
+    const PREFIXES: &[(char, f64)] = &[
+        ('f', 1e-15),
+        ('p', 1e-12),
+        ('n', 1e-9),
+        ('u', 1e-6),
+        ('µ', 1e-6),
+        ('μ', 1e-6),
+        ('m', 1e-3),
+        ('k', 1e3),
+        ('M', 1e6),
+    ];
+    let token = ["PP", "pp", "rms", "RMS"]
         .iter()
-        .find(|(suffix, _)| name.ends_with(suffix))
-        .map_or(Dim::Unknown, |&(_, e)| Dim::Known(e))
+        .find_map(|s| token.strip_suffix(s))
+        .unwrap_or(token)
+        .replace('Ω', "ohm");
+    let base = |t: &str| BASES.iter().copied().find(|b| *b == t);
+    if let Some(b) = base(&token) {
+        return Some((1.0, b));
+    }
+    let mut chars = token.chars();
+    let prefix = chars.next()?;
+    let scale = PREFIXES.iter().find(|(c, _)| *c == prefix)?.1;
+    base(chars.as_str()).map(|b| (scale, b))
+}
+
+/// The prefixed unit a row's own text says its numbers were converted from
+/// ("units converted from µV to V", "converted from 10 mA to A"), and its scale.
+fn converted_from(text: &str) -> Option<(&str, f64)> {
+    let at = text.to_ascii_lowercase().find("convert")?;
+    let mut words = text[at..].split_whitespace().skip_while(|w| *w != "from");
+    let first = words.nth(1)?;
+    let unit = match first.trim_start_matches(|c: char| c.is_ascii_digit() || "+-.±−".contains(c))
+    {
+        "" => words.next()?,
+        rest => rest,
+    }
+    .trim_end_matches([',', ';', '.', ')']);
+    si_unit(unit)
+        .filter(|(scale, _)| *scale != 1.0)
+        .map(|(scale, _)| (unit, scale))
+}
+
+/// A row stored in a base `unit` whose text says it was converted from a
+/// prefixed unit, but whose number was not converted (or was converted twice).
+/// A printed datasheet number lies within 1e-4..1e4 of its own unit, so a
+/// column that reads back outside that window in the source unit is wrong.
+pub(crate) fn conversion_problem(
+    texts: &[&str],
+    unit: &str,
+    columns: &[(&str, Option<f64>)],
+) -> Option<String> {
+    si_unit(unit).filter(|(scale, _)| *scale == 1.0)?;
+    let (from, scale) = texts.iter().find_map(|t| converted_from(t))?;
+    let (column, v) = columns.iter().find_map(|&(column, v)| {
+        let wrong = |v: &f64| *v != 0.0 && !(1e-4..=1e4).contains(&(v.abs() / scale));
+        v.filter(wrong).map(|v| (column, v))
+    })?;
+    Some(format!(
+        "says it was converted from {from}, but {column} = {v} {unit} would read {} {from}: \
+         convert the printed number (a printed {v} {from} is {} {unit})",
+        v / scale,
+        v * scale
+    ))
 }
 
 fn unit_name(e: Exponents) -> String {
@@ -378,6 +472,42 @@ mod tests {
             ("x = 3; x", Some(CURRENT)),
         ] {
             assert_eq!(check_dimensions(expr, want), Ok(()), "{expr}");
+        }
+    }
+
+    #[test]
+    fn row_units_parse_and_unconverted_rows_are_named() {
+        for (unit, want) in [
+            ("mA", Some((1e-3, "A"))),
+            ("µV/°C", Some((1e-6, "V"))),
+            ("V/µs", Some((1e6, "V"))),
+            ("kΩ", Some((1e3, "ohm"))),
+            ("µVPP", Some((1e-6, "V"))),
+            ("S", Some((1.0, "S"))),
+            ("dB", None),
+            ("min", None),
+        ] {
+            assert_eq!(si_unit(unit), want, "{unit}");
+        }
+        let check = |text: &str, unit: &str, v: f64| {
+            conversion_problem(&["Table 5, VOS row", text], unit, &[("typ", Some(v))])
+        };
+        let err = check("units converted from µV to V", "V", 2.0).unwrap();
+        assert!(err.contains("typ = 2 V would read 2000000 µV"), "{err}");
+        assert!(check("converted from 10 pA to A", "A", 10.0).is_some());
+        assert!(
+            check("converted from µV to V", "V", 2e-12).is_some(),
+            "twice"
+        );
+        for (text, unit, v) in [
+            ("units converted from µV to V", "V", 2e-6),
+            ("converted from 10 mA to A", "A", 0.01),
+            ("converted from kΩ to Ω", "ohm", 2000.0),
+            ("converted from V/µs to V/s", "V/s", 1.6e5),
+            ("printed in µV", "V", 2.0),
+            ("units converted from µV to mV", "mV", 2.0),
+        ] {
+            assert_eq!(check(text, unit, v), None, "{text}");
         }
     }
 }

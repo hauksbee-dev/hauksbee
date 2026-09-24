@@ -38,12 +38,12 @@ fn add_load_step(circuit: &mut Circuit, node: NodeId, t_edge: f64, i_step: f64) 
         (t_edge + 1e-9, i_step),
         (1.0, i_step),
     ];
-    circuit.add(Device::Isource {
-        name: "Iload".into(),
-        p: node,
-        n: NodeId::GROUND,
-        kind: SourceKind::Pwl(pwl.map(|(t, v)| PwlPoint { t, v }).to_vec()),
-    });
+    circuit.add(Device::isource(
+        "Iload",
+        node,
+        NodeId::GROUND,
+        SourceKind::Pwl(pwl.map(|(t, v)| PwlPoint { t, v }).to_vec()),
+    ));
 }
 
 /// Ideal rail `v0` behind `r_s` feeding `NODE`, decoupled by `cap` pre-charged

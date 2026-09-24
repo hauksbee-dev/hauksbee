@@ -10,19 +10,16 @@ use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 
 /// The compiled `hauksbee` binary (Cargo sets this for the engine crate's tests).
-#[allow(dead_code)]
 pub fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_hauksbee")
 }
 
 /// The compiled `hauksbee` binary as an owned path.
-#[allow(dead_code)]
 pub fn hauksbee_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hauksbee"))
 }
 
 /// Workspace-relative example boards, resolved from this crate's manifest dir.
-#[allow(dead_code)]
 pub fn board(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
 }
@@ -55,7 +52,6 @@ pub fn last_flag(engine: &mut HauksbeeEngine, frame_dt: f64, n: usize) -> f64 {
 }
 
 /// Run the compiled binary and wait for it to exit.
-#[allow(dead_code)]
 pub fn run(args: &[&str]) -> Output {
     Command::new(bin())
         .args(args)
@@ -65,7 +61,6 @@ pub fn run(args: &[&str]) -> Output {
 
 /// [`run`] against a board: the `run` subcommand, that board's path, then
 /// `args`. Every CLI test that analyses a board spells this same prefix.
-#[allow(dead_code)]
 pub fn run_board(board: &std::path::Path, args: &[&str]) -> Output {
     let mut argv = vec!["run", board.to_str().unwrap()];
     argv.extend_from_slice(args);
@@ -73,31 +68,34 @@ pub fn run_board(board: &std::path::Path, args: &[&str]) -> Output {
 }
 
 /// Decode a captured `Output`'s stdout as UTF-8.
-#[allow(dead_code)]
 pub fn stdout(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
 /// Decode a captured `Output`'s stderr as UTF-8.
-#[allow(dead_code)]
 pub fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
 /// Assert a captured run succeeded, surfacing stderr on failure.
-#[allow(dead_code)]
 pub fn assert_ok(o: &Output) {
     assert!(o.status.success(), "{}", stderr(o));
 }
 
 /// Decode and concatenate a captured run's stdout and stderr, in that order.
-#[allow(dead_code)]
 pub fn combined(o: &Output) -> String {
     format!("{}{}", stdout(o), stderr(o))
 }
 
+/// Read and parse a JSON artifact (SARIF, report) a run wrote to `path`.
+pub fn read_json(path: impl AsRef<std::path::Path>) -> serde_json::Value {
+    let path = path.as_ref();
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("{} was written: {e}", path.display()));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{} is JSON: {e}", path.display()))
+}
+
 /// The repo root, two levels up from this crate's manifest dir.
-#[allow(dead_code)]
 pub fn repo_root() -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -108,23 +106,11 @@ pub fn repo_root() -> PathBuf {
 
 /// Return a device without changing the caller's insertion order or DeviceId.
 pub fn resistor(name: String, a: NodeId, b: NodeId, ohms: f64) -> Device {
-    Device::Resistor {
-        name,
-        a,
-        b,
-        ohms,
-        tc1: None,
-    }
+    Device::resistor(name, a, b, ohms)
 }
 
 pub fn capacitor(name: String, a: NodeId, b: NodeId, farads: f64) -> Device {
-    Device::Capacitor {
-        name,
-        a,
-        b,
-        farads,
-        ic: None,
-    }
+    Device::capacitor(name, a, b, farads)
 }
 
 pub fn vsource(name: String, p: NodeId, n: NodeId, kind: SourceKind) -> Device {
@@ -179,13 +165,11 @@ pub fn pin(number: &str, net: Option<i64>, function: &str, kind: &str) -> Pin {
 
 /// [`pin`] with no function and no kind: just a number on a net, the common
 /// case for a fixture that only cares about connectivity.
-#[allow(dead_code)]
 pub fn netted_pin(number: &str, net: i64) -> Pin {
     pin(number, Some(net), "", "")
 }
 
 /// [`pin`] with no function, kind "passive": a resistor/capacitor-style pad.
-#[allow(dead_code)]
 pub fn passive_pin(number: &str, net: i64) -> Pin {
     pin(number, Some(net), "", "passive")
 }
@@ -202,11 +186,8 @@ pub fn component(
         value,
         lib_id,
         footprint,
-        position: None,
-        layer: String::new(),
-        properties: Vec::new(),
-        dnp: false,
         pins,
+        ..Default::default()
     }
 }
 
@@ -217,7 +198,6 @@ pub fn net(id: i64, name: String) -> Net {
 /// A two-pin 0402 resistor-shaped [`component`], the shape both the
 /// zero-ohm-jumper and zero-ohm-link fixtures build their board from: no
 /// `lib_id`, footprint fixed at the real 0402 link package.
-#[allow(dead_code)]
 pub fn r0402(reference: &str, value: &str, pins: Vec<Pin>) -> Component {
     component(
         reference.to_string(),

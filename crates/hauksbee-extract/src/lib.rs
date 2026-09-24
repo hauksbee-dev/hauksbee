@@ -274,8 +274,18 @@ pub struct Net {
     pub name: String,
 }
 
+impl Net {
+    #[must_use]
+    pub fn new(id: i64, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+        }
+    }
+}
+
 /// A component pin/pad connection point.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Pin {
     /// Pad number / pin number as printed ("1", "A8", "EP").
     pub number: String,
@@ -290,7 +300,7 @@ pub struct Pin {
     pub position: Option<(f64, f64)>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Component {
     /// Reference designator ("R1", "U101").
     pub reference: String,
@@ -898,9 +908,7 @@ pub(crate) mod testutil {
         Pin {
             number: number.into(),
             net,
-            function: String::new(),
-            kind: String::new(),
-            position: None,
+            ..Default::default()
         }
     }
 
@@ -916,24 +924,15 @@ pub(crate) mod testutil {
             value: value.into(),
             lib_id: lib_id.into(),
             footprint: footprint.into(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
             pins,
+            ..Default::default()
         }
     }
 
     pub(crate) fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
         ExtractedBoard {
             name: "b".into(),
-            nets: nets
-                .iter()
-                .map(|&(id, name)| Net {
-                    id,
-                    name: name.into(),
-                })
-                .collect(),
+            nets: nets.iter().map(|&(id, name)| Net::new(id, name)).collect(),
             components,
         }
     }

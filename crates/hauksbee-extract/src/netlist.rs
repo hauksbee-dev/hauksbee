@@ -75,14 +75,12 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                 value: comp.find_value("value").unwrap_or_default(),
                 lib_id,
                 footprint: comp.find_value("footprint").unwrap_or_default(),
-                position: None,
-                layer: String::new(),
                 properties,
                 // KiCad netlists encode DNP as a (usually value-less) property
                 // child; thread it through so DNP-aware analysis behaves the same
                 // regardless of ingestion path (PCB / schematic already do).
                 dnp,
-                pins: Vec::new(),
+                ..Default::default()
             });
         }
     }
@@ -110,10 +108,7 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                     s
                 }
             };
-            nets.push(Net {
-                id,
-                name: net.find_value("name").unwrap_or_default(),
-            });
+            nets.push(Net::new(id, net.find_value("name").unwrap_or_default()));
             for node in net.find_all("node") {
                 let Some(reference) = node.find_value("ref") else {
                     continue;

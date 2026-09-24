@@ -771,9 +771,8 @@ pub fn reconstruct(
             let pin = Pin {
                 number: pin_name.to_string(),
                 net: if net == 0 { None } else { Some(net) },
-                function: String::new(),
-                kind: String::new(),
                 position: Some((cx, cy)),
+                ..Default::default()
             };
             assigned_flashes += 1;
             x2_bound_pads += 1;
@@ -846,9 +845,8 @@ pub fn reconstruct(
             comp_pads[ci].push(Pin {
                 number: n.to_string(),
                 net: if net == 0 { None } else { Some(net) },
-                function: String::new(),
-                kind: String::new(),
                 position: Some((cx, cy)),
+                ..Default::default()
             });
         }
     }
@@ -858,13 +856,12 @@ pub fn reconstruct(
         components.push(Component {
             reference: pl.reference.clone(),
             value: pl.value.clone(),
-            lib_id: String::new(),
             footprint: pl.package.clone(),
             position: Some((pl.x, pl.y, pl.rotation)),
             layer: if pl.top { "F.Cu".into() } else { "B.Cu".into() },
-            properties: Vec::new(),
             dnp: pl.dnp,
             pins: std::mem::take(&mut comp_pads[i]),
+            ..Default::default()
         });
     }
     // Components the film binds that no P&P row places. The film knows the
@@ -881,18 +878,14 @@ pub fn reconstruct(
         let top_pads = layers_of.iter().filter(|&&l| l == 0).count();
         components.push(Component {
             reference: refdes,
-            value: String::new(),
-            lib_id: String::new(),
-            footprint: String::new(),
             position: Some((sx / n, sy / n, 0.0)),
             layer: if top_pads * 2 >= layers_of.len() {
                 "F.Cu".into()
             } else {
                 "B.Cu".into()
             },
-            properties: Vec::new(),
-            dnp: false,
             pins,
+            ..Default::default()
         });
     }
 
@@ -1666,11 +1659,7 @@ mod tests {
             .map(|c| c.reference.as_str())
             .collect();
         assert_eq!(refs, vec!["R9", "U3"], "stable refdes order");
-        let u3 = board
-            .components
-            .iter()
-            .find(|c| c.reference == "U3")
-            .unwrap();
+        let u3 = board.component("U3").unwrap();
         assert_eq!(u3.pins.len(), 2);
         assert_eq!(u3.pins[0].number, "1");
         assert!(

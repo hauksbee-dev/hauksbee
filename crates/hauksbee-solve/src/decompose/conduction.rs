@@ -252,13 +252,7 @@ mod tests {
             // DeviceId(0)/(1); F/H/B point their control source at DeviceId(0).
             if matches!(d, Device::Coupling { .. }) {
                 for (i, nm) in ["Lw1", "Lw2"].iter().enumerate() {
-                    let lid = circuit.add(Device::Inductor {
-                        name: (*nm).into(),
-                        a: m[3],
-                        b: GND,
-                        henries: 1e-6,
-                        ic: None,
-                    });
+                    let lid = circuit.add(Device::inductor(*nm, m[3], GND, 1e-6));
                     assert_eq!(lid.0 as usize, i);
                 }
             } else if !d.controlling_sources().is_empty() {

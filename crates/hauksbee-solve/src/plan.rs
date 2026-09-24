@@ -602,13 +602,7 @@ mod tests {
             tc1: Some(0.001),
         });
         cap(&mut c, "C1", n[0], GND, 1e-9);
-        c.add(Device::Inductor {
-            name: "L1".into(),
-            a: n[1],
-            b: n[2],
-            henries: 1e-6,
-            ic: None,
-        });
+        c.add(Device::inductor("L1", n[1], n[2], 1e-6));
         idc(&mut c, "I1", n[2], GND, 1e-3);
         diode(&mut c, "D1", n[0], n[3], Default::default());
         crate::test_fixtures::bjt(&mut c, "Q1", vin, n[3], GND, &Default::default());

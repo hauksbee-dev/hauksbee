@@ -7941,12 +7941,12 @@ missing = ["measurement_registers"]
             }
         }
         if let Some(&vcc) = roles.get("vcc") {
-            circuit.add(Device::Vsource {
-                name: "VSTATIC".into(),
-                p: vcc,
-                n: NodeId::GROUND,
-                kind: SourceKind::Dc(5.0),
-            });
+            circuit.add(Device::vsource(
+                "VSTATIC",
+                vcc,
+                NodeId::GROUND,
+                SourceKind::Dc(5.0),
+            ));
         }
         let parsed: hauksbee_models::logic_spec::Logic =
             toml::from_str(spec).expect("parse memory");
@@ -9062,12 +9062,12 @@ data_out = ["io0"]
     fn a_passively_reached_level_is_not_reported_as_firmware_driven() {
         let mut circuit = Circuit::new();
         let res = circuit.node("RES");
-        circuit.add(Device::Vsource {
-            name: "Vsupply_VCC".into(),
-            p: res,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(3.3),
-        });
+        circuit.add(Device::vsource(
+            "Vsupply_VCC",
+            res,
+            NodeId::GROUND,
+            SourceKind::Dc(3.3),
+        ));
         let bound = bound_board(
             "passive_res",
             circuit,

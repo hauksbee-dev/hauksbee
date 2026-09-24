@@ -104,14 +104,12 @@ mod identity_tests {
                 value: "1k".to_string(),
                 lib_id: "Device:R".to_string(),
                 footprint: "R_0603".to_string(),
-                position: None,
                 layer: "F.Cu".to_string(),
                 properties: vec![(
                     hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.to_string(),
                     "inferred reference without source UID".to_string(),
                 )],
-                dnp: false,
-                pins: Vec::new(),
+                ..Default::default()
             }],
         };
 
@@ -138,11 +136,9 @@ mod identity_tests {
                 value: "0R".to_string(),
                 lib_id: "Device:R".to_string(),
                 footprint: "R_0603".to_string(),
-                position: None,
                 layer: "F.Cu".to_string(),
-                properties: Vec::new(),
                 dnp: true,
-                pins: Vec::new(),
+                ..Default::default()
             }],
         };
 
@@ -189,11 +185,7 @@ mod identity_tests {
         let code = decompile_board_to_code(source).expect("a fitted part decompiles");
         let rebuilt = code_to_board_text(&code).expect("the code recompiles");
         let board = ExtractedBoard::from_kicad_pcb(&rebuilt).expect("recompiled board extracts");
-        let r4 = board
-            .components
-            .iter()
-            .find(|c| c.reference == "R4")
-            .expect("R4 survives the round trip");
+        let r4 = board.component("R4").expect("R4 survives the round trip");
         assert!(
             hauksbee_extract::assembly::AssemblyState::of(r4).is_present(),
             "a Present part must come back Present, with no DNP flag or refusal invented"

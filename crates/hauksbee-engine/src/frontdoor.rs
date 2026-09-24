@@ -3931,32 +3931,18 @@ fn main {
             number: number.to_string(),
             net: Some(net),
             function: function.to_string(),
-            kind: String::new(),
-            position: None,
+            ..Default::default()
         };
         let component = |reference: &str, value: &str, lib_id: &str, pins: Vec<Pin>| Component {
             reference: reference.to_string(),
             value: value.to_string(),
             lib_id: lib_id.to_string(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
             pins,
+            ..Default::default()
         };
         let board = ExtractedBoard {
             name: "mixed-backend-board".to_string(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "+5V".to_string(),
-                },
-                Net {
-                    id: 2,
-                    name: "GND".to_string(),
-                },
-            ],
+            nets: vec![Net::new(1, "+5V"), Net::new(2, "GND")],
             components: vec![
                 component(
                     "U1",

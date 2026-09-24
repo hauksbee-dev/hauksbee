@@ -239,6 +239,134 @@ pub fn known_param_names(kind: ComponentKind) -> &'static [&'static str] {
     }
 }
 
+/// What each param without a unit suffix means, as `name unit meaning` (`-` is
+/// dimensionless). A suffixed name (`iq_a`, `tpd_s`, `cout_min_f`) carries its
+/// unit already, except `leak_s`: siemens, not seconds. The prompt shows these
+/// to the author and [`source_warnings`] checks cited rows against the units.
+const GLOSSARY: &str = "is A saturation current (a fitted law constant, not a leakage row); \
+    n - emission coefficient; rs ohm series resistance; cjo F zero-bias junction capacitance; \
+    vj V junction potential; m - grading coefficient; tt s transit time; \
+    bv V reverse breakdown voltage; ibv A current at bv; eg eV bandgap; \
+    xti - saturation-current temperature exponent; bf - forward beta (hFE); br - reverse beta; \
+    nf - forward emission coefficient; nr - reverse emission coefficient; \
+    vaf V forward Early voltage; var V reverse Early voltage; rb ohm base resistance; \
+    re ohm emitter resistance; rc ohm collector resistance; cje F zero-bias B-E capacitance; \
+    cjc F zero-bias B-C capacitance; tf s forward transit time; tr s reverse transit time; \
+    ikf A forward beta roll-off current; ise A B-E leakage saturation current; \
+    ne - B-E leakage emission coefficient; vto V gate threshold; kp A/V^2 transconductance; \
+    lambda 1/V channel-length modulation; cgs F gate-source capacitance; \
+    cgd F gate-drain capacitance; cbd F drain-body capacitance; rd ohm drain resistance; \
+    vout V fixed output setpoint; vref V reference voltage; gain - open-loop gain (V/V); \
+    pole_hz Hz dominant pole; slew V/s slew rate; rail_lo V output rail (low); \
+    rail_hi V output rail (high); swing_lo V headroom from V-; swing_hi V headroom from V+; \
+    out_lo V output low level; out_hi V output high level; hysteresis V input hysteresis; \
+    ron_ohms ohm output on-resistance (VOL / IOL); leak_s S output-off conductance (IOH / VOH); \
+    ron ohm switch on-resistance; roff ohm switch off-resistance; vth V control threshold; \
+    vih V input high threshold; vil V input low threshold; voh V output high level; \
+    vol V output low level; ro ohm output resistance";
+
+/// Params that ARE a printed bound (an input threshold, an output level), so
+/// equalling a min-only or max-only row is their meaning, not a mistake.
+const BOUND_PARAMS: &[&str] = &[
+    "vih", "vil", "voh", "vol", "out_lo", "out_hi", "rail_lo", "rail_hi", "swing_lo", "swing_hi",
+];
+
+fn glossary() -> impl Iterator<Item = [&'static str; 3]> {
+    GLOSSARY.split(';').filter_map(|e| {
+        let mut it = e.trim().splitn(3, ' ');
+        Some([it.next()?, it.next()?, it.next()?])
+    })
+}
+
+/// The unit `name` is documented in: its glossary entry, else its suffix.
+pub fn param_unit(name: &str) -> Option<&'static str> {
+    glossary()
+        .find(|[n, ..]| *n == name)
+        .map(|[_, unit, _]| unit)
+        .or_else(|| crate::units::suffix_unit(name).map(|(_, base)| base))
+}
+
+/// `name = meaning (unit)` for each glossary param `kind` reads, for the prompt.
+pub fn param_meanings(kind: ComponentKind) -> String {
+    let names = known_param_names(kind);
+    let lines: Vec<String> = glossary()
+        .filter(|[n, ..]| names.contains(n))
+        .map(|[n, unit, meaning]| format!("{n} = {meaning} ({unit})"))
+        .collect();
+    lines.join("; ")
+}
+
+/// Params the binder reads only in the other output form of this entry.
+fn form_ignored(entry: &ModelEntry) -> &'static [&'static str] {
+    match (entry.kind, entry.params.get_bool("open_collector")) {
+        (ComponentKind::Comparator, Some(true)) => &["out_lo", "out_hi", "hysteresis"],
+        (ComponentKind::Comparator, _) => &["ron_ohms", "leak_s"],
+        _ => &[],
+    }
+}
+
+/// Warnings that tie `[models.params]` to the card's own characteristic rows,
+/// matched by value: a param equal to a row printed in another base unit than
+/// the param's documented one (a current stored as a conductance), and a
+/// nominal equal to the min or max of a row that prints no typ (unless another
+/// row prints it as a typ). The unit check only looks below 1e-3, where a copied
+/// current or capacitance lives and a round volt or ohm value cannot collide.
+pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
+    let rows = entry
+        .source
+        .as_ref()
+        .map_or(&[][..], |s| &s.characteristic[..]);
+    let mut out = Vec::new();
+    for (name, value) in &entry.params.0 {
+        let (Some(v), Some(unit)) = (value.as_f64(), param_unit(name)) else {
+            continue;
+        };
+        if v == 0.0
+            || unit.contains('/')
+            || crate::units::si_unit(unit).is_none_or(|(s, _)| s != 1.0)
+        {
+            continue;
+        }
+        let hits: Vec<_> = rows
+            .iter()
+            .filter(|row| !row.unit.contains('/'))
+            .filter_map(|row| {
+                let (scale, base) = crate::units::si_unit(&row.unit)?;
+                let columns = [("min", row.min), ("typ", row.typ), ("max", row.max)];
+                let column = columns.into_iter().find_map(|(column, x)| {
+                    x.filter(|x| (x * scale - v).abs() <= 1e-9 * v.abs())
+                        .map(|_| column)
+                })?;
+                Some((row, column, base))
+            })
+            .collect();
+        let printed_typ = hits
+            .iter()
+            .any(|&(_, column, base)| column == "typ" && base == unit);
+        for (row, column, base) in hits {
+            let row_name = &row.parameter;
+            if base != unit && v.abs() < 1e-3 {
+                out.push(format!(
+                    "param '{name}' is documented in {unit} but equals the {column} of \
+                     characteristic '{row_name}' ({}): derive it in {unit}, do not copy the row",
+                    row.unit
+                ));
+            } else if base == unit
+                && !printed_typ
+                && row.typ.is_none()
+                && !BOUND_PARAMS.contains(&name.as_str())
+            {
+                out.push(format!(
+                    "param '{name}' equals the {column} of characteristic '{row_name}', which \
+                     prints no typ: a nominal is the typ, or the midpoint (min + max) / 2 of a \
+                     row printing both, never a one-sided bound"
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// One parameter name outside the entry's vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownParam {
@@ -255,12 +383,12 @@ impl UnknownParam {
     pub fn message(&self) -> String {
         match &self.suggestion {
             Some(s) => format!(
-                "param '{}' is not read for this kind; did you mean '{}'? \
+                "param '{}' is not read for this kind or output form; did you mean '{}'? \
                  (unread params are silently ignored, so the default applies)",
                 self.name, s
             ),
             None => format!(
-                "param '{}' is not read for this kind, so it is silently ignored; \
+                "param '{}' is not read for this kind or output form, so it is silently ignored; \
                  remove it or check the spelling",
                 self.name
             ),
@@ -276,8 +404,11 @@ pub fn unknown_params(entry: &ModelEntry) -> Vec<UnknownParam> {
     let vocab = known_param_names(entry.kind);
     let referenced = behavioral_identifiers(entry);
 
+    let ignored = form_ignored(entry);
     let known = |name: &str| -> bool {
-        vocab.contains(&name) || UNIVERSAL.contains(&name) || referenced.contains(name)
+        (vocab.contains(&name) && !ignored.contains(&name))
+            || UNIVERSAL.contains(&name)
+            || referenced.contains(name)
     };
 
     // `<stem>_from_ref` is the board-programmable form of `<stem>`, but ONLY on
@@ -483,6 +614,75 @@ mod tests {
             let found = unknown_params(&entry("vreg", params, extra));
             assert_eq!(found.len(), 1, "{params}: {found:?}");
             assert_eq!(found[0].suggestion.as_deref(), Some("vout"), "{found:?}");
+        }
+    }
+
+    #[test]
+    fn output_form_units_and_cited_rows_are_cross_checked() {
+        let oc = "open_collector = true\nron_ohms = 30.0\nleak_s = ";
+        for (params, unread) in [
+            ("out_lo = 0.0\nout_hi = 5.0\nhysteresis = 0.0", None),
+            ("out_lo = 0.0\nout_hi = 5.0\nleak_s = 1e-9", Some("leak_s")),
+            (
+                &format!("{oc}2e-11\nhysteresis = 0.001"),
+                Some("hysteresis"),
+            ),
+        ] {
+            let found = unknown_params(&entry("comparator", params, ""));
+            assert_eq!(found.first().map(|u| u.name.as_str()), unread, "{params}");
+        }
+        assert_eq!(
+            ["leak_s", "tpd_s", "cjo", "iq_a", "slew"].map(param_unit),
+            [Some("S"), Some("s"), Some("F"), Some("A"), Some("V/s")]
+        );
+        assert!(param_meanings(ComponentKind::Diode)
+            .contains("cjo = zero-bias junction capacitance (F)"));
+
+        let row = |cols: &str, unit: &str| {
+            format!("[models.source]\ntier = \"datasheet-derived\"\n[[models.source.characteristic]]\nparameter = \"ROW\"\n{cols}\nunit = \"{unit}\"\nconditions = \"c\"\nbasis = \"b\"\n")
+        };
+        let (leak, leak_ok) = (format!("{oc}1e-10"), format!("{oc}2e-11"));
+        for (kind, params, source, want) in [
+            (
+                "comparator",
+                &*leak,
+                row("max = 0.1", "nA"),
+                "documented in S",
+            ),
+            ("comparator", &leak_ok, row("max = 0.1", "nA"), ""),
+            (
+                "vreg",
+                "dropout_v = 0.5",
+                row("max = 0.5", "V"),
+                "prints no typ",
+            ),
+            (
+                "vreg",
+                "dropout_v = 0.5",
+                row("min = 0.5\nmax = 0.9", "V"),
+                "no typ",
+            ),
+            (
+                "vreg",
+                "dropout_v = 0.3",
+                row("typ = 0.3\nmax = 0.5", "V"),
+                "",
+            ),
+            (
+                "vreg",
+                "dropout_v = 0.3",
+                row("min = 0.1\nmax = 0.5", "V"),
+                "",
+            ),
+            ("digital", "voh = 2.4", row("min = 2.4", "V"), ""),
+            ("diode", "rs = 1.0", row("max = 1.0", "V"), ""),
+        ] {
+            let found = source_warnings(&entry(kind, params, &source));
+            let ok = found.len() == usize::from(!want.is_empty());
+            assert!(
+                ok && found.iter().all(|w| w.contains(want)),
+                "{params}: {found:?}"
+            );
         }
     }
 

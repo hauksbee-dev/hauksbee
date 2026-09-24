@@ -6,7 +6,7 @@
 //! the compiled binary, because every one of these is an exit-code or
 //! output-surface contract.
 
-use crate::support::{board, run, run_board, stderr, stdout};
+use crate::support::{board, read_json, run, run_board, stderr, stdout};
 use std::path::PathBuf;
 
 /// A board with two real copper shorts (GND <-> +5V), so --strict gates.
@@ -366,9 +366,7 @@ fn junit_and_sarif_artifacts_are_written_and_valid() {
         jx.contains("<testsuites") && jx.contains("<failure"),
         "{jx}"
     );
-    let sj: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
-            .expect("sarif parses");
+    let sj = read_json(&sarif);
     assert_eq!(sj["version"], "2.1.0");
     assert!(sj["runs"][0]["results"]
         .as_array()

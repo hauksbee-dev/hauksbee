@@ -108,7 +108,7 @@ fn focused_refuses_a_missing_required_keep_reference() {
 fn pin_net_name(path: &PathBuf, refdes: &str, pad: &str) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let board = ExtractedBoard::from_auto(&text).ok()?;
-    let comp = board.components.iter().find(|c| c.reference == refdes)?;
+    let comp = board.component(refdes)?;
     let net = comp.pins.iter().find(|p| p.number == pad)?.net?;
     board
         .nets
@@ -126,7 +126,7 @@ fn net_members(path: &PathBuf, refdes: &str, pad: &str) -> Vec<String> {
     let Ok(board) = ExtractedBoard::from_auto(&text) else {
         return Vec::new();
     };
-    let Some(comp) = board.components.iter().find(|c| c.reference == refdes) else {
+    let Some(comp) = board.component(refdes) else {
         return Vec::new();
     };
     let Some(net) = comp

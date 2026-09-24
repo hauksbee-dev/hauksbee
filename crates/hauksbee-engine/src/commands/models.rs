@@ -79,28 +79,49 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
     // which is usually correct, and deliberately do not count.)
     let mut warnings = 0usize;
 
+    // Source-record shape first, from the raw TOML: a parse names only its
+    // first missing or unknown key, and every one of them is a finding.
+    for problem in hauksbee_models::validation::source_shape_findings(&root) {
+        findings += 1;
+        println!("source shape: ERROR: {problem}");
+    }
     if root.get("sensor").is_some() {
         checked += 1;
-        match hauksbee_models::SensorSpec::from_toml(&text) {
-            Ok(spec) => println!("sensor '{}': ok", spec.sensor().name),
+        // Every source problem, then the first structural one.
+        match toml::from_str::<hauksbee_models::SensorSpec>(&text) {
+            Ok(mut spec) => {
+                let source = spec.sensor.source.take().map(|s| s.problems());
+                let result = spec.validate().err().into_iter().map(|e| e.to_string());
+                let errors: Vec<String> = source
+                    .into_iter()
+                    .flatten()
+                    .map(|p| format!("sensor.source: {p}"))
+                    .chain(result)
+                    .collect();
+                for e in &errors {
+                    println!("sensor spec: ERROR: {e}");
+                }
+                findings += errors.len();
+                if errors.is_empty() {
+                    println!("sensor '{}': ok", spec.sensor().name);
+                }
+            }
             Err(e) => {
                 findings += 1;
                 println!("sensor spec: ERROR: {e}");
             }
         }
     } else if root.get("models").is_some() {
-        let db: hauksbee_models::schema::DbFile = toml::from_str(&text).map_err(|e| {
-            // An unknown `kind` is the classic first-model mistake; serde's
-            // unknown-variant wording lists the vocabulary but a synonym
-            // deserves its direct answer (ldo -> vreg).
-            match hauksbee_models::validation::kind_error_note(&e.to_string()) {
-                Some(note) => anyhow::anyhow!(
-                    "'{}': [[models]] parse error: {e}\n  {note}",
-                    file.display()
-                ),
-                None => anyhow::anyhow!("'{}': [[models]] parse error: {e}", file.display()),
-            }
-        })?;
+        // An unknown `kind` is the classic first-model mistake; serde's
+        // unknown-variant wording lists the vocabulary but a synonym deserves
+        // its direct answer (ldo -> vreg).
+        let db = toml::from_str::<hauksbee_models::schema::DbFile>(&text).unwrap_or_else(|e| {
+            findings += 1;
+            let note = hauksbee_models::validation::kind_error_note(&e.to_string());
+            let note = note.map_or(String::new(), |n| format!("\n  {n}"));
+            println!("'{}': [[models]] parse ERROR: {e}{note}", file.display());
+            hauksbee_models::schema::DbFile { models: Vec::new() }
+        });
         for entry in &db.models {
             checked += 1;
             let mut entry_findings = 0usize;
@@ -126,13 +147,11 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
             // ever mentioned, so it says so, and adds the nearest real name when
             // one is close enough to be worth naming. Unknown names can also be
             // genuine extensions, which is why it cannot gate.
-            for u in hauksbee_models::param_names::unknown_params(entry) {
+            let unknown = hauksbee_models::param_names::unknown_params(entry);
+            let cited = hauksbee_models::param_names::source_warnings(entry);
+            for w in unknown.iter().map(|u| u.message()).chain(cited) {
                 entry_warnings += 1;
-                println!(
-                    "model '{}' [models.params]: warning: {}",
-                    entry.id,
-                    u.message()
-                );
+                println!("model '{}' [models.params]: warning: {w}", entry.id);
             }
             if !entry.logic.is_empty() {
                 match crate::logic::LogicComponent::compile(&entry.id, &entry.logic) {

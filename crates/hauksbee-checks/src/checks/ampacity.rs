@@ -1161,13 +1161,9 @@ sense_full_scale_v = 0.05
         Component {
             reference: reference.into(),
             value: value.into(),
-            lib_id: String::new(),
             footprint: footprint.into(),
-            position: None,
-            layer: String::new(),
-            properties: vec![],
-            dnp: false,
             pins,
+            ..Default::default()
         }
     }
 
@@ -1197,10 +1193,7 @@ sense_full_scale_v = 0.05
     }
 
     fn net(id: i64, name: &str) -> Net {
-        Net {
-            id,
-            name: name.into(),
-        }
+        Net::new(id, name)
     }
 
     fn board(name: &str, nets: Vec<Net>, components: Vec<Component>) -> ExtractedBoard {

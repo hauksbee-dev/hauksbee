@@ -1391,19 +1391,13 @@ mod branch_output_tests {
         let cc = c.node("c");
         let a = c.node("a");
         // V1 (branch), R1: 1 V through 1k into node b.
-        c.add(Device::Vsource {
-            name: "V1".into(),
-            p: inn,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(1.0),
-        });
-        c.add(Device::Resistor {
-            name: "R1".into(),
-            a: inn,
-            b,
-            ohms: 1000.0,
-            tc1: None,
-        });
+        c.add(Device::vsource(
+            "V1",
+            inn,
+            NodeId::GROUND,
+            SourceKind::Dc(1.0),
+        ));
+        c.add(Device::resistor("R1", inn, b, 1000.0));
         // A dependent voltage source (VCVS) that owns a branch, defined BEFORE L1
         // so it interleaves ahead of the inductor's branch unknown.
         c.add(Device::Vcvs {
@@ -1414,28 +1408,10 @@ mod branch_output_tests {
             cn: NodeId::GROUND,
             gain: 2.0,
         });
-        c.add(Device::Resistor {
-            name: "Rc".into(),
-            a: cc,
-            b: NodeId::GROUND,
-            ohms: 1000.0,
-            tc1: None,
-        });
-        c.add(Device::Resistor {
-            name: "Ra".into(),
-            a,
-            b: NodeId::GROUND,
-            ohms: 1000.0,
-            tc1: None,
-        });
+        c.add(Device::resistor("Rc", cc, NodeId::GROUND, 1000.0));
+        c.add(Device::resistor("Ra", a, NodeId::GROUND, 1000.0));
         // The inductor whose current we check: b -> ground.
-        c.add(Device::Inductor {
-            name: "L1".into(),
-            a: b,
-            b: NodeId::GROUND,
-            henries: 1e-3,
-            ic: None,
-        });
+        c.add(Device::inductor("L1", b, NodeId::GROUND, 1e-3));
 
         let wf = Transient::new(SolverOptions::default())
             .run(&c, 1e-3)

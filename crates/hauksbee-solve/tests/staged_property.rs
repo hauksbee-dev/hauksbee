@@ -86,12 +86,7 @@ fn random_board(seed: u64) -> Circuit {
                 period: 0.0,
             }
         };
-        c.add(Device::Vsource {
-            name: format!("V{i}"),
-            p: vin,
-            n: NodeId::GROUND,
-            kind,
-        });
+        c.add(Device::vsource(format!("V{i}"), vin, NodeId::GROUND, kind));
         let depth = rng.pick(1, 3);
         let mut prev = vin;
         let mut tail = vin;

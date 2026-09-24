@@ -189,13 +189,7 @@ mod tests {
         let swclk = c.node("SWCLK");
         // A capacitor alone provides no DC path: still floating at DC.
         let gnd = NodeId::GROUND;
-        c.devices.push(Device::Capacitor {
-            name: "C1".into(),
-            a: swclk,
-            b: gnd,
-            farads: 22e-12,
-            ic: None,
-        });
+        c.devices.push(Device::capacitor("C1", swclk, gnd, 22e-12));
         assert_eq!(net_dc_definition(&c, swclk), NetDcDefinition::Floating);
     }
 
@@ -203,13 +197,8 @@ mod tests {
     fn pulldown_to_ground_defines() {
         let mut c = circuit();
         let swclk = c.node("SWCLK");
-        c.devices.push(Device::Resistor {
-            name: "R33".into(),
-            a: swclk,
-            b: NodeId::GROUND,
-            ohms: 100_000.0,
-            tc1: None,
-        });
+        c.devices
+            .push(Device::resistor("R33", swclk, NodeId::GROUND, 100_000.0));
         assert_eq!(
             net_dc_definition(&c, swclk),
             NetDcDefinition::DefinedThroughBoard { via: "R33".into() }
@@ -222,26 +211,14 @@ mod tests {
         let a = c.node("SWCLK");
         let b = c.node("SWCLK_MCU");
         let rail = c.node("+3V3");
-        c.devices.push(Device::Resistor {
-            name: "R5".into(),
-            a,
-            b,
-            ohms: 22.0,
-            tc1: None,
-        });
-        c.devices.push(Device::Resistor {
-            name: "R9".into(),
-            a: b,
-            b: rail,
-            ohms: 47_000.0,
-            tc1: None,
-        });
-        c.devices.push(Device::Vsource {
-            name: "V3V3".into(),
-            p: rail,
-            n: NodeId::GROUND,
-            kind: hauksbee_ir::SourceKind::Dc(3.3),
-        });
+        c.devices.push(Device::resistor("R5", a, b, 22.0));
+        c.devices.push(Device::resistor("R9", b, rail, 47_000.0));
+        c.devices.push(Device::vsource(
+            "V3V3",
+            rail,
+            NodeId::GROUND,
+            hauksbee_ir::SourceKind::Dc(3.3),
+        ));
         assert_eq!(
             net_dc_definition(&c, a),
             NetDcDefinition::DefinedThroughBoard { via: "R5".into() }
@@ -253,13 +230,7 @@ mod tests {
         let mut c = circuit();
         let a = c.node("A");
         let b = c.node("B");
-        c.devices.push(Device::Resistor {
-            name: "R1".into(),
-            a,
-            b,
-            ohms: 10_000.0,
-            tc1: None,
-        });
+        c.devices.push(Device::resistor("R1", a, b, 10_000.0));
         assert_eq!(net_dc_definition(&c, a), NetDcDefinition::Indeterminate);
     }
 }

@@ -167,10 +167,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let nets: Vec<Net> = signals
         .iter()
         .enumerate()
-        .map(|(i, (name, _))| Net {
-            id: i as i64 + 1,
-            name: name.clone(),
-        })
+        .map(|(i, (name, _))| Net::new(i as i64 + 1, name.clone()))
         .collect();
 
     // (element, pad) -> net id
@@ -217,9 +214,8 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                             Pin {
                                 number: pname.clone(),
                                 net: pad_net.get(&(el.name.clone(), pname.clone())).copied(),
-                                function: String::new(),
-                                kind: String::new(),
                                 position: Some(abs),
+                                ..Default::default()
                             }
                         })
                         .collect()

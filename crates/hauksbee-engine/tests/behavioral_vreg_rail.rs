@@ -120,12 +120,7 @@ fn bind(out_role: &str) -> BoundBoard {
 fn converter_vreg_binds_covered_and_suppresses_the_auto_rail() {
     let bound = bind("fb");
 
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|r| r.reference == "U1")
-        .expect("U1 has a bind row");
+    let row = bound.report.row("U1").expect("U1 has a bind row");
     assert!(
         matches!(&row.outcome, BindOutcome::Behavioral { device } if device.contains("converter")),
         "U1 must bind as a behavioural converter, got {:?}",
@@ -201,12 +196,7 @@ fn converter_vreg_with_out_role_stamps_no_ideal_source() {
         bound.supplies.iter().all(|l| l.net_name != "+3.3V"),
         "the auto-rail stays suppressed under the 'out' mapping too"
     );
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|r| r.reference == "U1")
-        .expect("U1 has a bind row");
+    let row = bound.report.row("U1").expect("U1 has a bind row");
     assert!(
         matches!(&row.outcome, BindOutcome::Behavioral { .. }) && row.warning.is_none(),
         "bound clean under 'out' as well: {:?} / {:?}",

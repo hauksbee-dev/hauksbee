@@ -76,12 +76,12 @@ fn representative_loop(a0: f64, r: f64, c: f64) -> Circuit {
     let fb = ckt.node("fb");
     let oa = ckt.node("oa");
     let out = ckt.node("out");
-    ckt.add(Device::Vsource {
-        name: "VINJ".into(),
-        p: fb,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(0.0),
-    });
+    ckt.add(Device::vsource(
+        "VINJ",
+        fb,
+        NodeId::GROUND,
+        SourceKind::Dc(0.0),
+    ));
     ckt.add(Device::OpAmp {
         name: "U1".into(),
         out: oa,
@@ -94,20 +94,8 @@ fn representative_loop(a0: f64, r: f64, c: f64) -> Circuit {
         rail_lo: Rail::fixed(-1e9),
         rail_hi: Rail::fixed(1e9),
     });
-    ckt.add(Device::Resistor {
-        name: "RP".into(),
-        a: oa,
-        b: out,
-        ohms: r,
-        tc1: None,
-    });
-    ckt.add(Device::Capacitor {
-        name: "CP".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: c,
-        ic: None,
-    });
+    ckt.add(Device::resistor("RP", oa, out, r));
+    ckt.add(Device::capacitor("CP", out, NodeId::GROUND, c));
     ckt
 }
 
@@ -189,26 +177,14 @@ fn ac_gain_assertion_evaluates_rc_corner() {
     let mut ckt = Circuit::new();
     let vin = ckt.node("in");
     let out = ckt.node("out");
-    ckt.add(Device::Vsource {
-        name: "VIN".into(),
-        p: vin,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(0.0),
-    });
-    ckt.add(Device::Resistor {
-        name: "R1".into(),
-        a: vin,
-        b: out,
-        ohms: 1.0e3,
-        tc1: None,
-    });
-    ckt.add(Device::Capacitor {
-        name: "C1".into(),
-        a: out,
-        b: NodeId::GROUND,
-        farads: 159.155e-9,
-        ic: None,
-    });
+    ckt.add(Device::vsource(
+        "VIN",
+        vin,
+        NodeId::GROUND,
+        SourceKind::Dc(0.0),
+    ));
+    ckt.add(Device::resistor("R1", vin, out, 1.0e3));
+    ckt.add(Device::capacitor("C1", out, NodeId::GROUND, 159.155e-9));
 
     let spec_ac = AcSpec {
         fstart: 10.0,

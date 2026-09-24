@@ -288,38 +288,26 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
 
     // Sink Rd terminations to GND (the board's pulldowns).
     if let Some(r) = term.cc1_rd_ohms {
-        c.add(Device::Resistor {
-            name: "Rd1".into(),
-            a: cc1_sink,
-            b: NodeId::GROUND,
-            ohms: r,
-            tc1: None,
-        });
+        c.add(Device::resistor("Rd1", cc1_sink, NodeId::GROUND, r));
     }
     // When shared, cc2's resistor is the same physical R79 already added via
     // cc1; adding it again would halve the resistance. Only add cc2's Rd when
     // it is an independent net.
     if !term.shared_net {
         if let Some(r) = term.cc2_rd_ohms {
-            c.add(Device::Resistor {
-                name: "Rd2".into(),
-                a: cc2_sink,
-                b: NodeId::GROUND,
-                ohms: r,
-                tc1: None,
-            });
+            c.add(Device::resistor("Rd2", cc2_sink, NodeId::GROUND, r));
         }
     }
 
     // Source Rp on CC1: a current source from GND into the CC1 node (current
     // flows p->n internally, so p=GND, n=CC1 injects current *into* CC1).
     // The cable wires CC1 through in both passive and e-marked cases.
-    c.add(Device::Isource {
-        name: "Rp1".into(),
-        p: NodeId::GROUND,
-        n: cc1_sink,
-        kind: SourceKind::Dc(rp.current_a()),
-    });
+    c.add(Device::isource(
+        "Rp1",
+        NodeId::GROUND,
+        cc1_sink,
+        SourceKind::Dc(rp.current_a()),
+    ));
 
     // CC2 path depends on the cable.
     match cable {
@@ -334,19 +322,13 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
         Cable::EMarked { ra_ohms } => {
             // E-marked: CC2 wires through, source asserts Rp on it, and the
             // e-marker presents Ra from CC2 to GND.
-            c.add(Device::Isource {
-                name: "Rp2".into(),
-                p: NodeId::GROUND,
-                n: cc2_sink,
-                kind: SourceKind::Dc(rp.current_a()),
-            });
-            c.add(Device::Resistor {
-                name: "Ra".into(),
-                a: cc2_sink,
-                b: NodeId::GROUND,
-                ohms: ra_ohms,
-                tc1: None,
-            });
+            c.add(Device::isource(
+                "Rp2",
+                NodeId::GROUND,
+                cc2_sink,
+                SourceKind::Dc(rp.current_a()),
+            ));
+            c.add(Device::resistor("Ra", cc2_sink, NodeId::GROUND, ra_ohms));
         }
     }
 
@@ -1345,11 +1327,8 @@ mod tests {
             value: "USB-C".into(),
             lib_id: "Connector:USB_C_Receptacle".into(),
             footprint: fp.into(),
-            position: None,
-            layer: String::new(),
-            properties: vec![],
-            dnp: false,
             pins: vec![pin_fn("A5", cc1, "CC1"), pin_fn("B5", cc2, "CC2")],
+            ..Default::default()
         };
         // J_early (board-order first, score 100+5=105) then J_late (later, but
         // "receptacle" in the footprint → 100+40+5=145).
@@ -1683,18 +1662,9 @@ mod tests {
         let board = ExtractedBoard {
             name: "dt".into(),
             nets: vec![
-                hauksbee_extract::Net {
-                    id: 0,
-                    name: "GND".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 1,
-                    name: "CC1".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 2,
-                    name: "CC2".into(),
-                },
+                hauksbee_extract::Net::new(0, "GND"),
+                hauksbee_extract::Net::new(1, "CC1"),
+                hauksbee_extract::Net::new(2, "CC2"),
             ],
             components: vec![
                 hauksbee_extract::Component {
@@ -1702,35 +1672,24 @@ mod tests {
                     value: "USB-C".into(),
                     lib_id: "Connector:USB_C_Receptacle".into(),
                     footprint: "USB_C_Receptacle_HRO".into(),
-                    position: None,
-                    layer: String::new(),
-                    properties: vec![],
-                    dnp: false,
                     pins: vec![pin_fn("A5", 1, "CC1"), pin_fn("B5", 2, "CC2")],
+                    ..Default::default()
                 },
                 // External discrete 5.1k Rd on CC1 -> GND.
                 hauksbee_extract::Component {
                     reference: "R1".into(),
                     value: "5.1k".into(),
                     lib_id: "Device:R".into(),
-                    footprint: String::new(),
-                    position: None,
-                    layer: String::new(),
-                    properties: vec![],
-                    dnp: false,
                     pins: vec![pin("1", 1), pin("2", 0)],
+                    ..Default::default()
                 },
                 // nPM1300 PMIC whose CC1 provides an internal 5.1k Rd.
                 hauksbee_extract::Component {
                     reference: "U1".into(),
                     value: "nPM1300-QEXX".into(),
                     lib_id: "Battery_Management:NPM1300".into(),
-                    footprint: String::new(),
-                    position: None,
-                    layer: String::new(),
-                    properties: vec![],
-                    dnp: false,
                     pins: vec![pin_fn("30", 1, "CC1")],
+                    ..Default::default()
                 },
             ],
         };

@@ -11,13 +11,7 @@ use hauksbee_ir::{Circuit, Device, NodeId};
 use hauksbee_solve::{blame, dc_operating_point, SolverOptions, Workspace};
 
 fn r(name: &str, a: NodeId, b: NodeId, ohms: f64) -> Device {
-    Device::Resistor {
-        name: name.to_string(),
-        a,
-        b,
-        ohms,
-        tc1: None,
-    }
+    Device::resistor(name.to_string(), a, b, ohms)
 }
 
 /// A board where one net is pinned by two ideal sources at different voltages:

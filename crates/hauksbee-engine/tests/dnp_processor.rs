@@ -169,12 +169,7 @@ fn a_skipped_sole_processor_warns_on_its_own_row() {
     let mut b = board();
     b.apply_dnp_policy(DnpPolicy::Honour, &[], &[]).unwrap();
     let bound = bind_board(&b, &ModelLibrary::builtin());
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|r| r.reference == "U1")
-        .expect("U1 has a bind row");
+    let row = bound.report.row("U1").expect("U1 has a bind row");
     let w = row.warning.as_deref().expect("must not vanish quietly");
     assert!(w.contains("only processor"), "{w}");
     assert!(w.contains("--fit U1"), "{w}");
@@ -202,12 +197,7 @@ fn a_left_open_link_contributes_nothing_and_its_absence_is_reported() {
     );
     // Side 2: visible. The row says why the part is absent, carrying the
     // policy's recorded reason through the assembly contract.
-    let row = bound
-        .report
-        .rows
-        .iter()
-        .find(|r| r.reference == "R7")
-        .expect("R7 has a bind row");
+    let row = bound.report.row("R7").expect("R7 has a bind row");
     match &row.outcome {
         hauksbee_engine::reports::bind::BindOutcome::Skipped { reason } => {
             assert_eq!(

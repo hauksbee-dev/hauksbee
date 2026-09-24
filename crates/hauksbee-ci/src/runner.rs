@@ -2490,7 +2490,7 @@ fn infer_supply_net(board: &ExtractedBoard, part_ref: &str) -> Option<String> {
         "VDD", "VCC", "VBAT", "AVDD", "DVDD", "VDDA", "VDD3P3", "3V3", "3.3V", "VIN", "VBUS", "5V",
         "VDDIO", "VDD_SPI",
     ];
-    let comp = board.components.iter().find(|c| c.reference == part_ref)?;
+    let comp = board.component(part_ref)?;
     for pin in &comp.pins {
         let f = pin.function.to_ascii_uppercase();
         if SUPPLY_HINTS.iter().any(|h| f.contains(h)) {
@@ -2517,9 +2517,7 @@ fn apply_decoupling(spec: &Spec, board: &ExtractedBoard, bound: &mut BoundBoard)
     // footprint and value (parsed to farads best-effort, 0 if unparseable).
     let default_for = |name: &str| {
         let (footprint, farads) = board
-            .components
-            .iter()
-            .find(|c| c.reference == name)
+            .component(name)
             .map(|c| {
                 let f = hauksbee_models::value::parse_value(&c.value).map_or(0.0, |p| p.si);
                 (c.footprint.as_str(), f)
@@ -3100,13 +3098,7 @@ fn suppress_rail(bound: &mut BoundBoard, net: &str) {
                     && (name == &format!("Vsupply_{net}") || name.starts_with("Vrail")) =>
             {
                 let (nm, a, b) = (name.clone(), *p, NodeId::GROUND);
-                *dev = Device::Resistor {
-                    name: nm,
-                    a,
-                    b,
-                    ohms: 1e12,
-                    tc1: None,
-                };
+                *dev = Device::resistor(nm, a, b, 1e12);
             }
             _ => {}
         }
@@ -3216,12 +3208,12 @@ fn drive_net(bound: &mut BoundBoard, net: &str, kind: SourceKind) {
         .iter()
         .any(|d| matches!(d, Device::Vsource { p, .. } if *p == node));
     if !already {
-        bound.circuit.add(Device::Vsource {
-            name: format!("Vci_drive_{net}"),
-            p: node,
-            n: NodeId::GROUND,
+        bound.circuit.add(Device::vsource(
+            format!("Vci_drive_{net}"),
+            node,
+            NodeId::GROUND,
             kind,
-        });
+        ));
     } else {
         // Retarget any existing CI drive source we own.
         for dev in bound.circuit.devices.iter_mut() {
@@ -3869,32 +3861,17 @@ mod spi_cs_source_tests {
     fn board_with(value: &str, footprint: &str, cs_pad: &str) -> ExtractedBoard {
         ExtractedBoard {
             name: "spi-cs-source".to_string(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "EE_CS".to_string(),
-                },
-                Net {
-                    id: 2,
-                    name: "OVERRIDE_CS".to_string(),
-                },
-            ],
+            nets: vec![Net::new(1, "EE_CS"), Net::new(2, "OVERRIDE_CS")],
             components: vec![Component {
                 reference: "U5".to_string(),
                 value: value.to_string(),
-                lib_id: String::new(),
                 footprint: footprint.to_string(),
-                position: None,
-                layer: String::new(),
-                properties: Vec::new(),
-                dnp: false,
                 pins: vec![Pin {
                     number: cs_pad.to_string(),
                     net: Some(1),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
+                    ..Default::default()
                 }],
+                ..Default::default()
             }],
         }
     }

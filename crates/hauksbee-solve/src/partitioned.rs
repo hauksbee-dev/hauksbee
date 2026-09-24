@@ -1407,12 +1407,12 @@ impl NonlinearIsland {
             .iter()
             .map(|&bn| {
                 let p = sub.map(circuit, bn);
-                let sid = sub.add(Device::Vsource {
-                    name: format!("VB{}", bn.0),
+                let sid = sub.add(Device::vsource(
+                    format!("VB{}", bn.0),
                     p,
-                    n: NodeId::GROUND,
-                    kind: SourceKind::Dc(0.0),
-                });
+                    NodeId::GROUND,
+                    SourceKind::Dc(0.0),
+                ));
                 (bn, sid)
             })
             .collect();

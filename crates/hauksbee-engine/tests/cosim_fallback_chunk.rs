@@ -249,13 +249,7 @@ fn rlc_ringing_board() -> BoundBoard {
         },
     ));
     c.add(resistor("R1".into(), vin, mid, RLC_R));
-    c.add(Device::Inductor {
-        name: "L1".into(),
-        a: mid,
-        b: vc,
-        henries: RLC_L,
-        ic: None,
-    });
+    c.add(Device::inductor("L1", mid, vc, RLC_L));
     c.add(capacitor("C1".into(), vc, NodeId::GROUND, RLC_C));
     bound_board("rlc-ringing", c, &[("vc", vc)])
 }

@@ -83,57 +83,28 @@ mod tests {
             pins.push(Pin {
                 number: number.into(),
                 net: Some(net),
-                function: String::new(),
-                kind: String::new(),
-                position: None,
+                ..Default::default()
             });
         }
         ExtractedBoard {
             name: "w25q-control-contract".into(),
             nets: vec![
-                Net {
-                    id: 1,
-                    name: "GND".into(),
-                },
-                Net {
-                    id: 2,
-                    name: "+3V3".into(),
-                },
-                Net {
-                    id: 10,
-                    name: "SPI_CS".into(),
-                },
-                Net {
-                    id: 11,
-                    name: "SPI_MISO".into(),
-                },
-                Net {
-                    id: 12,
-                    name: "Net-(U6-Pad3)".into(),
-                },
-                Net {
-                    id: 13,
-                    name: "SPI_MOSI".into(),
-                },
-                Net {
-                    id: 14,
-                    name: "SPI_SCK".into(),
-                },
-                Net {
-                    id: 15,
-                    name: "Net-(U6-Pad7)".into(),
-                },
+                Net::new(1, "GND"),
+                Net::new(2, "+3V3"),
+                Net::new(10, "SPI_CS"),
+                Net::new(11, "SPI_MISO"),
+                Net::new(12, "Net-(U6-Pad3)"),
+                Net::new(13, "SPI_MOSI"),
+                Net::new(14, "SPI_SCK"),
+                Net::new(15, "Net-(U6-Pad7)"),
             ],
             components: vec![Component {
                 reference: "U6".into(),
                 value: "W25Q80DVS".into(),
-                lib_id: String::new(),
                 footprint: "LibreSolar:SOIC-8_3.9x4.9mm_Pitch1.27mm".into(),
-                position: None,
                 layer: "Top".into(),
-                properties: Vec::new(),
-                dnp: false,
                 pins,
+                ..Default::default()
             }],
         }
     }

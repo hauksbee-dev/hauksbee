@@ -1237,10 +1237,7 @@ impl NetlistBuilder {
             let id = next_id;
             next_id += 1;
             net_id_of_root.insert(r, id);
-            nets.push(Net {
-                id,
-                name: net_name[&r].clone(),
-            });
+            nets.push(Net::new(id, net_name[&r].clone()));
         }
 
         // 5. Write net ids back onto pins.

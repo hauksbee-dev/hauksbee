@@ -184,12 +184,7 @@ pub fn bjt_beta_try(m: &ModelEntry, vcc: f64, rc: f64, i_b: f64) -> Result<f64, 
     c.add(vsource("Vcc".into(), nvcc, NodeId::GROUND, Dc(vcc)));
     c.add(resistor("Rc".into(), nvcc, ncol, rc));
     // Push Ib into the base node from ground.
-    c.add(Device::Isource {
-        name: "Ib".into(),
-        p: NodeId::GROUND,
-        n: nbase,
-        kind: Dc(i_b),
-    });
+    c.add(Device::isource("Ib", NodeId::GROUND, nbase, Dc(i_b)));
     c.add(Device::Bjt {
         name: "Q1".into(),
         c: ncol,
@@ -217,12 +212,7 @@ pub fn bjt_vbe_try(m: &ModelEntry) -> Result<f64, String> {
     let nbase = c.node("base");
     c.add(vsource("Vcc".into(), nvcc, NodeId::GROUND, Dc(10.0)));
     c.add(resistor("Rc".into(), nvcc, ncol, 2.2e3));
-    c.add(Device::Isource {
-        name: "Ib".into(),
-        p: NodeId::GROUND,
-        n: nbase,
-        kind: Dc(i_b),
-    });
+    c.add(Device::isource("Ib", NodeId::GROUND, nbase, Dc(i_b)));
     c.add(Device::Bjt {
         name: "Q1".into(),
         c: ncol,

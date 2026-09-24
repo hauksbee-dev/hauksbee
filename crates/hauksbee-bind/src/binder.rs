@@ -231,13 +231,7 @@ impl BoundBoard {
             if let Some(dev) = self.circuit.devices.get_mut(leg.vsource.0 as usize) {
                 if let Device::Vsource { name, p, .. } = dev {
                     let (nm, a) = (name.clone(), *p);
-                    *dev = Device::Resistor {
-                        name: nm,
-                        a,
-                        b: NodeId::GROUND,
-                        ohms: SUPPRESSED_RAIL_OHMS,
-                        tc1: None,
-                    };
+                    *dev = Device::resistor(nm, a, NodeId::GROUND, SUPPRESSED_RAIL_OHMS);
                     opened = true;
                 }
             }
@@ -249,13 +243,7 @@ impl BoundBoard {
             if let Device::Vsource { name, p, .. } = dev {
                 if *p == node && (*name == leg_name || name.starts_with("Vrail")) {
                     let (nm, a) = (name.clone(), *p);
-                    *dev = Device::Resistor {
-                        name: nm,
-                        a,
-                        b: NodeId::GROUND,
-                        ohms: SUPPRESSED_RAIL_OHMS,
-                        tc1: None,
-                    };
+                    *dev = Device::resistor(nm, a, NodeId::GROUND, SUPPRESSED_RAIL_OHMS);
                     opened = true;
                 }
             }
@@ -2814,13 +2802,7 @@ fn bind_passive(
                 )),
             );
         };
-        circuit.add(Device::Resistor {
-            name: comp.reference.clone(),
-            a,
-            b,
-            ohms,
-            tc1: None,
-        });
+        circuit.add(Device::resistor(comp.reference.clone(), a, b, ohms));
         return (
             BindOutcome::Analog {
                 device: format!("R {}", fmt_eng(ohms, "Ω")),
@@ -2852,20 +2834,13 @@ fn bind_passive(
             .filter(|v| v.is_finite() && *v > 0.0)
         {
             let mid = circuit.node(&format!("__{}_dcr", comp.reference));
-            circuit.add(Device::Inductor {
-                name: comp.reference.clone(),
-                a,
-                b: mid,
-                henries: p.si,
-                ic: None,
-            });
-            circuit.add(Device::Resistor {
-                name: format!("{}_dcr", comp.reference),
-                a: mid,
+            circuit.add(Device::inductor(comp.reference.clone(), a, mid, p.si));
+            circuit.add(Device::resistor(
+                format!("{}_dcr", comp.reference),
+                mid,
                 b,
-                ohms: dcr,
-                tc1: None,
-            });
+                dcr,
+            ));
             return (
                 BindOutcome::Analog {
                     device: format!("L {} + DCR {}", fmt_eng(p.si, "H"), fmt_eng(dcr, "Ω")),
@@ -2894,33 +2869,25 @@ fn bind_passive(
             let mut left = a;
             if let Some(esr) = esr {
                 let mid = circuit.node(&format!("__{}_esr", comp.reference));
-                circuit.add(Device::Resistor {
-                    name: format!("{}_esr", comp.reference),
-                    a: left,
-                    b: mid,
-                    ohms: esr,
-                    tc1: None,
-                });
+                circuit.add(Device::resistor(
+                    format!("{}_esr", comp.reference),
+                    left,
+                    mid,
+                    esr,
+                ));
                 left = mid;
             }
             if let Some(esl) = esl {
                 let mid = circuit.node(&format!("__{}_esl", comp.reference));
-                circuit.add(Device::Inductor {
-                    name: format!("{}_esl", comp.reference),
-                    a: left,
-                    b: mid,
-                    henries: esl,
-                    ic: None,
-                });
+                circuit.add(Device::inductor(
+                    format!("{}_esl", comp.reference),
+                    left,
+                    mid,
+                    esl,
+                ));
                 left = mid;
             }
-            circuit.add(Device::Capacitor {
-                name: comp.reference.clone(),
-                a: left,
-                b,
-                farads: p.si,
-                ic: None,
-            });
+            circuit.add(Device::capacitor(comp.reference.clone(), left, b, p.si));
             return (
                 BindOutcome::Analog {
                     device: format!("C {} with sourced parasitics", fmt_eng(p.si, "F")),
@@ -3015,27 +2982,9 @@ fn passive_device(
     let unit = p.unit.as_deref().unwrap_or("");
     let letter = passive_letter(comp);
     if letter == Some('C') || unit.eq_ignore_ascii_case("F") {
-        (
-            Device::Capacitor {
-                name,
-                a,
-                b,
-                farads: p.si,
-                ic: None,
-            },
-            None,
-        )
+        (Device::capacitor(name, a, b, p.si), None)
     } else if letter == Some('L') || unit.eq_ignore_ascii_case("H") {
-        (
-            Device::Inductor {
-                name,
-                a,
-                b,
-                henries: p.si,
-                ic: None,
-            },
-            None,
-        )
+        (Device::inductor(name, a, b, p.si), None)
     } else if p.si <= 0.0 {
         // A literal 0 (or negative) resistance is a fitted jumper link, not a
         // mathematical short. Binding it at the raw 1e-6 floor leaves ten
@@ -3050,26 +2999,11 @@ fn passive_device(
             ZERO_OHM_JUMPER_OHMS * 1e3,
         );
         (
-            Device::Resistor {
-                name,
-                a,
-                b,
-                ohms: ZERO_OHM_JUMPER_OHMS,
-                tc1: None,
-            },
+            Device::resistor(name, a, b, ZERO_OHM_JUMPER_OHMS),
             Some(note),
         )
     } else {
-        (
-            Device::Resistor {
-                name,
-                a,
-                b,
-                ohms: p.si.max(1e-6),
-                tc1: None,
-            },
-            None,
-        )
+        (Device::resistor(name, a, b, p.si.max(1e-6)), None)
     }
 }
 
@@ -3632,12 +3566,12 @@ fn bind_vreg(
             "vreg input, output, and local return must be distinct",
         );
     }
-    let source_id = circuit.add(Device::Vsource {
-        name: format!("Vreg_{}", comp.reference),
-        p: out,
-        n: gnd,
-        kind: SourceKind::Dc(vout),
-    });
+    let source_id = circuit.add(Device::vsource(
+        format!("Vreg_{}", comp.reference),
+        out,
+        gnd,
+        SourceKind::Dc(vout),
+    ));
     // The headroom the ideal source assumes: the card's widest output endpoint
     // plus its declared dropout limit. A missing dropout is recorded, not invented.
     let vout_limit = source
@@ -3800,12 +3734,12 @@ fn bind_adj_vreg(
         true => (circuit.node(&format!("{}_vreg_drive", comp.reference)), gnd),
         false => (adj, adj),
     };
-    let source = circuit.add(Device::Vsource {
-        name: format!("Vref_{}", comp.reference),
-        p: out,
-        n: low,
-        kind: SourceKind::Dc(vref),
-    });
+    let source = circuit.add(Device::vsource(
+        format!("Vref_{}", comp.reference),
+        out,
+        low,
+        SourceKind::Dc(vref),
+    ));
     if grounded {
         circuit.add(Device::Vcvs {
             name: format!("Evreg_{}", comp.reference),
@@ -3831,12 +3765,12 @@ fn bind_adj_vreg(
         let Some(amps) = model.params.get_f64(key).filter(|i| on && i.is_finite()) else {
             continue;
         };
-        helpers.push(circuit.add(Device::Isource {
-            name: format!("{prefix}_{}", comp.reference),
-            p: input,
-            n: to,
-            kind: SourceKind::Dc(amps),
-        }));
+        helpers.push(circuit.add(Device::isource(
+            format!("{prefix}_{}", comp.reference),
+            input,
+            to,
+            SourceKind::Dc(amps),
+        )));
     }
     let dropout_v = model.params.get_f64("dropout_v");
     regulators.push(SimpleRegulator {
@@ -3904,12 +3838,12 @@ fn bind_shunt_ref(
     };
     let (vref, zka, ikmax) = (p("vref", 2.495), p("zka_ohms", 0.2), p("ikmax_a", 0.1));
     let vr = circuit.node(&format!("{r}_shunt_vref"));
-    circuit.add(Device::Vsource {
-        name: format!("Vint_{r}"),
-        p: vr,
-        n: anode,
-        kind: SourceKind::Dc(vref - p("iktest_a", 0.01) * zka),
-    });
+    circuit.add(Device::vsource(
+        format!("Vint_{r}"),
+        vr,
+        anode,
+        SourceKind::Dc(vref - p("iktest_a", 0.01) * zka),
+    ));
     let gate = circuit.node(&format!("{r}_shunt_gate"));
     circuit.add(Device::OpAmp {
         name: r.clone(),
@@ -3932,18 +3866,18 @@ fn bind_shunt_ref(
         cn: NodeId::GROUND,
         gm: ikmax,
     });
-    circuit.add(Device::Vsource {
-        name: format!("Vreg_{r}"),
-        p: kint,
-        n: anode,
-        kind: SourceKind::Dc(0.0),
-    });
-    circuit.add(Device::Isource {
-        name: format!("Iref_{r}"),
-        p: refpin,
-        n: anode,
-        kind: SourceKind::Dc(p("iref_a", 0.0)),
-    });
+    circuit.add(Device::vsource(
+        format!("Vreg_{r}"),
+        kint,
+        anode,
+        SourceKind::Dc(0.0),
+    ));
+    circuit.add(Device::isource(
+        format!("Iref_{r}"),
+        refpin,
+        anode,
+        SourceKind::Dc(p("iref_a", 0.0)),
+    ));
     (
         BindOutcome::Analog {
             device: format!("shunt reference {vref:.3}V (the board's divider sets the cathode)"),
@@ -4158,13 +4092,12 @@ fn bind_timer_555(
         (ctrl, tref, leg * (th - tr)),
         (tref, gnd, leg * tr),
     ] {
-        circuit.add(Device::Resistor {
-            name: format!("Rdiv_{r}_{}", circuit.node_name(b)),
+        circuit.add(Device::resistor(
+            format!("Rdiv_{r}_{}", circuit.node_name(b)),
             a,
             b,
             ohms,
-            tc1: None,
-        });
+        ));
     }
 
     let gain = p("comparator_gain", 1200.0);
@@ -4226,13 +4159,7 @@ fn bind_timer_555(
     }
     let q = leg_of("_q", qb, pullup * 0.01);
     circuit.add(q);
-    circuit.add(Device::Resistor {
-        name: format!("Rq_{r}"),
-        a: vcc,
-        b: qb,
-        ohms: pullup,
-        tc1: None,
-    });
+    circuit.add(Device::resistor(format!("Rq_{r}"), vcc, qb, pullup));
     if let Some(out) = out {
         let (vol, drop) = (p("vol_v", 0.1), p("voh_drop_v", 1.4));
         let outi = circuit.node(&format!("{r}_555_outi"));
@@ -4251,13 +4178,12 @@ fn bind_timer_555(
             .expect("555 output expression"),
             deps: vec![hauksbee_ir::BDep::Volt(qb), hauksbee_ir::BDep::Volt(vcc)],
         });
-        circuit.add(Device::Resistor {
-            name: format!("Rout_{r}"),
-            a: outi,
-            b: out,
-            ohms: p("out_ohms", 10.0),
-            tc1: None,
-        });
+        circuit.add(Device::resistor(
+            format!("Rout_{r}"),
+            outi,
+            out,
+            p("out_ohms", 10.0),
+        ));
     }
     (
         BindOutcome::Analog {
@@ -4350,12 +4276,12 @@ fn bind_comparator(
                 .or_else(|| roles.get("gnd"))
                 .copied()
                 .unwrap_or(NodeId::GROUND);
-            circuit.add(Device::Isource {
-                name: format!("Iq_{}", comp.reference),
-                p: vcc,
-                n: gnd,
-                kind: SourceKind::Dc(static_ua * 1e-6),
-            });
+            circuit.add(Device::isource(
+                format!("Iq_{}", comp.reference),
+                vcc,
+                gnd,
+                SourceKind::Dc(static_ua * 1e-6),
+            ));
         }
     }
 
@@ -6978,13 +6904,7 @@ mod tests {
         Component {
             reference: reference.to_string(),
             value: value.to_string(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -6992,17 +6912,12 @@ mod tests {
         Pin {
             number: number.to_string(),
             net: Some(net),
-            function: String::new(),
-            kind: String::new(),
-            position: None,
+            ..Default::default()
         }
     }
 
     fn net(id: i64, name: &str) -> Net {
-        Net {
-            id,
-            name: name.to_string(),
-        }
+        Net::new(id, name.to_string())
     }
 
     /// Resolve `value` the way the binder does (value and MPN both set).
@@ -7126,12 +7041,7 @@ mod tests {
         };
 
         let bound = bind_board(&board, &ModelLibrary::builtin());
-        let row = bound
-            .report
-            .rows
-            .iter()
-            .find(|row| row.reference == "R1")
-            .unwrap();
+        let row = bound.report.row("R1").unwrap();
         assert_eq!(row.model_id, None);
         assert_eq!(row.confidence, Confidence::Unresolved);
         assert!(matches!(
