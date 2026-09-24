@@ -340,7 +340,7 @@ fn resolved_shape(c: &Component) -> Option<ResolvedShape> {
             footprint: non_empty(&c.footprint),
             mpn,
             properties: c.properties.clone(),
-            reference: None,
+            ..Default::default()
         };
         let shape = ModelLibrary::builtin_shared()
             .resolve(&query)

@@ -56,4 +56,5 @@ mod tarski_staged_replay;
 mod timer555;
 mod tolerance;
 mod unpowered_rail_is_declared;
+mod variant_sweep;
 mod watchdog_coverage_hole;

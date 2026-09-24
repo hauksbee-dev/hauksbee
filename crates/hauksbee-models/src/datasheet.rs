@@ -1388,10 +1388,14 @@ answer and fails validation.
 Component kind: {kind_line}
 
 If the request names a family of variants (output voltages, packages, grades),
-model the variant the request implies; if it is ambiguous, say in
-`description` which variant was modelled and why. Never merge variants, and
-widen `value_re` only to that variant's ordering-table codes, never to a
-family root its siblings share.
+model the variant the request implies. Never merge variants, and widen
+`value_re` only to that variant's ordering-table codes, never to a family root
+its siblings share. Variants are the exception, only where the datasheet itself
+prints distinct orderable variants: when the name you were given does not pin
+one and they differ in pinout or output form, emit one complete [[models]] per
+variant, each with the shared family `value_re`, `variant_of = "<family>"` and
+`[models.variant]` (`orderable_re`, `orderable` = its ordering-table codes,
+`package`, `basis`; no default).
 
 The `kind` FIELD inside your entry must come from this closed list (the
 schema accepts nothing else): {legal_kinds}.
@@ -2968,6 +2972,10 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
         check_reply_entry(entry, part, kind_str)
             .map_err(|e| anyhow::anyhow!("[[models]] entry '{}': {e:#}", entry.id))?;
     }
+    let all: Vec<ModelEntry> = std::iter::once(first.clone()).chain(entries).collect();
+    if let Some(problem) = crate::variants::lint(&all).into_iter().next() {
+        bail!("variant set in the reply for {part}: {problem}");
+    }
     Ok(first)
 }
 
@@ -3497,6 +3505,15 @@ uncertainty = [
 "#;
         let entry = parse_and_validate_reply(good, "BCM847BS", "bjt_npn").unwrap();
         assert_eq!(entry.id, "bcm847bs");
+        // A variant reply is checked as a set: a code two members match is refused.
+        let member = |id: &str, re: &str, code: &str| {
+            let head = format!("\"{id}\"\nvariant_of = \"BCM847BS\"\nvariant = {{ orderable_re = \"{re}\", orderable = [\"BCM847BS,{code}\"], basis = \"p. 2\" }}");
+            good.replace("\"bcm847bs\"", &head)
+        };
+        let pair = |y_re| member("x", "115$", "115") + &member("y", y_re, "135");
+        assert!(parse_and_validate_reply(&pair("135$"), "BCM847BS", "bjt_npn").is_ok());
+        let error = parse_and_validate_reply(&pair("1.5$"), "BCM847BS", "bjt_npn").unwrap_err();
+        assert!(error.to_string().contains("variant set"), "{error:#}");
         let no_source = &good[..good.find("[models.source]").unwrap()];
         let error = parse_and_validate_reply(no_source, "BCM847BS", "bjt_npn").unwrap_err();
         assert!(error.to_string().contains("rule 0"), "{error:#}");

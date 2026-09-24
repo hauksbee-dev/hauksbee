@@ -33,6 +33,7 @@ use hauksbee_ir::evidence::{
     ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, RunDate, Scope, Subject,
     SubjectSet, ValueOrigin,
 };
+use hauksbee_models::variants::{Selection, Via};
 use hauksbee_models::Confidence;
 use sha2::{Digest, Sha256};
 
@@ -42,6 +43,7 @@ struct ModelFact {
     model_id: String,
     confidence: MatchConfidence,
     source: hauksbee_ir::evidence::ModelSource,
+    selection: Option<Selection>,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +194,43 @@ fn component_occurrence_subjects(
     (component_subjects, row_subjects)
 }
 
+/// A bound part's `REF.model` row, after its `REF.variant` row (who chose the
+/// member) when a variant set chose the model.
+fn push_model_rows(
+    parameters: &mut Vec<ParameterProvenance>,
+    subject: &str,
+    (display, model_id, layer, confidence): (&str, &str, ModelLayer, MatchConfidence),
+    selection: Option<&Selection>,
+) -> Result<(), EvidenceError> {
+    let origin = ValueOrigin::Model {
+        model_id: model_id.to_string(),
+        layer,
+        confidence,
+    };
+    let mut rows = Vec::new();
+    if let Some(s) = selection {
+        let how = match (s.determined.is_some(), s.via) {
+            (false, _) => format!("standing in for {}", s.ids()),
+            (true, Via::Spec) => "selected in the spec".into(),
+            (true, Via::Sweep) => format!("one run of the sweep over {}", s.ids()),
+            (true, Via::Board) => "determined by the board".into(),
+        };
+        let spec = ValueOrigin::UserOverride {
+            via: hauksbee_ir::evidence::OverrideSource::Spec,
+        };
+        let chosen = s.determined.is_some() && s.via == Via::Spec;
+        let from = if chosen { spec } else { origin.clone() };
+        rows.push(("variant", format!("{model_id}, {how}"), from));
+    }
+    rows.push(("model", model_id.to_string(), origin));
+    for (field, value, origin) in rows {
+        let name = format!("{display}.{field}");
+        let row = ParameterProvenance::for_subject(subject, name, value, origin)?;
+        parameters.push(row);
+    }
+    Ok(())
+}
+
 /// The open-part assumptions for one bind report: one per DISTINCT claim, not
 /// one per unresolved row.
 ///
@@ -299,6 +338,15 @@ impl BoardEvidence {
         let (component_subjects, row_subjects) = component_occurrence_subjects(board, report);
         let mut assumptions = Vec::new();
         assumptions.extend(open_part_assumptions(report, &row_subjects));
+        // A variant set the board could not narrow bound a same-pinout stand-in.
+        for (&index, s) in &report.selections {
+            let (row, subject) = (&report.rows[index], &row_subjects[index]);
+            if let (None, Some(bound)) = (&s.determined, &row.model_id) {
+                let ids = s.ids();
+                let a = Assumption::undetermined_variant(subject, &row.reference, bound, &ids);
+                assumptions.push(a);
+            }
+        }
         // A part bound to a generic estimated-fallback model is running on
         // invented ratings. Recorded here rather than only in the CI report's
         // coverage_warnings, so it reaches every surface that renders the evidence
@@ -481,6 +529,9 @@ impl BoardEvidence {
             .zip(&row_subjects)
             .map(|(row, subject)| (subject.as_str(), row))
             .collect();
+        let selections: BTreeMap<&str, _> = (report.selections.iter())
+            .filter_map(|(index, selection)| Some((row_subjects.get(*index)?.as_str(), selection)))
+            .collect();
         let mut maps = Vec::with_capacity(owned.len());
         for (net, refs) in &owned {
             let scope = NetScope::new([net.as_str()], None)?;
@@ -515,16 +566,10 @@ impl BoardEvidence {
                             source.clone(),
                             confidence,
                         )?);
-                        parameters.push(ParameterProvenance::for_subject(
-                            reference,
-                            format!("{provenance_reference}.model"),
-                            model_id,
-                            ValueOrigin::Model {
-                                model_id: model_id.to_string(),
-                                layer: source.layer(),
-                                confidence,
-                            },
-                        )?);
+                        let selection = selections.get(reference.as_str()).copied();
+                        let layer = source.layer();
+                        let fact = (&*provenance_reference, model_id, layer, confidence);
+                        push_model_rows(&mut parameters, reference, fact, selection)?;
                     }
                 }
                 push_default_parameters(
@@ -552,6 +597,7 @@ impl BoardEvidence {
                             .source
                             .clone()
                             .unwrap_or_else(|| unspecified_source(model_id)),
+                        selection: selections.get(component_subject).map(|s| (*s).clone()),
                     },
                 ))
             })
@@ -1374,16 +1420,9 @@ impl BoardEvidence {
                 fact.source.clone(),
                 fact.confidence,
             )?);
-            parameters.push(ParameterProvenance::for_subject(
-                reference,
-                format!("{}.model", fact.reference),
-                &fact.model_id,
-                ValueOrigin::Model {
-                    model_id: fact.model_id.clone(),
-                    layer: fact.source.layer(),
-                    confidence: fact.confidence,
-                },
-            )?);
+            let layer = fact.source.layer();
+            let row = (&*fact.reference, &*fact.model_id, layer, fact.confidence);
+            push_model_rows(&mut parameters, reference, row, fact.selection.as_ref())?;
             push_default_parameters(
                 &mut parameters,
                 reference,
@@ -1508,6 +1547,15 @@ impl BoardEvidence {
         }
         for ((kind, statement, because, consequence, replacement), mut refs) in assumption_groups {
             refs.sort_by_key(|reference| natural_evidence_ref_key(reference));
+            // A group of one names its part, so a fix quoting it (a spec line) stays exact.
+            let named = |text: String| match refs.as_slice() {
+                [only] => text
+                    .replace("Each affected part", only)
+                    .replace("each affected part", only),
+                _ => text,
+            };
+            let [statement, because, consequence, replacement] =
+                [statement, because, consequence, replacement].map(named);
             let _ = write!(
                 out,
                 "[{kind}] {statement} Why: {because} Effect: {consequence} Fix: {replacement}"

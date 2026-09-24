@@ -126,6 +126,8 @@ pub struct BindReport {
     pub board_name: String,
     pub regulators: Vec<SimpleRegulator>,
     pub open_parts: Vec<OpenPart>,
+    /// Orderable-variant selections, keyed by the index of the row they bound.
+    pub selections: std::collections::BTreeMap<usize, hauksbee_models::variants::Selection>,
 }
 
 /// One unresolved (open-circuit) part and where its pins land, so the scheduler

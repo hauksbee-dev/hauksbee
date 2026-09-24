@@ -185,6 +185,10 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
             findings += entry_findings;
             warnings += entry_warnings;
         }
+        for problem in hauksbee_models::variants::lint(&db.models) {
+            findings += 1;
+            println!("variant set: ERROR: {problem}");
+        }
     } else if root.get("soc").is_some() {
         checked += 1;
         findings += lint_soc(file, &text, &root);

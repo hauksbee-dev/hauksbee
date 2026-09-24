@@ -336,6 +336,8 @@ pub struct ComponentQuery {
     /// Source properties retained by the board extractor (datasheet URL,
     /// supplier/order-code metadata, BOM fields, and similar evidence).
     pub properties: Vec<(String, String)>,
+    /// Numbered electrical pads on the footprint, for the variant pad-set selector.
+    pub pads: Vec<String>,
     /// Reference designator (e.g. `"R1"`), used only in diagnostics.
     pub reference: Option<String>,
 }

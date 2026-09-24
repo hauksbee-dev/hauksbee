@@ -130,6 +130,13 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peripheral_power: Option<PeripheralPower>,
 
+    /// The orderable-variant family this entry is one member of. Siblings share
+    /// it and the family match; `[models.variant]` tells them apart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<crate::variants::VariantSpec>,
+
     /// Machine-readable scope of the behavior this model actually implements.
     ///
     /// A model resolving is not the same claim as the whole component being
@@ -1129,7 +1136,7 @@ impl PassiveClass {
 ///
 /// All populated rules are ANDed: the entry matches only when every
 /// non-`None` rule fires. At least one rule must be populated.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct MatchRules {
     /// Exact KiCad lib_id string (e.g. `"Device:R"`) or prefix ending with
     /// `":"` (e.g. `"Device:"` matches any lib_id in the Device library).

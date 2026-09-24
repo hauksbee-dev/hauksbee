@@ -990,7 +990,15 @@ pub struct Override {
     pub reference: String,
     /// The replacement value string, spelled the way the board file would spell
     /// it (e.g. `"0.05"`, `"4k7"`, `"100n"`). Applied before binding.
-    pub value: String,
+    #[serde(default)]
+    pub value: Option<String>,
+    /// The orderable variant fitted here: a member id of the part's `variant_of`
+    /// set, written to the reserved `hauksbee_select` property before binding.
+    #[serde(default)]
+    pub select: Option<String>,
+    /// Why that variant, for the spec's reader.
+    #[serde(default)]
+    pub reason: Option<String>,
     /// Optional tolerance, as a percentage of `value` (10.0 = ±10%). Present =
     /// this component joins the tolerance ensemble with `value` as nominal.
     #[serde(default)]
@@ -1746,6 +1754,9 @@ impl Spec {
             );
         }
         for ov in &self.overrides {
+            let valued = ov.value.is_some() || (ov.select.is_some() && ov.tolerance.is_none());
+            let why = "give a `value` (a `tolerance` spreads around it), or `select` a variant";
+            check(valued, format!("override on '{}': {why}", ov.reference));
             if let Some(p) = ov.tolerance {
                 check(
                     in_band(p),

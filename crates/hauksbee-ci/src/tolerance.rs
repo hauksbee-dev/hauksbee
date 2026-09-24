@@ -159,7 +159,7 @@ impl SampledValue {
 /// One ensemble member: the seed index and every toleranced component's value
 /// for that member. `values` is empty when the spec has no tolerances (the
 /// plain fuzz/single-run path).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SeedPlan {
     pub seed: u32,
     pub values: Vec<SampledValue>,
@@ -172,6 +172,31 @@ pub struct SeedPlan {
     /// the response, and the assertion must report that rather than the corner
     /// pass. See [`interior_probe_count`].
     pub interior: bool,
+    /// The variant member this run simulates for each undetermined same-pinout
+    /// part, `(reference, member id)`: the member axis of [`with_variants`].
+    pub variants: Vec<(String, String)>,
+}
+
+/// Cross every plan with every combination of the undetermined same-pinout variant
+/// sets `(reference, member ids)`, so the ensemble passes only if every member does.
+/// `None` above 2^[`CORNER_CAP`] runs: the part then keeps its flagged stand-in.
+pub fn with_variants(
+    mut runs: Vec<SeedPlan>,
+    axes: &[(String, Vec<String>)],
+) -> Option<Vec<SeedPlan>> {
+    for (reference, ids) in axes {
+        let member = |plan: &SeedPlan, id: &String| {
+            let mut plan = plan.clone();
+            plan.variants.push((reference.clone(), id.clone()));
+            plan
+        };
+        let cross = |p: &SeedPlan| ids.iter().map(|id| member(p, id)).collect::<Vec<_>>();
+        runs = runs.iter().flat_map(cross).collect();
+        if runs.len() > 1 << CORNER_CAP {
+            return None;
+        }
+    }
+    Some(runs)
 }
 
 /// The ensemble execution mode.
@@ -218,8 +243,8 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
         spec.overrides
             .iter()
             .rev()
-            .find(|o| o.reference == reference)
-            .map(|o| o.value.as_str())
+            .find(|o| o.reference == reference && o.value.is_some())
+            .and_then(|o| o.value.as_deref())
     };
 
     for rule in &spec.tolerances {
@@ -268,7 +293,7 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
             continue;
         };
         let dist = Distribution::parse(ov.distribution.as_deref().unwrap_or("uniform"))?;
-        let eff_value = overridden_value(&ov.reference).unwrap_or(&ov.value);
+        let eff_value = overridden_value(&ov.reference).unwrap_or_default();
         let nominal = parse_nominal(&ov.reference, eff_value)?;
         by_ref.insert(
             ov.reference.clone(),
@@ -329,7 +354,7 @@ pub fn build_plans(
             .map(|seed| SeedPlan {
                 seed,
                 values: tolerances.iter().map(|t| sample(seed, t)).collect(),
-                interior: false,
+                ..SeedPlan::default()
             })
             .collect()),
         Mode::Corners => {
@@ -358,6 +383,7 @@ pub fn build_plans(
             let mut plans: Vec<SeedPlan> = (0..count)
                 .map(|k| SeedPlan {
                     seed: k,
+                    variants: Vec::new(),
                     interior: false,
                     values: tolerances
                         .iter()
@@ -441,6 +467,7 @@ fn interior_plans(first_seed: u32, tolerances: &[ResolvedTolerance]) -> Vec<Seed
         .map(|p| SeedPlan {
             seed: first_seed + p as u32,
             interior: true,
+            variants: Vec::new(),
             values: tolerances
                 .iter()
                 .enumerate()
@@ -766,6 +793,22 @@ mod tests {
             assert_eq!(interior_probe_count(n), 8, "n = {n}");
         }
         assert!(interior_probe_count(CORNER_CAP) * 100 < 1usize << CORNER_CAP);
+    }
+
+    /// Every seed runs every variant combination, and a sweep past the cap is refused.
+    #[test]
+    fn variant_axes_cross_every_plan_within_the_cap() {
+        use std::collections::BTreeSet;
+        let axis = |r: &str, ids: &str| (r.to_string(), ids.split(' ').map(String::from).collect());
+        let axes: [(String, Vec<String>); 2] = [axis("U3", "a b"), axis("U4", "x y z")];
+        let plans = build_plans(Mode::MonteCarlo, 2, &[]).unwrap();
+        let swept = with_variants(plans.clone(), &axes).unwrap();
+        let runs: BTreeSet<_> = swept.iter().map(|p| (p.seed, &p.variants)).collect();
+        assert_eq!((swept.len(), runs.len()), (12, 12), "{runs:?}");
+        let fifth = format!("{:?}", swept[4].variants);
+        assert_eq!(fifth, r#"[("U3", "b"), ("U4", "y")]"#);
+        let wide = [("U3".to_string(), (0..1025).map(|i| i.to_string()).collect())];
+        assert!(with_variants(plans, &wide).is_none());
     }
 
     /// `below` must be free of the modulo bias `next_u64() % n` carries: over
