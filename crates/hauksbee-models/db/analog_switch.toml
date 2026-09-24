@@ -44,6 +44,10 @@ missing = ["bandwidth", "channel_capacitance", "dynamic_output_enable", "esd_cla
 [models.source]
 tier = "datasheet-derived"
 validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
 
 # AP2553, Diodes Incorporated DS35404 Rev. 12 (September 2021):
 # https://www.diodes.com/datasheet/download/AP2553.pdf
@@ -97,6 +101,10 @@ missing = ["fault_output", "output_discharge", "reverse_current_blocking", "shor
 [models.source]
 tier = "datasheet-derived"
 validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"
 
 [[models]]
 id = "sn74lvc1g3157"
