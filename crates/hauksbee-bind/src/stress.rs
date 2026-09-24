@@ -1662,35 +1662,25 @@ mod monitor_temp_tests {
             ("Resistor_SMD:R_0603Metric", 1.0 / 20.0),
             ("Resistor_SMD:R_1005Metric", 1.0 / 16.0),
             ("Resistor_SMD:R_3216Metric", 1.0 / 4.0),
-            // The imperial size code is paired with its metric code, and a small
-            // part's metric code equals a larger part's imperial code. Matching
-            // the metric suffix first over-rates tiny parts by up to 2x.
-            ("Resistor_SMD:R_0201_0603Metric", 1.0 / 20.0),
-            ("Resistor_SMD:R_01005_0402Metric", 1.0 / 32.0),
-            ("R_0402_1005Metric", 1.0 / 16.0),
-            ("R_0603_1608Metric", 1.0 / 10.0),
-            ("R_0805_2012Metric", 1.0 / 8.0),
-            ("R_1206_3216Metric", 1.0 / 4.0),
-        ] {
-            assert_resistor_rating(f, ResistorPowerBasis::ChipPackage, Some(want));
-        }
-        // Real KiCad names carry pad dimensions after the size code. Treating
-        // those digits as a second size code sent the name to the imperial pass,
-        // which read metric 0402 as imperial 0402 and doubled the rating.
-        for (f, want) in [
-            ("Resistor_SMD:R_0402Metric_Pad0.74x0.62mm", 1.0 / 32.0),
-            ("Resistor_SMD:R_0603Metric_Pad0.98x0.95mm", 1.0 / 20.0),
-            ("Resistor_SMD:R_3216Metric_Pad1.42x1.75mm", 1.0 / 4.0),
-        ] {
-            assert_resistor_rating(f, ResistorPowerBasis::ChipPackage, Some(want));
-        }
-        // KiCad's dual form carries a separate imperial token, which stays
-        // authoritative: 0201 imperial (1/20 W), NOT 0603 metric read as imperial.
-        for (f, want) in [
+            // KiCad's dual form pairs the imperial size code with its metric one,
+            // and a small part's metric code equals a larger part's imperial code,
+            // so the imperial token stays authoritative: 0201 imperial (1/20 W),
+            // NOT 0603 metric read as imperial. Matching the metric suffix first
+            // over-rates tiny parts by up to 2x.
             ("Resistor_SMD:R_0201_0603Metric", 1.0 / 20.0),
             ("Resistor_SMD:R_01005_0402Metric", 1.0 / 32.0),
             ("Resistor_SMD:R_0402_1005Metric", 1.0 / 16.0),
             ("Resistor_SMD:R_1206_3216Metric", 1.0 / 4.0),
+            ("R_0402_1005Metric", 1.0 / 16.0),
+            ("R_0603_1608Metric", 1.0 / 10.0),
+            ("R_0805_2012Metric", 1.0 / 8.0),
+            ("R_1206_3216Metric", 1.0 / 4.0),
+            // Real KiCad names carry pad dimensions after the size code. Treating
+            // those digits as a second size code sent the name to the imperial
+            // pass, which read metric 0402 as imperial 0402 and doubled the rating.
+            ("Resistor_SMD:R_0402Metric_Pad0.74x0.62mm", 1.0 / 32.0),
+            ("Resistor_SMD:R_0603Metric_Pad0.98x0.95mm", 1.0 / 20.0),
+            ("Resistor_SMD:R_3216Metric_Pad1.42x1.75mm", 1.0 / 4.0),
             ("Resistor_SMD:R_0402_1005Metric_Pad0.72x0.64mm", 1.0 / 16.0),
             ("Resistor_SMD:R_0201_0603Metric_Pad0.64x0.40mm", 1.0 / 20.0),
         ] {
@@ -2005,16 +1995,11 @@ mod monitor_temp_tests {
                 (want, usize::from(want.is_some())),
                 "{volts} V"
             );
-            if let Some(a) = out.first() {
-                assert!(
-                    a.because().contains("200 C/W inferred from its package"),
-                    "{a:?}"
-                );
-                assert!(
-                    a.replacement().contains("theta_ja_c_per_w to R1's card"),
-                    "{a:?}"
-                );
-            }
+            let named = |a: &Assumption| {
+                a.because().contains("200 C/W inferred from its package")
+                    && a.replacement().contains("theta_ja_c_per_w to R1's card")
+            };
+            assert!(out.iter().all(named), "{out:?}");
         }
     }
 
