@@ -1193,10 +1193,7 @@ sense_full_scale_v = 0.05
     }
 
     fn net(id: i64, name: &str) -> Net {
-        Net {
-            id,
-            name: name.into(),
-        }
+        Net::new(id, name)
     }
 
     fn board(name: &str, nets: Vec<Net>, components: Vec<Component>) -> ExtractedBoard {

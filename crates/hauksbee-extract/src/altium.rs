@@ -1512,10 +1512,7 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
     let nets: Vec<Net> = net_names
         .iter()
         .enumerate()
-        .map(|(i, name)| Net {
-            id: i as i64 + 1,
-            name: name.clone(),
-        })
+        .map(|(i, name)| Net::new(i as i64 + 1, name.clone()))
         .collect();
 
     // Group pads by their owning component index.

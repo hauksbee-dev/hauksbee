@@ -485,14 +485,8 @@ mod tests {
         let board = hauksbee_extract::ExtractedBoard {
             name: "design".into(),
             nets: vec![
-                hauksbee_extract::Net {
-                    id: 1,
-                    name: "GND".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 2,
-                    name: "SIGNAL".into(),
-                },
+                hauksbee_extract::Net::new(1, "GND"),
+                hauksbee_extract::Net::new(2, "SIGNAL"),
             ],
             components: vec![hauksbee_extract::Component {
                 reference: "R1".into(),

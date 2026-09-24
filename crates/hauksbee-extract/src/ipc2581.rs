@@ -890,10 +890,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         .collect();
     let nets: Vec<Net> = net_order
         .iter()
-        .map(|n| Net {
-            id: net_ids[n.as_str()],
-            name: unescape(n),
-        })
+        .map(|n| Net::new(net_ids[n.as_str()], unescape(n)))
         .collect();
 
     // ── Components ───────────────────────────────────────────────────────────

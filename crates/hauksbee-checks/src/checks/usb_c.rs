@@ -1680,18 +1680,9 @@ mod tests {
         let board = ExtractedBoard {
             name: "dt".into(),
             nets: vec![
-                hauksbee_extract::Net {
-                    id: 0,
-                    name: "GND".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 1,
-                    name: "CC1".into(),
-                },
-                hauksbee_extract::Net {
-                    id: 2,
-                    name: "CC2".into(),
-                },
+                hauksbee_extract::Net::new(0, "GND"),
+                hauksbee_extract::Net::new(1, "CC1"),
+                hauksbee_extract::Net::new(2, "CC2"),
             ],
             components: vec![
                 hauksbee_extract::Component {

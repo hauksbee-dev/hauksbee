@@ -499,10 +499,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         .iter()
         .enumerate()
         .skip(1)
-        .map(|(i, name)| Net {
-            id: i as i64,
-            name: unescape(name),
-        })
+        .map(|(i, name)| Net::new(i as i64, unescape(name)))
         .collect();
 
     // ── Components ───────────────────────────────────────────────────────────

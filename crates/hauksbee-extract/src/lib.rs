@@ -274,6 +274,16 @@ pub struct Net {
     pub name: String,
 }
 
+impl Net {
+    #[must_use]
+    pub fn new(id: i64, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+        }
+    }
+}
+
 /// A component pin/pad connection point.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Pin {
@@ -922,13 +932,7 @@ pub(crate) mod testutil {
     pub(crate) fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
         ExtractedBoard {
             name: "b".into(),
-            nets: nets
-                .iter()
-                .map(|&(id, name)| Net {
-                    id,
-                    name: name.into(),
-                })
-                .collect(),
+            nets: nets.iter().map(|&(id, name)| Net::new(id, name)).collect(),
             components,
         }
     }

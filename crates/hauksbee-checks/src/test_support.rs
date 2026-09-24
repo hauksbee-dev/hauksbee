@@ -51,13 +51,7 @@ pub(crate) fn board(
 ) -> ExtractedBoard {
     ExtractedBoard {
         name: name.into(),
-        nets: nets
-            .iter()
-            .map(|(id, n)| Net {
-                id: *id,
-                name: (*n).into(),
-            })
-            .collect(),
+        nets: nets.iter().map(|(id, n)| Net::new(*id, *n)).collect(),
         components,
     }
 }

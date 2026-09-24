@@ -108,10 +108,7 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                     s
                 }
             };
-            nets.push(Net {
-                id,
-                name: net.find_value("name").unwrap_or_default(),
-            });
+            nets.push(Net::new(id, net.find_value("name").unwrap_or_default()));
             for node in net.find_all("node") {
                 let Some(reference) = node.find_value("ref") else {
                     continue;

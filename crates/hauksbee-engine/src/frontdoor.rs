@@ -3942,16 +3942,7 @@ fn main {
         };
         let board = ExtractedBoard {
             name: "mixed-backend-board".to_string(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "+5V".to_string(),
-                },
-                Net {
-                    id: 2,
-                    name: "GND".to_string(),
-                },
-            ],
+            nets: vec![Net::new(1, "+5V"), Net::new(2, "GND")],
             components: vec![
                 component(
                     "U1",

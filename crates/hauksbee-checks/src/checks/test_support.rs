@@ -34,13 +34,7 @@ pub(crate) fn part(reference: &str, value: &str, pads: &[(&str, i64)]) -> Compon
 pub(crate) fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
     ExtractedBoard {
         name: "t".into(),
-        nets: nets
-            .iter()
-            .map(|(id, name)| Net {
-                id: *id,
-                name: (*name).into(),
-            })
-            .collect(),
+        nets: nets.iter().map(|(id, name)| Net::new(*id, *name)).collect(),
         components,
     }
 }

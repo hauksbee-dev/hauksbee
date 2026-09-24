@@ -6991,10 +6991,7 @@ mod tests {
     }
 
     fn net(id: i64, name: &str) -> Net {
-        Net {
-            id,
-            name: name.to_string(),
-        }
+        Net::new(id, name.to_string())
     }
 
     /// Resolve `value` the way the binder does (value and MPN both set).

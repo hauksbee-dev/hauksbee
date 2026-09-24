@@ -1962,10 +1962,7 @@ mod tests {
             name: name.to_string(),
             nets: nets
                 .iter()
-                .map(|&(id, name)| Net {
-                    id,
-                    name: name.to_string(),
-                })
+                .map(|&(id, name)| Net::new(id, name.to_string()))
                 .collect(),
             components,
         }

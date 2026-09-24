@@ -179,10 +179,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     net_ids.sort_unstable();
     let nets: Vec<Net> = net_ids
         .iter()
-        .map(|&id| Net {
-            id: id + 1,
-            name: net_names[&id].clone(),
-        })
+        .map(|&id| Net::new(id + 1, net_names[&id].clone()))
         .collect();
     let net_id = |file_id: Option<i64>| -> Option<i64> {
         file_id

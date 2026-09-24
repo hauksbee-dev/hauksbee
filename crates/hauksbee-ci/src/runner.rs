@@ -3867,16 +3867,7 @@ mod spi_cs_source_tests {
     fn board_with(value: &str, footprint: &str, cs_pad: &str) -> ExtractedBoard {
         ExtractedBoard {
             name: "spi-cs-source".to_string(),
-            nets: vec![
-                Net {
-                    id: 1,
-                    name: "EE_CS".to_string(),
-                },
-                Net {
-                    id: 2,
-                    name: "OVERRIDE_CS".to_string(),
-                },
-            ],
+            nets: vec![Net::new(1, "EE_CS"), Net::new(2, "OVERRIDE_CS")],
             components: vec![Component {
                 reference: "U5".to_string(),
                 value: value.to_string(),
