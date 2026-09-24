@@ -47,8 +47,9 @@ swing_hi = 1.5      # "VO voltage output swing from rail, positive rail,
                     # worst case, not a typical.
 swing_lo = 0.020    # same row, negative rail, VS = 5 V, RL <= 10 kOhm,
                     # TA = -25 to 85 C: TYP 5 mV, MAX 20 mV. The MAX is taken.
-rail_lo = 0.0       # fallback levels, used only by a deck `.model opamp(...)`
-rail_hi = 32.0      # (no supply pins to read); NOT a swing limit.
+# No rail_lo/rail_hi: with the swing published the binder never reads them
+# (a deck `.model opamp(...)` carries its own), and the 0 V / 32 V they held
+# were supply levels, which the lint now rejects as output limits.
 warning = "the output swing is bounded by the supply pins (V(V-)+20 mV to V(V+)-1.5 V, the datasheet MAX headrooms at RL >= 2 kOhm), but nothing else about the output stage is: the output current limit (short-circuit and the 20 mA source / 10 mA sink region) is not modelled, so a load stiffer than 2 kOhm gets a swing the part cannot actually hold and a heavier one is answered as if it could. The input common-mode range is now checked by the `input_common_mode` envelope above, and that rule UNDER-REPORTS for an op-amp: it fires only when BOTH inputs of one channel sit above V+ - 1.5 V, whereas this part leaves its guaranteed range as soon as EITHER input does, so a single input above the ceiling is not flagged at all. The 0 V lower end is not checked either, the amplification itself is still computed as if the part were in range, and the phase-reversal behaviour below V- is not modelled at all. Input offset voltage (3 mV typ, 7 mV max), input bias current (45 nA typ, 250 nA max) and input offset current (5 nA typ, 50 nA max) are taken as zero, and the gain is the 100 V/mV typ rather than the 25 V/mV min, so a computed output is the NOMINAL part at 25 C, not a bound over the datasheet's spread or over temperature. The 0.7 MHz gain-bandwidth and 0.3 V/us slew rate are not on this card, so a board-bound LM358 answers DC and settles instantly."
 
 [models.coverage]
@@ -714,10 +715,8 @@ gain    = 100000.0  # AOL typ 100 V/mV, Table 6.5 (the LM324B grade's column;
 # "voltage output swing from rail" rows as SLOS068AB does for the dual.
 swing_hi = 1.5      # positive rail, VS = 5 V, RL >= 2 kOhm: MAX 1.5 V
 swing_lo = 0.020    # negative rail, VS = 5 V, RL <= 10 kOhm: MAX 20 mV
-rail_lo = 0.0       # fallback levels only (deck `.model opamp(...)`, no pins)
-rail_hi = 30.0      # VCC max, Recommended Operating Conditions, LM324xx column
-                    # (the 32 V in Absolute Maximum Ratings is a damage limit).
-                    # NEITHER is a swing limit; `swing_hi` is.
+# No rail_lo/rail_hi: as on the lm358 entry, the swing is what binds, and the
+# 0 V / 30 V they held were supply levels, not output limits.
 warning = "the output swing is bounded by the supply pins (V(V-)+20 mV to V(V+)-1.5 V, the datasheet MAX headrooms at RL >= 2 kOhm), but nothing else about the output stage is: the output current limit is not modelled, so a load stiffer than 2 kOhm gets a swing the part cannot actually hold. The input common-mode range (0 V to V+ - 1.5 V) is not checked, so an input driven above it is answered as if the part still amplified it. Input offset voltage (7 mV max), input bias current (250 nA max) and input offset current (50 nA max) are taken as zero, and the gain is the 100 V/mV typ rather than the 25 V/mV min, so a computed output is the NOMINAL part at 25 C, not a bound over the datasheet's spread or over temperature. Gain-bandwidth and slew rate are not on this card, so a board-bound LM324 answers DC and settles instantly. All four amplifiers share one supply leg and one pair of rails; nothing here distinguishes them beyond their nets."
 
 [models.coverage]

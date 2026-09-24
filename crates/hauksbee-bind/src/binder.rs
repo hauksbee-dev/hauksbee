@@ -26,6 +26,7 @@ use hauksbee_ir::{
     SourceKind,
 };
 use hauksbee_models::sensor_spec::StrapTie;
+use hauksbee_models::validation::repeatable_role;
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{
     Bus, ComponentKind, ComponentQuery, Confidence, ModelEntry, ModelLibrary, PeripheralPower,
@@ -1988,6 +1989,10 @@ fn bind_component(
     // without a role the pin-rule table is consulted, and each such inference is
     // recorded as a guess-warning (so nothing is silently guessed).
     let (role_nets, guesses) = role_node_map_guessed(comp, model, node_of, pin_rules);
+    if let Some(reason) = split_role(comp, model, node_of) {
+        let warning = format!("{}: {reason}; the part is left OPEN", comp.reference);
+        return (BindOutcome::Unresolved { reason }, Some(warning), guesses);
+    }
 
     // A model-declared firmware peripheral is executable behavior in its own
     // right, but only when the board actually wires the bus roles.
@@ -2514,6 +2519,31 @@ fn role_node_map_guessed(
         ));
     }
     (m, guesses)
+}
+
+/// Two pads of one signal role on two nets: the role map keeps one, floating a
+/// unit. (One pad on two nets is a board contradiction, refused elsewhere.)
+/// Only multi-unit kinds: elsewhere a repeated role is one internal node (an
+/// SOT-223 tab, a flow-through ESD pin) that a board may leave on its own net.
+fn split_role(
+    comp: &Component,
+    model: &ModelEntry,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> Option<String> {
+    use ComponentKind::{BjtNpn, BjtPnp, Comparator, Diode, Opamp};
+    let unit_role = |r: &&String| match model.kind {
+        Opamp | Comparator | BjtNpn | BjtPnp => !repeatable_role(r),
+        Diode => matches!(r.as_str(), "anode" | "cathode"),
+        _ => false,
+    };
+    let mut first = HashMap::new();
+    comp.pins.iter().find_map(|pin| {
+        let role = model.pins.get(&pin.number).filter(unit_role)?;
+        let node = node_of(pin.net)?;
+        let (pad, at) = *first.entry(role).or_insert((&pin.number, node));
+        let why = "sit on different nets, so only one would be bound: a multi-unit part needs per-unit roles";
+        (at != node && *pad != pin.number).then(|| format!("pads {pad} and {} both carry role '{role}' but {why}", pin.number))
+    })
 }
 
 /// As [`role_node_map`] but taking the pad->role map and (optional) kind
@@ -7996,6 +8026,35 @@ style = "i2c_pointer"
             } else {
                 assert!(warning.is_none(), "{value}: {warning:?}");
             }
+        }
+    }
+
+    /// One role on pads of two nets refuses the part; on one net it binds.
+    #[test]
+    fn one_role_on_pads_of_two_nets_is_refused_not_half_bound() {
+        let pins =
+            [("1", "anode"), ("2", "cathode"), ("3", "cathode")].map(|(p, r)| (p.into(), r.into()));
+        let model = make_entry(
+            "dual",
+            ComponentKind::Diode,
+            "dual",
+            Default::default(),
+            pins.into(),
+        );
+        for (third, refused) in [(1, false), (2, true)] {
+            let mut c = comp("D1", "dual");
+            c.pins = vec![pin("1", 0), pin("2", 1), pin("3", third)];
+            let mut circuit = Circuit::new();
+            let nodes = [NodeId::GROUND, circuit.node("A"), circuit.node("B")];
+            let node_of = move |n: Option<i64>| Some(nodes[usize::try_from(n?).ok()?]);
+            let (outcome, warning) = bind_one(&c, &model, &mut circuit, &node_of, &HashMap::new());
+            let split =
+                warning.is_some_and(|w| w.contains("pads 2 and 3 both carry role 'cathode'"));
+            assert_eq!(
+                matches!(outcome, BindOutcome::Unresolved { .. }) && split,
+                refused,
+                "{outcome:?}"
+            );
         }
     }
 

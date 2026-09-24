@@ -39,6 +39,41 @@ fn has_role_ci(entry: &ModelEntry, role: &str) -> bool {
         .any(|known| known.eq_ignore_ascii_case(role))
 }
 
+/// A role several pads may share as one net inside: supply, ground, NC, exposed pad.
+pub fn repeatable_role(role: &str) -> bool {
+    let role = role.to_ascii_lowercase();
+    let base = role.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
+    let supply = ["vcc", "vdd", "vee", "vss"].contains(&base.get(..3).unwrap_or(base));
+    let one_net = "vs v_plus v_minus nc dnc ep epad exposed_pad thermal_pad pad tab";
+    supply || base.contains("gnd") || one_net.split(' ').any(|r| r == base)
+}
+
+/// A per-unit signal role on several pads (a lone electrode letter such as `"B"`
+/// aliases a numbered pad): merged units, which the binder wires once.
+fn merged_unit_roles(entry: &ModelEntry) -> Vec<String> {
+    use ComponentKind::*;
+    let logic = &entry.logic;
+    let units = match entry.kind {
+        BjtNpn | BjtPnp => "collector_q1, base_q1, emitter_q1, collector_q2, ...",
+        Opamp | Comparator => "out_a, in_minus_a, in_plus_a, out_b, ... for units _a to _d",
+        _ => "a1, y1, a2, y2, ..., each listed in [models.logic]",
+    };
+    let per_unit = |role: &str| match entry.kind {
+        Opamp | Comparator => !repeatable_role(role),
+        BjtNpn | BjtPnp => role.split("_q").next() == Some("base"),
+        Digital | ShiftRegister => logic.inputs.iter().chain(&logic.outputs).any(|r| r == role),
+        _ => false,
+    };
+    let mut pads = std::collections::BTreeMap::<&str, Vec<&str>>::new();
+    for (pad, role) in entry.pins.iter().filter(|(_, r)| per_unit(r)) {
+        if pad.len() > 1 || !pad.chars().all(|c| c.is_ascii_alphabetic()) {
+            pads.entry(role).or_default().push(pad);
+        }
+    }
+    let merged = pads.into_iter().filter(|(_, p)| p.len() > 1);
+    merged.map(|(role, pads)| format!("[models.pins] pads {} all carry '{role}': give each unit of a multi-unit part its own suffixed roles ({units}), or the binder wires one unit and floats the rest; only supply, ground, nc and exposed-pad roles repeat", pads.join(", "))).collect()
+}
+
 /// True when the generic digital binder has executable logic for this card.
 pub fn digital_has_behavior(entry: &ModelEntry) -> bool {
     entry.kind != ComponentKind::Digital
@@ -181,8 +216,9 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
             magnitude: &[("vout", 0.5, 30.0)],
             ordered: &[],
         },
+        // A printed swing binds the rail to the supply net; the fixed level is then unread.
         Opamp => KindRules {
-            required: &["gain", "rail_lo", "rail_hi"],
+            required: &["gain", "rail_lo|swing_lo", "rail_hi|swing_hi"],
             ranges: &[
                 ("gain", 1.0, 1e9),
                 ("rail_lo", -60.0, 60.0),
@@ -256,6 +292,8 @@ fn kind_rules(entry: &ModelEntry) -> KindRules {
 pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     let mut p = Problems::default();
     let params = &entry.params;
+    let mut supplies = vec![0.0];
+    supplies.extend(entry.ratings.max_voltage_v);
 
     for envelope in &entry.envelope {
         p.require(!envelope.basis().trim().is_empty(), || {
@@ -270,6 +308,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 abs_max_v,
                 ..
             } => {
+                supplies.extend([*min_v, *max_v, abs_max_v.unwrap_or(0.0)]);
                 p.require(has_role_ci(entry, pin), || {
                     format!("operating envelope pin '{pin}' is not a role in [models.pins]")
                 });
@@ -315,6 +354,9 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             }
         }
     }
+
+    // A pin map is a stated fact even on an identity-only card.
+    p.0.extend(merged_unit_roles(entry));
 
     // An identity-only card is useful provenance, but it is deliberately not a
     // simulation model. Keep that state explicit and machine-checkable instead
@@ -451,8 +493,9 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 })
         };
         for key in rules.required {
-            p.require(params.get_f64(key).is_some() || abstains(key), || {
-                format!("missing required param '{key}'")
+            let given = |k| params.get_f64(k).is_some() || abstains(k);
+            p.require(key.split('|').any(given), || {
+                format!("missing required param '{}'", key.replace('|', "' or '"))
             });
         }
         for (key, lo, hi) in rules.ranges {
@@ -484,11 +527,24 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 .to_string()
         });
         validate_vreg_capacitor_params(entry, &mut p);
-        for (lo, hi) in rules.ordered {
+        // Logic levels on any kind: a Schmitt VT+/VT- swap inverts every input.
+        let levels = [("vil", "vih"), ("vol", "voh")];
+        for (lo, hi) in rules.ordered.iter().chain(&levels) {
             if let (Some(a), Some(b)) = (params.get_f64(lo), params.get_f64(hi)) {
                 p.require(a < b, || {
                     format!("param '{lo}' = {a} must be strictly less than '{hi}' = {b}")
                 });
+            }
+        }
+        // With a swing published, an op-amp rail at ground, a stated supply or
+        // half of one (split supply) is the supply copied, not a swing limit.
+        let near = |v: f64, s: f64| (v.abs() - s.abs()).abs() < 1e-3;
+        let at_supply = |v: &f64| supplies.iter().any(|s| near(*v, *s) || near(*v, s / 2.0));
+        for side in ["lo", "hi"] {
+            let get = |k: &str| params.get_f64(&format!("{k}_{side}"));
+            let swing = get("swing").is_some_and(|s| s > 0.0) && entry.kind == ComponentKind::Opamp;
+            if let Some(v) = get("rail").filter(|v| swing && at_supply(v)) {
+                p.push(format!("param 'rail_{side}' = {v} is a supply level, not the output's swing limit: with swing_{side} printed, omit it or give the stated test supply minus that swing"));
             }
         }
         check_required_pins(entry, &mut p);
@@ -1211,6 +1267,42 @@ mod tests {
 
     fn accepts(e: &ModelEntry) {
         assert!(validate(e).is_ok(), "{:?}", validate(e));
+    }
+
+    /// Refused: a merged unit role, a swapped Schmitt pair, a rail at a supply.
+    #[test]
+    fn merged_units_swapped_levels_and_supply_rails_are_refused() {
+        let mut e = entry(
+            ComponentKind::Opamp,
+            &[("gain", 1e5), ("swing_lo", 0.02), ("swing_hi", 1.5)],
+        );
+        fn roles(s: &str) -> Vec<(&str, &str)> {
+            s.split(' ').filter_map(|r| r.split_once(':')).collect()
+        }
+        let dual = "4:vee 8:vcc 1:out_a 2:in_minus_a 3:in_plus_a 5:in_plus_b 6:in_minus_b 7:out_b";
+        pins(&mut e, &roles(dual));
+        accepts(&e);
+        pins(&mut e, &roles(&dual.replace("7:out_b", "7:out_a")));
+        rejects(&e, "pads 1, 7 all carry 'out_a': give each unit");
+        pins(&mut e, &roles(dual));
+        e.params.set_f64("rail_hi", 5.0);
+        e.ratings.max_voltage_v = Some(10.0);
+        rejects(&e, "'rail_hi' = 5 is a supply level");
+        e.params.set_f64("rail_hi", 3.5);
+        accepts(&e);
+        let mut q = entry(
+            ComponentKind::BjtNpn,
+            &[("is", 1e-14), ("bf", 200.0), ("nf", 1.0)],
+        );
+        pins(
+            &mut q,
+            &roles("1:emitter_q1 2:base 3:collector_q2 4:emitter_q2 5:base 6:collector_q1"),
+        );
+        rejects(&q, "pads 2, 5 all carry 'base'");
+        rejects(
+            &entry(ComponentKind::Digital, &[("vil", 2.5), ("vih", 1.5)]),
+            "'vil' = 2.5 must be strictly less",
+        );
     }
 
     #[test]

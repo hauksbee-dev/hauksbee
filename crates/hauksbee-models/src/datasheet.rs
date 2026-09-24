@@ -1464,7 +1464,8 @@ PIN ROLE NAMES for kind="{entry_kind}": {pin_roles}
   explicit NCs, exposed pads, and repeated supplies/grounds. Use one stable
   lowercase role per pad (`_n` for active-low), use it verbatim everywhere else,
   and preserve other stated functions/aliases in that pad's TOML comment. Never
-  merge or omit a pad merely because its function is unknown.
+  merge or omit a pad merely because its function is unknown. Only pads of one
+  net share a role: each unit of a multi-unit part takes its own suffixed roles.
 
 {pin_role_guidance}
 
@@ -1505,6 +1506,8 @@ WHERE TO LOOK AND HOW TO READ IT:
   programming equations. Cite the equation and every stated validity condition.
 - Before answering, re-read every cited row and footnote, then double-check its
   units, sign, package variant, test bias, and min/typ/max column.
+- Read each value from one printed cell, in a family table the exact orderable
+  part's column; never average, interpolate between cells, or make a midpoint.
 
 {source_quantity_guidance}
 
@@ -1589,10 +1592,11 @@ IMPORTANT RULES:
    the figure, the points read, and its conditions. A curve reading is typical
    only: never turn it into a min/max, a rating, or an uncertainty interval.
 3. If a required param is genuinely absent and cannot be derived or fitted, do not
-   estimate it. Emit an identity-only card with `identity_only = true`, a
-   `warning`, and `unlocked_by`, and name the missing fact as
-   `ABSTAIN: datasheet does not state ...` in the description or an unknown
-   source record. A named abstention is correct; a guessed field is wrong.
+   estimate it. If the kind's params above allow an `unknown` record for it, write
+   that record; otherwise emit an identity-only card (`identity_only = true`,
+   `warning`, `unlocked_by`) still carrying every field the datasheet states, and
+   name the missing fact as `ABSTAIN: datasheet does not state ...` in the
+   description or an unknown source record. A named abstention is correct; a guessed field is wrong.
 4. For every real behavior the selected schema and params do not represent,
    the description must say `does not model ...` and name that behavior. Do not
    let a partial card read as a complete model of the component. Never delete a
@@ -1929,11 +1933,14 @@ Only include the blocks the datasheet supports, each number cited (rule 1).
 /// the cheap half of the same guarantee.
 fn pin_roles_for_kind(kind: &str) -> &'static str {
     match kind {
-        "diode" => "anode, cathode",
-        "bjt_npn" | "bjt_pnp" => "collector, base, emitter",
+        "diode" => "anode, cathode; an array indexes each diode's own pad: cathode1, cathode2",
+        "bjt_npn" | "bjt_pnp" => "collector, base, emitter; a dual: collector_q1, base_q1, ..._q2",
         "nmos" | "pmos" => "drain, gate, source",
         "vreg" | "charger" | "pmic" => "in, out, gnd  (and en / adj / fb when the part has them)",
-        "opamp" | "comparator" => "in_plus, in_minus, out, vcc, vee",
+        "opamp" | "comparator" => {
+            "in_plus, in_minus, out, vcc, vee; a dual or quad suffixes each unit's signal roles \
+             _a to _d (out_a, in_minus_a, in_plus_a, out_b, in_minus_b, ...), supplies unsuffixed"
+        }
         "analog_switch" => "in_out_a, in_out_b (SPST) or com, s0, s1 (SPDT)",
         "digital" | "shift_register" => {
             "vcc or vdd; gnd or vss; functional roles copied from the pin/function table, with repeated channels indexed consistently (for example a1, y1, a2, y2) and active-low roles suffixed _n"
@@ -1995,7 +2002,9 @@ channels; do not collapse multiple gates onto generic `in`/`out`.
 Choose `voh`, `vol`, `vih`, and `vil` at one cited supply/load/temperature corner;
 do not mix corners. State whether each source value is typical or guaranteed and
 that fixed simulation levels are not universal datasheet bounds. VT+ and VT- are
-static switching thresholds; do not substitute dynamic or noise values. Only when
+static switching thresholds; do not substitute dynamic or noise values. A Schmitt
+input takes vih = VT+ and vil = VT- as plain typ numbers (no typ: VT+ max, VT- min),
+never as a VT row with min and max, which reads inverted. Only when
 the requested scenario needs a guaranteed transition bound, use VT+ maximum for
 a high-going transition and VT- minimum for a low-going transition. Inputs decide
 low at or below `vil`, high at or above `vih`, and hold their previous state in
@@ -2011,7 +2020,7 @@ use the identity-only abstention and name the unresolved package.
 
 fn required_params_for_kind(kind: &str) -> &'static str {
     match kind {
-        "diode" => "is, n, rs",
+        "diode" => "is, n, rs, fitted to the cited VF-at-IF rows (25 C; typ, else max)",
         "bjt_npn" | "bjt_pnp" => "is, bf, nf",
         // Never the word "is" here: optional_params_for_kind would drop the `is` param.
         "nmos" | "pmos" => {
@@ -2028,12 +2037,14 @@ fn required_params_for_kind(kind: &str) -> &'static str {
         "vreg" => {
             "fixed: vout, dropout_v, iq_a; adjustable (ADJ/FB pin): vref (the reference, \
              never the output), dropout_v and the quiescent current param the checker asks \
-             for, with no vout"
+             for, with no vout. iq_a: the no-load ground (or supply) current; max_current_a: \
+             the rated output current, never the absolute-maximum IOUT; dropout_v: the row for \
+             this part's own output-voltage option"
         }
         "opamp" => {
-            "gain, rail_lo, rail_hi (fixed fallback levels); swing_lo/swing_hi are the \
-             output headroom from each supply pin (max column), pole_hz is GBW / gain, \
-             slew is in V/us"
+            "gain, and swing_lo/swing_hi (output headroom from each supply pin, max column) or \
+             rail_lo/rail_hi (swing limits at a stated test supply, VS minus the swing, never the \
+             supply or ground itself); pole_hz is GBW / gain, slew is in V/us"
         }
         "comparator" => {
             "out_lo, out_hi, hysteresis (V). hysteresis is the datasheet VHYS, the FULL width \
@@ -2433,8 +2444,8 @@ fn verification_clause(ws: &Workspace, table: &str) -> String {
         "omit that register or field and name it in a `status = \"unknown\"` \
          `[[sensor.source.uncertainty]]` record whose reason starts `ABSTAIN:`"
     } else {
-        "use the prompt's identity-only form and a named `ABSTAIN:` in `description` \
-         or `[models.source.uncertainty]`"
+        "use rule 3 (an unknown record, else the identity-only form still giving every \
+         sourced field) and a named `ABSTAIN:` in `description` or `[models.source.uncertainty]`"
     };
     let pages = if ws.pages.is_empty() {
         "No page images were rendered. If available text or diagnostic tools cannot \
@@ -3048,6 +3059,9 @@ fn check_reply_entry(entry: &ModelEntry, part: &str, kind_str: &str) -> Result<(
     {
         bail!("reply for {part} has no model-error record (rule 0)");
     }
+    if let Some([is, n, rs]) = crate::param_names::diode_refit(entry) {
+        bail!("diode is/n/rs are absent or over 10% off the cited VF rows, which fit is = {is:.4e}, n = {n:.4}, rs = {rs:.4}");
+    }
     crate::validation::validate(entry).map_err(|errs| {
         let msg: Vec<String> = errs.iter().map(ToString::to_string).collect();
         anyhow::anyhow!("validation failed: {}", msg.join("; "))
@@ -3242,6 +3256,8 @@ mod tests {
         let comparator = build_prompt("CMP_FIXTURE", "comparator", "x");
         assert!(comparator.contains("hysteresis = 0.0") && comparator.contains("leak_s: 0 to 1"));
         assert!(comparator.contains("(VT+ minus VT-), never the input offset"));
+        assert!(comparator.contains("each unit's signal roles _a to _d (out_a, in_minus_a"));
+        assert!(build_prompt("AMP_FIXTURE", "opamp", "x").contains("never the supply or ground"));
         assert!(comparator.contains("leak_s = output-off conductance (IOH / VOH) (S)"));
         assert!(
             build_prompt("D", "diode", "x").contains("cjo = zero-bias junction capacitance (F)")
