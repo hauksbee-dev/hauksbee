@@ -1277,7 +1277,6 @@ impl Assumption {
         reference: &str,
         bound: &str,
         members: &str,
-        fix: &str,
     ) -> Self {
         Self::build(
             AssumptionKind::SubstituteModel,
@@ -1287,7 +1286,7 @@ impl Assumption {
             format!("{reference} is simulated as variant {bound}, one of {members}."),
             format!("Nothing on the board says which of the variants the card lists ({members}) is fitted; they share a pinout, so {bound} stands in."),
             format!("Every result touching {reference} describes {bound}; wherever the variants differ in values or output form, it may describe the wrong part."),
-            fix.to_string(),
+            format!("add `[[override]] ref=\"{reference}\" select=\"{bound}\"` to the spec, or put the orderable code in the BOM; `hauksbee-ci` simulates every variant and passes only if all pass"),
             None,
         )
     }

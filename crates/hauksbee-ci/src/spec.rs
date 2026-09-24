@@ -1754,20 +1754,9 @@ impl Spec {
             );
         }
         for ov in &self.overrides {
-            check(
-                ov.select.is_some() || ov.value.is_some(),
-                format!(
-                    "override on '{}': give a `value`, or `select` a variant",
-                    ov.reference
-                ),
-            );
-            check(
-                ov.tolerance.is_none() || ov.value.is_some(),
-                format!(
-                    "override on '{}': `tolerance` needs the `value` it spreads around",
-                    ov.reference
-                ),
-            );
+            let valued = ov.value.is_some() || (ov.select.is_some() && ov.tolerance.is_none());
+            let why = "give a `value` (a `tolerance` spreads around it), or `select` a variant";
+            check(valued, format!("override on '{}': {why}", ov.reference));
             if let Some(p) = ov.tolerance {
                 check(
                     in_band(p),

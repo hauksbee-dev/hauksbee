@@ -13,7 +13,7 @@ import {
   assertToml, buildToml, CHECK_KINDS, componentCapabilityIssues, CONSTRAINT_KEYS,
   emptyCheck, emptyPeripheral, emptySensor, normalizeSavedCheck, peripheralIssues,
   peripheralToml, railPolarity, rowIssues, sensorIssues, sensorToml, supplyToml,
-  upsertOverride, upsertOverrideToml,
+  overrideToml, upsertOverride,
 } from '../lib/check-spec'
 import type {
   BuilderState, CheckRow, OverrideRow, PeripheralRow, RowIssue, SensorRow, SupplyRow,
@@ -415,14 +415,16 @@ export function ChecksView({
         sensorRows.push(row)
         raw += `\n# TODO: paste a validated register-map spec for ${r.ref ?? r.id}${sensorToml(row)}`
       } else if (r.type === 'select') {
-        selects.push({ ref: r.ref, select: r.select, reason: 'picked in the app' })
+        const row = { ref: r.ref, select: r.select, reason: 'picked in the app' }
+        selects.push(row)
+        raw += overrideToml(row) // the last [[override]] for a ref wins
       } else {
         const row = { net: r.net, volts: String(r.volts ?? 3.3) }
         supplyRows.push(row)
         raw += supplyToml(row)
       }
     }
-    if (rawMode) setRawText(previous => selects.reduce(upsertOverrideToml, previous + raw))
+    if (rawMode) setRawText(previous => previous + raw)
     else {
       if (selects.length) setOverrides(rows => selects.reduce(upsertOverride, rows))
       if (checkRows.length) setChecks(cs => [...cs, ...checkRows])

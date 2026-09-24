@@ -450,18 +450,11 @@ pub fn bind_board_with(
         let model_id = model.as_ref().map(|m| m.id.clone());
 
         let (kind_str, outcome, warning, guesses) = match (&model, &res.selection) {
-            (None, Some(selection)) => {
-                let reason = selection.open_reason(&comp.reference);
-                let warning = format!(
-                    "cannot bind '{}' ({}): {reason}",
-                    comp.reference, comp.value
-                );
-                (
-                    None,
-                    BindOutcome::Unresolved { reason },
-                    Some(warning),
-                    Vec::new(),
-                )
+            (None, Some(s)) => {
+                let reason = s.open_reason(&comp.reference);
+                let warning = format!("cannot bind '{}' ({}): {reason}", s.reference, s.value);
+                let outcome = BindOutcome::Unresolved { reason };
+                (None, outcome, Some(warning), Vec::new())
             }
             (None, None) => {
                 let (kind_str, outcome, warning) = unresolved_outcome(comp, &node_of, lib);
@@ -1169,9 +1162,7 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
         return hauksbee_models::Resolution {
             model: Some(entry),
             confidence: Confidence::Guessed,
-            query: q,
             source: Some("engine-fallback".to_string()),
-            layer: None,
             origin: Some("engine-fallback".to_string()),
             provenance: Some(
                 hauksbee_ir::evidence::ModelSource::new(
@@ -1187,7 +1178,7 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
                 )
                 .expect("static fallback provenance is valid"),
             ),
-            references: Vec::new(), tied: Vec::new(), selection: None,
+            ..hauksbee_models::Resolution::unresolved(q)
         };
     }
     res

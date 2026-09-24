@@ -22,23 +22,13 @@ fn card(b_pins: &str) -> String {
 
 #[test]
 fn an_undetermined_variant_set_is_swept_or_refused_never_guessed() {
-    let parts = support::comp(
-        "U3",
-        "Package_TO_SOT_SMD:SOT-23",
-        "XYZ1234",
-        10,
-        support::pad(1, "VIN") + &support::pad(2, "GND") + &support::pad(3, "VOUT"),
-    ) + &support::comp(
-        "R1",
-        "Resistor_SMD:R_0805_2012Metric",
-        "1k",
-        20,
-        support::pad(1, "VOUT") + &support::pad(2, "GND"),
-    );
-    let board = support::write_tmp(
-        "xyz.board",
-        &format!("board version 1\nfn main {{\n{parts}}}\n"),
-    );
+    let (comp, pad) = (support::comp, support::pad);
+    let u3 = pad(1, "VIN") + &pad(2, "GND") + &pad(3, "VOUT");
+    let u3 = comp("U3", "Package_TO_SOT_SMD:SOT-23", "XYZ1234", 10, u3);
+    let r1 = pad(1, "VOUT") + &pad(2, "GND");
+    let r1 = comp("R1", "Resistor_SMD:R_0805_2012Metric", "1k", 20, r1);
+    let board = format!("board version 1\nfn main {{\n{u3}{r1}}}\n");
+    let board = support::write_tmp("xyz.board", &board);
     let same = "\"1\" = \"in\"\n\"2\" = \"gnd\"\n\"3\" = \"out\"";
     let other = "\"1\" = \"out\"\n\"2\" = \"gnd\"\n\"3\" = \"in\"";
     let select = "[[override]]\nref = \"U3\"\nselect = \"xyz1234A\"\n";
@@ -47,13 +37,11 @@ fn an_undetermined_variant_set_is_swept_or_refused_never_guessed() {
         // (case, B pinout, max V, spec extra) -> passed, invalid, seeds, detail
         ("every member passes", same, 5.5, "", true, false, 2, "held across 2 seeds"),
         ("the members split", same, 3.4, "", false, false, 2, "seed 0 with U3 as variant xyz1234B"),
-        ("pinouts differ", other, 3.4, "", false, true, 1, "Selection required for U3"),
+        ("pinouts differ", other, 3.4, "", false, true, 1, "Selection required for U3: the 2 XYZ1234"),
         ("the spec selects", other, 3.4, select, true, false, 1, "settled 3.300V"),
     ];
     for (case, b_pins, max, extra, passed, invalid, seeds, detail) in rows {
-        let models = support::write_tmp("xyz.toml", &card(b_pins))
-            .parent()
-            .map(Into::into);
+        let models = support::write_tmp("xyz.toml", &card(b_pins));
         let spec = support::write_tmp(
             "spec.toml",
             &format!(
@@ -63,31 +51,19 @@ fn an_undetermined_variant_set_is_swept_or_refused_never_guessed() {
                 support::toml_path(&board)
             ),
         );
-        let r = hauksbee_ci::run(&hauksbee_ci::RunConfig {
-            models_dir: models,
-            ..support::run_config(spec)
-        })
-        .expect(case);
+        let mut config = support::run_config(spec);
+        config.models_dir = models.parent().map(Into::into);
+        let r = hauksbee_ci::run(&config).expect(case);
         let row = support::row(&r, "vout");
-        assert_eq!(
-            (row.passed, row.invalid, r.seeds),
-            (passed, invalid, seeds),
-            "{case}: {row:?}"
+        let got = (row.passed, row.invalid, r.seeds);
+        assert_eq!(got, (passed, invalid, seeds), "{case}: {row:?}");
+        let unlock = "Unlocked by: Add `[[override]] ref=\"U3\" select=\"xyz1234A\"` to the spec";
+        let text = &row.detail;
+        assert!(
+            text.contains(detail) && (!invalid || text.contains(unlock)),
+            "{case}: {text}"
         );
-        assert!(row.detail.contains(detail), "{case}: {}", row.detail);
-        if invalid {
-            assert!(
-                row.detail.contains("select=\"xyz1234A\""),
-                "{case}: {}",
-                row.detail
-            );
-        }
-        if !extra.is_empty() {
-            let json = r.render_json();
-            assert!(
-                json.contains("xyz1234A, selected in the spec"),
-                "{case}: provenance row"
-            );
-        }
+        let chosen = r.render_json().contains("xyz1234A, selected in the spec");
+        assert!(extra.is_empty() || chosen, "{case}: provenance row");
     }
 }

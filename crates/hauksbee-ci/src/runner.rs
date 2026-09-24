@@ -20,6 +20,7 @@ use hauksbee_models::ModelLibrary;
 
 use crate::error::SpecError;
 use crate::spec::{Spec, SupplySpec};
+use crate::tolerance::SeedPlan;
 
 #[derive(Debug, Clone)]
 pub(crate) struct VariantEvidence {
@@ -845,13 +846,7 @@ pub fn run_spec_with_lib(
         .any(|p| !fuzz_net_drives(spec, p.seed).is_empty());
     let swept = plans.iter().any(|p| !p.variants.is_empty());
     let shared_ac = if spec.ac.is_some() && tols.is_empty() && !fuzz_straps_present && !swept {
-        Some(compute_ac(
-            spec,
-            &base,
-            &crate::tolerance::SeedPlan::default(),
-            &[],
-            lib,
-        )?)
+        Some(compute_ac(spec, &base, &SeedPlan::default(), &[], lib)?)
     } else {
         None
     };
@@ -897,7 +892,7 @@ pub fn run_spec_with_lib(
 fn compute_ac(
     spec: &Spec,
     base: &ExtractedBoard,
-    plan: &crate::tolerance::SeedPlan,
+    plan: &SeedPlan,
     fuzz_drives: &[(String, f64)],
     lib: &ModelLibrary,
 ) -> Result<AcOutcome, SpecError> {
@@ -1366,11 +1361,9 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> ExtractedBoard {
             .find(|c| c.reference == ov.reference)
         {
             comp.value = ov.value.clone().unwrap_or_else(|| comp.value.clone());
-            let select = ov
-                .select
-                .iter()
-                .map(|id| (SELECT_PROPERTY.to_string(), id.clone()));
-            comp.properties.extend(select);
+            if let Some(id) = &ov.select {
+                comp.properties.push((SELECT_PROPERTY.into(), id.clone()));
+            }
         }
     }
     board
@@ -1388,17 +1381,15 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> ExtractedBoard {
 /// round-trips. `{:?}` is round-trippable for f64 and its scientific form (for
 /// very small values) is accepted by the same parser.
 /// The plan's variant members are set the same way, as the sweep's selection.
-fn apply_plan(board: &mut ExtractedBoard, plan: &crate::tolerance::SeedPlan) {
+fn apply_plan(board: &mut ExtractedBoard, plan: &SeedPlan) {
     for comp in &mut board.components {
         let reference = comp.reference.as_str();
         if let Some(sv) = plan.values.iter().find(|sv| sv.reference == reference) {
             comp.value = format!("{:?}", sv.si);
         }
         let ids = plan.variants.iter().filter(|(r, _)| r == reference);
-        let sweep = ids
-            .map(|(_, id)| (SWEEP_PROPERTY.to_string(), id.clone()))
-            .collect::<Vec<_>>();
-        comp.properties.extend(sweep);
+        comp.properties
+            .extend(ids.map(|(_, id)| (SWEEP_PROPERTY.into(), id.clone())));
     }
 }
 
@@ -1410,23 +1401,19 @@ fn sweep_variants(
     spec: &Spec,
     base: &ExtractedBoard,
     lib: &ModelLibrary,
-    plans: Vec<crate::tolerance::SeedPlan>,
-) -> Vec<crate::tolerance::SeedPlan> {
+    plans: Vec<SeedPlan>,
+) -> Vec<SeedPlan> {
     use hauksbee_extract::assembly::AssemblyState;
     let board = apply_overrides(spec, base);
     let open = |comp: &hauksbee_extract::Component| {
         let part = AssemblyState::of(comp).fitted()?;
-        let selection = hauksbee_engine::binder::resolve(lib, part).selection?;
-        let ids = selection.survivors().map(|m| m.id.clone()).collect();
-        (selection.determined.is_none() && selection.same_pinout)
-            .then(|| (comp.reference.clone(), ids))
+        let s = hauksbee_engine::binder::resolve(lib, part).selection?;
+        let ids = s.survivors().map(|m| m.id.clone()).collect();
+        let open = s.determined.is_none() && s.same_pinout;
+        open.then(|| (comp.reference.clone(), ids))
     };
     let axes: Vec<(String, Vec<String>)> = board.components.iter().filter_map(open).collect();
-    if axes.is_empty() {
-        return plans;
-    }
-    let fallback = plans.clone();
-    crate::tolerance::with_variants(plans, &axes).unwrap_or(fallback)
+    crate::tolerance::with_variants(plans.clone(), &axes).unwrap_or(plans)
 }
 
 /// The run's production assumptions: the hollow-gate ones the caller already

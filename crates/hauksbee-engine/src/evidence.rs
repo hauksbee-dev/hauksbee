@@ -194,8 +194,8 @@ fn component_occurrence_subjects(
     (component_subjects, row_subjects)
 }
 
-/// A bound part's `REF.model` row, after its `REF.variant` row when a variant
-/// set chose the model; `fact` is (display reference, model id, layer, confidence).
+/// A bound part's `REF.model` row, after its `REF.variant` row (who chose the
+/// member) when a variant set chose the model.
 fn push_model_rows(
     parameters: &mut Vec<ParameterProvenance>,
     subject: &str,
@@ -207,55 +207,28 @@ fn push_model_rows(
         layer,
         confidence,
     };
-    if let Some(selection) = selection {
-        let (value, origin) = variant_value(model_id, selection, origin.clone());
-        parameters.push(ParameterProvenance::for_subject(
-            subject,
-            format!("{display}.variant"),
-            value,
-            origin,
-        )?);
+    let mut rows = Vec::new();
+    if let Some(s) = selection {
+        let how = match (s.determined.is_some(), s.via) {
+            (false, _) => format!("standing in for {}", s.ids()),
+            (true, Via::Spec) => "selected in the spec".into(),
+            (true, Via::Sweep) => format!("one run of the sweep over {}", s.ids()),
+            (true, Via::Board) => "determined by the board".into(),
+        };
+        let spec = ValueOrigin::UserOverride {
+            via: hauksbee_ir::evidence::OverrideSource::Spec,
+        };
+        let chosen = s.determined.is_some() && s.via == Via::Spec;
+        let from = if chosen { spec } else { origin.clone() };
+        rows.push(("variant", format!("{model_id}, {how}"), from));
     }
-    parameters.push(ParameterProvenance::for_subject(
-        subject,
-        format!("{display}.model"),
-        model_id,
-        origin,
-    )?);
+    rows.push(("model", model_id.to_string(), origin));
+    for (field, value, origin) in rows {
+        let name = format!("{display}.{field}");
+        let row = ParameterProvenance::for_subject(subject, name, value, origin)?;
+        parameters.push(row);
+    }
     Ok(())
-}
-
-/// The member ids of a variant set, for a sentence.
-fn variant_members(selection: &Selection) -> String {
-    selection
-        .members
-        .iter()
-        .map(|m| m.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The `REF.variant` provenance value and origin: who chose the bound member.
-fn variant_value(
-    model_id: &str,
-    selection: &Selection,
-    model: ValueOrigin,
-) -> (String, ValueOrigin) {
-    let members = variant_members(selection);
-    match (selection.determined.is_some(), selection.via) {
-        (false, _) => (format!("{model_id}, standing in for {members}"), model),
-        (true, Via::Spec) => {
-            let origin = ValueOrigin::UserOverride {
-                via: hauksbee_ir::evidence::OverrideSource::Spec,
-            };
-            (format!("{model_id}, selected in the spec"), origin)
-        }
-        (true, Via::Sweep) => (
-            format!("{model_id}, one run of the sweep over {members}"),
-            model,
-        ),
-        (true, Via::Board) => (format!("{model_id}, determined by the board"), model),
-    }
 }
 
 /// The open-part assumptions for one bind report: one per DISTINCT claim, not
@@ -366,29 +339,12 @@ impl BoardEvidence {
         let mut assumptions = Vec::new();
         assumptions.extend(open_part_assumptions(report, &row_subjects));
         // A variant set the board could not narrow bound a same-pinout stand-in.
-        for (&index, selection) in report
-            .selections
-            .iter()
-            .filter(|(_, s)| s.determined.is_none())
-        {
-            let row = &report.rows[index];
-            let subject = row_subjects
-                .get(index)
-                .map_or(row.reference.trim(), String::as_str);
-            if let Some(bound) = &row.model_id {
-                let fix = format!(
-                    "add `{}` to the spec, or put the orderable code in the BOM; `hauksbee-ci` \
-                     simulates every variant and passes only if all pass",
-                    selection.override_line(&row.reference)
-                );
-                let members = variant_members(selection);
-                assumptions.push(Assumption::undetermined_variant(
-                    subject,
-                    &row.reference,
-                    bound,
-                    &members,
-                    &fix,
-                ));
+        for (&index, s) in &report.selections {
+            let (row, subject) = (&report.rows[index], &row_subjects[index]);
+            if let (None, Some(bound)) = (&s.determined, &row.model_id) {
+                let ids = s.ids();
+                let a = Assumption::undetermined_variant(subject, &row.reference, bound, &ids);
+                assumptions.push(a);
             }
         }
         // A part bound to a generic estimated-fallback model is running on
@@ -611,12 +567,8 @@ impl BoardEvidence {
                             confidence,
                         )?);
                         let selection = selections.get(reference.as_str()).copied();
-                        let fact = (
-                            provenance_reference.as_str(),
-                            model_id,
-                            source.layer(),
-                            confidence,
-                        );
+                        let layer = source.layer();
+                        let fact = (&*provenance_reference, model_id, layer, confidence);
                         push_model_rows(&mut parameters, reference, fact, selection)?;
                     }
                 }
@@ -1468,12 +1420,8 @@ impl BoardEvidence {
                 fact.source.clone(),
                 fact.confidence,
             )?);
-            let row = (
-                fact.reference.as_str(),
-                fact.model_id.as_str(),
-                fact.source.layer(),
-                fact.confidence,
-            );
+            let layer = fact.source.layer();
+            let row = (&*fact.reference, &*fact.model_id, layer, fact.confidence);
             push_model_rows(&mut parameters, reference, row, fact.selection.as_ref())?;
             push_default_parameters(
                 &mut parameters,

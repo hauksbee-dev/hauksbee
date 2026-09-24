@@ -717,12 +717,9 @@ impl ModelLibrary {
             // Siblings of an orderable-variant set are not a tie: `variants::select`
             // scores them against the component and binds one, a stand-in, or none.
             let family = le.compiled.entry.variant_of.as_deref();
-            let sibling = |o: &LayeredEntry| {
-                family.is_some()
-                    && o.compiled.entry.variant_of.as_deref() == family
-                    && rank(o).0 == top.0
-                    && rank(o).1 == top.1
-            };
+            let tier =
+                |o: &LayeredEntry| (rank(o).0, rank(o).1, o.compiled.entry.variant_of.clone());
+            let sibling = |o: &LayeredEntry| family.is_some() && tier(o) == tier(le);
             let mut siblings: Vec<&LayeredEntry> = matched().filter(|o| sibling(o)).collect();
             siblings.sort_by(|a, b| a.compiled.entry.id.cmp(&b.compiled.entry.id));
             let entries: Vec<&ModelEntry> = siblings.iter().map(|o| &o.compiled.entry).collect();
@@ -734,10 +731,8 @@ impl ModelLibrary {
                     .find(|o| Some(o.compiled.entry.id.as_str()) == bound),
             };
             let Some(le) = chosen else {
-                return Resolution {
-                    selection,
-                    ..Resolution::unresolved(q.clone())
-                };
+                let open = Resolution::unresolved(q.clone());
+                return Resolution { selection, ..open };
             };
             let tie = |other: &&LayeredEntry| {
                 rank(other) == top && other.compiled.entry.id != *id && !sibling(other)
@@ -792,12 +787,9 @@ impl ModelLibrary {
             error: e,
         };
         let db_file: schema::DbFile = toml::from_str(src).map_err(parse)?;
-        if let Some(problem) = variants::lint(&db_file.models).into_iter().next() {
+        if let Some(messages) = variants::lint(&db_file.models).into_iter().next() {
             let id = source_name.to_string();
-            return Err(ModelError::ValidationFailed {
-                id,
-                messages: problem,
-            });
+            return Err(ModelError::ValidationFailed { id, messages });
         }
 
         for mut entry in db_file.models {
@@ -922,7 +914,6 @@ impl ModelLibrary {
         Resolution {
             model: Some(entry),
             confidence: Confidence::Exact,
-            query,
             source: Some("spice".to_string()),
             layer: Some(SourceLayer::Spice),
             origin: Some(card.name.clone()),
@@ -940,9 +931,7 @@ impl ModelLibrary {
                 )
                 .expect("SPICE card names are non-empty after parsing"),
             ),
-            references: Vec::new(),
-            tied: Vec::new(),
-            selection: None,
+            ..Resolution::unresolved(query)
         }
     }
 }

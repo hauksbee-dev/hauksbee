@@ -23,7 +23,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use hauksbee_ir::evidence::{EvidenceMap, MatchConfidence, ModelLayer, ModelOnPath};
+use hauksbee_ir::evidence::{Assumption, EvidenceMap, MatchConfidence, ModelLayer, ModelOnPath};
 
 pub mod assertions;
 pub mod check;
@@ -594,9 +594,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             result.waived = None;
             // An unsettled variant set names its members and the spec line that settles it.
             let cited = |id| evidence.assumptions().iter().find(|a| a.id() == id);
-            let listed = |a: &&hauksbee_ir::evidence::Assumption| {
-                a.because().contains(hauksbee_models::variants::LISTED)
-            };
+            let listed = |a: &&Assumption| a.because().contains(hauksbee_models::variants::LISTED);
             let variant = map.assumptions().iter().filter_map(cited).find(listed);
             let why = variant.map(|a| format!(" {} Unlocked by: {}", a.because(), a.replacement()));
             if !result.detail.starts_with("INVALID evidence:") {

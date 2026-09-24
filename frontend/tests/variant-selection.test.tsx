@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { OpenSelectionsBanner } from '../src/components/SelectionCard'
-import { buildToml, tomlToBuilder, upsertOverride, upsertOverrideToml } from '../src/lib/check-spec'
+import { buildToml, tomlToBuilder, upsertOverride } from '../src/lib/check-spec'
 import type { WebOpenSelection } from '../src/types/report'
 
 describe('variant selection overrides', () => {
@@ -12,15 +12,6 @@ describe('variant selection overrides', () => {
     expect(toml.match(/\[\[override\]\]/g)).toHaveLength(1)
     expect(tomlToBuilder(toml)?.overrides).toEqual([{ ref: 'U3', select: 'xyz1234a', reason: 'picked in the app' }])
     expect(tomlToBuilder('[[override]]\nref = "U3"\nbogus = 1\n')).toBeNull()
-  })
-
-  test('raw upsert keeps other blocks and replaces the same ref', () => {
-    const raw = 'name = "n"\n\n[[override]]\nref = "U3"\nselect = "b"\n\n[[override]]\nref = "U9"\nvalue = "x"\n\n[[assert]]\nkind = "no_faults"\n'
-    const out = upsertOverrideToml(raw, { ref: 'U3', select: 'a' })
-    expect(out.match(/ref = "U3"/g)).toHaveLength(1)
-    expect(out).toContain('select = "a"')
-    expect(out).toContain('ref = "U9"')
-    expect(out).toContain('kind = "no_faults"')
   })
 
   test('banner names the state and offers each member with its page', () => {

@@ -182,31 +182,24 @@ pub struct SeedPlan {
 /// member does. `None` above 2^[`CORNER_CAP`] runs: the part then keeps its
 /// flagged stand-in.
 pub fn with_variants(
-    plans: Vec<SeedPlan>,
+    mut runs: Vec<SeedPlan>,
     axes: &[(String, Vec<String>)],
 ) -> Option<Vec<SeedPlan>> {
-    let combos = axes
-        .iter()
-        .try_fold(1usize, |n, (_, ids)| n.checked_mul(ids.len()))?;
-    if plans.len().checked_mul(combos)? > 1 << CORNER_CAP {
-        return None;
-    }
-    let pick = |mut k: usize| {
-        let pick = |(reference, ids): &(String, Vec<String>)| {
-            let id = ids[k % ids.len()].clone();
-            k /= ids.len();
-            (reference.clone(), id)
+    for (reference, ids) in axes {
+        let member = |plan: &SeedPlan, id: &String| {
+            let mut plan = plan.clone();
+            plan.variants.push((reference.clone(), id.clone()));
+            plan
         };
-        axes.iter().map(pick).collect()
-    };
-    let pick = &pick;
-    let expand = |plan: SeedPlan| {
-        (0..combos).map(move |k| SeedPlan {
-            variants: pick(k),
-            ..plan.clone()
-        })
-    };
-    Some(plans.into_iter().flat_map(expand).collect())
+        runs = runs
+            .iter()
+            .flat_map(|p| ids.iter().map(|id| member(p, id)))
+            .collect();
+        if runs.len() > 1 << CORNER_CAP {
+            return None;
+        }
+    }
+    Some(runs)
 }
 
 /// The ensemble execution mode.
@@ -808,26 +801,16 @@ mod tests {
     /// Every seed runs every variant combination, and a sweep past the cap is refused.
     #[test]
     fn variant_axes_cross_every_plan_within_the_cap() {
-        let ids = |ids: &[&str]| ids.iter().map(ToString::to_string).collect::<Vec<_>>();
-        let axes = [
-            ("U3".to_string(), ids(&["a", "b"])),
-            ("U4".to_string(), ids(&["x", "y", "z"])),
-        ];
+        use std::collections::BTreeSet;
+        let axis = |r: &str, ids: &str| (r.to_string(), ids.split(' ').map(String::from).collect());
+        let axes: [(String, Vec<String>); 2] = [axis("U3", "a b"), axis("U4", "x y z")];
         let plans = build_plans(Mode::MonteCarlo, 2, &[]).unwrap();
         let swept = with_variants(plans.clone(), &axes).unwrap();
-        let runs: Vec<(u32, String)> = swept
-            .iter()
-            .map(|p| (p.seed, format!("{:?}", p.variants)))
-            .collect();
-        assert_eq!(runs.len(), 12);
+        let runs: BTreeSet<_> = swept.iter().map(|p| (p.seed, &p.variants)).collect();
+        assert_eq!((swept.len(), runs.len()), (12, 12), "{runs:?}");
         assert_eq!(
-            runs.iter().collect::<std::collections::BTreeSet<_>>().len(),
-            12,
-            "{runs:?}"
-        );
-        assert_eq!(
-            swept[1].variants,
-            [("U3".into(), "b".into()), ("U4".into(), "x".into())]
+            format!("{:?}", swept[4].variants),
+            r#"[("U3", "b"), ("U4", "y")]"#
         );
         let wide = [("U3".to_string(), (0..1025).map(|i| i.to_string()).collect())];
         assert!(with_variants(plans, &wide).is_none());

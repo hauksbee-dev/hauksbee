@@ -410,20 +410,6 @@ export function overrideToml(o: OverrideRow): string {
   return out
 }
 
-/** Raw-mode upsert: drop any `[[override]]` block already naming this ref,
- *  then append the new one. */
-export function upsertOverrideToml(raw: string, row: OverrideRow): string {
-  const sameRef = (block: string) => {
-    try {
-      return (parseToml(block) as { override?: OverrideRow[] }).override?.[0]?.ref === row.ref
-    } catch {
-      return false
-    }
-  }
-  const kept = raw.split(/(?=^\s*\[)/m).filter(b => !(/^\s*\[\[override\]\]/.test(b) && sameRef(b)))
-  return kept.join('').trimEnd() + '\n' + overrideToml(row)
-}
-
 /** One [[assert]] block: the kind's subject, then its schema fields in order,
  *  each only when filled (strings quoted, numbers only when finite). */
 export function assertToml(c: CheckRow): string {

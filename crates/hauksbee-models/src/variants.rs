@@ -59,11 +59,13 @@ pub struct Member {
     pub reason: String,
 }
 
-/// A variant set scored against one component. `determined` is the one member
-/// left once contradicted ones drop; `same_pinout` says every member maps the
-/// same pads to the same roles.
+/// A variant set scored against one component (`reference`, `value`).
+/// `determined` is the one member left once contradicted ones drop;
+/// `same_pinout` says every member maps the same pads to the same roles.
 #[derive(Debug, Clone, Serialize)]
 pub struct Selection {
+    pub reference: String,
+    pub value: String,
     pub family: String,
     pub members: Vec<Member>,
     pub determined: Option<String>,
@@ -79,10 +81,8 @@ impl Selection {
     /// The member to bind: the determined one, else for a same-pinout set the
     /// first survivor as a flagged stand-in, else none (the part stays open).
     pub fn bound(&self) -> Option<&str> {
-        let stand_in = self.survivors().next().filter(|_| self.same_pinout);
-        self.determined
-            .as_deref()
-            .or(stand_in.map(|m| m.id.as_str()))
+        let stand_in = self.survivors().find(|_| self.same_pinout);
+        self.determined.as_deref().or(stand_in.map(|m| &*m.id))
     }
 
     /// The spec line that settles the set for `reference`.
@@ -91,24 +91,24 @@ impl Selection {
         format!("[[override]] ref=\"{reference}\" select=\"{id}\"")
     }
 
+    /// The member ids, for a sentence.
+    pub fn ids(&self) -> String {
+        let ids: Vec<&str> = self.members.iter().map(|m| &*m.id).collect();
+        ids.join(", ")
+    }
+
     /// Every member with its selector, source and verdict, for a message.
     pub fn listing(&self) -> String {
-        let line = |m: &Member| {
-            format!(
-                "{} ({}; {}): {:?}, {}",
-                m.id, m.selector, m.basis, m.verdict, m.reason
-            )
-        };
+        let head = |m: &Member| format!("{} ({}; {})", m.id, m.selector, m.basis);
+        let line = |m: &Member| format!("{}: {:?}, {}", head(m), m.verdict, m.reason);
         self.members.iter().map(line).collect::<Vec<_>>().join("; ")
     }
 
     /// Why a set with nothing to bind leaves `reference` open, and what closes it.
     pub fn open_reason(&self, reference: &str) -> String {
         let (n, family, listing) = (self.members.len(), &self.family, self.listing());
-        let (unlock, line) = (
-            Assumption::UNLOCKED_BY_MARKER,
-            self.override_line(reference),
-        );
+        let unlock = Assumption::UNLOCKED_BY_MARKER;
+        let line = self.override_line(reference);
         if self.survivors().next().is_none() {
             return format!(
                 "the board fits none of the {n} {family} {LISTED}: {listing}.{unlock}fix the part \
@@ -153,12 +153,8 @@ pub fn select(family: &str, siblings: &[&ModelEntry], q: &ComponentQuery) -> Sel
         (0..siblings.len()).filter(hit).collect()
     };
     // The first identity text (MPN, value, then properties) some member's code matches.
-    let reserved = [SELECT_PROPERTY, SWEEP_PROPERTY];
-    let props = q
-        .properties
-        .iter()
-        .filter(|(k, _)| !reserved.contains(&k.as_str()));
-    let props = props.map(|(_, v)| v.as_str());
+    let own = |(k, _): &&(String, String)| k != SELECT_PROPERTY && k != SWEEP_PROPERTY;
+    let props = q.properties.iter().filter(own).map(|(_, v)| v.as_str());
     let texts = [q.mpn.as_deref(), q.value.as_deref()];
     let mut texts = texts.into_iter().flatten().chain(props).map(str::trim);
     let identity = texts.find_map(|text| Some((text, hits(text))).filter(|(_, h)| !h.is_empty()));
@@ -192,15 +188,14 @@ pub fn select(family: &str, siblings: &[&ModelEntry], q: &ComponentQuery) -> Sel
         }
     };
     let members: Vec<Member> = siblings.iter().enumerate().map(score).collect();
-    let mut left = members.iter().filter(|m| m.verdict != Verdict::C);
-    let determined = match (left.next(), left.next()) {
-        (Some(only), None) => Some(only.id.clone()),
-        _ => None,
-    };
+    let left: Vec<&Member> = members.iter().filter(|m| m.verdict != Verdict::C).collect();
+    let determined = (left.len() == 1).then(|| left[0].id.clone());
     let same_pinout = siblings.windows(2).all(|pair| pair[0].pins == pair[1].pins);
-    let family = family.to_string();
+    let text = |t: &Option<String>| t.clone().unwrap_or_default();
     Selection {
-        family,
+        reference: text(&q.reference),
+        value: text(&q.value),
+        family: family.to_string(),
         members,
         determined,
         via,
@@ -289,62 +284,38 @@ mod tests {
     #[test]
     fn selection_binds_what_the_board_determines_and_never_guesses_a_pinout() {
         let (soic, sot) = (Some("Package_SO:SOIC-8"), Some("Package_TO_SOT_SMD:SOT-23"));
-        let pads = ["1", "2", "3"].map(String::from).to_vec();
+        let (pads, none) = (["1", "2", "3"].map(String::from).to_vec(), &vec![]);
         #[rustfmt::skip]
         let cases = [
-            // (case, B pins, value, mpn, footprint, select, pads) -> bound, determined, via
-            ("value names A's code", OTHER, "XYZ1234ADBVR", None, None, None, &pads, Some("a"), true, Via::Board),
-            ("mpn names B's code", SAME, "XYZ1234", Some("XYZ1234BDBV"), None, None, &pads, Some("b"), true, Via::Board),
-            ("package picks B", SAME, "XYZ1234", None, soic, None, &pads, Some("b"), true, Via::Board),
-            ("pads rule out B's pad 4", OTHER, "XYZ1234", None, None, None, &pads, Some("a"), true, Via::Board),
-            ("spec selects B", OTHER, "XYZ1234", None, None, Some("xyz1234b"), &vec![], Some("b"), true, Via::Spec),
-            ("same pinout stands in", SAME, "XYZ1234", None, None, None, &pads, Some("a"), false, Via::Board),
-            ("pinouts differ, stays open", OTHER, "XYZ1234", None, None, None, &vec![], None, false, Via::Board),
-            ("select contradicts the mpn", SAME, "XYZ1234", Some("XYZ1234ADBV"), None, Some("xyz1234b"), &pads, None, false, Via::Spec),
-            ("package contradicts the mpn", SAME, "XYZ1234", Some("XYZ1234BDBV"), sot, None, &pads, None, false, Via::Board),
+            // (case, B pins, value, mpn, footprint, select, pads) -> bound, determined, via, text
+            ("value names A's code", OTHER, "XYZ1234ADBVR", None, None, None, &pads, Some("a"), true, Via::Board, "S, code XYZ1234ADBVR"),
+            ("mpn names B's code", SAME, "XYZ1234", Some("XYZ1234BDBV"), None, None, &pads, Some("b"), true, Via::Board, "C, code XYZ1234BDBV"),
+            ("package picks B", SAME, "XYZ1234", None, soic, None, &pads, Some("b"), true, Via::Board, "C, package SOT-23, SOIC footprint"),
+            ("pads rule out B's pad 4", OTHER, "XYZ1234", None, None, None, &pads, Some("a"), true, Via::Board, "C, no pad 4 on the footprint"),
+            ("spec selects B", OTHER, "XYZ1234", None, None, Some("xyz1234b"), none, Some("b"), true, Via::Spec, "S, the spec selects xyz1234b"),
+            ("same pinout stands in", SAME, "XYZ1234", None, None, None, &pads, Some("a"), false, Via::Board, "U, nothing names it"),
+            ("pinouts differ, stays open", OTHER, "XYZ1234", None, None, None, none, None, false, Via::Board, "selection required for U3: the 2 XYZ1234"),
+            ("select contradicts the mpn", SAME, "XYZ1234", Some("XYZ1234ADBV"), None, Some("xyz1234b"), &pads, None, false, Via::Spec, "fits none of the 2"),
+            ("package contradicts the mpn", SAME, "XYZ1234", Some("XYZ1234BDBV"), sot, None, &pads, None, false, Via::Board, "fits none of the 2"),
         ];
-        for (case, b_pins, value, mpn, footprint, select, pads, bound, determined, via) in cases {
+        for (case, b_pins, value, mpn, footprint, select, pads, bound, determined, via, text) in
+            cases
+        {
             let lib = load(&family(b_pins, "SOIC-8")).unwrap();
-            let select = select.map(|id| (SELECT_PROPERTY.to_string(), id.to_string()));
-            let (value, mpn, footprint) = (
-                Some(value.into()),
-                mpn.map(Into::into),
-                footprint.map(Into::into),
-            );
-            let (properties, pads) = (select.into_iter().collect(), pads.clone());
-            let q = ComponentQuery {
-                value,
-                mpn,
-                footprint,
-                properties,
-                pads,
-                ..Default::default()
-            };
+            let owned = |t: Option<&str>| t.map(String::from);
+            let mut q = ComponentQuery::default();
+            (q.value, q.mpn, q.footprint) = (owned(Some(value)), owned(mpn), owned(footprint));
+            q.pads.clone_from(pads);
+            q.properties
+                .extend(select.map(|id| (SELECT_PROPERTY.into(), id.into())));
             let res = lib.resolve(&q);
-            let selection = res.selection.as_ref().expect(case);
-            let got = res
-                .model
-                .as_ref()
-                .map(|m| m.id.trim_start_matches("xyz1234"));
-            assert_eq!(
-                (got, selection.determined.is_some(), selection.via),
-                (bound, determined, via),
-                "{case}: {}",
-                selection.listing()
-            );
+            let s = res.selection.expect(case);
+            let got = res.model.map(|m| m.id.replace("xyz1234", ""));
+            let got = (got.as_deref(), s.determined.is_some(), s.via);
+            assert_eq!(got, (bound, determined, via), "{case}: {}", s.listing());
             assert!(res.tied.is_empty(), "{case}: siblings are not a tie");
-            let reason = selection.open_reason("U3");
-            let (open, none) = (case.contains("stays open"), case.contains("contradicts"));
-            for (want, needed) in [
-                ("selection required for U3", open),
-                ("[[override]] ref=\"U3\" select=\"xyz1234a\"", open),
-                ("fits none", none),
-            ] {
-                assert!(
-                    !needed || reason.contains(want),
-                    "{case}: {want} in {reason}"
-                );
-            }
+            let said = format!("{} {}", s.listing(), s.open_reason("U3"));
+            assert!(said.contains(text), "{case}: {text} in {said}");
         }
     }
 
@@ -353,15 +324,11 @@ mod tests {
         let good = family(SAME, "SOT-23");
         let lint_src = |src: &str| {
             let file = toml::from_str::<crate::schema::DbFile>(src);
-            file.map_or_else(|e| vec![e.to_string()], |f| lint(&f.models))
-                .join("\n")
+            let found = file.map_or_else(|e| vec![e.to_string()], |f| lint(&f.models));
+            found.join("\n")
         };
         assert_eq!(lint_src(&good), "");
-        let lone = good
-            .split("[[models]]")
-            .nth(1)
-            .map(|a| format!("[[models]]{a}"))
-            .unwrap();
+        let lone = format!("[[models]]{}", good.split("[[models]]").nth(1).unwrap());
         #[rustfmt::skip]
         let cases = [
             ("no [models.variant]", good.replacen("[models.variant]", "[models.variantx]", 1), "come together"),
