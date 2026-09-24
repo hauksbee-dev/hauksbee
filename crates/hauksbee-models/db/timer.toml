@@ -53,7 +53,7 @@ low = 0.0
 high = 0.03
 unit = "fraction"
 kind = "specification-limits"
-basis = "SLFS022 Electrical Characteristics, initial error of timing interval, NE555: 1% typ, 3% max"
+basis = "SLFS022 Electrical Characteristics, initial error of timing interval, NE555: 1% typ, 3% max; zero is the physical lower bound of an error magnitude"
 
 [[models.envelope]]
 kind = "supply_range"

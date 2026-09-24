@@ -9,9 +9,10 @@ use std::collections::HashSet;
 use crate::check::{nonneg_finite, positive_finite, Problems};
 use crate::schema::{
     AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics,
-    ModelEntry, ModelSourceSpec, OperatingEnvelope, PeripheralSpec,
+    ModelEntry, OperatingEnvelope, PeripheralSpec,
 };
 use crate::sensor_spec::{Bus, SensorSpec};
+use hauksbee_ir::evidence::ModelUncertainty;
 use thiserror::Error;
 
 /// A validation error.
@@ -435,8 +436,20 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // state exists to prevent.
     if !identity_only {
         let rules = kind_rules(entry);
+        // A programmed-current (charger) vreg may abstain on `iq_a`, which the
+        // binder tolerates absent, when its datasheet prints only a limit: an
+        // `unknown` source record names it and the row stays a characteristic.
+        let abstains = |key: &str| {
+            key == "iq_a"
+                && entry.current_program.is_some()
+                && entry.source.as_ref().is_some_and(|s| {
+                    s.uncertainty.iter().any(|u| {
+                        matches!(u, ModelUncertainty::Unknown { parameter, .. } if parameter == key)
+                    })
+                })
+        };
         for key in rules.required {
-            p.require(params.get_f64(key).is_some(), || {
+            p.require(params.get_f64(key).is_some() || abstains(key), || {
                 format!("missing required param '{key}'")
             });
         }
@@ -504,8 +517,30 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     if let Some(program) = &entry.current_program {
         check_current_program(entry, program, &mut p);
     }
-    if let Some(Err(m)) = entry.source.as_ref().map(ModelSourceSpec::validate) {
-        p.0.push(format!("[models.source]: {m}"));
+    if let Some(source) = &entry.source {
+        p.0.extend(
+            source
+                .problems()
+                .into_iter()
+                .map(|m| format!("[models.source]: {m}")),
+        );
+        // No semiconductor or IC row reaches a farad: a printed pF/nF number
+        // stored under `F` unconverted. A passive (a supercapacitor) may.
+        for (i, row) in source.characteristic.iter().enumerate() {
+            let farads = crate::units::si_unit(&row.unit).filter(|(_, base)| *base == "F");
+            let big = [row.min, row.typ, row.max].into_iter().flatten();
+            let big = big.filter(|v| farads.is_some_and(|(s, _)| (v * s).abs() >= 1.0));
+            if let Some(v) = big
+                .max_by(f64::total_cmp)
+                .filter(|_| entry.kind != ComponentKind::Passive)
+            {
+                p.push(format!(
+                    "[models.source]: characteristic {i} ({}): {v} {} is a farad or more, not a \
+                     semiconductor capacitance: convert the printed pF/nF value",
+                    row.parameter, row.unit
+                ));
+            }
+        }
     }
 
     if p.0.is_empty() {
@@ -1457,6 +1492,33 @@ high_offset = 1.3333333333333333
         let mut e = programmed_vreg();
         f(e.current_program.as_mut().unwrap());
         e
+    }
+
+    #[test]
+    fn charger_iq_abstains_by_record_and_capacitance_rows_stay_below_a_farad() {
+        let source = |extra: &str| -> Option<crate::schema::ModelSourceSpec> {
+            Some(toml::from_str(&format!("tier = \"datasheet-derived\"\n{extra}")).expect("parses"))
+        };
+        let unknown =
+            "[[uncertainty]]\nstatus = \"unknown\"\nparameter = \"iq_a\"\nreason = \"max only\"";
+        let mut e = programmed_vreg();
+        e.params.0.remove("iq_a");
+        rejects(&e, "missing required param 'iq_a'");
+        e.source = source(unknown);
+        accepts(&e);
+        let mut plain = entry(ComponentKind::Vreg, &[("vout", 3.3), ("dropout_v", 0.3)]);
+        plain.source = source(unknown);
+        rejects(&plain, "missing required param 'iq_a'");
+
+        let row = |value: &str| {
+            let text = format!("[[characteristic]]\nparameter = \"CT\"\ntyp = {value}\nconditions = \"VR = 0 V\"\nbasis = \"Table 1\"");
+            source(&text)
+        };
+        let mut d = diode();
+        d.source = row("2.0\nunit = \"pF\"");
+        accepts(&d);
+        d.source = row("2.0\nunit = \"F\"");
+        rejects(&d, "a farad or more");
     }
 
     #[test]
