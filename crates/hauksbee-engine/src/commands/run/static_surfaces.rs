@@ -11,23 +11,6 @@ use super::{
     RunConfig, SelectedSurface,
 };
 
-/// The evidence spine every bound static surface attaches: the board's bind
-/// report dated by the run clock, carrying the input artifact it came from.
-fn board_evidence(
-    cfg: &RunConfig,
-    run_inputs: &RunInputs,
-    bound: &crate::binder::BoundBoard,
-) -> anyhow::Result<crate::evidence::BoardEvidence> {
-    Ok(crate::evidence::board_evidence(
-        &run_inputs.board,
-        &bound.report,
-        &run_inputs.reader_notes,
-        &cfg.board,
-        &run_inputs.raw,
-        run_inputs.input_kind,
-    )?)
-}
-
 pub(crate) fn emit_selected(
     cfg: &RunConfig,
     quiet: bool,
@@ -44,6 +27,18 @@ pub(crate) fn emit_selected(
     let reader_notes = &run_inputs.reader_notes;
     let inputs = &run_inputs.inputs;
     let schematic_ties = &artifacts.schematic_ties;
+    let report_inputs = crate::reports::StaticInputs {
+        board_path: &cfg.board,
+        board,
+        text,
+        raw,
+        input_kind,
+        altium_present: is_altium,
+        lib,
+        reader_notes,
+        inputs,
+    };
+    let mode = crate::reports::OutputMode::from_flags(cfg.json, cfg.plain);
     let prebound = &mut artifacts.prebound;
     // --list-nets: print the board's net names so the user can pick one for
     // --ac-node / --ac-loop without grepping the layout. One net per line on
@@ -84,20 +79,12 @@ pub(crate) fn emit_selected(
     // of running one flag at a time. Honours --plain / --json / --strict.
     if surface == SelectedSurface::Check {
         return crate::reports::check::emit_with_schematic_quiet(
-            &cfg.board,
-            &board,
-            &text,
-            &raw,
-            input_kind,
-            is_altium,
-            &lib,
-            &reader_notes,
-            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            &report_inputs,
+            mode,
             cfg.strict,
             cfg.verbose,
             cfg.oracle,
             quiet,
-            &inputs,
             schematic_ties.as_ref(),
         )
         .map(|()| true);
@@ -108,7 +95,7 @@ pub(crate) fn emit_selected(
             &board,
             &lib,
             &reader_notes,
-            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            mode,
             quiet,
             cfg.verbose,
             &inputs,
@@ -119,20 +106,12 @@ pub(crate) fn emit_selected(
     // --drc: run geometric short / clearance detection, print, exit.
     if surface == SelectedSurface::Drc {
         return crate::reports::drc::emit_with_schematic_quiet(
-            &cfg.board,
-            &board,
-            &text,
-            &raw,
-            input_kind,
-            is_altium,
-            &lib,
-            &reader_notes,
-            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            &report_inputs,
+            mode,
             cfg.oracle,
             cfg.strict,
             cfg.verbose,
             quiet,
-            &inputs,
             schematic_ties.as_ref(),
         )
         .map(|()| true);
@@ -143,7 +122,7 @@ pub(crate) fn emit_selected(
     // and explicitly asks for a current before pass/fail.
     if surface == SelectedSurface::Ampacity {
         let bound = bind_board(&board, &lib);
-        let evidence = board_evidence(cfg, run_inputs, &bound)?;
+        let evidence = report_inputs.evidence(&bound.report)?;
         let net_names: Vec<String> = board.nets.iter().map(|net| net.name.clone()).collect();
         return crate::reports::ampacity::emit_quiet(
             &text,
@@ -161,36 +140,14 @@ pub(crate) fn emit_selected(
     // (which needs the model db's per-part strap tables), and the MCU internal
     // resource-conflict check (a lint-class structural check too), print, exit.
     if surface == SelectedSurface::Lint {
-        return crate::reports::lint::emit_quiet(
-            &cfg.board,
-            &board,
-            &raw,
-            input_kind,
-            &lib,
-            &reader_notes,
-            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
-            cfg.strict,
-            quiet,
-            &inputs,
-        )
-        .map(|()| true);
+        return crate::reports::lint::emit_quiet(&report_inputs, mode, cfg.strict, quiet)
+            .map(|()| true);
     }
 
     // --resources: run only the MCU internal resource-conflict check, print, exit.
     if surface == SelectedSurface::Resources {
-        return crate::reports::lint::emit_resources_quiet(
-            &cfg.board,
-            &board,
-            &raw,
-            input_kind,
-            &lib,
-            &reader_notes,
-            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
-            cfg.strict,
-            quiet,
-            &inputs,
-        )
-        .map(|()| true);
+        return crate::reports::lint::emit_resources_quiet(&report_inputs, mode, cfg.strict, quiet)
+            .map(|()| true);
     }
 
     // --usb-c: run the USB-C CC attach classifier (the RPi 4 re-derivation) and
@@ -198,18 +155,12 @@ pub(crate) fn emit_selected(
     // any user-facing surface; this is its CLI front door.
     if surface == SelectedSurface::UsbC {
         let bound = bind_board(&board, &lib);
-        let evidence = board_evidence(cfg, run_inputs, &bound)?;
+        let evidence = report_inputs.evidence(&bound.report)?;
         let blockers = crate::result::unmodelled_critical_refs(
             &crate::result::BindSummary::from_report(&bound.report),
         );
         return crate::reports::usb_c::emit_quiet(
-            &board,
-            &evidence,
-            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
-            cfg.strict,
-            quiet,
-            &inputs,
-            &blockers,
+            &board, &evidence, mode, cfg.strict, quiet, &inputs, &blockers,
         )
         .map(|()| true);
     }
@@ -218,21 +169,8 @@ pub(crate) fn emit_selected(
     // geometry-bearing checks (antenna keepout, USB length skew) need the raw
     // KiCad layout text, so it is passed through.
     if surface == SelectedSurface::Si {
-        return crate::reports::si::emit_quiet(
-            &cfg.board,
-            &board,
-            &text,
-            &raw,
-            input_kind,
-            is_altium,
-            &lib,
-            &reader_notes,
-            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
-            cfg.strict,
-            quiet,
-            &inputs,
-        )
-        .map(|()| true);
+        return crate::reports::si::emit_quiet(&report_inputs, mode, cfg.strict, quiet)
+            .map(|()| true);
     }
 
     // --ac: small-signal AC sweep on the bound circuit, print Bode + (optional)
@@ -245,7 +183,7 @@ pub(crate) fn emit_selected(
             Some(b) => b,
             None => bind_board(&board, &lib),
         };
-        let evidence = board_evidence(cfg, run_inputs, &bound)?;
+        let evidence = report_inputs.evidence(&bound.report)?;
         return crate::reports::ac::emit_quiet(
             &bound,
             &evidence,
@@ -270,16 +208,8 @@ pub(crate) fn emit_selected(
     // combined branch or those JSON paths become unreachable dead code.
     if surface == SelectedSurface::BareJson {
         return crate::reports::check::emit_combined_json_with_schematic(
-            &cfg.board,
-            &board,
-            &text,
-            &raw,
-            input_kind,
-            is_altium,
-            &lib,
-            &reader_notes,
+            &report_inputs,
             cfg.strict,
-            &inputs,
             schematic_ties.as_ref(),
         )
         .map(|()| true);

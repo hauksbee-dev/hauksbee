@@ -398,57 +398,43 @@ fn emit_report(
             });
         }
         if zero_activity {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: "co-sim saw zero net toggles and no UART output; the \
+            jr.push_coverage_note(
+                "co-sim saw zero net toggles and no UART output; the \
                               firmware was not exercised; this result cannot vouch \
-                              for firmware behaviour"
-                    .to_string(),
-            });
+                              for firmware behaviour",
+            );
         }
         // Independent of analog_valid: a run can be fully valid AND contain
         // windows a fallback rung produced. Silence here would let a
         // first-order, dissipative window read as a first-class one.
         if fallback_chunk_count > 0 {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: format!(
-                    "co-sim analog solve fell back on {fallback_chunk_count} chunk(s); \
+            jr.push_coverage_note(format!(
+                "co-sim analog solve fell back on {fallback_chunk_count} chunk(s); \
                          those windows are converged but were produced by a fallback \
                          integration path (see fallback_windows in the co-sim JSON \
                          for the method, its known numerical trade-off, and the \
                          measured error_estimate_v per window)"
-                ),
-            });
+            ));
         }
         // A non-convergent chunk held stale voltages: a loud coverage note so
         // a CI consumer that filters notes (not just the CosimJson body) sees
         // the analog side is not trustworthy over the failed windows.
         if !analog_valid {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: format!(
-                    "co-sim analog solve failed on {failed_chunk_count} chunk(s) \
+            jr.push_coverage_note(format!(
+                "co-sim analog solve failed on {failed_chunk_count} chunk(s) \
                          that no fallback integration could carry; those windows held \
                          stale node voltages and are reported as analog_valid:false; \
                          analog-derived findings over them are not trustworthy"
-                ),
-            });
+            ));
             // One note PER failed window naming the interval and the
             // solver's diagnosis, so a JSON consumer gets the offending net
             // and element without re-running the board.
             for d in engine.scheduler().failed_window_diagnoses() {
-                jr.notes.push(JsonNote {
-                    kind: JsonNoteKind::Coverage,
-                    message: format!("analog non-convergence at {d}"),
-                });
+                jr.push_coverage_note(format!("analog non-convergence at {d}"));
             }
         }
         for message in shared_coverage_messages(engine.scheduler(), "co-sim: ") {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message,
-            });
+            jr.push_coverage_note(message);
         }
         for net in held_high_boot_nets {
             jr.notes.push(JsonNote {

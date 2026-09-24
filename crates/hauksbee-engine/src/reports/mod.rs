@@ -239,6 +239,118 @@ impl KicadClearanceInput {
     }
 }
 
+/// The normalized board inputs every static report reads, bundled once so each
+/// surface takes one argument instead of eight.
+#[derive(Clone, Copy)]
+pub(crate) struct StaticInputs<'a> {
+    pub board_path: &'a Path,
+    pub board: &'a ExtractedBoard,
+    pub text: &'a str,
+    pub raw: &'a [u8],
+    pub input_kind: crate::board_input::InputKind,
+    pub altium_present: bool,
+    pub lib: &'a hauksbee_models::ModelLibrary,
+    pub reader_notes: &'a [String],
+    pub inputs: &'a [crate::result::JsonInputEvidence],
+}
+
+impl StaticInputs<'_> {
+    /// The evidence spine every bound static surface attaches: the board's bind
+    /// report dated by the run clock, carrying the input artifact it came from.
+    pub(crate) fn evidence(
+        &self,
+        report: &crate::reports::bind::BindReport,
+    ) -> Result<crate::evidence::BoardEvidence, hauksbee_ir::evidence::EvidenceError> {
+        crate::evidence::board_evidence(
+            self.board,
+            report,
+            self.reader_notes,
+            self.board_path,
+            self.raw,
+            self.input_kind,
+        )
+    }
+
+    /// [`run_drc`] over these inputs.
+    fn drc(&self) -> anyhow::Result<(Option<KicadClearanceInput>, hauksbee_extract::DrcReport)> {
+        run_drc(
+            self.board_path,
+            self.board,
+            self.text,
+            self.raw,
+            self.altium_present,
+        )
+    }
+
+    /// The layout text the geometry-bearing SI checks read; Altium geometry is
+    /// not yet threaded into them, so `None` there.
+    fn geo_text(&self) -> Option<&str> {
+        (!self.altium_present).then_some(self.text)
+    }
+}
+
+/// Run the geometric DRC: Altium's own rules, else KiCad's with the sibling
+/// project/custom-rule clearances (returned too, for provenance and coverage;
+/// `None` exactly on Altium). Shared by `--drc`, `--check` and the CI finding
+/// gatherer so they can never run different DRCs over one board.
+pub(crate) fn run_drc(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    altium_present: bool,
+) -> anyhow::Result<(Option<KicadClearanceInput>, hauksbee_extract::DrcReport)> {
+    let clearance_input = (!altium_present)
+        .then(|| KicadClearanceInput::load(board_path, board))
+        .transpose()?;
+    let report = if altium_present {
+        ExtractedBoard::altium_drc(raw)?
+    } else {
+        // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
+        // concrete net names here (the CLI has both the board path and the
+        // extracted netlist), then hand the DRC a pairwise clearance resolver.
+        ExtractedBoard::drc_with_clearance_rules(
+            text,
+            clearance_input
+                .as_ref()
+                .and_then(|input| input.rules.clone()),
+        )?
+    };
+    Ok((clearance_input, report))
+}
+
+/// Where the DRC's clearance rule came from: the tool default on Altium, else
+/// the KiCad inputs [`run_drc`] loaded.
+pub(crate) fn clearance_provenance(
+    input: Option<&KicadClearanceInput>,
+    board_path: &Path,
+    text: &str,
+    clearance_mm: f64,
+) -> crate::result::ClearanceRuleProvenance {
+    input.map_or_else(
+        || crate::result::ClearanceRuleProvenance::tool_default(clearance_mm),
+        |input| input.provenance(board_path, text, clearance_mm),
+    )
+}
+
+/// The schematic contributed to the verdict, so it enters the inventory with
+/// its own hash and what it did. A reader who sees a contact reported as a
+/// declared tie must be able to find the file that declared it.
+pub(crate) fn with_schematic_evidence(
+    evidence: crate::evidence::BoardEvidence,
+    ties: Option<&crate::schematic_ties::SchematicTies>,
+    qualification: Option<&hauksbee_extract::DrcTieQualification>,
+) -> Result<crate::evidence::BoardEvidence, hauksbee_ir::evidence::EvidenceError> {
+    match (ties, qualification) {
+        (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
+            &ties.path,
+            &ties.raw,
+            ties.contribution(qualification),
+        ),
+        _ => Ok(evidence),
+    }
+}
+
 /// Strict-mode predicate for the connectivity/resource lint: any high/medium
 /// finding fails the gate.
 ///

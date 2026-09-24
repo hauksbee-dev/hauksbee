@@ -5,52 +5,28 @@
 
 use std::path::Path;
 
-use hauksbee_extract::ExtractedBoard;
-use hauksbee_models::ModelLibrary;
-
 use crate::binder::bind_board;
-use crate::result::{BindSummary, DrcStructured, JsonInputEvidence, JsonReport};
+use crate::result::{BindSummary, DrcStructured, JsonReport};
 
-use super::{KicadClearanceInput, OutputMode};
+use super::{KicadClearanceInput, OutputMode, StaticInputs};
 
 /// Run geometric short / clearance detection, print it in `mode`, cross-check the
 /// oracle when asked, then (under `strict`) exit non-zero on a true short. Returns
 /// `Ok(())` on the non-gating paths; a strict short calls `std::process::exit(2)`.
 /// `quiet` suppresses the text surface.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_with_schematic_quiet(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
+    input: &StaticInputs,
     mode: OutputMode,
     oracle: bool,
     strict: bool,
     verbose: bool,
     quiet: bool,
-    inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
-    let clearance_input = (!altium_present)
-        .then(|| KicadClearanceInput::load(board_path, board))
-        .transpose()?;
-    let mut report = if altium_present {
-        ExtractedBoard::altium_drc(raw)?
-    } else {
-        // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
-        // concrete net names here (the CLI has both the board path and the
-        // extracted netlist), then hand the DRC a pairwise clearance resolver.
-        ExtractedBoard::drc_with_clearance_rules(
-            text,
-            clearance_input
-                .as_ref()
-                .and_then(|input| input.rules.clone()),
-        )?
-    };
+    let StaticInputs {
+        board_path, text, ..
+    } = *input;
+    let (clearance_input, mut report) = input.drc()?;
     // The companion schematic's declarations, applied before waivers and before
     // anything reads the findings. Reclassifies, never deletes.
     let qualification = schematic_ties.map(|ties| ties.qualify(&report));
@@ -60,56 +36,25 @@ pub(crate) fn emit_with_schematic_quiet(
     // mirrors check.rs exactly: only a true short is waivable; a clearance
     // violation does not gate on its own, so it has nothing to be excused from.
     let mut waivers = super::check::load_waivers(board_path);
-    let (kept, waived) = waivers.partition("drc", std::mem::take(&mut report.findings), |f| {
-        let kind = match f.kind {
-            hauksbee_extract::ViolationKind::Short => "short",
-            _ => "clearance-not-waivable",
-        };
-        (
-            kind.to_string(),
-            vec![f.net_a_name.clone(), f.net_b_name.clone()],
-            Vec::new(),
-            format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
-        )
-    });
-    report.findings = kept;
+    let waived = super::check::waive_drc(&mut waivers, &mut report);
     // Zero routed copper: a pads-only board passes the spacing check
     // vacuously, so `UNROUTED_COPPER_NOTE` is printed by the two surfaces that
     // read this flag, `--drc` and `--check`.
-    let unrouted = !altium_present && super::unrouted_kicad_layout(text);
-    let bound = bind_board(board, lib);
-    let evidence = crate::evidence::board_evidence(
-        board,
-        &bound.report,
-        reader_notes,
-        board_path,
-        raw,
-        input_kind,
-    )?
-    .with_custom_rules_coverage(
+    let unrouted = !input.altium_present && super::unrouted_kicad_layout(text);
+    let bound = bind_board(input.board, input.lib);
+    let evidence = input.evidence(&bound.report)?.with_custom_rules_coverage(
         clearance_input
             .as_ref()
             .and_then(KicadClearanceInput::custom_coverage),
     )?;
-    // The schematic contributed to the verdict, so it enters the inventory with
-    // its own hash and what it did. A reader who sees a contact reported as a
-    // declared tie must be able to find the file that declared it.
-    let evidence = match (schematic_ties, &qualification) {
-        (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
-            &ties.path,
-            &ties.raw,
-            ties.contribution(qualification),
-        )?,
-        _ => evidence,
-    };
-    let provenance = if altium_present {
-        crate::result::ClearanceRuleProvenance::tool_default(report.clearance_mm)
-    } else {
-        clearance_input
-            .as_ref()
-            .expect("non-Altium DRC loaded KiCad clearance inputs")
-            .provenance(board_path, text, report.clearance_mm)
-    };
+    let evidence =
+        super::with_schematic_evidence(evidence, schematic_ties, qualification.as_ref())?;
+    let provenance = super::clearance_provenance(
+        clearance_input.as_ref(),
+        board_path,
+        text,
+        report.clearance_mm,
+    );
     let mut structured = DrcStructured::from_report_with_ties(
         &report,
         qualification.as_ref(),
@@ -140,21 +85,15 @@ pub(crate) fn emit_with_schematic_quiet(
             // Grouped DRC: shorts kept verbatim, clearance findings
             // grouped by (net_a, net_b, layer), at-limit separated from below-rule.
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
-                .with_inputs(inputs)
+                .with_inputs(input.inputs)
                 .with_evidence(&evidence);
             jr.drc = Some(structured.clone());
             jr.clearance_rule_source = Some(provenance.clone());
             if provenance.source == crate::result::ClearanceRuleSource::Defaulted {
-                jr.notes.push(crate::result::JsonNote {
-                    kind: crate::result::JsonNoteKind::Coverage,
-                    message: provenance.cli_notice(),
-                });
+                jr.push_coverage_note(provenance.cli_notice());
             }
             if unrouted {
-                jr.notes.push(crate::result::JsonNote {
-                    kind: crate::result::JsonNoteKind::Coverage,
-                    message: super::UNROUTED_COPPER_NOTE.to_string(),
-                });
+                jr.push_coverage_note(super::UNROUTED_COPPER_NOTE.to_string());
             }
             // A green verdict that quietly dropped findings would be worse than
             // no waivers at all, so the machine surface carries them too.

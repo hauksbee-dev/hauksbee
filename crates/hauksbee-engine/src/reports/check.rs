@@ -9,43 +9,25 @@ use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
 use crate::result::{
-    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured,
-    JsonInputEvidence, JsonReport,
+    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured, JsonReport,
 };
 
-use super::{lint_fails, si_fails, KicadClearanceInput, OutputMode};
+use super::{lint_fails, si_fails, KicadClearanceInput, OutputMode, StaticInputs};
 
 /// Run the full static suite and print it in `mode`, then (under `strict`) exit
 /// non-zero if any real finding gates. `quiet` suppresses the text surface and
 /// `oracle` cross-checks against kicad-cli.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_with_schematic_quiet(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
+    input: &StaticInputs,
     mode: OutputMode,
     strict: bool,
     verbose: bool,
     oracle: bool,
     quiet: bool,
-    inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
     CheckReport {
-        board_path,
-        board,
-        text,
-        raw,
-        input_kind,
-        altium_present,
-        lib,
-        reader_notes,
-        inputs,
+        input,
         schematic_ties,
     }
     .emit(
@@ -59,18 +41,10 @@ pub(crate) fn emit_with_schematic_quiet(
     )
 }
 
-// Both entrypoints run the same static suite. Keep their input bundle private so
-// public callers retain their existing APIs without duplicating the report pipeline.
+// Both entrypoints run the same static suite over one input bundle, so the
+// report pipeline is written once.
 struct CheckReport<'a> {
-    board_path: &'a Path,
-    board: &'a ExtractedBoard,
-    text: &'a str,
-    raw: &'a [u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &'a ModelLibrary,
-    reader_notes: &'a [String],
-    inputs: &'a [JsonInputEvidence],
+    input: &'a StaticInputs<'a>,
     schematic_ties: Option<&'a crate::schematic_ties::SchematicTies>,
 }
 
@@ -87,17 +61,17 @@ enum CheckDisplay {
 impl CheckReport<'_> {
     fn emit(self, display: CheckDisplay, strict: bool) -> anyhow::Result<()> {
         let Self {
+            input,
+            schematic_ties,
+        } = self;
+        let StaticInputs {
             board_path,
             board,
             text,
-            raw,
-            input_kind,
             altium_present,
             lib,
-            reader_notes,
-            inputs,
-            schematic_ties,
-        } = self;
+            ..
+        } = *input;
         let combined = matches!(display, CheckDisplay::CombinedJson);
         let (mode, verbose, oracle, quiet) = match display {
             CheckDisplay::Full {
@@ -110,55 +84,26 @@ impl CheckReport<'_> {
         };
         let bound = bind_board(board, lib);
         let summary = BindSummary::from_report(&bound.report);
-        let evidence = crate::evidence::board_evidence(
-            board,
-            &bound.report,
-            reader_notes,
-            board_path,
-            raw,
-            input_kind,
-        )?;
-        let clearance_input = (!altium_present)
-            .then(|| KicadClearanceInput::load(board_path, board))
-            .transpose()?;
+        let evidence = input.evidence(&bound.report)?;
+        let (clearance_input, mut drc) = input.drc()?;
         let evidence = evidence.with_custom_rules_coverage(
             clearance_input
                 .as_ref()
                 .and_then(KicadClearanceInput::custom_coverage),
         )?;
-        let mut drc = if altium_present {
-            ExtractedBoard::altium_drc(raw)?
-        } else {
-            ExtractedBoard::drc_with_clearance_rules(
-                text,
-                clearance_input
-                    .as_ref()
-                    .and_then(|input| input.rules.clone()),
-            )?
-        };
 
         // The companion schematic's declarations, applied before anything reads the
         // findings. Reclassifies, never deletes: a covered contact keeps its layer,
         // location and measured gap and gains the declaration that qualifies it.
         let qualification = schematic_ties.map(|ties| ties.qualify(&drc));
-        // The schematic contributed to the verdict, so it enters the inventory with
-        // its own hash and what it did. A reader who sees a contact reported as a
-        // declared tie must be able to find the file that declared it.
-        let evidence = match (schematic_ties, &qualification) {
-            (Some(ties), Some(qualification)) => evidence.with_schematic_artifact(
-                &ties.path,
-                &ties.raw,
-                ties.contribution(qualification),
-            )?,
-            _ => evidence,
-        };
+        let evidence =
+            super::with_schematic_evidence(evidence, schematic_ties, qualification.as_ref())?;
         let lint = crate::checks::engine_lint(board, lib);
-        let geo_text = if altium_present { None } else { Some(text) };
         // Route through the single SI chokepoint so this aggregate surface carries
         // the same trace-ampacity + input-cap-ripple findings as the dedicated
         // `--si` report (the bare `si_checks` omitted them, giving `--check` a false
         // "looks healthy" over an under-width power trace).
-        let mut si = crate::checks::engine_si(board, lib, geo_text);
+        let mut si = crate::checks::engine_si(board, lib, input.geo_text());
         // USB-C CC compliance, only when the board has a USB-C receptacle.
         let usbc = crate::usb_c_report(board);
 
@@ -168,14 +113,12 @@ impl CheckReport<'_> {
         let mut waivers = load_waivers(board_path);
         let mut lint = lint;
         let waived = apply_static_waivers(&mut waivers, &mut lint, &mut si, &mut drc);
-        let provenance = if altium_present {
-            crate::result::ClearanceRuleProvenance::tool_default(drc.clearance_mm)
-        } else {
-            clearance_input
-                .as_ref()
-                .expect("non-Altium check loaded KiCad clearance inputs")
-                .provenance(board_path, text, drc.clearance_mm)
-        };
+        let provenance = super::clearance_provenance(
+            clearance_input.as_ref(),
+            board_path,
+            text,
+            drc.clearance_mm,
+        );
         let mut drc_structured = DrcStructured::from_report_with_ties(
             &drc,
             qualification.as_ref(),
@@ -252,22 +195,16 @@ impl CheckReport<'_> {
                 let mut jr = JsonReport::new(&bound.name, summary)
                     .with_bind_verdict_gate()
                     .with_surface_gate(would_gate)
-                    .with_inputs(inputs)
+                    .with_inputs(input.inputs)
                     .with_evidence(&evidence);
                 jr.drc = Some(drc_structured.clone());
                 jr.triage = Some(triage.clone());
                 jr.clearance_rule_source = Some(provenance.clone());
                 if unrouted {
-                    jr.notes.push(crate::result::JsonNote {
-                        kind: crate::result::JsonNoteKind::Coverage,
-                        message: super::UNROUTED_COPPER_NOTE.to_string(),
-                    });
+                    jr.push_coverage_note(super::UNROUTED_COPPER_NOTE.to_string());
                 }
                 if !blockers.is_empty() {
-                    jr.notes.push(crate::result::JsonNote {
-                        kind: crate::result::JsonNoteKind::Coverage,
-                        message: crate::result::inconclusive_verdict(&blockers),
-                    });
+                    jr.push_coverage_note(crate::result::inconclusive_verdict(&blockers));
                 }
                 jr.findings = Some(actual_findings.clone());
                 // A green verdict that quietly dropped findings would be worse than
@@ -547,17 +484,6 @@ fn gate_items(
 /// discipline as `emit_with_schematic_quiet`, without rendering a report. Waived findings are
 /// excluded here exactly as they are excluded from the gate, so a SARIF error
 /// can never fail a pipeline the report command would pass.
-pub fn gather_findings(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    altium_present: bool,
-    lib: &ModelLibrary,
-) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
-    gather_findings_with_schematic(board_path, board, text, raw, altium_present, lib, None)
-}
-
 pub fn gather_findings_with_schematic(
     board_path: &Path,
     board: &ExtractedBoard,
@@ -567,19 +493,7 @@ pub fn gather_findings_with_schematic(
     lib: &ModelLibrary,
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
-    let clearance_input = (!altium_present)
-        .then(|| KicadClearanceInput::load(board_path, board))
-        .transpose()?;
-    let mut drc = if altium_present {
-        ExtractedBoard::altium_drc(raw)?
-    } else {
-        ExtractedBoard::drc_with_clearance_rules(
-            text,
-            clearance_input
-                .as_ref()
-                .and_then(|input| input.rules.clone()),
-        )?
-    };
+    let (_, mut drc) = super::run_drc(board_path, board, text, raw, altium_present)?;
 
     // The companion schematic's declarations, applied before anything reads the
     // findings. Reclassifies, never deletes: a covered contact keeps its layer,
@@ -626,17 +540,21 @@ pub(crate) fn apply_static_waivers(
     si: &mut hauksbee_extract::SiReport,
     drc: &mut hauksbee_extract::DrcReport,
 ) -> Vec<crate::waiver::WaivedFinding> {
-    let (kept_lint, waived_lint) =
-        waivers.partition("lint", std::mem::take(&mut lint.findings), |f| {
-            (
-                f.check.as_str().to_string(),
-                f.nets.clone(),
-                f.refs.clone(),
-                f.message.clone(),
-            )
-        });
-    lint.findings = kept_lint;
-    let (kept_si, waived_si) = waivers.partition("si", std::mem::take(&mut si.findings), |f| {
+    let mut waived = waive_lint(waivers, lint);
+    waived.extend(waive_si(waivers, si));
+    waived.extend(waive_drc(waivers, drc));
+    waived
+}
+
+/// Apply the board's `lint`-scoped waivers to `report`, returning what was
+/// excused. Resource conflicts are lint-class findings and ride the same check
+/// name inside `--check`, so one waiver file covers `--lint`, `--resources` and
+/// the combined report; keying them differently would split it.
+pub(crate) fn waive_lint(
+    waivers: &mut crate::waiver::WaiverSet,
+    report: &mut hauksbee_extract::NetLintReport,
+) -> Vec<crate::waiver::WaivedFinding> {
+    let (kept, waived) = waivers.partition("lint", std::mem::take(&mut report.findings), |f| {
         (
             f.check.as_str().to_string(),
             f.nets.clone(),
@@ -644,26 +562,48 @@ pub(crate) fn apply_static_waivers(
             f.message.clone(),
         )
     });
-    si.findings = kept_si;
-    let (kept_drc, waived_shorts) =
-        waivers.partition("drc", std::mem::take(&mut drc.findings), |f| {
-            let kind = match f.kind {
-                hauksbee_extract::ViolationKind::Short => "short",
-                _ => "clearance-not-waivable",
-            };
-            (
-                kind.to_string(),
-                vec![f.net_a_name.clone(), f.net_b_name.clone()],
-                Vec::new(),
-                format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
-            )
-        });
-    drc.findings = kept_drc;
-    waived_lint
-        .into_iter()
-        .chain(waived_si)
-        .chain(waived_shorts)
-        .collect()
+    report.findings = kept;
+    waived
+}
+
+/// Apply the board's `si`-scoped waivers to `report`, returning what was excused.
+pub(crate) fn waive_si(
+    waivers: &mut crate::waiver::WaiverSet,
+    report: &mut hauksbee_extract::SiReport,
+) -> Vec<crate::waiver::WaivedFinding> {
+    let (kept, waived) = waivers.partition("si", std::mem::take(&mut report.findings), |f| {
+        (
+            f.check.as_str().to_string(),
+            f.nets.clone(),
+            f.refs.clone(),
+            f.message.clone(),
+        )
+    });
+    report.findings = kept;
+    waived
+}
+
+/// Apply the board's `drc`-scoped waivers to `report`, returning what was
+/// excused. Only a true short is waivable; a clearance violation does not gate
+/// on its own, so it has nothing to be excused from.
+pub(crate) fn waive_drc(
+    waivers: &mut crate::waiver::WaiverSet,
+    report: &mut hauksbee_extract::DrcReport,
+) -> Vec<crate::waiver::WaivedFinding> {
+    let (kept, waived) = waivers.partition("drc", std::mem::take(&mut report.findings), |f| {
+        let kind = match f.kind {
+            hauksbee_extract::ViolationKind::Short => "short",
+            _ => "clearance-not-waivable",
+        };
+        (
+            kind.to_string(),
+            vec![f.net_a_name.clone(), f.net_b_name.clone()],
+            Vec::new(),
+            format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
+        )
+    });
+    report.findings = kept;
+    waived
 }
 
 /// The copper shorts as machine findings.
@@ -935,29 +875,13 @@ pub(crate) fn render_waivers_scoped(
 /// Without it a bare `--json` would fall through to the TUI/websocket default and
 /// hang a piped / CI / AI caller. Carries the same findings as `emit_with_schematic_quiet`'s JSON,
 /// and (under `strict`) gates with the same exit-2 contract.
-pub fn emit_combined_json_with_schematic(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
+pub(crate) fn emit_combined_json_with_schematic(
+    input: &StaticInputs,
     strict: bool,
-    inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
     CheckReport {
-        board_path,
-        board,
-        text,
-        raw,
-        input_kind,
-        altium_present,
-        lib,
-        reader_notes,
-        inputs,
+        input,
         schematic_ties,
     }
     .emit(CheckDisplay::CombinedJson, strict)

@@ -2195,6 +2195,14 @@ impl JsonReport {
         }
     }
 
+    /// Append a `coverage` note: a caveat on what this result can vouch for.
+    pub fn push_coverage_note(&mut self, message: impl Into<String>) {
+        self.notes.push(JsonNote {
+            kind: JsonNoteKind::Coverage,
+            message: message.into(),
+        });
+    }
+
     /// Attach the CLI's complete, ordered input inventory to a result document.
     /// Mark this report as a model-dependent-claim surface: unbound
     /// verdict-critical parts flip its verdict to `invalid` (the machine
@@ -2306,7 +2314,7 @@ impl JsonReport {
                 // than `JsonFinding::gates`: this path counts `serious_count`,
                 // and the surfaces whose gate is wider apply their waivers
                 // upstream, before a finding reaches this document (see
-                // `reports::check::gather_findings`).
+                // `reports::check::gather_findings_with_schematic`).
                 if f.severity == "serious" {
                     if let Some(w) =
                         waivers.take_waiver(&f.check, &f.kind, &f.nets, &f.refs, &f.message)

@@ -70,6 +70,32 @@ pub struct DepStatus {
     pub sends_data_offhost: Option<&'static str>,
 }
 
+impl DepStatus {
+    /// An absent row for a local binary (running it sends nothing anywhere):
+    /// no path, version, install button or detail until the probe says so.
+    fn local(
+        id: &'static str,
+        name: &'static str,
+        unlocks: &'static str,
+        cost: String,
+        manual: String,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            present: false,
+            path: None,
+            version: None,
+            unlocks,
+            installable: false,
+            cost,
+            manual,
+            detail: None,
+            sends_data_offhost: None,
+        }
+    }
+}
+
 /// Probe every dependency. Each probe runs the engine's own discovery; none of
 /// this is a plain `which` that could disagree with a real run. Independent
 /// resolvers run in parallel so a slow local tool cannot hold up all the other
@@ -151,33 +177,21 @@ struct PathCliSpec {
 }
 
 fn probe_path_cli(spec: PathCliSpec) -> DepStatus {
-    let Some(path) = which_on_path(spec.bin) else {
-        return DepStatus {
-            id: spec.id,
-            name: spec.name,
-            present: false,
-            path: None,
-            version: None,
-            unlocks: spec.unlocks,
-            installable: false,
-            cost: spec.cost,
-            manual: spec.manual,
-            detail: Some(spec.absent_detail),
-            sends_data_offhost: Some(spec.privacy),
-        };
-    };
-    DepStatus {
-        id: spec.id,
-        name: spec.name,
-        present: true,
-        version: None,
-        path: Some(path.display().to_string()),
-        unlocks: spec.unlocks,
-        installable: false,
-        cost: spec.cost,
-        manual: spec.manual,
-        detail: Some(spec.present_detail),
+    let base = DepStatus {
         sends_data_offhost: Some(spec.privacy),
+        ..DepStatus::local(spec.id, spec.name, spec.unlocks, spec.cost, spec.manual)
+    };
+    match which_on_path(spec.bin) {
+        Some(path) => DepStatus {
+            present: true,
+            path: Some(path.display().to_string()),
+            detail: Some(spec.present_detail),
+            ..base
+        },
+        None => DepStatus {
+            detail: Some(spec.absent_detail),
+            ..base
+        },
     }
 }
 
@@ -243,48 +257,42 @@ fn probe_codex() -> DepStatus {
     let privacy = "Using this sends the datasheet's text to OpenAI. Nothing is sent unless \
                    you ask for an extraction, and hauksbee never runs it on its own.";
 
-    let Some(bin) = which_codex() else {
-        return DepStatus {
-            id: "codex",
-            name: "Codex (datasheet extraction)",
-            present: false,
-            path: None,
-            version: None,
+    // Deliberately never auto-installable: an account and a login are the
+    // user's to give, and a one-click button for a service that takes their
+    // data would be the wrong shape whatever it said.
+    let base = DepStatus {
+        sends_data_offhost: Some(privacy),
+        ..DepStatus::local(
+            "codex",
+            "Codex (datasheet extraction)",
             unlocks,
-            // Deliberately never auto-installable: an account and a login are
-            // the user's to give, and a one-click button for a service that
-            // takes their data would be the wrong shape whatever it said.
-            installable: false,
             cost,
             manual,
+        )
+    };
+    let Some(bin) = which_codex() else {
+        return DepStatus {
             detail: Some(
                 "codex not found on PATH. This is optional: every other part of hauksbee \
                  works without it, and a model can always be written by hand (one TOML \
                  file, see docs/extending/)."
                     .to_string(),
             ),
-            sends_data_offhost: Some(privacy),
+            ..base
         };
     };
 
     DepStatus {
-        id: "codex",
-        name: "Codex (datasheet extraction)",
         // The status page answers the cheap, local question. The readiness
         // endpoint calls `probe_extractors` to turn this into a fail-closed
         // authenticated status before consent is offered.
         present: true,
-        version: None,
         path: Some(bin.display().to_string()),
-        unlocks,
-        installable: false,
-        cost,
-        manual,
         detail: Some(
             "codex CLI found; login status is checked only when datasheet extraction is requested."
                 .to_string(),
         ),
-        sends_data_offhost: Some(privacy),
+        ..base
     }
 }
 
@@ -402,59 +410,32 @@ fn probe_renode() -> DepStatus {
     // embedded; see `materialize_install_sims_script`), so the manual line can
     // always be the subcommand that runs the same flow.
     let manual = "hauksbee install renode".to_string();
+    let base = DepStatus::local("renode", "Renode", unlocks, cost, manual);
 
     #[cfg(feature = "renode")]
     {
         match hauksbee_mcu::renode::find_renode() {
             Ok(p) => DepStatus {
-                // A local binary: running it sends nothing anywhere.
-                sends_data_offhost: None,
-                id: "renode",
-                name: "Renode",
                 present: true,
                 path: Some(p.display().to_string()),
-                version: None,
-                unlocks,
-                installable: false,
-                cost,
-                manual,
-                detail: None,
+                ..base
             },
             Err(e) => DepStatus {
-                // A local binary: running it sends nothing anywhere.
-                sends_data_offhost: None,
-                id: "renode",
-                name: "Renode",
-                present: false,
-                path: None,
-                version: None,
-                unlocks,
                 installable: host_is_installable_os(),
-                cost,
-                manual,
                 detail: Some(e.to_string()),
+                ..base
             },
         }
     }
     #[cfg(not(feature = "renode"))]
     {
         DepStatus {
-            // A local binary: running it sends nothing anywhere.
-            sends_data_offhost: None,
-            id: "renode",
-            name: "Renode",
-            present: false,
-            path: None,
-            version: None,
-            unlocks,
-            installable: false,
-            cost,
-            manual,
             detail: Some(
                 "this build of hauksbee was compiled without the `renode` feature, so it \
                  could not use Renode even if installed"
                     .to_string(),
             ),
+            ..base
         }
     }
 }
@@ -479,6 +460,7 @@ fn probe_esp_qemu() -> DepStatus {
         _ => "not auto-installable on this OS; see github.com/espressif/qemu/releases".to_string(),
     };
     let manual = "hauksbee install esp-qemu".to_string();
+    let base = DepStatus::local("esp-qemu", "Espressif QEMU", unlocks, cost, manual);
 
     #[cfg(feature = "qemu")]
     {
@@ -486,22 +468,13 @@ fn probe_esp_qemu() -> DepStatus {
         let xtensa = find_qemu(QemuArch::Xtensa);
         let riscv = find_qemu(QemuArch::Riscv32);
         match (&xtensa, &riscv) {
+            // The machine-help invocation in the resolver is enough to reject
+            // mainline QEMU. A second `--version` subprocess adds no readiness
+            // information, so leave cosmetic version blank.
             (Ok(x), Ok(r)) => DepStatus {
-                // A local binary: running it sends nothing anywhere.
-                sends_data_offhost: None,
-                id: "esp-qemu",
-                name: "Espressif QEMU",
                 present: true,
                 path: Some(format!("{}; {}", x.display(), r.display())),
-                // The machine-help invocation in the resolver is enough to
-                // reject mainline QEMU. A second `--version` subprocess adds
-                // no readiness information, so leave cosmetic version blank.
-                version: None,
-                unlocks,
-                installable: false,
-                cost,
-                manual,
-                detail: None,
+                ..base
             },
             _ => {
                 // Name which half is missing rather than a blanket "absent":
@@ -522,19 +495,10 @@ fn probe_esp_qemu() -> DepStatus {
                     )),
                 }
                 DepStatus {
-                    // A local binary: running it sends nothing anywhere.
-                    sends_data_offhost: None,
-                    id: "esp-qemu",
-                    name: "Espressif QEMU",
-                    present: false,
-                    path: None,
-                    version: None,
-                    unlocks,
                     installable: cfg!(windows)
                         || hauksbee_mcu::qemu::install::host_asset_triple().is_ok(),
-                    cost,
-                    manual,
                     detail: Some(parts.join("; ")),
+                    ..base
                 }
             }
         }
@@ -542,22 +506,12 @@ fn probe_esp_qemu() -> DepStatus {
     #[cfg(not(feature = "qemu"))]
     {
         DepStatus {
-            // A local binary: running it sends nothing anywhere.
-            sends_data_offhost: None,
-            id: "esp-qemu",
-            name: "Espressif QEMU",
-            present: false,
-            path: None,
-            version: None,
-            unlocks,
-            installable: false,
-            cost,
-            manual,
             detail: Some(
                 "this build of hauksbee was compiled without the `qemu` feature, so it \
                  could not use the Espressif QEMU fork even if installed"
                     .to_string(),
             ),
+            ..base
         }
     }
 }
@@ -608,38 +562,21 @@ fn probe_ngspice() -> DepStatus {
         _ => "install ngspice from ngspice.sourceforge.io",
     }
     .to_string();
+    let cost = "a package-manager install".to_string();
+    let base = DepStatus::local("ngspice", "ngspice", unlocks, cost, manual);
     match find_ngspice() {
         Some(p) => DepStatus {
-            // A local binary: running it sends nothing anywhere.
-            sends_data_offhost: None,
-            id: "ngspice",
-            name: "ngspice",
             present: true,
-            version: None,
             path: Some(p.display().to_string()),
-            unlocks,
-            installable: false,
-            cost: "a package-manager install".to_string(),
-            manual,
-            detail: None,
+            ..base
         },
         None => DepStatus {
-            // A local binary: running it sends nothing anywhere.
-            sends_data_offhost: None,
-            id: "ngspice",
-            name: "ngspice",
-            present: false,
-            path: None,
-            version: None,
-            unlocks,
-            installable: false,
-            cost: "a package-manager install".to_string(),
-            manual,
             detail: Some(
                 "ngspice not found ($NGSPICE, PATH, or a standard install location). \
                  It comes from your system package manager, not from here."
                     .to_string(),
             ),
+            ..base
         },
     }
 }
@@ -661,39 +598,22 @@ fn probe_kicad_cli() -> DepStatus {
     }
     .to_string();
     let cost = "part of the full KiCad suite; the KiCad download alone is over 1 GB".to_string();
+    let base = DepStatus::local("kicad-cli", "kicad-cli", unlocks, cost, manual);
     match find_kicad_cli() {
         Some((path, ver)) => DepStatus {
-            // A local binary: running it sends nothing anywhere.
-            sends_data_offhost: None,
-            id: "kicad-cli",
-            name: "kicad-cli",
             present: true,
             path: Some(path),
             version: Some(ver),
-            unlocks,
-            installable: false,
-            cost,
-            manual,
-            detail: None,
+            ..base
         },
         None => DepStatus {
-            // A local binary: running it sends nothing anywhere.
-            sends_data_offhost: None,
-            id: "kicad-cli",
-            name: "kicad-cli",
-            present: false,
-            path: None,
-            version: None,
-            unlocks,
-            installable: false,
-            cost,
-            manual,
             detail: Some(
                 "kicad-cli not found (PATH, /Applications, or a standard install \
                  location). KiCad is a desktop application install, not something this \
                  server should download for you."
                     .to_string(),
             ),
+            ..base
         },
     }
 }
@@ -707,42 +627,34 @@ fn probe_avr() -> DepStatus {
     #[cfg(feature = "avr")]
     {
         DepStatus {
-            // A local binary: running it sends nothing anywhere.
-            sends_data_offhost: None,
-            id: "avr",
-            name: "AVR (simavr)",
             present: true,
-            path: None,
-            version: None,
-            unlocks,
-            installable: false,
-            cost: "linked into this binary at build time".to_string(),
-            manual: String::new(),
             detail: Some("simavr is linked into this binary; no separate install".to_string()),
+            ..DepStatus::local(
+                "avr",
+                "AVR (simavr)",
+                unlocks,
+                "linked into this binary at build time".to_string(),
+                String::new(),
+            )
         }
     }
     #[cfg(not(feature = "avr"))]
     {
         DepStatus {
-            // A local binary: running it sends nothing anywhere.
-            sends_data_offhost: None,
-            id: "avr",
-            name: "AVR (simavr)",
-            present: false,
-            path: None,
-            version: None,
-            unlocks,
-            installable: false,
-            cost: "linked at build time only; a runtime install cannot add it".to_string(),
-            manual: "scripts/install-sims.sh --avr, then rebuild hauksbee with the `avr` \
-                     feature"
-                .to_string(),
             detail: Some(
                 "this build of hauksbee was compiled without libsimavr. It is linked \
                  in-process at build time, so installing it now cannot help this binary; \
                  rebuild after installing simavr."
                     .to_string(),
             ),
+            ..DepStatus::local(
+                "avr",
+                "AVR (simavr)",
+                unlocks,
+                "linked at build time only; a runtime install cannot add it".to_string(),
+                "scripts/install-sims.sh --avr, then rebuild hauksbee with the `avr` feature"
+                    .to_string(),
+            )
         }
     }
 }
