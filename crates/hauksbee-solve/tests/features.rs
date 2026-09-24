@@ -155,11 +155,11 @@ fn temperature_toggle_changes_diode_drop() {
     let mut circuit = SpiceLoader::load(net).unwrap();
     circuit.temp_c = 100.0;
 
-    let hot = {
+    let drop_at_n = |temperature: bool| {
         let opts = SolverOptions {
             temperature_c: 100.0,
             effects: DeviceEffects {
-                temperature: true,
+                temperature,
                 ..DeviceEffects::default()
             },
             ..SolverOptions::fixed(1e-6)
@@ -170,27 +170,60 @@ fn temperature_toggle_changes_diode_drop() {
             .final_node(&circuit, "n")
             .unwrap()
     };
-    let nominal = {
-        let opts = SolverOptions {
-            temperature_c: 100.0,
-            effects: DeviceEffects {
-                temperature: false,
-                ..DeviceEffects::default()
-            },
-            ..SolverOptions::fixed(1e-6)
-        };
-        Transient::new(opts)
-            .run(&circuit, 1e-6)
-            .unwrap()
-            .final_node(&circuit, "n")
-            .unwrap()
-    };
+    let hot = drop_at_n(true);
+    let nominal = drop_at_n(false);
     // Hotter diode conducts more -> lower node voltage at n than the nominal-T
     // model. The two must differ measurably.
     assert!(
         (hot - nominal).abs() > 5e-3,
         "temp toggle had no effect: {hot} vs {nominal}"
     );
+}
+
+/// The §3.4 `DeviceEffects` toggle contract: on the `net_charge` deck, flipping
+/// `toggle` must move the waveform at `node` by more than `min_diff`; on the
+/// `net_plain` deck (a model without the gated fields) the two runs must be
+/// BIT-IDENTICAL (the existing-deck compatibility bar).
+fn assert_toggle_contract(
+    what: &str,
+    net_charge: &str,
+    net_plain: &str,
+    node: &str,
+    min_diff: f64,
+    toggle: fn(&mut DeviceEffects, bool),
+) {
+    let run = |net: &str, on: bool| {
+        let circuit = SpiceLoader::load(net).unwrap();
+        let mut effects = DeviceEffects::default();
+        toggle(&mut effects, on);
+        let opts = SolverOptions {
+            effects,
+            ..SolverOptions::fixed(10e-9)
+        };
+        let out = Transient::new(opts).run(&circuit, 8e-6).unwrap();
+        out.node(&circuit, node).unwrap().to_vec()
+    };
+    let w_on = run(net_charge, true);
+    let w_off = run(net_charge, false);
+    let max_diff = w_on
+        .iter()
+        .zip(&w_off)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f64, f64::max);
+    assert!(
+        max_diff > min_diff,
+        "{what}: toggle on must change the waveform (max diff {max_diff:e})"
+    );
+    let p_on = run(net_plain, true);
+    let p_off = run(net_plain, false);
+    assert_eq!(p_on.len(), p_off.len());
+    for (i, (a, b)) in p_on.iter().zip(&p_off).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "{what}: plain deck must be BIT-identical across the toggle (sample {i}: {a} vs {b})"
+        );
+    }
 }
 
 /// The §3.4 `DeviceEffects` contract for `junction_caps` (dev-plan 04):
@@ -206,42 +239,14 @@ fn junction_caps_toggle_is_honored_for_diodes() {
                       .model DMOD D(IS=1e-14 N=1 CJO=100p TT=100n)\n.end\n";
     let net_plain = "d\nV1 in 0 PULSE(0 5 1u 100n 100n 4u 10u)\nR1 in n 1k\nD1 n 0 DMOD\n\
                      .model DMOD D(IS=1e-14 N=1)\n.end\n";
-    let run = |net: &str, junction_caps: bool| {
-        let circuit = SpiceLoader::load(net).unwrap();
-        let opts = SolverOptions {
-            effects: DeviceEffects {
-                junction_caps,
-                ..DeviceEffects::default()
-            },
-            ..SolverOptions::fixed(10e-9)
-        };
-        let out = Transient::new(opts).run(&circuit, 8e-6).unwrap();
-        out.node(&circuit, "n").unwrap().to_vec()
-    };
-    // Charge-carrying model: the toggle must change the waveform.
-    let w_on = run(net_charge, true);
-    let w_off = run(net_charge, false);
-    let max_diff = w_on
-        .iter()
-        .zip(&w_off)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0f64, f64::max);
-    assert!(
-        max_diff > 1e-3,
-        "junction_caps=on must change a charge-carrying diode's waveform (max diff {max_diff:e})"
+    assert_toggle_contract(
+        "diode junction_caps",
+        net_charge,
+        net_plain,
+        "n",
+        1e-3,
+        |e, on| e.junction_caps = on,
     );
-    // Charge-free model: bit-identical whatever the toggle (the existing-deck
-    // compatibility bar).
-    let p_on = run(net_plain, true);
-    let p_off = run(net_plain, false);
-    assert_eq!(p_on.len(), p_off.len());
-    for (i, (a, b)) in p_on.iter().zip(&p_off).enumerate() {
-        assert_eq!(
-            a.to_bits(),
-            b.to_bits(),
-            "charge-free deck must be BIT-identical across the toggle (sample {i}: {a} vs {b})"
-        );
-    }
 }
 
 /// The §3.4 `DeviceEffects` contract for `junction_caps` on BJTs (dev-plan 04
@@ -258,39 +263,14 @@ fn junction_caps_toggle_is_honored_for_bjts() {
     let net_plain = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(5 0 1u 50n 50n 4u 10u)\n\
                      RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QSW\n\
                      .model QSW NPN(IS=1e-15 BF=100)\n.end\n";
-    let run = |net: &str, junction_caps: bool| {
-        let circuit = SpiceLoader::load(net).unwrap();
-        let opts = SolverOptions {
-            effects: DeviceEffects {
-                junction_caps,
-                ..DeviceEffects::default()
-            },
-            ..SolverOptions::fixed(10e-9)
-        };
-        let out = Transient::new(opts).run(&circuit, 8e-6).unwrap();
-        out.node(&circuit, "c").unwrap().to_vec()
-    };
-    let w_on = run(net_charge, true);
-    let w_off = run(net_charge, false);
-    let max_diff = w_on
-        .iter()
-        .zip(&w_off)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0f64, f64::max);
-    assert!(
-        max_diff > 1e-2,
-        "junction_caps=on must change a charge-carrying BJT's waveform (max diff {max_diff:e})"
+    assert_toggle_contract(
+        "BJT junction_caps",
+        net_charge,
+        net_plain,
+        "c",
+        1e-2,
+        |e, on| e.junction_caps = on,
     );
-    let p_on = run(net_plain, true);
-    let p_off = run(net_plain, false);
-    assert_eq!(p_on.len(), p_off.len());
-    for (i, (a, b)) in p_on.iter().zip(&p_off).enumerate() {
-        assert_eq!(
-            a.to_bits(),
-            b.to_bits(),
-            "charge-free BJT deck must be BIT-identical across the toggle (sample {i}: {a} vs {b})"
-        );
-    }
 }
 
 /// The §3.4 `DeviceEffects` contract for `junction_caps` on MOSFETs
@@ -311,40 +291,14 @@ fn junction_caps_toggle_is_honored_for_mosfets() {
     let net_plain = "m\nVDD vdd 0 DC 5\nVG in 0 PULSE(0 5 1u 100n 100n 4u 10u)\n\
                      RG in g 10k\nRL vdd d 100\nM1 d g 0 0 MSW\n\
                      .model MSW NMOS(VTO=2 KP=1e-2 W=1m L=10u)\n.end\n";
-    let run = |net: &str, junction_caps: bool| {
-        let circuit = SpiceLoader::load(net).unwrap();
-        let opts = SolverOptions {
-            effects: DeviceEffects {
-                junction_caps,
-                ..DeviceEffects::default()
-            },
-            ..SolverOptions::fixed(10e-9)
-        };
-        let out = Transient::new(opts).run(&circuit, 8e-6).unwrap();
-        out.node(&circuit, "d").unwrap().to_vec()
-    };
-    let w_on = run(net_charge, true);
-    let w_off = run(net_charge, false);
-    let max_diff = w_on
-        .iter()
-        .zip(&w_off)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0f64, f64::max);
-    assert!(
-        max_diff > 1e-2,
-        "junction_caps=on must change a gate-charge-carrying MOSFET's waveform \
-         (max diff {max_diff:e})"
+    assert_toggle_contract(
+        "MOSFET junction_caps",
+        net_charge,
+        net_plain,
+        "d",
+        1e-2,
+        |e, on| e.junction_caps = on,
     );
-    let p_on = run(net_plain, true);
-    let p_off = run(net_plain, false);
-    assert_eq!(p_on.len(), p_off.len());
-    for (i, (a, b)) in p_on.iter().zip(&p_off).enumerate() {
-        assert_eq!(
-            a.to_bits(),
-            b.to_bits(),
-            "charge-free MOS deck must be BIT-identical across the toggle (sample {i}: {a} vs {b})"
-        );
-    }
 }
 
 /// The MOS body diode is STRUCTURAL physics like the BJT's junctions, no
@@ -408,39 +362,14 @@ fn series_resistance_toggle_is_honored_for_bjts() {
     let net_plain = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(0 5 1u 50n 50n 4u 10u)\n\
                      RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QR\n\
                      .model QR NPN(IS=1e-15 BF=100)\n.end\n";
-    let run = |net: &str, series: bool| {
-        let circuit = SpiceLoader::load(net).unwrap();
-        let opts = SolverOptions {
-            effects: DeviceEffects {
-                series_resistance: series,
-                ..DeviceEffects::default()
-            },
-            ..SolverOptions::fixed(10e-9)
-        };
-        let out = Transient::new(opts).run(&circuit, 8e-6).unwrap();
-        out.node(&circuit, "c").unwrap().to_vec()
-    };
-    let w_on = run(net_r, true);
-    let w_off = run(net_r, false);
-    let max_diff = w_on
-        .iter()
-        .zip(&w_off)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0f64, f64::max);
-    assert!(
-        max_diff > 1e-2,
-        "series_resistance=on must change an rb/rc/re BJT's waveform (max diff {max_diff:e})"
+    assert_toggle_contract(
+        "BJT series_resistance",
+        net_r,
+        net_plain,
+        "c",
+        1e-2,
+        |e, on| e.series_resistance = on,
     );
-    let p_on = run(net_plain, true);
-    let p_off = run(net_plain, false);
-    assert_eq!(p_on.len(), p_off.len());
-    for (i, (a, b)) in p_on.iter().zip(&p_off).enumerate() {
-        assert_eq!(
-            a.to_bits(),
-            b.to_bits(),
-            "default-model BJT deck must be BIT-identical across the toggle (sample {i}: {a} vs {b})"
-        );
-    }
 }
 
 #[test]
