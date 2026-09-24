@@ -26,11 +26,7 @@ fn code_less_nets_do_not_fuse() {
         "two code-less nets must not collapse onto one sentinel id"
     );
 
-    let r1 = board
-        .components
-        .iter()
-        .find(|c| c.reference == "R1")
-        .expect("R1");
+    let r1 = board.component("R1").expect("R1");
     let p1 = r1.pins.iter().find(|p| p.number == "1").expect("pin 1");
     let p2 = r1.pins.iter().find(|p| p.number == "2").expect("pin 2");
     assert_ne!(

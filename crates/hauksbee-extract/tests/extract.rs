@@ -20,16 +20,8 @@ fn dnp_flag_parsed_from_pcb_attr_and_schematic_symbol() {
     (pad "1" smd roundrect (at 5 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "N1"))))
 "#;
     let board = ExtractedBoard::from_kicad_pcb(pcb).unwrap();
-    let r1 = board
-        .components
-        .iter()
-        .find(|c| c.reference == "R1")
-        .unwrap();
-    let r2 = board
-        .components
-        .iter()
-        .find(|c| c.reference == "R2")
-        .unwrap();
+    let r1 = board.component("R1").unwrap();
+    let r2 = board.component("R2").unwrap();
     assert!(r1.dnp, "R1 has `(attr ... dnp)`, must be DNP");
     assert!(!r2.dnp, "R2 has `(attr smd)` only, must not be DNP");
 }
@@ -64,9 +56,7 @@ fn duplicate_refdes_footprints_merge_into_one_component() {
         "TP4's two instances merge; R1 stays separate"
     );
     let tp4 = board
-        .components
-        .iter()
-        .find(|c| c.reference == "TP4")
+        .component("TP4")
         .expect("TP4 survives as one component");
     assert_eq!(tp4.pins.len(), 2, "TP4 keeps both instances' pads");
 }
@@ -133,16 +123,8 @@ fn numeric_net_zero_means_no_net_not_a_shared_node() {
             .collect::<Vec<_>>()
     );
     // The two `(net 0 "")` pads carry no net; they are NOT fused together.
-    let u1 = board
-        .components
-        .iter()
-        .find(|c| c.reference == "U1")
-        .unwrap();
-    let h1 = board
-        .components
-        .iter()
-        .find(|c| c.reference == "H1")
-        .unwrap();
+    let u1 = board.component("U1").unwrap();
+    let h1 = board.component("H1").unwrap();
     let u1_p1 = u1.pins.iter().find(|p| p.number == "1").unwrap();
     let u1_p2 = u1.pins.iter().find(|p| p.number == "2").unwrap();
     let h1_p1 = &h1.pins[0];
@@ -174,9 +156,7 @@ fn v10_empty_net_name_means_no_net() {
     let board = ExtractedBoard::from_kicad_pcb(pcb).unwrap();
     let pin = |r: &str, n: &str| {
         board
-            .components
-            .iter()
-            .find(|c| c.reference == r)
+            .component(r)
             .unwrap()
             .pins
             .iter()

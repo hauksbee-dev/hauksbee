@@ -111,7 +111,7 @@ fn devkit_external_cc_resistors_are_marked_dnp() {
         &root,
         "zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb",
     );
-    let find = |r: &str| board.components.iter().find(|c| c.reference == r).cloned();
+    let find = |r: &str| board.component(r).cloned();
     for r in ["R603", "R604"] {
         let c = find(r).unwrap_or_else(|| panic!("{r} not found"));
         assert_eq!(c.value, "5k1", "{r} should be the 5k1 external Rd");

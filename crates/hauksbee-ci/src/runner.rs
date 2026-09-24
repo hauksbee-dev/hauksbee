@@ -2490,7 +2490,7 @@ fn infer_supply_net(board: &ExtractedBoard, part_ref: &str) -> Option<String> {
         "VDD", "VCC", "VBAT", "AVDD", "DVDD", "VDDA", "VDD3P3", "3V3", "3.3V", "VIN", "VBUS", "5V",
         "VDDIO", "VDD_SPI",
     ];
-    let comp = board.components.iter().find(|c| c.reference == part_ref)?;
+    let comp = board.component(part_ref)?;
     for pin in &comp.pins {
         let f = pin.function.to_ascii_uppercase();
         if SUPPLY_HINTS.iter().any(|h| f.contains(h)) {
@@ -2517,9 +2517,7 @@ fn apply_decoupling(spec: &Spec, board: &ExtractedBoard, bound: &mut BoundBoard)
     // footprint and value (parsed to farads best-effort, 0 if unparseable).
     let default_for = |name: &str| {
         let (footprint, farads) = board
-            .components
-            .iter()
-            .find(|c| c.reference == name)
+            .component(name)
             .map(|c| {
                 let f = hauksbee_models::value::parse_value(&c.value).map_or(0.0, |p| p.si);
                 (c.footprint.as_str(), f)

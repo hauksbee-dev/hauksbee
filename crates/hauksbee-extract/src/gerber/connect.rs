@@ -1666,11 +1666,7 @@ mod tests {
             .map(|c| c.reference.as_str())
             .collect();
         assert_eq!(refs, vec!["R9", "U3"], "stable refdes order");
-        let u3 = board
-            .components
-            .iter()
-            .find(|c| c.reference == "U3")
-            .unwrap();
+        let u3 = board.component("U3").unwrap();
         assert_eq!(u3.pins.len(), 2);
         assert_eq!(u3.pins[0].number, "1");
         assert!(

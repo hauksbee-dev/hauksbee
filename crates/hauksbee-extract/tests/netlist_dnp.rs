@@ -22,16 +22,8 @@ fn netlist_dnp_property_marks_component_do_not_populate() {
 "#;
     let board = ExtractedBoard::from_kicad_netlist(text).expect("netlist parses");
 
-    let r1 = board
-        .components
-        .iter()
-        .find(|c| c.reference == "R1")
-        .expect("R1");
-    let r2 = board
-        .components
-        .iter()
-        .find(|c| c.reference == "R2")
-        .expect("R2");
+    let r1 = board.component("R1").expect("R1");
+    let r2 = board.component("R2").expect("R2");
 
     assert!(
         !r1.dnp,
@@ -58,11 +50,7 @@ fn netlist_dnp_explicit_false_value_stays_populated() {
 )
 "#;
     let board = ExtractedBoard::from_kicad_netlist(text).expect("netlist parses");
-    let c1 = board
-        .components
-        .iter()
-        .find(|c| c.reference == "C1")
-        .expect("C1");
+    let c1 = board.component("C1").expect("C1");
     assert!(
         !c1.dnp,
         "an explicit falsey dnp value must keep the part populated"

@@ -189,11 +189,7 @@ mod identity_tests {
         let code = decompile_board_to_code(source).expect("a fitted part decompiles");
         let rebuilt = code_to_board_text(&code).expect("the code recompiles");
         let board = ExtractedBoard::from_kicad_pcb(&rebuilt).expect("recompiled board extracts");
-        let r4 = board
-            .components
-            .iter()
-            .find(|c| c.reference == "R4")
-            .expect("R4 survives the round trip");
+        let r4 = board.component("R4").expect("R4 survives the round trip");
         assert!(
             hauksbee_extract::assembly::AssemblyState::of(r4).is_present(),
             "a Present part must come back Present, with no DNP flag or refusal invented"
