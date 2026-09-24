@@ -1309,7 +1309,8 @@ max_junction_temp_c = 125.0    # TJ max. Vishay, onsemi and Taiwan Semi all say
                                # 125; the 150 in Diodes DS23003 is an outlier on
                                # a sheet Diodes has marked obsolete.
 theta_ja_c_per_w = 40.0        # RthJA typ, vertical PCB, 2.5in x 2.5in copper
-theta_jc_c_per_w = 10.0        # RthJL typ, junction to lead
+# No theta_jc_c_per_w: the sheet prints no junction-to-case figure. Its 10 C/W
+# is RthJL, junction to lead (Vishay 88526, Thermal Characteristics).
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 1N5819HW: the SOD-123 surface-mount 40 V / 1 A Schottky.

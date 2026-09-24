@@ -206,8 +206,8 @@ rb  = 10.0
 rc  = 1.0
 re  = 0.5
 cje = 1.1e-11   # Ce typ 11 pF @ VEB = 0.5 V, f = 1 MHz: BCM847BS v.8 Table 7, p.4
-cjc = 5.0e-13
-tf  = 3.0e-10
+cjc = 3.5e-12   # zero-bias Cc read off Fig. 7 (p.6); 1.1 pF there at VCB = 10 V, Table 7 max 1.5 pF
+tf  = 6.4e-10   # 1/(2*pi*fT), fT typ 250 MHz @ VCE = 5 V, IC = 10 mA: Table 7, p.4
 # Note: this entry models a single transistor in the pair.
 # hauksbee-extract must instantiate two Device::Bjt entries per footprint,
 # using the pin map below for Q1 and Q2 respectively.
