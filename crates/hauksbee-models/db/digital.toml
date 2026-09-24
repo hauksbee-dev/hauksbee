@@ -2463,7 +2463,9 @@ voh   = 2.55     # MIN at VCC = 3 V, IOH = -4 mA over -40 to 85 C. The 25 C-only
                  # min is 2.6; the operating-range figure is the one to hold a
                  # board to, and it is 50 mV lower. Not a typical: see the note
                  # above. Unloaded the min is VCC - 0.1 V at IOH = -20 uA.
-vol   = 0.44     # max at VCC = 3 V, IOL = 4 mA (0.1 V max at 20 uA)
+vol   = 0.45     # max at VCC = 3 V, IOL = 4 mA over -40 to 85 C, the same column
+                 # as voh (0.44 at 25 C only; 0.1 V max at 20 uA): SCES766C
+                 # Electrical Characteristics, p.5
 vih   = 2.0      # min, VCC = 3.0 to 3.6 V
 vil   = 0.9      # max, VCC = 3.0 to 3.6 V
 tpd_s = 2.4e-9   # tpd typ, VCC = 3.3 V +/- 0.3 V, CL = 5 pF (3.5 ns max at 25 C)
@@ -3044,7 +3046,8 @@ voh = 4.4
 vol = 0.1
 vih = 2.0
 vil = 0.8
-tpd_s = 1.5e-8
+tpd_s = 3.3e-9   # tpd typ, 25 C, VCC = 5 V +/- 0.5 V, CL = 15 pF (6.9 ns max; 4.8 typ
+                 # at CL = 50 pF): DS35184 Rev. 1-2 Switching Characteristics, p.5
 supply_pin = "5"
 gnd_pin = "3"
 supply_static_ua = 1.0

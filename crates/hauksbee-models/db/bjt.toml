@@ -197,14 +197,15 @@ mpn_re   = "(?i)BCM847BS"
 [models.params]
 # Source: Nexperia BCM847BS datasheet Rev. 4 2022, SPICE model (same as BC847)
 is  = 1.0e-14
-bf  = 150.0
+bf  = 290.0     # hFE typ @ VCE = 5 V, IC = 2 mA (200 min, 450 max): BCM847BS v.8
+                # (15 July 2026) Table 7 Characteristics, p.4
 nf  = 1.0
 vaf = 80.0
 br  = 4.0
 rb  = 10.0
 rc  = 1.0
 re  = 0.5
-cje = 9.0e-13
+cje = 1.1e-11   # Ce typ 11 pF @ VEB = 0.5 V, f = 1 MHz: BCM847BS v.8 Table 7, p.4
 cjc = 5.0e-13
 tf  = 3.0e-10
 # Note: this entry models a single transistor in the pair.
@@ -224,7 +225,8 @@ pair_count = 2
 
 [models.ratings]
 max_current_a = 0.1       # per transistor (Nexperia)
-max_power_w = 0.25
+max_power_w = 0.2         # Ptot per transistor, Tamb <= 25 C (300 mW per device):
+                          # BCM847BS v.8 Table 5 Limiting values, p.3
 max_voltage_v = 45.0
 
 # ─────────────────────────────────────────────────────────────────────────────

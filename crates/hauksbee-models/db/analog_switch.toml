@@ -87,7 +87,8 @@ exponent = 0.925
 max_current_a = 2.1
 max_voltage_v = 5.5
 max_junction_temp_c = 125.0
-theta_ja_c_per_w = 120.0
+theta_ja_c_per_w = 160.0  # SOT26 on JEDEC high-K board; 120 is the U-DFN2020-6 row.
+                          # DS35404 Rev. 12-3, Dissipation Rating Table, p.4
 
 [models.coverage]
 implements = ["enable_gating", "off_state_leakage", "on_resistance", "programmed_current_limit"]

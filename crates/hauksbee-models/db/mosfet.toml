@@ -146,7 +146,11 @@ cgs    = 5.8e-10   # = Ciss - Crss = 630 - 50 = 580 pF, same test condition
 # Source: AOS AO3400A datasheet Rev 3.1, Absolute Maximum Ratings TA=25C.
 max_current_a       = 5.7     # ID continuous at TA=25C (A)
 max_surge_current_a = 30.0    # IDM pulsed (A)
-max_power_w         = 1.4     # PD at TA=25C (W)
+max_power_w         = 1.4     # PD at TA=25C (W). Rev 3.1 Note B (p.2): PD is
+                              # derived from the t<=10s RthJA (90 max), so it is a
+                              # short-duration figure (125 C / 1.4 W = 89 C/W); the
+                              # steady-state RthJA below is the one for the thermal
+                              # estimate, so the two are not meant to agree.
 max_voltage_v       = 30.0    # VDS (V)
 theta_ja_c_per_w    = 100.0   # RthJA steady-state typ (max 125; the t<=10s value is 70)
 max_junction_temp_c = 150.0   # TJ max (C)
