@@ -159,7 +159,7 @@ impl SampledValue {
 /// One ensemble member: the seed index and every toleranced component's value
 /// for that member. `values` is empty when the spec has no tolerances (the
 /// plain fuzz/single-run path).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SeedPlan {
     pub seed: u32,
     pub values: Vec<SampledValue>,
@@ -172,6 +172,31 @@ pub struct SeedPlan {
     /// the response, and the assertion must report that rather than the corner
     /// pass. See [`interior_probe_count`].
     pub interior: bool,
+    /// The variant member this run simulates for each undetermined same-pinout
+    /// part, `(reference, member id)`: the member axis of [`with_variants`].
+    pub variants: Vec<(String, String)>,
+}
+
+/// Cross every plan with every combination of the undetermined same-pinout
+/// variant sets `(reference, member ids)`, so the ensemble passes only if every
+/// member does. `None` above 2^[`CORNER_CAP`] runs: the part then keeps its
+/// flagged stand-in.
+pub fn with_variants(plans: Vec<SeedPlan>, axes: &[(String, Vec<String>)]) -> Option<Vec<SeedPlan>> {
+    let combos = axes.iter().try_fold(1usize, |n, (_, ids)| n.checked_mul(ids.len()))?;
+    if plans.len().checked_mul(combos)? > 1 << CORNER_CAP {
+        return None;
+    }
+    let pick = |mut k: usize| {
+        let pick = |(reference, ids): &(String, Vec<String>)| {
+            let id = ids[k % ids.len()].clone();
+            k /= ids.len();
+            (reference.clone(), id)
+        };
+        axes.iter().map(pick).collect()
+    };
+    let pick = &pick;
+    let expand = |plan: SeedPlan| (0..combos).map(move |k| SeedPlan { variants: pick(k), ..plan.clone() });
+    Some(plans.into_iter().flat_map(expand).collect())
 }
 
 /// The ensemble execution mode.
@@ -218,8 +243,8 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
         spec.overrides
             .iter()
             .rev()
-            .find(|o| o.reference == reference)
-            .map(|o| o.value.as_str())
+            .find(|o| o.reference == reference && o.value.is_some())
+            .and_then(|o| o.value.as_deref())
     };
 
     for rule in &spec.tolerances {
@@ -268,7 +293,7 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
             continue;
         };
         let dist = Distribution::parse(ov.distribution.as_deref().unwrap_or("uniform"))?;
-        let eff_value = overridden_value(&ov.reference).unwrap_or(&ov.value);
+        let eff_value = overridden_value(&ov.reference).unwrap_or_default();
         let nominal = parse_nominal(&ov.reference, eff_value)?;
         by_ref.insert(
             ov.reference.clone(),
@@ -329,7 +354,7 @@ pub fn build_plans(
             .map(|seed| SeedPlan {
                 seed,
                 values: tolerances.iter().map(|t| sample(seed, t)).collect(),
-                interior: false,
+                ..SeedPlan::default()
             })
             .collect()),
         Mode::Corners => {
@@ -358,6 +383,7 @@ pub fn build_plans(
             let mut plans: Vec<SeedPlan> = (0..count)
                 .map(|k| SeedPlan {
                     seed: k,
+                    variants: Vec::new(),
                     interior: false,
                     values: tolerances
                         .iter()
@@ -441,6 +467,7 @@ fn interior_plans(first_seed: u32, tolerances: &[ResolvedTolerance]) -> Vec<Seed
         .map(|p| SeedPlan {
             seed: first_seed + p as u32,
             interior: true,
+            variants: Vec::new(),
             values: tolerances
                 .iter()
                 .enumerate()

@@ -314,10 +314,12 @@ fn evaluate_hwtrace(
 /// "corner 12" would send a reader looking for a min/max combination that does
 /// not exist. `member` is the caller's already-resolved corner/seed noun.
 fn member_label(member: &str, out: &RunOutcome) -> String {
+    let variants = out.variants.iter().map(|(r, id)| format!(" with {r} as variant {id}"));
+    let variants: String = variants.collect();
     if out.interior {
-        format!("interior probe {}", out.seed)
+        format!("interior probe {}{variants}", out.seed)
     } else {
-        format!("{member} {}", out.seed)
+        format!("{member} {}{variants}", out.seed)
     }
 }
 

@@ -15,6 +15,7 @@ use hauksbee_ir::evidence::{
     ArtifactKind, ArtifactProvenance, ArtifactRole, Contribution, IgnoredInput,
 };
 use hauksbee_ir::{Device, NodeId, PwlPoint, SourceKind};
+use hauksbee_models::variants::{SELECT_PROPERTY, SWEEP_PROPERTY};
 use hauksbee_models::ModelLibrary;
 
 use crate::error::SpecError;
@@ -390,6 +391,8 @@ pub struct RunOutcome {
     /// evaluation keeps the two apart, because a failure here disproves the
     /// corner set's monotonicity assumption instead of adding to its coverage.
     pub interior: bool,
+    /// The variant members this run simulated: see [`crate::tolerance::SeedPlan::variants`].
+    pub variants: Vec<(String, String)>,
     /// Full `(t_s, volts)` waveforms for the nets any `hwtrace` assertion
     /// probes, sampled at the frame cadence (held-stale frames excluded, like
     /// every other analog aggregate). Empty when the spec has no hwtrace
@@ -813,6 +816,7 @@ pub fn run_spec_with_lib(
         spec.ensemble_mode()?
     };
     let plans = crate::tolerance::build_plans(mode, spec.ensemble_seed_count(), &tols)?;
+    let plans = sweep_variants(spec, &base, lib, plans);
 
     // Failing-seed isolation: keep only the requested member.
     let total = plans.len();
@@ -839,8 +843,9 @@ pub fn run_spec_with_lib(
     let fuzz_straps_present = plans
         .iter()
         .any(|p| !fuzz_net_drives(spec, p.seed).is_empty());
-    let shared_ac = if spec.ac.is_some() && tols.is_empty() && !fuzz_straps_present {
-        Some(compute_ac(spec, &base, &[], &[], lib)?)
+    let swept = plans.iter().any(|p| !p.variants.is_empty());
+    let shared_ac = if spec.ac.is_some() && tols.is_empty() && !fuzz_straps_present && !swept {
+        Some(compute_ac(spec, &base, &crate::tolerance::SeedPlan::default(), &[], lib)?)
     } else {
         None
     };
@@ -870,7 +875,7 @@ pub fn run_spec_with_lib(
             Some(ac) => Some(ac.clone()),
             None if spec.ac.is_some() => {
                 let fuzz_drives = fuzz_net_drives(spec, plan.seed);
-                Some(compute_ac(spec, &base, &plan.values, &fuzz_drives, lib)?)
+                Some(compute_ac(spec, &base, plan, &fuzz_drives, lib)?)
             }
             None => None,
         };
@@ -886,7 +891,7 @@ pub fn run_spec_with_lib(
 fn compute_ac(
     spec: &Spec,
     base: &ExtractedBoard,
-    sampled: &[crate::tolerance::SampledValue],
+    plan: &crate::tolerance::SeedPlan,
     fuzz_drives: &[(String, f64)],
     lib: &ModelLibrary,
 ) -> Result<AcOutcome, SpecError> {
@@ -894,7 +899,7 @@ fn compute_ac(
 
     let cfg = spec.ac.as_ref().expect("compute_ac called without [ac]");
     let mut board = apply_overrides(spec, base);
-    apply_sampled_values(&mut board, sampled);
+    apply_plan(&mut board, plan);
     let mut bound = bind_board(&board, lib);
 
     // Bias the operating point exactly as the transient run would: rail
@@ -1354,7 +1359,9 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> ExtractedBoard {
             .iter_mut()
             .find(|c| c.reference == ov.reference)
         {
-            comp.value = ov.value.clone();
+            comp.value = ov.value.clone().unwrap_or_else(|| comp.value.clone());
+            let select = ov.select.iter().map(|id| (SELECT_PROPERTY.to_string(), id.clone()));
+            comp.properties.extend(select);
         }
     }
     board
@@ -1371,16 +1378,43 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> ExtractedBoard {
 /// point ("1210.0"), so the size-code heuristic never fires and the value
 /// round-trips. `{:?}` is round-trippable for f64 and its scientific form (for
 /// very small values) is accepted by the same parser.
-fn apply_sampled_values(board: &mut ExtractedBoard, sampled: &[crate::tolerance::SampledValue]) {
-    for sv in sampled {
-        if let Some(comp) = board
-            .components
-            .iter_mut()
-            .find(|c| c.reference == sv.reference)
-        {
+/// The plan's variant members are set the same way, as the sweep's selection.
+fn apply_plan(board: &mut ExtractedBoard, plan: &crate::tolerance::SeedPlan) {
+    for comp in &mut board.components {
+        let reference = comp.reference.as_str();
+        if let Some(sv) = plan.values.iter().find(|sv| sv.reference == reference) {
             comp.value = format!("{:?}", sv.si);
         }
+        let ids = plan.variants.iter().filter(|(r, _)| r == reference);
+        let sweep = ids.map(|(_, id)| (SWEEP_PROPERTY.to_string(), id.clone())).collect::<Vec<_>>();
+        comp.properties.extend(sweep);
     }
+}
+
+/// Cross the plans with every member of each fitted part's undetermined
+/// same-pinout variant set, when that stays within the corner cap; otherwise
+/// (or with nothing to sweep) the plans stand and such parts bind a flagged
+/// stand-in.
+fn sweep_variants(
+    spec: &Spec,
+    base: &ExtractedBoard,
+    lib: &ModelLibrary,
+    plans: Vec<crate::tolerance::SeedPlan>,
+) -> Vec<crate::tolerance::SeedPlan> {
+    use hauksbee_extract::assembly::AssemblyState;
+    let board = apply_overrides(spec, base);
+    let open = |comp: &hauksbee_extract::Component| {
+        let part = AssemblyState::of(comp).fitted()?;
+        let selection = hauksbee_engine::binder::resolve(lib, part).selection?;
+        let ids = selection.survivors().map(|m| m.id.clone()).collect();
+        (selection.determined.is_none() && selection.same_pinout).then(|| (comp.reference.clone(), ids))
+    };
+    let axes: Vec<(String, Vec<String>)> = board.components.iter().filter_map(open).collect();
+    if axes.is_empty() {
+        return plans;
+    }
+    let fallback = plans.clone();
+    crate::tolerance::with_variants(plans, &axes).unwrap_or(fallback)
 }
 
 /// The run's production assumptions: the hollow-gate ones the caller already
@@ -1723,7 +1757,7 @@ fn run_one(
 ) -> Result<RunOutcome, SpecError> {
     let seed = plan.seed;
     let mut board = apply_overrides(spec, base);
-    apply_sampled_values(&mut board, &plan.values);
+    apply_plan(&mut board, plan);
     let mut bound = bind_board(&board, lib);
 
     // The as-built overlay comes first: it is BOARD state (the physical rework
@@ -2215,6 +2249,7 @@ fn run_one(
         analog_abort,
         sampled_values: plan.values.clone(),
         interior: plan.interior,
+        variants: plan.variants.clone(),
         net_series,
         substitutions: engine
             .scheduler()

@@ -937,9 +937,25 @@
             "gaussian"
           ]
         },
+        "reason": {
+          "description": "Why that variant, for the spec's reader.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "ref": {
           "description": "Reference designator, e.g. \"R_Shunt15301\".",
           "type": "string"
+        },
+        "select": {
+          "description": "The orderable variant fitted here: a member id of the part's `variant_of`\nset, written to the reserved `hauksbee_select` property before binding.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "tolerance": {
           "description": "Optional tolerance, as a percentage of `value` (10.0 = ±10%). Present =\nthis component joins the tolerance ensemble with `value` as nominal.",
@@ -954,13 +970,16 @@
         },
         "value": {
           "description": "The replacement value string, spelled the way the board file would spell\nit (e.g. `\"0.05\"`, `\"4k7\"`, `\"100n\"`). Applied before binding.",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       },
       "additionalProperties": false,
       "required": [
-        "ref",
-        "value"
+        "ref"
       ]
     },
     "PeripheralSpec": {
