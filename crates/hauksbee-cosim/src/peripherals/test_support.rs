@@ -3,8 +3,11 @@
 //! the same bus protocol), so a framing mistake shows up in both at once.
 
 use crate::peripherals::i2c::I2cBus;
+use crate::peripherals::spi::SpiSlave;
+use crate::MutexExt;
 use hauksbee_ir::{Circuit, Device, DeviceId, SourceKind};
 use hauksbee_mcu::I2cEvent;
+use std::sync::{Arc, Mutex};
 
 /// One pointer-framed write transaction: START, `bytes`, STOP.
 pub(crate) fn i2c_write(bus: &mut I2cBus, addr: u8, bytes: &[u8]) {
@@ -35,5 +38,34 @@ pub(crate) fn dc_source_volts(circuit: &Circuit, vsource: DeviceId) -> f64 {
             ..
         } => v,
         _ => panic!("driver vsource"),
+    }
+}
+
+/// An SPI slave that answers every byte with `miso` and records each MOSI
+/// byte in `got`; it offers no `miso_preview`.
+pub(crate) struct FixedSpiSlave {
+    pub miso: u8,
+    pub got: Arc<Mutex<Vec<u8>>>,
+}
+
+impl FixedSpiSlave {
+    pub(crate) fn new(miso: u8) -> Self {
+        Self {
+            miso,
+            got: Arc::default(),
+        }
+    }
+}
+
+impl SpiSlave for FixedSpiSlave {
+    fn transfer(&mut self, mosi: u8) -> u8 {
+        self.got.lock_or_recover().push(mosi);
+        self.miso
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
