@@ -1333,3 +1333,7 @@ missing = ["channel_capacitance", "iec_pulse_waveform", "package_parasitics", "s
 [models.source]
 tier = "datasheet-derived"
 validation = "physical-bounds-only"
+[[models.source.uncertainty]]
+status = "unknown"
+parameter = "model"
+reason = "datasheet publishes no validated model error interval"

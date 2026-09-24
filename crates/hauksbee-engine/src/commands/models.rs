@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use hauksbee_ir::evidence::{
     ModelLayer, ModelSource, ModelSourceTier, ModelUncertainty, ModelValidation,
 };
+use hauksbee_models::schema::model_error_warning;
 use hauksbee_models::{ModelLibrary, Pack, PackStore};
 use sha2::{Digest, Sha256};
 
@@ -90,7 +91,12 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
         // Every source problem, then the first structural one.
         match toml::from_str::<hauksbee_models::SensorSpec>(&text) {
             Ok(mut spec) => {
-                let source = spec.sensor.source.take().map(|s| s.problems());
+                let source = spec.sensor.source.take();
+                if let Some(w) = model_error_warning(source.as_ref()) {
+                    warnings += 1;
+                    println!("sensor.source: warning: {w}");
+                }
+                let source = source.map(|s| s.problems());
                 let result = spec.validate().err().into_iter().map(|e| e.to_string());
                 let errors: Vec<String> = source
                     .into_iter()
@@ -149,6 +155,10 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
             // genuine extensions, which is why it cannot gate.
             let unknown = hauksbee_models::param_names::unknown_params(entry);
             let cited = hauksbee_models::param_names::source_warnings(entry);
+            if let Some(w) = model_error_warning(entry.source.as_ref()) {
+                entry_warnings += 1;
+                println!("model '{}' [models.source]: warning: {w}", entry.id);
+            }
             for w in unknown.iter().map(|u| u.message()).chain(cited) {
                 entry_warnings += 1;
                 println!("model '{}' [models.params]: warning: {w}", entry.id);
