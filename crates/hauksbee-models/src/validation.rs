@@ -1271,22 +1271,38 @@ mod tests {
 
     /// Refused: a merged unit role, a swapped Schmitt pair, a rail at a supply.
     #[test]
-    #[rustfmt::skip]
     fn merged_units_swapped_levels_and_supply_rails_are_refused() {
-        let mut e = entry(ComponentKind::Opamp, &[("gain", 1e5), ("swing_lo", 0.02), ("swing_hi", 1.5)]);
-        fn roles(s: &str) -> Vec<(&str, &str)> { s.split(' ').filter_map(|r| r.split_once(':')).collect() }
+        let mut e = entry(
+            ComponentKind::Opamp,
+            &[("gain", 1e5), ("swing_lo", 0.02), ("swing_hi", 1.5)],
+        );
+        fn roles(s: &str) -> Vec<(&str, &str)> {
+            s.split(' ').filter_map(|r| r.split_once(':')).collect()
+        }
         let dual = "4:vee 8:vcc 1:out_a 2:in_minus_a 3:in_plus_a 5:in_plus_b 6:in_minus_b 7:out_b";
-        pins(&mut e, &roles(dual)); accepts(&e);
+        pins(&mut e, &roles(dual));
+        accepts(&e);
         pins(&mut e, &roles(&dual.replace("7:out_b", "7:out_a")));
         rejects(&e, "pads 1, 7 all carry 'out_a': give each unit");
         pins(&mut e, &roles(dual));
-        e.params.set_f64("rail_hi", 5.0); e.ratings.max_voltage_v = Some(10.0);
+        e.params.set_f64("rail_hi", 5.0);
+        e.ratings.max_voltage_v = Some(10.0);
         rejects(&e, "'rail_hi' = 5 is a supply level");
-        e.params.set_f64("rail_hi", 3.5); accepts(&e);
-        let mut q = entry(ComponentKind::BjtNpn, &[("is", 1e-14), ("bf", 200.0), ("nf", 1.0)]);
-        pins(&mut q, &roles("1:emitter_q1 2:base 3:collector_q2 4:emitter_q2 5:base 6:collector_q1"));
+        e.params.set_f64("rail_hi", 3.5);
+        accepts(&e);
+        let mut q = entry(
+            ComponentKind::BjtNpn,
+            &[("is", 1e-14), ("bf", 200.0), ("nf", 1.0)],
+        );
+        pins(
+            &mut q,
+            &roles("1:emitter_q1 2:base 3:collector_q2 4:emitter_q2 5:base 6:collector_q1"),
+        );
         rejects(&q, "pads 2, 5 all carry 'base'");
-        rejects(&entry(ComponentKind::Digital, &[("vil", 2.5), ("vih", 1.5)]), "'vil' = 2.5 must be strictly less");
+        rejects(
+            &entry(ComponentKind::Digital, &[("vil", 2.5), ("vih", 1.5)]),
+            "'vil' = 2.5 must be strictly less",
+        );
     }
 
     #[test]

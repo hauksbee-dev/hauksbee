@@ -899,22 +899,46 @@ mod tests {
 
     /// VF rows cut from a known law refit to it; a bf outside hFE warns.
     #[test]
-    #[rustfmt::skip]
     fn a_drafted_law_is_checked_against_its_cited_rows() {
         let law = [1e-8, 1.2, 0.5];
-        let row = |name: &str, cols: String, conditions: String| format!("[[models.source.characteristic]]\nparameter = \"{name}\"\n{cols}\nunit = \"V\"\nconditions = \"{conditions}\"\nbasis = \"b\"\n");
-        let vf = |ma: f64| row("VF forward voltage", format!("typ = {}", diode_vf(law, ma / 1e3)), format!("IF = {ma} mA, TA = 25 \u{b0}C"));
-        let source = |rows: String| format!("[models.source]\ntier = \"datasheet-derived\"\n{rows}");
+        let row = |name: &str, cols: String, conditions: String| {
+            format!("[[models.source.characteristic]]\nparameter = \"{name}\"\n{cols}\nunit = \"V\"\nconditions = \"{conditions}\"\nbasis = \"b\"\n")
+        };
+        let vf = |ma: f64| {
+            row(
+                "VF forward voltage",
+                format!("typ = {}", diode_vf(law, ma / 1e3)),
+                format!("IF = {ma} mA, TA = 25 \u{b0}C"),
+            )
+        };
+        let source =
+            |rows: String| format!("[models.source]\ntier = \"datasheet-derived\"\n{rows}");
         let rows = source([1.0, 10.0, 100.0, 1000.0].map(vf).concat());
         let drafted = entry("diode", "is = 1e-8\nn = 1.2\nrs = 0.5", &rows);
         assert!(source_warnings(&drafted).is_empty() && diode_refit(&drafted).is_none());
         let off = entry("diode", "is = 1e-14\nn = 1.0\nrs = 0.0", &rows);
         let fit = diode_refit(&off).expect("the rows fit their own law");
-        assert!(fit.iter().zip(law).all(|(a, b)| (a / b - 1.0).abs() < 1e-3), "{fit:?}");
+        assert!(
+            fit.iter().zip(law).all(|(a, b)| (a / b - 1.0).abs() < 1e-3),
+            "{fit:?}"
+        );
         assert!(source_warnings(&off)[0].ends_with("over 10% off"));
-        let hfe = source(row("hFE DC current gain", "min = 110\nmax = 220".into(), "c".into()));
-        let bjt = |bf: f64| source_warnings(&entry("bjt_npn", &format!("is = 1e-14\nbf = {bf}\nnf = 1.0"), &hfe));
-        assert!(bjt(300.0)[0].contains("bf = 300 is outside the printed min..max") && bjt(200.0).is_empty());
+        let hfe = source(row(
+            "hFE DC current gain",
+            "min = 110\nmax = 220".into(),
+            "c".into(),
+        ));
+        let bjt = |bf: f64| {
+            source_warnings(&entry(
+                "bjt_npn",
+                &format!("is = 1e-14\nbf = {bf}\nnf = 1.0"),
+                &hfe,
+            ))
+        };
+        assert!(
+            bjt(300.0)[0].contains("bf = 300 is outside the printed min..max")
+                && bjt(200.0).is_empty()
+        );
     }
 
     #[test]

@@ -8023,17 +8023,30 @@ style = "i2c_pointer"
 
     /// One role on pads of two nets refuses the part; on one net it binds.
     #[test]
-    #[rustfmt::skip]
     fn one_role_on_pads_of_two_nets_is_refused_not_half_bound() {
-        let pins = [("1", "anode"), ("2", "cathode"), ("3", "cathode")].map(|(p, r)| (p.into(), r.into()));
-        let model = make_entry("dual", ComponentKind::Diode, "dual", Default::default(), pins.into());
+        let pins =
+            [("1", "anode"), ("2", "cathode"), ("3", "cathode")].map(|(p, r)| (p.into(), r.into()));
+        let model = make_entry(
+            "dual",
+            ComponentKind::Diode,
+            "dual",
+            Default::default(),
+            pins.into(),
+        );
         for (third, refused) in [(1, false), (2, true)] {
-            let mut c = comp("D1", "dual"); c.pins = vec![pin("1", 0), pin("2", 1), pin("3", third)];
-            let mut circuit = Circuit::new(); let nodes = [NodeId::GROUND, circuit.node("A"), circuit.node("B")];
+            let mut c = comp("D1", "dual");
+            c.pins = vec![pin("1", 0), pin("2", 1), pin("3", third)];
+            let mut circuit = Circuit::new();
+            let nodes = [NodeId::GROUND, circuit.node("A"), circuit.node("B")];
             let node_of = move |n: Option<i64>| Some(nodes[usize::try_from(n?).ok()?]);
             let (outcome, warning) = bind_one(&c, &model, &mut circuit, &node_of, &HashMap::new());
-            let split = warning.is_some_and(|w| w.contains("pads 2 and 3 both carry role 'cathode'"));
-            assert_eq!(matches!(outcome, BindOutcome::Unresolved { .. }) && split, refused, "{outcome:?}");
+            let split =
+                warning.is_some_and(|w| w.contains("pads 2 and 3 both carry role 'cathode'"));
+            assert_eq!(
+                matches!(outcome, BindOutcome::Unresolved { .. }) && split,
+                refused,
+                "{outcome:?}"
+            );
         }
     }
 
