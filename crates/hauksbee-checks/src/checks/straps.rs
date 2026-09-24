@@ -44,7 +44,7 @@ use std::collections::BTreeMap;
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ModelEntry, ModelLibrary, StrapInternalPull, StrapLevel, StrapPin};
 
-use super::envelope::{role_net_id, RailResolver};
+use super::envelope::{role_net_id, RailRange, RailResolver};
 use hauksbee_bind::binder::resolve;
 use hauksbee_extract::assembly::AssemblyState;
 
@@ -54,14 +54,14 @@ pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     strap_lint_with_drives(board, lib, &BTreeMap::new())
 }
 
-/// [`strap_lint`] with solved (or spec-forced) net levels, which a pull
+/// [`strap_lint`] with solved (or spec-forced) net spans, which a pull
 /// divider is judged at alongside each rail's declared corners.
 pub fn strap_lint_with_drives(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
-    drives: &BTreeMap<String, f64>,
+    solved: &BTreeMap<String, RailRange>,
 ) -> NetLintReport {
-    let rails = RailResolver::new(board, lib, drives);
+    let rails = RailResolver::new(board, lib, solved);
     let mut report = NetLintReport::default();
     for comp in &board.components {
         // The three-state contract: only a present part's strap table runs.
@@ -638,7 +638,7 @@ vih = [0.0, 2.0]
     fn check(
         name: &str,
         b: &ExtractedBoard,
-        drives: &BTreeMap<String, f64>,
+        drives: &BTreeMap<String, RailRange>,
         want: &[(Severity, &[&str])],
     ) {
         let report = strap_lint_with_drives(b, &library(), drives);
@@ -838,9 +838,15 @@ vih = [0.0, 2.0]
         for (name, b, want) in &cases {
             check(name, b, &none, want);
         }
-        // A solved rail joins the declared corners: +3V3 solved at 2.6 V pulls
-        // the 1k/10k active-low divider down to 2.36 V, still HIGH.
-        let solved = BTreeMap::from([("+3V3".to_string(), 2.6)]);
+        // A solved span joins the declared corners: +3V3 sagging to 2.6 V in the
+        // run pulls the 1k/10k active-low divider down to 2.36 V, still HIGH.
+        let solved = BTreeMap::from([(
+            "+3V3".to_string(),
+            RailRange {
+                min_v: 2.6,
+                max_v: 3.3,
+            },
+        )]);
         let faulty = strap_board(
             "+3V3",
             "/BOOT0",
@@ -850,7 +856,7 @@ vih = [0.0, 2.0]
             "solved rail",
             &faulty,
             &solved,
-            &[(Medium, &["2.36-3.15 V", "3 rail corner(s)"])],
+            &[(Medium, &["2.36-3.15 V", "4 rail corner(s)"])],
         );
     }
 }

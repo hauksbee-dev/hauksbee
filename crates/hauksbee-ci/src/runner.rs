@@ -1447,11 +1447,16 @@ fn production_assumptions(
     let solved = |net: &str| engine.scheduler().net_voltage(net);
     let analog = hauksbee_engine::checks::analog_inputs::run_assumptions(board, lib, &solved);
     production_assumptions.extend(analog);
-    // Supply and rail-order envelopes, on the same solved levels.
-    let levels = board
-        .nets
-        .iter()
-        .filter_map(|n| Some((n.name.clone(), solved(&n.name)?)));
+    // Supply and rail-order envelopes, on the span each net covered in the run
+    // (a sag that recovers is still a violation), or its final level.
+    let levels = board.nets.iter().filter_map(|n| {
+        let span = engine.scheduler().net_range(&n.name);
+        let (min_v, max_v) = span.or_else(|| solved(&n.name).map(|v| (v, v)))?;
+        Some((
+            n.name.clone(),
+            hauksbee_engine::checks::envelope::RailRange { min_v, max_v },
+        ))
+    });
     let opts = engine.scheduler().opts;
     let supply = hauksbee_engine::checks::envelope::run_assumptions(
         board,
@@ -2717,6 +2722,10 @@ fn attach_peripherals(
         let id = format!("ramp_{}", s.net);
         let ramp = Stimulus::voltage(sched.circuit_mut(), &id, net, kind);
         sched.attach_peripheral(Box::new(ramp));
+        // A rail below its envelope while it ramps is power-on, not a sag.
+        sched.powered_from_s = sched
+            .powered_from_s
+            .max(s.ramp_ms.unwrap_or_default() / 1e3);
     }
 
     for p in &spec.peripherals {

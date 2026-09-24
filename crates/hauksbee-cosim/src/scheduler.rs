@@ -448,6 +448,9 @@ pub struct Scheduler {
     /// requested span.
     pub stop_when_dead: bool,
     pub sim_time: f64,
+    /// When the board is powered: a cold power-on ramp ends here, so a net's
+    /// [`Self::net_range`] floor counts only samples from then on.
+    pub powered_from_s: f64,
     /// Sub-microsecond remainder carried between chunks. `run_micros` takes an
     /// integer microsecond count, so a chunk whose duration is not a whole
     /// number of microseconds (e.g. a 1.5 µs chunk, or any chunk under 0.5 µs
@@ -1081,6 +1084,8 @@ pub struct ChunkPinEdges {
 pub struct NetStat {
     pub min_v: f64,
     pub max_v: f64,
+    /// The minimum once the board is powered (see `Scheduler::powered_from_s`).
+    pub powered_min_v: f64,
     pub toggles: u64,
     last_logic: Option<bool>,
 }
@@ -1090,6 +1095,7 @@ impl Default for NetStat {
         NetStat {
             min_v: f64::INFINITY,
             max_v: f64::NEG_INFINITY,
+            powered_min_v: f64::INFINITY,
             toggles: 0,
             last_logic: None,
         }
@@ -1325,6 +1331,7 @@ impl Scheduler {
             stop_when_dead: false,
             opts,
             sim_time: 0.0,
+            powered_from_s: 0.0,
             micros_carry: 0.0,
             stats: HashMap::new(),
             firmware_edge_toggles: HashMap::new(),
@@ -5029,11 +5036,15 @@ impl Scheduler {
             }
         };
         let (vih, vil) = (0.6 * vhigh, 0.4 * vhigh);
+        let powered = self.sim_time >= self.powered_from_s;
         for (name, &node) in &self.net_nodes {
             let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
             let st = self.stats.entry(name.clone()).or_default();
             st.min_v = st.min_v.min(v);
             st.max_v = st.max_v.max(v);
+            if powered {
+                st.powered_min_v = st.powered_min_v.min(v);
+            }
             // Logic level with a rail-scaled midpoint and hysteresis band.
             let logic = if v > vih {
                 Some(true)
@@ -5221,6 +5232,14 @@ impl Scheduler {
     pub fn net_voltage(&self, net: &str) -> Option<f64> {
         let node = self.net_nodes.get(net)?;
         self.node_volts.get(node.0 as usize).copied()
+    }
+
+    /// The (min, max) a net covered across the run's converged chunks, the
+    /// floor counted once the board is powered and the ceiling throughout (a
+    /// power-on overshoot is real). `None` before any powered sample.
+    pub fn net_range(&self, net: &str) -> Option<(f64, f64)> {
+        let st = self.stats.get(net)?;
+        (st.powered_min_v <= st.max_v).then_some((st.powered_min_v, st.max_v))
     }
 
     /// The name of the net on `node`, or `"node N"` for an unnamed one.
@@ -8425,6 +8444,22 @@ data_out = ["io0"]
         );
         assert!((sched.mcus[1].logic_high_v - 3.3).abs() < 1e-6);
         assert!(count_toggles(&mut sched, "BLINK33", &[2.7, 0.0, 2.7, 0.0]) >= 3);
+    }
+
+    /// `net_range` keeps a sag that recovers, and its floor skips a power-on
+    /// ramp (samples before `powered_from_s`) while its ceiling does not.
+    #[test]
+    fn net_range_keeps_a_recovered_sag_but_not_the_power_on_ramp() {
+        let (mut sched, _h) = sched_with_core(MockCore::default(), &[]);
+        count_toggles(&mut sched, "VDD", &[3.3, 2.9, 3.3]);
+        assert_eq!(sched.net_range("VDD"), Some((2.9, 3.3)));
+        let (mut sched, _h) = sched_with_core(MockCore::default(), &[]);
+        sched.powered_from_s = 1e-3;
+        count_toggles(&mut sched, "VDD", &[0.0, 1.6]);
+        assert_eq!(sched.net_range("VDD"), None);
+        sched.sim_time = 1e-3;
+        count_toggles(&mut sched, "VDD", &[3.3, 3.2]);
+        assert_eq!(sched.net_range("VDD"), Some((3.2, 3.3)));
     }
 
     // ── Backend limitation and coverage honesty ──────────────────────────────

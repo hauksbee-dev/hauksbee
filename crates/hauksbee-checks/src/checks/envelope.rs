@@ -184,7 +184,8 @@ fn battery_ranges(board: &ExtractedBoard, lib: &ModelLibrary) -> BTreeMap<i64, O
 
 pub(crate) struct RailResolver<'a> {
     board: &'a ExtractedBoard,
-    drives: &'a BTreeMap<String, f64>,
+    /// Levels a run solved (or a spec forced), each the span the net covered.
+    solved: &'a BTreeMap<String, RailRange>,
     regulators: BTreeMap<i64, RailRange>,
     batteries: BTreeMap<i64, Option<RailRange>>,
 }
@@ -193,36 +194,37 @@ impl<'a> RailResolver<'a> {
     pub(crate) fn new(
         board: &'a ExtractedBoard,
         lib: &ModelLibrary,
-        drives: &'a BTreeMap<String, f64>,
+        solved: &'a BTreeMap<String, RailRange>,
     ) -> Self {
         let (regulators, batteries) = (regulator_ranges(board, lib), battery_ranges(board, lib));
         Self {
             board,
-            drives,
+            solved,
             regulators,
             batteries,
         }
     }
 
-    fn solved(&self, net_id: i64) -> Option<f64> {
-        self.drives.get(&self.board.net(net_id)?.name).copied()
+    fn solved(&self, net_id: i64) -> Option<RailRange> {
+        self.solved.get(&self.board.net(net_id)?.name).copied()
     }
 
-    /// Every level a net is judged at: the solved one when a run gave it, plus
-    /// both corners of its declared range. Empty when neither is known.
+    /// Every level a net is judged at: the solved span when a run gave it,
+    /// plus both corners of its declared range. Empty when neither is known.
     pub(crate) fn corners(&self, net_id: i64) -> Vec<f64> {
         let declared = match self.declared(net_id) {
-            RailKnowledge::Known(r) => vec![r.min_v, r.max_v],
-            _ => Vec::new(),
+            RailKnowledge::Known(r) => Some(r),
+            _ => None,
         };
-        self.solved(net_id).into_iter().chain(declared).collect()
+        let spans = self.solved(net_id).into_iter().chain(declared);
+        let mut corners: Vec<f64> = spans.flat_map(|r| [r.min_v, r.max_v]).collect();
+        corners.dedup();
+        corners
     }
 
     fn range(&self, net_id: i64) -> RailKnowledge {
-        self.solved(net_id).map_or_else(
-            || self.declared(net_id),
-            |volts| RailKnowledge::Known(RailRange::point(volts)),
-        )
+        self.solved(net_id)
+            .map_or_else(|| self.declared(net_id), RailKnowledge::Known)
     }
 
     fn declared(&self, net_id: i64) -> RailKnowledge {
@@ -298,17 +300,20 @@ pub fn envelope_lint_with_drives(
     lib: &ModelLibrary,
     drives: &BTreeMap<String, f64>,
 ) -> NetLintReport {
-    envelope_lint_with_tolerance(board, lib, drives, 0.0, 0.0)
+    let points = drives
+        .iter()
+        .map(|(net, v)| (net.clone(), RailRange::point(*v)));
+    envelope_lint_with_tolerance(board, lib, &points.collect(), 0.0, 0.0)
 }
 
 fn envelope_lint_with_tolerance(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
-    drives: &BTreeMap<String, f64>,
+    solved: &BTreeMap<String, RailRange>,
     reltol: f64,
     vntol: f64,
 ) -> NetLintReport {
-    let resolver = RailResolver::new(board, lib, drives);
+    let resolver = RailResolver::new(board, lib, solved);
     let mut report = NetLintReport::default();
     let mut abstained_nets = BTreeSet::new();
 
@@ -450,11 +455,13 @@ fn envelope_lint_with_tolerance(
 
 /// The same limits as run evidence, judged on the levels the run SOLVED. A
 /// serious limit undermines whatever the part drives; a lesser one qualifies
-/// it. A rail the run did not solve is an abstention, never a violation.
+/// it. A rail the run did not solve is an abstention, never a violation. Each
+/// level is the span the net covered over the run, so a rail that sags out of
+/// its envelope and recovers is judged on the sag, not on where it ended.
 pub fn run_assumptions(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
-    solved: &BTreeMap<String, f64>,
+    solved: &BTreeMap<String, RailRange>,
     reltol: f64,
     vntol: f64,
 ) -> Vec<hauksbee_ir::evidence::Assumption> {
@@ -547,10 +554,23 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
             .next()
             .expect("an exact out-of-band forced level must fire");
         assert!(finding.message.contains("3.800..3.800"));
-        for (volts, should_fire) in [(3.2 - 1.0e-9, false), (3.2 - 0.01, true)] {
-            let solved = BTreeMap::from([("UNNAMED_SUPPLY".to_string(), volts)]);
+        // (run min, run max): a steady rail, one grazing the edge within solver
+        // tolerance, one that sags out and recovers to 3.3 V (its final level
+        // alone would pass), and one that overshoots.
+        for (min_v, max_v, fires) in [
+            (3.3, 3.3, false),
+            (3.2 - 1.0e-9, 3.3, false),
+            (3.19, 3.3, true),
+            (3.3, 3.7, true),
+        ] {
+            let solved =
+                BTreeMap::from([("UNNAMED_SUPPLY".to_string(), RailRange { min_v, max_v })]);
             let findings = run_assumptions(&b, &lib, &solved, 1.0e-3, 1.0e-6);
-            assert_eq!(!findings.is_empty(), should_fire, "volts={volts}");
+            assert_eq!(
+                !findings.is_empty(),
+                fires,
+                "{min_v}..{max_v}: {findings:?}"
+            );
         }
     }
 
