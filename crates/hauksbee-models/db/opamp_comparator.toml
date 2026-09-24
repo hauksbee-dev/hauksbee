@@ -481,20 +481,22 @@ description = "LMV7219 7ns single-supply comparator, push-pull output, SOT-23-5"
 value_re = "(?i)^LMV7219"
 
 [models.params]
-# Source: Texas Instruments LMV7219 datasheet (SNOS561D), Table 6.3 / 6.5
-out_lo     = 0.05   # output low typ at 5V supply (V)
-out_hi     = 4.95   # output high typ at 5V supply (V)
+# Source: Texas Instruments LMV7219 datasheet (SNOS458I), Table 6.6 (5 V).
+# Output levels are the guaranteed limits at IL = 0.4 mA (typicals are
+# VCC - 0.02 V and 10 mV).
+out_lo     = 0.05   # VOL max at 5V supply (V)
+out_hi     = 4.95   # VOH min at 5V supply (V)
 # VHYST typ 7.5 mV at V+ = 5 V (7 mV at 2.7 V), TI SNOS458I Electrical
 # Characteristics 5 V; its footnote (4) defines it as Vtrip+ minus Vtrip-, the
 # full band this param means. VOS (the trip points' average) is not modelled.
 hysteresis = 0.0075
-tpd_s      = 7.0e-9 # propagation delay 7 ns typ @ 5V (Table 6.3)
+tpd_s      = 7.0e-9 # propagation delay 7 ns typ @ 5V, 50 mV overdrive (8 ns typ at 15 mV)
 # Supply draw: IS 1.1 mA typ / 1.8 mA max at V+ = 5 V, no load (0.9 mA typ
 # is the 2.7 V table), TI SNOS458I Electrical Characteristics 5 V. Stamped as
 # a constant quiescent pull on the VCC pin net so a metering shunt in series
 # with the part's rail reads it.
 supply_static_ua = 1100.0
-warning = "the output HIGH level on this card is fixed at 4.95 V, the datasheet typical for a 5 V supply, and does NOT follow the voltage on the board's rail: the binder hard-codes it rather than reading the VCC pad, so this part on a 3.3 V board is still answered as swinging to 4.95 V, above its own supply. The low level (50 mV) is fixed the same way. Treat any result that turns on the output level of a LMV7219 on a rail other than 5 V as unanswered."
+warning = "the output HIGH level on this card is fixed at 4.95 V, the datasheet's guaranteed minimum for a 5 V supply at 0.4 mA, and does NOT follow the voltage on the board's rail: the binder hard-codes it rather than reading the VCC pad, so this part on a 3.3 V board is still answered as swinging to 4.95 V, above its own supply. The low level (50 mV) is fixed the same way. Treat any result that turns on the output level of a LMV7219 on a rail other than 5 V as unanswered."
 
 [models.pins]
 "1" = "out"
