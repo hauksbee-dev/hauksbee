@@ -48,22 +48,6 @@ export interface BindSummaryWeb {
   /** The same parts with their detail, so the report can offer to do something
    *  about them rather than only naming them. Omitted when empty. */
   open_parts?: WebOpenPart[]
-  /** Parts whose board name matches several orderable variants of one family.
-   *  Omitted when empty. */
-  open_selections?: WebOpenSelection[]
-}
-
-/** A family the board does not pin to one variant. `same_pinout: true` binds
- *  the first non-C member as a flagged stand-in (CI sweeps every member);
- *  false leaves the part OPEN until a `[[override]] select` picks one. */
-export interface WebOpenSelection {
-  reference: string
-  value: string
-  family: string
-  members: Array<{ id: string; selector: string; basis: string; verdict: 'S' | 'C' | 'U'; reason: string }>
-  determined: string | null
-  via: 'board' | 'spec' | 'sweep'
-  same_pinout: boolean
 }
 
 /** One part on the open-active-path list. `bound: false` means it has no model
@@ -623,8 +607,6 @@ export type BoardRequest =
   /** An ideal scenario supply: the checks runner rebuilds the circuit with it
    *  on the next run; it is not a live post-solve voltage force. */
   | { type: 'supply'; net: string; volts?: number }
-  /** Settle an open variant selection with `[[override]] select`. */
-  | { type: 'select'; ref: string; select: string }
 
 /** A request in the queue; `seq` orders and de-duplicates consumption across
  *  remounts. */
