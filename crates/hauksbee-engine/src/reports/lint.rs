@@ -5,33 +5,22 @@
 //! under `--strict` exits non-zero on a high/medium finding. CLI glue over the
 //! engine's lint checks.
 
-use std::path::Path;
-
-use hauksbee_extract::ExtractedBoard;
-use hauksbee_models::ModelLibrary;
-
 use crate::binder::bind_board;
 use crate::result::{
     lint_findings_json, BindSummary, JsonInputEvidence, JsonNote, JsonNoteKind, JsonReport,
 };
 
-use super::{lint_fails, OutputMode};
+use super::{lint_fails, OutputMode, StaticInputs};
 
 /// Print the full `--lint` bundle in `mode`, surface any pin-role guesses, then
 /// (under `strict`) exit non-zero on a high/medium finding.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_quiet(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
+    input: &StaticInputs,
     mode: OutputMode,
     strict: bool,
     quiet: bool,
-    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
+    let StaticInputs { board, lib, .. } = *input;
     // device_decode lives inside engine_lint (so --check/--json/TUI/frontdoor
     // get it too), so it must not be spliced in here as well: that
     // double-counts every decode finding.
@@ -39,18 +28,11 @@ pub(crate) fn emit_quiet(
     // Without this, a lint finding the board's owner overruled turns
     // `--lint --strict` red on a board that `--check --strict` passes, and the
     // narrower command looks like it lost the waiver.
-    let mut waivers = super::check::load_waivers(board_path);
+    let mut waivers = super::check::load_waivers(input.board_path);
     let waived = super::check::waive_lint(&mut waivers, &mut report);
     // Bind once: both the JSON header and the pin-role guess surfacing read it.
     let bound = bind_board(board, lib);
-    let evidence = crate::evidence::board_evidence(
-        board,
-        &bound.report,
-        reader_notes,
-        board_path,
-        raw,
-        input_kind,
-    )?;
+    let evidence = input.evidence(&bound.report)?;
     // Pin-role GUESS warnings: roles the binder inferred from the configurable
     // pin-rule table rather than an explicit pin-function. Nothing is silently
     // guessed, so the lint reports each one, but on the correct channel per
@@ -75,7 +57,15 @@ pub(crate) fn emit_quiet(
         OutputMode::Json => {
             println!(
                 "{}",
-                lint_json(&bound, &report, &guesses, &waived, &blockers, inputs, &evidence)?
+                lint_json(
+                    &bound,
+                    &report,
+                    &guesses,
+                    &waived,
+                    &blockers,
+                    input.inputs,
+                    &evidence
+                )?
             );
         }
         OutputMode::Plain | OutputMode::Text => {
@@ -214,31 +204,18 @@ fn lint_json(
 /// `--resources`: only the MCU internal resource-conflict check (plus the
 /// unchecked-MCU coverage note, so a clean result is not mistaken for "checked
 /// and conflict-free").
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_resources_quiet(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
+    input: &StaticInputs,
     mode: OutputMode,
     strict: bool,
     quiet: bool,
-    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
+    let StaticInputs { board, lib, .. } = *input;
     let mut report = crate::checks::resources_lint(board, lib);
-    let mut waivers = super::check::load_waivers(board_path);
+    let mut waivers = super::check::load_waivers(input.board_path);
     let waived = super::check::waive_lint(&mut waivers, &mut report);
     let bound = bind_board(board, lib);
-    let evidence = crate::evidence::board_evidence(
-        board,
-        &bound.report,
-        reader_notes,
-        board_path,
-        raw,
-        input_kind,
-    )?;
+    let evidence = input.evidence(&bound.report)?;
     // Same INCONCLUSIVE contract as the full `--lint`: this subset's clean
     // verdict is just as vacuous over an unmodelled critical part.
     let blockers =
@@ -249,7 +226,15 @@ pub(crate) fn emit_resources_quiet(
         OutputMode::Json => {
             println!(
                 "{}",
-                lint_json(&bound, &report, &[], &waived, &blockers, inputs, &evidence)?
+                lint_json(
+                    &bound,
+                    &report,
+                    &[],
+                    &waived,
+                    &blockers,
+                    input.inputs,
+                    &evidence
+                )?
             );
         }
         OutputMode::Plain => {
@@ -358,7 +343,7 @@ mod tests {
         assert!(!res.contains("net-lint:"), "{res}");
     }
     use crate::binder::BoundBoard;
-    use hauksbee_extract::NetLintReport;
+    use hauksbee_extract::{ExtractedBoard, NetLintReport};
 
     fn empty_bound() -> BoundBoard {
         BoundBoard {

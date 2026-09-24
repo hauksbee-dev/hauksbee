@@ -5,38 +5,28 @@
 
 use std::path::Path;
 
-use hauksbee_extract::ExtractedBoard;
-use hauksbee_models::ModelLibrary;
-
 use crate::binder::bind_board;
-use crate::result::{BindSummary, DrcStructured, JsonInputEvidence, JsonReport};
+use crate::result::{BindSummary, DrcStructured, JsonReport};
 
-use super::{KicadClearanceInput, OutputMode};
+use super::{KicadClearanceInput, OutputMode, StaticInputs};
 
 /// Run geometric short / clearance detection, print it in `mode`, cross-check the
 /// oracle when asked, then (under `strict`) exit non-zero on a true short. Returns
 /// `Ok(())` on the non-gating paths; a strict short calls `std::process::exit(2)`.
 /// `quiet` suppresses the text surface.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_with_schematic_quiet(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
+    input: &StaticInputs,
     mode: OutputMode,
     oracle: bool,
     strict: bool,
     verbose: bool,
     quiet: bool,
-    inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
-    let (clearance_input, mut report) =
-        super::run_drc(board_path, board, text, raw, altium_present)?;
+    let StaticInputs {
+        board_path, text, ..
+    } = *input;
+    let (clearance_input, mut report) = input.drc()?;
     // The companion schematic's declarations, applied before waivers and before
     // anything reads the findings. Reclassifies, never deletes.
     let qualification = schematic_ties.map(|ties| ties.qualify(&report));
@@ -50,17 +40,9 @@ pub(crate) fn emit_with_schematic_quiet(
     // Zero routed copper: a pads-only board passes the spacing check
     // vacuously, so `UNROUTED_COPPER_NOTE` is printed by the two surfaces that
     // read this flag, `--drc` and `--check`.
-    let unrouted = !altium_present && super::unrouted_kicad_layout(text);
-    let bound = bind_board(board, lib);
-    let evidence = crate::evidence::board_evidence(
-        board,
-        &bound.report,
-        reader_notes,
-        board_path,
-        raw,
-        input_kind,
-    )?
-    .with_custom_rules_coverage(
+    let unrouted = !input.altium_present && super::unrouted_kicad_layout(text);
+    let bound = bind_board(input.board, input.lib);
+    let evidence = input.evidence(&bound.report)?.with_custom_rules_coverage(
         clearance_input
             .as_ref()
             .and_then(KicadClearanceInput::custom_coverage),
@@ -103,7 +85,7 @@ pub(crate) fn emit_with_schematic_quiet(
             // Grouped DRC: shorts kept verbatim, clearance findings
             // grouped by (net_a, net_b, layer), at-limit separated from below-rule.
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
-                .with_inputs(inputs)
+                .with_inputs(input.inputs)
                 .with_evidence(&evidence);
             jr.drc = Some(structured.clone());
             jr.clearance_rule_source = Some(provenance.clone());

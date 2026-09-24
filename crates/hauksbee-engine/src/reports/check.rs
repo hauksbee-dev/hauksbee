@@ -9,43 +9,25 @@ use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
 use crate::result::{
-    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured,
-    JsonInputEvidence, JsonReport,
+    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured, JsonReport,
 };
 
-use super::{lint_fails, si_fails, KicadClearanceInput, OutputMode};
+use super::{lint_fails, si_fails, KicadClearanceInput, OutputMode, StaticInputs};
 
 /// Run the full static suite and print it in `mode`, then (under `strict`) exit
 /// non-zero if any real finding gates. `quiet` suppresses the text surface and
 /// `oracle` cross-checks against kicad-cli.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_with_schematic_quiet(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
+    input: &StaticInputs,
     mode: OutputMode,
     strict: bool,
     verbose: bool,
     oracle: bool,
     quiet: bool,
-    inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
     CheckReport {
-        board_path,
-        board,
-        text,
-        raw,
-        input_kind,
-        altium_present,
-        lib,
-        reader_notes,
-        inputs,
+        input,
         schematic_ties,
     }
     .emit(
@@ -59,18 +41,10 @@ pub(crate) fn emit_with_schematic_quiet(
     )
 }
 
-// Both entrypoints run the same static suite. Keep their input bundle private so
-// public callers retain their existing APIs without duplicating the report pipeline.
+// Both entrypoints run the same static suite over one input bundle, so the
+// report pipeline is written once.
 struct CheckReport<'a> {
-    board_path: &'a Path,
-    board: &'a ExtractedBoard,
-    text: &'a str,
-    raw: &'a [u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &'a ModelLibrary,
-    reader_notes: &'a [String],
-    inputs: &'a [JsonInputEvidence],
+    input: &'a StaticInputs<'a>,
     schematic_ties: Option<&'a crate::schematic_ties::SchematicTies>,
 }
 
@@ -87,17 +61,17 @@ enum CheckDisplay {
 impl CheckReport<'_> {
     fn emit(self, display: CheckDisplay, strict: bool) -> anyhow::Result<()> {
         let Self {
+            input,
+            schematic_ties,
+        } = self;
+        let StaticInputs {
             board_path,
             board,
             text,
-            raw,
-            input_kind,
             altium_present,
             lib,
-            reader_notes,
-            inputs,
-            schematic_ties,
-        } = self;
+            ..
+        } = *input;
         let combined = matches!(display, CheckDisplay::CombinedJson);
         let (mode, verbose, oracle, quiet) = match display {
             CheckDisplay::Full {
@@ -110,16 +84,8 @@ impl CheckReport<'_> {
         };
         let bound = bind_board(board, lib);
         let summary = BindSummary::from_report(&bound.report);
-        let evidence = crate::evidence::board_evidence(
-            board,
-            &bound.report,
-            reader_notes,
-            board_path,
-            raw,
-            input_kind,
-        )?;
-        let (clearance_input, mut drc) =
-            super::run_drc(board_path, board, text, raw, altium_present)?;
+        let evidence = input.evidence(&bound.report)?;
+        let (clearance_input, mut drc) = input.drc()?;
         let evidence = evidence.with_custom_rules_coverage(
             clearance_input
                 .as_ref()
@@ -133,12 +99,11 @@ impl CheckReport<'_> {
         let evidence =
             super::with_schematic_evidence(evidence, schematic_ties, qualification.as_ref())?;
         let lint = crate::checks::engine_lint(board, lib);
-        let geo_text = if altium_present { None } else { Some(text) };
         // Route through the single SI chokepoint so this aggregate surface carries
         // the same trace-ampacity + input-cap-ripple findings as the dedicated
         // `--si` report (the bare `si_checks` omitted them, giving `--check` a false
         // "looks healthy" over an under-width power trace).
-        let mut si = crate::checks::engine_si(board, lib, geo_text);
+        let mut si = crate::checks::engine_si(board, lib, input.geo_text());
         // USB-C CC compliance, only when the board has a USB-C receptacle.
         let usbc = crate::usb_c_report(board);
 
@@ -230,7 +195,7 @@ impl CheckReport<'_> {
                 let mut jr = JsonReport::new(&bound.name, summary)
                     .with_bind_verdict_gate()
                     .with_surface_gate(would_gate)
-                    .with_inputs(inputs)
+                    .with_inputs(input.inputs)
                     .with_evidence(&evidence);
                 jr.drc = Some(drc_structured.clone());
                 jr.triage = Some(triage.clone());
@@ -525,17 +490,6 @@ fn gate_items(
 /// discipline as `emit_with_schematic_quiet`, without rendering a report. Waived findings are
 /// excluded here exactly as they are excluded from the gate, so a SARIF error
 /// can never fail a pipeline the report command would pass.
-pub fn gather_findings(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    altium_present: bool,
-    lib: &ModelLibrary,
-) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
-    gather_findings_with_schematic(board_path, board, text, raw, altium_present, lib, None)
-}
-
 pub fn gather_findings_with_schematic(
     board_path: &Path,
     board: &ExtractedBoard,
@@ -927,29 +881,13 @@ pub(crate) fn render_waivers_scoped(
 /// Without it a bare `--json` would fall through to the TUI/websocket default and
 /// hang a piped / CI / AI caller. Carries the same findings as `emit_with_schematic_quiet`'s JSON,
 /// and (under `strict`) gates with the same exit-2 contract.
-pub fn emit_combined_json_with_schematic(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
+pub(crate) fn emit_combined_json_with_schematic(
+    input: &StaticInputs,
     strict: bool,
-    inputs: &[JsonInputEvidence],
     schematic_ties: Option<&crate::schematic_ties::SchematicTies>,
 ) -> anyhow::Result<()> {
     CheckReport {
-        board_path,
-        board,
-        text,
-        raw,
-        input_kind,
-        altium_present,
-        lib,
-        reader_notes,
-        inputs,
+        input,
         schematic_ties,
     }
     .emit(CheckDisplay::CombinedJson, strict)

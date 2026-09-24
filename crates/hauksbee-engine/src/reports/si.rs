@@ -4,15 +4,10 @@
 //! renders in the requested mode and, under `--strict`, exits non-zero on a real
 //! finding. CLI glue over the extract- and engine-layer SI checks.
 
-use std::path::Path;
-
-use hauksbee_extract::ExtractedBoard;
-use hauksbee_models::ModelLibrary;
-
 use crate::binder::bind_board;
-use crate::result::{si_findings_json, BindSummary, JsonInputEvidence, JsonReport};
+use crate::result::{si_findings_json, BindSummary, JsonReport};
 
-use super::{si_fails, OutputMode};
+use super::{si_fails, OutputMode, StaticInputs};
 
 /// The human-surface refusal for an undermined SI input-coverage claim; the
 /// same vocabulary as the INCONCLUSIVE bind refusal, single-sourced here so
@@ -23,42 +18,25 @@ undermined, so a clean result here is not a clean bill (see the evidence section
 /// Print the SI report in `mode`, then (under `strict`) exit non-zero on a real
 /// finding. `quiet` suppresses the text surface.
 pub(crate) fn emit_quiet(
-    board_path: &Path,
-    board: &ExtractedBoard,
-    text: &str,
-    raw: &[u8],
-    input_kind: crate::board_input::InputKind,
-    altium_present: bool,
-    lib: &ModelLibrary,
-    reader_notes: &[String],
+    input: &StaticInputs,
     mode: OutputMode,
     strict: bool,
     quiet: bool,
-    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
-    // Altium geometry is not yet threaded into the SI text checks, so pass None
-    // there; the connectivity-based SI checks still run on `board`.
-    let geo_text = if altium_present { None } else { Some(text) };
+    let StaticInputs { board, lib, .. } = *input;
     // The single SI chokepoint: extract-layer SI checks plus the engine-layer
     // trace-ampacity + input-cap-ripple checks. Shared with `--check`, the JSON
     // aggregate, the TUI and the web front door so every SI surface runs the
     // identical set.
-    let mut report = crate::checks::engine_si(board, lib, geo_text);
+    let mut report = crate::checks::engine_si(board, lib, input.geo_text());
     // Waivers, same semantics as `--check`: an SI finding the board's owner
     // overruled must come out of THIS gate too, or `--si --strict` turns red on
     // a board `--check --strict` passes. Same key as check.rs, so one waiver
     // file covers both commands.
-    let mut waivers = super::check::load_waivers(board_path);
+    let mut waivers = super::check::load_waivers(input.board_path);
     let waived = super::check::waive_si(&mut waivers, &mut report);
     let bound = bind_board(board, lib);
-    let evidence = crate::evidence::board_evidence(
-        board,
-        &bound.report,
-        reader_notes,
-        board_path,
-        raw,
-        input_kind,
-    )?;
+    let evidence = input.evidence(&bound.report)?;
     let coverage = evidence.check_coverage_map("si", "Signal-integrity input coverage")?;
     let run_level = if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
         vec![coverage]
@@ -87,7 +65,7 @@ pub(crate) fn emit_quiet(
                 // so the verdict has to know or the document reads `pass`
                 // beside exit 2.
                 .with_surface_gate(si_fails(&report))
-                .with_inputs(inputs)
+                .with_inputs(input.inputs)
                 .with_evidence(&evidence);
             jr.findings = Some(si_findings_json(&report));
             jr.attach_finding_evidence(&evidence, run_level.clone())?;

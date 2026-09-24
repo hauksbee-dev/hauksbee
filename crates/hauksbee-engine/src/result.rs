@@ -2306,7 +2306,7 @@ impl JsonReport {
                 // than `JsonFinding::gates`: this path counts `serious_count`,
                 // and the surfaces whose gate is wider apply their waivers
                 // upstream, before a finding reaches this document (see
-                // `reports::check::gather_findings`).
+                // `reports::check::gather_findings_with_schematic`).
                 if f.severity == "serious" {
                     if let Some(w) =
                         waivers.take_waiver(&f.check, &f.kind, &f.nets, &f.refs, &f.message)

@@ -239,6 +239,56 @@ impl KicadClearanceInput {
     }
 }
 
+/// The normalized board inputs every static report reads, bundled once so each
+/// surface takes one argument instead of eight.
+#[derive(Clone, Copy)]
+pub(crate) struct StaticInputs<'a> {
+    pub board_path: &'a Path,
+    pub board: &'a ExtractedBoard,
+    pub text: &'a str,
+    pub raw: &'a [u8],
+    pub input_kind: crate::board_input::InputKind,
+    pub altium_present: bool,
+    pub lib: &'a hauksbee_models::ModelLibrary,
+    pub reader_notes: &'a [String],
+    pub inputs: &'a [crate::result::JsonInputEvidence],
+}
+
+impl StaticInputs<'_> {
+    /// The evidence spine every bound static surface attaches: the board's bind
+    /// report dated by the run clock, carrying the input artifact it came from.
+    pub(crate) fn evidence(
+        &self,
+        report: &crate::reports::bind::BindReport,
+    ) -> Result<crate::evidence::BoardEvidence, hauksbee_ir::evidence::EvidenceError> {
+        crate::evidence::board_evidence(
+            self.board,
+            report,
+            self.reader_notes,
+            self.board_path,
+            self.raw,
+            self.input_kind,
+        )
+    }
+
+    /// [`run_drc`] over these inputs.
+    fn drc(&self) -> anyhow::Result<(Option<KicadClearanceInput>, hauksbee_extract::DrcReport)> {
+        run_drc(
+            self.board_path,
+            self.board,
+            self.text,
+            self.raw,
+            self.altium_present,
+        )
+    }
+
+    /// The layout text the geometry-bearing SI checks read; Altium geometry is
+    /// not yet threaded into them, so `None` there.
+    fn geo_text(&self) -> Option<&str> {
+        (!self.altium_present).then_some(self.text)
+    }
+}
+
 /// Run the geometric DRC: Altium's own rules, else KiCad's with the sibling
 /// project/custom-rule clearances (returned too, for provenance and coverage;
 /// `None` exactly on Altium). Shared by `--drc`, `--check` and the CI finding
