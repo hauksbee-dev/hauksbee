@@ -1441,6 +1441,24 @@ fn production_assumptions(
     // below the gate drive its RDS(on) is specified at, a current peak the card
     // carries no pulsed rating for. Never a silent clean pass.
     production_assumptions.extend(engine.scheduler().stress.run_disclosures());
+    // A junction temperature on a package-guessed theta_JA qualifies the
+    // max_temp claim on that part, and a no_faults pass the guess decides.
+    let thermal_claims = |reference: &str, decisive: bool| {
+        let feeds = |a: &&crate::spec::Assertion| match a.kind.as_str() {
+            "max_temp" => a
+                .reference
+                .as_deref()
+                .is_some_and(|r| crate::assertions::key_belongs_to_ref(r, reference)),
+            "no_faults" => decisive,
+            _ => false,
+        };
+        let scope = |a: &crate::spec::Assertion| hauksbee_ir::evidence::Scope::Check {
+            check: "ci".into(),
+            kind: Some(a.label()),
+        };
+        spec.asserts.iter().filter(feeds).map(scope).collect()
+    };
+    production_assumptions.extend(engine.scheduler().stress.inferred_theta_ja(thermal_claims));
     // Analog inputs outside the window their card guarantees: a comparator
     // channel with every input above its common-mode ceiling (MEASURED, so it
     // undermines), an ADC pin behind too high a source impedance (qualifies).

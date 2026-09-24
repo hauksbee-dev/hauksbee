@@ -50,7 +50,8 @@
 
 use std::collections::HashMap;
 
-use hauksbee_ir::{evidence::Assumption, Circuit, Device, DeviceId, NodeId};
+use hauksbee_ir::evidence::{Assumption, AssumptionSource, Scope, Subject};
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 use hauksbee_models::schema::{ComponentKind, Ratings};
 
 /// Consecutive chunks a continuous-rating violation must persist before it is
@@ -643,6 +644,8 @@ struct RunStats {
     /// Lowest gate drive (V, folded into N-channel space) seen while a MOSFET
     /// carried a meaningful current. `None` if it never conducted.
     worst_vgs: Option<f64>,
+    /// Hottest estimated junction temperature (C). `None` if it never dissipated.
+    peak_tj_c: Option<f64>,
 }
 
 /// The fraction of its continuous rating at which a MOSFET counts as
@@ -749,6 +752,35 @@ impl StressMonitor {
                     &format!("{r} peaks at {pk:.3} A, above the {cont:.3} A its card rates CONTINUOUSLY, and the card carries no pulsed (IDM) rating for the peak to be judged against"),
                     "add the datasheet's pulsed drain/forward current to the card, then re-run"));
             }
+        }
+        out
+    }
+
+    /// A junction temperature judged on a theta_JA inferred from the package,
+    /// because the card carries none, qualifies each claim it feeds.
+    /// `claims(reference, decisive)` names those claims' scopes; `decisive` is
+    /// true when twice the inferred theta_JA would put the peak at or over the
+    /// part's Tj limit, so a verdict drawn from the limit rests on the guess.
+    pub fn inferred_theta_ja(&self, claims: impl Fn(&str, bool) -> Vec<Scope>) -> Vec<Assumption> {
+        let mut out = Vec::new();
+        for (m, s) in self.metas.iter().zip(&self.run) {
+            let Some(peak) = s.peak_tj_c.filter(|_| m.ratings.theta_ja_c_per_w.is_none()) else {
+                continue;
+            };
+            let (r, theta, limit) = (&m.reference, m.theta_ja_c_per_w(), m.tj_max_c());
+            let decisive = 2.0 * peak - self.ambient_c >= limit;
+            let key = format!("{r}-theta-ja");
+            let text = format!("{r}'s junction temperature (peak {peak:.1} C)");
+            let how = format!(
+                "a theta_JA of {theta:.0} C/W inferred from its package ('{}'), because its card \
+                 carries no theta_ja_c_per_w",
+                m.footprint
+            );
+            let fix = format!("add the datasheet's theta_ja_c_per_w to {r}'s card, then re-run");
+            out.extend(claims(r, decisive).into_iter().map(|scope| {
+                let subject = Subject::new(&key, &text);
+                Assumption::reduced_fidelity(AssumptionSource::Binder, subject, scope, &how, &fix)
+            }));
         }
         out
     }
@@ -1097,6 +1129,8 @@ impl StressMonitor {
                     meta.theta_ja_c_per_w(),
                 );
                 self.temp_by_ref.insert(meta.reference.clone(), tj);
+                let peak = &mut self.run[i].peak_tj_c;
+                *peak = Some(peak.map_or(tj, |p| p.max(tj)));
                 checks.push(Check {
                     kind: FaultKind::Overtemperature,
                     value: tj,
@@ -1941,6 +1975,46 @@ mod monitor_temp_tests {
                     .any(|f| f.kind == FaultKind::Overcurrent)
             });
             assert_eq!(raised, want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_package_guessed_theta_ja_qualifies_the_claims_it_feeds() {
+        // (volts across 100 ohm, the card's theta_JA, whether a claim is named
+        // and whether 2x the guessed 200 C/W reaches the 125 C limit): idle,
+        // 10 mW (a 2 C rise), 1 W (a 200 C rise), and a card that states it.
+        for (volts, theta, want) in [
+            (0.0, None, None),
+            (1.0, None, Some(false)),
+            (10.0, None, Some(true)),
+            (10.0, Some(50.0), None),
+        ] {
+            let ratings = Ratings {
+                theta_ja_c_per_w: theta,
+                ..Default::default()
+            };
+            let (mut circuit, node, mut monitor) = resistor_monitor(100.0, ratings);
+            drive(&mut monitor, &mut circuit, node, volts, 2);
+            let seen = std::cell::Cell::new(None);
+            let out = monitor.inferred_theta_ja(|_, decisive| {
+                seen.set(Some(decisive));
+                vec![Scope::Board]
+            });
+            assert_eq!(
+                (seen.get(), out.len()),
+                (want, usize::from(want.is_some())),
+                "{volts} V"
+            );
+            if let Some(a) = out.first() {
+                assert!(
+                    a.because().contains("200 C/W inferred from its package"),
+                    "{a:?}"
+                );
+                assert!(
+                    a.replacement().contains("theta_ja_c_per_w to R1's card"),
+                    "{a:?}"
+                );
+            }
         }
     }
 

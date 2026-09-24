@@ -12,6 +12,7 @@ use crate::result::{
     JsonInputEvidence, JsonNote, JsonNoteKind, JsonReport, Refusal, ThermalDeviceJson, ThermalJson,
     Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
+use hauksbee_ir::evidence::Scope;
 
 /// Run the thermal estimate and print it (`json` selects JSON over the text
 /// table). Exits with the invalid-for-analysis code when the table is invalid,
@@ -58,9 +59,18 @@ pub(crate) fn emit_quiet(
     // moved into the JSON report.
     let coverage_refs = coverage_open_active_refs(&summary);
     let budget = engine.scheduler().error_budget()?;
+    // Each row's temperature on a package-guessed theta_JA qualifies that row.
+    let scope = |r: &str, _| {
+        vec![Scope::Check {
+            check: "thermal".into(),
+            kind: Some(r.into()),
+        }]
+    };
+    let guessed = engine.scheduler().stress.inferred_theta_ja(scope);
+    let evidence = evidence.clone().with_assumptions(guessed)?;
     let mut maps = Vec::new();
     for (reference, tj_c, over_limit) in &rows {
-        maps.push(evidence.simulation_map(
+        maps.push(evidence.check_simulation_map(
             format!(
                 "{reference} peak junction temperature is {tj_c:.3} C ({})",
                 if *over_limit {
@@ -72,9 +82,10 @@ pub(crate) fn emit_quiet(
             &[],
             std::slice::from_ref(reference),
             Some(budget.clone()),
+            Some(("thermal", reference)),
         )?);
     }
-    let report_evidence = evidence.clone().with_maps(maps);
+    let report_evidence = evidence.with_maps(maps);
     if json {
         let mut jr = JsonReport::new(&board_name, summary)
             .with_inputs(inputs)

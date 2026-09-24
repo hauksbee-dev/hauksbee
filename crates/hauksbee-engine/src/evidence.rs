@@ -1203,13 +1203,27 @@ impl BoardEvidence {
         references: &[String],
         budget: Option<ErrorBudget>,
     ) -> Result<EvidenceMap, EvidenceError> {
+        self.check_simulation_map(assertion, nets, references, budget, None)
+    }
+
+    /// [`Self::simulation_map`] for a claim a `Scope::Check { check, kind }`
+    /// assumption can name as `check_scope = (check, kind)`.
+    pub fn check_simulation_map(
+        &self,
+        assertion: impl Into<String>,
+        nets: &[String],
+        references: &[String],
+        budget: Option<ErrorBudget>,
+        check_scope: Option<(&str, &str)>,
+    ) -> Result<EvidenceMap, EvidenceError> {
         let scoped_nets = self.nets_for_subjects(nets, references);
         if scoped_nets.is_empty() {
             return Err(EvidenceError::Empty {
                 field: "simulation_map.nets",
             });
         }
-        let mut map = self.map_for_nets(assertion.into(), scoped_nets.into_iter().collect())?;
+        let nets = scoped_nets.into_iter().collect();
+        let mut map = self.map_for_nets_with_check(assertion.into(), nets, check_scope)?;
         let artifacts = [self.board_artifact, self.firmware_artifact]
             .into_iter()
             .flatten()
