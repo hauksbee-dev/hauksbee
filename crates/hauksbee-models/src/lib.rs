@@ -57,6 +57,7 @@ mod units;
 pub mod unmodelled;
 pub mod validation;
 pub mod value;
+pub mod variants;
 
 use std::path::{Path, PathBuf};
 
@@ -294,10 +295,12 @@ pub struct Resolution {
     /// Other entry ids that matched exactly as well as the winner, which only
     /// its smaller id chose: deterministic, but a guess about which part this is.
     pub tied: Vec<String>,
+    /// The orderable-variant selection, when the winner is one of a `variant_of` set.
+    pub selection: Option<variants::Selection>,
 }
 
 impl Resolution {
-    fn unresolved(query: ComponentQuery) -> Self {
+    pub fn unresolved(query: ComponentQuery) -> Self {
         Resolution {
             model: None,
             confidence: Confidence::Unresolved,
@@ -308,6 +311,7 @@ impl Resolution {
             provenance: None,
             references: Vec::new(),
             tied: Vec::new(),
+            selection: None,
         }
     }
 }
@@ -709,16 +713,34 @@ impl ModelLibrary {
         };
         let matched = || self.entries.iter().filter(|le| le.compiled.matches(q));
         if let Some(le) = matched().max_by_key(|le| (rank(le), Reverse(&le.compiled.entry.id))) {
-            let (id, top @ (_, _, score, _)) = (&le.compiled.entry.id, rank(le));
-            let tie = |other: &&LayeredEntry| rank(other) == top && other.compiled.entry.id != *id;
+            let (id, top) = (&le.compiled.entry.id, rank(le));
+            // Siblings of an orderable-variant set are not a tie: `variants::select`
+            // scores them against the component and binds one, a stand-in, or none.
+            let family = le.compiled.entry.variant_of.as_deref();
+            let sibling = |o: &LayeredEntry| {
+                family.is_some() && o.compiled.entry.variant_of.as_deref() == family && rank(o).0 == top.0 && rank(o).1 == top.1
+            };
+            let mut siblings: Vec<&LayeredEntry> = matched().filter(|o| sibling(o)).collect();
+            siblings.sort_by(|a, b| a.compiled.entry.id.cmp(&b.compiled.entry.id));
+            let entries: Vec<&ModelEntry> = siblings.iter().map(|o| &o.compiled.entry).collect();
+            let selection = family.map(|family| variants::select(family, &entries, q));
+            let chosen = match selection.as_ref().map(variants::Selection::bound) {
+                None => Some(le),
+                Some(bound) => siblings.into_iter().find(|o| Some(o.compiled.entry.id.as_str()) == bound),
+            };
+            let Some(le) = chosen else {
+                return Resolution { selection, ..Resolution::unresolved(q.clone()) };
+            };
+            let tie = |other: &&LayeredEntry| rank(other) == top && other.compiled.entry.id != *id && !sibling(other);
             let ids = matched().filter(tie).map(|o| o.compiled.entry.id.clone());
             return Resolution {
+                selection,
                 tied: ids
                     .collect::<std::collections::BTreeSet<_>>()
                     .into_iter()
                     .collect(),
                 model: Some(le.compiled.entry.clone()),
-                confidence: score_to_confidence(score),
+                confidence: score_to_confidence(rank(le).2),
                 query: q.clone(),
                 source: Some(le.layer.coarse_name().to_string()),
                 layer: Some(le.layer),
@@ -760,6 +782,10 @@ impl ModelLibrary {
             error: e,
         };
         let db_file: schema::DbFile = toml::from_str(src).map_err(parse)?;
+        if let Some(problem) = variants::lint(&db_file.models).into_iter().next() {
+            let id = source_name.to_string();
+            return Err(ModelError::ValidationFailed { id, messages: problem });
+        }
 
         for mut entry in db_file.models {
             let id = entry.id.clone();
@@ -903,6 +929,7 @@ impl ModelLibrary {
             ),
             references: Vec::new(),
             tied: Vec::new(),
+            selection: None,
         }
     }
 }

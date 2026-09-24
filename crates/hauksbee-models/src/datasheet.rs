@@ -1388,10 +1388,14 @@ answer and fails validation.
 Component kind: {kind_line}
 
 If the request names a family of variants (output voltages, packages, grades),
-model the variant the request implies; if it is ambiguous, say in
-`description` which variant was modelled and why. Never merge variants, and
-widen `value_re` only to that variant's ordering-table codes, never to a
-family root its siblings share.
+model the variant the request implies. Never merge variants, and widen
+`value_re` only to that variant's ordering-table codes, never to a family root
+its siblings share. Variants are the exception, only where the datasheet itself
+prints distinct orderable variants: when the name you were given does not pin
+one and they differ in pinout or output form, emit one complete [[models]] per
+variant, each with the shared family `value_re`, `variant_of = "<family>"` and
+`[models.variant]` (`orderable_re`, `orderable` = its ordering-table codes,
+`package`, `basis`; no default).
 
 The `kind` FIELD inside your entry must come from this closed list (the
 schema accepts nothing else): {legal_kinds}.
@@ -2967,6 +2971,10 @@ fn parse_and_validate_reply(raw: &str, part: &str, kind_str: &str) -> Result<Mod
     for entry in std::iter::once(&first).chain(entries.as_slice()) {
         check_reply_entry(entry, part, kind_str)
             .map_err(|e| anyhow::anyhow!("[[models]] entry '{}': {e:#}", entry.id))?;
+    }
+    let all: Vec<ModelEntry> = std::iter::once(first.clone()).chain(entries).collect();
+    if let Some(problem) = crate::variants::lint(&all).into_iter().next() {
+        bail!("variant set in the reply for {part}: {problem}");
     }
     Ok(first)
 }
