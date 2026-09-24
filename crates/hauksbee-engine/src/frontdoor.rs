@@ -2771,10 +2771,10 @@ fn main {
     /// The corpus CM4-adapter fab directory zipped the way a user would, or
     /// `None` when the corpus is absent (and not required).
     fn corpus_gerber_zip() -> Option<Vec<u8>> {
-        let dir = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-            .unwrap_or_default()
-            .join("famous/uconsole_cm4_adapter_gerber");
-        if !dir.exists() {
+        let Some(dir) = hauksbee_testkit::corpus_board(
+            env!("CARGO_MANIFEST_DIR"),
+            "famous/uconsole_cm4_adapter_gerber",
+        ) else {
             // Corpus-gated like the extract crate's gerber tests, including
             // their licence rule: ClockworkPi publishes this adapter with no
             // licence statement, so corpus.toml marks it
@@ -2790,7 +2790,7 @@ fn main {
                  not in the default fetch (licence unconfirmed)"
             );
             return None;
-        }
+        };
         let files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&dir)
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -2822,6 +2822,22 @@ fn main {
             .findings
             .iter()
             .any(|f| f.why.to_lowercase().contains("microcontroller"))
+    }
+
+    /// The co-sim section of a report whose static analysis succeeded with
+    /// firmware supplied, asserting it never hit the B6 "could not re-read the
+    /// board" failure mode.
+    fn cosim_without_reread(r: WebReport) -> WebCosimSection {
+        assert!(r.ok, "static analysis succeeds: {:?}", r.error);
+        let cosim = r
+            .cosim
+            .expect("cosim section present once firmware was supplied");
+        assert!(
+            !cosim.findings.iter().any(|f| f.why.contains("re-read")),
+            "the re-read failure mode must be gone: {:?}",
+            cosim.findings
+        );
+        cosim
     }
 
     #[test]
@@ -3407,16 +3423,12 @@ fn main {
         assert!(r.ok, "zipped .board must analyze: {:?}", r.error);
         assert_eq!(r.num_components, 1);
 
-        let r = analyze_with_firmware("tarski-export.zip", &bytes, "fw.elf", BOOT_GATE_FW);
-        assert!(r.ok, "static analysis succeeds: {:?}", r.error);
-        let cosim = r
-            .cosim
-            .expect("cosim section present once firmware was supplied");
-        assert!(
-            !cosim.findings.iter().any(|f| f.why.contains("re-read")),
-            "{:?}",
-            cosim.findings
-        );
+        let cosim = cosim_without_reread(analyze_with_firmware(
+            "tarski-export.zip",
+            &bytes,
+            "fw.elf",
+            BOOT_GATE_FW,
+        ));
         assert!(!cosim.ran);
         assert!(cosim_says_no_mcu(&cosim), "{:?}", cosim.findings);
 
@@ -3443,16 +3455,12 @@ fn main {
             .iter()
             .any(|n| n.message.contains("reverse-extracted")));
 
-        let r = analyze_with_firmware("cm4_adapter_gerbers.zip", &bytes, "fw.elf", BOOT_GATE_FW);
-        assert!(r.ok, "{:?}", r.error);
-        let cosim = r
-            .cosim
-            .expect("cosim section present once firmware was supplied");
-        assert!(
-            !cosim.findings.iter().any(|f| f.why.contains("re-read")),
-            "{:?}",
-            cosim.findings
-        );
+        let cosim = cosim_without_reread(analyze_with_firmware(
+            "cm4_adapter_gerbers.zip",
+            &bytes,
+            "fw.elf",
+            BOOT_GATE_FW,
+        ));
         if !cosim.ran {
             assert!(cosim_says_no_mcu(&cosim), "{:?}", cosim.findings);
         }
@@ -3510,49 +3518,19 @@ fn main {
         // on a zipped .board export that produced a clean static report.
         // Normalizing once must give a REAL co-sim outcome: here
         // the DSL board has no MCU, so the honest "no microcontroller" note.
-        use std::io::Write;
-        let dsl = br#"# Board-as-Code (hauksbee board DSL v1)
-board version 20241229
-
-fn main {
-    net "A"
-    net "B"
-    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
-        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
-        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
-    }
-}
-"#;
-        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        w.start_file(
-            "export/tarski.board",
-            zip::write::SimpleFileOptions::default(),
-        )
-        .unwrap();
-        w.write_all(dsl).unwrap();
-        let bytes = w.finish().unwrap().into_inner();
-        let r = analyze_with_firmware("tarski-export.zip", &bytes, "fw.elf", BOOT_GATE_FW);
-        assert!(r.ok, "static analysis succeeds: {:?}", r.error);
-        let cosim = r
-            .cosim
-            .expect("cosim section present once firmware was supplied");
-        assert!(
-            !cosim
-                .findings
-                .iter()
-                .any(|f| f.why.contains("re-read") || f.why.contains("Could not re-read")),
-            "the re-read failure mode must be gone: {:?}",
-            cosim.findings
-        );
+        let bytes = zip_of(&[("export/tarski.board", BOARD_DSL)]);
+        let cosim = cosim_without_reread(analyze_with_firmware(
+            "tarski-export.zip",
+            &bytes,
+            "fw.elf",
+            BOOT_GATE_FW,
+        ));
         assert!(
             !cosim.ran,
             "the DSL board has no MCU, so the co-sim cannot run"
         );
         assert!(
-            cosim
-                .findings
-                .iter()
-                .any(|f| f.why.to_lowercase().contains("microcontroller")),
+            cosim_says_no_mcu(&cosim),
             "the honest no-MCU note must be the reason: {:?}",
             cosim.findings
         );
@@ -3563,56 +3541,21 @@ fn main {
     /// names no parts). Corpus-gated like [`analyze_gerber_zip_reverse_extracts`].
     #[test]
     fn gerber_zip_with_firmware_reaches_cosim() {
-        use std::io::Write;
-        let Some(dir) = hauksbee_testkit::corpus_board(
-            env!("CARGO_MANIFEST_DIR"),
-            "famous/uconsole_cm4_adapter_gerber",
-        ) else {
-            assert!(
-                std::env::var("HAUKSBEE_REQUIRE_UCONSOLE_CORPUS").is_err(),
-                "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_cm4_adapter_gerber is absent"
-            );
-            eprintln!(
-                "NOT RUN  gerber-zip cosim test: uconsole_cm4_adapter_gerber is \
-                 not in the default fetch (licence unconfirmed)"
-            );
+        let Some(bytes) = corpus_gerber_zip() else {
             return;
         };
-        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let p = entry.unwrap().path();
-            if p.is_file() {
-                w.start_file(
-                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
-                    zip::write::SimpleFileOptions::default(),
-                )
-                .unwrap();
-                w.write_all(&std::fs::read(&p).unwrap()).unwrap();
-            }
-        }
-        let bytes = w.finish().unwrap().into_inner();
-        let r = analyze_with_firmware("cm4_adapter_gerbers.zip", &bytes, "fw.elf", BOOT_GATE_FW);
-        assert!(r.ok, "gerber zip static analysis succeeds: {:?}", r.error);
-        let cosim = r
-            .cosim
-            .expect("cosim section present once firmware was supplied");
-        assert!(
-            !cosim
-                .findings
-                .iter()
-                .any(|f| f.why.contains("re-read") || f.why.contains("Could not re-read")),
-            "the re-read failure mode must be gone: {:?}",
-            cosim.findings
-        );
+        let cosim = cosim_without_reread(analyze_with_firmware(
+            "cm4_adapter_gerbers.zip",
+            &bytes,
+            "fw.elf",
+            BOOT_GATE_FW,
+        ));
         // A fab archive carries no part identities, so the expected honest
         // outcome is "no MCU"; a run would also be acceptable if reverse
         // extraction ever learns to name one.
         if !cosim.ran {
             assert!(
-                cosim
-                    .findings
-                    .iter()
-                    .any(|f| f.why.to_lowercase().contains("microcontroller")),
+                cosim_says_no_mcu(&cosim),
                 "a not-run co-sim must carry the honest reason: {:?}",
                 cosim.findings
             );
