@@ -23,6 +23,7 @@
 //! Espressif QEMU fork (ESP32/ESP32-C3); see docs/cosim/MCU.md for the matrix. The
 //! ESP32 tests skip cleanly when the deterministic fork is absent.
 
+#[cfg(feature = "qemu")]
 use std::path::PathBuf;
 
 use hauksbee_ci::run;
@@ -135,6 +136,7 @@ fn gate_left_floating_fails_naming_the_net() {
 // installed (QEMU is an environmental dependency, not part of the corpus, so its
 // absence is always a skip - the proven backend tests gate the same way).
 
+#[cfg(feature = "qemu")]
 fn watchy_v15_board() -> Option<PathBuf> {
     // corpus_board, not a hand-joined path: the fetch layout has no `famous/`
     // level, and the hand-rolled join made the nightly gate's REQUIRE_CORPUS
@@ -145,6 +147,7 @@ fn watchy_v15_board() -> Option<PathBuf> {
     )
 }
 
+#[cfg(feature = "qemu")]
 fn qemu_xtensa_available() -> bool {
     // Reuse the backend's real discovery so this gate agrees exactly with what
     // the co-sim will actually do. is_available runs the candidate's
@@ -166,6 +169,7 @@ fn qemu_xtensa_available() -> bool {
 /// key absolutized (spec paths resolve relative to the spec file, and the temp
 /// copy does not live in examples/). TOML literal strings keep Windows paths
 /// free of escape mangling.
+#[cfg(feature = "qemu")]
 fn resolved_spec(name: &str, board: &std::path::Path) -> (tempfile::TempDir, PathBuf) {
     let src = example(name);
     let text = std::fs::read_to_string(&src).expect("example spec reads");
@@ -192,6 +196,7 @@ fn resolved_spec(name: &str, board: &std::path::Path) -> (tempfile::TempDir, Pat
     (dir, spec)
 }
 
+#[cfg(feature = "qemu")]
 fn corpus_or_skip(what: &str) -> Option<PathBuf> {
     let board = watchy_v15_board();
     if board.is_none() {
@@ -213,6 +218,7 @@ fn corpus_or_skip(what: &str) -> Option<PathBuf> {
 /// it this co-sim sub-divides into ~80 QMP cont/stop pairs per frame and takes
 /// ten MINUTES instead of ~3.5 s, a ~200x regression a 120 s ceiling catches
 /// while still tolerating a slow CI machine.
+#[cfg(feature = "qemu")]
 fn watchy_run(what: &str, spec: &str) -> Option<hauksbee_ci::CiResult> {
     let board = corpus_or_skip(what)?;
     if !qemu_xtensa_available() {
@@ -233,6 +239,7 @@ fn watchy_run(what: &str, spec: &str) -> Option<hauksbee_ci::CiResult> {
 
 /// PASS: the reduced display-init firmware drives the Watchy e-paper RES# net
 /// (GPIO9) HIGH within the boot window on the real v1.5 board under QEMU.
+#[cfg(feature = "qemu")]
 #[test]
 fn watchy_v15_display_res_driven_passes() {
     let Some(result) = watchy_run("watchy_v15_display_res PASS", "watchy_v15_display_res.toml")
@@ -256,6 +263,7 @@ fn watchy_v15_display_res_driven_passes() {
 /// the RES net Hi-Z on the same board, so boot-coverage goes RED. This is the
 /// teeth - the check passes above only because it genuinely watches the firmware
 /// drive the net.
+#[cfg(feature = "qemu")]
 #[test]
 fn watchy_v15_display_res_undriven_fails() {
     let Some(result) = watchy_run(

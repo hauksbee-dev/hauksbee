@@ -8,11 +8,14 @@ mod ac_stability;
 mod adj_regulator_validity;
 mod analog_invalid;
 mod assembly_inputs_ci;
+// Its cases are all AVR or Espressif QEMU co-sims.
+#[cfg(any(feature = "avr", feature = "qemu"))]
 mod boot_coverage;
 mod check_cli;
 mod ci_report_schema_drift;
 mod cli_diagnostics;
 mod comparator_hysteresis;
+#[cfg(feature = "renode")]
 mod cosim_coverage_honesty;
 mod doc_coverage;
 mod evidence_spine_ci;
@@ -27,6 +30,7 @@ mod hwtrace;
 mod init_scaffold;
 mod inkplate_class_demo;
 mod manifest_cli_contract;
+#[cfg(feature = "renode")]
 mod mcu_descriptor_dir;
 mod multiunit_keying;
 mod olimex_burst_calibration;
