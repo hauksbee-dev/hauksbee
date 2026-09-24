@@ -23,6 +23,16 @@ fn smooth_switch_opts() -> SolverOptions {
     o
 }
 
+/// A single-frequency sweep at `f`.
+fn spot(f: f64) -> AcSpec {
+    AcSpec {
+        fstart: f,
+        fstop: f,
+        points: 1,
+        sweep: Sweep::Linear,
+    }
+}
+
 /// Build an RC low-pass: Vin -> R -> out -> C -> gnd. Unit AC source at `in`.
 fn rc_lowpass(r: f64, c: f64) -> (Circuit, f64) {
     let mut ckt = Circuit::new();
@@ -77,12 +87,7 @@ fn rc_lowpass_corner_is_minus_3db_minus_45deg() {
     let (ckt, fc) = rc_lowpass(r, c);
     assert!((fc - 1000.0).abs() < 1.0, "fc={fc}");
 
-    let spec = AcSpec {
-        fstart: fc,
-        fstop: fc,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec = spot(fc);
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     let bode = resp.bode(&ckt, "out");
     let (_f, db, phase) = bode[0];
@@ -209,12 +214,7 @@ fn series_rlc_resonant_frequency_and_q() {
     );
 
     // Verify exact closed form at f0 itself: H(jw0) = 1/(jw0 R C) -> |H| = Q.
-    let spec0 = AcSpec {
-        fstart: f0,
-        fstop: f0,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec0 = spot(f0);
     let r0 = AcAnalysis::new(opts()).run(&ckt, &spec0).unwrap();
     let v0 = r0.points[0].node(&ckt, "out").unwrap();
     assert!(
@@ -250,12 +250,7 @@ fn series_lc_notch_at_resonance() {
     ind(&mut ckt, "L1", out, tank, l);
     add_capacitor(&mut ckt, "C1", tank, NodeId::GROUND, c, None);
 
-    let spec = AcSpec {
-        fstart: f0,
-        fstop: f0,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec = spot(f0);
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     let v = resp.points[0].node(&ckt, "out").unwrap();
     // At f0 the series LC is ~0 ohms, so out is pulled to ground: deep notch.
@@ -279,12 +274,7 @@ fn dedicated_loop_injection_source_keeps_bias_rails_at_ac_ground() {
     add_resistor(&mut ckt, "RBIAS", vcc, out, 1.0e3);
     add_resistor(&mut ckt, "RLOAD", out, NodeId::GROUND, 1.0e3);
 
-    let spec = AcSpec {
-        fstart: 1.0,
-        fstop: 1.0,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec = spot(1.0);
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     let v = resp.points[0].node(&ckt, "out").unwrap();
 
@@ -461,12 +451,7 @@ fn zero_ohm_jumper_is_a_short_in_ac() {
     add_resistor(&mut ckt, "R1", mid, out, r);
     add_capacitor(&mut ckt, "C1", out, NodeId::GROUND, c, None);
     let fc = 1.0 / (std::f64::consts::TAU * r * c);
-    let spec = AcSpec {
-        fstart: fc,
-        fstop: fc,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec = spot(fc);
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     // The node behind the jumper carries the full drive: |V(mid)| = 1, 0 deg.
     let vmid = resp.points[0].node(&ckt, "mid").unwrap();
@@ -513,12 +498,7 @@ fn ac_resistor_gets_the_dc_paths_tc1_derating() {
     let mut o = opts();
     o.temperature_c = temp_c; // effects.temperature defaults on
     let fc = 1.0 / (std::f64::consts::TAU * r_derated * c);
-    let spec = AcSpec {
-        fstart: fc,
-        fstop: fc,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec = spot(fc);
     let resp = AcAnalysis::new(o).run(&ckt, &spec).unwrap();
     let (_f, db, phase) = resp.bode(&ckt, "out")[0];
     assert!(
@@ -543,12 +523,7 @@ fn comparator_output_is_held_by_its_output_stage_in_ac() {
     add_vdc(&mut ckt, "VIN", vin, NodeId::GROUND, 0.0);
     add_capacitor(&mut ckt, "CC", vin, x, 1e-9, None);
     comparator(&mut ckt, "U1", x, NodeId::GROUND, NodeId::GROUND, 0.0);
-    let spec = AcSpec {
-        fstart: 1e3,
-        fstop: 1e3,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec = spot(1e3);
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     let vx = resp.points[0].node(&ckt, "x").unwrap().norm();
     let expect = std::f64::consts::TAU * 1e3 * 1e-9; // ωC / 1 S
@@ -580,12 +555,7 @@ fn cold_bjt_base_is_not_coupled_through_a_floored_gmu() {
         NodeId::GROUND,
         &hauksbee_ir::BjtModel::default(),
     );
-    let spec = AcSpec {
-        fstart: 1e3,
-        fstop: 1e3,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec = spot(1e3);
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     let vb = resp.points[0].node(&ckt, "b").unwrap().norm();
     let vc = resp.points[0].node(&ckt, "c").unwrap().norm();
@@ -635,12 +605,7 @@ fn spdt_bbm_loser_leg_is_open_in_ac_like_dc() {
         (2.0, 1.0),
         (1.0, 1e9),
     );
-    let spec = AcSpec {
-        fstart: 1e3,
-        fstop: 1e3,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec = spot(1e3);
     let resp = AcAnalysis::new(smooth_switch_opts())
         .run(&ckt, &spec)
         .unwrap();
@@ -670,12 +635,7 @@ fn reactive_stamps_are_regular_at_the_dc_limit() {
     add_resistor(&mut ckt, "R1", out, NodeId::GROUND, 1.0e3);
     add_capacitor(&mut ckt, "C1", out, NodeId::GROUND, 1e-9, None);
     // 1 uHz: ωL ~ 6e-9 Ω, ωC ~ 6e-15 S; the DC limit for both elements.
-    let spec = AcSpec {
-        fstart: 1e-6,
-        fstop: 1e-6,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec = spot(1e-6);
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     let vout = resp.points[0].node(&ckt, "out").unwrap();
     assert!(
@@ -728,12 +688,7 @@ fn vswitch_mid_transition_control_modulation_appears_in_ac() {
 
     let vmid = 1.5;
     let ckt = build(vmid);
-    let spec = AcSpec {
-        fstart: 1.0,
-        fstop: 1.0,
-        points: 1,
-        sweep: Sweep::Linear,
-    };
+    let spec = spot(1.0);
     let resp = AcAnalysis::new(smooth_switch_opts())
         .run(&ckt, &spec)
         .unwrap();

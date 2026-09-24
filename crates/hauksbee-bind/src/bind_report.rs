@@ -401,16 +401,14 @@ impl BindReport {
 
         let pad = |s: &str, w: usize| format!("{:<width$}", s, width = w);
 
+        let widths = [w_ref, w_val, w_mod, w_conf, w_out];
+        let rule = |left: &str, mid: &str, right: &str| {
+            let bars: Vec<String> = widths.iter().map(|w| "─".repeat(*w)).collect();
+            format!("{left}─{}─{right}\n", bars.join(&format!("─{mid}─")))
+        };
+
         let mut out = String::new();
-        let top = format!(
-            "┌─{}─┬─{}─┬─{}─┬─{}─┬─{}─┐\n",
-            "─".repeat(w_ref),
-            "─".repeat(w_val),
-            "─".repeat(w_mod),
-            "─".repeat(w_conf),
-            "─".repeat(w_out),
-        );
-        out.push_str(&top);
+        out.push_str(&rule("┌", "┬", "┐"));
         // Header.
         refs = pad(&refs, w_ref);
         vals = pad(&vals, w_val);
@@ -420,14 +418,7 @@ impl BindReport {
         out.push_str(&format!(
             "│ {refs} │ {vals} │ {models} │ {confs} │ {outs} │\n"
         ));
-        out.push_str(&format!(
-            "├─{}─┼─{}─┼─{}─┼─{}─┼─{}─┤\n",
-            "─".repeat(w_ref),
-            "─".repeat(w_val),
-            "─".repeat(w_mod),
-            "─".repeat(w_conf),
-            "─".repeat(w_out),
-        ));
+        out.push_str(&rule("├", "┼", "┤"));
         for (r, v, m, c, o) in &cells {
             out.push_str(&format!(
                 "│ {} │ {} │ {} │ {} │ {} │\n",
@@ -438,14 +429,7 @@ impl BindReport {
                 pad(o, w_out),
             ));
         }
-        out.push_str(&format!(
-            "└─{}─┴─{}─┴─{}─┴─{}─┴─{}─┘\n",
-            "─".repeat(w_ref),
-            "─".repeat(w_val),
-            "─".repeat(w_mod),
-            "─".repeat(w_conf),
-            "─".repeat(w_out),
-        ));
+        out.push_str(&rule("└", "┴", "┘"));
 
         if !include_bulk_passives {
             let mut capacitors = 0usize;
@@ -462,23 +446,14 @@ impl BindReport {
             let total = capacitors + resistors + inductors;
             if total > 0 {
                 let mut kinds = Vec::new();
-                if capacitors > 0 {
-                    kinds.push(format!(
-                        "{capacitors} capacitor{}",
-                        if capacitors == 1 { "" } else { "s" }
-                    ));
-                }
-                if resistors > 0 {
-                    kinds.push(format!(
-                        "{resistors} resistor{}",
-                        if resistors == 1 { "" } else { "s" }
-                    ));
-                }
-                if inductors > 0 {
-                    kinds.push(format!(
-                        "{inductors} inductor{}",
-                        if inductors == 1 { "" } else { "s" }
-                    ));
+                for (n, kind) in [
+                    (capacitors, "capacitor"),
+                    (resistors, "resistor"),
+                    (inductors, "inductor"),
+                ] {
+                    if n > 0 {
+                        kinds.push(format!("{n} {kind}{}", if n == 1 { "" } else { "s" }));
+                    }
                 }
                 out.push_str(&format!(
                     "{total} passives bound by footprint/value fallback: {}. Use --verbose to show every bind row.\n",

@@ -3722,15 +3722,7 @@ impl Scheduler {
         }
         let t = self.sim_time;
         for s in &mut self.supplies {
-            let i = self
-                .layout
-                .branch(s.vsource)
-                .and_then(|b| {
-                    self.branch_x
-                        .get(b.saturating_sub(self.layout.n_nodes))
-                        .copied()
-                })
-                .unwrap_or(0.0);
+            let i = branch_current_of(&self.layout, &self.branch_x, s.vsource).unwrap_or(0.0);
             // Branch current of a Vsource flows p->n internally; the current
             // *delivered to the net* is the negative of that. Use magnitude.
             s.update(&mut self.circuit, i.abs(), t, chunk);
@@ -3749,11 +3741,7 @@ impl Scheduler {
         let branch = self.branch_x.clone();
         let layout = self.layout.clone();
         let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
-        let branch_current = |id: DeviceId| -> Option<f64> {
-            layout
-                .branch(id)
-                .and_then(|b| branch.get(b.saturating_sub(layout.n_nodes)).copied())
-        };
+        let branch_current = |id: DeviceId| branch_current_of(&layout, &branch, id);
         for d in &mut self.behavioral {
             d.update(&mut self.circuit, &node_v, &branch_current, t, chunk);
             self.faults_pending.extend(d.drain_faults());
@@ -3787,13 +3775,9 @@ impl Scheduler {
         vin: f64,
         budget_w: f64,
     ) -> bool {
-        for d in &mut self.behavioral {
-            if d.reference == reference {
-                d.set_input_budget(vin, budget_w);
-                return true;
-            }
-        }
-        false
+        self.behavioral_device(reference)
+            .map(|d| d.set_input_budget(vin, budget_w))
+            .is_some()
     }
 
     /// Mutable access to a behavioural device by reference (tests/sweeps).
@@ -3822,11 +3806,7 @@ impl Scheduler {
         let branch = self.branch_x.clone();
         let layout = self.layout.clone();
         let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
-        let branch_current = |id: DeviceId| -> Option<f64> {
-            layout
-                .branch(id)
-                .and_then(|b| branch.get(b.saturating_sub(layout.n_nodes)).copied())
-        };
+        let branch_current = |id: DeviceId| branch_current_of(&layout, &branch, id);
         let new = self
             .stress
             .evaluate(&mut self.circuit, &node_v, &branch_current, self.sim_time);
@@ -3975,16 +3955,7 @@ impl Scheduler {
     /// and the rung is recorded per window, WITH a measured step-doubling
     /// error estimate, so the consumer knows which method produced
     /// which answer and how far the chunk-end state can be trusted.
-    fn fallback_ladder(
-        &self,
-        chunk: f64,
-        thermal: &mut ChunkThermalAccum,
-    ) -> Option<(
-        ChunkFallbackMethod,
-        Vec<f64>,
-        TransientDiagnostics,
-        Option<f64>,
-    )> {
+    fn fallback_ladder(&self, chunk: f64, thermal: &mut ChunkThermalAccum) -> Option<RungOutcome> {
         let seed = self.last_dc_seed.as_deref();
         let reduced = self.reduced_step_opts(chunk);
         // Rungs below the forced one are skipped (test hook; 0 in production,
@@ -4064,12 +4035,7 @@ impl Scheduler {
         opts: SolverOptions,
         seed: Option<&[f64]>,
         thermal: &mut ChunkThermalAccum,
-    ) -> Option<(
-        ChunkFallbackMethod,
-        Vec<f64>,
-        TransientDiagnostics,
-        Option<f64>,
-    )> {
+    ) -> Option<RungOutcome> {
         thermal.clear();
         let (x, diagnostics) = self.march_chunk(chunk, opts, seed, thermal).ok()?;
         if self.insane_node_state(&x).is_some() {
@@ -5984,6 +5950,22 @@ impl Scheduler {
 pub struct StepResult {
     pub sim_time: f64,
     pub uart: HashMap<String, Vec<u8>>,
+}
+
+/// A fallback rung that rescued a chunk: its method, end state, diagnostics and
+/// step-doubling error estimate.
+type RungOutcome = (
+    ChunkFallbackMethod,
+    Vec<f64>,
+    TransientDiagnostics,
+    Option<f64>,
+);
+
+/// The solved branch current of device `id`, when it owns a branch unknown.
+fn branch_current_of(layout: &Layout, branch_x: &[f64], id: DeviceId) -> Option<f64> {
+    layout
+        .branch(id)
+        .and_then(|b| branch_x.get(b.saturating_sub(layout.n_nodes)).copied())
 }
 
 /// Point one model-peripheral supply leg's Isource at `amps`.

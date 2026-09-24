@@ -1913,6 +1913,25 @@ mod tests {
         outcomes.iter().map(|o| o.sag_v).fold(0.0f64, f64::max)
     }
 
+    fn max_signal_sag(outcomes: &[StiffOutcome]) -> f64 {
+        outcomes
+            .iter()
+            .filter(|o| o.kind == BoundaryKind::Signal)
+            .map(|o| o.sag_v)
+            .fold(0.0f64, f64::max)
+    }
+
+    /// A 100-ohm shunt tear of `rail` from `feed`.
+    fn shunt_tear(rail: NodeId, feed: NodeId, shunt: DeviceId) -> RailTear {
+        RailTear {
+            rail,
+            feed,
+            shunt,
+            r_shunt: 100.0,
+            extra_loads: Vec::new(),
+        }
+    }
+
     fn assert_matches(c: &Circuit, exec: &StiffExecution, mono: &Waveforms, tol: f64, what: &str) {
         let (err, node) = max_error(c, &exec.waveforms.time, &exec.waveforms.node_voltages, mono);
         assert!(
@@ -2020,13 +2039,7 @@ mod tests {
         let (dt, tstop) = (100e-9, 4e-6);
         let opts = tight_opts(dt);
         let mono = monolith(&c, &opts, tstop);
-        let rails = vec![RailTear {
-            rail,
-            feed,
-            shunt,
-            r_shunt: 100.0,
-            extra_loads: Vec::new(),
-        }];
+        let rails = vec![shunt_tear(rail, feed, shunt)];
         let exec = run_composed(&c, &[mid], &rails, &ComposedPolicy::default(), &opts, tstop);
         assert!(exec
             .outcomes
@@ -2041,12 +2054,7 @@ mod tests {
             .find(|o| o.node == mid)
             .expect("signal outcome");
         assert!(sig.accepted, "{sig:?}");
-        let sag = exec
-            .outcomes
-            .iter()
-            .filter(|o| o.kind == BoundaryKind::Signal)
-            .map(|o| o.sag_v)
-            .fold(0.0f64, f64::max);
+        let sag = max_signal_sag(&exec.outcomes);
         let tol = (3.0 * sag).max(1e-4);
         assert_matches_within_grid(
             &c,
@@ -2079,13 +2087,7 @@ mod tests {
             Transient::new(mono_opts).run(&c, tstop).is_err(),
             "fixture must have no whole-group DC"
         );
-        let rails = vec![RailTear {
-            rail,
-            feed,
-            shunt,
-            r_shunt: 100.0,
-            extra_loads: Vec::new(),
-        }];
+        let rails = vec![shunt_tear(rail, feed, shunt)];
         let run = || run_composed(&c, &[mid], &rails, &ComposedPolicy::default(), &opts, tstop);
         let (a, b) = (run(), run());
         assert_deterministic(&c, &a, &b);
@@ -2126,13 +2128,7 @@ mod tests {
             let rail = c.node(&format!("RAIL_{tag}"));
             let shunt = res(&mut c, &format!("Rsh{tag}"), p5, rail, 100.0);
             let blocks = pnp_blocks(&mut c, tag, rail, 1, vd, 100e3, 10e3);
-            rails.push(RailTear {
-                rail,
-                feed: p5,
-                shunt,
-                r_shunt: 100.0,
-                extra_loads: Vec::new(),
-            });
+            rails.push(shunt_tear(rail, p5, shunt));
             rail_nodes.push(rail);
             cols.push(blocks[0].1);
         }
@@ -2175,12 +2171,7 @@ mod tests {
             );
         }
         let mono = monolith(&pinned, &opts, tstop);
-        let sag = a
-            .outcomes
-            .iter()
-            .filter(|o| o.kind == BoundaryKind::Signal)
-            .map(|o| o.sag_v)
-            .fold(0.0f64, f64::max);
+        let sag = max_signal_sag(&a.outcomes);
         let tol = (3.0 * sag).max(1e-4);
         for name in ["MID", "RAIL_A", "RAIL_B", "Ac0", "Bc0", "Ab0", "Bb0"] {
             let series = a.waveforms.node(&c, name).unwrap();
@@ -2241,6 +2232,23 @@ mod tests {
         }
     }
 
+    /// A held-rail capped execution that must not fail mechanically, with its
+    /// refusal report.
+    fn run_held(
+        c: &Circuit,
+        cuts: &[NodeId],
+        held: &HashMap<u32, Vec<f64>>,
+        policy: &CapturePolicy,
+        opts: &SolverOptions,
+        tstop: f64,
+    ) -> (Option<StiffExecution>, Vec<StiffOutcome>) {
+        let mut refusals = Vec::new();
+        let exec =
+            execute_stiff_group_held_capped(c, cuts, held, policy, opts, tstop, &mut refusals)
+                .expect("mechanical success");
+        (exec, refusals)
+    }
+
     fn held_vdd(vdd: NodeId, hold_v: f64, dt: f64, tstop: f64) -> HashMap<u32, Vec<f64>> {
         [(vdd.0, vec![hold_v; uniform_grid(dt, tstop).len()])]
             .into_iter()
@@ -2269,17 +2277,7 @@ mod tests {
             max_growth_blocks: 0,
             ..CapturePolicy::default()
         };
-        let mut neg_refusals = Vec::new();
-        let neg = execute_stiff_group_held_capped(
-            &c,
-            &[vspk],
-            &held,
-            &off,
-            &opts,
-            tstop,
-            &mut neg_refusals,
-        )
-        .expect("mechanical success");
+        let (neg, _) = run_held(&c, &[vspk], &held, &off, &opts, tstop);
         if let Some(exec) = &neg {
             let ptp = swing(&exec.waveforms.node_voltages[vspk.0 as usize]);
             assert!(
@@ -2288,18 +2286,10 @@ mod tests {
             );
         }
 
-        let mut refusals = Vec::new();
-        let exec = execute_stiff_group_held_capped(
-            &c,
-            &[vspk],
-            &held,
-            &CapturePolicy::default(),
-            &opts,
-            tstop,
-            &mut refusals,
-        )
-        .expect("mechanical success")
-        .unwrap_or_else(|| panic!("generator-inclusive capture must succeed: {refusals:?}"));
+        let default = CapturePolicy::default();
+        let (exec, refusals) = run_held(&c, &[vspk], &held, &default, &opts, tstop);
+        let exec = exec
+            .unwrap_or_else(|| panic!("generator-inclusive capture must succeed: {refusals:?}"));
         let o = exec
             .outcomes
             .iter()
@@ -2342,18 +2332,10 @@ mod tests {
         );
         let held = held_vdd(vdd, hold_v, dt, tstop);
 
-        let mut refusals = Vec::new();
-        let exec = execute_stiff_group_held_capped(
-            &c,
-            &[vspk, vspk2],
-            &held,
-            &CapturePolicy::default(),
-            &opts,
-            tstop,
-            &mut refusals,
-        )
-        .expect("mechanical success")
-        .unwrap_or_else(|| panic!("merged generator captures must succeed: {refusals:?}"));
+        let default = CapturePolicy::default();
+        let (exec, refusals) = run_held(&c, &[vspk, vspk2], &held, &default, &opts, tstop);
+        let exec =
+            exec.unwrap_or_else(|| panic!("merged generator captures must succeed: {refusals:?}"));
         for cand in [vspk, vspk2] {
             let o = exec
                 .outcomes

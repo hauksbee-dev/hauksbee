@@ -1157,6 +1157,33 @@ fn main {
         w.finish().unwrap().into_inner()
     }
 
+    /// Every file directly inside `dir`, zipped under `gerbers/`.
+    fn zip_dir_files(dir: &Path) -> Vec<u8> {
+        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.is_file() {
+                entries.push((
+                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
+                    std::fs::read(&p).unwrap(),
+                ));
+            }
+        }
+        let refs: Vec<(&str, &[u8])> = entries
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        zip_of(&refs)
+    }
+
+    /// An empty per-process scratch directory named for `tag`.
+    fn fresh_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("hauksbee-bi-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
     fn kicad_text_normalizes_byte_identical() {
         let norm = from_bytes("boot_gate.kicad_pcb", KICAD).expect("kicad text normalizes");
@@ -1220,10 +1247,7 @@ fn main {
             norm.notes
         );
 
-        let dir =
-            std::env::temp_dir().join(format!("hauksbee-bi-ipc356-zip-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = fresh_dir("ipc356-zip");
         let path = dir.join("fab.zip");
         std::fs::write(&path, &bytes).unwrap();
         let path_norm = from_path(&path).expect("path ZIP uses the same authority");
@@ -1381,8 +1405,7 @@ fn main {
 
     #[test]
     fn from_path_applies_the_file_stem_name_fallback() {
-        let dir = std::env::temp_dir().join(format!("hauksbee-bi-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = fresh_dir("test");
         let p = dir.join("my_widget.board");
         std::fs::write(&p, DSL).unwrap();
         let norm = from_path(&p).expect(".board file normalizes from a path");
@@ -1399,8 +1422,7 @@ fn main {
         // Treating EVERY .zip as a gerber archive kills a zipped Board-as-Code
         // export with a gerber error. The zip classifier routes it exactly like
         // the web drop zone does.
-        let dir = std::env::temp_dir().join(format!("hauksbee-bi-zip-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = fresh_dir("zip");
         let p = dir.join("export.zip");
         std::fs::write(&p, zip_of(&[("export/tarski.board", DSL)])).unwrap();
         let norm = from_path(&p).expect("a zipped .board export must compile");
@@ -1441,21 +1463,7 @@ fn main {
         );
 
         // The zipped form through the bytes path.
-        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let p = entry.unwrap().path();
-            if p.is_file() {
-                entries.push((
-                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
-                    std::fs::read(&p).unwrap(),
-                ));
-            }
-        }
-        let refs: Vec<(&str, &[u8])> = entries
-            .iter()
-            .map(|(n, b)| (n.as_str(), b.as_slice()))
-            .collect();
-        let bytes = zip_of(&refs);
+        let bytes = zip_dir_files(&dir);
         let norm = from_bytes("cm4_adapter_gerbers.zip", &bytes).expect("gerber zip normalizes");
         assert_eq!(norm.kind, InputKind::Gerber);
         assert!(norm.is_gerber());
@@ -1502,21 +1510,7 @@ fn main {
         );
 
         // The zipped form through the bytes path.
-        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let p = entry.unwrap().path();
-            if p.is_file() {
-                entries.push((
-                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
-                    std::fs::read(&p).unwrap(),
-                ));
-            }
-        }
-        let refs: Vec<(&str, &[u8])> = entries
-            .iter()
-            .map(|(n, b)| (n.as_str(), b.as_slice()))
-            .collect();
-        let bytes = zip_of(&refs);
+        let bytes = zip_dir_files(&dir);
         let norm = from_bytes("cm4_adapter_gerbers.zip", &bytes).expect("gerber zip normalizes");
         assert_eq!(norm.kind, InputKind::Gerber);
         assert!(norm.is_gerber());
@@ -1548,9 +1542,7 @@ fn main {
         );
         assert!(!norm.is_binary());
 
-        let dir = std::env::temp_dir().join(format!("hauksbee-bi-odb-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = fresh_dir("odb");
         let file = dir.join("boot_gate.odb.zip");
         std::fs::write(&file, ODB_ZIP).unwrap();
         let norm = from_path(&file).expect("ODB++ zip normalizes from a path");
@@ -1561,8 +1553,7 @@ fn main {
 
     #[test]
     fn an_unpacked_odbpp_job_directory_normalizes_instead_of_failing_as_gerbers() {
-        let dir = std::env::temp_dir().join(format!("hauksbee-bi-odbdir-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = fresh_dir("odbdir");
         // Unpack the fixture the way a user who double-clicked the archive would.
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(ODB_ZIP)).unwrap();
         for i in 0..zip.len() {
@@ -1600,9 +1591,7 @@ fn main {
         assert!(norm.layout_text.is_none());
         assert!(norm.is_gerber() && !norm.is_gerber_archive());
 
-        let dir = std::env::temp_dir().join(format!("hauksbee-bi-ipc-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = fresh_dir("ipc");
         let file = dir.join("boot_gate.ipc2581.xml");
         std::fs::write(&file, IPC2581).unwrap();
         let norm = from_path(&file).expect("IPC-2581 normalizes from a path");
