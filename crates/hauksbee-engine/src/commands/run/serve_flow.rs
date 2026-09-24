@@ -51,11 +51,11 @@ pub(crate) fn emit_or_serve(
     // `--apply-shorts` already bridged and disclosed them above.
     if !cfg.apply_shorts {
         let drc_report = if is_altium {
-            ExtractedBoard::altium_drc(&raw).unwrap_or_default()
+            ExtractedBoard::altium_drc(raw).unwrap_or_default()
         } else {
             ExtractedBoard::drc_with_clearance_rules(
-                &text,
-                crate::reports::kicad_pro_clearance_rules(&cfg.board, &board),
+                text,
+                crate::reports::kicad_pro_clearance_rules(&cfg.board, board),
             )
             .unwrap_or_default()
         };
@@ -83,7 +83,7 @@ pub(crate) fn emit_or_serve(
     // name with the recompiled KiCad text would be re-"compiled" as DSL and
     // fail. Plain text boards hand over the layout text.
     let report_bytes: &[u8] = if is_altium || is_board_code {
-        &raw
+        raw
     } else {
         text.as_bytes()
     };
@@ -130,7 +130,7 @@ pub(crate) fn emit_or_serve(
     })
     .to_string();
 
-    let served_board_file = preloaded_board_file(&board_url, &raw, input_kind, &text);
+    let served_board_file = preloaded_board_file(&board_url, raw, input_kind, text);
     crate::commands::common::serve(
         engine,
         cfg.port,

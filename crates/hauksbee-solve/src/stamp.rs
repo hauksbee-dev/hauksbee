@@ -3475,9 +3475,9 @@ mod tests {
 
         let deps = [BDep::Volt(NodeId(1))];
         let ln = CompiledExpr::compile("math::ln(__d0)").unwrap();
-        assert!(behavioral_eval_partials(&ln, &deps, &mut vec![-1.0], 0.0, &opts).is_err());
+        assert!(behavioral_eval_partials(&ln, &deps, &mut [-1.0], 0.0, &opts).is_err());
         let div = CompiledExpr::compile("1.0/__d0").unwrap();
-        assert!(behavioral_eval_partials(&div, &deps, &mut vec![0.0], 0.0, &opts).is_err());
+        assert!(behavioral_eval_partials(&div, &deps, &mut [0.0], 0.0, &opts).is_err());
         let flip = CompiledExpr::compile("math::ln(0.0 - __d0)").unwrap();
         let mut vals = vec![-1e-15];
         assert!(behavioral_eval_partials(&flip, &deps, &mut vals, 0.0, &opts).is_err());

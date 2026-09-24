@@ -1286,7 +1286,7 @@ fn nearest_builtin(spec: &str, builtins: &[&'static str]) -> Option<&'static str
         let backend_penalty = usize::from(backend != cb);
         // Order: bigger LCP wins, then smaller distance, then same backend.
         let key = (usize::MAX - lcp, dist, backend_penalty);
-        if best.map_or(true, |(a, b, c, _)| key < (a, b, c)) {
+        if best.is_none_or(|(a, b, c, _)| key < (a, b, c)) {
             best = Some((key.0, key.1, key.2, cand));
         }
     }
@@ -1380,7 +1380,7 @@ mod not_found_honesty_tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("stm32f103-mine.soc.toml"), "x").unwrap();
-        let hints = builtin_fallback_hints("stm32f103", &[tmp.clone()]);
+        let hints = builtin_fallback_hints("stm32f103", std::slice::from_ref(&tmp));
         assert_eq!(hints.len(), 1, "{hints:?}");
         assert!(
             hints[0].contains("stm32f103.soc.toml") && hints[0].contains("stm32f103-mine.soc.toml"),
@@ -1488,8 +1488,7 @@ mcu_label = "test part"
     /// property, so both fell to Renode defaults unrelated to the part.
     #[test]
     fn a_platform_that_declares_no_clock_at_all_is_refused() {
-        let silent = format!(
-            r#"
+        let silent = r#"
 [soc]
 backend = "renode"
 machine = "m"
@@ -1499,7 +1498,7 @@ frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "test part"
 "#
-        );
+        .to_string();
         match SocConfig::from_soc_toml(&silent) {
             Err(SocError::UndeclaredClock { mips, platform, .. }) => {
                 assert_eq!(mips, 8);
@@ -1612,18 +1611,17 @@ mcu_label = "test part"
 
     #[test]
     fn a_support_token_with_no_bundle_is_refused_per_field() {
-        let platform = format!(
-            r#"
+        let platform = r#"
 [soc]
 backend = "renode"
 machine = "m"
-platform_repl = "@{{support}}/mine.repl"
+platform_repl = "@{support}/mine.repl"
 cpu_path = "sysbus.cpu"
 frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "test part"
 "#
-        );
+        .to_string();
         assert!(
             matches!(
                 SocConfig::from_soc_toml(&platform),

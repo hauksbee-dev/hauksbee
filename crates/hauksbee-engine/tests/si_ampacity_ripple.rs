@@ -167,7 +167,7 @@ fn programmed_charger_with_stackup(copper: &str) -> (ExtractedBoard, String) {
     programmed_charger_and_text(&format!("{DECLARED_STACKUP}\n  {copper}"))
 }
 
-fn findings_of<'a>(report: &'a SiReport, check: SiCheck) -> Vec<&'a hauksbee_extract::SiFinding> {
+fn findings_of(report: &SiReport, check: SiCheck) -> Vec<&hauksbee_extract::SiFinding> {
     report
         .findings
         .iter()

@@ -177,7 +177,7 @@ fn kicad_prl_input_points_at_the_sibling_board() {
 fn directory_with_one_board_file_is_used_with_a_note() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::copy(clean_board(), dir.path().join("only.kicad_pcb")).unwrap();
-    let out = run_board(&dir.path(), &["--drc"]);
+    let out = run_board(dir.path(), &["--drc"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     assert!(
         stderr(&out).contains("using the board file inside it"),
@@ -191,7 +191,7 @@ fn directory_with_several_board_files_asks_which() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::copy(clean_board(), dir.path().join("a.kicad_pcb")).unwrap();
     std::fs::copy(clean_board(), dir.path().join("b.kicad_pcb")).unwrap();
-    let out = run_board(&dir.path(), &["--drc"]);
+    let out = run_board(dir.path(), &["--drc"]);
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
     assert!(

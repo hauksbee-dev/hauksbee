@@ -941,8 +941,8 @@ pub(crate) fn seed_reactive_state(
 }
 
 /// After an accepted step, roll every history forward (see
-/// [`ReactiveState::roll`]). The op-amp EMF rolls through the SAME single-pole
-/// + slew update the stamp used this step (`opamp_transient_output` is shared
+/// [`ReactiveState::roll`]). The op-amp EMF rolls through the SAME single-pole +
+/// slew update the stamp used this step (`opamp_transient_output` is shared
 /// code), from the frozen previous EMF and the ACCEPTED inputs, so at
 /// convergence it reproduces exactly the EMF the final Newton iteration
 /// stamped; updated on acceptance only, never mid-Newton.

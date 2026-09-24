@@ -1401,7 +1401,7 @@ fn analyze_normalized_with_context(
         components,
         import_diagnostics: Some(web_import_diagnostics(norm)),
         bind: Some(bind_web),
-        model_coverage: Some(crate::commands::models::coverage_snapshot(board, &lib)),
+        model_coverage: Some(crate::commands::models::coverage_snapshot(board, lib)),
         inventory: evidence.inventory().to_vec(),
         assumptions: evidence.assumptions().to_vec(),
         evidence: evidence.maps().to_vec(),
@@ -1412,7 +1412,7 @@ fn analyze_normalized_with_context(
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
-        component_assertions: component_assertion_capabilities(board, &bound),
+        component_assertions: component_assertion_capabilities(board, bound),
         supplies,
         ..WebReport::default()
     };

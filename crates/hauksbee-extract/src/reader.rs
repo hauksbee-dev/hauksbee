@@ -317,7 +317,7 @@ pub fn unrecognized_message(bytes: &[u8]) -> String {
     // readable name. The file IS a format hauksbee reads, just not on its own,
     // so reciting the whole accepted-formats list reads as "unsupported" when
     // the real answer is "pass the folder, not this one file".
-    if let Some(what) = lone_fab_file(&head) {
+    if let Some(what) = lone_fab_file(head) {
         return format!(
             "this is {what}, which is one file out of a fab job rather than a whole \
              board. hauksbee reverse-extracts a board from the complete set (copper \

@@ -472,11 +472,9 @@ pub fn parse(text: &str) -> DrillFile {
         // relies on that reading would lose its holes. Inside a rout section
         // the block above has already claimed them.
         let bare_g = leading_g_code(&up);
-        if matches!(bare_g, Some(n) if n != 0 && n != 1) {
-            if up.contains('X') || up.contains('Y') {
-                let _ = parse_xy_modal(&up, &fmt, &mut last_x, &mut last_y);
-                continue;
-            }
+        if matches!(bare_g, Some(n) if n != 0 && n != 1) && (up.contains('X') || up.contains('Y')) {
+            let _ = parse_xy_modal(&up, &fmt, &mut last_x, &mut last_y);
+            continue;
         }
 
         // Coordinate line: X..Y.. , or modal X-only / Y-only (keep last axis).

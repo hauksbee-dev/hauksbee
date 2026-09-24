@@ -177,10 +177,10 @@ fn explicit_kicad_copper(n: &Name) -> Option<LayerRole> {
         })
     };
     if token_suffix("f_cu") || token_suffix("f.cu") {
-        return Some(top(&n));
+        return Some(top(n));
     }
     if token_suffix("b_cu") || token_suffix("b.cu") {
-        return Some(bottom(&n));
+        return Some(bottom(n));
     }
     for sep in ['_', '.'] {
         let tail = format!("{sep}cu");
@@ -194,7 +194,7 @@ fn explicit_kicad_copper(n: &Name) -> Option<LayerRole> {
                 continue;
             };
             if (1..=32).contains(&k) && rest[digits.len()..] == tail {
-                return Some(inner(k, &n));
+                return Some(inner(k, n));
             }
         }
     }
@@ -274,8 +274,8 @@ fn is_altium_drill_drawing_ext(ext: &str) -> bool {
 fn eagle_role(n: &Name) -> Option<LayerRole> {
     let ext = n.ext.as_deref()?;
     let role = match ext {
-        "cmp" => top(&n),
-        "sol" => bottom(&n),
+        "cmp" => top(n),
+        "sol" => bottom(n),
         "plc" | "pls" | "stc" | "sts" | "crc" | "crs" | "mil" => LayerRole::Ignored,
         "dim" => LayerRole::Outline,
         "drd" => LayerRole::Drill,
@@ -284,7 +284,7 @@ fn eagle_role(n: &Name) -> Option<LayerRole> {
             if !(2..=15).contains(&k) {
                 return None;
             }
-            inner(k - 1, &n)
+            inner(k - 1, n)
         }
     };
     Some(role)

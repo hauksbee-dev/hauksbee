@@ -708,7 +708,7 @@ mod tests {
         write_with_mtime(&src.join("components/App.tsx"), old);
         write_with_mtime(&dist.join("index.html"), std::time::SystemTime::now());
         assert!(
-            dist_stale_message(&dist, &[src.clone()]).is_none(),
+            dist_stale_message(&dist, std::slice::from_ref(&src)).is_none(),
             "up-to-date dist must not warn"
         );
 
@@ -718,8 +718,8 @@ mod tests {
             &src.join("components/App.tsx"),
             std::time::SystemTime::now(),
         );
-        let msg =
-            dist_stale_message(&dist, &[src.clone()]).expect("stale dist must produce a warning");
+        let msg = dist_stale_message(&dist, std::slice::from_ref(&src))
+            .expect("stale dist must produce a warning");
         assert!(msg.contains("STALE"), "message names the condition: {msg}");
         assert!(
             msg.contains("App.tsx"),

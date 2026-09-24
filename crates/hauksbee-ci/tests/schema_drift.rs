@@ -9,7 +9,7 @@
 //! * `schema_file_matches_spec_type`: after normalizing checkout line endings,
 //!   the checked-in file equals what the types generate, byte for byte.
 //!   Regenerate after editing `Spec` (or any type it contains) with:
-//!       UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test schema_drift
+//!   `UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test schema_drift`
 //! * `generated_schema_is_strict_and_documented`: the generator actually
 //!   carries the properties the editor experience depends on (doc comments as
 //!   hover descriptions, deny_unknown_fields as additionalProperties: false),

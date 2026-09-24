@@ -18,6 +18,7 @@
 //!      default on every OS), plus `C:\Espressif\tools\...` on Windows (the
 //!      ESP-IDF Windows installer's default root),
 //!   5. the binary on `PATH`.
+//!
 //! On Windows the binary file names carry `.exe`.
 //!
 //! IMPORTANT: this must resolve the *Espressif* fork, not Homebrew's mainline

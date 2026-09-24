@@ -979,10 +979,7 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
             }
             total += leg_total;
             if let Some(void) = widest_void(&uncovered, &ref_layer, leg_total) {
-                if worst
-                    .as_ref()
-                    .map_or(true, |w| void.extent_mm > w.extent_mm)
-                {
+                if worst.as_ref().is_none_or(|w| void.extent_mm > w.extent_mm) {
                     worst = Some(void);
                 }
             }
@@ -1094,7 +1091,7 @@ fn widest_void(uncovered: &[(f64, f64)], layer: &str, total: usize) -> Option<Mi
             from: (min_x, min_y),
             to: (max_x, max_y),
         };
-        if best.as_ref().map_or(true, |b| width > b.extent_mm) {
+        if best.as_ref().is_none_or(|b| width > b.extent_mm) {
             best = Some(candidate);
         }
     }

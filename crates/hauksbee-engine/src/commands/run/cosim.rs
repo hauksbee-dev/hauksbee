@@ -75,7 +75,7 @@ fn execute_and_collect_observations(
                  (run --list-nets to see every net name)"
         );
     }
-    crate::reports::cosim::validate_probes(&probes, cfg.probe_csv.as_deref(), &probe_known_nets)?;
+    crate::reports::cosim::validate_probes(&probes, cfg.probe_csv.as_deref(), probe_known_nets)?;
 
     let board_name = engine.report().board_name.clone();
     let summary = BindSummary::from_report(engine.report());
@@ -102,7 +102,7 @@ fn execute_and_collect_observations(
     // stats the text table reads, so every surface agrees. The achieved
     // rate is stamped from the run's own wall-clock measurement so the
     // machine surface carries the delivered factor, not an assumed one.
-    let cosim = crate::reports::cosim::build_cosim_json(&engine, uart_seen)?.map(|mut c| {
+    let cosim = crate::reports::cosim::build_cosim_json(engine, uart_seen)?.map(|mut c| {
         c.wall_s = wall_s;
         c.realtime_factor = achieved_factor;
         c
@@ -158,7 +158,7 @@ fn execute_and_collect_observations(
     // informational per-gate panel, populated only when firmware actually ran
     // (with no --firmware or a stalled one, every gate would read "floating").
     let boot_advisory = crate::checks::boot::analyze(
-        &board,
+        board,
         &engine.scheduler().firmware_held_high_nets(),
         &engine.scheduler().firmware_output_configured_nets(),
         &engine.scheduler().firmware_driven_nets(),
@@ -387,8 +387,8 @@ fn emit_report(
             // turns the boot advisory into an exit 2, so under that flag
             // the advisory is gate-grade for this document too.
             .with_surface_gate(faults_gate || (cfg.strict_boot && has_boot_advisory))
-            .with_inputs(&inputs)
-            .with_evidence(&run_evidence);
+            .with_inputs(inputs)
+            .with_evidence(run_evidence);
         // A substitution is an info-level note that must never be silently
         // absent (it changes how much the co-sim result can be trusted).
         for sub in engine.scheduler().substitutions() {
@@ -475,7 +475,7 @@ fn emit_report(
         // a substitute chip or never exercised the firmware. Surface those as
         // heads-up notes so the verdict reads "no failures, but N worth a look"
         // (via PlainReport::verdict) instead of a bare "Looks healthy".
-        let mut report = crate::plain_faults(&faults);
+        let mut report = crate::plain_faults(faults);
         for sub in engine.scheduler().substitutions() {
             report.heads_up.push(crate::plain::HeadsUp::note(format!(
                 "co-sim ran on a SUBSTITUTE chip: {}",
@@ -535,7 +535,7 @@ fn emit_report(
         // nets. --report and the web/JSON surfaces already say this; the
         // headless text/plain path must too, or a clean-looking co-sim silently
         // hides that half the board was never modelled.
-        let open = crate::result::coverage_open_active_refs(&summary);
+        let open = crate::result::coverage_open_active_refs(summary);
         if !open.is_empty() {
             report.heads_up.push(crate::plain::HeadsUp::note(format!(
                 "co-sim coverage: {} of {} critical parts modelled: {} active IC(s) are \
@@ -573,7 +573,7 @@ fn emit_report(
         if !gate_rows.is_empty() {
             print!("{}", crate::checks::boot::render_boot_gate_panel(gate_rows));
         }
-        let open = crate::result::coverage_open_active_refs(&summary);
+        let open = crate::result::coverage_open_active_refs(summary);
         if !open.is_empty() {
             println!(
                 "co-sim coverage: {} of {} critical parts modelled: {} active IC(s) \

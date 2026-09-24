@@ -66,7 +66,7 @@ fn follower_driven_at_5v_converges() {
     );
 }
 
-/// + input exactly AT the high rail: the operating point sits `rail/gain`
+/// `+` input exactly AT the high rail: the operating point sits `rail/gain`
 /// below the rail, still inside the linear window.
 #[test]
 fn follower_driven_at_rail_converges() {
@@ -79,7 +79,7 @@ fn follower_driven_at_rail_converges() {
     );
 }
 
-/// + input PAST the high rail: the loop truly saturates and the output must
+/// `+` input PAST the high rail: the loop truly saturates and the output must
 /// land on the rail itself, not oscillate.
 #[test]
 fn follower_driven_past_rail_converges_to_rail() {

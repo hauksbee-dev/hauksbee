@@ -46,7 +46,7 @@ pub(crate) fn emit_selected(
     if surface == SelectedSurface::Inventory {
         let bound = match prebound.take() {
             Some(b) => b,
-            None => bind_board(&board, &lib),
+            None => bind_board(board, lib),
         };
         let mut nets: Vec<String> = bound.net_names.clone();
         nets.sort();
@@ -92,13 +92,13 @@ pub(crate) fn emit_selected(
 
     if surface == SelectedSurface::Bind {
         return crate::reports::bind::emit_quiet(
-            &board,
-            &lib,
-            &reader_notes,
+            board,
+            lib,
+            reader_notes,
             mode,
             quiet,
             cfg.verbose,
-            &inputs,
+            inputs,
         )
         .map(|()| true);
     }
@@ -121,11 +121,11 @@ pub(crate) fn emit_selected(
     // without a per-net current spec this tells the user the bottleneck capacity
     // and explicitly asks for a current before pass/fail.
     if surface == SelectedSurface::Ampacity {
-        let bound = bind_board(&board, &lib);
+        let bound = bind_board(board, lib);
         let evidence = report_inputs.evidence(&bound.report)?;
         let net_names: Vec<String> = board.nets.iter().map(|net| net.name.clone()).collect();
         return crate::reports::ampacity::emit_quiet(
-            &text,
+            text,
             is_altium,
             &evidence,
             &net_names,
@@ -154,13 +154,13 @@ pub(crate) fn emit_selected(
     // print the compliance report. The capability existed but was unreachable from
     // any user-facing surface; this is its CLI front door.
     if surface == SelectedSurface::UsbC {
-        let bound = bind_board(&board, &lib);
+        let bound = bind_board(board, lib);
         let evidence = report_inputs.evidence(&bound.report)?;
         let blockers = crate::result::unmodelled_critical_refs(
             &crate::result::BindSummary::from_report(&bound.report),
         );
         return crate::reports::usb_c::emit_quiet(
-            &board, &evidence, mode, cfg.strict, quiet, &inputs, &blockers,
+            board, &evidence, mode, cfg.strict, quiet, inputs, &blockers,
         )
         .map(|()| true);
     }
@@ -181,7 +181,7 @@ pub(crate) fn emit_selected(
         // sweep runs on the reworked circuit.
         let bound = match prebound.take() {
             Some(b) => b,
-            None => bind_board(&board, &lib),
+            None => bind_board(board, lib),
         };
         let evidence = report_inputs.evidence(&bound.report)?;
         return crate::reports::ac::emit_quiet(
@@ -193,7 +193,7 @@ pub(crate) fn emit_selected(
             cfg.ac_loop.as_deref(),
             cfg.json,
             quiet,
-            &inputs,
+            inputs,
         )
         .map(|()| true);
     }

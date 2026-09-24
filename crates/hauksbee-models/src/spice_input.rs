@@ -74,14 +74,14 @@ fn join_continuation_lines(text: &str) -> Vec<String> {
     let mut result: Vec<String> = Vec::new();
     for raw_line in text.lines() {
         let line = raw_line.trim_end();
-        if line.starts_with('+') {
+        if let Some(cont) = line.strip_prefix('+') {
             // Continuation: append to previous line
             if let Some(last) = result.last_mut() {
                 last.push(' ');
-                last.push_str(line[1..].trim_start());
+                last.push_str(cont.trim_start());
             } else {
                 // Continuation without a prior line, treat as new
-                result.push(line[1..].trim_start().to_string());
+                result.push(cont.trim_start().to_string());
             }
         } else {
             result.push(line.to_string());

@@ -950,7 +950,7 @@ mod tests {
 
     #[test]
     fn expm_matches_closed_forms() {
-        let e = expm(&vec![0.0; 4], 2);
+        let e = expm(&[0.0; 4], 2);
         assert!((e[0] - 1.0).abs() < 1e-12 && (e[3] - 1.0).abs() < 1e-12 && e[1].abs() < 1e-12);
         assert!((expm(&[-1.0], 1)[0] - (-1.0f64).exp()).abs() < 1e-9);
         assert!(

@@ -870,8 +870,8 @@ pub(crate) fn render_waivers_scoped(
     s
 }
 
-/// The bare-`--json` combined machine report (bind + DRC + lint/straps/resources
-/// + SI + USB-C) for a `run <board> --json` with no specific report selector.
+/// The bare-`--json` combined machine report (bind + DRC + lint/straps/resources +
+/// SI + USB-C) for a `run <board> --json` with no specific report selector.
 /// Without it a bare `--json` would fall through to the TUI/websocket default and
 /// hang a piped / CI / AI caller. Carries the same findings as `emit_with_schematic_quiet`'s JSON,
 /// and (under `strict`) gates with the same exit-2 contract.

@@ -1084,11 +1084,11 @@ mod tests {
         assert!(!a.allow_dynamic);
         assert!(a.refactor(&m));
         let mut xa = b.to_vec();
-        a.solve(&mut xa, &mut vec![0.0; 3]);
+        a.solve(&mut xa, &mut [0.0; 3]);
         let mut f = m.factorize_symbolic();
         assert!(f.refactor_frozen(&m));
         let mut xf = b.to_vec();
-        f.solve(&mut xf, &mut vec![0.0; 3]);
+        f.solve(&mut xf, &mut [0.0; 3]);
         assert!(
             xa.iter().zip(&xf).all(|(p, q)| p.to_bits() == q.to_bits()),
             "{xa:?} vs {xf:?}"

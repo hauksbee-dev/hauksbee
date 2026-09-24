@@ -1312,7 +1312,7 @@ impl Assumption {
             AssumptionKind::InferredPinRole,
             AssumptionSource::Binder,
             &subject,
-            part_scope(&part_ref),
+            part_scope(part_ref),
             format!("{reference} pin {pin} is taken to be its {role} pin."),
             "The inputs named no role for that pin, so the pin-rule table inferred one from \
              the part's shape."
@@ -1354,7 +1354,7 @@ impl Assumption {
             AssumptionKind::DefaultParameter,
             AssumptionSource::Binder,
             &subject,
-            parameter_scope(&part_ref, &parameter),
+            parameter_scope(part_ref, &parameter),
             format!("{reference}.{parameter} is taken as {value}, a documented default."),
             "No input carried a value for it.".to_string(),
             format!(
@@ -1702,6 +1702,7 @@ impl Assumption {
     ///   warning), and a `Waived` one must;
     /// - a `TimeWindow` scope's bounds are real numbers, because they reach the
     ///   published JSON and NaN or infinity is not JSON.
+    ///
     /// Every constructor's output must satisfy the rules [`Self::validate`]
     /// states, and a debug build is where a producer that hands over an empty
     /// datum finds out. A debug assert rather than a `Result` because ninety

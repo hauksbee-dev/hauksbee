@@ -770,7 +770,7 @@ mod tests {
         let evidence = evidence_findings(&[map]).pop().unwrap();
         assert_eq!(evidence.severity, "serious");
         assert_eq!(evidence.kind, "undermined");
-        let junit = junit_xml("b", &[evidence.clone()]);
+        let junit = junit_xml("b", std::slice::from_ref(&evidence));
         assert!(junit.contains("<failure"), "{junit}");
         assert!(junit.contains("INVALID evidence"), "{junit}");
         let sarif = sarif_json(Path::new("b.kicad_pcb"), &[evidence]);

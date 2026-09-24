@@ -422,6 +422,7 @@ impl ModelLibrary {
     ///   2. `~/.hauksbee/models`, where datasheet extraction writes,
     ///   3. `~/.config/hauksbee/models`; the user's own custom models,
     ///   4. each `extra_dirs` entry, e.g. a `--models-dir` flag, highest.
+    ///
     /// A custom behavioural part dropped into one of these loads without
     /// recompiling. Directory and pack load errors are warned to stderr, not
     /// fatal, so a single malformed user file never breaks the whole library.

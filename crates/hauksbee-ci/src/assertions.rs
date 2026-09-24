@@ -1251,7 +1251,7 @@ fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
             .collect()
     } else {
         let h: String = cleaned.split_whitespace().collect();
-        if h.len() % 2 != 0 || h.is_empty() {
+        if !h.len().is_multiple_of(2) || h.is_empty() {
             return None;
         }
         (0..h.len())

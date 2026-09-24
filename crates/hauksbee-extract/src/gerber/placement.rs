@@ -445,7 +445,7 @@ fn expand_ref_range(tok: &str) -> Vec<String> {
     // expand to C01..C10, not C1..C10, or the padded P&P references (C01..C09)
     // never match on lookup and their value/MPN/DNP enrichment is silently lost.
     // A leading zero signals a fixed-width field; without one, format naturally.
-    let width = if lw > 1 && tok[..a].as_bytes()[lp.len()] == b'0' {
+    let width = if lw > 1 && tok.as_bytes()[..a][lp.len()] == b'0' {
         lw
     } else {
         0

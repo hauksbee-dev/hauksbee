@@ -306,10 +306,9 @@ fn render_spec_at_with_run_hint(
     // misleading diagnosis on a net the firmware actually drives LOW (or via an
     // unmodelled peripheral bus), so the assertion is emitted commented-out with
     // an honest note naming the gap and the user opts in deliberately.
-    let boot_coverage_supported = mcu_backend.as_deref().map_or(
-        true,
-        hauksbee_engine::scheduler::backend_reports_drive_direction,
-    );
+    let boot_coverage_supported = mcu_backend
+        .as_deref()
+        .is_none_or(hauksbee_engine::scheduler::backend_reports_drive_direction);
 
     let stem = board_stem(board);
     // TOML-encoded, not hand-quoted: a Windows relative path is full of

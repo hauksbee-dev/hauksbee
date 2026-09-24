@@ -13,7 +13,7 @@
 //!   / `END GENERATED` markers in the doc equal what this claim list renders,
 //!   so the human-readable doc can never disagree with the enforced list.
 //!   Regenerate after editing the claims with:
-//!       UPDATE_COMPAT=1 cargo test -p hauksbee-ir --test compat_drift
+//!   `UPDATE_COMPAT=1 cargo test -p hauksbee-ir --test compat_drift`
 //!
 //! Adding a supported/refused card to the loader means adding a claim here (and
 //! regenerating the doc); removing one makes a claim fail loudly. That coupling

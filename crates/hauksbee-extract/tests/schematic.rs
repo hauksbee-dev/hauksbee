@@ -31,7 +31,7 @@ macro_rules! fixture_or_skip {
     };
 }
 
-fn net_of<'a>(b: &'a ExtractedBoard, reference: &str, pin: &str) -> Option<i64> {
+fn net_of(b: &ExtractedBoard, reference: &str, pin: &str) -> Option<i64> {
     let c = b.component(reference)?;
     c.pins.iter().find(|p| p.number == pin)?.net
 }

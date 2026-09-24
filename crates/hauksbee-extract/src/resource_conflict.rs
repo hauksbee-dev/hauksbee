@@ -430,7 +430,7 @@ fn is_rail_or_ground(name: &str) -> bool {
         let b = t.as_bytes();
         b.len() >= 2
             && b[0].is_ascii_digit()
-            && b.iter().any(|&c| c == b'V')
+            && b.contains(&b'V')
             && b.iter().all(|&c| c.is_ascii_digit() || c == b'V')
     };
     let is_supply_token = |t: &str| {
@@ -888,7 +888,7 @@ mod tests {
             let pwm = format!(
                 "{}{}",
                 (gpio >> 1) & 7,
-                if gpio % 2 == 0 { 'A' } else { 'B' }
+                if gpio.is_multiple_of(2) { 'A' } else { 'B' }
             );
             assert_eq!(pin.pwm.as_deref(), Some(pwm.as_str()), "pad {pad}");
         }

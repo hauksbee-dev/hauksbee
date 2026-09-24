@@ -2869,7 +2869,7 @@ fn group_contours(contours: Vec<Vec<(f64, f64)>>) -> Vec<Vec<Vec<(f64, f64)>>> {
     // even, i.e. an outer).
     let group_of: Vec<usize> = (0..n)
         .map(|i| {
-            if encloses[i].len() % 2 == 0 {
+            if encloses[i].len().is_multiple_of(2) {
                 i
             } else {
                 encloses[i]

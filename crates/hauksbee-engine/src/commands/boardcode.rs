@@ -44,7 +44,7 @@ pub fn to_code(board: &Path, out: Option<&Path>) -> anyhow::Result<()> {
     );
     match out {
         Some(p) => {
-            std::fs::write(&p, &code)?;
+            std::fs::write(p, &code)?;
             eprintln!("wrote {}", p.display());
         }
         None => print!("{code}"),

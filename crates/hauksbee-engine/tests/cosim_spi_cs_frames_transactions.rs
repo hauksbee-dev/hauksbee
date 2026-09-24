@@ -11,6 +11,7 @@
 //!   - a CS falling edge  -> `SpiBus::cs_assert`   (begin a transaction),
 //!   - a byte transfer     -> `SpiBus::transfer`    (one MOSI/MISO exchange),
 //!   - a CS rising edge    -> `SpiBus::cs_deassert` (end the transaction),
+//!
 //! interleaved in cycle order by the `on_pin_change` + `on_spi` closures. When a
 //! bus has a resolved CS pin (or a backend that surfaces CS itself), it
 //! `frames_itself()` and the scheduler SKIPS the chunk-boundary deselect, so a

@@ -73,7 +73,7 @@ pub(super) fn enforce_gates(
             eprintln!("WARNING: timing evidence invalid: {refusal}");
         }
         if cfg.strict {
-            let refusal = timing_refusal(&timing_refusals);
+            let refusal = timing_refusal(timing_refusals);
             crate::reports::ci_artifacts::exit_with_refusal(EXIT_INVALID_FOR_ANALYSIS, &refusal);
         }
     }

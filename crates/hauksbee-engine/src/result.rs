@@ -21,11 +21,11 @@
 //! ## Exit-code contract (see ONBOARDING_PLAN §4.2)
 //! - `0`  clean, or findings present but not `--strict`.
 //! - `1`  the run never happened: the board could not be read, or the analysis
-//!        could not be set up. An input error, not a verdict about the board.
+//!   could not be set up. An input error, not a verdict about the board.
 //! - `2`  `--strict` and at least one gating finding.
 //! - `3`  **board invalid for the requested analysis** (AC with no signal path,
-//!        thermal with no resolved dissipating devices). A run that could not
-//!        produce a meaningful answer must never exit 0.
+//!   thermal with no resolved dissipating devices). A run that could not
+//!   produce a meaningful answer must never exit 0.
 //!
 //! ## Rendering paths
 //!
@@ -2283,6 +2283,7 @@ impl JsonReport {
     ///     invalidate the run; the finding stays on the report wearing its own
     ///     badge;
     ///   - `pass`, otherwise.
+    ///
     /// Mirrors the run's own exit gate: DRC shorts are ignored when the board is
     /// newer than the validated copper extraction (`version_warning` set), the
     /// same carve-out the CI gate makes.

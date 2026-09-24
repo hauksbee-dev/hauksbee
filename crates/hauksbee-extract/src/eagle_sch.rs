@@ -274,7 +274,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
                     Event::Empty(e) => (e, true),
                     _ => unreachable!(),
                 };
-                let a = attrs(&e);
+                let a = attrs(e);
                 let name = e.name().as_ref().to_vec();
                 if element_path.is_empty() {
                     if saw_document_element {

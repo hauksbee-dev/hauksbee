@@ -33,6 +33,7 @@
 //!   - the configuration divider on the pin resolves to *known* resistor values
 //!     (a parseable pull-up to the reference rail and a parseable pull-down to
 //!     ground), so the pin voltage is computable.
+//!
 //! If the divider cannot be resolved to concrete resistor values, the check stays
 //! SILENT. A check that cannot resolve the divider does not fire. (See
 //! `docs/checks/DEVICE_DECODE.md` and `docs/about/LIMITATIONS.md`.)

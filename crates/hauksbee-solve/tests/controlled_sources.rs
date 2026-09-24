@@ -14,7 +14,7 @@
 //!   control pair must fuse with its output port in the union-find, or the
 //!   control would be replayed across a Gauss-Seidel step lag (the O(dt)
 //!   coupling error class the tearing rules exist to prevent).
-
+//!
 //! The F/H (CCCS/CCVS) section below mirrors the same gates with the two
 //! structurally new hazards of current control (§2.2):
 //!

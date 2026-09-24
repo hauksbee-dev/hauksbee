@@ -80,7 +80,7 @@ fn rp2040_i2c_bridge_round_trips_with_pico_sdk_firmware() {
         I2cEvent::Read { addr } => {
             log.lock().unwrap().push(format!("read {addr:#04X}"));
             let mut n = counter.lock().unwrap();
-            let byte = if *n % 2 == 0 { 0xAB } else { 0xCD };
+            let byte = if (*n).is_multiple_of(2) { 0xAB } else { 0xCD };
             *n += 1;
             Some(byte)
         }
@@ -159,7 +159,7 @@ fn rp2040_spi_bridge_probe() {
         }
         seen.lock().unwrap().push(event.mosi);
         let mut n = counter.lock().unwrap();
-        let byte = if *n % 2 == 0 { 0x5A } else { 0xA5 };
+        let byte = if (*n).is_multiple_of(2) { 0x5A } else { 0xA5 };
         *n += 1;
         byte
     }));

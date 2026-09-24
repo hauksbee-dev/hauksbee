@@ -552,7 +552,7 @@ fn is_pin_array_package(fp: &str) -> bool {
 }
 
 /// All (component, pin) members of a net id.
-fn members<'a>(board: &'a ExtractedBoard, net_id: i64) -> Vec<(&'a Component, &'a Pin)> {
+fn members(board: &ExtractedBoard, net_id: i64) -> Vec<(&Component, &Pin)> {
     board.net_members(net_id)
 }
 
@@ -611,7 +611,7 @@ fn package_code(footprint: &str) -> Option<&'static str> {
 }
 
 fn parse_capacitance_uf(value: &str) -> Option<f64> {
-    let s = value.trim().replace('µ', "u").replace('μ', "u");
+    let s = value.trim().replace(['µ', 'μ'], "u");
     if s.is_empty() {
         return None;
     }
@@ -1070,7 +1070,7 @@ fn sd_role(name: &str) -> Option<&'static str> {
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|t| !t.is_empty())
         .collect();
-    if toks.iter().any(|t| *t == "CMD") {
+    if toks.contains(&"CMD") {
         return Some("CMD");
     }
     let dat_index = |t: &str| -> Option<usize> {

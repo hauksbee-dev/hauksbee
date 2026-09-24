@@ -2612,6 +2612,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
 ///     well-conditioned where the bare DC matrix was singular, and
 ///   * carry zero current at steady state (dv/dt -> 0), so the settled point is
 ///     the true DC operating point of the unmodified circuit.
+///
 /// Returns the settled unknown vector (truncated to the original layout size, as
 /// the pseudo-caps own no branch unknowns so the node/branch indices are
 /// unchanged), or `None` if even the regularized march fails to settle.

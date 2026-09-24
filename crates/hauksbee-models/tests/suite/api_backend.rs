@@ -12,8 +12,7 @@ use std::sync::mpsc;
 
 fn write_test_pdf(path: &std::path::Path) {
     let stream = b"BT /F1 12 Tf 72 720 Td (IF 200mA VRRM 100V test datasheet body) Tj ET";
-    let objects = vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+    let objects = [b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
         format!(
@@ -22,8 +21,7 @@ fn write_test_pdf(path: &std::path::Path) {
             String::from_utf8_lossy(stream)
         )
         .into_bytes(),
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
-    ];
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec()];
     let mut pdf = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::with_capacity(objects.len());
     for (index, object) in objects.iter().enumerate() {

@@ -37,14 +37,14 @@ pub(crate) fn build_live_simulation(
     // reuse that bound board rather than re-binding and re-applying.
     let bound = match prebound.take() {
         Some(b) => b,
-        None => bind_board(&board, &lib),
+        None => bind_board(board, lib),
     };
     let mut board_evidence = crate::evidence::board_evidence(
-        &board,
+        board,
         &bound.report,
-        &reader_notes,
+        reader_notes,
         &cfg.board,
-        &raw,
+        raw,
         input_kind,
     )?;
     if let Some(firmware) = &cfg.firmware {
@@ -110,11 +110,11 @@ pub(crate) fn build_live_simulation(
     // --apply-shorts: bridge every detected copper short before simulating.
     if cfg.apply_shorts {
         let report = if is_altium {
-            ExtractedBoard::altium_drc(&raw)?
+            ExtractedBoard::altium_drc(raw)?
         } else {
             ExtractedBoard::drc_with_clearance_rules(
-                &text,
-                crate::reports::kicad_pro_clearance_rules(&cfg.board, &board),
+                text,
+                crate::reports::kicad_pro_clearance_rules(&cfg.board, board),
             )?
         };
         let qualification = schematic_ties.map(|ties| ties.qualify(&report));

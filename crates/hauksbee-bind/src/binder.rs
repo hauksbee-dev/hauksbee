@@ -3076,7 +3076,7 @@ fn bind_passive_array(
     let mut notes: Vec<String> = Vec::new();
     // (element name, a, b) before connectivity filtering.
     let mut elements: Vec<(String, Option<NodeId>, Option<NodeId>)> = Vec::new();
-    if pads.len() % 2 == 0 {
+    if pads.len().is_multiple_of(2) {
         // Isolated-array convention: sequential pad pairs.
         for (i, pair) in pads.chunks(2).enumerate() {
             elements.push((
@@ -4894,6 +4894,7 @@ fn bind_digital(
 ///     (RESET_SR), that gate's output is Qb (internal);
 ///   - the OTHER gate is the Q gate: its non-cross input is `set` (SPIKE<n>),
 ///     its output net is `q` (the observable L<n>, wired to the 165 inputs).
+///
 /// Stamps a Thevenin driver on the `q` net and pushes one [`DigitalComponent`]
 /// (the builtin NOR-latch spec) per latch. Returns true if ≥1 latch was bound.
 fn bind_nor_latches(

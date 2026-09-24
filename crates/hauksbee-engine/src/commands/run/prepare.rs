@@ -161,21 +161,21 @@ fn gather_ci_artifact_findings(
 ) -> anyhow::Result<Vec<JsonFinding>> {
     let mut findings = crate::reports::check::gather_findings_with_schematic(
         &cfg.board,
-        &board,
-        &text,
-        &raw,
+        board,
+        text,
+        raw,
         is_altium,
         lib,
         schematic_ties,
     )?;
     findings.retain(|finding| ci_check_selected(surface, finding));
-    let bound = bind_board(&board, &lib);
+    let bound = bind_board(board, lib);
     let evidence = crate::evidence::board_evidence(
-        &board,
+        board,
         &bound.report,
-        &reader_notes,
+        reader_notes,
         &cfg.board,
-        &raw,
+        raw,
         input_kind,
     )?;
     let mut maps = evidence.maps_for_findings(&findings)?;
@@ -209,7 +209,7 @@ fn gather_ci_artifact_findings(
         &crate::result::BindSummary::from_report(&bound.report),
     );
     let blockers = if surface == SelectedSurface::UsbC {
-        crate::reports::usb_c::scoped_blockers(&board, &blockers)
+        crate::reports::usb_c::scoped_blockers(board, &blockers)
     } else {
         blockers
     };
@@ -520,7 +520,7 @@ pub(crate) fn prepare_run_inputs(
     }
     if let Some(path) = &cfg.emit_manifest {
         let manifest = capture_manifest(
-            &cfg,
+            cfg,
             firmware_source.as_deref(),
             schematic,
             schematic_ties.as_ref(),

@@ -3914,7 +3914,7 @@ pub mod eagle_drc {
             }
         }
 
-        let mut report = sweep_buckets(buckets, &rules, &no_net, &net_ties, &name_of);
+        let mut report = sweep_buckets(buckets, &rules, &no_net, &net_ties, name_of);
 
         // ── Pour-to-pour rank arbitration ────────────────────────────────────
         // Differing ranks are arbitrated (the higher-numbered pour carves around

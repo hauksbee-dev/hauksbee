@@ -581,6 +581,7 @@ fn default_store() -> anyhow::Result<PackStore> {
 ///     `tar`, then the directory containing `pack.toml` is installed);
 ///   - a git URL (`git@…`, `git://…`, `ssh://…`, `…​.git`, or any `https://…`),
 ///     shallow-cloned with the system `git`.
+///
 /// Plain `http://` URLs are refused: no HTTP client ships in hauksbee, and an
 /// unencrypted model source is a bad default anyway, clone or download it
 /// yourself and pass the path.

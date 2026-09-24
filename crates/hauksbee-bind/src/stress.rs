@@ -46,6 +46,7 @@
 //!   - diode reverse over-voltage (past breakdown) → the junction *shorts*
 //!     (avalanche/punch-through that fails closed), modelled as a small series
 //!     resistor across the former diode nodes.
+//!
 //! Non-destructive mode reports continuously and never mutates the circuit.
 
 use std::collections::HashMap;
