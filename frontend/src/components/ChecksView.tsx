@@ -13,9 +13,10 @@ import {
   assertToml, buildToml, CHECK_KINDS, componentCapabilityIssues, CONSTRAINT_KEYS,
   emptyCheck, emptyPeripheral, emptySensor, normalizeSavedCheck, peripheralIssues,
   peripheralToml, railPolarity, rowIssues, sensorIssues, sensorToml, supplyToml,
+  overrideToml, upsertOverride,
 } from '../lib/check-spec'
 import type {
-  BuilderState, CheckRow, PeripheralRow, RowIssue, SensorRow, SupplyRow,
+  BuilderState, CheckRow, OverrideRow, PeripheralRow, RowIssue, SensorRow, SupplyRow,
 } from '../lib/check-spec'
 import { BuilderSection, Field, RawModeSummary, RemoveButton } from './checks/pieces'
 import { InteractionBuilder } from './checks/InteractionBuilder'
@@ -52,6 +53,7 @@ interface SavedChecksState {
   supplies?: SupplyRow[]
   peripherals?: PeripheralRow[]
   sensors?: SensorRow[]
+  overrides?: OverrideRow[]
   checks?: CheckRow[]
   rawMode?: boolean
   rawText?: string
@@ -215,6 +217,7 @@ export function ChecksView({
   const [peripherals, setPeripherals] = useState<PeripheralRow[]>(() => savedArray(saved?.peripherals))
   const [sensors, setSensors] = useState<SensorRow[]>(() => savedArray(saved?.sensors))
   const [checks, setChecks] = useState<CheckRow[]>(initialChecks)
+  const [overrides, setOverrides] = useState<OverrideRow[]>(() => savedArray(saved?.overrides))
   // Firmware is staged on the board session, but including it in a check run
   // is an explicit choice. Preserve the old default on AVR-capable builds;
   // permissive/non-AVR builds start on the static-only path.
@@ -274,8 +277,8 @@ export function ChecksView({
   }, [])
 
   const builtToml = useMemo(
-    () => buildToml(specName, duration, supplies, peripherals, checks, sensors),
-    [specName, duration, supplies, peripherals, checks, sensors],
+    () => buildToml(specName, duration, supplies, peripherals, checks, sensors, overrides),
+    [specName, duration, supplies, peripherals, checks, sensors, overrides],
   )
   const effectiveToml = rawMode ? rawText : builtToml
   const firmwareForRun = includeFirmware ? firmwareFile : null
@@ -302,9 +305,9 @@ export function ChecksView({
   // Auto-save (the "things auto load in future" contract).
   useEffect(() => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText, includeFirmware }))
+      localStorage.setItem(storageKey, JSON.stringify({ specName, duration, supplies, peripherals, sensors, checks, overrides, rawMode, rawText, includeFirmware }))
     } catch { /* storage full/blocked: the session still works */ }
-  }, [storageKey, specName, duration, supplies, peripherals, sensors, checks, rawMode, rawText, includeFirmware])
+  }, [storageKey, specName, duration, supplies, peripherals, sensors, checks, overrides, rawMode, rawText, includeFirmware])
 
   // Report the run summary to the shell's chips; a stale or failed run
   // reports nothing rather than a number that no longer matches the spec.
@@ -387,7 +390,7 @@ export function ChecksView({
   useEffect(() => {
     if (pending.length === 0) return
     const checkRows: CheckRow[] = [], peripheralRows: PeripheralRow[] = []
-    const sensorRows: SensorRow[] = [], supplyRows: SupplyRow[] = []
+    const sensorRows: SensorRow[] = [], supplyRows: SupplyRow[] = [], selects: OverrideRow[] = []
     let raw = ''
     for (const r of pending) {
       if (r.type === 'check') {
@@ -411,6 +414,10 @@ export function ChecksView({
         const row = emptySensor(nextSensorId.current++, r.id, r.ref ?? '', r.modelId ?? '')
         sensorRows.push(row)
         raw += `\n# TODO: paste a validated register-map spec for ${r.ref ?? r.id}${sensorToml(row)}`
+      } else if (r.type === 'select') {
+        const row = { ref: r.ref, select: r.select, reason: 'picked in the app' }
+        selects.push(row)
+        raw += overrideToml(row) // the last [[override]] for a ref wins
       } else {
         const row = { net: r.net, volts: String(r.volts ?? 3.3) }
         supplyRows.push(row)
@@ -419,6 +426,7 @@ export function ChecksView({
     }
     if (rawMode) setRawText(previous => previous + raw)
     else {
+      if (selects.length) setOverrides(rows => selects.reduce(upsertOverride, rows))
       if (checkRows.length) setChecks(cs => [...cs, ...checkRows])
       if (peripheralRows.length) setPeripherals(rows => [...rows, ...peripheralRows])
       if (sensorRows.length) setSensors(rows => [...rows, ...sensorRows])
@@ -532,6 +540,7 @@ export function ChecksView({
       setPeripherals(parsed.peripherals)
       setSensors(parsed.sensors)
       setChecks(parsed.checks)
+      setOverrides(parsed.overrides)
       nextId.current = parsed.checks.reduce((m, c) => Math.max(m, c.id), 0) + 1
       nextPeripheralId.current = parsed.peripherals.reduce((m, p) => Math.max(m, p.rowId), 0) + 1
       nextSensorId.current = parsed.sensors.reduce((m, s) => Math.max(m, s.rowId), 0) + 1
