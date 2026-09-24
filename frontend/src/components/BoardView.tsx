@@ -4,7 +4,7 @@ import { coverageFor, modelsOnNet, padNetsOf, plural, reportView, stageWords } f
 import type { BoardSession } from '../hooks/useBoardSession'
 import { WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
-import { SelectionCard } from './SelectionCard'
+import { OpenSelectionsBanner, SelectionCard } from './SelectionCard'
 import { AdditionalEvidencePanel, evidenceSlots } from './AdditionalEvidencePanel'
 import { QueuedConstraintModal } from './ConstraintModal'
 import type { ConstraintDraft } from './ConstraintEditor'
@@ -291,6 +291,11 @@ export function BoardView({
           </div>
         )}
 
+        <OpenSelectionsBanner
+          selections={r.bind?.open_selections ?? []}
+          onQueue={restoredFrom ? undefined : request => { onQueue(request); onOpenChecks() }}
+        />
+
         {r.model_coverage && (
           <ModelCoveragePanel
             coverage={r.model_coverage}
@@ -420,6 +425,7 @@ export function BoardView({
                       boundKind={selectedComponent ? r.component_kinds?.[selectedComponent.ref] ?? null : null}
                       assertionCapabilities={selectedComponent ? r.component_assertions?.[selectedComponent.ref] ?? [] : []}
                       modelCoverage={coverageFor(r.model_coverage, selectedComponent?.ref)}
+                      openSelection={r.bind?.open_selections?.find(s => s.reference === selectedComponent?.ref)}
                       netModels={modelsOnNet(r.model_coverage, selectedNet)}
                       onQueue={request => {
                         if (request.type === 'check') setConstraintDraft(request)

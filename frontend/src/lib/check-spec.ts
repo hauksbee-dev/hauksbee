@@ -103,7 +103,20 @@ export interface BuilderState {
   peripherals: PeripheralRow[]
   sensors: SensorRow[]
   checks: CheckRow[]
+  overrides: OverrideRow[]
 }
+
+/** An `[[override]]`: `select` settles an open variant selection for `ref`. */
+export interface OverrideRow {
+  ref: string
+  select?: string
+  value?: string
+  reason?: string
+}
+
+/** Replace any override for the same ref (a re-pick never duplicates). */
+export const upsertOverride = (rows: OverrideRow[], row: OverrideRow) =>
+  [...rows.filter(r => r.ref !== row.ref), row]
 
 export function emptySensor(rowId: number, id = '', componentRef = '', modelId = ''): SensorRow {
   return {
@@ -389,6 +402,14 @@ export function sensorToml(sensor: SensorRow): string {
   return out
 }
 
+export function overrideToml(o: OverrideRow): string {
+  let out = `\n[[override]]\nref = ${tomlString(o.ref)}\n`
+  for (const key of ['select', 'value', 'reason'] as const) {
+    if (o[key] !== undefined) out += `${key} = ${tomlString(o[key])}\n`
+  }
+  return out
+}
+
 /** One [[assert]] block: the kind's subject, then its schema fields in order,
  *  each only when filled (strings quoted, numbers only when finite). */
 export function assertToml(c: CheckRow): string {
@@ -415,6 +436,7 @@ export function buildToml(
   peripherals: PeripheralRow[],
   checks: CheckRow[],
   sensors: SensorRow[] = [],
+  overrides: OverrideRow[] = [],
 ): string {
   const dur = numOr(duration)
   return `name = ${tomlString(name)}\n${dur ? `duration_ms = ${dur}\n` : ''}`
@@ -422,6 +444,7 @@ export function buildToml(
     + peripherals.map(peripheralToml).join('')
     + sensors.map(sensorToml).join('')
     + checks.map(assertToml).join('')
+    + overrides.map(overrideToml).join('')
 }
 
 // Fields the builder round-trips on a [[supply]] / an [[assert]]. Anything
@@ -447,7 +470,7 @@ export function tomlToBuilder(raw: string): BuilderState | null {
   } catch {
     return null
   }
-  const KNOWN = new Set(['name', 'duration_ms', 'supply', 'peripheral', 'sensor', 'assert', 'board', 'firmware', 'mcu'])
+  const KNOWN = new Set(['name', 'duration_ms', 'supply', 'peripheral', 'sensor', 'assert', 'override', 'board', 'firmware', 'mcu'])
   if (Object.keys(doc).some(k => !KNOWN.has(k))) return null
   const supplies: SupplyRow[] = []
   for (const s of (doc.supply as Record<string, unknown>[] | undefined) ?? []) {
@@ -507,6 +530,12 @@ export function tomlToBuilder(raw: string): BuilderState | null {
     k.hydrate?.(row)
     checks.push(row)
   }
+  const overrides: OverrideRow[] = []
+  for (const o of (doc.override as Record<string, unknown>[] | undefined) ?? []) {
+    if (Object.keys(o).some(k => !['ref', 'select', 'value', 'reason'].includes(k))) return null
+    if (Object.values(o).some(v => typeof v !== 'string')) return null
+    overrides.push(o as unknown as OverrideRow)
+  }
   return {
     name: String(doc.name ?? 'board checks'),
     duration: String(doc.duration_ms ?? '100'),
@@ -514,6 +543,7 @@ export function tomlToBuilder(raw: string): BuilderState | null {
     peripherals,
     sensors,
     checks,
+    overrides,
   }
 }
 
