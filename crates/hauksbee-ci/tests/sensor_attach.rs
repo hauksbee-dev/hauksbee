@@ -29,6 +29,7 @@ use hauksbee_ci::run;
 
 use crate::support::{self, example};
 
+#[cfg(feature = "renode")]
 fn firmware_present() -> bool {
     support::repo("testdata/firmware/stm32_i2c_thermostat/thermostat.elf").exists()
 }
@@ -36,6 +37,7 @@ fn firmware_present() -> bool {
 /// One declarative-LM75 thermostat run from `examples/<spec>`, asserted GREEN
 /// with the whole human report as the message. Holds the descriptor lock, and
 /// skips cleanly when Renode or the thermostat firmware is absent.
+#[cfg(feature = "renode")]
 fn lm75_run(case: &str, spec: &str, expect: &str) -> Option<hauksbee_ci::CiResult> {
     let _guard = support::descriptor_env_lock();
     if !hauksbee_mcu::renode::is_available() || !firmware_present() {
@@ -60,6 +62,7 @@ fn lm75_run(case: &str, spec: &str, expect: &str) -> Option<hauksbee_ci::CiResul
 /// This is the primary proof. It fails only if the Renode I2C bridge is not
 /// wired (FLAG never reaches 2.5 V) or the interpreter encoded the temperature
 /// incorrectly (firmware reads != 40 C). Either failure is a clear signal.
+#[cfg(feature = "renode")]
 #[test]
 fn sensor_attach_lm75_hot_flag_goes_high() {
     let expect = "declarative LM75 at 40 C drove FLAG HIGH (boot-coverage PASS)";
@@ -79,6 +82,7 @@ fn sensor_attach_lm75_hot_flag_goes_high() {
 ///
 /// Negative control: the firmware reads 20 C < 30 C and must not drive FLAG.
 /// The 4k7 pull-down holds the net at ~0 V the whole run.
+#[cfg(feature = "renode")]
 #[test]
 fn sensor_attach_lm75_cold_flag_stays_low() {
     let expect = "declarative LM75 at 20 C held FLAG LOW (voltage PASS)";

@@ -20,8 +20,8 @@ description = "CI for hardware: run a board+firmware spec headless, assert on ra
 default = ["serve", "avr", "renode", "qemu"]
 serve = ["dep:hauksbee-server", "hauksbee-engine/serve"]
 avr = ["hauksbee-engine/avr", "hauksbee-server?/avr"]
-renode = ["hauksbee-engine/renode", "hauksbee-server?/renode"]
-qemu = ["hauksbee-engine/qemu", "hauksbee-server?/qemu"]
+renode = ["hauksbee-engine/renode", "hauksbee-server?/renode", "hauksbee-mcu/renode"]
+qemu = ["hauksbee-engine/qemu", "hauksbee-server?/qemu", "hauksbee-mcu/qemu"]
 
 [[bin]]
 name = "hauksbee-ci"
@@ -57,9 +57,10 @@ hauksbee-server = { version = "0.1.0-beta.6", path = "../hauksbee-server", defau
 # signal reaper (hauksbee_mcu::children), and the boot-coverage tests reuse
 # the backend's real Espressif-QEMU / Renode discovery (is_available) so heavy
 # co-sim cases skip cleanly when the emulator is absent. default-features =
-# false and no `avr` here on purpose: this line must never drag GPL simavr
-# into the permissive shape (see docs/about/release-and-licensing.md).
-hauksbee-mcu = { version = "0.1.0-beta.6", path = "../hauksbee-mcu", default-features = false, features = ["qemu", "renode"] }
+# false, with backends only via this crate's own features: this line must
+# never drag GPL simavr into the permissive shape, nor enable a backend the
+# engine was built without (see docs/about/release-and-licensing.md).
+hauksbee-mcu = { version = "0.1.0-beta.6", path = "../hauksbee-mcu", default-features = false }
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }
