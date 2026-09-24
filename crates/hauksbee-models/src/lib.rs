@@ -711,14 +711,12 @@ impl ModelLibrary {
         if let Some(le) = matched().max_by_key(|le| (rank(le), Reverse(&le.compiled.entry.id))) {
             let (id, top @ (_, _, score, _)) = (&le.compiled.entry.id, rank(le));
             let tie = |other: &&LayeredEntry| rank(other) == top && other.compiled.entry.id != *id;
-            let mut tied: Vec<String> = matched()
-                .filter(tie)
-                .map(|o| o.compiled.entry.id.clone())
-                .collect();
-            tied.sort();
-            tied.dedup();
+            let ids = matched().filter(tie).map(|o| o.compiled.entry.id.clone());
             return Resolution {
-                tied,
+                tied: ids
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
                 model: Some(le.compiled.entry.clone()),
                 confidence: score_to_confidence(score),
                 query: q.clone(),

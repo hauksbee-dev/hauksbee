@@ -6998,11 +6998,11 @@ mod tests {
             .collect()
     }
 
+    /// Each role on the node its name gives, or `role:node` on that node.
     fn roles(circuit: &mut Circuit, names: &[&str]) -> HashMap<String, NodeId> {
-        names
-            .iter()
-            .map(|r| (r.to_string(), circuit.node(&r.to_uppercase())))
-            .collect()
+        let node = |(r, n): (&str, &str)| (r.to_string(), circuit.node(&n.to_uppercase()));
+        let at = names.iter().map(|r| r.split_once(':').unwrap_or((*r, *r)));
+        at.map(node).collect()
     }
 
     #[test]
@@ -7349,7 +7349,7 @@ style = "i2c_pointer"
     }
 
     #[test]
-    fn simple_vreg_requires_finite_voltage_and_all_roles() {
+    fn simple_vreg_requires_finite_voltage_and_distinct_roles() {
         for case in [
             "missing vout | - | in out gnd | finite `vout`",
             "NaN vout | NaN | in out gnd | finite `vout`",
@@ -7357,6 +7357,9 @@ style = "i2c_pointer"
             "missing input | 3.3 | out gnd | input not connected",
             "missing output | 3.3 | in gnd | output not connected",
             "missing return | 3.3 | in out | local return not connected",
+            "out-return tied | 3.3 | gnd:a in:b out:a | must be distinct",
+            "out-in tied | 3.3 | gnd:a in:b out:b | must be distinct",
+            "in-return tied | 3.3 | gnd:a in:a out:b | must be distinct",
         ] {
             let [_, vout, names, token] = case.split(" | ").collect::<Vec<_>>()[..] else {
                 panic!("{case}")
@@ -7367,28 +7370,6 @@ style = "i2c_pointer"
             let (outcome, warning, regs) = bind_u9(&model, None, &mut circuit, &roles);
             assert!(matches!(outcome, BindOutcome::Unresolved { .. }), "{case}");
             assert!(warning.is_some_and(|w| w.contains(token)), "{case}");
-            assert!(circuit.devices.is_empty() && regs.is_empty(), "{case}");
-        }
-    }
-
-    #[test]
-    fn simple_vreg_rejects_tied_roles() {
-        let model = simple_vreg(Some(3.3));
-        for (case, gnd, input, out) in [
-            ("out-return", "A", "B", "A"),
-            ("out-in", "A", "B", "B"),
-            ("in-return", "A", "A", "B"),
-        ] {
-            let mut circuit = Circuit::new();
-            let roles = HashMap::from([
-                ("gnd".into(), circuit.node(gnd)),
-                ("in".into(), circuit.node(input)),
-                ("out".into(), circuit.node(out)),
-            ]);
-            let (outcome, warning, regs) = bind_u9(&model, None, &mut circuit, &roles);
-            assert!(matches!(outcome, BindOutcome::Unresolved { .. }), "{case}");
-            let distinct = warning.is_some_and(|w| w.contains("must be distinct"));
-            assert!(distinct, "{case}");
             assert!(circuit.devices.is_empty() && regs.is_empty(), "{case}");
         }
     }
