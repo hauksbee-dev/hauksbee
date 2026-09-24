@@ -632,9 +632,11 @@ value_re = "(?i)^XC6206(P33[12]?(MR-?G?)?|[-_ ]?3[._]3V?)$"
 [models.params]
 # Source: Torex XC6206 datasheet ETR03005-009, VOUT(T) = 3.3 row. See above.
 vout      = 3.3      # nominal; effective output is x0.98 .. x1.02 @ IOUT = 30 mA
-dropout_v = 0.25     # Vdif2 typ @ IOUT = 100 mA (680 mV max); Vdif1 is 75 mV
-                     # typ @ IOUT = 30 mA. The 100 mA figure is the useful one
-                     # for a 200 mA part.
+dropout_v = 0.68     # Vdif2 MAX @ IOUT = 100 mA (250 mV typ), the guaranteed
+                     # worst case `row_column` reads for a dropout; Vdif1 is
+                     # 350 mV max @ 30 mA. The 100 mA figure is the useful one
+                     # for a 200 mA part. ETR03005-009 Electrical
+                     # Characteristics Chart, VOUT(T) = 3.3 row (E-3), p.5.
 iq_a      = 1.0e-6   # IDD typ, output open (3.0 uA max)
 
 [models.pins]

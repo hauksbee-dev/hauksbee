@@ -873,12 +873,11 @@ max_pin_current_a = 0.01   # signal input terminal current, +/-10 mA
 #
 # Datasheet figures used (VCC+ = 3.3 V, TA = 25 C unless noted):
 #   VCC       = 2.5 to 5.5 V   (2.3 to 5.5 V over 0 to 125 C)
-#   Avd       = 80 dB min, 90 dB typ @ RL = 10 kOhm, Vout = 0.5 to 2.8 V, 25 C,
-#               VCC = 3.3 V. Rev 2 Table 4, read directly. 75 dB min over the full
-#               temperature range. THE FIGURE HERE WAS 89 dB AND THAT WAS THE WRONG
-#               TABLE: 89 dB typ is Table 3's number, at VCC = 2.5 V with
-#               Vout = 0.5 to 2 V. The two tables differ by one dB and the entry had
-#               taken the 2.5 V row while claiming 3.3 V.
+#   Avd       = 80 dB min, 89 dB typ @ RL = 10 kOhm, Vout = 0.5 to 2.8 V, 25 C,
+#               VCC = 3.3 V. DS4899 Rev 13 Table 4, p.7, read directly (75 dB min
+#               over the full temperature range). The preliminary Rev 2 Table 4
+#               printed 90 dB here; Rev 13 prints 89 dB at both 2.5 V (Table 3)
+#               and 3.3 V, so the current sheet is the authority.
 #   Vhigh/low = 15 mV typ, 40 mV max from either rail @ RL = 10 kOhm
 #                            (45 mV typ, 150 mV max @ RL = 600 Ohm)
 #   ICC       = 0.8 mA typ, 1.1 mA max PER AMPLIFIER @ VCC = 3.3 V
@@ -886,7 +885,7 @@ max_pin_current_a = 0.01   # signal input terminal current, +/-10 mA
 #   Vio       = 0.1 mV typ, 4.5 mV max at 25 C (standard grade)
 #
 # `gain` IS THE TYPICAL, NOT THE MINIMUM, and the difference is a factor of three:
-# 90 dB typ is 31623 V/V, while the guaranteed 80 dB min is 10000 V/V. The typical
+# 89 dB typ is 28184 V/V, while the guaranteed 80 dB min is 10000 V/V. The typical
 # is used because an op-amp's open-loop gain enters a closed-loop result only as a
 # small error term and the typical is the honest central estimate; a design whose
 # behaviour turns on the difference is one this ideal-gain model cannot judge either
@@ -932,10 +931,10 @@ description = "ST TSV914 quad rail-to-rail op-amp, SOIC-14, 3.3V rails, all four
 value_re = "(?i)^TSV914A?I?Y?[DP]T$|^TSV914$"
 
 [models.params]
-gain    = 31623.0   # Avd 90 dB typ, RL = 10 kOhm, Vout = 0.5 to 2.8 V, 25 C,
-                    # VCC = 3.3 V: Rev 2 Table 4, read directly (80 dB min = 1e4).
-                    # Was 28184, which is Table 3's 2.5 V figure. Nothing turns on
-                    # the difference in a closed loop; the citation was the defect.
+gain    = 28184.0   # Avd 89 dB typ, RL = 10 kOhm, Vout = 0.5 to 2.8 V, 25 C,
+                    # VCC = 3.3 V (80 dB min = 1e4): DS4899 Rev 13 Table 4, p.7.
+                    # The 90 dB (31623) was the preliminary Rev 2's figure; Rev 13
+                    # prints 89 dB in both the 2.5 V and 3.3 V tables.
 # HEADROOMS, not levels: the old rail_hi = 3.285 baked a 3.3 V board into the
 # card, so the same part on a 5 V rail clipped 1.7 V early and on a sagging
 # rail never clipped at all. These track the V+/V- pads instead.
@@ -943,7 +942,7 @@ swing_lo = 0.015    # Vlow typ, 15 mV from the negative rail @ RL = 10 kOhm
 swing_hi = 0.015    # Vhigh, the same 15 mV of headroom below V+
 rail_lo = 0.015     # fallback levels only (deck `.model opamp(...)`, no pins)
 rail_hi = 3.285     # 3.3 V rail minus the same 15 mV of headroom
-warning = "rail-to-rail output within 15 mV typ of each supply pin at RL = 10 kOhm; the output current limit is not modelled, so a heavier load gets a swing the part cannot hold. Input offset voltage (0.2 mV typ, 3 mV max on the plain grade), input bias current and input offset current are taken as zero and the input common-mode range is not checked. The 8 MHz gain-bandwidth and 4.5 V/us slew rate are not on this card, so a board-bound TSV914 answers DC and settles instantly, and the gain is the 90 dB typ rather than the 80 dB min. All four amplifiers share one supply leg and one pair of rails."
+warning = "rail-to-rail output within 15 mV typ of each supply pin at RL = 10 kOhm; the output current limit is not modelled, so a heavier load gets a swing the part cannot hold. Input offset voltage (0.2 mV typ, 3 mV max on the plain grade), input bias current and input offset current are taken as zero and the input common-mode range is not checked. The 8 MHz gain-bandwidth and 4.5 V/us slew rate are not on this card, so a board-bound TSV914 answers DC and settles instantly, and the gain is the 89 dB typ rather than the 80 dB min. All four amplifiers share one supply leg and one pair of rails."
 
 [models.coverage]
 implements = ["finite_open_loop_gain", "supply_referenced_output_swing",
@@ -2215,10 +2214,10 @@ missing = ["output_current_limit", "load_dependent_output_swing",
 "6" = "in_minus_b"   # VINB-
 "7" = "out_b"        # VOUTB
 "8" = "vcc"          # VDD
-"9" = "gnd"          # EP, the DFN's exposed thermal pad. Table 3-1 says it is
-                     # internally connected to VSS and MUST be tied to the same
-                     # potential on the board, so naming it a ground role is the
-                     # datasheet's own instruction, not an inference. A PDIP or
+"9" = "vss"          # EP, the DFN's exposed thermal pad. Table 3-1 and Section
+                     # 3.4 say it is internally connected to VSS and must be tied
+                     # to the same potential, so it takes pad 4's `vss` role, not
+                     # `gnd` (VSS is not ground on a split supply). A PDIP or
                      # SOIC part simply has no pad 9 and this line does nothing.
 
 [models.ratings]
