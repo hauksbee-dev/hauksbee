@@ -228,14 +228,7 @@ REFUSAL_ERROR = (
 
 
 def successful_browser_runner(captured: list[Path] | None = None):
-    def run(
-        paths: list[Path],
-        output: Path,
-        base_url: str,
-        cohort: str,
-        refusals: list[Path],
-        firmware: list[dict | None] | None = None,
-    ) -> int:
+    def run(paths, output, base_url, cohort, refusals, firmware=None) -> int:
         if captured is not None:
             captured.extend(paths)
         output.mkdir(parents=True, exist_ok=True)
@@ -321,14 +314,7 @@ def artifact_mutating_runner(mutate, exit_code: int = 0):
     once and each test carries only the edit that makes its point.
     """
 
-    def run(
-        paths: list[Path],
-        output: Path,
-        base_url: str,
-        cohort: str,
-        refusals: list[Path],
-        firmware: list[dict | None] | None = None,
-    ) -> int:
+    def run(paths, output, base_url, cohort, refusals, firmware=None) -> int:
         successful_browser_runner()(paths, output, base_url, cohort, refusals, firmware)
         artifact = json.loads((output / "results.json").read_text())
         mutate(artifact)
@@ -1179,60 +1165,58 @@ class HistoryTests(unittest.TestCase):
         self.assertIn("--untracked-files=normal", run.call_args_list[1].args[0])
 
 
+# Every external-five/corpus gate call below plans at the same instant, against
+# the same fixture server, with the same entropy and tool commit; only the pools
+# (external root/manifest then corpus root/manifest), the iteration/run id, and
+# the runner ever change.
+def run_external(
+    base: Path,
+    pools: tuple[Path, Path, Path, Path],
+    *,
+    iteration_id: str,
+    runner,
+    history: Path | None = None,
+    evidence_dir: Path | None = None,
+):
+    external_root, external_manifest, corpus_root, corpus_manifest = pools
+    return release_gates.run_external_gate(
+        external_root=external_root,
+        external_manifest=external_manifest,
+        corpus_root=corpus_root,
+        corpus_manifest=corpus_manifest,
+        history_path=base / "history.jsonl" if history is None else history,
+        evidence_dir=base / "evidence" if evidence_dir is None else evidence_dir,
+        scratch_root=base / "scratch",
+        iteration_id=iteration_id,
+        planned_at="2026-08-06T12:00:00Z",
+        base_url="http://127.0.0.1:37651",
+        entropy="a" * 64,
+        tool_commit="e" * 40,
+        runner=runner,
+    )
+
+
+def run_corpus(
+    base: Path,
+    corpus_root: Path,
+    corpus_manifest: Path,
+    *,
+    run_id: str,
+    runner,
+):
+    return release_gates.run_corpus_gate(
+        corpus_root=corpus_root,
+        corpus_manifest=corpus_manifest,
+        evidence_dir=base / "evidence",
+        scratch_root=base / "scratch",
+        run_id=run_id,
+        base_url="http://127.0.0.1:37651",
+        tool_commit="e" * 40,
+        runner=runner,
+    )
+
+
 class CommandTests(unittest.TestCase):
-    # Every external-five/corpus gate call below plans at the same instant,
-    # against the same fixture server, with the same entropy and tool commit;
-    # only the pools, the iteration/run id, and the runner ever change.
-    def run_external(
-        self,
-        base: Path,
-        external_root: Path,
-        external_manifest: Path,
-        corpus_root: Path,
-        corpus_manifest: Path,
-        *,
-        iteration_id: str,
-        runner,
-        history: Path | None = None,
-        evidence_dir: Path | None = None,
-    ):
-        return release_gates.run_external_gate(
-            external_root=external_root,
-            external_manifest=external_manifest,
-            corpus_root=corpus_root,
-            corpus_manifest=corpus_manifest,
-            history_path=base / "history.jsonl" if history is None else history,
-            evidence_dir=base / "evidence" if evidence_dir is None else evidence_dir,
-            scratch_root=base / "scratch",
-            iteration_id=iteration_id,
-            planned_at="2026-08-06T12:00:00Z",
-            base_url="http://127.0.0.1:37651",
-            entropy="a" * 64,
-            tool_commit="e" * 40,
-            runner=runner,
-        )
-
-    def run_corpus(
-        self,
-        base: Path,
-        corpus_root: Path,
-        corpus_manifest: Path,
-        *,
-        run_id: str,
-        runner,
-        evidence_dir: Path | None = None,
-    ):
-        return release_gates.run_corpus_gate(
-            corpus_root=corpus_root,
-            corpus_manifest=corpus_manifest,
-            evidence_dir=base / "evidence" if evidence_dir is None else evidence_dir,
-            scratch_root=base / "scratch",
-            run_id=run_id,
-            base_url="http://127.0.0.1:37651",
-            tool_commit="e" * 40,
-            runner=runner,
-        )
-
     def test_release_orchestrator_api_is_available(self) -> None:
         self.assertTrue(hasattr(release_gates, "run_external_gate"))
         self.assertTrue(hasattr(release_gates, "run_corpus_gate"))
@@ -1243,22 +1227,17 @@ class CommandTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest = manifest_pool(
-                base, "external", 7, cohort="external"
-            )
-            corpus_root, corpus_manifest = manifest_pool(
-                base, "corpus", 2, cohort="corpus"
+            pools = (
+                *manifest_pool(base, "external", 7, cohort="external"),
+                *manifest_pool(base, "corpus", 2, cohort="corpus"),
             )
             captured: list[Path] = []
             history = base / "history.jsonl"
             evidence_dir = base / "evidence"
 
-            evidence = self.run_external(
+            evidence = run_external(
                 base,
-                external_root,
-                external_manifest,
-                corpus_root,
-                corpus_manifest,
+                pools,
                 iteration_id="release-01",
                 runner=successful_browser_runner(captured),
             )
@@ -1294,20 +1273,18 @@ class CommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
             shared = b"(kicad_pcb already-known)"
-            corpus_root, corpus_manifest = manifest_pool(
+            corpus = manifest_pool(
                 base, "corpus", 1, cohort="corpus", duplicate_payload=shared
             )
-            external_root, external_manifest = manifest_pool(
+            external = manifest_pool(
                 base, "external", 5, cohort="external", duplicate_payload=shared
             )
+            pools = (*external, *corpus)
 
             with self.assertRaisesRegex(SelectionError, r"only 4 remain"):
-                self.run_external(
+                run_external(
                     base,
-                    external_root,
-                    external_manifest,
-                    corpus_root,
-                    corpus_manifest,
+                    pools,
                     iteration_id="release-01",
                     runner=successful_browser_runner(),
                 )
@@ -1317,9 +1294,7 @@ class CommandTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest, corpus_root, corpus_manifest = (
-                _external_and_corpus_pools(base)
-            )
+            pools = _external_and_corpus_pools(base)
             history = base / "history.jsonl"
             evidence_dir = base / "evidence"
 
@@ -1332,12 +1307,9 @@ class CommandTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 SelectionError, r"browser journey failed for external-0"
             ):
-                self.run_external(
+                run_external(
                     base,
-                    external_root,
-                    external_manifest,
-                    corpus_root,
-                    corpus_manifest,
+                    pools,
                     history=history,
                     evidence_dir=evidence_dir,
                     iteration_id="release-failed",
@@ -1355,28 +1327,16 @@ class CommandTests(unittest.TestCase):
     def test_external_gate_records_a_runner_launch_exception_as_failed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest, corpus_root, corpus_manifest = (
-                _external_and_corpus_pools(base)
-            )
+            pools = _external_and_corpus_pools(base)
             history = base / "history.jsonl"
 
-            def unavailable(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
+            def unavailable(*_args) -> int:
                 raise OSError("browser executable is unavailable")
 
             with self.assertRaisesRegex(SelectionError, r"could not start"):
-                self.run_external(
+                run_external(
                     base,
-                    external_root,
-                    external_manifest,
-                    corpus_root,
-                    corpus_manifest,
+                    pools,
                     history=history,
                     iteration_id="runner-unavailable",
                     runner=unavailable,
@@ -1386,9 +1346,7 @@ class CommandTests(unittest.TestCase):
     def test_external_gate_records_a_staging_failure_as_failed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest, corpus_root, corpus_manifest = (
-                _external_and_corpus_pools(base)
-            )
+            pools = _external_and_corpus_pools(base)
             history = base / "history.jsonl"
             with (
                 patch(
@@ -1397,12 +1355,9 @@ class CommandTests(unittest.TestCase):
                 ),
                 self.assertRaisesRegex(SelectionError, r"could not stage"),
             ):
-                self.run_external(
+                run_external(
                     base,
-                    external_root,
-                    external_manifest,
-                    corpus_root,
-                    corpus_manifest,
+                    pools,
                     history=history,
                     iteration_id="staging-unavailable",
                     runner=successful_browser_runner(),
@@ -1412,21 +1367,16 @@ class CommandTests(unittest.TestCase):
     def test_external_gate_marks_a_zero_exit_artifact_mismatch_failed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest, corpus_root, corpus_manifest = (
-                _external_and_corpus_pools(base)
-            )
+            pools = _external_and_corpus_pools(base)
             history = base / "history.jsonl"
 
             def mismatched(artifact: dict) -> None:
                 artifact["results"][0]["path"] = str(base / "different.kicad_pcb")
 
             with self.assertRaisesRegex(SelectionError, r"do not exactly match"):
-                self.run_external(
+                run_external(
                     base,
-                    external_root,
-                    external_manifest,
-                    corpus_root,
-                    corpus_manifest,
+                    pools,
                     history=history,
                     iteration_id="artifact-mismatch",
                     runner=artifact_mutating_runner(mismatched),
@@ -1439,30 +1389,18 @@ class CommandTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest, corpus_root, corpus_manifest = (
-                _external_and_corpus_pools(base)
-            )
+            pools = _external_and_corpus_pools(base)
             history = base / "history.jsonl"
 
-            def mutating(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
-                code = successful_browser_runner()(paths, output, base_url, cohort, refusals, firmware)
+            def mutating(paths, *rest) -> int:
+                code = successful_browser_runner()(paths, *rest)
                 paths[0].write_text("changed during run")
                 return code
 
             with self.assertRaisesRegex(SelectionError, r"staged input changed"):
-                self.run_external(
+                run_external(
                     base,
-                    external_root,
-                    external_manifest,
-                    corpus_root,
-                    corpus_manifest,
+                    pools,
                     history=history,
                     iteration_id="mutated-input",
                     runner=mutating,
@@ -1474,37 +1412,23 @@ class CommandTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest, corpus_root, corpus_manifest = (
-                _external_and_corpus_pools(base)
-            )
+            pools = _external_and_corpus_pools(base)
 
-            def path_leaking(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
-                successful_browser_runner()(paths, output, base_url, cohort, refusals, firmware)
-                artifact = json.loads((output / "results.json").read_text())
-                artifact["results"][0]["report"]["diagnostic"] = {
-                    "detail": f"reader opened {paths[0].resolve()}",
+            def path_leaking(artifact: dict) -> None:
+                row = artifact["results"][0]
+                row["report"]["diagnostic"] = {
+                    # The row's path is the resolved staged input's absolute path.
+                    "detail": f"reader opened {row['path']}",
                     "windows": r"reader opened C:\Users\release\board.kicad_pcb",
                 }
-                (output / "results.json").write_text(json.dumps(artifact))
-                return 0
 
             evidence_dir = base / "evidence"
-            self.run_external(
+            run_external(
                 base,
-                external_root,
-                external_manifest,
-                corpus_root,
-                corpus_manifest,
+                pools,
                 evidence_dir=evidence_dir,
                 iteration_id="redaction",
-                runner=path_leaking,
+                runner=artifact_mutating_runner(path_leaking),
             )
             retained = (evidence_dir / "redaction.json").read_text()
             self.assertNotIn(str(base), retained)
@@ -1521,7 +1445,7 @@ class CommandTests(unittest.TestCase):
             )
             captured: list[Path] = []
 
-            evidence = self.run_corpus(
+            evidence = run_corpus(
                 base,
                 corpus_root,
                 corpus_manifest,
@@ -1556,20 +1480,13 @@ class CommandTests(unittest.TestCase):
             )
             handed_refusals: list[list[Path]] = []
 
-            def recording(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
+            def recording(paths, output, base_url, cohort, refusals, *rest) -> int:
                 handed_refusals.append(list(refusals))
                 return successful_browser_runner()(
-                    paths, output, base_url, cohort, refusals, firmware
+                    paths, output, base_url, cohort, refusals, *rest
                 )
 
-            evidence = self.run_corpus(
+            evidence = run_corpus(
                 base,
                 corpus_root,
                 corpus_manifest,
@@ -1586,12 +1503,7 @@ class CommandTests(unittest.TestCase):
 
             # A refusal that turns into a report is a failure, not a bonus.
             def analysing_the_unreadable(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
+                paths, output, base_url, cohort, refusals, firmware=None
             ) -> int:
                 successful_browser_runner()(paths, output, base_url, cohort, [])
                 artifact = json.loads((output / "results.json").read_text())
@@ -1603,7 +1515,7 @@ class CommandTests(unittest.TestCase):
                 return 0
 
             with self.assertRaisesRegex(SelectionError, r"did not refuse"):
-                self.run_corpus(
+                run_corpus(
                     base,
                     corpus_root,
                     corpus_manifest,
@@ -1617,48 +1529,27 @@ class CommandTests(unittest.TestCase):
             # nothing was ever dropped on.
             for stripped in ("report", "refusal_message"):
 
-                def hollow(
-                    paths: list[Path],
-                    output: Path,
-                    base_url: str,
-                    cohort: str,
-                    refusals: list[Path],
-                    firmware: list[dict | None] | None = None,
-                    field: str = stripped,
-                ) -> int:
-                    successful_browser_runner()(
-                        paths, output, base_url, cohort, refusals, firmware
-                    )
-                    artifact = json.loads((output / "results.json").read_text())
+                def hollow(artifact: dict, field: str = stripped) -> None:
                     for row in artifact["results"]:
                         if row["expected_refusal"]:
                             row[field] = None
-                    (output / "results.json").write_text(json.dumps(artifact))
-                    return 0
 
                 with self.assertRaisesRegex(SelectionError, r"retained no|no reason"):
-                    self.run_corpus(
+                    run_corpus(
                         base,
                         corpus_root,
                         corpus_manifest,
                         run_id=f"corpus-refusal-hollow-{stripped}",
-                        runner=hollow,
+                        runner=artifact_mutating_runner(hollow),
                     )
 
             # And a journey that never applied the contract at all cannot pass
             # by simply omitting the field.
-            def contract_never_applied(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
+            def contract_never_applied(paths, output, base_url, cohort, *_rest) -> int:
                 return successful_browser_runner()(paths, output, base_url, cohort, [])
 
             with self.assertRaisesRegex(SelectionError, r"did not apply the"):
-                self.run_corpus(
+                run_corpus(
                     base,
                     corpus_root,
                     corpus_manifest,
@@ -1676,25 +1567,22 @@ class CommandTests(unittest.TestCase):
         # with five refusals and no analysed board at all.
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
-            external_root, external_manifest = manifest_pool(
-                base,
-                "external",
-                6,
-                cohort="external",
-                refusal_numbers=frozenset({0, 1}),
-            )
-            corpus_root, corpus_manifest = manifest_pool(
-                base, "corpus", 1, cohort="corpus"
+            pools = (
+                *manifest_pool(
+                    base,
+                    "external",
+                    6,
+                    cohort="external",
+                    refusal_numbers=frozenset({0, 1}),
+                ),
+                *manifest_pool(base, "corpus", 1, cohort="corpus"),
             )
             captured: list[Path] = []
 
             with self.assertRaisesRegex(SelectionError, r"only 4 remain"):
-                self.run_external(
+                run_external(
                     base,
-                    external_root,
-                    external_manifest,
-                    corpus_root,
-                    corpus_manifest,
+                    pools,
                     iteration_id="external-refusals",
                     runner=successful_browser_runner(captured),
                 )
@@ -4797,38 +4685,11 @@ class FirmwareJourneyContractTests(unittest.TestCase):
 class ValueGateWiringTests(unittest.TestCase):
     """The grades reach the evidence document, the summary, and the exit code."""
 
-    def _pools(self, base: Path) -> tuple[Path, Path, Path, Path]:
-        return _external_and_corpus_pools(base)
-
     def _run(self, base: Path, runner):
-        external_root, external_manifest, corpus_root, corpus_manifest = self._pools(
-            base
-        )
-        return release_gates.run_external_gate(
-            external_root=external_root,
-            external_manifest=external_manifest,
-            corpus_root=corpus_root,
-            corpus_manifest=corpus_manifest,
-            history_path=base / "history.jsonl",
-            evidence_dir=base / "evidence",
-            scratch_root=base / "scratch",
+        return run_external(
+            base,
+            _external_and_corpus_pools(base),
             iteration_id="release-01",
-            planned_at="2026-08-06T12:00:00Z",
-            base_url="http://127.0.0.1:37651",
-            entropy="a" * 64,
-            tool_commit="e" * 40,
-            runner=runner,
-        )
-
-    def _run_corpus(self, base: Path, corpus_root: Path, corpus_manifest: Path, *, run_id: str, runner):
-        return release_gates.run_corpus_gate(
-            corpus_root=corpus_root,
-            corpus_manifest=corpus_manifest,
-            evidence_dir=base / "evidence",
-            scratch_root=base / "scratch",
-            run_id=run_id,
-            base_url="http://127.0.0.1:37651",
-            tool_commit="e" * 40,
             runner=runner,
         )
 
@@ -4842,19 +4703,12 @@ class ValueGateWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
 
-            def dishonest(paths, output, base_url, cohort, refusals, firmware=None):
-                code = successful_browser_runner()(
-                    paths, output, base_url, cohort, refusals, firmware
-                )
-                results_path = output / "results.json"
-                document = json.loads(results_path.read_text(encoding="utf-8"))
+            def dishonest(artifact: dict) -> None:
                 # Exported JSON it never validated: honest on its face, false.
-                document["results"][2]["exported"] = False
-                results_path.write_text(json.dumps(document))
-                return code
+                artifact["results"][2]["exported"] = False
 
             with self.assertRaises(SelectionError) as caught:
-                self._run(base, dishonest)
+                self._run(base, artifact_mutating_runner(dishonest))
             self.assertIn("did not validate JSON export", str(caught.exception))
 
             evidence = json.loads(
@@ -4946,10 +4800,8 @@ class ValueGateWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
 
-            def crashing(paths, output, base_url, cohort, refusals, firmware=None):
-                successful_browser_runner()(
-                    paths, output, base_url, cohort, refusals, firmware
-                )
+            def crashing(*args) -> int:
+                successful_browser_runner()(*args)
                 return 3
 
             with self.assertRaisesRegex(SelectionError, r"exited with status 3"):
@@ -4971,18 +4823,13 @@ class ValueGateWiringTests(unittest.TestCase):
                 base, "corpus", 3, cohort="corpus"
             )
 
-            def collapsing(paths, output, base_url, cohort, refusals, firmware=None):
-                successful_browser_runner()(
-                    paths, output, base_url, cohort, refusals, firmware
-                )
-                artifact = json.loads((output / "results.json").read_text())
+            def collapsing(artifact: dict) -> None:
                 artifact["results"][1]["report"]["num_components"] = 0
-                (output / "results.json").write_text(json.dumps(artifact))
-                return 0
 
             with self.assertRaisesRegex(SelectionError, r"no bench-grade value"):
-                self._run_corpus(
-                    base, corpus_root, corpus_manifest, run_id="corpus-value-01", runner=collapsing
+                run_corpus(
+                    base, corpus_root, corpus_manifest, run_id="corpus-value-01",
+                    runner=artifact_mutating_runner(collapsing),
                 )
 
             # And the graded document is retained, not lost with the exception.
@@ -5054,26 +4901,13 @@ class ValueGateWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
 
-            def exploding(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
-                successful_browser_runner()(
-                    paths, output, base_url, cohort, refusals, firmware
-                )
-                return 0
-
             with patch.object(
                 release_gates,
                 "grade_board",
                 side_effect=RuntimeError("grader blew up"),
             ):
                 with self.assertRaisesRegex(SelectionError, r"could not be graded"):
-                    self._run(base, exploding)
+                    self._run(base, successful_browser_runner())
 
             history = load_history(base / "history.jsonl")
             self.assertEqual(1, len(history.results))
@@ -5185,14 +5019,7 @@ class ValueGateWiringTests(unittest.TestCase):
             base = Path(raw)
             corpus_root, corpus_manifest = self._firmware_corpus(base)
 
-            def swapping(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
-            ) -> int:
+            def swapping(paths, output, base_url, cohort, refusals, firmware) -> int:
                 successful_browser_runner()(
                     paths, output, base_url, cohort, refusals, firmware
                 )
@@ -5200,7 +5027,7 @@ class ValueGateWiringTests(unittest.TestCase):
                 return 0
 
             with self.assertRaisesRegex(SelectionError, r"staged input changed"):
-                self._run_corpus(
+                run_corpus(
                     base, corpus_root, corpus_manifest, run_id="corpus-swap", runner=swapping
                 )
 
@@ -5211,12 +5038,7 @@ class ValueGateWiringTests(unittest.TestCase):
             handed: list[list[dict | None] | None] = []
 
             def capturing(
-                paths: list[Path],
-                output: Path,
-                base_url: str,
-                cohort: str,
-                refusals: list[Path],
-                firmware: list[dict | None] | None = None,
+                paths, output, base_url, cohort, refusals, firmware=None
             ) -> int:
                 handed.append(firmware)
                 successful_browser_runner()(
@@ -5241,7 +5063,7 @@ class ValueGateWiringTests(unittest.TestCase):
                 (output / "results.json").write_text(json.dumps(artifact))
                 return 0
 
-            evidence = self._run_corpus(
+            evidence = run_corpus(
                 base, corpus_root, corpus_manifest, run_id="corpus-firmware", runner=capturing
             )
 
