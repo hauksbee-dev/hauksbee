@@ -11,7 +11,7 @@
 //! Names: `v_<role>` is a pin voltage and `i_<name>` a path or load current (both
 //! bound by the behavioral runtime); `t`, `time` and `t_in_state` are seconds;
 //! `state_<name>` is a 0/1 selector. Params carry their unit as a suffix
-//! (`_v`, `_a`/`_ma`/`_ua`, `_ohm`/`_ohms`, `_s`, `_f`/`_pf`, `_hz`, `_w`); a
+//! (`_v`/`_volts`, `_a`/`_ma`/`_ua`, `_ohm`/`_ohms`, `_s`, `_f`/`_pf`, `_hz`, `_w`); a
 //! `_per_` name is a ratio this table does not model. Anything else is unknown.
 //!
 //! What it cannot judge, and therefore never rejects: an identifier with no
@@ -80,6 +80,7 @@ fn name_dim(name: &str) -> Dim {
 pub(crate) fn suffix_unit(name: &str) -> Option<(f64, &'static str)> {
     const SUFFIXES: &[(&str, f64, &str)] = &[
         ("_v", 1.0, "V"),
+        ("_volts", 1.0, "V"),
         ("_a", 1.0, "A"),
         ("_ma", 1e-3, "A"),
         ("_ua", 1e-6, "A"),
@@ -102,8 +103,19 @@ pub(crate) fn suffix_unit(name: &str) -> Option<(f64, &'static str)> {
 /// suffix (`µVPP`) is read through; an unknown denominator (`°C`, `√Hz`) is 1.
 pub(crate) fn si_unit(unit: &str) -> Option<(f64, &'static str)> {
     let (num, den) = unit.trim().split_once('/').unwrap_or((unit.trim(), ""));
-    let (scale, base) = prefixed_unit(num)?;
+    let (scale, base) = prefixed_unit(num).or_else(|| product_unit(num))?;
     Some((scale / prefixed_unit(den).map_or(1.0, |(s, _)| s), base))
+}
+
+/// `AΩ` or `mA·kΩ` is volts: the current-resistance product a programming
+/// constant (I = K / R) is printed in.
+fn product_unit(num: &str) -> Option<(f64, &'static str)> {
+    let num = num.replace(['·', '*', ' '], "");
+    let split = |i| Some((prefixed_unit(num.get(..i)?)?, prefixed_unit(num.get(i..)?)?));
+    (1..num.len()).find_map(|i| match split(i)? {
+        ((a, "A"), (b, "ohm")) | ((a, "ohm"), (b, "A")) => Some((a * b, "V")),
+        _ => None,
+    })
 }
 
 /// The factor taking a number in `unit` to `want` (`mV` to `V` is 1e-3, `V/µs`

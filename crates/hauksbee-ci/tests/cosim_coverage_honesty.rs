@@ -31,10 +31,6 @@ use hauksbee_ci::run;
 
 use crate::support::{self, repo};
 
-fn renode_available() -> bool {
-    hauksbee_mcu::renode::is_available()
-}
-
 fn write_spec(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
     std::fs::create_dir_all(dir).expect("mkdir spec dir");
     let p = dir.join(name);
@@ -60,7 +56,7 @@ fn hole_in_every_format(r: &hauksbee_ci::CiResult, subject: &str) {
 #[test]
 fn dropped_adc_injection_reaches_every_ci_report_format() {
     let _guard = support::descriptor_env_lock();
-    if !renode_available() {
+    if !hauksbee_mcu::renode::is_available() {
         eprintln!("SKIP: Renode not installed");
         return;
     }
@@ -117,7 +113,7 @@ contains = "hello from stm32"
 #[test]
 fn unexercised_bus_sensor_warns_and_fails_its_peripheral_assertion() {
     let _guard = support::descriptor_env_lock();
-    if !renode_available() {
+    if !hauksbee_mcu::renode::is_available() {
         eprintln!("SKIP: Renode not installed");
         return;
     }

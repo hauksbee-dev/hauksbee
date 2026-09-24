@@ -30,6 +30,17 @@ pub fn comp(r: &str, lib: &str, val: &str, x: usize, pads: String) -> String {
     format!("comp {r} lib \"{lib}\" val \"{val}\" layer \"F.Cu\" at {x} 20 rot 0 {{\n{pads}}}\n")
 }
 
+/// Write `body` to a spec file named `name` and load it, which must succeed.
+pub fn load_spec(name: &str, body: &str) -> hauksbee_ci::Spec {
+    hauksbee_ci::Spec::load(&write_tmp(name, body)).expect("spec loads")
+}
+
+/// Write `body` to a spec file named `name` and return why it refuses to load.
+pub fn load_error(name: &str, body: &str) -> String {
+    let err = hauksbee_ci::Spec::load(&write_tmp(name, body));
+    err.expect_err("spec must refuse to load").to_string()
+}
+
 /// Write `body` to a spec file named `name` and run it with default config.
 pub fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
     hauksbee_ci::run(&run_config(write_tmp(name, body))).expect("spec runs")
@@ -49,18 +60,8 @@ pub fn ci_result(
         board: "b.kicad_pcb".to_string(),
         results,
         seeds: 1,
-        elapsed: std::time::Duration::from_secs(0),
         analog_abort,
-        coverage: None,
-        substitutions: Vec::new(),
-        coverage_warnings: Vec::new(),
-        timing_coverage: Vec::new(),
-        timing_refusals: Vec::new(),
-        dead_rails: Vec::new(),
-        waiver_notes: Vec::new(),
-        inventory: Vec::new(),
-        assumptions: Vec::new(),
-        evidence: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -149,6 +150,11 @@ pub fn repo_root() -> PathBuf {
         .nth(2)
         .expect("repo root")
         .to_path_buf()
+}
+
+/// Decode a captured `Output`'s stdout as UTF-8.
+pub fn stdout(o: &std::process::Output) -> String {
+    String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
 /// Decode a captured `Output`'s stderr as UTF-8.

@@ -364,17 +364,7 @@ fn refusal_and_abort_documents_validate() {
         results: vec![invalid_assertion],
         seeds: 1,
         elapsed: Duration::from_millis(12),
-        analog_abort: false,
-        coverage: None,
-        substitutions: Vec::new(),
-        coverage_warnings: Vec::new(),
-        timing_coverage: Vec::new(),
-        timing_refusals: Vec::new(),
-        dead_rails: Vec::new(),
-        waiver_notes: Vec::new(),
-        inventory: Vec::new(),
-        assumptions: Vec::new(),
-        evidence: Vec::new(),
+        ..Default::default()
     };
     // The abort case doubles as the every-honesty-array-populated document: a
     // consumer's worst case is all five qualifier lists non-empty at once.
@@ -403,9 +393,7 @@ fn refusal_and_abort_documents_validate() {
         timing_refusals: vec!["PWL replay budget exceeded".to_string()],
         dead_rails: vec!["ANALOG_VDD".to_string()],
         waiver_notes: vec!["waiver for max_temp on R1 lapsed on 2026-01-01".to_string()],
-        inventory: Vec::new(),
-        assumptions: Vec::new(),
-        evidence: Vec::new(),
+        ..Default::default()
     };
 
     for (shape, result) in [("refusal", &refusal), ("bare abort", &bare_abort)] {

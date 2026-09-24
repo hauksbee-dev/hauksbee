@@ -56,26 +56,18 @@
 //! were on their way to it), the first row of that table gets even harder to
 //! break, not easier.
 
-use crate::support::bin;
+use crate::support::{bin, blinky_board, stderr, stdout};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-fn manifest() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
 fn fixture_dir() -> PathBuf {
-    manifest().join("tests/fixtures/exit3")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exit3")
 }
 
 /// Write `body` beside a copy of the blinky board and run it.
 fn run_spec(tag: &str, body: &str) -> (Output, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::copy(
-        manifest().join("examples/boards/blinky.kicad_pcb"),
-        dir.path().join("blinky.kicad_pcb"),
-    )
-    .unwrap();
+    std::fs::copy(blinky_board(), dir.path().join("blinky.kicad_pcb")).unwrap();
     let spec = dir.path().join(format!("{tag}.toml"));
     std::fs::write(&spec, body).unwrap();
     let out = Command::new(bin())
@@ -90,8 +82,7 @@ fn run_spec(tag: &str, body: &str) -> (Output, tempfile::TempDir) {
 /// The assertion every route shares: a verdict, not a refusal.
 fn assert_trustworthy(route: &str, out: &Output) {
     let code = out.status.code();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let (stdout, stderr) = (stdout(out), stderr(out));
     assert!(
         matches!(code, Some(0) | Some(1)),
         "{route}: expected a trustworthy verdict (0 or 1), got {code:?}.\n\

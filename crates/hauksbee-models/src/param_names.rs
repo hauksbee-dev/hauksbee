@@ -433,6 +433,55 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
             }
         }
     }
+    out.extend(row_slips(entry, rows));
+    out
+}
+
+/// A param or current-program constant grossly off every row printing it. A
+/// row prints `name` when its unit converts to the param's and any symbol in
+/// its text (a run with no lowercase letter) is the name, its stem (less the
+/// unit suffix) or, for a one-letter stem, that letter subscripted (`k_volts`
+/// is KISET's K). Off: every column is a decade slip of 10^3 or more (over
+/// 10^2.5), or the value is outside min..max and 3x or more past the nearer
+/// bound. One agreeing row clears it.
+fn row_slips(entry: &ModelEntry, rows: &[Characteristic]) -> Vec<String> {
+    let program = toml::Table::try_from(&entry.current_program).unwrap_or_default();
+    let named = entry.params.0.iter().map(|(k, v)| (k, v.as_f64()));
+    let apart = |a: f64, b: f64| (a / b).abs().max((b / a).abs());
+    let mut out = Vec::new();
+    for (name, v) in named.chain(program.iter().map(|(k, v)| (k, v.as_float()))) {
+        let (Some(v), Some(unit)) = (v.filter(|v| *v != 0.0), param_unit(name)) else {
+            continue;
+        };
+        let words: Vec<&str> = name.split('_').collect();
+        let stem =
+            words[..words.len() - usize::from(crate::units::suffix_unit(name).is_some())].concat();
+        let slip = |row: &Characteristic| {
+            let symbols = row.parameter.split(|c: char| !c.is_alphanumeric());
+            let symbols = symbols.filter(|s| !s.is_empty() && !s.chars().any(char::is_lowercase));
+            let cited = symbols
+                .map(str::to_lowercase)
+                .any(|s| s == *name || s == stem || (stem.len() == 1 && s.starts_with(&stem)));
+            let scale = crate::units::scale_between(&row.unit, unit).filter(|_| cited)?;
+            let cols = [("typ", row.typ), ("min", row.min), ("max", row.max)];
+            let cols = cols.map(|(c, x)| (c, x.unwrap_or(0.0)));
+            let &(column, x) = cols.iter().find(|c| c.1 != 0.0)?;
+            let decade = cols
+                .iter()
+                .all(|c| c.1 == 0.0 || apart(c.1 * scale, v) >= 316.0);
+            let beyond = row.min.zip(row.max).is_some_and(|(a, b)| {
+                let (lo, hi) = (a.min(b) * scale, a.max(b) * scale);
+                (v < lo || v > hi) && apart(v, lo).min(apart(v, hi)) >= 3.0
+            });
+            let (p, ru, ratio) = (&row.parameter, &row.unit, apart(x * scale, v));
+            let base = format!("{:.11e}", x * scale).parse().unwrap_or(x * scale);
+            let why = ["beyond its printed min..max", "a power-of-ten slip"][usize::from(decade)];
+            let message = format!("{name} = {v} but characteristic '{p}' prints {column} {x} {ru} = {base} {unit}: {ratio:.0}× apart, {why}; check the unit");
+            Some((decade || beyond).then_some(message))
+        };
+        let slips = rows.iter().filter_map(slip).collect::<Option<Vec<_>>>();
+        out.extend(slips.and_then(|s| s.into_iter().next()));
+    }
     out
 }
 
@@ -707,8 +756,9 @@ mod tests {
         assert!(param_meanings(ComponentKind::Diode)
             .contains("cjo = zero-bias junction capacitance (F)"));
 
-        let row = |cols: &str, unit: &str| {
-            format!("[models.source]\ntier = \"datasheet-derived\"\n[[models.source.characteristic]]\nparameter = \"ROW\"\n{cols}\nunit = \"{unit}\"\nconditions = \"c\"\nbasis = \"b\"\n")
+        let kp = "[models.current_program]\npin = \"p\"\nsemantics = \"regulated_current\"\nequation = \"inverse_resistance\"\nk_volts = ";
+        let row = |name: &str, cols: &str, unit: &str| {
+            format!("[models.source]\ntier = \"datasheet-derived\"\n[[models.source.characteristic]]\nparameter = \"{name}\"\n{cols}\nunit = \"{unit}\"\nconditions = \"c\"\nbasis = \"b\"\n")
         };
         for case in [
             "comparator | OC1e-10 | max = 0.1 | nA | documented in S",
@@ -720,12 +770,25 @@ mod tests {
             "vreg | dropout_v = 0.3 | min = 0.1, max = 0.5 | V | ",
             "digital | voh = 2.4 | min = 2.4 | V | ",
             "diode | rs = 1.0 | max = 1.0 | V | ",
+            "vreg | KP0.54 | KISET k: min = 490, typ = 540, max = 590 | AΩ | = 540 V: 1000× apart",
+            "vreg | KP0.54 | ISET current factor KISET: typ = 540 | AΩ | = 540 V: 1000× apart",
+            "vreg | iq_a = 6.5e-5 | ISD shutdown IQSD: typ = 0.05 | uA | ",
+            "vreg | KP540 | KISET k: min = 490, typ = 540, max = 590 | AΩ | ",
+            "vreg | KP0.52 | KISET k: typ = 520 | mA·kΩ | typ 520 mA·kΩ = 520 V: 1000× apart",
+            "vreg | vout = 0.0033 | VOUT out: typ = 3.3 | V | 1000× apart, a power-of-ten slip",
+            "vreg | vout = 0.0033 | VOUT out: typ = 3.3 | ppm/°C | ",
+            "vreg | vout = 0.0033 | VIN in: typ = 3.3 | V | ",
+            "vreg | iq_a = 6.5e-6 | IQ q: min = 50, max = 90 | uA | 50 uA = 0.00005 A: 8× apart, beyond",
+            "vreg | iq_a = 6.5e-5 | IQ q: min = 50, max = 90 | uA | ",
+            "diode | rs = 1.9 | RS series: typ = 0.8, max = 2.5 | Ω | ",
         ] {
             let [kind, params, cols, unit, want] = case.split(" | ").collect::<Vec<_>>()[..] else {
                 panic!("{case}")
             };
-            let source = row(&cols.replace(", ", "\n"), unit);
-            let found = source_warnings(&entry(kind, &params.replace("OC", oc), &source));
+            let (name, cols) = cols.split_once(": ").unwrap_or(("ROW", cols));
+            let source = row(name, &cols.replace(", ", "\n"), unit);
+            let params = params.replace("OC", oc).replace("KP", kp);
+            let found = source_warnings(&entry(kind, &params, &source));
             let all = found.iter().all(|w| w.contains(want));
             assert!(
                 all && found.len() == usize::from(!want.is_empty()),

@@ -6,11 +6,10 @@
 
 use std::path::{Path, PathBuf};
 
-use hauksbee_ci::{run, RunConfig};
+use hauksbee_ci::run;
 use serde_json::Value;
 
-fn fixture_board() -> &'static str {
-    r#"(export (version "E")
+const FIXTURE_BOARD: &str = r#"(export (version "E")
   (design (source "evidence-spine CI fixture"))
   (components
     (comp (ref "R1")
@@ -22,11 +21,10 @@ fn fixture_board() -> &'static str {
       (node (ref "R1") (pin "1") (pintype "passive")))
     (net (code "2") (name "GND")
       (node (ref "R1") (pin "2") (pintype "passive")))))
-"#
-}
+"#;
 
 fn write_spec(dir: &Path, name: &str, min_v: f64) -> PathBuf {
-    std::fs::write(dir.join("board.net"), fixture_board()).unwrap();
+    std::fs::write(dir.join("board.net"), FIXTURE_BOARD).unwrap();
     let spec = dir.join(format!("{name}.toml"));
     std::fs::write(
         &spec,
@@ -41,11 +39,8 @@ fn write_spec(dir: &Path, name: &str, min_v: f64) -> PathBuf {
 }
 
 fn run_json(spec: PathBuf) -> (hauksbee_ci::CiResult, Value) {
-    let result = run(&RunConfig {
-        spec,
-        ..Default::default()
-    })
-    .expect("the production spec runner completes");
+    let result =
+        run(&crate::support::run_config(spec)).expect("the production spec runner completes");
     let json = serde_json::from_str(&result.render_json()).expect("CI JSON parses");
     (result, json)
 }
@@ -180,17 +175,9 @@ fn a_live_waiver_is_evidence_on_the_exact_assertion_it_authorized() {
         "\n[[assert]]\nname = \"RAIL ordinary floor\"\nkind = \"voltage\"\nnet = \"RAIL\"\nmin = 3.0\n",
     );
     std::fs::write(&spec, text).unwrap();
-    std::fs::write(
-        dir.path().join("hauksbee-waivers.toml"),
-        r#"[[waive]]
-check = "ci"
-kind = "voltage"
-nets = ["RAIL"]
-reason = "bench-confirmed during staged rollout"
-until = "2030-01-01"
-"#,
-    )
-    .unwrap();
+    let reason = "bench-confirmed during staged rollout";
+    let waiver = crate::support::waive("ci", "voltage", "RAIL", reason, "2030-01-01");
+    std::fs::write(dir.path().join("hauksbee-waivers.toml"), waiver).unwrap();
 
     let (result, json) = run_json(spec);
     assert_eq!(result.exit_code(), 0, "an active waiver remains non-gating");

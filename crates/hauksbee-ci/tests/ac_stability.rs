@@ -9,24 +9,22 @@
 //! the exact CI path a board spec would: an `[ac]` sweep feeds a `phase_margin`
 //! assertion, and the evaluator passes/fails on the computed margin.
 
-use hauksbee_ci::assertions::evaluate;
+use hauksbee_ci::assertions::{evaluate, AssertResult};
 use hauksbee_ci::runner::{AcOutcome, RunOutcome};
-use hauksbee_ci::Spec;
 use hauksbee_ir::{Circuit, Device, NodeId, Rail, SourceKind};
 use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
 
-use crate::support;
+use crate::support::{load_error, load_spec};
 
 // --- spec validation --------------------------------------------------------
 
 #[test]
 fn phase_margin_assertion_needs_ac_block() {
-    let p = support::write_tmp(
+    let err = load_error(
         "pm_no_ac.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[[assert]]\nkind=\"phase_margin\"\nnet=\"FB\"\nmin=45\n",
     );
-    let err = Spec::load(&p).unwrap_err();
-    assert!(err.to_string().contains("[ac] sweep block"), "got: {err}");
+    assert!(err.contains("[ac] sweep block"), "got: {err}");
 }
 
 #[test]
@@ -34,36 +32,30 @@ fn phase_margin_without_a_bound_is_a_measurement_not_a_silent_gate() {
     // An unbounded numeric assertion used to be a loud spec error. It now
     // loads as a MEASUREMENT: it reports the margin and judges nothing, which
     // is a different thing from a gate that passes without a bound.
-    let p = support::write_tmp(
+    let spec = load_spec(
         "pm_no_bound.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=1\nfstop=1e6\npoints=10\n[[assert]]\nkind=\"phase_margin\"\nnet=\"FB\"\n",
     );
-    let spec = Spec::load(&p).expect("an unbounded phase_margin is a measurement");
     assert!(spec.asserts[0].measurement(), "{:?}", spec.asserts[0]);
 }
 
 #[test]
 fn ac_gain_assertion_parses() {
-    let p = support::write_tmp(
+    let spec = load_spec(
         "ac_gain.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=10\nfstop=1e5\npoints=10\nsweep=\"dec\"\n[[assert]]\nkind=\"ac_gain\"\nnet=\"OUT\"\nmax=-3.0\nfreq_hz=1000\n",
     );
-    let spec = Spec::load(&p).unwrap();
     assert!(spec.ac.is_some());
     assert_eq!(spec.asserts.len(), 1);
 }
 
 #[test]
 fn bad_sweep_mode_is_rejected() {
-    let p = support::write_tmp(
+    let err = load_error(
         "bad_sweep.toml",
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=10\nfstop=1e5\npoints=10\nsweep=\"octave\"\n[[assert]]\nkind=\"ac_gain\"\nnet=\"OUT\"\nmin=-3\n",
     );
-    let err = Spec::load(&p).unwrap_err();
-    assert!(
-        err.to_string().contains("dec") || err.to_string().contains("lin"),
-        "got: {err}"
-    );
+    assert!(err.contains("dec") || err.contains("lin"), "got: {err}");
 }
 
 // --- end-to-end: representative compensated op-amp loop ----------------------
@@ -115,14 +107,35 @@ fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
     let mut ac = AcOutcome::default();
     ac.margins.insert(net.to_string(), st.margins());
     ac.bode.insert(net.to_string(), resp.bode(ckt, net));
+    ac_outcome(ac)
+}
+
+/// A RunOutcome carrying only `ac`. AC assertions are seed-independent
+/// DC-linearised sweeps, never touched by a failed transient chunk: a clean,
+/// valid analog outcome.
+fn ac_outcome(ac: AcOutcome) -> RunOutcome {
     RunOutcome {
         ambient_c: 25.0,
         ac: Some(ac),
-        // AC assertions are seed-independent DC-linearised sweeps, never touched
-        // by a failed transient chunk: a clean, valid analog outcome.
         analog_valid: true,
         ..Default::default()
     }
+}
+
+/// The one result of a spec with `[ac] {ac}` and the single `[[assert]] {assert}`,
+/// evaluated over `out`.
+fn ac_result(name: &str, ac: &str, assert: &str, out: RunOutcome) -> AssertResult {
+    let body = format!("board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\n{ac}\n[[assert]]\n{assert}\n");
+    let mut results = evaluate(&load_spec(name, &body), &[out]);
+    assert_eq!(results.len(), 1);
+    results.remove(0)
+}
+
+/// The `[ac]` sweep the loop specs declare, matching [`outcome_for`]'s.
+const LOOP_SWEEP: &str = "fstart=1\nfstop=1e8\npoints=50";
+
+fn phase_margin(min_deg: u32) -> String {
+    format!("kind=\"phase_margin\"\nnet=\"out\"\nmin={min_deg}")
 }
 
 #[test]
@@ -132,23 +145,9 @@ fn stable_loop_passes_phase_margin_45() {
     let ckt = representative_loop(1.0e5, 1.0e3, 1.5915e-6);
     let out = outcome_for(&ckt, "out");
 
-    let p = support::write_tmp(
-        "stable.toml",
-        "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=1\nfstop=1e8\npoints=50\n[[assert]]\nkind=\"phase_margin\"\nnet=\"out\"\nmin=45\n",
-    );
-    let spec = Spec::load(&p).unwrap();
-    let results = evaluate(&spec, &[out]);
-    assert_eq!(results.len(), 1);
-    assert!(
-        results[0].passed,
-        "expected pass, detail: {}",
-        results[0].detail
-    );
-    assert!(
-        results[0].detail.contains("phase margin"),
-        "{}",
-        results[0].detail
-    );
+    let r = ac_result("stable.toml", LOOP_SWEEP, &phase_margin(45), out);
+    assert!(r.passed, "expected pass, detail: {}", r.detail);
+    assert!(r.detail.contains("phase margin"), "{}", r.detail);
 }
 
 #[test]
@@ -158,17 +157,8 @@ fn marginal_loop_fails_strict_phase_margin() {
     let ckt = representative_loop(1.0e5, 1.0e3, 1.5915e-6);
     let out = outcome_for(&ckt, "out");
 
-    let p = support::write_tmp(
-        "marginal.toml",
-        "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=1\nfstop=1e8\npoints=50\n[[assert]]\nkind=\"phase_margin\"\nnet=\"out\"\nmin=120\n",
-    );
-    let spec = Spec::load(&p).unwrap();
-    let results = evaluate(&spec, &[out]);
-    assert!(
-        !results[0].passed,
-        "expected fail, detail: {}",
-        results[0].detail
-    );
+    let r = ac_result("marginal.toml", LOOP_SWEEP, &phase_margin(120), out);
+    assert!(!r.passed, "expected fail, detail: {}", r.detail);
 }
 
 #[test]
@@ -197,36 +187,14 @@ fn ac_gain_assertion_evaluates_rc_corner() {
         .unwrap();
     let mut ac = AcOutcome::default();
     ac.bode.insert("out".to_string(), resp.bode(&ckt, "out"));
-    let outcome = RunOutcome {
-        ambient_c: 25.0,
-        ac: Some(ac),
-        analog_valid: true,
-        ..Default::default()
-    };
+    let outcome = ac_outcome(ac);
 
     // At fc=1000 Hz the gain is -3.01 dB, so "max <= -2.9 at 1000 Hz" passes and
     // "min >= -2.9 at 1000 Hz" fails.
-    let pass = support::write_tmp(
-        "acgain_pass.toml",
-        "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=10\nfstop=1e6\npoints=30\n[[assert]]\nkind=\"ac_gain\"\nnet=\"out\"\nmax=-2.9\nfreq_hz=1000\n",
-    );
-    let spec = Spec::load(&pass).unwrap();
-    let r = evaluate(&spec, &[outcome.clone()]);
-    assert!(
-        r[0].passed,
-        "expected pass at corner, detail: {}",
-        r[0].detail
-    );
-
-    let fail = support::write_tmp(
-        "acgain_fail.toml",
-        "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=10\nfstop=1e6\npoints=30\n[[assert]]\nkind=\"ac_gain\"\nnet=\"out\"\nmin=-2.9\nfreq_hz=1000\n",
-    );
-    let spec = Spec::load(&fail).unwrap();
-    let r = evaluate(&spec, &[outcome]);
-    assert!(
-        !r[0].passed,
-        "expected fail at corner, detail: {}",
-        r[0].detail
-    );
+    let sweep = "fstart=10\nfstop=1e6\npoints=30";
+    let gain = |bound: &str| format!("kind=\"ac_gain\"\nnet=\"out\"\n{bound}=-2.9\nfreq_hz=1000");
+    let r = ac_result("acgain_pass.toml", sweep, &gain("max"), outcome.clone());
+    assert!(r.passed, "expected pass at corner, detail: {}", r.detail);
+    let r = ac_result("acgain_fail.toml", sweep, &gain("min"), outcome);
+    assert!(!r.passed, "expected fail at corner, detail: {}", r.detail);
 }

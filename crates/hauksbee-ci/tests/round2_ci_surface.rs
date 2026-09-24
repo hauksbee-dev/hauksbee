@@ -18,46 +18,37 @@ use hauksbee_ci::assertions::AssertResult;
 use hauksbee_ci::report::{junit_error_suite, render_junit_document, CiResult};
 use hauksbee_ci::{apply_waivers, waiver_notes, Spec};
 
-fn write_spec(dir: &std::path::Path, name: &str, kind_line: &str) -> PathBuf {
-    let p = dir.join(name);
-    std::fs::write(
-        &p,
-        format!(
-            // boot_coverage refuses to load without firmware (it would be a
-            // hollow gate), so the helper stages one.
-            "name = \"t\"\nboard = \"b.kicad_pcb\"\nfirmware = \"app.elf\"\nduration_ms = 10\n\n\
-             [[assert]]\n{kind_line}\nnet = \"EN\"\nmin = 3.0\ndeadline_ms = 10.0\n"
-        ),
-    )
-    .unwrap();
-    p
+/// A spec named "t" on board `b.kicad_pcb`, 10 ms long, with `body` after the header.
+fn write_spec(body: &str) -> PathBuf {
+    let head = "name = \"t\"\nboard = \"b.kicad_pcb\"\nduration_ms = 10\n";
+    crate::support::write_tmp("s.toml", &format!("{head}{body}"))
+}
+
+/// Why the spec `body` (after the standard header) refuses to load.
+fn load_error(body: &str) -> String {
+    Spec::load(&write_spec(body)).unwrap_err().to_string()
 }
 
 #[test]
 fn both_boot_coverage_spellings_load_and_normalize_to_the_canonical_kind() {
-    let dir = tempfile::tempdir().unwrap();
     for spelling in ["kind = \"boot_coverage\"", "kind = \"boot-coverage\""] {
-        let p = write_spec(dir.path(), "s.toml", spelling);
+        // boot_coverage refuses to load without firmware (it would be a
+        // hollow gate), so the spec stages one.
+        let p = write_spec(&format!(
+            "firmware = \"app.elf\"\n\n\
+             [[assert]]\n{spelling}\nnet = \"EN\"\nmin = 3.0\ndeadline_ms = 10.0\n"
+        ));
         let spec = Spec::load(&p).unwrap_or_else(|e| panic!("{spelling} must load: {e}"));
         assert_eq!(
             spec.asserts[0].kind, "boot_coverage",
             "the loader folds every accepted spelling onto the canonical one"
         );
-        std::fs::remove_file(&p).unwrap();
     }
 }
 
 #[test]
 fn an_unknown_assertion_kind_gets_a_did_you_mean_hint() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("s.toml");
-    std::fs::write(
-        &p,
-        "name = \"t\"\nboard = \"b.kicad_pcb\"\nduration_ms = 10\n\n\
-         [[assert]]\nkind = \"voltag\"\nnet = \"VCC\"\nmin = 3.0\n",
-    )
-    .unwrap();
-    let err = Spec::load(&p).unwrap_err().to_string();
+    let err = load_error("\n[[assert]]\nkind = \"voltag\"\nnet = \"VCC\"\nmin = 3.0\n");
     assert!(
         err.contains("did you mean 'voltage'?"),
         "a one-edit typo must be pointed at the real kind, got: {err}"
@@ -74,16 +65,10 @@ fn an_unknown_assertion_kind_gets_a_did_you_mean_hint() {
 
 #[test]
 fn an_unknown_supply_kind_gets_a_did_you_mean_hint() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("s.toml");
-    std::fs::write(
-        &p,
-        "name = \"t\"\nboard = \"b.kicad_pcb\"\nduration_ms = 10\n\n\
-         [[supply]]\nnet = \"VCC\"\nkind = \"benchh\"\nvolts = 5.0\n\n\
+    let err = load_error(
+        "\n[[supply]]\nnet = \"VCC\"\nkind = \"benchh\"\nvolts = 5.0\n\n\
          [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
-    )
-    .unwrap();
-    let err = Spec::load(&p).unwrap_err().to_string();
+    );
     assert!(
         err.contains("did you mean 'bench'?"),
         "supply-kind typos get the same treatment: {err}"
@@ -92,16 +77,10 @@ fn an_unknown_supply_kind_gets_a_did_you_mean_hint() {
 
 #[test]
 fn an_unknown_peripheral_type_gets_a_did_you_mean_hint() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("s.toml");
-    std::fs::write(
-        &p,
-        "name = \"t\"\nboard = \"b.kicad_pcb\"\nduration_ms = 10\n\n\
-         [[peripheral]]\nid = \"B1\"\ntype = \"pushbuton\"\nnet = \"BTN\"\n\n\
+    let err = load_error(
+        "\n[[peripheral]]\nid = \"B1\"\ntype = \"pushbuton\"\nnet = \"BTN\"\n\n\
          [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
-    )
-    .unwrap();
-    let err = Spec::load(&p).unwrap_err().to_string();
+    );
     assert!(
         err.contains("did you mean 'pushbutton'?"),
         "peripheral-type typos get a hint: {err}"
@@ -251,12 +230,6 @@ fn the_merged_junit_document_aggregates_counts_across_suites() {
 
 // ── waiver matching against a real waiver file ──────────────────────────────
 
-fn waiver_file(dir: &std::path::Path, body: &str) -> PathBuf {
-    let p = dir.join("hauksbee-waivers.toml");
-    std::fs::write(&p, body).unwrap();
-    p
-}
-
 /// The waiver every case below starts from: an active `ci` voltage waiver on
 /// `+5V`, matching what [`result_named`] builds.
 fn ci_waiver() -> String {
@@ -270,14 +243,14 @@ fn ci_waiver() -> String {
 }
 
 /// The `WaiverSet` a waiver file with `body` loads to.
-fn waivers_from(dir: &std::path::Path, body: &str) -> hauksbee_engine::waiver::WaiverSet {
-    hauksbee_engine::waiver::WaiverSet::load(&waiver_file(dir, body)).unwrap()
+fn waivers_from(body: &str) -> hauksbee_engine::waiver::WaiverSet {
+    let file = crate::support::write_tmp("hauksbee-waivers.toml", body);
+    hauksbee_engine::waiver::WaiverSet::load(&file).unwrap()
 }
 
 #[test]
 fn an_active_ci_waiver_covers_the_matching_failure_and_nothing_else() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut waivers = waivers_from(dir.path(), &ci_waiver());
+    let mut waivers = waivers_from(&ci_waiver());
     let mut results = vec![
         result_named("+5V holds", false), // matches: kind voltage, net +5V
         {
@@ -309,9 +282,8 @@ fn an_active_ci_waiver_covers_the_matching_failure_and_nothing_else() {
 
 #[test]
 fn an_expired_ci_waiver_gates_again_and_is_reported() {
-    let dir = tempfile::tempdir().unwrap();
     let body = crate::support::waive("ci", "voltage", "+5V", "expired on purpose", "2020-01-01");
-    let mut waivers = waivers_from(dir.path(), &body);
+    let mut waivers = waivers_from(&body);
     let mut results = vec![result_named("+5V holds", false)];
     apply_waivers(&mut results, &mut waivers);
     assert!(
@@ -329,8 +301,7 @@ fn an_expired_ci_waiver_gates_again_and_is_reported() {
 fn an_invalid_result_can_never_be_waived() {
     // A waiver overrules a finding; an INVALID is the absence of one. Letting
     // a waiver green an untrustworthy run would fail open.
-    let dir = tempfile::tempdir().unwrap();
-    let mut waivers = waivers_from(dir.path(), &ci_waiver());
+    let mut waivers = waivers_from(&ci_waiver());
     let mut invalid = result_named("+5V holds", false);
     invalid.invalid = true;
     let mut results = vec![invalid];
@@ -342,7 +313,6 @@ fn an_invalid_result_can_never_be_waived() {
 
 #[test]
 fn a_stale_ci_waiver_is_reported_but_static_check_waivers_are_not_our_business() {
-    let dir = tempfile::tempdir().unwrap();
     let body = crate::support::waive("ci", "voltage", "+5V", "matched nothing", "2030-01-01")
         + &crate::support::waive(
             "si",
@@ -351,7 +321,7 @@ fn a_stale_ci_waiver_is_reported_but_static_check_waivers_are_not_our_business()
             "an SI waiver a CI run never consults",
             "2030-01-01",
         );
-    let waivers = waivers_from(dir.path(), &body);
+    let waivers = waivers_from(&body);
     let notes = waiver_notes(&waivers);
     assert_eq!(notes.len(), 1, "only the ci waiver is reported: {notes:?}");
     assert!(notes[0].contains("matched nothing"), "{notes:?}");
@@ -368,9 +338,8 @@ fn a_stale_ci_waiver_is_reported_but_static_check_waivers_are_not_our_business()
 // is waived and it is not.
 #[test]
 fn a_waiver_naming_no_check_surface_is_reported_not_silently_inert() {
-    let dir = tempfile::tempdir().unwrap();
     let body = crate::support::waive("cl", "voltage", "+5V", "meant ci, typed cl", "2030-01-01");
-    let mut waivers = waivers_from(dir.path(), &body);
+    let mut waivers = waivers_from(&body);
     // It really is inert: the failure it was meant to cover still gates.
     let mut results = vec![result_named("+5V holds", false)];
     apply_waivers(&mut results, &mut waivers);
@@ -393,7 +362,6 @@ fn a_real_static_check_surface_is_still_not_reported_here() {
     // drc / lint waivers belong to `hauksbee run`'s surfaces, and telling a CI
     // reader they matched nothing would be telling them to delete waivers this
     // run never consults.
-    let dir = tempfile::tempdir().unwrap();
     for surface in ["si", "drc", "lint"] {
         let body = crate::support::waive(
             surface,
@@ -402,7 +370,7 @@ fn a_real_static_check_surface_is_still_not_reported_here() {
             "not this run's business",
             "2030-01-01",
         );
-        let waivers = waivers_from(dir.path(), &body);
+        let waivers = waivers_from(&body);
         assert!(
             waiver_notes(&waivers).is_empty(),
             "a {surface} waiver must stay quiet here"
@@ -415,7 +383,6 @@ fn the_boot_coverage_alias_matches_a_canonical_waiver() {
     // A spec still written with the old spelling normalizes at load, so its
     // failures carry kind "boot_coverage" and a waiver written canonically
     // covers them; nobody has to know the alias history to write a waiver.
-    let dir = tempfile::tempdir().unwrap();
     let body = crate::support::waive(
         "ci",
         "boot_coverage",
@@ -423,7 +390,7 @@ fn the_boot_coverage_alias_matches_a_canonical_waiver() {
         "gate driven by an unmodelled supervisor",
         "2030-01-01",
     );
-    let mut waivers = waivers_from(dir.path(), &body);
+    let mut waivers = waivers_from(&body);
     let mut r = result_named("EN driven", false);
     r.kind = "boot_coverage".to_string();
     r.subject_nets = vec!["EN".to_string()];

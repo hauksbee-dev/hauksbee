@@ -34,9 +34,7 @@ use crate::support::{self, example};
 /// of avr-gcc is fine - the committed hex is used.
 #[cfg(feature = "avr")]
 fn ensure_firmware(variant: &str) {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware")
-        .join(format!("boot_gate_{variant}"));
+    let dir = support::repo(&format!("testdata/firmware/boot_gate_{variant}"));
     let hex = dir.join("boot_gate.hex");
     if hex.exists() {
         // Try to refresh if avr-gcc is available; ignore failure.
@@ -195,16 +193,15 @@ fn resolved_spec(name: &str, board: &std::path::Path) -> (tempfile::TempDir, Pat
 }
 
 fn corpus_or_skip(what: &str) -> Option<PathBuf> {
-    match watchy_v15_board() {
-        Some(p) => Some(p),
-        None => {
-            if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-                panic!("corpus required but Watchy v1.5 board missing ({what})");
-            }
-            eprintln!("skipping {what} (corpus absent)");
-            None
-        }
+    let board = watchy_v15_board();
+    if board.is_none() {
+        assert!(
+            !support::require_corpus(),
+            "corpus required but Watchy v1.5 board missing ({what})"
+        );
+        eprintln!("skipping {what} (corpus absent)");
     }
+    board
 }
 
 /// One Watchy v1.5 boot-coverage run under QEMU: resolve the corpus board,

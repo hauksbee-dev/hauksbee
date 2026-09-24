@@ -12,12 +12,6 @@ use hauksbee_ci::run;
 
 use crate::support;
 
-/// A path under this crate's own manifest dir (its `examples/` and `../../testdata`),
-/// distinct from [`support::repo`] which resolves against the workspace root.
-fn repo(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
-}
-
 fn scratch(name: &str) -> PathBuf {
     let dir =
         std::env::temp_dir().join(format!("hauksbee_ci_fwinput_{}_{name}", std::process::id()));
@@ -33,7 +27,7 @@ fn scratch(name: &str) -> PathBuf {
 #[test]
 fn spec_firmware_zip_resolves_and_passes() {
     let dir = scratch("zip");
-    let hex = std::fs::read(repo("../../testdata/firmware/boot_gate_a/boot_gate.hex"))
+    let hex = std::fs::read(support::repo("testdata/firmware/boot_gate_a/boot_gate.hex"))
         .expect("committed boot_gate hex present");
     let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     w.start_file(
@@ -45,7 +39,7 @@ fn spec_firmware_zip_resolves_and_passes() {
     let bytes = w.finish().unwrap().into_inner();
     std::fs::write(dir.join("fw.zip"), bytes).unwrap();
 
-    let board = repo("examples/boards/boot_gate.kicad_pcb");
+    let board = support::example("boards/boot_gate.kicad_pcb");
     std::fs::write(
         dir.join("spec.toml"),
         format!(
@@ -71,8 +65,7 @@ deadline_ms = 20.0
     )
     .unwrap();
 
-    let result =
-        run(&crate::support::run_config(dir.join("spec.toml"))).expect("zip firmware spec runs");
+    let result = run(&support::run_config(dir.join("spec.toml"))).expect("zip firmware spec runs");
     assert!(
         result.passed(),
         "the zipped hex boots and drives the gate:\n{}",
@@ -87,7 +80,7 @@ deadline_ms = 20.0
 fn spec_firmware_useless_dir_is_an_actionable_error() {
     let dir = scratch("dir");
     std::fs::create_dir_all(dir.join("not_a_project")).unwrap();
-    let board = repo("examples/boards/boot_gate.kicad_pcb");
+    let board = support::example("boards/boot_gate.kicad_pcb");
     std::fs::write(
         dir.join("spec.toml"),
         format!(
@@ -109,7 +102,7 @@ kind = "no_faults"
     )
     .unwrap();
 
-    let err = run(&crate::support::run_config(dir.join("spec.toml")))
+    let err = run(&support::run_config(dir.join("spec.toml")))
         .expect_err("a useless firmware dir must be refused");
     let msg = err.to_string();
     assert!(
