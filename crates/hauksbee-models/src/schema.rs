@@ -1284,58 +1284,51 @@ mod tests {
 
     #[test]
     fn characteristic_rows_keep_printed_columns_and_validate() {
-        let spec = |columns: &str| {
-            let basis = if columns.contains("basis") {
-                ""
-            } else {
-                "basis = \"Table 5\""
-            };
-            let text = format!("tier = \"datasheet-derived\"\n[[characteristic]]\nparameter = \"VF\"\n{columns}\nunit = \"V\"\nconditions = \"IF = 1 mA, pulsed\"\n{basis}\n");
+        let parse = |records: &str| {
+            let text = format!("tier = \"datasheet-derived\"\n{records}");
             toml::from_str::<ModelSourceSpec>(&text).map_err(|e| e.to_string())
         };
-        let cite = |columns: &str, basis: &str| format!("{columns}\nbasis = \"EC table, {basis}\"");
-        for (columns, error) in [
-            ("max = 0.37".into(), None),
-            ("typ = 2e-12".into(), None),
-            ("min = 1.0\ntyp = 1.0\nmax = 2.0".into(), None),
-            ("min = 1.0\nmax = 1.0".into(), None),
-            ("min = -0.85\nmax = -0.65".into(), None),
-            ("min = -0.65\ntyp = -0.7\nmax = -0.85".into(), None),
+        let spec = |columns: &str, basis: &str| {
+            parse(&format!("[[characteristic]]\nparameter = \"VF\"\n{columns}\nunit = \"V\"\nconditions = \"IF = 1 mA, pulsed\"\nbasis = \"Table 5{basis}\"\n"))
+        };
+        for (columns, basis, error) in [
+            ("max = 0.37", "", ""),
+            ("typ = 2e-12", "", ""),
+            ("min = 1.0\ntyp = 1.0\nmax = 2.0", "", ""),
+            ("min = 1.0\nmax = 1.0", "", ""),
+            ("min = -0.85\nmax = -0.65", "", ""),
+            ("min = -0.65\ntyp = -0.7\nmax = -0.85", "", ""),
             (
-                cite("min = 0.3\nmax = 0.4", "min/max columns, no typ published"),
-                None,
+                "min = 0.3\nmax = 0.4",
+                ", min/max columns, no typ published",
+                "",
             ),
-            (cite("typ = 0.3\nmax = 0.4", "typ/max columns"), None),
+            ("typ = 0.3\nmax = 0.4", ", typ/max columns", ""),
+            ("typ = 2e-6", ", typ column, converted from µV to V", ""),
+            ("", "", "at least one of min, typ, max"),
+            ("max = nan", "", "finite"),
+            ("min = -inf", "", "finite"),
+            ("min = 2.0\ntyp = 1.0", "", "min <= typ <= max"),
+            ("typ = 3.0\nmax = 2.0", "", "signed offset"),
+            ("min = -0.6\ntyp = 0.1\nmax = -0.8", "", "by signed value"),
+            ("max = 1.0\nlow = 0.0", "", "unknown field `low`"),
             (
-                cite("typ = 2e-6", "typ column, converted from µV to V"),
-                None,
+                "min = 0.01\nmax = 0.08",
+                ", min/typ columns",
+                "fills min/max",
             ),
-            (String::new(), Some("at least one of min, typ, max")),
-            ("max = nan".into(), Some("finite")),
-            ("min = -inf".into(), Some("finite")),
-            ("min = 2.0\ntyp = 1.0".into(), Some("min <= typ <= max")),
-            ("typ = 3.0\nmax = 2.0".into(), Some("signed offset")),
+            ("max = 0.4", ", typ column", "cites the typ column"),
             (
-                "min = -0.6\ntyp = 0.1\nmax = -0.8".into(),
-                Some("by signed value"),
-            ),
-            ("max = 1.0\nlow = 0.0".into(), Some("unknown field `low`")),
-            (
-                cite("min = 0.01\nmax = 0.08", "min/typ columns"),
-                Some("fills min/max"),
-            ),
-            (
-                cite("max = 0.4", "typ column"),
-                Some("cites the typ column"),
-            ),
-            (
-                cite("typ = 2.0", "typ, converted from µV to V"),
-                Some("converted from µV"),
+                "typ = 2.0",
+                ", typ, converted from µV to V",
+                "converted from µV",
             ),
         ] {
-            let got = spec(&columns).and_then(|s| s.validate().map(|()| s));
-            match (error, got) {
-                (None, Ok(s)) => {
+            match (
+                error,
+                spec(columns, basis).and_then(|s| s.validate().map(|()| s)),
+            ) {
+                ("", Ok(s)) => {
                     let text = toml::to_string(&s).unwrap();
                     assert_eq!(toml::from_str::<ModelSourceSpec>(&text).unwrap(), s);
                     let printed = ["min =", "typ =", "max ="];
@@ -1344,44 +1337,36 @@ mod tests {
                         printed.map(|c| text.contains(c))
                     );
                 }
-                (Some(needle), Err(e)) => assert!(e.contains(needle), "{columns}: {e}"),
+                (needle, Err(e)) if !needle.is_empty() => {
+                    assert!(e.contains(needle), "{columns}: {e}")
+                }
                 (want, got) => panic!("{columns}: wanted {want:?}, got {got:?}"),
             }
         }
-        let mut blank = spec("typ = 2.0").unwrap();
+        let mut blank = spec("typ = 2.0", "").unwrap();
         blank.characteristic[0].basis = " ".into();
         assert_eq!(
             blank.validate().unwrap_err(),
             "characteristic 0 (VF): requires non-empty parameter and basis"
         );
         // Every bad record is reported, each by name, in one pass.
-        blank
-            .characteristic
-            .push(spec("min = 2.0\ntyp = 1.0").unwrap().characteristic[0].clone());
+        let unordered = spec("min = 2.0\ntyp = 1.0", "").unwrap();
+        blank.characteristic.extend(unordered.characteristic);
         let interval = |basis: &str| {
-            format!("[[uncertainty]]\nstatus = \"interval\"\nparameter = \"idd\"\nlow = 0.0\nhigh = 2e-3\nunit = \"A\"\nkind = \"specification-limits\"\nbasis = \"{basis}\"\n")
+            parse(&format!("[[uncertainty]]\nstatus = \"interval\"\nparameter = \"idd\"\nlow = 0.0\nhigh = 2e-3\nunit = \"A\"\nkind = \"specification-limits\"\nbasis = \"{basis}\"\n")).unwrap()
         };
         for (basis, bad) in [
             ("typ/max columns", true),
             ("min/max columns", false),
             ("maximum; zero is the physical lower bound", false),
         ] {
-            let text = format!("tier = \"datasheet-derived\"\n{}", interval(basis));
-            let problems = toml::from_str::<ModelSourceSpec>(&text).unwrap().problems();
-            assert_eq!(
-                problems
-                    .iter()
-                    .any(|p| p.contains("need a printed min AND max")),
-                bad,
-                "{basis}"
-            );
+            let problems = interval(basis).problems();
+            let flagged = problems
+                .iter()
+                .any(|p| p.contains("need a printed min AND max"));
+            assert_eq!(flagged, bad, "{basis}");
         }
-        blank.uncertainty = toml::from_str::<ModelSourceSpec>(&format!(
-            "tier = \"datasheet-derived\"\n{}",
-            interval("typ/max")
-        ))
-        .unwrap()
-        .uncertainty;
+        blank.uncertainty = interval("typ/max").uncertainty;
         assert_eq!(blank.problems().len(), 3, "{:?}", blank.problems());
     }
 

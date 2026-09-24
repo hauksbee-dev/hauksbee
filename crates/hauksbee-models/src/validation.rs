@@ -1100,13 +1100,7 @@ pub fn kind_error_note(err_text: &str) -> Option<String> {
     })
 }
 
-const SOURCE_KEYS: &[&str] = &[
-    "tier",
-    "validation",
-    "references",
-    "uncertainty",
-    "characteristic",
-];
+const SOURCE_KEYS: &str = "tier validation references uncertainty characteristic";
 const RECORD_KINDS: &str = " ([[...source.uncertainty]] status = \"interval\" bounds one \
     parameter by printed min AND max as low/high; [[...source.characteristic]] keeps a \
     printed row's min/typ/max columns as printed)";
@@ -1125,13 +1119,14 @@ pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
                 .and_then(|s| s.get("source"))
                 .map(|s| ("sensor.source".into(), s)),
         );
+    let source_keys: Vec<&str> = SOURCE_KEYS.split_whitespace().collect();
     let mut out = Vec::new();
     for (path, table) in sources.filter_map(|(p, s)| Some((p, s.as_table()?))) {
         for (key, value) in table {
-            if !SOURCE_KEYS.contains(&key.as_str()) {
+            if !source_keys.contains(&key.as_str()) {
                 out.push(format!(
                     "{path}: unknown key '{key}'{}",
-                    key_hint(key, SOURCE_KEYS)
+                    key_hint(key, &source_keys)
                 ));
                 continue;
             }
@@ -1141,42 +1136,22 @@ pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
                     continue;
                 };
                 let status = fields.get("status").and_then(toml::Value::as_str);
-                let (required, optional): (&[&str], &[&str]) = match (key.as_str(), status) {
-                    ("characteristic", _) => (
-                        &["parameter", "unit", "conditions", "basis"],
-                        &["min", "typ", "max"],
-                    ),
-                    (_, Some("interval")) => (
-                        &[
-                            "status",
-                            "parameter",
-                            "low",
-                            "high",
-                            "unit",
-                            "kind",
-                            "basis",
-                        ],
-                        &[],
-                    ),
-                    (_, Some("unknown")) => (&["status", "parameter", "reason"], &[]),
-                    _ => (
-                        &["status"],
-                        &[
-                            "parameter",
-                            "low",
-                            "high",
-                            "unit",
-                            "kind",
-                            "basis",
-                            "reason",
-                        ],
-                    ),
+                let (required, optional) = match (key.as_str(), status) {
+                    ("characteristic", _) => ("parameter unit conditions basis", "min typ max"),
+                    (_, Some("interval")) => ("status parameter low high unit kind basis", ""),
+                    (_, Some("unknown")) => ("status parameter reason", ""),
+                    _ => ("status", "parameter low high unit kind basis reason"),
                 };
+                let required: Vec<&str> = required.split_whitespace().collect();
                 let at = format!("{path}.{key}[{i}]");
                 for missing in required.iter().filter(|k| !fields.contains_key(**k)) {
                     out.push(format!("{at}: missing required key '{missing}'"));
                 }
-                let known: Vec<&str> = required.iter().chain(optional).copied().collect();
+                let known: Vec<&str> = required
+                    .iter()
+                    .copied()
+                    .chain(optional.split_whitespace())
+                    .collect();
                 for extra in fields.keys().filter(|k| !known.contains(&k.as_str())) {
                     out.push(format!(
                         "{at}: unknown key '{extra}'{}",
@@ -1192,16 +1167,15 @@ pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
 /// The key an unknown one probably meant, and for a column or interval word
 /// used in the wrong record, the one-line difference between the two records.
 fn key_hint(key: &str, known: &[&str]) -> String {
-    const SWAPS: &[(&str, &str)] = &[
-        ("low", "min"),
-        ("high", "max"),
-        ("min", "low"),
-        ("max", "high"),
-    ];
-    let swap = SWAPS
-        .iter()
-        .find(|(from, to)| *from == key && known.contains(to));
-    let near = swap.map(|(_, to)| *to).or_else(|| {
+    let swap = match key {
+        "low" => "min",
+        "high" => "max",
+        "min" => "low",
+        "max" => "high",
+        _ => "",
+    };
+    let swap = known.contains(&swap).then_some(swap);
+    let near = swap.or_else(|| {
         let distance = |k: &str| hauksbee_ir::levenshtein(key, k);
         let near = known.iter().copied().filter(|k| distance(k) <= 2);
         near.min_by_key(|k| distance(k))

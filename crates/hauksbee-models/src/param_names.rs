@@ -638,53 +638,51 @@ mod tests {
         assert!(param_meanings(ComponentKind::Diode)
             .contains("cjo = zero-bias junction capacitance (F)"));
 
-        let row = |p: &str, cols: &str, unit: &str| {
-            format!("[models.source]\ntier = \"datasheet-derived\"\n[[models.source.characteristic]]\nparameter = \"{p}\"\n{cols}\nunit = \"{unit}\"\nconditions = \"c\"\nbasis = \"b\"\n")
+        let row = |cols: &str, unit: &str| {
+            format!("[models.source]\ntier = \"datasheet-derived\"\n[[models.source.characteristic]]\nparameter = \"ROW\"\n{cols}\nunit = \"{unit}\"\nconditions = \"c\"\nbasis = \"b\"\n")
         };
         let (leak, leak_ok) = (format!("{oc}1e-10"), format!("{oc}2e-11"));
         for (kind, params, source, want) in [
             (
                 "comparator",
                 &*leak,
-                row("IOH", "max = 0.1", "nA"),
-                Some("documented in S"),
+                row("max = 0.1", "nA"),
+                "documented in S",
             ),
-            ("comparator", &leak_ok, row("IOH", "max = 0.1", "nA"), None),
+            ("comparator", &leak_ok, row("max = 0.1", "nA"), ""),
             (
                 "vreg",
                 "dropout_v = 0.5",
-                row("VDO", "max = 0.5", "V"),
-                Some("prints no typ"),
+                row("max = 0.5", "V"),
+                "prints no typ",
             ),
             (
                 "vreg",
                 "dropout_v = 0.5",
-                row("VDO", "min = 0.5\nmax = 0.9", "V"),
-                Some("no typ"),
+                row("min = 0.5\nmax = 0.9", "V"),
+                "no typ",
             ),
             (
                 "vreg",
                 "dropout_v = 0.3",
-                row("VDO", "typ = 0.3\nmax = 0.5", "V"),
-                None,
+                row("typ = 0.3\nmax = 0.5", "V"),
+                "",
             ),
             (
                 "vreg",
                 "dropout_v = 0.3",
-                row("VDO", "min = 0.1\nmax = 0.5", "V"),
-                None,
+                row("min = 0.1\nmax = 0.5", "V"),
+                "",
             ),
-            ("digital", "voh = 2.4", row("VOH", "min = 2.4", "V"), None),
-            ("diode", "rs = 1.0", row("VF", "max = 1.0", "V"), None),
+            ("digital", "voh = 2.4", row("min = 2.4", "V"), ""),
+            ("diode", "rs = 1.0", row("max = 1.0", "V"), ""),
         ] {
             let found = source_warnings(&entry(kind, params, &source));
-            match want {
-                Some(w) => assert!(
-                    found.len() == 1 && found[0].contains(w),
-                    "{params}: {found:?}"
-                ),
-                None => assert!(found.is_empty(), "{params}: {found:?}"),
-            }
+            let ok = found.len() == usize::from(!want.is_empty());
+            assert!(
+                ok && found.iter().all(|w| w.contains(want)),
+                "{params}: {found:?}"
+            );
         }
     }
 
