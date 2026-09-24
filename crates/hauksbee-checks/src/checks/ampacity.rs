@@ -671,7 +671,7 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
                 let programmed = pin_net_for_role(part, model, &program.pin).and_then(|net| {
                     let (ohms, path) =
                         program_resistance_to_ground(board, net, 4, Some(component_index))?;
-                    match &program.equation {
+                    let sense = match &program.equation {
                         hauksbee_models::schema::CurrentProgramEquation::SenseScaledResistance {
                             sense_roles,
                             sense_far_roles,
@@ -704,32 +704,28 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
                             }) {
                                 return None;
                             }
-                            let equation_current_a =
-                                program.equation_current_with_sense_a(ohms, sense_ohms)?;
-                            let operating_current_a =
-                                program.operating_current_with_sense_a(ohms, sense_ohms)?;
-                            Some((
-                                equation_current_a,
-                                operating_current_a,
-                                ohms,
-                                path,
-                                programmed_power_rails(board, part, model, program)?,
-                                Some((sense_ohms, sense_shunts)),
-                            ))
+                            Some((sense_ohms, sense_shunts))
                         }
-                        _ => {
-                            let equation_current_a = program.equation_current_a(ohms)?;
-                            let operating_current_a = program.operating_current_a(ohms)?;
-                            Some((
-                                equation_current_a,
-                                operating_current_a,
-                                ohms,
-                                path,
-                                programmed_power_rails(board, part, model, program)?,
-                                None,
-                            ))
-                        }
-                    }
+                        _ => None,
+                    };
+                    let (equation_current_a, operating_current_a) = match &sense {
+                        Some((sense_ohms, _)) => (
+                            program.equation_current_with_sense_a(ohms, *sense_ohms)?,
+                            program.operating_current_with_sense_a(ohms, *sense_ohms)?,
+                        ),
+                        None => (
+                            program.equation_current_a(ohms)?,
+                            program.operating_current_a(ohms)?,
+                        ),
+                    };
+                    Some((
+                        equation_current_a,
+                        operating_current_a,
+                        ohms,
+                        path,
+                        programmed_power_rails(board, part, model, program)?,
+                        sense,
+                    ))
                 });
                 match programmed {
                     Some((equation_current_a, current_a, ohms, path, nets, sense)) => {

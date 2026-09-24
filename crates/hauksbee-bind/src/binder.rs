@@ -3993,9 +3993,29 @@ fn bind_opamp(
     // Per-unit names use the `_q<N>` key the CI thermal aggregation matches
     // (as bind_bjt does for paired BJTs).
     let channels = wired_channels(roles);
-    for &(unit, out, inp, inn) in &channels {
+    let (units, device) = if channels.is_empty() {
+        // Single-channel parts (INA181/186, generic role names): one device
+        // under the bare reference, exactly as before.
+        let out = pick(roles, &["out", "out_1"]).copied();
+        let inp = pick(roles, &["in_plus", "inp", "in+"]).copied();
+        let inn = pick(roles, &["in_minus", "inn", "in-"]).copied();
+        let (Some(out), Some(inp), Some(inn)) = (out, inp, inn) else {
+            return open_warning(comp, "opamp pins not all connected");
+        };
+        let single = vec![(comp.reference.clone(), out, inp, inn)];
+        (single, "opamp".to_string())
+    } else {
+        let units = channels
+            .iter()
+            .map(|&(unit, out, inp, inn)| {
+                (format!("{}_q{}", comp.reference, unit + 1), out, inp, inn)
+            })
+            .collect();
+        (units, format!("opamp x{}", channels.len()))
+    };
+    for (name, out, inp, inn) in units {
         circuit.add(Device::OpAmp {
-            name: format!("{}_q{}", comp.reference, unit + 1),
+            name,
             out,
             inp,
             inn,
@@ -4007,41 +4027,7 @@ fn bind_opamp(
             rail_hi,
         });
     }
-    if !channels.is_empty() {
-        return (
-            BindOutcome::Behavioral {
-                device: format!("opamp x{}", channels.len()),
-            },
-            warning,
-        );
-    }
-
-    // Single-channel parts (INA181/186, generic role names): one device under
-    // the bare reference, exactly as before.
-    let out = pick(roles, &["out", "out_1"]).copied();
-    let inp = pick(roles, &["in_plus", "inp", "in+"]).copied();
-    let inn = pick(roles, &["in_minus", "inn", "in-"]).copied();
-    let (Some(out), Some(inp), Some(inn)) = (out, inp, inn) else {
-        return open_warning(comp, "opamp pins not all connected");
-    };
-    circuit.add(Device::OpAmp {
-        name: comp.reference.clone(),
-        out,
-        inp,
-        inn,
-        reference,
-        gain,
-        pole_hz,
-        slew,
-        rail_lo,
-        rail_hi,
-    });
-    (
-        BindOutcome::Behavioral {
-            device: "opamp".to_string(),
-        },
-        warning,
-    )
+    (BindOutcome::Behavioral { device }, warning)
 }
 
 /// One smoothed comparator, as a canonical B-source sub-expression: 0 while
