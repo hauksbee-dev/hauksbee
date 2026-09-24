@@ -64,7 +64,7 @@ fn insert_unambiguous(
     }
 }
 
-fn copy_copper_films(source: &Path, destination: &Path) {
+fn copy_films_and_drill(source: &Path, destination: &Path) {
     for entry in std::fs::read_dir(source).expect("read corpus production directory") {
         let entry = entry.expect("read production entry");
         let path = entry.path();
@@ -75,9 +75,12 @@ fn copy_copper_films(source: &Path, destination: &Path) {
             .extension()
             .and_then(|value| value.to_str())
             .unwrap_or("");
-        if matches!(extension.to_ascii_lowercase().as_str(), "gtl" | "gbl") {
+        if matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "gtl" | "gbl" | "txt"
+        ) {
             std::fs::copy(&path, destination.join(entry.file_name()))
-                .expect("copy corpus copper film");
+                .expect("copy corpus film or drill");
         }
     }
 }
@@ -126,7 +129,7 @@ fn sparkfun_panel_gerbers_never_merge_native_layout_nets() {
     // at each physical pad centre; the net comparison below never trusts the
     // generated reference, value, or package as connectivity authority.
     let job = TempJob::new("sparkfun_rp2040");
-    copy_copper_films(&production, &job.0);
+    copy_films_and_drill(&production, &job.0);
     std::fs::write(
         job.0.join("native-oracle-pos.csv"),
         native_placement_csv(&native),
