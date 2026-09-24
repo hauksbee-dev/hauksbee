@@ -51,7 +51,7 @@
 //! Consumed by `hauksbee models lint` (`hauksbee-engine/src/commands/models.rs`).
 //! Rationale: `docs/how-and-why/hauksbee-models/schema.md`.
 
-use crate::schema::{ComponentKind, ModelEntry};
+use crate::schema::{Characteristic, ComponentKind, ModelEntry};
 
 /// Names any kind may carry: resolve-report annotations, the explicit
 /// identity-without-behavior state, and the free-text `warning` the binder
@@ -257,19 +257,13 @@ const GLOSSARY: &str = "is A saturation current (a fitted law constant, not a le
     lambda 1/V channel-length modulation; cgs F gate-source capacitance; \
     cgd F gate-drain capacitance; cbd F drain-body capacitance; rd ohm drain resistance; \
     vout V fixed output setpoint; vref V reference voltage; gain - open-loop gain (V/V); \
-    pole_hz Hz dominant pole; slew V/s slew rate; rail_lo V output rail (low); \
+    pole_hz Hz dominant pole; slew V/us slew rate; rail_lo V output rail (low); \
     rail_hi V output rail (high); swing_lo V headroom from V-; swing_hi V headroom from V+; \
     out_lo V output low level; out_hi V output high level; hysteresis V input hysteresis; \
     ron_ohms ohm output on-resistance (VOL / IOL); leak_s S output-off conductance (IOH / VOH); \
     ron ohm switch on-resistance; roff ohm switch off-resistance; vth V control threshold; \
     vih V input high threshold; vil V input low threshold; voh V output high level; \
     vol V output low level; ro ohm output resistance";
-
-/// Params that ARE a printed bound (an input threshold, an output level), so
-/// equalling a min-only or max-only row is their meaning, not a mistake.
-const BOUND_PARAMS: &[&str] = &[
-    "vih", "vil", "voh", "vol", "out_lo", "out_hi", "rail_lo", "rail_hi", "swing_lo", "swing_hi",
-];
 
 fn glossary() -> impl Iterator<Item = [&'static str; 3]> {
     GLOSSARY.split(';').filter_map(|e| {
@@ -284,6 +278,82 @@ pub fn param_unit(name: &str) -> Option<&'static str> {
         .find(|[n, ..]| *n == name)
         .map(|[_, unit, _]| unit)
         .or_else(|| crate::units::suffix_unit(name).map(|(_, base)| base))
+}
+
+/// Which printed column of a row param the simulator reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Column {
+    /// The typ, else the midpoint of a row printing min and max; never a
+    /// one-sided bound.
+    Nominal,
+    /// A guaranteed level: that limit, else the typ of a row printing none.
+    Min,
+    Max,
+}
+
+/// The column table. A param that IS a guaranteed limit reads its worst-case
+/// column: an input threshold or output level (VIH/VOH min, VIL/VOL max), a
+/// headroom or dropout (max), and any name carrying a `min` or `max` word.
+/// Everything else is a nominal.
+pub fn row_column(name: &str) -> Column {
+    const MIN: &[&str] = &["vih", "voh", "out_hi", "rail_hi"];
+    const MAX: &[&str] = &["vil", "vol", "out_lo", "rail_lo", "vol_v", "voh_drop_v"];
+    const MAX_HEADROOM: &[&str] = &["dropout_v", "swing_lo", "swing_hi"];
+    let has = |word| name.split('_').any(|w| w == word);
+    if MIN.contains(&name) || has("min") {
+        Column::Min
+    } else if MAX.contains(&name) || MAX_HEADROOM.contains(&name) || has("max") {
+        Column::Max
+    } else {
+        Column::Nominal
+    }
+}
+
+/// The factor from a row's printed `unit` to the base unit of param `name`
+/// (its glossary or suffix unit), or none for a unitless param.
+fn row_scale(name: &str, unit: &str) -> Result<f64, String> {
+    let want = param_unit(name).filter(|u| *u != "-");
+    let scale = match want {
+        _ if unit.trim() == want.unwrap_or("") => Some(1.0),
+        Some(want) => crate::units::scale_between(unit, want),
+        None => None,
+    };
+    scale.ok_or_else(|| {
+        let want = want.map_or("no unit".to_string(), |u| format!("{u}, by its name"));
+        format!("unit '{unit}' does not fit '{name}', which is read in {want}")
+    })
+}
+
+/// The value the simulator reads from `row` as param `name`: the column
+/// [`row_column`] picks, converted from the printed unit to the one its name
+/// reads (`_ua` is micro-amperes).
+pub fn row_value(name: &str, row: &Characteristic) -> Result<f64, String> {
+    let suffix = crate::units::suffix_unit(name).map_or(1.0, |(scale, _)| scale);
+    let scale = row_scale(name, &row.unit)? / suffix;
+    let midpoint = row.min.zip(row.max).map(|(a, b)| (a + b) / 2.0);
+    let (value, reads) = match row_column(name) {
+        Column::Nominal => (row.typ.or(midpoint), "the typ, or the min/max midpoint"),
+        Column::Min => (row.min.or(row.typ), "the min, or the typ"),
+        Column::Max => (row.max.or(row.typ), "the max, or the typ"),
+    };
+    value.map(|v| v * scale).ok_or_else(|| {
+        format!("the row prints no column '{name}' reads ({reads}): record it as a characteristic")
+    })
+}
+
+/// `row` as param `name`'s characteristic record, in the base unit of that
+/// param, so its derived interval sits beside the declared ones.
+pub(crate) fn row_characteristic(name: &str, row: &Characteristic) -> Option<Characteristic> {
+    let base = row_scale(name, &row.unit).ok()?;
+    let scaled = |v: Option<f64>| v.map(|v| v * base);
+    Some(Characteristic {
+        parameter: name.to_string(),
+        min: scaled(row.min),
+        typ: scaled(row.typ),
+        max: scaled(row.max),
+        unit: param_unit(name).unwrap_or_default().to_string(),
+        ..row.clone()
+    })
 }
 
 /// `name = meaning (unit)` for each glossary param `kind` reads, for the prompt.
@@ -354,7 +424,8 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
             } else if base == unit
                 && !printed_typ
                 && row.typ.is_none()
-                && !BOUND_PARAMS.contains(&name.as_str())
+                // A bound param (VOL max) equalling the column it reads is its meaning.
+                && !matches!((row_column(name), column), (Column::Min, "min") | (Column::Max, "max"))
             {
                 out.push(format!(
                     "param '{name}' equals the {column} of characteristic '{row_name}', which \
@@ -633,7 +704,7 @@ mod tests {
         }
         assert_eq!(
             ["leak_s", "tpd_s", "cjo", "iq_a", "slew"].map(param_unit),
-            [Some("S"), Some("s"), Some("F"), Some("A"), Some("V/s")]
+            [Some("S"), Some("s"), Some("F"), Some("A"), Some("V/us")]
         );
         assert!(param_meanings(ComponentKind::Diode)
             .contains("cjo = zero-bias junction capacitance (F)"));
@@ -650,12 +721,7 @@ mod tests {
                 "documented in S",
             ),
             ("comparator", &leak_ok, row("max = 0.1", "nA"), ""),
-            (
-                "vreg",
-                "dropout_v = 0.5",
-                row("max = 0.5", "V"),
-                "prints no typ",
-            ),
+            ("vreg", "vout = 0.5", row("max = 0.5", "V"), "prints no typ"),
             (
                 "vreg",
                 "dropout_v = 0.5",
@@ -684,6 +750,39 @@ mod tests {
                 "{params}: {found:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_row_param_reads_its_column_in_the_unit_its_name_names() {
+        for case in [
+            "iq_a | typ = 65, max = 90, unit = \"uA\" | 6.500000e-5",
+            "supply_static_ua | typ = 65, max = 90, unit = \"mA\" | 6.500000e4",
+            "vout | min = 3.2, max = 3.4, unit = \"V\" | 3.300000e0",
+            "dropout_v | typ = 150, max = 250, unit = \"mV\" | 2.500000e-1",
+            "voh | min = 2.4, typ = 3, unit = \"V\" | 2.400000e0",
+            "vol | typ = 0.1, unit = \"V\" | 1.000000e-1",
+            "gain | typ = 1e5, unit = \"\" | 1.000000e5",
+            "vout | min = 3.2, unit = \"V\" | reads (the typ, or the min/max midpoint)",
+            "vol | min = 0.1, unit = \"V\" | reads (the max, or the typ)",
+            "iq_a | typ = 5, unit = \"mV/\u{b0}C\" | which is read in A, by its name",
+            "gain | typ = 5, unit = \"V\" | which is read in no unit",
+        ] {
+            let [name, cols, want] = case.splitn(3, " | ").collect::<Vec<_>>()[..] else {
+                panic!("{case}")
+            };
+            let src = format!(
+                "{}\nconditions = \"c\"\nbasis = \"b\"",
+                cols.replace(", ", "\n")
+            );
+            let row: Characteristic = toml::from_str(&src).expect("row parses");
+            let got = row_value(name, &row).map_or_else(|e| e, |v| format!("{v:.6e}"));
+            assert!(got.contains(want), "{case}: {got}");
+        }
+        let columns = ["vih", "i_max_a", "rail_lo", "iq_a"].map(row_column);
+        assert_eq!(
+            columns,
+            [Column::Min, Column::Max, Column::Max, Column::Nominal]
+        );
     }
 
     #[test]

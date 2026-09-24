@@ -474,6 +474,7 @@ pub fn bind_board_with(
             }
         };
 
+        let warning = with_tie_warning(comp, &res, warning);
         if let Some(k) = &kind_str {
             component_kinds.insert(comp.reference.clone(), k.clone());
         }
@@ -1112,6 +1113,7 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
             origin: None,
             provenance: None,
             references: Vec::new(),
+            tied: Vec::new(),
         };
     }
     // Pull a likely manufacturer part-number out of properties for mpn match.
@@ -1176,7 +1178,7 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
                 )
                 .expect("static fallback provenance is valid"),
             ),
-            references: Vec::new(),
+            references: Vec::new(), tied: Vec::new(),
         };
     }
     res
@@ -3412,6 +3414,33 @@ fn entry_warning(comp: &Component, model: &ModelEntry) -> Option<String> {
     ))
 }
 
+/// A library tie broken only by entry id is a guess about which part (which
+/// variant) this is, so it leads the part's warning as evidence on every
+/// surface; the choice itself stays the deterministic smallest id.
+fn with_tie_warning(
+    comp: &Component,
+    res: &hauksbee_models::Resolution,
+    warning: Option<String>,
+) -> Option<String> {
+    let Some(chosen) = res.model.as_ref().filter(|_| !res.tied.is_empty()) else {
+        return warning;
+    };
+    let (marker, part) = (
+        Assumption::PARTIAL_MODEL_MARKER,
+        format!("{} ({}): ", comp.reference, comp.value),
+    );
+    let rest = warning
+        .as_deref()
+        .map(|w| w.strip_prefix(marker).unwrap_or(w));
+    let rest = rest.map(|w| format!("; also {}", w.strip_prefix(&part).unwrap_or(w)));
+    let (id, tied) = (&chosen.id, res.tied.join(", "));
+    Some(format!(
+        "{marker}{part}matched library entries {id}, {tied} equally well; bound '{id}', the first \
+         by id, so where they differ (pins, values) results describe that entry{}",
+        rest.unwrap_or_default()
+    ))
+}
+
 /// The open outcome for a passive whose value text does not parse.
 fn unparseable(comp: &Component) -> (BindOutcome, Option<String>) {
     let reason = format!("unparseable value '{}'", comp.value);
@@ -5133,18 +5162,11 @@ fn log_mcu_auto_decision(
     let auto_router = model.params.get_str("auto_bind") == Some("family_router");
     if auto_router {
         let family = model.params.get_str("auto_bind_family").unwrap_or("MCU");
-        let named = model
-            .params
-            .0
-            .get("auto_bind_pin_names")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as usize;
-        let derived = model
-            .params
-            .0
-            .get("auto_bind_derived_pins")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as usize;
+        let count = |key| model.params.get_f64(key).unwrap_or(0.0) as usize;
+        let (named, derived) = (
+            count("auto_bind_pin_names"),
+            count("auto_bind_derived_pins"),
+        );
         let summary = model
             .params
             .get_str("auto_bind_pin_summary")
@@ -7479,6 +7501,68 @@ style = "i2c_pointer"
             assert!((reg.min_in_v - min_in_v).abs() < 1e-12, "{case}: {reg:?}");
             assert_eq!(reg.max_in_v, max_in_v, "{case}");
         }
+    }
+
+    /// A row param binds exactly as the scalar it replaces, its min/max giving
+    /// the vout interval the headroom reads; a full library tie leads the caveat.
+    #[test]
+    fn row_params_bind_like_scalars_and_a_full_tie_is_a_caveat() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let row = |cols: &str| format!("{{ {cols}, conditions = \"c\", basis = \"b\" }}");
+        let vout = row("min = 3.2, typ = 3.3, max = 3.4, unit = \"V\"");
+        let dropout = row("typ = 250, unit = \"mV\"");
+        let limits = "[[models.source.uncertainty]]\nstatus = \"interval\"\nparameter = \"vout\"\n\
+             low = 3.2\nhigh = 3.4\nunit = \"V\"\nkind = \"specification-limits\"\nbasis = \"b\"\n";
+        let tie = "{}\nvout = 3.3\ndropout_v = 0.25";
+        let (scalar, row) = (
+            limits.to_owned() + tie,
+            format!("{{}}\nvout = {vout}\ndropout_v = {dropout}"),
+        );
+        for (id, value, body) in [
+            ("zz_scalar", "ZZ_SCALAR", &*scalar),
+            ("zz_row", "ZZ_ROW", &row),
+            ("zz_tie_b", "ZZ_TIE", tie),
+            ("zz_tie_a", "ZZ_TIE", tie),
+        ] {
+            let head = format!(
+                "[[models]]\nid = \"{id}\"\nkind = \"vreg\"\ndescription = \"synthetic\"\n\
+                 [models.match]\nvalue_re = '^{value}$'\n[models.source]\ntier = \"datasheet-derived\"\n\
+                 [[models.source.uncertainty]]\nstatus = \"unknown\"\nparameter = \"model\"\nreason = \"-\"\n"
+            );
+            let card = head + &body.replace("{}", "[models.params]\ncout_min_f = 0.0\niq_a = 1e-5");
+            std::fs::write(dir.path().join(format!("{id}.toml")), card).expect("card written");
+        }
+        let lib = ModelLibrary::builtin().with_user_dir(dir.path());
+        let resolve = |v: &str| {
+            lib.as_ref()
+                .expect("cards load")
+                .resolve(&ComponentQuery::new(None, Some(v.into()), None))
+        };
+        let [scalar, row] = ["ZZ_SCALAR", "ZZ_ROW"].map(|value| {
+            let (res, mut circuit) = (resolve(value), Circuit::new());
+            let roles = roles(&mut circuit, &["in", "out", "gnd"]);
+            let model = res.model.expect("the synthetic card resolves");
+            let (outcome, warning, regs) =
+                bind_u9(&model, res.provenance.as_ref(), &mut circuit, &roles);
+            let limits = format!("{:.9?} {:.9}", regs[0].dropout_v, regs[0].min_in_v);
+            (
+                format!("{outcome:?} {warning:?} {:?}", circuit.devices),
+                limits,
+            )
+        });
+        assert_eq!(scalar, row);
+        assert_eq!(row.1, "Some(0.250000000) 3.650000000");
+
+        let (res, component) = (resolve("ZZ_TIE"), comp("U9", "ZZ_TIE"));
+        let marker = Assumption::PARTIAL_MODEL_MARKER;
+        let bare = with_tie_warning(&component, &res, None).unwrap_or_default();
+        let tie = "U9 (ZZ_TIE): matched library entries zz_tie_a, zz_tie_b equally well; bound 'zz_tie_a'";
+        assert!(bare.starts_with(&format!("{marker}{tie}")), "{bare}");
+        let other = Some(format!("{marker}U9 (ZZ_TIE): enable off"));
+        assert_eq!(
+            with_tie_warning(&component, &res, other),
+            Some(format!("{bare}; also enable off"))
+        );
     }
 
     fn analog_switch_entry(description: &str) -> ModelEntry {

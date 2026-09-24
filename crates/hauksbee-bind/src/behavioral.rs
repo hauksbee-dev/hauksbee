@@ -406,7 +406,7 @@ fn compile_law_implicit(
             || token == "t_in_state"
             || token.starts_with("state_");
         if !runtime_owned {
-            if let Some(v) = params.0.get(token).and_then(|v| v.as_f64()) {
+            if let Some(v) = params.get_f64(token) {
                 // Round-trip-exact literal, parenthesised so `1/x` stays `1/(v)`.
                 out.push_str(&format!("({v:?})"));
                 continue;
@@ -1176,8 +1176,8 @@ impl BehavioralDevice {
         for load in &self.profiled_loads {
             let _ = ctx.set_value(format!("i_load_{}", load.name), Value::Float(load.last_i_a));
         }
-        for (k, v) in &self.params.0 {
-            if let Some(f) = v.as_f64() {
+        for k in self.params.0.keys() {
+            if let Some(f) = self.params.get_f64(k) {
                 let _ = ctx.set_value(k.clone(), Value::Float(f));
             }
         }

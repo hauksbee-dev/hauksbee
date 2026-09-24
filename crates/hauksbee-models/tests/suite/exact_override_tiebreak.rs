@@ -111,3 +111,34 @@ value_re = "(?i)^ZZ904$"
         assert_eq!(m.id, "zz_family");
     }
 }
+
+#[test]
+fn a_full_tie_binds_the_first_id_and_names_the_others() {
+    // Three same-layer entries with one regex: nothing but the id separates
+    // them, so the smallest id wins in every load order and the rest are named.
+    let base = tempfile::tempdir().expect("tempdir");
+    let ids = ["zz_c", "zz_a", "zz_b"];
+    for id in ids {
+        let card = format!(
+            "[[models]]\nid = \"{id}\"\nkind = \"diode\"\ndescription = \"synthetic\"\n\
+             params = {{ is = 1e-14, n = 1.0, rs = 1.0 }}\n[models.match]\nvalue_re = \"(?i)^ZZ77$\"\n"
+        );
+        let dir = base.path().join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("card.toml"), card).unwrap();
+    }
+    for order in [ids, [ids[1], ids[2], ids[0]]] {
+        let mut lib = ModelLibrary::empty();
+        for id in order {
+            let errs = lib.load_dir_layer(&base.path().join(id), SourceLayer::UserDir);
+            assert!(errs.is_empty(), "{errs:?}");
+        }
+        let r = resolve(&lib, "ZZ77");
+        assert_eq!(
+            r.model.expect("ZZ77 resolves").id,
+            "zz_a",
+            "order {order:?}"
+        );
+        assert_eq!(r.tied, ["zz_b", "zz_c"]);
+    }
+}

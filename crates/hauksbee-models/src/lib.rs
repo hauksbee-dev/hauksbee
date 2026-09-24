@@ -291,6 +291,9 @@ pub struct Resolution {
     /// citation identifies bytes/sections while uncertainty states what the
     /// model is allowed to claim.
     pub references: Vec<schema::ModelSourceReference>,
+    /// Other entry ids that matched exactly as well as the winner, which only
+    /// its smaller id chose: deterministic, but a guess about which part this is.
+    pub tied: Vec<String>,
 }
 
 impl Resolution {
@@ -304,6 +307,7 @@ impl Resolution {
             origin: None,
             provenance: None,
             references: Vec::new(),
+            tied: Vec::new(),
         }
     }
 }
@@ -695,33 +699,26 @@ impl ModelLibrary {
 
         // Layers 0..30: one scan, best (layer priority, specificity,
         // regex constrainedness, smallest id) wins. The last two keys make
-        // ties deterministic and independent of load order.
+        // ties deterministic and independent of load order; the entries only
+        // the id separates are reported as `tied`.
         use std::cmp::Reverse;
-        let sort_key = |le: &'_ LayeredEntry, score: u32| {
-            (
-                le.provenance.tier().priority(),
-                le.layer.priority(),
-                score,
-                le.compiled.regex_specificity(),
-                Reverse(le.compiled.entry.id.clone()),
-            )
-        };
-        let mut best: Option<(&LayeredEntry, u32)> = None;
-        for le in &self.entries {
-            if !le.compiled.matches(q) {
-                continue;
-            }
+        let rank = |le: &LayeredEntry| {
             let score = le.compiled.specificity_score(q);
-            if best
-                .as_ref()
-                .map(|(b, s)| sort_key(le, score) > sort_key(b, *s))
-                .unwrap_or(true)
-            {
-                best = Some((le, score));
-            }
-        }
-        if let Some((le, score)) = best {
+            let (tier, layer) = (le.provenance.tier().priority(), le.layer.priority());
+            (tier, layer, score, le.compiled.regex_specificity())
+        };
+        let matched = || self.entries.iter().filter(|le| le.compiled.matches(q));
+        if let Some(le) = matched().max_by_key(|le| (rank(le), Reverse(&le.compiled.entry.id))) {
+            let (id, top @ (_, _, score, _)) = (&le.compiled.entry.id, rank(le));
+            let tie = |other: &&LayeredEntry| rank(other) == top && other.compiled.entry.id != *id;
+            let mut tied: Vec<String> = matched()
+                .filter(tie)
+                .map(|o| o.compiled.entry.id.clone())
+                .collect();
+            tied.sort();
+            tied.dedup();
             return Resolution {
+                tied,
                 model: Some(le.compiled.entry.clone()),
                 confidence: score_to_confidence(score),
                 query: q.clone(),
@@ -806,7 +803,7 @@ impl ModelLibrary {
             // Taken before compiling so provenance is carried once, by
             // `ModelSource`, not also inside the compiled entry. Builtin cards
             // skip `validate` above, so their source is checked here too.
-            let declaration = entry.source.take();
+            let mut declaration = entry.source.take();
             if let Some(Err(e)) = declaration.as_ref().map(schema::ModelSourceSpec::validate) {
                 return Err(invalid(format!("[models.source]: {e}")));
             }
@@ -818,6 +815,13 @@ impl ModelLibrary {
                 .as_ref()
                 .map(|source| source.references.clone())
                 .unwrap_or_default();
+            // A row param is its own characteristic, so its interval is derived
+            // (a card with no source declares no uncertainty, derived or not).
+            if let Some(source) = declaration.as_mut() {
+                let rows = compiled.entry.params.rows();
+                let rows = rows.filter_map(|(key, row)| param_names::row_characteristic(key, row));
+                source.characteristic.extend(rows);
+            }
             let provenance = model_source(
                 declaration.as_ref(),
                 default_tier,
@@ -900,6 +904,7 @@ impl ModelLibrary {
                 .expect("SPICE card names are non-empty after parsing"),
             ),
             references: Vec::new(),
+            tied: Vec::new(),
         }
     }
 }
@@ -917,7 +922,7 @@ pub fn model_source(
     origin: &str,
     id: &str,
 ) -> Result<ModelSource, String> {
-    let uncertainty = declared
+    let mut uncertainty = declared
         .map(|s| s.uncertainty.clone())
         .filter(|values| !values.is_empty())
         .unwrap_or_else(|| {
@@ -927,6 +932,15 @@ pub fn model_source(
             )
             .expect("static unknown uncertainty is valid")]
         });
+    // A characteristic row printing min and max states its interval, unless a
+    // declared one already names that parameter or those bounds.
+    for row in declared.iter().flat_map(|s| &s.characteristic) {
+        let stated = |u: &ModelUncertainty| {
+            matches!(u, ModelUncertainty::Interval { parameter: p, low, high, .. }
+            if *p == row.parameter || [Some(*low), Some(*high)] == [row.min, row.max])
+        };
+        uncertainty.extend(row.interval().filter(|_| !uncertainty.iter().any(stated)));
+    }
     ModelSource::new(
         pack_tier
             .or(declared.map(|s| s.tier))

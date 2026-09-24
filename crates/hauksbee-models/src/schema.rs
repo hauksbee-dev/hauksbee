@@ -300,10 +300,12 @@ pub struct ModelSourceSpec {
 
 /// One published characteristic row carrying only the min/typ/max columns the
 /// row prints, so a one-sided limit or a typical-only value keeps its number
-/// without becoming a two-sided interval.
+/// without becoming a two-sided interval. As a `[models.params]` value it is
+/// that param's row, and `parameter` defaults to the key.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Characteristic {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub parameter: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
@@ -388,6 +390,14 @@ impl Characteristic {
         let named = [("min", self.min), ("typ", self.typ), ("max", self.max)];
         out.extend(crate::units::conversion_problem(&texts, &self.unit, &named));
         out
+    }
+
+    /// The specification-limits interval a row printing both min and max
+    /// states; the typ stays in the row.
+    pub(crate) fn interval(&self) -> Option<ModelUncertainty> {
+        let (a, b) = (self.min?, self.max?);
+        ModelUncertainty::interval(&self.parameter, a.min(b), a.max(b), &self.unit, &self.basis)
+            .ok()
     }
 }
 
@@ -1164,9 +1174,21 @@ impl MatchRules {
 pub struct Params(pub BTreeMap<String, ParamValue>);
 
 impl Params {
-    /// Retrieve a floating-point param by name.
+    /// Retrieve a floating-point param by name: a number, or the column of a
+    /// printed row that [`crate::param_names::row_value`] picks for `key`.
     pub fn get_f64(&self, key: &str) -> Option<f64> {
-        self.0.get(key)?.as_f64()
+        match self.0.get(key)? {
+            ParamValue::Row(row) => crate::param_names::row_value(key, row).ok(),
+            value => value.as_f64(),
+        }
+    }
+
+    /// The params written as printed rows, by key.
+    pub fn rows(&self) -> impl Iterator<Item = (&str, &Characteristic)> {
+        self.0.iter().filter_map(|(key, value)| match value {
+            ParamValue::Row(row) => Some((key.as_str(), &**row)),
+            _ => None,
+        })
     }
 
     /// Retrieve a string param by name.
@@ -1211,7 +1233,8 @@ impl Params {
     }
 }
 
-/// A parameter value, either a float, integer, or string.
+/// A parameter value: a float, integer, bool or string, or a printed datasheet
+/// row whose column and unit code chooses (read it through [`Params::get_f64`]).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum ParamValue {
@@ -1219,6 +1242,7 @@ pub enum ParamValue {
     Int(i64),
     Bool(bool),
     String(String),
+    Row(Box<Characteristic>),
 }
 
 macro_rules! param_from {
@@ -1233,7 +1257,8 @@ macro_rules! param_from {
 param_from!(f64 => Float, i64 => Int, bool => Bool, String => String);
 
 impl ParamValue {
-    /// Return as `f64`, converting integers.
+    /// Return as `f64`, converting integers; `None` for a row, whose value
+    /// depends on its key.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             ParamValue::Float(v) => Some(*v),
