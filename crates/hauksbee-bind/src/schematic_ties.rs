@@ -442,13 +442,7 @@ mod tests {
             components: vec![hauksbee_extract::Component {
                 reference: "U1".into(),
                 value: "MCU".into(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
-                layer: String::new(),
-                properties: Vec::new(),
-                dnp: false,
-                pins: Vec::new(),
+                ..Default::default()
             }],
         };
         let layout = dir.path().join("design.brd");
@@ -505,26 +499,19 @@ mod tests {
                 value: "10k".into(),
                 lib_id: "device:R0603".into(),
                 footprint: "R0603".into(),
-                position: None,
-                layer: String::new(),
-                properties: Vec::new(),
-                dnp: false,
                 pins: vec![
                     hauksbee_extract::Pin {
                         number: "1".into(),
                         net: Some(1),
-                        function: String::new(),
-                        kind: String::new(),
-                        position: None,
+                        ..Default::default()
                     },
                     hauksbee_extract::Pin {
                         number: "2".into(),
                         net: Some(2),
-                        function: String::new(),
-                        kind: String::new(),
-                        position: None,
+                        ..Default::default()
                     },
                 ],
+                ..Default::default()
             }],
         };
 

@@ -232,9 +232,8 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                     .map(|p| Pin {
                         number: p.name.clone(),
                         net: net_id(p.net),
-                        function: String::new(),
-                        kind: String::new(),
                         position: Some((p.x_mm, p.y_mm)),
+                        ..Default::default()
                     })
                     .collect()
             })

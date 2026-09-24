@@ -1947,19 +1947,13 @@ mod tests {
         Component {
             reference: reference.to_string(),
             value: value.to_string(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
             layer: "F.Cu".to_string(),
-            properties: Vec::new(),
-            dnp: false,
             pins: vec![Pin {
                 number: "1".to_string(),
                 net: Some(net),
-                function: String::new(),
-                kind: String::new(),
-                position: None,
+                ..Default::default()
             }],
+            ..Default::default()
         }
     }
 

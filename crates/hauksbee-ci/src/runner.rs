@@ -3880,19 +3880,13 @@ mod spi_cs_source_tests {
             components: vec![Component {
                 reference: "U5".to_string(),
                 value: value.to_string(),
-                lib_id: String::new(),
                 footprint: footprint.to_string(),
-                position: None,
-                layer: String::new(),
-                properties: Vec::new(),
-                dnp: false,
                 pins: vec![Pin {
                     number: cs_pad.to_string(),
                     net: Some(1),
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
+                    ..Default::default()
                 }],
+                ..Default::default()
             }],
         }
     }

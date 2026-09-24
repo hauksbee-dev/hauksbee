@@ -224,12 +224,8 @@ mod tests {
             reference: reference.to_string(),
             value: value.to_string(),
             lib_id: lib_id.to_string(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
             pins: (1..=n).map(|i| pin(&i.to_string(), 0)).collect(),
+            ..Default::default()
         }
     }
 

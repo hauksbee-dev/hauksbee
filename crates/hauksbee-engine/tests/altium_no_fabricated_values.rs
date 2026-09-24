@@ -22,17 +22,15 @@ use crate::support::netted_pin as pin;
 fn valueless(reference: &str, footprint: &str, nets: (i64, i64)) -> Component {
     Component {
         reference: reference.to_string(),
-        value: String::new(),
         lib_id: footprint.to_string(),
         footprint: footprint.to_string(),
-        position: None,
         layer: "F.Cu".to_string(),
         properties: vec![(
             "value_unresolved".to_string(),
             "no value in the PcbDoc; Altium keeps values in the .SchDoc".to_string(),
         )],
-        dnp: false,
         pins: vec![pin("1", nets.0), pin("2", nets.1)],
+        ..Default::default()
     }
 }
 

@@ -96,9 +96,8 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         comps.entry(reference).or_default().push(Pin {
             number: pin_number,
             net,
-            function: String::new(),
-            kind: String::new(),
             position,
+            ..Default::default()
         });
     }
 
@@ -180,13 +179,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         .map(|reference| Component {
             pins: comps.remove(&reference).unwrap_or_default(),
             reference,
-            value: String::new(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
+            ..Default::default()
         })
         .collect();
 

@@ -6978,13 +6978,7 @@ mod tests {
         Component {
             reference: reference.to_string(),
             value: value.to_string(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
-            pins: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -6992,9 +6986,7 @@ mod tests {
         Pin {
             number: number.to_string(),
             net: Some(net),
-            function: String::new(),
-            kind: String::new(),
-            position: None,
+            ..Default::default()
         }
     }
 

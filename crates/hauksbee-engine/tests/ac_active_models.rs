@@ -21,10 +21,7 @@ fn ina186_board() -> ExtractedBoard {
             value: "INA186".to_string(),
             lib_id: "Package_TO_SOT_SMD:SOT-363_SC-70-6".to_string(),
             footprint: "Package_TO_SOT_SMD:SOT-363_SC-70-6".to_string(),
-            position: None,
             layer: "F.Cu".to_string(),
-            properties: Vec::new(),
-            dnp: false,
             pins: vec![
                 pin("1", 3),
                 pin("2", 1),
@@ -33,6 +30,7 @@ fn ina186_board() -> ExtractedBoard {
                 pin("5", 5),
                 pin("6", 6),
             ],
+            ..Default::default()
         }],
     }
 }

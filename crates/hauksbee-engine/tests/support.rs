@@ -198,11 +198,8 @@ pub fn component(
         value,
         lib_id,
         footprint,
-        position: None,
-        layer: String::new(),
-        properties: Vec::new(),
-        dnp: false,
         pins,
+        ..Default::default()
     }
 }
 

@@ -275,7 +275,7 @@ pub struct Net {
 }
 
 /// A component pin/pad connection point.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Pin {
     /// Pad number / pin number as printed ("1", "A8", "EP").
     pub number: String,
@@ -290,7 +290,7 @@ pub struct Pin {
     pub position: Option<(f64, f64)>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Component {
     /// Reference designator ("R1", "U101").
     pub reference: String,
@@ -898,9 +898,7 @@ pub(crate) mod testutil {
         Pin {
             number: number.into(),
             net,
-            function: String::new(),
-            kind: String::new(),
-            position: None,
+            ..Default::default()
         }
     }
 
@@ -916,11 +914,8 @@ pub(crate) mod testutil {
             value: value.into(),
             lib_id: lib_id.into(),
             footprint: footprint.into(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
             pins,
+            ..Default::default()
         }
     }
 

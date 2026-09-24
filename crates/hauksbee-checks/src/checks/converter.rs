@@ -601,22 +601,16 @@ mod tests {
             Component {
                 reference: reference.into(),
                 value: value.into(),
-                lib_id: String::new(),
-                footprint: String::new(),
-                position: None,
                 layer: "F.Cu".into(),
-                properties: vec![],
-                dnp: false,
                 pins: pins
                     .into_iter()
                     .map(|(number, net)| Pin {
                         number: number.into(),
                         net: Some(net),
-                        function: String::new(),
-                        kind: String::new(),
-                        position: None,
+                        ..Default::default()
                     })
                     .collect(),
+                ..Default::default()
             }
         };
         ExtractedBoard {

@@ -119,22 +119,15 @@ mod tests {
         Component {
             reference: "U1".into(),
             value: "TEST".into(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: Vec::new(),
-            dnp: false,
             pins: pins
                 .iter()
                 .map(|(number, net)| Pin {
                     number: (*number).into(),
                     net: *net,
-                    function: String::new(),
-                    kind: String::new(),
-                    position: None,
+                    ..Default::default()
                 })
                 .collect(),
+            ..Default::default()
         }
     }
 

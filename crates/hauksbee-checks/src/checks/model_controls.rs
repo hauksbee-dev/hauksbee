@@ -83,9 +83,7 @@ mod tests {
             pins.push(Pin {
                 number: number.into(),
                 net: Some(net),
-                function: String::new(),
-                kind: String::new(),
-                position: None,
+                ..Default::default()
             });
         }
         ExtractedBoard {
@@ -127,13 +125,10 @@ mod tests {
             components: vec![Component {
                 reference: "U6".into(),
                 value: "W25Q80DVS".into(),
-                lib_id: String::new(),
                 footprint: "LibreSolar:SOIC-8_3.9x4.9mm_Pitch1.27mm".into(),
-                position: None,
                 layer: "Top".into(),
-                properties: Vec::new(),
-                dnp: false,
                 pins,
+                ..Default::default()
             }],
         }
     }

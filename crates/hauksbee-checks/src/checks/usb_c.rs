@@ -1345,11 +1345,8 @@ mod tests {
             value: "USB-C".into(),
             lib_id: "Connector:USB_C_Receptacle".into(),
             footprint: fp.into(),
-            position: None,
-            layer: String::new(),
-            properties: vec![],
-            dnp: false,
             pins: vec![pin_fn("A5", cc1, "CC1"), pin_fn("B5", cc2, "CC2")],
+            ..Default::default()
         };
         // J_early (board-order first, score 100+5=105) then J_late (later, but
         // "receptacle" in the footprint → 100+40+5=145).
@@ -1702,35 +1699,24 @@ mod tests {
                     value: "USB-C".into(),
                     lib_id: "Connector:USB_C_Receptacle".into(),
                     footprint: "USB_C_Receptacle_HRO".into(),
-                    position: None,
-                    layer: String::new(),
-                    properties: vec![],
-                    dnp: false,
                     pins: vec![pin_fn("A5", 1, "CC1"), pin_fn("B5", 2, "CC2")],
+                    ..Default::default()
                 },
                 // External discrete 5.1k Rd on CC1 -> GND.
                 hauksbee_extract::Component {
                     reference: "R1".into(),
                     value: "5.1k".into(),
                     lib_id: "Device:R".into(),
-                    footprint: String::new(),
-                    position: None,
-                    layer: String::new(),
-                    properties: vec![],
-                    dnp: false,
                     pins: vec![pin("1", 1), pin("2", 0)],
+                    ..Default::default()
                 },
                 // nPM1300 PMIC whose CC1 provides an internal 5.1k Rd.
                 hauksbee_extract::Component {
                     reference: "U1".into(),
                     value: "nPM1300-QEXX".into(),
                     lib_id: "Battery_Management:NPM1300".into(),
-                    footprint: String::new(),
-                    position: None,
-                    layer: String::new(),
-                    properties: vec![],
-                    dnp: false,
                     pins: vec![pin_fn("30", 1, "CC1")],
+                    ..Default::default()
                 },
             ],
         };

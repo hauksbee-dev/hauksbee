@@ -563,9 +563,8 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             pins.push(Pin {
                 number,
                 net,
-                function: String::new(),
-                kind: String::new(),
                 position: Some((t.x_mm, t.y_mm)),
+                ..Default::default()
             });
         }
 

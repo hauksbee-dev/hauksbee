@@ -75,14 +75,12 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                 value: comp.find_value("value").unwrap_or_default(),
                 lib_id,
                 footprint: comp.find_value("footprint").unwrap_or_default(),
-                position: None,
-                layer: String::new(),
                 properties,
                 // KiCad netlists encode DNP as a (usually value-less) property
                 // child; thread it through so DNP-aware analysis behaves the same
                 // regardless of ingestion path (PCB / schematic already do).
                 dnp,
-                pins: Vec::new(),
+                ..Default::default()
             });
         }
     }

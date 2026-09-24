@@ -217,9 +217,8 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                             Pin {
                                 number: pname.clone(),
                                 net: pad_net.get(&(el.name.clone(), pname.clone())).copied(),
-                                function: String::new(),
-                                kind: String::new(),
                                 position: Some(abs),
+                                ..Default::default()
                             }
                         })
                         .collect()

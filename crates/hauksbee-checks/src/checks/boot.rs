@@ -557,22 +557,15 @@ mod tests {
         Pin {
             number: "1".into(),
             net,
-            function: String::new(),
-            kind: String::new(),
-            position: None,
+            ..Default::default()
         }
     }
     fn resistor(reference: &str, a: i64, b: i64) -> Component {
         Component {
             reference: reference.into(),
             value: "10k".into(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: vec![],
-            dnp: false,
             pins: vec![pin(Some(a)), pin(Some(b))],
+            ..Default::default()
         }
     }
     #[test]
@@ -671,14 +664,9 @@ mod tests {
     fn part_dnp(reference: &str, net: i64, dnp: bool) -> Component {
         Component {
             reference: reference.into(),
-            value: String::new(),
-            lib_id: String::new(),
-            footprint: String::new(),
-            position: None,
-            layer: String::new(),
-            properties: vec![],
             dnp,
             pins: vec![pin(Some(net))],
+            ..Default::default()
         }
     }
 
@@ -746,12 +734,7 @@ mod tests {
     ) -> Component {
         Component {
             reference: reference.into(),
-            value: String::new(),
-            lib_id: String::new(),
             footprint: footprint.into(),
-            position: None,
-            layer: String::new(),
-            properties: vec![],
             dnp,
             pins: pads
                 .iter()
@@ -759,10 +742,10 @@ mod tests {
                     number: (*num).into(),
                     net: Some(*net),
                     function: (*func).into(),
-                    kind: String::new(),
-                    position: None,
+                    ..Default::default()
                 })
                 .collect(),
+            ..Default::default()
         }
     }
 

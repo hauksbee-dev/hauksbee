@@ -104,14 +104,12 @@ mod identity_tests {
                 value: "1k".to_string(),
                 lib_id: "Device:R".to_string(),
                 footprint: "R_0603".to_string(),
-                position: None,
                 layer: "F.Cu".to_string(),
                 properties: vec![(
                     hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.to_string(),
                     "inferred reference without source UID".to_string(),
                 )],
-                dnp: false,
-                pins: Vec::new(),
+                ..Default::default()
             }],
         };
 
@@ -138,11 +136,9 @@ mod identity_tests {
                 value: "0R".to_string(),
                 lib_id: "Device:R".to_string(),
                 footprint: "R_0603".to_string(),
-                position: None,
                 layer: "F.Cu".to_string(),
-                properties: Vec::new(),
                 dnp: true,
-                pins: Vec::new(),
+                ..Default::default()
             }],
         };
 

@@ -1003,9 +1003,8 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
                 Pin {
                     number: unescape(number),
                     net,
-                    function: String::new(),
-                    kind: String::new(),
                     position,
+                    ..Default::default()
                 }
             })
             .collect();

@@ -449,10 +449,8 @@ fn repeated_physical_pads_bind_one_logical_two_terminal_resistor() {
         vec![
             Pin {
                 number: "1".to_string(),
-                net: None,
-                function: String::new(),
                 kind: "passive".to_string(),
-                position: None,
+                ..Default::default()
             },
             pin("2", 2, ""),
             pin("1", 1, ""),

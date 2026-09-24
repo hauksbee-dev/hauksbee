@@ -1161,13 +1161,9 @@ sense_full_scale_v = 0.05
         Component {
             reference: reference.into(),
             value: value.into(),
-            lib_id: String::new(),
             footprint: footprint.into(),
-            position: None,
-            layer: String::new(),
-            properties: vec![],
-            dnp: false,
             pins,
+            ..Default::default()
         }
     }
 
