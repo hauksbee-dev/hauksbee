@@ -1447,7 +1447,7 @@ impl InputResponder for SoftI2cResponder {
 pub(crate) mod tests {
     use super::*;
     use crate::peripherals::register_map::RegisterMapSensor;
-    use crate::peripherals::spi::SpiSlave;
+    use crate::peripherals::test_support::FixedSpiSlave;
 
     /// A responder that answers every edge on its pins with a fixed drive.
     struct Probe {
@@ -2267,19 +2267,8 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
     /// presented wrong bits, so the responder must fault.
     #[test]
     fn bitbang_spi_faults_on_previewless_nonzero_reply() {
-        struct Opaque;
-        impl SpiSlave for Opaque {
-            fn transfer(&mut self, _mosi: u8) -> u8 {
-                0xAB
-            }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
-        }
-        let bus = Arc::new(Mutex::new(SpiBus::new("U9", Box::new(Opaque))));
+        let opaque = FixedSpiSlave::new(0xAB);
+        let bus = Arc::new(Mutex::new(SpiBus::new("U9", Box::new(opaque))));
         let mut m = SpiMaster {
             resp: BitBangSpiResponder::new(bus, PINS),
             miso: false,
@@ -2432,10 +2421,7 @@ style = "i2c_pointer"
             m.edge(SCL, true);
             m.edge(SCL, false);
         }
-        m.edge(SDA, true);
-        m.edge(SCL, true);
-        m.edge(SDA, false);
-        m.edge(SCL, false);
+        m.start();
         assert!(m.write_byte(0x68 << 1), "post-resync address must ACK");
         m.stop();
     }

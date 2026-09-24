@@ -6694,6 +6694,7 @@ fn adc_channel_promoted(binding: &McuBinding, ch: u8) -> bool {
 mod tests {
     use super::*;
     use crate::peripherals::controls::stamp_resistor;
+    use crate::peripherals::test_support::FixedSpiSlave;
     use crate::responders::tests::one_bit_spec;
     use hauksbee_ir::SourceKind;
 
@@ -7621,6 +7622,12 @@ missing = ["measurement_registers"]
 
     // ── AVR-bound electrical proofs (need the in-process simavr core) ────────
 
+    /// The Arduino Nano module "A1" at x = 100 with the given pads.
+    #[cfg(feature = "avr")]
+    fn nano(pads: &'static [(u8, u8, usize)]) -> FixturePart<'static> {
+        ("Module:Arduino_Nano", "A1", "Arduino_Nano", 100, pads)
+    }
+
     /// A Nano module driving net CLK from A2 (PC2) into an RC integrator
     /// (10k into 100 nF, tau = 1 ms).
     #[cfg(feature = "avr")]
@@ -7628,13 +7635,7 @@ missing = ["measurement_registers"]
         pcb_fixture(
             &["", "GND", "+5V", "CLK", "MID"],
             &[
-                (
-                    "Module:Arduino_Nano",
-                    "A1",
-                    "Arduino_Nano",
-                    100,
-                    &[(4, 4, 1), (27, 27, 2), (21, 21, 3)],
-                ),
+                nano(&[(4, 4, 1), (27, 27, 2), (21, 21, 3)]),
                 ("Resistor:R", "R1", "10k", 110, &[(1, 0, 3), (2, 2, 4)]),
                 ("Capacitor:C", "C1", "100nF", 120, &[(1, 0, 4), (2, 2, 1)]),
             ],
@@ -7648,19 +7649,13 @@ missing = ["measurement_registers"]
         pcb_fixture(
             &["", "GND", "+5V", "SER", "SRCLK", "RCLK", "Q0", "Q7"],
             &[
-                (
-                    "Module:Arduino_Nano",
-                    "A1",
-                    "Arduino_Nano",
-                    100,
-                    &[
-                        (4, 4, 1),
-                        (27, 27, 2),
-                        (14, 14, 3),
-                        (16, 16, 4),
-                        (15, 15, 5),
-                    ],
-                ),
+                nano(&[
+                    (4, 4, 1),
+                    (27, 27, 2),
+                    (14, 14, 3),
+                    (16, 16, 4),
+                    (15, 15, 5),
+                ]),
                 (
                     "Logic:SN74HC595",
                     "U2",
@@ -7688,13 +7683,7 @@ missing = ["measurement_registers"]
         pcb_fixture(
             &["", "GND", "+5V", "BUS"],
             &[
-                (
-                    "Module:Arduino_Nano",
-                    "A1",
-                    "Arduino_Nano",
-                    100,
-                    &[(4, 4, 1), (27, 27, 2), (21, 21, 3)],
-                ),
+                nano(&[(4, 4, 1), (27, 27, 2), (21, 21, 3)]),
                 ("Resistor:R", "R1", "10k", 110, &[(1, 0, 3), (2, 2, 1)]),
             ],
         )
@@ -8053,22 +8042,12 @@ data_out = ["io0"]
 
     #[test]
     fn memory_with_another_mcus_mutable_node_is_not_claimed() {
-        const SPEC: &str = r#"
-inputs = ["gnd", "data", "we_n"]
-outputs = ["io0"]
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "we_n", edge = "rising" }
-read_gates = [{ pin = "we_n", active = "high" }]
-data_in = ["data"]
-data_out = ["io0"]
-"#;
+        // ONE_PIN_MEMORY with its data input moved onto its own "data" net.
+        let spec = ONE_PIN_MEMORY
+            .replace(r#"["gnd", "we_n"]"#, r#"["gnd", "data", "we_n"]"#)
+            .replace(r#"data_in = ["gnd"]"#, r#"data_in = ["data"]"#);
         let mut m =
-            scheduler_with_legacy_memory(SPEC, &["gnd", "data", "we_n", "io0"], &["we_n", "io0"]);
+            scheduler_with_legacy_memory(&spec, &["gnd", "data", "we_n", "io0"], &["we_n", "io0"]);
         let data_node = m.sched.net_nodes["data"];
         add_second_mcu_on(&mut m, data_node);
         m.sched.build_and_install_parallel_memories();
@@ -8133,23 +8112,15 @@ data_out = ["io0"]
     /// component with unrelated comb logic must stay on the ordinary path.
     #[test]
     fn memory_fast_path_does_not_suppress_unrelated_logic_on_the_same_component() {
-        const SPEC: &str = r#"
-inputs = ["gnd", "we_n"]
-outputs = ["io0", "status"]
-comb = { status = "we_n" }
-[[memory]]
-name = "cell"
-words = 2
-bits = 1
-init = 1
-address = ["gnd"]
-write = { pin = "we_n", edge = "rising" }
-read_gates = [{ pin = "we_n", active = "high" }]
-data_in = ["gnd"]
-data_out = ["io0"]
-"#;
-        let mut m =
-            scheduler_with_legacy_memory(SPEC, &["gnd", "we_n", "io0", "status"], &["we_n", "io0"]);
+        let spec = ONE_PIN_MEMORY.replace(
+            "outputs = [\"io0\"]",
+            "outputs = [\"io0\", \"status\"]\ncomb = { status = \"we_n\" }",
+        );
+        let mut m = scheduler_with_legacy_memory(
+            &spec,
+            &["gnd", "we_n", "io0", "status"],
+            &["we_n", "io0"],
+        );
         m.sched.build_and_install_parallel_memories();
         assert!(m.sched.parallel_memory_chips.is_empty());
     }
@@ -8283,19 +8254,6 @@ data_out = ["io0"]
         assert!(for_pin(('C', 3)).is_empty(), "{calls:?}");
     }
 
-    struct Opaque;
-    impl crate::peripherals::spi::SpiSlave for Opaque {
-        fn transfer(&mut self, _mosi: u8) -> u8 {
-            0
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
-    }
-
     fn cs_frames(sched: &Scheduler, m: usize) -> usize {
         sched.mcus[m].shared.lock_or_recover().cs_frames.len()
     }
@@ -8315,7 +8273,10 @@ data_out = ["io0"]
                 binding("U1", "simavr:test", drivers),
             );
         }
-        let bus = Arc::new(Mutex::new(SpiBus::new("U9", Box::new(Opaque))));
+        let bus = Arc::new(Mutex::new(SpiBus::new(
+            "U9",
+            Box::new(FixedSpiSlave::new(0)),
+        )));
         sched.register_cs_frame(&bus, Some(cs_pin), None);
         assert_eq!(cs_frames(&sched, 0) + cs_frames(&sched, 1), 1);
 
@@ -8332,7 +8293,10 @@ data_out = ["io0"]
                 binding(&format!("U{idx}"), "simavr:test", drivers),
             );
         }
-        let bus = Arc::new(Mutex::new(SpiBus::new("U9", Box::new(Opaque))));
+        let bus = Arc::new(Mutex::new(SpiBus::new(
+            "U9",
+            Box::new(FixedSpiSlave::new(0)),
+        )));
         sched.register_cs_frame(&bus, Some(cs_pin), Some(cs_net));
         assert_eq!(cs_frames(&sched, 0), 0);
         assert_eq!(cs_frames(&sched, 1), 1);
@@ -8561,37 +8525,12 @@ data_out = ["io0"]
     /// currently asserted.
     #[test]
     fn attach_two_spi_buses_routes_bytes_to_the_cs_selected_bus() {
-        struct RecSlave {
-            got: Arc<Mutex<Vec<u8>>>,
-            miso: u8,
-        }
-        impl crate::peripherals::spi::SpiSlave for RecSlave {
-            fn transfer(&mut self, mosi: u8) -> u8 {
-                self.got.lock_or_recover().push(mosi);
-                self.miso
-            }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-                self
-            }
-        }
-
         let cs1 = ('C', 0u8);
         let cs2 = ('C', 1u8);
         let (mut sched, h) = sched_with_core(MockCore::default(), &[cs1, cs2]);
-        let got1 = Arc::new(Mutex::new(Vec::new()));
-        let got2 = Arc::new(Mutex::new(Vec::new()));
-        let bus = |got: &Arc<Mutex<Vec<u8>>>, miso| {
-            Arc::new(Mutex::new(SpiBus::new(
-                "U",
-                Box::new(RecSlave {
-                    got: got.clone(),
-                    miso,
-                }),
-            )))
-        };
+        let (slave1, slave2) = (FixedSpiSlave::new(0x5A), FixedSpiSlave::new(0xA5));
+        let (got1, got2) = (slave1.got.clone(), slave2.got.clone());
+        let bus = |slave: FixedSpiSlave| Arc::new(Mutex::new(SpiBus::new("U", Box::new(slave))));
         let resolved = |pin| {
             Some(ResolvedCs {
                 pin,
@@ -8599,8 +8538,8 @@ data_out = ["io0"]
                 provenance: CsProvenance::SpecDeclared,
             })
         };
-        sched.attach_spi_bus(bus(&got1, 0x5A), resolved(cs1));
-        sched.attach_spi_bus(bus(&got2, 0xA5), resolved(cs2));
+        sched.attach_spi_bus(bus(slave1), resolved(cs1));
+        sched.attach_spi_bus(bus(slave2), resolved(cs2));
 
         let edge = |pin: (char, u8), high: bool| {
             let mut slot = h.pin_cb.lock_or_recover();
