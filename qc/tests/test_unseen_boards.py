@@ -9,7 +9,8 @@ import subprocess
 import tempfile
 import unittest
 import zipfile
-from contextlib import redirect_stderr, redirect_stdout
+from collections.abc import Iterator
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,6 +29,13 @@ from qc.unseen_boards import (
 import qc.unseen_boards as unseen_boards
 import qc.release_board_gates as release_gates
 import qc.value_grading as value_grading
+
+
+@contextmanager
+def temp_base() -> Iterator[Path]:
+    """A scratch directory for one test, removed when the block exits."""
+    with tempfile.TemporaryDirectory() as raw:
+        yield Path(raw)
 
 
 def candidate(
@@ -467,8 +475,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_manifest_discovery_refuses_a_revision_marker_that_does_not_match_the_pin(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus = base / "board-corpus"
             source = corpus / "alpha"
             source.mkdir(parents=True)
@@ -486,8 +493,7 @@ class DiscoveryTests(unittest.TestCase):
                 discover_candidates(corpus, manifest_path=manifest)
 
     def test_logical_board_identity_survives_a_content_only_change(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus = base / "board-corpus"
             source = corpus / "alpha"
             source.mkdir(parents=True)
@@ -509,8 +515,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_crawl_does_not_follow_a_board_symlink_outside_the_candidate_root(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus = base / "candidate-pool"
             corpus.mkdir()
             private_board = base / "private.kicad_pcb"
@@ -522,8 +527,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_manifest_groups_loose_gerber_films_into_one_reproducible_drop(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus = base / "board-corpus"
             source = corpus / "films"
             source.mkdir(parents=True)
@@ -560,8 +564,7 @@ class DiscoveryTests(unittest.TestCase):
                 )
 
     def test_manifest_rejects_an_arbitrary_zip_as_a_board_input(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus = base / "board-corpus"
             source = corpus / "archive"
             source.mkdir(parents=True)
@@ -588,8 +591,7 @@ class DiscoveryTests(unittest.TestCase):
                 discover_candidates(corpus, manifest_path=manifest)
 
     def test_archive_sniffing_rejects_unsafe_directory_entries(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             zip_path = base / "unsafe.zip"
             with zipfile.ZipFile(zip_path, "w") as archive:
                 archive.writestr("../escape/", b"")
@@ -611,8 +613,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_external_manifest_requires_explicit_redistribution_provenance(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus = base / "external"
             source = corpus / "alpha"
             source.mkdir(parents=True)
@@ -639,8 +640,7 @@ expect = ["board.kicad_pcb"]
     def test_external_git_candidate_must_be_a_clean_checkout_at_the_pinned_revision(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             root = base / "external"
             source = root / "alpha"
             source.mkdir(parents=True)
@@ -657,8 +657,7 @@ expect = ["board.kicad_pcb"]
                 discover_candidates(root, manifest_path=manifest)
 
     def test_manifest_expect_path_must_stay_inside_its_declared_source(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus = base / "pool"
             source = corpus / "alpha"
             other = corpus / "other"
@@ -683,8 +682,7 @@ expect = ["board.kicad_pcb"]
         # The `expect` twin of this check is tested above; the firmware path is a
         # second way into the same staging directory, and it is the one that would
         # hand the browser an arbitrary file off this machine.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus, source = self._alpha_source(base)
             (source / "board.kicad_pcb").write_text("(kicad_pcb alpha)")
             (base / "secret.elf").write_text("not firmware from this source")
@@ -703,8 +701,7 @@ expect = ["board.kicad_pcb"]
         # The entry exists to prove hauksbee refuses the format. Pairing firmware
         # with it asks for a co-simulation on a board nothing will read, and left
         # unchecked it surfaced as a bare non-zero runner exit with no reason.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus, source = self._alpha_source(base)
             (source / "board.brd").write_bytes(b"\x10\x80binary eagle")
             (source / "app.elf").write_text("firmware")
@@ -722,8 +719,7 @@ expect = ["board.kicad_pcb"]
                 discover_candidates(corpus, manifest_path=manifest)
 
     def test_arbitrary_tar_gz_is_not_claimed_as_odbpp(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus, source = self._alpha_source(base)
             archive_path = source / "not-odb.tar.gz"
             payload = base / "README.txt"
@@ -741,8 +737,7 @@ expect = ["board.kicad_pcb"]
     def test_materialization_copies_a_direct_input_into_the_staging_directory(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             source = base / "source" / "board.kicad_pcb"
             source.parent.mkdir()
             source.write_text("(kicad_pcb direct)")
@@ -1225,8 +1220,7 @@ class CommandTests(unittest.TestCase):
     def test_external_gate_binds_five_staged_content_hashes_to_redacted_completion_evidence(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             pools = (
                 *manifest_pool(base, "external", 7, cohort="external"),
                 *manifest_pool(base, "corpus", 2, cohort="corpus"),
@@ -1270,8 +1264,7 @@ class CommandTests(unittest.TestCase):
     def test_external_gate_excludes_content_already_present_in_the_known_corpus(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             shared = b"(kicad_pcb already-known)"
             corpus = manifest_pool(
                 base, "corpus", 1, cohort="corpus", duplicate_payload=shared
@@ -1292,8 +1285,7 @@ class CommandTests(unittest.TestCase):
     def test_external_gate_appends_failed_terminal_evidence_when_browser_gate_fails(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             pools = _external_and_corpus_pools(base)
             history = base / "history.jsonl"
             evidence_dir = base / "evidence"
@@ -1325,8 +1317,7 @@ class CommandTests(unittest.TestCase):
             self.assertNotIn(str(base), retained_path.read_text())
 
     def test_external_gate_records_a_runner_launch_exception_as_failed(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             pools = _external_and_corpus_pools(base)
             history = base / "history.jsonl"
 
@@ -1344,8 +1335,7 @@ class CommandTests(unittest.TestCase):
             self.assertEqual("failed", load_history(history).results[0]["status"])
 
     def test_external_gate_records_a_staging_failure_as_failed(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             pools = _external_and_corpus_pools(base)
             history = base / "history.jsonl"
             with (
@@ -1365,8 +1355,7 @@ class CommandTests(unittest.TestCase):
             self.assertEqual("failed", load_history(history).results[0]["status"])
 
     def test_external_gate_marks_a_zero_exit_artifact_mismatch_failed(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             pools = _external_and_corpus_pools(base)
             history = base / "history.jsonl"
 
@@ -1387,8 +1376,7 @@ class CommandTests(unittest.TestCase):
     def test_external_gate_refuses_if_a_staged_input_changes_during_the_browser_run(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             pools = _external_and_corpus_pools(base)
             history = base / "history.jsonl"
 
@@ -1410,8 +1398,7 @@ class CommandTests(unittest.TestCase):
     def test_retained_browser_evidence_redacts_absolute_paths_at_any_depth(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             pools = _external_and_corpus_pools(base)
 
             def path_leaking(artifact: dict) -> None:
@@ -1438,8 +1425,7 @@ class CommandTests(unittest.TestCase):
     def test_corpus_gate_runs_every_discovered_candidate_not_a_five_board_sample(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus_root, corpus_manifest = manifest_pool(
                 base, "corpus", 7, cohort="corpus"
             )
@@ -1473,8 +1459,7 @@ class CommandTests(unittest.TestCase):
         # Both directions, because either one alone is a hole: a readable board
         # must still produce its export, and a declared-unreadable input must
         # still be refused rather than quietly analysed.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus_root, corpus_manifest = manifest_pool(
                 base, "corpus", 3, cohort="corpus", refusal_numbers=frozenset({1})
             )
@@ -1565,8 +1550,7 @@ class CommandTests(unittest.TestCase):
         # nothing about that, so an external pool that tagged its entries
         # `unreadable-by-design` could otherwise satisfy a completed iteration
         # with five refusals and no analysed board at all.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             pools = (
                 *manifest_pool(
                     base,
@@ -1667,8 +1651,7 @@ class CommandTests(unittest.TestCase):
     def test_release_history_audit_requires_terminal_results_and_matching_evidence(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             with self.assertRaisesRegex(HistoryError, r"no completed external-five"):
                 release_gates.audit_release_history(
                     base / "empty.jsonl", base / "evidence", require_completed=True
@@ -1723,8 +1706,7 @@ class CommandTests(unittest.TestCase):
     def test_release_history_audit_binds_terminal_status_and_boards_to_evidence(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             history = base / "history.jsonl"
             candidates = filesystem_candidates(base / "pool", 5)
             reservation = reserve_iteration(
@@ -1765,8 +1747,7 @@ class CommandTests(unittest.TestCase):
     def test_plan_command_requires_a_manifest_and_commits_its_own_random_seed(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             pool = base / "pool"
             pool.mkdir()
             manifest = base / "candidates.toml"
@@ -3566,8 +3547,7 @@ class GerberValueContractTests(unittest.TestCase):
         # one; this pins the directory shape so that stays true by choice rather
         # than by luck. Reading a directory as zero layers and "floor not
         # applicable" is a silent fail-open. Same films, same numbers, either way.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             archive = base / "package.zip"
             gerber_archive(archive, copper_layers=2, flashes_per_layer=400)
 
@@ -4277,8 +4257,7 @@ def _kit_manifest(
 
 class FirmwareJourneyContractTests(unittest.TestCase):
     def test_a_manifest_may_pair_firmware_with_a_board(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             root, manifest = _kit_manifest(base, firmware_expect="cosim")
 
             candidates = discover_candidates(root, manifest_path=manifest)
@@ -4291,8 +4270,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
             self.assertEqual(b"\x7fELF fixture", staged.read_bytes())
 
     def test_the_reservation_records_the_firmware_digest(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             root, manifest = _kit_manifest(base)
             candidate = discover_candidates(root, manifest_path=manifest)[0]
 
@@ -4309,8 +4287,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         # and both are called from the handler whose job is to write the terminal
         # ledger record. An OSError escaping there leaves a reserved iteration
         # with no terminal result, which an append-only ledger can never correct.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             root, manifest = _kit_manifest(base, firmware_bytes=b"\x7fELF")
             candidate = discover_candidates(root, manifest_path=manifest)[0]
             (root / "kit" / "firmware.elf").unlink()
@@ -4325,8 +4302,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
     def test_firmware_swapped_after_reservation_is_refused_at_staging(self) -> None:
         # A reservation names specific firmware bytes. Staging different ones
         # would let the journey co-simulate an image the ledger never recorded.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             root, manifest = _kit_manifest(base, firmware_bytes=b"\x7fELF original")
             source = root / "kit"
             candidate = discover_candidates(root, manifest_path=manifest)[0]
@@ -4350,8 +4326,8 @@ class FirmwareJourneyContractTests(unittest.TestCase):
     def test_a_firmware_pairing_cannot_be_lost_to_content_dedup(self) -> None:
         # Content dedup keeps the first path-ordered candidate, so a later entry
         # naming identical bytes WITH firmware would silently lose the pairing.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw); root = base / "corpus"
+        with temp_base() as base:
+            root = base / "corpus"
             for name in ("aaa", "zzz"):
                 source = root / name
                 source.mkdir(parents=True)
@@ -4381,8 +4357,8 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         # The same board with two firmwares is two trials. Keeping whichever
         # sorted first would drop one of them without a word, and checking only
         # for "the first carries none" missed exactly that case.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw); root = base / "corpus"
+        with temp_base() as base:
+            root = base / "corpus"
             for name, image in (("aaa", b"\x7fELF one"), ("zzz", b"\x7fELF two")):
                 source = root / name
                 source.mkdir(parents=True)
@@ -4413,8 +4389,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
         # An entry that lost its firmware path would otherwise keep a
         # `firmware_expect` line, produce no firmware plan, and quietly stop
         # exercising the co-simulation it still claims to demand.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             root, manifest = _kit_manifest(base, firmware=False, firmware_expect="cosim")
 
             with self.assertRaisesRegex(
@@ -4423,8 +4398,7 @@ class FirmwareJourneyContractTests(unittest.TestCase):
                 discover_candidates(base / "corpus", manifest_path=manifest)
 
     def test_an_unknown_firmware_expectation_is_refused(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             root, manifest = _kit_manifest(base, firmware_expect="vibes")
 
             with self.assertRaisesRegex(SelectionError, r"firmware_expect must be"):
@@ -4700,8 +4674,7 @@ class ValueGateWiringTests(unittest.TestCase):
         # one bad journey retained no value grades at all: the operator lost the
         # unlocks for the four boards that were fine. The run must still fail, and
         # it must fail with the graded document kept.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
 
             def dishonest(artifact: dict) -> None:
                 # Exported JSON it never validated: honest on its face, false.
@@ -4727,8 +4700,7 @@ class ValueGateWiringTests(unittest.TestCase):
             )
 
     def test_a_delivered_run_records_the_grade_in_retained_evidence(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             evidence = self._run(base, successful_browser_runner())
 
             self.assertEqual("completed", evidence["status"])
@@ -4747,8 +4719,7 @@ class ValueGateWiringTests(unittest.TestCase):
         # Through the real CLI, not the gate function: a value failure has to
         # reach the shell as exit 2 with a readable reason and no traceback, the
         # same way every other gate error does.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             external_root, external_manifest, corpus_root, corpus_manifest = (
                 _external_and_corpus_pools(base)
             )
@@ -4797,8 +4768,7 @@ class ValueGateWiringTests(unittest.TestCase):
         # The runner's own exit code is the only signal for a failure that never
         # reached the artifact (a crashed browser, a missing server). An
         # otherwise-valid artifact beside a non-zero exit must not pass.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
 
             def crashing(*args) -> int:
                 successful_browser_runner()(*args)
@@ -4817,8 +4787,7 @@ class ValueGateWiringTests(unittest.TestCase):
         # `run-corpus` is the EXHAUSTIVE gate, and it has its own wiring of the
         # value check. Testing only the five-board gate left a one-line edit able
         # to record a collapsed board as `completed` over the whole corpus.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus_root, corpus_manifest = manifest_pool(
                 base, "corpus", 3, cohort="corpus"
             )
@@ -4846,8 +4815,7 @@ class ValueGateWiringTests(unittest.TestCase):
     def test_a_collapsed_board_fails_the_run_and_keeps_the_graded_evidence(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
 
             def collapsing(artifact: dict) -> None:
                 # Honest, exportable, and worthless: every check outside the
@@ -4872,8 +4840,7 @@ class ValueGateWiringTests(unittest.TestCase):
         # A report is untrusted input. A TypeError escaping the gate would leave a
         # reserved iteration with no terminal record, burning five unseen boards
         # and breaking the append-only invariant the ledger documents.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
 
             def malformed(artifact: dict) -> None:
                 artifact["results"][0]["report"]["assumptions"] = 3
@@ -4898,8 +4865,7 @@ class ValueGateWiringTests(unittest.TestCase):
         # The last line of defence: whatever the artifact does to the grader, the
         # reservation still gets its one terminal record and the operator gets a
         # sentence rather than a traceback.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
 
             with patch.object(
                 release_gates,
@@ -4921,8 +4887,7 @@ class ValueGateWiringTests(unittest.TestCase):
         # Aborting on the first failed journey threw away the grades of every
         # board that completed, so a run with one broken journey retained no
         # unlocks for the honestly degraded boards next to it.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
 
             def one_broken(artifact: dict) -> None:
                 artifact["results"][0]["failures"] = ["the drop target never armed"]
@@ -4959,8 +4924,7 @@ class ValueGateWiringTests(unittest.TestCase):
             self.assertEqual(3, len(summary["delivered"]))
 
     def test_a_degraded_board_passes_and_is_enumerated_with_its_unlock(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
 
             def degrading(artifact: dict) -> None:
                 report = artifact["results"][0]["report"]
@@ -5015,8 +4979,7 @@ class ValueGateWiringTests(unittest.TestCase):
     def test_firmware_that_changes_mid_run_is_caught_and_digested(self) -> None:
         # Hashing only the boards would let a paired image change during the run
         # with nothing in the ledger saying which bytes the co-sim exercised.
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus_root, corpus_manifest = self._firmware_corpus(base)
 
             def swapping(paths, output, base_url, cohort, refusals, firmware) -> int:
@@ -5032,8 +4995,7 @@ class ValueGateWiringTests(unittest.TestCase):
                 )
 
     def test_the_gate_hands_the_journey_the_firmware_it_staged(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            base = Path(raw)
+        with temp_base() as base:
             corpus_root, corpus_manifest = self._firmware_corpus(base)
             handed: list[list[dict | None] | None] = []
 
