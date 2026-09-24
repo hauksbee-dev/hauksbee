@@ -90,16 +90,10 @@ pub(crate) fn emit_with_schematic_quiet(
             jr.drc = Some(structured.clone());
             jr.clearance_rule_source = Some(provenance.clone());
             if provenance.source == crate::result::ClearanceRuleSource::Defaulted {
-                jr.notes.push(crate::result::JsonNote {
-                    kind: crate::result::JsonNoteKind::Coverage,
-                    message: provenance.cli_notice(),
-                });
+                jr.push_coverage_note(provenance.cli_notice());
             }
             if unrouted {
-                jr.notes.push(crate::result::JsonNote {
-                    kind: crate::result::JsonNoteKind::Coverage,
-                    message: super::UNROUTED_COPPER_NOTE.to_string(),
-                });
+                jr.push_coverage_note(super::UNROUTED_COPPER_NOTE.to_string());
             }
             // A green verdict that quietly dropped findings would be worse than
             // no waivers at all, so the machine surface carries them too.

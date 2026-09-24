@@ -70,10 +70,7 @@ pub(crate) fn emit_quiet(
             jr.findings = Some(si_findings_json(&report));
             jr.attach_finding_evidence(&evidence, run_level.clone())?;
             if !blockers.is_empty() {
-                jr.notes.push(crate::result::JsonNote {
-                    kind: crate::result::JsonNoteKind::Coverage,
-                    message: crate::result::inconclusive_verdict(&blockers),
-                });
+                jr.push_coverage_note(crate::result::inconclusive_verdict(&blockers));
             }
             // A green verdict that quietly dropped findings would be worse than
             // no waivers at all, so the machine surface carries them too.

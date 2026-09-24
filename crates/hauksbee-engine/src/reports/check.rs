@@ -201,16 +201,10 @@ impl CheckReport<'_> {
                 jr.triage = Some(triage.clone());
                 jr.clearance_rule_source = Some(provenance.clone());
                 if unrouted {
-                    jr.notes.push(crate::result::JsonNote {
-                        kind: crate::result::JsonNoteKind::Coverage,
-                        message: super::UNROUTED_COPPER_NOTE.to_string(),
-                    });
+                    jr.push_coverage_note(super::UNROUTED_COPPER_NOTE.to_string());
                 }
                 if !blockers.is_empty() {
-                    jr.notes.push(crate::result::JsonNote {
-                        kind: crate::result::JsonNoteKind::Coverage,
-                        message: crate::result::inconclusive_verdict(&blockers),
-                    });
+                    jr.push_coverage_note(crate::result::inconclusive_verdict(&blockers));
                 }
                 jr.findings = Some(actual_findings.clone());
                 // A green verdict that quietly dropped findings would be worse than

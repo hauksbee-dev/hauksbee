@@ -9,8 +9,8 @@
 use crate::engine::HauksbeeEngine;
 use crate::result::{
     coverage_open_active_refs, thermal_coverage, thermal_validity, BindSummary, CheckCoverage,
-    JsonInputEvidence, JsonNote, JsonNoteKind, JsonReport, Refusal, ThermalDeviceJson, ThermalJson,
-    Validity, EXIT_INVALID_FOR_ANALYSIS,
+    JsonInputEvidence, JsonReport, Refusal, ThermalDeviceJson, ThermalJson, Validity,
+    EXIT_INVALID_FOR_ANALYSIS,
 };
 use hauksbee_ir::evidence::Scope;
 
@@ -95,10 +95,10 @@ pub(crate) fn emit_quiet(
         // Same INCONCLUSIVE lead as the text caveat: one vocabulary, no
         // text-vs-JSON dialect fork.
         if coverage.partial {
-            jr.notes.push(JsonNote {
-                kind: JsonNoteKind::Coverage,
-                message: format!("INCONCLUSIVE: {}", thermal_coverage_caveat(&coverage)),
-            });
+            jr.push_coverage_note(format!(
+                "INCONCLUSIVE: {}",
+                thermal_coverage_caveat(&coverage)
+            ));
         }
         jr.thermal = Some(ThermalJson {
             validity: strict_partial_refusal

@@ -185,10 +185,7 @@ fn lint_json(
     // `verdict` reads `invalid` beside it and --strict exits 3. The structured
     // part list is already in `bind.active_path_unresolved`.
     if !blockers.is_empty() {
-        jr.notes.push(JsonNote {
-            kind: JsonNoteKind::Coverage,
-            message: crate::result::inconclusive_verdict(blockers),
-        });
+        jr.push_coverage_note(crate::result::inconclusive_verdict(blockers));
     }
     jr.notes.extend(guesses.iter().map(|(r, g)| JsonNote {
         kind: JsonNoteKind::BindRole,
