@@ -1343,6 +1343,8 @@ mod tests {
             ("min = 2.0\ntyp = 1.0", "", "min <= typ <= max"),
             ("typ = 3.0\nmax = 2.0", "", "signed offset"),
             ("min = -0.6\ntyp = 0.1\nmax = -0.8", "", "by signed value"),
+            ("min = -0.65\nmax = -0.85", "", ""),
+            ("min = 0.65\nmax = -0.85", "", "by signed value"),
             ("max = 1.0\nlow = 0.0", "", "unknown field `low`"),
             (
                 "min = 0.01\nmax = 0.08",
