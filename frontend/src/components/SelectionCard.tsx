@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { CloseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
 import { netReadoutText, type NetReading } from '../lib/net-state'
-import type { ModelCoverageComponent, BoardRequest } from '../types/report'
+import type { ModelCoverageComponent, BoardRequest, WebOpenSelection } from '../types/report'
+import { Callout } from './ui'
 
 // The unified selection card: what a click on the board surface reports, in
 // the same card language on the report map and the live sim. A net shows its
@@ -85,10 +86,62 @@ function OfferButton({ offer, onQueue }: {
   )
 }
 
+/** Pick the orderable variant a part really is: each option names the member,
+ *  its orderable codes and the datasheet page that says so. A pick becomes an
+ *  `[[override]] select` in the checks spec. */
+export function VariantPicker({ selection: s, onQueue }: {
+  selection: WebOpenSelection
+  onQueue: (request: BoardRequest) => void
+}) {
+  return (
+    <select
+      className="hb-input text-[12px]"
+      style={{ maxWidth: '100%' }}
+      data-testid={`variant-picker-${s.reference}`}
+      aria-label={`${s.reference} variant`}
+      value=""
+      onChange={e => onQueue({ type: 'select', ref: s.reference, select: e.target.value })}
+    >
+      <option value="" disabled>Pick the fitted {s.family} variant…</option>
+      {s.members.map(m => (
+        <option key={m.id} value={m.id} disabled={m.verdict === 'C'}>
+          {m.id} — {m.selector || 'no orderable codes'} · {m.basis}{m.verdict === 'C' ? ` (ruled out: ${m.reason})` : ''}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+/** Stand-in wording, shared by the banner and the card. */
+const selectionState = (s: WebOpenSelection) => s.same_pinout
+  ? `simulated as ${s.members.find(m => m.verdict !== 'C')?.id ?? '?'}; CI checks every variant`
+  : 'selection required: left open until you pick one'
+
+export function OpenSelectionsBanner({ selections, onQueue }: {
+  selections: WebOpenSelection[]
+  onQueue?: (request: BoardRequest) => void
+}) {
+  if (selections.length === 0) return null
+  return (
+    <Callout tone="warn" testId="open-selections" className="mt-3" title="Variant not pinned by the board">
+      {selections.map(s => (
+        <div key={s.reference} className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <b>{s.reference}</b> <span style={{ fontFamily: 'var(--font-mono)' }}>{s.value}</span>
+          <span style={{ color: 'var(--silk-dim)' }}>{selectionState(s)}</span>
+          {onQueue && <VariantPicker selection={s} onQueue={onQueue} />}
+        </div>
+      ))}
+    </Callout>
+  )
+}
+
 export function SelectionCard({
   net, liveVolts, reading, component, boundKind, modelCoverage, netModels = [], assertionCapabilities = [],
-  onQueue, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet,
+  onQueue, peripheralMode = 'scenario', onAddProbe, onAuthorModel, onClose, onPickNet, openSelection,
 }: {
+  /** The selected part's open variant selection, when the board leaves one. */
+  openSelection?: WebOpenSelection
+
   /** Selected net, when the click landed on copper. */
   net: string | null
   /** Live voltage for the net, when a sim frame carries it. */
@@ -257,6 +310,12 @@ export function SelectionCard({
                   </div>
                 )
               })()}
+            </div>
+          )}
+          {openSelection && (
+            <div className="flex flex-col gap-1 text-[11px]" data-testid="selection-variant" style={{ color: 'var(--warn-strong)' }}>
+              {selectionState(openSelection)}
+              {onQueue && <VariantPicker selection={openSelection} onQueue={onQueue} />}
             </div>
           )}
           {component.lib_id && (
