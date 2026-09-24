@@ -1784,16 +1784,7 @@ impl Scheduler {
                         cycle,
                     )
                     .into_iter()
-                    .map(|update| {
-                        let pin = PinId {
-                            port: update.pin.0,
-                            bit: update.pin.1,
-                        };
-                        match update.level {
-                            Some(high) => hauksbee_mcu::PinDrive::drive(pin, high),
-                            None => hauksbee_mcu::PinDrive::release(pin),
-                        }
-                    })
+                    .map(pin_drive)
                     .collect()
             },
         ));
@@ -1812,15 +1803,7 @@ impl Scheduler {
                         cycle,
                     )
                     .into_iter()
-                    .map(|update| match update.level {
-                        Some(high) => hauksbee_mcu::PinDrive::drive(
-                            PinId::new(update.pin.0, update.pin.1),
-                            high,
-                        ),
-                        None => {
-                            hauksbee_mcu::PinDrive::release(PinId::new(update.pin.0, update.pin.1))
-                        }
-                    })
+                    .map(pin_drive)
                     .collect()
             },
         ));
@@ -1843,17 +1826,7 @@ impl Scheduler {
         // (possibly tri-stated) gpio driver, so this map covers both the control
         // outputs (PL/SCLK) and the MISO *input* pin (its driver stays disabled
         // because the firmware never drives it, but the mapping is what we need).
-        let gpio_maps: Vec<HashMap<i64, (char, u8)>> = self
-            .mcus
-            .iter()
-            .map(|m| {
-                m.binding
-                    .gpio_drivers
-                    .iter()
-                    .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
-                    .collect()
-            })
-            .collect();
+        let gpio_maps = gpio_net_maps(&self.mcus);
 
         for order in order_165_chains(&self.digital) {
             for (mi, gpio_node) in gpio_maps.iter().enumerate() {
@@ -2435,28 +2408,14 @@ impl Scheduler {
     /// pending-buffer overflow or an external backend transport/configuration
     /// failure. Zero everywhere on a healthy run. Ordered by MCU reference.
     pub fn uart_rx_overflow(&self) -> Vec<(String, u64)> {
-        let mut out: Vec<(String, u64)> = self
-            .mcus
-            .iter()
-            .map(|m| (m.binding.reference.clone(), m.core.uart_rx_overflow()))
-            .filter(|(_, n)| *n > 0)
-            .collect();
-        out.sort();
-        out
+        self.per_mcu(|core| Some(core.uart_rx_overflow()).filter(|&n| n > 0))
     }
 
     /// Host serial bytes accepted by a backend but not yet presented to its
     /// emulated UART. A non-empty result at session teardown is undelivered
     /// input, even when the backend's overflow count is zero.
     pub fn uart_rx_pending(&self) -> Vec<(String, usize)> {
-        let mut out: Vec<(String, usize)> = self
-            .mcus
-            .iter()
-            .map(|m| (m.binding.reference.clone(), m.core.uart_rx_pending()))
-            .filter(|(_, n)| *n > 0)
-            .collect();
-        out.sort();
-        out
+        self.per_mcu(|core| Some(core.uart_rx_pending()).filter(|&n| n > 0))
     }
 
     /// Per-MCU statements of how the backend's watchdog fidelity falls short of
@@ -2471,17 +2430,7 @@ impl Scheduler {
     /// reboots the core the way silicon does (simavr) are absent: the silence is
     /// what makes the warning mean something. Ordered by MCU reference.
     pub fn watchdog_limitations(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
-            .mcus
-            .iter()
-            .filter_map(|m| {
-                m.core
-                    .watchdog_limitation()
-                    .map(|l| (m.binding.reference.clone(), l))
-            })
-            .collect();
-        out.sort();
-        out
+        self.per_mcu(|core| core.watchdog_limitation())
     }
 
     /// Per-MCU statements of how the backend's TIMING fidelity falls short of
@@ -2494,17 +2443,7 @@ impl Scheduler {
     /// backends are absent: the silence is the claim the gate measures. Ordered
     /// by MCU reference.
     pub fn timing_limitations(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
-            .mcus
-            .iter()
-            .filter_map(|m| {
-                m.core
-                    .timing_limitation()
-                    .map(|l| (m.binding.reference.clone(), l))
-            })
-            .collect();
-        out.sort();
-        out
+        self.per_mcu(|core| core.timing_limitation())
     }
 
     /// Times an unserviced watchdog rebooted each MCU's core during this run,
@@ -2514,11 +2453,16 @@ impl Scheduler {
     /// [`Scheduler::watchdog_limitations`], since a backend that cannot reboot
     /// at all reports zero here and says so there. Ordered by MCU reference.
     pub fn watchdog_resets(&self) -> Vec<(String, u64)> {
-        let mut out: Vec<(String, u64)> = self
+        self.per_mcu(|core| Some(core.watchdog_resets()).filter(|&n| n > 0))
+    }
+
+    /// `(MCU reference, value)` for every live MCU whose core yields a value,
+    /// ordered by MCU reference: the shape every per-MCU finding above shares.
+    fn per_mcu<T: Ord>(&self, value: impl Fn(&dyn Mcu) -> Option<T>) -> Vec<(String, T)> {
+        let mut out: Vec<(String, T)> = self
             .mcus
             .iter()
-            .map(|m| (m.binding.reference.clone(), m.core.watchdog_resets()))
-            .filter(|(_, n)| *n > 0)
+            .filter_map(|m| value(m.core.as_ref()).map(|v| (m.binding.reference.clone(), v)))
             .collect();
         out.sort();
         out
@@ -3061,10 +3005,11 @@ impl Scheduler {
     /// poll slice, so this adaptively does so. A request below the integer-
     /// microsecond MCU bridge quantum is refused before mutating the scheduler.
     pub fn configure_timing(&mut self, req: TimingRequirement) -> anyhow::Result<()> {
-        for (label, value) in [
+        let limits = [
             ("minimum pulse", req.min_pulse_s),
             ("maximum edge error", req.max_edge_error_s),
-        ] {
+        ];
+        for (label, value) in limits {
             if let Some(v) = value {
                 anyhow::ensure!(
                     v.is_finite() && v > 0.0,
@@ -3076,28 +3021,16 @@ impl Scheduler {
         // Exact cores have a measured one-cycle floor. Check it before changing
         // a shared chunk for any coarse core, so a mixed-backend refusal is
         // transactional.
-        for m in &self.mcus {
-            if !m.core.cycle_exact() {
-                continue;
-            }
+        for m in self.mcus.iter().filter(|m| m.core.cycle_exact()) {
             let cycle_s = 1.0 / m.core.frequency().max(1) as f64;
-            if let Some(pulse) = req.min_pulse_s {
+            for (label, value) in limits {
+                let Some(v) = value else { continue };
                 anyhow::ensure!(
-                    pulse + f64::EPSILON >= cycle_s,
-                    "timing request refused for {} ({}): minimum pulse {:.3} us is below its measured one-cycle resolution {:.3} us",
+                    v + f64::EPSILON >= cycle_s,
+                    "timing request refused for {} ({}): {label} {:.3} us is below its measured one-cycle resolution {:.3} us",
                     m.binding.reference,
                     m.binding.backend,
-                    pulse * 1e6,
-                    cycle_s * 1e6,
-                );
-            }
-            if let Some(error) = req.max_edge_error_s {
-                anyhow::ensure!(
-                    error + f64::EPSILON >= cycle_s,
-                    "timing request refused for {} ({}): maximum edge error {:.3} us is below its measured one-cycle resolution {:.3} us",
-                    m.binding.reference,
-                    m.binding.backend,
-                    error * 1e6,
+                    v * 1e6,
                     cycle_s * 1e6,
                 );
             }
@@ -6541,16 +6474,7 @@ fn build_595_chains(
     let mut owned = std::collections::HashSet::new();
 
     // Precompute each MCU's net-node -> (port, bit) GPIO map once.
-    let gpio_maps: Vec<HashMap<i64, (char, u8)>> = mcus
-        .iter()
-        .map(|m| {
-            m.binding
-                .gpio_drivers
-                .iter()
-                .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
-                .collect()
-        })
-        .collect();
+    let gpio_maps = gpio_net_maps(mcus);
 
     for order in order_595_chains(digital) {
         // Bind this chain to whichever MCU drives its head's control pins.
@@ -6566,6 +6490,20 @@ fn build_595_chains(
         }
     }
     (chains, chain_mcu, owned)
+}
+
+/// Each MCU's net-node -> (port, bit) GPIO map, the shape the 595 and 165
+/// chain builders match a chain's control nets against.
+fn gpio_net_maps(mcus: &[LiveMcu]) -> Vec<HashMap<i64, (char, u8)>> {
+    mcus.iter()
+        .map(|m| {
+            m.binding
+                .gpio_drivers
+                .iter()
+                .map(|(&pin, drv)| (i64::from(drv.net.0), pin))
+                .collect()
+        })
+        .collect()
 }
 
 /// Whether every 595 chain whose parallel outputs feed a synchronous memory
@@ -6653,6 +6591,15 @@ fn build_generic_replay_chips(
         }
     }
     (chips, pin_nets)
+}
+
+/// A responder's pin update in the MCU backend's drive vocabulary.
+fn pin_drive(update: crate::responders::InputDrive) -> hauksbee_mcu::PinDrive {
+    let pin = PinId::new(update.pin.0, update.pin.1);
+    match update.level {
+        Some(high) => hauksbee_mcu::PinDrive::drive(pin, high),
+        None => hauksbee_mcu::PinDrive::release(pin),
+    }
 }
 
 /// Wire `on_pin_change` / `on_uart` hooks into a shared capture buffer.
