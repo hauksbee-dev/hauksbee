@@ -1549,6 +1549,14 @@ PIN NUMBERING, read this before you fill in [models.pins]:
   P5. If after all that you are still unsure, say so in a comment on the pins
       block rather than presenting a guess as read. An honest
       `# LOW CONFIDENCE: ...` is useful. A confident wrong map is not.
+  P6. ONE COLUMN PER PACKAGE. When the pin table prints a pin-number column per
+      package, record every column, names as printed, after [models.source]:
+        [[models.source.pinout]]
+        package = "<package as printed>"
+        pins = {{ "1" = "<printed name>", "2" = "<printed name>" }}
+      The description names only your package. Read [models.pins] from that
+      package's own column and its own figure: a figure labelled with another
+      package is not yours, and the checker compares the two.
 
 IMPORTANT RULES:
 0. Emit this machine-readable source block immediately after the model's description:
@@ -1910,7 +1918,9 @@ Only include the blocks the datasheet supports, each number cited (rule 1).
   current_out_roles = [\"out\"]
   max_operating_current_a = <highest specified programmed current, A>
   equation = \"inverse_resistance\"
-  k_volts = <typical K in volts>"
+  k_volts = <typical K in volts>
+  # k_volts is SI (A·Ω = V). A law printed as I(mA) = K / R(kΩ) keeps K
+  # unchanged, because mA·kΩ = V: I = 1000 / R(kΩ) in mA is k_volts = 1000."
         }
         "pmic" => {
             "\nFor a PMIC specifically: identify any pin with an INTERNAL pull \
@@ -2186,13 +2196,15 @@ impl Reply<'_> {
         if inserted {
             say!("[model-extract] warning: model-error record missing; inserted the conservative unknown record");
         }
-        // A param omitted where a cited row fixes it is filled, with its working.
+        // A param omitted where a cited row fixes it is filled, with its working,
+        // and a diode law off its cited VF rows is replaced by their fit.
         let db = toml::from_str::<crate::schema::DbFile>(&raw).map_or(vec![], |d| d.models);
         let models = doc.get_mut(path).and_then(Item::as_array_of_tables_mut);
         let tables = models.into_iter().flat_map(ArrayOfTables::iter_mut);
         for (entry, table) in db.iter().zip(tables) {
             let mut derived = crate::param_names::derivations(entry);
             derived.retain(|d| !entry.params.0.contains_key(d.0));
+            derived.extend(crate::param_names::diode_refit_params(entry));
             let params = (!derived.is_empty()).then(|| table.entry("params"));
             let params = params.map(|p| p.or_insert(Item::Table(Table::new())));
             let Some(params) = params.and_then(Item::as_table_like_mut) else {
@@ -3300,7 +3312,8 @@ mod tests {
 
         let charger = build_prompt("LTC4020", "charger", "x");
         assert!(charger.contains("[models.behavioral.converter]"));
-        assert!(charger.contains("iin_program"));
+        assert!(charger.contains("iin_program") && charger.contains("because mA·kΩ = V"));
+        assert!(charger.contains("pins = { \"1\" = \"<printed name>\""));
         assert!(charger.contains("kind = \"vreg\"") && !charger.contains("kind = \"charger\""));
         assert!(charger.contains("Component kind: vreg (the charger family"));
         assert!(
@@ -3667,6 +3680,26 @@ uncertainty = [
             parse_and_validate_reply("I couldn't find the parameters.", "BC847", "bjt_npn")
                 .is_err()
         );
+        // A diode law off its cited VF rows is refit by completion, then validates.
+        let vf = |ma: f64| {
+            let v = 1.2 * hauksbee_ir::thermal_voltage_c(27.0) * (ma * 1e5).ln_1p() + ma * 5e-4;
+            format!("[[models.source.characteristic]]\nparameter = \"VF\"\ntyp = {v}\nunit = \"V\"\nconditions = \"IF = {ma} mA\"\nbasis = \"b\"\n")
+        };
+        let rows = [1.0, 10.0, 100.0, 1000.0].map(vf).concat();
+        let off = format!("[[models]]\nid = \"d\"\nkind = \"diode\"\n[models.match]\nvalue_re = \"D\"\n[models.params]\nis = 1e-14\nn = 1.0\nrs = 0.0\n{MODEL_SOURCE}{rows}");
+        let error = parse_and_validate_reply(&off, "D", "diode").unwrap_err();
+        assert!(format!("{error:#}").contains("over 10% off"), "{error:#}");
+        let fixed = Reply::Model {
+            part: "D",
+            kind: "diode",
+        }
+        .complete(off);
+        assert!(fixed.contains("  # fitted: is/n/rs to the cited VF rows (4 points), the card's"));
+        let n = parse_and_validate_reply(&fixed, "D", "diode")
+            .unwrap()
+            .params
+            .get_f64("n");
+        assert!(n.is_some_and(|n| (n - 1.2).abs() < 1e-3), "{fixed}");
         let diode = "[[models]]\nid = \"x\"\nkind = \"diode\"\n[models.params]\nis = 1e-9\nn = 1.7\nrs = 0.5\n";
         assert!(
             parse_and_validate_reply(diode, "X", "bjt_npn").is_err(),

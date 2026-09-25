@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use crate::check::{nonneg_finite, positive_finite, Problems};
 use crate::schema::{
     AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics,
-    ModelEntry, OperatingEnvelope, ParamValue, PeripheralSpec,
+    ModelEntry, OperatingEnvelope, ParamValue, PeripheralSpec, Pinout,
 };
 use crate::sensor_spec::{Bus, SensorSpec};
 use hauksbee_ir::evidence::ModelUncertainty;
@@ -357,6 +357,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
 
     // A pin map is a stated fact even on an identity-only card.
     p.0.extend(merged_unit_roles(entry));
+    check_pinout(entry, &mut p);
 
     // An identity-only card is useful provenance, but it is deliberately not a
     // simulation model. Keep that state explicit and machine-checkable instead
@@ -912,6 +913,70 @@ fn check_current_program(
         }
         _ => {}
     }
+    check_program_scale(entry, program, p, valid);
+}
+
+/// The unit slip a current-program constant is checked for.
+const K_SI: &str = "the constant is in volts (A·Ω), and a law printed with I in mA and R \
+    in kΩ keeps its printed constant (mA·kΩ = V): check it for a 1000x slip";
+
+/// A programming pin develops its reference (0.1 V to a few V) across the
+/// resistor, so under 10 Ω it would sink tens of mA: a load shunt, not a
+/// program resistor. A constant divided by 1000 (a law printed in mA and kΩ,
+/// wrongly converted) moves a typical 1 to 10 kΩ full-scale resistor to 1 to 10 Ω.
+const MIN_PROGRAM_OHMS: f64 = 10.0;
+
+/// The law against the physical resistor range, and against every cited
+/// charge or limit current row printed at a stated programming resistor
+/// (`R<pin> = 10 kΩ`): the law must land within 25% of the printed columns.
+fn check_program_scale(
+    entry: &ModelEntry,
+    program: &crate::schema::CurrentProgram,
+    p: &mut Problems,
+    valid: bool,
+) {
+    let full = program
+        .max_operating_current_a
+        .or(entry.ratings.max_current_a);
+    let short = match &program.equation {
+        CurrentProgramEquation::SenseScaledResistance {
+            program_bias_a: bias,
+            program_full_scale_v: volts,
+            ..
+        } => (volts / bias < MIN_PROGRAM_OHMS)
+            .then(|| format!("program_full_scale_v / program_bias_a = {} Ω", volts / bias)),
+        _ => full.zip(program.equation_current_a(MIN_PROGRAM_OHMS)).and_then(|(full, i)| {
+            (i < full).then(|| format!("the law gives {i:.4} A at {MIN_PROGRAM_OHMS} Ω, short of the {full} A full scale"))
+        }),
+    };
+    if let Some(short) = short.filter(|_| valid) {
+        p.push(format!("current_program: {short}, so full scale needs a programming resistor under {MIN_PROGRAM_OHMS} Ω, which no programming pin takes; {K_SI}"));
+    }
+    let resistor = format!("(?i:R_?{})", regex::escape(program.pin.trim()));
+    for row in entry.source.iter().flat_map(|s| &s.characteristic) {
+        let name = row.parameter.to_ascii_lowercase();
+        let programmed = ["charg", "chrg", "chg", "reg", "lim"]
+            .iter()
+            .any(|w| name.contains(w))
+            && !["pre", "trickle", "term", "pin", "leak"]
+                .iter()
+                .any(|w| name.contains(w));
+        let scale = crate::units::scale_between(&row.unit, "A").filter(|_| programmed && valid);
+        let ohms = crate::param_names::quantity(&row.conditions, &resistor, "ohm");
+        let law = ohms.and_then(|r| Some((r, program.equation_current_a(r)?)));
+        let Some((scale, (ohms, law))) = scale.zip(law) else {
+            continue;
+        };
+        let printed = [row.min, row.typ, row.max].into_iter().flatten();
+        let printed = printed.map(|v| (v * scale).abs());
+        let (lo, hi) = printed.fold((f64::INFINITY, 0.0_f64), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        });
+        p.require((lo / 1.25..=hi * 1.25).contains(&law), || {
+            let (what, at) = (&row.parameter, &row.conditions);
+            format!("current_program: the law gives {law:.4} A at {ohms} Ω, but characteristic '{what}' prints {lo}..{hi} A there ({at}); {K_SI}")
+        });
+    }
 }
 
 /// A state-controlled series path or a profiled load is solver-facing
@@ -992,28 +1057,7 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
         _ => return,
     };
 
-    // Normalize each declared role: lowercase, strip a trailing channel suffix
-    // (`_a`..`_d` or `_q<N>`), then a trailing digit run + underscore. This
-    // folds the binder's channel variants onto the base role: `out_1`->`out`,
-    // `d1`/`d2`->`d` (dual MOSFET), `collector_q2`->`collector`.
-    let normalize = |role: &str| -> String {
-        let mut r = role.to_ascii_lowercase();
-        if let Some(base) = ["_a", "_b", "_c", "_d"]
-            .iter()
-            .find_map(|sfx| r.strip_suffix(sfx))
-        {
-            r = base.to_string();
-        }
-        if let Some(idx) = r.rfind("_q") {
-            if idx + 2 < r.len() && r[idx + 2..].bytes().all(|c| c.is_ascii_digit()) {
-                r.truncate(idx);
-            }
-        }
-        r.trim_end_matches(|c: char| c.is_ascii_digit())
-            .trim_end_matches('_')
-            .to_string()
-    };
-    let declared: HashSet<String> = entry.pins.values().map(|role| normalize(role)).collect();
+    let declared: HashSet<String> = entry.pins.values().map(|role| fold_role(role)).collect();
 
     for family in required {
         p.require(family.iter().any(|name| declared.contains(*name)), || {
@@ -1024,6 +1068,104 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
                 family.join(" / ")
             )
         });
+    }
+}
+
+/// A role folded onto its base: lowercase, less a trailing channel suffix
+/// (`_a`..`_d` or `_q<N>`), then a trailing digit run + underscore. This folds
+/// the binder's channel variants onto the base role: `out_1`->`out`,
+/// `d1`/`d2`->`d` (dual MOSFET), `collector_q2`->`collector`.
+fn fold_role(role: &str) -> String {
+    let mut r = role.to_ascii_lowercase();
+    if let Some(base) = ["_a", "_b", "_c", "_d"]
+        .iter()
+        .find_map(|sfx| r.strip_suffix(sfx))
+    {
+        r = base.to_string();
+    }
+    if let Some(idx) = r.rfind("_q") {
+        if idx + 2 < r.len() && r[idx + 2..].bytes().all(|c| c.is_ascii_digit()) {
+            r.truncate(idx);
+        }
+    }
+    r.trim_end_matches(|c: char| c.is_ascii_digit())
+        .trim_end_matches('_')
+        .to_string()
+}
+
+/// A role or printed pin name as a [`fold_role`] key less an active-low `_n`
+/// and a rail `V` prefix: `VIN`, `IN` and the role `in` agree.
+fn pin_key(name: &str) -> String {
+    let folded = fold_role(name);
+    let base = folded.strip_suffix("_n").unwrap_or(&folded);
+    let rest = base.strip_prefix('v').filter(|r| r.len() > 1);
+    let rail = rest.filter(|r| r.starts_with(|c: char| c.is_ascii_alphabetic()));
+    rail.unwrap_or(base).to_string()
+}
+
+/// The keys of a printed pin name: each word ("NC/GND") and the whole name ("N.C.").
+fn pin_name_keys(name: &str) -> Vec<String> {
+    let whole: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    let words = name.split(|c: char| !c.is_alphanumeric() && c != '_');
+    let words = words.chain([whole.as_str()]).filter(|w| !w.is_empty());
+    words.map(pin_key).collect()
+}
+
+/// `[models.pins]` against the pin-table column of the card's own package
+/// (`[models.variant] package`, else the one package the description names,
+/// else a lone column): the same pads, and no pad whose role is the name that
+/// column prints on another pad, the mark of a map read off another package.
+fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
+    let pinouts = entry
+        .source
+        .as_ref()
+        .map_or(&[][..], |s| s.pinout.as_slice());
+    if pinouts.is_empty() || entry.pins.is_empty() {
+        return;
+    }
+    let plain = |s: &str| s.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+    let description = plain(&entry.description);
+    let declared = entry.variant.as_ref().and_then(|v| v.package.as_deref());
+    let named: Vec<&Pinout> = pinouts
+        .iter()
+        .filter(|o| match declared {
+            Some(package) => plain(&o.package) == plain(package),
+            None => pinouts.len() == 1 || description.contains(&plain(&o.package)),
+        })
+        .collect();
+    // A description naming "SOT-23-5" also contains "SOT-23": the longer is meant.
+    let within = |o: &Pinout, b: &Pinout| {
+        b.package.len() > o.package.len() && plain(&b.package).contains(&plain(&o.package))
+    };
+    let named: Vec<&Pinout> = named
+        .iter()
+        .copied()
+        .filter(|o| !named.iter().any(|b| within(o, b)))
+        .collect();
+    let [own] = named[..] else {
+        let all: Vec<&str> = pinouts.iter().map(|o| o.package.as_str()).collect();
+        p.push(format!("[[models.source.pinout]] records {}, but neither [models.variant] package nor the description names exactly one of them: name the one package [models.pins] is for", all.join(", ")));
+        return;
+    };
+    let package = &own.package;
+    if !own.pins.keys().eq(entry.pins.keys()) {
+        let pads = |m: &std::collections::BTreeMap<String, String>| {
+            m.keys().map(String::as_str).collect::<Vec<_>>().join(", ")
+        };
+        p.push(format!("[models.pins] pads ({}) are not the '{package}' pinout's pads ({}): map exactly the declared package's pads", pads(&entry.pins), pads(&own.pins)));
+    }
+    for (pad, role) in &entry.pins {
+        let key = pin_key(role);
+        let prints = |name: &str| pin_name_keys(name).contains(&key);
+        let Some(here) = own.pins.get(pad).filter(|name| !prints(name)) else {
+            continue;
+        };
+        if let Some((other, name)) = own.pins.iter().find(|(q, n)| *q != pad && prints(n)) {
+            p.push(format!("[models.pins] pad {pad} = '{role}', but the '{package}' pinout prints '{here}' on pad {pad} and '{name}' on pad {other}: read [models.pins] from the declared package's own column and figure; a figure labelled with another package is not this card's"));
+        }
     }
 }
 
@@ -1136,7 +1278,7 @@ pub fn kind_error_note(err_text: &str) -> Option<String> {
     })
 }
 
-const SOURCE_KEYS: &str = "tier validation references uncertainty characteristic";
+const SOURCE_KEYS: &str = "tier validation references uncertainty characteristic pinout";
 const RECORD_KINDS: &str = " ([[...source.uncertainty]] status = \"interval\" bounds one \
     parameter by printed min AND max as low/high; [[...source.characteristic]] keeps a \
     printed row's min/typ/max columns as printed)";
@@ -1174,6 +1316,7 @@ pub fn source_shape_findings(root: &toml::Value) -> Vec<String> {
                 let status = fields.get("status").and_then(toml::Value::as_str);
                 let (required, optional) = match (key.as_str(), status) {
                     ("characteristic", _) => ("parameter unit conditions basis", "min typ max"),
+                    ("pinout", _) => ("package pins", ""),
                     (_, Some("interval")) => ("status parameter low high unit kind basis", ""),
                     (_, Some("unknown")) => ("status parameter reason", ""),
                     _ => ("status", "parameter low high unit kind basis reason"),
@@ -1794,6 +1937,82 @@ high_offset = 1.3333333333333333
             }),
             "k_volts",
         );
+
+        // I(mA) = 1000 / R(kΩ) is k_volts = 1000: the 1000x slip, a correct
+        // constant, and a constant a cited RPROG row contradicts.
+        let row = "[[characteristic]]\nparameter = \"ICHG charge current\"\ntyp = 100\n\
+                   unit = \"mA\"\nconditions = \"RPROG = 10 kΩ\"\nbasis = \"Table 1, typ\"";
+        for (k_volts, needle) in [
+            (1.0, Some("1000x slip")),
+            (1000.0, None),
+            (2000.0, Some("prints 0.1..0.1 A")),
+        ] {
+            let mut e = with_program(|p| {
+                p.equation = CurrentProgramEquation::InverseResistance { k_volts }
+            });
+            e.source = toml::from_str(&format!("tier = \"datasheet-derived\"\n{row}")).ok();
+            needle.map_or_else(|| accepts(&e), |needle| rejects(&e, needle));
+        }
+    }
+
+    /// A regulator whose sheet prints a five-pin and a four-pin package column.
+    const LDO_FIXTURE: &str = r#"
+id = "ldo_fixture"
+kind = "vreg"
+description = "LDO, SOT-23-5 package"
+[params]
+vout = 3.3
+dropout_v = 0.3
+iq_a = 0.0001
+[pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+[source]
+tier = "datasheet-derived"
+[[source.pinout]]
+package = "SOT-23-5"
+pins = { "1" = "VIN", "2" = "GND", "3" = "EN", "4" = "NC", "5" = "VOUT" }
+[[source.pinout]]
+package = "DFN-4"
+pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
+"#;
+
+    #[test]
+    fn pins_must_match_the_declared_packages_pinout_column() {
+        let card = |edits: &[(&str, &str)]| -> ModelEntry {
+            let text = edits
+                .iter()
+                .fold(LDO_FIXTURE.to_string(), |s, (a, b)| s.replace(a, b));
+            toml::from_str(&text).unwrap()
+        };
+        accepts(&card(&[]));
+        let dfn_dropped = LDO_FIXTURE
+            .find("[[source.pinout]]\npackage = \"DFN")
+            .unwrap();
+        accepts(&card(&[
+            (&LDO_FIXTURE[dfn_dropped..], ""),
+            ("SOT-23-5 package", ""),
+        ]));
+        for (edits, needle) in [
+            // VOUT taken from the other package's drawing, VIN from elsewhere.
+            (
+                &[
+                    ("\"1\" = \"in\"", "\"1\" = \"out\""),
+                    ("\"5\" = \"out\"", "\"5\" = \"in\""),
+                ][..],
+                "the 'SOT-23-5' pinout prints 'VIN' on pad 1 and 'VOUT' on pad 5",
+            ),
+            (&[("SOT-23-5 package", "")], "names exactly one"),
+            (
+                &[("SOT-23-5 package", "DFN-4 package")],
+                "not the 'DFN-4' pinout's pads",
+            ),
+        ] {
+            rejects(&card(edits), needle);
+        }
     }
 
     #[test]

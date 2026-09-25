@@ -2620,6 +2620,7 @@ fn editable_model_upgrade(
             "copied from a resolved model for local extension; edits have not yet been validated",
         )?],
         characteristic: Vec::new(),
+        pinout: Vec::new(),
     });
     let missing = model.coverage.missing.join(", ");
     // Do not flatten ModelEntry into an auxiliary wrapper here. The TOML

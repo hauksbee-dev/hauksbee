@@ -303,6 +303,18 @@ pub struct ModelSourceSpec {
     /// rating home, kept as data. Card-level only; never an uncertainty interval.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub characteristic: Vec<Characteristic>,
+    /// `[[models.source.pinout]]`: the pin table's column for each package the
+    /// sheet prints, so `[models.pins]` is checked against its own package's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinout: Vec<Pinout>,
+}
+
+/// One package's pin-table column: pad identifier to the name printed for it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pinout {
+    pub package: String,
+    pub pins: BTreeMap<String, String>,
 }
 
 /// One published characteristic row carrying only the min/typ/max columns the

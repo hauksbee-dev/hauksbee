@@ -528,8 +528,9 @@ fn at_25(row: &Characteristic) -> bool {
 }
 
 /// The magnitude of `sym = <number> <unit>` in `text`, in `unit` (`IR = 10 mA`).
-fn quantity(text: &str, sym: &str, unit: &str) -> Option<f64> {
-    let re = regex::Regex::new(&format!(r"\b{sym}\s*=\s*([-+]?\d*\.?\d+)\s*([a-zA-Zµμ]*)")).ok()?;
+pub(crate) fn quantity(text: &str, sym: &str, unit: &str) -> Option<f64> {
+    let re =
+        regex::Regex::new(&format!(r"\b{sym}\s*=\s*([-+]?\d*\.?\d+)\s*([a-zA-ZµμΩ]*)")).ok()?;
     let c = re.captures(text)?;
     let scale = crate::units::scale_between(&c[2], unit).or(c[2].is_empty().then_some(1.0));
     Some(c[1].parse::<f64>().ok()?.abs() * scale?)
@@ -696,6 +697,24 @@ pub(crate) fn diode_refit(entry: &ModelEntry) -> Option<[f64; 3]> {
     let points = vf_points(&entry.source.as_ref().filter(|_| diode)?.characteristic)?;
     let (fit, fits) = (diode_fit(&points)?, |law| worst_miss(law, &points).0 <= 0.1);
     (!diode_law(entry).is_some_and(fits)).then_some(fit)
+}
+
+/// [`diode_refit`] as the is/n/rs completion writes over the card's, with the working.
+pub(crate) fn diode_refit_params(entry: &ModelEntry) -> Vec<Derived> {
+    let (Some(fit), Some(points)) = (diode_refit(entry), vf_points(cited_rows(entry))) else {
+        return Vec::new();
+    };
+    let off = diode_law(entry).map_or("absent".into(), |law| {
+        format!("{:.0}% off", 100.0 * worst_miss(law, &points).0)
+    });
+    let count = points.len();
+    let how =
+        format!("fitted: is/n/rs to the cited VF rows ({count} points), the card's law was {off}");
+    let round = |v: f64| format!("{v:.4e}").parse().unwrap_or(v);
+    let fitted = ["is", "n", "rs"].into_iter().zip(fit);
+    fitted
+        .map(|(name, v)| (name, round(v), how.clone()))
+        .collect()
 }
 
 /// One parameter name outside the entry's vocabulary.
