@@ -38,10 +38,12 @@ pub enum BindOutcome {
     Unresolved { reason: String },
 }
 
-/// Whether a stamped device kind is an ACTIVE part, whose generic fallback
-/// model would carry invented breakdown/current/power ratings that a stress
-/// verdict can cite. Passives (resistor, capacitor, inductor) are excluded: their
-/// fallbacks carry no such ratings and bind on nearly every board.
+/// Whether a stamped device kind is an ACTIVE part, whose generic fallback model
+/// would carry invented breakdown/current/power ratings that a stress verdict can
+/// cite.
+///
+/// Passives (resistor, capacitor, inductor) are excluded: their fallbacks carry
+/// no such ratings and bind on nearly every board.
 #[must_use]
 pub fn is_active_fallback_device(device: &str) -> bool {
     let d = device.to_ascii_lowercase();
@@ -137,6 +139,7 @@ pub struct BindReport {
 
 /// One unresolved (open-circuit) part and where its pins land, so the scheduler
 /// can tell a bystander from a part that would DRIVE a net if it were modelled.
+///
 /// `pins` pairs each connected node with whether the pin can drive: `false` only
 /// when the schematic types it `input`, `power_in` or `no_connect`.
 #[derive(Debug, Clone)]
@@ -549,7 +552,9 @@ fn truncate(s: &str, max: usize) -> String {
 
 /// Natural sort key for a reference designator: alpha prefix (case-folded),
 /// then the numeric part as a NUMBER (so R2 sorts before R10), then any
-/// remaining suffix. Shared by every user-facing table that lists parts.
+/// remaining suffix.
+///
+/// Shared by every user-facing table that lists parts.
 #[must_use]
 pub fn natural_ref_key(reference: &str) -> (String, u64, String) {
     let prefix: String = reference
@@ -942,11 +947,13 @@ pub fn is_tool_generated_ref(reference: &str) -> bool {
 
 /// Whether a resolved row's `warning` indicates a GENUINE open/undriven-pin
 /// condition (which makes thermal/AC over its nets untrustworthy) as opposed to
-/// an auto-bind GPIO-map note. The binder routinely attaches an
-/// `[auto-bind] ... GPIO map derived/cannot be derived ...` note to a perfectly
-/// working MCU when it infers (or fails to infer) the pin map from schematic pin
-/// names; that is a naming limitation, not an open circuit, and must NOT mark the
-/// part as untrustworthy on the live circuit.
+/// an auto-bind GPIO-map note.
+///
+/// The binder routinely attaches an `[auto-bind] ... GPIO map derived/cannot be
+/// derived ...` note to a perfectly working MCU when it infers (or fails to
+/// infer) the pin map from schematic pin names; that is a naming limitation, not
+/// an open circuit, and must NOT mark the part as untrustworthy on the live
+/// circuit.
 #[must_use]
 pub fn is_open_pin_warning(warning: &str) -> bool {
     // Positive match on explicit open-pin markers, NOT a negative catch-all: a

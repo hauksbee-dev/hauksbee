@@ -54,16 +54,20 @@ use hauksbee_ir::{Device, NodeId};
 
 use crate::binder::BoundBoard;
 
-/// First node id handed to floated (cut/lifted) terminals. Must clear the
-/// binder's node namespace entirely, [`apply`](AsBuiltOverlay::apply) fails
-/// loudly if any bound node reaches it. The value is the historical base
-/// `tarski_prep::fault1_cut` used, kept so the overlay's result is
-/// byte-identical to the proven imperative surgery.
+/// First node id handed to floated (cut/lifted) terminals.
+///
+/// Must clear the binder's node namespace entirely,
+/// [`apply`](AsBuiltOverlay::apply) fails loudly if any bound node reaches
+/// it. The value is the historical base `tarski_prep::fault1_cut` used,
+/// kept so the overlay's result is byte-identical to the proven imperative
+/// surgery.
 pub const FLOAT_NODE_BASE: u32 = 800_000;
 
-/// Everything that can go wrong loading or applying an overlay. Messages are
-/// self-contained: they carry the overlay origin (path), the 1-based line of
-/// the offending entry, and near-match suggestions where a name was unknown.
+/// Everything that can go wrong loading or applying an overlay.
+///
+/// Messages are self-contained: they carry the overlay origin (path), the
+/// 1-based line of the offending entry, and near-match suggestions where a
+/// name was unknown.
 #[derive(Debug, thiserror::Error)]
 pub enum AsBuiltError {
     #[error("as-built overlay {origin}: TOML parse error: {source}")]
@@ -292,12 +296,14 @@ pub struct Jumper {
 
 /// A part wired ON during rework: a new two-terminal device soldered between
 /// two existing nets (a pull resistor onto a floating control line, a bulk
-/// capacitor across a rail). Exactly one of `ohms` / `farads` names the part;
-/// `ref` is the rework record's own designator and must not collide with a
-/// fabricated device, so the overlay can never silently shadow the board.
-/// Nets are named as on the board; a fresh node from a `[[cut]]` cannot be a
-/// terminal (it has no name by construction; when a rework wires into a cut,
-/// record the wire side with a `[[jumper]]` onto a real net instead).
+/// capacitor across a rail).
+///
+/// Exactly one of `ohms` / `farads` names the part; `ref` is the rework
+/// record's own designator and must not collide with a fabricated device, so
+/// the overlay can never silently shadow the board. Nets are named as on the
+/// board; a fresh node from a `[[cut]]` cannot be a terminal (it has no name
+/// by construction; when a rework wires into a cut, record the wire side with
+/// a `[[jumper]]` onto a real net instead).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fit {

@@ -83,15 +83,17 @@ impl LogicLevels {
 }
 
 /// The `[models.logic]` spec of the cross-coupled NOR SR latch the binder
-/// synthesizes for a 74HC02 latch pair (the Tarski spike recorder). Roles
-/// `set` (active-high SET), `reset` (active-high RESET), output `q` (`qb` is
-/// the internal cross-couple node, unwired on the board). Active-LOW Q
-/// semantics: at reset Q is HIGH (idle), a SET pulse drives Q LOW and the
-/// cross-couple HOLDS it LOW until the next RESET, so the firmware-driven
-/// 74HC165 readback samples the level the real board's latch Q presents
-/// (idle HIGH -> 0xFFC0, captured spike LOW). The cross-coupled `comb` pair
-/// resolves by the evaluator's fixpoint machinery; `init` seeds the cleared
-/// power-on state (a symmetric seed would be the classic SR metastability).
+/// synthesizes for a 74HC02 latch pair (the Tarski spike recorder).
+///
+/// Roles `set` (active-high SET), `reset` (active-high RESET), output `q`
+/// (`qb` is the internal cross-couple node, unwired on the board).
+/// Active-LOW Q semantics: at reset Q is HIGH (idle), a SET pulse drives Q
+/// LOW and the cross-couple HOLDS it LOW until the next RESET, so the
+/// firmware-driven 74HC165 readback samples the level the real board's latch
+/// Q presents (idle HIGH -> 0xFFC0, captured spike LOW). The cross-coupled
+/// `comb` pair resolves by the evaluator's fixpoint machinery; `init` seeds
+/// the cleared power-on state (a symmetric seed would be the classic SR
+/// metastability).
 pub const NOR_LATCH_SPEC_ID: &str = "nor_sr_latch";
 const NOR_LATCH_SPEC: &str = r#"
 inputs  = ["set", "reset"]

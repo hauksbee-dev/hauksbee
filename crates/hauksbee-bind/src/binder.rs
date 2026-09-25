@@ -84,15 +84,16 @@ pub struct McuBinding {
     pub max_supply_v: Option<f64>,
 }
 
-/// One MCP4728 quad DAC discovered on the board. Carries the assigned 7-bit
-/// I2C address, the board reference/value config (VREF, gain), and the four
-/// VOUT-channel [`PinDriver`]s already stamped into the circuit. The scheduler
-/// realizes each binding as a spec-driven
+/// One MCP4728 quad DAC discovered on the board.
+///
+/// Carries the assigned 7-bit I2C address, the board reference/value config
+/// (VREF, gain), and the four VOUT-channel [`PinDriver`]s already stamped into
+/// the circuit. The scheduler realizes each binding as a spec-driven
 /// `RegisterMapSensor` (in `hauksbee_cosim::peripherals`) instance of
 /// `testdata/sensor-specs/mcp4728.toml` on a shared bus, binding these drivers to
-/// the spec's per-channel outputs; the slave then drives the VOUT nets itself
-/// at each transaction end (the ctx-bearing `on_stop`), so the analog
-/// solve sees the DAC output voltages.
+/// the spec's per-channel outputs; the slave then drives the VOUT nets itself at
+/// each transaction end (the ctx-bearing `on_stop`), so the analog solve sees the
+/// DAC output voltages.
 pub struct DacBinding {
     pub reference: String,
     pub address: u8,
@@ -317,10 +318,11 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
     bind_board_with(board, lib, &crate::behavioral::CustomRegistry::new())
 }
 
-/// Bind an extracted board, consulting `custom` for escape-hatch Rust
-/// behaviours. A component whose resolved model id / value / MPN matches a
-/// registered factory is realised by that [`CustomBehavior`](crate::behavioral::CustomBehavior)
-/// instead of the declarative layer.
+/// Bind an extracted board, consulting `custom` for escape-hatch Rust behaviours.
+///
+/// A component whose resolved model id / value / MPN matches a registered factory is realised
+/// by that [`CustomBehavior`](crate::behavioral::CustomBehavior) instead of the declarative
+/// layer.
 #[must_use]
 pub fn bind_board_with(
     board: &ExtractedBoard,
@@ -5419,11 +5421,12 @@ const fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
 
 /// Map a dual-purpose analog-pin role to its GPIO `(port, bit)`, so `bind_mcu`
 /// can stamp the tri-stated driver half of the dual ADC+GPIO bind (dynamic
-/// promotion). On the `ATmega328P` the analog pins
-/// A0..A5 are port C bits 0..5 (PC0..PC5); A6/A7 (Nano modules) are ADC-only
-/// with no port pin and return `None`, so they stay pure ADC probes. Handles
-/// both the Nano module role ("a2", "a3_...") and the bare role carrying an
-/// adc index ("`pc2_adc2`").
+/// promotion).
+///
+/// On the `ATmega328P` the analog pins A0..A5 are port C bits 0..5 (PC0..PC5);
+/// A6/A7 (Nano modules) are ADC-only with no port pin and return `None`, so
+/// they stay pure ADC probes. Handles both the Nano module role ("a2",
+/// "a3_...") and the bare role carrying an adc index ("`pc2_adc2`").
 #[must_use]
 pub fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
@@ -6371,9 +6374,10 @@ pub fn apply_bom_identity(
 }
 
 /// [`apply_identity`] for a placement file, which additionally reconciles where
-/// the parts sit. A placement file whose positions disagree with the layout's is
-/// from another revision, and that is refused for the same reason a contradicting
-/// BOM is.
+/// the parts sit.
+///
+/// A placement file whose positions disagree with the layout's is from another
+/// revision, and that is refused for the same reason a contradicting BOM is.
 pub fn apply_placement_identity(
     board: &mut ExtractedBoard,
     file: &hauksbee_extract::placement::PlacementFile,

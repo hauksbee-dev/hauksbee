@@ -276,9 +276,11 @@ impl DeviceMeta {
     }
 }
 
-/// What a resistor's power rating was derived from. The rating is only as good
-/// as the package evidence behind it, and an overstress verdict that rests on a
-/// guessed package must say so rather than read as a measurement.
+/// What a resistor's power rating was derived from.
+///
+/// The rating is only as good as the package evidence behind it, and an
+/// overstress verdict that rests on a guessed package must say so rather than
+/// read as a measurement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResistorPowerBasis {
     /// A recognised chip-resistor size code (the imperial token in the
@@ -563,14 +565,15 @@ pub fn strip_unit_suffix(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-/// A supply-rail absolute-maximum watch for a part that is not an analog
-/// device in the solver (an MCU / logic IC): the part's supply NET is checked
-/// against the model's `max_voltage_v` each chunk. These parts deliberately get
-/// no whole-device [`DeviceMeta`] (their per-pin currents are covered by the
-/// pin-driver metas). Without this check a rail driven far past the chip's
-/// absolute-maximum Vcc would raise nothing at all, which is an honesty gap the
-/// model DB can close: it carries the rating (e.g. `ATmega328P`
-/// `max_voltage_v = 6.0`).
+/// A supply-rail absolute-maximum watch for a part that is not an analog device
+/// in the solver (an MCU / logic IC): the part's supply NET is checked against
+/// the model's `max_voltage_v` each chunk.
+///
+/// These parts deliberately get no whole-device [`DeviceMeta`] (their per-pin
+/// currents are covered by the pin-driver metas). Without this check a rail
+/// driven far past the chip's absolute-maximum Vcc would raise nothing at all,
+/// which is an honesty gap the model DB can close: it carries the rating (e.g.
+/// `ATmega328P` `max_voltage_v = 6.0`).
 #[derive(Debug, Clone)]
 pub struct SupplyWatch {
     /// Component reference designator the fault names (e.g. "U1").

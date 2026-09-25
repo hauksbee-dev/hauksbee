@@ -61,10 +61,11 @@ pub fn is_board_code_header(text: &str) -> bool {
     head.contains("Board-as-Code") || head.contains("board version ")
 }
 
-/// What kind of input the normalizer recognised. Call sites use this where
-/// they would otherwise keep `is_binary` / `is_gerber` flags; the
-/// `layout_text == None` kinds (Altium, Gerber, Odb, Ipc2581) need different DRC
-/// handling from the text ones and from each other.
+/// What kind of input the normalizer recognised.
+///
+/// Call sites use this where they would otherwise keep `is_binary` / `is_gerber`
+/// flags; the `layout_text == None` kinds (Altium, Gerber, Odb, Ipc2581) need
+/// different DRC handling from the text ones and from each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputKind {
     /// A text layout/netlist format (`KiCad` `.kicad_pcb`, Eagle `.brd`,

@@ -79,16 +79,20 @@ use evalexpr::{
 };
 use hauksbee_models::logic_spec::{Edge, Level, Logic, LogicExpr, LogicSpecError, RegisterOp};
 
-/// Fixpoint sweep bound for combinational cycles. Part of the semantics
-/// contract: the compile-time exhaustive check verifies every SCC settles
-/// within this many Gauss–Seidel sweeps for every input/seed combination.
-/// Physical latch structures settle in ≤ 2 sweeps; 16 leaves generous slack
-/// for legitimate wider cycles without letting a pathological spec spin.
+/// Fixpoint sweep bound for combinational cycles.
+///
+/// Part of the semantics contract: the compile-time exhaustive check
+/// verifies every SCC settles within this many Gauss–Seidel sweeps for
+/// every input/seed combination. Physical latch structures settle in ≤ 2
+/// sweeps; 16 leaves generous slack for legitimate wider cycles without
+/// letting a pathological spec spin.
 pub const COMB_FIXPOINT_BOUND: usize = 16;
 
 /// Maximum `external inputs + cycle members` the exhaustive convergence check
-/// will enumerate (2^cap evaluations). A cycle wider than this is refused
-/// rather than shipped unverified, refuse-rather-than-fake.
+/// will enumerate (2^cap evaluations).
+///
+/// A cycle wider than this is refused rather than shipped unverified,
+/// refuse-rather-than-fake.
 pub const CONVERGENCE_ENUM_CAP: u32 = 12;
 
 /// A named logic-compilation failure (everything `logic_spec` validation
@@ -607,8 +611,10 @@ impl ParallelMemoryStorage {
 }
 
 /// Cloneable description and shared storage for one compiled parallel-memory
-/// port. The scheduler combines these role names with the bound board's nets
-/// when it installs an edge-synchronous firmware responder.
+/// port.
+///
+/// The scheduler combines these role names with the bound board's nets when
+/// it installs an edge-synchronous firmware responder.
 #[derive(Debug, Clone)]
 pub struct ParallelMemoryPort {
     pub name: String,

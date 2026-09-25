@@ -152,8 +152,10 @@ pub fn resolve(
 }
 
 /// Validate and resolve a browser-uploaded companion schematic without
-/// inventing a filesystem path. Unlike sibling discovery, a supplied upload is
-/// explicit input: malformed, mismatched, or non-Eagle data fails closed.
+/// inventing a filesystem path.
+///
+/// Unlike sibling discovery, a supplied upload is explicit input: malformed,
+/// mismatched, or non-Eagle data fails closed.
 pub fn resolve_uploaded(
     board_name: &str,
     board: &hauksbee_extract::ExtractedBoard,
