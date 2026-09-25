@@ -29,7 +29,7 @@
 ///
 /// The lint suppressions are scoped to this module on purpose. bindgen emits
 /// C naming, self-transmutes, same-type casts and undocumented `unsafe fn`s for
-/// a C header's typedefs, none of which anyone can act on: the file is
+/// a C header's typedefs (plus pedantic/nursery noise), none of which anyone can act on: the file is
 /// regenerated from simavr's headers on every build. Silencing them here keeps
 /// the rest of the crate under a clean `-D warnings` gate instead of drowning
 /// it in several hundred warnings about code nobody here writes.
@@ -42,7 +42,9 @@
     clippy::useless_transmute,
     clippy::unnecessary_cast,
     clippy::missing_safety_doc,
-    clippy::ptr_offset_with_cast
+    clippy::ptr_offset_with_cast,
+    clippy::pedantic,
+    clippy::nursery
 )]
 pub mod ffi {
     include!(concat!(env!("OUT_DIR"), "/simavr_bindings.rs"));
