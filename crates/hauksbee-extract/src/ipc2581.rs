@@ -112,7 +112,7 @@ pub enum NetSource {
 }
 
 impl NetSource {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::LogicalNet => "LogicalNet",
             Self::LayerFeature => "LayerFeature/Set",

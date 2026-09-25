@@ -20,7 +20,7 @@ use std::collections::HashMap;
 /// quick-xml deprecates `unescape_value` in favour of `normalized_value`, which
 /// takes an `XmlVersion` the crate does not export, so the replacement is not
 /// callable from outside quick-xml.
-pub(crate) fn xml_attrs(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
+pub fn xml_attrs(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
     e.attributes()
         .flatten()
         .map(|a| {

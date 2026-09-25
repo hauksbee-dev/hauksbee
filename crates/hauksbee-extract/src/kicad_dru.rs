@@ -96,7 +96,7 @@ impl KicadDruRule {
         })
     }
 
-    pub fn is_global(&self) -> bool {
+    pub const fn is_global(&self) -> bool {
         self.condition.is_none() && self.layer.is_none()
     }
 

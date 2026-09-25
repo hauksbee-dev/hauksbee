@@ -29,14 +29,14 @@ use std::collections::HashMap;
 /// `Protel_Advanced_PCB` board. The KIND gate keeps ASCII exports of OTHER
 /// Protel documents (schematics etc.) out of this reader; those fall through
 /// to the unrecognized-format message instead of a garbled parse.
-pub(crate) fn looks_like_protel_ascii(bytes: &[u8]) -> bool {
+pub fn looks_like_protel_ascii(bytes: &[u8]) -> bool {
     let head = leading_text(bytes);
     head.starts_with("|RECORD=") && head.contains("KIND=Protel_Advanced_PCB")
 }
 
 /// Content sniff for the error path: ANY leading pipe-delimited `|RECORD=`
 /// text, whether or not it is a board this crate can read.
-pub(crate) fn looks_like_pipe_records(bytes: &[u8]) -> bool {
+pub fn looks_like_pipe_records(bytes: &[u8]) -> bool {
     leading_text(bytes).starts_with("|RECORD=")
 }
 

@@ -144,7 +144,7 @@ impl LintCheck {
         Self::I2cBusLoading,
     ];
 
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::MissingI2cPullup => "missing_i2c_pullup",
             Self::MissingSdPullup => "missing_sd_pullup",
@@ -176,7 +176,7 @@ pub enum Severity {
 }
 
 impl Severity {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::High => "high",
             Self::Medium => "medium",
@@ -192,10 +192,10 @@ pub struct NetLintReport {
 }
 
 impl NetLintReport {
-    pub fn is_clean(&self) -> bool {
+    pub const fn is_clean(&self) -> bool {
         self.findings.is_empty()
     }
-    pub fn count(&self) -> usize {
+    pub const fn count(&self) -> usize {
         self.findings.len()
     }
     pub fn of_check(&self, c: LintCheck) -> impl Iterator<Item = &LintFinding> {
@@ -222,7 +222,7 @@ impl ExtractedBoard {
 // ---------------------------------------------------------------------------
 
 /// Normalise a net name: trim, drop a leading hierarchical path and `/`, upper.
-pub(crate) fn norm(name: &str) -> String {
+pub fn norm(name: &str) -> String {
     let n = name.trim();
     // Keep only the leaf of a hierarchical net path so "/Power/+3V3" -> "+3V3".
     let leaf = n.rsplit('/').next().unwrap_or(n);
@@ -230,7 +230,7 @@ pub(crate) fn norm(name: &str) -> String {
 }
 
 /// Ground net?
-pub(crate) fn is_ground(name: &str) -> bool {
+pub fn is_ground(name: &str) -> bool {
     let n = norm(name);
     matches!(
         n.as_str(),
@@ -291,7 +291,7 @@ fn rail_voltage(name: &str) -> Option<f64> {
 /// these for the pure `<digits>V<digits>` grammar, but the loose `contains`
 /// fallbacks (3V3/1V8) need the same protection or a divider tapping such a
 /// sense net is miscounted as a pull-up and a genuine finding is suppressed.
-pub(crate) fn has_signal_role_token(n: &str) -> bool {
+pub fn has_signal_role_token(n: &str) -> bool {
     n.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| {
         matches!(
             t,
@@ -325,7 +325,7 @@ pub(crate) fn has_signal_role_token(n: &str) -> bool {
 /// the KiCad digit-V-digit "5V0"/"3V3" form. Returns `None` for names that
 /// don't start with a digit after the optional '+' (VCC, `VDD_IO`), leaving them
 /// to the token heuristics. Mirrors the engine binder's `positive_rail_fallback`.
-pub(crate) fn numeric_rail_magnitude(n: &str) -> Option<f64> {
+pub fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     let rest = n.strip_prefix('+').unwrap_or(n);
     let int_part: String = rest
         .chars()
@@ -370,7 +370,7 @@ pub(crate) fn numeric_rail_magnitude(n: &str) -> Option<f64> {
 /// exists. A bare designator-prefix test loses a real resistor numbered into an
 /// `RN` range and accepts a capacitor labelled `R5` as a pull-up, farads read as
 /// ohms. Shared with the SI checks so the two surfaces cannot disagree.
-pub(crate) fn is_resistor(c: &Component) -> bool {
+pub fn is_resistor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_resistor()
 }
 
@@ -560,7 +560,7 @@ fn members(board: &ExtractedBoard, net_id: i64) -> Vec<(&Component, &Pin)> {
 /// load cap and the kind whose presence to ground makes a net read as a local
 /// supply rail? Delegates to the same evidence ladder as [`is_resistor`], so the
 /// capacitor and resistor questions stay consistent about any one part.
-pub(crate) fn is_capacitor(c: &Component) -> bool {
+pub fn is_capacitor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_capacitor()
 }
 
@@ -792,7 +792,7 @@ fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
 /// KiCad emits one placeholder net per deliberately-unconnected pad, named
 /// `unconnected-(REF-PIN-PadN)`. A pin on such a net is an explicit no-connect,
 /// never a fault.
-pub(crate) fn is_unconnected_net(name: &str) -> bool {
+pub fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
 
@@ -810,7 +810,7 @@ fn pin_is_no_connect(p: &Pin) -> bool {
 /// recognised decorated form (`I2C_SDA`, SDA1, ASDA, `SDA_3V3`, ...). We require the
 /// SDA/SCL token to stand as its own word so we do not match "USDA" sub-strings
 /// or unrelated nets.
-pub(crate) fn i2c_role(name: &str) -> Option<&'static str> {
+pub fn i2c_role(name: &str) -> Option<&'static str> {
     let n = norm(name);
     // Split on common separators and look for an exact SDA/SCL token.
     let toks: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).collect();
@@ -1679,7 +1679,7 @@ fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintRepor
 /// (lowercase-`m` read as MEG is a 1e9 error). Accept only an ohmic magnitude
 /// (no unit, or an explicit Ω) so a stray farad/volt value still reads as "not
 /// a resistor".
-pub(crate) fn parse_ohms(v: &str) -> Option<f64> {
+pub fn parse_ohms(v: &str) -> Option<f64> {
     hauksbee_models::value::parse_value(v)
         .filter(|p| matches!(p.unit.as_deref(), None | Some("Ω")))
         .map(|p| p.si)

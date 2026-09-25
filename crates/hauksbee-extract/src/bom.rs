@@ -170,7 +170,7 @@ impl BomError {
     /// The process exit code this refusal maps to. Always
     /// [`EXIT_INVALID_FOR_ANALYSIS`]: every variant here means the input cannot
     /// be analysed, not that an assertion failed.
-    pub fn exit_code(&self) -> i32 {
+    pub const fn exit_code(&self) -> i32 {
         EXIT_INVALID_FOR_ANALYSIS
     }
 }
@@ -233,7 +233,7 @@ pub enum BomDialect {
 impl BomDialect {
     /// The short machine name recorded in provenance, and the name a report
     /// prints. Stable: it goes in JSON.
-    pub fn kind(self) -> &'static str {
+    pub const fn kind(self) -> &'static str {
         match self {
             Self::KicadGrouped => "kicad_grouped_bom",
             Self::KicadUngrouped => "kicad_ungrouped_bom",
@@ -248,7 +248,7 @@ impl BomDialect {
     }
 
     /// The human name, for a report line a person reads.
-    pub fn describe(self) -> &'static str {
+    pub const fn describe(self) -> &'static str {
         match self {
             Self::KicadGrouped => "KiCad grouped BOM",
             Self::KicadUngrouped => "KiCad ungrouped BOM",
@@ -265,13 +265,13 @@ impl BomDialect {
     /// True when this dialect's `Comment` column is definitionally the value
     /// column. In Altium, LCSC and JLCPCB exports it is; in a spreadsheet
     /// somebody wrote, `Comment` is a comment.
-    fn comment_is_value(self) -> bool {
+    const fn comment_is_value(self) -> bool {
         matches!(self, Self::Altium | Self::Lcsc | Self::Jlcpcb)
     }
 
     /// True for the two fixed-width Eagle shapes, which are sliced by header
     /// column offsets rather than split on a delimiter.
-    fn is_fixed_width(self) -> bool {
+    const fn is_fixed_width(self) -> bool {
         matches!(self, Self::EaglePartlist | Self::EagleGroupedPartlist)
     }
 }
@@ -313,7 +313,7 @@ pub enum ColumnRole {
 
 impl ColumnRole {
     /// The name used in `--bom-column <role>=<column>` and in JSON.
-    pub fn flag_name(self) -> &'static str {
+    pub const fn flag_name(self) -> &'static str {
         match self {
             Self::Reference => "reference",
             Self::Value => "value",
@@ -350,7 +350,7 @@ impl ColumnRole {
     }
 
     /// Every role name, for an error message that has to list them.
-    pub fn all() -> &'static [Self] {
+    pub const fn all() -> &'static [Self] {
         &[
             Self::Reference,
             Self::Value,
@@ -390,11 +390,11 @@ pub enum MappingConfidence {
 
 impl MappingConfidence {
     /// True when a non-interactive run may act on this assignment unasked.
-    pub fn usable_unattended(self) -> bool {
+    pub const fn usable_unattended(self) -> bool {
         matches!(self, Self::Certain | Self::Likely)
     }
 
-    pub fn describe(self) -> &'static str {
+    pub const fn describe(self) -> &'static str {
         match self {
             Self::Certain => "certain",
             Self::Likely => "likely",
@@ -535,7 +535,7 @@ impl ColumnOverrides {
         Ok((parsed, header.trim().to_string()))
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.pairs.is_empty()
     }
 
@@ -1972,7 +1972,7 @@ pub(crate) fn split_references(cell: &str) -> (Vec<String>, Vec<String>) {
 }
 
 /// Singular or plural form, so a report never says "1 rows".
-fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
+const fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
     if n == 1 {
         one
     } else {

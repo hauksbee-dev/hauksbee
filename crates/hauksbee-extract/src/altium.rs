@@ -187,11 +187,11 @@ pub(crate) struct StreamReader<'a> {
 }
 
 impl<'a> StreamReader<'a> {
-    pub(crate) fn new(buf: &'a [u8]) -> Self {
+    pub(crate) const fn new(buf: &'a [u8]) -> Self {
         StreamReader { buf, pos: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    const fn remaining(&self) -> usize {
         self.buf.len().saturating_sub(self.pos)
     }
 
@@ -365,7 +365,7 @@ fn decode_altium_str(raw: &[u8]) -> String {
 /// `0xA0–0xFF` coincide with Latin-1 (byte value == code point); `0x80–0x9F`
 /// carry the CP1252-specific punctuation (smart quotes, dashes, €, …). The five
 /// undefined slots map to U+FFFD.
-fn cp1252_char(b: u8) -> char {
+const fn cp1252_char(b: u8) -> char {
     match b {
         0x80 => '\u{20AC}',
         0x82 => '\u{201A}',

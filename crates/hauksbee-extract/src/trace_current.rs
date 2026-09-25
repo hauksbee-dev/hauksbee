@@ -85,7 +85,7 @@ pub enum CopperSource {
 impl CopperSource {
     /// Whether the numbers behind this rating were assumed rather than read off
     /// the board.
-    pub fn is_assumed(self) -> bool {
+    pub const fn is_assumed(self) -> bool {
         !matches!(self, Self::Stackup)
     }
 }
@@ -179,7 +179,7 @@ impl CopperWeights {
     }
 
     /// Whether the layout carried a stackup block, whatever it yielded.
-    pub fn is_declared(&self) -> bool {
+    pub const fn is_declared(&self) -> bool {
         self.declared
     }
 
@@ -681,7 +681,7 @@ pub struct Bottleneck {
 }
 
 /// Whether a layer name is one KiCad gives OUTER copper.
-fn is_outer_layer_name(n: &str) -> bool {
+const fn is_outer_layer_name(n: &str) -> bool {
     n.eq_ignore_ascii_case("F.Cu") || n.eq_ignore_ascii_case("B.Cu")
 }
 

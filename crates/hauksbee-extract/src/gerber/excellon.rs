@@ -102,7 +102,7 @@ struct CoordFormat {
 }
 
 impl CoordFormat {
-    fn scale(&self) -> f64 {
+    const fn scale(&self) -> f64 {
         if self.metric {
             1.0
         } else {
@@ -136,7 +136,7 @@ impl CoordFormat {
     /// Take an `i:j` split, ignoring absurd widths: these feed
     /// `format!("{:0>width$}")` and the slicing below, so a corrupt
     /// `99999:1` would panic or allocate wildly. Real splits are tiny.
-    fn set_split(&mut self, i: usize, d: usize) {
+    const fn set_split(&mut self, i: usize, d: usize) {
         if i <= 12 && d <= 12 {
             self.int_digits = i;
             self.dec_digits = d;

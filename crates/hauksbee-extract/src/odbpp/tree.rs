@@ -28,11 +28,11 @@ use crate::ExtractError;
 
 /// The marker that identifies an ODB++ job root: the matrix file, which every
 /// job has exactly one of and which no other format ships.
-pub(crate) const MATRIX_PATH: &str = "matrix/matrix";
+pub const MATRIX_PATH: &str = "matrix/matrix";
 
 /// A whole ODB++ job in memory: lower-cased `/`-separated path relative to the
 /// job root → file content.
-pub(crate) struct OdbTree {
+pub struct OdbTree {
     files: BTreeMap<String, Vec<u8>>,
     /// Paths whose `.Z` / `.gz` payload would not inflate, so their content is
     /// the raw compressed bytes and will not parse. Reported, never hidden.
@@ -45,7 +45,7 @@ pub(crate) struct OdbTree {
 }
 
 impl OdbTree {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             files: BTreeMap::new(),
             undecompressed: Vec::new(),
@@ -299,18 +299,18 @@ fn collect(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-pub(crate) fn is_zip(bytes: &[u8]) -> bool {
+pub fn is_zip(bytes: &[u8]) -> bool {
     bytes.starts_with(b"PK\x03\x04")
 }
 
-pub(crate) fn is_gzip(bytes: &[u8]) -> bool {
+pub fn is_gzip(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0x1f, 0x8b])
 }
 
 /// A bare (uncompressed) tar: the `ustar` magic sits at offset 257 of the first
 /// 512-byte header block. Checking the magic rather than the extension keeps a
 /// mis-named archive readable and keeps a random binary out.
-pub(crate) fn looks_like_tar(bytes: &[u8]) -> bool {
+pub fn looks_like_tar(bytes: &[u8]) -> bool {
     bytes.len() >= 265 && (&bytes[257..262] == b"ustar")
 }
 
@@ -327,7 +327,7 @@ pub(crate) fn looks_like_tar(bytes: &[u8]) -> bool {
 /// professional job with tens of megabytes of `features` far inside it. Hitting
 /// the ceiling is an error naming the limit, not a truncated read: a job silently
 /// missing its last layers is the half-board this crate refuses to produce.
-pub(crate) const MAX_INFLATED_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_INFLATED_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Inflate a gzip member, or `None` if it is not gzip / is corrupt / would
 /// exceed `budget` (which is decremented by what was produced).
@@ -351,7 +351,7 @@ fn gunzip_within(bytes: &[u8], budget: &mut u64) -> Option<Vec<u8>> {
 /// `matrix/matrix` member? Reads only what it must — a zip's central directory
 /// for the zip form, and at most [`SNIFF_BYTES`] of inflated tar for the tgz
 /// form, so detection never inflates a 200 MB fab archive.
-pub(crate) fn archive_has_matrix(bytes: &[u8]) -> bool {
+pub fn archive_has_matrix(bytes: &[u8]) -> bool {
     if is_zip(bytes) {
         let Ok(zip) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
             return false;

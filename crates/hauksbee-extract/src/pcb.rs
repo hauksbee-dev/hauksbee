@@ -335,7 +335,7 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
 ///
 /// Shared by every KiCad s-expression reader (layout, schematic, DRC): they all
 /// meet the same node with the same defaults.
-pub(crate) fn at_of(list: &List) -> (f64, f64, f64) {
+pub fn at_of(list: &List) -> (f64, f64, f64) {
     match list.find("at") {
         Some(at) => (
             at.arg_f64(0).unwrap_or(0.0),

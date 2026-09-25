@@ -274,7 +274,7 @@ impl AnchorKind {
     /// Naming precedence, highest wins. Mirrors KiCad's driver priority
     /// (`connection_graph.h`): GLOBAL > `GLOBAL_POWER_PIN` > `LOCAL_LABEL` >
     /// `HIER_LABEL`. Ties still break to the lexicographically smallest name.
-    fn prio(self) -> u8 {
+    const fn prio(self) -> u8 {
         match self {
             Self::Global => 4,
             Self::Power => 3,
@@ -1635,7 +1635,7 @@ fn at_xy(list: &List) -> Option<Pt> {
 /// True if `p` lies strictly between `a` and `b` on the segment a–b (collinear,
 /// excluding the endpoints). Coordinates are integer micrometres, so the cross
 /// product is exact.
-fn point_strictly_inside(p: Pt, a: Pt, b: Pt) -> bool {
+const fn point_strictly_inside(p: Pt, a: Pt, b: Pt) -> bool {
     let cross =
         (b.0 - a.0) as i128 * (p.1 - a.1) as i128 - (b.1 - a.1) as i128 * (p.0 - a.0) as i128;
     if cross != 0 {

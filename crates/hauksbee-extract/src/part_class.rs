@@ -84,7 +84,7 @@ use crate::Component;
 
 /// What a component record is, as far as the two-terminal-passive question goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PartClass {
+pub enum PartClass {
     /// A two-terminal passive of a known class.
     Passive(PassiveClass),
     /// Two terminals, but the evidence says it is not a passive at all (a
@@ -108,7 +108,7 @@ impl PartClass {
     /// True only for a capacitor: the kind of part that can be a crystal load
     /// cap, a decoupling cap, or the bypass that makes a net read as a local
     /// supply rail.
-    pub(crate) fn is_capacitor(self) -> bool {
+    pub(crate) const fn is_capacitor(self) -> bool {
         matches!(self, Self::Passive(PassiveClass::Capacitor))
     }
 }
@@ -120,7 +120,7 @@ impl PartClass {
 /// signal contact, so a two-terminal part can show four pin entries (pad 1 x2,
 /// pad 2 x2). An IPC-356 both-sided through-hole access record does the same.
 /// All of those must resolve to "two terminals".
-pub(crate) fn connected_pads(c: &Component) -> usize {
+pub fn connected_pads(c: &Component) -> usize {
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for p in &c.pins {
         if p.net.is_some() {
@@ -138,7 +138,7 @@ pub(crate) fn connected_pads(c: &Component) -> usize {
 /// part and a mirrored decoupling cap is misclassified. Only a lowercase `r`
 /// immediately before an uppercase designator letter counts, so a genuine
 /// `R5` / `RV1` is untouched.
-pub(crate) fn ref_designator(reference: &str) -> String {
+pub fn ref_designator(reference: &str) -> String {
     let r = reference.trim();
     let bytes = r.as_bytes();
     if bytes.len() >= 2 && bytes[0] == b'r' && bytes[1].is_ascii_uppercase() {
@@ -158,7 +158,7 @@ pub fn is_plain_resistor(c: &Component) -> bool {
 }
 
 /// Classify one component record against the ladder in the module doc.
-pub(crate) fn classify_two_terminal(c: &Component) -> PartClass {
+pub fn classify_two_terminal(c: &Component) -> PartClass {
     // Rung 1: terminal count.
     if connected_pads(c) != 2 {
         return PartClass::NotTwoTerminal;

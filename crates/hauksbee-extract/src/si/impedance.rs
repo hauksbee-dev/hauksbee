@@ -162,7 +162,7 @@ pub struct Stackup {
 impl Stackup {
     /// The default-assumption stackup (used only for info-level estimates when
     /// the file has no stackup block).
-    fn default_assumed() -> Self {
+    const fn default_assumed() -> Self {
         Self {
             h_microstrip_mm: DEFAULT_DIELECTRIC_MM,
             t_cu_mm: DEFAULT_CU_THICKNESS_MM,
@@ -324,14 +324,14 @@ pub enum ImpedanceClass {
 
 impl ImpedanceClass {
     /// Target impedance (ohms).
-    pub fn target_ohm(self) -> f64 {
+    pub const fn target_ohm(self) -> f64 {
         match self {
             Self::UsbDiff => 90.0,
             Self::EthernetDiff => 100.0,
             Self::SingleEnded50 => 50.0,
         }
     }
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::UsbDiff => "USB 90 ohm differential",
             Self::EthernetDiff => "Ethernet 100 ohm differential",
@@ -343,7 +343,7 @@ impl ImpedanceClass {
     /// [`Self::label`] carries the number, so pairing it with the target read
     /// back as "[target 90 ohm USB 90 ohm differential]"; this says the kind
     /// once and lets the caller print the number once.
-    pub fn kind_label(self) -> &'static str {
+    pub const fn kind_label(self) -> &'static str {
         match self {
             Self::UsbDiff => "USB differential",
             Self::EthernetDiff => "Ethernet differential",

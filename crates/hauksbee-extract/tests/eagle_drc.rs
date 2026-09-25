@@ -58,7 +58,7 @@ fn board(packages: &str, elements: &str, signals: &str, designrules: &str) -> St
 }
 
 /// The default Eagle design-rule block (6 mil = 0.1524 mm wire-wire clearance).
-fn default_rules() -> &'static str {
+const fn default_rules() -> &'static str {
     r#"<designrules name="default">
 <param name="mdWireWire" value="6mil"/>
 <param name="mdWirePad" value="6mil"/>

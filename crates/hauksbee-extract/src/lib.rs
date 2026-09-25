@@ -903,7 +903,7 @@ pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Comp
 pub(crate) mod testutil {
     use crate::{Component, ExtractedBoard, Net, Pin};
 
-    pub(crate) fn pin(number: &str, net: Option<i64>) -> Pin {
+    pub fn pin(number: &str, net: Option<i64>) -> Pin {
         Pin {
             number: number.into(),
             net,
@@ -911,7 +911,7 @@ pub(crate) mod testutil {
         }
     }
 
-    pub(crate) fn part(
+    pub fn part(
         reference: &str,
         value: &str,
         lib_id: &str,
@@ -928,7 +928,7 @@ pub(crate) mod testutil {
         }
     }
 
-    pub(crate) fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
+    pub fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
         ExtractedBoard {
             name: "b".into(),
             nets: nets.iter().map(|&(id, name)| Net::new(id, name)).collect(),
@@ -1129,7 +1129,7 @@ pub struct Lint {
 }
 
 impl Lint {
-    pub fn is_clean(&self) -> bool {
+    pub const fn is_clean(&self) -> bool {
         self.undeclared_nets.is_empty() && self.floating_components.is_empty()
     }
 }

@@ -77,7 +77,7 @@ pub struct DnpAbsence {
 
 impl DnpAbsence {
     /// The line a report prints for this absence.
-    pub fn describe(&self) -> &'static str {
+    pub const fn describe(&self) -> &'static str {
         match &self.reason {
             Some(reason) => reason.describe(),
             None => "DNP (not populated)",
@@ -100,7 +100,7 @@ pub struct FittedComponent<'c> {
 
 impl<'c> FittedComponent<'c> {
     /// The underlying record, for read access with the original lifetime.
-    pub fn component(self) -> &'c Component {
+    pub const fn component(self) -> &'c Component {
         self.part
     }
 }
@@ -154,7 +154,7 @@ impl<'c> AssemblyState<'c> {
     }
 
     /// True when the part is assembled and identity-trusted.
-    pub fn is_present(&self) -> bool {
+    pub const fn is_present(&self) -> bool {
         matches!(self, AssemblyState::Present(_))
     }
 

@@ -464,7 +464,7 @@ pub enum ViolationKind {
 }
 
 impl ViolationKind {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Short => "short",
             Self::Clearance => "clearance",
@@ -489,7 +489,7 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Track => "track",
             Self::Arc => "arc",
@@ -595,7 +595,7 @@ impl DrcTieQualification {
         find_at(&self.qualified, net_a, net_b, layer, x, y)
     }
 
-    pub fn qualified_count(&self) -> usize {
+    pub const fn qualified_count(&self) -> usize {
         self.qualified.len()
     }
 
@@ -622,13 +622,13 @@ impl DrcTieQualification {
         find_at(&self.declared, net_a, net_b, layer, x, y)
     }
 
-    pub fn declaration_count(&self) -> usize {
+    pub const fn declaration_count(&self) -> usize {
         self.declaration_count
     }
 
     /// Distinct schematic declarations that matched exactly one measured
     /// physical contact cluster. Layer rows are not double-counted.
-    pub fn matched_declaration_count(&self) -> usize {
+    pub const fn matched_declaration_count(&self) -> usize {
         self.matched_declaration_count
     }
 
@@ -2248,7 +2248,7 @@ impl NetTieOwners {
         }
     }
 
-    fn point_shape((x, y): (f64, f64)) -> Shape {
+    const fn point_shape((x, y): (f64, f64)) -> Shape {
         Shape::disc(x, y, 0.0)
     }
 
@@ -4073,7 +4073,7 @@ pub mod altium_drc {
 
     /// Map an Altium primitive's net field to the hauksbee net id (index + 1, so
     /// id 0 stays the "no net" bucket), or 0 when unattached / out of range.
-    fn net_id(field: u16, n_nets: usize) -> i64 {
+    const fn net_id(field: u16, n_nets: usize) -> i64 {
         if field == NONE_U16 || (field as usize) >= n_nets {
             0
         } else {

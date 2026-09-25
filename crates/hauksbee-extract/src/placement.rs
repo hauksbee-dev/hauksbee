@@ -155,7 +155,7 @@ pub enum PlacementDetection {
 impl PlacementError {
     /// Always [`EXIT_INVALID_FOR_ANALYSIS`]: each variant means the input cannot
     /// be analysed, not that an assertion failed.
-    pub fn exit_code(&self) -> i32 {
+    pub const fn exit_code(&self) -> i32 {
         EXIT_INVALID_FOR_ANALYSIS
     }
 }
@@ -188,7 +188,7 @@ pub enum PlacementDialect {
 
 impl PlacementDialect {
     /// The stable machine name recorded in provenance.
-    pub fn kind(self) -> &'static str {
+    pub const fn kind(self) -> &'static str {
         match self {
             Self::KicadPosAscii => "kicad_pos_ascii",
             Self::KicadPosCsv => "kicad_pos_csv",
@@ -197,7 +197,7 @@ impl PlacementDialect {
         }
     }
 
-    pub fn describe(self) -> &'static str {
+    pub const fn describe(self) -> &'static str {
         match self {
             Self::KicadPosAscii => "KiCad position file",
             Self::KicadPosCsv => "KiCad position file (csv)",
@@ -222,7 +222,7 @@ impl Side {
     /// The KiCad copper-layer name, so a side can be compared against
     /// [`crate::Component::layer`] without either side of the comparison
     /// guessing.
-    pub fn kicad_layer(self) -> Option<&'static str> {
+    pub const fn kicad_layer(self) -> Option<&'static str> {
         match self {
             Self::Top => Some("F.Cu"),
             Self::Bottom => Some("B.Cu"),
@@ -232,7 +232,7 @@ impl Side {
 
     /// The word a report prints, so a line reads as a sentence rather than as a
     /// Rust variant name.
-    pub fn describe(self) -> &'static str {
+    pub const fn describe(self) -> &'static str {
         match self {
             Self::Top => "top",
             Self::Bottom => "bottom",
@@ -816,7 +816,7 @@ impl PlacementCrossCheck {
     /// conclusion drawn from the pair would describe a board that does not exist.
     /// The threshold is a majority of the shared parts: a single moved part is a
     /// change to report, a wholesale disagreement is a different board.
-    pub fn is_different_board(&self) -> bool {
+    pub const fn is_different_board(&self) -> bool {
         if self.matched == 0 {
             return !self.only_in_placement.is_empty();
         }

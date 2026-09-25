@@ -43,7 +43,7 @@ pub enum LayerRole {
 }
 
 impl LayerRole {
-    pub fn is_copper(&self) -> bool {
+    pub const fn is_copper(&self) -> bool {
         matches!(self, Self::Copper { .. })
     }
 }

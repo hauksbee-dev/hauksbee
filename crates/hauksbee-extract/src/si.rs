@@ -71,7 +71,7 @@ pub enum SiSeverity {
 }
 
 impl SiSeverity {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::High => "high",
             Self::Medium => "medium",
@@ -80,7 +80,7 @@ impl SiSeverity {
         }
     }
     /// Info notes are observations, not findings.
-    pub fn is_finding(self) -> bool {
+    pub const fn is_finding(self) -> bool {
         !matches!(self, Self::Info)
     }
 }
@@ -105,7 +105,7 @@ pub enum SiCheck {
 }
 
 impl SiCheck {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::CrystalLoadCap => "crystal_load_cap",
             Self::I2cRiseTime => "i2c_rise_time",

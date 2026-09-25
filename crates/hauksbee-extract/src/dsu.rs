@@ -4,7 +4,7 @@
 //! reads the final partition back with `find`, so the merge rules live in the
 //! readers and the bookkeeping lives in one place.
 
-pub(crate) struct Dsu {
+pub struct Dsu {
     parent: Vec<usize>,
     size: Vec<usize>,
 }

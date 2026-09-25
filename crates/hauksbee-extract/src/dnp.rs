@@ -42,7 +42,7 @@ pub enum DnpPolicy {
 impl DnpPolicy {
     /// The one-line description a report prints so the default is never a
     /// surprise.
-    pub fn describe(self) -> &'static str {
+    pub const fn describe(self) -> &'static str {
         match self {
             Self::FitExceptLinks => {
                 "DNP parts are simulated as fitted (they are usually placed eventually), \
@@ -92,7 +92,7 @@ pub enum DnpReason {
 }
 
 impl DnpReason {
-    pub fn describe(&self) -> &'static str {
+    pub const fn describe(&self) -> &'static str {
         match self {
             Self::Policy => "DNP, fitted by default",
             Self::NamedFit => "DNP, fitted because you asked for it",
@@ -104,7 +104,7 @@ impl DnpReason {
 
     /// The stable tag stored under [`DNP_REASON_KEY`]. Round-trips through
     /// [`DnpReason::from_policy_tag`].
-    pub fn policy_tag(&self) -> &'static str {
+    pub const fn policy_tag(&self) -> &'static str {
         match self {
             Self::Policy => "policy",
             Self::NamedFit => "named-fit",
@@ -147,7 +147,7 @@ pub struct DnpDecision {
 
 impl DnpDecision {
     /// True when the board had no DNP parts at all, so there is nothing to say.
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.fitted.is_empty() && self.left_open.is_empty()
     }
 

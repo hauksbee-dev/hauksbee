@@ -129,7 +129,7 @@ pub enum PlacementSource {
 }
 
 impl PlacementSource {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::EdaData => "eda/data",
             Self::ComponentLayers => "component layers",
@@ -151,7 +151,7 @@ pub struct OdbLayer {
 }
 
 impl OdbLayer {
-    pub fn features(&self) -> usize {
+    pub const fn features(&self) -> usize {
         self.lines + self.pads + self.arcs + self.surfaces
     }
 }
@@ -889,7 +889,7 @@ mod tests {
     /// A minimal but structurally complete two-resistor job, written into a zip
     /// the way KiCad writes one (placement on the component layers, `eda/data`
     /// holding nets and packages).
-    pub(crate) fn tiny_job() -> Vec<(&'static str, String)> {
+    pub fn tiny_job() -> Vec<(&'static str, String)> {
         vec![
             (
                 "matrix/matrix",
@@ -940,7 +940,7 @@ mod tests {
     }
 
     /// Zip the given members, so the archive path is exercised end to end.
-    pub(crate) fn zip_members(members: &[(&str, String)]) -> Vec<u8> {
+    pub fn zip_members(members: &[(&str, String)]) -> Vec<u8> {
         let raw: Vec<(&str, Vec<u8>)> = members
             .iter()
             .map(|(n, b)| (*n, b.as_bytes().to_vec()))
@@ -949,7 +949,7 @@ mod tests {
     }
 
     /// [`zip_members`] for members that are not valid UTF-8 (a gzip payload).
-    pub(crate) fn zip_raw(members: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    pub fn zip_raw(members: &[(&str, Vec<u8>)]) -> Vec<u8> {
         use std::io::Write;
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let opts: zip::write::FileOptions<'_, ()> =

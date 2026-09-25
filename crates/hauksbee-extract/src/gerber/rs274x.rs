@@ -111,7 +111,7 @@ pub struct X2Attrs {
 }
 
 impl X2Attrs {
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.function.is_none()
             && self.net.is_none()
             && self.pin.is_none()
@@ -129,7 +129,7 @@ impl X2Attrs {
 /// stitches layers but is not a component pad. Resolves the via-vs-pad
 /// ambiguity the geometric reconstruction cannot (a stitching via inside a
 /// footprint window looks exactly like a pad).
-pub fn function_is_via(f: &ApertureFunction) -> bool {
+pub const fn function_is_via(f: &ApertureFunction) -> bool {
     matches!(f, ApertureFunction::ViaPad)
 }
 
@@ -139,7 +139,7 @@ pub fn function_is_via(f: &ApertureFunction) -> bool {
 /// Absence of any function says nothing, that flash keeps its geometric
 /// fallback, because a partially attributed film is not a film asserting its
 /// bare flashes are non-pads.
-pub fn function_is_nonpad(f: &ApertureFunction) -> bool {
+pub const fn function_is_nonpad(f: &ApertureFunction) -> bool {
     matches!(
         f,
         ApertureFunction::FiducialPad(_)
@@ -473,7 +473,7 @@ fn contours_to_geo_polygon(mut contours: Vec<Vec<(f64, f64)>>) -> Option<Polygon
 }
 
 /// Closed bounding box of a segment: `[minx, miny, maxx, maxy]`.
-fn line_box(l: &::geo::Line<f64>) -> [f64; 4] {
+const fn line_box(l: &::geo::Line<f64>) -> [f64; 4] {
     [
         l.start.x.min(l.end.x),
         l.start.y.min(l.end.y),
@@ -1657,13 +1657,13 @@ impl<'a> Plotter<'a> {
 
     /// Is the object transform the identity? Only then may a clear image, which
     /// this plotter draws untransformed, be trusted to subtract.
-    fn identity_transform(&self) -> bool {
+    const fn identity_transform(&self) -> bool {
         self.scale_identity && self.rotation_identity && self.mirror_identity
     }
 
     /// May clear geometry drawn right now be trusted to subtract? Not under an
     /// unapplied object transform, and not inside an `%AB` body (see `ab_depth`).
-    fn may_bank_clears(&self) -> bool {
+    const fn may_bank_clears(&self) -> bool {
         self.identity_transform()
             && self.ab_depth == 0
             && self.image_positive

@@ -41,7 +41,7 @@ pub enum Shape {
 }
 
 impl Shape {
-    pub fn disc(x: f64, y: f64, r: f64) -> Self {
+    pub const fn disc(x: f64, y: f64, r: f64) -> Self {
         Self::Capsule(Capsule {
             ax: x,
             ay: y,
@@ -420,7 +420,7 @@ fn boxes_farther_than(a: [f64; 4], b: [f64; 4], limit: f64) -> bool {
     separation > limit + 1e-6
 }
 
-fn segment_box(a: (f64, f64), b: (f64, f64)) -> [f64; 4] {
+const fn segment_box(a: (f64, f64), b: (f64, f64)) -> [f64; 4] {
     [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]
 }
 
