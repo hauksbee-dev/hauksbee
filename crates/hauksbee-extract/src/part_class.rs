@@ -148,8 +148,10 @@ pub fn ref_designator(reference: &str) -> String {
 }
 
 /// Public rung-ladder answer to "is this record a plain two-terminal
-/// resistor?", for downstream crates that must agree with the lint/SI checks
-/// about what a resistor is. Answers from the model DB's declared passive
+/// resistor?".
+///
+/// It serves downstream crates that must agree with the lint/SI checks about
+/// what a resistor is. Answers from the model DB's declared passive
 /// class through the assembly witness, falling back to the designator/`lib_id`
 /// strings only when nothing better exists; `Unknown` and identity-refused
 /// records are never resistors.

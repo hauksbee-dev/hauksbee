@@ -18,6 +18,7 @@
 use crate::assembly::AssemblyState;
 use crate::part_class::{self, connected_pads, ref_designator};
 use crate::{Component, ExtractedBoard, Pin};
+use std::fmt::Write as _;
 
 /// One lint finding, severity-tagged, with the evidence to reproduce it.
 #[derive(Debug, Clone)]
@@ -109,13 +110,17 @@ pub enum LintCheck {
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
-/// exists but is do-not-populate" variant. The plain-language renderer keys
+/// exists but is do-not-populate" variant.
+///
+/// The plain-language renderer keys
 /// its DNP explanation off this exact substring, so it is a shared constant
 /// rather than two strings that can silently drift apart.
 pub const DNP_PULLUP_MESSAGE_MARKER: &str = "do-not-populate";
 
 /// The phrase that marks an SD pull-up finding as the SPI-wired-socket
-/// variant, whose rationale differs from SD mode (CMD is the host's
+/// variant.
+///
+/// Its rationale differs from SD mode (CMD is the host's
 /// push-pull DI there, not an open-drain identification line). The plain
 /// renderer keys its SPI explanation off this substring; shared for the same
 /// no-drift reason as [`DNP_PULLUP_MESSAGE_MARKER`].
@@ -260,16 +265,12 @@ fn rail_voltage(name: &str) -> Option<f64> {
         "VBAT" | "VBATT" | "VSYS" | "VIN" | "+VBAT" | "VPP" | "VDDIO" | "VDD_IO" | "VIO" => {
             Some(3.7)
         }
-        _ => {
-            // A numeric rail carries its own magnitude ("+15V", "24V", "+15V0").
-            // This MUST precede the loose contains("5V") branch: "+15V" contains
-            // the substring "5V" and starts with '+', so without this it was
-            // mislabeled a 5 V rail.
-            if let Some(v) = numeric_rail_magnitude(&n) {
-                Some(v)
-            } else if n.contains("5V")
-                && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS"))
-            {
+        // A numeric rail carries its own magnitude ("+15V", "24V", "+15V0").
+        // This MUST precede the loose contains("5V") branch: "+15V" contains
+        // the substring "5V" and starts with '+', so without this it was
+        // mislabeled a 5 V rail.
+        _ => numeric_rail_magnitude(&n).or_else(|| {
+            if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
                 Some(5.0)
             } else if (n.contains("3V3") || n.contains("3.3V") || n.contains("3P3"))
                 && !has_signal_role_token(&n)
@@ -286,7 +287,7 @@ fn rail_voltage(name: &str) -> Option<f64> {
             } else {
                 None
             }
-        }
+        }),
     }
 }
 
@@ -415,10 +416,10 @@ fn is_resistor_array(c: &Component) -> bool {
 /// each Vcc. A bare pass-gate switch (PCA9306, PCA9509 pass type) does NOT, so
 /// it is deliberately excluded.
 fn has_integrated_i2c_pullups(c: &Component) -> bool {
-    let v = c.value.to_ascii_uppercase();
     const FAMILIES: [&str; 7] = [
         "NTS010", "TXS010", "TXB010", "PCA9517", "PCA9617", "LTC4311", "NVT2010",
     ];
+    let v = c.value.to_ascii_uppercase();
     FAMILIES.iter().any(|f| v.contains(f))
 }
 
@@ -1293,6 +1294,7 @@ fn is_host_silicon(c: &Component) -> bool {
     r.starts_with('U') || (c.pins.len() > 2 && !is_resistor(c) && !is_resistor_array(c))
 }
 
+#[allow(clippy::too_many_lines, reason = "one pass over SD socket nets")]
 fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
     for net in &board.nets {
         if net.id == 0 || is_unconnected_net(&net.name) {
@@ -1567,16 +1569,16 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
 /// (containing '/', or a known bus/peripheral keyword) is treated as a signal,
 /// not a control pin.
 fn control_role(function: &str) -> Option<&'static str> {
-    let f = function.trim().to_ascii_uppercase();
-    if f.is_empty() {
-        return None;
-    }
     // A multiplexed / signal name (Ethernet, SPI, GPIO mux, etc.) is not a
     // dedicated control pin even if a sub-token looks like "EN".
     const SIGNAL_KEYWORDS: [&str; 12] = [
         "GPIO", "EMAC", "RMII", "TX_EN", "RX_EN", "CLKEN", "VSPI", "HSPI", "UART", "PWM", "SENSE",
         "OPEN",
     ];
+    let f = function.trim().to_ascii_uppercase();
+    if f.is_empty() {
+        return None;
+    }
     if SIGNAL_KEYWORDS.iter().any(|k| f.contains(k)) {
         return None;
     }
@@ -1709,7 +1711,7 @@ fn check_led_current(board: &ExtractedBoard, report: &mut NetLintReport) {
         for (i, p) in led.pins.iter().enumerate().take(2) {
             led_nets[i] = p.net;
         }
-        let (Some(na), Some(nb)) = (led_nets[0], led_nets[1]) else {
+        let [Some(na), Some(nb)] = led_nets else {
             continue;
         };
 
@@ -1951,14 +1953,10 @@ pub fn render_netlint(report: &NetLintReport) -> String {
         out.push_str("net-lint: no findings.\n");
         return out;
     }
-    out.push_str(&format!("net-lint: {} finding(s)\n", report.findings.len()));
+    let _ = writeln!(out, "net-lint: {} finding(s)", report.findings.len());
     for f in &report.findings {
-        out.push_str(&format!(
-            "  [{}] {} - {}\n",
-            f.severity.as_str(),
-            f.check.as_str(),
-            f.message
-        ));
+        let (severity, check) = (f.severity.as_str(), f.check.as_str());
+        let _ = writeln!(out, "  [{severity}] {check} - {}", f.message);
     }
     out
 }

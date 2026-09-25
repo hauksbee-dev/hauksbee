@@ -139,7 +139,7 @@ fn parse_resources(text: &str) -> Result<Vec<McuResources>, String> {
         let min_pins = entry
             .get("min_pins")
             .and_then(toml::Value::as_integer)
-            .map(|n| n as usize);
+            .and_then(|n| usize::try_from(n).ok());
         let mut pins = BTreeMap::new();
         if let Some(table) = entry.get("pins").and_then(|p| p.as_table()) {
             for (pad, v) in table {
@@ -887,7 +887,7 @@ pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, Str
                 net_name,
                 res.pwm
                     .clone()
-                    .or(res.qspi_group.clone())
+                    .or_else(|| res.qspi_group.clone())
                     .unwrap_or_default(),
                 match inf {
                     Some((f, ev)) => format!("{} [{:?}] <= {ev}", f.class, f.peripheral),
@@ -902,6 +902,7 @@ pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     #[test]
     fn embedded_table_parses_and_has_known_mcus() {
@@ -1018,10 +1019,11 @@ mod tests {
             1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 29,
             31, 3, 8, 13, 23, 28, 30, 32, 35, 36, 37, 38, 39, 40,
         ] {
-            spare.push_str(&format!(
-                "    (net (code {}) (name spare{pin}) (node (ref U1) (pin {pin})) (node (ref RES1) (pin 1)))\n",
+            let _ = writeln!(
+                spare,
+                "    (net (code {}) (name spare{pin}) (node (ref U1) (pin {pin})) (node (ref RES1) (pin 1)))",
                 100 + pin
-            ));
+            );
         }
         format!(
             r"(export (version D)
@@ -1147,6 +1149,7 @@ mod tests {
     /// A SAMD51 with a flash on the QSPI DATA pads. With 4-wire SPI net naming
     /// (MOSI/MISO/SCK/CS) it is the SparkFun SERCOM-SPI bug -> fires. With
     /// quad-IO naming (IO0..IO3) it is a correct QSPI flash -> silent.
+    #[allow(clippy::format_collect, reason = "forty-line test fixture")]
     fn samd51_flash_net(data_names: [&str; 4]) -> String {
         format!(
             r"(export (version D)

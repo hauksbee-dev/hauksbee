@@ -19,6 +19,7 @@
 //!     with stdin closed and a 10-minute poll-and-kill timeout.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -129,10 +130,7 @@ fn focus_on_pwm(text: &str) -> String {
                 .find_map(|k| lower.find(k))
         })
         .or_else(|| lower.find("pwm"));
-    let start = match anchor_byte {
-        Some(b) => text[..b].chars().count().saturating_sub(2_000),
-        None => 0,
-    };
+    let start = anchor_byte.map_or(0, |b| text[..b].chars().count().saturating_sub(2_000));
     text.chars().skip(start).take(48_000).collect()
 }
 
@@ -253,21 +251,20 @@ fn call_codex(prompt: &str, pdf: &Path) -> Result<String, String> {
         let _ = stdin.write_all(b""); // close stdin or codex blocks on EOF
     }
     let deadline = Instant::now() + CODEX_TIMEOUT;
-    loop {
-        match child.try_wait().map_err(|e| format!("poll codex: {e}"))? {
-            Some(_) => break,
-            None => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!(
-                        "codex timed out after {}s",
-                        CODEX_TIMEOUT.as_secs()
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
+    while child
+        .try_wait()
+        .map_err(|e| format!("poll codex: {e}"))?
+        .is_none()
+    {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "codex timed out after {}s",
+                CODEX_TIMEOUT.as_secs()
+            ));
         }
+        std::thread::sleep(Duration::from_millis(500));
     }
     let out = child
         .wait_with_output()
@@ -417,22 +414,15 @@ fn diff_tables(hand: &BTreeMap<String, String>, machine: &BTreeMap<String, Strin
         }
     }
     let mut s = String::new();
-    s.push_str(&format!("agree: {agree}/{} hand rows\n", hand.len()));
+    let _ = writeln!(s, "agree: {agree}/{} hand rows", hand.len());
     if !disagree.is_empty() {
-        s.push_str(&format!(
-            "DISAGREE ({}):\n{}\n",
-            disagree.len(),
-            disagree.join("\n")
-        ));
+        let _ = writeln!(s, "DISAGREE ({}):\n{}", disagree.len(), disagree.join("\n"));
     }
     if !only_hand.is_empty() {
-        s.push_str(&format!("only in hand table: {}\n", only_hand.join(", ")));
+        let _ = writeln!(s, "only in hand table: {}", only_hand.join(", "));
     }
     if !only_machine.is_empty() {
-        s.push_str(&format!(
-            "only in machine table: {}\n",
-            only_machine.join(", ")
-        ));
+        let _ = writeln!(s, "only in machine table: {}", only_machine.join(", "));
     }
     if disagree.is_empty() && only_hand.is_empty() {
         s.push_str("VERDICT: machine extraction matches the hand table on every shared GPIO.\n");
@@ -501,9 +491,11 @@ id = "rp2040_extracted"
     #[test]
     fn committed_rp2040_extraction_matches_hand_table() {
         let fixture = repo("../../testdata/resource/rp2040_pwm_extracted.toml");
-        if !fixture.exists() {
-            panic!("missing fixture {fixture:?}; regenerate with `resource-extract --pdf <RP2040 datasheet>`");
-        }
+        assert!(
+            fixture.exists(),
+            "missing fixture {}; regenerate with `resource-extract --pdf <RP2040 datasheet>`",
+            fixture.display()
+        );
         let raw = std::fs::read_to_string(&fixture).unwrap();
         let machine = parse_pad_pwm_table(&raw).expect("fixture parses + validates");
         let hand = load_hand_table(&repo("db/mcu_resources.toml")).expect("hand table loads");
@@ -526,7 +518,7 @@ id = "rp2040_extracted"
     ///   cargo test -p hauksbee-extract --bin resource-extract -- \
     ///       `live_rp2040_extraction` --ignored --nocapture
     #[test]
-    #[ignore]
+    #[ignore = "downloads a 5.3 MB PDF and runs codex"]
     fn live_rp2040_extraction_agrees() {
         let pdf = repo("../../testdata/datasheets/rp2040-datasheet.pdf");
         if !pdf.exists() {

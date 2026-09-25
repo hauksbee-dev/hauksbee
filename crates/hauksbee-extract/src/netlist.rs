@@ -100,14 +100,10 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
     let mut synthetic_net_id: i64 = -1;
     if let Some(net_list) = root.find("nets") {
         for net in net_list.find_all("net") {
-            let id = match net.find_i64("code") {
-                Some(code) => code,
-                None => {
-                    let s = synthetic_net_id;
-                    synthetic_net_id -= 1;
-                    s
-                }
-            };
+            let id = net.find_i64("code").unwrap_or_else(|| {
+                synthetic_net_id -= 1;
+                synthetic_net_id + 1
+            });
             nets.push(Net::new(id, net.find_value("name").unwrap_or_default()));
             for node in net.find_all("node") {
                 let Some(reference) = node.find_value("ref") else {

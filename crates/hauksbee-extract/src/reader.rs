@@ -60,6 +60,9 @@ pub trait BoardReader: Send + Sync {
     fn detects(&self, bytes: &[u8], path: Option<&Path>) -> bool;
 
     /// Parse a file this reader has claimed into an [`ExtractedBoard`].
+    ///
+    /// # Errors
+    /// The format's own [`ExtractError`] when the claimed file does not read.
     fn read(&self, bytes: &[u8], path: Option<&Path>) -> Result<ExtractedBoard, ReadError>;
 
     /// True for formats whose content is binary (OLE2 etc.). The byte-input
@@ -261,13 +264,19 @@ impl Registry {
     /// Detect and read in one step. When nothing matches, the error carries
     /// [`unrecognized_message`]'s user-facing explanation of what the bytes
     /// look like and what hauksbee accepts.
+    ///
+    /// # Errors
+    /// [`ExtractError::Unrecognized`] when no reader claims the bytes, or the
+    /// claiming reader's own error.
     pub fn read(&self, bytes: &[u8], path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
-        match self.detect(bytes, path) {
-            Some(r) => r.read(bytes, path),
-            None => Err(ExtractError::Unrecognized {
-                message: unrecognized_message(bytes),
-            }),
-        }
+        self.detect(bytes, path).map_or_else(
+            || {
+                Err(ExtractError::Unrecognized {
+                    message: unrecognized_message(bytes),
+                })
+            },
+            |r| r.read(bytes, path),
+        )
     }
 
     /// The names of every registered reader, in consultation order.
@@ -283,8 +292,9 @@ impl Default for Registry {
     }
 }
 
-/// The user-facing message for content no reader recognised. Special-cases
-/// the look-alikes users actually upload (an empty file, a Git LFS pointer
+/// The user-facing message for content no reader recognised.
+///
+/// Special-cases the look-alikes users actually upload (an empty file, a Git LFS pointer
 /// that was never pulled, an ASCII Protel export that is not a board), and
 /// otherwise names the accepted formats in user words rather than internal
 /// reader ids.
@@ -369,6 +379,7 @@ fn lone_fab_file(head: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::{BoardReader, Ipc356Reader};
+    use std::fmt::Write as _;
 
     #[test]
     fn ipc356_detected_even_with_a_header_past_64kib() {
@@ -377,9 +388,10 @@ mod tests {
         // slips past a windowed detector and regresses to Unrecognized.
         let mut doc = String::new();
         for i in 0..3000 {
-            doc.push_str(&format!(
-                "C  a long comment header line number {i} padding padding\n"
-            ));
+            let _ = writeln!(
+                doc,
+                "C  a long comment header line number {i} padding padding"
+            );
         }
         assert!(doc.len() > 64 * 1024, "header must exceed the old window");
         doc.push_str("317GND              R1    -1    D0472PA00X+019000Y+029450X0945Y0945R180S0\n");

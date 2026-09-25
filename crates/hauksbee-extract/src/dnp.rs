@@ -18,6 +18,7 @@
 //! parts were fitted and which were left open, so the choice is never silent.
 
 use crate::{Component, ExtractedBoard};
+use std::fmt::Write as _;
 
 /// Resistance at or below which a two-terminal part counts as a link rather
 /// than a component: fitting it merges the nets on either side instead of
@@ -57,14 +58,17 @@ impl DnpPolicy {
 }
 
 /// Property key under which [`ExtractedBoard::apply_dnp_policy`] records WHY a
-/// left-open part is absent, so downstream classification
+/// left-open part is absent.
+///
+/// It exists so downstream classification
 /// ([`crate::assembly::AssemblyState::of`]) can hand the reason back without a
 /// side channel. The value is [`DnpReason::policy_tag`].
 pub const DNP_REASON_KEY: &str = "hauksbee.dnp_reason";
 
 /// Property key marking a component that was DNP in the source layout and is
-/// present only because the default fit policy assumed it will be placed
-/// eventually. Presence-class lints (a pull-up "exists") read this so a
+/// present only because the default fit policy assumed it will be placed.
+///
+/// Presence-class lints (a pull-up "exists") read this so a
 /// simulation convenience cannot silently satisfy an as-assembled claim: the
 /// board that ships does NOT carry the part. A part the user explicitly named
 /// as fitted carries no mark; that is a human decision about this build.
@@ -340,6 +344,10 @@ impl ExtractedBoard {
     /// `fit` and `no_fit` name individual references and always win over the
     /// policy. An unknown reference in either list is an error: a typo must
     /// fail loudly rather than quietly change nothing.
+    ///
+    /// # Errors
+    /// [`crate::ExtractError::UnknownReference`] when `fit` or `no_fit` names a
+    /// reference not on the board, or names one reference in both lists.
     pub fn apply_dnp_policy(
         &mut self,
         policy: DnpPolicy,
@@ -364,7 +372,7 @@ impl ExtractedBoard {
             for u in &unknown {
                 let near = nearest_references(u, &known, 3);
                 if !near.is_empty() {
-                    msg.push_str(&format!(" '{u}': did you mean {}?", near.join(", ")));
+                    let _ = write!(msg, " '{u}': did you mean {}?", near.join(", "));
                 }
             }
             msg.push_str(" Check the reference designators against the board.");

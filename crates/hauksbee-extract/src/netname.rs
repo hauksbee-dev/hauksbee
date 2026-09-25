@@ -1,5 +1,7 @@
 //! KiCad net-name unescaping: the ONE place file-syntax spellings become the
-//! names a person recognises. KiCad's file format escapes reserved characters
+//! names a person recognises.
+//!
+//! KiCad's file format escapes reserved characters
 //! (`/GPIO0{slash}XTAL1`) and stores sub/superscript render markup verbatim
 //! (`SCL_{2}`); both leaked into findings, `--list-nets`, and the JSON
 //! contract. Every parser that reads a net name from KiCad text funnels
@@ -22,7 +24,9 @@ const NAMED_ESCAPES: &[(&str, &str)] = &[
 ];
 
 /// Turn a net name as spelled in a KiCad file into the name the schematic
-/// shows: named escape tokens become their characters, and the sub-/super-
+/// shows.
+///
+/// Named escape tokens become their characters, and the sub-/super-
 /// script / overbar markup braces (`SCL_{2}`, `V^{2}`, `~{RESET}`) are
 /// dropped while their marker character is kept (`SCL_2`, `V^2`, `~RESET`).
 /// Names with no `{` pass through untouched (the overwhelmingly common case).
