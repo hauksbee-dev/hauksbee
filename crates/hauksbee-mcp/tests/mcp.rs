@@ -1,7 +1,7 @@
 //! End-to-end tests through the real binary: spawn `hauksbee-mcp`, speak the
 //! MCP handshake over its stdio, and drive the tools against the repo's real
-//! board and firmware fixtures. No mocks anywhere: analyze_board runs the real
-//! engine, run_checks runs the real spec runner, and the refusal test feeds
+//! board and firmware fixtures. No mocks anywhere: `analyze_board` runs the real
+//! engine, `run_checks` runs the real spec runner, and the refusal test feeds
 //! real firmware to a genuinely processorless board.
 
 use serde_json::{json, Value};
@@ -29,7 +29,7 @@ impl McpClient {
             .expect("spawn hauksbee-mcp");
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout piped"));
-        let mut client = McpClient {
+        let mut client = Self {
             child,
             stdin,
             stdout,

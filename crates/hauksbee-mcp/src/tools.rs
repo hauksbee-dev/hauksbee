@@ -22,13 +22,13 @@ pub struct ToolResult {
 
 impl ToolResult {
     fn ok(value: Value) -> Self {
-        ToolResult {
+        Self {
             value,
             is_error: false,
         }
     }
     fn err(message: impl Into<String>) -> Self {
-        ToolResult {
+        Self {
             value: json!({ "error": message.into() }),
             is_error: true,
         }
@@ -36,7 +36,7 @@ impl ToolResult {
     /// A tool body's `Result`: `Ok` is the structured result (a refusal
     /// included), `Err` the input/execution error message.
     fn from_body(body: Result<Value, String>) -> Self {
-        body.map_or_else(ToolResult::err, ToolResult::ok)
+        body.map_or_else(Self::err, Self::ok)
     }
 }
 
@@ -272,8 +272,7 @@ fn shell_display_path(path: &str) -> String {
 fn display_name(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string())
+        .map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 /// `analyze_board`: read the board (and optional firmware) bytes and run the
@@ -577,7 +576,7 @@ fn board_to_code(args: &Value) -> Result<Value, String> {
     Ok(json!({ "board": display_name(board_path), "code": code }))
 }
 
-/// `run_script`: hand the source to the QuickJS sandbox. Failures come back
+/// `run_script`: hand the source to the `QuickJS` sandbox. Failures come back
 /// with the captured logs attached, because a half-run script's logs are the
 /// only forensic trail the caller has.
 fn run_script(args: &Value) -> ToolResult {

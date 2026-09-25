@@ -1,4 +1,4 @@
-//! The `run_script` code-mode sandbox: an embedded QuickJS (via rquickjs, MIT
+//! The `run_script` code-mode sandbox: an embedded `QuickJS` (via rquickjs, MIT
 //! licensed, bundled C, no system dependency) whose ONLY capability is the
 //! `hauksbee` API. An agent submits one JavaScript program; it runs
 //! server-side, composing analyzeBoard / runChecks / listCapabilities /
@@ -8,7 +8,7 @@
 //! args string and returns a JSON result string, one native log sink, and a
 //! JS prelude that wraps them in the typed `hauksbee` object. Everything else
 //! (no filesystem, no network, no timers, no imports) simply does not exist in
-//! the QuickJS instance we build.
+//! the `QuickJS` instance we build.
 //!
 //! Read that narrowly. The JS environment has no filesystem, but the bridge it
 //! reaches through does: `analyzeBoard` is an unrestricted read of any path,
@@ -25,7 +25,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-/// Memory ceiling for a script run, enforced on the QuickJS heap.
+/// Memory ceiling for a script run, enforced on the `QuickJS` heap.
 ///
 /// Note what this does NOT cover: anything the bridge copies out of JS into
 /// Rust. `rt.set_memory_limit` bounds the interpreter's own allocator, so a
@@ -53,7 +53,7 @@ const MAX_LOG_LINE_BYTES: usize = 8 * 1024;
 
 /// The JS prelude evaluated before the user script: builds `console.log` and
 /// the `hauksbee` object over the two native bridge functions. Refusals
-/// (status == invalid_for_analysis) and tool errors both THROW here, so the
+/// (status == `invalid_for_analysis`) and tool errors both THROW here, so the
 /// user script sees them as exceptions, never as ordinary return values.
 const PRELUDE: &str = r#"
 globalThis.console = {
@@ -260,7 +260,7 @@ mod log_bounds_tests {
             .unwrap_or_default()
     }
 
-    /// The captured log lives in Rust, outside the QuickJS heap limit, so a
+    /// The captured log lives in Rust, outside the `QuickJS` heap limit, so a
     /// logging loop would grow memory without bound (measured: gigabytes in
     /// seconds from one line of script) unless the line count is capped.
     #[test]

@@ -1,5 +1,5 @@
 //! The MCP protocol layer: JSON-RPC 2.0 over newline-delimited stdio, per the
-//! Model Context Protocol stdio transport. Hand-rolled on serde_json rather
+//! Model Context Protocol stdio transport. Hand-rolled on `serde_json` rather
 //! than an SDK because the subset a tools-only server needs (initialize /
 //! initialized / ping / tools/list / tools/call) is a few hundred lines, and a
 //! hand-rolled implementation keeps the dependency tree clean and auditable.
@@ -34,7 +34,7 @@ impl Default for Server {
 
 impl Server {
     pub fn new() -> Self {
-        Server { initialized: false }
+        Self { initialized: false }
     }
 
     /// Handle one line from stdin. Returns the response line to write, or
