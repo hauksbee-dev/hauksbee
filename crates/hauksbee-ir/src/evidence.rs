@@ -277,7 +277,7 @@ impl std::fmt::Display for AssumptionId {
 macro_rules! wire_enum {
     ($ty:ident, $what:literal, { $($variant:ident => $s:literal),+ $(,)? }) => {
         impl $ty {
-            pub fn as_str(self) -> &'static str {
+            pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $s,)+
                 }
@@ -365,7 +365,7 @@ impl AssumptionKind {
     /// The wire form, identical to what serde writes (`snake_case`). The one
     /// place this vocabulary is spelled.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::OpenPart => "open_part",
             Self::SubstituteModel => "substitute_model",
@@ -384,7 +384,7 @@ impl AssumptionKind {
     /// The id slug for this kind, `kebab-case`. Stable: ids are compared across
     /// runs and named in acknowledgment files.
     #[must_use]
-    pub fn slug(self) -> &'static str {
+    pub const fn slug(self) -> &'static str {
         match self {
             Self::OpenPart => "open-part",
             Self::SubstituteModel => "substitute-model",
@@ -461,7 +461,7 @@ impl EntityRef {
 
     /// The subject category.
     #[must_use]
-    pub fn kind(&self) -> EntityKind {
+    pub const fn kind(&self) -> EntityKind {
         self.kind
     }
 
@@ -524,7 +524,7 @@ impl ParameterRef {
 
     /// The subject carrying the parameter.
     #[must_use]
-    pub fn subject(&self) -> &EntityRef {
+    pub const fn subject(&self) -> &EntityRef {
         &self.subject
     }
 
@@ -747,13 +747,13 @@ pub struct Subject<'a> {
 impl<'a> Subject<'a> {
     /// Distinct id key and prose.
     #[must_use]
-    pub fn new(key: &'a str, text: &'a str) -> Self {
+    pub const fn new(key: &'a str, text: &'a str) -> Self {
         Self { key, text }
     }
 
     /// One string serving as both, for subjects that already read as prose.
     #[must_use]
-    pub fn same(both: &'a str) -> Self {
+    pub const fn same(both: &'a str) -> Self {
         Self {
             key: both,
             text: both,
@@ -770,25 +770,25 @@ impl<'a> Subject<'a> {
 impl Assumption {
     /// The stable id.
     #[must_use]
-    pub fn id(&self) -> &AssumptionId {
+    pub const fn id(&self) -> &AssumptionId {
         &self.id
     }
 
     /// What kind of gap this is. Read-only: it is the input to the status rule.
     #[must_use]
-    pub fn kind(&self) -> AssumptionKind {
+    pub const fn kind(&self) -> AssumptionKind {
         self.kind
     }
 
     /// Which pipeline stage raised it.
     #[must_use]
-    pub fn source(&self) -> AssumptionSource {
+    pub const fn source(&self) -> AssumptionSource {
         self.source
     }
 
     /// What it taints, which is what the causal-path traversal matches against.
     #[must_use]
-    pub fn scope(&self) -> &Scope {
+    pub const fn scope(&self) -> &Scope {
         &self.scope
     }
 
@@ -854,7 +854,7 @@ impl Assumption {
     /// collision domain. Kept so independently normalized registries can be
     /// merged without treating a content suffix as a new base namespace.
     #[must_use]
-    pub fn collision_base_id(&self) -> &AssumptionId {
+    pub const fn collision_base_id(&self) -> &AssumptionId {
         &self.collision_base_id
     }
 
@@ -990,7 +990,7 @@ impl Assumption {
     ) -> Self {
         let subject = component_subject.trim().to_string();
         let subject_text = if value.trim().is_empty() {
-            or_else(reference, "an unnamed part").to_string()
+            or_else(reference, "an unnamed part")
         } else {
             format!(
                 "{} ({})",
@@ -1032,7 +1032,7 @@ impl Assumption {
     /// modelled, and it is the BOARD that is outside what the card covers.
     #[must_use]
     pub fn operating_limit_violated(subject: &str, reference: &str, gap: &str, fix: &str) -> Self {
-        let part = or_else(reference, "an unnamed part").to_string();
+        let part = or_else(reference, "an unnamed part");
         let mut built = Self::partial_model_for_component(subject, reference, "", gap, fix);
         built.kind = AssumptionKind::OperatingLimitViolated;
         built.id = AssumptionId::new(built.kind, subject); // named subject, no disambiguator
@@ -1139,7 +1139,7 @@ impl Assumption {
         let reference = or_else(reference, "an unnamed part");
         let value = fragment(value);
         let named = if value.is_empty() {
-            reference.to_string()
+            reference.clone()
         } else {
             format!("{reference} ({value})")
         };
@@ -1460,10 +1460,10 @@ impl Assumption {
         // the sentinel.
         let raw = fragment(check);
         let check = or_else(check, AssumptionId::UNNAMED_SUBJECT);
-        let (subject, named) = match &rule {
-            Some(r) => (format!("{raw}/{r}"), format!("{check} {r}")),
-            None => (raw.clone(), check.clone()),
-        };
+        let (subject, named) = rule.as_ref().map_or_else(
+            || (raw.clone(), check.clone()),
+            |r| (format!("{raw}/{r}"), format!("{check} {r}")),
+        );
         let subject = if raw.is_empty() && rule.is_none() {
             String::new()
         } else {
@@ -1473,10 +1473,7 @@ impl Assumption {
             AssumptionKind::NotChecked,
             source,
             &subject,
-            Scope::Check {
-                check: check.clone(),
-                kind: rule,
-            },
+            Scope::Check { check, kind: rule },
             format!("The {named} check did not run."),
             sentence_or(
                 because,
@@ -1919,7 +1916,7 @@ impl ModelSourceTier {
     /// Policy precedence. The number is internal ordering, not an accuracy
     /// percentage: tiers never invent a numeric error bound.
     #[must_use]
-    pub fn priority(self) -> u8 {
+    pub const fn priority(self) -> u8 {
         match self {
             Self::Open => 0,
             Self::EstimatedFallback => 10,
@@ -1957,7 +1954,7 @@ pub enum ModelValidation {
 
 impl ModelValidation {
     #[must_use]
-    pub fn priority(self) -> u8 {
+    pub const fn priority(self) -> u8 {
         match self {
             Self::Unvalidated => 0,
             Self::PhysicalBoundsOnly => 10,
@@ -1994,7 +1991,7 @@ pub enum OverrideSource {
 }
 
 /// One concrete thing an artifact contributed to the run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Contribution {
     /// What, as a stable slug: "connectivity", "`copper_geometry`",
     /// "placements", "`component_values`", "`dnp_flags`", "`firmware_image`",
@@ -2006,7 +2003,7 @@ pub struct Contribution {
 }
 
 /// One member or section of an artifact that was deliberately not used.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct IgnoredInput {
     /// The member: a file inside an archive, a section of a document, or a
     /// sibling file the reader saw and skipped.
@@ -2019,7 +2016,7 @@ pub struct IgnoredInput {
 /// artifacts, and whether they agreed. A disagreement additionally raises a
 /// parser-limitation assumption; an agreement is positive evidence and belongs
 /// in the inventory in its own right.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CrossCheck {
     /// What was cross-checked.
     pub what: String,
@@ -2045,7 +2042,7 @@ pub struct CrossCheck {
 ///     }]);
 /// assert_eq!(a.role(), ArtifactRole::Layout);
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[schemars(
     description = "One input artifact: what it was, what it gave the run, \
                           what in it was ignored, and which cross-checks it passed."
@@ -2129,7 +2126,7 @@ impl ArtifactProvenance {
     }
 
     #[must_use]
-    pub fn kind(&self) -> ArtifactKind {
+    pub const fn kind(&self) -> ArtifactKind {
         self.kind
     }
 
@@ -2139,7 +2136,7 @@ impl ArtifactProvenance {
     }
 
     #[must_use]
-    pub fn role(&self) -> ArtifactRole {
+    pub const fn role(&self) -> ArtifactRole {
         self.role
     }
 
@@ -2199,7 +2196,7 @@ impl ArtifactProvenance {
 }
 
 /// Where a bound parameter's value came from.
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ValueOrigin {
     /// Read from an input artifact, by index into the run inventory.
@@ -2234,7 +2231,7 @@ pub enum ValueOrigin {
 }
 
 /// Provenance for one bound parameter of one device.
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct ParameterProvenance {
     /// Injective causal identity of the component occurrence, when the
     /// producer has one. Kept separate from human-readable `parameter` so a
@@ -2312,7 +2309,7 @@ impl ParameterProvenance {
     }
 
     #[must_use]
-    pub fn origin(&self) -> &ValueOrigin {
+    pub const fn origin(&self) -> &ValueOrigin {
         &self.origin
     }
 }
@@ -2343,17 +2340,17 @@ impl TimeWindow {
 
     /// Whether both bounds are real numbers.
     #[must_use]
-    pub fn is_finite(&self) -> bool {
+    pub const fn is_finite(&self) -> bool {
         self.start_s.is_finite() && self.end_s.is_finite()
     }
 
     #[must_use]
-    pub fn start_s(self) -> f64 {
+    pub const fn start_s(self) -> f64 {
         self.start_s
     }
 
     #[must_use]
-    pub fn end_s(self) -> f64 {
+    pub const fn end_s(self) -> f64 {
         self.end_s
     }
 }
@@ -2397,17 +2394,17 @@ impl WindowMethod {
     /// An integration algorithm and timestep are provenance, not an empirical
     /// error bound. A producer may report a measured comparison elsewhere, but
     /// it must not translate "first order" into an unsupported relative error.
-    pub fn new(window: TimeWindow, method: IntegrationMethod) -> Result<Self, EvidenceError> {
+    pub const fn new(window: TimeWindow, method: IntegrationMethod) -> Result<Self, EvidenceError> {
         Ok(Self { window, method })
     }
 
     #[must_use]
-    pub fn window(&self) -> TimeWindow {
+    pub const fn window(&self) -> TimeWindow {
         self.window
     }
 
     #[must_use]
-    pub fn method(&self) -> IntegrationMethod {
+    pub const fn method(&self) -> IntegrationMethod {
         self.method
     }
 }
@@ -2442,22 +2439,22 @@ impl IntegrationTolerance {
     }
 
     #[must_use]
-    pub fn reltol(self) -> f64 {
+    pub const fn reltol(self) -> f64 {
         self.reltol
     }
 
     #[must_use]
-    pub fn vntol(self) -> f64 {
+    pub const fn vntol(self) -> f64 {
         self.vntol
     }
 
     #[must_use]
-    pub fn abstol(self) -> f64 {
+    pub const fn abstol(self) -> f64 {
         self.abstol
     }
 
     #[must_use]
-    pub fn chgtol(self) -> f64 {
+    pub const fn chgtol(self) -> f64 {
         self.chgtol
     }
 }
@@ -2484,7 +2481,7 @@ impl Residual {
     }
 
     #[must_use]
-    pub fn max_abs(&self) -> f64 {
+    pub const fn max_abs(&self) -> f64 {
         self.max_abs
     }
 
@@ -2647,7 +2644,7 @@ impl ModelUncertainty {
     /// Whether this interval can satisfy a fail-closed accuracy requirement.
     /// Typical and estimated ranges stay visible but never become guarantees.
     #[must_use]
-    pub fn is_strict_bound(&self) -> bool {
+    pub const fn is_strict_bound(&self) -> bool {
         matches!(
             self,
             Self::Interval {
@@ -2658,7 +2655,7 @@ impl ModelUncertainty {
     }
 
     #[must_use]
-    pub fn interval_kind(&self) -> Option<ModelIntervalKind> {
+    pub const fn interval_kind(&self) -> Option<ModelIntervalKind> {
         match self {
             Self::Interval { kind, .. } => Some(*kind),
             Self::Unknown { .. } => None,
@@ -2709,11 +2706,11 @@ impl ModelSource {
     }
 
     #[must_use]
-    pub fn tier(&self) -> ModelSourceTier {
+    pub const fn tier(&self) -> ModelSourceTier {
         self.tier
     }
     #[must_use]
-    pub fn layer(&self) -> ModelLayer {
+    pub const fn layer(&self) -> ModelLayer {
         self.layer
     }
     #[must_use]
@@ -2721,7 +2718,7 @@ impl ModelSource {
         &self.origin
     }
     #[must_use]
-    pub fn validation(&self) -> ModelValidation {
+    pub const fn validation(&self) -> ModelValidation {
         self.validation
     }
     #[must_use]
@@ -2730,7 +2727,7 @@ impl ModelSource {
     }
 }
 
-fn finite(field: &'static str, value: f64) -> Result<(), EvidenceError> {
+const fn finite(field: &'static str, value: f64) -> Result<(), EvidenceError> {
     if value.is_finite() {
         Ok(())
     } else {
@@ -2875,7 +2872,7 @@ impl ErrorBudget {
     }
 
     #[must_use]
-    pub fn tolerance(&self) -> IntegrationTolerance {
+    pub const fn tolerance(&self) -> IntegrationTolerance {
         self.tolerance
     }
 
@@ -2885,7 +2882,7 @@ impl ErrorBudget {
     }
 
     #[must_use]
-    pub fn residual(&self) -> Option<&Residual> {
+    pub const fn residual(&self) -> Option<&Residual> {
         self.residual.as_ref()
     }
 
@@ -2900,7 +2897,7 @@ impl ErrorBudget {
     }
 
     #[must_use]
-    pub fn event_time_error_s(&self) -> Option<f64> {
+    pub const fn event_time_error_s(&self) -> Option<f64> {
         self.event_time_error_s
     }
 
@@ -2914,7 +2911,7 @@ impl ErrorBudget {
 
     /// The common shape: known tolerances, nothing else measured yet.
     #[must_use]
-    pub fn new(tolerance: IntegrationTolerance) -> Self {
+    pub const fn new(tolerance: IntegrationTolerance) -> Self {
         Self {
             tolerance,
             methods: Vec::new(),
@@ -3024,17 +3021,17 @@ impl ModelOnPath {
     }
 
     #[must_use]
-    pub fn layer(&self) -> ModelLayer {
+    pub const fn layer(&self) -> ModelLayer {
         self.layer
     }
 
     #[must_use]
-    pub fn source(&self) -> &ModelSource {
+    pub const fn source(&self) -> &ModelSource {
         &self.source
     }
 
     #[must_use]
-    pub fn confidence(&self) -> MatchConfidence {
+    pub const fn confidence(&self) -> MatchConfidence {
         self.confidence
     }
 }
@@ -3241,7 +3238,7 @@ impl NetScope {
 
     /// The assertion observation window, when it has one.
     #[must_use]
-    pub fn window(&self) -> Option<TimeWindow> {
+    pub const fn window(&self) -> Option<TimeWindow> {
         self.window
     }
 }
@@ -3633,7 +3630,7 @@ impl EvidenceMap {
 
     /// The derived status. There is no setter, by design.
     #[must_use]
-    pub fn status(&self) -> EvidenceStatus {
+    pub const fn status(&self) -> EvidenceStatus {
         self.status
     }
 
@@ -3683,7 +3680,7 @@ impl EvidenceMap {
     /// How good the numbers behind this assertion are, when the producing path
     /// measured them.
     #[must_use]
-    pub fn error_budget(&self) -> Option<&ErrorBudget> {
+    pub const fn error_budget(&self) -> Option<&ErrorBudget> {
         self.error_budget.as_ref()
     }
 

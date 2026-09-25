@@ -168,12 +168,12 @@ impl EnsembleCoverage {
     #[must_use]
     pub fn describe(&self) -> String {
         match self {
-            EnsembleCoverage::MonteCarlo { seeds, components } => format!(
+            Self::MonteCarlo { seeds, components } => format!(
                 "tolerance ensemble: nominal baseline + {seeds} sampled seed(s) over \
                  {components} toleranced component(s): statistical coverage, not \
                  worst-case proof"
             ),
-            EnsembleCoverage::Corners {
+            Self::Corners {
                 corners,
                 interior: 0,
                 components,
@@ -182,7 +182,7 @@ impl EnsembleCoverage {
                  {components} component(s): bounds the worst case only where the \
                  response is monotonic in each value"
             ),
-            EnsembleCoverage::Corners {
+            Self::Corners {
                 corners,
                 interior,
                 components,
@@ -193,7 +193,7 @@ impl EnsembleCoverage {
                  the interior for a point that breaks an assertion the corners passed \
                  (evidence for that monotonicity, not proof of it)"
             ),
-            EnsembleCoverage::SingleMember {
+            Self::SingleMember {
                 seed,
                 components,
                 interior: true,
@@ -203,7 +203,7 @@ impl EnsembleCoverage {
                  component(s): one pinned point strictly inside the tolerance ranges, \
                  carrying none of the corner set's bounded claim"
             ),
-            EnsembleCoverage::SingleMember {
+            Self::SingleMember {
                 seed,
                 components,
                 corners: true,
@@ -212,7 +212,7 @@ impl EnsembleCoverage {
                 "single corner: corner {seed} over {components} toleranced \
                  component(s): one pinned deterministic corner, not full corner coverage"
             ),
-            EnsembleCoverage::SingleMember {
+            Self::SingleMember {
                 seed,
                 components,
                 corners: false,
@@ -537,7 +537,7 @@ impl CiResult {
             refusal: self.refusal(),
             seeds: self.seeds,
             elapsed_s: self.elapsed.as_secs_f64(),
-            coverage: self.coverage.as_ref().map(|c| c.describe()),
+            coverage: self.coverage.as_ref().map(EnsembleCoverage::describe),
             substitutions: self.substitutions.clone(),
             coverage_warnings: self.coverage_warnings.clone(),
             timing_coverage: self.timing_coverage.clone(),
@@ -608,10 +608,8 @@ impl CiResult {
     pub fn exit_code(&self) -> i32 {
         if self.analog_invalid() {
             hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS
-        } else if self.passed() {
-            0
         } else {
-            1
+            i32::from(!self.passed())
         }
     }
 
@@ -887,7 +885,7 @@ impl CiResult {
             self.elapsed.as_secs_f64()
         ));
         for r in &self.results {
-            let evidence = self.evidence_text(&r.label, &mut Default::default());
+            let evidence = self.evidence_text(&r.label, &mut HashSet::default());
             let gating = !r.passed && !r.invalid && r.waived.is_none();
             // The body is the measured detail, then (on a gating red) the
             // `why:` line, then the evidence. Plenty of people only ever read
@@ -938,10 +936,10 @@ impl CiResult {
             out.push_str("    </testcase>\n");
         }
         if synthetic_abort {
-            let msg = self
-                .refusal()
-                .map(|r| r.render_text())
-                .unwrap_or_else(|| "the run is INVALID for analysis".to_string());
+            let msg = self.refusal().map_or_else(
+                || "the run is INVALID for analysis".to_string(),
+                |r| r.render_text(),
+            );
             out.push_str("    <testcase classname=\"analog\" name=\"analog co-sim converged\">\n");
             out.push_str(&format!(
                 "      <error message=\"{}\">{}</error>\n",
@@ -1031,7 +1029,7 @@ impl CiResult {
             .evidence
             .iter()
             .filter(|map| map.status() != hauksbee_ir::evidence::EvidenceStatus::Clean)
-            .flat_map(|map| map.assumptions())
+            .flat_map(hauksbee_ir::evidence::EvidenceMap::assumptions)
             .filter(|id| surfaced.insert((*id).clone()))
             .filter_map(|id| Some((id, self.assumptions.iter().find(|a| a.id() == id)?)))
             .map(|(id, a)| {

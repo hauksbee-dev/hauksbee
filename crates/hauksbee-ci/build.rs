@@ -19,15 +19,17 @@ fn main() {
         let version = std::env::var("CARGO_PKG_VERSION")
             .expect("Cargo must provide CARGO_PKG_VERSION for a release-tagged build");
         let expected = format!("v{version}");
-        if tag != expected {
-            panic!("HAUKSBEE_RELEASE_TAG must equal this package version ({expected})");
-        }
+        assert!(
+            tag == expected,
+            "HAUKSBEE_RELEASE_TAG must equal this package version ({expected})"
+        );
         println!("cargo:rustc-env=GIT_TAG={tag}");
     }
     if let Ok(hash) = std::env::var("HAUKSBEE_SOURCE_COMMIT") {
-        if !is_commit(&hash) {
-            panic!("HAUKSBEE_SOURCE_COMMIT must be one lowercase 40-character hexadecimal commit");
-        }
+        assert!(
+            is_commit(&hash),
+            "HAUKSBEE_SOURCE_COMMIT must be one lowercase 40-character hexadecimal commit"
+        );
         println!("cargo:rustc-env=GIT_HASH={hash}");
         return;
     }

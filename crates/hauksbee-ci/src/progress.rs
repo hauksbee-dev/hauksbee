@@ -158,7 +158,9 @@ mod tests {
         Arc<StdMutex<Vec<String>>>,
         std::sync::MutexGuard<'static, ()>,
     ) {
-        let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let lines = Arc::new(StdMutex::new(Vec::new()));
         let sink = Arc::clone(&lines);
         set_sink(Some(Box::new(move |l: &str| {
@@ -169,7 +171,9 @@ mod tests {
 
     #[test]
     fn silent_without_a_sink_and_for_a_quick_phase() {
-        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_sink(None);
         assert!(!enabled());
         // Must neither panic nor write.
@@ -182,7 +186,7 @@ mod tests {
         let (lines, _guard) = capture();
         let mut t = Ticker::new("quick");
         for i in 0..=100 {
-            t.at(i as f64 / 100.0);
+            t.at(f64::from(i) / 100.0);
         }
         t.done();
         set_sink(None);
@@ -198,9 +202,9 @@ mod tests {
         let (lines, _guard) = capture();
         let mut t = Ticker::new("slow");
         // Backdate the start so the phase counts as slow without sleeping.
-        t.started = Instant::now() - Duration::from_secs(10);
+        t.started = Instant::now().checked_sub(Duration::from_secs(10)).unwrap();
         for i in 0..=10_000 {
-            t.at(i as f64 / 10_000.0);
+            t.at(f64::from(i) / 10_000.0);
         }
         t.done();
         set_sink(None);

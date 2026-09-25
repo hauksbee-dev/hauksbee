@@ -42,7 +42,7 @@ pub struct EsrEsl {
 
 impl EsrEsl {
     /// Zero parasitics: an ideal capacitor.
-    pub const IDEAL: EsrEsl = EsrEsl {
+    pub const IDEAL: Self = Self {
         esr_ohms: 0.0,
         esl_henries: 0.0,
     };
@@ -73,33 +73,33 @@ impl EsrEsl {
     /// tantalum ESR is the datasheet 100 kHz figure for a mid-value part; these
     /// are deliberately representative, not a per-MPN table.
     #[must_use]
-    pub fn for_class(class: CapClass) -> EsrEsl {
+    pub const fn for_class(class: CapClass) -> Self {
         match class {
-            CapClass::Mlcc0201 => EsrEsl {
+            CapClass::Mlcc0201 => Self {
                 esr_ohms: 0.080,
                 esl_henries: 0.3e-9,
             },
-            CapClass::Mlcc0402 => EsrEsl {
+            CapClass::Mlcc0402 => Self {
                 esr_ohms: 0.050,
                 esl_henries: 0.4e-9,
             },
-            CapClass::Mlcc0603 => EsrEsl {
+            CapClass::Mlcc0603 => Self {
                 esr_ohms: 0.030,
                 esl_henries: 0.6e-9,
             },
-            CapClass::Mlcc0805 => EsrEsl {
+            CapClass::Mlcc0805 => Self {
                 esr_ohms: 0.020,
                 esl_henries: 0.8e-9,
             },
-            CapClass::Mlcc1206 => EsrEsl {
+            CapClass::Mlcc1206 => Self {
                 esr_ohms: 0.015,
                 esl_henries: 1.2e-9,
             },
-            CapClass::Electrolytic => EsrEsl {
+            CapClass::Electrolytic => Self {
                 esr_ohms: 1.0,
                 esl_henries: 5e-9,
             },
-            CapClass::Tantalum => EsrEsl {
+            CapClass::Tantalum => Self {
                 esr_ohms: 0.5,
                 esl_henries: 3e-9,
             },
@@ -112,11 +112,11 @@ impl EsrEsl {
     /// MLCC footprint is bucketed by its size code (imperial or the equivalent
     /// metric code). Falls back to 0603 MLCC.
     #[must_use]
-    pub fn from_footprint(footprint: &str, value_farads: f64) -> EsrEsl {
+    pub fn from_footprint(footprint: &str, value_farads: f64) -> Self {
         if let Some(class) = Self::class_from_footprint(footprint, value_farads) {
-            return EsrEsl::for_class(class);
+            return Self::for_class(class);
         }
-        EsrEsl::for_class(CapClass::Mlcc0603)
+        Self::for_class(CapClass::Mlcc0603)
     }
 
     /// The inferred [`CapClass`] for a footprint + value, or `None` when nothing

@@ -102,8 +102,8 @@ pub enum Distribution {
 impl Distribution {
     pub fn parse(s: &str) -> Result<Self, SpecError> {
         match s {
-            "uniform" => Ok(Distribution::Uniform),
-            "gaussian" => Ok(Distribution::Gaussian),
+            "uniform" => Ok(Self::Uniform),
+            "gaussian" => Ok(Self::Gaussian),
             other => Err(SpecError::Invalid(format!(
                 "unknown tolerance distribution '{other}'{} (expected uniform|gaussian)",
                 crate::error::did_you_mean_hint(other, &["uniform", "gaussian"])
@@ -212,8 +212,8 @@ pub enum Mode {
 impl Mode {
     pub fn parse(s: &str) -> Result<Self, SpecError> {
         match s {
-            "monte-carlo" => Ok(Mode::MonteCarlo),
-            "corners" => Ok(Mode::Corners),
+            "monte-carlo" => Ok(Self::MonteCarlo),
+            "corners" => Ok(Self::Corners),
             other => Err(SpecError::Invalid(format!(
                 "unknown [ensemble] mode '{other}'{} (expected monte-carlo|corners)",
                 crate::error::did_you_mean_hint(other, &["monte-carlo", "corners"])
@@ -372,10 +372,10 @@ pub fn build_plans(
                 // n can be arbitrarily large here (one tolerance per component),
                 // so 1u64 << n overflows for n >= 64, a debug panic / wrong
                 // number in the very message that reports the cap was blown.
-                let runs = match u32::try_from(n).ok().and_then(|s| 1u64.checked_shl(s)) {
-                    Some(v) => v.to_string(),
-                    None => "more than 2^63".to_string(),
-                };
+                let runs = u32::try_from(n)
+                    .ok()
+                    .and_then(|s| 1u64.checked_shl(s))
+                    .map_or_else(|| "more than 2^63".to_string(), |v| v.to_string());
                 return Err(SpecError::Invalid(format!(
                     "corner mode enumerates 2^n combinations and {n} toleranced \
                      components would be {runs} runs (cap is 2^{CORNER_CAP} = {}); \
@@ -534,22 +534,22 @@ struct SplitMix(u64);
 impl SplitMix {
     fn for_component(seed: u32, reference: &str) -> Self {
         // Fold the domain tag + reference bytes into the state, then mix.
-        let mut x = (seed as u64)
-            .wrapping_mul(0x9E3779B97F4A7C15)
-            .wrapping_add(0xD1B54A32D192ED03);
+        let mut x = u64::from(seed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(0xD1B5_4A32_D192_ED03);
         for b in "tol:".bytes().chain(reference.bytes()) {
-            x ^= b as u64;
-            x = x.wrapping_mul(0xFF51AFD7ED558CCD);
+            x ^= u64::from(b);
+            x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
             x ^= x >> 33;
         }
-        SplitMix(x)
+        Self(x)
     }
 
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E3779B97F4A7C15);
+    const fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
 
@@ -774,7 +774,7 @@ mod tests {
         let interior: Vec<&SeedPlan> = plans.iter().filter(|p| p.interior).collect();
         let stratum = |v: &SampledValue| -> usize {
             let unit = (v.si / v.nominal_si - 1.0) / 0.10; // in (-1, +1)
-            (((unit + 1.0) / 2.0) * probes as f64).floor() as usize
+            (f64::midpoint(unit, 1.0) * probes as f64).floor() as usize
         };
         for i in 0..2 {
             let mut hit: Vec<usize> = interior.iter().map(|p| stratum(&p.values[i])).collect();

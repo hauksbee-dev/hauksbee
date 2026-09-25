@@ -317,7 +317,7 @@ impl Backend {
 
     /// The canonical token for this backend (the `backend:` half of a spec).
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Renode => "renode",
             Self::Qemu => "qemu",
@@ -520,7 +520,7 @@ mod renode_schema {
     /// encoding can decode. The pin counts are structural: `moder` reads 2 bits
     /// per pin and `stm32f1_crl_crh` 4 bits per pin out of one 32-bit word (plus
     /// a second word for CRH), so both top out at 16 pins whatever the port is.
-    fn dir_encoding_reach(encoding: DirEncoding) -> (&'static str, u8) {
+    const fn dir_encoding_reach(encoding: DirEncoding) -> (&'static str, u8) {
         match encoding {
             DirEncoding::Moder => ("moder", 16),
             DirEncoding::Stm32f1CrlCrh => ("stm32f1_crl_crh", 16),
@@ -763,7 +763,7 @@ impl crate::qemu::QemuConfig {
 /// external backends divides a cycle count by it to get the run window, so a
 /// zero clock asks for an infinite window instead of erroring, and on Renode
 /// [`check_clock_declarations`] holds the platform's own declarations to it.
-fn validate_frequency(frequency_hz: u64) -> Result<(), SocError> {
+const fn validate_frequency(frequency_hz: u64) -> Result<(), SocError> {
     if frequency_hz == 0 {
         return Err(SocError::ZeroFrequency);
     }
@@ -797,13 +797,13 @@ fn repl_property_values(source: &str, property: &str) -> Vec<u64> {
             continue;
         };
         let value = value.trim().trim_end_matches(';').trim();
-        let parsed = match value
+        let parsed = value
             .strip_prefix("0x")
             .or_else(|| value.strip_prefix("0X"))
-        {
-            Some(hex) => u64::from_str_radix(hex, 16).ok(),
-            None => value.parse::<u64>().ok(),
-        };
+            .map_or_else(
+                || value.parse::<u64>().ok(),
+                |hex| u64::from_str_radix(hex, 16).ok(),
+            );
         if let Some(v) = parsed {
             out.push(v);
         }
@@ -945,22 +945,19 @@ fn validate_ports(ports: impl Iterator<Item = (char, u8)>) -> Result<(), SocErro
             return Err(SocError::PortTooWide { letter, width });
         }
     }
-    match first_duplicate(ports.iter().map(|p| p.0)) {
-        Some(letter) => Err(SocError::DuplicatePortLetter(letter)),
-        None => Ok(()),
-    }
+    first_duplicate(ports.iter().map(|p| p.0))
+        .map_or(Ok(()), |letter| Err(SocError::DuplicatePortLetter(letter)))
 }
 
 #[cfg(any(feature = "renode", feature = "qemu"))]
 /// Validate a bus controller list has no duplicate names.
 fn validate_controllers(bus: &'static str, controllers: &[String]) -> Result<(), SocError> {
-    match first_duplicate(controllers) {
-        Some(name) => Err(SocError::DuplicateController {
+    first_duplicate(controllers).map_or(Ok(()), |name| {
+        Err(SocError::DuplicateController {
             bus,
             name: name.clone(),
-        }),
-        None => Ok(()),
-    }
+        })
+    })
 }
 
 // ── Resolution: a `backend:part` spec → a descriptor ───────────────
@@ -1158,7 +1155,7 @@ impl SocConfig {
 
     /// The backend this resolved descriptor targets.
     #[must_use]
-    pub fn backend(&self) -> Backend {
+    pub const fn backend(&self) -> Backend {
         match self {
             #[cfg(feature = "renode")]
             Self::Renode(_) => Backend::Renode,

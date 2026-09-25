@@ -89,6 +89,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 const VDDD: f64 = 3.3;
 
 /// A decoded PD request voltage from a `VBUS_MAX` / `VBUS_MIN` divider, in volts.
+///
 /// `Faulty` is the catch-all for a voltage above every named band (should not
 /// happen for an in-range divider, kept for totality).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,14 +105,14 @@ pub enum PdVolts {
 impl PdVolts {
     /// Nominal volts for ordering / display.
     #[must_use]
-    pub fn volts(self) -> u32 {
+    pub const fn volts(self) -> u32 {
         match self {
-            PdVolts::V5 => 5,
-            PdVolts::V9 => 9,
-            PdVolts::V12 => 12,
-            PdVolts::V15 => 15,
-            PdVolts::V19 => 19,
-            PdVolts::V20 => 20,
+            Self::V5 => 5,
+            Self::V9 => 9,
+            Self::V12 => 12,
+            Self::V15 => 15,
+            Self::V19 => 19,
+            Self::V20 => 20,
         }
     }
 }
@@ -125,7 +126,7 @@ impl PdVolts {
 ///
 /// `VBUS_MIN` uses the same band structure, so this one decoder serves both pins.
 #[must_use]
-pub fn decode_table2(mv: i64) -> PdVolts {
+pub const fn decode_table2(mv: i64) -> PdVolts {
     match mv {
         i64::MIN..=248 => PdVolts::V5,
         249..=786 => PdVolts::V9,
@@ -492,7 +493,7 @@ fn is_tps25982_token(value: &str) -> bool {
         }
         let token: String = uppercase[start..]
             .chars()
-            .take_while(|c| c.is_ascii_alphanumeric())
+            .take_while(char::is_ascii_alphanumeric)
             .collect();
         let rest = &token["TPS25982".len()..];
         if rest.is_empty() {
@@ -503,10 +504,9 @@ fn is_tps25982_token(value: &str) -> bool {
         if !matches!(variant, '2' | '3' | '4' | '7') {
             return false;
         }
-        match chars.next() {
-            None => true, // family + voltage variant, with package omitted
-            Some(response) => matches!(response, 'L' | 'O'),
-        }
+        chars
+            .next()
+            .is_none_or(|response| matches!(response, 'L' | 'O'))
     })
 }
 
@@ -1081,10 +1081,7 @@ fn check_cypd3177(board: &ExtractedBoard, u: &Component, report: &mut NetLintRep
                 reachable.push((b, format!("static {mv} mV")));
             } else {
                 for d in &detents {
-                    let eff_pd = match d.extra_pd {
-                        Some(extra) => parallel(*rpd, extra), // permanent || switched leg
-                        None => *rpd,                         // open leg: permanent only
-                    };
+                    let eff_pd = d.extra_pd.map_or(*rpd, |extra| parallel(*rpd, extra));
                     let mv = divider_mv(*rpu, eff_pd);
                     let b = decode_table2(mv);
                     reachable.push((b, format!("{} -> {mv} mV", d.label)));
@@ -1149,7 +1146,7 @@ fn check_cypd3177(board: &ExtractedBoard, u: &Component, report: &mut NetLintRep
                 .filter(|(b, _)| min_band.volts() > b.volts())
                 .count();
             if max_band.is_some() && clamped > 0 {
-                let top = max_band.map(|b| b.volts()).unwrap_or(0);
+                let top = max_band.map_or(0, PdVolts::volts);
                 report.findings.push(LintFinding {
                     check: LintCheck::DeviceDecode,
                     severity: Severity::High,

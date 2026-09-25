@@ -99,10 +99,10 @@ impl SourceKind {
                     *offset + amplitude * (phase.to_radians()).sin()
                 } else {
                     let td = t - delay;
-                    let damp = if *theta != 0.0 {
-                        (-theta * td).exp()
-                    } else {
+                    let damp = if *theta == 0.0 {
                         1.0
+                    } else {
+                        (-theta * td).exp()
                     };
                     offset + amplitude * damp * (TAU * freq * td + phase.to_radians()).sin()
                 }

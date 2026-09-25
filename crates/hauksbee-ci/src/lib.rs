@@ -55,9 +55,11 @@ pub use spec::Spec;
 /// a static composed string.
 pub fn version_string() -> &'static str {
     static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    V.get_or_init(|| match option_env!("GIT_HASH") {
-        Some(hash) => format!("{} (git {hash})", env!("CARGO_PKG_VERSION")),
-        None => env!("CARGO_PKG_VERSION").to_string(),
+    V.get_or_init(|| {
+        option_env!("GIT_HASH").map_or_else(
+            || env!("CARGO_PKG_VERSION").to_string(),
+            |hash| format!("{} (git {hash})", env!("CARGO_PKG_VERSION")),
+        )
     })
 }
 
@@ -268,10 +270,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // Coverage banner data for a tolerance ensemble: how many members ran and
     // how many components were sampled (from any outcome; the set is fixed).
     let coverage = if spec.has_tolerances() {
-        let components = outcomes
-            .first()
-            .map(|o| o.sampled_values.len())
-            .unwrap_or(0);
+        let components = outcomes.first().map_or(0, |o| o.sampled_values.len());
         let members = outcomes.len() as u32;
         // A pinned `--seed N` filters the ensemble down to that one member, so the
         // "nominal baseline + members-1 sampled" (Monte-Carlo) and "N corners"
@@ -534,8 +533,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                 result
                     .subject_nets
                     .first()
-                    .map(String::as_str)
-                    .unwrap_or("the net"),
+                    .map_or("the net", String::as_str),
                 result.detail
             );
             floating_reds.insert(result.label.clone());

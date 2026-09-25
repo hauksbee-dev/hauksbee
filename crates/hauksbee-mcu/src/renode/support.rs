@@ -96,7 +96,11 @@ impl SupportBundle {
     pub fn repl_sources(&self) -> Vec<String> {
         self.files
             .iter()
-            .filter(|f| f.name.ends_with(".repl"))
+            .filter(|f| {
+                std::path::Path::new(f.name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("repl"))
+            })
             .filter_map(|f| String::from_utf8(f.bytes.to_vec()).ok())
             .collect()
     }
@@ -248,7 +252,10 @@ mod tests {
                 );
             }
             for name in &carried {
-                if name.ends_with(".cs") {
+                if std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("cs"))
+                {
                     assert!(
                         bundle.sources.contains(name),
                         "{}: {name} is carried but never included, so its \

@@ -93,7 +93,7 @@ impl InlineProfile {
         hauksbee_models::LoadProfile {
             id: self.id.clone(),
             description: self.description.clone(),
-            match_rule: Default::default(),
+            match_rule: hauksbee_models::profile::ProfileMatch::default(),
             segments: self
                 .segments
                 .iter()
@@ -157,8 +157,8 @@ pub struct RailWindow {
 
 impl RailWindow {
     #[must_use]
-    pub fn new() -> Self {
-        RailWindow {
+    pub const fn new() -> Self {
+        Self {
             min_v: f64::INFINITY,
             max_v: f64::NEG_INFINITY,
             samples: Vec::new(),
@@ -181,7 +181,7 @@ impl RailWindow {
     /// `voltage` assertion path already sees. (The `samples` timeseries, and hence
     /// `dip_duration/recovery` and `spike_duration/settling` still reflect settled
     /// per-frame values.)
-    pub fn fold(&mut self, v: f64) {
+    pub const fn fold(&mut self, v: f64) {
         self.min_v = self.min_v.min(v);
         self.max_v = self.max_v.max(v);
     }

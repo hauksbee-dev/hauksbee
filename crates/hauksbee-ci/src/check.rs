@@ -68,7 +68,7 @@ impl Diagnostic {
     /// A diagnostic with no location and no fix; the callers that can derive
     /// either set it with struct-update syntax.
     fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Diagnostic {
+        Self {
             line: None,
             col: None,
             code,
@@ -81,7 +81,7 @@ impl Diagnostic {
     /// text when it appears there.
     fn at(self, text: &str, ident: &str) -> Self {
         let (line, col) = locate(text, ident).map_or((None, None), |(l, c)| (Some(l), Some(c)));
-        Diagnostic { line, col, ..self }
+        Self { line, col, ..self }
     }
 
     /// Render for the terminal: `file:line:col: [code] message (fix)`.
@@ -306,7 +306,7 @@ fn push_spec_error(diags: &mut Vec<Diagnostic>, text: &str, err: &SpecError) {
         }
         SpecError::Io(m) => diags.push(Diagnostic::new("io", m.clone())),
         SpecError::Toml { message, .. } => {
-            diags.push(Diagnostic::new("toml-parse", message.clone()))
+            diags.push(Diagnostic::new("toml-parse", message.clone()));
         }
         SpecError::Invalid(m) => {
             // The did-you-mean lives in ONE place on a diagnostic: `fix`. It
@@ -398,10 +398,7 @@ fn split_did_you_mean(msg: &str) -> (String, Option<String>) {
         return (msg.to_string(), None);
     };
     // Every construction site ends the clause with a question mark.
-    let end = msg[start..]
-        .find('?')
-        .map(|i| start + i + 1)
-        .unwrap_or(msg.len());
+    let end = msg[start..].find('?').map_or(msg.len(), |i| start + i + 1);
     let clause = msg[start..end].to_string();
     let mut lead = start;
     let mut trail = end;
@@ -468,7 +465,7 @@ fn line_col(text: &str, byte: usize) -> (u32, u32) {
     let byte = byte.min(text.len());
     let before = &text[..byte];
     let line = before.bytes().filter(|&b| b == b'\n').count() as u32 + 1;
-    let col = (byte - before.rfind('\n').map(|i| i + 1).unwrap_or(0)) as u32 + 1;
+    let col = (byte - before.rfind('\n').map_or(0, |i| i + 1)) as u32 + 1;
     (line, col)
 }
 

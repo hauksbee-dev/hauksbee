@@ -119,7 +119,9 @@ fn f072_shipped_descriptor_loads_with_the_verified_offsets() {
                 );
                 assert!(cmd.ends_with(&format!(" {i}")), "channel {i} feed: {cmd}");
             }
-            other => panic!("channel {i} must use a Monitor feed, got {other:?}"),
+            other @ hauksbee_mcu::renode::AdcInject::MemoryWord(_) => {
+                panic!("channel {i} must use a Monitor feed, got {other:?}")
+            }
         }
     }
 
@@ -142,7 +144,9 @@ fn f072_descriptor_resolves_as_a_builtin() {
     match resolved.expect("the shipped F072 must resolve") {
         hauksbee_mcu::SocConfig::Renode(c) => assert_eq!(c.machine, "f072"),
         #[allow(unreachable_patterns)]
-        other => panic!("expected a Renode config, got {other:?}"),
+        other @ hauksbee_mcu::SocConfig::Qemu(_) => {
+            panic!("expected a Renode config, got {other:?}")
+        }
     }
 }
 

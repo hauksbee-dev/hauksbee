@@ -99,16 +99,16 @@ pub enum FaultKind {
 
 impl FaultKind {
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            FaultKind::Overcurrent => "overcurrent",
-            FaultKind::SurgeCurrent => "surge_current",
-            FaultKind::Overpower => "overpower",
-            FaultKind::Overvoltage => "overvoltage",
-            FaultKind::ReverseBias => "reverse_bias",
-            FaultKind::PinOvercurrent => "pin_overcurrent",
-            FaultKind::Short => "short",
-            FaultKind::Overtemperature => "overtemperature",
+            Self::Overcurrent => "overcurrent",
+            Self::SurgeCurrent => "surge_current",
+            Self::Overpower => "overpower",
+            Self::Overvoltage => "overvoltage",
+            Self::ReverseBias => "reverse_bias",
+            Self::PinOvercurrent => "pin_overcurrent",
+            Self::Short => "short",
+            Self::Overtemperature => "overtemperature",
         }
     }
 
@@ -116,16 +116,16 @@ impl FaultKind {
     // Infallible (unknown maps to Overcurrent), so FromStr and its Err type do not fit.
     #[allow(clippy::should_implement_trait)]
     #[must_use]
-    pub fn from_str(s: &str) -> FaultKind {
+    pub fn from_str(s: &str) -> Self {
         match s {
-            "surge_current" => FaultKind::SurgeCurrent,
-            "overpower" => FaultKind::Overpower,
-            "overvoltage" => FaultKind::Overvoltage,
-            "reverse_bias" => FaultKind::ReverseBias,
-            "pin_overcurrent" => FaultKind::PinOvercurrent,
-            "overtemperature" => FaultKind::Overtemperature,
-            "short" => FaultKind::Short,
-            _ => FaultKind::Overcurrent,
+            "surge_current" => Self::SurgeCurrent,
+            "overpower" => Self::Overpower,
+            "overvoltage" => Self::Overvoltage,
+            "reverse_bias" => Self::ReverseBias,
+            "pin_overcurrent" => Self::PinOvercurrent,
+            "overtemperature" => Self::Overtemperature,
+            "short" => Self::Short,
+            _ => Self::Overcurrent,
         }
     }
 }
@@ -209,7 +209,7 @@ impl DeviceMeta {
         let prefix: String = self
             .reference
             .chars()
-            .take_while(|c| c.is_ascii_alphabetic())
+            .take_while(char::is_ascii_alphabetic)
             .collect::<String>()
             .to_ascii_uppercase();
         matches!(prefix.as_str(), "R" | "RN" | "RA")
@@ -401,27 +401,30 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     // ("R_0201_0603Metric"), imperial 01005 → metric 0402. So the smallest
     // packages MUST be matched first, before the larger imperial tokens they
     // embed as a metric suffix, or they are silently over-rated.
-    if let Some(w) = imperial_chip_watts(|code| f.contains(code)) {
-        chip(w)
-    } else if let Some(w) = din_axial_rating(&f) {
-        // A DIN body code IS size evidence, and the codes are not interchangeable:
-        // DIN0204 is a 1/8 W body while DIN0207 is 1/4 W, so treating them alike
-        // over-rates the smaller one twofold and suppresses its overpower check.
-        // An axial footprint with no DIN code carries no size evidence and falls
-        // through to the abstention below.
-        ResistorPower {
-            watts: Some(w),
-            basis: ResistorPowerBasis::ThtAxial,
-        }
-    } else {
-        // The package class may be known but its SIZE is not, or nothing is known
-        // at all. Either way there is no rating to derive: a real 0603 behind a
-        // custom footprint name is a 1/10 W part, and handing it any floor either
-        // invents an overpower fault (if the floor is lower than the truth) or
-        // suppresses a real one (if it is higher). It becomes a named coverage
-        // gap instead, which is the honest form of not knowing.
-        unknown()
-    }
+    imperial_chip_watts(|code| f.contains(code)).map_or_else(
+        || {
+            if let Some(w) = din_axial_rating(&f) {
+                // A DIN body code IS size evidence, and the codes are not interchangeable:
+                // DIN0204 is a 1/8 W body while DIN0207 is 1/4 W, so treating them alike
+                // over-rates the smaller one twofold and suppresses its overpower check.
+                // An axial footprint with no DIN code carries no size evidence and falls
+                // through to the abstention below.
+                ResistorPower {
+                    watts: Some(w),
+                    basis: ResistorPowerBasis::ThtAxial,
+                }
+            } else {
+                // The package class may be known but its SIZE is not, or nothing is known
+                // at all. Either way there is no rating to derive: a real 0603 behind a
+                // custom footprint name is a 1/10 W part, and handing it any floor either
+                // invents an overpower fault (if the floor is lower than the truth) or
+                // suppresses a real one (if it is higher). It becomes a named coverage
+                // gap instead, which is the honest form of not knowing.
+                unknown()
+            }
+        },
+        chip,
+    )
 }
 
 /// Every imperial chip size code the rating table recognises, smallest body
@@ -686,7 +689,7 @@ const GATE_DRIVE_TOLERANCE: f64 = 0.02;
 
 impl Default for StressMonitor {
     fn default() -> Self {
-        StressMonitor::new(Vec::new())
+        Self::new(Vec::new())
     }
 }
 
@@ -695,7 +698,7 @@ impl StressMonitor {
     #[must_use]
     pub fn new(metas: Vec<DeviceMeta>) -> Self {
         let n = metas.len();
-        StressMonitor {
+        Self {
             limits: (metas.iter())
                 .map(|m| (m.power_rating_w(), m.theta_ja_c_per_w(), m.tj_max_c()))
                 .collect(),
@@ -827,7 +830,7 @@ impl StressMonitor {
 
     /// Number of monitored devices.
     #[must_use]
-    pub fn device_count(&self) -> usize {
+    pub const fn device_count(&self) -> usize {
         self.metas.len()
     }
 
@@ -975,14 +978,14 @@ impl StressMonitor {
 
     /// Live stress fraction per component reference (0..1).
     #[must_use]
-    pub fn stress_by_ref(&self) -> &HashMap<String, f64> {
+    pub const fn stress_by_ref(&self) -> &HashMap<String, f64> {
         &self.stress_by_ref
     }
 
     /// Live estimated steady-state junction temperature (C) per component
     /// reference, for dissipating devices.
     #[must_use]
-    pub fn temp_by_ref(&self) -> &HashMap<String, f64> {
+    pub const fn temp_by_ref(&self) -> &HashMap<String, f64> {
         &self.temp_by_ref
     }
 
@@ -1299,7 +1302,7 @@ struct OperatingPoint {
 
 impl OperatingPoint {
     /// A two-terminal point: `|I|`, the signed across-voltage, dissipation.
-    fn new(current_a: f64, voltage_v: f64, power_w: f64) -> Self {
+    const fn new(current_a: f64, voltage_v: f64, power_w: f64) -> Self {
         Self {
             vgs: None,
             current_a,

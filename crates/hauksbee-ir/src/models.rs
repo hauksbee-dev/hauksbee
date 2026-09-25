@@ -88,7 +88,7 @@ impl Polarity {
     /// `+1.0` for N-type, `-1.0` for P-type; multiplies terminal voltages and
     /// currents so one set of equations serves both polarities.
     #[must_use]
-    pub fn sign(self) -> f64 {
+    pub const fn sign(self) -> f64 {
         match self {
             Self::N => 1.0,
             Self::P => -1.0,
@@ -267,19 +267,19 @@ impl Default for BjtModel {
 }
 
 /// serde defaults for the SGP parameters whose "off" value is not zero.
-fn f64_infinity() -> f64 {
+const fn f64_infinity() -> f64 {
     f64::INFINITY
 }
-fn f64_two() -> f64 {
+const fn f64_two() -> f64 {
     2.0
 }
-fn f64_mj() -> f64 {
+const fn f64_mj() -> f64 {
     0.33
 }
-fn f64_vj() -> f64 {
+const fn f64_vj() -> f64 {
     0.75
 }
-fn f64_fc() -> f64 {
+const fn f64_fc() -> f64 {
     0.5
 }
 

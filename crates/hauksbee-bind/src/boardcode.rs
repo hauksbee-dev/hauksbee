@@ -107,10 +107,10 @@ pub fn program_from_extracted(board: &ExtractedBoard) -> anyhow::Result<Program>
             // is what survives the round-trip and what the binder + pin-rule
             // table match on, so prefer it. Fall back to the symbol lib_id only
             // when no footprint is known.
-            lib_id: if !c.footprint.is_empty() {
-                c.footprint.clone()
-            } else {
+            lib_id: if c.footprint.is_empty() {
                 c.lib_id.clone()
+            } else {
+                c.footprint.clone()
             },
             value: c.value.clone(),
             layer: if c.layer.is_empty() {
@@ -126,7 +126,7 @@ pub fn program_from_extracted(board: &ExtractedBoard) -> anyhow::Result<Program>
     }
 
     Ok(Program {
-        version: 20241229,
+        version: 20_241_229,
         blocks: Vec::new(),
         body,
         outline: None,
@@ -176,7 +176,7 @@ pub fn load_code(path: &Path) -> anyhow::Result<String> {
         let mut found = None;
         for entry in std::fs::read_dir(path)? {
             let p = entry?.path();
-            if p.extension().map(|e| e == "board").unwrap_or(false) {
+            if p.extension().is_some_and(|e| e == "board") {
                 if found.is_some() {
                     anyhow::bail!(
                         "{} contains more than one .board file; pass the file directly",

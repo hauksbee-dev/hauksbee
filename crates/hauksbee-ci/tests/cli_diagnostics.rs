@@ -151,7 +151,7 @@ fn example_alone_is_still_a_complete_invocation() {
     let dir = dir_with_board();
     let out = run_in(dir.path(), &["run", "--example", "blinky", "--quiet"]);
     assert!(
-        matches!(out.status.code(), Some(0) | Some(1)),
+        matches!(out.status.code(), Some(0 | 1)),
         "--example must run: {}\n{}",
         stdout(&out),
         stderr(&out)

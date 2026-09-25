@@ -112,7 +112,7 @@ impl CompiledExpr {
 
     /// Number of dependency slots (`__d0 .. __d{n-1}`) the expression reads.
     #[must_use]
-    pub fn n_slots(&self) -> usize {
+    pub const fn n_slots(&self) -> usize {
         self.n_slots
     }
 

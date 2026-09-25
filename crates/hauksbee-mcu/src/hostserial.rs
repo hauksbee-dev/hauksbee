@@ -90,7 +90,7 @@ pub enum HostSerialTransport {
 impl HostSerialTransport {
     /// The transport name as it appears in CLI flags and printed output.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pty => "pty",
             Self::Tcp => "tcp",
@@ -313,7 +313,7 @@ impl HostSerial {
 
     /// Which transport this endpoint uses.
     #[must_use]
-    pub fn transport(&self) -> HostSerialTransport {
+    pub const fn transport(&self) -> HostSerialTransport {
         self.transport
     }
 
@@ -326,13 +326,13 @@ impl HostSerial {
 
     /// Whether a host tool is attached right now.
     #[must_use]
-    pub fn peer_attached(&self) -> bool {
+    pub const fn peer_attached(&self) -> bool {
         self.attached
     }
 
     /// Session byte counters.
     #[must_use]
-    pub fn stats(&self) -> HostSerialStats {
+    pub const fn stats(&self) -> HostSerialStats {
         self.stats
     }
 
@@ -396,7 +396,7 @@ impl HostSerial {
                     let n = unsafe {
                         libc::read(
                             *master,
-                            buf.as_mut_ptr() as *mut libc::c_void,
+                            buf.as_mut_ptr().cast::<libc::c_void>(),
                             buf.len().min(READ_BUDGET - out.len()),
                         )
                     };
@@ -416,7 +416,6 @@ impl HostSerial {
                     let err = std::io::Error::last_os_error();
                     match err.raw_os_error() {
                         Some(libc::EINTR) => continue,
-                        Some(libc::EAGAIN) => break,
                         Some(libc::EIO) => {
                             self.mark_detached();
                             break;
@@ -514,7 +513,7 @@ impl HostSerial {
                 Inner::Pty { master, .. } => {
                     // SAFETY: writing a slice we own, length from the slice.
                     let n = unsafe {
-                        libc::write(*master, front.as_ptr() as *const libc::c_void, front.len())
+                        libc::write(*master, front.as_ptr().cast::<libc::c_void>(), front.len())
                     };
                     if n > 0 {
                         n as usize
@@ -525,7 +524,6 @@ impl HostSerial {
                         let err = std::io::Error::last_os_error();
                         match err.raw_os_error() {
                             Some(libc::EINTR) => continue,
-                            Some(libc::EAGAIN) => break,
                             Some(libc::EIO) => {
                                 self.mark_detached();
                                 break;
@@ -642,7 +640,7 @@ impl HostSerial {
             };
             // SAFETY: single valid pollfd, zero timeout, no allocation.
             unsafe {
-                libc::poll(&mut p, 1, 0);
+                libc::poll(&raw mut p, 1, 0);
             }
             if (p.revents & (libc::POLLHUP | libc::POLLNVAL)) != 0 {
                 return false;
@@ -749,14 +747,14 @@ fn set_raw(fd: libc::c_int) {
     // SAFETY: termios is a plain POD struct; the fd is checked by the kernel.
     unsafe {
         let mut t: libc::termios = std::mem::zeroed();
-        if libc::tcgetattr(fd, &mut t) != 0 {
+        if libc::tcgetattr(fd, &raw mut t) != 0 {
             return;
         }
-        libc::cfmakeraw(&mut t);
+        libc::cfmakeraw(&raw mut t);
         // No modem-control or hardware-flow-control lines exist on this link, so
         // CLOCAL keeps a peer's open from blocking on carrier detect.
         t.c_cflag |= libc::CLOCAL | libc::CREAD;
-        let _ = libc::tcsetattr(fd, libc::TCSANOW, &t);
+        let _ = libc::tcsetattr(fd, libc::TCSANOW, &raw const t);
     }
 }
 
@@ -931,7 +929,7 @@ mod tests {
             options.c_lflag = 0;
             assert_eq!(libc::tcflush(peer.as_raw_fd(), libc::TCIFLUSH), 0);
             assert_eq!(
-                libc::tcsetattr(peer.as_raw_fd(), libc::TCSANOW, &options),
+                libc::tcsetattr(peer.as_raw_fd(), libc::TCSANOW, &raw const options),
                 0
             );
         }

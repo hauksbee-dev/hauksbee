@@ -48,7 +48,7 @@ pub enum QemuArch {
 impl QemuArch {
     /// The QEMU system binary file name for this architecture.
     #[must_use]
-    pub fn binary_name(self) -> &'static str {
+    pub const fn binary_name(self) -> &'static str {
         match self {
             Self::Xtensa => "qemu-system-xtensa",
             Self::Riscv32 => "qemu-system-riscv32",
@@ -56,7 +56,7 @@ impl QemuArch {
     }
 
     /// The per-arch env override variable name.
-    fn env_override(self) -> &'static str {
+    const fn env_override(self) -> &'static str {
         match self {
             Self::Xtensa => "HAUKSBEE_QEMU_XTENSA",
             Self::Riscv32 => "HAUKSBEE_QEMU_RISCV32",
@@ -167,7 +167,7 @@ pub fn is_available(arch: QemuArch) -> bool {
 /// Homebrew mainline binary on `PATH` from being mistaken for the fork.
 /// `pub(crate)` so the installer (`qemu::install`) accepts a freshly unpacked
 /// binary through the exact same check discovery uses.
-pub(crate) fn is_esp_fork(bin: &Path) -> bool {
+pub fn is_esp_fork(bin: &Path) -> bool {
     Command::new(bin)
         .args(["-machine", "help"])
         .stdin(Stdio::null())
@@ -247,7 +247,7 @@ impl QemuProcess {
 
     /// How long to wait for the QMP port to come up after spawn.
     #[must_use]
-    pub fn startup_timeout() -> Duration {
+    pub const fn startup_timeout() -> Duration {
         Duration::from_secs(20)
     }
 

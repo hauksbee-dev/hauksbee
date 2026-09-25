@@ -81,7 +81,7 @@ pub fn install_root() -> Result<PathBuf> {
 /// The release-asset tool prefix for an architecture (`qemu-xtensa` /
 /// `qemu-riscv32`), as used in the published asset names.
 #[must_use]
-pub fn tool_name(arch: QemuArch) -> &'static str {
+pub const fn tool_name(arch: QemuArch) -> &'static str {
     match arch {
         QemuArch::Xtensa => "qemu-xtensa",
         QemuArch::Riscv32 => "qemu-riscv32",
@@ -664,16 +664,14 @@ pub fn install_esp_qemu(
         .iter()
         .copied()
         .filter(|&a| {
-            if let Ok(existing) = super::find_qemu(a) {
+            super::find_qemu(a).map_or(true, |existing| {
                 progress(&format!(
                     "{} already discoverable at {}; skipping",
                     a.binary_name(),
                     existing.display()
                 ));
                 false
-            } else {
-                true
-            }
+            })
         })
         .collect();
     if missing.is_empty() {

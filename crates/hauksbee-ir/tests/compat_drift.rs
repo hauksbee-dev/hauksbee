@@ -35,7 +35,7 @@ enum Cat {
 }
 
 impl Cat {
-    fn heading(self) -> &'static str {
+    const fn heading(self) -> &'static str {
         match self {
             Self::Element => "Element cards",
             Self::Model => "`.model` types",
@@ -46,7 +46,7 @@ impl Cat {
         }
     }
     /// Iteration order for the generated doc.
-    fn all() -> &'static [Self] {
+    const fn all() -> &'static [Self] {
         &[
             Self::Element,
             Self::Model,

@@ -49,7 +49,7 @@ pub struct LogicLevels {
 impl LogicLevels {
     #[must_use]
     pub fn from_params(m: &ModelEntry) -> Self {
-        LogicLevels {
+        Self {
             voh: m.params.get_f64("voh").unwrap_or(4.4),
             vol: m.params.get_f64("vol").unwrap_or(0.1),
             vih: m.params.get_f64("vih").unwrap_or(3.15),
@@ -73,7 +73,7 @@ impl LogicLevels {
     }
 
     #[must_use]
-    pub fn drive_volts(&self, high: bool) -> f64 {
+    pub const fn drive_volts(&self, high: bool) -> f64 {
         if high {
             self.voh
         } else {
@@ -306,7 +306,7 @@ impl SupplyDraw {
             gnd,
             SourceKind::Dc(0.0),
         ));
-        SupplyDraw {
+        Self {
             isource,
             vcc,
             static_a: static_ua * 1e-6,
@@ -392,7 +392,7 @@ impl DigitalComponent {
         } else {
             Some(LogicComponent::compile(&model.id, &model.logic)?)
         };
-        Ok(DigitalComponent {
+        Ok(Self {
             reference,
             levels: LogicLevels::from_params(model),
             roles,
@@ -417,7 +417,7 @@ impl DigitalComponent {
         let spec: Logic = toml::from_str(NOR_LATCH_SPEC).expect("builtin NOR latch spec parses");
         let logic = LogicComponent::compile(NOR_LATCH_SPEC_ID, &spec)
             .expect("builtin NOR latch spec compiles");
-        DigitalComponent {
+        Self {
             reference,
             levels,
             roles,
@@ -450,7 +450,7 @@ impl DigitalComponent {
         let Some(logic) = self.logic.as_mut() else {
             return;
         };
-        if logic.set_register("store", byte as u64) {
+        if logic.set_register("store", u64::from(byte)) {
             logic.refresh_outputs();
             self.drive_outputs(circuit);
         }
@@ -501,7 +501,7 @@ impl DigitalComponent {
         let Some(s) = self.supply.as_mut() else {
             return;
         };
-        let n = std::mem::take(&mut s.transitions) as f64;
+        let n = f64::from(std::mem::take(&mut s.transitions));
         let vcc_v = node_v(s.vcc);
         let amps = if vcc_v >= SupplyDraw::POWERED_THRESHOLD_V && dt > 0.0 {
             s.static_a + n * s.cpd_f * vcc_v / dt
@@ -532,8 +532,7 @@ impl DigitalComponent {
     pub fn set_register(&mut self, name: &str, value: u64) -> bool {
         self.logic
             .as_mut()
-            .map(|l| l.set_register(name, value))
-            .unwrap_or(false)
+            .is_some_and(|l| l.set_register(name, value))
     }
 
     /// Current logic level of a spec output.
@@ -551,8 +550,7 @@ impl DigitalComponent {
     pub fn chains_as_595(&self) -> bool {
         self.logic
             .as_ref()
-            .map(|l| l.has_input("ser") && l.has_output("qh_serial"))
-            .unwrap_or(false)
+            .is_some_and(|l| l.has_input("ser") && l.has_output("qh_serial"))
     }
 
     /// Structural chain candidacy for 74HC165-style read chains: a `ser`
@@ -561,8 +559,7 @@ impl DigitalComponent {
     pub fn chains_as_165(&self) -> bool {
         self.logic
             .as_ref()
-            .map(|l| l.has_input("ser") && l.has_input("pl_n") && l.has_output("qh"))
-            .unwrap_or(false)
+            .is_some_and(|l| l.has_input("ser") && l.has_input("pl_n") && l.has_output("qh"))
     }
 
     /// Is this a binder-synthesized NOR SR latch?
@@ -570,8 +567,7 @@ impl DigitalComponent {
     pub fn is_nor_latch(&self) -> bool {
         self.logic
             .as_ref()
-            .map(|l| l.spec_id() == NOR_LATCH_SPEC_ID)
-            .unwrap_or(false)
+            .is_some_and(|l| l.spec_id() == NOR_LATCH_SPEC_ID)
     }
 
     /// True when the part has at least one clocked register (edge-replay
@@ -580,8 +576,7 @@ impl DigitalComponent {
     pub fn is_sequential(&self) -> bool {
         self.logic
             .as_ref()
-            .map(|l| l.is_sequential())
-            .unwrap_or(false)
+            .is_some_and(super::logic::LogicComponent::is_sequential)
     }
 
     /// Compiled parallel-memory ports, if this declarative part owns any.
@@ -597,8 +592,7 @@ impl DigitalComponent {
     pub fn has_exclusive_memory_port(&self, name: &str) -> bool {
         self.logic
             .as_ref()
-            .map(|logic| logic.has_exclusive_memory_port(name))
-            .unwrap_or(false)
+            .is_some_and(|logic| logic.has_exclusive_memory_port(name))
     }
 
     /// Input pins whose edge timing matters (register clocks / resets /
@@ -663,7 +657,7 @@ fn order_serial_chains(
         .filter(|(_, d)| is_member(d))
         .map(|(i, _)| i)
         .collect();
-    let node_of = |i: usize, role: &str| digital[i].roles.get(role).map(|n| n.0 as i64);
+    let node_of = |i: usize, role: &str| digital[i].roles.get(role).map(|n| i64::from(n.0));
 
     // node -> chip whose `link_out` is that node (the producer).
     let producer: HashMap<i64, usize> = chips
@@ -709,6 +703,7 @@ fn order_serial_chains(
 }
 
 /// Flattened head-to-tail order of every 74HC595 chip, all chains concatenated.
+///
 /// Kept for the `tarski_inference` example's single-chain verification (the
 /// board has exactly one 90-chip chain). The scheduler uses
 /// [`order_595_chains`] instead so independent chains stay separate.
@@ -785,7 +780,7 @@ impl Hc595Chain {
         // Broadcast control nets are shared, so read them off the head chip.
         let role_gpio = |i: usize, role: &str| -> Option<(char, u8)> {
             let node = chip(i).roles.get(role)?;
-            gpio_node.get(&(node.0 as i64)).copied()
+            gpio_node.get(&i64::from(node.0)).copied()
         };
 
         let srclk = role_gpio(head, "srclk")?;
@@ -803,11 +798,9 @@ impl Hc595Chain {
         // so refuse loudly and leave the chain to the once-per-chunk tick.
         for &ci in &order {
             let chip = &digital[ci];
-            let ok = chip
-                .logic
-                .as_ref()
-                .map(|l| l.register_bits("shift") == Some(8) && l.register_bits("store") == Some(8))
-                .unwrap_or(false);
+            let ok = chip.logic.as_ref().is_some_and(|l| {
+                l.register_bits("shift") == Some(8) && l.register_bits("store") == Some(8)
+            });
             if !ok {
                 eprintln!(
                     "ERROR: 595-chain chip '{}' ({}): [models.logic] must declare 8-bit \
@@ -816,15 +809,14 @@ impl Hc595Chain {
                     chip.reference,
                     chip.logic
                         .as_ref()
-                        .map(|l| l.spec_id())
-                        .unwrap_or("no logic"),
+                        .map_or("no logic", super::logic::LogicComponent::spec_id),
                 );
                 return None;
             }
         }
 
         let n = order.len();
-        Some(Hc595Chain {
+        Some(Self {
             order,
             srclk,
             rclk,
@@ -856,7 +848,7 @@ impl Hc595Chain {
                 self.lvl_srclr_n = high;
                 if !high {
                     // Active-low clear: wipe the shift registers (not storage).
-                    for s in self.shift.iter_mut() {
+                    for s in &mut self.shift {
                         *s = 0;
                     }
                 }
@@ -911,8 +903,8 @@ impl Hc595Chain {
     /// stage-7 serial output into the next chip's stage 0. The head takes the
     /// current SER level. This is the PATH B carry logic.
     fn shift_once(&mut self) {
-        let mut carry = self.lvl_ser as u8;
-        for s in self.shift.iter_mut() {
+        let mut carry = u8::from(self.lvl_ser);
+        for s in &mut self.shift {
             let out_bit = (*s >> 7) & 1; // stage 7 = qh_serial
                                          // u8 wraps to 8 bits on shift, so no explicit & 0xFF mask is needed.
             *s = (*s << 1) | carry;
@@ -935,8 +927,8 @@ impl Hc595Chain {
             // Mirror the chain's bytes into the chip's spec registers so frame
             // reporting and the comb outputs (qa..qh from store, qh_serial from
             // shift) see the edge-accurate state, then drive.
-            d.set_register("shift", self.shift[c] as u64);
-            d.set_register("store", self.latched[c] as u64);
+            d.set_register("shift", u64::from(self.shift[c]));
+            d.set_register("store", u64::from(self.latched[c]));
             d.drive_from_registers(circuit);
             // Tri-state / enable the parallel-output drivers per the CHAIN's
             // OE_n level (tracked from MCU edges; the chip itself is skipped by
@@ -1025,14 +1017,14 @@ impl Hc165Chain {
         let chip = |i: usize| &digital[i];
         let role_gpio = |i: usize, role: &str| -> Option<(char, u8)> {
             let node = chip(i).roles.get(role)?;
-            gpio_node.get(&(node.0 as i64)).copied()
+            gpio_node.get(&i64::from(node.0)).copied()
         };
 
         let pl_n = role_gpio(head, "pl_n")?;
         let clk = role_gpio(head, "clk")?;
         // The head chip's QH must be wired to an MCU input pin (MISO).
         let qh_node = chip(head).roles.get("qh")?;
-        let miso = input_node.get(&(qh_node.0 as i64)).copied()?;
+        let miso = input_node.get(&i64::from(qh_node.0)).copied()?;
 
         // Capture each chip's parallel-input nodes (a..h) for sampling on load.
         let roles = ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -1047,7 +1039,7 @@ impl Hc165Chain {
             })
             .collect();
 
-        Some(Hc165Chain {
+        Some(Self {
             order,
             pl_n,
             clk,
@@ -1077,10 +1069,7 @@ impl Hc165Chain {
         for chip_inputs in &self.inputs {
             // Emit order within a chip is h,g,f,e,d,c,b,a (h reaches QH first).
             for k in (0..8).rev() {
-                let bit = match chip_inputs[k] {
-                    Some(n) => node_v(n) >= levels.vih,
-                    None => false,
-                };
+                let bit = chip_inputs[k].is_some_and(|n| node_v(n) >= levels.vih);
                 self.seq.push(bit);
             }
         }
@@ -1130,16 +1119,16 @@ impl Hc165Chain {
     /// family, so any chip's levels serve.
     #[must_use]
     pub fn levels(&self, digital: &[DigitalComponent]) -> LogicLevels {
-        self.order
-            .first()
-            .map(|&i| digital[i].levels)
-            .unwrap_or(LogicLevels {
+        self.order.first().map_or(
+            LogicLevels {
                 voh: 4.4,
                 vol: 0.1,
                 vih: 3.15,
                 vil: 1.35,
                 ro: DEFAULT_RO,
-            })
+            },
+            |&i| digital[i].levels,
+        )
     }
 
     /// The current word the chain would have shifted out given a captured load,
@@ -1158,6 +1147,7 @@ impl Hc165Chain {
 }
 
 /// Which pin roles a digital component treats as outputs (gets a driver).
+///
 /// Used by the binder to decide which pins to stamp Thevenin drivers on.
 /// Declarative parts answer from their `[models.logic]` outputs; parts
 /// without a logic block fall back to the `y*` role convention the
@@ -1235,10 +1225,10 @@ mod tests {
             prev_qh = Some(qh);
         }
         let gpio_node: HashMap<i64, (char, u8)> = HashMap::from([
-            (n_srclk.0 as i64, ('B', 5)),
-            (n_rclk.0 as i64, ('D', 6)),
-            (n_srclr.0 as i64, ('C', 3)),
-            (n_ser_head.0 as i64, ('B', 3)),
+            (i64::from(n_srclk.0), ('B', 5)),
+            (i64::from(n_rclk.0), ('D', 6)),
+            (i64::from(n_srclr.0), ('C', 3)),
+            (i64::from(n_ser_head.0), ('B', 3)),
         ]);
         let order = order_595_chain(&chips);
         let refs: Vec<&str> = order.iter().map(|&i| chips[i].reference.as_str()).collect();
@@ -1499,14 +1489,14 @@ mod tests {
         let ser_a = circuit.node("SER_A");
         let ser_b = circuit.node("SER_B");
         let mut gpio_a = HashMap::from([
-            (srclk.0 as i64, ('B', 5)),
-            (rclk.0 as i64, ('D', 6)),
-            (ser_a.0 as i64, ('B', 3)),
+            (i64::from(srclk.0), ('B', 5)),
+            (i64::from(rclk.0), ('D', 6)),
+            (i64::from(ser_a.0), ('B', 3)),
         ]);
         let mut gpio_b = gpio_a.clone();
-        gpio_b.remove(&(ser_a.0 as i64));
-        gpio_b.insert(ser_b.0 as i64, ('B', 4));
-        gpio_a.remove(&(ser_b.0 as i64));
+        gpio_b.remove(&i64::from(ser_a.0));
+        gpio_b.insert(i64::from(ser_b.0), ('B', 4));
+        gpio_a.remove(&i64::from(ser_b.0));
         let find = |head: &str| -> Vec<usize> {
             chains
                 .iter()
@@ -1555,10 +1545,10 @@ mod tests {
                 .expect("builtin 595 logic compiles"),
         ];
         let gpio = HashMap::from([
-            (srclk.0 as i64, ('B', 5)),
-            (rclk.0 as i64, ('D', 6)),
-            (ser.0 as i64, ('B', 3)),
-            (oe.0 as i64, ('C', 2)),
+            (i64::from(srclk.0), ('B', 5)),
+            (i64::from(rclk.0), ('D', 6)),
+            (i64::from(ser.0), ('B', 3)),
+            (i64::from(oe.0), ('C', 2)),
         ]);
         let order = order_595_chains(&chips).into_iter().next().unwrap();
         let mut chain = Hc595Chain::build(&chips, order, &gpio).expect("binds");
@@ -1603,9 +1593,9 @@ mod tests {
         let head = make(circuit, "U15002", inter, miso, head_inputs_hi);
         let chips = vec![up, head];
         let gpio = HashMap::from([
-            (pl.0 as i64, ('D', 4)),
-            (clk.0 as i64, ('B', 5)),
-            (miso.0 as i64, ('B', 4)),
+            (i64::from(pl.0), ('D', 4)),
+            (i64::from(clk.0), ('B', 5)),
+            (i64::from(miso.0), ('B', 4)),
         ]);
         let order = order_165_chains(&chips);
         assert_eq!(order.len(), 1, "one 165 chain recovered");
@@ -1635,10 +1625,10 @@ mod tests {
                 ..
             } = dev
             {
-                volts.insert(p.0 as i64, *v);
+                volts.insert(i64::from(p.0), *v);
             }
         }
-        let node_v = |n: NodeId| volts.get(&(n.0 as i64)).copied().unwrap_or(0.0);
+        let node_v = |n: NodeId| volts.get(&i64::from(n.0)).copied().unwrap_or(0.0);
 
         let mut miso_level = false;
         let mut drive = |pin, high, miso: &mut bool| {
@@ -1650,7 +1640,7 @@ mod tests {
         drive(('D', 4), true, &mut miso_level);
         let mut value: u16 = 0;
         for _ in 0..16 {
-            value = (value << 1) | miso_level as u16;
+            value = (value << 1) | u16::from(miso_level);
             drive(('B', 5), true, &mut miso_level);
             drive(('B', 5), false, &mut miso_level);
         }

@@ -194,7 +194,7 @@ pub struct SetValues {
 }
 
 impl SetValues {
-    fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.ohms.is_none() && self.farads.is_none() && self.von.is_none() && self.voff.is_none()
     }
     /// `was`-refinement: does `dev`'s current value match every declared key
@@ -202,9 +202,8 @@ impl SetValues {
     /// match rather than erroring: `was` selects, `set` demands.)
     fn matches_current(&self, dev: &Device) -> bool {
         let near = |actual: f64, expected: f64| (actual - expected).abs() < 0.01 * expected.abs();
-        let ok = |declared: Option<f64>, actual: Option<f64>| match declared {
-            None => true,
-            Some(exp) => actual.is_some_and(|act| near(act, exp)),
+        let ok = |declared: Option<f64>, actual: Option<f64>| {
+            declared.is_none_or(|exp| actual.is_some_and(|act| near(act, exp)))
         };
         let (ohms, farads, von, voff) = match dev {
             Device::Resistor { ohms, .. } => (Some(*ohms), None, None, None),
@@ -245,11 +244,11 @@ pub enum Terminal {
 
 impl Terminal {
     /// The mutable node this role names on `dev`, when the variant has it.
-    fn node_mut<'d>(&self, dev: &'d mut Device) -> Option<&'d mut NodeId> {
+    const fn node_mut<'d>(&self, dev: &'d mut Device) -> Option<&'d mut NodeId> {
         match (self, dev) {
-            (Terminal::Base, Device::Bjt { b, .. }) => Some(b),
-            (Terminal::Collector, Device::Bjt { c, .. }) => Some(c),
-            (Terminal::Emitter, Device::Bjt { e, .. }) => Some(e),
+            (Self::Base, Device::Bjt { b, .. }) => Some(b),
+            (Self::Collector, Device::Bjt { c, .. }) => Some(c),
+            (Self::Emitter, Device::Bjt { e, .. }) => Some(e),
             _ => None,
         }
     }
@@ -386,7 +385,7 @@ impl AsBuiltOverlay {
 
     /// The `[board]` provenance block, if the overlay carries one.
     #[must_use]
-    pub fn board(&self) -> Option<&BoardMeta> {
+    pub const fn board(&self) -> Option<&BoardMeta> {
         self.doc.board.as_ref()
     }
 
@@ -486,7 +485,7 @@ impl AsBuiltOverlay {
             .circuit
             .devices
             .iter()
-            .flat_map(|d| d.nodes())
+            .flat_map(hauksbee_ir::Device::nodes)
             .chain(bound.net_nodes.values().copied())
             .map(|n| n.0)
             .max()
@@ -623,7 +622,7 @@ impl AsBuiltOverlay {
             });
         }
         let mut severed = 0usize;
-        for dev in bound.circuit.devices.iter_mut() {
+        for dev in &mut bound.circuit.devices {
             if let Some(node) = cut.terminal.node_mut(dev) {
                 if matched_nodes.contains(node) {
                     *node = NodeId(*next_float);
@@ -661,7 +660,7 @@ impl AsBuiltOverlay {
         let reference = lift.reference.get_ref().as_str();
         let mut lifted = 0usize;
         let mut name_matches = 0usize;
-        for dev in bound.circuit.devices.iter_mut() {
+        for dev in &mut bound.circuit.devices {
             if !dev.name().contains(reference) {
                 continue;
             }
@@ -741,7 +740,7 @@ impl AsBuiltOverlay {
                 net: jumper.to.get_ref().clone(),
             });
         }
-        for dev in bound.circuit.devices.iter_mut() {
+        for dev in &mut bound.circuit.devices {
             dev.map_nodes(&mut |n| if n == to { from } else { n });
         }
         for nid in bound.net_nodes.values_mut() {
@@ -756,7 +755,7 @@ impl AsBuiltOverlay {
         // node, so ADC injection, GPIO drive, rail stamping, and DAC output all
         // read/write the wrong (now-floating) node after a bodge-wire. (R8 #6)
         let remap = |n: NodeId| if n == to { from } else { n };
-        for mcu in bound.mcus.iter_mut() {
+        for mcu in &mut bound.mcus {
             for n in mcu.role_nets.values_mut() {
                 *n = remap(*n);
             }
@@ -767,15 +766,15 @@ impl AsBuiltOverlay {
                 drv.net = remap(drv.net);
             }
         }
-        for dac in bound.dacs.iter_mut() {
+        for dac in &mut bound.dacs {
             for drv in dac.vout_drivers.iter_mut().flatten() {
                 drv.net = remap(drv.net);
             }
         }
-        for leg in bound.supplies.iter_mut() {
+        for leg in &mut bound.supplies {
             leg.net = remap(leg.net);
         }
-        for b in bound.behavioral.iter_mut() {
+        for b in &mut bound.behavioral {
             b.remap_node(remap);
         }
         // Digital components cache raw NodeIds the same way: `roles` maps each
@@ -785,7 +784,7 @@ impl AsBuiltOverlay {
         // unremapped after a bodge wire, an input role samples the orphaned
         // (now floating ~0 V) `to` node instead of the merged net, so a buffer
         // or shift-register reads a stale LOW regardless of the real signal.
-        for d in bound.digital.iter_mut() {
+        for d in &mut bound.digital {
             for n in d.roles.values_mut() {
                 *n = remap(*n);
             }
@@ -802,7 +801,7 @@ impl AsBuiltOverlay {
     }
 }
 
-fn variant_name(dev: &Device) -> &'static str {
+const fn variant_name(dev: &Device) -> &'static str {
     match dev {
         Device::Resistor { .. } => "resistor",
         Device::Capacitor { .. } => "capacitor",

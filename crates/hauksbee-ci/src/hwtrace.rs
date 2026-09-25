@@ -152,8 +152,7 @@ impl Feature {
         FEATURE_KINDS
             .iter()
             .find(|(k, _)| *k == self.kind)
-            .map(|(_, u)| *u)
-            .unwrap_or("?")
+            .map_or("?", |(_, u)| *u)
     }
 }
 
@@ -163,7 +162,7 @@ impl Trace {
     pub fn load(path: &Path) -> Result<Self, SpecError> {
         let text = std::fs::read_to_string(path)
             .map_err(SpecError::io(format!("reading trace {}", path.display())))?;
-        let mut trace: Trace = toml::from_str(&text).map_err(|e| SpecError::Toml {
+        let mut trace: Self = toml::from_str(&text).map_err(|e| SpecError::Toml {
             file: path.display().to_string(),
             message: e.message().to_string(),
         })?;
@@ -346,9 +345,8 @@ fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecEr
     }
     let ts = timescale_s
         .ok_or_else(|| SpecError::Invalid(format!("{ctx}: VCD has no parseable $timescale")))?;
-    let id = match signal {
-        Some(name) => vars
-            .iter()
+    let id = if let Some(name) = signal {
+        vars.iter()
             .find(|(_, n)| n == name)
             .map(|(i, _)| i.clone())
             .ok_or_else(|| {
@@ -356,18 +354,17 @@ fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecEr
                 SpecError::Invalid(format!(
                     "{ctx}: VCD has no signal named '{name}' (have: {known:?})"
                 ))
-            })?,
-        None => {
-            if vars.len() != 1 {
-                let known: Vec<&String> = vars.iter().map(|(_, n)| n).collect();
-                return Err(SpecError::Invalid(format!(
-                    "{ctx}: VCD has {} signals ({known:?}); the channel needs a `signal` \
-                     field to pick one",
-                    vars.len()
-                )));
-            }
-            vars[0].0.clone()
+            })?
+    } else {
+        if vars.len() != 1 {
+            let known: Vec<&String> = vars.iter().map(|(_, n)| n).collect();
+            return Err(SpecError::Invalid(format!(
+                "{ctx}: VCD has {} signals ({known:?}); the channel needs a `signal` \
+                 field to pick one",
+                vars.len()
+            )));
         }
+        vars[0].0.clone()
     };
 
     // Body: #time markers and scalar value changes for our id.
@@ -426,8 +423,8 @@ fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecEr
 
 /// Parse a VCD timescale token ("1us", "10ns", "1ms") into seconds-per-tick.
 fn parse_timescale(tok: &str) -> Option<f64> {
-    let digits: String = tok.chars().take_while(|c| c.is_ascii_digit()).collect();
-    let unit: String = tok.chars().skip_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = tok.chars().take_while(char::is_ascii_digit).collect();
+    let unit: String = tok.chars().skip_while(char::is_ascii_digit).collect();
     let n: f64 = digits.parse().ok()?;
     let mult = match unit.trim() {
         "s" => 1.0,
@@ -584,7 +581,7 @@ pub fn extract(series: &[(f64, f64)], f: &Feature) -> Result<f64, String> {
                     break;
                 };
                 let end = edges[i + 1 + next_rise];
-                let fall = edges[i + 1..i + 1 + next_rise + 1]
+                let fall = edges[(i + 1)..=(i + 1 + next_rise)]
                     .iter()
                     .find(|e| !e.rising);
                 if let Some(fall) = fall {
@@ -643,7 +640,7 @@ pub fn compare(
     // edges in 100 ms and five edges in 1000 ms are different waveforms. This
     // is the trigger-alignment trap made explicit rather than absorbed.
     if f.kind == "edge_count" {
-        let span = |s: &[(f64, f64)]| s.last().map(|l| l.0 - s[0].0).unwrap_or(0.0);
+        let span = |s: &[(f64, f64)]| s.last().map_or(0.0, |l| l.0 - s[0].0);
         let (cs, ss) = (span(captured), span(simulated));
         if cs > 0.0 && (cs - ss).abs() / cs > 0.10 {
             return fail(format!(
@@ -780,7 +777,7 @@ mod tests {
 
         // Small noise around the swing must not manufacture edges: the
         // hysteresis scales with the swing.
-        let mut noisy = s.clone();
+        let mut noisy = s;
         for (i, p) in noisy.iter_mut().enumerate() {
             p.1 += 0.06 * ((i as f64 * 0.7).sin());
         }
@@ -790,7 +787,7 @@ mod tests {
 
     #[test]
     fn too_few_edges_is_a_named_refusal_not_a_zero() {
-        let flat: Vec<(f64, f64)> = (0..100).map(|i| (i as f64 * 1e-3, 5.0)).collect();
+        let flat: Vec<(f64, f64)> = (0..100).map(|i| (f64::from(i) * 1e-3, 5.0)).collect();
         let err = extract(&flat, &feat("period")).unwrap_err();
         assert!(err.contains("rising edge"), "got: {err}");
     }

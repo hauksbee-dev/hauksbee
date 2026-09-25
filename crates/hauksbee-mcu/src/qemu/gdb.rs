@@ -207,7 +207,7 @@ fn scan_packet(buf: &[u8]) -> Scan {
     Scan::Ok(String::from_utf8_lossy(payload).into_owned(), consumed)
 }
 
-fn hex_val(b: u8) -> Option<u8> {
+const fn hex_val(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
         b'a'..=b'f' => Some(b - b'a' + 10),

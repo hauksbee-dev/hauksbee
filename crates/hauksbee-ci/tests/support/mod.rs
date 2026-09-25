@@ -134,7 +134,7 @@ pub fn run_config(spec: PathBuf) -> hauksbee_ci::RunConfig {
 }
 
 /// The compiled `hauksbee-ci` binary (Cargo sets this for the crate's tests).
-pub fn bin() -> &'static str {
+pub const fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_hauksbee-ci")
 }
 
@@ -181,5 +181,5 @@ pub static DESCRIPTOR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(())
 pub fn descriptor_env_lock() -> std::sync::MutexGuard<'static, ()> {
     DESCRIPTOR_ENV_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

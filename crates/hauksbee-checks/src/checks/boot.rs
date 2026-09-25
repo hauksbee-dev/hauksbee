@@ -71,7 +71,7 @@ pub fn analyze(
         // the warning-level Floating row with a factual, non-warning bias note
         // naming the resistor. A gate with NO bias network stays Floating and
         // fires exactly as before.
-        for (_, net, state) in rows.iter_mut() {
+        for (_, net, state) in &mut rows {
             if *state == BootGateState::Floating {
                 if let Some(bias) = gate_bias(board, net) {
                     *state = BootGateState::HeldByBias(bias);
@@ -238,7 +238,7 @@ pub fn net_drives_a_switch(board: &ExtractedBoard, net_name: &str) -> bool {
         AssemblyState::of(c).is_present()
             && matches!(
                 c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()),
-                Some('Q') | Some('K')
+                Some('Q' | 'K')
             )
     })
 }
@@ -315,7 +315,7 @@ fn is_three_lead_variant(f: &str, p: &str) -> bool {
     };
     let after = &f[idx + p.len()..];
     if let Some(rest) = after.strip_prefix('-') {
-        let count: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let count: String = rest.chars().take_while(char::is_ascii_digit).collect();
         if !count.is_empty() {
             return count == "3";
         }
@@ -428,10 +428,10 @@ pub enum BiasLevel {
 }
 
 impl BiasLevel {
-    fn word(self) -> &'static str {
+    const fn word(self) -> &'static str {
         match self {
-            BiasLevel::Low => "low",
-            BiasLevel::High => "high",
+            Self::Low => "low",
+            Self::High => "high",
         }
     }
 }
@@ -440,11 +440,11 @@ impl BootGateState {
     #[must_use]
     pub fn label(&self) -> String {
         match self {
-            BootGateState::DrivenHigh => "driven HIGH and held".to_string(),
-            BootGateState::PulledHigh => "pulled HIGH (weak internal pull-up)".to_string(),
-            BootGateState::DrivenLow => "driven LOW and held".to_string(),
-            BootGateState::Floating => "never driven (floating)".to_string(),
-            BootGateState::HeldByBias(b) => {
+            Self::DrivenHigh => "driven HIGH and held".to_string(),
+            Self::PulledHigh => "pulled HIGH (weak internal pull-up)".to_string(),
+            Self::DrivenLow => "driven LOW and held".to_string(),
+            Self::Floating => "never driven (floating)".to_string(),
+            Self::HeldByBias(b) => {
                 let paren = if b.value.is_empty() {
                     format!("to {}", b.rail)
                 } else {
@@ -462,21 +462,21 @@ impl BootGateState {
     /// LOW and a hardware-biased gate are reported without a marker (both are the
     /// common held-at-a-defined-level case, nothing for a reader to chase).
     #[must_use]
-    pub fn marker(&self) -> &'static str {
+    pub const fn marker(&self) -> &'static str {
         match self {
-            BootGateState::DrivenHigh | BootGateState::PulledHigh => "  <- switched at power-up",
-            BootGateState::Floating => "  <- undefined until firmware drives it",
-            BootGateState::DrivenLow | BootGateState::HeldByBias(_) => "",
+            Self::DrivenHigh | Self::PulledHigh => "  <- switched at power-up",
+            Self::Floating => "  <- undefined until firmware drives it",
+            Self::DrivenLow | Self::HeldByBias(_) => "",
         }
     }
     #[must_use]
-    pub fn json(&self) -> &'static str {
+    pub const fn json(&self) -> &'static str {
         match self {
-            BootGateState::DrivenHigh => "driven_high",
-            BootGateState::PulledHigh => "pulled_high",
-            BootGateState::DrivenLow => "driven_low",
-            BootGateState::Floating => "floating",
-            BootGateState::HeldByBias(b) => match b.level {
+            Self::DrivenHigh => "driven_high",
+            Self::PulledHigh => "pulled_high",
+            Self::DrivenLow => "driven_low",
+            Self::Floating => "floating",
+            Self::HeldByBias(b) => match b.level {
                 BiasLevel::Low => "held_low_by_bias",
                 BiasLevel::High => "held_high_by_bias",
             },
@@ -907,7 +907,7 @@ mod tests {
             ("Q4".to_string(), "FloatNet".to_string()),
         ];
         let set = |xs: &[&str]| -> std::collections::HashSet<String> {
-            xs.iter().map(|s| s.to_string()).collect()
+            xs.iter().map(std::string::ToString::to_string).collect()
         };
         let held_high = set(&["DrivenHi", "PulledHi"]);
         let configured = set(&["DrivenHi", "LoNet"]);

@@ -244,7 +244,10 @@ mod tests {
         let report = analog_input_lint(b, &lib, v);
         assert_eq!(report.findings.len(), n, "{label}: {report:?}");
         let assumptions = run_assumptions(b, &lib, v);
-        let kinds: Vec<_> = assumptions.iter().map(|a| a.kind()).collect();
+        let kinds: Vec<_> = assumptions
+            .iter()
+            .map(hauksbee_ir::evidence::Assumption::kind)
+            .collect();
         assert_eq!(kinds, vec![kind; n], "{label}");
         let m = report.findings.first().map(|f| f.message.clone());
         let m = m.unwrap_or_default();

@@ -40,6 +40,7 @@ use hauksbee_models::value::parse_value;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
 
 /// The Rp termination a source advertises, per USB Type-C spec Table 4-20.
+///
 /// Modelled as a current source into the CC pin (the spec's "Current
 /// Source/Pull-Down CC Model", Figure 4-6), which is the model the source-side
 /// voltage windows in Tables 4-28/4-29/4-30 are defined against.
@@ -56,11 +57,11 @@ pub enum Rp {
 impl Rp {
     /// Rp modelled as a current source: the spec current value (A), Table 4-20.
     #[must_use]
-    pub fn current_a(self) -> f64 {
+    pub const fn current_a(self) -> f64 {
         match self {
-            Rp::Default => 80e-6,
-            Rp::Med1A5 => 180e-6,
-            Rp::High3A => 330e-6,
+            Self::Default => 80e-6,
+            Self::Med1A5 => 180e-6,
+            Self::High3A => 330e-6,
         }
     }
 
@@ -68,11 +69,11 @@ impl Rp {
     /// column). Provided for the alternative resistive-Rp model; the classifier
     /// defaults to the current-source model.
     #[must_use]
-    pub fn pullup_ohms(self) -> f64 {
+    pub const fn pullup_ohms(self) -> f64 {
         match self {
-            Rp::Default => 56_000.0,
-            Rp::Med1A5 => 22_000.0,
-            Rp::High3A => 10_000.0,
+            Self::Default => 56_000.0,
+            Self::Med1A5 => 22_000.0,
+            Self::High3A => 10_000.0,
         }
     }
 
@@ -85,22 +86,22 @@ impl Rp {
     ///     sink's pull-down is attached);
     ///   - **at or above** `vopen` reads as open (nothing attached).
     #[must_use]
-    pub fn thresholds(self) -> CcThresholds {
+    pub const fn thresholds(self) -> CcThresholds {
         match self {
             // Table 4-28: vRa max 0.20 V, vRd 0.25..1.50 V (threshold 1.60 V), vOPEN 1.65 V.
-            Rp::Default => CcThresholds {
+            Self::Default => CcThresholds {
                 vra_max: 0.20,
                 vrd_max: 1.60,
                 vopen: 1.65,
             },
             // Table 4-29: vRa max 0.40 V, vRd 0.45..1.50 V (threshold 1.60 V), vOPEN 1.65 V.
-            Rp::Med1A5 => CcThresholds {
+            Self::Med1A5 => CcThresholds {
                 vra_max: 0.40,
                 vrd_max: 1.60,
                 vopen: 1.65,
             },
             // Table 4-30: vRa max 0.80 V, vRd 0.85..2.45 V (threshold 2.60 V), vOPEN 2.75 V.
-            Rp::High3A => CcThresholds {
+            Self::High3A => CcThresholds {
                 vra_max: 0.80,
                 vrd_max: 2.60,
                 vopen: 2.75,
@@ -134,20 +135,20 @@ pub enum PinState {
 impl PinState {
     /// Classify a solved CC voltage against the source thresholds for an Rp.
     #[must_use]
-    pub fn classify(v: f64, t: CcThresholds) -> PinState {
+    pub fn classify(v: f64, t: CcThresholds) -> Self {
         if v >= t.vopen {
-            PinState::Open
+            Self::Open
         } else if v < t.vra_max {
-            PinState::Ra
+            Self::Ra
         } else {
             // Between vra_max and vopen. The Rd window's upper threshold sits
             // below vOPEN; a voltage above vrd_max but below vOPEN is an
             // out-of-spec grey zone the source does not credit as a sink. We
             // fold it to Open (undetected) rather than invent a fourth state.
             if v < t.vrd_max {
-                PinState::Rd
+                Self::Rd
             } else {
-                PinState::Open
+                Self::Open
             }
         }
     }
@@ -175,33 +176,33 @@ pub enum Attach {
 impl Attach {
     /// Whether a compliant source applies VBUS power in this state.
     #[must_use]
-    pub fn powers(self) -> bool {
-        matches!(self, Attach::SinkAttached | Attach::PoweredCableWithSink)
+    pub const fn powers(self) -> bool {
+        matches!(self, Self::SinkAttached | Self::PoweredCableWithSink)
     }
 
     /// Map a (CC1, CC2) pin-state pair to the port state (Table 4-10).
     #[must_use]
-    pub fn from_pins(cc1: PinState, cc2: PinState) -> Attach {
+    pub const fn from_pins(cc1: PinState, cc2: PinState) -> Self {
         use PinState::{Open, Ra, Rd};
         match (cc1, cc2) {
-            (Open, Open) => Attach::Nothing,
-            (Rd, Open) | (Open, Rd) => Attach::SinkAttached,
-            (Rd, Ra) | (Ra, Rd) => Attach::PoweredCableWithSink,
-            (Ra, Open) | (Open, Ra) => Attach::PoweredCableNoSink,
-            (Rd, Rd) => Attach::DebugAccessory,
-            (Ra, Ra) => Attach::AudioAccessory,
+            (Open, Open) => Self::Nothing,
+            (Rd, Open) | (Open, Rd) => Self::SinkAttached,
+            (Rd, Ra) | (Ra, Rd) => Self::PoweredCableWithSink,
+            (Ra, Open) | (Open, Ra) => Self::PoweredCableNoSink,
+            (Rd, Rd) => Self::DebugAccessory,
+            (Ra, Ra) => Self::AudioAccessory,
         }
     }
 
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Attach::Nothing => "Nothing",
-            Attach::SinkAttached => "SinkAttached",
-            Attach::PoweredCableWithSink => "PoweredCableWithSink",
-            Attach::PoweredCableNoSink => "PoweredCableNoSink",
-            Attach::DebugAccessory => "DebugAccessory",
-            Attach::AudioAccessory => "AudioAccessory",
+            Self::Nothing => "Nothing",
+            Self::SinkAttached => "SinkAttached",
+            Self::PoweredCableWithSink => "PoweredCableWithSink",
+            Self::PoweredCableNoSink => "PoweredCableNoSink",
+            Self::DebugAccessory => "DebugAccessory",
+            Self::AudioAccessory => "AudioAccessory",
         }
     }
 }
@@ -226,8 +227,8 @@ pub enum Cable {
 impl Cable {
     /// Canonical e-marked cable with a 1.0 kΩ Ra (mid of the 800 Ω..1.2 kΩ band).
     #[must_use]
-    pub fn emarked() -> Cable {
-        Cable::EMarked { ra_ohms: 1000.0 }
+    pub const fn emarked() -> Self {
+        Self::EMarked { ra_ohms: 1000.0 }
     }
 }
 
@@ -265,7 +266,7 @@ pub struct CcResult {
 impl CcResult {
     /// Whether the source applies VBUS.
     #[must_use]
-    pub fn powers(&self) -> bool {
+    pub const fn powers(&self) -> bool {
         self.attach.powers()
     }
 }
@@ -432,7 +433,7 @@ fn is_ground_name(name: &str) -> bool {
     let core: String = name
         .to_ascii_uppercase()
         .chars()
-        .filter(|c| c.is_ascii_alphabetic())
+        .filter(char::is_ascii_alphabetic)
         .collect();
     matches!(
         core.as_str(),
@@ -693,7 +694,7 @@ impl CcPinTermination {
     /// below the nominal 5.1 kΩ a source expects, so the source under-reads the
     /// CC voltage and mis-detects the advertised current.
     #[must_use]
-    pub fn is_double_terminated(&self) -> bool {
+    pub const fn is_double_terminated(&self) -> bool {
         self.external_rd_ohms.is_some() && self.internal_rd_ohms.is_some()
     }
 }
@@ -710,7 +711,7 @@ pub struct ReceptacleCc {
 impl ReceptacleCc {
     /// True when either CC pin of this receptacle is double-terminated.
     #[must_use]
-    pub fn has_double_termination(&self) -> bool {
+    pub const fn has_double_termination(&self) -> bool {
         self.cc1.is_double_terminated() || self.cc2.is_double_terminated()
     }
 }
@@ -737,7 +738,9 @@ impl CcTerminationAudit {
     /// internal Rd (the double-termination defect, on any half of the board).
     #[must_use]
     pub fn has_double_termination(&self) -> bool {
-        self.receptacles.iter().any(|r| r.has_double_termination())
+        self.receptacles
+            .iter()
+            .any(ReceptacleCc::has_double_termination)
     }
 
     /// True when *every* receptacle presents a credited Rd on at least one CC
@@ -817,7 +820,7 @@ fn audit_one_cc(
             let on_cc = comp.pins.iter().any(|p| {
                 let f = p.function.to_ascii_uppercase();
                 (f == "CC1" || f == "CC2" || f == "CC")
-                    && p.net.map(|n| reachable.contains(&n)).unwrap_or(false)
+                    && p.net.is_some_and(|n| reachable.contains(&n))
             });
             if on_cc {
                 internal_rd_ohms = Some(internal);
@@ -1046,7 +1049,9 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     let (level, headline) = apply_double_termination(
         level,
         headline,
-        audit.as_ref().is_some_and(|a| a.has_double_termination()),
+        audit
+            .as_ref()
+            .is_some_and(CcTerminationAudit::has_double_termination),
     );
 
     // Report the EFFECTIVE Rd (external ∥ controller-internal) of the primary
@@ -1057,8 +1062,9 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     // a cross-surface disagreement. Fall back to the external Rd when no audit ran.
     let (cc1_rd_ohms, cc2_rd_ohms) = audit
         .as_ref()
-        .map(|a| (a.cc1.effective_rd_ohms(), a.cc2.effective_rd_ohms()))
-        .unwrap_or((term.cc1_rd_ohms, term.cc2_rd_ohms));
+        .map_or((term.cc1_rd_ohms, term.cc2_rd_ohms), |a| {
+            (a.cc1.effective_rd_ohms(), a.cc2.effective_rd_ohms())
+        });
 
     Some(UsbcReport {
         receptacles: audit.map(|a| a.receptacles).unwrap_or_default(),
@@ -1188,7 +1194,7 @@ impl UsbcReport {
     }
 
     /// One-line verdict tag.
-    fn tag(&self) -> &'static str {
+    const fn tag(&self) -> &'static str {
         match self.level {
             UsbcLevel::Ok => "OK",
             UsbcLevel::Info => "INFO",
@@ -1262,10 +1268,7 @@ impl UsbcReport {
     /// Machine-readable JSON (hand-built; the CC types are not `Serialize`).
     #[must_use]
     pub fn to_json(&self) -> String {
-        let rd = |r: Option<f64>| match r {
-            Some(v) => format!("{v:.1}"),
-            None => "null".to_string(),
-        };
+        let rd = |r: Option<f64>| r.map_or_else(|| "null".to_string(), |v| format!("{v:.1}"));
         format!(
             "{{\"check\":\"usb_c_cc\",\"level\":\"{}\",\"attach\":\"{}\",\"powers_vbus\":{},\
              \"shared_net\":{},\"has_discrete_rd\":{},\"cc1_rd_ohms\":{},\"cc2_rd_ohms\":{},\

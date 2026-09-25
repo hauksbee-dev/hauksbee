@@ -458,15 +458,15 @@ fn resolve_embedded_builtins() {
     // Every built-in spec resolves and matches its constructor.
     match SocConfig::resolve("renode:stm32f072").unwrap() {
         SocConfig::Renode(c) => assert_eq!(c, RenodeConfig::stm32f072()),
-        other => panic!("expected Renode, got {other:?}"),
+        other @ SocConfig::Qemu(_) => panic!("expected Renode, got {other:?}"),
     }
     match SocConfig::resolve("renode:stm32f103").unwrap() {
         SocConfig::Renode(c) => assert_eq!(c, RenodeConfig::stm32f103()),
-        other => panic!("expected Renode, got {other:?}"),
+        other @ SocConfig::Qemu(_) => panic!("expected Renode, got {other:?}"),
     }
     match SocConfig::resolve("qemu:esp32c3").unwrap() {
         SocConfig::Qemu(c) => assert_eq!(c, QemuConfig::esp32c3()),
-        other => panic!("expected Qemu, got {other:?}"),
+        other @ SocConfig::Renode(_) => panic!("expected Qemu, got {other:?}"),
     }
     // The full built-in set is discoverable.
     let specs = SocConfig::builtin_specs();
@@ -539,7 +539,7 @@ width = 16
             assert_eq!(c.mcu_label, "STM32F072 (ARM Cortex-M0)");
             assert_eq!(c.ports[0].odr_offset, 0x14);
         }
-        other => panic!("expected Renode, got {other:?}"),
+        other @ SocConfig::Qemu(_) => panic!("expected Renode, got {other:?}"),
     }
 }
 
@@ -628,7 +628,7 @@ fn override_dir_is_fail_loud_and_beats_builtin() {
     assert!(marker_applied, "marker replacement must have applied");
     match valid_res.unwrap() {
         SocConfig::Renode(c) => assert_eq!(c.mcu_label, "nRF52840 (OVERRIDE-DIR COPY)"),
-        other => panic!("expected Renode, got {other:?}"),
+        other @ SocConfig::Qemu(_) => panic!("expected Renode, got {other:?}"),
     }
 }
 

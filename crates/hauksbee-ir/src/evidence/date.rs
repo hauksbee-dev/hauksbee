@@ -31,10 +31,12 @@ impl RunDate {
     /// Capture the system clock and apply the credibility rule.
     #[must_use]
     pub fn from_system_clock() -> Self {
-        match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            Ok(d) => Self::from_epoch_days((d.as_secs() / 86_400) as i64),
-            Err(_) => Self::unknown(),
-        }
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or_else(
+                |_| Self::unknown(),
+                |d| Self::from_epoch_days((d.as_secs() / 86_400) as i64),
+            )
     }
 
     /// Construct from days since the Unix epoch. Pre-floor readings become
@@ -46,7 +48,7 @@ impl RunDate {
 
     /// No trustworthy run date. Every waiver reads as expired.
     #[must_use]
-    pub fn unknown() -> Self {
+    pub const fn unknown() -> Self {
         Self(None)
     }
 
@@ -58,7 +60,7 @@ impl RunDate {
 
     /// Days since the Unix epoch, or `None` when the clock is untrustworthy.
     #[must_use]
-    pub fn epoch_days(self) -> Option<i64> {
+    pub const fn epoch_days(self) -> Option<i64> {
         self.0
     }
 
@@ -98,11 +100,11 @@ pub fn parse_ymd_epoch_days(s: &str) -> Option<i64> {
     Some(days_from_civil(y, m, d))
 }
 
-fn is_leap(y: i64) -> bool {
+const fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
-fn days_in_month(y: i64, m: u32) -> u32 {
+const fn days_in_month(y: i64, m: u32) -> u32 {
     match m {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,

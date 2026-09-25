@@ -61,7 +61,7 @@ impl Qmp {
     }
 
     /// Set the default per-command response timeout.
-    pub fn set_timeout(&mut self, t: Duration) {
+    pub const fn set_timeout(&mut self, t: Duration) {
         self.timeout = t;
     }
 
@@ -196,7 +196,7 @@ impl Qmp {
     /// empty-socket probe costs a blocking read timeout on every chunk);
     /// instead [`Qmp::measured_run_window`] refuses to settle until the pair
     /// is ordered, which a stale STOP next to this chunk's RESUME never is.
-    pub fn clear_run_events(&mut self) {
+    pub const fn clear_run_events(&mut self) {
         self.event_resume = None;
         self.event_stop = None;
     }
@@ -387,13 +387,12 @@ fn unescape_json_string(s: &str) -> String {
                 Some('r') => out.push('\r'),
                 Some('t') => out.push('\t'),
                 Some('"') => out.push('"'),
-                Some('\\') => out.push('\\'),
+                Some('\\') | None => out.push('\\'),
                 Some('/') => out.push('/'),
                 Some(other) => {
                     out.push('\\');
                     out.push(other);
                 }
-                None => out.push('\\'),
             }
         } else {
             out.push(c);
@@ -462,7 +461,7 @@ mod tests {
         assert_eq!(parse_xp_word("000000003ff44004: 0x00000020"), Some(0x20));
         assert_eq!(
             parse_xp_word("0x3ff44004: 0xdeadbeef\r\n"),
-            Some(0xdeadbeef)
+            Some(0xdead_beef)
         );
         assert_eq!(parse_xp_word("no hex here"), None);
     }

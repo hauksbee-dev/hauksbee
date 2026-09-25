@@ -31,21 +31,21 @@ pub enum SpecError {
     /// Several independent errors found in ONE pass. Validation collects every
     /// error it can rather than stopping at the first, so a spec author fixes
     /// one invocation's worth of findings, not one finding per invocation.
-    Many(Vec<SpecError>),
+    Many(Vec<Self>),
 }
 
 impl fmt::Display for SpecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SpecError::Io(m) => write!(f, "{m}"),
-            SpecError::Toml { file, message } => {
+            Self::Io(m) => write!(f, "{m}"),
+            Self::Toml { file, message } => {
                 write!(f, "could not parse spec {file}: {message}")
             }
-            SpecError::Invalid(m) => write!(f, "invalid spec: {m}"),
-            SpecError::Solver { context, source } => {
+            Self::Invalid(m) => write!(f, "invalid spec: {m}"),
+            Self::Solver { context, source } => {
                 write!(f, "invalid spec: {context}: {source}")
             }
-            SpecError::UnknownNets(items) => {
+            Self::UnknownNets(items) => {
                 writeln!(f, "spec references net(s) not found on the board:")?;
                 for (net, ctx, suggestions) in items {
                     write!(f, "  '{net}' (in {ctx})")?;
@@ -57,7 +57,7 @@ impl fmt::Display for SpecError {
                 }
                 Ok(())
             }
-            SpecError::Many(errors) => {
+            Self::Many(errors) => {
                 for (i, e) in errors.iter().enumerate() {
                     if i > 0 {
                         writeln!(f)?;
@@ -82,25 +82,25 @@ impl std::error::Error for SpecError {
 impl SpecError {
     /// Fold independently collected errors into one result: none is `Ok`, one
     /// comes back as itself, several as [`SpecError::Many`].
-    pub fn from_many(mut errs: Vec<SpecError>) -> Result<(), SpecError> {
+    pub fn from_many(mut errs: Vec<Self>) -> Result<(), Self> {
         match errs.len() {
             0 => Ok(()),
             1 => Err(errs.remove(0)),
-            _ => Err(SpecError::Many(errs)),
+            _ => Err(Self::Many(errs)),
         }
     }
 
     /// A `map_err` adapter: `.map_err(SpecError::invalid("reading BOM"))`
     /// yields `Invalid("reading BOM: <cause>")`.
-    pub fn invalid<E: fmt::Display>(context: impl Into<String>) -> impl Fn(E) -> SpecError {
+    pub fn invalid<E: fmt::Display>(context: impl Into<String>) -> impl Fn(E) -> Self {
         let context = context.into();
-        move |e| SpecError::Invalid(format!("{context}: {e}"))
+        move |e| Self::Invalid(format!("{context}: {e}"))
     }
 
     /// The [`SpecError::Io`] twin of [`SpecError::invalid`].
-    pub fn io<E: fmt::Display>(context: impl Into<String>) -> impl Fn(E) -> SpecError {
+    pub fn io<E: fmt::Display>(context: impl Into<String>) -> impl Fn(E) -> Self {
         let context = context.into();
-        move |e| SpecError::Io(format!("{context}: {e}"))
+        move |e| Self::Io(format!("{context}: {e}"))
     }
 
     /// CLI exit code for this pre-verdict error. A typed solver refusal means
@@ -237,10 +237,7 @@ pub fn did_you_mean(target: &str, options: &[&str]) -> Option<String> {
 /// splice in: `" (did you mean 'voltage'?)"`, or empty when nothing is close.
 #[must_use]
 pub fn did_you_mean_hint(target: &str, options: &[&str]) -> String {
-    match did_you_mean(target, options) {
-        Some(s) => format!(" (did you mean '{s}'?)"),
-        None => String::new(),
-    }
+    did_you_mean(target, options).map_or_else(String::new, |s| format!(" (did you mean '{s}'?)"))
 }
 
 #[cfg(test)]
@@ -248,7 +245,7 @@ mod tests {
     use super::*;
 
     fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+        list.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]
@@ -298,7 +295,10 @@ mod tests {
         );
         // KiCad's unnamed "no net" bucket must not leak (it renders as a bare comma).
         let s = near_matches("+5W", &known, 5);
-        assert!(!s.iter().any(|n| n.is_empty()), "empty net leaked: {s:?}");
+        assert!(
+            !s.iter().any(std::string::String::is_empty),
+            "empty net leaked: {s:?}"
+        );
         assert_eq!(s.first().map(String::as_str), Some("+5V"));
         assert!(
             near_matches("zzzzzzzzzz", &known, 3).is_empty(),

@@ -87,7 +87,7 @@ pub enum WaiverError {
 impl std::fmt::Display for WaiverError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WaiverError::Io(m) | WaiverError::Toml(m) | WaiverError::Invalid(m) => write!(f, "{m}"),
+            Self::Io(m) | Self::Toml(m) | Self::Invalid(m) => write!(f, "{m}"),
         }
     }
 }
@@ -113,7 +113,7 @@ impl WaiverSet {
             w.validate(i, path)?;
         }
         let hits = vec![0; file.waive.len()];
-        Ok(WaiverSet {
+        Ok(Self {
             waivers: file.waive,
             hits,
             today,
@@ -140,12 +140,12 @@ impl WaiverSet {
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.waivers.is_empty()
     }
 
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.waivers.len()
     }
 

@@ -67,7 +67,7 @@ pub fn e_machine_from_name(name: &str) -> Option<u16> {
 
 /// Human-readable name for an `e_machine` value, for error messages.
 #[must_use]
-pub fn machine_name(e_machine: u16) -> &'static str {
+pub const fn machine_name(e_machine: u16) -> &'static str {
     match e_machine {
         EM_ARM => "ARM",
         EM_AVR => "AVR",
@@ -91,9 +91,8 @@ pub fn machine_name(e_machine: u16) -> &'static str {
 /// `1` = little-endian, `2` = big-endian. All supported targets are
 /// little-endian, but honouring the flag keeps the reader correct for any ELF.
 pub fn read_e_machine(path: &Path) -> Result<Option<u16>> {
-    let header = match read_header(path)? {
-        Some(h) => h,
-        None => return Ok(None), // not an ELF
+    let Some(header) = read_header(path)? else {
+        return Ok(None);
     };
     let little_endian = header[5] != 2; // EI_DATA: 2 = big-endian, else little
     let lo = header[E_MACHINE_OFFSET];

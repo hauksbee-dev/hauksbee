@@ -639,12 +639,8 @@ fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
     let end = out.sim_ms / 1000.0;
     match a.kind.as_str() {
         "voltage" | "pulse_width" => Some((a.after_ms.unwrap_or(0.0) / 1000.0, end)),
-        "toggle" => Some((0.0, end)),
-        "max_current" | "max_temp" => Some((0.0, end)),
-        "boot_coverage" | "boot-coverage" => {
-            Some((0.0, a.deadline_ms.map(|d| d / 1000.0).unwrap_or(end)))
-        }
-        "rail_window" => Some((0.0, end)),
+        "toggle" | "max_current" | "max_temp" | "rail_window" => Some((0.0, end)),
+        "boot_coverage" | "boot-coverage" => Some((0.0, a.deadline_ms.map_or(end, |d| d / 1000.0))),
         // A vcd_sink's `transitions` field counts analog per-frame threshold
         // crossings (exactly like `toggle`), so a chunk the solver failed on
         // corrupts it and it must be INVALID, not a definite pass/fail. Digital
@@ -799,8 +795,8 @@ struct Verdict {
 }
 
 impl Verdict {
-    fn new() -> Self {
-        Verdict {
+    const fn new() -> Self {
+        Self {
             ok: true,
             parts: Vec::new(),
             whys: Vec::new(),
@@ -846,7 +842,7 @@ impl Verdict {
 }
 
 /// A `(false, reason, None)` verdict for a check that never got data.
-fn no_data(reason: String) -> (bool, String, Option<String>) {
+const fn no_data(reason: String) -> (bool, String, Option<String>) {
     (false, reason, None)
 }
 
@@ -1023,8 +1019,14 @@ fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool,
         }
         None => out.protection_tripped.get(&net).copied(),
     };
-    match tripped {
-        Some(t) => {
+    tripped.map_or_else(
+        || {
+            (
+                false,
+                format!("{net} has no battery protection supply leg (nothing to trip)"),
+            )
+        },
+        |t| {
             let ok = t == want;
             (
                 ok,
@@ -1034,12 +1036,8 @@ fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool,
                     if want { "trip" } else { "no trip" }
                 ),
             )
-        }
-        None => (
-            false,
-            format!("{net} has no battery protection supply leg (nothing to trip)"),
-        ),
-    }
+        },
+    )
 }
 
 /// Boot-coverage: the control net named by `net` must reach its defined level
@@ -1435,13 +1433,12 @@ fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     // STABLE (sorted-by-key) order: iterating a HashMap's values put the
     // streams in nondeterministic order, so an anchored/boundary-spanning
     // match (`^BOOT`) flaked run to run.
-    let text: String = match &a.mcu {
-        Some(m) => out.uart.get(m).cloned().unwrap_or_default(),
-        None => {
-            let mut items: Vec<(&String, &String)> = out.uart.iter().collect();
-            items.sort();
-            items.into_iter().map(|(_, v)| v.as_str()).collect()
-        }
+    let text: String = if let Some(m) = &a.mcu {
+        out.uart.get(m).cloned().unwrap_or_default()
+    } else {
+        let mut items: Vec<(&String, &String)> = out.uart.iter().collect();
+        items.sort();
+        items.into_iter().map(|(_, v)| v.as_str()).collect()
     };
     let preview = truncate(&text.replace(['\r', '\n'], "·"), 60);
 
@@ -1959,8 +1956,8 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
         .faults
         .iter()
         .find(|f| key_belongs_to_ref(&reference, &f.component) && f.kind == "overtemperature");
-    match over {
-        Some(f) => (
+    if let Some(f) = over {
+        (
             false,
             format!(
                 "Tj({}) exceeded device max: {:.1}C > {:.1}C at {:.1}ms",
@@ -1973,28 +1970,27 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<Stri
                 f.limit,
                 f.t_ms
             )),
-        ),
-        None => {
-            // No sample at all: the junction was never estimated, so this
-            // guard was never evaluated. Reporting it green would be the
-            // same vacuous pass the load-time untracked-ref refusal exists to
-            // prevent; fail with the reason instead (max_current's no-data
-            // branch is the same discipline).
-            let Some((_, tj)) = peak else {
-                return (
-                    false,
-                    format!(
-                        "Tj({reference}): no dissipation was ever measured, so its junction \
-                         temperature was never estimated; the guard was never evaluated and \
-                         cannot be reported green (give the assert an explicit `celsius`, \
-                         or point it at a part this run actually stresses)"
-                    ),
-                    None,
-                );
-            };
-            let detail = format!("Tj({reference}) peak {tj:.1}C, within device max");
-            (true, detail, None)
-        }
+        )
+    } else {
+        // No sample at all: the junction was never estimated, so this
+        // guard was never evaluated. Reporting it green would be the
+        // same vacuous pass the load-time untracked-ref refusal exists to
+        // prevent; fail with the reason instead (max_current's no-data
+        // branch is the same discipline).
+        let Some((_, tj)) = peak else {
+            return (
+                false,
+                format!(
+                    "Tj({reference}): no dissipation was ever measured, so its junction \
+                     temperature was never estimated; the guard was never evaluated and \
+                     cannot be reported green (give the assert an explicit `celsius`, \
+                     or point it at a part this run actually stresses)"
+                ),
+                None,
+            );
+        };
+        let detail = format!("Tj({reference}) peak {tj:.1}C, within device max");
+        (true, detail, None)
     }
 }
 
@@ -2606,7 +2602,7 @@ mod tests {
         fn square(period_s: f64) -> Vec<(f64, f64)> {
             (0..=1000)
                 .map(|i| {
-                    let t = i as f64 * 0.001;
+                    let t = f64::from(i) * 0.001;
                     let v = if (t / period_s).fract() >= 0.5 {
                         4.9
                     } else {

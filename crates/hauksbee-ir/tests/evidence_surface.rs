@@ -225,7 +225,7 @@ fn a_consumer_cannot_obtain_a_clean_map_over_an_undermining_set() {
     assert_eq!(map.status(), EvidenceStatus::Undermined);
 
     // Clone plus builder methods cannot launder it either.
-    let cloned = map.clone();
+    let cloned = map;
     assert_eq!(cloned.status(), EvidenceStatus::Undermined);
 
     // And an empty set is the only route to Clean.
@@ -266,7 +266,7 @@ fn a_producer_can_populate_the_inventory_and_the_json_round_trips() {
     assert_eq!(doc["kind"], "fitted_by_default");
     assert_eq!(doc["scope"]["type"], "board");
 
-    let (_registry, map) = traversed_map("A", "3V3", &["R7"], vec![assumption.clone()]);
+    let (_registry, map) = traversed_map("A", "3V3", &["R7"], vec![assumption]);
     let json = serde_json::to_string(&map).expect("serializes");
     let doc: serde_json::Value = serde_json::from_str(&json).expect("is a JSON document");
     assert_eq!(doc["status"], "undermined");

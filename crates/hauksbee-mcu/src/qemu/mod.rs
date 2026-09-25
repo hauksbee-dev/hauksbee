@@ -492,7 +492,7 @@ fn run_window(seconds: f64, boot_complete: bool) -> Duration {
     Duration::from_secs_f64(s)
 }
 
-fn observable_gpio_changes(prev: u32, new: u32, prev_enable: u32, enable: u32) -> u32 {
+const fn observable_gpio_changes(prev: u32, new: u32, prev_enable: u32, enable: u32) -> u32 {
     ((new ^ prev) | (enable & !prev_enable)) & enable
 }
 
@@ -914,10 +914,10 @@ impl QemuBackend {
     fn read_guest_u32(&mut self, addr: u32) -> Result<u32> {
         match self.qmp.read_u32(addr) {
             Ok(v) => Ok(v),
-            Err(qmp_err) => match self.gdb.as_mut() {
-                Some(g) => g.read_u32(addr),
-                None => Err(qmp_err).context("QMP word read failed and no gdbstub fallback"),
-            },
+            Err(qmp_err) => self.gdb.as_mut().map_or_else(
+                || Err(qmp_err).context("QMP word read failed and no gdbstub fallback"),
+                |g| g.read_u32(addr),
+            ),
         }
     }
 
@@ -1154,13 +1154,13 @@ impl QemuBackend {
     /// backend has switched from boot-floored run windows to exact ones.
     /// Diagnostic / test-support accessor.
     #[must_use]
-    pub fn boot_complete(&self) -> bool {
+    pub const fn boot_complete(&self) -> bool {
         self.boot_complete
     }
 
     /// Which live GPIO output observation path this backend selected.
     #[must_use]
-    pub fn gpio_output_observation(&self) -> GpioOutputObservation {
+    pub const fn gpio_output_observation(&self) -> GpioOutputObservation {
         self.gpio_output_observation
     }
 

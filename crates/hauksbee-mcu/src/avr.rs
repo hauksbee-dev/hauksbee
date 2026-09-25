@@ -180,7 +180,7 @@ unsafe fn set_external(avr: *mut ffi::avr_t, port: char, mask: u8, value: u8) {
         ffi::avr_ioctl(
             avr,
             ioport_set_external(port as u8),
-            &mut ext as *mut u64 as *mut c_void,
+            (&raw mut ext).cast::<c_void>(),
         );
     }
 }
@@ -245,7 +245,7 @@ type IrqHook = unsafe extern "C" fn(*mut ffi::avr_irq_t, u32, *mut c_void);
 
 /// The shared state a hook was registered with (`param` is the leaked
 /// `Box<Arc<Mutex<SharedState>>>` from [`AvrMcu::new`]).
-unsafe fn hook_state<'a>(param: *mut c_void) -> &'a Arc<Mutex<SharedState>> {
+const unsafe fn hook_state<'a>(param: *mut c_void) -> &'a Arc<Mutex<SharedState>> {
     unsafe { &*(param as *const Arc<Mutex<SharedState>>) }
 }
 
@@ -382,10 +382,7 @@ impl SharedState {
 fn drain_uart_pending(state: &Arc<Mutex<SharedState>>) {
     loop {
         let (avr, byte) = {
-            let mut s = match state.lock() {
-                Ok(s) => s,
-                Err(_) => return,
-            };
+            let Ok(mut s) = state.lock() else { return };
             if !s.uart_clear_to_send || s.avr_ptr.is_null() {
                 return;
             }
@@ -436,7 +433,7 @@ unsafe impl Send for SharedState {}
 /// on. simavr's run loop advances `avr->cycle` itself (not this callback), so a
 /// no-op keeps cycle accounting exact while removing the wall-clock stall. (The
 /// QEMU backend guards the same liveness hazard with `BOOT_WINDOW_CAP_S`.)
-unsafe extern "C" fn noop_sleep(_avr: *mut ffi::avr_t, _how_long: ffi::avr_cycle_count_t) {}
+const unsafe extern "C" fn noop_sleep(_avr: *mut ffi::avr_t, _how_long: ffi::avr_cycle_count_t) {}
 
 unsafe extern "C" fn uart_output_hook(_irq: *mut ffi::avr_irq_t, value: u32, param: *mut c_void) {
     if let Ok(mut s) = unsafe { hook_state(param) }.lock() {
@@ -749,7 +746,7 @@ fn path_cstr(path: &Path) -> Result<CString> {
 /// previous call in units of (cycles × 1e6); returns `(cycles_this_call,
 /// new_carry)` with `new_carry < 1e6`. When `freq` is a multiple of the chunk
 /// rate the carry is always 0 and this reduces to plain `us·freq/1e6`.
-fn cycle_budget(us: u64, freq: u64, carry: u64) -> (u64, u64) {
+const fn cycle_budget(us: u64, freq: u64, carry: u64) -> (u64, u64) {
     let total = us * freq + carry;
     (total / 1_000_000, total % 1_000_000)
 }
@@ -813,7 +810,7 @@ impl AvrMcu {
             callbacks: Callbacks::default(),
         }));
 
-        let callback_ptr = Box::into_raw(Box::new(state.clone())) as *mut c_void;
+        let callback_ptr = Box::into_raw(Box::new(state.clone())).cast::<c_void>();
 
         // Disable simavr's UART "stdio echo" (on by default). It is redundant
         // here (every TX byte reaches the engine through `on_uart`) and v1.8's
@@ -969,7 +966,8 @@ impl AvrMcu {
         unsafe {
             let mut boot_base: u32 = 0;
             let mut boot_size: u32 = 0;
-            let boot = ffi::read_ihex_file(hex_cstr.as_ptr(), &mut boot_size, &mut boot_base);
+            let boot =
+                ffi::read_ihex_file(hex_cstr.as_ptr(), &raw mut boot_size, &raw mut boot_base);
             if boot.is_null() {
                 bail!("read_ihex_file failed for '{}'", path.display());
             }
@@ -984,7 +982,7 @@ impl AvrMcu {
             let size = boot_size as usize;
             let end = base.checked_add(size);
             if end.is_none_or(|e| e > flash_size) {
-                libc::free(boot as *mut libc::c_void);
+                libc::free(boot.cast::<libc::c_void>());
                 bail!(
                     "firmware '{}' does not fit this MCU's flash: the image spans \
                      0x{:05X}..0x{:05X} but flash is only {} bytes (0x00000..0x{:05X}); \
@@ -1001,7 +999,7 @@ impl AvrMcu {
                 (*self.avr).flash.add(boot_base as usize),
                 boot_size as usize,
             );
-            libc::free(boot as *mut libc::c_void);
+            libc::free(boot.cast::<libc::c_void>());
             (*self.avr).pc = boot_base;
             (*self.avr).codeend = (*self.avr).flashend;
         }
@@ -1019,7 +1017,7 @@ impl AvrMcu {
 
         unsafe {
             let mut fp = std::mem::zeroed::<ffi::elf_firmware_t>();
-            let rc = ffi::elf_read_firmware(elf_cstr.as_ptr(), &mut fp);
+            let rc = ffi::elf_read_firmware(elf_cstr.as_ptr(), &raw mut fp);
             if rc != 0 {
                 bail!(
                     "elf_read_firmware failed (rc={}) for '{}'",
@@ -1027,7 +1025,7 @@ impl AvrMcu {
                     path.display()
                 );
             }
-            ffi::avr_load_firmware(self.avr, &mut fp);
+            ffi::avr_load_firmware(self.avr, &raw mut fp);
         }
 
         Ok(())
@@ -1364,7 +1362,7 @@ impl Drop for AvrMcu {
                 ffi::avr_terminate(self.avr);
             }
             if !self.callback_ptr.is_null() {
-                let _ = Box::from_raw(self.callback_ptr as *mut Arc<Mutex<SharedState>>);
+                let _ = Box::from_raw(self.callback_ptr.cast::<Arc<Mutex<SharedState>>>());
             }
         }
     }

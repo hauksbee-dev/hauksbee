@@ -119,7 +119,7 @@ impl CustomRegistry {
     /// An empty registry.
     #[must_use]
     pub fn new() -> Self {
-        CustomRegistry::default()
+        Self::default()
     }
 
     /// Register a factory under a match `key` (matched against model id / value /
@@ -552,9 +552,9 @@ impl BehavioralDevice {
         params: &Params,
         role_nodes: &BTreeMap<String, NodeId>,
         mut custom: Box<dyn CustomBehavior>,
-    ) -> BehavioralDevice {
+    ) -> Self {
         custom.stamp(circuit, reference, params, role_nodes);
-        BehavioralDevice {
+        Self {
             reference: reference.to_string(),
             role_nodes: role_nodes.clone(),
             params: params.clone(),
@@ -578,8 +578,8 @@ impl BehavioralDevice {
         params: &Params,
         role_nodes: &BTreeMap<String, NodeId>,
         board_resistor: &dyn Fn(&str) -> Option<f64>,
-    ) -> Option<BehavioralDevice> {
-        let mut dev = BehavioralDevice {
+    ) -> Option<Self> {
+        let mut dev = Self {
             reference: reference.to_string(),
             role_nodes: role_nodes.clone(),
             params: params.clone(),
@@ -615,19 +615,23 @@ impl BehavioralDevice {
             };
             // Internal pull to a rail.
             if let Some(ohms) = pin.pull_ohms {
-                let rail = if let Some(v) = pin.pull_to_volts {
-                    // Literal-voltage rail: stamp a hidden stiff source node.
-                    Some(hidden_dc_node(
-                        circuit,
-                        reference,
-                        &format!("{role}_rail"),
-                        v,
-                    ))
-                } else if let Some(rail_role) = &pin.pull_to {
-                    role_nodes.get(rail_role).copied()
-                } else {
-                    None
-                };
+                let rail = pin.pull_to_volts.map_or_else(
+                    || {
+                        if let Some(rail_role) = &pin.pull_to {
+                            role_nodes.get(rail_role).copied()
+                        } else {
+                            None
+                        }
+                    },
+                    |v| {
+                        Some(hidden_dc_node(
+                            circuit,
+                            reference,
+                            &format!("{role}_rail"),
+                            v,
+                        ))
+                    },
+                );
                 if let Some(rail_node) = rail {
                     circuit.add(Device::resistor(
                         format!("Rbeh_{reference}_{role}_pull"),
@@ -672,7 +676,7 @@ impl BehavioralDevice {
         role_nodes: &BTreeMap<String, NodeId>,
     ) {
         if let Some(fsm) = &model.fsm {
-            self.fsm_states = fsm.states.clone();
+            self.fsm_states.clone_from(&fsm.states);
             // Compile each transition guard once. A guard that fails to parse is
             // reported here (not silently, not re-parsed every chunk) and stored
             // as `None`, so it simply never fires.
@@ -805,7 +809,7 @@ impl BehavioralDevice {
             let profile = LoadProfile {
                 id: format!("model:{reference}:{}", load.name),
                 description: format!("model-owned current profile for {reference}"),
-                match_rule: Default::default(),
+                match_rule: hauksbee_models::profile::ProfileMatch::default(),
                 segments: load.segments.clone(),
             };
             let initial_i = profile.current_at(-1.0, load.seed);
@@ -1009,8 +1013,7 @@ impl BehavioralDevice {
         }
         self.fsm_states
             .get(self.state_idx)
-            .map(String::as_str)
-            .unwrap_or("")
+            .map_or("", String::as_str)
     }
 
     /// The node the converter's output source drives, or None (no converter).
@@ -1053,14 +1056,16 @@ impl BehavioralDevice {
                 eval_number(&leg.program, &ctx)
             }
             LawStamp::Runtime { source, .. } => match circuit.devices.get(source.0 as usize) {
-                Some(Device::Isource {
-                    kind: SourceKind::Dc(v),
-                    ..
-                })
-                | Some(Device::Vsource {
-                    kind: SourceKind::Dc(v),
-                    ..
-                }) => Some(*v),
+                Some(
+                    Device::Isource {
+                        kind: SourceKind::Dc(v),
+                        ..
+                    }
+                    | Device::Vsource {
+                        kind: SourceKind::Dc(v),
+                        ..
+                    },
+                ) => Some(*v),
                 _ => None,
             },
         }
@@ -1158,7 +1163,7 @@ impl BehavioralDevice {
     /// Configure an input-power budget (W) at input voltage `vin` (V). When set,
     /// each chunk raises an overpower fault if the converter's reflected input
     /// draw exceeds the budget.
-    pub fn set_input_budget(&mut self, vin: f64, budget_w: f64) {
+    pub const fn set_input_budget(&mut self, vin: f64, budget_w: f64) {
         self.input_budget = Some((vin, budget_w));
     }
 
@@ -1249,10 +1254,7 @@ impl BehavioralDevice {
 
         // Open drains: assert (on_ohms) when the active state lists od_assert.
         for od in &self.open_drains {
-            let assert = overrides
-                .get(&od.pin_role)
-                .map(|b| b.od_assert)
-                .unwrap_or(false);
+            let assert = overrides.get(&od.pin_role).is_some_and(|b| b.od_assert);
             let ohms = if assert { od.on_ohms } else { OFF_OHMS };
             set_resistor_ohms(circuit, od.resistor, ohms);
         }
@@ -1302,8 +1304,7 @@ impl BehavioralDevice {
         if let Some(enable) = &c.cfg.enable {
             let enabled = c
                 .enable_node
-                .map(|node| node_v(node) >= enable.high_threshold_v)
-                .unwrap_or(false);
+                .is_some_and(|node| node_v(node) >= enable.high_threshold_v);
             if !enabled {
                 c.last_cmd_vout = 0.0;
                 c.shut_down(circuit);
@@ -1504,10 +1505,10 @@ pub fn program_iin_limit(
         }
         Some(first)
     }?;
-    let prog = match sp.prog_ref.as_deref() {
-        Some(reference) => board_resistor(reference),
-        None => sp.prog_ohms,
-    }?;
+    let prog = sp
+        .prog_ref
+        .as_deref()
+        .map_or(sp.prog_ohms, board_resistor)?;
     if !rsense.is_finite() || rsense <= 0.0 || !prog.is_finite() || prog <= 0.0 {
         return None;
     }
@@ -1522,11 +1523,10 @@ pub fn program_iin_limit(
 // ── small circuit-mutation helpers (mirror power_supply/drivers) ────────────
 
 fn set_source_dc(circuit: &mut Circuit, id: DeviceId, v: f64) {
-    match circuit.devices.get_mut(id.0 as usize) {
-        Some(Device::Vsource { kind, .. }) | Some(Device::Isource { kind, .. }) => {
-            *kind = SourceKind::Dc(v);
-        }
-        _ => {}
+    if let Some(Device::Vsource { kind, .. } | Device::Isource { kind, .. }) =
+        circuit.devices.get_mut(id.0 as usize)
+    {
+        *kind = SourceKind::Dc(v);
     }
 }
 

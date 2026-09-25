@@ -242,7 +242,7 @@ impl BoundBoard {
         self.supplies.retain(|s| s.net != node);
         // A bare ideal rail source stamped straight onto the net.
         let leg_name = format!("Vsupply_{net}");
-        for dev in self.circuit.devices.iter_mut() {
+        for dev in &mut self.circuit.devices {
             if let Device::Vsource { name, p, .. } = dev {
                 if *p == node && (*name == leg_name || name.starts_with("Vrail")) {
                     let (nm, a) = (name.clone(), *p);
@@ -620,7 +620,7 @@ pub fn bind_board_with(
             .map(|(r, _)| r.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        for row in report.rows.iter_mut() {
+        for row in &mut report.rows {
             if dnp_mcus.iter().any(|(r, _)| r == &row.reference) {
                 row.warning = Some(format!(
                     "{} is marked DNP in the board file, so it is not simulated, and it is the \
@@ -742,7 +742,7 @@ fn bind_behavioral(
         // only when the pin is genuinely DRIVEN (mb2.0's GPIO), not merely left
         // floating at 0 V (mb2.5+ NC).
         let empty_pins = std::collections::BTreeMap::new();
-        let model_pins = model.as_ref().map(|m| &m.pins).unwrap_or(&empty_pins);
+        let model_pins = model.as_ref().map_or(&empty_pins, |m| &m.pins);
         let role_nets =
             role_node_map_pins(comp, model_pins, model.as_ref().map(|m| m.kind), node_of);
         let role_map: std::collections::BTreeMap<String, NodeId> = role_nets
@@ -1069,7 +1069,7 @@ pub fn model_role_cs(
     let model = resolution.model?;
     let cs_net = model_cs_net(board, part, &model);
     Some(ModelRoleCs {
-        model_id: model.id.clone(),
+        model_id: model.id,
         from_builtin_db,
         cs_net,
     })
@@ -1117,7 +1117,7 @@ pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_mode
         non_empty(&comp.footprint),
     );
     q.reference = Some(comp.reference.clone());
-    q.properties = comp.properties.clone();
+    q.properties.clone_from(&comp.properties);
     let pads = comp.pins.iter().map(|pin| pin.number.trim().to_string());
     q.pads = pads.filter(|number| !number.is_empty()).collect();
     // A refused identity is not a model match even here: the record cannot say
@@ -1273,7 +1273,7 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             "connector_fallback",
             ComponentKind::Ignore,
             "connector / mechanical (engine fallback by reference class)",
-            Default::default(),
+            hauksbee_models::Params::default(),
             std::collections::BTreeMap::new(),
         ));
     }
@@ -1294,7 +1294,7 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             "crystal_fallback",
             ComponentKind::Ignore,
             "crystal / resonator (engine fallback; high-impedance, clock from MCU model)",
-            Default::default(),
+            hauksbee_models::Params::default(),
             BTreeMap::new(),
         ));
     }
@@ -1328,10 +1328,9 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             })
         });
     // Voltage/current ratings (e.g. a zener's 5.1V) are not passive magnitudes.
-    let val_is_passive_magnitude = parse_value(&comp.value)
-        .map(|p| !matches!(p.unit.as_deref(), Some("V") | Some("A")))
-        .unwrap_or(false);
-    let ref_is_passive = matches!(prefix.chars().next(), Some('R') | Some('C') | Some('L'));
+    let val_is_passive_magnitude =
+        parse_value(&comp.value).is_some_and(|p| !matches!(p.unit.as_deref(), Some("V" | "A")));
+    let ref_is_passive = matches!(prefix.chars().next(), Some('R' | 'C' | 'L'));
     if diode_prefix || fp_is_diode {
         let v = comp.value.trim();
         let val_is_generic = ["", "D", "diode", "1N4148", "1N4148W", "1N4148WS"]
@@ -1379,9 +1378,8 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
     // "CTEB_2.2UF_35V_10%_...): the first underscore-separated token that
     // parses as a value wins.
     let kind_pins: Option<(ComponentKind, [(&str, &str); 2])> = match passive_letter(comp) {
-        Some('R') => Some((ComponentKind::Passive, [("1", "a"), ("2", "b")])),
         Some('C') => Some((ComponentKind::Passive, [("1", "pos"), ("2", "neg")])),
-        Some('L') => Some((ComponentKind::Passive, [("1", "a"), ("2", "b")])),
+        Some('R' | 'L') => Some((ComponentKind::Passive, [("1", "a"), ("2", "b")])),
         _ => None,
     };
     if let Some((kind, pinmap)) = kind_pins {
@@ -1710,7 +1708,7 @@ fn role_from_mcu_pinfunction_token(token: &str) -> Option<String> {
         if !matches!(port, 'A'..='I') {
             return None;
         }
-        let digits: String = chars.take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = chars.take_while(char::is_ascii_digit).collect();
         if digits.is_empty() || digits.len() > 2 {
             return None;
         }
@@ -1719,7 +1717,7 @@ fn role_from_mcu_pinfunction_token(token: &str) -> Option<String> {
         }
     }
     if let Some(rest) = token.strip_prefix("GPIO") {
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
         if !digits.is_empty() && digits.parse::<u8>().ok()? < 64 {
             return Some(format!("gpio{digits}"));
         }
@@ -1785,8 +1783,11 @@ fn make_entry(
 
 /// The `snake_case` discriminant string for a [`ComponentKind`] (matches the
 /// TOML `#[serde(rename_all = "snake_case")]` encoding).
-fn kind_str(kind: ComponentKind) -> &'static str {
-    use ComponentKind::*;
+const fn kind_str(kind: ComponentKind) -> &'static str {
+    use ComponentKind::{
+        Adc, AnalogSwitch, BjtNpn, BjtPnp, Comparator, Connector, Dac, Digital, Diode, Ignore, Mcu,
+        Nmos, Opamp, Passive, Pmos, ShiftRegister, Timer, Vreg,
+    };
     match kind {
         Passive => "passive",
         Diode => "diode",
@@ -1913,8 +1914,7 @@ fn unresolved_outcome(
         .properties
         .iter()
         .find(|(k, _)| k.to_ascii_lowercase().contains("mpn"))
-        .map(|(_, v)| v.as_str())
-        .unwrap_or("");
+        .map_or("", |(_, v)| v.as_str());
     let abstention = lib.unmodelled().note_for(&comp.value, mpn);
     let reason = match (value_unresolved, abstention) {
         // The extractor's own explanation for a valueless part wins: it says the
@@ -1949,7 +1949,10 @@ fn bind_component(
     board: (&[Component], &HashMap<String, f64>),
     pin_rules: &hauksbee_models::PinRuleTable,
 ) -> (BindOutcome, Option<String>, Vec<String>) {
-    use ComponentKind::*;
+    use ComponentKind::{
+        Adc, AnalogSwitch, BjtNpn, BjtPnp, Comparator, Connector, Dac, Digital, Diode, Ignore, Mcu,
+        Nmos, Opamp, Passive, Pmos, ShiftRegister, Timer, Vreg,
+    };
     let (components, power_nets) = board;
 
     // A source-bound identity is not executable behavior. Older identity cards
@@ -2361,9 +2364,7 @@ fn bind_model_peripheral(
                 } else {
                     "resolved high"
                 };
-                let actual = strap_level(role)
-                    .map(|_| opposite.to_string())
-                    .unwrap_or_else(|error| error);
+                let actual = strap_level(role).map_or_else(|error| error, |_| opposite.to_string());
                 Err(refuse(
                     format!(
                         "register-map bus personality requires role '{role}' {level}, but it is {actual}"
@@ -2591,7 +2592,7 @@ fn role_node_map_pins(
 /// BJT, MOSFET), on everything else a lettered pad is not an electrode name.
 /// A purely numeric pad is a pad number, never an electrode.
 fn role_from_electrode_pad(kind: ComponentKind, pad: &str) -> Option<String> {
-    use ComponentKind::*;
+    use ComponentKind::{BjtNpn, BjtPnp, Diode, Nmos, Pmos};
     if !matches!(kind, Diode | BjtNpn | BjtPnp | Nmos | Pmos) {
         return None;
     }
@@ -3386,7 +3387,7 @@ fn bind_mosfet(
     let m = MosfetModel {
         level: MosLevel::Level1,
         polarity,
-        vto: p.get_f64("vto").map(|v| fold * v).unwrap_or(def.vto),
+        vto: p.get_f64("vto").map_or(def.vto, |v| fold * v),
         kp: p.get_f64("kp").unwrap_or(def.kp),
         lambda: p.get_f64("lambda").unwrap_or(def.lambda),
         gamma: p.get_f64("gamma").unwrap_or(def.gamma),
@@ -3651,7 +3652,7 @@ fn bind_vreg(
             } if parameter == "vout" => Some(low.abs().max(high.abs())),
             _ => None,
         })
-        .unwrap_or(vout.abs());
+        .unwrap_or_else(|| vout.abs());
     let dropout_v = model.params.get_f64("dropout_v");
     regulators.push(SimpleRegulator {
         reference: comp.reference.clone(),
@@ -3785,9 +3786,10 @@ fn bind_adj_vreg(
     };
     // OUT on ADJ shorts an LM317's reference, but FB on OUT is a grounded part's
     // unity setting (Vout = Vref); FB on GND leaves that part nothing to hold.
-    let tied = match grounded {
-        true => gnd == input || gnd == out || gnd == adj,
-        false => out == adj,
+    let tied = if grounded {
+        gnd == input || gnd == out || gnd == adj
+    } else {
+        out == adj
     };
     if tied || out == input || input == adj {
         return open_warning(comp, "vreg input, output, ADJ and any GND must be distinct");
@@ -3795,9 +3797,10 @@ fn bind_adj_vreg(
     // A grounded part's `Vref` ends on a private node the VCVS drives. The VCVS
     // is no helper: it reads no branch, and left in place when `source` is
     // swapped out it keeps that node defined.
-    let (low, ret) = match grounded {
-        true => (circuit.node(&format!("{}_vreg_drive", comp.reference)), gnd),
-        false => (adj, adj),
+    let (low, ret) = if grounded {
+        (circuit.node(&format!("{}_vreg_drive", comp.reference)), gnd)
+    } else {
+        (adj, adj)
     };
     let source = circuit.add(Device::vsource(
         format!("Vref_{}", comp.reference),
@@ -3996,10 +3999,11 @@ fn supply_rails(
         let Some(headroom) = model.params.get_f64(swing) else {
             return Ok(Rail::fixed(model.params.get_f64(fixed).unwrap_or(dflt)));
         };
-        match pick(roles, pins).copied().filter(|n| sign > 0.0 || !n.is_ground()) {
-            Some(pin) => Ok(Rail { pin, offset: sign * headroom }),
-            None => Err(open_warning(comp, "op-amp supply pin is not on a net, so the card's datasheet output swing has no rail to sit on")),
-        }
+        pick(roles, pins)
+            .copied()
+            .filter(|n| sign > 0.0 || !n.is_ground())
+            .map(|pin| Rail { pin, offset: sign * headroom })
+            .ok_or_else(|| open_warning(comp, "op-amp supply pin is not on a net, so the card's datasheet output swing has no rail to sit on"))
     };
     Ok((
         rail("swing_lo", "rail_lo", 0.0, 1.0, &["vss", "vee", "v_minus"])?,
@@ -4470,9 +4474,7 @@ fn bind_analog_switch(
                 "shared-select DPDT has a dynamic OE_N input; the current switch primitive has one control and cannot combine select with output-enable, so both lanes are left open rather than modeled as always enabled",
             );
         }
-        let (vcc_v, vcc_warning) = match power_nets.get(circuit.node_name(vcc)).copied() {
-            Some(value) => (value, None),
-            None => (
+        let (vcc_v, vcc_warning) = power_nets.get(circuit.node_name(vcc)).copied().map_or_else(|| (
                 DEFAULT_VCC,
                 Some(format!(
                     "{} ({}): shared-select DPDT VCC net '{}' has no resolved rail voltage; modeling select thresholds against an assumed {DEFAULT_VCC} V rail",
@@ -4480,8 +4482,7 @@ fn bind_analog_switch(
                     comp.value,
                     circuit.node_name(vcc),
                 )),
-            ),
-        };
+            ), |value| (value, None));
         for (lane, com, s0, s1) in [(1, com_1, s0_1, s1_1), (2, com_2, s0_2, s1_2)] {
             let name = format!("{}_l{lane}", comp.reference);
             stamp_spdt(
@@ -4527,21 +4528,23 @@ fn bind_analog_switch(
         // reintroduces the very "com<->s0 permanently open" bug the threshold
         // math above fixes. Fall back to DEFAULT_VCC but SAY SO, matching the
         // passive-array convention warning.
-        let (vcc_v, vcc_warning) = match power_nets.get(circuit.node_name(vcc)).copied() {
-            Some(v) => (v, None),
-            None => (
-                DEFAULT_VCC,
-                Some(format!(
-                    "{} ({}): analog-switch VCC net '{}' has no resolved rail voltage; \
+        let (vcc_v, vcc_warning) = power_nets.get(circuit.node_name(vcc)).copied().map_or_else(
+            || {
+                (
+                    DEFAULT_VCC,
+                    Some(format!(
+                        "{} ({}): analog-switch VCC net '{}' has no resolved rail voltage; \
                      modeling its SPDT thresholds against an assumed {DEFAULT_VCC} V rail; \
                      on a lower-voltage board the common<->s0 throw may read as open, \
                      so verify the switch's actual supply",
-                    comp.reference,
-                    comp.value,
-                    circuit.node_name(vcc),
-                )),
-            ),
-        };
+                        comp.reference,
+                        comp.value,
+                        circuit.node_name(vcc),
+                    )),
+                )
+            },
+            |v| (v, None),
+        );
         let params = [ron, roff, vth];
         stamp_spdt(
             circuit,
@@ -4604,7 +4607,7 @@ fn bind_analog_switch(
                     comp.reference,
                     partial
                         .iter()
-                        .map(|n| n.to_string())
+                        .map(std::string::ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(", ")
                 ))
@@ -4950,12 +4953,10 @@ fn bind_nor_latches(
             let in_i = other_in(&gates[i], gates[j].y);
             let in_j = other_in(&gates[j], gates[i].y);
             let net_name = |n: Option<NodeId>| n.map(|n| circuit.node_name(n).to_string());
-            let i_is_reset = net_name(in_i)
-                .map(|s| s.to_ascii_uppercase().contains("RESET"))
-                .unwrap_or(false);
-            let j_is_reset = net_name(in_j)
-                .map(|s| s.to_ascii_uppercase().contains("RESET"))
-                .unwrap_or(false);
+            let i_is_reset =
+                net_name(in_i).is_some_and(|s| s.to_ascii_uppercase().contains("RESET"));
+            let j_is_reset =
+                net_name(in_j).is_some_and(|s| s.to_ascii_uppercase().contains("RESET"));
             // The reset gate's output is Qb; the OTHER gate is Q.
             let (q_gate, set_in) = if j_is_reset && !i_is_reset {
                 (i, in_i)
@@ -5034,8 +5035,7 @@ fn bind_mcu(
     let effective_pins: std::collections::BTreeMap<String, String> = {
         let mut merged = derived_when_empty
             .as_ref()
-            .map(|d| d.roles.clone())
-            .unwrap_or_else(|| derive_mcu_pin_roles(comp).roles);
+            .map_or_else(|| derive_mcu_pin_roles(comp).roles, |d| d.roles.clone());
         for (pad, role) in &model.pins {
             merged.insert(pad.clone(), role.clone());
         }
@@ -5389,7 +5389,7 @@ pub fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     // two-bank numeric-port convention below. These names double as the
     // strap-table roles, which match pin roles by exact string.
     if let Some(rest) = r.strip_prefix("gpio") {
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
         if let Ok(n) = digits.parse::<u8>() {
             if n < 32 {
                 return Some(('0', n));
@@ -5406,16 +5406,13 @@ pub fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     if !matches!(port, 'A'..='I' | '0' | '1') {
         return None;
     }
-    let digits: String = rest[1..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let digits: String = rest[1..].chars().take_while(char::is_ascii_digit).collect();
     let bit = digits.parse::<u8>().ok()?;
     (bit < 32).then_some((port, bit))
 }
 
 /// Arduino digital pin number -> `ATmega328P` (port, bit).
-fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
+const fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
     match num {
         0..=7 => Some(('D', num)),
         8..=13 => Some(('B', num - 8)),
@@ -5464,7 +5461,7 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
     // Bare "pc0_adc0" .. "pc5_adc5".
     if let Some(idx) = r.find("adc") {
         let after = &r[idx + 3..];
-        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
         return digits.parse().ok();
     }
     None
@@ -5555,51 +5552,49 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
             // '-'-prefixed rails first: "-5V_ANALOG" must resolve negative and
             // never fall into the positive "contains 5V" branch through an
             // incidental VCC/VBUS token elsewhere in the name.
-            if let Some(v) = negative_rail_fallback(&n) {
-                Some(v)
-            // A numeric positive rail carries its own magnitude ("+15V",
-            // "+24V", "+9V", "+15V0", "+15V_ANALOG"). This MUST run before the
-            // loose "contains 5V" branch: "+15V" contains the substring "5V"
-            // and starts with '+', so without this it was silently classified
-            // as a 5 V rail, a +15V op-amp supply solved at 5 V.
-            } else if let Some(v) = positive_rail_fallback(&n) {
-                Some(v)
-            // A supply-token-prefixed rail carries its magnitude in an embedded
-            // voltage token ("VCC_5V", "VDD_3V3", "VDD_1V8", "VCC_15V",
-            // "VBUS_25V"). This precise extraction MUST run before the loose
-            // "contains 5V"/"3V3" substring heuristics below: "VCC_15V" contains
-            // the substring "5V" and "VDD_13V3" contains "3V3", so the substring
-            // branches misread them as 5 V / 3.3 V. embedded_rail_magnitude reads
-            // the whole "15V"/"13V3" digit run and returns 15.0 / 13.3.
-            } else if let Some(v) = embedded_rail_magnitude(&n) {
-                Some(v)
-            // Fallback for voltage-suffixed names embedded_rail_magnitude cannot
-            // parse a numeric token from but that still carry a "5V"/"3V3"
-            // substring next to a supply token (e.g. "VCC_5VOLTS").
-            } else if n.contains("5V")
-                && (n.starts_with('+')
-                    || n.contains("VCC")
-                    || n.contains("VBUS")
-                    || n.contains("VDD"))
-            {
-                Some(5.0)
-            // Same gate for the 3.3 V substring fallback: a bare domain-suffixed
-            // SIGNAL net (an open-drain data line "SDA_3V3", a monitor "SENSE_3V3_MON",
-            // an interrupt "IRQ_3.3V") is NOT a rail and must stay unresolved, or
-            // Pass 3 stamps an ideal 3.3 V supply onto it and pins the line high.
-            // Genuine rails still resolve: exact names hit the match arm above,
-            // token-prefixed forms (VDD_3V3) via embedded_rail_magnitude, numeric
-            // forms (+3V3_ANALOG) via positive_rail_fallback.
-            } else if (n.contains("3V3") || n.contains("3.3V"))
-                && (n.starts_with('+')
-                    || n.contains("VCC")
-                    || n.contains("VBUS")
-                    || n.contains("VDD"))
-            {
-                Some(3.3)
-            } else {
-                None
-            }
+            negative_rail_fallback(&n).map_or_else(
+                || {
+                    if let Some(v) = positive_rail_fallback(&n) {
+                        Some(v)
+                    // A supply-token-prefixed rail carries its magnitude in an embedded
+                    // voltage token ("VCC_5V", "VDD_3V3", "VDD_1V8", "VCC_15V",
+                    // "VBUS_25V"). This precise extraction MUST run before the loose
+                    // "contains 5V"/"3V3" substring heuristics below: "VCC_15V" contains
+                    // the substring "5V" and "VDD_13V3" contains "3V3", so the substring
+                    // branches misread them as 5 V / 3.3 V. embedded_rail_magnitude reads
+                    // the whole "15V"/"13V3" digit run and returns 15.0 / 13.3.
+                    } else if let Some(v) = embedded_rail_magnitude(&n) {
+                        Some(v)
+                    // Fallback for voltage-suffixed names embedded_rail_magnitude cannot
+                    // parse a numeric token from but that still carry a "5V"/"3V3"
+                    // substring next to a supply token (e.g. "VCC_5VOLTS").
+                    } else if n.contains("5V")
+                        && (n.starts_with('+')
+                            || n.contains("VCC")
+                            || n.contains("VBUS")
+                            || n.contains("VDD"))
+                    {
+                        Some(5.0)
+                    // Same gate for the 3.3 V substring fallback: a bare domain-suffixed
+                    // SIGNAL net (an open-drain data line "SDA_3V3", a monitor "SENSE_3V3_MON",
+                    // an interrupt "IRQ_3.3V") is NOT a rail and must stay unresolved, or
+                    // Pass 3 stamps an ideal 3.3 V supply onto it and pins the line high.
+                    // Genuine rails still resolve: exact names hit the match arm above,
+                    // token-prefixed forms (VDD_3V3) via embedded_rail_magnitude, numeric
+                    // forms (+3V3_ANALOG) via positive_rail_fallback.
+                    } else if (n.contains("3V3") || n.contains("3.3V"))
+                        && (n.starts_with('+')
+                            || n.contains("VCC")
+                            || n.contains("VBUS")
+                            || n.contains("VDD"))
+                    {
+                        Some(3.3)
+                    } else {
+                        None
+                    }
+                },
+                Some,
+            )
         }
     }
 }
@@ -5749,7 +5744,7 @@ fn rail_magnitude(rest: &str) -> Option<f64> {
     }
     let frac: String = after[1..]
         .chars()
-        .take_while(|c| c.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
         .collect();
     // A voltage-PREFIXED net whose suffix is a monitor/feedback/sense token
     // ("12V_FB", "5V_MON", "3V3_SENSE") is a divided TAP of the rail, not the rail
@@ -5782,7 +5777,7 @@ fn is_rail_monitor_suffix(tail: &str) -> bool {
     let first: String = tail
         .trim_start_matches(|c: char| !c.is_ascii_alphanumeric())
         .chars()
-        .take_while(|c| c.is_ascii_alphanumeric())
+        .take_while(char::is_ascii_alphanumeric)
         .collect();
     // Match on the ROOT, not an exact token: the same intent is spelled in
     // longer forms, "DIVIDER" (DIV), "SENSED"/"SENSING" (SENSE), "MEASURE"
@@ -5943,7 +5938,7 @@ impl IdentityFinding {
     #[must_use]
     pub fn line(&self) -> String {
         match self {
-            IdentityFinding::ValueDisagrees {
+            Self::ValueDisagrees {
                 reference,
                 layout,
                 artifact,
@@ -5952,17 +5947,17 @@ impl IdentityFinding {
                 "{reference} is {layout:?} on the layout and {artifact:?} in {source}; the part \
                  number from {source} is what bound, so check which revision is current"
             ),
-            IdentityFinding::NotOnBoard { references, source } => format!(
+            Self::NotOnBoard { references, source } => format!(
                 "{source} names {} parts the board does not have: {}",
                 references.len(),
                 references.join(", ")
             ),
-            IdentityFinding::NotInArtifact { references, source } => format!(
+            Self::NotInArtifact { references, source } => format!(
                 "{} parts on the board are not in {source}: {}",
                 references.len(),
                 references.join(", ")
             ),
-            IdentityFinding::QuantityDisagrees {
+            Self::QuantityDisagrees {
                 references,
                 stated,
                 enumerated,
@@ -5972,7 +5967,7 @@ impl IdentityFinding {
                  designators ({}); the list is what bound",
                 references.join(", ")
             ),
-            IdentityFinding::PopulateDisagrees {
+            Self::PopulateDisagrees {
                 reference,
                 layout_says_dnp,
                 artifact_says_populate,
@@ -6017,7 +6012,7 @@ pub struct FitAdvice {
 
 impl FitAdvice {
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.fit.is_empty() && self.no_fit.is_empty()
     }
 }
@@ -6104,7 +6099,7 @@ fn model_words(model: &ModelEntry) -> String {
     }
 }
 
-fn confidence_word(c: Confidence) -> &'static str {
+const fn confidence_word(c: Confidence) -> &'static str {
     match c {
         Confidence::Exact => "exact",
         Confidence::Family => "family",
@@ -6151,7 +6146,7 @@ pub enum IdentityRefusal {
 impl IdentityRefusal {
     /// Always [`crate::EXIT_INVALID_FOR_ANALYSIS`].
     #[must_use]
-    pub fn exit_code(&self) -> i32 {
+    pub const fn exit_code(&self) -> i32 {
         crate::EXIT_INVALID_FOR_ANALYSIS
     }
 }
@@ -6277,7 +6272,7 @@ pub fn apply_identity(
                 comp.properties
                     .push((IDENTITY_SOURCE_PROPERTY.to_string(), hint.source.clone()));
                 if substituted {
-                    comp.value = mpn.clone();
+                    comp.value.clone_from(mpn);
                 }
                 report.identified.push(IdentityAttribution {
                     reference: hint.reference.clone(),
@@ -6296,7 +6291,7 @@ pub fn apply_identity(
         if let Some(value) = &hint.value {
             let comp = &mut board.components[idx];
             if comp.value.trim().is_empty() {
-                comp.value = value.clone();
+                comp.value.clone_from(value);
                 comp.properties
                     .push((VALUE_PROPERTY.to_string(), value.clone()));
                 report.values_filled.push(FilledValue {
@@ -6456,7 +6451,7 @@ fn layout_names_a_part(comp: &Component) -> bool {
 fn names_same_part(a: &str, b: &str, manufacturer: Option<&str>) -> bool {
     fn norm(s: &str) -> String {
         s.chars()
-            .filter(|c| c.is_ascii_alphanumeric())
+            .filter(char::is_ascii_alphanumeric)
             .collect::<String>()
             .to_ascii_uppercase()
     }
@@ -6791,7 +6786,7 @@ fn contradiction_between(
                  {artifact_value:?} ({a})",
                 reference
                     .chars()
-                    .take_while(|c| c.is_ascii_alphabetic())
+                    .take_while(char::is_ascii_alphabetic)
                     .collect::<String>()
             ));
         }
@@ -6817,7 +6812,7 @@ fn contradiction_between(
                      {artifact_value:?}, which is {scale}",
                     reference
                         .chars()
-                        .take_while(|c| c.is_ascii_alphabetic())
+                        .take_while(char::is_ascii_alphabetic)
                         .collect::<String>()
                 ));
             }
@@ -6862,7 +6857,7 @@ fn contradiction_between(
 
 fn normalise_identity_text(text: &str) -> String {
     text.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect::<String>()
         .to_ascii_uppercase()
 }
@@ -6897,7 +6892,7 @@ fn package_electrical_pad_count(package: &str) -> Option<usize> {
         let digits: String = suffix
             .chars()
             .skip_while(|c| !c.is_ascii_digit())
-            .take_while(|c| c.is_ascii_digit())
+            .take_while(char::is_ascii_digit)
             .collect();
         if let Ok(pads) = digits.parse::<usize>() {
             let after_count = &suffix[digit_start + digits.len()..];
@@ -7051,7 +7046,7 @@ mod tests {
         let mut ambiguous = comp("R1", "1k");
         ambiguous.lib_id = "Device:R".into();
         ambiguous.footprint = "R_0603".into();
-        ambiguous.properties.push(marker.clone());
+        ambiguous.properties.push(marker);
         assert!(AssemblyState::of(&ambiguous).fitted().is_none());
         assert!(library_resolution(&lib, &ambiguous).model.is_none());
 
@@ -7884,7 +7879,7 @@ style = "i2c_pointer"
     #[test]
     fn role_sources_have_global_priority_not_per_pad_priority() {
         let mut c = comp("D1", "D");
-        let map = [("1".into(), "anode".into())].into_iter().collect();
+        let map = std::iter::once(("1".into(), "anode".into())).collect();
         let node_of = |net: Option<i64>| net.map(|id| NodeId(id as u32));
         let mut named = pin("2", 2);
         named.function = "A".into();
@@ -8055,7 +8050,7 @@ style = "i2c_pointer"
             "dual",
             ComponentKind::Diode,
             "dual",
-            Default::default(),
+            hauksbee_models::Params::default(),
             pins.into(),
         );
         for (third, refused) in [(1, false), (2, true)] {

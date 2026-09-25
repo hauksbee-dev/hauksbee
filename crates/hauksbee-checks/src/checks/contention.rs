@@ -96,6 +96,7 @@ struct Driver {
 }
 
 /// One component that bound to a digital-kind model, as this check saw it.
+///
 /// This is the calibration's evidence surface: it says how far each candidate
 /// part got through the classification, so a corpus sweep can prove its silence
 /// is real (parts bound, outputs presented, exclusions applied) rather than
@@ -149,7 +150,7 @@ impl Scan {
 /// Kinds the binder routes through `bind_digital`, i.e. the kinds whose
 /// connected output roles get a stamped Thevenin driver. Kept in step with
 /// `binder::bind_component`'s match arms.
-fn is_digital_kind(kind: ComponentKind) -> bool {
+const fn is_digital_kind(kind: ComponentKind) -> bool {
     matches!(
         kind,
         ComponentKind::Digital | ComponentKind::ShiftRegister | ComponentKind::Adc
@@ -301,7 +302,7 @@ pub fn contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
                 refs.len(),
                 listed.join(", ")
             ),
-            refs: refs.iter().map(|r| r.to_string()).collect(),
+            refs: refs.iter().map(std::string::ToString::to_string).collect(),
             nets: vec![name],
         });
     }

@@ -344,7 +344,10 @@ fn uncommenting_the_scaffolded_rail_blocks_gates_for_real() {
         let result = run(&run_config(spec_path.clone()))
             .unwrap_or_else(|e| panic!("{tag}: the uncommented rail spec runs, got: {e}"));
         let human = result.render_human();
-        let undermined = result.evidence.iter().any(|map| map.is_undermined());
+        let undermined = result
+            .evidence
+            .iter()
+            .any(hauksbee_ir::evidence::EvidenceMap::is_undermined);
         assert_eq!(
             result.exit_code(),
             if undermined { 3 } else { 0 },

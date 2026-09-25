@@ -167,15 +167,12 @@ pub fn resolve_uploaded(
     let schematic_path = Path::new(schematic_name);
     if !board_is_eagle {
         anyhow::bail!(
-            "schematic upload {}: this board is not an Eagle .brd; refusing unrelated companion input",
-            schematic_name
+            "schematic upload {schematic_name}: this board is not an Eagle .brd; refusing unrelated companion input"
         );
     }
     if board_path.file_stem() != schematic_path.file_stem() {
         anyhow::bail!(
-            "schematic upload {}: design identity does not match board {}: Eagle companion files must share a basename",
-            schematic_name,
-            board_name
+            "schematic upload {schematic_name}: design identity does not match board {board_name}: Eagle companion files must share a basename"
         );
     }
     if hauksbee_extract::looks_like_eagle_binary(raw) {

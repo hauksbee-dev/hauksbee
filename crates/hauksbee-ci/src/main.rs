@@ -579,7 +579,7 @@ fn suggest_board_in_cwd() -> anyhow::Error {
     const BOARD_EXTS: &[&str] = &["kicad_pcb", "kicad_sch", "net", "brd", "d356", "board"];
     let mut boards: Vec<String> = std::fs::read_dir(".")
         .into_iter()
-        .flat_map(|entries| entries.flatten())
+        .flat_map(std::iter::Iterator::flatten)
         .filter(|entry| {
             let path = entry.path();
             path.is_file()

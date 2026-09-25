@@ -141,7 +141,7 @@ impl NormalizedBoard {
     /// copper for gerbers, read from the file for the other two) but not in what
     /// the geometry-bearing checks can do, which is nothing.
     #[must_use]
-    pub fn is_gerber(&self) -> bool {
+    pub const fn is_gerber(&self) -> bool {
         matches!(
             self.kind,
             InputKind::Gerber | InputKind::Ipc356Archive | InputKind::Odb | InputKind::Ipc2581
@@ -164,7 +164,7 @@ impl NormalizedBoard {
 /// connectivity came from — on exactly the axis these readers exist to be honest
 /// about.
 #[must_use]
-pub fn input_kind_phrase(kind: InputKind) -> &'static str {
+pub const fn input_kind_phrase(kind: InputKind) -> &'static str {
     match kind {
         InputKind::Gerber => "a gerber archive",
         InputKind::Ipc356Archive => "a fab archive carrying an IPC-D-356 netlist",
@@ -246,10 +246,10 @@ impl BoardInputError {
     #[must_use]
     pub fn web_message(&self) -> String {
         match self {
-            BoardInputError::BoardCode(e) => {
+            Self::BoardCode(e) => {
                 format!("Could not compile this Board-as-Code file: {e}.")
             }
-            BoardInputError::Extract(e) => {
+            Self::Extract(e) => {
                 format!("Could not read this board file: {e}. Supported: {SUPPORTED_FORMATS}.")
             }
             other => format!("Could not read this board file: {other}"),
@@ -278,10 +278,8 @@ impl BoardInputError {
 /// So it runs ahead of reader selection rather than as a nicer message for an
 /// `Unrecognized` result.
 fn refuse_eagle_binary(file_name: &str, raw: &[u8]) -> Result<(), BoardInputError> {
-    match unsupported_format_refusal(file_name, raw) {
-        Some(message) => Err(BoardInputError::Unsupported(message)),
-        None => Ok(()),
-    }
+    unsupported_format_refusal(file_name, raw)
+        .map_or(Ok(()), |message| Err(BoardInputError::Unsupported(message)))
 }
 
 /// The refusal for a format hauksbee RECOGNISES and deliberately does not read,
@@ -354,29 +352,28 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
     // reverse-extracted from copper.
     let mut zip_code: Option<String> = None;
     if contents.starts_with(b"PK\x03\x04") {
-        match zip_board_code(file_name, contents)? {
-            Some(src) => zip_code = Some(src),
-            None => {
-                if let Some(norm) = ipc356_from_fab_zip(file_name, contents)? {
-                    return Ok(norm);
-                }
-                let out = gerber_from_zip_bytes(file_name, contents)?;
-                let notes = out.stats.coverage_notes();
-                return Ok(NormalizedBoard {
-                    board: out.board,
-                    layout_text: None,
-                    raw: contents.to_vec(),
-                    kind: InputKind::Gerber,
-                    notes,
-                });
+        if let Some(src) = zip_board_code(file_name, contents)? {
+            zip_code = Some(src);
+        } else {
+            if let Some(norm) = ipc356_from_fab_zip(file_name, contents)? {
+                return Ok(norm);
             }
+            let out = gerber_from_zip_bytes(file_name, contents)?;
+            let notes = out.stats.coverage_notes();
+            return Ok(NormalizedBoard {
+                board: out.board,
+                layout_text: None,
+                raw: contents.to_vec(),
+                kind: InputKind::Gerber,
+                notes,
+            });
         }
     }
 
-    let text: Cow<'_, str> = match &zip_code {
-        Some(src) => Cow::Borrowed(src.as_str()),
-        None => String::from_utf8_lossy(contents),
-    };
+    let text: Cow<'_, str> = zip_code.as_ref().map_or_else(
+        || String::from_utf8_lossy(contents),
+        |src| Cow::Borrowed(src.as_str()),
+    );
     // Board-as-Code (`hauksbee to-code` output, usually `*.board`, possibly
     // zipped) is a DSL, not a CAD format, so the extractor cannot sniff it.
     // Compile it to KiCad board text first; the emitted text then flows
@@ -508,7 +505,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     let ext_lower = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     if ext_lower == "kicad_pro" || ext_lower == "kicad_prl" {
         let sibling = path.with_extension("kicad_pcb");
@@ -581,11 +578,10 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             // A zip that is neither a gerber set nor a .board export is often
             // a FIRMWARE project zipped by mistake; say where firmware goes
             // instead of only rejecting.
-            if let Some(marker) = zip_firmware_marker(&raw) {
-                BoardInputError::Zip(firmware_zip_message(&file_name, marker))
-            } else {
-                BoardInputError::Gerber(gerber_path_message(path, &e.to_string()))
-            }
+            zip_firmware_marker(&raw).map_or_else(
+                || BoardInputError::Gerber(gerber_path_message(path, &e.to_string())),
+                |marker| BoardInputError::Zip(firmware_zip_message(&file_name, marker)),
+            )
         })?;
         return gerber_job(path, out, raw);
     }
@@ -669,13 +665,15 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             "net" => Some("a KiCad netlist"),
             _ => None,
         };
-        match known {
-            Some(desc) => BoardInputError::Extract(format!(
-                "'{file_name}' looks like {desc} by extension, but its content \
+        known.map_or_else(
+            || BoardInputError::Extract(format!("'{file_name}': {e}")),
+            |desc| {
+                BoardInputError::Extract(format!(
+                    "'{file_name}' looks like {desc} by extension, but its content \
                  did not parse: {e}"
-            )),
-            None => BoardInputError::Extract(format!("'{file_name}': {e}")),
-        }
+                ))
+            },
+        )
     })?;
     Ok(normalized(
         path,
@@ -698,7 +696,7 @@ fn board_files_in(dir: &Path) -> Vec<std::path::PathBuf> {
             let ext = p
                 .extension()
                 .and_then(|x| x.to_str())
-                .map(|x| x.to_ascii_lowercase())
+                .map(str::to_ascii_lowercase)
                 .unwrap_or_default();
             if !p.is_file() {
                 continue;
@@ -728,10 +726,8 @@ fn ipc2581_head(path: &Path) -> bool {
         return false;
     };
     let mut head = vec![0u8; 4096];
-    match f.read(&mut head) {
-        Ok(n) => hauksbee_extract::ipc2581::looks_like_ipc2581(&head[..n]),
-        Err(_) => false,
-    }
+    f.read(&mut head)
+        .is_ok_and(|n| hauksbee_extract::ipc2581::looks_like_ipc2581(&head[..n]))
 }
 
 /// The CLI/CI wording for a failed gerber reverse-extraction from a path.
@@ -1072,7 +1068,10 @@ fn zip_firmware_marker(contents: &[u8]) -> Option<&'static str> {
         if name.starts_with(".pio/") || name.contains("/.pio/") {
             return Some("a .pio build tree");
         }
-        if name.ends_with(".hex") {
+        if std::path::Path::new(&name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("hex"))
+        {
             return Some("compiled .hex firmware");
         }
     }

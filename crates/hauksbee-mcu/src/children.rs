@@ -50,7 +50,7 @@ pub struct ProcessTreeGuard {
 unsafe impl Send for ProcessTreeGuard {}
 
 impl ProcessTreeGuard {
-    fn attach(child: &std::process::Child) -> std::io::Result<Self> {
+    const fn attach(child: &std::process::Child) -> std::io::Result<Self> {
         #[cfg(windows)]
         {
             use std::ffi::c_void;
@@ -103,7 +103,7 @@ impl ProcessTreeGuard {
     /// Windows uses the retained Job Object handle, never a numeric PID that
     /// may already have been reaped and recycled. Unix teardown is performed
     /// by the caller's process-group kill; the guard is only a marker there.
-    pub fn terminate(&self) -> std::io::Result<()> {
+    pub const fn terminate(&self) -> std::io::Result<()> {
         #[cfg(windows)]
         {
             use windows_sys::Win32::System::JobObjects::TerminateJobObject;

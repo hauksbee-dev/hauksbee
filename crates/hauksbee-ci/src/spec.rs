@@ -113,11 +113,10 @@ pub enum DnpMode {
 
 impl From<DnpMode> for hauksbee_extract::dnp::DnpPolicy {
     fn from(m: DnpMode) -> Self {
-        use hauksbee_extract::dnp::DnpPolicy;
         match m {
-            DnpMode::FitExceptLinks => DnpPolicy::FitExceptLinks,
-            DnpMode::FitAll => DnpPolicy::FitAll,
-            DnpMode::Honour => DnpPolicy::Honour,
+            DnpMode::FitExceptLinks => Self::FitExceptLinks,
+            DnpMode::FitAll => Self::FitAll,
+            DnpMode::Honour => Self::Honour,
         }
     }
 }
@@ -205,15 +204,17 @@ fn validate_fit_lists(fit: &[String], no_fit: &[String], context: &str) -> Resul
             )));
         }
     }
-    match fit.iter().find(|reference| no_fit.contains(reference)) {
-        Some(reference) => Err(SpecError::Invalid(format!(
-            "{context} names '{reference}' as both fitted and left open; pick one"
-        ))),
-        None => Ok(()),
-    }
+    fit.iter()
+        .find(|reference| no_fit.contains(reference))
+        .map_or(Ok(()), |reference| {
+            Err(SpecError::Invalid(format!(
+                "{context} names '{reference}' as both fitted and left open; pick one"
+            )))
+        })
 }
 
 /// Timing coverage a strict check requires from the MCU/co-sim bridge.
+///
 /// Declaring this opts the run into adaptive poll chunking and fail-closed
 /// capability negotiation; absent means the report still publishes measured
 /// timing coverage but makes no extra timing claim.
@@ -524,13 +525,13 @@ fn struct_fields<T: JsonSchema>() -> Vec<String> {
 fn default_name() -> String {
     "hauksbee-ci".to_string()
 }
-fn default_duration_ms() -> f64 {
+const fn default_duration_ms() -> f64 {
     100.0
 }
-fn default_frame_ms() -> f64 {
+const fn default_frame_ms() -> f64 {
     1.0
 }
-fn default_ambient_c() -> f64 {
+const fn default_ambient_c() -> f64 {
     25.0
 }
 
@@ -1088,7 +1089,7 @@ pub struct EnsembleSpec {
     pub mode: String,
 }
 
-fn default_ensemble_seeds() -> u32 {
+const fn default_ensemble_seeds() -> u32 {
     16
 }
 fn default_ensemble_mode() -> String {
@@ -1097,7 +1098,7 @@ fn default_ensemble_mode() -> String {
 
 impl Default for EnsembleSpec {
     fn default() -> Self {
-        EnsembleSpec {
+        Self {
             seeds: default_ensemble_seeds(),
             mode: default_ensemble_mode(),
         }
@@ -1374,7 +1375,7 @@ impl Spec {
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
+            .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         if board_file_ext(&ext) {
             return Err(SpecError::Io(board_not_spec_message(path)));
@@ -1419,7 +1420,7 @@ impl Spec {
         if board_file_content(&text) {
             return Err(SpecError::Io(board_not_spec_message(path)));
         }
-        let mut spec: Spec = toml::from_str(&text).map_err(|e| SpecError::Toml {
+        let mut spec: Self = toml::from_str(&text).map_err(|e| SpecError::Toml {
             file: path.display().to_string(),
             // `e.to_string()` keeps the "at line N, column M" locator and the
             // caret-annotated snippet; `e.message()` dropped both, so a hand-author
@@ -1871,10 +1872,11 @@ impl Spec {
     /// The ensemble mode in effect (defaults to Monte-Carlo when tolerances
     /// exist without an explicit `[ensemble]` block).
     pub fn ensemble_mode(&self) -> Result<crate::tolerance::Mode, SpecError> {
-        match &self.ensemble {
-            Some(e) => crate::tolerance::Mode::parse(&e.mode),
-            None => Ok(crate::tolerance::Mode::MonteCarlo),
-        }
+        self.ensemble
+            .as_ref()
+            .map_or(Ok(crate::tolerance::Mode::MonteCarlo), |e| {
+                crate::tolerance::Mode::parse(&e.mode)
+            })
     }
 
     /// Total ensemble seed count for a Monte-Carlo run: one shared seed stream
@@ -1882,12 +1884,11 @@ impl Spec {
     /// of `[fuzz] seeds` and `[ensemble] seeds` (each seed does both).
     #[must_use]
     pub fn ensemble_seed_count(&self) -> u32 {
-        let fuzz = self.fuzz.as_ref().map(|f| f.seeds).unwrap_or(1);
+        let fuzz = self.fuzz.as_ref().map_or(1, |f| f.seeds);
         let tol = if self.has_tolerances() {
             self.ensemble
                 .as_ref()
-                .map(|e| e.seeds)
-                .unwrap_or_else(|| EnsembleSpec::default().seeds)
+                .map_or_else(|| EnsembleSpec::default().seeds, |e| e.seeds)
         } else {
             1
         };
@@ -2604,43 +2605,48 @@ impl Assertion {
                     .unwrap_or_default();
                 format!("{net} {}{when}", bound(" V", "voltage"))
             }
-            "uart" => {
-                if let Some(c) = &self.contains {
-                    format!("UART contains {c:?}")
-                } else if let Some(m) = &self.matches {
-                    format!("UART matches /{m}/")
-                } else {
-                    "UART".into()
-                }
-            }
-            "toggle" => match self.freq_hz {
-                Some(f) => format!("{net} toggles at ~{f} Hz"),
-                None => format!("{net} toggles >= {} times", self.min_toggles.unwrap_or(0)),
-            },
+            "uart" => self.contains.as_ref().map_or_else(
+                || {
+                    if let Some(m) = &self.matches {
+                        format!("UART matches /{m}/")
+                    } else {
+                        "UART".into()
+                    }
+                },
+                |c| format!("UART contains {c:?}"),
+            ),
+            "toggle" => self.freq_hz.map_or_else(
+                || format!("{net} toggles >= {} times", self.min_toggles.unwrap_or(0)),
+                |f| format!("{net} toggles at ~{f} Hz"),
+            ),
             "no_faults" => "no stress faults raised".into(),
             "max_current" => {
                 let reference = self.reference.clone().unwrap_or_default();
                 // No bound is a measurement, not a limit of 0 A.
-                self.amps.map_or(format!("I({reference})"), |a| {
-                    format!("I({reference}) <= {a} A")
-                })
+                self.amps.map_or_else(
+                    || format!("I({reference})"),
+                    |a| format!("I({reference}) <= {a} A"),
+                )
             }
             "max_temp" => {
                 let reference = self.reference.clone().unwrap_or_default();
-                match self.celsius {
-                    Some(c) => format!("Tj({reference}) <= {c} C"),
-                    None => format!("Tj({reference}) <= device max"),
-                }
+                self.celsius.map_or_else(
+                    || format!("Tj({reference}) <= device max"),
+                    |c| format!("Tj({reference}) <= {c} C"),
+                )
             }
             "peripheral" => {
                 let id = self.id.clone().unwrap_or_default();
-                if let Some(b) = &self.bytes {
-                    format!("peripheral {id} contains bytes {b}")
-                } else if let Some(f) = &self.field {
-                    format!("peripheral {id}.{f} {}", bound("", "set"))
-                } else {
-                    format!("peripheral {id}")
-                }
+                self.bytes.as_ref().map_or_else(
+                    || {
+                        if let Some(f) = &self.field {
+                            format!("peripheral {id}.{f} {}", bound("", "set"))
+                        } else {
+                            format!("peripheral {id}")
+                        }
+                    },
+                    |b| format!("peripheral {id} contains bytes {b}"),
+                )
             }
             "rail_window" => {
                 let mut parts = Vec::new();

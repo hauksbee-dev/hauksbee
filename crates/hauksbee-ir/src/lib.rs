@@ -70,7 +70,7 @@ impl NodeId {
 
     /// True for the ground reference node.
     #[must_use]
-    pub fn is_ground(self) -> bool {
+    pub const fn is_ground(self) -> bool {
         self.0 == 0
     }
 }
@@ -194,7 +194,7 @@ impl Circuit {
 
     /// Number of nodes including ground.
     #[must_use]
-    pub fn node_count(&self) -> usize {
+    pub const fn node_count(&self) -> usize {
         self.node_names.len()
     }
 
@@ -557,7 +557,10 @@ impl Device {
             | Self::Capacitor { a, b, .. }
             | Self::Inductor { a, b, .. }
             | Self::Diode { a, k: b, .. } => vec![*a, *b],
-            Self::Vsource { p, n, .. } | Self::Isource { p, n, .. } => vec![*p, *n],
+            Self::Vsource { p, n, .. }
+            | Self::Isource { p, n, .. }
+            | Self::Cccs { p, n, .. }
+            | Self::Ccvs { p, n, .. } => vec![*p, *n],
             Self::Bjt { c, b, e, .. } => vec![*c, *b, *e],
             Self::Mosfet { d, g, s, b, .. } => {
                 let mut v = vec![*d, *g, *s];
@@ -597,7 +600,6 @@ impl Device {
             }
             // The control of an F/H is a DEVICE reference, not a node: the
             // only wires these touch are their output port.
-            Self::Cccs { p, n, .. } | Self::Ccvs { p, n, .. } => vec![*p, *n],
             // Output port plus every V(node) dependency: like the E/G control
             // pair, a sensed node IS a node reference this device carries, so
             // it participates in node walks (partitioner union, max_node).
@@ -643,7 +645,10 @@ impl Device {
                 *a = f(*a);
                 *b = f(*b);
             }
-            Self::Vsource { p, n, .. } | Self::Isource { p, n, .. } => {
+            Self::Vsource { p, n, .. }
+            | Self::Isource { p, n, .. }
+            | Self::Cccs { p, n, .. }
+            | Self::Ccvs { p, n, .. } => {
                 *p = f(*p);
                 *n = f(*n);
             }
@@ -712,10 +717,6 @@ impl Device {
             // must ALSO call [`Device::retarget_controlling_source`] or the
             // reference silently points at whatever occupies that index in the
             // new circuit (see the partitioned executor's island build).
-            Self::Cccs { p, n, .. } | Self::Ccvs { p, n, .. } => {
-                *p = f(*p);
-                *n = f(*n);
-            }
             // The dep list carries the device's V(node) references: remap
             // every one IN PLACE, keeping slot order (the expression's __d{k}
             // variables are positional). BDep::Branch is a DeviceId, untouched
@@ -863,11 +864,13 @@ impl Device {
     #[must_use]
     pub fn conduction_nodes(&self) -> Vec<NodeId> {
         match self {
-            Self::Resistor { a, b, .. }
-            | Self::Capacitor { a, b, .. }
-            | Self::Inductor { a, b, .. }
-            | Self::Diode { a, k: b, .. } => vec![*a, *b],
-            Self::Vsource { p, n, .. } | Self::Isource { p, n, .. } => vec![*p, *n],
+            Self::Vsource { p, n, .. }
+            | Self::Isource { p, n, .. }
+            | Self::Vcvs { p, n, .. }
+            | Self::Vccs { p, n, .. }
+            | Self::Cccs { p, n, .. }
+            | Self::Ccvs { p, n, .. }
+            | Self::Behavioral { p, n, .. } => vec![*p, *n],
             Self::Bjt { c, b, e, .. } => vec![*c, *b, *e],
             // Level-1 channel current flows d<->s. The gate row receives
             // entries exactly when the model carries gate capacitance
@@ -891,28 +894,28 @@ impl Device {
                 v
             }
             // The switch channel conducts; the control pair only steers it.
-            Self::VSwitch { a, b, .. } => vec![*a, *b],
+            Self::Resistor { a, b, .. }
+            | Self::Capacitor { a, b, .. }
+            | Self::Inductor { a, b, .. }
+            | Self::Diode { a, k: b, .. }
+            | Self::VSwitch { a, b, .. } => vec![*a, *b],
             // Behavioral output stages drive their out node through a 1 Ohm
             // Thevenin; the inputs are ideal (infinite input impedance) and the
             // opamp reference only offsets the target voltage (its own row gets
             // nothing; it appears as a column of the out row).
-            Self::OpAmp { out, .. } => vec![*out],
-            Self::Comparator { out, .. } => vec![*out],
+            Self::OpAmp { out, .. } | Self::Comparator { out, .. } => vec![*out],
             // Controlled sources drive current through their output port only:
             // the VCVS branch current enters the p/n KCL rows, the VCCS
             // transconductance current likewise. The control pair appears
             // exclusively as matrix COLUMNS of other rows; this is the
             // canonical sense-vs-conduction split the W1 classifier was built
             // for, and the solve-side cross-check test holds the stamp to it.
-            Self::Vcvs { p, n, .. } | Self::Vccs { p, n, .. } => vec![*p, *n],
             // F/H drive current through their output port; the control is not
             // a terminal at all (see `controlling_sources`).
-            Self::Cccs { p, n, .. } | Self::Ccvs { p, n, .. } => vec![*p, *n],
             // A B-source drives current through its output port only. Every
             // V(node) dep is read-only (Jacobian COLUMNS of the p/n or branch
             // rows); the maximal-coupling device is still, per terminal, the
             // same conduct-vs-sense split as a VCVS.
-            Self::Behavioral { p, n, .. } => vec![*p, *n],
             // A coupling has NO terminals: current flows through the WINDINGS,
             // whose own a/b declarations above carry the conduction claim. The
             // stamp cross-check holds this to account trivially (the coupling
@@ -935,13 +938,6 @@ impl Device {
     #[must_use]
     pub fn sense_nodes(&self) -> Vec<NodeId> {
         match self {
-            Self::Resistor { .. }
-            | Self::Capacitor { .. }
-            | Self::Inductor { .. }
-            | Self::Diode { .. }
-            | Self::Vsource { .. }
-            | Self::Isource { .. }
-            | Self::Bjt { .. } => Vec::new(),
             // Exactly the complement of the conduction claim above: gate and
             // bulk are sense terminals only while the model gives their rows
             // nothing (no gate caps / no bulk junctions).
@@ -987,7 +983,6 @@ impl Device {
             // tear candidate; a branch-current sense never is). The coupling
             // is declared through [`Device::controlling_sources`] instead, and
             // the partitioner/conduction graph consume that directly.
-            Self::Cccs { .. } | Self::Ccvs { .. } => Vec::new(),
             // Every V(node) dep is a declared SENSE edge; the tear layers
             // must see that this device reads across island boundaries.
             // Deduped, and EXCLUDING the output terminals: a
@@ -1013,7 +1008,16 @@ impl Device {
             // windings' BRANCH CURRENTS, which this node vocabulary cannot
             // express (the F/H precedent, same reasoning verbatim), declared
             // through `controlling_sources`, never as a free-tear candidate.
-            Self::Coupling { .. } => Vec::new(),
+            Self::Resistor { .. }
+            | Self::Capacitor { .. }
+            | Self::Inductor { .. }
+            | Self::Diode { .. }
+            | Self::Vsource { .. }
+            | Self::Isource { .. }
+            | Self::Bjt { .. }
+            | Self::Cccs { .. }
+            | Self::Ccvs { .. }
+            | Self::Coupling { .. } => Vec::new(),
         }
     }
 
@@ -1191,7 +1195,7 @@ impl Device {
     /// linear-looking `{2*V(a)}` ships the finite-difference tangent path), so
     /// it deliberately stays off this whitelist and taints its island.
     #[must_use]
-    pub fn is_linear(&self) -> bool {
+    pub const fn is_linear(&self) -> bool {
         matches!(
             self,
             Self::Resistor { .. }
@@ -1232,7 +1236,7 @@ impl Device {
     /// sources (`Vcvs`/`Vccs`/`Cccs`/`Ccvs`) are continuous analog constraints
     /// with no discrete state, so they stay with the analog solver (`false`).
     #[must_use]
-    pub fn is_event_driven(&self) -> bool {
+    pub const fn is_event_driven(&self) -> bool {
         matches!(self, Self::Comparator { .. })
     }
 }

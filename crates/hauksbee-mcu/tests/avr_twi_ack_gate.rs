@@ -63,7 +63,7 @@ fn twi_scanner_finds_only_modeled_addresses() {
     // is a plain event log; the ACK decision must come from the address set,
     // not from the handler's return value shape.
     let events: Arc<Mutex<Vec<I2cEvent>>> = Arc::new(Mutex::new(Vec::new()));
-    let ev_sink = events.clone();
+    let ev_sink = events;
     mcu.set_i2c_slave_addresses(&[0x48, 0x50]);
     mcu.on_i2c(Box::new(move |ev| {
         ev_sink.lock().unwrap().push(ev);

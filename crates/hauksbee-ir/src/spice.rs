@@ -147,7 +147,7 @@ impl SpiceLoader {
             line: 0,
             msg: msg(e),
         })?;
-        load_deck(&text, path.parent().unwrap_or(Path::new(".")))
+        load_deck(&text, path.parent().unwrap_or_else(|| Path::new(".")))
     }
 }
 
@@ -306,7 +306,7 @@ fn read_lines(
                 picked
             }
         };
-        let sub = path.parent().unwrap_or(Path::new("."));
+        let sub = path.parent().unwrap_or_else(|| Path::new("."));
         read_lines(&inc, sub, Rc::from(arg), false, depth + 1, out)?;
     }
     Ok(())
@@ -969,7 +969,7 @@ impl<'a> Build<'a> {
                         a,
                         b,
                         ohms: v.max(1e-6),
-                        tc1: kv.get("tc1").or(kv.get("tc")).copied(),
+                        tc1: kv.get("tc1").or_else(|| kv.get("tc")).copied(),
                     },
                     'C' => Device::Capacitor {
                         name,
@@ -1546,9 +1546,9 @@ fn mosfet_model(m: &Model, kv: &ParamEnv) -> MosfetModel {
     // Cards state VTO in device convention (negative for an enhancement PMOS);
     // the solver stores it polarity-folded.
     d.vto = m.get("vto").map_or(d.vto, |v| d.polarity.sign() * v);
-    let l = kv.get("l").copied().or(m.get("l")).unwrap_or(1.0);
-    let w = kv.get("w").copied().or(m.get("w")).unwrap_or(1.0);
-    d.w_over_l = if l != 0.0 { w / l } else { 1.0 };
+    let l = kv.get("l").copied().or_else(|| m.get("l")).unwrap_or(1.0);
+    let w = kv.get("w").copied().or_else(|| m.get("w")).unwrap_or(1.0);
+    d.w_over_l = if l == 0.0 { 1.0 } else { w / l };
     d.cgs_ov = m.get_or("cgso", 0.0) * w;
     d.cgd_ov = m.get_or("cgdo", 0.0) * w;
     d.c_ox = m

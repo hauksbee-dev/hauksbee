@@ -172,7 +172,7 @@ fn device_nodes(device: &Device) -> Vec<NodeId> {
 /// Fallback for device variants added after this module: read no nodes,
 /// which errs toward `Floating`, the direction that REFUSES a numeric pass
 /// rather than inventing one.
-fn other_nodes_conservative(_device: &Device) -> Vec<NodeId> {
+const fn other_nodes_conservative(_device: &Device) -> Vec<NodeId> {
     Vec::new()
 }
 

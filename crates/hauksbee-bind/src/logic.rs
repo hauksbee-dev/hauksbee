@@ -1,4 +1,5 @@
 //! Generic evaluator for declarative digital logic (`[models.logic]`).
+//!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/digital.md
 //! (the digital-domain essay) and docs/how-and-why/hauksbee-models/logic_spec.md
 //! (the format and the byte-exact migration record).
@@ -503,14 +504,14 @@ impl ParallelMemoryStorage {
     fn finish_write_period(&mut self) {
         if let Some(protection) = &mut self.protection {
             protection.write_window = None;
-            if !protection.enabled {
+            if protection.enabled {
+                protection.command_buffer.clear();
+            } else {
                 for (pending_address, pending_value) in
                     std::mem::take(&mut protection.command_buffer)
                 {
                     self.cells[pending_address] = pending_value;
                 }
-            } else {
-                protection.command_buffer.clear();
             }
         }
     }
@@ -633,7 +634,7 @@ impl ParallelMemoryPort {
     pub fn words(&self) -> usize {
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .cells
             .len()
     }
@@ -642,7 +643,7 @@ impl ParallelMemoryPort {
     pub fn read(&self, address: usize) -> Option<u64> {
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .read(address, self.mask)
     }
 
@@ -652,7 +653,7 @@ impl ParallelMemoryPort {
         let program_cycles = seconds_to_cycles(program_s, frequency_hz);
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .timed_read(address, self.mask, cycle, program_cycles)
     }
 
@@ -661,7 +662,7 @@ impl ParallelMemoryPort {
     pub fn write(&self, address: usize, value: u64) -> bool {
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .write(address, value, self.mask, false)
     }
 
@@ -669,7 +670,7 @@ impl ParallelMemoryPort {
     pub fn write_after_gap(&self, address: usize, value: u64, gap_exceeded: bool) -> bool {
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .write(address, value, self.mask, gap_exceeded)
     }
 
@@ -680,12 +681,11 @@ impl ParallelMemoryPort {
         };
         let timeout_cycles = self
             .byte_load_timeout_s
-            .map(|seconds| seconds_to_cycles(seconds, frequency_hz))
-            .unwrap_or(0);
+            .map_or(0, |seconds| seconds_to_cycles(seconds, frequency_hz));
         let program_cycles = seconds_to_cycles(program_s, frequency_hz);
         self.storage
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .timed_write(
                 address,
                 value,
@@ -1123,7 +1123,7 @@ impl LogicComponent {
         let input_vars: Vec<String> = input_names.iter().map(|n| format!("v_{n}")).collect();
         let output_vars: Vec<String> = output_names.iter().map(|n| format!("v_{n}")).collect();
 
-        let mut lc = LogicComponent {
+        let mut lc = Self {
             spec_id: spec_id.to_string(),
             input_levels: input_defaults.clone(),
             input_defaults,
@@ -1499,7 +1499,7 @@ impl LogicComponent {
         for ri in 0..self.registers.len() {
             let (cur_clock, next) = {
                 let r = &self.registers[ri];
-                let cur_clock = r.clock.map(|(p, _)| self.input_levels[p]).unwrap_or(false);
+                let cur_clock = r.clock.is_some_and(|(p, _)| self.input_levels[p]);
                 let edge_fired = match r.clock {
                     Some((_, Edge::Rising)) => cur_clock && !r.prev_clock,
                     Some((_, Edge::Falling)) => !cur_clock && r.prev_clock,
@@ -1573,7 +1573,7 @@ impl LogicComponent {
             let _ = m
                 .storage
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .write(address, value, m.mask, false);
         }
 
@@ -1592,11 +1592,11 @@ impl LogicComponent {
         };
         match r.op {
             Some(RegisterOp::ShiftLeft) => {
-                let d = r.data_in.as_ref().map(din_bit).unwrap_or(0);
+                let d = r.data_in.as_ref().map_or(0, din_bit);
                 (r.state.wrapping_shl(1) | d) & r.mask
             }
             Some(RegisterOp::ShiftRight) => {
-                let d = r.data_in.as_ref().map(din_bit).unwrap_or(0);
+                let d = r.data_in.as_ref().map_or(0, din_bit);
                 (r.state >> 1) | (d.wrapping_shl(r.bits - 1))
             }
             Some(RegisterOp::Load) => match r.data_in {
@@ -1639,7 +1639,10 @@ impl LogicComponent {
             let address = m.address.iter().enumerate().fold(0usize, |a, (bit, &pin)| {
                 a | (usize::from(self.input_levels[pin]) << bit)
             });
-            let mut storage = m.storage.lock().unwrap_or_else(|e| e.into_inner());
+            let mut storage = m
+                .storage
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let word = storage.read(address, m.mask).unwrap_or(0);
             for (bit, &out) in m.data_out.iter().enumerate() {
                 self.output_levels[out] = word & (1u64 << bit) != 0;

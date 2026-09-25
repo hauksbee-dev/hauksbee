@@ -60,7 +60,7 @@ const MCU_FAMILY_PREFIXES: &[&str] = &[
 fn is_active_ic_refdes(reference: &str) -> bool {
     let r = reference.to_ascii_uppercase();
     // Strip to the leading alphabetic prefix.
-    let prefix: String = r.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let prefix: String = r.chars().take_while(char::is_ascii_alphabetic).collect();
     prefix == "U" || prefix == "IC" || prefix == "MCU"
 }
 

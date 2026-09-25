@@ -277,15 +277,12 @@ fn github_workflow_yaml_for(
          \x20         persist-credentials: false\n\
          \x20       # Pinned to the exact release commit: a tag can move after\n\
          \x20       # review, while an object ID cannot redirect the Action code.\n\
-         \x20     - uses: hauksbee-dev/hauksbee/integrations/github-action@{}\n\
+         \x20     - uses: hauksbee-dev/hauksbee/integrations/github-action@{release_commit}\n\
          \x20       with:\n\
-         \x20         hauksbee-ref: {}\n\
-         {}\
+         \x20         hauksbee-ref: {release_commit}\n\
+         {acquisition}\
          \x20         junit: hauksbee-ci-results.xml\n\
-         \x20         publish-report: ${{{{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}}}\n",
-        release_commit,
-        release_commit,
-        acquisition
+         \x20         publish-report: ${{{{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}}}\n"
     ))
 }
 
@@ -404,27 +401,32 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
         // linters first: they finish in milliseconds, and there is no point
         // solving a circuit for a commit `black` is about to reject anyway.
         let entry = pre_commit_entry();
-        let (new_text, did) = if let Some(pos) = text.lines().position(|l| l.trim_end() == "repos:")
-        {
-            let lines: Vec<&str> = text.lines().collect();
-            let end = repos_list_end(&lines, pos);
-            let mut lines = lines;
-            lines.insert(end, entry.trim_end());
-            let mut joined = lines.join("\n");
-            joined.push('\n');
-            (
-                joined,
-                "appended the hauksbee-ci entry to `repos:` (after your existing hooks)",
-            )
-        } else {
-            let mut t = text.clone();
-            if !t.ends_with('\n') {
-                t.push('\n');
-            }
-            t.push_str("repos:\n");
-            t.push_str(&entry);
-            (t, "added a `repos:` section with the hauksbee-ci entry")
-        };
+        let (new_text, did) = text
+            .lines()
+            .position(|l| l.trim_end() == "repos:")
+            .map_or_else(
+                || {
+                    let mut t = text.clone();
+                    if !t.ends_with('\n') {
+                        t.push('\n');
+                    }
+                    t.push_str("repos:\n");
+                    t.push_str(&entry);
+                    (t, "added a `repos:` section with the hauksbee-ci entry")
+                },
+                |pos| {
+                    let lines: Vec<&str> = text.lines().collect();
+                    let end = repos_list_end(&lines, pos);
+                    let mut lines = lines;
+                    lines.insert(end, entry.trim_end());
+                    let mut joined = lines.join("\n");
+                    joined.push('\n');
+                    (
+                        joined,
+                        "appended the hauksbee-ci entry to `repos:` (after your existing hooks)",
+                    )
+                },
+            );
         fs::write(&config, new_text).with_context(|| format!("writing {}", config.display()))?;
         return Ok(format!(
             "{did} in {}; run `pre-commit install` to activate it\n{}",

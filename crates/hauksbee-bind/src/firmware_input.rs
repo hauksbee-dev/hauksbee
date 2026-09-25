@@ -282,9 +282,8 @@ fn best_image_entry<R: Read + std::io::Seek>(
 ) -> Option<ImageEntry> {
     let mut candidates: Vec<(u8, i64, usize, String)> = Vec::new();
     for i in 0..archive.len() {
-        let entry = match archive.by_index(i) {
-            Ok(e) => e,
-            Err(_) => continue,
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
         };
         if entry.is_dir() {
             continue;
@@ -297,13 +296,15 @@ fn best_image_entry<R: Read + std::io::Seek>(
         }
         let lower = name.to_ascii_lowercase();
         let in_pio_build = lower.contains(".pio/build/");
-        let rank = if lower.ends_with(".elf") {
-            if in_pio_build {
-                0
-            } else {
-                1
-            }
-        } else if lower.ends_with(".hex") {
+        let rank = if std::path::Path::new(&lower)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("elf"))
+        {
+            u8::from(!in_pio_build)
+        } else if std::path::Path::new(&lower)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("hex"))
+        {
             if in_pio_build {
                 2
             } else {
@@ -314,17 +315,14 @@ fn best_image_entry<R: Read + std::io::Seek>(
         };
         // Newest wins within a rank; the zip DateTime collapses to a sortable
         // scalar (seconds precision is plenty for "which build is fresher").
-        let stamp = entry
-            .last_modified()
-            .map(|dt| {
-                (dt.year() as i64) * 33177600
-                    + (dt.month() as i64) * 2764800
-                    + (dt.day() as i64) * 86400
-                    + (dt.hour() as i64) * 3600
-                    + (dt.minute() as i64) * 60
-                    + dt.second() as i64
-            })
-            .unwrap_or(0);
+        let stamp = entry.last_modified().map_or(0, |dt| {
+            i64::from(dt.year()) * 33_177_600
+                + i64::from(dt.month()) * 2_764_800
+                + i64::from(dt.day()) * 86400
+                + i64::from(dt.hour()) * 3600
+                + i64::from(dt.minute()) * 60
+                + i64::from(dt.second())
+        });
         candidates.push((rank, -stamp, i, name));
     }
     let total = candidates.len();
@@ -469,7 +467,7 @@ fn drain_tail(mut r: impl Read) -> Vec<u8> {
     let mut chunk = [0u8; 8192];
     loop {
         match r.read(&mut chunk) {
-            Ok(0) => break,
+            Ok(0) | Err(_) => break,
             Ok(n) => {
                 buf.extend_from_slice(&chunk[..n]);
                 if buf.len() > PIO_OUTPUT_TAIL_BYTES {
@@ -477,7 +475,6 @@ fn drain_tail(mut r: impl Read) -> Vec<u8> {
                     buf.drain(..excess);
                 }
             }
-            Err(_) => break,
         }
     }
     buf

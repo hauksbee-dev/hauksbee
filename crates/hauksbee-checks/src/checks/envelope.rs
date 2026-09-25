@@ -27,7 +27,7 @@ pub struct RailRange {
 }
 
 impl RailRange {
-    fn point(volts: f64) -> Self {
+    const fn point(volts: f64) -> Self {
         Self {
             min_v: volts,
             max_v: volts,
@@ -42,7 +42,7 @@ enum RailKnowledge {
     Unknown,
 }
 
-pub(crate) fn finding_severity(severity: EnvelopeSeverity) -> Severity {
+pub(crate) const fn finding_severity(severity: EnvelopeSeverity) -> Severity {
     match severity {
         EnvelopeSeverity::Serious => Severity::High,
         EnvelopeSeverity::Medium => Severity::Medium,
@@ -50,7 +50,7 @@ pub(crate) fn finding_severity(severity: EnvelopeSeverity) -> Severity {
     }
 }
 
-fn raised_one_band(severity: Severity) -> Severity {
+const fn raised_one_band(severity: Severity) -> Severity {
     match severity {
         Severity::Low => Severity::Medium,
         Severity::Medium | Severity::High => Severity::High,
@@ -242,15 +242,13 @@ impl<'a> RailResolver<'a> {
         if is_ground(&net.name) {
             return RailKnowledge::Known(RailRange::point(0.0));
         }
-        power_rail_voltage(&net.name)
-            .map(|nominal| {
-                let delta = nominal.abs() * 0.05;
-                RailKnowledge::Known(RailRange {
-                    min_v: nominal - delta,
-                    max_v: nominal + delta,
-                })
+        power_rail_voltage(&net.name).map_or(RailKnowledge::Unknown, |nominal| {
+            let delta = nominal.abs() * 0.05;
+            RailKnowledge::Known(RailRange {
+                min_v: nominal - delta,
+                max_v: nominal + delta,
             })
-            .unwrap_or(RailKnowledge::Unknown)
+        })
     }
 }
 

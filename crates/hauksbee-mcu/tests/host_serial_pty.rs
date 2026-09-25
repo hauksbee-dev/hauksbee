@@ -114,11 +114,15 @@ fn write_all_from_peer(peer: &mut std::fs::File, bytes: &[u8]) {
 fn make_cooked(fd: std::os::unix::io::RawFd) {
     unsafe {
         let mut t: libc::termios = std::mem::zeroed();
-        assert_eq!(libc::tcgetattr(fd, &mut t), 0, "tcgetattr");
+        assert_eq!(libc::tcgetattr(fd, &raw mut t), 0, "tcgetattr");
         t.c_lflag |= libc::ECHO | libc::ICANON | libc::ISIG;
         t.c_oflag |= libc::OPOST | libc::ONLCR;
         t.c_iflag |= libc::ICRNL;
-        assert_eq!(libc::tcsetattr(fd, libc::TCSANOW, &t), 0, "tcsetattr");
+        assert_eq!(
+            libc::tcsetattr(fd, libc::TCSANOW, &raw const t),
+            0,
+            "tcsetattr"
+        );
     }
 }
 

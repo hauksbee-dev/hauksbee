@@ -238,15 +238,15 @@ pub struct NetWindow {
 }
 
 impl NetWindow {
-    fn empty() -> Self {
-        NetWindow {
+    const fn empty() -> Self {
+        Self {
             min_v: f64::INFINITY,
             max_v: f64::NEG_INFINITY,
             last_v: 0.0,
             samples: 0,
         }
     }
-    fn observe(&mut self, v: f64) {
+    const fn observe(&mut self, v: f64) {
         self.min_v = self.min_v.min(v);
         self.max_v = self.max_v.max(v);
         self.last_v = v;
@@ -256,7 +256,7 @@ impl NetWindow {
     /// `last_v`. The settled report value must stay the last-chunk voltage
     /// (`observe`), not the peak excursion, folding the extremes through
     /// `observe` would leave `last_v` reporting the max of the final frame.
-    fn fold(&mut self, v: f64) {
+    const fn fold(&mut self, v: f64) {
         self.min_v = self.min_v.min(v);
         self.max_v = self.max_v.max(v);
         self.samples += 1;
@@ -691,7 +691,7 @@ pub(crate) struct DescriptorDirGuard {
 
 impl DescriptorDirGuard {
     pub(crate) fn apply(spec: &Spec) -> Self {
-        let none = DescriptorDirGuard { restore: None };
+        let none = Self { restore: None };
         let Some(dir) = spec.mcu_descriptor_dir() else {
             return none;
         };
@@ -702,7 +702,7 @@ impl DescriptorDirGuard {
             return none;
         }
         std::env::set_var("HAUKSBEE_MCU_DIR", &dir);
-        DescriptorDirGuard {
+        Self {
             restore: Some(prev),
         }
     }
@@ -1536,12 +1536,14 @@ fn production_assumptions(
             )
             .map_err(|e| SpecError::Invalid(format!("building fallback evidence: {e}")))?,
         );
-        let accuracy = match w.error_estimate_v {
-            Some(e) => format!("measured chunk-end error estimate {e:.3e} V"),
-            None => "no error estimate was established (no companion re-solve \
+        let accuracy = w.error_estimate_v.map_or_else(
+            || {
+                "no error estimate was established (no companion re-solve \
                      converged)"
-                .to_string(),
-        };
+                    .to_string()
+            },
+            |e| format!("measured chunk-end error estimate {e:.3e} V"),
+        );
         production_assumptions.push(hauksbee_ir::evidence::Assumption::reduced_fidelity(
             hauksbee_ir::evidence::AssumptionSource::Solver,
             hauksbee_ir::evidence::Subject::new(
@@ -1667,13 +1669,13 @@ fn coverage_warnings(engine: &HauksbeeEngine, hollow_warnings: &[String]) -> Vec
         .scheduler()
         .adc_dropped()
         .iter()
-        .map(|d| d.message())
+        .map(hauksbee_engine::scheduler::AdcDrop::message)
         .chain(
             engine
                 .scheduler()
                 .unexercised_buses()
                 .iter()
-                .map(|b| b.message()),
+                .map(hauksbee_engine::scheduler::UnexercisedBus::message),
         )
         // Watchdog coverage: a backend whose armed watchdog never fires
         // (renode:nrf52840, the ESP32 timer groups) lets firmware that HANGS
@@ -2254,7 +2256,7 @@ fn run_one(
             .scheduler()
             .substitutions()
             .iter()
-            .map(|s| s.message())
+            .map(hauksbee_engine::scheduler::McuSubstitution::message)
             .collect(),
         coverage_warnings: coverage_warnings(&engine, &hollow_warnings),
         regulation: engine.scheduler().regulation_taint().to_vec(),
@@ -2574,13 +2576,10 @@ fn apply_decoupling(spec: &Spec, board: &ExtractedBoard, bound: &mut BoundBoard)
     // Every bound capacitor's package/dielectric default, inferred from its
     // footprint and value (parsed to farads best-effort, 0 if unparseable).
     let default_for = |name: &str| {
-        let (footprint, farads) = board
-            .component(name)
-            .map(|c| {
-                let f = hauksbee_models::value::parse_value(&c.value).map_or(0.0, |p| p.si);
-                (c.footprint.as_str(), f)
-            })
-            .unwrap_or(("", 0.0));
+        let (footprint, farads) = board.component(name).map_or(("", 0.0), |c| {
+            let f = hauksbee_models::value::parse_value(&c.value).map_or(0.0, |p| p.si);
+            (c.footprint.as_str(), f)
+        });
         EsrEsl::from_footprint(footprint, farads)
     };
     let cap_names: Vec<String> = bound
@@ -2886,7 +2885,7 @@ fn attach_peripherals(
                     "noise" => StimulusKind::Noise {
                         offset: p.offset.unwrap_or(0.0),
                         amplitude: p.amplitude.unwrap_or(0.1),
-                        seed: 0xC0FFEE,
+                        seed: 0x00C0_FFEE,
                     },
                     other => return Err(err(&format!("unknown waveform '{other}'"))),
                 };
@@ -3154,13 +3153,17 @@ fn snapshot_peripherals(
     for p in &spec.peripherals {
         let bytes = match p.kind.as_str() {
             "i2c_eeprom" => sched.i2c_buses().iter().find_map(|bus| {
-                let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+                let b = bus
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 (hauksbee_engine::Peripheral::id(&*b) == p.id)
                     .then(|| b.slave::<Eeprom24c>(p.address.unwrap_or(0x50)))?
                     .map(|ee| ee.contents().to_vec())
             }),
             "spi_eeprom" => sched.spi_buses().iter().find_map(|bus| {
-                let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+                let b = bus
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 (hauksbee_engine::Peripheral::id(&*b) == p.id)
                     .then(|| b.slave::<Spi25Eeprom>())?
                     .map(|ee| ee.contents().to_vec())
@@ -3205,7 +3208,7 @@ fn suppress_rail(bound: &mut BoundBoard, net: &str) {
     let Some(node) = bound.node(net) else { return };
     bound.supplies.retain(|s| s.net != node);
     let series = format!("Rsupply_{net}");
-    for dev in bound.circuit.devices.iter_mut() {
+    for dev in &mut bound.circuit.devices {
         match dev {
             // The leg's series resistor: opening it disconnects the private
             // drive node from the rail.
@@ -3297,7 +3300,7 @@ fn hollow_gates<'a>(
 /// the same answer it would without the ramp.
 fn open_supply_leg(bound: &mut BoundBoard, net: &str) {
     let series = format!("Rsupply_{net}");
-    for dev in bound.circuit.devices.iter_mut() {
+    for dev in &mut bound.circuit.devices {
         if let Device::Resistor { name, ohms, .. } = dev {
             if name == &series {
                 *ohms = 1e12;
@@ -3336,7 +3339,7 @@ fn drive_net(bound: &mut BoundBoard, net: &str, kind: SourceKind) {
         ));
     } else {
         // Retarget any existing CI drive source we own.
-        for dev in bound.circuit.devices.iter_mut() {
+        for dev in &mut bound.circuit.devices {
             if let Device::Vsource {
                 name, p, kind: k, ..
             } = dev
@@ -3459,7 +3462,7 @@ fn fuzz_net_drives(spec: &Spec, seed: u32) -> Vec<(String, f64)> {
             let v = if seed == 0 {
                 lo
             } else {
-                let h = hash2(seed as u64, &net);
+                let h = hash2(u64::from(seed), &net);
                 if h & 1 == 0 {
                     lo
                 } else {
@@ -3474,15 +3477,15 @@ fn fuzz_net_drives(spec: &Spec, seed: u32) -> Vec<(String, f64)> {
 /// A tiny deterministic hash of a u64 and a string (splitmix64 over the bytes).
 fn hash2(seed: u64, s: &str) -> u64 {
     let mut x = seed
-        .wrapping_mul(0x9E3779B97F4A7C15)
-        .wrapping_add(0xD1B54A32D192ED03);
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(0xD1B5_4A32_D192_ED03);
     for b in s.bytes() {
-        x ^= b as u64;
-        x = x.wrapping_mul(0xFF51AFD7ED558CCD);
+        x ^= u64::from(b);
+        x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
         x ^= x >> 33;
     }
     x ^= x >> 30;
-    x = x.wrapping_mul(0xBF58476D1CE4E5B9);
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     x ^= x >> 27;
     x
 }
@@ -3536,7 +3539,9 @@ mod tests {
 
     #[test]
     fn descriptor_dir_guard_sets_the_env_for_its_lifetime_and_restores() {
-        let _lock = MCU_DIR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = MCU_DIR_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         std::env::remove_var("HAUKSBEE_MCU_DIR");
         let spec = spec_with_descriptor_dir(Some("socs"));
         {
@@ -3560,7 +3565,9 @@ mod tests {
     /// takes the same lock as its neighbour so the two cannot interleave.
     #[test]
     fn descriptor_dir_guard_publishes_the_spec_dir_unless_the_operator_set_one() {
-        let _lock = MCU_DIR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = MCU_DIR_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let spec_with = |dir: Option<&str>| {
             let mcu = dir
                 .map(|d| format!("[mcu]\ndescriptor_dir = \"{d}\"\n"))
@@ -3939,7 +3946,7 @@ i2c_address = 0x76
             let mut sched = hauksbee_engine::scheduler::Scheduler::new(
                 BoundBoard::default(),
                 None,
-                Default::default(),
+                hauksbee_solve::SolverOptions::default(),
             )
             .unwrap();
             attach_sensors(&s, &mut sched).map_err(|e| e.to_string())

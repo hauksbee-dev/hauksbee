@@ -119,6 +119,7 @@ pub use qemu::{QemuBackend, QemuConfig};
 pub use soc::{Backend, SocConfig, SocError};
 
 /// Immutable simavr source revision linked into a provenance-bound AVR build.
+///
 /// Ordinary local system-library builds may not carry this optional identity;
 /// release and CI builds require it and expose it through `doctor --backends`.
 #[cfg(feature = "avr")]

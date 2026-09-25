@@ -73,8 +73,7 @@ pub fn init_to(board: &Path, out: Option<&Path>) -> Result<PathBuf, SpecError> {
     let spec_dir = out
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let run_hint = if out.is_relative() {
         out.clone()
     } else {
@@ -158,8 +157,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let dir = board
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     render_spec_at(board, &dir)
 }
 
@@ -170,10 +168,10 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
 fn board_reference(board: &Path, spec_dir: &Path) -> String {
     let board_abs = std::fs::canonicalize(board).unwrap_or_else(|_| board.to_path_buf());
     let dir_abs = std::fs::canonicalize(spec_dir).unwrap_or_else(|_| spec_dir.to_path_buf());
-    match relative_path(&dir_abs, &board_abs) {
-        Some(rel) => rel.display().to_string(),
-        None => board_abs.display().to_string(),
-    }
+    relative_path(&dir_abs, &board_abs).map_or_else(
+        || board_abs.display().to_string(),
+        |rel| rel.display().to_string(),
+    )
 }
 
 /// Encode a path as a TOML string. Hand-written basic-string quoting turns a
@@ -469,10 +467,10 @@ fn render_spec_at_with_run_hint(
             hauksbee_ir::docs_url("docs/cosim/MCU.md")
         );
     }
-    let boot_net_line = match &boot_net {
-        Some(net) => format!("# net = \"{net}\"                  # control net to watch (edit to your gate/enable/reset/CS)"),
-        None => "# net = \"CONTROL_NET\"            # no signal net detected; set this to a real control net".to_string(),
-    };
+    let boot_net_line = boot_net.as_ref().map_or_else(
+        || "# net = \"CONTROL_NET\"            # no signal net detected; set this to a real control net".to_string(),
+        |net| format!("# net = \"{net}\"                  # control net to watch (edit to your gate/enable/reset/CS)"),
+    );
     let _ = writeln!(
         s,
         "# [[assert]]\n# kind = \"boot_coverage\"\n{boot_net_line}\n\
@@ -532,11 +530,7 @@ fn render_spec_at_with_run_hint(
     // voltage (-5%), never from the board-wide reference: a 4.5 V floor
     // scaffolded onto a 1.1 V core rail is wrong on arrival.
     if let Some((rail, rail_v)) = supplies.first() {
-        let scenario_part = bound
-            .mcus
-            .first()
-            .map(|m| m.reference.as_str())
-            .unwrap_or("U1");
+        let scenario_part = bound.mcus.first().map_or("U1", |m| m.reference.as_str());
         let _ = writeln!(
             s,
             "\n# rail_window: does the rail stay up under a dynamic load step (a WiFi\n\

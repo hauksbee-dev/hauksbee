@@ -75,13 +75,13 @@ impl BindOutcome {
     #[must_use]
     pub fn label(&self) -> String {
         match self {
-            BindOutcome::Analog { device } => format!("analog {device}"),
-            BindOutcome::Behavioral { device } => format!("behavioral {device}"),
-            BindOutcome::Digital { kind } => format!("digital {kind}"),
-            BindOutcome::Mcu { backend } => format!("mcu {backend}"),
-            BindOutcome::PowerRail { volts } => format!("rail {volts:.2}V"),
-            BindOutcome::Skipped { reason } => format!("skipped ({reason})"),
-            BindOutcome::Unresolved { reason } => {
+            Self::Analog { device } => format!("analog {device}"),
+            Self::Behavioral { device } => format!("behavioral {device}"),
+            Self::Digital { kind } => format!("digital {kind}"),
+            Self::Mcu { backend } => format!("mcu {backend}"),
+            Self::PowerRail { volts } => format!("rail {volts:.2}V"),
+            Self::Skipped { reason } => format!("skipped ({reason})"),
+            Self::Unresolved { reason } => {
                 let reason = reason
                     .split_once(hauksbee_ir::evidence::Assumption::UNLOCKED_BY_MARKER)
                     .map_or(reason.as_str(), |(because, _)| because.trim());
@@ -92,14 +92,14 @@ impl BindOutcome {
 
     /// Whether this outcome counts as a "resolved" component (for stats).
     #[must_use]
-    pub fn is_resolved(&self) -> bool {
-        !matches!(self, BindOutcome::Unresolved { .. })
+    pub const fn is_resolved(&self) -> bool {
+        !matches!(self, Self::Unresolved { .. })
     }
 
     /// Whether this outcome was deliberately ignored (excluded from resolve %).
     #[must_use]
-    pub fn is_ignored(&self) -> bool {
-        matches!(self, BindOutcome::Skipped { .. })
+    pub const fn is_ignored(&self) -> bool {
+        matches!(self, Self::Skipped { .. })
     }
 }
 
@@ -412,7 +412,7 @@ impl BindReport {
             })
             .collect();
 
-        let pad = |s: &str, w: usize| format!("{:<width$}", s, width = w);
+        let pad = |s: &str, w: usize| format!("{s:<w$}");
 
         let widths = [w_ref, w_val, w_mod, w_conf, w_out];
         let rule = |left: &str, mid: &str, right: &str| {
@@ -555,7 +555,7 @@ pub fn natural_ref_key(reference: &str) -> (String, u64, String) {
         .take_while(|c| !c.is_ascii_digit())
         .collect();
     let rest = &reference[prefix.len()..];
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     let suffix = rest[digits.len()..].to_string();
     (
         prefix.to_ascii_uppercase(),
@@ -750,7 +750,7 @@ impl BindSummary {
             }
         }
 
-        BindSummary {
+        Self {
             resolved: report.resolved_count(),
             unresolved: report.non_ignored_count() - report.resolved_count(),
             non_ignored: report.non_ignored_count(),
@@ -852,9 +852,8 @@ impl BindSummary {
             if actives > 0 {
                 let _ = writeln!(
                     s,
-                    "  {} of these are active ICs left OPEN: analog/AC/thermal results on \
-                     their nets are NOT trustworthy.",
-                    actives
+                    "  {actives} of these are active ICs left OPEN: analog/AC/thermal results on \
+                     their nets are NOT trustworthy."
                 );
             }
             if actives < self.active_path_unresolved.len() {
@@ -921,7 +920,7 @@ pub fn is_active_ic_ref(reference: &str) -> bool {
     }
     let prefix: String = reference
         .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
+        .take_while(char::is_ascii_alphabetic)
         .map(|c| c.to_ascii_uppercase())
         .collect();
     matches!(prefix.as_str(), "U" | "IC" | "MCU")

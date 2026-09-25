@@ -251,22 +251,22 @@ pub enum AbstentionReason {
 }
 
 impl AbstentionReason {
-    fn describe(self) -> &'static str {
+    const fn describe(self) -> &'static str {
         match self {
-            AbstentionReason::NoDirectionalNames => {
+            Self::NoDirectionalNames => {
                 concat!(
                     "the connectivity is reversible, so it is equally consistent with a buck ",
                     "and a boost, and neither rail name says which is the input"
                 )
             }
-            AbstentionReason::BothNamedInput => {
+            Self::BothNamedInput => {
                 concat!(
                     "the connectivity is reversible, and BOTH rail names claim to be the ",
                     "input, so the names contradict each other rather than settling the ",
                     "direction"
                 )
             }
-            AbstentionReason::BothNamedOutput => {
+            Self::BothNamedOutput => {
                 concat!(
                     "the connectivity is reversible, and BOTH rail names claim to be the ",
                     "output, so the names contradict each other rather than settling the ",
@@ -537,12 +537,8 @@ fn classify_topology_or_reason(
         rail_direction(fet_side_name),
         rail_direction(inductor_far_name),
     ) {
-        (Some(Input), Some(Output)) | (Some(Input), None) | (None, Some(Output)) => {
-            Ok(Topology::Buck)
-        }
-        (Some(Output), Some(Input)) | (Some(Output), None) | (None, Some(Input)) => {
-            Ok(Topology::Boost)
-        }
+        (Some(Input) | None, Some(Output)) | (Some(Input), None) => Ok(Topology::Buck),
+        (Some(Output) | None, Some(Input)) | (Some(Output), None) => Ok(Topology::Boost),
         (Some(Input), Some(Input)) => Err(AbstentionReason::BothNamedInput),
         (Some(Output), Some(Output)) => Err(AbstentionReason::BothNamedOutput),
         (None, None) => Err(AbstentionReason::NoDirectionalNames),

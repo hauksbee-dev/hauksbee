@@ -105,7 +105,7 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
     let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
     let reply_counter = Arc::new(Mutex::new(0u8));
-    let counter = reply_counter.clone();
+    let counter = reply_counter;
     mcu.on_i2c(Box::new(move |ev| {
         let mut log = sink.lock().unwrap();
         match ev {

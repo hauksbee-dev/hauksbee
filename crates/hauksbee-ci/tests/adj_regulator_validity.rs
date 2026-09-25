@@ -36,13 +36,14 @@ ratings = { max_current_a = 0.5, max_voltage_v = 6.0 }
 fn board(grounded: bool, r1: f64, r2: Option<f64>, rl: Option<f64>) -> String {
     // Pads are offset by pad number so that no two of a part's land coincide.
     let u1 = pad(1, "ADJ") + &pad(2, "VOUT") + &pad(3, "VIN");
-    let (lib, value, u1) = match grounded {
-        true => (
+    let (lib, value, u1) = if grounded {
+        (
             "Package_TO_SOT_SMD:SOT-23-5",
             "GREF-LDO",
             u1 + &pad(4, "GND"),
-        ),
-        false => ("Package_TO_SOT_SMD:SOT-223-3_TabPin2", "LM317", u1),
+        )
+    } else {
+        ("Package_TO_SOT_SMD:SOT-223-3_TabPin2", "LM317", u1)
     };
     let mut parts = comp("U1", lib, value, 20, u1);
     for (i, (r, val, a, b)) in [

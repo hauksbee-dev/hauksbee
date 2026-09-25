@@ -265,7 +265,7 @@ fn classify_series(comp: &hauksbee_extract::Component) -> Series {
         // A value with a farad/henry unit in this position is not a resistor, and
         // a capacitor to ground on a PROG pin is a filter, not the programming
         // element.
-        Some(p) if matches!(p.unit.as_deref(), Some("F") | Some("H")) => Series::Unknown,
+        Some(p) if matches!(p.unit.as_deref(), Some("F" | "H")) => Series::Unknown,
         Some(p) if p.si == 0.0 => Series::Closed,
         Some(p) if p.si > 0.0 => Series::Ohms(p.si),
         _ => Series::Unknown,
@@ -585,14 +585,11 @@ fn adjacent_sense_resistor(
         {
             continue;
         }
-        let terminals = match electrical_terminal_nets(component) {
-            Some(terminals) => terminals,
-            None => {
-                if component.pins.iter().any(|pin| pin.net == Some(sense_net)) {
-                    return None;
-                }
-                continue;
+        let Some(terminals) = electrical_terminal_nets(component) else {
+            if component.pins.iter().any(|pin| pin.net == Some(sense_net)) {
+                return None;
             }
+            continue;
         };
         let far_net = if terminals.0 == sense_net {
             terminals.1

@@ -81,28 +81,25 @@ fn main() {
     // crate, so a path-stable target cache cannot silently retain an object
     // linked against different GPL corresponding source.
     if let Ok(expected_commit) = env::var("SIMAVR_COMMIT") {
-        if expected_commit.len() != 40 || !expected_commit.bytes().all(|b| b.is_ascii_hexdigit()) {
-            panic!("SIMAVR_COMMIT must be one 40-character hexadecimal Git commit");
-        }
+        assert!(
+            expected_commit.len() == 40 && expected_commit.bytes().all(|b| b.is_ascii_hexdigit()),
+            "SIMAVR_COMMIT must be one 40-character hexadecimal Git commit"
+        );
         let include_root = canonical("SIMAVR_INCLUDE_DIR", &include_dir);
         let lib_root = canonical("SIMAVR_LIB_DIR", &lib_dir);
-        let prefix = include_root.parent().unwrap_or(Path::new("/"));
-        if prefix != lib_root.parent().unwrap_or(Path::new("/")) {
-            panic!(
-                "SIMAVR_INCLUDE_DIR and SIMAVR_LIB_DIR must share one prefix when SIMAVR_COMMIT attests the linked source (got {} and {})",
-                include_root.display(),
-                lib_root.display()
-            );
-        }
+        let prefix = include_root.parent().unwrap_or_else(|| Path::new("/"));
+        assert!(prefix == lib_root.parent().unwrap_or_else(|| Path::new("/")), 
+            "SIMAVR_INCLUDE_DIR and SIMAVR_LIB_DIR must share one prefix when SIMAVR_COMMIT attests the linked source (got {} and {})",
+            include_root.display(),
+            lib_root.display()
+        );
         let marker = prefix.join(".hauksbee-simavr-commit");
         println!("cargo:rerun-if-changed={}", marker.display());
         let installed_commit = read_marker(&marker);
-        if installed_commit != expected_commit {
-            panic!(
-                "simavr provenance mismatch: build requested {expected_commit}, but {} records {installed_commit}",
-                marker.display()
-            );
-        }
+        assert!(installed_commit == expected_commit,
+            "simavr provenance mismatch: build requested {expected_commit}, but {} records {installed_commit}",
+            marker.display()
+        );
         let payload_record = prefix.join(".hauksbee-simavr-payload.sha256");
         println!("cargo:rerun-if-changed={}", payload_record.display());
         let archive = lib_root.join("libsimavr.a");
@@ -122,12 +119,10 @@ fn main() {
             })
             .collect();
         payload_lines.push(format!("{}  lib/libsimavr.a", sha256(&archive)));
-        if read_marker(&payload_record) != payload_lines.join("\n") {
-            panic!(
-                "simavr payload digest mismatch under {}: installed headers/archive are not the bytes recorded after the pinned build",
-                prefix.display()
-            );
-        }
+        assert!(read_marker(&payload_record) == payload_lines.join("\n"),
+            "simavr payload digest mismatch under {}: installed headers/archive are not the bytes recorded after the pinned build",
+            prefix.display()
+        );
         println!("cargo:rustc-env=HAUKSBEE_SIMAVR_COMMIT={expected_commit}");
     }
 
@@ -145,27 +140,25 @@ fn main() {
     .filter(|(_, path)| !Path::new(path).exists())
     .map(|(what, path)| format!("{what} (looked for {path})"))
     .collect();
-    if !missing.is_empty() {
-        panic!(
-            "\n\
-             hauksbee-mcu: the `avr` co-sim feature needs a system libsimavr, but \
-             couldn't find {missing}.\n\
-             \n\
-             simavr is GPL-3.0 and this repo is Apache-2.0, so simavr is NOT vendored here; \
-             it is linked from your system by deliberate choice. To build the AVR \
-             backend, pick one:\n\
-             \n\
-             1. Install simavr with one command:\n\
-             \x20      scripts/install-sims.sh --avr\n\
-             \n\
-             2. Point the build at an existing install:\n\
-             \x20      SIMAVR_INCLUDE_DIR=<prefix>/include SIMAVR_LIB_DIR=<prefix>/lib cargo build ...\n\
-             \n\
-             3. Build without AVR (no simavr needed; Renode + QEMU backends only):\n\
-             \x20      cargo build -p hauksbee-engine --no-default-features --features renode,qemu\n",
-            missing = missing.join(" and "),
-        );
-    }
+    assert!(missing.is_empty(),
+        "\n\
+         hauksbee-mcu: the `avr` co-sim feature needs a system libsimavr, but \
+         couldn't find {missing}.\n\
+         \n\
+         simavr is GPL-3.0 and this repo is Apache-2.0, so simavr is NOT vendored here; \
+         it is linked from your system by deliberate choice. To build the AVR \
+         backend, pick one:\n\
+         \n\
+         1. Install simavr with one command:\n\
+         \x20      scripts/install-sims.sh --avr\n\
+         \n\
+         2. Point the build at an existing install:\n\
+         \x20      SIMAVR_INCLUDE_DIR=<prefix>/include SIMAVR_LIB_DIR=<prefix>/lib cargo build ...\n\
+         \n\
+         3. Build without AVR (no simavr needed; Renode + QEMU backends only):\n\
+         \x20      cargo build -p hauksbee-engine --no-default-features --features renode,qemu\n",
+        missing = missing.join(" and "),
+    );
 
     // Link against system-installed simavr (static)
     println!("cargo:rustc-link-search=native={lib_dir}");

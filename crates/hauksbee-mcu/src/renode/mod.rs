@@ -529,7 +529,7 @@ impl<C: Send + 'static> BridgeServer<C> {
         })
     }
 
-    fn port(&self) -> u16 {
+    const fn port(&self) -> u16 {
         self.port
     }
 

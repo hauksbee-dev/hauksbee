@@ -153,7 +153,7 @@ impl RenodeProcess {
     /// and .NET cold start even though Renode is healthy, so this is bounded
     /// but leaves room for that rather than exhausting the port retries.
     #[must_use]
-    pub fn startup_timeout() -> Duration {
+    pub const fn startup_timeout() -> Duration {
         Duration::from_secs(60)
     }
 

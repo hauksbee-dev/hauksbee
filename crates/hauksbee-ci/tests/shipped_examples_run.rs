@@ -99,8 +99,7 @@ fn every_shipped_example_spec_is_one_hauksbee_understands() {
         assert_ne!(
             code,
             Some(2),
-            "{name} is a spec hauksbee cannot make sense of, and we ship it as an example:\n{}",
-            stderr
+            "{name} is a spec hauksbee cannot make sense of, and we ship it as an example:\n{stderr}"
         );
         ran += 1;
     }

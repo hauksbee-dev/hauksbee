@@ -50,7 +50,7 @@ impl Monitor {
     }
 
     /// Set the default per-command response timeout.
-    pub fn set_timeout(&mut self, t: Duration) {
+    pub const fn set_timeout(&mut self, t: Duration) {
         self.timeout = t;
     }
 
