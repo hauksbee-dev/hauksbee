@@ -718,16 +718,35 @@ pub(crate) fn diode_refit_params(entry: &ModelEntry) -> Vec<Derived> {
 }
 
 /// Why an identity-only card's own cited rows (25 °C or unstated, any printed
-/// column) already give its kind's required law, or `None`: VF rows that fit a
-/// diode; hFE and VBE-at-IC rows (is at nf = 1); VGS(th) and RDS(on)-at-VGS or
-/// gFS-at-ID rows (level 1); an op-amp's gain and VOH/VOL rows; a push-pull
-/// comparator's VOH/VOL rows. A kind lacking any of them may still abstain.
-pub(crate) fn needless_abstention(entry: &ModelEntry) -> Option<String> {
+/// column) cover every `required` param its kind's checker asks for, or `None`.
+/// A required param no row covers leaves the abstention legal unless
+/// `may_abstain` lets an `unknown` record stand for it. Covering rows: VF rows
+/// that fit a diode's is/n/rs; hFE for bf and VBE-at-IC for is/nf (nf = 1);
+/// VGS(th) for vto and RDS(on)-at-VGS or gFS-at-ID for kp; AOL for gain, VOL/VOH
+/// for an op-amp's or comparator's low/high output, VHYS for hysteresis.
+pub(crate) fn needless_abstention(
+    entry: &ModelEntry,
+    required: &[&str],
+    may_abstain: impl Fn(&str) -> bool,
+) -> Option<String> {
     use ComponentKind::*;
     let rows = cited_rows(entry);
+    let fits = entry.kind == Diode && vf_points(rows).and_then(|p| diode_fit(&p)).is_some();
     // Each need is `|`-separated alternatives `SYMBOLS@bias:unit`, the bias a
     // quantity the row's conditions must print.
-    let cite = |need: &&str| {
+    let need = |key: &str| match (entry.kind, key) {
+        (Diode, _) if fits => Some("VF"),
+        (BjtNpn | BjtPnp, "bf") => Some("HFE"),
+        (BjtNpn | BjtPnp, "is" | "nf") => Some("VBE VBEon VBEsat@I_?C:A"),
+        (Nmos | Pmos, "vto") => Some("VGSth VTH"),
+        (Nmos | Pmos, "kp") => Some("RDSon@V_?GS:V|GFS@I_?D:A"),
+        (Opamp, "gain") => Some("AOL AVOL AVD AVO"),
+        (Opamp | Comparator, k) if k.ends_with("_lo") => Some("VOL"),
+        (Opamp | Comparator, k) if k.ends_with("_hi") => Some("VOH"),
+        (Comparator, "hysteresis") => Some("VHYS VHYST HYS"),
+        _ => None,
+    };
+    let cite = |need: &str| {
         let found = need.split('|').find_map(|alt| {
             let (syms, bias) = alt.split_once('@').unwrap_or((alt, ""));
             let biased = |r: &Characteristic| {
@@ -741,16 +760,20 @@ pub(crate) fn needless_abstention(entry: &ModelEntry) -> Option<String> {
         });
         found.map(|r| format!("'{}'", r.parameter))
     };
-    let needs: &[&str] = match entry.kind {
-        Diode if diode_fit(&vf_points(rows)?).is_some() => &["VF"],
-        BjtNpn | BjtPnp => &["HFE", "VBE VBEon VBEsat@I_?C:A"],
-        Nmos | Pmos => &["VGSth VTH", "RDSon@V_?GS:V|GFS@I_?D:A"],
-        Opamp => &["AOL AVOL AVD AVO", "VOH", "VOL"],
-        Comparator => &["VOH", "VOL"],
-        _ => return None,
-    };
-    let cited: Option<Vec<_>> = needs.iter().map(cite).collect();
-    let (cited, kind) = (cited?.join(", "), serde_json::to_string(&entry.kind).ok()?);
+    let mut cited = Vec::new();
+    for key in required {
+        match need(key).and_then(cite) {
+            Some(row) => cited.push(row),
+            None if key.split('|').any(&may_abstain) => {}
+            None => return None,
+        }
+    }
+    cited.sort();
+    cited.dedup();
+    let (cited, kind) = (cited.join(", "), serde_json::to_string(&entry.kind).ok()?);
+    if cited.is_empty() {
+        return None;
+    }
     Some(format!("identity-only, but cited rows {cited} suffice for kind {kind} (typ-only or max-only rows are usable; Hauksbee fits and derives from them): write the model, naming any other missing fact in an `unknown` record"))
 }
 
@@ -1118,8 +1141,9 @@ mod tests {
         format!("[models.source]\ntier = \"datasheet-derived\"\n{rows}")
     }
 
-    /// An identity-only card whose own cited rows give its kind's law is refused
-    /// by name; one lacking a required row, or a digital part, may abstain.
+    /// An identity-only card whose own cited rows cover every param its checker
+    /// requires is refused by name (a missing optional GBW row changes nothing);
+    /// one lacking a row for a required param, or a digital part, may abstain.
     #[test]
     fn identity_only_is_refused_where_the_cited_rows_suffice() {
         let law = [1e-9, 1.8, 0.2];
@@ -1128,11 +1152,14 @@ mod tests {
         for case in [
             diode.as_str(),
             "diode | VF ; max = 1 ; V ; IF = 10 mA + IR ; max = 5 ; uA ; VR = 50 V | ",
-            "bjt_pnp | hFE ; min = 100 ; - ; IC = -2 mA + VBE(on) ; max = -0.75 ; V ; IC = -2 mA | 'hFE', 'VBE(on)'",
+            "bjt_pnp | hFE ; min = 100 ; - ; IC = -2 mA + VBE(on) ; max = -0.75 ; V ; IC = -2 mA | 'VBE(on)', 'hFE'",
             "bjt_npn | hFE ; min = 100 ; - ; IC = 2 mA + VCE(sat) ; max = 0.2 ; V ; IC = 10 mA | ",
-            "nmos | VGS(th) ; min = 1, max = 2.5 ; V ; ID = 250 uA + RDS(on) ; typ = 40 ; mΩ ; VGS = 10 V | 'VGS(th)', 'RDS(on)'",
+            "nmos | VGS(th) ; min = 1, max = 2.5 ; V ; ID = 250 uA + RDS(on) ; typ = 40 ; mΩ ; VGS = 10 V | 'RDS(on)', 'VGS(th)'",
             "pmos | VGS(th) ; min = 1, max = 2.5 ; V ; ID = 1 mA + RDS(on) ; max = 90 ; mΩ ; VGS = 4.5 V, TJ = 125 °C | ",
             "opamp | AOL ; typ = 110 ; dB ; RL = 10 kΩ + VOH ; min = 4.8, typ = 4.9 ; V ; RL = 10 kΩ + VOL ; max = 0.1 ; V ; RL = 10 kΩ | 'AOL', 'VOH', 'VOL'",
+            "opamp | AOL ; typ = 110 ; dB ; RL = 10 kΩ + VOH ; typ = 4.9 ; V ; RL = 10 kΩ | ",
+            "comparator | VOH ; min = 4.9 ; V ; IO = 4 mA + VOL ; max = 0.4 ; V ; IO = 4 mA | ",
+            "comparator | VOH ; min = 4.9 ; V ; - + VOL ; max = 0.4 ; V ; - + VHYS ; typ = 3 ; mV ; - | 'VHYS', 'VOH', 'VOL'",
             "comparator | VOL ; max = 0.4 ; V ; ISINK = 4 mA + IOH leakage ; max = 1 ; uA ; VO = 5 V | ",
             "digital | VIH ; min = 2 ; V ; VCC = 5 V | ",
         ] {
@@ -1145,6 +1172,15 @@ mod tests {
             let refused = got.as_ref().is_err_and(|e| e.iter().any(|e| e.message.contains(&named)));
             assert!(if want.is_empty() { got.is_ok() } else { refused }, "{case}: {got:?}");
         }
+        // An uncovered required param counts as covered only where an `unknown` may stand.
+        let half = entry(
+            "opamp",
+            "",
+            &cited("AOL ; typ = 110 ; dB ; - + VOH ; typ = 4.9 ; V ; -"),
+        );
+        let required = ["gain", "rail_lo|swing_lo", "rail_hi|swing_hi"];
+        assert!(needless_abstention(&half, &required, |k| k == "swing_lo").is_some());
+        assert!(needless_abstention(&half, &required, |_| false).is_none());
     }
 
     /// Each standard relation fills its param from synthetic cited rows only.

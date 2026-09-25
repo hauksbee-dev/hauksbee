@@ -137,6 +137,20 @@ fn validate_vreg_capacitor_params(entry: &ModelEntry, p: &mut Problems) {
     }
 }
 
+/// A programmed-current or behavioural vreg (charger, pmic) may abstain on an
+/// `iq_a` or `dropout_v` printed as no single value by an `unknown` source
+/// record; the rows stay characteristics. The binder then stamps no Iq and
+/// flags the rail's headroom as unverified, never assumed.
+fn abstains(entry: &ModelEntry, key: &str) -> bool {
+    matches!(key, "iq_a" | "dropout_v")
+        && (entry.current_program.is_some() || !entry.behavioral.is_empty())
+        && entry.source.as_ref().is_some_and(|s| {
+            s.uncertainty.iter().any(
+                |u| matches!(u, ModelUncertainty::Unknown { parameter, .. } if parameter == key),
+            )
+        })
+}
+
 fn kind_rules(entry: &ModelEntry) -> KindRules {
     use ComponentKind::*;
     match entry.kind {
@@ -384,7 +398,10 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             || entry.peripheral.is_some()
             || entry.peripheral_power.is_some();
         p.require(!behaves, || "identity-only model cannot also declare logic, behavioral physics, current_program, a firmware peripheral, or peripheral power; remove identity_only only after that behavior is validated".into());
-        p.0.extend(crate::param_names::needless_abstention(entry));
+        let required = kind_rules(entry).required;
+        let abstention =
+            crate::param_names::needless_abstention(entry, required, |k| abstains(entry, k));
+        p.0.extend(abstention);
     }
 
     if let Some(peripheral) = &entry.peripheral {
@@ -481,21 +498,8 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // state exists to prevent.
     if !identity_only {
         let rules = kind_rules(entry);
-        // A programmed-current or behavioural vreg (charger, pmic) may abstain
-        // on an `iq_a` or `dropout_v` printed as no single value by an `unknown`
-        // source record; the rows stay characteristics. The binder then stamps
-        // no Iq and flags the rail's headroom as unverified, never assumed.
-        let abstains = |key: &str| {
-            matches!(key, "iq_a" | "dropout_v")
-                && (entry.current_program.is_some() || !entry.behavioral.is_empty())
-                && entry.source.as_ref().is_some_and(|s| {
-                    s.uncertainty.iter().any(|u| {
-                        matches!(u, ModelUncertainty::Unknown { parameter, .. } if parameter == key)
-                    })
-                })
-        };
         for key in rules.required {
-            let given = |k| params.get_f64(k).is_some() || abstains(k);
+            let given = |k| params.get_f64(k).is_some() || abstains(entry, k);
             p.require(key.split('|').any(given), || {
                 format!("missing required param '{}'", key.replace('|', "' or '"))
             });
