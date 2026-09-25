@@ -207,7 +207,7 @@ pub fn pnp_blocks(
         .collect()
 }
 
-/// The shunt-fed PNP array: +5V -> `r_shunt` -> ANALOG_VDD -> `n` blocks.
+/// The shunt-fed PNP array: +5V -> `r_shunt` -> `ANALOG_VDD` -> `n` blocks.
 /// Returns `(circuit, rail, feed, shunt device, blocks)`.
 pub fn shunt_array(
     n: usize,

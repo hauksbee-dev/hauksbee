@@ -24,8 +24,7 @@ pub fn repo_root(manifest_dir: &str) -> PathBuf {
     PathBuf::from(manifest_dir)
         .parent()
         .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(manifest_dir))
+        .map_or_else(|| PathBuf::from(manifest_dir), Path::to_path_buf)
 }
 
 /// True when a missing asset should fail the run instead of skipping it.
@@ -239,7 +238,7 @@ pub fn walk_files_with_ext(root: &Path, exts: &[&str]) -> Vec<PathBuf> {
     out
 }
 
-/// KiCad board text for a minimal Arduino Nano + 10k pull resistor fixture:
+/// `KiCad` board text for a minimal Arduino Nano + 10k pull resistor fixture:
 /// net 1 GND, net 2 +5V, net 3 BUS (A1 pad 4 = GND, pad 27 = +5V, pad 21 =
 /// BUS; R1 across BUS/GND). Shared by the AVR and host-serial co-sim tests
 /// that only need "an Arduino Nano on a net", not a specific board's real
@@ -356,7 +355,7 @@ pub const NOT_KNOWN_GOOD_MARKER: &str = ".hauksbee-not-known-good";
 /// the known-good set a silence gate may grade itself on.
 ///
 /// Two kinds of entry carry the marker, and `corpus.toml` says which per board:
-/// a reference design that was never a manufactured product (KiCad's own demos),
+/// a reference design that was never a manufactured product (`KiCad`'s own demos),
 /// and a shipped board on which a gate fires and the finding has not yet been
 /// adjudicated. Neither may be counted as "a known-good board this check stayed
 /// quiet on", because the first was never known-good and the second is exactly
