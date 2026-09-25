@@ -71,6 +71,7 @@ pub enum SiSeverity {
 }
 
 impl SiSeverity {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::High => "high",
@@ -80,6 +81,7 @@ impl SiSeverity {
         }
     }
     /// Info notes are observations, not findings.
+    #[must_use]
     pub const fn is_finding(self) -> bool {
         !matches!(self, Self::Info)
     }
@@ -105,6 +107,7 @@ pub enum SiCheck {
 }
 
 impl SiCheck {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CrystalLoadCap => "crystal_load_cap",
@@ -141,9 +144,11 @@ impl SiReport {
         self.findings.iter().filter(|f| f.severity.is_finding())
     }
     /// Count of true findings (excludes info notes).
+    #[must_use]
     pub fn finding_count(&self) -> usize {
         self.findings_only().count()
     }
+    #[must_use]
     pub fn is_clean(&self) -> bool {
         self.finding_count() == 0
     }
@@ -160,6 +165,7 @@ impl ExtractedBoard {
     /// always runs. The I2C rise-time check runs either way, but folds routed
     /// trace capacitance in when a layout is present and says out loud that it
     /// could not when one is not.
+    #[must_use]
     pub fn si_checks(&self, pcb_text: Option<&str>) -> SiReport {
         let mut report = SiReport::default();
         check_crystal_load_cap(self, &mut report);
@@ -432,6 +438,7 @@ fn is_crystal(c: &Component) -> bool {
 }
 
 /// `CL = (C1 * C2) / (C1 + C2)` series combination, in the caps' own unit.
+#[must_use]
 pub fn cl_series(c1: f64, c2: f64) -> f64 {
     if c1 <= 0.0 || c2 <= 0.0 {
         return 0.0;
@@ -441,6 +448,7 @@ pub fn cl_series(c1: f64, c2: f64) -> f64 {
 
 /// Board-presented load capacitance (pF): the series combination of the two load
 /// caps plus the stray.
+#[must_use]
 pub fn cl_board_pf(c1_pf: f64, c2_pf: f64, cstray_pf: f64) -> f64 {
     cl_series(c1_pf, c2_pf) + cstray_pf
 }
@@ -760,6 +768,7 @@ struct BusCapacitance {
 }
 
 /// Rise time (ns) for a pull-up R (ohms) charging a bus capacitance C (pF).
+#[must_use]
 pub fn i2c_rise_time_ns(r_ohm: f64, c_pf: f64) -> f64 {
     // t = 0.8473 * R[ohm] * C[F]; with C in pF (1e-12) and t in ns (1e9):
     // 0.8473 * R * (C*1e-12) * 1e9 = 0.8473 * R * C * 1e-3.
@@ -1459,6 +1468,7 @@ fn elem_net_id(elem: &List, by_name: &HashMap<String, i64>) -> Option<i64> {
 }
 
 /// Sum of discrete-trace (segment + arc) copper length on a net, in mm.
+#[must_use]
 pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
     let by_name = net_name_index(root);
     let mut total = 0.0;
@@ -1511,6 +1521,7 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
 ///
 /// Falls back to the chord when the three points are collinear (a degenerate
 /// arc, zero curvature), where the chord IS the length.
+#[must_use]
 pub fn arc_length_mm(start: (f64, f64), mid: (f64, f64), end: (f64, f64)) -> f64 {
     let ((sx, sy), (mx, my), (ex, ey)) = (start, mid, end);
     let chord = |a: (f64, f64), b: (f64, f64)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
@@ -1844,6 +1855,7 @@ fn check_usb_diff_pair(board: &ExtractedBoard, root: &List, report: &mut SiRepor
 
 /// Render an SI report. Findings first, then info notes, so the surface reads
 /// like `--lint`.
+#[must_use]
 pub fn render_si(report: &SiReport) -> String {
     let mut out = String::new();
     let n = report.finding_count();

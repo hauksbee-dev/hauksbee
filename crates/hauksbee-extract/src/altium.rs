@@ -1593,6 +1593,7 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
 /// OLE2 file (`D0 CF 11 E0` magic) that actually contains an Altium Nets
 /// storage. The container check alone is not enough: many unrelated formats
 /// (old `.doc`, `.msi`, `.msg`) are OLE2 too.
+#[must_use]
 pub fn looks_like_pcbdoc(bytes: &[u8]) -> bool {
     if bytes.len() < 8 || bytes[0..4] != [0xD0, 0xCF, 0x11, 0xE0] {
         return false;

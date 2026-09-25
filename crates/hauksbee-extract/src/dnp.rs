@@ -42,6 +42,7 @@ pub enum DnpPolicy {
 impl DnpPolicy {
     /// The one-line description a report prints so the default is never a
     /// surprise.
+    #[must_use]
     pub const fn describe(self) -> &'static str {
         match self {
             Self::FitExceptLinks => {
@@ -71,6 +72,7 @@ pub const DNP_FITTED_KEY: &str = "hauksbee.dnp_fitted_by_policy";
 
 /// True when this component was DNP in the source and is present only by the
 /// default fit policy (see [`DNP_FITTED_KEY`]).
+#[must_use]
 pub fn fitted_from_dnp_policy(c: &crate::Component) -> bool {
     c.properties.iter().any(|(key, _)| key == DNP_FITTED_KEY)
 }
@@ -92,6 +94,7 @@ pub enum DnpReason {
 }
 
 impl DnpReason {
+    #[must_use]
     pub const fn describe(&self) -> &'static str {
         match self {
             Self::Policy => "DNP, fitted by default",
@@ -104,6 +107,7 @@ impl DnpReason {
 
     /// The stable tag stored under [`DNP_REASON_KEY`]. Round-trips through
     /// [`DnpReason::from_policy_tag`].
+    #[must_use]
     pub const fn policy_tag(&self) -> &'static str {
         match self {
             Self::Policy => "policy",
@@ -117,6 +121,7 @@ impl DnpReason {
     /// Parse a [`DNP_REASON_KEY`] tag back into the reason. `None` for an
     /// unknown tag: a stale or foreign value must degrade to "the board file
     /// says DNP", never invent a decision.
+    #[must_use]
     pub fn from_policy_tag(tag: &str) -> Option<Self> {
         match tag {
             "policy" => Some(Self::Policy),
@@ -147,12 +152,14 @@ pub struct DnpDecision {
 
 impl DnpDecision {
     /// True when the board had no DNP parts at all, so there is nothing to say.
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.fitted.is_empty() && self.left_open.is_empty()
     }
 
     /// The lines a human-facing report prints. Empty when the board has no DNP
     /// parts, so a board without any never mentions the subject.
+    #[must_use]
     pub fn lines(&self) -> Vec<String> {
         if self.is_empty() {
             return Vec::new();
@@ -266,6 +273,7 @@ pub(crate) fn is_eagle_copper_link_fields(value: &str, library: &str, package: &
     arduino_sj || sparkfun_closed_trace
 }
 
+#[must_use]
 pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
     is_jumper_or_net_tie_fields(&comp.value, &comp.lib_id, &comp.footprint)
 }
@@ -273,6 +281,7 @@ pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
 /// A two-terminal part whose value is a near-zero resistance, or a footprint
 /// that only exists to bridge copper. Fitting one merges the nets it sits
 /// between, so under the default policy it stays open.
+#[must_use]
 pub fn is_zero_ohm_link(comp: &Component) -> bool {
     if comp.pins.len() > 2 {
         return false;

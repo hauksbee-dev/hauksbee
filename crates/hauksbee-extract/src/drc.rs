@@ -84,6 +84,7 @@ pub const SHORT_TOUCH_EPS_MM: f64 = 1e-9;
 ///
 /// Negative is overlap, zero is abutment, and anything inside
 /// [`SHORT_TOUCH_EPS_MM`] is one of those two measured through floating point.
+#[must_use]
 pub fn is_touching(gap_mm: f64) -> bool {
     gap_mm <= SHORT_TOUCH_EPS_MM
 }
@@ -128,6 +129,7 @@ pub struct ClearanceRules {
 }
 
 impl ClearanceRules {
+    #[must_use]
     pub fn new(default_clearance_mm: f64) -> Self {
         let default = if default_clearance_mm > 0.0 {
             default_clearance_mm
@@ -170,6 +172,7 @@ impl ClearanceRules {
         }
     }
 
+    #[must_use]
     pub fn clearance_for_net(&self, net: &str) -> f64 {
         self.net_classes
             .get(net)
@@ -204,6 +207,7 @@ impl ClearanceRules {
         *entry = entry.max(clearance_mm);
     }
 
+    #[must_use]
     pub fn effective_clearance(&self, net_a: &str, net_b: &str) -> f64 {
         if let Some(clearance) = self.global_clearance_override_mm {
             return clearance;
@@ -464,6 +468,7 @@ pub enum ViolationKind {
 }
 
 impl ViolationKind {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Short => "short",
@@ -489,6 +494,7 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Track => "track",
@@ -574,6 +580,7 @@ fn find_at<'a>(
 }
 
 impl DrcTieQualification {
+    #[must_use]
     pub fn tie_for<'a>(&'a self, finding: &DrcFinding) -> Option<&'a DeclaredTie> {
         self.tie_at(
             &finding.net_a_name,
@@ -584,6 +591,7 @@ impl DrcTieQualification {
         )
     }
 
+    #[must_use]
     pub fn tie_at(
         &self,
         net_a: &str,
@@ -595,12 +603,14 @@ impl DrcTieQualification {
         find_at(&self.qualified, net_a, net_b, layer, x, y)
     }
 
+    #[must_use]
     pub const fn qualified_count(&self) -> usize {
         self.qualified.len()
     }
 
     /// Schematic context for a unique measured contact, without implying that
     /// the declaration authorizes this physical location.
+    #[must_use]
     pub fn declaration_for<'a>(&'a self, finding: &DrcFinding) -> Option<&'a DeclaredTie> {
         self.declaration_at(
             &finding.net_a_name,
@@ -611,6 +621,7 @@ impl DrcTieQualification {
         )
     }
 
+    #[must_use]
     pub fn declaration_at(
         &self,
         net_a: &str,
@@ -622,20 +633,24 @@ impl DrcTieQualification {
         find_at(&self.declared, net_a, net_b, layer, x, y)
     }
 
+    #[must_use]
     pub const fn declaration_count(&self) -> usize {
         self.declaration_count
     }
 
     /// Distinct schematic declarations that matched exactly one measured
     /// physical contact cluster. Layer rows are not double-counted.
+    #[must_use]
     pub const fn matched_declaration_count(&self) -> usize {
         self.matched_declaration_count
     }
 
+    #[must_use]
     pub fn source(&self) -> &str {
         &self.source
     }
 
+    #[must_use]
     pub fn source_summary(&self) -> String {
         let declared = self.declared.len();
         format!(
@@ -746,6 +761,7 @@ pub struct DrcReport {
 pub const FIRST_UNVALIDATED_PCB_VERSION: u32 = 20260000;
 
 /// The `(version N)` format token from a `.kicad_pcb`, if present.
+#[must_use]
 pub fn kicad_pcb_format_version(text: &str) -> Option<u32> {
     let head: String = text.chars().take(512).collect();
     let i = head.find("(version")?;
@@ -759,6 +775,7 @@ pub fn kicad_pcb_format_version(text: &str) -> Option<u32> {
 
 /// A caveat string when the board's format version is newer than hauksbee's
 /// validated range, else `None`.
+#[must_use]
 pub fn unvalidated_version_warning(text: &str) -> Option<String> {
     let v = kicad_pcb_format_version(text)?;
     if v < FIRST_UNVALIDATED_PCB_VERSION {
@@ -786,10 +803,12 @@ impl DrcReport {
             .filter(|f| f.kind == ViolationKind::Clearance)
     }
 
+    #[must_use]
     pub fn short_count(&self) -> usize {
         self.shorts().count()
     }
 
+    #[must_use]
     pub fn is_clean(&self) -> bool {
         self.short_count() == 0
     }
@@ -819,6 +838,7 @@ impl DrcReport {
     /// Records matching schematic declarations as context. A schematic net
     /// pair has no board-coordinate authority, so this does not populate the
     /// physically authorized set or change which shorts gate.
+    #[must_use]
     pub fn qualify_with_declared_ties(
         &self,
         source: &str,
@@ -903,6 +923,7 @@ impl DrcReport {
     /// (KiCad always carves a pad out of a different-net pour, and KiCad-10
     /// keyhole fills make those carves read as negative gaps), but a reader
     /// cannot audit a rule they were never told was applied.
+    #[must_use]
     pub fn suppression_note(&self) -> Option<String> {
         let Some(n) = self.zone_pad_overlaps_suppressed else {
             // Never measured: either no copper DRC pass ran (a netlist-only input
@@ -2432,6 +2453,7 @@ pub fn run_drc(doc: &Document, clearance_override: Option<f64>) -> DrcReport {
 
 /// Run geometric short / clearance detection with project-derived per-net
 /// clearance rules.
+#[must_use]
 pub fn run_drc_with_clearance_rules(doc: &Document, rules: Option<ClearanceRules>) -> DrcReport {
     let Some(root) = doc.root() else {
         return DrcReport::default();
@@ -2723,6 +2745,7 @@ pub fn drc_from_text_with_clearance_rules(
 
 /// Convenience: run the geometric DRC on Eagle `.brd` XML text, using the
 /// board's own design-rule clearance (falling back to [`DEFAULT_CLEARANCE_MM`]).
+#[must_use]
 pub fn eagle_drc_from_text(text: &str) -> DrcReport {
     eagle_drc::run(text, None)
 }
@@ -3628,6 +3651,7 @@ pub mod eagle_drc {
     /// `clearance_override` forces the clearance rule (mm) when `Some`; otherwise
     /// the board's own design-rule clearance is used, falling back to
     /// [`DEFAULT_CLEARANCE_MM`] only when the board states none.
+    #[must_use]
     pub fn run(text: &str, clearance_override: Option<f64>) -> DrcReport {
         let parsed = parse(text);
         if !parsed.saw_eagle {

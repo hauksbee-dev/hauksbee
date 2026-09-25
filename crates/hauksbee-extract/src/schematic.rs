@@ -138,6 +138,7 @@ fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
 /// board corpus carries it and no sub-sheet does, across KiCad 6 through 10.
 /// A flat single-sheet design is its own root and carries it too, so this does
 /// not mistake a one-file project for a fragment.
+#[must_use]
 pub fn is_root_sheet(doc: &Document) -> bool {
     doc.root()
         .is_some_and(|r| r.find_all("sheet_instances").next().is_some())

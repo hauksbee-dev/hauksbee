@@ -129,6 +129,7 @@ pub enum PlacementSource {
 }
 
 impl PlacementSource {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::EdaData => "eda/data",
@@ -151,6 +152,7 @@ pub struct OdbLayer {
 }
 
 impl OdbLayer {
+    #[must_use]
     pub const fn features(&self) -> usize {
         self.lines + self.pads + self.arcs + self.surfaces
     }
@@ -208,6 +210,7 @@ impl OdbStats {
     /// Computing a disagreement and then leaving it inside the extractor is the
     /// same failure as not computing it, so this is the accessor the
     /// board-input normalizer copies onto its own notes.
+    #[must_use]
     pub fn notes(&self) -> Vec<String> {
         let mut out = vec![format!(
             "ODB++ input: the circuit was read from the job's own EDA data \
@@ -269,12 +272,14 @@ pub fn from_odbpp_archive(bytes: &[u8]) -> Result<OdbExtraction, ExtractError> {
 /// member. Keyed on the matrix file because it is what makes a tree an ODB++
 /// job, and because a zip of gerbers (the other archive hauksbee accepts) never
 /// has one.
+#[must_use]
 pub fn looks_like_odbpp_archive(bytes: &[u8]) -> bool {
     tree::archive_has_matrix(bytes)
 }
 
 /// Content sniff for the directory form: does this directory (or a single job
 /// directory inside it) hold `matrix/matrix`?
+#[must_use]
 pub fn looks_like_odbpp_dir(dir: &Path) -> bool {
     if dir.join("matrix").join("matrix").is_file() {
         return true;

@@ -85,6 +85,7 @@ pub enum CopperSource {
 impl CopperSource {
     /// Whether the numbers behind this rating were assumed rather than read off
     /// the board.
+    #[must_use]
     pub const fn is_assumed(self) -> bool {
         !matches!(self, Self::Stackup)
     }
@@ -126,6 +127,7 @@ impl CopperWeights {
     /// A stackup that declares a copper layer without a thickness contributes
     /// nothing, so that layer falls back to the assumed default rather than to a
     /// zero rating.
+    #[must_use]
     pub fn from_root(root: &List) -> Self {
         let mut declared: Vec<(String, f64)> = Vec::new();
         let mut has_stackup = false;
@@ -174,16 +176,19 @@ impl CopperWeights {
     }
 
     /// Whether any per-layer copper weight was declared.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_layer.is_empty()
     }
 
     /// Whether the layout carried a stackup block, whatever it yielded.
+    #[must_use]
     pub const fn is_declared(&self) -> bool {
         self.declared
     }
 
     /// The weight (oz) and side for a copper layer, when the stackup declares it.
+    #[must_use]
     pub fn get(&self, layer: &str) -> Option<(f64, bool)> {
         self.by_layer.get(layer).copied()
     }
@@ -196,6 +201,7 @@ impl CopperWeights {
 /// `k = 0.048` for external (outer) copper layers, `0.024` for internal. This
 /// is the long-standard ampacity curve; it is a conservative ballpark, not a
 /// thermal simulation, and is documented as such.
+#[must_use]
 pub fn ipc2221_ampacity(width_mm: f64, oz: f64, dt_c: f64, external: bool) -> f64 {
     if width_mm <= 0.0 || oz <= 0.0 || dt_c <= 0.0 {
         return 0.0;
@@ -209,6 +215,7 @@ pub fn ipc2221_ampacity(width_mm: f64, oz: f64, dt_c: f64, external: bool) -> f6
 
 /// Inverse of [`ipc2221_ampacity`]: the minimum finished width (mm) needed to
 /// carry `amps` at temperature rise `dt_c`. Useful for "you need at least X mm".
+#[must_use]
 pub fn ipc2221_min_width_mm(amps: f64, oz: f64, dt_c: f64, external: bool) -> f64 {
     if amps <= 0.0 || oz <= 0.0 || dt_c <= 0.0 {
         return 0.0;
@@ -264,6 +271,7 @@ pub struct NetCopper {
 /// when the text is not a KiCad layout or does not parse, so callers outside the
 /// extract crate (which has the s-expr parser) can run the ampacity check from
 /// raw text without depending on the parser themselves.
+#[must_use]
 pub fn net_copper_from_text(text: &str) -> Vec<NetCopper> {
     if !text.contains("(kicad_pcb") {
         return Vec::new();
@@ -280,6 +288,7 @@ pub fn net_copper_from_text(text: &str) -> Vec<NetCopper> {
 /// Parse the per-net copper geometry (track widths + zone presence) from a
 /// KiCad `.kicad_pcb` document root. Mirrors `drc::collect_primitives` but keeps
 /// only what an ampacity question needs.
+#[must_use]
 pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
     // net id -> name, and the inverse (name -> id) so a track that cites its
     // net by NAME rather than numeric id (some KiCad generations) still resolves.
@@ -461,6 +470,7 @@ pub struct TraceCurrentFinding {
 impl TraceCurrentFinding {
     /// The copper basis in words, marked ASSUMED (and naming the upload that
     /// would settle it) whenever the board did not declare the layer.
+    #[must_use]
     pub fn describe_copper(&self) -> String {
         let side = if self.external {
             "external"
@@ -544,6 +554,7 @@ impl Default for TraceAudit {
 
 impl TraceAudit {
     /// The default audit, with per-layer copper weights read from `root`.
+    #[must_use]
     pub fn from_root(root: &List) -> Self {
         Self {
             copper: CopperWeights::from_root(root),
@@ -554,6 +565,7 @@ impl TraceAudit {
     /// The default audit, with per-layer copper weights read from raw
     /// `.kicad_pcb` text. Non-KiCad or unparseable text yields the plain default,
     /// whose ratings are then marked ASSUMED.
+    #[must_use]
     pub fn from_pcb_text(text: &str) -> Self {
         if !text.contains("(kicad_pcb") {
             return Self::default();
@@ -574,6 +586,7 @@ impl TraceAudit {
     /// those numbers came from. An undeclared layer falls back to the stated
     /// default rather than refusing to rate the net, but the source records that
     /// so the message can say ASSUMED.
+    #[must_use]
     pub fn copper_for(&self, layer: Option<&str>) -> (f64, bool, CopperSource) {
         if let Some(found) = layer.and_then(|l| self.copper.get(l)) {
             return (found.0, found.1, CopperSource::Stackup);
@@ -708,6 +721,7 @@ fn assumed_external_for(layer: Option<&str>) -> bool {
 }
 
 /// Render a copper weight the way a fab drawing does: `1 oz`, `0.5 oz`.
+#[must_use]
 pub fn describe_oz(oz: f64) -> String {
     if (oz - oz.round()).abs() < 0.01 {
         format!("{:.0} oz", oz.round())
@@ -720,6 +734,7 @@ pub fn describe_oz(oz: f64) -> String {
 /// citation)`, flag every **trace-routed** net whose bottleneck cannot carry the
 /// cited current. Poured nets are skipped (their true cross-section is out of
 /// reach); nets with no cited current are skipped (no fabricated load).
+#[must_use]
 pub fn audit_trace_currents(
     copper: &[NetCopper],
     cited: &HashMap<String, (f64, String)>,
@@ -781,6 +796,7 @@ pub fn audit_trace_currents(
 /// Capacity-only report for power-looking nets. This never produces pass/fail:
 /// without a cited current the honest output is "this routed bottleneck can
 /// carry roughly N amps", or "poured net: out of reach".
+#[must_use]
 pub fn trace_capacity_report(copper: &[NetCopper], audit: &TraceAudit) -> Vec<TraceCapacityRow> {
     let mut rows = Vec::new();
     for nc in copper {
@@ -874,6 +890,7 @@ fn compact_copper(r: &TraceCapacityRow) -> String {
     format!("{} {side}{assumed}", describe_oz(r.oz))
 }
 
+#[must_use]
 pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
     let mut out = String::new();
     out.push_str("ampacity: IPC-2221 capacity only; supply a current for pass/fail.\n");

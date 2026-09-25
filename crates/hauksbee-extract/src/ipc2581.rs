@@ -112,6 +112,7 @@ pub enum NetSource {
 }
 
 impl NetSource {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::LogicalNet => "LogicalNet",
@@ -164,6 +165,7 @@ impl Ipc2581Stats {
     /// connectivity came from, what was not checked, and every cross-check that
     /// disagreed. The board-input normalizer copies these onto its own notes, so
     /// a disagreement the reader found actually reaches the user.
+    #[must_use]
     pub fn notes(&self) -> Vec<String> {
         let mut out = vec![format!(
             "IPC-2581 input (revision {}, FunctionMode {}): the netlist was read \
@@ -202,6 +204,7 @@ pub struct Ipc2581Extraction {
 /// the root element rather than the namespace URI because the un-namespaced form
 /// real converters emit is still an IPC-2581 document; the namespace, when
 /// present, is accepted as a second confirmation.
+#[must_use]
 pub fn looks_like_ipc2581(bytes: &[u8]) -> bool {
     let window = &bytes[..bytes.len().min(4096)];
     let head = String::from_utf8_lossy(window);

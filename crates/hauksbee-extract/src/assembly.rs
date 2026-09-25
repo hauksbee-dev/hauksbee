@@ -52,6 +52,7 @@ pub enum IdentityRefusal {
 
 impl IdentityRefusal {
     /// The human-readable reason a report prints.
+    #[must_use]
     pub fn reason(&self) -> String {
         match self {
             Self::DuplicateReferenceConflict(detail) => {
@@ -77,6 +78,7 @@ pub struct DnpAbsence {
 
 impl DnpAbsence {
     /// The line a report prints for this absence.
+    #[must_use]
     pub const fn describe(&self) -> &'static str {
         match &self.reason {
             Some(reason) => reason.describe(),
@@ -100,6 +102,7 @@ pub struct FittedComponent<'c> {
 
 impl<'c> FittedComponent<'c> {
     /// The underlying record, for read access with the original lifetime.
+    #[must_use]
     pub const fn component(self) -> &'c Component {
         self.part
     }
@@ -129,6 +132,7 @@ impl<'c> AssemblyState<'c> {
     /// Classify one component record. The single entry point: consumers ask this
     /// rather than reading `component.dnp` or probing the identity properties,
     /// so no two checks can disagree about what "present" means.
+    #[must_use]
     pub fn of(component: &'c Component) -> Self {
         if let Some(refusal) = identity_refusal(component) {
             return AssemblyState::IdentityUnknown(refusal);
@@ -146,6 +150,7 @@ impl<'c> AssemblyState<'c> {
 
     /// The witness, if the part is present. Consuming (the state is `Copy`able
     /// data plus a borrow) so `AssemblyState::of(c).fitted()` composes.
+    #[must_use]
     pub fn fitted(self) -> Option<FittedComponent<'c>> {
         match self {
             AssemblyState::Present(part) => Some(part),
@@ -154,6 +159,7 @@ impl<'c> AssemblyState<'c> {
     }
 
     /// True when the part is assembled and identity-trusted.
+    #[must_use]
     pub const fn is_present(&self) -> bool {
         matches!(self, AssemblyState::Present(_))
     }
@@ -161,6 +167,7 @@ impl<'c> AssemblyState<'c> {
     /// The human-readable reason the part is NOT an ordinary fitted component,
     /// or `None` when it is present. Reports print this so a skip is never
     /// silent.
+    #[must_use]
     pub fn absence(&self) -> Option<String> {
         match self {
             AssemblyState::Present(_) => None,

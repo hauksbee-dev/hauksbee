@@ -197,6 +197,7 @@ impl Stackup {
 /// stripline are not modelled: claiming a stripline reference plane requires
 /// knowing which inner layer is a solid plane, which the stackup block does not
 /// say.
+#[must_use]
 pub fn read_stackup(root: &List) -> Option<Stackup> {
     let setup = root.find("setup")?;
     let stackup = setup.find("stackup")?;
@@ -257,6 +258,7 @@ pub fn read_stackup(root: &List) -> Option<Stackup> {
 /// `w`, `h`, `t` in the same length unit (mm here). Returns `None` for a
 /// degenerate geometry (the log argument <= 1, i.e. a trace too wide for the
 /// formula's validity band, which we then decline to judge).
+#[must_use]
 pub fn microstrip_z0(w: f64, h: f64, t: f64, er: f64) -> Option<f64> {
     if w <= 0.0 || h <= 0.0 || er <= 0.0 {
         return None;
@@ -277,6 +279,7 @@ pub fn microstrip_z0(w: f64, h: f64, t: f64, er: f64) -> Option<f64> {
 /// centred in a dielectric of total plane-to-plane height `h`.
 ///
 /// `Z0 = (60 / sqrt(Er)) * ln(4*H / (0.67*pi*(0.8*W + T)))`
+#[must_use]
 pub fn stripline_z0(w: f64, h: f64, t: f64, er: f64) -> Option<f64> {
     if w <= 0.0 || h <= 0.0 || er <= 0.0 {
         return None;
@@ -299,6 +302,7 @@ pub fn stripline_z0(w: f64, h: f64, t: f64, er: f64) -> Option<f64> {
 ///
 /// `z0` is the single-ended microstrip impedance of one trace, `s` the
 /// edge-to-edge spacing, `h` the dielectric height.
+#[must_use]
 pub fn differential_microstrip_z(z0: f64, s: f64, h: f64) -> Option<f64> {
     if z0 <= 0.0 || s < 0.0 || h <= 0.0 {
         return None;
@@ -324,6 +328,7 @@ pub enum ImpedanceClass {
 
 impl ImpedanceClass {
     /// Target impedance (ohms).
+    #[must_use]
     pub const fn target_ohm(self) -> f64 {
         match self {
             Self::UsbDiff => 90.0,
@@ -331,6 +336,7 @@ impl ImpedanceClass {
             Self::SingleEnded50 => 50.0,
         }
     }
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::UsbDiff => "USB 90 ohm differential",
@@ -343,6 +349,7 @@ impl ImpedanceClass {
     /// [`Self::label`] carries the number, so pairing it with the target read
     /// back as "[target 90 ohm USB 90 ohm differential]"; this says the kind
     /// once and lets the caller print the number once.
+    #[must_use]
     pub const fn kind_label(self) -> &'static str {
         match self {
             Self::UsbDiff => "USB differential",

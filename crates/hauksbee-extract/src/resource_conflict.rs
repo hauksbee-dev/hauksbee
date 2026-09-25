@@ -631,6 +631,7 @@ impl ExtractedBoard {
     /// Run the MCU internal resource-conflict check. Returns its findings in the
     /// same `NetLintReport` shape the connectivity lint uses, so callers and the
     /// CLI can treat them uniformly.
+    #[must_use]
     pub fn resource_conflicts(&self) -> NetLintReport {
         let tables = load_resources();
         let mut report = NetLintReport::default();
@@ -848,6 +849,7 @@ fn report_qspi_group_conflicts(
 // function) so a silent board can be chased to ground truth.
 // ---------------------------------------------------------------------------
 #[doc(hidden)]
+#[must_use]
 pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, String, String)> {
     let tables = load_resources();
     let mut out = Vec::new();

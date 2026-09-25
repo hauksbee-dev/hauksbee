@@ -489,6 +489,7 @@ impl ExtractedBoard {
     /// Routes through the [`reader::Registry`], consulting only the binary
     /// readers so a text file handed here is not force-parsed as bytes (it
     /// returns `None` and the caller falls back to [`Self::from_auto`]).
+    #[must_use]
     pub fn from_auto_bytes(bytes: &[u8]) -> Option<Result<Self, ExtractError>> {
         let registry = reader::Registry::builtin();
         registry
@@ -507,19 +508,23 @@ impl ExtractedBoard {
         reader::Registry::builtin().read(text.as_bytes(), None)
     }
 
+    #[must_use]
     pub fn net(&self, id: i64) -> Option<&Net> {
         self.nets.iter().find(|n| n.id == id)
     }
 
+    #[must_use]
     pub fn net_by_name(&self, name: &str) -> Option<&Net> {
         self.nets.iter().find(|n| n.name == name)
     }
 
+    #[must_use]
     pub fn component(&self, reference: &str) -> Option<&Component> {
         self.components.iter().find(|c| c.reference == reference)
     }
 
     /// (component, pin) pairs attached to a net.
+    #[must_use]
     pub fn net_members(&self, net_id: i64) -> Vec<(&Component, &Pin)> {
         let mut out = Vec::new();
         for c in &self.components {
@@ -533,6 +538,7 @@ impl ExtractedBoard {
     }
 
     /// Consistency report: problems worth surfacing before simulation.
+    #[must_use]
     pub fn lint(&self) -> Lint {
         let mut lint = Lint::default();
         let net_ids: std::collections::HashSet<i64> = self.nets.iter().map(|n| n.id).collect();
@@ -1129,6 +1135,7 @@ pub struct Lint {
 }
 
 impl Lint {
+    #[must_use]
     pub const fn is_clean(&self) -> bool {
         self.undeclared_nets.is_empty() && self.floating_components.is_empty()
     }

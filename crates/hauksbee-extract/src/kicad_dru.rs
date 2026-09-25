@@ -55,6 +55,7 @@ pub enum KicadDruConstraintKind {
 }
 
 impl KicadDruConstraintKind {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Clearance => "clearance",
@@ -88,6 +89,7 @@ pub struct KicadDruRule {
 }
 
 impl KicadDruRule {
+    #[must_use]
     pub fn clearance_min_mm(&self) -> Option<f64> {
         self.constraints.iter().rev().find_map(|constraint| {
             (constraint.kind == KicadDruConstraintKind::Clearance)
@@ -96,16 +98,19 @@ impl KicadDruRule {
         })
     }
 
+    #[must_use]
     pub const fn is_global(&self) -> bool {
         self.condition.is_none() && self.layer.is_none()
     }
 
+    #[must_use]
     pub fn has_bare_value(&self) -> bool {
         self.constraints
             .iter()
             .any(|constraint| constraint.has_bare_value)
     }
 
+    #[must_use]
     pub fn bare_value_constraint_types(&self) -> Vec<KicadDruConstraintKind> {
         let mut kinds = Vec::new();
         for constraint in self
@@ -132,6 +137,7 @@ impl KicadDruRules {
     /// KiCad gives a later matching custom rule priority over an earlier one.
     /// Only an unconditional, layer-independent rule is report-wide. KiCad
     /// 10.0.5 deactivates the entire file if any constraint bound is unitless.
+    #[must_use]
     pub fn global_clearance_mm(&self) -> Option<f64> {
         if self.has_bare_values() {
             return None;

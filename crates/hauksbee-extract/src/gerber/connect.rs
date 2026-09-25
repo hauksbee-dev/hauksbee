@@ -91,6 +91,7 @@ pub struct PlatedHole {
 
 impl PlatedHole {
     /// A round plated hole that reaches the whole stack.
+    #[must_use]
     pub const fn through(x: f64, y: f64, diameter: f64) -> Self {
         Self {
             x,
@@ -1046,6 +1047,7 @@ impl ReconStats {
     /// An unmatched flash is still copper and still joins whatever net it
     /// touches; what it lacks is a component and a pin, which is what makes
     /// every per-part figure partial.
+    #[must_use]
     pub fn coverage_notes(&self) -> Vec<String> {
         let mut out = self.notes.clone();
         if self.unassigned_flashes > 0 {

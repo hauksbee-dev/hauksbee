@@ -153,6 +153,7 @@ pub fn ref_designator(reference: &str) -> String {
 /// class through the assembly witness, falling back to the designator/`lib_id`
 /// strings only when nothing better exists; `Unknown` and identity-refused
 /// records are never resistors.
+#[must_use]
 pub fn is_plain_resistor(c: &Component) -> bool {
     classify_two_terminal(c).is_resistor()
 }

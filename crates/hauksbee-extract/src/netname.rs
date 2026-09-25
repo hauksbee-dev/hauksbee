@@ -26,6 +26,7 @@ const NAMED_ESCAPES: &[(&str, &str)] = &[
 /// script / overbar markup braces (`SCL_{2}`, `V^{2}`, `~{RESET}`) are
 /// dropped while their marker character is kept (`SCL_2`, `V^2`, `~RESET`).
 /// Names with no `{` pass through untouched (the overwhelmingly common case).
+#[must_use]
 pub fn unescape_net_name(name: &str) -> String {
     if !name.contains('{') {
         return name.to_string();

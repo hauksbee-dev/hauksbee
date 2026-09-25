@@ -202,6 +202,7 @@ impl Tools {
     }
 }
 
+#[must_use]
 pub fn parse(text: &str) -> DrillFile {
     let mut fmt = CoordFormat::default();
     let mut tools = Tools::default();

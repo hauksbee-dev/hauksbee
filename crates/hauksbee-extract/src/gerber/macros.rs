@@ -53,6 +53,7 @@ struct EvaledPrim {
 /// exposure-on primitives, minus fully-interior exposure-off voids), centred at
 /// the flash point `(cx, cy)` and scaled by `s` (inch->mm or 1.0). `args` are
 /// the flash's positional parameters (`$1` = `args[0]`, ...).
+#[must_use]
 pub fn instantiate_macro(
     m: &ApertureMacro,
     args: &[MacroDecimal],

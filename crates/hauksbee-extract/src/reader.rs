@@ -216,6 +216,7 @@ pub struct Registry {
 
 impl Registry {
     /// The nine formats hauksbee reads natively.
+    #[must_use]
     pub fn builtin() -> Self {
         Self {
             readers: vec![
@@ -270,6 +271,7 @@ impl Registry {
     }
 
     /// The names of every registered reader, in consultation order.
+    #[must_use]
     pub fn reader_names(&self) -> Vec<&str> {
         self.readers.iter().map(|r| r.name()).collect()
     }

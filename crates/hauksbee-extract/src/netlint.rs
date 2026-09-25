@@ -144,6 +144,7 @@ impl LintCheck {
         Self::I2cBusLoading,
     ];
 
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::MissingI2cPullup => "missing_i2c_pullup",
@@ -176,6 +177,7 @@ pub enum Severity {
 }
 
 impl Severity {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::High => "high",
@@ -192,9 +194,11 @@ pub struct NetLintReport {
 }
 
 impl NetLintReport {
+    #[must_use]
     pub const fn is_clean(&self) -> bool {
         self.findings.is_empty()
     }
+    #[must_use]
     pub const fn count(&self) -> usize {
         self.findings.len()
     }
@@ -205,6 +209,7 @@ impl NetLintReport {
 
 impl ExtractedBoard {
     /// Run the connectivity lint-class checks.
+    #[must_use]
     pub fn net_lint(&self) -> NetLintReport {
         let mut report = NetLintReport::default();
         check_i2c_pullups(self, &mut report);
@@ -1939,6 +1944,7 @@ fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
 }
 
 /// Render a lint report as a Unicode table.
+#[must_use]
 pub fn render_netlint(report: &NetLintReport) -> String {
     let mut out = String::new();
     if report.findings.is_empty() {

@@ -77,6 +77,7 @@ impl DeclaredNetTie {
     /// True when this declaration covers a copper contact between these two
     /// nets, in either order. Net names are compared exactly: Eagle net names
     /// are case-sensitive and `GND` is not `gnd`.
+    #[must_use]
     pub fn covers(&self, net_a: &str, net_b: &str) -> bool {
         (self.net == net_a && self.tied_net == net_b)
             || (self.net == net_b && self.tied_net == net_a)
@@ -84,6 +85,7 @@ impl DeclaredNetTie {
 
     /// The declaration in one clause, naming the symbols and the net, for a
     /// report line. `AGND7 wired to SUPPLY6 in net GND`.
+    #[must_use]
     pub fn describe(&self) -> String {
         if self.tied_to.is_empty() {
             format!("{} placed on net {}", self.symbol, self.net)
@@ -108,6 +110,7 @@ impl DeclaredNetTie {
 /// first, so `<schematic>` can sit ten kilobytes in and a head slice would
 /// reject a perfectly good schematic. Only `<eagle>` is checked near the top,
 /// where it genuinely is; the scan is one linear pass, cheap next to parsing.
+#[must_use]
 pub fn looks_like_eagle_schematic(text: &str) -> bool {
     parse(text).is_ok()
 }

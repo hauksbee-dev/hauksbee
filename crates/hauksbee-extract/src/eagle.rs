@@ -307,6 +307,7 @@ fn corrupt_coord(tag: &str, attr: &str, raw: &str) -> ExtractError {
 /// accepted-format list at someone holding a board hauksbee reads happily
 /// after a re-save. The `.brd` and `.sch` forms share the header, so the
 /// message must not claim to know which of the two this is.
+#[must_use]
 pub fn looks_like_eagle_binary(bytes: &[u8]) -> bool {
     matches!(bytes, [0x10, 0x00 | 0x80, _, 0x00, ..])
 }
@@ -320,6 +321,7 @@ pub fn looks_like_eagle_binary(bytes: &[u8]) -> bool {
 /// asserts it would be trading one wrong instruction for another. The
 /// requirement is stated instead of the vendor, so the sentence stays true as
 /// the tooling moves.
+#[must_use]
 pub fn eagle_binary_message() -> String {
     format!(
         "this is an Eagle drawing in the pre-Eagle-6 BINARY format, which hauksbee does \

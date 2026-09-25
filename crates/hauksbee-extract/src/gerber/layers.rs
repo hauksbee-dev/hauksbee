@@ -43,6 +43,7 @@ pub enum LayerRole {
 }
 
 impl LayerRole {
+    #[must_use]
     pub const fn is_copper(&self) -> bool {
         matches!(self, Self::Copper { .. })
     }
@@ -316,6 +317,7 @@ fn is_gerber_film_ext(n: &Name) -> bool {
 /// Operating-system litter that travels with a copied fab folder: macOS
 /// resource forks (`._name`) and Finder/Explorer metadata. A `._board-F_Cu.gbr`
 /// fork would otherwise classify as top copper by its name alone.
+#[must_use]
 pub fn is_filesystem_noise(file_name: &str) -> bool {
     file_name.starts_with("._")
         || file_name == ".DS_Store"
@@ -639,6 +641,7 @@ pub enum AttributeCarrier {
 /// Only a properly terminated attribute has authority: `%TF...*%` must end its
 /// line, and the comment form must end in `*`. An unterminated lookalike or a
 /// `%TA` aperture attribute states nothing about the file.
+#[must_use]
 pub fn file_function(text: &str) -> Option<(String, AttributeCarrier)> {
     const NAME: &str = "TF.FileFunction,";
     let names_function = |body: &str| {
@@ -712,6 +715,7 @@ fn file_function_role(head: &str, path: &Path) -> Option<LayerRole> {
 /// Whether `head` reads as an Excellon drill program: the `M48` header, a
 /// tool definition, a format statement, or (a header-less file) a body that is
 /// mostly `T<n>` selects and `X`/`Y` coordinate lines.
+#[must_use]
 pub fn looks_like_excellon(head: &str) -> bool {
     let mut coordinate_lines = 0usize;
     let mut other_lines = 0usize;
@@ -777,11 +781,13 @@ fn is_excellon_tool_def(up: &str) -> bool {
 
 /// Whether `head` carries RS-274X structure: a format specification plus a
 /// unit or aperture definition, which no Excellon program contains.
+#[must_use]
 pub fn looks_like_rs274x(head: &str) -> bool {
     head.contains("%FS") && (head.contains("%MO") || head.contains("%AD"))
 }
 
 /// A role as a report phrase.
+#[must_use]
 pub fn role_phrase(role: &LayerRole) -> String {
     match role {
         LayerRole::Copper { index: 0, .. } => "top copper".to_string(),
@@ -808,6 +814,7 @@ pub fn role_phrase(role: &LayerRole) -> String {
 /// bottom.art = copper:bottom
 /// drill-1-6.art = drill
 /// ```
+#[must_use]
 pub fn parse_mapping(text: &str) -> std::collections::HashMap<String, LayerRole> {
     let mut map = std::collections::HashMap::new();
     for line in text.lines() {
@@ -1385,6 +1392,7 @@ fn bare_stack_index(n: &Name) -> Option<usize> {
 /// Input/output: a list of `(role, original_index_into_caller_vec)` for the
 /// copper files only. Returns the same list with `Copper.index` rewritten to a
 /// dense `0..n` stack position.
+#[must_use]
 pub fn assign_inner_indices(mut coppers: Vec<(LayerRole, usize)>) -> Vec<(LayerRole, usize)> {
     let n = coppers.len();
     if n == 0 {

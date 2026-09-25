@@ -41,6 +41,7 @@ pub enum Shape {
 }
 
 impl Shape {
+    #[must_use]
     pub const fn disc(x: f64, y: f64, r: f64) -> Self {
         Self::Capsule(Capsule {
             ax: x,
@@ -53,6 +54,7 @@ impl Shape {
 
     /// This shape shifted by `(dx, dy)` board millimetres. Used to tile a
     /// step-and-repeat base cell across its grid.
+    #[must_use]
     pub fn translated(&self, dx: f64, dy: f64) -> Self {
         let shift = |pts: &[(f64, f64)]| pts.iter().map(|(x, y)| (x + dx, y + dy)).collect();
         match self {
@@ -75,6 +77,7 @@ impl Shape {
     }
 
     /// Inflated AABB (minx, miny, maxx, maxy).
+    #[must_use]
     pub fn bounds(&self) -> [f64; 4] {
         match self {
             Self::Capsule(c) => [
@@ -150,6 +153,7 @@ fn vertex_mean(pts: &[(f64, f64)]) -> (f64, f64) {
 // ── Distance helpers (all in mm) ─────────────────────────────────────────────
 
 /// Closest point on segment AB to point P, with the squared distance.
+#[must_use]
 pub fn point_seg_closest(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> ((f64, f64), f64) {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len2 = dx * dx + dy * dy;
@@ -164,6 +168,7 @@ pub fn point_seg_closest(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> ((f64, 
 }
 
 /// Squared distance from point P to segment AB.
+#[must_use]
 pub fn point_seg_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     point_seg_closest((px, py), (ax, ay), (bx, by)).1
 }
@@ -176,6 +181,7 @@ fn on_seg(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> bool {
     q.0 <= p.0.max(r.0) && q.0 >= p.0.min(r.0) && q.1 <= p.1.max(r.1) && q.1 >= p.1.min(r.1)
 }
 
+#[must_use]
 pub fn segments_intersect(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f64, f64)) -> bool {
     let d1 = orient(p3, p4, p1);
     let d2 = orient(p3, p4, p2);
@@ -193,6 +199,7 @@ pub fn segments_intersect(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f
 /// Minimum distance between two segments plus the closest point pair (on AB,
 /// on CD). 0 with the crossing point (both) when they cross; a colinear touch
 /// falls through to the endpoint candidates, which find a zero-distance pair.
+#[must_use]
 pub fn seg_seg_closest(
     a1: (f64, f64),
     a2: (f64, f64),
@@ -225,6 +232,7 @@ pub fn seg_seg_closest(
     (best.0.sqrt(), best.1, best.2)
 }
 
+#[must_use]
 pub fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f64)) -> f64 {
     seg_seg_closest(a1, a2, b1, b2).0
 }
@@ -233,6 +241,7 @@ pub fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f6
 /// an odd number of them. This remains useful for one self-contained aperture
 /// image (outer + holes); painted [`Shape::MultiPolygon`] values use signed
 /// coverage instead.
+#[must_use]
 pub fn point_in_contours(px: f64, py: f64, contours: &[Vec<(f64, f64)>]) -> bool {
     contours
         .iter()
@@ -243,6 +252,7 @@ pub fn point_in_contours(px: f64, py: f64, contours: &[Vec<(f64, f64)>]) -> bool
 /// weight when it encloses the point; strictly positive coverage is copper.
 /// The length mismatch is a construction defect, so fail closed as no copper
 /// instead of silently reverting to parity.
+#[must_use]
 pub fn point_in_weighted_contours(
     px: f64,
     py: f64,
@@ -259,6 +269,7 @@ pub fn point_in_weighted_contours(
             > 0
 }
 
+#[must_use]
 pub fn point_in_polygon(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
     let n = poly.len();
     if n < 3 {
@@ -280,6 +291,7 @@ pub fn point_in_polygon(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
 /// Minimum boundary-to-boundary distance between two polygons (0 if their
 /// edges cross) plus the closest point pair (on `a`, on `b`). Containment is
 /// the caller's business (point-in-polygon).
+#[must_use]
 pub fn poly_poly_closest(a: &[(f64, f64)], b: &[(f64, f64)]) -> (f64, (f64, f64), (f64, f64)) {
     let mut best = (f64::INFINITY, (0.0, 0.0), (0.0, 0.0));
     if a.is_empty() || b.is_empty() {
@@ -370,6 +382,7 @@ fn contour_edges(contour: &[(f64, f64)]) -> impl Iterator<Item = ((f64, f64), (f
 }
 
 /// Whether `(px, py)` lies on the copper of `shape`, corner radius included.
+#[must_use]
 pub fn shape_contains_point(shape: &Shape, px: f64, py: f64) -> bool {
     match shape {
         Shape::Capsule(c) => point_seg_dist2(px, py, c.ax, c.ay, c.bx, c.by) <= c.r * c.r,
@@ -526,6 +539,7 @@ fn weighted_regions_gap(
 
 /// Signed copper-edge gap between two shapes. `<= 0` means the copper overlaps
 /// (they are the same conductor); positive is the clear gap.
+#[must_use]
 pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
     shape_gap_at(a, b).0
 }
@@ -538,6 +552,7 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
 /// nearest. Dropping candidates whose bounding boxes already sit beyond
 /// `reach` keeps every candidate that could decide the answer, in order, so
 /// the nearest exposed one is unchanged whenever it is within `reach`.
+#[must_use]
 pub fn shape_gap_within(a: &Shape, b: &Shape, reach: f64) -> f64 {
     let finite = |s: &Shape| match s {
         Shape::Capsule(c) => [c.ax, c.ay, c.bx, c.by, c.r].iter().all(|v| v.is_finite()),
@@ -569,6 +584,7 @@ pub fn shape_gap_within(a: &Shape, b: &Shape, reach: f64) -> f64 {
 /// [`shape_gap`] plus the point of closest approach (see
 /// `closest_approach_point`; for full containment, a point of the contained
 /// copper), which is where a DRC finding is reported.
+#[must_use]
 pub fn shape_gap_at(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
     match (a, b) {
         (Shape::Capsule(ca), Shape::Capsule(cb)) => {
@@ -660,12 +676,14 @@ impl<'a> PolyGrid<'a> {
     /// Build a grid for `contours`. `target_cells` is the rough number of cells
     /// along the longer axis (more = finer = fewer exact fallbacks, more build
     /// cost).
+    #[must_use]
     pub fn new(contours: &'a [Vec<(f64, f64)>], target_cells: usize) -> Self {
         Self::build(contours, None, target_cells)
     }
 
     /// Build a grid for a signed painted region. A mismatched weight vector is
     /// represented as entirely outside, matching [`point_in_weighted_contours`].
+    #[must_use]
     pub fn new_weighted(
         contours: &'a [Vec<(f64, f64)>],
         weights: &'a [i16],
@@ -948,6 +966,7 @@ impl<'a> PolyGrid<'a> {
 
     /// Is `(px, py)` inside the shape? O(1) grid lookup, exact test only on a
     /// boundary cell.
+    #[must_use]
     pub fn contains(&self, px: f64, py: f64) -> bool {
         // `floor`, not a truncating cast: a query up to one cell left of `minx` or
         // below `miny` truncates to index 0 and reads the edge row/column instead
@@ -975,6 +994,7 @@ impl<'a> PolyGrid<'a> {
     /// boundary, so `false` is a sound refusal: nothing there to penetrate. The
     /// point is to keep the exact poly-poly distance off the hot path, which on a
     /// board-sized pour every primitive's bounds would otherwise reach.
+    #[must_use]
     pub fn near_boundary(&self, b: [f64; 4]) -> bool {
         let cx0 = (((b[0] - self.minx) * self.inv_cell).floor() as isize).max(0);
         let cy0 = (((b[1] - self.miny) * self.inv_cell).floor() as isize).max(0);

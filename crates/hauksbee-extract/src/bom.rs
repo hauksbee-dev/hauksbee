@@ -170,6 +170,7 @@ impl BomError {
     /// The process exit code this refusal maps to. Always
     /// [`EXIT_INVALID_FOR_ANALYSIS`]: every variant here means the input cannot
     /// be analysed, not that an assertion failed.
+    #[must_use]
     pub const fn exit_code(&self) -> i32 {
         EXIT_INVALID_FOR_ANALYSIS
     }
@@ -233,6 +234,7 @@ pub enum BomDialect {
 impl BomDialect {
     /// The short machine name recorded in provenance, and the name a report
     /// prints. Stable: it goes in JSON.
+    #[must_use]
     pub const fn kind(self) -> &'static str {
         match self {
             Self::KicadGrouped => "kicad_grouped_bom",
@@ -248,6 +250,7 @@ impl BomDialect {
     }
 
     /// The human name, for a report line a person reads.
+    #[must_use]
     pub const fn describe(self) -> &'static str {
         match self {
             Self::KicadGrouped => "KiCad grouped BOM",
@@ -313,6 +316,7 @@ pub enum ColumnRole {
 
 impl ColumnRole {
     /// The name used in `--bom-column <role>=<column>` and in JSON.
+    #[must_use]
     pub const fn flag_name(self) -> &'static str {
         match self {
             Self::Reference => "reference",
@@ -328,6 +332,7 @@ impl ColumnRole {
 
     /// Parse the role name a caller typed. `None` for anything unrecognised,
     /// so the caller can list the accepted names.
+    #[must_use]
     pub fn from_flag_name(s: &str) -> Option<Self> {
         Some(
             match s
@@ -350,6 +355,7 @@ impl ColumnRole {
     }
 
     /// Every role name, for an error message that has to list them.
+    #[must_use]
     pub const fn all() -> &'static [Self] {
         &[
             Self::Reference,
@@ -390,10 +396,12 @@ pub enum MappingConfidence {
 
 impl MappingConfidence {
     /// True when a non-interactive run may act on this assignment unasked.
+    #[must_use]
     pub const fn usable_unattended(self) -> bool {
         matches!(self, Self::Certain | Self::Likely)
     }
 
+    #[must_use]
     pub const fn describe(self) -> &'static str {
         match self {
             Self::Certain => "certain",
@@ -456,6 +464,7 @@ impl ColumnMap {
     /// The lines a report prints so the mapping actually used is never
     /// invisible. Recording the mapping is half the contract: a run that
     /// proceeds on a detected mapping must say which one it used.
+    #[must_use]
     pub fn lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         for a in &self.used {
@@ -495,6 +504,7 @@ pub struct ColumnOverrides {
 }
 
 impl ColumnOverrides {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -535,6 +545,7 @@ impl ColumnOverrides {
         Ok((parsed, header.trim().to_string()))
     }
 
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.pairs.is_empty()
     }
@@ -595,6 +606,7 @@ impl BomProvenance {
     ///
     /// Half the contract of proceeding on a detected mapping is saying which
     /// mapping was used, so this is not optional output.
+    #[must_use]
     pub fn lines(&self) -> Vec<String> {
         let sha = if self.sha256.is_empty() {
             String::new()
@@ -695,11 +707,13 @@ impl Bom {
 
     /// Does this file look like a BOM at all? Cheap enough to run over every
     /// file beside a board, so a caller can find the BOM without being told.
+    #[must_use]
     pub fn detects(bytes: &[u8]) -> bool {
         matches!(Self::probe(bytes, ""), BomDetection::Ready(_))
     }
 
     /// Probe a possible BOM without discarding a recognized file's diagnostic.
+    #[must_use]
     pub fn probe(bytes: &[u8], name: &str) -> BomDetection {
         match Self::from_bytes(bytes, name, &ColumnOverrides::new()) {
             Ok(bom) => BomDetection::Ready(bom),
@@ -709,6 +723,7 @@ impl Bom {
     }
 
     /// Every reference designator the BOM mentions, sorted and deduplicated.
+    #[must_use]
     pub fn references(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .rows
@@ -721,6 +736,7 @@ impl Bom {
     }
 
     /// The row covering one reference designator, if any.
+    #[must_use]
     pub fn row_for(&self, reference: &str) -> Option<&BomRow> {
         self.rows
             .iter()
@@ -737,6 +753,7 @@ impl Bom {
     /// number of placements on the board is not a separate case: it is a
     /// reference designator missing from one side or the other, which
     /// [`crate::bom`]'s reconciliation already reports by name.
+    #[must_use]
     pub fn quantity_disagreements(&self) -> Vec<(&BomRow, usize, usize)> {
         self.rows
             .iter()
@@ -750,6 +767,7 @@ impl Bom {
 
     /// Identity hints for the binder, one per reference designator the BOM
     /// names. See [`IdentityHint`].
+    #[must_use]
     pub fn identity_hints(&self) -> Vec<IdentityHint> {
         let mut out = Vec::new();
         for row in &self.rows {

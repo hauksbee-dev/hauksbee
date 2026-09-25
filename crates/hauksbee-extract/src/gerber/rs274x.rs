@@ -69,6 +69,7 @@ pub struct CopperPrim {
 
 impl CopperPrim {
     /// A primitive with no X2 identity, exactly what a stripped film yields.
+    #[must_use]
     pub fn bare(shape: Shape, kind: PrimKind) -> Self {
         Self {
             shape,
@@ -111,6 +112,7 @@ pub struct X2Attrs {
 }
 
 impl X2Attrs {
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.function.is_none()
             && self.net.is_none()
@@ -120,6 +122,7 @@ impl X2Attrs {
 
     /// The film's net names for this primitive (usually one; several on a
     /// net-tie object). Empty when the film named none.
+    #[must_use]
     pub fn net_names(&self) -> &[Arc<str>] {
         self.net.as_deref().unwrap_or(&[])
     }
@@ -129,6 +132,7 @@ impl X2Attrs {
 /// stitches layers but is not a component pad. Resolves the via-vs-pad
 /// ambiguity the geometric reconstruction cannot (a stitching via inside a
 /// footprint window looks exactly like a pad).
+#[must_use]
 pub const fn function_is_via(f: &ApertureFunction) -> bool {
     matches!(f, ApertureFunction::ViaPad)
 }
@@ -139,6 +143,7 @@ pub const fn function_is_via(f: &ApertureFunction) -> bool {
 /// Absence of any function says nothing, that flash keeps its geometric
 /// fallback, because a partially attributed film is not a film asserting its
 /// bare flashes are non-pads.
+#[must_use]
 pub const fn function_is_nonpad(f: &ApertureFunction) -> bool {
     matches!(
         f,
