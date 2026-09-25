@@ -10,7 +10,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PATH_MODULE = re.compile(r'#\[path\s*=\s*"([^"]+\.rs)"\]\s*\n\s*mod\s+', re.MULTILINE)
+# `#[path = "x.rs"] mod y;` or a bare `mod x;` (x.rs or x/mod.rs beside the driver).
+MODULE = re.compile(r'^(?:#\[path\s*=\s*"([^"]+\.rs)"\]\s*\n)?\s*mod\s+(\w+)\s*;', re.MULTILINE)
+
+
+def module_refs(driver: Path) -> list[str]:
+    refs = []
+    for path, name in MODULE.findall(driver.read_text()):
+        flat = f"{name}.rs"
+        refs.append(path or (flat if (driver.parent / flat).is_file() else f"{name}/mod.rs"))
+    return refs
 
 
 def main() -> None:
@@ -34,7 +43,7 @@ def main() -> None:
         bundle_drivers: set[Path] = set()
         bundled_sources: list[Path] = []
         for driver in declared_paths:
-            refs = PATH_MODULE.findall(driver.read_text())
+            refs = module_refs(driver)
             if not refs:
                 continue
             bundle_drivers.add(driver.resolve())
