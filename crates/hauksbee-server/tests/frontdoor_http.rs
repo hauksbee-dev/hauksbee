@@ -144,7 +144,7 @@ async fn analyze_without_filename_header_defaults_gracefully() {
 }
 
 /// Build a minimal multipart/form-data body for the given parts.
-/// Each part is (field_name, filename, raw_bytes).
+/// Each part is (`field_name`, filename, `raw_bytes`).
 fn multipart_body(boundary: &str, parts: &[(&str, &str, &[u8])]) -> Vec<u8> {
     let mut body = Vec::new();
     for (name, filename, data) in parts {
@@ -223,10 +223,10 @@ async fn design_router_threads_every_supplemental_input_and_repeated_models() {
 #[tokio::test]
 async fn checks_thread_optional_eagle_schematic_bytes_to_the_runner() {
     let check: frontdoor::DesignCheckRunner = Arc::new(|upload, spec| {
-        let (schematic_name, schematic_len) = upload
-            .schematic
-            .map(|file| (file.name, file.bytes.len()))
-            .unwrap_or(("none".to_string(), 0));
+        let (schematic_name, schematic_len) =
+            upload.schematic.map_or(("none".to_string(), 0), |file| {
+                (file.name, file.bytes.len())
+            });
         format!(
             "{{\"ok\":true,\"board_name\":\"{}\",\"board_len\":{},\"schematic_name\":\"{schematic_name}\",\"schematic_len\":{schematic_len},\"spec_len\":{}}}",
             upload.board.name,

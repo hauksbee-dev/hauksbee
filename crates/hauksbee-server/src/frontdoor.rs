@@ -41,7 +41,7 @@ type JsonResponse = (StatusCode, [(header::HeaderName, &'static str); 1], String
 
 /// Reject a request that a *website* in the user's browser made cross-origin to
 /// our loopback server. The analysis/check endpoints can run an uploaded
-/// PlatformIO project (`pio run` executes arbitrary `extra_scripts`), so a
+/// `PlatformIO` project (`pio run` executes arbitrary `extra_scripts`), so a
 /// drive-by `FormData` POST from any open tab would be code execution under the
 /// user's account. `Sec-Fetch-Site` is set by the browser and CANNOT be forged
 /// by page JS: our own same-origin page sends `same-origin`; a hostile
@@ -66,7 +66,7 @@ fn reject_cross_site(headers: &HeaderMap) -> Option<JsonResponse> {
 }
 
 /// Largest board upload accepted (256 MiB). Real flagship layouts blow past a
-/// timid cap (the 3,443-component Tarski InputSystem .kicad_pcb is 44 MiB), and
+/// timid cap (the 3,443-component Tarski `InputSystem` .`kicad_pcb` is 44 MiB), and
 /// the server is localhost-only, so the limit exists solely to stop a
 /// pathological upload from exhausting memory. When it does trip, axum answers
 /// with a plain-text 413 ("Failed to buffer the request body"), which is why
@@ -863,7 +863,7 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
             Err(e) => return Err(format!("malformed multipart upload: {e}")),
         };
         let name = field.name().unwrap_or("").to_string();
-        let filename = field.file_name().map(|s| s.to_string());
+        let filename = field.file_name().map(std::string::ToString::to_string);
         let data = match field.bytes().await {
             Ok(b) => b,
             Err(e) => return Err(format!("failed to read upload part: {e}")),
@@ -952,7 +952,7 @@ async fn check_handler(
 /// POST `/api/analyze`: the raw board file as the request body, with the
 /// original filename in the `X-Board-Filename` header (the page sets it).
 /// Board files may be text (KiCad/Eagle/IPC), a zip (gerbers) or a binary
-/// container (Altium .PcbDoc). The analyzer's extractor sniffs the format from
+/// container (Altium .`PcbDoc`). The analyzer's extractor sniffs the format from
 /// the RAW bytes; decoding here to a lossy-UTF8 string would corrupt the binary
 /// formats before they are ever parsed. Returns the analysis JSON.
 async fn analyze_handler_design_raw(

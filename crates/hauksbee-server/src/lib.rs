@@ -74,7 +74,7 @@ struct LiveSession {
     shared: Arc<Shared>,
     task: tokio::task::JoinHandle<()>,
     board_name: String,
-    /// (file name, KiCad layout text) served at `/boards/<file name>` so the
+    /// (file name, `KiCad` layout text) served at `/boards/<file name>` so the
     /// frontend's geometry viewer can render the launched board. None for
     /// formats with no client-drawable text (Altium, gerber zips).
     board_file: Option<(String, String)>,
@@ -96,8 +96,8 @@ pub struct LiveHub {
 impl LiveHub {
     // LiveHub::new returns Arc<LiveHub>, so implementing Default would be the wrong trait.
     #[allow(clippy::new_without_default)]
-    pub fn new() -> Arc<LiveHub> {
-        Arc::new(LiveHub {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
             session: std::sync::Mutex::new(None),
         })
     }
@@ -197,21 +197,21 @@ pub struct Server {
 
 impl Server {
     /// Spawn the simulation loop around `engine` and return the server.
-    pub fn new(engine: Box<dyn Engine>) -> Server {
-        Server::new_named(engine, None)
+    pub fn new(engine: Box<dyn Engine>) -> Self {
+        Self::new_named(engine, None)
     }
 
     /// [`Server::new`] with an explicit session name for `/api/live/status`
     /// and the frontend's session-identity surfaces. Callers that know the
     /// board's FILE name should pass it: many layout files carry no board
     /// name, so the engine-derived fallback is often empty.
-    pub fn new_named(engine: Box<dyn Engine>, name: Option<String>) -> Server {
+    pub fn new_named(engine: Box<dyn Engine>, name: Option<String>) -> Self {
         let hub = LiveHub::new();
         let name = name
             .filter(|n| !n.trim().is_empty())
             .unwrap_or_else(|| engine.board_info().name.clone());
         hub.launch(engine, name, None, None);
-        Server { hub }
+        Self { hub }
     }
 
     /// The live-session hub this server preloaded, for wiring the launch API.
@@ -392,14 +392,13 @@ fn unified_router(parts: RouterParts) -> Router {
 /// names make everything else safely cacheable, but the entry HTML is served
 /// under a stable name, a cached copy keeps pointing at old asset hashes and
 /// resurrects "already fixed" bugs after a rebuild. `no-cache` still allows a
-/// 304 when the file is unchanged (ServeDir handles conditional requests).
+/// 304 when the file is unchanged (`ServeDir` handles conditional requests).
 async fn no_cache_html(mut res: axum::response::Response) -> axum::response::Response {
     let is_html = res
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map(|ct| ct.starts_with("text/html"))
-        .unwrap_or(false);
+        .is_some_and(|ct| ct.starts_with("text/html"));
     if is_html {
         res.headers_mut().insert(
             header::CACHE_CONTROL,
@@ -560,7 +559,7 @@ fn origin_is_ours(headers: &axum::http::HeaderMap) -> Result<(), &'static str> {
     // Strip the port: any loopback port is our own server or another local
     // tool, and the alternative is guessing which port we ended up on after
     // the fallback ladder.
-    let hostname = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    let hostname = host.rsplit_once(':').map_or(host, |(h, _)| h);
     if matches!(hostname, "127.0.0.1" | "localhost" | "[::1]" | "::1") {
         Ok(())
     } else {
@@ -681,7 +680,7 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
     }
 }
 
-/// The engine's BoardInfo with the session's wire name applied (see the
+/// The engine's `BoardInfo` with the session's wire name applied (see the
 /// fallback rationale in [`LiveHub::launch`]).
 fn named_board_info(engine: &dyn Engine, wire_name: &str) -> BoardInfo {
     let mut info = engine.board_info();
@@ -1091,7 +1090,7 @@ mod rate_honesty_tests {
 
     impl TestEngine {
         fn new(cost: f64, dies: bool) -> Self {
-            TestEngine {
+            Self {
                 sim_time: 0.0,
                 cost,
                 dies,
@@ -1181,7 +1180,7 @@ mod rate_honesty_tests {
                 cmd_rx,
                 shared.clone(),
             ));
-            Session {
+            Self {
                 cmd,
                 rx,
                 shared,

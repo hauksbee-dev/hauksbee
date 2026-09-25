@@ -63,13 +63,13 @@ pub struct RateMeter {
 
 impl Default for RateMeter {
     fn default() -> Self {
-        RateMeter::new()
+        Self::new()
     }
 }
 
 impl RateMeter {
-    pub fn new() -> RateMeter {
-        RateMeter {
+    pub fn new() -> Self {
+        Self {
             progress: VecDeque::new(),
             costs: VecDeque::new(),
         }

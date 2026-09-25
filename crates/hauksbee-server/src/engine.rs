@@ -40,7 +40,7 @@ impl McuDemoEngine {
         let uart_rx: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
         let led_state: std::sync::Arc<std::sync::Mutex<bool>> = Default::default();
         let mcu = Self::build_mcu(firmware_hex, &uart_rx, &led_state)?;
-        Ok(McuDemoEngine {
+        Ok(Self {
             mcu,
             name: name.to_string(),
             board_url: board_url.to_string(),
@@ -52,7 +52,7 @@ impl McuDemoEngine {
         })
     }
 
-    /// Build a fresh AvrMcu with callbacks wired to the shared UART/LED state.
+    /// Build a fresh `AvrMcu` with callbacks wired to the shared UART/LED state.
     fn build_mcu(
         firmware_hex: &std::path::Path,
         uart_rx: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
