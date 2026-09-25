@@ -42,8 +42,9 @@ mod eagle;
 /// works from destroys the header, and one of those readers will then claim the
 /// file and report invented parts from it.
 pub use eagle::{eagle_binary_message, looks_like_eagle_binary};
-/// Declared net ties from a companion Eagle `.sch`. Not a schematic extractor:
-/// the `.brd` already carries the netlist, and this answers only whether the
+/// Declared net ties from a companion Eagle `.sch`.
+///
+/// Not a schematic extractor: the `.brd` already carries the netlist, and this answers only whether the
 /// designer DECLARED two named nets joined on purpose, which the `.brd` cannot
 /// say and which decides whether a copper contact between them is a defect.
 pub mod eagle_sch;
@@ -337,10 +338,20 @@ pub struct ExtractedBoard {
 }
 
 impl ExtractedBoard {
+    /// KiCad layout (`.kicad_pcb`).
+    ///
+    /// # Errors
+    /// [`ExtractError::Parse`] when the text is not a well-formed s-expression, or
+    /// another variant when it is not a readable KiCad board.
     pub fn from_kicad_pcb(text: &str) -> Result<Self, ExtractError> {
         pcb::extract(text)
     }
 
+    /// KiCad netlist export (`.net`).
+    ///
+    /// # Errors
+    /// [`ExtractError::Parse`] when the text is not a well-formed s-expression, or
+    /// another variant when it is not a KiCad netlist.
     pub fn from_kicad_netlist(text: &str) -> Result<Self, ExtractError> {
         netlist::extract(text)
     }
@@ -350,12 +361,19 @@ impl ExtractedBoard {
     /// and power symbols, since a schematic carries no copper. Sub-sheets are
     /// not followed (single sheet only); use [`Self::from_kicad_schematic_path`]
     /// to recurse a hierarchy that lives in sibling files.
+    ///
+    /// # Errors
+    /// Fails when the text is not a well-formed KiCad schematic.
     pub fn from_kicad_schematic(text: &str) -> Result<Self, ExtractError> {
         schematic::extract(text)
     }
 
     /// KiCad schematic from a file path, recursing into the sheet hierarchy
     /// (sub-sheets resolved relative to the file's directory).
+    ///
+    /// # Errors
+    /// Fails when the file or a sub-sheet cannot be read or is not a
+    /// well-formed KiCad schematic.
     pub fn from_kicad_schematic_path(path: &Path) -> Result<Self, ExtractError> {
         schematic::extract_from_path(path)
     }
@@ -368,6 +386,9 @@ impl ExtractedBoard {
     /// over either a KiCad `.kicad_pcb` ([`drc::run_drc`]) or an Eagle `.brd`
     /// ([`drc::eagle_drc_from_text`]); an unrecognised format returns an empty
     /// report.
+    ///
+    /// # Errors
+    /// Fails when a KiCad board does not parse.
     pub fn drc(text: &str) -> Result<drc::DrcReport, ExtractError> {
         Self::drc_with_clearance(text, None)
     }
@@ -378,6 +399,9 @@ impl ExtractedBoard {
     /// `.kicad_pcb`, so a caller that knows the board path can read the
     /// Default-class clearance and pass it here. `None` keeps the board's own /
     /// default behaviour. The Eagle path reads its own rules and ignores this.
+    ///
+    /// # Errors
+    /// Fails when a KiCad board does not parse.
     pub fn drc_with_clearance(
         text: &str,
         clearance_override: Option<f64>,
@@ -387,6 +411,9 @@ impl ExtractedBoard {
 
     /// [`Self::drc`] with project-derived per-net clearance rules for KiCad
     /// boards. Other input formats keep their own scalar-rule behavior.
+    ///
+    /// # Errors
+    /// Fails when a KiCad board does not parse.
     pub fn drc_with_clearance_rules(
         text: &str,
         rules: Option<drc::ClearanceRules>,
@@ -402,6 +429,10 @@ impl ExtractedBoard {
     }
 
     /// Eagle `.brd` (XML, Eagle 6+): Arduino, Adafruit, SparkFun designs.
+    ///
+    /// # Errors
+    /// [`ExtractError::Xml`] or [`ExtractError::WrongRoot`] when the text is
+    /// not a readable Eagle board.
     pub fn from_eagle_brd(text: &str) -> Result<Self, ExtractError> {
         eagle::extract(text)
     }
@@ -424,12 +455,19 @@ impl ExtractedBoard {
     /// This fits exactly the named parts and nothing else. For the policy that
     /// decides the rest of the board's DNP parts, see
     /// [`apply_dnp_policy`](Self::apply_dnp_policy).
+    ///
+    /// # Errors
+    /// [`ExtractError::UnknownReference`] naming every reference in `refs` that
+    /// is not on the board.
     pub fn fit(&mut self, refs: &[String]) -> Result<usize, ExtractError> {
         let decision = self.apply_dnp_policy(dnp::DnpPolicy::Honour, refs, &[])?;
         Ok(decision.fitted.len())
     }
 
     /// IPC-D-356/356A fab netlist: the universal fallback any EDA exports.
+    ///
+    /// # Errors
+    /// Fails when the text carries no IPC-D-356 records to read.
     pub fn from_ipc_d356(text: &str) -> Result<Self, ExtractError> {
         ipc356::extract(text)
     }
@@ -439,6 +477,10 @@ impl ExtractedBoard {
     /// `Nets6` / `Components6` / `Pads6` record streams. The layout carries full
     /// net connectivity, so the board file alone fully describes the circuit,
     /// the same way a `.kicad_pcb` does. See [`altium`] and `docs/ingest/ALTIUM.md`.
+    ///
+    /// # Errors
+    /// [`ExtractError::Altium`] when the bytes are not a readable Compound File
+    /// or lack the Altium record streams.
     pub fn from_altium_pcb(bytes: &[u8]) -> Result<Self, ExtractError> {
         altium::extract(bytes)
     }
@@ -449,18 +491,30 @@ impl ExtractedBoard {
     /// the job's CAD netlist. See [`odbpp`] for the accounting this discards
     /// ([`odbpp::OdbExtraction::stats`] keeps it) and what is deliberately not
     /// modelled.
+    ///
+    /// # Errors
+    /// [`ExtractError::Odb`] when the job cannot be opened or lacks the data a
+    /// netlist needs.
     pub fn from_odbpp(path: &Path) -> Result<Self, ExtractError> {
         odbpp::from_odbpp(path).map(|e| e.board)
     }
 
     /// ODB++ from archive bytes (`.tgz` / `.tar` / `.zip`), for the web path
     /// that has an upload rather than a path.
+    ///
+    /// # Errors
+    /// [`ExtractError::Odb`] when the archive cannot be unpacked or lacks the
+    /// data a netlist needs.
     pub fn from_odbpp_archive(bytes: &[u8]) -> Result<Self, ExtractError> {
         odbpp::from_odbpp_archive(bytes).map(|e| e.board)
     }
 
     /// IPC-2581 (DPMX) design-exchange XML, revision B or C, namespaced or not.
     /// See [`ipc2581`]; [`ipc2581::extract`] keeps the read's accounting.
+    ///
+    /// # Errors
+    /// [`ExtractError::Ipc2581`] or [`ExtractError::Xml`] when the document is
+    /// not readable IPC-2581.
     pub fn from_ipc2581(text: &str) -> Result<Self, ExtractError> {
         ipc2581::extract(text).map(|e| e.board)
     }
@@ -469,6 +523,9 @@ impl ExtractedBoard {
     /// pipe-delimited text): the `.pcbdoc` form EasyEDA and several converters
     /// produce instead of Altium Designer's binary OLE2 container. Reads nets,
     /// components, pads and comment texts; carries no copper geometry for DRC.
+    ///
+    /// # Errors
+    /// Fails when the text is not an ASCII Protel board export.
     pub fn from_protel_ascii(text: &str) -> Result<Self, ExtractError> {
         protel_ascii::extract(text)
     }
@@ -477,6 +534,9 @@ impl ExtractedBoard {
     /// of [`Self::drc`]. Reads copper geometry (tracks, arcs, vias, pads,
     /// polygons) per net and feeds the same detection engine the KiCad and Eagle
     /// paths use.
+    ///
+    /// # Errors
+    /// [`ExtractError::Altium`] when the bytes are not a readable `.PcbDoc`.
     pub fn altium_drc(bytes: &[u8]) -> Result<drc::DrcReport, ExtractError> {
         drc::altium_drc_from_bytes(bytes)
     }
@@ -504,6 +564,10 @@ impl ExtractedBoard {
     /// hard-coded substring ladder. An input no reader recognises fails with
     /// [`ExtractError::Unrecognized`], whose message describes the accepted
     /// formats in user words (see [`reader::unrecognized_message`]).
+    ///
+    /// # Errors
+    /// [`ExtractError::Unrecognized`] when no reader claims the input, or the
+    /// claiming reader's own error when the file does not read.
     pub fn from_auto(text: &str) -> Result<Self, ExtractError> {
         reader::Registry::builtin().read(text.as_bytes(), None)
     }
@@ -604,9 +668,6 @@ pub(crate) fn name_unescaper(producer: &str) -> impl Fn(&str) -> String {
 }
 
 fn unescape_kicad_name(s: &str) -> String {
-    if !s.contains('{') {
-        return s.to_string();
-    }
     const TABLE: &[(&str, &str)] = &[
         ("{dblquote}", "\""),
         ("{quote}", "'"),
@@ -623,6 +684,9 @@ fn unescape_kicad_name(s: &str) -> String {
         // `{brace}` last: a `{` restored earlier must not start a new token.
         ("{brace}", "{"),
     ];
+    if !s.contains('{') {
+        return s.to_string();
+    }
     let mut out = s.to_string();
     for (token, ch) in TABLE {
         if out.contains(token) {
@@ -650,161 +714,161 @@ fn unescape_kicad_name(s: &str) -> String {
 /// identities carrying an explicit `duplicate_reference_conflict` property.
 pub const DUPLICATE_REFERENCE_CONFLICT_KEY: &str = "duplicate_reference_conflict";
 
-pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Component> {
-    fn append_property(component: &mut Component, key: &str, value: String) {
-        if !component
-            .properties
-            .iter()
-            .any(|(existing_key, existing_value)| existing_key == key && existing_value == &value)
-        {
-            component.properties.push((key.to_string(), value));
+fn append_property(component: &mut Component, key: &str, value: String) {
+    if !component
+        .properties
+        .iter()
+        .any(|(existing_key, existing_value)| existing_key == key && existing_value == &value)
+    {
+        component.properties.push((key.to_string(), value));
+    }
+}
+
+fn hard_conflicts(previous: &Component, incoming: &Component) -> Vec<String> {
+    let mut conflicts = Vec::new();
+    let fields = [
+        ("values", &previous.value, &incoming.value),
+        ("footprints", &previous.footprint, &incoming.footprint),
+        ("library ids", &previous.lib_id, &incoming.lib_id),
+    ];
+    for (what, a, b) in fields {
+        if !a.is_empty() && !b.is_empty() && a != b {
+            conflicts.push(format!("{what} differ ('{a}' versus '{b}')"));
         }
     }
-
-    fn hard_conflicts(previous: &Component, incoming: &Component) -> Vec<String> {
-        let mut conflicts = Vec::new();
-        let fields = [
-            ("values", &previous.value, &incoming.value),
-            ("footprints", &previous.footprint, &incoming.footprint),
-            ("library ids", &previous.lib_id, &incoming.lib_id),
-        ];
-        for (what, a, b) in fields {
-            if !a.is_empty() && !b.is_empty() && a != b {
-                conflicts.push(format!("{what} differ ('{a}' versus '{b}')"));
-            }
-        }
-        for previous_pin in &previous.pins {
-            for incoming_pin in &incoming.pins {
-                if previous_pin.number == incoming_pin.number
-                    && matches!(
-                        (previous_pin.net, incoming_pin.net),
-                        (Some(previous_net), Some(incoming_net)) if previous_net != incoming_net
-                    )
-                {
-                    conflicts.push(format!(
-                        "pin '{}' maps to {:?} versus {:?}",
-                        previous_pin.number, previous_pin.net, incoming_pin.net
-                    ));
-                }
-            }
-        }
-        for (previous_key, previous_value) in &previous.properties {
-            for (incoming_key, incoming_value) in &incoming.properties {
-                if previous_key == incoming_key && previous_value != incoming_value {
-                    conflicts.push(format!(
-                        "property '{previous_key}' differs ('{previous_value}' versus '{incoming_value}')"
-                    ));
-                }
-            }
-        }
-        conflicts.sort();
-        conflicts.dedup();
-        conflicts
-    }
-
-    // Metadata order in ODB++, IPC-2581, binary Altium and ASCII Protel is not
-    // guaranteed to agree. Pick the unsuffixed representative from content,
-    // not arrival order, so reading the same conflict through another path
-    // cannot silently change what `board.component("J1")` means.
-    fn stable_component_key(component: &Component) -> String {
-        let mut properties: Vec<_> = component
-            .properties
-            .iter()
-            .filter(|(key, _)| key != DUPLICATE_REFERENCE_CONFLICT_KEY)
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-            .collect();
-        properties.sort_unstable();
-        let mut pins: Vec<_> = component
-            .pins
-            .iter()
-            .map(|pin| {
-                (
-                    pin.number.as_str(),
-                    pin.net,
-                    pin.function.as_str(),
-                    pin.kind.as_str(),
+    for previous_pin in &previous.pins {
+        for incoming_pin in &incoming.pins {
+            if previous_pin.number == incoming_pin.number
+                && matches!(
+                    (previous_pin.net, incoming_pin.net),
+                    (Some(previous_net), Some(incoming_net)) if previous_net != incoming_net
                 )
-            })
-            .collect();
-        pins.sort_unstable();
-        format!(
-            "{:?}",
-            (
-                component.value.as_str(),
-                component.footprint.as_str(),
-                component.lib_id.as_str(),
-                component.dnp,
-                properties,
-                pins,
-            )
-        )
-    }
-
-    fn merge_compatible(previous: &mut Component, incoming: Component) {
-        previous.dnp = previous.dnp && incoming.dnp;
-        if previous.value.is_empty() && !incoming.value.is_empty() {
-            previous.value = incoming.value.clone();
-        }
-        if previous.footprint.is_empty() && !incoming.footprint.is_empty() {
-            previous.footprint = incoming.footprint.clone();
-        }
-        if previous.lib_id.is_empty() && !incoming.lib_id.is_empty() {
-            previous.lib_id = incoming.lib_id.clone();
-        }
-        if previous.position.is_none() {
-            previous.position = incoming.position;
-        }
-        if previous.layer.is_empty() && !incoming.layer.is_empty() {
-            previous.layer = incoming.layer.clone();
-        }
-
-        for (key, value) in incoming.properties {
-            if key == altium::VALUE_UNRESOLVED_KEY && !previous.value.is_empty() {
-                continue;
-            }
-            append_property(previous, &key, value);
-        }
-        if !previous.value.is_empty() {
-            previous
-                .properties
-                .retain(|(key, _)| key != altium::VALUE_UNRESOLVED_KEY);
-        }
-        for mut pin in incoming.pins {
-            // Readers can recover connectivity from different streams. The same
-            // physical pad may therefore be unknown in one record and known in
-            // another; enrich that record instead of manufacturing an identity
-            // conflict or two logical pins. Pads at distinct positions remain
-            // distinct physical placements even when they share pin and net.
-            if let Some(existing) = previous
-                .pins
-                .iter_mut()
-                .find(|existing| existing.number == pin.number && existing.position == pin.position)
             {
-                if existing.net.is_none() {
-                    existing.net = pin.net;
-                } else if pin.net.is_none() {
-                    pin.net = existing.net;
-                }
-                if existing.function.is_empty() {
-                    existing.function = pin.function.clone();
-                } else if pin.function.is_empty() {
-                    pin.function = existing.function.clone();
-                }
-                if existing.kind.is_empty() {
-                    existing.kind = pin.kind.clone();
-                } else if pin.kind.is_empty() {
-                    pin.kind = existing.kind.clone();
-                }
+                conflicts.push(format!(
+                    "pin '{}' maps to {:?} versus {:?}",
+                    previous_pin.number, previous_pin.net, incoming_pin.net
+                ));
             }
-            // Do not deduplicate physical pad placements. A real split
-            // footprint can place the same numbered pad at the same coordinate
-            // on opposite layers (Watchy TP4/TP5); downstream electrical walks
-            // deduplicate by pin/net where needed, while geometry consumers need
-            // both records.
-            previous.pins.push(pin);
         }
     }
+    for (previous_key, previous_value) in &previous.properties {
+        for (incoming_key, incoming_value) in &incoming.properties {
+            if previous_key == incoming_key && previous_value != incoming_value {
+                conflicts.push(format!(
+                    "property '{previous_key}' differs ('{previous_value}' versus '{incoming_value}')"
+                ));
+            }
+        }
+    }
+    conflicts.sort();
+    conflicts.dedup();
+    conflicts
+}
 
+// Metadata order in ODB++, IPC-2581, binary Altium and ASCII Protel is not
+// guaranteed to agree. Pick the unsuffixed representative from content,
+// not arrival order, so reading the same conflict through another path
+// cannot silently change what `board.component("J1")` means.
+fn stable_component_key(component: &Component) -> String {
+    let mut properties: Vec<_> = component
+        .properties
+        .iter()
+        .filter(|(key, _)| key != DUPLICATE_REFERENCE_CONFLICT_KEY)
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    properties.sort_unstable();
+    let mut pins: Vec<_> = component
+        .pins
+        .iter()
+        .map(|pin| {
+            (
+                pin.number.as_str(),
+                pin.net,
+                pin.function.as_str(),
+                pin.kind.as_str(),
+            )
+        })
+        .collect();
+    pins.sort_unstable();
+    format!(
+        "{:?}",
+        (
+            component.value.as_str(),
+            component.footprint.as_str(),
+            component.lib_id.as_str(),
+            component.dnp,
+            properties,
+            pins,
+        )
+    )
+}
+
+fn merge_compatible(previous: &mut Component, incoming: Component) {
+    previous.dnp = previous.dnp && incoming.dnp;
+    if previous.value.is_empty() && !incoming.value.is_empty() {
+        previous.value = incoming.value;
+    }
+    if previous.footprint.is_empty() && !incoming.footprint.is_empty() {
+        previous.footprint = incoming.footprint;
+    }
+    if previous.lib_id.is_empty() && !incoming.lib_id.is_empty() {
+        previous.lib_id = incoming.lib_id;
+    }
+    if previous.position.is_none() {
+        previous.position = incoming.position;
+    }
+    if previous.layer.is_empty() && !incoming.layer.is_empty() {
+        previous.layer = incoming.layer;
+    }
+
+    for (key, value) in incoming.properties {
+        if key == altium::VALUE_UNRESOLVED_KEY && !previous.value.is_empty() {
+            continue;
+        }
+        append_property(previous, &key, value);
+    }
+    if !previous.value.is_empty() {
+        previous
+            .properties
+            .retain(|(key, _)| key != altium::VALUE_UNRESOLVED_KEY);
+    }
+    for mut pin in incoming.pins {
+        // Readers can recover connectivity from different streams. The same
+        // physical pad may therefore be unknown in one record and known in
+        // another; enrich that record instead of manufacturing an identity
+        // conflict or two logical pins. Pads at distinct positions remain
+        // distinct physical placements even when they share pin and net.
+        if let Some(existing) = previous
+            .pins
+            .iter_mut()
+            .find(|existing| existing.number == pin.number && existing.position == pin.position)
+        {
+            if existing.net.is_none() {
+                existing.net = pin.net;
+            } else if pin.net.is_none() {
+                pin.net = existing.net;
+            }
+            if existing.function.is_empty() {
+                existing.function.clone_from(&pin.function);
+            } else if pin.function.is_empty() {
+                pin.function.clone_from(&existing.function);
+            }
+            if existing.kind.is_empty() {
+                existing.kind.clone_from(&pin.kind);
+            } else if pin.kind.is_empty() {
+                pin.kind.clone_from(&existing.kind);
+            }
+        }
+        // Do not deduplicate physical pad placements. A real split
+        // footprint can place the same numbered pad at the same coordinate
+        // on opposite layers (Watchy TP4/TP5); downstream electrical walks
+        // deduplicate by pin/net where needed, while geometry consumers need
+        // both records.
+        previous.pins.push(pin);
+    }
+}
+
+pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Component> {
     let mut used_references: HashSet<String> = components
         .iter()
         .filter(|component| !component.reference.is_empty())
@@ -818,15 +882,10 @@ pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Comp
             continue;
         }
         let reference = component.reference.clone();
-        let index = match group_index.get(&reference).copied() {
-            Some(index) => index,
-            None => {
-                let index = groups.len();
-                groups.push((reference.clone(), Vec::new()));
-                group_index.insert(reference, index);
-                index
-            }
-        };
+        let index = *group_index.entry(reference.clone()).or_insert_with(|| {
+            groups.push((reference, Vec::new()));
+            groups.len() - 1
+        });
         groups[index].1.push(component);
     }
 

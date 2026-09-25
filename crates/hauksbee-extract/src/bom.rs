@@ -38,8 +38,9 @@ use serde::{Deserialize, Serialize};
 /// on a file that is not a BOM at all.
 const MAX_BANNER_LINES: usize = 40;
 
-/// The exit code a refused BOM produces: "invalid for analysis", the same code
-/// a diverged co-simulation produces. A BOM hauksbee cannot map is not a failed
+/// The exit code a refused BOM produces: "invalid for analysis".
+///
+/// It is the same code a diverged co-simulation produces. A BOM hauksbee cannot map is not a failed
 /// assertion (exit 1) and not a usage error (exit 2): it is an input that cannot
 /// be analysed truthfully, which is exactly what 3 means. The definition lives
 /// in `hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS`; `hauksbee-engine`'s
@@ -49,8 +50,9 @@ pub const EXIT_INVALID_FOR_ANALYSIS: i32 = 3;
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
-/// Why a BOM could not be used. Every variant is already a whole human
-/// sentence naming the file, what is wrong, and what to do about it, because a
+/// Why a BOM could not be used.
+///
+/// Every variant is already a whole human sentence naming the file, what is wrong, and what to do about it, because a
 /// refusal whose message does not say what to do next is a dead end.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum BomError {
@@ -519,6 +521,9 @@ impl ColumnOverrides {
 
     /// Parse a `role=column` pair as typed on a command line. The error is the
     /// message to show, already naming the accepted role names.
+    ///
+    /// # Errors
+    /// The message to show when `s` has no `=` or names an unknown role.
     pub fn parse_pair(s: &str) -> Result<(ColumnRole, String), String> {
         let (role, header) = s.split_once('=').ok_or_else(|| {
             format!(
@@ -664,6 +669,10 @@ impl Bom {
     /// Read a BOM from a path. The dialect is detected from the content, never
     /// the extension: the tab-separated exports that claim to be `.csv` are
     /// common enough that trusting the extension is a bug.
+    ///
+    /// # Errors
+    /// [`BomError::Io`] when the file cannot be read, or the refusal
+    /// [`Self::from_bytes`] gives for content that is not a usable BOM.
     pub fn read(path: &Path) -> Result<Self, BomError> {
         let name = path.display().to_string();
         let bytes = std::fs::read(path).map_err(|e| BomError::Io {
@@ -674,6 +683,9 @@ impl Bom {
     }
 
     /// Read a BOM from a path with caller-confirmed column mappings.
+    ///
+    /// # Errors
+    /// As [`Self::read`].
     pub fn read_with(path: &Path, overrides: &ColumnOverrides) -> Result<Self, BomError> {
         let name = path.display().to_string();
         let bytes = std::fs::read(path).map_err(|e| BomError::Io {
@@ -685,6 +697,10 @@ impl Bom {
 
     /// Read a BOM from bytes, hashing them for provenance. `name` is what error
     /// messages call the file.
+    ///
+    /// # Errors
+    /// A [`BomError`] naming why the content is not a usable BOM: empty, no
+    /// confident reference column, an unknown override column, and so on.
     pub fn from_bytes(
         bytes: &[u8],
         name: &str,
@@ -697,6 +713,9 @@ impl Bom {
 
     /// Read a BOM from text already in memory, with no hash. Used by tests and
     /// by callers that synthesized the table.
+    ///
+    /// # Errors
+    /// As [`Self::from_bytes`].
     pub fn from_text(
         text: &str,
         name: &str,
@@ -876,80 +895,8 @@ impl Bom {
             });
         }
 
-        let mut first_lines = std::collections::BTreeMap::<&str, usize>::new();
-        for (reference, line) in &duplicate_candidates {
-            if let Some(first_line) = first_lines.insert(reference, *line) {
-                return Err(BomError::DuplicateReference {
-                    name: name.to_string(),
-                    reference: reference.clone(),
-                    first_line,
-                    second_line: *line,
-                });
-            }
-        }
-
-        let with_mpn = rows.iter().filter(|r| r.mpn.is_some()).count();
-        let parts: usize = rows.iter().map(|r| r.references.len()).sum();
-        let mut contributed = vec![Contribution {
-            what: "part identity".to_string(),
-            detail: format!(
-                "{parts} reference designators over {} {}, {with_mpn} of {} carrying a \
-                 manufacturer part number",
-                rows.len(),
-                plural(rows.len(), "row", "rows"),
-                plural(rows.len(), "it", "them"),
-            ),
-        }];
-        let stated = rows.iter().filter(|r| r.populate.is_some()).count();
-        if stated > 0 {
-            contributed.push(Contribution {
-                what: "populate flags".to_string(),
-                detail: format!(
-                    "{stated} {} whether the part is fitted",
-                    plural(stated, "row states", "rows state")
-                ),
-            });
-        }
-
-        let mut ignored: Vec<IgnoredInput> = map
-            .ignored_headers
-            .iter()
-            .map(|h| IgnoredInput {
-                what: format!("column {h:?}"),
-                why: "no analysis reads it".to_string(),
-            })
-            .collect();
-        for a in &map.left_unmapped {
-            ignored.push(IgnoredInput {
-                what: format!("column {:?}", a.header),
-                why: format!(
-                    "it is only a guess at the {} column; confirm it with \
-                     `--bom-column {}={}`",
-                    a.role.flag_name(),
-                    a.role.flag_name(),
-                    a.header
-                ),
-            });
-        }
-        if rows.iter().any(|r| r.distributor_part.is_some()) {
-            ignored.push(IgnoredInput {
-                what: "distributor order codes".to_string(),
-                why: "a distributor code is not a manufacturer part number, so matching a \
-                      model against one would bind the wrong device"
-                    .to_string(),
-            });
-        }
-        skipped_placeholders.sort();
-        skipped_placeholders.dedup();
-        if !skipped_placeholders.is_empty() {
-            ignored.push(IgnoredInput {
-                what: format!("{} unannotated designators", skipped_placeholders.len()),
-                why: format!(
-                    "{} name no specific part, so they cannot be matched to the board",
-                    skipped_placeholders.join(", ")
-                ),
-            });
-        }
+        refuse_duplicates(name, &duplicate_candidates)?;
+        let (contributed, ignored) = accounting(&rows, &map, skipped_placeholders);
 
         Ok(Self {
             dialect,
@@ -965,6 +912,93 @@ impl Bom {
             },
         })
     }
+}
+
+/// Refuse a designator that two rows both claim, naming both lines.
+fn refuse_duplicates(name: &str, candidates: &[(String, usize)]) -> Result<(), BomError> {
+    let mut first_lines = std::collections::BTreeMap::<&str, usize>::new();
+    for (reference, line) in candidates {
+        if let Some(first_line) = first_lines.insert(reference, *line) {
+            return Err(BomError::DuplicateReference {
+                name: name.to_string(),
+                reference: reference.clone(),
+                first_line,
+                second_line: *line,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// What a parsed BOM contributed to the analysis and what it left unread.
+fn accounting(
+    rows: &[BomRow],
+    map: &ColumnMap,
+    mut skipped_placeholders: Vec<String>,
+) -> (Vec<Contribution>, Vec<IgnoredInput>) {
+    let with_mpn = rows.iter().filter(|r| r.mpn.is_some()).count();
+    let parts: usize = rows.iter().map(|r| r.references.len()).sum();
+    let mut contributed = vec![Contribution {
+        what: "part identity".to_string(),
+        detail: format!(
+            "{parts} reference designators over {} {}, {with_mpn} of {} carrying a \
+             manufacturer part number",
+            rows.len(),
+            plural(rows.len(), "row", "rows"),
+            plural(rows.len(), "it", "them"),
+        ),
+    }];
+    let stated = rows.iter().filter(|r| r.populate.is_some()).count();
+    if stated > 0 {
+        contributed.push(Contribution {
+            what: "populate flags".to_string(),
+            detail: format!(
+                "{stated} {} whether the part is fitted",
+                plural(stated, "row states", "rows state")
+            ),
+        });
+    }
+
+    let mut ignored: Vec<IgnoredInput> = map
+        .ignored_headers
+        .iter()
+        .map(|h| IgnoredInput {
+            what: format!("column {h:?}"),
+            why: "no analysis reads it".to_string(),
+        })
+        .collect();
+    for a in &map.left_unmapped {
+        ignored.push(IgnoredInput {
+            what: format!("column {:?}", a.header),
+            why: format!(
+                "it is only a guess at the {} column; confirm it with \
+                 `--bom-column {}={}`",
+                a.role.flag_name(),
+                a.role.flag_name(),
+                a.header
+            ),
+        });
+    }
+    if rows.iter().any(|r| r.distributor_part.is_some()) {
+        ignored.push(IgnoredInput {
+            what: "distributor order codes".to_string(),
+            why: "a distributor code is not a manufacturer part number, so matching a \
+                  model against one would bind the wrong device"
+                .to_string(),
+        });
+    }
+    skipped_placeholders.sort();
+    skipped_placeholders.dedup();
+    if !skipped_placeholders.is_empty() {
+        ignored.push(IgnoredInput {
+            what: format!("{} unannotated designators", skipped_placeholders.len()),
+            why: format!(
+                "{} name no specific part, so they cannot be matched to the board",
+                skipped_placeholders.join(", ")
+            ),
+        });
+    }
+    (contributed, ignored)
 }
 
 /// One artifact's claim about what one reference designator is.
@@ -1047,20 +1081,22 @@ pub(crate) struct Table {
 /// Shared with the placement reader, which needs all three for the same reasons.
 pub(crate) fn decode(bytes: &[u8]) -> String {
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    let text = match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
-        // Spreadsheet exports commonly use Windows-1252. Its 0x80..0x9f range
-        // is punctuation and currency symbols, not the Latin-1 control range,
-        // so a byte-for-codepoint fallback corrupts ordinary descriptions and
-        // part numbers.
-        Err(_) => encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned(),
-    };
+    // Spreadsheet exports commonly use Windows-1252. Its 0x80..0x9f range
+    // is punctuation and currency symbols, not the Latin-1 control range,
+    // so a byte-for-codepoint fallback corrupts ordinary descriptions and
+    // part numbers.
+    let text = std::str::from_utf8(bytes).map_or_else(
+        |_| encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned(),
+        str::to_string,
+    );
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 /// Hex SHA-256, for provenance. Hand-rolled because this crate has no hash
 /// dependency and one 40-line function is a smaller commitment than a new
 /// entry in the workspace's dependency audit.
+// FIPS 180-4 constants are quoted as published; eight words need no buffer reuse.
+#[allow(clippy::unreadable_literal, clippy::format_collect)]
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
@@ -1573,17 +1609,19 @@ fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, M
         | "bottom_designator"
         | "topdesignator"
         | "bottomdesignator"
-        | "component_reference" => push(Reference, Likely),
-        "parts" => push(Reference, Likely),
+        | "component_reference"
+        | "parts" => push(Reference, Likely),
         "part" => push(Reference, if eagle { Certain } else { Guess }),
-        "customer_reference" | "component_number_on_pcb" => push(Reference, Guess),
-        "component" | "item" | "row" => push(Reference, Guess),
+        "customer_reference" | "component_number_on_pcb" | "component" | "item" | "row" => {
+            push(Reference, Guess);
+        }
 
         // ── value ──
         "value" => push(Value, Certain),
-        "val" | "kicad_value" => push(Value, Likely),
+        "val" | "kicad_value" | "description_value" | "value_description" => {
+            push(Value, Likely);
+        }
         "comment" => push(Value, if comment_is_value { Likely } else { Guess }),
-        "description_value" | "value_description" => push(Value, Likely),
         "description" => push(Value, Guess),
 
         // ── manufacturer part number ──
@@ -1652,6 +1690,7 @@ fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, M
 /// refuses with [`EXIT_INVALID_FOR_ANALYSIS`] naming the ambiguous column and
 /// how to resolve it. An interactive caller reads [`ColumnMap::left_unmapped`]
 /// and the refusal's own text to build the question it asks.
+#[allow(clippy::too_many_lines, reason = "one ordered mapping pass")]
 fn map_columns(
     table: &Table,
     dialect: BomDialect,
@@ -1826,22 +1865,22 @@ fn map_columns(
     // Reference is the join key: without a confident one nothing in the file
     // can be attached to a part, so this is a refusal rather than a note.
     if map.index_of(ColumnRole::Reference).is_none() {
-        return match map
+        let guess = map
             .left_unmapped
             .iter()
-            .find(|a| a.role == ColumnRole::Reference)
-        {
-            Some(guess) => Err(BomError::UnconfidentReferenceColumn {
-                name: name.to_string(),
-                candidate: guess.header.clone(),
-                headers: headers_list(),
-            }),
-            None => Err(BomError::NotABom {
+            .find(|a| a.role == ColumnRole::Reference);
+        return Err(guess.map_or_else(
+            || BomError::NotABom {
                 name: name.to_string(),
                 looked: MAX_BANNER_LINES,
                 example: "Designator".to_string(),
-            }),
-        };
+            },
+            |guess| BomError::UnconfidentReferenceColumn {
+                name: name.to_string(),
+                candidate: guess.header.clone(),
+                headers: headers_list(),
+            },
+        ));
     }
 
     let claimed: Vec<usize> = map
