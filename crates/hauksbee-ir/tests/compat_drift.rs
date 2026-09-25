@@ -37,23 +37,23 @@ enum Cat {
 impl Cat {
     fn heading(self) -> &'static str {
         match self {
-            Cat::Element => "Element cards",
-            Cat::Model => "`.model` types",
-            Cat::Analysis => "Analyses",
-            Cat::Directive => "Directives",
-            Cat::SourceFn => "Source functions",
-            Cat::Expression => "Expressions",
+            Self::Element => "Element cards",
+            Self::Model => "`.model` types",
+            Self::Analysis => "Analyses",
+            Self::Directive => "Directives",
+            Self::SourceFn => "Source functions",
+            Self::Expression => "Expressions",
         }
     }
     /// Iteration order for the generated doc.
-    fn all() -> &'static [Cat] {
+    fn all() -> &'static [Self] {
         &[
-            Cat::Element,
-            Cat::Model,
-            Cat::Analysis,
-            Cat::Directive,
-            Cat::SourceFn,
-            Cat::Expression,
+            Self::Element,
+            Self::Model,
+            Self::Analysis,
+            Self::Directive,
+            Self::SourceFn,
+            Self::Expression,
         ]
     }
 }

@@ -24,11 +24,7 @@ use std::sync::OnceLock;
 /// mid-process and this is hit from hot stamp paths.
 pub fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var_os("HAUKSBEE_DEBUG")
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-    })
+    *ON.get_or_init(|| std::env::var_os("HAUKSBEE_DEBUG").is_some_and(|v| !v.is_empty()))
 }
 
 /// Emit an engine-internal note to the debug channel. A no-op unless

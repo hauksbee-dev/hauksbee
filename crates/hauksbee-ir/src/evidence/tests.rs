@@ -876,8 +876,7 @@ fn the_judgement_types_are_serialize_only() {
         // edit that made it necessary.
         let block: String = src[..at]
             .rsplit_once("\n\n")
-            .map(|(_, tail)| tail)
-            .unwrap_or(&src[..at])
+            .map_or(&src[..at], |(_, tail)| tail)
             .lines()
             // Attribute lines only: the doc comment above these types
             // discusses `Deserialize` in prose, and a guard that reads the

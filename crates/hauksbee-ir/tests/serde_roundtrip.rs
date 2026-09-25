@@ -40,7 +40,7 @@ fn circuit_json_roundtrip() {
 
 /// Every variant in the [`Device::examples`] inventory must round-trip
 /// losslessly. `examples()` panics if a variant ships without an example
-/// (the strum::EnumCount length assert), so a new device cannot dodge this
+/// (the `strum::EnumCount` length assert), so a new device cannot dodge this
 /// test by omission.
 #[test]
 fn every_device_variant_roundtrips() {

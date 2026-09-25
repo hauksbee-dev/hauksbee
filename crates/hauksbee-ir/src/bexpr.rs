@@ -76,7 +76,7 @@ impl CompiledExpr {
     /// `time`). Anything else, a syntax error, an unknown identifier, is an
     /// `Err(String)`; the loader wraps it with a line number, serde with a
     /// deserialization error.
-    pub fn compile(src: &str) -> Result<CompiledExpr, String> {
+    pub fn compile(src: &str) -> Result<Self, String> {
         let tree = build_operator_tree(src)
             .map_err(|e| format!("malformed behavioral expression `{src}`: {e}"))?;
         let mut n_slots = 0usize;
@@ -98,7 +98,7 @@ impl CompiledExpr {
             }
         }
         let dep_names = (0..n_slots).map(|k| format!("__d{k}")).collect();
-        Ok(CompiledExpr {
+        Ok(Self {
             src: src.to_string(),
             tree,
             dep_names,
@@ -184,7 +184,7 @@ impl Serialize for CompiledExpr {
 impl<'de> Deserialize<'de> for CompiledExpr {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let src = String::deserialize(deserializer)?;
-        CompiledExpr::compile(&src).map_err(serde::de::Error::custom)
+        Self::compile(&src).map_err(serde::de::Error::custom)
     }
 }
 

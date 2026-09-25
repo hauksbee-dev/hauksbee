@@ -66,7 +66,7 @@ pub struct NodeId(pub u32);
 
 impl NodeId {
     /// The ground node.
-    pub const GROUND: NodeId = NodeId(0);
+    pub const GROUND: Self = Self(0);
 
     /// True for the ground reference node.
     pub fn is_ground(self) -> bool {
@@ -91,8 +91,8 @@ pub struct Rail {
 
 impl Rail {
     /// A fixed level in volts, tracking no supply pin.
-    pub const fn fixed(offset: f64) -> Rail {
-        Rail {
+    pub const fn fixed(offset: f64) -> Self {
+        Self {
             pin: NodeId::GROUND,
             offset,
         }
@@ -103,7 +103,7 @@ impl Rail {
     /// up (the DC homotopy starts every source at zero, and a ramping rail
     /// passes through it) puts a headroom ceiling below the floor; the band
     /// collapses onto the floor there instead of inverting.
-    pub fn band(lo: Rail, hi: Rail, v: impl Fn(NodeId) -> f64) -> (f64, f64) {
+    pub fn band(lo: Self, hi: Self, v: impl Fn(NodeId) -> f64) -> (f64, f64) {
         let (lo, hi) = (v(lo.pin) + lo.offset, v(hi.pin) + hi.offset);
         (lo, hi.max(lo))
     }
@@ -140,14 +140,14 @@ pub struct Circuit {
 
 impl Default for Circuit {
     fn default() -> Self {
-        Circuit::new()
+        Self::new()
     }
 }
 
 impl Circuit {
     /// Empty circuit with only the ground node defined and `temp_c = 27`.
     pub fn new() -> Self {
-        Circuit {
+        Self {
             node_names: vec!["0".to_string()],
             devices: Vec::new(),
             temp_c: 27.0,
@@ -186,8 +186,7 @@ impl Circuit {
     pub fn node_name(&self, id: NodeId) -> &str {
         self.node_names
             .get(id.0 as usize)
-            .map(String::as_str)
-            .unwrap_or("?")
+            .map_or("?", String::as_str)
     }
 
     /// Number of nodes including ground.
@@ -236,7 +235,7 @@ impl Circuit {
     pub fn max_node(&self) -> u32 {
         self.devices
             .iter()
-            .flat_map(|d| d.nodes())
+            .flat_map(Device::nodes)
             .map(|n| n.0)
             .max()
             .unwrap_or(0)
@@ -524,50 +523,50 @@ impl Device {
     /// Reference designator (`R1`, `Q3`, ...).
     pub fn name(&self) -> &str {
         match self {
-            Device::Resistor { name, .. }
-            | Device::Capacitor { name, .. }
-            | Device::Inductor { name, .. }
-            | Device::Vsource { name, .. }
-            | Device::Isource { name, .. }
-            | Device::Diode { name, .. }
-            | Device::Bjt { name, .. }
-            | Device::Mosfet { name, .. }
-            | Device::VSwitch { name, .. }
-            | Device::OpAmp { name, .. }
-            | Device::Comparator { name, .. }
-            | Device::Vcvs { name, .. }
-            | Device::Vccs { name, .. }
-            | Device::Cccs { name, .. }
-            | Device::Ccvs { name, .. }
-            | Device::Behavioral { name, .. }
-            | Device::Coupling { name, .. } => name,
+            Self::Resistor { name, .. }
+            | Self::Capacitor { name, .. }
+            | Self::Inductor { name, .. }
+            | Self::Vsource { name, .. }
+            | Self::Isource { name, .. }
+            | Self::Diode { name, .. }
+            | Self::Bjt { name, .. }
+            | Self::Mosfet { name, .. }
+            | Self::VSwitch { name, .. }
+            | Self::OpAmp { name, .. }
+            | Self::Comparator { name, .. }
+            | Self::Vcvs { name, .. }
+            | Self::Vccs { name, .. }
+            | Self::Cccs { name, .. }
+            | Self::Ccvs { name, .. }
+            | Self::Behavioral { name, .. }
+            | Self::Coupling { name, .. } => name,
         }
     }
 
     /// All nodes this device connects to (may include ground).
     pub fn nodes(&self) -> Vec<NodeId> {
         match self {
-            Device::Resistor { a, b, .. }
-            | Device::Capacitor { a, b, .. }
-            | Device::Inductor { a, b, .. }
-            | Device::Diode { a, k: b, .. } => vec![*a, *b],
-            Device::Vsource { p, n, .. } | Device::Isource { p, n, .. } => vec![*p, *n],
-            Device::Bjt { c, b, e, .. } => vec![*c, *b, *e],
-            Device::Mosfet { d, g, s, b, .. } => {
+            Self::Resistor { a, b, .. }
+            | Self::Capacitor { a, b, .. }
+            | Self::Inductor { a, b, .. }
+            | Self::Diode { a, k: b, .. } => vec![*a, *b],
+            Self::Vsource { p, n, .. } | Self::Isource { p, n, .. } => vec![*p, *n],
+            Self::Bjt { c, b, e, .. } => vec![*c, *b, *e],
+            Self::Mosfet { d, g, s, b, .. } => {
                 let mut v = vec![*d, *g, *s];
                 if let Some(b) = b {
                     v.push(*b);
                 }
                 v
             }
-            Device::VSwitch {
+            Self::VSwitch {
                 a,
                 b,
                 ctrl_p,
                 ctrl_n,
                 ..
             } => vec![*a, *b, *ctrl_p, *ctrl_n],
-            Device::OpAmp {
+            Self::OpAmp {
                 out,
                 inp,
                 inn,
@@ -583,20 +582,20 @@ impl Device {
                 nodes.extend([rail_lo.pin, rail_hi.pin].iter().filter(|n| !n.is_ground()));
                 nodes
             }
-            Device::Comparator { out, inp, inn, .. } => {
+            Self::Comparator { out, inp, inn, .. } => {
                 vec![*out, *inp, *inn]
             }
-            Device::Vcvs { p, n, cp, cn, .. } | Device::Vccs { p, n, cp, cn, .. } => {
+            Self::Vcvs { p, n, cp, cn, .. } | Self::Vccs { p, n, cp, cn, .. } => {
                 vec![*p, *n, *cp, *cn]
             }
             // The control of an F/H is a DEVICE reference, not a node: the
             // only wires these touch are their output port.
-            Device::Cccs { p, n, .. } | Device::Ccvs { p, n, .. } => vec![*p, *n],
+            Self::Cccs { p, n, .. } | Self::Ccvs { p, n, .. } => vec![*p, *n],
             // Output port plus every V(node) dependency: like the E/G control
             // pair, a sensed node IS a node reference this device carries, so
             // it participates in node walks (partitioner union, max_node).
             // I(vname) deps are device references, not nodes (see F/H).
-            Device::Behavioral { p, n, deps, .. } => {
+            Self::Behavioral { p, n, deps, .. } => {
                 let mut v = vec![*p, *n];
                 for d in deps {
                     if let BDep::Volt(dn) = d {
@@ -611,7 +610,7 @@ impl Device {
             // unions, sub-circuit remapping) legitimately see nothing here;
             // the l1/l2 device references participate through
             // `controlling_sources` instead.
-            Device::Coupling { .. } => Vec::new(),
+            Self::Coupling { .. } => Vec::new(),
         }
     }
 
@@ -630,23 +629,23 @@ impl Device {
     /// reference) are remapped only when present.
     pub fn map_nodes(&mut self, f: &mut impl FnMut(NodeId) -> NodeId) {
         match self {
-            Device::Resistor { a, b, .. }
-            | Device::Capacitor { a, b, .. }
-            | Device::Inductor { a, b, .. }
-            | Device::Diode { a, k: b, .. } => {
+            Self::Resistor { a, b, .. }
+            | Self::Capacitor { a, b, .. }
+            | Self::Inductor { a, b, .. }
+            | Self::Diode { a, k: b, .. } => {
                 *a = f(*a);
                 *b = f(*b);
             }
-            Device::Vsource { p, n, .. } | Device::Isource { p, n, .. } => {
+            Self::Vsource { p, n, .. } | Self::Isource { p, n, .. } => {
                 *p = f(*p);
                 *n = f(*n);
             }
-            Device::Bjt { c, b, e, .. } => {
+            Self::Bjt { c, b, e, .. } => {
                 *c = f(*c);
                 *b = f(*b);
                 *e = f(*e);
             }
-            Device::Mosfet { d, g, s, b, .. } => {
+            Self::Mosfet { d, g, s, b, .. } => {
                 *d = f(*d);
                 *g = f(*g);
                 *s = f(*s);
@@ -654,7 +653,7 @@ impl Device {
                     *b = f(*b);
                 }
             }
-            Device::VSwitch {
+            Self::VSwitch {
                 a,
                 b,
                 ctrl_p,
@@ -666,7 +665,7 @@ impl Device {
                 *ctrl_p = f(*ctrl_p);
                 *ctrl_n = f(*ctrl_n);
             }
-            Device::OpAmp {
+            Self::OpAmp {
                 out,
                 inp,
                 inn,
@@ -690,12 +689,12 @@ impl Device {
                     }
                 }
             }
-            Device::Comparator { out, inp, inn, .. } => {
+            Self::Comparator { out, inp, inn, .. } => {
                 *out = f(*out);
                 *inp = f(*inp);
                 *inn = f(*inn);
             }
-            Device::Vcvs { p, n, cp, cn, .. } | Device::Vccs { p, n, cp, cn, .. } => {
+            Self::Vcvs { p, n, cp, cn, .. } | Self::Vccs { p, n, cp, cn, .. } => {
                 *p = f(*p);
                 *n = f(*n);
                 *cp = f(*cp);
@@ -706,7 +705,7 @@ impl Device {
             // must ALSO call [`Device::retarget_controlling_source`] or the
             // reference silently points at whatever occupies that index in the
             // new circuit (see the partitioned executor's island build).
-            Device::Cccs { p, n, .. } | Device::Ccvs { p, n, .. } => {
+            Self::Cccs { p, n, .. } | Self::Ccvs { p, n, .. } => {
                 *p = f(*p);
                 *n = f(*n);
             }
@@ -715,7 +714,7 @@ impl Device {
             // variables are positional). BDep::Branch is a DeviceId, untouched
             // here, extraction passes retarget it via
             // `retarget_controlling_source_slot`, exactly like F/H.
-            Device::Behavioral { p, n, deps, .. } => {
+            Self::Behavioral { p, n, deps, .. } => {
                 *p = f(*p);
                 *n = f(*n);
                 for d in deps.iter_mut() {
@@ -728,7 +727,7 @@ impl Device {
             // NodeId at all, `l1`/`l2` are DeviceIds, the same reference
             // class as an F/H `ctrl_src`, and extraction passes retarget them
             // through `retarget_controlling_source_slot` (slots 0 and 1).
-            Device::Coupling { .. } => {}
+            Self::Coupling { .. } => {}
         }
     }
 
@@ -757,8 +756,8 @@ impl Device {
         // partitioner's fusion rule and to sub-circuit retargeting; the same
         // silent-drop hazard class as a `_` arm in `map_nodes`.
         match self {
-            Device::Cccs { ctrl_src, .. } | Device::Ccvs { ctrl_src, .. } => vec![*ctrl_src],
-            Device::Behavioral { deps, .. } => deps
+            Self::Cccs { ctrl_src, .. } | Self::Ccvs { ctrl_src, .. } => vec![*ctrl_src],
+            Self::Behavioral { deps, .. } => deps
                 .iter()
                 .filter_map(|d| match d {
                     BDep::Branch(id) => Some(*id),
@@ -771,20 +770,20 @@ impl Device {
             // never a tear candidate) and sub-circuit extraction must carry
             // both inductors along and retarget these ids, exactly the F/H
             // contracts this accessor already grants.
-            Device::Coupling { l1, l2, .. } => vec![*l1, *l2],
-            Device::Resistor { .. }
-            | Device::Capacitor { .. }
-            | Device::Inductor { .. }
-            | Device::Vsource { .. }
-            | Device::Isource { .. }
-            | Device::Diode { .. }
-            | Device::Bjt { .. }
-            | Device::Mosfet { .. }
-            | Device::VSwitch { .. }
-            | Device::OpAmp { .. }
-            | Device::Comparator { .. }
-            | Device::Vcvs { .. }
-            | Device::Vccs { .. } => Vec::new(),
+            Self::Coupling { l1, l2, .. } => vec![*l1, *l2],
+            Self::Resistor { .. }
+            | Self::Capacitor { .. }
+            | Self::Inductor { .. }
+            | Self::Vsource { .. }
+            | Self::Isource { .. }
+            | Self::Diode { .. }
+            | Self::Bjt { .. }
+            | Self::Mosfet { .. }
+            | Self::VSwitch { .. }
+            | Self::OpAmp { .. }
+            | Self::Comparator { .. }
+            | Self::Vcvs { .. }
+            | Self::Vccs { .. } => Vec::new(),
         }
     }
 
@@ -799,11 +798,11 @@ impl Device {
     pub fn retarget_controlling_source_slot(&mut self, slot: usize, new_id: DeviceId) {
         // Exhaustive for the same reason as `controlling_sources`.
         match self {
-            Device::Cccs { ctrl_src, .. } | Device::Ccvs { ctrl_src, .. } => {
+            Self::Cccs { ctrl_src, .. } | Self::Ccvs { ctrl_src, .. } => {
                 assert_eq!(slot, 0, "F/H have exactly one control slot");
                 *ctrl_src = new_id;
             }
-            Device::Behavioral { deps, .. } => {
+            Self::Behavioral { deps, .. } => {
                 let target = deps
                     .iter_mut()
                     .filter_map(|d| match d {
@@ -816,24 +815,24 @@ impl Device {
                     None => panic!("behavioral source has no branch-dep slot {slot}"),
                 }
             }
-            Device::Coupling { l1, l2, .. } => match slot {
+            Self::Coupling { l1, l2, .. } => match slot {
                 0 => *l1 = new_id,
                 1 => *l2 = new_id,
                 _ => panic!("coupling has exactly two winding slots, not slot {slot}"),
             },
-            Device::Resistor { .. }
-            | Device::Capacitor { .. }
-            | Device::Inductor { .. }
-            | Device::Vsource { .. }
-            | Device::Isource { .. }
-            | Device::Diode { .. }
-            | Device::Bjt { .. }
-            | Device::Mosfet { .. }
-            | Device::VSwitch { .. }
-            | Device::OpAmp { .. }
-            | Device::Comparator { .. }
-            | Device::Vcvs { .. }
-            | Device::Vccs { .. } => {
+            Self::Resistor { .. }
+            | Self::Capacitor { .. }
+            | Self::Inductor { .. }
+            | Self::Vsource { .. }
+            | Self::Isource { .. }
+            | Self::Diode { .. }
+            | Self::Bjt { .. }
+            | Self::Mosfet { .. }
+            | Self::VSwitch { .. }
+            | Self::OpAmp { .. }
+            | Self::Comparator { .. }
+            | Self::Vcvs { .. }
+            | Self::Vccs { .. } => {
                 panic!("device without control references cannot retarget slot {slot}")
             }
         }
@@ -855,12 +854,12 @@ impl Device {
     /// disagree with the stamp.
     pub fn conduction_nodes(&self) -> Vec<NodeId> {
         match self {
-            Device::Resistor { a, b, .. }
-            | Device::Capacitor { a, b, .. }
-            | Device::Inductor { a, b, .. }
-            | Device::Diode { a, k: b, .. } => vec![*a, *b],
-            Device::Vsource { p, n, .. } | Device::Isource { p, n, .. } => vec![*p, *n],
-            Device::Bjt { c, b, e, .. } => vec![*c, *b, *e],
+            Self::Resistor { a, b, .. }
+            | Self::Capacitor { a, b, .. }
+            | Self::Inductor { a, b, .. }
+            | Self::Diode { a, k: b, .. } => vec![*a, *b],
+            Self::Vsource { p, n, .. } | Self::Isource { p, n, .. } => vec![*p, *n],
+            Self::Bjt { c, b, e, .. } => vec![*c, *b, *e],
             // Level-1 channel current flows d<->s. The gate row receives
             // entries exactly when the model carries gate capacitance
             // (displacement current through the charge companions), and
@@ -868,7 +867,7 @@ impl Device {
             // (body-diode DC branch and/or depletion caps). A default model
             // (no cap/body fields) keeps the plain [d, s] classification
             // bit-identically, gate stays sense, bulk stays unstamped.
-            Device::Mosfet {
+            Self::Mosfet {
                 d, g, s, b, model, ..
             } => {
                 let mut v = vec![*d, *s];
@@ -883,28 +882,28 @@ impl Device {
                 v
             }
             // The switch channel conducts; the control pair only steers it.
-            Device::VSwitch { a, b, .. } => vec![*a, *b],
+            Self::VSwitch { a, b, .. } => vec![*a, *b],
             // Behavioral output stages drive their out node through a 1 Ohm
             // Thevenin; the inputs are ideal (infinite input impedance) and the
             // opamp reference only offsets the target voltage (its own row gets
             // nothing; it appears as a column of the out row).
-            Device::OpAmp { out, .. } => vec![*out],
-            Device::Comparator { out, .. } => vec![*out],
+            Self::OpAmp { out, .. } => vec![*out],
+            Self::Comparator { out, .. } => vec![*out],
             // Controlled sources drive current through their output port only:
             // the VCVS branch current enters the p/n KCL rows, the VCCS
             // transconductance current likewise. The control pair appears
             // exclusively as matrix COLUMNS of other rows; this is the
             // canonical sense-vs-conduction split the W1 classifier was built
             // for, and the solve-side cross-check test holds the stamp to it.
-            Device::Vcvs { p, n, .. } | Device::Vccs { p, n, .. } => vec![*p, *n],
+            Self::Vcvs { p, n, .. } | Self::Vccs { p, n, .. } => vec![*p, *n],
             // F/H drive current through their output port; the control is not
             // a terminal at all (see `controlling_sources`).
-            Device::Cccs { p, n, .. } | Device::Ccvs { p, n, .. } => vec![*p, *n],
+            Self::Cccs { p, n, .. } | Self::Ccvs { p, n, .. } => vec![*p, *n],
             // A B-source drives current through its output port only. Every
             // V(node) dep is read-only (Jacobian COLUMNS of the p/n or branch
             // rows); the maximal-coupling device is still, per terminal, the
             // same conduct-vs-sense split as a VCVS.
-            Device::Behavioral { p, n, .. } => vec![*p, *n],
+            Self::Behavioral { p, n, .. } => vec![*p, *n],
             // A coupling has NO terminals: current flows through the WINDINGS,
             // whose own a/b declarations above carry the conduction claim. The
             // stamp cross-check holds this to account trivially (the coupling
@@ -912,7 +911,7 @@ impl Device {
             // windings' branch rows, which are not node rows). The inter-
             // winding solver coupling is declared via `controlling_sources`,
             // the branch-current vocabulary, exactly like F/H.
-            Device::Coupling { .. } => Vec::new(),
+            Self::Coupling { .. } => Vec::new(),
         }
     }
 
@@ -926,17 +925,17 @@ impl Device {
     /// cross-check test enforces both the partition and the zero-row property.
     pub fn sense_nodes(&self) -> Vec<NodeId> {
         match self {
-            Device::Resistor { .. }
-            | Device::Capacitor { .. }
-            | Device::Inductor { .. }
-            | Device::Diode { .. }
-            | Device::Vsource { .. }
-            | Device::Isource { .. }
-            | Device::Bjt { .. } => Vec::new(),
+            Self::Resistor { .. }
+            | Self::Capacitor { .. }
+            | Self::Inductor { .. }
+            | Self::Diode { .. }
+            | Self::Vsource { .. }
+            | Self::Isource { .. }
+            | Self::Bjt { .. } => Vec::new(),
             // Exactly the complement of the conduction claim above: gate and
             // bulk are sense terminals only while the model gives their rows
             // nothing (no gate caps / no bulk junctions).
-            Device::Mosfet { g, b, model, .. } => {
+            Self::Mosfet { g, b, model, .. } => {
                 let mut v = Vec::new();
                 if !model.has_gate_charge() {
                     v.push(*g);
@@ -948,8 +947,8 @@ impl Device {
                 }
                 v
             }
-            Device::VSwitch { ctrl_p, ctrl_n, .. } => vec![*ctrl_p, *ctrl_n],
-            Device::OpAmp {
+            Self::VSwitch { ctrl_p, ctrl_n, .. } => vec![*ctrl_p, *ctrl_n],
+            Self::OpAmp {
                 inp,
                 inn,
                 reference,
@@ -964,10 +963,10 @@ impl Device {
                 v.extend([rail_lo.pin, rail_hi.pin].iter().filter(|n| !n.is_ground()));
                 v
             }
-            Device::Comparator { inp, inn, .. } => vec![*inp, *inn],
+            Self::Comparator { inp, inn, .. } => vec![*inp, *inn],
             // The control pair steers the gain term but its own KCL rows
             // receive nothing (ideal infinite input impedance).
-            Device::Vcvs { cp, cn, .. } | Device::Vccs { cp, cn, .. } => vec![*cp, *cn],
+            Self::Vcvs { cp, cn, .. } | Self::Vccs { cp, cn, .. } => vec![*cp, *cn],
             // DELIBERATELY EMPTY, and a vocabulary gap made explicit: what an
             // F/H senses is another device's BRANCH CURRENT, which this
             // node-voltage sense list cannot express. Declaring the control
@@ -978,7 +977,7 @@ impl Device {
             // tear candidate; a branch-current sense never is). The coupling
             // is declared through [`Device::controlling_sources`] instead, and
             // the partitioner/conduction graph consume that directly.
-            Device::Cccs { .. } | Device::Ccvs { .. } => Vec::new(),
+            Self::Cccs { .. } | Self::Ccvs { .. } => Vec::new(),
             // Every V(node) dep is a declared SENSE edge; the tear layers
             // must see that this device reads across island boundaries.
             // Deduped, and EXCLUDING the output terminals: a
@@ -988,7 +987,7 @@ impl Device {
             // conduction claim wins because the p/n rows really do receive
             // current. I(vname) deps are branch-current reads with no node
             // vocabulary, declared via `controlling_sources` like F/H.
-            Device::Behavioral { p, n, deps, .. } => {
+            Self::Behavioral { p, n, deps, .. } => {
                 let mut v: Vec<NodeId> = deps
                     .iter()
                     .filter_map(|d| match d {
@@ -1004,7 +1003,7 @@ impl Device {
             // windings' BRANCH CURRENTS, which this node vocabulary cannot
             // express (the F/H precedent, same reasoning verbatim), declared
             // through `controlling_sources`, never as a free-tear candidate.
-            Device::Coupling { .. } => Vec::new(),
+            Self::Coupling { .. } => Vec::new(),
         }
     }
 
@@ -1017,27 +1016,27 @@ impl Device {
     /// to the stamp/sense cross-check, serde round-trip, and node-walk coverage
     /// tests. Parameter values are arbitrary but physically sane (the tests
     /// probe structure, not accuracy).
-    pub fn examples(n: [NodeId; 4]) -> Vec<Device> {
+    pub fn examples(n: [NodeId; 4]) -> Vec<Self> {
         let out = vec![
-            Device::resistor("Rex", n[0], n[1], 1e3),
-            Device::capacitor("Cex", n[0], n[1], 1e-9),
-            Device::inductor("Lex", n[0], n[1], 1e-6),
-            Device::vsource("Vex", n[0], n[1], SourceKind::Dc(1.0)),
-            Device::isource("Iex", n[0], n[1], SourceKind::Dc(1e-3)),
-            Device::Diode {
+            Self::resistor("Rex", n[0], n[1], 1e3),
+            Self::capacitor("Cex", n[0], n[1], 1e-9),
+            Self::inductor("Lex", n[0], n[1], 1e-6),
+            Self::vsource("Vex", n[0], n[1], SourceKind::Dc(1.0)),
+            Self::isource("Iex", n[0], n[1], SourceKind::Dc(1e-3)),
+            Self::Diode {
                 name: "Dex".into(),
                 a: n[0],
                 k: n[1],
                 model: DiodeModel::default(),
             },
-            Device::Bjt {
+            Self::Bjt {
                 name: "Qex".into(),
                 c: n[0],
                 b: n[1],
                 e: n[2],
                 model: BjtModel::default(),
             },
-            Device::Mosfet {
+            Self::Mosfet {
                 name: "Mex".into(),
                 d: n[0],
                 g: n[1],
@@ -1045,7 +1044,7 @@ impl Device {
                 b: Some(n[3]),
                 model: MosfetModel::default(),
             },
-            Device::VSwitch {
+            Self::VSwitch {
                 name: "Sex".into(),
                 a: n[0],
                 b: n[1],
@@ -1056,7 +1055,7 @@ impl Device {
                 ron: 1.0,
                 roff: 1e9,
             },
-            Device::OpAmp {
+            Self::OpAmp {
                 name: "Aex".into(),
                 out: n[0],
                 inp: n[1],
@@ -1068,7 +1067,7 @@ impl Device {
                 rail_lo: Rail::fixed(-5.0),
                 rail_hi: Rail::fixed(5.0),
             },
-            Device::Comparator {
+            Self::Comparator {
                 name: "Kex".into(),
                 out: n[0],
                 inp: n[1],
@@ -1077,7 +1076,7 @@ impl Device {
                 out_hi: 5.0,
                 hysteresis: 1e-3,
             },
-            Device::Vcvs {
+            Self::Vcvs {
                 name: "Eex".into(),
                 p: n[0],
                 n: n[1],
@@ -1085,7 +1084,7 @@ impl Device {
                 cn: n[3],
                 gain: 10.0,
             },
-            Device::Vccs {
+            Self::Vccs {
                 name: "Gex".into(),
                 p: n[0],
                 n: n[1],
@@ -1104,14 +1103,14 @@ impl Device {
             // whose row must provably receive nothing). Consumers that only
             // inspect structure (serde round-trip, node walks) need nothing:
             // DeviceId round-trips like any field.
-            Device::Cccs {
+            Self::Cccs {
                 name: "Fex".into(),
                 p: n[0],
                 n: n[1],
                 ctrl_src: DeviceId(0),
                 gain: 2.0,
             },
-            Device::Ccvs {
+            Self::Ccvs {
                 name: "Hex".into(),
                 p: n[0],
                 n: n[1],
@@ -1124,7 +1123,7 @@ impl Device {
             // Voltage output (owns a branch unknown). The canonical expression
             // compiles here so every property-test consumer gets a genuinely
             // evaluable device; `expect` is safe; the text is a constant.
-            Device::Behavioral {
+            Self::Behavioral {
                 name: "Bex".into(),
                 p: n[0],
                 n: n[1],
@@ -1142,7 +1141,7 @@ impl Device {
             // Named `KMex`, not `Kex`: the Comparator example above already
             // wears `Kex`, and a duplicate refdes would poison any consumer
             // that indexes examples by name.
-            Device::Coupling {
+            Self::Coupling {
                 name: "KMex".into(),
                 l1: DeviceId(0),
                 l2: DeviceId(1),
@@ -1158,7 +1157,7 @@ impl Device {
         // node-walk coverage tests.
         assert_eq!(
             out.len(),
-            <Device as strum::EnumCount>::COUNT,
+            <Self as strum::EnumCount>::COUNT,
             "Device::examples() must ship exactly one instance per variant"
         );
         debug_assert_eq!(
@@ -1184,25 +1183,25 @@ impl Device {
     pub fn is_linear(&self) -> bool {
         matches!(
             self,
-            Device::Resistor { .. }
-                | Device::Capacitor { .. }
-                | Device::Inductor { .. }
-                | Device::Vsource { .. }
-                | Device::Isource { .. }
+            Self::Resistor { .. }
+                | Self::Capacitor { .. }
+                | Self::Inductor { .. }
+                | Self::Vsource { .. }
+                | Self::Isource { .. }
                 // Controlled sources E/G: the stamp is a CONSTANT gain/gm times
                 // node voltages, so the Jacobian never moves, linear. Linear
                 // does NOT mean state-space-reducible: `LinearIsland::compile`
                 // must still explicitly refuse islands containing them (it
                 // models only R/C/L/I) or they would vanish from the A matrix.
-                | Device::Vcvs { .. }
-                | Device::Vccs { .. }
+                | Self::Vcvs { .. }
+                | Self::Vccs { .. }
                 // Controlled sources F/H: constant gain/transresistance times
                 // a branch-current UNKNOWN, still constant matrix entries, so
                 // the Jacobian never moves. Same caveat as E/G: linear does
                 // not mean state-space-reducible, and `LinearIsland::compile`
                 // refuses islands containing them.
-                | Device::Cccs { .. }
-                | Device::Ccvs { .. }
+                | Self::Cccs { .. }
+                | Self::Ccvs { .. }
                 // Coupled inductors: the mutual inductance M = k*sqrt(L1*L2)
                 // is a CONSTANT; the companion cross terms scale with 1/dt
                 // like any inductor's, never with the iterate, so coupling
@@ -1212,7 +1211,7 @@ impl Device {
                 // group inductance matrix INVERTED, and k == 1 makes it
                 // legally singular), routing them to MNA which stamps L
                 // directly.
-                | Device::Coupling { .. }
+                | Self::Coupling { .. }
         )
     }
 
@@ -1222,6 +1221,6 @@ impl Device {
     /// sources (`Vcvs`/`Vccs`/`Cccs`/`Ccvs`) are continuous analog constraints
     /// with no discrete state, so they stay with the analog solver (`false`).
     pub fn is_event_driven(&self) -> bool {
-        matches!(self, Device::Comparator { .. })
+        matches!(self, Self::Comparator { .. })
     }
 }

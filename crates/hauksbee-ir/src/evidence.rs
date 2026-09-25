@@ -233,7 +233,7 @@ impl AssumptionId {
     /// equivalent and is not: a board that names a part `TP#1` would escape to
     /// `TP%231`, which is exactly what `TP` plus ordinal 1 escapes to, so a
     /// designator containing `#` collided with an ordinal-qualified one and the
-    /// duplicate reached the registry. KiCad emits `#`-prefixed references
+    /// duplicate reached the registry. `KiCad` emits `#`-prefixed references
     /// routinely, and a designator read verbatim out of a fabrication report can
     /// hold anything, so this is board data rather than a crafted string.
     fn with_ordinal(&self, n: usize) -> Self {
@@ -639,8 +639,8 @@ fn fragment(s: &str) -> String {
 /// one crate is that a producer cannot half-do it somewhere else.
 ///
 /// The leading word is capitalized only when it is prose. Net, bus, signal and
-/// property names are case-sensitive, and "spi0" or "value_unresolved" rendered
-/// as "Spi0" or "Value_unresolved" would be a different identifier: the module
+/// property names are case-sensitive, and "spi0" or "`value_unresolved`" rendered
+/// as "Spi0" or "`Value_unresolved`" would be a different identifier: the module
 /// exists to stop one gap being described two ways, so it must not spell the
 /// same subject two ways itself.
 fn sentence(s: &str) -> String {
@@ -1378,7 +1378,7 @@ impl Assumption {
     /// assertion and turns a whole BOM-less run invalid for analysis. A reader
     /// that knows which placed parts are actually in question should scope it to
     /// `Scope::Parts` instead, which is the reading the status table's
-    /// "FittedByDefault (subject part)" row asks for.
+    /// "`FittedByDefault` (subject part)" row asks for.
     pub fn fitted_by_default(source: AssumptionSource, input: Subject<'_>, scope: Scope) -> Self {
         let input_key = input.key;
         let input = or_else(&input.text_or_key(), "this input");
@@ -1815,7 +1815,7 @@ pub enum ArtifactRole {
     Waivers,
     /// A model pack or models directory.
     ModelPack,
-    /// An MCU / SoC descriptor.
+    /// An MCU / `SoC` descriptor.
     SocDescriptor,
 }
 
@@ -1954,12 +1954,12 @@ pub enum OverrideSource {
 /// One concrete thing an artifact contributed to the run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Contribution {
-    /// What, as a stable slug: "connectivity", "copper_geometry",
-    /// "placements", "component_values", "dnp_flags", "firmware_image",
-    /// "net_names", "clearance_rules".
+    /// What, as a stable slug: "connectivity", "`copper_geometry`",
+    /// "placements", "`component_values`", "`dnp_flags`", "`firmware_image`",
+    /// "`net_names`", "`clearance_rules`".
     pub what: String,
     /// The specifics, one sentence, e.g. "netlist read from the document's
-    /// LogicalNet section, not reverse-engineered from copper".
+    /// `LogicalNet` section, not reverse-engineered from copper".
     pub detail: String,
 }
 
@@ -2735,11 +2735,10 @@ impl ErrorBudget {
     /// residual as unmeasured; it never turns method order into a percentage.
     pub fn plain_summary(&self) -> String {
         let tolerance = self.tolerance;
-        let residual = self
-            .residual
-            .as_ref()
-            .map(|residual| format!("{:.3e}A at {}", residual.max_abs, residual.at))
-            .unwrap_or_else(|| "unmeasured".to_string());
+        let residual = self.residual.as_ref().map_or_else(
+            || "unmeasured".to_string(),
+            |residual| format!("{:.3e}A at {}", residual.max_abs, residual.at),
+        );
         let failed = match self.failed_windows.len() {
             1 => "1 window".to_string(),
             count => format!("{count} windows"),
@@ -2759,10 +2758,10 @@ impl ErrorBudget {
             .into_iter()
             .collect::<Vec<_>>()
             .join(",");
-        let event_time = self
-            .event_time_error_s
-            .map(|seconds| format!("<={seconds:.3e}s"))
-            .unwrap_or_else(|| "unmeasured".to_string());
+        let event_time = self.event_time_error_s.map_or_else(
+            || "unmeasured".to_string(),
+            |seconds| format!("<={seconds:.3e}s"),
+        );
         format!(
             "settings reltol={:.3e} vntol={:.3e}V abstol={:.3e}A chgtol={:.3e}C; \
              residual={residual}; methods={}; failed={failed}; event_time_error={event_time}; \
@@ -3064,7 +3063,7 @@ impl EvidenceRegistry {
                 }
             })
             .collect();
-        let mut registry = EvidenceRegistry::new(assumptions)?;
+        let mut registry = Self::new(assumptions)?;
         for mut artifact in self.artifacts.clone() {
             artifact.rekey_colliding_assumption(from, to)?;
             registry.add_artifact(artifact)?;

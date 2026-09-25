@@ -284,13 +284,13 @@ fn read_lines(
                 for raw in inc.lines() {
                     let t = raw.trim();
                     let mut words = t.split_whitespace();
-                    match words.next().map(|w| w.to_ascii_lowercase()).as_deref() {
+                    match words.next().map(str::to_ascii_lowercase).as_deref() {
                         Some(".lib")
                             if words
                                 .next()
                                 .is_some_and(|n| n.eq_ignore_ascii_case(section)) =>
                         {
-                            inside = true
+                            inside = true;
                         }
                         Some(".endl") => inside = false,
                         _ if inside => {

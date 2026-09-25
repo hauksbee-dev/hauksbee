@@ -88,8 +88,8 @@ impl Polarity {
     /// currents so one set of equations serves both polarities.
     pub fn sign(self) -> f64 {
         match self {
-            Polarity::N => 1.0,
-            Polarity::P => -1.0,
+            Self::N => 1.0,
+            Self::P => -1.0,
         }
     }
 }
@@ -135,7 +135,7 @@ pub struct DiodeModel {
 
 impl Default for DiodeModel {
     fn default() -> Self {
-        DiodeModel {
+        Self {
             is: 1e-14,
             n: 1.0,
             rs: 0.0,
@@ -230,7 +230,7 @@ pub struct BjtModel {
 
 impl Default for BjtModel {
     fn default() -> Self {
-        BjtModel {
+        Self {
             polarity: Polarity::N,
             is: 1e-16,
             bf: 100.0,
@@ -368,7 +368,7 @@ pub struct MosfetModel {
 
 impl Default for MosfetModel {
     fn default() -> Self {
-        MosfetModel {
+        Self {
             level: MosLevel::Level1,
             polarity: Polarity::N,
             vto: 1.0,

@@ -75,7 +75,7 @@ pub enum SourceKind {
         /// Time (s) at which the ramp reaches full amplitude. Expected `> 0`.
         scale_to: f64,
         /// The waveform being ramped.
-        inner: Box<SourceKind>,
+        inner: Box<Self>,
     },
 }
 
@@ -85,8 +85,8 @@ impl SourceKind {
     #[allow(clippy::manual_clamp)]
     pub fn eval(&self, t: f64) -> f64 {
         match self {
-            SourceKind::Dc(v) => *v,
-            SourceKind::Sin {
+            Self::Dc(v) => *v,
+            Self::Sin {
                 offset,
                 amplitude,
                 freq,
@@ -106,7 +106,7 @@ impl SourceKind {
                     offset + amplitude * damp * (TAU * freq * td + phase.to_radians()).sin()
                 }
             }
-            SourceKind::Pulse {
+            Self::Pulse {
                 v1,
                 v2,
                 delay,
@@ -115,8 +115,8 @@ impl SourceKind {
                 width,
                 period,
             } => pulse(*v1, *v2, *delay, *rise, *fall, *width, *period, t),
-            SourceKind::Pwl(points) => pwl(points, t),
-            SourceKind::Ramped { scale_to, inner } => {
+            Self::Pwl(points) => pwl(points, t),
+            Self::Ramped { scale_to, inner } => {
                 // `min(t / scale_to, 1).max(0) * inner(t)`. Guard scale_to <= 0
                 // (a degenerate zero-length ramp) as "full amplitude at once".
                 let ramp = if *scale_to > 0.0 {
@@ -132,7 +132,7 @@ impl SourceKind {
     /// The value at `t = 0`, used to seed the DC operating point.
     pub fn dc_value(&self) -> f64 {
         match self {
-            SourceKind::Dc(v) => *v,
+            Self::Dc(v) => *v,
             // A `Ramped` source is zero at t=0 by construction (the ramp factor
             // is 0), which is exactly the power-on rest value this seeds.
             _ => self.eval(0.0),
@@ -141,8 +141,8 @@ impl SourceKind {
 
     /// Wrap `self` in a [`SourceKind::Ramped`] that reaches full amplitude at
     /// `t_ramp`. See the variant docs for the envelope shape.
-    pub fn ramped(self, t_ramp: f64) -> SourceKind {
-        SourceKind::Ramped {
+    pub fn ramped(self, t_ramp: f64) -> Self {
+        Self::Ramped {
             scale_to: t_ramp,
             inner: Box::new(self),
         }
