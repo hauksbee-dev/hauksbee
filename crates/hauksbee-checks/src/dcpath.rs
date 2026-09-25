@@ -56,6 +56,7 @@ pub enum NetDcDefinition {
 
 /// Classify one node. Pure function of the circuit; the caller maps net
 /// names to [`NodeId`]s (`BoundBoard::net_nodes`).
+#[must_use]
 pub fn net_dc_definition(circuit: &Circuit, start: NodeId) -> NetDcDefinition {
     // Reference nodes: ground, plus every terminal of an independent source.
     // A source terminal defines its node's level (or ties it, through the

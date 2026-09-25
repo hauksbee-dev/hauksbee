@@ -29,6 +29,7 @@ impl RunDate {
     pub const EARLIEST_CREDIBLE_DAY: i64 = 20_663;
 
     /// Capture the system clock and apply the credibility rule.
+    #[must_use]
     pub fn from_system_clock() -> Self {
         match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
             Ok(d) => Self::from_epoch_days((d.as_secs() / 86_400) as i64),
@@ -38,26 +39,31 @@ impl RunDate {
 
     /// Construct from days since the Unix epoch. Pre-floor readings become
     /// unknown instead of being clamped into a date that could activate a waiver.
+    #[must_use]
     pub fn from_epoch_days(days: i64) -> Self {
         Self((days >= Self::EARLIEST_CREDIBLE_DAY).then_some(days))
     }
 
     /// No trustworthy run date. Every waiver reads as expired.
+    #[must_use]
     pub fn unknown() -> Self {
         Self(None)
     }
 
     /// Whether an end-of-day expiry still covers this run.
+    #[must_use]
     pub fn is_covered_by(self, expiry_epoch_days: i64) -> bool {
         self.0.is_some_and(|today| expiry_epoch_days >= today)
     }
 
     /// Days since the Unix epoch, or `None` when the clock is untrustworthy.
+    #[must_use]
     pub fn epoch_days(self) -> Option<i64> {
         self.0
     }
 
     /// Classify one waiver using the shared parser and fail-closed clock rule.
+    #[must_use]
     pub fn waiver_state(self, until: &str) -> WaiverState {
         match parse_ymd_epoch_days(until) {
             Some(expiry) if self.is_covered_by(expiry) => WaiverState::Active,
@@ -75,6 +81,7 @@ pub enum WaiverState {
 }
 
 /// Parse a real `YYYY-MM-DD` calendar date into days since the Unix epoch.
+#[must_use]
 pub fn parse_ymd_epoch_days(s: &str) -> Option<i64> {
     let mut parts = s.trim().split('-');
     let y: i64 = parts.next()?.parse().ok()?;

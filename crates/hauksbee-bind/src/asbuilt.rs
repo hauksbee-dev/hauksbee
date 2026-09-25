@@ -385,6 +385,7 @@ impl AsBuiltOverlay {
     }
 
     /// The `[board]` provenance block, if the overlay carries one.
+    #[must_use]
     pub fn board(&self) -> Option<&BoardMeta> {
         self.doc.board.as_ref()
     }

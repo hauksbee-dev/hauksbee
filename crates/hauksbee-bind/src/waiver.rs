@@ -139,10 +139,12 @@ impl WaiverSet {
         }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.waivers.is_empty()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.waivers.len()
     }
@@ -199,6 +201,7 @@ impl WaiverSet {
 
     /// Waivers that are past their date. Their findings gate the build again,
     /// and the report names them so the red is explainable.
+    #[must_use]
     pub fn expired(&self) -> Vec<&Waiver> {
         self.waivers
             .iter()
@@ -232,6 +235,7 @@ impl WaiverSet {
 
     /// Active waivers that matched nothing this run. Either the finding is
     /// fixed and the waiver should go, or it no longer describes what fires.
+    #[must_use]
     pub fn stale(&self) -> Vec<&Waiver> {
         self.waivers
             .iter()

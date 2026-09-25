@@ -355,6 +355,7 @@ fn number_end(t: &str) -> usize {
 /// Parse a SPICE number with an optional engineering suffix (`1k`, `2.2u`,
 /// `1meg`, `4.7nF`, `5A`). A stray tail (`1kk`, `1x`) is `None`, not silently
 /// truncated. Public because the CLI accepts the same vocabulary.
+#[must_use]
 pub fn parse_spice_number(tok: &str) -> Option<f64> {
     const SCALES: [&str; 10] = ["meg", "mil", "t", "g", "k", "m", "u", "n", "p", "f"];
     const EXP: [i32; 10] = [6, -6, 12, 9, 3, -3, -6, -9, -12, -15];
@@ -375,6 +376,7 @@ pub fn parse_spice_number(tok: &str) -> Option<f64> {
 }
 
 /// Iterative Levenshtein edit distance; shared by did-you-mean hints elsewhere.
+#[must_use]
 pub fn levenshtein(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut prev: Vec<usize> = (0..=b.len()).collect();

@@ -629,6 +629,7 @@ pub struct ParallelMemoryWritePort {
 }
 
 impl ParallelMemoryPort {
+    #[must_use]
     pub fn words(&self) -> usize {
         self.storage
             .lock()
@@ -637,6 +638,7 @@ impl ParallelMemoryPort {
             .len()
     }
 
+    #[must_use]
     pub fn read(&self, address: usize) -> Option<u64> {
         self.storage
             .lock()
@@ -644,6 +646,7 @@ impl ParallelMemoryPort {
             .read(address, self.mask)
     }
 
+    #[must_use]
     pub fn read_at(&self, address: usize, cycle: u64, frequency_hz: u64) -> Option<u64> {
         let program_s = self.program_time_s?;
         let program_cycles = seconds_to_cycles(program_s, frequency_hz);
@@ -654,6 +657,7 @@ impl ParallelMemoryPort {
     }
 
     #[cfg(test)]
+    #[must_use]
     pub fn write(&self, address: usize, value: u64) -> bool {
         self.storage
             .lock()
@@ -661,6 +665,7 @@ impl ParallelMemoryPort {
             .write(address, value, self.mask, false)
     }
 
+    #[must_use]
     pub fn write_after_gap(&self, address: usize, value: u64, gap_exceeded: bool) -> bool {
         self.storage
             .lock()
@@ -668,6 +673,7 @@ impl ParallelMemoryPort {
             .write(address, value, self.mask, gap_exceeded)
     }
 
+    #[must_use]
     pub fn write_at(&self, address: usize, value: u64, cycle: u64, frequency_hz: u64) -> bool {
         let Some(program_s) = self.program_time_s else {
             return self.write_after_gap(address, value, false);
@@ -1255,32 +1261,38 @@ impl LogicComponent {
     }
 
     /// The model id / spec name this component was compiled from.
+    #[must_use]
     pub fn spec_id(&self) -> &str {
         &self.spec_id
     }
 
     /// Declared input pin names.
+    #[must_use]
     pub fn input_names(&self) -> &[String] {
         &self.input_names
     }
 
     /// Declared output names, in declaration order.
+    #[must_use]
     pub fn output_names(&self) -> &[String] {
         &self.output_names
     }
 
     /// Does the spec declare this input pin?
+    #[must_use]
     pub fn has_input(&self, name: &str) -> bool {
         self.input_names.iter().any(|n| n == name)
     }
 
     /// Does the spec declare this output?
+    #[must_use]
     pub fn has_output(&self, name: &str) -> bool {
         self.output_names.iter().any(|n| n == name)
     }
 
     /// True when the part has at least one clocked register; the parts whose
     /// sub-chunk pulse trains demand edge-granular replay.
+    #[must_use]
     pub fn is_sequential(&self) -> bool {
         self.registers.iter().any(|r| r.clock.is_some())
             || self.memories.iter().any(|m| !m.writes.is_empty())
@@ -1333,12 +1345,14 @@ impl LogicComponent {
     }
 
     /// Current logic level of an output.
+    #[must_use]
     pub fn output_level(&self, name: &str) -> Option<bool> {
         let i = self.output_names.iter().position(|n| n == name)?;
         Some(self.output_levels[i])
     }
 
     /// Is an output currently driving (not tri-stated)?
+    #[must_use]
     pub fn output_enabled(&self, name: &str) -> Option<bool> {
         let i = self.output_names.iter().position(|n| n == name)?;
         Some(self.output_enabled[i])
@@ -1346,6 +1360,7 @@ impl LogicComponent {
 
     /// Addressable memories declared by this component, sharing their backing
     /// cells with the tick evaluator. Empty for ordinary logic parts.
+    #[must_use]
     pub fn memory_ports(&self) -> Vec<ParallelMemoryPort> {
         self.memories
             .iter()
@@ -1394,6 +1409,7 @@ impl LogicComponent {
     /// component's ordinary tick entirely. It is therefore safe only when no
     /// register, combinational expression, tri-state group, second memory, or
     /// unrelated output also depends on that tick.
+    #[must_use]
     pub fn has_exclusive_memory_port(&self, name: &str) -> bool {
         if self.memories.len() != 1
             || self.memories[0].name != name
@@ -1418,6 +1434,7 @@ impl LogicComponent {
     }
 
     /// Current value of a register.
+    #[must_use]
     pub fn register(&self, name: &str) -> Option<u64> {
         self.registers
             .iter()
@@ -1431,6 +1448,7 @@ impl LogicComponent {
     }
 
     /// Declared width of a register, if the spec has one by this name.
+    #[must_use]
     pub fn register_bits(&self, name: &str) -> Option<u32> {
         self.registers
             .iter()

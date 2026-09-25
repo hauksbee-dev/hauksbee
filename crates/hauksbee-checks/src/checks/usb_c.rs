@@ -55,6 +55,7 @@ pub enum Rp {
 
 impl Rp {
     /// Rp modelled as a current source: the spec current value (A), Table 4-20.
+    #[must_use]
     pub fn current_a(self) -> f64 {
         match self {
             Rp::Default => 80e-6,
@@ -66,6 +67,7 @@ impl Rp {
     /// Rp modelled as a resistor pull-up to 4.75..5.5 V (Table 4-20, middle
     /// column). Provided for the alternative resistive-Rp model; the classifier
     /// defaults to the current-source model.
+    #[must_use]
     pub fn pullup_ohms(self) -> f64 {
         match self {
             Rp::Default => 56_000.0,
@@ -82,6 +84,7 @@ impl Rp {
     ///   - **between** `vra_threshold` and `vrd_max_threshold` reads as Rd (a
     ///     sink's pull-down is attached);
     ///   - **at or above** `vopen` reads as open (nothing attached).
+    #[must_use]
     pub fn thresholds(self) -> CcThresholds {
         match self {
             // Table 4-28: vRa max 0.20 V, vRd 0.25..1.50 V (threshold 1.60 V), vOPEN 1.65 V.
@@ -130,6 +133,7 @@ pub enum PinState {
 
 impl PinState {
     /// Classify a solved CC voltage against the source thresholds for an Rp.
+    #[must_use]
     pub fn classify(v: f64, t: CcThresholds) -> PinState {
         if v >= t.vopen {
             PinState::Open
@@ -170,11 +174,13 @@ pub enum Attach {
 
 impl Attach {
     /// Whether a compliant source applies VBUS power in this state.
+    #[must_use]
     pub fn powers(self) -> bool {
         matches!(self, Attach::SinkAttached | Attach::PoweredCableWithSink)
     }
 
     /// Map a (CC1, CC2) pin-state pair to the port state (Table 4-10).
+    #[must_use]
     pub fn from_pins(cc1: PinState, cc2: PinState) -> Attach {
         use PinState::{Open, Ra, Rd};
         match (cc1, cc2) {
@@ -187,6 +193,7 @@ impl Attach {
         }
     }
 
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Attach::Nothing => "Nothing",
@@ -218,6 +225,7 @@ pub enum Cable {
 
 impl Cable {
     /// Canonical e-marked cable with a 1.0 kΩ Ra (mid of the 800 Ω..1.2 kΩ band).
+    #[must_use]
     pub fn emarked() -> Cable {
         Cable::EMarked { ra_ohms: 1000.0 }
     }
@@ -256,6 +264,7 @@ pub struct CcResult {
 
 impl CcResult {
     /// Whether the source applies VBUS.
+    #[must_use]
     pub fn powers(&self) -> bool {
         self.attach.powers()
     }
@@ -275,6 +284,7 @@ impl CcResult {
 /// When `term.shared_net` is true the two source CC pins drive a single node,
 /// which is exactly why the `RPi` 4 reads two Ra terminations under an e-marked
 /// cable.
+#[must_use]
 pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult {
     let mut c = Circuit::new();
 
@@ -394,6 +404,7 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
 /// false "no VBUS" verdict.
 ///
 /// Returns `None` if no receptacle with identifiable CC pins is found.
+#[must_use]
 pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTermination> {
     let grounds = ground_net_ids(board);
     let (cc1_net, cc2_net) = receptacle_cc_nets(board)?;
@@ -462,6 +473,7 @@ fn ground_net_ids(board: &ExtractedBoard) -> std::collections::HashSet<i64> {
 /// `receptacle_cc_nets`, `nets_bridged_to`) so the scope cannot drift from
 /// the walk. `None` when the board carries no identifiable USB-C receptacle
 /// CC termination.
+#[must_use]
 pub fn receptacle_cc_net_names(
     board: &ExtractedBoard,
 ) -> Option<std::collections::HashSet<String>> {
@@ -666,6 +678,7 @@ pub struct CcPinTermination {
 impl CcPinTermination {
     /// The effective Rd a source sees: external Rd in parallel with the
     /// controller's internal Rd (whichever are present).
+    #[must_use]
     pub fn effective_rd_ohms(&self) -> Option<f64> {
         match (self.external_rd_ohms, self.internal_rd_ohms) {
             (Some(e), Some(i)) => Some(1.0 / (1.0 / e + 1.0 / i)),
@@ -679,6 +692,7 @@ impl CcPinTermination {
     /// same CC line: the double-termination defect. The effective Rd is then well
     /// below the nominal 5.1 kΩ a source expects, so the source under-reads the
     /// CC voltage and mis-detects the advertised current.
+    #[must_use]
     pub fn is_double_terminated(&self) -> bool {
         self.external_rd_ohms.is_some() && self.internal_rd_ohms.is_some()
     }
@@ -695,6 +709,7 @@ pub struct ReceptacleCc {
 
 impl ReceptacleCc {
     /// True when either CC pin of this receptacle is double-terminated.
+    #[must_use]
     pub fn has_double_termination(&self) -> bool {
         self.cc1.is_double_terminated() || self.cc2.is_double_terminated()
     }
@@ -720,6 +735,7 @@ pub struct CcTerminationAudit {
 impl CcTerminationAudit {
     /// True when *any* receptacle's CC pin carries both an external and an
     /// internal Rd (the double-termination defect, on any half of the board).
+    #[must_use]
     pub fn has_double_termination(&self) -> bool {
         self.receptacles.iter().any(|r| r.has_double_termination())
     }
@@ -728,6 +744,7 @@ impl CcTerminationAudit {
     /// pin (external or internal). A receptacle with no Rd at all is either a
     /// power-only / debug receptacle or an under-read; this lets a caller
     /// distinguish "all halves terminated" from "primary terminated only".
+    #[must_use]
     pub fn all_receptacles_terminated(&self) -> bool {
         !self.receptacles.is_empty()
             && self
@@ -745,6 +762,7 @@ impl CcTerminationAudit {
 /// ~2.55 kΩ, dragging the CC voltage out of spec.
 ///
 /// Returns `None` if the board has no identifiable USB-C receptacle CC nets.
+#[must_use]
 pub fn audit_cc_termination(board: &ExtractedBoard) -> Option<CcTerminationAudit> {
     let grounds = ground_net_ids(board);
 
@@ -955,6 +973,7 @@ fn is_resistor(comp: &hauksbee_extract::Component) -> bool {
 /// Convenience: parse a board, extract its sink CC termination, attach the given
 /// source + cable, and classify. Returns `None` if the board carries no
 /// identifiable USB-C receptacle CC termination.
+#[must_use]
 pub fn classify_board(board: &ExtractedBoard, rp: Rp, cable: Cable) -> Option<CcResult> {
     let term = extract_sink_termination(board)?;
     Some(classify_attach(term, rp, cable))
@@ -1007,6 +1026,7 @@ pub struct UsbcReport {
 /// hauksbee cannot see from copper. `Serious` is reserved for a board that
 /// clearly intends to be a self-terminated sink (a discrete Rd is present) yet a
 /// compliant cable still leaves it without VBUS.
+#[must_use]
 pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     let term = extract_sink_termination(board)?;
     let audit = audit_cc_termination(board);
@@ -1142,6 +1162,7 @@ fn fmt_rd(r: Option<f64>) -> String {
 
 impl UsbcReport {
     /// True when a CI gate (`--strict`) should fail on this verdict.
+    #[must_use]
     pub fn is_serious(&self) -> bool {
         self.level == UsbcLevel::Serious
     }
@@ -1151,6 +1172,7 @@ impl UsbcReport {
     /// USB-C verdict. `None` for `Ok` (nothing actionable to surface). `Serious`
     /// carries the standard split-pulldown remedy in `fix`; `Info` leaves `fix`
     /// empty (a self-contained observation).
+    #[must_use]
     pub fn web_gloss(&self) -> Option<(String, String, String)> {
         match self.level {
             UsbcLevel::Ok => None,
@@ -1203,6 +1225,7 @@ impl UsbcReport {
     }
 
     /// The engineer-facing text report.
+    #[must_use]
     pub fn render(&self) -> String {
         format!(
             "USB-C CC compliance: [{}] {}\n  attach (default Rp, e-marked cable): {}; VBUS applied: {}\n{}",
@@ -1215,6 +1238,7 @@ impl UsbcReport {
     }
 
     /// The plain-language report (what / why / what-to-do for the serious case).
+    #[must_use]
     pub fn render_plain(&self) -> String {
         let verdict = match self.level {
             UsbcLevel::Ok => "USB-C looks healthy: a charger will power this board.",
@@ -1236,6 +1260,7 @@ impl UsbcReport {
     }
 
     /// Machine-readable JSON (hand-built; the CC types are not `Serialize`).
+    #[must_use]
     pub fn to_json(&self) -> String {
         let rd = |r: Option<f64>| match r {
             Some(v) => format!("{v:.1}"),

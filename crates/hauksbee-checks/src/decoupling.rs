@@ -48,6 +48,7 @@ impl EsrEsl {
     };
 
     /// True when both parasitics are zero (ideal).
+    #[must_use]
     pub fn is_ideal(&self) -> bool {
         self.esr_ohms == 0.0 && self.esl_henries == 0.0
     }
@@ -71,6 +72,7 @@ impl EsrEsl {
     /// mounted self-inductance (the body plus a short pad loop). Electrolytic /
     /// tantalum ESR is the datasheet 100 kHz figure for a mid-value part; these
     /// are deliberately representative, not a per-MPN table.
+    #[must_use]
     pub fn for_class(class: CapClass) -> EsrEsl {
         match class {
             CapClass::Mlcc0201 => EsrEsl {
@@ -109,6 +111,7 @@ impl EsrEsl {
     /// large can / EIA tant case codes) get the electrolytic/tantalum row; an
     /// MLCC footprint is bucketed by its size code (imperial or the equivalent
     /// metric code). Falls back to 0603 MLCC.
+    #[must_use]
     pub fn from_footprint(footprint: &str, value_farads: f64) -> EsrEsl {
         if let Some(class) = Self::class_from_footprint(footprint, value_farads) {
             return EsrEsl::for_class(class);
@@ -119,6 +122,7 @@ impl EsrEsl {
     /// The inferred [`CapClass`] for a footprint + value, or `None` when nothing
     /// in the name is recognised (the caller then falls back to a default MLCC).
     /// Split out so the inference is unit-testable on its own.
+    #[must_use]
     pub fn class_from_footprint(footprint: &str, value_farads: f64) -> Option<CapClass> {
         let fp = footprint.to_ascii_uppercase();
 

@@ -81,6 +81,7 @@ pub const CORNER_CAP: usize = 10;
 /// against the assertion's own window, so a response worse than every corner but
 /// still in band passes. That is why a clean sweep narrows the disclosure rather
 /// than removing it.
+#[must_use]
 pub fn interior_probe_count(n: usize) -> usize {
     (2 * n + 2).min(8)
 }
@@ -146,6 +147,7 @@ pub struct SampledValue {
 
 impl SampledValue {
     /// Human form for reports: `R3=10.9k` / `C1=18.2n(min)`.
+    #[must_use]
     pub fn describe(&self) -> String {
         let tag = match self.corner {
             Some(Corner::Min) => "(min)",
@@ -180,6 +182,7 @@ pub struct SeedPlan {
 /// Cross every plan with every combination of the undetermined same-pinout variant
 /// sets `(reference, member ids)`, so the ensemble passes only if every member does.
 /// `None` above 2^[`CORNER_CAP`] runs: the part then keeps its flagged stand-in.
+#[must_use]
 pub fn with_variants(
     mut runs: Vec<SeedPlan>,
     axes: &[(String, Vec<String>)],
@@ -323,6 +326,7 @@ fn parse_nominal(reference: &str, value: &str) -> Result<f64, SpecError> {
 /// Minimal glob: `*` matches any (possibly empty) run of characters; every
 /// other character matches itself. Enough for `R*` / `R1?`-free use; we
 /// deliberately support only `*` to keep the matching teachable.
+#[must_use]
 pub fn glob_match(pattern: &str, s: &str) -> bool {
     fn inner(p: &[u8], s: &[u8]) -> bool {
         match p.split_first() {
@@ -493,6 +497,7 @@ fn interior_plans(first_seed: u32, tolerances: &[ResolvedTolerance]) -> Vec<Seed
 /// and the reference, so the value does not depend on what other components
 /// are toleranced or on evaluation order, that is what makes `--seed N`
 /// re-runs byte-identical.
+#[must_use]
 pub fn sample(seed: u32, t: &ResolvedTolerance) -> SampledValue {
     let tol = t.percent / 100.0;
     let frac = if seed == 0 {
@@ -586,6 +591,7 @@ impl SplitMix {
 
 /// Format an SI value in engineering notation for reports: 10900 -> "10.9k",
 /// 1.82e-8 -> "18.2n". Three significant digits; trailing zeros trimmed.
+#[must_use]
 pub fn format_engineering(v: f64) -> String {
     if v == 0.0 || !v.is_finite() {
         return format!("{v}");

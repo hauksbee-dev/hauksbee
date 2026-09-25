@@ -70,11 +70,13 @@ pub struct SupportBundle {
 }
 
 /// Look up a bundle by its descriptor name.
+#[must_use]
 pub fn lookup(name: &str) -> Option<&'static SupportBundle> {
     BUNDLES.iter().copied().find(|b| b.name == name)
 }
 
 /// Every bundle name this build knows, for error messages and validation.
+#[must_use]
 pub fn known_names() -> Vec<&'static str> {
     BUNDLES.iter().map(|b| b.name).collect()
 }
@@ -90,6 +92,7 @@ impl SupportBundle {
     /// embedded in the binary, so the descriptor loader's clock cross-check
     /// (`soc::check_clock_declarations`) can read them without touching the
     /// filesystem, and RP2040 is held to the same rule as every inline part.
+    #[must_use]
     pub fn repl_sources(&self) -> Vec<String> {
         self.files
             .iter()
@@ -131,6 +134,7 @@ impl SupportBundle {
     ///
     /// `path add` comes first so the bundle's own `.repl` can name its data
     /// files relatively.
+    #[must_use]
     pub fn prelude_commands(&self, dir: &Path) -> Vec<String> {
         let mut cmds = Vec::with_capacity(self.sources.len() + 1);
         cmds.push(format!("path add @{}", dir.display()));

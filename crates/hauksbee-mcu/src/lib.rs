@@ -127,6 +127,7 @@ pub const SIMAVR_BUILD_COMMIT: Option<&str> = option_env!("HAUKSBEE_SIMAVR_COMMI
 /// Human-readable provenance for the built-in AVR backend. Shared by CLI and
 /// MCP so the two public capability surfaces cannot drift.
 #[cfg(feature = "avr")]
+#[must_use]
 pub fn simavr_build_detail() -> String {
     SIMAVR_BUILD_COMMIT.map_or_else(
         || "simavr linked into this binary (source commit not embedded)".to_string(),

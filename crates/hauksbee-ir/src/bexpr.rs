@@ -105,11 +105,13 @@ impl CompiledExpr {
     }
 
     /// The canonical source text.
+    #[must_use]
     pub fn src(&self) -> &str {
         &self.src
     }
 
     /// Number of dependency slots (`__d0 .. __d{n-1}`) the expression reads.
+    #[must_use]
     pub fn n_slots(&self) -> usize {
         self.n_slots
     }

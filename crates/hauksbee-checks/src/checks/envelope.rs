@@ -290,11 +290,13 @@ fn unknown_abstention(net_name: &str, battery_without_chemistry: bool) -> String
 
 /// Run operating-envelope checks using only rail knowledge carried by the
 /// board and its bound model cards.
+#[must_use]
 pub fn envelope_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     envelope_lint_with_drives(board, lib, &BTreeMap::new())
 }
 
 /// Run operating-envelope checks with exact spec or forced-run net levels.
+#[must_use]
 pub fn envelope_lint_with_drives(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
@@ -458,6 +460,7 @@ fn envelope_lint_with_tolerance(
 /// it. A rail the run did not solve is an abstention, never a violation. Each
 /// level is the span the net covered over the run, so a rail that sags out of
 /// its envelope and recovers is judged on the sag, not on where it ended.
+#[must_use]
 pub fn run_assumptions(
     board: &ExtractedBoard,
     lib: &ModelLibrary,

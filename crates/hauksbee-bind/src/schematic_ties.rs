@@ -287,6 +287,7 @@ fn verify_design_identity(
 impl SchematicTies {
     /// Qualify the measured report without changing its established public
     /// shape. Renderers and gates consume the returned side data.
+    #[must_use]
     pub fn qualify(
         &self,
         report: &hauksbee_extract::DrcReport,
@@ -294,6 +295,7 @@ impl SchematicTies {
         report.qualify_with_declared_ties(&self.path.to_string_lossy(), &self.ties)
     }
 
+    #[must_use]
     pub fn contribution(&self, qualification: &hauksbee_extract::DrcTieQualification) -> String {
         let matched = qualification.matched_declaration_count();
         format!(

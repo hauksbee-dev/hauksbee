@@ -526,6 +526,7 @@ const DEAD_RAIL_MIN_PARTS: usize = 6;
 /// tell that report from a true one.
 ///
 /// Returns the net names, ordered, deduped.
+#[must_use]
 pub fn unpowered_supply_nets(
     board: &ExtractedBoard,
     bound: &BoundBoard,

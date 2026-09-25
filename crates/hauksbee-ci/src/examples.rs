@@ -60,6 +60,7 @@ const SPEC_REWRITES: &[(&str, &str)] = &[(
 )];
 
 /// The names `--example` accepts, for help/error text.
+#[must_use]
 pub fn names() -> Vec<&'static str> {
     EXAMPLES.iter().map(|e| e.name).collect()
 }

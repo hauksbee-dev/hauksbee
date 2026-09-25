@@ -165,6 +165,7 @@ impl EnsembleCoverage {
     /// This string is the banner AND the JSON `coverage` field AND what the
     /// evidence map carries, so it must never claim more than the per-assertion
     /// detail lines in `assertions::all_green_detail` do.
+    #[must_use]
     pub fn describe(&self) -> String {
         match self {
             EnsembleCoverage::MonteCarlo { seeds, components } => format!(
@@ -350,6 +351,7 @@ impl CiJsonError {
     }
 
     /// Serialize to the single line `hauksbee-ci run --json` prints.
+    #[must_use]
     pub fn render_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| {
             "{\"ok\":false,\"error\":\"could not serialize the spec error\"}".to_string()
@@ -386,6 +388,7 @@ fn schema_absent_evidence(generator: &mut schemars::SchemaGenerator) -> schemars
 impl CiResult {
     /// One C5.3 refusal shared verbatim by JSON, terminal, `JUnit`, annotations,
     /// the web checks panel, and MCP.
+    #[must_use]
     pub fn refusal(&self) -> Option<Refusal> {
         if !self.analog_invalid() {
             return None;
@@ -490,6 +493,7 @@ impl CiResult {
     /// `<skipped>` `JUnit` testcase, a `::warning` annotation and the `waived`
     /// JSON field, without turning the build red. The web checks panel is the
     /// exception and renders it as a plain FAIL (see docs/ci/CI.md).
+    #[must_use]
     pub fn passed(&self) -> bool {
         self.results.iter().all(|r| r.passed || r.waived.is_some())
     }
@@ -502,6 +506,7 @@ impl CiResult {
     }
 
     /// Count of failures an active waiver covers (visible, not gating).
+    #[must_use]
     pub fn waived_count(&self) -> usize {
         self.results.iter().filter(|r| r.waived.is_some()).count()
     }
@@ -511,6 +516,7 @@ impl CiResult {
     /// (`crates/hauksbee-ci/schemas/hauksbee-ci-report.schema.json`) is
     /// GENERATED from it and a new field cannot ship without appearing in the
     /// contract: `tests/ci_report_schema_drift.rs` fails when the two diverge.
+    #[must_use]
     pub fn json_report(&self) -> CiJsonReport {
         CiJsonReport {
             schema_version: CI_REPORT_SCHEMA_VERSION,
@@ -568,24 +574,28 @@ impl CiResult {
     /// qualifier the human report carries (analog abort, substitutions,
     /// coverage wording), a consumer must never see a cleaner story than the
     /// terminal does.
+    #[must_use]
     pub fn render_json(&self) -> String {
         serde_json::to_string(&self.json_report()).unwrap_or_else(|e| {
             CiJsonError::new(format!("could not serialize the run result: {e}")).render_json()
         })
     }
 
+    #[must_use]
     pub fn pass_count(&self) -> usize {
         self.results.iter().filter(|r| r.passed).count()
     }
 
     /// Count of assertions that could not be honestly evaluated (their window
     /// overlapped a failed analog chunk).
+    #[must_use]
     pub fn invalid_count(&self) -> usize {
         self.results.iter().filter(|r| r.invalid).count()
     }
 
     /// True when the run is invalid-for-analysis: at least one assertion is
     /// INVALID, or the analog co-sim tripped the strict abort.
+    #[must_use]
     pub fn analog_invalid(&self) -> bool {
         self.analog_abort || self.results.iter().any(|r| r.invalid)
     }
@@ -594,6 +604,7 @@ impl CiResult {
     /// tripped analog abort), else 1 any ordinary red, else 0 all green.
     /// The invalid path is checked first so a diverged co-sim refuses rather than
     /// reports a fake pass/fail.
+    #[must_use]
     pub fn exit_code(&self) -> i32 {
         if self.analog_invalid() {
             hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS
@@ -714,6 +725,7 @@ impl CiResult {
             .collect()
     }
 
+    #[must_use]
     pub fn render_human(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!(
@@ -835,6 +847,7 @@ impl CiResult {
     /// `JUnit` XML: each assertion is a `<testcase>`, failures carry a
     /// `<failure>` with the detail. Any CI (GitLab, Jenkins, GitHub, Buildkite)
     /// ingests this.
+    #[must_use]
     pub fn render_junit(&self) -> String {
         render_junit_document(std::slice::from_ref(&self.junit_suite()))
     }
@@ -842,6 +855,7 @@ impl CiResult {
     /// This run as ONE `<testsuite>` fragment plus its counters, so a
     /// multi-spec invocation can merge several runs (and spec errors) into a
     /// single `<testsuites>` document with honest aggregate counts.
+    #[must_use]
     pub fn junit_suite(&self) -> JunitSuite {
         // INVALID assertions map to JUnit `<error>` (the test could not run to a
         // verdict), ordinary reds to `<failure>`. Keep the two counts distinct so
@@ -1123,6 +1137,7 @@ pub struct JunitSuite {
 /// Wrap one or more suites in the `<testsuites>` envelope with honest
 /// aggregate counts. Every `JUnit` document this crate emits goes through here,
 /// so the single-spec and merged multi-spec shapes cannot drift.
+#[must_use]
 pub fn render_junit_document(suites: &[JunitSuite]) -> String {
     let tests: usize = suites.iter().map(|s| s.tests).sum();
     let failures: usize = suites.iter().map(|s| s.failures).sum();
@@ -1146,6 +1161,7 @@ pub fn render_junit_document(suites: &[JunitSuite]) -> String {
 /// emits, so downstream ingestors (GitLab, Jenkins, GitHub) render it as an
 /// errored test, distinct from a failure. `name` labels the suite (the spec
 /// path in a multi-spec run, "spec error" for one).
+#[must_use]
 pub fn junit_error_suite(name: &str, message: &str) -> JunitSuite {
     let message = xml_escape(message);
     JunitSuite {
@@ -1165,6 +1181,7 @@ pub fn junit_error_suite(name: &str, message: &str) -> JunitSuite {
 
 /// A synthetic `JUnit` document for a single spec/board error (exit 2); the
 /// one-spec convenience over [`junit_error_suite`] + [`render_junit_document`].
+#[must_use]
 pub fn render_junit_error(message: &str) -> String {
     render_junit_document(std::slice::from_ref(&junit_error_suite(
         "spec error",
@@ -1182,6 +1199,7 @@ pub fn render_junit_error(message: &str) -> String {
 ///
 /// Every surface that prints a `why:` goes through here, so the terminal and the
 /// `JUnit` body cannot end up saying different things about the same failure.
+#[must_use]
 pub fn why_line(r: &AssertResult) -> Option<String> {
     r.why
         .clone()
@@ -1359,6 +1377,7 @@ fn xml_escape(s: &str) -> String {
 /// Escape the characters that are special in GitHub workflow-command data.
 /// Percent first, then the control characters, else the `%0A`/`%0D` inserted
 /// for them would get their own `%` re-encoded to `%25`.
+#[must_use]
 pub fn gh_escape(s: &str) -> String {
     s.replace('%', "%25")
         .replace('\r', "%0D")

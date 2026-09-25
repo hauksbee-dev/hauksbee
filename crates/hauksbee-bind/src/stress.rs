@@ -98,6 +98,7 @@ pub enum FaultKind {
 }
 
 impl FaultKind {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             FaultKind::Overcurrent => "overcurrent",
@@ -114,6 +115,7 @@ impl FaultKind {
     /// Inverse of [`Self::as_str`]; unknown strings map to `Overcurrent`.
     // Infallible (unknown maps to Overcurrent), so FromStr and its Err type do not fit.
     #[allow(clippy::should_implement_trait)]
+    #[must_use]
     pub fn from_str(s: &str) -> FaultKind {
         match s {
             "surge_current" => FaultKind::SurgeCurrent,
@@ -163,6 +165,7 @@ pub struct DeviceMeta {
 impl DeviceMeta {
     /// Effective power rating (W): explicit `max_power_w`, else derived from the
     /// resistor footprint size. `None` if no power limit is known.
+    #[must_use]
     pub fn power_rating_w(&self) -> Option<f64> {
         if let Some(p) = self.ratings.max_power_w {
             return Some(p);
@@ -222,6 +225,7 @@ impl DeviceMeta {
     /// The aggregation key: boards commonly carry dozens of resistors from one
     /// library whose naming this cannot parse, and reporting each separately
     /// floods the honesty channel to the point where it stops being read.
+    #[must_use]
     pub fn power_coverage_package(&self) -> Option<&str> {
         if !matches!(self.kind, ComponentKind::Passive)
             || self.ratings.max_power_w.is_some()
@@ -239,6 +243,7 @@ impl DeviceMeta {
         })
     }
 
+    #[must_use]
     pub fn power_coverage_gap(&self) -> Option<String> {
         let package = self.power_coverage_package()?;
         Some(format!(
@@ -253,6 +258,7 @@ impl DeviceMeta {
     /// `theta_ja_c_per_w` from the model, else derived from the footprint
     /// package class. Always returns a value (the footprint default is the
     /// conservative fallback), so every dissipating device gets a temperature.
+    #[must_use]
     pub fn theta_ja_c_per_w(&self) -> f64 {
         self.ratings
             .theta_ja_c_per_w
@@ -262,6 +268,7 @@ impl DeviceMeta {
     /// Effective maximum junction temperature (C): explicit
     /// `max_junction_temp_c` from the model, else the per-package-class default
     /// (150 C for power packages, 125 C otherwise).
+    #[must_use]
     pub fn tj_max_c(&self) -> f64 {
         self.ratings
             .max_junction_temp_c
@@ -299,6 +306,7 @@ pub struct ResistorPower {
 /// A board with fifty resistors from one unparseable library is one coverage hole
 /// with fifty instances, not fifty holes, and rendering it as fifty is how an
 /// honesty channel gets tuned out.
+#[must_use]
 pub fn aggregate_power_coverage_gaps(metas: &[DeviceMeta]) -> Vec<String> {
     let mut by_package: std::collections::BTreeMap<&str, Vec<&str>> =
         std::collections::BTreeMap::new();
@@ -358,6 +366,7 @@ pub fn aggregate_power_coverage_gaps(metas: &[DeviceMeta]) -> Vec<String> {
 /// imperial or metric token) gives the standard rating; a recognised small axial
 /// body gives its genuine 1/4 W; everything else derives nothing and becomes a
 /// named coverage gap naming the unlock.
+#[must_use]
 pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     let f = footprint.to_ascii_uppercase();
     let chip = |w: f64| ResistorPower {
@@ -542,6 +551,7 @@ fn din_axial_rating(f: &str) -> Option<f64> {
 /// (`key_belongs_to_ref`) to aggregate per-unit keys under the bare ref. Only
 /// an all-digit tail after the marker counts, so "`SW1_heater`" or "`U1_qspi`" are
 /// left alone (and "SW1" never claims "SW10"'s units).
+#[must_use]
 pub fn strip_unit_suffix(name: &str) -> &str {
     ["_q", "_s", "_e"]
         .into_iter()
@@ -682,6 +692,7 @@ impl Default for StressMonitor {
 
 impl StressMonitor {
     /// Build a monitor over the device metadata gathered at bind time.
+    #[must_use]
     pub fn new(metas: Vec<DeviceMeta>) -> Self {
         let n = metas.len();
         StressMonitor {
@@ -713,6 +724,7 @@ impl StressMonitor {
     ///   guarantee the part is on at all, so that undermines.
     /// * A current peak above a continuous rating on a card with NO pulsed
     ///   rating to judge it against: qualified, naming how long it lasted.
+    #[must_use]
     pub fn run_disclosures(&self) -> Vec<Assumption> {
         let mut out = Vec::new();
         for (m, s) in self.metas.iter().zip(&self.run) {
@@ -801,6 +813,7 @@ impl StressMonitor {
     /// [`crate::binder::BoundBoard::power_coverage_gaps`] is the same list for
     /// callers holding a bound board rather than a live monitor; between them the
     /// CI report, the evidence map and the TUI all carry these.
+    #[must_use]
     pub fn power_coverage_gaps(&self) -> Vec<String> {
         let mut gaps = aggregate_power_coverage_gaps(&self.metas);
         // A MOSFET that conducted but whose card states no VGS for its RDS(on)
@@ -813,6 +826,7 @@ impl StressMonitor {
     }
 
     /// Number of monitored devices.
+    #[must_use]
     pub fn device_count(&self) -> usize {
         self.metas.len()
     }
@@ -960,12 +974,14 @@ impl StressMonitor {
     }
 
     /// Live stress fraction per component reference (0..1).
+    #[must_use]
     pub fn stress_by_ref(&self) -> &HashMap<String, f64> {
         &self.stress_by_ref
     }
 
     /// Live estimated steady-state junction temperature (C) per component
     /// reference, for dissipating devices.
+    #[must_use]
     pub fn temp_by_ref(&self) -> &HashMap<String, f64> {
         &self.temp_by_ref
     }

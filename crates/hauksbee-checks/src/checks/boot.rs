@@ -43,6 +43,7 @@ pub struct BootAdvisory {
 /// strong HIGH from a weak pull-up); `driven` is the union of output-configured
 /// and written nets. `firmware_ran` is `true` only when firmware was supplied and
 /// actually exercised the board; the gate-state panel is suppressed otherwise.
+#[must_use]
 pub fn analyze(
     board: &ExtractedBoard,
     firmware_held_high: &[String],
@@ -100,6 +101,7 @@ pub fn analyze(
 /// plain R refs only. An RV varistor / RT thermistor / RN network is `R…`-prefixed
 /// but sets no DC level (a varistor is high-impedance below its clamp), so crediting
 /// one as a bias would silently suppress a real boot hazard.
+#[must_use]
 pub fn net_has_no_bias_resistor(board: &ExtractedBoard, net_name: &str) -> bool {
     let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
         return false;
@@ -139,6 +141,7 @@ pub fn net_has_no_bias_resistor(board: &ExtractedBoard, net_name: &str) -> bool 
 /// "Resistor" is the same strict predicate the hazard filter uses
 /// (`super::straps::is_assembled_resistor`), plain assembled R refs only, so a
 /// varistor / thermistor / DNP part is never miscredited as a bias.
+#[must_use]
 pub fn gate_bias(board: &ExtractedBoard, net_name: &str) -> Option<GateBias> {
     let net = board.nets.iter().find(|n| n.name == net_name)?;
     let bias_of = |comp: &Component, rail_id: i64| -> Option<GateBias> {
@@ -226,6 +229,7 @@ fn rail_name_and_level(board: &ExtractedBoard, net_id: i64) -> Option<(String, B
 /// assembled) switches don't count. (Pin-function data that would let us require
 /// the *control* terminal specifically is absent in PCB-only extraction, so any
 /// terminal of a populated Q/K qualifies, a deliberate, conservative breadth.)
+#[must_use]
 pub fn net_drives_a_switch(board: &ExtractedBoard, net_name: &str) -> bool {
     let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
         return false;
@@ -433,6 +437,7 @@ impl BiasLevel {
 }
 
 impl BootGateState {
+    #[must_use]
     pub fn label(&self) -> String {
         match self {
             BootGateState::DrivenHigh => "driven HIGH and held".to_string(),
@@ -456,6 +461,7 @@ impl BootGateState {
     /// A short marker for the states worth a look (active or undefined at reset);
     /// LOW and a hardware-biased gate are reported without a marker (both are the
     /// common held-at-a-defined-level case, nothing for a reader to chase).
+    #[must_use]
     pub fn marker(&self) -> &'static str {
         match self {
             BootGateState::DrivenHigh | BootGateState::PulledHigh => "  <- switched at power-up",
@@ -463,6 +469,7 @@ impl BootGateState {
             BootGateState::DrivenLow | BootGateState::HeldByBias(_) => "",
         }
     }
+    #[must_use]
     pub fn json(&self) -> &'static str {
         match self {
             BootGateState::DrivenHigh => "driven_high",
@@ -515,6 +522,7 @@ fn boot_gate_states(
 /// plain-language lines, one per transistor gate, reporting (not judging) what
 /// the firmware does to it at power-up. The arrows flag the active / undefined
 /// cases for a non-engineer to verify; LOW is reported without a flag.
+#[must_use]
 pub fn render_boot_gate_panel(rows: &[(String, String, BootGateState)]) -> String {
     let ref_w = rows
         .iter()

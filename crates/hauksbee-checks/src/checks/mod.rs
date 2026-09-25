@@ -85,6 +85,7 @@ pub(crate) fn resolved_components<'a>(
 /// reopen the "Looks healthy" hole by forgetting one: splice `device_decode` in
 /// on the `--lint` path alone and every other surface returns a false PASS on
 /// those faults.
+#[must_use]
 pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
     report
@@ -139,6 +140,7 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
 /// cap that `--si` flags; the SI twin of the `engine_lint` hole above.
 /// `geo_text` is the raw layout text (None for Altium, whose geometry is not yet
 /// threaded into the text-based SI checks).
+#[must_use]
 pub fn engine_si(board: &ExtractedBoard, lib: &ModelLibrary, geo_text: Option<&str>) -> SiReport {
     let mut report = board.si_checks(geo_text);
     ampacity::append_ampacity(board, lib, geo_text, &mut report);
@@ -150,6 +152,7 @@ pub fn engine_si(board: &ExtractedBoard, lib: &ModelLibrary, geo_text: Option<&s
 /// unchecked-strap-bearing-MCU coverage note. A named chokepoint so neither the
 /// `--resources` path nor `engine_lint` can drop the coverage note by forgetting
 /// to append it.
+#[must_use]
 pub fn resources_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.resource_conflicts();
     report

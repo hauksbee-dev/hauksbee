@@ -44,6 +44,7 @@ use hauksbee_extract::assembly::AssemblyState;
 /// Worst-case input-cap RMS ripple current of a buck (A): `I_out*sqrt(D - D^2)`.
 /// `d` is the duty cycle `Vout/Vin` in (0,1). Clamps `d` to the open interval so
 /// a degenerate `d` returns 0 rather than NaN.
+#[must_use]
 pub fn buck_input_cap_ripple_rms(i_out_a: f64, d: f64) -> f64 {
     if i_out_a <= 0.0 || d <= 0.0 || d >= 1.0 {
         return 0.0;
@@ -55,6 +56,7 @@ pub fn buck_input_cap_ripple_rms(i_out_a: f64, d: f64) -> f64 {
 /// `sqrt(D - D^2)` peak), giving `0.5 * I_out`. When the operating duty range
 /// brackets 0.5 the worst case is exactly there; otherwise it is at the nearer
 /// endpoint. This returns the worst-case ripple over a duty range `[d_lo, d_hi]`.
+#[must_use]
 pub fn worst_case_ripple_over_duty(i_out_a: f64, d_lo: f64, d_hi: f64) -> f64 {
     let (lo, hi) = if d_lo <= d_hi {
         (d_lo, d_hi)

@@ -247,6 +247,7 @@ impl TimingSpec {
         )
     }
 
+    #[must_use]
     pub fn requirement(self) -> hauksbee_engine::scheduler::TimingRequirement {
         hauksbee_engine::scheduler::TimingRequirement {
             min_pulse_s: self.min_pulse_us.map(|v| v * 1e-6),
@@ -1448,43 +1449,52 @@ impl Spec {
     }
 
     /// The board file path, resolved against the spec's directory.
+    #[must_use]
     pub fn board_path(&self) -> PathBuf {
         resolve_in(&self.base_dir, &self.board)
     }
 
+    #[must_use]
     pub fn bom_path(&self) -> Option<PathBuf> {
         self.resolve(&self.bom)
     }
 
+    #[must_use]
     pub fn placement_path(&self) -> Option<PathBuf> {
         self.resolve(&self.placement)
     }
 
+    #[must_use]
     pub fn models_dir_path(&self) -> Option<PathBuf> {
         self.resolve(&self.models_dir)
     }
 
+    #[must_use]
     pub fn variant_path(&self) -> Option<PathBuf> {
         self.resolve(&self.variant)
     }
 
     /// The optional Eagle companion path, resolved against the spec directory.
+    #[must_use]
     pub fn schematic_path(&self) -> Option<PathBuf> {
         self.resolve(&self.schematic)
     }
 
     /// The firmware path, resolved against the spec's directory.
+    #[must_use]
     pub fn firmware_path(&self) -> Option<PathBuf> {
         self.resolve(&self.firmware)
     }
 
     /// The as-built overlay path, resolved against the spec's directory.
+    #[must_use]
     pub fn asbuilt_path(&self) -> Option<PathBuf> {
         self.resolve(&self.asbuilt)
     }
 
     /// The informational MCU-kind note, whichever spelling carried it
     /// (`mcu = "..."` or `[mcu] name = "..."`).
+    #[must_use]
     pub fn mcu_note(&self) -> Option<&str> {
         match &self.mcu {
             Some(McuField::Note(s)) => Some(s),
@@ -1498,6 +1508,7 @@ impl Spec {
     /// legacy string form). Precedence against the `HAUKSBEE_MCU_DIR`
     /// environment variable is applied by the runner, not here: an explicitly
     /// set env var wins over this field.
+    #[must_use]
     pub fn mcu_descriptor_dir(&self) -> Option<PathBuf> {
         match &self.mcu {
             Some(McuField::Config(c)) => self.resolve(&c.descriptor_dir),
@@ -1835,6 +1846,7 @@ impl Spec {
 
     /// Does this spec declare any component tolerance (a `[[tolerance]]` rule
     /// or an `[[override]]` carrying a `tolerance`)?
+    #[must_use]
     pub fn has_tolerances(&self) -> bool {
         !self.tolerances.is_empty() || self.overrides.iter().any(|o| o.tolerance.is_some())
     }
@@ -1846,6 +1858,7 @@ impl Spec {
     /// spec injects an event: no peripheral timeline, no scenario, no firmware.
     /// Deliberately narrow, so the start-up-timing note lands on the specs it
     /// is actually about and on no others.
+    #[must_use]
     pub fn dc_initialised(&self) -> bool {
         self.supplies
             .iter()
@@ -1867,6 +1880,7 @@ impl Spec {
     /// Total ensemble seed count for a Monte-Carlo run: one shared seed stream
     /// drives both net fuzz and tolerance sampling, so the count is the larger
     /// of `[fuzz] seeds` and `[ensemble] seeds` (each seed does both).
+    #[must_use]
     pub fn ensemble_seed_count(&self) -> u32 {
         let fuzz = self.fuzz.as_ref().map(|f| f.seeds).unwrap_or(1);
         let tol = if self.has_tolerances() {
@@ -1881,6 +1895,7 @@ impl Spec {
     }
 
     /// Every net name the spec references, for board-aware validation.
+    #[must_use]
     pub fn referenced_nets(&self) -> Vec<(String, &'static str)> {
         // Explicit peripheral net references (ref+pin is checked at attach).
         // cs_net is included: a typo there silently degrades exact SPI
@@ -1950,6 +1965,7 @@ impl Spec {
 ///
 /// One list, so the `ref` validation and the framing path cannot disagree about
 /// which kinds care.
+#[must_use]
 pub fn is_spi_slave_kind(kind: &str) -> bool {
     matches!(kind, "spi_eeprom" | "spi_mcp3008")
 }
@@ -1968,6 +1984,7 @@ pub fn is_spi_slave_kind(kind: &str) -> bool {
 /// this list cannot know its id. The check therefore only fires on the case it
 /// can actually judge, one built-in SPI-slave model bound to the kind that
 /// describes the other.
+#[must_use]
 pub fn builtin_model_id_for_spi_kind(kind: &str) -> Option<&'static str> {
     match kind {
         "spi_eeprom" => Some("eeprom_25xx_spi"),
@@ -2212,6 +2229,7 @@ impl Assertion {
     /// Is this the boot-coverage kind, under either accepted spelling?
     /// `Spec::load` folds the alias, but a directly-constructed Assertion
     /// (tests, library callers) may still carry it.
+    #[must_use]
     pub fn is_boot_coverage(&self) -> bool {
         matches!(self.kind.as_str(), "boot_coverage" | "boot-coverage")
     }
@@ -2236,6 +2254,7 @@ impl Assertion {
     /// rail that came up at t=0 instead of being ramped change its answer? A
     /// pulse width is timed from edges, and any `after_ms` selects a window by
     /// the clock; both are meaningless on a DC-initialised board.
+    #[must_use]
     pub fn times_startup(&self) -> bool {
         self.kind == "pulse_width" || self.after_ms.is_some_and(|t| t > 0.0)
     }
@@ -2570,6 +2589,7 @@ impl Assertion {
     }
 
     /// A human label for this assertion.
+    #[must_use]
     pub fn label(&self) -> String {
         if let Some(n) = &self.name {
             return n.clone();

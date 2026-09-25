@@ -80,6 +80,7 @@ pub fn install_root() -> Result<PathBuf> {
 
 /// The release-asset tool prefix for an architecture (`qemu-xtensa` /
 /// `qemu-riscv32`), as used in the published asset names.
+#[must_use]
 pub fn tool_name(arch: QemuArch) -> &'static str {
     match arch {
         QemuArch::Xtensa => "qemu-xtensa",
@@ -123,6 +124,7 @@ pub fn host_asset_triple() -> Result<&'static str> {
 /// The asset's version fragment for a release tag: dashes become underscores
 /// (`esp-develop-9.2.2-20260417` -> `esp_develop_9.2.2_20260417`). Verified
 /// against the live release's published names.
+#[must_use]
 pub fn tag_to_asset_version(tag: &str) -> String {
     tag.replace('-', "_")
 }
@@ -146,6 +148,7 @@ where
 
 /// The constructed (fallback) asset name for when the release's asset list
 /// cannot be fetched: the modern `.tar.xz` form with the underscored version.
+#[must_use]
 pub fn constructed_asset_name(arch: QemuArch, tag: &str, triple: &str) -> String {
     format!(
         "{}-softmmu-{}-{}.tar.xz",
@@ -157,6 +160,7 @@ pub fn constructed_asset_name(arch: QemuArch, tag: &str, triple: &str) -> String
 
 /// The checksum-manifest asset name for a release
 /// (`qemu-<ver>-checksum.sha256`).
+#[must_use]
 pub fn checksum_asset_name(tag: &str) -> String {
     format!("qemu-{}-checksum.sha256", tag_to_asset_version(tag))
 }
@@ -164,6 +168,7 @@ pub fn checksum_asset_name(tag: &str) -> String {
 /// Extract `asset`'s sha256 from the release's checksum manifest. Lines look
 /// like `<hex> *<asset-name>` (a leading `*` marks binary mode); `#` lines
 /// are comments.
+#[must_use]
 pub fn checksum_for(manifest: &str, asset: &str) -> Option<String> {
     for line in manifest.lines() {
         let line = line.trim();

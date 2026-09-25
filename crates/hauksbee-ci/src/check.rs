@@ -85,6 +85,7 @@ impl Diagnostic {
     }
 
     /// Render for the terminal: `file:line:col: [code] message (fix)`.
+    #[must_use]
     pub fn render_human(&self, file: &Path) -> String {
         let mut loc = file.display().to_string();
         if let Some(l) = self.line {
@@ -130,6 +131,7 @@ pub struct CheckOptions {
 ///    (`unknown-ref`) against that exact assembled input,
 /// 5. unless `no_board`: resolve the `firmware` path and check it exists and is
 ///    readable (`firmware-missing`), on the same code path `run` uses.
+#[must_use]
 pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,

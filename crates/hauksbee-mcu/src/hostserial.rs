@@ -89,6 +89,7 @@ pub enum HostSerialTransport {
 
 impl HostSerialTransport {
     /// The transport name as it appears in CLI flags and printed output.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pty => "pty",
@@ -311,22 +312,26 @@ impl HostSerial {
     }
 
     /// Which transport this endpoint uses.
+    #[must_use]
     pub fn transport(&self) -> HostSerialTransport {
         self.transport
     }
 
     /// The device path (pty) or `host:port` (tcp) a host tool opens. This is the
     /// string the CLI prints for the user to paste into another terminal.
+    #[must_use]
     pub fn endpoint(&self) -> &str {
         &self.endpoint
     }
 
     /// Whether a host tool is attached right now.
+    #[must_use]
     pub fn peer_attached(&self) -> bool {
         self.attached
     }
 
     /// Session byte counters.
+    #[must_use]
     pub fn stats(&self) -> HostSerialStats {
         self.stats
     }
@@ -373,6 +378,7 @@ impl HostSerial {
 
     /// Host bytes already owned by the endpoint but not yet taken by the
     /// session for simulated-time scheduling.
+    #[must_use]
     pub fn pending_from_peer(&self) -> usize {
         self.inbound.len()
     }
@@ -574,6 +580,7 @@ impl HostSerial {
     }
 
     /// How many bytes are still waiting for the peer.
+    #[must_use]
     pub fn pending_to_peer(&self) -> usize {
         self.backlog.len()
     }
@@ -589,6 +596,7 @@ impl HostSerial {
     }
 
     /// A paste-ready hint for attaching a tool, tailored to the transport.
+    #[must_use]
     pub fn attach_hint(&self) -> Vec<String> {
         match self.transport {
             HostSerialTransport::Pty => vec![

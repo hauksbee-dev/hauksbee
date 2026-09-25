@@ -111,6 +111,7 @@ pub(crate) fn schema_absent_or_string(_: &mut schemars::SchemaGenerator) -> sche
 }
 
 /// Evaluate every assertion in the spec; returns one result per assertion.
+#[must_use]
 pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
     // Ensemble flavor drives the honest wording: None = plain fuzz/single run,
     // Some(mode) = tolerance ensemble (sampled coverage vs bounded corners).

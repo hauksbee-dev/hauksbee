@@ -47,6 +47,7 @@ pub struct LogicLevels {
 }
 
 impl LogicLevels {
+    #[must_use]
     pub fn from_params(m: &ModelEntry) -> Self {
         LogicLevels {
             voh: m.params.get_f64("voh").unwrap_or(4.4),
@@ -60,6 +61,7 @@ impl LogicLevels {
     /// Convert a sampled voltage to a logic level using hysteresis. `prev` is
     /// the last decided level for the pin (true=high); between vil and vih the
     /// pin holds its previous state.
+    #[must_use]
     pub fn decide(&self, v: f64, prev: bool) -> bool {
         if v >= self.vih {
             true
@@ -70,6 +72,7 @@ impl LogicLevels {
         }
     }
 
+    #[must_use]
     pub fn drive_volts(&self, high: bool) -> f64 {
         if high {
             self.voh
@@ -131,6 +134,7 @@ pub struct PinEdge {
 /// series is already cycle-monotonic; a `(port,bit)` maps to its ordered edge
 /// times so the solver can normalise a cycle to a fraction of the chunk's cycle
 /// span and drive a `SourceKind::Pwl` waveform on the net that pin feeds.
+#[must_use]
 pub fn pin_edges_by_pin(edges: &[PinEdge]) -> HashMap<(char, u8), Vec<(u64, bool)>> {
     let mut per_pin: HashMap<(char, u8), Vec<(u64, bool)>> = HashMap::new();
     for e in edges {
@@ -403,6 +407,7 @@ impl DigitalComponent {
     /// the `q` output [`PinDriver`]. Uses the supplied logic levels (the 74HC02
     /// model entry's). State initialises to the cleared idle (Q HIGH) via the
     /// spec's `init`.
+    #[must_use]
     pub fn new_nor_latch(
         reference: String,
         levels: LogicLevels,
@@ -518,6 +523,7 @@ impl DigitalComponent {
     }
 
     /// Current value of a spec register (`None`: no such register / inert).
+    #[must_use]
     pub fn register(&self, name: &str) -> Option<u64> {
         self.logic.as_ref().and_then(|l| l.register(name))
     }
@@ -531,6 +537,7 @@ impl DigitalComponent {
     }
 
     /// Current logic level of a spec output.
+    #[must_use]
     pub fn output_level(&self, name: &str) -> Option<bool> {
         self.logic.as_ref().and_then(|l| l.output_level(name))
     }
@@ -540,6 +547,7 @@ impl DigitalComponent {
     /// chains. The role names are the data-visible contract the chain
     /// controllers key on, so a new model joins a chain by declaring the
     /// roles, with no Rust change.
+    #[must_use]
     pub fn chains_as_595(&self) -> bool {
         self.logic
             .as_ref()
@@ -549,6 +557,7 @@ impl DigitalComponent {
 
     /// Structural chain candidacy for 74HC165-style read chains: a `ser`
     /// serial input, a `pl_n` parallel-load input, and a `qh` serial output.
+    #[must_use]
     pub fn chains_as_165(&self) -> bool {
         self.logic
             .as_ref()
@@ -557,6 +566,7 @@ impl DigitalComponent {
     }
 
     /// Is this a binder-synthesized NOR SR latch?
+    #[must_use]
     pub fn is_nor_latch(&self) -> bool {
         self.logic
             .as_ref()
@@ -566,6 +576,7 @@ impl DigitalComponent {
 
     /// True when the part has at least one clocked register (edge-replay
     /// candidacy, see the scheduler's generalized replay).
+    #[must_use]
     pub fn is_sequential(&self) -> bool {
         self.logic
             .as_ref()
@@ -582,6 +593,7 @@ impl DigitalComponent {
     }
 
     /// True when the named memory is the component's only tick-owned behavior.
+    #[must_use]
     pub fn has_exclusive_memory_port(&self, name: &str) -> bool {
         self.logic
             .as_ref()
@@ -591,6 +603,7 @@ impl DigitalComponent {
 
     /// Input pins whose edge timing matters (register clocks / resets /
     /// loads / enables / serial data), per the spec.
+    #[must_use]
     pub fn sequential_pins(&self) -> Vec<&str> {
         self.logic
             .as_ref()
@@ -600,6 +613,7 @@ impl DigitalComponent {
 
     /// Compact register state for frame reporting: one entry per spec
     /// register under its declared name.
+    #[must_use]
     pub fn state_summary(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         if let Some(logic) = self.logic.as_ref() {
@@ -698,6 +712,7 @@ fn order_serial_chains(
 /// Kept for the `tarski_inference` example's single-chain verification (the
 /// board has exactly one 90-chip chain). The scheduler uses
 /// [`order_595_chains`] instead so independent chains stay separate.
+#[must_use]
 pub fn order_595_chain(digital: &[DigitalComponent]) -> Vec<usize> {
     order_595_chains(digital).into_iter().flatten().collect()
 }
@@ -758,6 +773,7 @@ impl Hc595Chain {
     /// `None` if no chips, or if the essential SRCLK / RCLK / head-SER pins are
     /// not all bound to GPIO (in which case the scheduler keeps the old
     /// once-per-chunk behaviour so nothing regresses).
+    #[must_use]
     pub fn build(
         digital: &[DigitalComponent],
         order: Vec<usize>,
@@ -998,6 +1014,7 @@ impl Hc165Chain {
     /// MCU's GPIO net map. PL and CLK are broadcast control nets read off the
     /// head chip; the head's `qh` net must map to an MCU input pin (MISO).
     /// Returns `None` if the essential PL / CLK / QH→MISO bindings are missing.
+    #[must_use]
     pub fn build(
         digital: &[DigitalComponent],
         order: Vec<usize>,
@@ -1046,6 +1063,7 @@ impl Hc165Chain {
 
     /// MCU GPIO pins this chain consumes edges from: PL, CLK. (MISO is an
     /// output of the chain, an input to the MCU.)
+    #[must_use]
     pub fn watches(&self, pin: (char, u8)) -> bool {
         pin == self.pl_n || pin == self.clk
     }
@@ -1110,6 +1128,7 @@ impl Hc165Chain {
 
     /// Logic thresholds of the head chip (for input sampling). The chips share a
     /// family, so any chip's levels serve.
+    #[must_use]
     pub fn levels(&self, digital: &[DigitalComponent]) -> LogicLevels {
         self.order
             .first()
@@ -1126,6 +1145,7 @@ impl Hc165Chain {
     /// The current word the chain would have shifted out given a captured load,
     /// MSB-first as the firmware accumulates it (bit 15 = first bit out). For
     /// diagnostics / tests; reflects `seq` independent of clocking position.
+    #[must_use]
     pub fn loaded_word(&self) -> u16 {
         let mut w = 0u16;
         for (i, &b) in self.seq.iter().enumerate().take(16) {
@@ -1142,6 +1162,7 @@ impl Hc165Chain {
 /// Declarative parts answer from their `[models.logic]` outputs; parts
 /// without a logic block fall back to the `y*` role convention the
 /// synthesized buffer passthrough mirrors onto.
+#[must_use]
 pub fn output_roles(model: &ModelEntry) -> Vec<String> {
     if !model.logic.is_empty() {
         return model.logic.outputs.clone();

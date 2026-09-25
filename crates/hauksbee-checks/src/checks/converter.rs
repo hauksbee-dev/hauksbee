@@ -299,6 +299,7 @@ pub struct ConverterAbstention {
 
 impl ConverterAbstention {
     /// The canonical user-facing sentence, naming the part and the unlock.
+    #[must_use]
     pub fn message(&self) -> String {
         format!(
             "converter: the switching stage around {} (switch node '{}', rails '{}' and '{}') \
@@ -321,6 +322,7 @@ impl ConverterAbstention {
 /// distinguish "no converter here" from "a converter nobody could orient", which
 /// is the exact dishonesty the abstentions exist to remove, so no such variant is
 /// offered for a caller to reach for.
+#[must_use]
 pub fn detect_converters_with_abstentions(
     board: &ExtractedBoard,
     lib: &ModelLibrary,

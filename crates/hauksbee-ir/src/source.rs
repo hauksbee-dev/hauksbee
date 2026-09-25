@@ -83,6 +83,7 @@ impl SourceKind {
     /// The source value at time `t` (seconds).
     // min/max maps a NaN ramp to full amplitude; clamp would propagate the NaN.
     #[allow(clippy::manual_clamp)]
+    #[must_use]
     pub fn eval(&self, t: f64) -> f64 {
         match self {
             Self::Dc(v) => *v,
@@ -130,6 +131,7 @@ impl SourceKind {
     }
 
     /// The value at `t = 0`, used to seed the DC operating point.
+    #[must_use]
     pub fn dc_value(&self) -> f64 {
         match self {
             Self::Dc(v) => *v,
@@ -141,6 +143,8 @@ impl SourceKind {
 
     /// Wrap `self` in a [`SourceKind::Ramped`] that reaches full amplitude at
     /// `t_ramp`. See the variant docs for the envelope shape.
+    #[must_use]
+    #[must_use]
     pub fn ramped(self, t_ramp: f64) -> Self {
         Self::Ramped {
             scale_to: t_ramp,

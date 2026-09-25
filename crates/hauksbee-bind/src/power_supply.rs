@@ -58,6 +58,7 @@ impl Chemistry {
     ///   1.0 V cutoff.
     /// - `LiFePO4`: A123 / generic LFP, 3.6 V surface-charge, extremely flat
     ///   ~3.3–3.2 V plateau, 2.5 V cutoff.
+    #[must_use]
     pub fn ocv_per_cell(self, soc: f64) -> f64 {
         let s = soc.clamp(0.0, 1.0);
         let knots: &[(f64, f64)] = match self {
@@ -173,6 +174,7 @@ pub struct BatteryProtection {
 
 impl BatteryProtection {
     /// New protection with a trip threshold and delay; reset threshold = trip.
+    #[must_use]
     pub fn new(trip_a: f64, delay_s: f64) -> Self {
         BatteryProtection {
             trip_a,
@@ -229,6 +231,7 @@ pub enum UsbSpec {
 
 impl UsbSpec {
     /// Spec current limit (A).
+    #[must_use]
     pub fn current_limit_a(self) -> f64 {
         match self {
             UsbSpec::V5_0_5A => 0.5,
@@ -239,6 +242,7 @@ impl UsbSpec {
 
     /// Effective cable + connector droop resistance (ohms). A real USB cable
     /// drops ~0.25 V at the rated current; we back that out into an ohmic droop.
+    #[must_use]
     pub fn droop_ohms(self) -> f64 {
         // ~0.25 V at full rated current.
         0.25 / self.current_limit_a()
@@ -254,6 +258,7 @@ impl Default for PowerSupply {
 impl PowerSupply {
     /// Nominal open-circuit voltage (no load), for seeding the first chunk and
     /// for diagnostics.
+    #[must_use]
     pub fn nominal_volts(&self) -> f64 {
         match self {
             PowerSupply::Ideal { volts }
@@ -270,6 +275,7 @@ impl PowerSupply {
     }
 
     /// The series output resistance to stamp for this supply's Thevenin leg.
+    #[must_use]
     pub fn series_r(&self) -> f64 {
         match self {
             PowerSupply::Ideal { .. } | PowerSupply::Bench { .. } => STIFF_R_OHMS,
@@ -282,6 +288,7 @@ impl PowerSupply {
     }
 
     /// State-of-charge readout (0..1), 1.0 for non-depleting supplies.
+    #[must_use]
     pub fn soc(&self) -> f64 {
         match self {
             PowerSupply::Battery { soc, .. } => *soc,
@@ -291,6 +298,7 @@ impl PowerSupply {
 
     /// Whether this supply's protection has latched open *right now*. False for
     /// supplies without protection (or unprotected batteries).
+    #[must_use]
     pub fn protection_tripped(&self) -> bool {
         match self {
             PowerSupply::Battery {
@@ -304,6 +312,7 @@ impl PowerSupply {
     /// Whether this supply's protection has tripped at *any* point so far
     /// (sticky). This is what a coarse-frame CI sampler should read, so a
     /// trip-then-rearm inside one frame is not aliased away.
+    #[must_use]
     pub fn protection_ever_tripped(&self) -> bool {
         match self {
             PowerSupply::Battery {
@@ -391,6 +400,7 @@ impl PowerSupply {
     }
 
     /// Short human-readable kind label for diagnostics / protocol.
+    #[must_use]
     pub fn kind_label(&self) -> &'static str {
         match self {
             PowerSupply::Ideal { .. } => "ideal",

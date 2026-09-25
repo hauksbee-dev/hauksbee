@@ -55,6 +55,7 @@ use hauksbee_extract::{ExtractError, ExtractedBoard};
 
 /// Whether `text` starts like a Board-as-Code file: a tiny sniff on the first
 /// 256 characters, shared by the input classifier and the watch loop.
+#[must_use]
 pub fn is_board_code_header(text: &str) -> bool {
     let head: String = text.chars().take(256).collect();
     head.contains("Board-as-Code") || head.contains("board version ")
@@ -125,6 +126,7 @@ pub struct NormalizedBoard {
 impl NormalizedBoard {
     /// A binary Altium board: DRC comes from the raw bytes twin, and there is
     /// no layout text. What call sites mean by `is_binary` / `altium.is_some()`.
+    #[must_use]
     pub fn is_binary(&self) -> bool {
         self.kind == InputKind::Altium
     }
@@ -138,6 +140,7 @@ impl NormalizedBoard {
     /// The three differ in how connectivity was obtained (reconstructed from
     /// copper for gerbers, read from the file for the other two) but not in what
     /// the geometry-bearing checks can do, which is nothing.
+    #[must_use]
     pub fn is_gerber(&self) -> bool {
         matches!(
             self.kind,
@@ -147,6 +150,7 @@ impl NormalizedBoard {
 
     /// Specifically a gerber archive, as opposed to the other two geometry-less
     /// inputs [`is_gerber`](Self::is_gerber) also covers.
+    #[must_use]
     pub fn is_gerber_archive(&self) -> bool {
         self.kind == InputKind::Gerber
     }
@@ -159,6 +163,7 @@ impl NormalizedBoard {
 /// carry" over an ODB++ job is stating something false about where the
 /// connectivity came from — on exactly the axis these readers exist to be honest
 /// about.
+#[must_use]
 pub fn input_kind_phrase(kind: InputKind) -> &'static str {
     match kind {
         InputKind::Gerber => "a gerber archive",
@@ -238,6 +243,7 @@ impl BoardInputError {
     /// The web front door's wording for this failure: what `/api/analyze`
     /// returns, phrased for someone who just dropped a file in a browser
     /// rather than for a terminal.
+    #[must_use]
     pub fn web_message(&self) -> String {
         match self {
             BoardInputError::BoardCode(e) => {
@@ -287,6 +293,7 @@ fn refuse_eagle_binary(file_name: &str, raw: &[u8]) -> Result<(), BoardInputErro
 /// board with "stream did not contain valid UTF-8" and "this board file is
 /// binary (e.g. Altium .`PcbDoc`)" respectively — one meaningless, one naming the
 /// wrong vendor, and neither telling the user the one thing that would work.
+#[must_use]
 pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String> {
     hauksbee_extract::looks_like_eagle_binary(raw).then(|| {
         format!(

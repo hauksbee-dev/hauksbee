@@ -73,6 +73,7 @@ pub fn stamp_bridge(
 /// Build the [`FaultEvent`] that surfaces an applied short through the fault
 /// channel. `value`/`limit` carry the bridge resistance (Ω) so the readout is
 /// meaningful even though a short is not a rating violation.
+#[must_use]
 pub fn short_fault(name_a: &str, name_b: &str, t: f64) -> FaultEvent {
     FaultEvent {
         component: format!("SHORT:{name_a}-{name_b}"),
@@ -87,6 +88,7 @@ pub fn short_fault(name_a: &str, name_b: &str, t: f64) -> FaultEvent {
 /// Resolve the shorted net *names* a [`DrcReport`] found, mapped onto the
 /// board's node table. Returns the (`name_a`, `name_b`) pairs whose copper actually
 /// overlaps (clearance-only violations are not applied), de-duplicated.
+#[must_use]
 pub fn shorted_name_pairs(report: &DrcReport) -> Vec<(String, String)> {
     let mut pairs: Vec<(String, String)> = report
         .shorts()

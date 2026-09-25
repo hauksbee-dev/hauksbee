@@ -361,6 +361,8 @@ impl RenodeConfig {
     }
 
     /// Add one ADC channel injection recipe. Chainable.
+    #[must_use]
+    #[must_use]
     pub fn with_adc_channel(mut self, map: AdcChannelMap) -> Self {
         self.adc_channels.push(map);
         self
@@ -371,6 +373,8 @@ impl RenodeConfig {
     /// A descriptor without a clock-control recipe is left unchanged. For a
     /// descriptor that has one, the rendered command runs during machine setup,
     /// before the first firmware instruction.
+    #[must_use]
+    #[must_use]
     pub fn with_external_clock_present(mut self, present: bool) -> Self {
         if let Some(clock) = &self.clock_control {
             self.extra_setup.push(
@@ -1915,6 +1919,7 @@ impl RenodeBackend {
     /// Return the path of the Renode log file that captures the execution trace,
     /// or `None` when `HAUKSBEE_RENODE_TRACE` is unset. Callers can read this
     /// file after the run to inspect the raw function-name log entries.
+    #[must_use]
     pub fn trace_log_path(&self) -> Option<&std::path::Path> {
         self.trace_log_path.as_deref()
     }

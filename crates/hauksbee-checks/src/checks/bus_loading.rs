@@ -143,6 +143,7 @@ fn attached_devices(board: &ExtractedBoard, net_id: i64) -> usize {
 }
 
 /// Run the I2C bus-loading lint over every I2C-named net with a pull-up.
+#[must_use]
 pub fn bus_loading_lint(board: &ExtractedBoard) -> NetLintReport {
     let mut report = NetLintReport::default();
     for net in &board.nets {

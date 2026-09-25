@@ -127,6 +127,7 @@ const WAIVER_SURFACES: &[&str] = &["ci", "drc", "lint", "si"];
 /// (missing `reason`, unparseable `until`, no `nets`/`refs`) refuses to load at
 /// all. It gets folded into the matched-nothing accounting here, with the
 /// surface it probably meant.
+#[must_use]
 pub fn waiver_notes(waivers: &hauksbee_engine::waiver::WaiverSet) -> Vec<String> {
     let mut notes = Vec::new();
     for w in waivers.expired() {

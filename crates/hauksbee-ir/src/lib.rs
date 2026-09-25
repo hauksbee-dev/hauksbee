@@ -69,6 +69,7 @@ impl NodeId {
     pub const GROUND: Self = Self(0);
 
     /// True for the ground reference node.
+    #[must_use]
     pub fn is_ground(self) -> bool {
         self.0 == 0
     }
@@ -91,6 +92,7 @@ pub struct Rail {
 
 impl Rail {
     /// A fixed level in volts, tracking no supply pin.
+    #[must_use]
     pub const fn fixed(offset: f64) -> Self {
         Self {
             pin: NodeId::GROUND,
@@ -146,6 +148,7 @@ impl Default for Circuit {
 
 impl Circuit {
     /// Empty circuit with only the ground node defined and `temp_c = 27`.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             node_names: vec!["0".to_string()],
@@ -190,6 +193,7 @@ impl Circuit {
     }
 
     /// Number of nodes including ground.
+    #[must_use]
     pub fn node_count(&self) -> usize {
         self.node_names.len()
     }
@@ -199,6 +203,7 @@ impl Circuit {
     /// new node for an unknown name; it returns `None`, so callers that must
     /// reference an EXISTING node (`.ic`/`.nodeset`) can refuse a typo rather
     /// than silently interning a floating node.
+    #[must_use]
     pub fn find_node(&self, name: &str) -> Option<NodeId> {
         if name == "0" || name.eq_ignore_ascii_case("gnd") {
             return Some(NodeId::GROUND);
@@ -521,6 +526,7 @@ impl Device {
     }
 
     /// Reference designator (`R1`, `Q3`, ...).
+    #[must_use]
     pub fn name(&self) -> &str {
         match self {
             Self::Resistor { name, .. }
@@ -544,6 +550,7 @@ impl Device {
     }
 
     /// All nodes this device connects to (may include ground).
+    #[must_use]
     pub fn nodes(&self) -> Vec<NodeId> {
         match self {
             Self::Resistor { a, b, .. }
@@ -750,6 +757,7 @@ impl Device {
     ///   same sub-system (the stamp needs its branch column) and retarget each
     ///   id via [`Device::retarget_controlling_source_slot`];
     /// * tests, which must place a `Vsource` behind the id(s) before stamping.
+    #[must_use]
     pub fn controlling_sources(&self) -> Vec<DeviceId> {
         // Exhaustive, no `_` arm: a future variant carrying a device reference
         // that fell into a catch-all empty-vec would be invisible to the
@@ -852,6 +860,7 @@ impl Device {
     /// `hauksbee-solve` stamps every example device and fails if a declared
     /// sense node's row receives anything, so this declaration cannot silently
     /// disagree with the stamp.
+    #[must_use]
     pub fn conduction_nodes(&self) -> Vec<NodeId> {
         match self {
             Self::Resistor { a, b, .. }
@@ -923,6 +932,7 @@ impl Device {
     /// no current ever crossed it. Every node the device touches is in exactly
     /// one of [`Device::conduction_nodes`] or this set; the solve-side
     /// cross-check test enforces both the partition and the zero-row property.
+    #[must_use]
     pub fn sense_nodes(&self) -> Vec<NodeId> {
         match self {
             Self::Resistor { .. }
@@ -1180,6 +1190,7 @@ impl Device {
     /// (an arbitrary expression's Jacobian moves with the iterate, even a
     /// linear-looking `{2*V(a)}` ships the finite-difference tangent path), so
     /// it deliberately stays off this whitelist and taints its island.
+    #[must_use]
     pub fn is_linear(&self) -> bool {
         matches!(
             self,
@@ -1220,6 +1231,7 @@ impl Device {
     /// here; the partitioning pass will use this to peel it off. Controlled
     /// sources (`Vcvs`/`Vccs`/`Cccs`/`Ccvs`) are continuous analog constraints
     /// with no discrete state, so they stay with the analog solver (`false`).
+    #[must_use]
     pub fn is_event_driven(&self) -> bool {
         matches!(self, Self::Comparator { .. })
     }

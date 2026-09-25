@@ -170,6 +170,7 @@ pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
 /// treated as examined, but `strap_lint` examines zero pins if the strap pad is
 /// absent on the extracted footprint or unrouted. That is outside this check's
 /// "no strap table" scope and left to the strap lint's own visibility caveats.
+#[must_use]
 pub fn mcu_coverage_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
     for comp in &board.components {

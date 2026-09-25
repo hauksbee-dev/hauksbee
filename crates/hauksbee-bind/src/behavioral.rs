@@ -117,6 +117,7 @@ pub struct CustomRegistry {
 
 impl CustomRegistry {
     /// An empty registry.
+    #[must_use]
     pub fn new() -> Self {
         CustomRegistry::default()
     }
@@ -135,6 +136,7 @@ impl CustomRegistry {
 
     /// Build a custom device for `keys` (any of the component's id/value/MPN), or
     /// `None` if nothing is registered for it.
+    #[must_use]
     pub fn build_for(&self, keys: &[&str]) -> Option<Box<dyn CustomBehavior>> {
         for (k, factory) in &self.factories {
             if keys.iter().any(|key| key.to_ascii_lowercase() == *k) {
@@ -145,6 +147,7 @@ impl CustomRegistry {
     }
 
     /// True when no factories are registered (the common case).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.factories.is_empty()
     }
@@ -1014,16 +1017,19 @@ impl BehavioralDevice {
     /// The binder consults this to suppress the ideal auto-rail on a
     /// converter-driven supply net: two stiff sources on one net, and the
     /// ideal one wins.
+    #[must_use]
     pub fn converter_out_node(&self) -> Option<NodeId> {
         self.converter.as_ref().map(|c| c.out_node)
     }
 
     /// The effective input-current limit of the converter (A), or None.
+    #[must_use]
     pub fn converter_iin_limit(&self) -> Option<f64> {
         self.converter.as_ref().and_then(|c| c.iin_limit_a)
     }
 
     /// Last reflected input current the converter drew (A), or None.
+    #[must_use]
     pub fn converter_iin(&self) -> Option<f64> {
         self.converter.as_ref().map(|c| c.last_iin_a)
     }

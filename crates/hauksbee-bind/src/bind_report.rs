@@ -41,6 +41,7 @@ pub enum BindOutcome {
 /// model would carry invented breakdown/current/power ratings that a stress
 /// verdict can cite. Passives (resistor, capacitor, inductor) are excluded: their
 /// fallbacks carry no such ratings and bind on nearly every board.
+#[must_use]
 pub fn is_active_fallback_device(device: &str) -> bool {
     let d = device.to_ascii_lowercase();
     [
@@ -71,6 +72,7 @@ impl BindOutcome {
     /// A named abstention's `reason` arrives with its two halves joined by
     /// `UNLOCKED_BY_MARKER`; the marker is stripped here so no reader surface
     /// shows the plumbing.
+    #[must_use]
     pub fn label(&self) -> String {
         match self {
             BindOutcome::Analog { device } => format!("analog {device}"),
@@ -89,11 +91,13 @@ impl BindOutcome {
     }
 
     /// Whether this outcome counts as a "resolved" component (for stats).
+    #[must_use]
     pub fn is_resolved(&self) -> bool {
         !matches!(self, BindOutcome::Unresolved { .. })
     }
 
     /// Whether this outcome was deliberately ignored (excluded from resolve %).
+    #[must_use]
     pub fn is_ignored(&self) -> bool {
         matches!(self, BindOutcome::Skipped { .. })
     }
@@ -194,6 +198,7 @@ impl BindReport {
     ///
     /// Deduped and order-stable, so this can be chained straight into a CI
     /// report's `coverage_warnings`. Empty on a board with no fallback binding.
+    #[must_use]
     pub fn estimated_fallback_warnings(&self) -> Vec<String> {
         let mut seen = std::collections::BTreeSet::new();
         self.non_ignored()
@@ -259,6 +264,7 @@ impl BindReport {
     }
 
     /// Count of non-ignored components.
+    #[must_use]
     pub fn non_ignored_count(&self) -> usize {
         self.non_ignored().count()
     }
@@ -270,6 +276,7 @@ impl BindReport {
     /// (e.g. an open diode whose pins are not both connected) is NOT resolved,
     /// so the "N of M resolved" headline agrees with the open parts listed
     /// below it.
+    #[must_use]
     pub fn resolved_count(&self) -> usize {
         self.non_ignored()
             .filter(|r| r.outcome.is_resolved())
@@ -277,6 +284,7 @@ impl BindReport {
     }
 
     /// Fraction of non-ignored components that resolved (0.0..=1.0).
+    #[must_use]
     pub fn resolved_fraction(&self) -> f64 {
         let n = self.non_ignored_count();
         if n == 0 {
@@ -290,16 +298,19 @@ impl BindReport {
         self.rows.iter().filter(|r| pred(&r.outcome)).count()
     }
 
+    #[must_use]
     pub fn mcu_count(&self) -> usize {
         self.count_where(|o| matches!(o, BindOutcome::Mcu { .. }))
     }
 
     /// Count of components bound as shift registers specifically.
+    #[must_use]
     pub fn shift_register_count(&self) -> usize {
         self.count_where(|o| matches!(o, BindOutcome::Digital { kind } if kind == "shift_register"))
     }
 
     /// Total components bound into the event-driven digital layer.
+    #[must_use]
     pub fn digital_count(&self) -> usize {
         self.count_where(|o| matches!(o, BindOutcome::Digital { .. }))
     }
@@ -335,6 +346,7 @@ impl BindReport {
     }
 
     /// Render a Unicode box-drawing table of every row.
+    #[must_use]
     pub fn render_table(&self) -> String {
         self.render_table_with_bulk_passives(true)
     }
@@ -343,6 +355,7 @@ impl BindReport {
     /// Generic R/C/L fallbacks are sound enough to account for in the summary,
     /// but printing hundreds of them ahead of the active devices hides the
     /// answer. [`Self::render_table`] remains the full form.
+    #[must_use]
     pub fn render_table_compact(&self) -> String {
         self.render_table_with_bulk_passives(false)
     }
@@ -535,6 +548,7 @@ fn truncate(s: &str, max: usize) -> String {
 /// Natural sort key for a reference designator: alpha prefix (case-folded),
 /// then the numeric part as a NUMBER (so R2 sorts before R10), then any
 /// remaining suffix. Shared by every user-facing table that lists parts.
+#[must_use]
 pub fn natural_ref_key(reference: &str) -> (String, u64, String) {
     let prefix: String = reference
         .chars()
@@ -756,6 +770,7 @@ impl BindSummary {
     /// outcome is not `Unresolved`, yet the part still does not drive its nets,
     /// so a thermal/AC result over those nets is just as untrustworthy. We walk
     /// `Mcu`/`Resolved`-style rows that carry a `warning` and name an active IC.
+    #[must_use]
     pub fn active_open_on_live_circuit(&self) -> bool {
         self.resolved_but_open_active.iter().any(|u| u.active_ic)
     }
@@ -771,6 +786,7 @@ impl BindSummary {
     /// result, so it must not trigger a false "invalid" verdict (a board that
     /// genuinely runs cool would otherwise be wrongly declared invalid). The
     /// `critical_parts_bound` ratio is still reported in the banner for audit.
+    #[must_use]
     pub fn active_ics_unresolved(&self) -> bool {
         self.active_path_unresolved.iter().any(|u| u.active_ic)
     }
@@ -785,6 +801,7 @@ impl BindSummary {
     /// Render the honest summary banner that augments the bind table. Leads with
     /// the role metric, then WARNS (loudly) when the active circuit is open, then
     /// lists each affected active-path part.
+    #[must_use]
     pub fn render_banner(&self) -> String {
         use std::fmt::Write as _;
         let mut s = String::new();
@@ -891,6 +908,7 @@ fn grouped_refs(parts: &[UnresolvedActive]) -> String {
 
 /// Whether a reference designator names an active IC (prefix U / IC / MCU),
 /// matching the binder's MCU-candidate convention.
+#[must_use]
 pub fn is_active_ic_ref(reference: &str) -> bool {
     // Eagle names any element the designer left unnamed `U$12`, and that covers
     // mounting holes, fiducials, logos, frames and test points. They take the
@@ -911,6 +929,7 @@ pub fn is_active_ic_ref(reference: &str) -> bool {
 
 /// Whether a reference is a CAD tool's placeholder for an unnamed element
 /// (Eagle's `U$12` form) rather than a designator a person assigned.
+#[must_use]
 pub fn is_tool_generated_ref(reference: &str) -> bool {
     let Some((head, tail)) = reference.split_once('$') else {
         return false;
@@ -928,6 +947,7 @@ pub fn is_tool_generated_ref(reference: &str) -> bool {
 /// working MCU when it infers (or fails to infer) the pin map from schematic pin
 /// names; that is a naming limitation, not an open circuit, and must NOT mark the
 /// part as untrustworthy on the live circuit.
+#[must_use]
 pub fn is_open_pin_warning(warning: &str) -> bool {
     // Positive match on explicit open-pin markers, NOT a negative catch-all: a
     // benign advisory on a fully-wired resolved IC (e.g. an analog switch whose

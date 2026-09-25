@@ -103,6 +103,7 @@ pub enum PdVolts {
 
 impl PdVolts {
     /// Nominal volts for ordering / display.
+    #[must_use]
     pub fn volts(self) -> u32 {
         match self {
             PdVolts::V5 => 5,
@@ -123,6 +124,7 @@ impl PdVolts {
 ///   19 V: 1921..=2778, 20 V: >= 2779.
 ///
 /// `VBUS_MIN` uses the same band structure, so this one decoder serves both pins.
+#[must_use]
 pub fn decode_table2(mv: i64) -> PdVolts {
     match mv {
         i64::MIN..=248 => PdVolts::V5,
@@ -139,6 +141,7 @@ pub fn decode_table2(mv: i64) -> PdVolts {
 /// permanent pull-down in parallel with any switched leg). An `r_pd` of 0 (a
 /// detent that grounds the pin directly) gives 0 mV; an open pull-down is modelled
 /// by the caller passing only the permanent resistor.
+#[must_use]
 pub fn divider_mv(r_pu: f64, r_pd: f64) -> i64 {
     if r_pu <= 0.0 && r_pd <= 0.0 {
         return 0;
@@ -389,6 +392,7 @@ fn leg_resistor_to_ground(board: &ExtractedBoard, node: i64) -> Option<(String, 
 /// CYPD3177 USB-C PD sink, the TI `BQ2407x` charger family's TMR safety timer,
 /// and the TI TPS25982 eFuse family's ILIM current limit; each identified part
 /// is decoded independently.
+#[must_use]
 pub fn device_decode_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
     for comp in &board.components {

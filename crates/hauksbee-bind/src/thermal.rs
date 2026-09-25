@@ -142,6 +142,7 @@ fn body_match<T: Copy>(table: &[(T, f64)], f: &str, has: impl Fn(T, &str) -> boo
 /// Derive a junction-to-ambient thermal resistance (C/W) from a footprint
 /// string, by matching the package body token. Still-air, no heatsink. See the
 /// module docs for the per-package sources.
+#[must_use]
 pub fn theta_ja_from_footprint(footprint: &str, kind: ComponentKind) -> f64 {
     let f = footprint.to_ascii_uppercase();
     // Chip passives: size-derived (smaller body = worse cooling).
@@ -164,6 +165,7 @@ fn chip_passive_theta_ja(f_upper: &str) -> Option<f64> {
 /// Default maximum junction temperature (C) for a package class. Power packages
 /// (tab / leadframe parts that exist to dissipate) default to 150 C; everything
 /// else to the common 125 C industrial limit.
+#[must_use]
 pub fn default_tj_max(footprint: &str) -> f64 {
     let f = footprint.to_ascii_uppercase();
     if POWER_BODIES.iter().any(|b| f.contains(b)) {
@@ -174,6 +176,7 @@ pub fn default_tj_max(footprint: &str) -> f64 {
 }
 
 /// Steady-state junction temperature (C): `Tj = Tambient + P * theta_JA`.
+#[must_use]
 pub fn junction_temp_c(ambient_c: f64, power_w: f64, theta_ja: f64) -> f64 {
     ambient_c + power_w.max(0.0) * theta_ja
 }

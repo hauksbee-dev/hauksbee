@@ -109,6 +109,7 @@ fn windows_install_candidates(root: &Path) -> Vec<PathBuf> {
 }
 
 /// True if a usable Renode install can be located. Used to skip tests cleanly.
+#[must_use]
 pub fn is_available() -> bool {
     find_renode().is_ok()
 }
@@ -151,11 +152,13 @@ impl RenodeProcess {
     /// first launch on macOS can spend more than 30 seconds in code-signing
     /// and .NET cold start even though Renode is healthy, so this is bounded
     /// but leaves room for that rather than exhausting the port retries.
+    #[must_use]
     pub fn startup_timeout() -> Duration {
         Duration::from_secs(60)
     }
 
     /// The spawned Renode's OS process id (diagnostics and the reaping tests).
+    #[must_use]
     pub fn pid(&self) -> u32 {
         self.inner.pid()
     }

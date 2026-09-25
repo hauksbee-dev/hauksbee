@@ -50,12 +50,14 @@ use hauksbee_extract::assembly::AssemblyState;
 
 /// Run the strap-pin lint over an extracted board, resolving each component
 /// against `lib` to find MCUs that carry a strap table.
+#[must_use]
 pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     strap_lint_with_drives(board, lib, &BTreeMap::new())
 }
 
 /// [`strap_lint`] with solved (or spec-forced) net spans, which a pull
 /// divider is judged at alongside each rail's declared corners.
+#[must_use]
 pub fn strap_lint_with_drives(
     board: &ExtractedBoard,
     lib: &ModelLibrary,

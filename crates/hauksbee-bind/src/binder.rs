@@ -194,11 +194,13 @@ impl BoundBoard {
     /// Lives here so any caller holding a `BoundBoard` can surface it, not only
     /// the CI runner: an abstention visible on one surface and silent on the
     /// others is still a silent abstention on those others.
+    #[must_use]
     pub fn power_coverage_gaps(&self) -> Vec<String> {
         crate::stress::aggregate_power_coverage_gaps(&self.device_meta)
     }
 
     /// Look up a net node by name.
+    #[must_use]
     pub fn node(&self, net: &str) -> Option<NodeId> {
         self.net_nodes.get(net).copied()
     }
@@ -273,6 +275,7 @@ pub enum FitRemedy {
 /// without being tested. Callers pair this with
 /// [`EXIT_INVALID_FOR_ANALYSIS`](crate::EXIT_INVALID_FOR_ANALYSIS)
 /// (or their spec-error equivalent) so a vacuous green is impossible.
+#[must_use]
 pub fn no_processor_message(dnp_mcus: &[(String, String)], remedy: FitRemedy) -> String {
     if dnp_mcus.is_empty() {
         return "cannot run firmware: this board bound zero processors, and none were \
@@ -309,6 +312,7 @@ pub fn no_processor_message(dnp_mcus: &[(String, String)], remedy: FitRemedy) ->
 }
 
 /// Bind an extracted board against a model library (no custom behaviours).
+#[must_use]
 pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
     bind_board_with(board, lib, &crate::behavioral::CustomRegistry::new())
 }
@@ -317,6 +321,7 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
 /// behaviours. A component whose resolved model id / value / MPN matches a
 /// registered factory is realised by that [`CustomBehavior`](crate::behavioral::CustomBehavior)
 /// instead of the declarative layer.
+#[must_use]
 pub fn bind_board_with(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
@@ -990,6 +995,7 @@ fn gather_device_meta(
 /// a caller cannot reach a model without having answered the three-state
 /// assembled-component question. DNP-absent and identity-unknown parts have no
 /// witness and therefore no model.
+#[must_use]
 pub fn resolve(lib: &ModelLibrary, part: FittedComponent<'_>) -> hauksbee_models::Resolution {
     library_resolution(lib, part.component())
 }
@@ -1043,6 +1049,7 @@ pub struct ModelRoleCs {
 }
 
 /// See [`ModelRoleCs`].
+#[must_use]
 pub fn model_role_cs(
     board: &ExtractedBoard,
     reference: &str,
@@ -1102,6 +1109,7 @@ fn model_cs_net(
 /// WOULD resolve to. None of them may stamp a device from the answer.
 /// Everything that models an assembled part goes through [`resolve`] and its
 /// [`FittedComponent`] witness.
+#[must_use]
 pub fn library_resolution(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
     let mut q = ComponentQuery::new(
         non_empty(&comp.lib_id),
@@ -5347,6 +5355,7 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
 }
 
 /// Map an `ATmega328P` / Arduino-Nano role string to a `(port, bit)` GPIO id.
+#[must_use]
 pub fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     if module {
@@ -5421,6 +5430,7 @@ fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
 /// with no port pin and return `None`, so they stay pure ADC probes. Handles
 /// both the Nano module role ("a2", "a3_...") and the bare role carrying an
 /// adc index ("`pc2_adc2`").
+#[must_use]
 pub fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     // As in `gpio_of_role`, the bare `a<n>` table is the NANO's. A module whose
@@ -5490,6 +5500,7 @@ fn is_canonical_ground(name: &str) -> bool {
 }
 
 /// True for ground-family net names.
+#[must_use]
 pub fn is_ground(name: &str) -> bool {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
     matches!(
@@ -5499,6 +5510,7 @@ pub fn is_ground(name: &str) -> bool {
 }
 
 /// If `name` is a recognised supply rail, return its nominal voltage.
+#[must_use]
 pub fn power_rail_voltage(name: &str) -> Option<f64> {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
     match n.as_str() {
@@ -5608,6 +5620,7 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
 /// structural test (how many parts hang off the net) so a three-pin enable
 /// called `VCC_EN` does not read as a dead rail. Ground is excluded: `VSS` and
 /// friends are 0 V because that is what they are.
+#[must_use]
 pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
     if is_ground(name) || power_rail_voltage(name).is_some() {
         return false;
@@ -5927,6 +5940,7 @@ pub enum IdentityFinding {
 
 impl IdentityFinding {
     /// The one line a report prints for this finding.
+    #[must_use]
     pub fn line(&self) -> String {
         match self {
             IdentityFinding::ValueDisagrees {
@@ -6002,6 +6016,7 @@ pub struct FitAdvice {
 }
 
 impl FitAdvice {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.fit.is_empty() && self.no_fit.is_empty()
     }
@@ -6025,6 +6040,7 @@ impl IdentityReport {
     /// The lines a report prints. Empty when the artifact agreed with the layout
     /// about everything and added nothing, so a run whose BOM says nothing new
     /// never mentions the subject.
+    #[must_use]
     pub fn lines(&self) -> Vec<String> {
         let mut out = self.evidence.clone();
         for a in &self.identified {
@@ -6134,6 +6150,7 @@ pub enum IdentityRefusal {
 
 impl IdentityRefusal {
     /// Always [`crate::EXIT_INVALID_FOR_ANALYSIS`].
+    #[must_use]
     pub fn exit_code(&self) -> i32 {
         crate::EXIT_INVALID_FOR_ANALYSIS
     }

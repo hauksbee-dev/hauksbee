@@ -120,6 +120,7 @@ impl SpecError {
 /// Return up to `limit` known names closest to `target`, ranked by edit
 /// distance, preferring substring/case-insensitive matches. Only returns names
 /// within a sensible distance so the suggestions are actually useful.
+#[must_use]
 pub fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String> {
     let t_lower = target.to_ascii_lowercase();
     let mut scored: Vec<(usize, &String)> = known
@@ -166,6 +167,7 @@ pub fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String>
 /// first letter is the component CLASS, the one character of a reference nobody
 /// fat-fingers into a different one, and it is what makes `R99 -> D1` obviously
 /// not a typo while `R_Shnt15301 -> R_Shunt15301` obviously is.
+#[must_use]
 pub fn near_refs(target: &str, known: &[String], limit: usize) -> Vec<String> {
     let class = designator_class(target);
     let t = target.to_ascii_lowercase();
@@ -202,6 +204,7 @@ fn designator_class(r: &str) -> Option<char> {
 /// The `; did you mean: a, b?` clause for a suggestion list, or empty when
 /// there is nothing worth suggesting. One formatter so every call site's
 /// wording (and the parser in `check` that splits it back out) agrees.
+#[must_use]
 pub fn suggestion_clause(suggestions: &[String]) -> String {
     if suggestions.is_empty() {
         String::new()
@@ -216,6 +219,7 @@ pub fn suggestion_clause(suggestions: &[String]) -> String {
 /// swapped pair, an added character) without ever suggesting something the
 /// user plainly did not type; a full-list dump already follows in the error,
 /// so a wild guess here would only mislead.
+#[must_use]
 pub fn did_you_mean(target: &str, options: &[&str]) -> Option<String> {
     let t = target.to_ascii_lowercase();
     options
@@ -231,6 +235,7 @@ pub fn did_you_mean(target: &str, options: &[&str]) -> Option<String> {
 
 /// Format the `did_you_mean` hint as the parenthetical the error messages
 /// splice in: `" (did you mean 'voltage'?)"`, or empty when nothing is close.
+#[must_use]
 pub fn did_you_mean_hint(target: &str, options: &[&str]) -> String {
     match did_you_mean(target, options) {
         Some(s) => format!(" (did you mean '{s}'?)"),

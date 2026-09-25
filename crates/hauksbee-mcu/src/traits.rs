@@ -32,6 +32,7 @@ pub struct PinId {
 
 impl PinId {
     /// Construct a pin identifier from a port letter and bit number.
+    #[must_use]
     pub fn new(port: char, bit: u8) -> Self {
         Self { port, bit }
     }
@@ -48,14 +49,17 @@ pub enum PinDrive {
 }
 
 impl PinDrive {
+    #[must_use]
     pub fn drive(pin: PinId, high: bool) -> Self {
         Self::Drive { pin, high }
     }
 
+    #[must_use]
     pub fn release(pin: PinId) -> Self {
         Self::Release { pin }
     }
 
+    #[must_use]
     pub fn pin(self) -> PinId {
         match self {
             Self::Drive { pin, .. } | Self::Release { pin } => pin,

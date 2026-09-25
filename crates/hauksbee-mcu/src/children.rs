@@ -390,6 +390,7 @@ pub(crate) fn kill_tree(pid: u32) {
 /// own shutdown path; the signal handler does the same thing inline (it
 /// cannot call this: `taskkill` spawning is not async-signal-safe, and the
 /// handler is unix-only anyway).
+#[must_use]
 pub fn kill_all_registered() -> usize {
     #[cfg(unix)]
     {

@@ -45,6 +45,7 @@ fn installed_by() -> String {
 
 /// Walk up from `start` to the repository root (the first directory that
 /// contains `.git`).
+#[must_use]
 pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
     let mut dir = start.canonicalize().ok()?;
     loop {
@@ -59,6 +60,7 @@ pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
 
 /// Is the pre-commit gate already wired in this repo (either framework
 /// config or plain hook mentioning hauksbee)?
+#[must_use]
 pub fn hook_wired(root: &Path) -> bool {
     let config = root.join(".pre-commit-config.yaml");
     if let Ok(text) = fs::read_to_string(&config) {
@@ -71,6 +73,7 @@ pub fn hook_wired(root: &Path) -> bool {
 }
 
 /// Is a GitHub workflow that runs hauksbee already present?
+#[must_use]
 pub fn action_wired(root: &Path) -> bool {
     let dir = root.join(".github/workflows");
     let Ok(entries) = fs::read_dir(&dir) else {
@@ -758,6 +761,7 @@ pub fn github_action_write(cwd: &Path, path: &Path) -> anyhow::Result<String> {
 /// The one next-step line a GREEN run ends with: point at whichever repo
 /// wiring is missing, and stay silent when both the hook and the workflow
 /// are already in place (or when there is no repo to wire).
+#[must_use]
 pub fn green_next_step(cwd: &Path) -> Option<String> {
     let root = find_repo_root(cwd)?;
     let hook = hook_wired(&root);

@@ -88,6 +88,7 @@ pub struct InlineSegment {
 
 impl InlineProfile {
     /// Convert to the model-layer [`hauksbee_models::LoadProfile`].
+    #[must_use]
     pub fn to_profile(&self) -> hauksbee_models::LoadProfile {
         hauksbee_models::LoadProfile {
             id: self.id.clone(),
@@ -155,6 +156,7 @@ pub struct RailWindow {
 }
 
 impl RailWindow {
+    #[must_use]
     pub fn new() -> Self {
         RailWindow {
             min_v: f64::INFINITY,
@@ -217,12 +219,14 @@ impl RailWindow {
 
     /// Total time (s) the rail spent strictly below `threshold` volts, summed
     /// over the sampled window (rectangular integration on the sample grid).
+    #[must_use]
     pub fn dip_duration_s(&self, threshold: f64) -> f64 {
         self.duration_past_s(threshold, true)
     }
 
     /// Total time (s) the rail spent strictly above `threshold` volts, summed
     /// over the sampled window (rectangular integration on the sample grid).
+    #[must_use]
     pub fn spike_duration_s(&self, threshold: f64) -> f64 {
         self.duration_past_s(threshold, false)
     }
@@ -281,6 +285,7 @@ impl RailWindow {
     /// if the rail never dipped, and `+∞` if it dipped but never climbed back to
     /// `recover_to` (so a `recover_within_ms` assertion FAILS loud rather than
     /// passing on the small `window_end − t_dip` value a late dip produced).
+    #[must_use]
     pub fn recovery_s(&self, threshold: f64, recover_to: f64) -> f64 {
         self.recovered_at_s(threshold, recover_to, true)
     }
@@ -289,6 +294,7 @@ impl RailWindow {
     /// sample at or below `settle_to` after the last sample above `settle_to`.
     /// Returns 0 if the rail never spiked, and `+∞` if it spiked but the final
     /// sample is still above `settle_to`.
+    #[must_use]
     pub fn settling_s(&self, threshold: f64, settle_to: f64) -> f64 {
         self.recovered_at_s(threshold, settle_to, false)
     }

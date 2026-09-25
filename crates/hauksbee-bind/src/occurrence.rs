@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 pub const OCCURRENCE_PREFIX: &str = "@hkb-occurrence:";
 
+#[must_use]
 pub fn component_occurrence_subject(
     reference: &str,
     total_occurrences: usize,

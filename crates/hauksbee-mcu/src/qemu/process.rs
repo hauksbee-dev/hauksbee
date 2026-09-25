@@ -47,6 +47,7 @@ pub enum QemuArch {
 
 impl QemuArch {
     /// The QEMU system binary file name for this architecture.
+    #[must_use]
     pub fn binary_name(self) -> &'static str {
         match self {
             Self::Xtensa => "qemu-system-xtensa",
@@ -156,6 +157,7 @@ fn idf_tools_candidates(root: &Path, file: &str) -> Vec<PathBuf> {
 
 /// True if a usable Espressif QEMU for `arch` can be located. Used to skip
 /// integration tests cleanly when the emulator is absent.
+#[must_use]
 pub fn is_available(arch: QemuArch) -> bool {
     find_qemu(arch).is_ok()
 }
@@ -238,11 +240,13 @@ impl QemuProcess {
     }
 
     /// What QEMU wrote to stderr so far, trimmed, capped to its last 2 KiB.
+    #[must_use]
     pub fn stderr_output(&self) -> String {
         self.inner.stderr_output()
     }
 
     /// How long to wait for the QMP port to come up after spawn.
+    #[must_use]
     pub fn startup_timeout() -> Duration {
         Duration::from_secs(20)
     }
@@ -261,6 +265,7 @@ impl QemuProcess {
     }
 
     /// The spawned QEMU's OS process id (diagnostics and the reaping tests).
+    #[must_use]
     pub fn pid(&self) -> u32 {
         self.inner.pid()
     }

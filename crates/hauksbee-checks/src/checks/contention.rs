@@ -140,6 +140,7 @@ impl Scan {
     /// measure: a board full of 3-state buffers exercises resolution, role
     /// enumeration, and the tri-state exclusion even though it yields zero
     /// push-pull pins.
+    #[must_use]
     pub fn output_roles_presented(&self) -> usize {
         self.parts.iter().map(|p| p.output_roles).sum()
     }
@@ -268,6 +269,7 @@ pub fn scan(board: &ExtractedBoard, lib: &ModelLibrary) -> Scan {
 
 /// Flag every net carrying push-pull outputs of two or more different modelled
 /// digital parts. See the module docs for the classification and the exclusions.
+#[must_use]
 pub fn contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
 

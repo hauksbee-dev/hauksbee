@@ -316,6 +316,7 @@ impl Backend {
     }
 
     /// The canonical token for this backend (the `backend:` half of a spec).
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Self::Renode => "renode",
@@ -1133,6 +1134,7 @@ impl SocConfig {
     }
 
     /// The `backend:part` specs of every embedded built-in descriptor.
+    #[must_use]
     pub fn builtin_specs() -> Vec<&'static str> {
         EMBEDDED.iter().map(|(k, _)| *k).collect()
     }
@@ -1149,11 +1151,13 @@ impl SocConfig {
     /// Note the layering: this is the EMBEDDED source, deliberately not the
     /// override-directory file that `resolve` would prefer. A caller asking for
     /// the shipped descriptor is asking about the binary, not the machine.
+    #[must_use]
     pub fn builtin_source(spec: &str) -> Option<&'static str> {
         EMBEDDED.iter().find(|(k, _)| *k == spec).map(|(_, v)| *v)
     }
 
     /// The backend this resolved descriptor targets.
+    #[must_use]
     pub fn backend(&self) -> Backend {
         match self {
             #[cfg(feature = "renode")]

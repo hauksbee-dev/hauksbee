@@ -185,6 +185,7 @@ pub mod mailbox {
     pub const ADC_FULL_SCALE_VOLTS: f64 = 3.1;
 
     /// The mailbox word carrying channel `ch`'s injected count.
+    #[must_use]
     pub const fn adc_channel_word(ch: u8) -> u32 {
         ADC_CH0 + 4 * ch as u32
     }
@@ -1152,11 +1153,13 @@ impl QemuBackend {
     /// Whether the firmware has raised the mailbox MAGIC handshake, i.e. the
     /// backend has switched from boot-floored run windows to exact ones.
     /// Diagnostic / test-support accessor.
+    #[must_use]
     pub fn boot_complete(&self) -> bool {
         self.boot_complete
     }
 
     /// Which live GPIO output observation path this backend selected.
+    #[must_use]
     pub fn gpio_output_observation(&self) -> GpioOutputObservation {
         self.gpio_output_observation
     }

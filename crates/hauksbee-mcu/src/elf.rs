@@ -54,6 +54,7 @@ pub const EM_RISCV: u16 = 0xF3; // 243
 /// example shape) rather than a raw `40`, and the loader resolves it here.
 /// Returns `None` for an unrecognised name so the loader raises a named
 /// "unknown `e_machine`" error instead of silently accepting garbage.
+#[must_use]
 pub fn e_machine_from_name(name: &str) -> Option<u16> {
     match name {
         "EM_ARM" => Some(EM_ARM),
@@ -65,6 +66,7 @@ pub fn e_machine_from_name(name: &str) -> Option<u16> {
 }
 
 /// Human-readable name for an `e_machine` value, for error messages.
+#[must_use]
 pub fn machine_name(e_machine: u16) -> &'static str {
     match e_machine {
         EM_ARM => "ARM",
