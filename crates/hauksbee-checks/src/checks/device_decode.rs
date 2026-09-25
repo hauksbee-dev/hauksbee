@@ -1,6 +1,7 @@
 //! Device-decode check class: configurable controllers whose strap / divider
 //! resistors *select a documented operating mode*, decoded against the part's
 //! datasheet bands.
+//!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A whole class of parts (USB-PD sink controllers, programmable LDOs, address-
@@ -137,12 +138,14 @@ pub const fn decode_table2(mv: i64) -> PdVolts {
     }
 }
 
-/// Config-pin voltage of a single-pull-up / single-pull-down divider, in mV:
+/// Config-pin voltage of a single-pull-up / single-pull-down divider, in mV.
+///
 /// `Vpin = VDDD * Rpd / (Rpu + Rpd)`. `r_pd` is the *effective* pull-down (the
 /// permanent pull-down in parallel with any switched leg). An `r_pd` of 0 (a
 /// detent that grounds the pin directly) gives 0 mV; an open pull-down is modelled
 /// by the caller passing only the permanent resistor.
 #[must_use]
+#[allow(clippy::similar_names, clippy::cast_possible_truncation)] // datasheet names; mV of a 3.3 V divider
 pub fn divider_mv(r_pu: f64, r_pd: f64) -> i64 {
     if r_pu <= 0.0 && r_pd <= 0.0 {
         return 0;
@@ -389,7 +392,9 @@ fn leg_resistor_to_ground(board: &ExtractedBoard, node: i64) -> Option<(String, 
     None
 }
 
-/// Run the device-decode check class over a board. Seeded parts: the
+/// Run the device-decode check class over a board.
+///
+/// Seeded parts: the
 /// CYPD3177 USB-C PD sink, the TI `BQ2407x` charger family's TMR safety timer,
 /// and the TI TPS25982 eFuse family's ILIM current limit; each identified part
 /// is decoded independently.
@@ -452,6 +457,7 @@ const TPS25982_SERIES_LINK_MAX_OHMS: f64 = 1.0;
 const TPS25982_SERIES_WALK_MAX_DEPTH: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_field_names)] // `_a` is the unit (amps), the repo's field convention
 struct IlimBand {
     min_a: f64,
     typ_a: f64,

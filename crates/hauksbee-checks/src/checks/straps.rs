@@ -435,7 +435,7 @@ fn judge_divider(
             p.reference, p.value
         ));
     }
-    let (Some([il_k, il_v]), Some([ih_k, ih_v])) = (strap.vil, strap.vih) else {
+    let (Some([lo_k, lo_v]), Some([hi_k, hi_v])) = (strap.vil, strap.vih) else {
         return Err(format!(
             "the '{}' card carries no sourced VIL/VIH for {}",
             model.id, strap.role
@@ -466,15 +466,17 @@ fn judge_divider(
             level.insert(*id, corners[k % corners.len()]);
             k /= corners.len();
         }
-        let (vil, vih) = (il_k * level[&vdd] + il_v, ih_k * level[&vdd] + ih_v);
+        let (vil, vih) = (
+            lo_k.mul_add(level[&vdd], lo_v),
+            hi_k.mul_add(level[&vdd], hi_v),
+        );
         (il, ih) = (widen(il, vil), widen(ih, vih));
         for skew in [-1.0, 1.0] {
             // A 0 Ohm part is a short: a micro-ohm pins the net to its far side.
             let (mut g, mut i) = (0.0, 0.0);
             for p in pulls {
-                let r = (p.ohms.unwrap_or_default()
-                    * (1.0 + skew * p.tol * if p.up { -1.0 } else { 1.0 }))
-                .max(1e-6);
+                let sign = if p.up { -1.0 } else { 1.0 };
+                let r = (p.ohms.unwrap_or_default() * (skew * p.tol).mul_add(sign, 1.0)).max(1e-6);
                 g += 1.0 / r;
                 i += level.get(&p.far).copied().unwrap_or(0.0) / r;
             }
@@ -659,7 +661,11 @@ vih = [0.0, 2.0]
         }
     }
 
+    // (name, board, expected (severity, message fragments) findings)
+    type Case<'a> = (&'a str, ExtractedBoard, &'a [(Severity, &'a [&'a str])]);
+
     #[test]
+    #[allow(clippy::too_many_lines)] // one flat table of strap cases reads best in one place
     fn strap_cases() {
         let none = BTreeMap::new();
         let with_unrelated_osc = |rail| {
@@ -677,8 +683,6 @@ vih = [0.0, 2.0]
                 part("J1", "BOOT_SEL", &[("1", 2), ("2", 4), ("3", 1)]),
             ],
         );
-        // (name, board, expected (severity, message fragments) findings)
-        type Case<'a> = (&'a str, ExtractedBoard, &'a [(Severity, &'a [&'a str])]);
         let cases: Vec<Case> = vec![
             // The Olimex fault: a 50 MHz oscillator through a 10R onto GPIO0.
             (

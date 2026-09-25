@@ -352,8 +352,8 @@ fn envelope_lint_with_tolerance(
                             continue;
                         }
                     };
-                    let min_tol = reltol * min_v.abs() + vntol;
-                    let max_tol = reltol * max_v.abs() + vntol;
+                    let min_tol = reltol.mul_add(min_v.abs(), vntol);
+                    let max_tol = reltol.mul_add(max_v.abs(), vntol);
                     if range.min_v >= *min_v - min_tol && range.max_v <= *max_v + max_tol {
                         continue;
                     }
@@ -453,8 +453,9 @@ fn envelope_lint_with_tolerance(
     report
 }
 
-/// The same limits as run evidence, judged on the levels the run SOLVED. A
-/// serious limit undermines whatever the part drives; a lesser one qualifies
+/// The same limits as run evidence, judged on the levels the run SOLVED.
+///
+/// A serious limit undermines whatever the part drives; a lesser one qualifies
 /// it. A rail the run did not solve is an abstention, never a violation. Each
 /// level is the span the net covered over the run, so a rail that sags out of
 /// its envelope and recovers is judged on the sag, not on where it ended.

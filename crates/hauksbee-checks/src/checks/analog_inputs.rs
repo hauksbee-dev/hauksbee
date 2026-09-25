@@ -1,4 +1,6 @@
-//! Analog input-range checks: a comparator's input common-mode ceiling, which
+//! Analog input-range checks.
+//!
+//! They cover a comparator's input common-mode ceiling, which
 //! TRACKS THE SUPPLY (`[[models.envelope]] kind = "input_common_mode"`, since
 //! the `supply_range` kind is absolute volts and cannot express `V+ - 1.5 V`),
 //! and the source impedance an MCU ADC pin is fed from
@@ -116,10 +118,9 @@ fn channel_flag(cx: &Ctx, c: &Component, m: &ModelEntry, e: &OperatingEnvelope) 
 fn adc_flag(cx: &Ctx, c: &Component, m: &ModelEntry, role: &str, limit: f64) -> Option<Flag> {
     let (r, net) = (c.reference.as_str(), cx.net(c, m, role)?);
     let (mut inv_r, mut feeders, mut abstain) = (0.0f64, Vec::new(), false);
-    for (member, _) in cx.board.net_members(net.id) {
-        if member.reference == c.reference {
-            continue;
-        } else if let Some(ohms) = super::bus_loading::resistor_ohms(member) {
+    let members = cx.board.net_members(net.id);
+    for (member, _) in members.iter().filter(|(m, _)| m.reference != c.reference) {
+        if let Some(ohms) = super::bus_loading::resistor_ohms(member) {
             inv_r += 1.0 / ohms;
             feeders.push(member.reference.clone());
         } else {

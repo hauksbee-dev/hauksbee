@@ -191,7 +191,9 @@ pub enum CapClass {
 }
 
 /// Replace an ideal `Device::Capacitor` (by name) in `circuit` with a series
-/// R-L-C network carrying the given parasitics. The capacitor keeps its value,
+/// R-L-C network carrying the given parasitics.
+///
+/// The capacitor keeps its value,
 /// IC and name (the C leg retains the name so reports/assertions still find it);
 /// the R and L legs are named `<name>_esr` / `<name>_esl`. Zero legs are
 /// skipped, so `EsrEsl::IDEAL` leaves the capacitor untouched.
@@ -370,18 +372,18 @@ mod tests {
         };
         assert!(apply_parasitics(&mut c, "C1", p));
         // One R, one L added; the C is rewritten to start at the ESL node.
-        let r = c
+        let esr = c
             .devices
             .iter()
             .find(|d| matches!(d, Device::Resistor { name, .. } if name == "C1_esr"));
-        let l = c
+        let esl = c
             .devices
             .iter()
             .find(|d| matches!(d, Device::Inductor { name, .. } if name == "C1_esl"));
-        assert!(r.is_some(), "ESR leg missing");
-        assert!(l.is_some(), "ESL leg missing");
+        assert!(esr.is_some(), "ESR leg missing");
+        assert!(esl.is_some(), "ESL leg missing");
         // The R leg starts at the original rail node.
-        if let Some(Device::Resistor { a: ra, .. }) = r {
+        if let Some(Device::Resistor { a: ra, .. }) = esr {
             assert_eq!(*ra, a, "ESR should start at the cap's original pad");
         }
         // The capacitor no longer touches the rail directly.

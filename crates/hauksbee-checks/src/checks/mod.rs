@@ -76,7 +76,9 @@ pub(crate) fn resolved_components<'a>(
     })
 }
 
-/// The full engine-level lint: the connectivity net-lint plus the model-aware
+/// The full engine-level lint.
+///
+/// It is the connectivity net-lint plus the model-aware
 /// checks, strap pins, MCU resource conflicts, the unmodelled-MCU coverage
 /// note, configured-device decode faults (e.g. a CYPD3177 PD-sink divider), and
 /// model-aware driver contention.
@@ -129,7 +131,9 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
 }
 
-/// The full engine-level signal-integrity report: the extract-layer SI checks
+/// The full engine-level signal-integrity report.
+///
+/// It is the extract-layer SI checks
 /// (`board.si_checks`) PLUS the model-aware engine-layer checks whose attribution
 /// needs the bound DB models, trace ampacity (IPC-2221) and input-cap ripple.
 /// Kept as one chokepoint so every SI surface (`--si`, `--check`, the JSON
@@ -149,7 +153,9 @@ pub fn engine_si(board: &ExtractedBoard, lib: &ModelLibrary, geo_text: Option<&s
 }
 
 /// The `--resources` view: the MCU internal resource-conflict check PLUS the
-/// unchecked-strap-bearing-MCU coverage note. A named chokepoint so neither the
+/// unchecked-strap-bearing-MCU coverage note.
+///
+/// A named chokepoint so neither the
 /// `--resources` path nor `engine_lint` can drop the coverage note by forgetting
 /// to append it.
 #[must_use]

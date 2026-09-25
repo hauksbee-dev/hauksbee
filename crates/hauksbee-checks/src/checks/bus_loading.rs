@@ -144,6 +144,7 @@ fn attached_devices(board: &ExtractedBoard, net_id: i64) -> usize {
 
 /// Run the I2C bus-loading lint over every I2C-named net with a pull-up.
 #[must_use]
+#[allow(clippy::cast_precision_loss)] // a device count never nears 2^52
 pub fn bus_loading_lint(board: &ExtractedBoard) -> NetLintReport {
     let mut report = NetLintReport::default();
     for net in &board.nets {
@@ -185,7 +186,7 @@ pub fn bus_loading_lint(board: &ExtractedBoard) -> NetLintReport {
 
         // Too weak for the ESTIMATED load: advisory only, estimate disclosed.
         let devices = attached_devices(board, net.id);
-        let c_est = devices as f64 * C_PER_DEVICE_F + C_TRACE_F;
+        let c_est = (devices as f64).mul_add(C_PER_DEVICE_F, C_TRACE_F);
         let t_r = RISE_FACTOR * r_eff * c_est;
         if t_r > I2C_RISE_BUDGET_S {
             report.findings.push(LintFinding {

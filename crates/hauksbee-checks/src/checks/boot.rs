@@ -1,5 +1,6 @@
-//! Boot-safety advisory: the business logic behind the co-sim's power-up
-//! findings, kept in the library so the CLI, the TUI and the web front door all
+//! Boot-safety advisory: the business logic behind the co-sim's power-up findings.
+//!
+//! It is kept in the library so the CLI, the TUI and the web front door all
 //! derive the same advisory from the same call rather than each re-deriving it.
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
@@ -89,8 +90,9 @@ pub fn analyze(
     }
 }
 
-/// True when a net has no *bias* resistor, no resistor tying it toward a power
-/// rail or ground, so nothing on the board fixes its power-up level (it is set
+/// True when a net has no *bias* resistor tying it toward a power rail or ground.
+///
+/// Then nothing on the board fixes its power-up level (it is set
 /// entirely by firmware). Used to sharpen the boot-control-net heads-up to nets
 /// with no hardware fail-safe. A resistor whose other terminal is NOT a rail or
 /// ground is a series element (e.g. GPIO -> R -> MOSFET gate), which sets no
@@ -124,8 +126,9 @@ pub fn net_has_no_bias_resistor(board: &ExtractedBoard, net_name: &str) -> bool 
     true
 }
 
-/// The bias resistor that fixes a gate net's power-up level, if one exists: a
-/// resistor tying the net to a rail/ground, directly (1 hop) or through one
+/// The bias resistor that fixes a gate net's power-up level, if one exists.
+///
+/// That is a resistor tying the net to a rail/ground, directly (1 hop) or through one
 /// series resistor (2 hops, a plain pull chain or divider). Returns the resistor
 /// *on the gate net* (its reference + value) and the rail it reaches, so the
 /// boot panel can report "held low by R1 (100k to GND)" instead of "floating".
@@ -219,7 +222,9 @@ fn rail_name_and_level(board: &ExtractedBoard, net_id: i64) -> Option<(String, B
     Some((net.name.clone(), level))
 }
 
-/// True when a net connects to a transistor or relay, a switch whose control
+/// True when a net connects to a transistor or relay that can switch a load.
+///
+/// Such a switch's control
 /// input (a MOSFET/BJT gate-base, a relay coil) at the wrong level at power-up
 /// switches a load. This is the load-bearing zero-FP guard for the boot
 /// advisory: it separates a genuine load-control net (e.g. an igniter gate fed
@@ -278,6 +283,12 @@ fn is_power_or_ground_net(board: &ExtractedBoard, net_id: i64) -> bool {
 /// (e.g. TO-92, whose lead order varies by part), so the boot-state panel simply
 /// omits that device rather than mislabelling a row.
 fn switch_control_pad(footprint: &str) -> Option<&'static str> {
+    // 3-lead discrete packages where the control terminal is pad 1 (MOSFET gate
+    // G-D-S, BJT base B-C-E/B-E-C, pad 1 is the control either way).
+    const THREE_LEAD: [&str; 12] = [
+        "SOT-23", "SOT23", "SOT-323", "SOT323", "SC-70", "SC70", "TO-252", "DPAK", "TO-263",
+        "D2PAK", "TO-220", "TO-247",
+    ];
     let f = footprint.to_ascii_uppercase();
     // 8-lead SINGLE power MOSFET (Power-SO-8 family): gate on pad 4, source on
     // 1-3, drain on 5-8. Checked before the 3-lead group ("SOT-23-8" also
@@ -291,12 +302,6 @@ fn switch_control_pad(footprint: &str) -> Option<&'static str> {
     if eight_lead_single {
         return Some("4");
     }
-    // 3-lead discrete packages where the control terminal is pad 1 (MOSFET gate
-    // G-D-S, BJT base B-C-E/B-E-C, pad 1 is the control either way).
-    const THREE_LEAD: [&str; 12] = [
-        "SOT-23", "SOT23", "SOT-323", "SOT323", "SC-70", "SC70", "TO-252", "DPAK", "TO-263",
-        "D2PAK", "TO-220", "TO-247",
-    ];
     if THREE_LEAD.iter().any(|p| is_three_lead_variant(&f, p)) {
         return Some("1");
     }
@@ -336,7 +341,9 @@ fn is_base_pad_name(s: &str) -> bool {
 }
 
 /// Every transistor (`Q…`) whose control terminal can be identified, paired with
-/// the net on that terminal; the rows of the boot-state panel. The control pad
+/// the net on that terminal; the rows of the boot-state panel.
+///
+/// The control pad
 /// is found first by an explicit `G`/`GATE` pad name (then `B`/`BASE`), else by
 /// footprint convention. DNP transistors and unidentifiable parts are skipped
 /// (the panel omits a device rather than mislabel it).
@@ -380,7 +387,9 @@ pub fn transistor_gate_nets(board: &ExtractedBoard) -> Vec<(String, String)> {
     out
 }
 
-/// What the firmware does to a gate net at power-up. Reported factually (no
+/// What the firmware does to a gate net at power-up.
+///
+/// Reported factually (no
 /// channel-type safety claim, a HIGH gate is "on" for a low-side N-MOSFET but
 /// "off" for a high-side P-MOSFET, which the netlist can't disambiguate).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -405,7 +414,9 @@ pub enum BootGateState {
 }
 
 /// The bias resistor that fixes a not-firmware-driven gate's power-up level, and
-/// the rail it ties to. Populated by [`gate_bias`] so the panel can name the
+/// the rail it ties to.
+///
+/// Populated by [`gate_bias`] so the panel can name the
 /// resistor, its value, and the rail instead of crying "floating".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateBias {
@@ -518,8 +529,9 @@ fn boot_gate_states(
         .collect()
 }
 
-/// Render the informational boot-state panel for the `--plain` surface: aligned
-/// plain-language lines, one per transistor gate, reporting (not judging) what
+/// Render the informational boot-state panel for the `--plain` surface.
+///
+/// It prints aligned plain-language lines, one per transistor gate, reporting (not judging) what
 /// the firmware does to it at power-up. The arrows flag the active / undefined
 /// cases for a non-engineer to verify; LOW is reported without a flag.
 #[must_use]
@@ -541,13 +553,13 @@ pub fn render_boot_gate_panel(rows: &[(String, String, BootGateState)]) -> Strin
          switch the moment the board powers up. Verify each is the level you intend\n\
          (a HIGH or floating gate can switch a load on before the firmware means to):\n",
     );
-    for (reference, net, state) in rows {
-        s.push_str(&format!(
+    s.extend(rows.iter().map(|(reference, net, state)| {
+        format!(
             "  {reference:<ref_w$}  {net:<net_w$}  {}{}\n",
             state.label(),
             state.marker(),
-        ));
-    }
+        )
+    }));
     s
 }
 

@@ -464,10 +464,10 @@ fn ground_net_ids(board: &ExtractedBoard) -> std::collections::HashSet<i64> {
         .collect()
 }
 
-/// Resolve the receptacle's CC1 and CC2 net ids, preferring the USB-C connector
-/// over any downstream CC controller / PMIC that also carries CC pin functions.
 /// The names of every net the CC audit actually walks, for scoping which
-/// unbound parts can make the CC verdict inconclusive: every receptacle's CC
+/// unbound parts can make the CC verdict inconclusive.
+///
+/// That is every receptacle's CC
 /// nets (not just the primary's), each expanded across the same 0 ohm /
 /// ferrite bridges `audit_one_cc` follows to reach a controller's internal
 /// Rd. Built from the audit's own helpers (`all_receptacle_cc_nets`,
@@ -497,6 +497,8 @@ pub fn receptacle_cc_net_names(
     Some(names)
 }
 
+/// Resolve the receptacle's CC1 and CC2 net ids, preferring the USB-C connector
+/// over any downstream CC controller / PMIC that also carries CC pin functions.
 fn receptacle_cc_nets(board: &ExtractedBoard) -> Option<(i64, i64)> {
     // The receptacle's CC1/CC2 nets. A CC pin function (or the A5/B5 pad numbers)
     // can appear on *several* components: the USB-C connector itself, AND any CC
@@ -757,8 +759,9 @@ impl CcTerminationAudit {
     }
 }
 
-/// Audit the receptacle's CC1/CC2 terminations for the double-Rd defect: a
-/// discrete external 5.1 kΩ Rd on a CC line that *also* routes into a PMIC /
+/// Audit the receptacle's CC1/CC2 terminations for the double-Rd defect.
+///
+/// The defect is a discrete external 5.1 kΩ Rd on a CC line that *also* routes into a PMIC /
 /// controller which already provides an internal Rd of its own (e.g. the Nordic
 /// nPM1300, whose datasheet states its CC pins "have internal pull-downs with
 /// resistance equal to Rd" = 5.1 kΩ). Both in parallel halve the effective Rd to
@@ -994,7 +997,9 @@ pub enum UsbcLevel {
     Serious,
 }
 
-/// A board-level USB-C CC compliance verdict for `hauksbee run --usb-c`. Built
+/// A board-level USB-C CC compliance verdict for `hauksbee run --usb-c`.
+///
+/// Built
 /// from the primary receptacle's termination classified against a default-Rp
 /// source through a passive cable; the standard "plug it into a charger" case.
 #[derive(Debug, Clone)]
@@ -1031,8 +1036,6 @@ pub struct UsbcReport {
 /// compliant cable still leaves it without VBUS.
 #[must_use]
 pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
-    let term = extract_sink_termination(board)?;
-    let audit = audit_cc_termination(board);
     // "Intends to be a self-terminated sink" means a discrete pulldown in a
     // *plausible Rd band*, not any resistor to GND. USB-C Rd is nominally 5.1 kΩ;
     // anything well above that (a bleeder, an ESD/EMC resistor, a non-Rd part on
@@ -1040,6 +1043,8 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     // would false-positive on a fine controller-terminated board. Trade-off: a
     // grossly-wrong Rd (e.g. a 51 kΩ typo) reads as Info, not Serious.
     const RD_PLAUSIBLE_MAX_OHMS: f64 = 10_000.0;
+    let term = extract_sink_termination(board)?;
+    let audit = audit_cc_termination(board);
     let plausible_rd = |r: Option<f64>| r.is_some_and(|ohms| ohms <= RD_PLAUSIBLE_MAX_OHMS);
     let has_discrete_rd = plausible_rd(term.cc1_rd_ohms) || plausible_rd(term.cc2_rd_ohms);
 
@@ -1426,6 +1431,7 @@ mod tests {
     // --- Spec constants (Tables 4-20, 4-21, 4-22) ---------------------------
 
     #[test]
+    #[allow(clippy::float_cmp)] // spec constants returned verbatim, so exact equality holds
     fn rp_current_values_match_spec_table_4_20() {
         assert_eq!(Rp::Default.current_a(), 80e-6);
         assert_eq!(Rp::Med1A5.current_a(), 180e-6);
@@ -1433,6 +1439,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // spec constants returned verbatim, so exact equality holds
     fn rp_resistor_pullups_match_spec_table_4_20() {
         assert_eq!(Rp::Default.pullup_ohms(), 56_000.0);
         assert_eq!(Rp::Med1A5.pullup_ohms(), 22_000.0);
@@ -1455,6 +1462,7 @@ mod tests {
     // --- Source-side thresholds (Tables 4-28/29/30) -------------------------
 
     #[test]
+    #[allow(clippy::float_cmp)] // spec constants returned verbatim, so exact equality holds
     fn default_rp_thresholds_match_table_4_28() {
         let t = Rp::Default.thresholds();
         assert_eq!(t.vra_max, 0.20);

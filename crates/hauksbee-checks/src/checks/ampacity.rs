@@ -33,7 +33,7 @@ use std::collections::{hash_map::Entry, BTreeSet, HashMap, HashSet, VecDeque};
 
 use hauksbee_extract::{
     audit_trace_currents, net_copper_from_text, ExtractedBoard, SiCheck, SiFinding, SiReport,
-    SiSeverity, TraceAudit,
+    SiSeverity, TraceAudit, TraceCurrentFinding,
 };
 use hauksbee_models::ModelLibrary;
 
@@ -77,10 +77,10 @@ impl Attribution {
             .collect::<Vec<_>>()
             .join("; plus ");
         if self.into_components_a > 0.0 && self.out_of_components_a > 0.0 {
-            citation.push_str(&format!(
-                "; net-flow balance uses max({:.3} A load side, {:.3} A source side), not their double-counted sum",
+            citation = format!(
+                "{citation}; net-flow balance uses max({:.3} A load side, {:.3} A source side), not their double-counted sum",
                 self.into_components_a, self.out_of_components_a
-            ));
+            );
         }
         (current_a, citation)
     }
@@ -325,30 +325,35 @@ fn solve_linear(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Option<Vec<f64>
     Some(solution)
 }
 
-/// The populated DC-equivalent resistance from `start` to ground, plus the
-/// conductive components that support the solved network.
+/// Union-find root of `index`, compressing the path as it goes.
+fn root(parents: &mut [usize], index: usize) -> usize {
+    if parents[index] != index {
+        parents[index] = root(parents, parents[index]);
+    }
+    parents[index]
+}
+
+/// Union-find merge of the sets holding `left` and `right`.
+fn unite(parents: &mut [usize], left: usize, right: usize) {
+    let left = root(parents, left);
+    let right = root(parents, right);
+    if left != right {
+        parents[right] = left;
+    }
+}
+
+/// The resistive/closed edges of the programming network around `start`.
 ///
-/// This is a bounded nodal-conductance solve, not a shortest-path heuristic:
-/// simultaneously populated parallel/bridge branches all affect the result.
-/// Known-open capacitors/jumpers are excluded. Any unreadable two-terminal part
-/// touching the reachable network makes the result undetermined rather than
-/// being silently assumed open or resistive. Positive-resistance branches with
-/// zero solved test current are omitted from the citation. Closed ideal links
-/// are retained because current division through a zero-ohm subnetwork is not
-/// uniquely recoverable from this equivalent-resistance solve.
-fn program_resistance_to_ground(
+/// The walk goes at most `max_hops` nets deep. `None` when it meets an
+/// unreadable part, exceeds its size bounds, or never reaches ground.
+fn program_network_edges(
     board: &ExtractedBoard,
     start: i64,
     max_hops: usize,
     excluded_component: Option<usize>,
-) -> Option<(f64, Vec<String>)> {
+) -> Option<Vec<ResistanceEdge>> {
     const MAX_PROGRAM_NODES: usize = 32;
     const MAX_PROGRAM_EDGES: usize = 64;
-
-    let start_net = board.net(start)?;
-    if super::converter::is_ground_net(&start_net.name) {
-        return None;
-    }
 
     let mut queue = VecDeque::from([(start, 0usize)]);
     let mut depth_by_net = HashMap::from([(start, 0usize)]);
@@ -369,16 +374,10 @@ fn program_resistance_to_ground(
             }
             let terminals = match electrical_terminal_net_options(component) {
                 Ok(Some(terminals)) => terminals,
-                Ok(None) => {
-                    // A multi-/single-terminal device on the programming net
-                    // can change its DC equivalent (a trim pot is the common
-                    // case). Ignore only the programmed IC itself, passed above.
-                    if component.pins.iter().any(|pin| pin.net == Some(net_id)) {
-                        return None;
-                    }
-                    continue;
-                }
-                Err(()) => {
+                // A multi-/single-terminal (or contradictory) device on the
+                // programming net can change its DC equivalent (a trim pot is the
+                // common case). Ignore only the programmed IC itself, passed above.
+                Ok(None) | Err(()) => {
                     if component.pins.iter().any(|pin| pin.net == Some(net_id)) {
                         return None;
                     }
@@ -431,6 +430,32 @@ fn program_resistance_to_ground(
     if !reached_ground {
         return None;
     }
+    Some(edges)
+}
+
+/// The populated DC-equivalent resistance from `start` to ground, plus the
+/// conductive components that support the solved network.
+///
+/// This is a bounded nodal-conductance solve, not a shortest-path heuristic:
+/// simultaneously populated parallel/bridge branches all affect the result.
+/// Known-open capacitors/jumpers are excluded. Any unreadable two-terminal part
+/// touching the reachable network makes the result undetermined rather than
+/// being silently assumed open or resistive. Positive-resistance branches with
+/// zero solved test current are omitted from the citation. Closed ideal links
+/// are retained because current division through a zero-ohm subnetwork is not
+/// uniquely recoverable from this equivalent-resistance solve.
+fn program_resistance_to_ground(
+    board: &ExtractedBoard,
+    start: i64,
+    max_hops: usize,
+    excluded_component: Option<usize>,
+) -> Option<(f64, Vec<String>)> {
+    let start_net = board.net(start)?;
+    if super::converter::is_ground_net(&start_net.name) {
+        return None;
+    }
+
+    let edges = program_network_edges(board, start, max_hops, excluded_component)?;
 
     let mut node_ids: Vec<i64> = edges
         .iter()
@@ -446,19 +471,6 @@ fn program_resistance_to_ground(
         .collect();
 
     let mut parents: Vec<usize> = (0..node_ids.len()).collect();
-    fn root(parents: &mut [usize], index: usize) -> usize {
-        if parents[index] != index {
-            parents[index] = root(parents, parents[index]);
-        }
-        parents[index]
-    }
-    fn unite(parents: &mut [usize], left: usize, right: usize) {
-        let left = root(parents, left);
-        let right = root(parents, right);
-        if left != right {
-            parents[right] = left;
-        }
-    }
     for edge in &edges {
         if edge.closed {
             unite(
@@ -599,7 +611,7 @@ fn adjacent_sense_resistor(
             continue;
         };
         match classify_series(component) {
-            Series::Open => continue,
+            Series::Open => {}
             Series::Ohms(ohms)
                 if ohms.is_finite() && ohms > 0.0 && expected_far.matches(board, far_net) =>
             {
@@ -776,7 +788,6 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
                     }),
                 }
             }
-            continue;
         }
     }
 
@@ -870,8 +881,68 @@ fn power_nets_of(
         .collect()
 }
 
+/// The severity and message of one trace-ampacity finding: a verdict when the board
+/// declared the copper weight behind the shortfall, a conditional note otherwise.
+fn ampacity_message(f: &TraceCurrentFinding, dt_c: f64) -> (SiSeverity, String) {
+    let Some(d) = f.declared_shortfall.as_ref() else {
+        return (
+            SiSeverity::Info,
+            format!(
+                "net '{}' carries a cited {:.2} A, and its lowest-rated routed trace is \
+                 {:.2} mm, which IPC-2221 rates at only {:.2} A ({}, {:.0} C rise); that \
+                 would need >= {:.2} mm. This is NOT a verdict: the copper weight was \
+                 assumed, and the real board may be heavier copper that carries it. \
+                 Declare the stackup (or upload a fab drawing) to turn this into a \
+                 decision. Attributed from: {}",
+                f.net,
+                f.cited_current_a,
+                f.bottleneck_width_mm,
+                f.ampacity_a,
+                f.describe_copper(),
+                dt_c,
+                f.required_width_mm,
+                f.citation,
+            ),
+        );
+    };
+    // Name the declared segment the conclusion rests on whenever it is not the
+    // same one the reported bottleneck came from, so the evidence and the
+    // width-to-fix are both visible.
+    let evidence = if d.layer == f.layer {
+        String::new()
+    } else {
+        format!(
+            " Its lowest DECLARED-copper trace, {} at {:.2} mm, independently rates \
+             only {:.2} A, which is what makes this a verdict rather than an \
+             artefact of an assumed copper weight.",
+            d.layer.as_deref().unwrap_or("(unnamed layer)"),
+            d.width_mm,
+            d.ampacity_a,
+        )
+    };
+    (
+        SiSeverity::High,
+        format!(
+            "net '{}' carries a cited {:.2} A, but its lowest-rated routed trace is \
+             {:.2} mm and IPC-2221 rates that at only {:.2} A ({}, {:.0} C rise); \
+             needs >= {:.2} mm.{} Attributed from: {}",
+            f.net,
+            f.cited_current_a,
+            f.bottleneck_width_mm,
+            f.ampacity_a,
+            f.describe_copper(),
+            dt_c,
+            f.required_width_mm,
+            evidence,
+            f.citation,
+        ),
+    )
+}
+
 /// Run the trace-ampacity check and append its findings (and an info note) to an
-/// SI report. `pcb_text` is the raw `.kicad_pcb` text (the copper geometry source);
+/// SI report.
+///
+/// `pcb_text` is the raw `.kicad_pcb` text (the copper geometry source);
 /// when it is absent or not a `KiCad` layout, the check is inert.
 pub fn append_ampacity(
     board: &ExtractedBoard,
@@ -911,64 +982,11 @@ pub fn append_ampacity(
         // A verdict needs a segment whose copper weight the BOARD declared to fail
         // on its own. The reported bottleneck may be an assumed-weight layer that
         // rates lower; that is still worth reporting, but it is not a conviction.
-        let verdict = f.declared_shortfall.as_ref();
-        let assumed = verdict.is_none();
+        let (severity, message) = ampacity_message(f, audit.dt_c);
         report.findings.push(SiFinding {
             check: SiCheck::TraceAmpacity,
-            severity: if assumed {
-                SiSeverity::Info
-            } else {
-                SiSeverity::High
-            },
-            message: if assumed {
-                format!(
-                    "net '{}' carries a cited {:.2} A, and its lowest-rated routed trace is \
-                     {:.2} mm, which IPC-2221 rates at only {:.2} A ({}, {:.0} C rise); that \
-                     would need >= {:.2} mm. This is NOT a verdict: the copper weight was \
-                     assumed, and the real board may be heavier copper that carries it. \
-                     Declare the stackup (or upload a fab drawing) to turn this into a \
-                     decision. Attributed from: {}",
-                    f.net,
-                    f.cited_current_a,
-                    f.bottleneck_width_mm,
-                    f.ampacity_a,
-                    f.describe_copper(),
-                    audit.dt_c,
-                    f.required_width_mm,
-                    f.citation,
-                )
-            } else {
-                // Name the declared segment the conclusion rests on whenever it is
-                // not the same one the reported bottleneck came from, so the
-                // evidence and the width-to-fix are both visible.
-                let d = verdict.expect("a verdict has a declared shortfall");
-                let evidence = if d.layer == f.layer {
-                    String::new()
-                } else {
-                    format!(
-                        " Its lowest DECLARED-copper trace, {} at {:.2} mm, independently rates \
-                         only {:.2} A, which is what makes this a verdict rather than an \
-                         artefact of an assumed copper weight.",
-                        d.layer.as_deref().unwrap_or("(unnamed layer)"),
-                        d.width_mm,
-                        d.ampacity_a,
-                    )
-                };
-                format!(
-                    "net '{}' carries a cited {:.2} A, but its lowest-rated routed trace is \
-                     {:.2} mm and IPC-2221 rates that at only {:.2} A ({}, {:.0} C rise); \
-                     needs >= {:.2} mm.{} Attributed from: {}",
-                    f.net,
-                    f.cited_current_a,
-                    f.bottleneck_width_mm,
-                    f.ampacity_a,
-                    f.describe_copper(),
-                    audit.dt_c,
-                    f.required_width_mm,
-                    evidence,
-                    f.citation,
-                )
-            },
+            severity,
+            message,
             refs: vec![],
             nets: vec![f.net.clone()],
         });
