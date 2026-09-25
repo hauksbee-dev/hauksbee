@@ -53,7 +53,8 @@ fn mnt_pocket_tlv1117_18_is_voltage_specific_and_explicitly_partial() {
     // Legacy fixed-output silicon is 5 mA typical; 65 µA is new-chip-only.
     assert_eq!(model.params.get_f64("iq_a"), Some(5.0e-3));
     assert_eq!(model.ratings.max_current_a, Some(0.8));
-    assert_eq!(model.ratings.max_voltage_v, Some(15.0));
+    // SLVS561O §5.1 abs max VIN 16 V; the 15 V recommended ceiling is the envelope.
+    assert_eq!(model.ratings.max_voltage_v, Some(16.0));
     assert_eq!(model.ratings.max_junction_temp_c, Some(125.0));
     assert_eq!(model.pins.len(), 4);
     let warning = model

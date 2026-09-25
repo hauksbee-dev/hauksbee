@@ -41,8 +41,17 @@ warning = "[partial model] TLV1117-18 nominal 1.8 V DC rail and sourced ratings 
 
 [models.ratings]
 max_current_a = 0.8
-max_voltage_v = 15.0
+max_voltage_v = 16.0   # SLVS561O 5.1 Absolute Maximum Ratings, continuous input voltage VIN -0.3 to 16 V
 max_junction_temp_c = 125.0
+
+# The 3.2-15 V recommended VIN range is the check that fires below the 16.0 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 3.2
+max_v = 15.0
+abs_max_v = 16.0
+basis = "TI TLV1117 SLVS561O, 5.3 Recommended Operating Conditions, VIN 3.2 V to 15 V for TLV1117-18; 5.1 Absolute Maximum Ratings, continuous input voltage VIN -0.3 V to 16 V"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AMS1117-3.3: the LDO on more hobby boards than any other part, usually as the
@@ -1485,7 +1494,16 @@ warning = "source-bound averaged DC model: board feedback and EN are executable;
 
 [models.ratings]
 max_current_a = 5.0
-max_voltage_v = 40.0
+max_voltage_v = 42.0   # Absolute Maximum Ratings, VIN supply pin voltage -0.3 to +42.0 V DC
+
+# The 3.8-40 V recommended VIN range is the check that fires below the 42.0 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 3.8
+max_v = 40.0
+abs_max_v = 42.0
+basis = "Diodes AP64501, Recommended Operating Conditions, VIN supply voltage 3.8 V to 40 V; Absolute Maximum Ratings, VIN supply pin voltage -0.3 V to +42.0 V (DC)"
 
 [models.behavioral.converter]
 topology = "buck"

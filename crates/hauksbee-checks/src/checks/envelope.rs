@@ -585,6 +585,10 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
             ("LTC4020EUHFPBF", "36", 58.0, Medium),
             ("NE555", "8", 17.0, Medium),
             ("ATmega1284P", "5", 5.8, Medium),
+            ("LM5109", "3", 16.0, Medium),
+            ("INA181A3", "5", 5.8, Medium),
+            ("INA181A3", "5", 7.0, High),
+            ("FSUSB42", "1", 5.0, Medium),
         ] {
             let b = board(&[(2, "VIN")], vec![part("U1", value, vec![pin(vin, 2)])]);
             let drives = BTreeMap::from([("VIN".to_string(), volts)]);

@@ -34,8 +34,17 @@ warning = "source-bound DC routing model: both USB lanes, select polarity, on-re
 "10" = "oe_n"
 
 [models.ratings]
-max_voltage_v = 4.6
+max_voltage_v = 5.6   # Absolute Maximum Ratings, VCC supply voltage -0.5 to 5.6 V
 max_junction_temp_c = 150.0
+
+# The 2.4-4.4 V operating range is the check that fires below the 5.6 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.4
+max_v = 4.4
+abs_max_v = 5.6
+basis = "onsemi FSUSB42/D, Recommended Operating Conditions, VCC supply voltage 2.4 V to 4.4 V; Absolute Maximum Ratings, VCC -0.5 V to 5.6 V"
 
 [models.coverage]
 implements = ["differential_mux_select", "off_state_leakage", "on_resistance"]
@@ -89,10 +98,19 @@ exponent = 0.925
 
 [models.ratings]
 max_current_a = 2.1
-max_voltage_v = 5.5
+max_voltage_v = 6.5   # Absolute Maximum Ratings, voltage on IN/OUT/FAULT/ILIM/EN -0.3 to +6.5 V
 max_junction_temp_c = 125.0
 theta_ja_c_per_w = 160.0  # SOT26 on JEDEC high-K board; 120 is the U-DFN2020-6 row.
                           # DS35404 Rev. 12-3, Dissipation Rating Table, p.4
+
+# The 2.7-5.5 V recommended VIN range is the check that fires below the 6.5 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in_out_b"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.5
+basis = "Diodes AP2553 DS35404 Rev. 12, Recommended Operating Conditions, VIN input voltage 2.7 V to 5.5 V; Absolute Maximum Ratings, voltage on IN -0.3 V to +6.5 V"
 
 [models.coverage]
 implements = ["enable_gating", "off_state_leakage", "on_resistance", "programmed_current_limit"]
@@ -136,7 +154,16 @@ vth  = 1.5       # switch threshold (V), midpoint of Vih/Vil at 3.3V
 
 [models.ratings]
 max_pin_current_a = 0.05  # continuous channel current (TI)
-max_voltage_v = 6.5
+max_voltage_v = 6.0   # Absolute Maximum Ratings, DBV/DCK supply voltage -0.5 to 6 V (6.5 V is the YZP/DSF/DRY/DRL row)
+
+# The 1.65-5.5 V recommended VCC range is the check that fires below the 6.0 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.65
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI SN74LVC1G3157 SCES424O, Recommended Operating Conditions, VCC 1.65 V to 5.5 V; Absolute Maximum Ratings, DBV/DCK supply voltage -0.5 V to 6 V"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -320,7 +347,16 @@ vth  = 1.3     # control threshold (V) at Vcc=2.7V conservative
 
 [models.ratings]
 max_pin_current_a = 0.025
-max_voltage_v = 7.0
+max_voltage_v = 10.5  # TI SCHS208E Absolute Maximum Ratings, DC supply voltage VCC (HC) -0.5 to 10.5 V; 7 V is the HCT row
+
+# The 2-10 V HC operating range is the check that fires below the 10.5 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.0
+max_v = 10.0
+abs_max_v = 10.5
+basis = "TI CD74HC4066 SCHS208E, Recommended Operating Conditions, VCC 2 V to 10 V for HC types; Absolute Maximum Ratings, DC supply voltage VCC (HC) -0.5 V to 10.5 V"
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Load switches and bidirectional pass-gate level translators.

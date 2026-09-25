@@ -298,7 +298,16 @@ iq_a = 0.001
 "21" = "vbus"      # V_BUS, USB input
 
 [models.ratings]
-max_voltage_v = 5.5       # VBUS abs max (datasheet)
+max_voltage_v = 22.0      # Table 5 Absolute maximum ratings, VBUS -0.3 to 22 V (PS v1.1)
+
+# The 4.0-5.5 V VBUS operating range is the check that fires below the 22.0 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vbus"
+min_v = 4.0
+max_v = 5.5
+abs_max_v = 22.0
+basis = "Nordic nPM1300 Product Specification v1.1, Section 5 Recommended operating conditions, VBUSOP supply voltage 4.0 V to 5.5 V; Table 5 Absolute maximum ratings, VBUS -0.3 V to 22 V"
 
 [models.behavioral.pins.shphld]
 # The internal pull-up from SHPHLD to VSYS. Nordic specs a strong ship-hold pull
@@ -361,7 +370,7 @@ max_junction_temp_c = 125.0   # Tj max (C), datasheet
 #         Texas Instruments LM5109 datasheet, SNVSA31C (Rev C, 2017).
 #
 # LM5107: 3A/3A half-bridge gate driver, non-inverting (HIN/LIN both active high).
-#   VDD abs max = 15V; bootstrap / HB high-side supply abs max = 120V.
+#   VDD abs max = 18V (8-14 V recommended); HB-to-VSS abs max = 118V (SNVS333F 6.1).
 # LM5109: 3A/3A half-bridge gate driver, LIN active-low (inverted low-side input).
 #   Same pin map and ratings as LM5107 with inverted LIN polarity.
 #
@@ -392,7 +401,7 @@ vil       = 0.8    # HIN/LIN low threshold (V) typ
 # WSON-8 / SOIC-8. Source: LM5107 datasheet SNVSA29B, Section 7.1 Pin Functions.
 "1" = "hin"   # High-side input (active high)
 "2" = "lin"   # Low-side input (active high for LM5107)
-"3" = "vdd"   # Supply (VDD, 8-15V range)
+"3" = "vdd"   # Supply (VDD, 8-14V recommended)
 "4" = "gnd"   # Ground
 "5" = "lo"    # Low-side gate drive output
 "6" = "hs"    # High-side source / bootstrap ground
@@ -401,9 +410,18 @@ vil       = 0.8    # HIN/LIN low threshold (V) typ
 
 [models.ratings]
 # Source: LM5107 datasheet SNVSA29B, Table 7.1 Absolute Maximum Ratings.
-# VDD abs max = 15V; HB (bootstrap) abs max = 120V (HB-to-GND).
-max_voltage_v       = 15.0    # VDD abs max (V), datasheet
+# VDD abs max = 18V; HB (bootstrap) abs max = 118V (HB-to-VSS), SNVS333F 6.1.
+max_voltage_v       = 18.0    # Absolute Maximum Ratings, VDD to VSS -0.3 to 18 V
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
+
+# The 8-14 V recommended VDD range is the check that fires below the 18.0 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 8.0
+max_v = 14.0
+abs_max_v = 18.0
+basis = "TI LM5107 SNVS333F, Section 6.3 Recommended Operating Conditions, VDD 8 V to 14 V; Section 6.1 Absolute Maximum Ratings, VDD to VSS -0.3 V to 18 V"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -441,8 +459,17 @@ vil       = 0.8
 
 [models.ratings]
 # Source: LM5109 datasheet SNVSA31C, Table 7.1 Absolute Maximum Ratings.
-max_voltage_v       = 15.0    # VDD abs max (V), datasheet
+max_voltage_v       = 18.0    # Absolute Maximum Ratings, VDD to VSS -0.3 to 18 V
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
+
+# The 8-14 V recommended VDD range is the check that fires below the 18.0 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vdd"
+min_v = 8.0
+max_v = 14.0
+abs_max_v = 18.0
+basis = "TI LM5109 SNVS369, Recommended Operating Conditions, VDD 8 V to 14 V; Absolute Maximum Ratings, VDD to VSS -0.3 V to 18 V"
 
 # ── TP4054: 400 mA single-cell Li-ion linear charger, SOT-23-5 ────────────────
 #
@@ -1358,7 +1385,7 @@ b = "gnd"
 expr = "max(0.0, v_d2n - vbreak_v) / rdyn_ohms + min(0.0, v_d2n + vf_v) / rdyn_ohms"
 
 [models.ratings]
-max_voltage_v = 5.5
+max_voltage_v = 6.0   # SLVSAC2G 6.1 Absolute Maximum Ratings, IO voltage (D+ and D- pins) 0 to 6 V; 5.5 V is the operating row
 
 [models.coverage]
 implements = ["esd_clamp", "negative_clamp", "positive_breakdown"]

@@ -71,7 +71,7 @@ fn specific_parts_resolve_with_their_kind_and_datasheet_ratings() {
             None,
             Some(|t| t >= 100.0),
         ),
-        // VDD 15 V; the mppt-1210 board uses the LM5109BMA variant
+        // VDD abs max 18 V; the mppt-1210 board uses the LM5109BMA variant
         (
             &["LM5109", "LM5109BMA", "LM5109BSD"],
             "lm5109",
@@ -88,21 +88,21 @@ fn specific_parts_resolve_with_their_kind_and_datasheet_ratings() {
             None,
             None,
         ),
-        // 26 V common-mode supply rating
+        // VS abs max 6 V (26 V is the IN+/IN- common-mode row), SBOS793H 6.1
         (
             &["INA181", "INA181A1", "INA181A3", "INA181A4IDBVR"],
             "ina181",
             Opamp,
-            Some(|v| (24.0..=28.0).contains(&v)),
+            Some(|v| (5.5..=6.5).contains(&v)),
             None,
             None,
         ),
-        // dual CSA, 26 V
+        // dual CSA, same 6 V VS abs max
         (
             &["INA2181", "INA2181A1", "INA2181A3IDGSR"],
             "ina2181",
             Opamp,
-            Some(|v| (24.0..=28.0).contains(&v)),
+            Some(|v| (5.5..=6.5).contains(&v)),
             None,
             None,
         ),

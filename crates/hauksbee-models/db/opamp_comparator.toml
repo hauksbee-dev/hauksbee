@@ -518,8 +518,8 @@ warning = "the output HIGH level on this card is fixed at 4.95 V, the datasheet'
 # A4=200V/V. This entry matches the whole INA180/181/186 family (gain-agnostic).
 #
 # Key absolute maximum ratings (INA180 datasheet, Table 7.1):
-#   VS supply abs max = 26V
-#   Common-mode input range: -0.2V to +26V
+#   VS supply abs max = 6V (26 V is the IN+/IN- common-mode abs max)
+#   Common-mode input range: -0.2V to +26V (SBOS741H 7.3)
 #   Tj max = 150C
 #
 # NOTE: The gain (20/50/100/200 V/V by part suffix) is not encoded here;
@@ -562,8 +562,17 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
 
 [models.ratings]
 # Source: INA180 datasheet SBOS774D, Table 7.1 Absolute Maximum Ratings
-max_voltage_v       = 26.0    # VS abs max (V), datasheet
+max_voltage_v       = 6.0     # supply voltage VS abs max; 26 V is the IN+/IN- common-mode row
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
+
+# The 2.7-5.5 V operating VS range is the check that fires below the 6.0 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vs"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI INA180 SBOS741H, 7.3 Recommended Operating Conditions, operating supply voltage VS 2.7 V to 5.5 V; 7.1 Absolute Maximum Ratings, supply voltage VS 6 V"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -599,8 +608,17 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
 
 [models.ratings]
 # Source: INA181 datasheet SBOS744C, Table 7.1 Absolute Maximum Ratings
-max_voltage_v       = 26.0
+max_voltage_v       = 6.0     # supply voltage VS abs max; 26 V is the IN+/IN- common-mode row
 max_junction_temp_c = 150.0
+
+# The 2.7-5.5 V operating VS range is the check that fires below the 6.0 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vs"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI INA181 SBOS793H, 6.3 Recommended Operating Conditions, operating supply voltage VS 2.7 V to 5.5 V; 6.1 Absolute Maximum Ratings, supply voltage VS 6 V"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -637,14 +655,23 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
 
 [models.ratings]
 # Source: INA186 datasheet SBOS791A, Table 7.1 Absolute Maximum Ratings
-max_voltage_v       = 26.0
+max_voltage_v       = 6.0     # supply voltage VS abs max; 26 V is the IN+/IN- common-mode row
 max_junction_temp_c = 150.0
+
+# The 1.7-5.5 V operating VS range is the check that fires below the 6.0 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vs"
+min_v = 1.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, operating supply voltage VS 1.7 V to 5.5 V; 6.1 Absolute Maximum Ratings, supply voltage VS 6 V"
 
 # ── INA2181, TI dual current-sense amplifier ─────────────────────────────────
 #
 # Source: Texas Instruments INA2181 datasheet, SBOS831A (Rev A, 2021).
 # DUAL channel version of the INA181 in an MSOP-10 / VSSOP-10 package.
-# Two independent current-sense channels, same 26V supply abs max.
+# Two independent current-sense channels, same 6 V supply abs max (SBOS793H 6.1).
 #
 # NOTE: This is a DUAL device. Each channel is electrically equivalent to one
 # INA181 channel. The pin map covers both channels A and B in the MSOP-10.
@@ -688,7 +715,7 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
 
 [models.ratings]
 # Source: INA2181 datasheet SBOS831A, Table 7.1 Absolute Maximum Ratings
-max_voltage_v       = 26.0    # VS abs max (V), datasheet
+max_voltage_v       = 6.0     # SBOS793H 6.1 supply voltage VS abs max; 26 V is the common-mode row
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
 
 # ─────────────────────────────────────────────────────────────────────────────
