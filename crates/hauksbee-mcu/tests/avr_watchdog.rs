@@ -8,7 +8,7 @@
 //! once the watchdog rewound the counter the loop was chasing a number the
 //! counter could never reach again. Measured before the fix: chunks 0, 1 and 2
 //! returned at cycles 80,000 / 160,001 / 240,000, and chunk 3 (the 15-20 ms
-//! window where WDTO_15MS bites) never returned at all. It was killed after
+//! window where `WDTO_15MS` bites) never returned at all. It was killed after
 //! 240 s of wall clock.
 //!
 //! It is a livelock, not a deadlock, which is why it presented as "the co-sim
@@ -92,14 +92,14 @@ fn a_starved_watchdog_reboots_the_core_without_wedging_the_cosim() {
         resets > 0,
         "WDTO_15MS starved over {} ms of virtual time must bite at least once; \
          got {resets} reboots",
-        CHUNKS as u64 * CHUNK_US / 1000
+        u64::from(CHUNKS) * CHUNK_US / 1000
     );
     // Several reboot cycles, not just the first: a fix that re-anchored once
     // and then drifted would clear the assertion above and fail this one.
     assert!(
         resets >= 3,
         "a ~16 ms watchdog over {} ms should reboot repeatedly; got {resets}",
-        CHUNKS as u64 * CHUNK_US / 1000
+        u64::from(CHUNKS) * CHUNK_US / 1000
     );
     // And the core is genuinely running between reboots, not merely returning.
     assert!(

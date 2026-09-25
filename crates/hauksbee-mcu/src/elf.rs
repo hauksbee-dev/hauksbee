@@ -42,7 +42,7 @@ pub const EM_ARM: u16 = 0x28; // 40
 pub const EM_AVR: u16 = 0x53; // 83
 /// `EM_XTENSA`, Tensilica Xtensa (ESP32 / ESP32-S3 under qemu-system-xtensa).
 pub const EM_XTENSA: u16 = 0x5E; // 94
-/// `EM_RISCV`, RISC-V (ESP32-C3 under qemu-system-riscv32; SiFive FE310 under
+/// `EM_RISCV`, RISC-V (ESP32-C3 under qemu-system-riscv32; `SiFive` FE310 under
 /// Renode).
 pub const EM_RISCV: u16 = 0xF3; // 243
 
@@ -50,10 +50,10 @@ pub const EM_RISCV: u16 = 0xF3; // 243
 /// `expected_e_machine` field) to its `e_machine` number.
 ///
 /// This is the reviewable-string side of the numeric [`EM_ARM`]/[`EM_RISCV`]/…
-/// constants: an SoC descriptor says `expected_e_machine = "EM_ARM"` (the
+/// constants: an `SoC` descriptor says `expected_e_machine = "EM_ARM"` (the
 /// example shape) rather than a raw `40`, and the loader resolves it here.
 /// Returns `None` for an unrecognised name so the loader raises a named
-/// "unknown e_machine" error instead of silently accepting garbage.
+/// "unknown `e_machine`" error instead of silently accepting garbage.
 pub fn e_machine_from_name(name: &str) -> Option<u16> {
     match name {
         "EM_ARM" => Some(EM_ARM),
@@ -165,12 +165,12 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    /// Write a minimal fake ELF header with the given e_machine (little-endian)
+    /// Write a minimal fake ELF header with the given `e_machine` (little-endian)
     /// and return its temp path. The filename carries a per-process counter as
-    /// well as the pid: several tests fabricate the SAME e_machine and the test
+    /// well as the pid: several tests fabricate the SAME `e_machine` and the test
     /// harness runs them in parallel threads, so a pid+machine name alone let
     /// one test remove/rewrite a file another was mid-way through reading (a
-    /// rare but real reads_known_machines flake).
+    /// rare but real `reads_known_machines` flake).
     fn fake_elf(e_machine: u16) -> std::path::PathBuf {
         static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let mut buf = vec![0u8; E_MACHINE_OFFSET + 2];

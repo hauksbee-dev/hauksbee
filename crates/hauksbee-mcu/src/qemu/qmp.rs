@@ -47,7 +47,7 @@ impl Qmp {
         stream
             .set_read_timeout(Some(Duration::from_millis(200)))
             .ok();
-        let mut q = Qmp {
+        let mut q = Self {
             stream,
             carry: Vec::new(),
             timeout: Duration::from_secs(30),
@@ -407,10 +407,7 @@ fn unescape_json_string(s: &str) -> String {
 fn parse_xp_word(out: &str) -> Option<u32> {
     // Find the last `0x` token and parse the hex after it.
     let after = out.rsplit_once("0x")?.1;
-    let hex: String = after
-        .chars()
-        .take_while(|c| c.is_ascii_hexdigit())
-        .collect();
+    let hex: String = after.chars().take_while(char::is_ascii_hexdigit).collect();
     if hex.is_empty() {
         return None;
     }

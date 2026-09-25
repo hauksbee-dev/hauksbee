@@ -21,7 +21,7 @@ use std::path::Path;
 
 /// Identifies a single GPIO pin by port letter and bit index.
 ///
-/// Example: `PinId { port: 'B', bit: 5 }` is Arduino D13 / ATmega328P PB5.
+/// Example: `PinId { port: 'B', bit: 5 }` is Arduino D13 / `ATmega328P` PB5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PinId {
     /// Port letter: 'A', 'B', 'C', 'D', …
@@ -112,7 +112,7 @@ pub enum I2cEvent {
 pub struct SpiEvent {
     /// Byte clocked out of MOSI.
     pub mosi: u8,
-    /// True when this event signals a chip-select deassert (FinishTransmission).
+    /// True when this event signals a chip-select deassert (`FinishTransmission`).
     /// The `mosi` field is meaningless when `deselect` is true; the callback
     /// return value is also ignored. Backends that cannot observe chip-select
     /// leave this false; the `SpiBus.post_solve` deselect path handles those.
@@ -185,7 +185,7 @@ pub trait Mcu {
         bail!("this MCU backend cannot hard-reset its core; firmware state persists")
     }
 
-    /// The MCU's clock frequency in Hz (e.g. 16_000_000 for a 16 MHz Arduino).
+    /// The MCU's clock frequency in Hz (e.g. `16_000_000` for a 16 MHz Arduino).
     fn frequency(&self) -> u64;
 
     // ---- Pin coupling ----
@@ -474,9 +474,9 @@ pub trait Mcu {
     ///   it breaks esp32 boot, measured), so virtual time is approximate and
     ///   host-load dependent even though the cont→stop window itself is now
     ///   measured from QEMU's RESUME/STOP event timestamps.
-    /// - `renode:stm32f103` deliberately clocks its TIMx blocks at the
+    /// - `renode:stm32f103` deliberately clocks its `TIMx` blocks at the
     ///   post-PLL 72 MHz against an 8 MHz reset-default core, so a bare-metal
-    ///   TIMx time base runs 9x fast (stated in the descriptor).
+    ///   `TIMx` time base runs 9x fast (stated in the descriptor).
     ///
     /// The string is a whole sentence rendered verbatim on the batch surfaces
     /// and TUI. The synchronous web report does not run the external backends

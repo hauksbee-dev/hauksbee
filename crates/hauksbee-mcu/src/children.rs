@@ -466,7 +466,7 @@ pub fn install_signal_reaper() {
 
 /// Tests that arrange a pty hangup and tests that spawn a process must not
 /// overlap: every spawn clones the fd table, and until exec applies
-/// FD_CLOEXEC the clone transiently holds every pty slave open, which hides
+/// `FD_CLOEXEC` the clone transiently holds every pty slave open, which hides
 /// a hangup another test just arranged and fails its liveness assertions.
 /// Shared by this module's spawning test and hostserial's pty tests.
 #[cfg(all(test, unix))]
@@ -481,11 +481,13 @@ mod tests {
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// register/unregister round-trips through the fixed table, and
-    /// kill_all empties it.
+    /// `kill_all` empties it.
     #[cfg(unix)]
     #[test]
     fn registry_bookkeeping() {
-        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // PIDs nothing real can hold during the test: register/unregister
         // only touch the table, and kill_tree on a nonexistent pid is a
         // harmless ESRCH.
@@ -501,9 +503,9 @@ mod tests {
         assert_eq!(kill_all_registered(), 0, "table is empty after the flush");
     }
 
-    /// kill_all_registered really kills a live child (its own process group
+    /// `kill_all_registered` really kills a live child (its own process group
     /// on unix). The full tree semantics, grandchildren included, are
-    /// covered by tests/child_reaping.rs against the real spawn paths.
+    /// covered by `tests/child_reaping.rs` against the real spawn paths.
     #[cfg(unix)]
     #[test]
     fn kill_all_kills_a_live_child() {
@@ -511,8 +513,10 @@ mod tests {
         // fd in the process, including any pty slave a concurrent test holds.
         let _quiesce = SPAWN_PTY_EXCLUSION
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _serial = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use std::os::unix::process::CommandExt;
         let mut cmd = std::process::Command::new("sleep");
         cmd.arg("300");

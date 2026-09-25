@@ -59,7 +59,7 @@ pub const FALLBACK_TAG: &str = "esp-develop-9.2.2-20260417";
 /// What Intel macOS installs instead of `BROKEN_INTEL_MAC_TAG` (a private
 /// sibling constant naming the mislabeled release): the
 /// previous release of the same QEMU 9.2.2 fork, whose `x86_64-apple-darwin`
-/// archives contain genuine x86_64 binaries.
+/// archives contain genuine `x86_64` binaries.
 pub const INTEL_MAC_FALLBACK_TAG: &str = "esp-develop-9.2.2-20250817";
 
 /// This release's `x86_64-apple-darwin` archives are mislabeled upstream:

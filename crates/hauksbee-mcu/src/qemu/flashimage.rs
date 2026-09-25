@@ -12,7 +12,7 @@
 //! user actually has in hand is the app ELF their build produced; the merged
 //! image is an esptool/idf.py build-machine byproduct a cold install cannot
 //! ask for (there is no esptool on the machine, and "go re-run your build with
-//! merge_bin" is a terrible first-run answer).
+//! `merge_bin`" is a terrible first-run answer).
 //!
 //! So the backend does the merge itself, in-process, with the espflash
 //! library: the same ELF-to-app-image conversion, default per-chip bootloader
@@ -71,7 +71,7 @@ fn quietly<T>(f: impl FnOnce() -> T) -> std::thread::Result<T> {
     INSTALL.call_once(|| {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            if !QUIET_PANICS.with(|q| q.get()) {
+            if !QUIET_PANICS.with(std::cell::Cell::get) {
                 previous(info);
             }
         }));

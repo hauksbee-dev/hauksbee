@@ -4,7 +4,7 @@
 //! # Why this exists
 //!
 //! The STM32F1 precedent (`db/mcu/stm32f103.soc.toml`) folds a hauksbee-authored
-//! `.repl` into the descriptor so stock CubeMX firmware boots. That works because
+//! `.repl` into the descriptor so stock `CubeMX` firmware boots. That works because
 //! Renode already *has* an STM32F103 platform and the fix is an extension of it.
 //!
 //! RP2040 has no such starting point. Renode 1.16.1 ships no rp2040 platform and
@@ -16,7 +16,7 @@
 //! Renode can compile C# at run time, though: `include <file.cs>` on the Monitor
 //! drives its bundled compiler and registers the resulting peripheral types, and
 //! the backend already relies on that for the I2C/SPI bridge peripherals. A
-//! bundle is that mechanism scaled up to a whole SoC: a set of `.cs` peripheral
+//! bundle is that mechanism scaled up to a whole `SoC`: a set of `.cs` peripheral
 //! models plus the data files the platform reads (an SVD, a boot ROM image),
 //! embedded in this binary, unpacked to a temp directory, and `include`d before
 //! the platform description parses.

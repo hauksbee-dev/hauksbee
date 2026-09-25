@@ -265,7 +265,7 @@ fn probe_static_preferred(name: &str, missing_msg: &str) -> bool {
             let _ = pkg_config::Config::new().statik(true).probe(name);
         } else {
             let _ = pkg_config::probe_library(name);
-            let lib = probe.libs.first().map(String::as_str).unwrap_or(name);
+            let lib = probe.libs.first().map_or(name, String::as_str);
             print_dynamic_warning(name, lib);
         }
         return name == "libelf"

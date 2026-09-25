@@ -1,7 +1,7 @@
 //! Espressif-QEMU-backed MCU emulation for the ESP32 family.
 //!
 //! [`QemuBackend`] drives a headless Espressif QEMU process (the fork with full
-//! ESP32 SoC peripheral models) over two TCP control channels plus a UART
+//! ESP32 `SoC` peripheral models) over two TCP control channels plus a UART
 //! socket, exposing the same generic [`Mcu`] trait the
 //! simavr and Renode backends implement. The engine's lockstep contract is
 //! unchanged: it calls `run_micros`, exchanges GPIO/UART state, and this backend
@@ -47,7 +47,7 @@
 //! Without icount the esp32 machine runs its virtual clock at roughly wall rate
 //! (like Renode's `RunFor` blocking for the interval). Run-to-run timing is not
 //! bit-exact, but the firmware's *logic behaviour* is reproducible because it is
-//! driven by the guest's deterministic peripheral timers (the FreeRTOS tick, the
+//! driven by the guest's deterministic peripheral timers (the `FreeRTOS` tick, the
 //! UART baud generator), sampled only at chunk boundaries: the same standard a
 //! logic analyser sampling a real board at the chunk rate would meet. The
 //! integration test pins it -- identical boot banner, GPIO toggle count stable
@@ -108,13 +108,13 @@ use std::time::Duration;
 /// proves old binaries and mailbox-aware firmware remain usable while ordinary
 /// firmware uses the real peripheral register on a patched build.
 ///
-/// RTC slow memory (0x5000_0000, 8 KiB, uncached, fixed) is chosen because a
+/// RTC slow memory (`0x5000_0000`, 8 KiB, uncached, fixed) is chosen because a
 /// minimal app never touches it, the address is stable, and it survives across
-/// the run. Firmware side: testdata/firmware/esp32_blinky/main/main.c.
+/// the run. Firmware side: `testdata/firmware/esp32_blinky/main/main.c`.
 pub mod mailbox {
     /// Base of the mailbox in RTC slow memory (Xtensa ESP32 / ESP32-S3).
     pub const BASE: u32 = 0x5000_0000;
-    /// Firmware -> host: mirror of GPIO_OUT_REG.
+    /// Firmware -> host: mirror of `GPIO_OUT_REG`.
     pub const GPIO_OUT: u32 = BASE;
     /// Host -> firmware: injected GPIO input word.
     pub const GPIO_IN: u32 = BASE + 0x04;
@@ -160,7 +160,7 @@ pub mod mailbox {
 
     /// Firmware -> host: `BUS_MAGIC_VALUE` once the v2 bus cells are valid.
     pub const BUS_MAGIC: u32 = BASE + 0x0C;
-    /// Magic tag for the v2 extension (MAGIC_VALUE + 1, "jnlj").
+    /// Magic tag for the v2 extension (`MAGIC_VALUE` + 1, "jnlj").
     pub const BUS_MAGIC_VALUE: u32 = 0x6A6C_6E6A;
 
     /// Host -> firmware: bitmask of ADC channels that carry an injected count.
@@ -177,7 +177,7 @@ pub mod mailbox {
     /// This must be what the converter SATURATES at, not the board's rail, or
     /// every injected voltage scales wrong as a count. 3.1 V is the datasheet
     /// full-scale input at the highest attenuation for the ESP32-S2/S3/C3
-    /// (ESP32-C3 datasheet, "ADC Characteristics": ATTEN_DB_11 measurable range
+    /// (ESP32-C3 datasheet, "ADC Characteristics": `ATTEN_DB_11` measurable range
     /// 0 ~ 3100 mV). The classic ESP32 is messier -- characterized-accurate to
     /// 2450 mV at 11 dB, theoretical full scale 1.1 V x 3.548 = 3.9 V clipped
     /// by the rail -- but real parts saturate near 3.1 V too. Injections
@@ -224,7 +224,7 @@ pub mod mailbox {
 /// `out_reg` remains the RAM-mailbox fallback (see [`mailbox`]);
 /// `peripheral_out_reg` is the real GPIO register used only after the backend
 /// proves the running QEMU carries Hauksbee's stateful GPIO patch. Both words
-/// use the GPIO_OUT bit layout, so edge synthesis is identical on either path.
+/// use the `GPIO_OUT` bit layout, so edge synthesis is identical on either path.
 ///
 /// Plain-data register-offset carrier, so a new part declares its mailbox
 /// addresses instead of adding branches to the backend.
@@ -268,9 +268,9 @@ pub struct QemuConfig {
     /// ESP32's 160-240 MHz so loop delays land near real durations.
     pub icount_shift: u8,
     /// Clock frequency in Hz reported by [`Mcu::frequency`] (advisory: QEMU
-    /// models the SoC clocking; this is for the engine's bookkeeping).
+    /// models the `SoC` clocking; this is for the engine's bookkeeping).
     pub frequency_hz: u64,
-    /// ELF `e_machine` this SoC's core executes: `EM_XTENSA` for ESP32 / S3,
+    /// ELF `e_machine` this `SoC`'s core executes: `EM_XTENSA` for ESP32 / S3,
     /// `EM_RISCV` for the ESP32-C3. Used to gate the firmware ELF (or its
     /// sibling app ELF beside the merged flash image) against the board's ISA,
     /// so an Xtensa image on a RISC-V board is refused rather than booted into
@@ -292,7 +292,7 @@ pub struct QemuConfig {
 /// The source from which GPIO output edges are observed in this QEMU process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GpioOutputObservation {
-    /// Real ESP32 GPIO_OUT MMIO state from a capability-probed patched model.
+    /// Real ESP32 `GPIO_OUT` MMIO state from a capability-probed patched model.
     PeripheralRegisters,
     /// Legacy RTC-slow-RAM word maintained by cooperating firmware.
     FirmwareMailbox,
@@ -309,7 +309,7 @@ impl QemuConfig {
     }
 }
 
-/// Validate the architecture of a QEMU flash image against the SoC's ISA.
+/// Validate the architecture of a QEMU flash image against the `SoC`'s ISA.
 ///
 /// QEMU boots from a merged `.bin` flash image, which is raw and carries no
 /// ELF header. So:
@@ -356,8 +356,7 @@ fn validate_flash_image_arch(flash_image: &Path, expected: u16, mcu_label: &str)
             let is_elf = p
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("elf"))
-                .unwrap_or(false);
+                .is_some_and(|e| e.eq_ignore_ascii_case("elf"));
             if !is_elf {
                 continue;
             }
@@ -389,8 +388,7 @@ fn validate_flash_image_arch(flash_image: &Path, expected: u16, mcu_label: &str)
             sibling_elfs.iter().find(|p| {
                 p.file_stem()
                     .and_then(|s| s.to_str())
-                    .map(|es| es == bs || es.contains(bs) || bs.contains(es))
-                    .unwrap_or(false)
+                    .is_some_and(|es| es == bs || es.contains(bs) || bs.contains(es))
             })
         })
         .unwrap_or(&sibling_elfs[0]);
@@ -540,7 +538,7 @@ pub struct QemuBackend {
     on_i2c: Option<I2cCb>,
     /// SPI byte-event handler, serviced from the mailbox SPI request cell.
     on_spi: Option<SpiCb>,
-    /// True once BUS_MAGIC_VALUE has been observed; the bus cells are never
+    /// True once `BUS_MAGIC_VALUE` has been observed; the bus cells are never
     /// read before the firmware declares them valid.
     bus_magic_seen: bool,
     /// Last serviced I2C / SPI request sequence numbers.
@@ -549,14 +547,14 @@ pub struct QemuBackend {
     /// Open I2C transaction for Start/Stop synthesis (the same state machine
     /// the Renode bridge runs).
     i2c_txn: I2cTxn,
-    /// Shadow of the ADC_MASK word (channels injected so far).
+    /// Shadow of the `ADC_MASK` word (channels injected so far).
     adc_mask_shadow: u32,
     /// One-time warning flag for ADC injection without a gdbstub.
     adc_no_gdb_warned: bool,
     /// One-time warning flag for digital-input injection without a gdbstub.
     digital_no_gdb_warned: bool,
-    /// One-time warning flag for a GPIO port that has no bank in this SoC
-    /// descriptor (e.g. ESP32 GPIO>=32 maps to port '1', but the ESP32 SoC has a
+    /// One-time warning flag for a GPIO port that has no bank in this `SoC`
+    /// descriptor (e.g. ESP32 GPIO>=32 maps to port '1', but the ESP32 `SoC` has a
     /// single 32-bit bank '0'). Such pins cannot be observed or injected, so the
     /// backend must SAY so rather than silently report the pin as never-driven.
     unbridged_gpio_warned: bool,
@@ -728,7 +726,7 @@ impl QemuBackend {
         // booted by the time this returns; nothing loads firmware later.
         core.firmware_loaded = true;
 
-        Ok(QemuBackend {
+        Ok(Self {
             config,
             qmp,
             gdb,
@@ -960,7 +958,7 @@ impl QemuBackend {
 
     /// Service the mailbox v2 bus cells once per chunk, while the
     /// guest is paused. Zero-cost when no callback is registered; one word
-    /// read per chunk until the firmware raises BUS_MAGIC.
+    /// read per chunk until the firmware raises `BUS_MAGIC`.
     fn service_bus_mailbox(&mut self) -> Result<()> {
         if self.on_i2c.is_none() && self.on_spi.is_none() {
             return Ok(());

@@ -66,9 +66,9 @@ pub struct PortMap {
     pub peripheral: String,
     /// Renode peripheral that receives externally driven GPIO input levels.
     ///
-    /// Usually this is the same peripheral as [`Self::peripheral`]. Some SoCs
+    /// Usually this is the same peripheral as [`Self::peripheral`]. Some `SoCs`
     /// split the register bank from the physical pin receiver: RP2040's SIO
-    /// owns GPIO_OUT/GPIO_OE, while its GPIOPort model owns `OnGPIO`. Keeping
+    /// owns `GPIO_OUT/GPIO_OE`, while its `GPIOPort` model owns `OnGPIO`. Keeping
     /// this path explicit prevents a register-only peripheral from being used
     /// as an input receiver (which Renode rejects) and keeps unsupported input
     /// drives fail-closed at the Monitor boundary.
@@ -271,7 +271,7 @@ pub struct RenodeConfig {
     pub extra_setup: Vec<String>,
     /// Extra Monitor commands run verbatim AFTER the firmware ELF is loaded
     /// (e.g. setting the CPU PC to a boot symbol the ELF entry does not point
-    /// at, as the SiFive FE310 Zephyr demo needs `cpu PC vinit`). Empty for the
+    /// at, as the `SiFive` FE310 Zephyr demo needs `cpu PC vinit`). Empty for the
     /// common case where the ELF entry is correct. The literal `{cpu}` token is
     /// substituted with this config's `cpu` path so commands can be SoC-generic.
     pub post_load_setup: Vec<String>,
@@ -289,7 +289,7 @@ pub struct RenodeConfig {
     /// platform (if any). Empty for most configurations.
     pub spi_extra_repl: Option<String>,
     /// ELF `e_machine` the platform's CPU executes (`EM_ARM` for the Cortex-M
-    /// STM32 / nRF52 platforms, `EM_RISCV` for the SiFive FE310). Used by the
+    /// STM32 / nRF52 platforms, `EM_RISCV` for the `SiFive` FE310). Used by the
     /// firmware-load arch gate to refuse a wrong-ISA ELF before `sysbus LoadELF`
     /// runs it as garbage. See [`crate::elf`].
     pub expected_e_machine: u16,
@@ -307,13 +307,13 @@ pub struct RenodeConfig {
     pub watchdog_limitation: Option<String>,
     /// How this part's TIMING fidelity falls short of the real part, surfaced
     /// through [`Mcu::timing_limitation`]. Per-part like the watchdog
-    /// statement: the F103 deliberately clocks its TIMx blocks at the
+    /// statement: the F103 deliberately clocks its `TIMx` blocks at the
     /// post-PLL 72 MHz against an 8 MHz reset-default core (only that rate
-    /// lets a stock CubeMX HAL project boot on a platform with no clock
+    /// lets a stock `CubeMX` HAL project boot on a platform with no clock
     /// tree), while the clock-truth-gated parts have nothing to declare.
     ///
     /// `None` claims a firmware delay costs the virtual time it costs on
-    /// silicon. That is a measurement (tests/clock_truth.rs), so a descriptor
+    /// silicon. That is a measurement (`tests/clock_truth.rs`), so a descriptor
     /// that leaves it out is asserting one.
     #[serde(default)]
     pub timing_limitation: Option<String>,
@@ -428,8 +428,7 @@ fn spawn_and_connect() -> Result<(RenodeProcess, Monitor, u16)> {
         let remaining = deadline.saturating_duration_since(Instant::now());
         anyhow::ensure!(
             !remaining.is_zero(),
-            "Renode monitor did not bind within the {:?} startup budget",
-            startup_timeout
+            "Renode monitor did not bind within the {startup_timeout:?} startup budget"
         );
         let [monitor_port, uart_port] = free_ports()?;
         let mut process = RenodeProcess::spawn(monitor_port)?;
@@ -520,7 +519,7 @@ impl<C: Send + 'static> BridgeServer<C> {
             }
         });
 
-        Ok(BridgeServer {
+        Ok(Self {
             port,
             callback,
             shutdown,
@@ -533,7 +532,10 @@ impl<C: Send + 'static> BridgeServer<C> {
     }
 
     fn replace_callback(&self, cb: C) {
-        let mut guard = self.callback.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self
+            .callback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = cb;
     }
 }
@@ -559,9 +561,9 @@ struct I2cBridgeState {
     /// `stm32f103.repl`) asks the slave for bytes exactly ONCE per read
     /// transaction, `Read()` at the address phase, and never asks again when
     /// its receive fifo drains. Firmware running the RM0008 two-byte receive
-    /// sequence (POS/ACK, then two DR reads gated on RxNE, see
+    /// sequence (POS/ACK, then two DR reads gated on `RxNE`, see
     /// `testdata/firmware/stm32_i2c_thermostat/main.c`) would therefore time
-    /// out waiting for RxNE on the second byte: the model's fifo holds only
+    /// out waiting for `RxNE` on the second byte: the model's fifo holds only
     /// the single byte that one `Read()` returned. With this flag set, a
     /// `read_count == 1` request fetches TWO bytes from the slave callback and
     /// returns both, so the pending two-byte receive is filled while every
@@ -601,7 +603,7 @@ const I2C_OP_FINISH: u8 = 3;
 const I2C_BRIDGE_MAX_READ: usize = 4096;
 /// Maximum payload size accepted from a single I2C bridge request.
 const I2C_BRIDGE_MAX_PAYLOAD: usize = 4096;
-/// Fixed I2C bridge request header: op(1) + addr(1) + read_count(4) + payload_len(4).
+/// Fixed I2C bridge request header: op(1) + addr(1) + `read_count(4)` + `payload_len(4)`.
 const I2C_BRIDGE_HEADER_LEN: usize = 10;
 
 impl I2cBridgeState {
@@ -678,7 +680,9 @@ impl I2cBridgeState {
         }
 
         let response = {
-            let mut cb = callback.lock().unwrap_or_else(|e| e.into_inner());
+            let mut cb = callback
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             match op {
                 I2C_OP_WRITE => {
                     self.txn.ensure(addr, false, &mut *cb);
@@ -741,8 +745,8 @@ const SPI_OP_FINISH: u8 = 2;
 /// Handle one SPI bridge connection. The Renode-side C# `HauksbeeSpiBridge`
 /// connects once per call. Protocol:
 ///   op=1 (Transmit): read 1 MOSI byte, call callback with deselect=false, write 1 MISO byte.
-///   op=2 (FinishTransmission): call callback with deselect=true so the SpiBus
-///         slave's deselect() fires promptly (resets the MCP3008 seq counter etc.)
+///   op=2 (FinishTransmission): call callback with deselect=true so the `SpiBus`
+///         slave's `deselect()` fires promptly (resets the MCP3008 seq counter etc.)
 ///         rather than waiting for the next chunk boundary.
 ///
 /// FAIL LOUD: a clean EOF *before* any op byte is benign (the drop-time wake-up
@@ -775,7 +779,9 @@ fn handle_spi_stream(
                 .context("SPI bridge: socket closed before MOSI byte arrived")?;
             let mosi = mosi_buf[0];
             let miso = {
-                let mut cb = callback.lock().unwrap_or_else(|e| e.into_inner());
+                let mut cb = callback
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 cb(SpiEvent {
                     mosi,
                     deselect: false,
@@ -797,7 +803,9 @@ fn handle_spi_stream(
             if trace {
                 eprintln!("renode-spi FinishTransmission");
             }
-            let mut cb = callback.lock().unwrap_or_else(|e| e.into_inner());
+            let mut cb = callback
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let _ = cb(SpiEvent {
                 mosi: 0,
                 deselect: true,
@@ -850,8 +858,8 @@ pub struct RenodeBackend {
     i2c_slave_addresses: Vec<u8>,
     /// Host-side bridge serving Renode I2C peripheral callbacks.
     i2c_bridge: Option<BridgeServer<I2cCb>>,
-    /// Per-controller SPI bridge servers: (controller_name, BridgeServer).
-    /// Each entry owns a distinct TCP port and BridgeServer so transfers on
+    /// Per-controller SPI bridge servers: (`controller_name`, `BridgeServer`).
+    /// Each entry owns a distinct TCP port and `BridgeServer` so transfers on
     /// "spi2" and "spi3" route to different callbacks without cross-talk.
     spi_bridges: Vec<(String, BridgeServer<SpiCb>)>,
     /// Temp `.cs` files generated for bridge peripherals, removed on drop so we
@@ -958,7 +966,7 @@ impl RenodeBackend {
 
         let last_odr = config.ports.iter().map(|p| (p.letter, 0u32)).collect();
 
-        Ok(RenodeBackend {
+        Ok(Self {
             config,
             monitor,
             core: PollState::new("Renode", uart),
@@ -1249,7 +1257,7 @@ fn substitute_support_dir(mut config: RenodeConfig, dir: Option<&Path>) -> Renod
 /// (a descriptor shipping platform fixes as data): the Monitor socket is
 /// line-oriented, so the source is written to a temp file and referenced by
 /// absolute `@`-path instead. The caller owns deleting the returned file
-/// (RenodeBackend rides it on the bridge-source cleanup list).
+/// (`RenodeBackend` rides it on the bridge-source cleanup list).
 ///
 /// Note for the I2C prefetch gate: [`platform_needs_i2c_single_read_prefetch`]
 /// keys on the CONFIG string, not this argument, and an inline F1 platform
@@ -1342,12 +1350,12 @@ fn render_i2c_bridge_source(port: u16, addresses: &[u8]) -> String {
     let mut classes = String::new();
     for addr in addresses {
         classes.push_str(&format!(
-            r#"
+            r"
     public class HauksbeeI2CBridge_{addr:02X} : HauksbeeI2CBridgeBase
     {{
         public HauksbeeI2CBridge_{addr:02X}() : base({port}, 0x{addr:02X}) {{ }}
     }}
-"#
+"
         ));
     }
 
@@ -2289,7 +2297,7 @@ mod tests {
 
     /// The gated STM32F1 two-byte-receive prefetch still works where enabled:
     /// a count==1 request fetches and returns two bytes so Renode 1.16.1's
-    /// one-shot STM32F4_I2C fifo can satisfy both DR reads. count==1 is the
+    /// one-shot `STM32F4_I2C` fifo can satisfy both DR reads. count==1 is the
     /// correct wire shape for this case: the model calls `Read()` (default
     /// count 1) exactly once at the address phase, never N=2, see the
     /// `single_read_prefetch` field docs for the source-level proof.

@@ -17,8 +17,8 @@
 //!
 //! The "peer" here is the test itself opening the printed device path, which is
 //! exactly what pyserial does. The real external-client proof (a Python
-//! pyserial script against an emulated ATmega328P) lives in the engine's
-//! host_serial_cosim test and in docs/cosim/MCU.md.
+//! pyserial script against an emulated `ATmega328P`) lives in the engine's
+//! `host_serial_cosim` test and in docs/cosim/MCU.md.
 
 #![cfg(unix)]
 
@@ -77,7 +77,7 @@ fn drain_at_peer(peer: &mut std::fs::File, n: usize) -> Vec<u8> {
             Ok(0) => break,
             Ok(k) => got.extend_from_slice(&buf[..k]),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(std::time::Duration::from_millis(1))
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
             Err(_) => break,
         }
@@ -101,7 +101,7 @@ fn write_all_from_peer(peer: &mut std::fs::File, bytes: &[u8]) {
             Ok(0) => std::thread::sleep(std::time::Duration::from_millis(1)),
             Ok(n) => sent += n,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(std::time::Duration::from_millis(1))
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
             Err(e) => panic!("host write failed: {e}"),
         }

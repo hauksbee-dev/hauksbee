@@ -15,7 +15,7 @@
 //! Why both QMP and gdbstub? QMP owns run/stop and the icount-budgeted time
 //! stepping; gdbstub owns clean word-granular memory writes. They attach to the
 //! same running QEMU over separate TCP sockets and do not interfere: the backend
-//! only touches the gdbstub while the vCPU is paused (between RunFor chunks),
+//! only touches the gdbstub while the vCPU is paused (between `RunFor` chunks),
 //! which is exactly when reading/writing peripheral registers is well defined.
 //!
 //! This is a deliberately tiny RSP implementation: no register access, no
@@ -45,7 +45,7 @@ impl GdbStub {
         stream
             .set_read_timeout(Some(Duration::from_millis(200)))
             .ok();
-        let mut g = GdbStub {
+        let mut g = Self {
             stream,
             timeout: Duration::from_secs(10),
         };
@@ -156,7 +156,7 @@ impl GdbStub {
 
 /// Encode an RSP packet: `$<payload>#<2-hex checksum>`.
 fn encode_packet(payload: &str) -> String {
-    let sum: u8 = payload.bytes().fold(0u8, |a, b| a.wrapping_add(b));
+    let sum: u8 = payload.bytes().fold(0u8, u8::wrapping_add);
     format!("${payload}#{sum:02x}")
 }
 

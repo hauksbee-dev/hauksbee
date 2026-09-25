@@ -1,6 +1,6 @@
 //! Firmware-architecture gate (fix #10): a wrong-ISA image must be refused at
 //! load time with a clear two-sided message, BEFORE the backend runs it as
-//! garbage. Uses the real testdata ELFs so the e_machine values are genuine,
+//! garbage. Uses the real testdata ELFs so the `e_machine` values are genuine,
 //! not synthetic.
 //!
 //! Background: docs/hunts/personas/persona-esp32-iot.md loaded an Xtensa ESP32

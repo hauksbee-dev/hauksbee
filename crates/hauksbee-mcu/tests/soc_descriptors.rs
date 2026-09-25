@@ -7,7 +7,7 @@
 //!      by the existing backend tests before its Rust constructor is deleted").
 //!   2. VALIDATION, each named-error category fires against a deliberately
 //!      broken descriptor (unknown backend, empty platform, overlapping/zero-
-//!      width ports, duplicate controllers, unknown e_machine, …).
+//!      width ports, duplicate controllers, unknown `e_machine`, …).
 //!   3. RESOLUTION, `SocConfig::resolve("backend:part")` finds the embedded
 //!      built-ins, and a user descriptor dropped in `$HAUKSBEE_MCU_DIR` is added
 //!      purely as data.
@@ -73,7 +73,7 @@ fn qemu_descriptors_equal_constructors() {
     }
 }
 
-/// The FE310's post_load_setup (the bring-up footgun) survives the round trip:
+/// The FE310's `post_load_setup` (the bring-up footgun) survives the round trip:
 /// this is a field the plan example predated, and losing it would silently
 /// break FE310 boot.
 #[test]
@@ -153,7 +153,7 @@ fn stm32f103_descriptor_ships_the_hal_boot_platform_inline() {
     );
 }
 
-/// The AdcChannelMap schema loads: no built-in uses it, but
+/// The `AdcChannelMap` schema loads: no built-in uses it, but
 /// a descriptor that carries an injection recipe must parse into the right map.
 #[test]
 fn adc_channel_recipe_loads_from_descriptor() {
@@ -439,7 +439,7 @@ width = 32
     );
 }
 
-/// deny_unknown_fields: a mistyped field is a loud parse error, not a silent
+/// `deny_unknown_fields`: a mistyped field is a loud parse error, not a silent
 /// drop (refuse rather than fake).
 #[test]
 fn unknown_field_is_rejected() {
@@ -489,7 +489,7 @@ fn resolve_bad_spec_and_missing() {
 }
 
 /// Acceptance: a NEW Renode MCU added purely as data, drop a descriptor
-/// in $HAUKSBEE_MCU_DIR and resolve it, no recompile. The override dir also wins
+/// in $`HAUKSBEE_MCU_DIR` and resolve it, no recompile. The override dir also wins
 /// over a built-in of the same part name.
 #[test]
 fn resolve_from_override_dir_adds_a_part_as_data() {
@@ -544,10 +544,10 @@ width = 16
 }
 
 /// The spec's `backend:` half is validated: an unknown backend token is a
-/// named error up front (not a NotFound), and the embedded lookup is keyed by
-/// the FULL spec, so a builtin part named under the wrong backend is NotFound
+/// named error up front (not a `NotFound`), and the embedded lookup is keyed by
+/// the FULL spec, so a builtin part named under the wrong backend is `NotFound`
 /// rather than a silent backend swap. (An override-dir file whose declared
-/// backend disagrees with the spec is a BackendMismatch, see
+/// backend disagrees with the spec is a `BackendMismatch`, see
 /// `override_dir_is_fail_loud_and_beats_builtin`.)
 #[test]
 fn resolve_validates_the_spec_backend_token() {
@@ -632,7 +632,7 @@ fn override_dir_is_fail_loud_and_beats_builtin() {
     }
 }
 
-/// Unwrap an InvalidDescriptor to its inner error, for variant assertions.
+/// Unwrap an `InvalidDescriptor` to its inner error, for variant assertions.
 fn invalid_backend_of(err: SocError) -> SocError {
     match err {
         SocError::InvalidDescriptor { source, .. } => *source,

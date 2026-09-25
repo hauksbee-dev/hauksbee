@@ -2,7 +2,7 @@
 //!
 //! Classic ESP32 (Xtensa LX6/LX7) and the RISC-V ESP32-C3 are not modelled by
 //! mainline QEMU or by Renode (no `esp32.repl` ships in either). Espressif
-//! maintains a QEMU fork with full ESP32 SoC peripheral models (GPIO matrix,
+//! maintains a QEMU fork with full ESP32 `SoC` peripheral models (GPIO matrix,
 //! UART, SPI flash controller, timers) and native macOS-arm64 / Linux release
 //! binaries. This module locates that fork's `qemu-system-xtensa` (ESP32 /
 //! ESP32-S3) and `qemu-system-riscv32` (ESP32-C3) binaries and spawns them.
@@ -14,7 +14,7 @@
 //!      `~/.hauksbee-qemu-esp-patched/qemu/bin/`, then the conventional
 //!      `~/.hauksbee-qemu-esp/qemu/bin/` (or legacy Galvani path),
 //!   4. the esp-idf tools install: `$IDF_TOOLS_PATH/tools/qemu-*/.../bin/`
-//!      when set, else `~/.espressif/tools/qemu-*/.../bin/` (the idf_tools.py
+//!      when set, else `~/.espressif/tools/qemu-*/.../bin/` (the `idf_tools.py`
 //!      default on every OS), plus `C:\Espressif\tools\...` on Windows (the
 //!      ESP-IDF Windows installer's default root),
 //!   5. the binary on `PATH`.
@@ -49,16 +49,16 @@ impl QemuArch {
     /// The QEMU system binary file name for this architecture.
     pub fn binary_name(self) -> &'static str {
         match self {
-            QemuArch::Xtensa => "qemu-system-xtensa",
-            QemuArch::Riscv32 => "qemu-system-riscv32",
+            Self::Xtensa => "qemu-system-xtensa",
+            Self::Riscv32 => "qemu-system-riscv32",
         }
     }
 
     /// The per-arch env override variable name.
     fn env_override(self) -> &'static str {
         match self {
-            QemuArch::Xtensa => "HAUKSBEE_QEMU_XTENSA",
-            QemuArch::Riscv32 => "HAUKSBEE_QEMU_RISCV32",
+            Self::Xtensa => "HAUKSBEE_QEMU_XTENSA",
+            Self::Riscv32 => "HAUKSBEE_QEMU_RISCV32",
         }
     }
 
@@ -188,7 +188,7 @@ impl QemuProcess {
     /// Spawn QEMU headless for `arch`, booting `flash_image`.
     ///
     /// Wiring (all over TCP so nothing native is linked):
-    ///   - `-machine <machine>`: the SoC model (esp32 / esp32s3 / esp32c3).
+    ///   - `-machine <machine>`: the `SoC` model (esp32 / esp32s3 / esp32c3).
     ///   - `-drive file=<flash>,if=mtd,format=raw,snapshot=on`: the merged 4 MB
     ///     flash image (2nd-stage bootloader + partition table + app), with all
     ///     guest writes redirected to a private temporary snapshot. The source
@@ -231,7 +231,7 @@ impl QemuProcess {
             ));
         // stderr captured (not /dev/null) so a failed boot can be explained
         // with QEMU's actual complaint (bad image, bad machine, bad drive size).
-        Ok(QemuProcess {
+        Ok(Self {
             inner: EmulatorProcess::spawn("Espressif QEMU", &mut cmd, true)?,
             qmp_port,
         })
@@ -299,7 +299,7 @@ mod discovery_tests {
 
     /// An idf-tools tree (`<root>/tools/qemu-*/<ver>/qemu/bin/<file>`) is
     /// globbed correctly: both arch tool dirs, any version, non-qemu tool dirs
-    /// ignored. This is the layout idf_tools.py produces on every OS,
+    /// ignored. This is the layout `idf_tools.py` produces on every OS,
     /// including `%USERPROFILE%\.espressif` and `C:\Espressif` on Windows.
     #[test]
     fn idf_tools_tree_is_globbed() {

@@ -91,8 +91,8 @@ impl HostSerialTransport {
     /// The transport name as it appears in CLI flags and printed output.
     pub fn as_str(self) -> &'static str {
         match self {
-            HostSerialTransport::Pty => "pty",
-            HostSerialTransport::Tcp => "tcp",
+            Self::Pty => "pty",
+            Self::Tcp => "tcp",
         }
     }
 }
@@ -217,7 +217,9 @@ impl HostSerial {
             // fix.
             static PTSNAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
             let slave = {
-                let _guard = PTSNAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                let _guard = PTSNAME_LOCK
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let name_ptr = libc::ptsname(master);
                 if name_ptr.is_null() {
                     bail!(
@@ -896,7 +898,7 @@ mod tests {
         // hangups; see children::SPAWN_PTY_EXCLUSION.
         let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::OpenOptionsExt;
 
@@ -975,7 +977,7 @@ mod tests {
         // hangups; see children::SPAWN_PTY_EXCLUSION.
         let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         use std::os::fd::AsRawFd;
 
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
@@ -1019,7 +1021,7 @@ mod tests {
         // hangups; see children::SPAWN_PTY_EXCLUSION.
         let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
         let first = open_pty_peer(&ep, "first peer");
         await_attach(&mut ep, 1);
@@ -1049,7 +1051,7 @@ mod tests {
         // hangups; see children::SPAWN_PTY_EXCLUSION.
         let _quiesce = crate::children::SPAWN_PTY_EXCLUSION
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut ep = HostSerial::open(HostSerialTransport::Pty).expect("pty endpoint");
         let mut peer = open_pty_peer(&ep, "peer");
         await_attach(&mut ep, 1);

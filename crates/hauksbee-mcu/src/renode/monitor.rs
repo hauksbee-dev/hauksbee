@@ -39,7 +39,7 @@ impl Monitor {
         stream
             .set_read_timeout(Some(Duration::from_millis(200)))
             .ok();
-        let mut m = Monitor {
+        let mut m = Self {
             stream,
             carry: String::new(),
             timeout: Duration::from_secs(30),

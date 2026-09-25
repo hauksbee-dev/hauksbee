@@ -4,7 +4,7 @@
 //! `on_spi` returns without doing anything, so a bound I2C/SPI sensor is never
 //! exercised. `nrf52840.soc.toml` therefore names the controllers the stock
 //! Renode 1.16.1 `nrf52840.repl` actually models -- `twi0`/`twi1`
-//! (I2C.NRF52840_I2C) and `spi2` (NRF52840_SPI) -- and this test proves,
+//! (`I2C.NRF52840_I2C`) and `spi2` (`NRF52840_SPI`) -- and this test proves,
 //! against the LIVE Renode install, that:
 //!
 //!   1. the descriptor's controller names exist on the booted platform (a

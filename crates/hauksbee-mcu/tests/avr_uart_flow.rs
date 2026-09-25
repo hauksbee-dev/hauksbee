@@ -1,4 +1,4 @@
-//! UART RX flow control and core reset, against a real emulated ATmega328P.
+//! UART RX flow control and core reset, against a real emulated `ATmega328P`.
 //!
 //! Guards two defects on the flagship AVR + host-serial path:
 //!
@@ -11,7 +11,7 @@
 //!    `Mcu::reset` must reboot the core itself.
 //!
 //! The firmware is hand-assembled inline (no toolchain dependency, same
-//! pattern as avr_run_clock.rs): it configures UART0 at 115200, transmits one
+//! pattern as `avr_run_clock.rs)`: it configures UART0 at 115200, transmits one
 //! boot banner byte, then echoes every received byte forever. The banner makes
 //! a reboot observable; the echo makes delivery (and order) checkable.
 
@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 /// enabling the UART. Seeing it a second time is proof of a real reboot.
 const BANNER: u8 = 0x42;
 
-/// Hand-assembled ATmega328P program: UART0 at 115200 (U2X off is fine for the
+/// Hand-assembled `ATmega328P` program: UART0 at 115200 (U2X off is fine for the
 /// emulator; the divisor only sets simavr's per-byte pacing), boot banner,
 /// then a polling echo loop.
 ///
@@ -68,7 +68,7 @@ const UART_ECHO: &[u8] = &[
     0xF3, 0xCF, // rjmp loop
 ];
 
-/// Build a 16 MHz ATmega328P running the echo firmware, with UART output
+/// Build a 16 MHz `ATmega328P` running the echo firmware, with UART output
 /// captured into a shared buffer.
 fn echo_mcu(name: &str) -> (AvrMcu, Arc<Mutex<Vec<u8>>>) {
     let hex = write_program_hex("avr-uart-flow", name, UART_ECHO);

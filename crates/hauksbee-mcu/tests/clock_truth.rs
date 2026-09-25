@@ -50,7 +50,7 @@ use std::sync::{Arc, Mutex};
 /// aliasing rules in the module docs before changing it.
 const CHUNK_US: u64 = 1_000;
 
-/// The SysTick firmwares' real-silicon half-period, from `tick.c`'s
+/// The `SysTick` firmwares' real-silicon half-period, from `tick.c`'s
 /// `HALF_PERIOD_MS`.
 const HALF_PERIOD_MS: f64 = 100.0;
 
@@ -123,7 +123,7 @@ fn measure(cfg: RenodeConfig, elf: &Path, pin: PinId, half_period_ms: f64) -> Op
         return Some(0.0);
     }
     let sim_ms = seen[EDGES as usize - 1] as f64 * CHUNK_US as f64 / 1000.0;
-    let silicon_ms = EDGES as f64 * half_period_ms;
+    let silicon_ms = f64::from(EDGES) * half_period_ms;
     println!("clock_truth: edges at chunks {seen:?}; {EDGES}th edge at {sim_ms} ms sim, {silicon_ms} ms on silicon");
     Some(silicon_ms / sim_ms)
 }
@@ -193,7 +193,7 @@ fn stm32f4_runs_at_the_parts_clock() {
 }
 
 /// nRF52840 at its fixed 64 MHz HFCLK. Was 6.54x fast: the stock platform
-/// declares no `systickFrequency` at all, so SysTick ran at a Renode default
+/// declares no `systickFrequency` at all, so `SysTick` ran at a Renode default
 /// with no relation to the part.
 #[test]
 fn nrf52840_runs_at_the_parts_clock() {
@@ -205,7 +205,7 @@ fn nrf52840_runs_at_the_parts_clock() {
     );
 }
 
-/// The FE310 oracle drives GPIO 19 (the HiFive1 green LED) on port '0'.
+/// The FE310 oracle drives GPIO 19 (the `HiFive1` green LED) on port '0'.
 const FE310_PIN: PinId = PinId { port: '0', bit: 19 };
 
 /// FE310 `mtime` at the part's 32.768 kHz RTC tick. Was declared 62 MHz by

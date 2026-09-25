@@ -159,7 +159,7 @@ fn spawned_flash_drive_uses_a_private_snapshot() {
 }
 
 /// Once QEMU dies, callers need the operation, exit status, and captured
-/// stderr. A bare QMP "connection closed" / BrokenPipe is not actionable and
+/// stderr. A bare QMP "connection closed" / `BrokenPipe` is not actionable and
 /// repeated chunks must not lose the original process-death evidence.
 #[test]
 fn process_death_reports_status_and_stderr() {
@@ -226,7 +226,7 @@ fn read_grandchild_pid(path: &Path) -> u32 {
     }
 }
 
-/// Shape 1: dropping a QemuProcess kills the emulator AND its forked
+/// Shape 1: dropping a `QemuProcess` kills the emulator AND its forked
 /// grandchild (the process-group kill), not just the direct child.
 #[test]
 fn drop_kills_the_whole_emulator_tree() {

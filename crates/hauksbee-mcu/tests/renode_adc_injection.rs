@@ -52,10 +52,10 @@ const ADC_RESULT_WORD: u32 = 0x2000_4000;
 
 /// Build the tiny Cortex-M3 firmware as a loadable ELF32 image, in memory.
 ///
-/// Layout at 0x0800_0000 (the STM32F103 flash base, matching the repo's
+/// Layout at `0x0800_0000` (the STM32F103 flash base, matching the repo's
 /// `stm32_blinky` linker script):
-///   +0x00  initial SP        = 0x2000_2000 (unused: the loop needs no stack)
-///   +0x04  reset vector      = 0x0800_0009 (code below, Thumb bit set)
+///   +0x00  initial SP        = `0x2000_2000` (unused: the loop needs no stack)
+///   +0x04  reset vector      = `0x0800_0009` (code below, Thumb bit set)
 ///   +0x08  4804      ldr r0, [pc, #16]   ; = 0x20004000  (literal at +0x1C)
 ///   +0x0A  4905      ldr r1, [pc, #20]   ; = 0x4001100C  (literal at +0x20)
 ///   +0x0C  4A05      ldr r2, [pc, #20]   ; = 0x40011000  (literal at +0x24)
@@ -66,10 +66,10 @@ const ADC_RESULT_WORD: u32 = 0x2000_4000;
 ///   +0x16  600A      str r2, [r1]
 ///   +0x18  E7FC      b   loop            ; (-8 from PC)
 ///   +0x1A  BF00      nop                 ; literal-pool alignment
-///   +0x1C  0x2000_4000
-///   +0x20  0x4001_100C
-///   +0x24  0x4001_1000
-///   +0x28  0x3333_3333
+///   +0x1C  `0x2000_4000`
+///   +0x20  `0x4001_100C`
+///   +0x24  `0x4001_1000`
+///   +0x28  `0x3333_3333`
 fn build_adc_copy_elf() -> Vec<u8> {
     const LOAD_ADDR: u32 = 0x0800_0000;
     const GPIOC_ODR: u32 = 0x4001_100C;

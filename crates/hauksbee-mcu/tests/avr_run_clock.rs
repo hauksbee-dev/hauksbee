@@ -32,7 +32,7 @@ const JMP_LOOP: &[u8] = &[0x0C, 0x94, 0x00, 0x00];
 const RJMP_LOOP: &[u8] = &[0xFF, 0xCF];
 
 /// `jmp 0x4000` (word address) at address 0: lands the PC at byte address
-/// 0x8000, past the ATmega328P's `flashend` (0x7FFF). simavr's `avr_run_one`
+/// 0x8000, past the `ATmega328P`'s `flashend` (0x7FFF). simavr's `avr_run_one`
 /// treats a PC beyond flash as a firmware crash (`avr_sadly_crashed` →
 /// `cpu_Crashed`); the "jumped into the weeds" failure mode.
 const JMP_INTO_WEEDS: &[u8] = &[

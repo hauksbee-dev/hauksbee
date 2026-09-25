@@ -66,8 +66,8 @@ macro_rules! rp2040_or_skip {
 }
 
 /// Boot evidence: the SDK's `stdio_init_all` + `printf` reach the host, which
-/// means the whole runtime_init chain (resets, XOSC, PLLs, clock muxes, UART
-/// clock, IO_BANK0 function select for GP0) completed and `main` ran.
+/// means the whole `runtime_init` chain (resets, XOSC, PLLs, clock muxes, UART
+/// clock, `IO_BANK0` function select for GP0) completed and `main` ran.
 #[test]
 fn rp2040_sdk_firmware_reaches_main_and_prints() {
     rp2040_or_skip!(mcu, "rp2040_blink_uart", "blink_uart.elf");
@@ -125,7 +125,7 @@ fn rp2040_led_toggles_are_observed() {
 
 /// The negative half. Same runtime, same UART traffic, no GPIO calls: the toggle
 /// assertion above must have nothing to fire on. Without this, a harness that
-/// invented edges (or a GPIO_OUT read that returned a stuck non-zero) would sail
+/// invented edges (or a `GPIO_OUT` read that returned a stuck non-zero) would sail
 /// through the positive test.
 #[test]
 fn rp2040_quiet_firmware_produces_no_led_edges() {
@@ -193,7 +193,7 @@ fn rp2040_reports_drive_direction_from_gpio_oe() {
 }
 
 /// RP2040 splits GPIO register ownership from its physical input receiver:
-/// SIO exposes GPIO_OUT/GPIO_OE, while GPIOPort.RP2040GPIO implements OnGPIO.
+/// SIO exposes `GPIO_OUT/GPIO_OE`, while GPIOPort.RP2040GPIO implements `OnGPIO`.
 /// This is a live Monitor-command regression for the exact failure mode where
 /// the backend sent `sysbus.sio OnGPIO ...` and Renode rejected it.
 #[test]

@@ -2,7 +2,7 @@
 //!
 //! The fixture is an ordinary ESP-IDF app: it never reads or writes Hauksbee's
 //! RTC-slow-RAM mailbox. This test therefore passes only when the emulator's
-//! real GPIO_OUT state is retained and the backend capability-probes that path.
+//! real `GPIO_OUT` state is retained and the backend capability-probes that path.
 //! Ordinary all-targets runs skip honestly on the supported upstream mailbox
 //! build. `scripts/test-qemu-gpio-source-patch.sh` sets the fail-closed
 //! `HAUKSBEE_REQUIRE_PATCHED_QEMU=1` acceptance mode after verifying the exact

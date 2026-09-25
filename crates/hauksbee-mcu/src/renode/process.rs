@@ -135,7 +135,7 @@ impl RenodeProcess {
             // `-p`: plain output, no ANSI colour codes.
             .args(["--disable-xwt", "--hide-log", "-p", "-P"])
             .arg(monitor_port.to_string());
-        Ok(RenodeProcess {
+        Ok(Self {
             // Capture stderr: Renode has no clean shutdown path in our
             // lifecycle, so the only first-hand account of a mid-run death
             // (an unhandled .NET exception, a missing runtime dependency) is

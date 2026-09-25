@@ -58,7 +58,7 @@ impl EmulatorProcess {
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(sink);
         let (child, guard) = spawn_emulator(cmd)
             .with_context(|| format!("spawning owned {label} from {:?}", cmd.get_program()))?;
-        Ok(EmulatorProcess {
+        Ok(Self {
             label,
             child,
             guard,
@@ -286,7 +286,7 @@ impl UartSocket {
         stream
             .set_write_timeout(Some(Duration::from_secs(2)))
             .with_context(|| format!("setting {label} UART write timeout"))?;
-        Ok(UartSocket { label, stream })
+        Ok(Self { label, stream })
     }
 
     /// Inject bytes into the firmware's UART receiver.
@@ -427,7 +427,7 @@ pub(crate) struct PollState {
 
 impl PollState {
     pub(crate) fn new(label: &'static str, uart: Option<UartSocket>) -> Self {
-        PollState {
+        Self {
             label,
             uart,
             uart_rx_failed: 0,

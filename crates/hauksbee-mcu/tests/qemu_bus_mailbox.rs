@@ -19,7 +19,7 @@
 //!
 //! Before the fix these fail structurally: `set_analog_in` was a no-op (the
 //! count never appears in guest RAM) and `on_i2c`/`on_spi` discarded the
-//! callback (no event ever fires, RSP_SEQ never advances).
+//! callback (no event ever fires, `RSP_SEQ` never advances).
 //!
 //! Skips gracefully (with the reason printed) when Espressif QEMU or the
 //! blinky flash image is absent.
@@ -204,7 +204,7 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
 
 /// an SPI burst submitted through the mailbox cell must fire one
 /// [`SpiEvent`] per byte and return the MISO bytes; a deselect op surfaces the
-/// same `deselect` event Renode's FinishTransmission produces.
+/// same `deselect` event Renode's `FinishTransmission` produces.
 #[test]
 fn qemu_spi_mailbox_surfaces_byte_events() {
     let _guard = qemu_test_lock();
@@ -252,7 +252,7 @@ fn qemu_spi_mailbox_surfaces_byte_events() {
 }
 
 /// Bit-identical when off: with callbacks registered but
-/// the firmware never raising BUS_MAGIC (every firmware that exists today),
+/// the firmware never raising `BUS_MAGIC` (every firmware that exists today),
 /// the backend must not touch the bus cells, no events, no acknowledgement.
 #[test]
 fn qemu_bus_mailbox_is_inert_without_magic() {

@@ -294,7 +294,7 @@ pub enum SocError {
     InvalidDescriptor {
         path: String,
         #[source]
-        source: Box<SocError>,
+        source: Box<Self>,
     },
 }
 
@@ -307,10 +307,10 @@ pub enum Backend {
 
 impl Backend {
     /// Parse a backend token, erroring (loud, named) on anything unknown.
-    pub fn parse(s: &str) -> Result<Backend, SocError> {
+    pub fn parse(s: &str) -> Result<Self, SocError> {
         match s {
-            "renode" => Ok(Backend::Renode),
-            "qemu" => Ok(Backend::Qemu),
+            "renode" => Ok(Self::Renode),
+            "qemu" => Ok(Self::Qemu),
             other => Err(SocError::UnknownBackend(other.to_string())),
         }
     }
@@ -318,14 +318,14 @@ impl Backend {
     /// The canonical token for this backend (the `backend:` half of a spec).
     pub fn name(self) -> &'static str {
         match self {
-            Backend::Renode => "renode",
-            Backend::Qemu => "qemu",
+            Self::Renode => "renode",
+            Self::Qemu => "qemu",
         }
     }
 
     /// The [`SocError::BackendMismatch`] for a descriptor declaring `found`
     /// where `self` was expected.
-    fn mismatch(self, found: Backend) -> SocError {
+    fn mismatch(self, found: Self) -> SocError {
         SocError::BackendMismatch {
             expected: self.name().to_string(),
             found: found.name().to_string(),
@@ -418,7 +418,7 @@ mod renode_schema {
         /// How this part's TIMING fidelity falls short, as a whole sentence
         /// rendered verbatim on the report surfaces. Omitted means "a firmware
         /// delay costs the virtual time it costs on silicon", which is a
-        /// measured claim (tests/clock_truth.rs), same discipline as the
+        /// measured claim (`tests/clock_truth.rs`), same discipline as the
         /// watchdog field above.
         #[serde(default)]
         pub timing_limitation: Option<String>,
@@ -655,7 +655,7 @@ impl crate::renode::RenodeConfig {
     /// backend, empty `platform_repl`, overlapping/zero-width ports, duplicate
     /// controllers, unknown `expected_e_machine`), and constructs the config.
     /// A `backend = "qemu"` descriptor is refused with [`SocError::BackendMismatch`].
-    pub fn from_soc_toml(src: &str) -> Result<crate::renode::RenodeConfig, SocError> {
+    pub fn from_soc_toml(src: &str) -> Result<Self, SocError> {
         parse_for::<renode_schema::RenodeSocFile>(src, Backend::Renode)?
             .soc
             .into_config()
@@ -745,7 +745,7 @@ mod qemu_schema {
 impl crate::qemu::QemuConfig {
     /// Load a QEMU config from a `*.soc.toml` descriptor. Same validated
     /// path as the Renode loader; a `backend = "renode"` descriptor is refused.
-    pub fn from_soc_toml(src: &str) -> Result<crate::qemu::QemuConfig, SocError> {
+    pub fn from_soc_toml(src: &str) -> Result<Self, SocError> {
         parse_for::<qemu_schema::QemuSocFile>(src, Backend::Qemu)?
             .soc
             .into_config()
@@ -817,7 +817,7 @@ fn repl_property_values(source: &str, property: &str) -> Vec<u64> {
 ///
 /// `frequency_hz` was decorative on Renode: it cancels out of both
 /// `cycles = seconds * frequency_hz` and `Mcu::frequency`, so a descriptor could
-/// claim an 8 MHz part while its platform ran a 72 MHz SysTick and nothing
+/// claim an 8 MHz part while its platform ran a 72 MHz `SysTick` and nothing
 /// anywhere disagreed. That is what let four backends ship running 4.5x to 9x
 /// fast. A warning would have been ignored for the same reason the mismatch was:
 /// nothing downstream depended on the number. Refusing at load makes the two
@@ -828,7 +828,7 @@ fn repl_property_values(source: &str, property: &str) -> Vec<u64> {
 ///
 /// Only `cpu PerformanceInMips` (the instructions-per-second knob, whose honest
 /// value is the core clock in MHz, as `db/mcu/rp2040/rp2040.repl` already had
-/// it) and `nvic systickFrequency` (the Cortex-M SysTick source). Every OTHER
+/// it) and `nvic systickFrequency` (the Cortex-M `SysTick` source). Every OTHER
 /// `frequency:` in a platform is a different clock domain, a 40 kHz IWDG, a
 /// 32768 Hz WDT, a timer block on its own APB branch, and holding those to the
 /// core rate would be wrong. Those domains are documented per descriptor and
@@ -999,14 +999,14 @@ pub enum SocConfig {
 
 impl SocConfig {
     /// Parse a descriptor string, dispatching to the backend it declares.
-    pub fn from_soc_toml(src: &str) -> Result<SocConfig, SocError> {
+    pub fn from_soc_toml(src: &str) -> Result<Self, SocError> {
         match peek_backend(src)? {
             Backend::Renode => {
                 #[cfg(feature = "renode")]
                 {
-                    Ok(SocConfig::Renode(
-                        crate::renode::RenodeConfig::from_soc_toml(src)?,
-                    ))
+                    Ok(Self::Renode(crate::renode::RenodeConfig::from_soc_toml(
+                        src,
+                    )?))
                 }
                 #[cfg(not(feature = "renode"))]
                 {
@@ -1016,9 +1016,7 @@ impl SocConfig {
             Backend::Qemu => {
                 #[cfg(feature = "qemu")]
                 {
-                    Ok(SocConfig::Qemu(crate::qemu::QemuConfig::from_soc_toml(
-                        src,
-                    )?))
+                    Ok(Self::Qemu(crate::qemu::QemuConfig::from_soc_toml(src)?))
                 }
                 #[cfg(not(feature = "qemu"))]
                 {
@@ -1050,7 +1048,7 @@ impl SocConfig {
     /// An invalid override for a builtin name (say a typo'd field in a user
     /// `stm32f103.soc.toml`) therefore fails the resolution rather than being
     /// silently skipped in favour of the builtin.
-    pub fn resolve(spec: &str) -> Result<SocConfig, SocError> {
+    pub fn resolve(spec: &str) -> Result<Self, SocError> {
         let (backend_tok, part) = spec
             .split_once(':')
             .ok_or_else(|| SocError::BadSpec(spec.to_string()))?;
@@ -1159,9 +1157,9 @@ impl SocConfig {
     pub fn backend(&self) -> Backend {
         match self {
             #[cfg(feature = "renode")]
-            SocConfig::Renode(_) => Backend::Renode,
+            Self::Renode(_) => Backend::Renode,
             #[cfg(feature = "qemu")]
-            SocConfig::Qemu(_) => Backend::Qemu,
+            Self::Qemu(_) => Backend::Qemu,
             // A build with no backend feature has no variants, but `&Self` is
             // still considered inhabited, so the match needs an arm to compile.
             #[cfg(not(any(feature = "renode", feature = "qemu")))]

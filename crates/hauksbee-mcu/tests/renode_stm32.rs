@@ -271,7 +271,7 @@ fn stm32_uart_command_response() {
 ///
 /// This test does NOT need firmware: it verifies the Renode machine setup
 /// (platform load + C# bridge compile + peripheral registration) succeeds
-/// without error. The on_spi_controller calls synthesise distinct per-byte
+/// without error. The `on_spi_controller` calls synthesise distinct per-byte
 /// callbacks and route them through the bridge's TCP protocol; any cross-talk
 /// would be caught by verifying each callback is only called for its own
 /// controller (tracked by Arc<Mutex<Vec<u8>>>).
