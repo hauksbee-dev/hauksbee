@@ -302,3 +302,23 @@ pub fn open_driver_reason(r: &str, v: &str, from: &str, nets: &[String]) -> Stri
          produces, then rerun."
     )
 }
+
+#[cfg(test)]
+mod tests {
+    // MIC5205-3.3 as bound: 18 V regulates (the envelope flags it), past 20 V abs max revokes.
+    #[test]
+    fn regulator_input_limit_is_the_abs_max() {
+        let reg = super::SimpleRegulator {
+            reference: "U1".into(),
+            source: hauksbee_ir::DeviceId(0),
+            input: super::NodeId::GROUND,
+            min_in_v: 3.65,
+            max_in_v: 20.0,
+            dropout_v: Some(0.35),
+            adj_return: None,
+            helpers: Vec::new(),
+        };
+        let ok = |v| super::headroom_ok(&reg, v);
+        assert_eq!([3.6, 18.0, 21.0].map(ok), [false, true, false]);
+    }
+}

@@ -107,7 +107,7 @@ latch_hold        = 0.3       # made ngspice's SW re-close on band re-entry and
 "8" = "vcc"
 
 [models.ratings]
-max_voltage_v = 16.0        # VCC, Recommended Operating Conditions (18 V abs max)
+max_voltage_v = 18.0        # VCC, Absolute Maximum Ratings (4.5-16 V operating: see the envelope above)
 max_current_a = 0.2         # output source/sink, 200 mA
 max_junction_temp_c = 125.0
 

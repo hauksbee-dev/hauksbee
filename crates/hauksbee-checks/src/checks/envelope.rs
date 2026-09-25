@@ -575,6 +575,25 @@ basis = "Recommended Operating Conditions, Table 1, VDD row"
     }
 
     #[test]
+    fn builtin_supply_between_recommended_and_abs_max_is_not_clean() {
+        use Severity::{High, Medium};
+        for (value, vin, volts, want) in [
+            ("MIC5205-3.3", "1", 18.0, Medium),
+            ("MIC5205-3.3", "1", 21.0, High),
+            ("MCP73831", "4", 6.5, Medium),
+            ("BL4054B-42TPRN", "4", 8.0, Medium),
+            ("LTC4020EUHFPBF", "36", 58.0, Medium),
+            ("NE555", "8", 17.0, Medium),
+        ] {
+            let b = board(&[(2, "VIN")], vec![part("U1", value, vec![pin(vin, 2)])]);
+            let drives = BTreeMap::from([("VIN".to_string(), volts)]);
+            let report = envelope_lint_with_drives(&b, &ModelLibrary::builtin(), &drives);
+            let got = report.of_check(LintCheck::OperatingEnvelope).next();
+            assert_eq!(got.map(|f| f.severity), Some(want), "{value} {volts} V");
+        }
+    }
+
+    #[test]
     fn unknown_rail_abstains_once_per_net() {
         let b = board(
             &[(1, "GND"), (2, "UNNAMED_SUPPLY")],

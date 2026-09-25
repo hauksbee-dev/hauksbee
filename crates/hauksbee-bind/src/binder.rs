@@ -7386,6 +7386,7 @@ style = "i2c_pointer"
         for case in [
             "card | AMS1117-3.3 | 3.3 | OUT 0 | 1.3 | 4.699 | 15 | at least 22 µF output capacitance",
             "offset | LM7905 | -5 | OUT RET | 1.1 | 6.1 | 25 | does not state the output-capacitor",
+            "abs max | MIC5205-3.3 | 3.3 | OUT 0 | 0.35 | 3.65 | 20 | does not state the output-capacitor",
             "bare | - | 5 | 0 RET | - | 5 | inf | -",
         ] {
             let [_, card, vout, pins, dropout_v, min_in_v, max_in_v, token] =

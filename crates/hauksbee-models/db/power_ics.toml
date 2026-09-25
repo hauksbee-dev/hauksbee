@@ -131,8 +131,17 @@ iq_a = 0.001
 "36" = "pvin"      # PVIN, power input
 
 [models.ratings]
-max_voltage_v = 55.0      # maximum operating input; absolute maximum is 60 V (Rev E datasheet)
+max_voltage_v = 60.0      # Absolute Maximum Ratings, PVIN/SENSVIN -0.3 V to 60 V (Rev E)
 max_junction_temp_c = 125.0
+
+# The 4.5-55 V operating range is the check that fires below the 60 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "pvin"
+min_v = 4.5
+max_v = 55.0
+abs_max_v = 60.0
+basis = "ADI LTC4020 Rev E, Features and Electrical Characteristics, VIN operating range 4.5 V to 55 V; Absolute Maximum Ratings, PVIN and SENSVIN -0.3 V to 60 V"
 
 [models.behavioral.converter]
 topology = "buck_boost"
@@ -723,10 +732,18 @@ iq_a      = 0.00051   # ISS typ while charging (53 uA typ once complete)
 
 [models.ratings]
 max_current_a = 0.5          # the practical ceiling at RPROG = 2.0 kOhm
-max_voltage_v = 6.0          # recommended operating ceiling (abs max VDD 7.0 V);
-                             # a check should fire on the recommended limit
+max_voltage_v = 7.0          # Absolute Maximum Ratings, VDD 7.0 V
 max_junction_temp_c = 125.0  # TJ operating max (TSD trips at 150 C typ)
 theta_ja_c_per_w = 230.0     # 5-lead SOT-23, 4-layer JC51-7 board
+
+# The 3.75-6 V operating range is the check that fires below the 7 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 3.75
+max_v = 6.0
+abs_max_v = 7.0
+basis = "Microchip MCP73831/2 DS21984A, DC Characteristics, supply voltage VDD 3.75 V to 6 V; Absolute Maximum Ratings, VDD 7.0 V"
 
 # Same programming law as the MCP73833 below: datasheet section 4.2 states
 # I_REG = 1000 V / R_PROG, and a floating PROG disables charging entirely, so an
@@ -802,9 +819,18 @@ iq_a      = 0.002     # ISS typ while charging (150 uA typ once complete)
 
 [models.ratings]
 max_current_a = 1.0
-max_voltage_v = 6.0          # recommended ceiling (abs max VDD 7.0 V)
+max_voltage_v = 7.0          # Absolute Maximum Ratings, VDD 7.0 V
 max_junction_temp_c = 125.0
 theta_ja_c_per_w = 113.0     # MSOP-10, 4-layer JC51-7 board
+
+# The 3.75-6 V operating range is the check that fires below the 7 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 3.75
+max_v = 6.0
+abs_max_v = 7.0
+basis = "Microchip MCP73833/4 DS20002005C, DC Characteristics, supply voltage VDD 3.75 V to 6 V; Absolute Maximum Ratings, VDD 7.0 V"
 
 # The 1 A rating above is the CEILING. The board picks the charge current with
 # one resistor on PROG, so a rail-current check must read that resistor rather
@@ -880,12 +906,20 @@ iq_a      = 0.002     # ICC typ while charging (100 uA typ standby)
 
 [models.ratings]
 max_current_a = 0.8          # programmable ceiling
-max_voltage_v = 6.5          # recommended operating ceiling. The part's own OVP
-                             # trips at 7.0 V typ and abs max is 10 V, but a
-                             # check should fire at the recommended limit.
+max_voltage_v = 10.0         # Absolute Maximum Ratings, VCC -0.3 to +10 V. The
+                             # part's own OVP trips at 7.0 V typ.
 max_junction_temp_c = 125.0
 theta_ja_c_per_w = 250.0     # SOT23-5, ~1 square of 1 oz copper (Note 4)
 theta_jc_c_per_w = 130.0     # SOT23-5
+
+# The 4.25-6.5 V recommended range is the check that fires below the 10 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 4.25
+max_v = 6.5
+abs_max_v = 10.0
+basis = "Shanghai Belling BL4054/BL4054B Rev 1.5, Recommended Operating Conditions, VCC 4.25 V to 6.5 V; Absolute Maximum Ratings, VCC -0.3 V to +10 V"
 
 # Datasheet electrical characteristics: ICHG(A) = 1000 V / RPROG(ohms).
 [models.current_program]

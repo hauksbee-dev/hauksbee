@@ -853,11 +853,19 @@ iq_a      = 80.0e-6  # Ground Pin Current typ @ IL = 100 uA (125 uA max). The
 
 [models.ratings]
 max_current_a = 0.15         # guaranteed output current
-max_voltage_v = 16.0         # operating ceiling (abs max is +-20 V); a check
-                             # should fire on the operating limit
+max_voltage_v = 20.0         # Absolute Maximum Ratings, input voltage VIN -20 V to +20 V
 max_junction_temp_c = 125.0
 theta_ja_c_per_w = 220.0     # SOT-23-5, minimum footprint (170 on square clad)
 theta_jc_c_per_w = 130.0
+
+# The 2.5-16 V operating range is the check that fires below the 20 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 2.5
+max_v = 16.0
+abs_max_v = 20.0
+basis = "Microchip MIC5205 DS20005785B, Operating Ratings, input voltage VIN 2.5 V to 16 V; Absolute Maximum Ratings, input voltage VIN -20 V to +20 V"
 
 # ── MCP1700-3302E ────────────────────────────────────────────────────────────
 # Microchip 250 mA, 1.6 uA-IQ CMOS LDO. The low-quiescent part a coin-cell
