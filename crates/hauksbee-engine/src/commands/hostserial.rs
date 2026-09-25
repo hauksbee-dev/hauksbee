@@ -122,6 +122,9 @@ pub struct SerialSessionConfig {
     /// Solver chunk override in microseconds (`--chunk-us`), applied the same way
     /// the headless report path applies it.
     pub chunk_us: Option<f64>,
+    /// Run past `seconds` while this is alive: an in-process host (a test peer)
+    /// holds the `Arc` until its exchange is done, so no wall budget can cut it off.
+    pub hold: Option<std::sync::Weak<()>>,
 }
 
 impl Default for SerialSessionConfig {
@@ -134,6 +137,7 @@ impl Default for SerialSessionConfig {
             end_after_idle_wall: None,
             mcu: None,
             chunk_us: None,
+            hold: None,
         }
     }
 }
@@ -538,7 +542,7 @@ pub fn run_session(
     // Wall instant of the last observable host activity, for
     // `end_after_idle_wall`.
     let mut last_activity_wall = 0.0f64;
-    while t < seconds {
+    while t < seconds || cfg.hold.as_ref().is_some_and(|h| h.strong_count() > 0) {
         report_events(&mut endpoint, &mut summary, announce);
 
         let wall = run_started.elapsed().as_secs_f64();

@@ -29,7 +29,11 @@ use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 use std::io::{Read, Write};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
+
+/// Bound on every wait below. Each wait ends on an event (bytes, a narration
+/// line); under load a paced sim falls far behind the wall, so only a hang hits this.
+const PATIENCE: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Bare Nano board: the co-sim needs a bound MCU, and the UART is intercepted
 /// inside the core rather than through copper, so no serial net is required.
@@ -132,7 +136,7 @@ fn open_peer(path: &str) -> std::fs::File {
 /// Push every byte, waiting out the pty's finite kernel buffer.
 fn write_all_to_board(peer: &mut std::fs::File, bytes: &[u8]) {
     let mut sent = 0;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + PATIENCE;
     while sent < bytes.len() {
         assert!(
             std::time::Instant::now() < deadline,
@@ -150,11 +154,11 @@ fn write_all_to_board(peer: &mut std::fs::File, bytes: &[u8]) {
     }
 }
 
-/// Read replies until `n` bytes have arrived or `budget` expires.
-fn read_from_board(peer: &mut std::fs::File, n: usize, budget: std::time::Duration) -> Vec<u8> {
+/// Read replies until `n` bytes have arrived.
+fn read_from_board(peer: &mut std::fs::File, n: usize) -> Vec<u8> {
     let mut got = Vec::new();
     let mut buf = [0u8; 1024];
-    let deadline = std::time::Instant::now() + budget;
+    let deadline = std::time::Instant::now() + PATIENCE;
     while got.len() < n && std::time::Instant::now() < deadline {
         match peer.read(&mut buf) {
             Ok(0) => std::thread::sleep(std::time::Duration::from_millis(1)),
@@ -168,13 +172,13 @@ fn read_from_board(peer: &mut std::fs::File, n: usize, budget: std::time::Durati
     got
 }
 
-/// Read until `wanted` appears or the budget expires. A reconnecting peer may
+/// Read until `wanted` appears. A reconnecting peer may
 /// first receive a conservatively retained byte from the peer that just closed,
 /// so a fixed-length read cannot prove that the new command was served.
-fn read_through_byte(peer: &mut std::fs::File, wanted: u8, budget: std::time::Duration) -> Vec<u8> {
+fn read_through_byte(peer: &mut std::fs::File, wanted: u8) -> Vec<u8> {
     let mut got = Vec::new();
     let mut buf = [0u8; 1024];
-    let deadline = std::time::Instant::now() + budget;
+    let deadline = std::time::Instant::now() + PATIENCE;
     while !got.contains(&wanted) && std::time::Instant::now() < deadline {
         match peer.read(&mut buf) {
             Ok(0) => std::thread::sleep(std::time::Duration::from_millis(1)),
@@ -188,18 +192,17 @@ fn read_through_byte(peer: &mut std::fs::File, wanted: u8, budget: std::time::Du
     got
 }
 
-/// Pull the device path out of the session's own narration, which is the only
-/// thing a host tool ever gets to see.
-fn endpoint_from(lines: &mpsc::Receiver<String>) -> String {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
-        if let Ok(line) = lines.recv_timeout(std::time::Duration::from_millis(200)) {
-            if let Some(rest) = line.strip_prefix("host serial: pty on ") {
-                return rest.trim().to_string();
-            }
+/// Wait for the session to narrate a line starting `prefix`, and return its
+/// remainder: the device path, or a detach, is all a host tool ever gets to see.
+fn await_line(lines: &mpsc::Receiver<String>, prefix: &str) -> String {
+    loop {
+        let line = lines
+            .recv_timeout(PATIENCE)
+            .unwrap_or_else(|_| panic!("no `{prefix}` line"));
+        if let Some(rest) = line.strip_prefix(prefix) {
+            return rest.trim().to_string();
         }
     }
-    panic!("the session never printed a device path");
 }
 
 /// The headline case: 256 distinct bytes in ONE host write, four times simavr's
@@ -215,22 +218,26 @@ fn host_record_longer_than_the_rx_fifo_round_trips() {
     let record: Vec<u8> = (0u16..256).map(|b| b as u8).collect();
     let want = record.clone();
 
+    let hold = Arc::new(());
+    let held = Some(Arc::downgrade(&hold));
     let peer = std::thread::spawn(move || {
-        let path = endpoint_from(&rx);
+        let path = await_line(&rx, "host serial: pty on ");
         let mut peer = open_peer(&path);
         // The banner lands first; it is not part of the echo stream.
-        let banner = read_from_board(&mut peer, 1, std::time::Duration::from_secs(10));
+        let banner = read_from_board(&mut peer, 1);
         write_all_to_board(&mut peer, &want);
-        let echoed = read_from_board(&mut peer, want.len(), std::time::Duration::from_secs(20));
+        let echoed = read_from_board(&mut peer, want.len());
         result_tx
             .send((banner, echoed))
             .expect("report the host's complete read");
+        // The exchange is done: the session may end.
+        drop(hold);
         // Keep the slave open until the session has flushed and accounted for
         // its final byte. Closing here used to race Linux's post-write PTY
         // liveness probe: the host had already read the byte, but the endpoint
         // conservatively retained and then counted it as dropped.
         release_rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(PATIENCE)
             .expect("session finalization releases the peer");
     });
 
@@ -239,9 +246,10 @@ fn host_record_longer_than_the_rx_fifo_round_trips() {
         let _ = tx.send(line.to_string());
     };
     let cfg = SerialSessionConfig {
-        // Wait for the peer so the record is sent inside the run, and give the
-        // 256-byte round trip (~44 ms of emulated serial time) room.
-        wait_secs: Some(20.0),
+        // Wait for the peer so the record is sent inside the run; the hold
+        // keeps the run going through the 256-byte round trip, however late.
+        wait_secs: Some(PATIENCE.as_secs_f64()),
+        hold: held,
         ..Default::default()
     };
     let summary = run_session(&mut engine, 2.0, &cfg, &mut say).expect("serial session");
@@ -296,20 +304,24 @@ fn late_peer_still_receives_the_boot_banner() {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let (release_tx, release_rx) = mpsc::channel::<()>();
 
+    let hold = Arc::new(());
+    let held = Some(Arc::downgrade(&hold));
     let peer = std::thread::spawn(move || {
-        let path = endpoint_from(&rx);
+        let path = await_line(&rx, "host serial: pty on ");
         // Long enough that the firmware has booted and sent its banner into a
         // port nobody is holding.
         std::thread::sleep(std::time::Duration::from_millis(400));
         let mut peer = open_peer(&path);
-        let banner = read_from_board(&mut peer, 1, std::time::Duration::from_secs(5));
+        let banner = read_from_board(&mut peer, 1);
         write_all_to_board(&mut peer, b"Z");
-        let echoed = read_from_board(&mut peer, 1, std::time::Duration::from_secs(5));
+        let echoed = read_from_board(&mut peer, 1);
         result_tx
             .send((banner, echoed))
             .expect("report the late peer's reads");
+        // The exchange is done: the session may end.
+        drop(hold);
         release_rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(PATIENCE)
             .expect("session finalization releases the late peer");
     });
 
@@ -319,8 +331,11 @@ fn late_peer_still_receives_the_boot_banner() {
     };
     // No --serial-wait: the run starts immediately, which is what makes the peer
     // late.
-    let summary = run_session(&mut engine, 2.0, &SerialSessionConfig::default(), &mut say)
-        .expect("serial session");
+    let cfg = SerialSessionConfig {
+        hold: held,
+        ..Default::default()
+    };
+    let summary = run_session(&mut engine, 2.0, &cfg, &mut say).expect("serial session");
     let (banner, echoed) = result_rx
         .recv_timeout(std::time::Duration::from_secs(1))
         .expect("late peer completed its reads");
@@ -349,26 +364,30 @@ fn peer_disconnect_mid_run_leaves_the_cosim_running() {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let (release_tx, release_rx) = mpsc::channel::<()>();
 
+    let hold = Arc::new(());
+    let held = Some(Arc::downgrade(&hold));
     let peer = std::thread::spawn(move || {
-        let path = endpoint_from(&rx);
+        let path = await_line(&rx, "host serial: pty on ");
         let mut first = open_peer(&path);
-        let _banner = read_from_board(&mut first, 1, std::time::Duration::from_secs(10));
+        let _banner = read_from_board(&mut first, 1);
         write_all_to_board(&mut first, b"A");
-        let first_echo = read_from_board(&mut first, 1, std::time::Duration::from_secs(5));
+        let first_echo = read_from_board(&mut first, 1);
         drop(first);
 
-        // Give the session a moment to notice the hangup, then come back.
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Come back once the session has noticed the hangup, not after a nap.
+        await_line(&rx, "host serial: peer DETACHED");
         let mut second = open_peer(&path);
         write_all_to_board(&mut second, b"B");
-        let second_stream = read_through_byte(&mut second, b'B', std::time::Duration::from_secs(5));
+        let second_stream = read_through_byte(&mut second, b'B');
         result_tx
             .send((first_echo, second_stream))
             .expect("report both peers' reads");
+        // The exchange is done: the session may end.
+        drop(hold);
         // The second peer is the live peer at session teardown. Keep it open
         // until the endpoint has flushed and credited the final echo.
         release_rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(PATIENCE)
             .expect("session finalization releases the second peer");
     });
 
@@ -377,7 +396,8 @@ fn peer_disconnect_mid_run_leaves_the_cosim_running() {
         let _ = tx.send(line.to_string());
     };
     let cfg = SerialSessionConfig {
-        wait_secs: Some(20.0),
+        wait_secs: Some(PATIENCE.as_secs_f64()),
+        hold: held,
         ..Default::default()
     };
     let summary = run_session(&mut engine, 3.0, &cfg, &mut say).expect("serial session");
