@@ -230,7 +230,7 @@ fn a_suppressed_rail_with_no_declared_supply_reads_dead() {
 
 #[test]
 fn a_stimulus_outranks_the_rail_inferred_from_its_nets_name() {
-    // Held-out c17: the name-inferred ideal 5 V rail won against the spec's own
+    // Regression: the name-inferred ideal 5 V rail won against the spec's own
     // stimulus, so a commanded step never reached the net and read back clean.
     let (_dir, spec) = blinky_spec(
         "stepped",

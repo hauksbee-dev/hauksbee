@@ -76,7 +76,7 @@ fn vka_in(case: &str, rs: &str, div: bool, refnet: &str, (min, max): (f64, f64),
     support::row(&r, "vka").passed
 }
 
-/// The held-out prediction challenge's own acceptance band for the 5 V setter.
+/// The prediction challenge's frozen acceptance band for the 5 V setter.
 const ACCEPT_5V: (f64, f64) = (4.835, 5.085);
 
 #[test]
