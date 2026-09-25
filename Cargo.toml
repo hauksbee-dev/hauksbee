@@ -49,20 +49,6 @@ categories = ["simulation", "science", "development-tools::testing"]
 # since a wrong MSRV breaks downstream builds for reasons the author cannot see.
 rust-version = "1.92"
 
-# Clippy runs under `-D warnings` in CI, so anything not listed here fails the
-# build. The list below is the debt that existed when the gate went up: real
-# style findings worth fixing, allowed for now so the gate can start catching
-# NEW problems today instead of waiting on a burn-down.
-#
-# Two rules for this list. It only shrinks, and a lint leaves it by being fixed,
-# never by being moved here to make a build pass. Some of these are riskier than
-# they look: `cargo clippy --fix` on clone_on_copy and the Default-initialiser
-# lints once rewrote the solver into silently returning a collapsed rail, so
-# they get fixed by hand, with the tests watched.
-[workspace.lints.clippy]
-needless_range_loop = "allow"
-type_complexity = "allow"
-
 [workspace.dependencies]
 # The forge-* crates are VENDORED into this repo (vendor/kicad-forge/crates/*)
 # so a fresh clone builds with no sibling checkout and no network. kicad-forge

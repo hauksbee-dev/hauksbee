@@ -129,8 +129,7 @@ jobs:
           cargo test --locked -p hauksbee-models --lib relevance_selection_ -- --nocapture
           cargo test --locked -p hauksbee-mcu --lib hostserial::tests::pty_peer_close_after_probe_cannot_deliver_output_to_the_guard -- --exact --nocapture
           cargo test --locked -p hauksbee-ci --test it spec_and_assertions -- --nocapture
-      # The allow-list of known findings lives in Cargo.toml's
-      # [workspace.lints.clippy]. Anything outside it fails here.
+      # No Clippy lint is allowed workspace-wide, so any finding fails here.
       # Tests are compiled and executed by the test jobs with warnings denied;
       # asking Clippy to compile hundreds of integration executables here made
       # the same test graph pay a second compiler/link pass. Clippy owns shipped

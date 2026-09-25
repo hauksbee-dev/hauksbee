@@ -79,9 +79,6 @@ serde_json = { workspace = true }
 # archives in scratch dirs.
 tempfile = { workspace = true }
 
-[lints]
-workspace = true
-
 [[test]]
 name = "it"
 path = "tests/main.rs"

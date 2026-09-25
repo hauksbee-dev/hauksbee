@@ -78,9 +78,6 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 yaml-rust2 = { version = "0.11", default-features = false }
 tempfile = { workspace = true }
 
-[lints]
-workspace = true
-
 [[test]]
 name = "it"
 path = "tests/main.rs"

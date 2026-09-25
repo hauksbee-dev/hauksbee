@@ -52,9 +52,6 @@ hauksbee-engine = { version = "0.1.0-beta.6", path = "../hauksbee-engine", defau
 hauksbee-ci = { version = "0.1.0-beta.6", path = "../hauksbee-ci", default-features = false }
 hauksbee-mcu = { version = "0.1.0-beta.6", path = "../hauksbee-mcu", default-features = false }
 
-[lints]
-workspace = true
-
 [[test]]
 name = "it"
 path = "tests/main.rs"

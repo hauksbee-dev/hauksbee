@@ -49,9 +49,6 @@ tar = "0.4"
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }
 
-[lints]
-workspace = true
-
 [[test]]
 name = "it"
 path = "tests/main.rs"

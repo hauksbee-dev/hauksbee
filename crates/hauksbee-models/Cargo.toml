@@ -41,9 +41,6 @@ forge-sexpr = { workspace = true }
 # dev-dependency cycle (extract depends on this crate).
 hauksbee-testkit = { path = "../hauksbee-testkit" }
 
-[lints]
-workspace = true
-
 [[test]]
 name = "it"
 path = "tests/main.rs"

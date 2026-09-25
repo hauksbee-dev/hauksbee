@@ -44,9 +44,6 @@ tokio = { version = "1.52.3", features = [
 tokio-stream = "0.1"
 tower-http = { version = "0.6.11", features = ["fs", "compression-gzip"] }
 
-[lints]
-workspace = true
-
 [[test]]
 name = "it"
 path = "tests/main.rs"

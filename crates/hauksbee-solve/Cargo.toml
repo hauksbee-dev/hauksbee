@@ -54,9 +54,6 @@ criterion = { version = "0.5", default-features = false, features = [
 name = "graded_boards"
 harness = false
 
-[lints]
-workspace = true
-
 [[test]]
 name = "it"
 path = "tests/main.rs"
