@@ -4,6 +4,7 @@
 
 ## Checks
 
+- [ ] Every commit is signed off (`git commit -s`; see "Licensing of contributions" in CONTRIBUTING.md)
 - [ ] `cargo fmt --all`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo test --workspace`

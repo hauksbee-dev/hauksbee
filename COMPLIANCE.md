@@ -109,7 +109,9 @@ and the "Records adapted from KiCad" section of
 
 **Contributions.** There is no contributor licence agreement. A contribution
 is licensed to the project under the repository's own licence (Apache-2.0,
-section 5: inbound = outbound), and contributors keep their copyright.
+section 5: inbound = outbound), and contributors keep their copyright. Each
+pull-request commit carries a Developer Certificate of Origin sign-off for its
+author, enforced by the `dco` workflow.
 
 Questions this page does not answer, or a redistribution shape it does not
 cover: open an issue, or use the contact in [`SECURITY.md`](SECURITY.md) if the

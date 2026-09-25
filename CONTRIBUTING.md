@@ -343,10 +343,15 @@ The short version:
 
 ## Licensing of contributions
 
-There is no CLA and nothing to sign. By opening a pull request you license
-your contribution under the repository's licence (Apache-2.0, section 5:
-inbound = outbound), and you keep your copyright. Only submit work you have
-the right to license that way.
+There is no CLA. By opening a pull request you license your contribution
+under the repository's licence (Apache-2.0, section 5: inbound = outbound), and
+you keep your copyright. Only submit work you have the right to license that way.
+
+Every commit certifies that with a sign-off, per the Developer Certificate of
+Origin (https://developercertificate.org): commit with `git commit -s`, which
+adds `Signed-off-by: Your Name <you@example.com>` for the commit's author. The
+`dco` check fails a pull request with an unsigned commit; `git rebase --signoff
+main` fixes a branch.
 
 ## Reporting bugs
 
