@@ -384,6 +384,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             || entry.peripheral.is_some()
             || entry.peripheral_power.is_some();
         p.require(!behaves, || "identity-only model cannot also declare logic, behavioral physics, current_program, a firmware peripheral, or peripheral power; remove identity_only only after that behavior is validated".into());
+        p.0.extend(crate::param_names::needless_abstention(entry));
     }
 
     if let Some(peripheral) = &entry.peripheral {

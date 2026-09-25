@@ -1490,13 +1490,14 @@ whose recommended minimum and maximum are both published. Emit rail_order for
 each explicit relation such as VCCA <= VCCB. From an op-amp's or comparator's
 VICR/CMVR row, emit one input_common_mode per channel: `supply` its positive
 supply, `inputs` that channel's two inputs, and `headroom_v` the test supply
-minus the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+). Pins,
-supplies and inputs are roles from [models.pins], never pad numbers. Every entry
-requires `basis` naming the exact table and row. Add `abs_max_v` only when the
-absolute-maximum table publishes it. There is no envelope without a table row to
-cite: omitting this section is correct when the datasheet lacks the necessary
-tables. Never infer a bound from a typical value, application schematic, or
-family convention.
+minus the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+), read
+from the 25 °C row when a full-temperature-range row is also printed, and `basis`
+names that row. Pins, supplies and inputs are roles from [models.pins], never pad
+numbers. Every entry requires `basis` naming the exact table and row. Add
+`abs_max_v` only when the absolute-maximum table publishes it. There is no
+envelope without a table row to cite: omitting this section is correct when the
+datasheet lacks the necessary tables. Never infer a bound from a typical value,
+application schematic, or family convention.
 
 WHERE TO LOOK AND HOW TO READ IT:
 - Supply bounds belong in Recommended Operating Conditions.
@@ -1605,12 +1606,17 @@ IMPORTANT RULES:
    Record every fT, Cob/Ccb, Cib/Ceb, Ciss, Crss, CT, trr, V(BR) and VZ row as a
    characteristic with its symbol, unit and bias: Hauksbee derives tf, cjc, cje,
    cgd, cgs, cjo, tt and bv/ibv from them.
-3. If a required param is genuinely absent and cannot be derived or fitted, do not
-   estimate it. If the kind's params above allow an `unknown` record for it, write
-   that record; otherwise emit an identity-only card (`identity_only = true`,
-   `warning`, `unlocked_by`) still carrying every field the datasheet states, and
-   name the missing fact as `ABSTAIN: datasheet does not state ...` in the
-   description or an unknown source record. A named abstention is correct; a guessed field is wrong.
+3. Identity-only is a last resort. A typ-only or max-only row is usable, cited
+   as printed; Hauksbee fits diode is/n/rs to VF rows and a MOSFET's vto/kp come
+   from VGS(th) and RDS(on) rows as above, so the checker refuses an identity-only
+   card whose cited rows suffice. Unnumbered leads take pad names A/K, G/D/S or
+   B/C/E. A required param genuinely absent and not derivable or fittable is never
+   estimated: one missing param takes an `unknown` record where the kind's params
+   above allow one. Only when the kind's behaviour cannot be written even so, emit
+   an identity-only card (`identity_only = true`, `warning`, `unlocked_by`) still
+   carrying every field the datasheet states, and name the missing fact as
+   `ABSTAIN: datasheet does not state ...` in the description or an unknown source
+   record. A named abstention is correct; a guessed field is wrong.
 4. For every real behavior the selected schema and params do not represent,
    the description must say `does not model ...` and name that behavior. Do not
    let a partial card read as a complete model of the component. Never delete a
@@ -3302,6 +3308,9 @@ mod tests {
         assert!(comparator.contains("hysteresis = 0.0") && comparator.contains("leak_s: 0 to 1"));
         assert!(comparator.contains("(VT+ minus VT-), never the input offset"));
         assert!(comparator.contains("VICR/CMVR row, emit one input_common_mode per channel"));
+        assert!(comparator.contains("from the 25 °C row when a full-temperature-range row"));
+        assert!(bjt.contains("Identity-only is a last resort. A typ-only or max-only row"));
+        assert!(bjt.contains("pad names A/K, G/D/S or\n   B/C/E") && bjt.contains("one missing"));
         assert!(comparator.contains("each unit's signal roles _a to _d (out_a, in_minus_a"));
         assert!(build_prompt("AMP_FIXTURE", "opamp", "x").contains("never the supply or ground"));
         assert!(comparator.contains("leak_s = output-off conductance (IOH / VOH) (S)"));
