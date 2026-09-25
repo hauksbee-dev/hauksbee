@@ -17,6 +17,7 @@
 use hauksbee_ir::evidence::{Assumption, ModelSource, ModelSourceTier};
 use hauksbee_models::Confidence;
 use serde::Serialize;
+use std::fmt::Write as _;
 
 /// What a component turned into during binding.
 #[derive(Debug, Clone, PartialEq)]
@@ -428,19 +429,18 @@ impl BindReport {
         models = pad(&models, w_mod);
         confs = pad(&confs, w_conf);
         outs = pad(&outs, w_out);
-        out.push_str(&format!(
-            "│ {refs} │ {vals} │ {models} │ {confs} │ {outs} │\n"
-        ));
+        let _ = writeln!(out, "│ {refs} │ {vals} │ {models} │ {confs} │ {outs} │");
         out.push_str(&rule("├", "┼", "┤"));
         for (r, v, m, c, o) in &cells {
-            out.push_str(&format!(
-                "│ {} │ {} │ {} │ {} │ {} │\n",
+            let _ = writeln!(
+                out,
+                "│ {} │ {} │ {} │ {} │ {} │",
                 pad(r, w_ref),
                 pad(v, w_val),
                 pad(m, w_mod),
                 pad(c, w_conf),
                 pad(o, w_out),
-            ));
+            );
         }
         out.push_str(&rule("└", "┴", "┘"));
 
@@ -468,10 +468,11 @@ impl BindReport {
                         kinds.push(format!("{n} {kind}{}", if n == 1 { "" } else { "s" }));
                     }
                 }
-                out.push_str(&format!(
-                    "{total} passives bound by footprint/value fallback: {}. Use --verbose to show every bind row.\n",
+                let _ = writeln!(
+                    out,
+                    "{total} passives bound by footprint/value fallback: {}. Use --verbose to show every bind row.",
                     kinds.join(", ")
-                ));
+                );
             }
         }
 
@@ -484,8 +485,9 @@ impl BindReport {
                 format!("{n} {many}")
             }
         };
-        out.push_str(&format!(
-            "\n{} of {} non-ignored components resolved ({:.0}%); {}, {} digital, {}, {}\n",
+        let _ = writeln!(
+            out,
+            "\n{} of {} non-ignored components resolved ({:.0}%); {}, {} digital, {}, {}",
             self.resolved_count(),
             self.non_ignored_count(),
             self.resolved_fraction() * 100.0,
@@ -493,12 +495,12 @@ impl BindReport {
             self.count_where(|o| matches!(o, BindOutcome::Digital { .. })),
             plural(self.warnings().count(), "warning", "warnings"),
             plural(guess_count, "pin-role guess", "pin-role guesses"),
-        ));
+        );
         for (r, w) in self.warnings() {
-            out.push_str(&format!("  ⚠ {r}: {w}\n"));
+            let _ = writeln!(out, "  ⚠ {r}: {w}");
         }
         for (r, g) in self.guess_warnings() {
-            out.push_str(&format!("  ? {r}: {g}\n"));
+            let _ = writeln!(out, "  ? {r}: {g}");
         }
         // Legend for the Conf column, shown only when a row is not `exact` so a
         // first-timer knows whether to worry about a `guessed`/`family` row.
@@ -803,7 +805,6 @@ impl BindSummary {
     /// lists each affected active-path part.
     #[must_use]
     pub fn render_banner(&self) -> String {
-        use std::fmt::Write as _;
         let mut s = String::new();
         let mcu_state = if self.mcu_bound {
             "MCU bound"

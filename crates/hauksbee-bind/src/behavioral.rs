@@ -39,6 +39,7 @@
 //! same context. Per-state pin overrides retune the open-drain / drive legs.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use evalexpr::{ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
@@ -411,7 +412,7 @@ fn compile_law_implicit(
         if !runtime_owned {
             if let Some(v) = params.get_f64(token) {
                 // Round-trip-exact literal, parenthesised so `1/x` stays `1/(v)`.
-                out.push_str(&format!("({v:?})"));
+                let _ = write!(out, "({v:?})");
                 continue;
             }
         }
@@ -421,7 +422,7 @@ fn compile_law_implicit(
                     deps.push(hauksbee_ir::BDep::Volt(node));
                     deps.len() - 1
                 });
-                out.push_str(&format!("__d{k}"));
+                let _ = write!(out, "__d{k}");
                 continue;
             }
             // A voltage the binder did not connect: the runtime form treats it
@@ -615,23 +616,14 @@ impl BehavioralDevice {
             };
             // Internal pull to a rail.
             if let Some(ohms) = pin.pull_ohms {
-                let rail = pin.pull_to_volts.map_or_else(
-                    || {
-                        if let Some(rail_role) = &pin.pull_to {
-                            role_nodes.get(rail_role).copied()
-                        } else {
-                            None
-                        }
-                    },
-                    |v| {
-                        Some(hidden_dc_node(
-                            circuit,
-                            reference,
-                            &format!("{role}_rail"),
-                            v,
-                        ))
-                    },
-                );
+                // A literal-voltage rail stamps a hidden stiff source node.
+                let rail = pin
+                    .pull_to_volts
+                    .map(|v| hidden_dc_node(circuit, reference, &format!("{role}_rail"), v))
+                    .or_else(|| {
+                        let rail_role = pin.pull_to.as_ref()?;
+                        role_nodes.get(rail_role).copied()
+                    });
                 if let Some(rail_node) = rail {
                     circuit.add(Device::resistor(
                         format!("Rbeh_{reference}_{role}_pull"),

@@ -71,6 +71,7 @@
 //! must tie `PL_n` low in copper as the real part requires.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use evalexpr::{
@@ -748,7 +749,7 @@ fn lower_expr(e: &LogicExpr, out: &mut String) {
             out.push_str(n);
         }
         LogicExpr::Bit(n, i) => {
-            out.push_str(&format!("b_{n}_{i}"));
+            let _ = write!(out, "b_{n}_{i}");
         }
         LogicExpr::Not(a) => {
             out.push_str("(!");

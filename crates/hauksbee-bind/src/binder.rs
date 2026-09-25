@@ -4474,15 +4474,16 @@ fn bind_analog_switch(
                 "shared-select DPDT has a dynamic OE_N input; the current switch primitive has one control and cannot combine select with output-enable, so both lanes are left open rather than modeled as always enabled",
             );
         }
-        let (vcc_v, vcc_warning) = power_nets.get(circuit.node_name(vcc)).copied().map_or_else(|| (
-                DEFAULT_VCC,
-                Some(format!(
-                    "{} ({}): shared-select DPDT VCC net '{}' has no resolved rail voltage; modeling select thresholds against an assumed {DEFAULT_VCC} V rail",
-                    comp.reference,
-                    comp.value,
-                    circuit.node_name(vcc),
-                )),
-            ), |value| (value, None));
+        let rail = power_nets.get(circuit.node_name(vcc)).copied();
+        let vcc_warning = rail.is_none().then(|| {
+            format!(
+                "{} ({}): shared-select DPDT VCC net '{}' has no resolved rail voltage; modeling select thresholds against an assumed {DEFAULT_VCC} V rail",
+                comp.reference,
+                comp.value,
+                circuit.node_name(vcc),
+            )
+        });
+        let vcc_v = rail.unwrap_or(DEFAULT_VCC);
         for (lane, com, s0, s1) in [(1, com_1, s0_1, s1_1), (2, com_2, s0_2, s1_2)] {
             let name = format!("{}_l{lane}", comp.reference);
             stamp_spdt(
@@ -4528,23 +4529,19 @@ fn bind_analog_switch(
         // reintroduces the very "com<->s0 permanently open" bug the threshold
         // math above fixes. Fall back to DEFAULT_VCC but SAY SO, matching the
         // passive-array convention warning.
-        let (vcc_v, vcc_warning) = power_nets.get(circuit.node_name(vcc)).copied().map_or_else(
-            || {
-                (
-                    DEFAULT_VCC,
-                    Some(format!(
-                        "{} ({}): analog-switch VCC net '{}' has no resolved rail voltage; \
-                     modeling its SPDT thresholds against an assumed {DEFAULT_VCC} V rail; \
-                     on a lower-voltage board the common<->s0 throw may read as open, \
-                     so verify the switch's actual supply",
-                        comp.reference,
-                        comp.value,
-                        circuit.node_name(vcc),
-                    )),
-                )
-            },
-            |v| (v, None),
-        );
+        let rail = power_nets.get(circuit.node_name(vcc)).copied();
+        let vcc_warning = rail.is_none().then(|| {
+            format!(
+                "{} ({}): analog-switch VCC net '{}' has no resolved rail voltage; \
+                 modeling its SPDT thresholds against an assumed {DEFAULT_VCC} V rail; \
+                 on a lower-voltage board the common<->s0 throw may read as open, \
+                 so verify the switch's actual supply",
+                comp.reference,
+                comp.value,
+                circuit.node_name(vcc),
+            )
+        });
+        let vcc_v = rail.unwrap_or(DEFAULT_VCC);
         let params = [ron, roff, vth];
         stamp_spdt(
             circuit,
@@ -5552,49 +5549,38 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
             // '-'-prefixed rails first: "-5V_ANALOG" must resolve negative and
             // never fall into the positive "contains 5V" branch through an
             // incidental VCC/VBUS token elsewhere in the name.
-            negative_rail_fallback(&n).map_or_else(
-                || {
-                    if let Some(v) = positive_rail_fallback(&n) {
-                        Some(v)
-                    // A supply-token-prefixed rail carries its magnitude in an embedded
-                    // voltage token ("VCC_5V", "VDD_3V3", "VDD_1V8", "VCC_15V",
-                    // "VBUS_25V"). This precise extraction MUST run before the loose
-                    // "contains 5V"/"3V3" substring heuristics below: "VCC_15V" contains
-                    // the substring "5V" and "VDD_13V3" contains "3V3", so the substring
-                    // branches misread them as 5 V / 3.3 V. embedded_rail_magnitude reads
-                    // the whole "15V"/"13V3" digit run and returns 15.0 / 13.3.
-                    } else if let Some(v) = embedded_rail_magnitude(&n) {
-                        Some(v)
-                    // Fallback for voltage-suffixed names embedded_rail_magnitude cannot
-                    // parse a numeric token from but that still carry a "5V"/"3V3"
-                    // substring next to a supply token (e.g. "VCC_5VOLTS").
-                    } else if n.contains("5V")
-                        && (n.starts_with('+')
-                            || n.contains("VCC")
-                            || n.contains("VBUS")
-                            || n.contains("VDD"))
-                    {
+            let supply_token =
+                n.starts_with('+') || n.contains("VCC") || n.contains("VBUS") || n.contains("VDD");
+            negative_rail_fallback(&n)
+                .or_else(|| positive_rail_fallback(&n))
+                // A supply-token-prefixed rail carries its magnitude in an embedded
+                // voltage token ("VCC_5V", "VDD_3V3", "VDD_1V8", "VCC_15V",
+                // "VBUS_25V"). This precise extraction MUST run before the loose
+                // "contains 5V"/"3V3" substring heuristics below: "VCC_15V" contains
+                // the substring "5V" and "VDD_13V3" contains "3V3", so the substring
+                // branches misread them as 5 V / 3.3 V. embedded_rail_magnitude reads
+                // the whole "15V"/"13V3" digit run and returns 15.0 / 13.3.
+                .or_else(|| embedded_rail_magnitude(&n))
+                // Fallback for voltage-suffixed names embedded_rail_magnitude cannot
+                // parse a numeric token from but that still carry a "5V"/"3V3"
+                // substring next to a supply token (e.g. "VCC_5VOLTS").
+                //
+                // Same gate for the 3.3 V substring fallback: a bare domain-suffixed
+                // SIGNAL net (an open-drain data line "SDA_3V3", a monitor "SENSE_3V3_MON",
+                // an interrupt "IRQ_3.3V") is NOT a rail and must stay unresolved, or
+                // Pass 3 stamps an ideal 3.3 V supply onto it and pins the line high.
+                // Genuine rails still resolve: exact names hit the match arm above,
+                // token-prefixed forms (VDD_3V3) via embedded_rail_magnitude, numeric
+                // forms (+3V3_ANALOG) via positive_rail_fallback.
+                .or_else(|| {
+                    if supply_token && n.contains("5V") {
                         Some(5.0)
-                    // Same gate for the 3.3 V substring fallback: a bare domain-suffixed
-                    // SIGNAL net (an open-drain data line "SDA_3V3", a monitor "SENSE_3V3_MON",
-                    // an interrupt "IRQ_3.3V") is NOT a rail and must stay unresolved, or
-                    // Pass 3 stamps an ideal 3.3 V supply onto it and pins the line high.
-                    // Genuine rails still resolve: exact names hit the match arm above,
-                    // token-prefixed forms (VDD_3V3) via embedded_rail_magnitude, numeric
-                    // forms (+3V3_ANALOG) via positive_rail_fallback.
-                    } else if (n.contains("3V3") || n.contains("3.3V"))
-                        && (n.starts_with('+')
-                            || n.contains("VCC")
-                            || n.contains("VBUS")
-                            || n.contains("VDD"))
-                    {
+                    } else if supply_token && (n.contains("3V3") || n.contains("3.3V")) {
                         Some(3.3)
                     } else {
                         None
                     }
-                },
-                Some,
-            )
+                })
         }
     }
 }

@@ -401,30 +401,27 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     // ("R_0201_0603Metric"), imperial 01005 → metric 0402. So the smallest
     // packages MUST be matched first, before the larger imperial tokens they
     // embed as a metric suffix, or they are silently over-rated.
-    imperial_chip_watts(|code| f.contains(code)).map_or_else(
-        || {
-            if let Some(w) = din_axial_rating(&f) {
-                // A DIN body code IS size evidence, and the codes are not interchangeable:
-                // DIN0204 is a 1/8 W body while DIN0207 is 1/4 W, so treating them alike
-                // over-rates the smaller one twofold and suppresses its overpower check.
-                // An axial footprint with no DIN code carries no size evidence and falls
-                // through to the abstention below.
-                ResistorPower {
-                    watts: Some(w),
-                    basis: ResistorPowerBasis::ThtAxial,
-                }
-            } else {
-                // The package class may be known but its SIZE is not, or nothing is known
-                // at all. Either way there is no rating to derive: a real 0603 behind a
-                // custom footprint name is a 1/10 W part, and handing it any floor either
-                // invents an overpower fault (if the floor is lower than the truth) or
-                // suppresses a real one (if it is higher). It becomes a named coverage
-                // gap instead, which is the honest form of not knowing.
-                unknown()
-            }
-        },
-        chip,
-    )
+    if let Some(w) = imperial_chip_watts(|code| f.contains(code)) {
+        return chip(w);
+    }
+    // A DIN body code IS size evidence, and the codes are not interchangeable:
+    // DIN0204 is a 1/8 W body while DIN0207 is 1/4 W, so treating them alike
+    // over-rates the smaller one twofold and suppresses its overpower check.
+    // An axial footprint with no DIN code carries no size evidence and falls
+    // through to the abstention below.
+    if let Some(w) = din_axial_rating(&f) {
+        return ResistorPower {
+            watts: Some(w),
+            basis: ResistorPowerBasis::ThtAxial,
+        };
+    }
+    // The package class may be known but its SIZE is not, or nothing is known
+    // at all. Either way there is no rating to derive: a real 0603 behind a
+    // custom footprint name is a 1/10 W part, and handing it any floor either
+    // invents an overpower fault (if the floor is lower than the truth) or
+    // suppresses a real one (if it is higher). It becomes a named coverage
+    // gap instead, which is the honest form of not knowing.
+    unknown()
 }
 
 /// Every imperial chip size code the rating table recognises, smallest body
