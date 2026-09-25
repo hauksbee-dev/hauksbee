@@ -193,6 +193,7 @@ fn examine_strap(
                 what,
                 pulls.into_iter().map(|p| p.reference).collect(),
             ),
+            // Low is reserved for this abstention: the plain and JSON renderers word it as unchecked.
             Err(why) => push(
                 Severity::Low,
                 format!(

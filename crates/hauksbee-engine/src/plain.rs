@@ -1096,6 +1096,13 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Both pins actively drive the wire. If one drives high while the other drives low, they fight: large current flows through the two chips, voltages land in a bad middle zone, and you can damage the outputs over time.".to_string(),
                 "Only one push-pull output should drive a wire. Remove one driver, add a resistor / buffer / proper bus arrangement, or change one output to open-drain with a single pull-up so they can share the line safely.".to_string(),
             ),
+            // Low is the strap lint's abstention (see `straps::examine_strap`):
+            // the level was not judged, so it must not read as a failure.
+            LintCheck::StrapPin if f.severity == Severity::Low => (
+                format!("The power-up level of a boot/strap pin on {parts} (net \"{net}\") could not be judged, so it is unchecked, not known to be wrong."),
+                format!("Some chips read certain pins at reset to decide how to boot. This pin has pull resistors both ways, so its level is set by the divider they form, and hauksbee could not compute it. Detail: {}", f.message),
+                format!("Confirm from the datasheet that the divider on \"{net}\" gives a clear high or low at reset, or supply what the detail names as missing so the check can judge it."),
+            ),
             LintCheck::StrapPin => (
                 format!("A boot/strap pin on {parts} (net \"{net}\") will not be held at the level the chip needs when it powers up."),
                 "Some chips read certain pins at the instant they reset to decide how to boot (which mode, where to load code from). If that pin is at the wrong level (or wobbling, e.g. a clock signal sits on it), the chip can boot into the wrong mode or fail to start.".to_string(),
@@ -1624,6 +1631,28 @@ mod tests {
                 !f.what.is_empty() && !f.why.is_empty() && !f.fix.is_empty(),
                 "{check:?} has an empty template field"
             );
+        }
+    }
+
+    /// A Low strap finding is the lint's abstention: worded as unchecked in the
+    /// plain and JSON renderings, while a judged failure still reads as one.
+    #[test]
+    fn strap_abstention_reads_as_unchecked_not_as_a_failure() {
+        for (severity, unchecked) in [(Severity::Low, true), (Severity::Medium, false)] {
+            let report = NetLintReport {
+                findings: vec![LintFinding {
+                    check: LintCheck::StrapPin,
+                    severity,
+                    message: "no vdd pad".to_string(),
+                    refs: vec!["U1".to_string()],
+                    nets: vec!["GPIO46".to_string()],
+                }],
+            };
+            let what = &plain_netlint(&report).findings[0].what;
+            assert_eq!(what.contains("unchecked"), unchecked, "{what}");
+            assert_eq!(what.contains("will not be held"), !unchecked, "{what}");
+            let hint = crate::result::lint_fix_hint(LintCheck::StrapPin, severity).unwrap();
+            assert_eq!(hint.contains("missing model data"), unchecked, "{hint}");
         }
     }
 

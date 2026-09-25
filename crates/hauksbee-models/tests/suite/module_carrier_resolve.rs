@@ -241,3 +241,48 @@ fn daisy_seed2_dfm_does_not_bind_the_seed_entry() {
         assert_ne!(model.id, "daisy_seed");
     }
 }
+
+/// ESP pad maps are per package (db/mcu.toml family note): the footprint picks
+/// the module or bare-chip map (spot checks from the cited datasheet tables),
+/// and an unrecognised package keeps the family identity and backend but no
+/// pad map or strap table, so no strap is examined on a wrong pad.
+#[test]
+fn esp_strap_maps_follow_the_package() {
+    for row in [
+        "ESP32-S3|QFN-56-1EP_7x7mm_P0.4mm_EP5.6x5.6mm|esp32s3_qfn56|5=gpio0 51=gpio45 52=gpio46 20=vdd",
+        "ESP32-S3|RF_Module:ESP32-S3-WROOM-1|esp32s3_wroom|27=gpio0 26=gpio45 16=gpio46 2=vdd",
+        "ESP32-S2-WROOM|RF_Module:ESP32-S2-WROVER|esp32s2_wroom|3=gpio0 39=gpio45 40=gpio46 2=vdd",
+        "ESP32-S2|QFN-56-1EP_7x7mm_P0.4mm_EP4x4mm|esp32s2_qfn56|5=gpio0 50=gpio45 55=gpio46 27=vdd",
+        "ESP32-C3-MINI-1|RF_Module:ESP32-C3-MINI-1|esp32c3_mini1|5=gpio2 22=gpio8 23=gpio9 3=vdd",
+        "ESP32-C3|RF_Module:ESP32-C3-WROOM-02|esp32c3_wroom02|16=gpio2 7=gpio8 8=gpio9 1=vdd",
+        "ESP32-C3|QFN-32-1EP_5x5mm_P0.5mm_EP3.7x3.7mm|esp32c3_qfn32|6=gpio2 14=gpio8 15=gpio9 17=vdd",
+        "ESP32-D0WD-V3|QFN-48-1EP_5x5mm_P0.35mm_EP3.7x3.7mm|esp32_qfn48|23=gpio0 22=gpio2 19=vdd",
+        "ESP32-WROOM-32E||esp32_wroom|25=gpio0 24=gpio2 35=p01_txd 34=p03_rxd",
+        "ESP32-PICO-D4||esp32_pico|23=gpio0 22=gpio2 19=vdd",
+    ] {
+        let [value, footprint, id, pins] = row.split('|').collect::<Vec<_>>()[..] else {
+            panic!("{row}")
+        };
+        let model = expect_query(Some(value), None, Some(footprint));
+        assert_eq!(model.id, id, "{row}");
+        let pairs: Vec<_> = pins.split(' ').filter_map(|p| p.split_once('=')).collect();
+        assert_pins(&model, &pairs);
+        assert!(!model.straps.is_empty(), "{row}");
+    }
+    for (value, backend) in [
+        ("ESP32-S3", "qemu:esp32s3"),
+        ("ESP32-S2", ""),
+        ("ESP32-C3", "qemu:esp32c3"),
+        ("ESP32", "qemu:esp32"),
+    ] {
+        for footprint in [None, Some("Package_DFN_QFN:QFN-64-1EP_9x9mm_P0.5mm")] {
+            let model = expect_query(Some(value), None, footprint);
+            assert_eq!(model.params.get_str("backend").unwrap_or(""), backend);
+            assert!(
+                model.pins.is_empty() && model.straps.is_empty(),
+                "{}",
+                model.id
+            );
+        }
+    }
+}

@@ -653,27 +653,40 @@ internal_pull = "none"
 note = "BOOT0 low boots main flash; high enters the system bootloader/SRAM"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ESP32 family. The classic ESP32 and ESP32-C3 co-simulate through the
-# Espressif-QEMU backend (`backend = "qemu:..."`, see docs/cosim/MCU.md); with no
-# firmware given the scheduler leaves the MCU out and the board solves as a
-# passive circuit, so extraction/report and the strap lint work regardless.
+# ESP32 family. The classic ESP32, ESP32-S3 and ESP32-C3 co-simulate through
+# the Espressif-QEMU backend (`backend = "qemu:..."`, see docs/cosim/MCU.md);
+# with no firmware given the scheduler leaves the MCU out and the board solves
+# as a passive circuit, so extraction/report and the strap lint work regardless.
 #
 # All strap data below is from the Espressif TRMs/datasheets, cited per entry.
 # The strap-pin lint reads `[models.straps]` + the pad->role map to find which
 # net each strap sits on, then flags a strap net driven by a free-running clock
 # at reset, biased to the wrong level, or left with no defined level.
+#
+# PAD MAPS ARE PER PACKAGE. A module (WROOM/WROVER/MINI) and the bare chip
+# number the same GPIO on different pads, so a pad map is true only on the
+# package it was read from. Where a family name ("ESP32-S3") is used for both,
+# the entries follow the rp2040/rp2040_qfn56 pattern: a value-only identity
+# entry (backend and coverage, NO pad map and NO strap table, so the strap lint
+# cannot examine a wrong pad and mcu_coverage reports the straps as unchecked)
+# plus one `footprint_re`-gated entry per package whose map was verified. The
+# footprint match adds specificity, so the package entry wins when it applies.
+# Pin numbers: Espressif datasheets (cited per entry) cross-checked against the
+# KiCad 9 RF_Module / MCU_Espressif symbols. The strap `vdd` role is the supply
+# pad of the domain that powers the strap IO (the one VIL/VIH scale with).
 
 [[models]]
 id = "esp32_wroom"
 kind = "mcu"
-description = "Espressif ESP32 classic (WROOM-32 / WROVER module, or bare ESP32-D0WD)"
+description = "Espressif ESP32 classic module (WROOM-32 / WROVER)"
 
 [models.match]
-# ESP-WROOM-32 / ESP32-WROOM-32(E/D/U/-N4/-N8/-N16) / ESP32-WROVER modules and
-# the bare ESP32 chip. The trailing flash/PSRAM/revision suffixes (e.g.
-# "ESP32-WROOM-32E-N4" on the Olimex EVB rev L) must all match the same strap
-# table, so the suffix is left open after "32".
-value_re = "(?i)^(ESP[- ]?WROOM[- ]?32|ESP32[- ]?WRO(OM|VER)[- ]?32?.*|ESP32(-D0WD.*)?)$"
+# ESP-WROOM-32 / ESP32-WROOM-32(E/D/U/-N4/-N8/-N16) / ESP32-WROVER modules. The
+# trailing flash/PSRAM/revision suffixes (e.g. "ESP32-WROOM-32E-N4" on the
+# Olimex EVB rev L) must all match the same strap table, so the suffix is left
+# open after "32". The value names the module, so it fixes the pad map. A bare
+# "ESP32"/"ESP32-D0WD" value is a QFN chip: see esp32 / esp32_qfn48 below.
+value_re = "(?i)^(ESP[- ]?WROOM[- ]?32|ESP32[- ]?WRO(OM|VER)[- ]?32?.*)$"
 # No mpn_re: match rules are ANDed, so an mpn_re would reject the common case
 # of a board whose ESP32 carries no MPN property (Olimex EVB, most KiCad libs).
 
@@ -692,7 +705,8 @@ backend = "qemu:esp32"
 # (port '0', bit n) for co-sim drive, and the strap lint matches them against
 # [models.straps] by exact string. Pad numbers verified against the Olimex
 # ESP32-EVB netlist (U3 = ESP-WROOM-32): pad25=GPIO0, 24=GPIO2, 29=GPIO5,
-# 14=GPIO12/MTDI, 23=GPIO15/MTDO. The demo-board pads (GPIO4, UART0) keep the
+# 14=GPIO12/MTDI, 23=GPIO15/MTDO, and the KiCad symbol (35 = TXD0/IO1,
+# 34 = RXD0/IO3; pad 33 is IO21). The demo-board pads (GPIO4, UART0) keep the
 # "p0<bit>" convention; both spellings resolve to the same port/bit.
 "1"  = "vss"        # GND
 "2"  = "vdd"        # 3V3
@@ -702,8 +716,8 @@ backend = "qemu:esp32"
 "14" = "gpio12"    # MTDI
 "23" = "gpio15"    # MTDO
 "26" = "p04"        # GPIO4: ~5 Hz blink, observable through the solved circuit
-"34" = "p01_txd"    # U0TXD (UART0 TX)
-"33" = "p03_rxd"    # U0RXD (UART0 RX)
+"35" = "p01_txd"    # TXD0 (UART0 TX, GPIO1)
+"34" = "p03_rxd"    # RXD0 (UART0 RX, GPIO3)
 
 [models.ratings]
 max_pin_current_a = 0.04   # ~40 mA abs max source/sink per pad (datasheet)
@@ -746,12 +760,86 @@ missing = ["instruction_counted_timing", "unmodified_firmware_gpio_input", "nati
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Bare classic ESP32 chip, package unknown: identity only (see the family note).
+[[models]]
+id = "esp32"
+kind = "mcu"
+description = "Espressif ESP32 classic bare chip (ESP32-D0WD*), package not recognised"
+
+[models.match]
+value_re = "(?i)^ESP32(-D0WD.*)?$"
+
+[models.params]
+backend = "qemu:esp32"
+
+[models.coverage]
+implements = ["xtensa_lx6_firmware_execution", "boot_to_application", "gpio_output_register_or_mailbox_observation", "uart_tx", "wall_bounded_virtual_time", "gpio_input_mailbox_contract", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract", "tmp105_temperature_injection"]
+missing = ["instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
+[[models]]
+id = "esp32_qfn48"
+kind = "mcu"
+description = "Espressif ESP32 classic bare chip, QFN48 (5x5 or 6x6 mm)"
+
+[models.match]
+value_re = "(?i)^ESP32(-D0WD.*)?$"
+footprint_re = '(?i)(^|:)V?QFN[-_]?48([-_]1EP)?[-_][56]x[56]mm'
+
+[models.params]
+backend = "qemu:esp32"
+
+[models.pins]
+# ESP32 Series Datasheet v5.3, Table 2-1 "Pin Overview" and Table 2-3 "Power
+# Pins": MTDI/GPIO12 = 18, VDD3P3_RTC = 19 (supplies the RTC IOs, GPIO0
+# included), MTDO/GPIO15 = 21, GPIO2 = 22, GPIO0 = 23, GPIO4 = 24, GPIO5 = 34,
+# U0RXD = 40, U0TXD = 41, GND = 49 (exposed pad).
+"19" = "vdd"
+"49" = "vss"
+"23" = "gpio0"
+"22" = "gpio2"
+"34" = "gpio5"
+"18" = "gpio12"
+"21" = "gpio15"
+"41" = "p01_txd"
+"40" = "p03_rxd"
+
+# Same die and strap table as esp32_wroom (same citations).
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high = SPI boot (normal); low = download/UART boot"
+
+[[models.straps]]
+role = "gpio2"
+level = "low"
+note = "GPIO2 must be low or floating at reset; tie-high blocks download mode"
+
+[[models.straps]]
+role = "gpio12"
+level = "low"
+note = "MTDI/GPIO12 selects VDD_SDIO flash voltage: low = 3.3 V (normal), high = 1.8 V"
+
+[[models.straps]]
+role = "gpio15"
+level = "high"
+note = "MTDO/GPIO15 high (normal) silences boot log on U0TXD; low enables it"
+
+[models.coverage]
+implements = ["xtensa_lx6_firmware_execution", "boot_to_application", "gpio_output_register_or_mailbox_observation", "uart_tx", "wall_bounded_virtual_time", "gpio_input_mailbox_contract", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract", "tmp105_temperature_injection"]
+missing = ["instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 [[models]]
 id = "esp32_pico"
 kind = "mcu"
 description = "Espressif ESP32-PICO-D4 SiP (Watchy v1.x/v2.x)"
 
 [models.match]
+# One SiP, one package: the value fixes the pad map without a footprint rule.
 value_re = "(?i)^ESP32[- ]?PICO[- ]?D4$"
 
 [models.params]
@@ -763,15 +851,18 @@ value_re = "(?i)^ESP32[- ]?PICO[- ]?D4$"
 backend = "qemu:esp32"
 
 [models.pins]
-# ESP32-PICO-D4 LGA-48 (KiCad RF_Module:ESP32-PICO-D4). Same ESP32 die, same
-# strap GPIOs; on the SiP the flash straps (GPIO12/GPIO15) are bonded internally
-# to the in-package flash, so only GPIO0/GPIO2/GPIO5 are board-exposed. Pad
-# numbers from the KiCad symbol; GPIO0 = pad 23 (verified on Watchy v1.5/v2.0).
-# The display + UART pads are verified against the Watchy v1.5 corpus board file
-# (net_probe): RES = U1 pad 28 = GPIO9, TX = pad 41 = GPIO1/U0TXD, RX = pad 40 =
-# GPIO3/U0RXD. GPIO9 is the e-paper DISPLAY_RES the boot-coverage check watches.
+# ESP32-PICO-D4 (ESP32-PICO Series Datasheet v1.3, Table 2-1, and the KiCad
+# MCU_Espressif:ESP32-PICO-D4 symbol): VDD3P3_RTC = 19 (RTC IO supply, GPIO0
+# included), IO2 = 22, IO0 = 23 (verified on Watchy v1.5/v2.0), IO4 = 24,
+# IO5 = 34. Pad 24 was mapped as GPIO2 before; it is IO4. On the SiP the flash
+# straps (GPIO12/GPIO15) are bonded internally to the in-package flash, so only
+# GPIO0/GPIO2/GPIO5 are board-exposed. The display + UART pads are verified
+# against the Watchy v1.5 corpus board file (net_probe): RES = U1 pad 28 =
+# GPIO9, TX = pad 41 = GPIO1/U0TXD, RX = pad 40 = GPIO3/U0RXD. GPIO9 is the
+# e-paper DISPLAY_RES the boot-coverage check watches.
+"19" = "vdd"
 "23" = "gpio0"
-"24" = "gpio2"
+"22" = "gpio2"
 "34" = "gpio5"
 "28" = "gpio9"      # DISPLAY_RES (board net RES); driven high by display init
 "41" = "p01_txd"    # U0TXD (UART0 TX)
@@ -798,10 +889,12 @@ note = "GPIO2 must be low or floating at reset"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ESP32-S3, package unknown: identity only (see the family note). The strap
+# table lives on the package entries below.
 [[models]]
 id = "esp32s3"
 kind = "mcu"
-description = "Espressif ESP32-S3 (WROOM-1 module or bare, Watchy v3)"
+description = "Espressif ESP32-S3, package not recognised (Watchy v3 class)"
 
 [models.match]
 value_re = "(?i)^ESP32[- ]?S3([- ]?WROOM.*)?$"
@@ -815,18 +908,40 @@ value_re = "(?i)^ESP32[- ]?S3([- ]?WROOM.*)?$"
 # so lint/report-only runs never need QEMU.
 backend = "qemu:esp32s3"
 
+[models.coverage]
+implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]
+missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation", "instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
+[[models]]
+id = "esp32s3_wroom"
+kind = "mcu"
+description = "Espressif ESP32-S3-WROOM-1/-1U/-2 module"
+
+[models.match]
+value_re = "(?i)^ESP32[- ]?S3([- ]?WROOM.*)?$"
+# KiCad RF_Module:ESP32-S3-WROOM-1 / -1U / -2 and vendor spellings of the same.
+# WROOM-2 has the WROOM-1 pinout (KiCad symbols agree on every strap pad).
+footprint_re = '(?i)ESP32[-_]?S3[-_]?WROOM[-_]?[12]'
+
+[models.params]
+backend = "qemu:esp32s3"
+
 [models.pins]
-# ESP32-S3 strap GPIOs (KiCad RF_Module:ESP32-S3-WROOM-1). On the S3 the
-# strapping pins are GPIO0, GPIO3, GPIO45, GPIO46. Pad map from the WROOM-1
-# symbol; GPIO0 = pad 27 (verified vs Watchy v3 BOOT net).
+# ESP32-S3-WROOM-1/-1U Datasheet v1.8, Table 3-1 "Pin Definitions" (and the
+# KiCad RF_Module:ESP32-S3-WROOM-1 symbol): GND = 1, 3V3 = 2, IO3 = 15,
+# IO46 = 16, IO45 = 26, IO0 = 27 (verified vs Watchy v3 BOOT net). Pads 6/7
+# are IO6/IO7; they were mapped as GPIO46/GPIO45 before.
+"1"  = "vss"
+"2"  = "vdd"
 "27" = "gpio0"
 "15" = "gpio3"
-"7"  = "gpio45"
-"6"  = "gpio46"
+"26" = "gpio45"
+"16" = "gpio46"
 
 # Ref: ESP32-S3 Technical Reference Manual v1.6, Table 2-9 "Strapping Pins";
-# ESP32-S3 datasheet v1.7 sec 2.4. GPIO0 high = SPI boot; GPIO46 selects ROM
-# messages / boot mode and must be low-or-floating at reset.
+# ESP32-S3 datasheet v2.2 sec 3 "Boot Configurations" (Table 3-1: GPIO0 weak
+# pull-up; GPIO45, GPIO46 weak pull-down). GPIO0 high = SPI boot; GPIO46
+# selects ROM messages / boot mode and must be low-or-floating at reset.
 [[models.straps]]
 role = "gpio0"
 level = "high"
@@ -852,22 +967,84 @@ note = "GPIO45 selects VDD_SPI flash voltage (low = 3.3 V default); must be defi
 implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]
 missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation", "instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
 
+[[models]]
+id = "esp32s3_qfn56"
+kind = "mcu"
+description = "Espressif ESP32-S3 bare chip, QFN56 7x7 mm (Watchy v3)"
+
+[models.match]
+value_re = "(?i)^ESP32[- ]?S3([- ]?WROOM.*)?$"
+footprint_re = '(?i)(^|:)V?QFN[-_]?56([-_]1EP)?[-_]7x7mm[-_]P0\.4mm'
+
+[models.params]
+backend = "qemu:esp32s3"
+
+[models.pins]
+# ESP32-S3 Series Datasheet v2.2, Table 2-1 "Pin Overview": GPIO0 = 5 and
+# GPIO3 = 8 (powered by VDD3P3_RTC = 20), GPIO45 = 51 and GPIO46 = 52 (powered
+# by VDD3P3_CPU = 46), GND = 57 (exposed pad). `vdd` is VDD3P3_RTC: it powers
+# GPIO0, the one strap with sourced VIL/VIH.
+"20" = "vdd"
+"57" = "vss"
+"5"  = "gpio0"
+"8"  = "gpio3"
+"51" = "gpio45"
+"52" = "gpio46"
+
+# Same strap table and citations as esp32s3_wroom.
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high = SPI boot (normal); low with GPIO46=0 = download boot"
+
+[[models.straps]]
+role = "gpio46"
+level = "low"
+note = "GPIO46 must be low or floating at reset (joins GPIO0 to pick boot mode)"
+
+[[models.straps]]
+role = "gpio45"
+level = "defined"
+note = "GPIO45 selects VDD_SPI flash voltage (low = 3.3 V default); must be defined"
+
+[models.coverage]
+implements = ["xtensa_lx7_machine_boot", "gpio_output_register_or_mailbox_observation_0_to_31", "uart_transport", "wall_bounded_virtual_time", "gpio_input_mailbox_contract_0_to_31", "adc_input_mailbox_contract", "i2c_spi_mailbox_contract"]
+missing = ["application_firmware_end_to_end_proof", "gpio_32_to_48_observation", "instruction_counted_timing", "unmodified_firmware_gpio_input", "native_adc_peripheral", "unmodified_firmware_i2c_spi_observation", "watchdog_behavior", "silicon_power_current_profile", "silicon_timing_and_errata"]
+
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ESP32-S2, package unknown: identity only (see the family note). The earlier
+# single map (27/7/6) matched neither package: on the S2-WROOM pads 27/7/6 are
+# IO33/IO4/IO3, and on the bare QFN56 pad 27 is the VDD3P3_RTC_IO supply.
 [[models]]
 id = "esp32s2"
 kind = "mcu"
-description = "Espressif ESP32-S2 (WROOM module or bare)"
+description = "Espressif ESP32-S2, package not recognised"
 
 [models.match]
 value_re = "(?i)^ESP32[- ]?S2([- ]?WROOM.*)?$"
 
+[[models]]
+id = "esp32s2_wroom"
+kind = "mcu"
+description = "Espressif ESP32-S2-WROOM/-WROOM-I/-WROVER module"
+
+[models.match]
+value_re = "(?i)^ESP32[- ]?S2([- ]?WROOM.*)?$"
+footprint_re = '(?i)ESP32[-_]?S2[-_]?WRO(OM|VER)'
+
 [models.pins]
-# ESP32-S2 strap GPIOs: GPIO0, GPIO45, GPIO46. Pad map from KiCad
-# RF_Module:ESP32-S2-WROOM symbol.
-"27" = "gpio0"
-"7"  = "gpio45"
-"6"  = "gpio46"
+# ESP32-S2-WROOM Datasheet v1.5, Table 2 "Pin Definitions": GND = 1, 3V3 = 2,
+# IO0 = 3, IO45 = 39, IO46 = 40. The KiCad RF_Module:ESP32-S2-WROVER symbol
+# carries the same numbering (WROVER shares the WROOM pinout).
+"1"  = "vss"
+"2"  = "vdd"
+"3"  = "gpio0"
+"39" = "gpio45"
+"40" = "gpio46"
 
 # Ref: ESP32-S2 Technical Reference Manual v1.2, Table "Strapping Pins";
 # ESP32-S2 datasheet v1.4 sec 2.4.
@@ -892,12 +1069,51 @@ role = "gpio45"
 level = "defined"
 note = "GPIO45 selects VDD_SPI flash voltage; must be defined"
 
+[[models]]
+id = "esp32s2_qfn56"
+kind = "mcu"
+description = "Espressif ESP32-S2 bare chip, QFN56 7x7 mm"
+
+[models.match]
+value_re = "(?i)^ESP32[- ]?S2([- ]?WROOM.*)?$"
+footprint_re = '(?i)(^|:)V?QFN[-_]?56([-_]1EP)?[-_]7x7mm[-_]P0\.4mm'
+
+[models.pins]
+# ESP32-S2 Series Datasheet v1.9, Table 2-1 "Pin Overview": GPIO0 = 5 (powered
+# by VDD3P3_RTC_IO = 27), GPIO45 = 50 and GPIO46 = 55 (powered by
+# VDD3P3_CPU = 45), GND = 57 (exposed pad).
+"27" = "vdd"
+"57" = "vss"
+"5"  = "gpio0"
+"50" = "gpio45"
+"55" = "gpio46"
+
+# Same strap table and citations as esp32s2_wroom.
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO0 high = SPI boot (normal); low = download boot"
+
+[[models.straps]]
+role = "gpio46"
+level = "low"
+note = "GPIO46 must be low or floating at reset"
+
+[[models.straps]]
+role = "gpio45"
+level = "defined"
+note = "GPIO45 selects VDD_SPI flash voltage; must be defined"
+
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ESP32-C3, package unknown: identity only (see the family note).
 [[models]]
 id = "esp32c3"
 kind = "mcu"
-description = "Espressif ESP32-C3 (RISC-V RV32IMC; WROOM-02 / MINI-1 module or bare)"
+description = "Espressif ESP32-C3 (RISC-V RV32IMC), package not recognised"
 
 [models.match]
 value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
@@ -905,28 +1121,37 @@ value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
 [models.params]
 backend = "qemu:esp32c3"
 
+[models.ratings]
+max_pin_current_a = 0.04
+max_current_a = 0.4
+max_voltage_v = 3.6
+
+[[models]]
+id = "esp32c3_mini1"
+kind = "mcu"
+description = "Espressif ESP32-C3-MINI-1/-1U module"
+
+[models.match]
+value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
+footprint_re = '(?i)ESP32[-_]?C3[-_]?MINI[-_]?1'
+
+[models.params]
+backend = "qemu:esp32c3"
+
 [models.pins]
-# Demo-board pads (the QEMU C3 proof board) use the "p0<bit>" convention; the
-# strap pads ("gpio<n>") are matched by the strap lint by exact role string.
-# Both spellings parse to the same flat GPIO space in the binder.
-#
-# Strap pad numbers below are the ESP32-C3-MINI-1 module pad numbering (Espressif
-# ESP32-C3-MINI-1 datasheet v2.x, Table "Pin Definitions": IO2=pad5, IO8=pad22,
-# IO9=pad23). NOTE: the ESP32-C3-WROOM-02 module uses DIFFERENT pad numbers for
-# the same straps (IO2=pad16, IO8=pad7, IO9=pad8), so this single map is correct
-# for MINI-1 (and the synthetic demo, which reuses MINI-1) but would mis-locate
-# the straps on a real WROOM-02; split the model by footprint if WROOM-02 support
-# is needed. (Previously these were 16/5/6, which matched neither module and fired
-# a false "GPIO9 mis-strapped" lint on MINI-1 boards whose pad 6 is GPIO3.)
+# ESP32-C3-MINI-1/-1U Datasheet v2.2, Table 3-1 "Pin Definitions": GND = 1, 2
+# (and 11, 14, 36-53), 3V3 = 3, IO2 = 5, IO4 = 18, IO8 = 22, IO9 = 23,
+# RXD0/GPIO20 = 30, TXD0/GPIO21 = 31. The QEMU C3 demo board uses this real
+# numbering; strap and demo roles share the flat GPIO space in the binder.
+# (Pad 2 was mapped as vdd before; it is GND.)
 "1"  = "vss"
-"2"  = "vdd"
-"12" = "p02"        # GPIO2 (demo board)
-"13" = "p04"        # GPIO4 (demo board)
-"30" = "p021_txd"   # U0TXD on GPIO21
-"31" = "p020_rxd"   # U0RXD on GPIO20
-"5"  = "gpio2"      # strap (ESP32-C3-MINI-1 pad numbering)
+"3"  = "vdd"
+"5"  = "gpio2"      # strap; the demo board's LED output
+"18" = "p04"        # GPIO4 (demo board blink)
 "22" = "gpio8"      # strap
 "23" = "gpio9"      # strap (BOOT)
+"31" = "p021_txd"   # TXD0 on GPIO21
+"30" = "p020_rxd"   # RXD0 on GPIO20
 
 [models.ratings]
 max_pin_current_a = 0.04
@@ -944,6 +1169,101 @@ boot_select = true   # the C3 BOOT pin; latches SPI-vs-download boot
 # ESP32-C3 Datasheet v2.4, Table 5-4 "DC Characteristics (3.3 V, 25 °C)": VIL
 # max 0.25 x VDD, VIH min 0.75 x VDD,
 # https://www.espressif.com/sites/default/files/documentation/esp32-c3_datasheet_en.pdf
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"
+
+[[models.straps]]
+role = "gpio8"
+level = "high"
+note = "GPIO8 must be high at reset (with GPIO9) for normal boot"
+
+[[models.straps]]
+role = "gpio2"
+level = "high"
+note = "GPIO2 must be high at reset"
+
+[[models]]
+id = "esp32c3_wroom02"
+kind = "mcu"
+description = "Espressif ESP32-C3-WROOM-02/-02U module"
+
+[models.match]
+value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
+footprint_re = '(?i)ESP32[-_]?C3[-_]?WROOM[-_]?02'
+
+[models.params]
+backend = "qemu:esp32c3"
+
+[models.pins]
+# ESP32-C3-WROOM-02 Datasheet, Table "Pin Definitions", as carried by the KiCad
+# RF_Module:ESP32-C3-WROOM-02 symbol: 3V3 = 1, IO8 = 7, IO9 = 8, GND = 9,
+# IO2 = 16.
+"1"  = "vdd"
+"9"  = "vss"
+"16" = "gpio2"
+"7"  = "gpio8"
+"8"  = "gpio9"
+
+[models.ratings]
+max_pin_current_a = 0.04
+max_current_a = 0.4
+max_voltage_v = 3.6
+
+# Same strap table and citations as esp32c3_mini1.
+[[models.straps]]
+role = "gpio9"
+level = "high"
+boot_select = true
+vil = [0.25, 0.0]
+vih = [0.75, 0.0]
+note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"
+
+[[models.straps]]
+role = "gpio8"
+level = "high"
+note = "GPIO8 must be high at reset (with GPIO9) for normal boot"
+
+[[models.straps]]
+role = "gpio2"
+level = "high"
+note = "GPIO2 must be high at reset"
+
+[[models]]
+id = "esp32c3_qfn32"
+kind = "mcu"
+description = "Espressif ESP32-C3 bare chip, QFN32 5x5 mm"
+
+[models.match]
+value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
+footprint_re = '(?i)(^|:)V?QFN[-_]?32([-_]1EP)?[-_]5x5mm[-_]P0\.5mm'
+
+[models.params]
+backend = "qemu:esp32c3"
+
+[models.pins]
+# ESP32-C3 Series Datasheet v2.4, Table 2-1 "Pin Overview": GPIO2 = 6 (powered
+# by VDD3P3_RTC = 11), GPIO8 = 14 and GPIO9 = 15 (powered by VDD3P3_CPU = 17),
+# U0RXD = 27, U0TXD = 28, GND = 33 (exposed pad). `vdd` is VDD3P3_CPU: it
+# powers GPIO9, the one strap with sourced VIL/VIH.
+"17" = "vdd"
+"33" = "vss"
+"6"  = "gpio2"
+"14" = "gpio8"
+"15" = "gpio9"
+"28" = "p021_txd"
+"27" = "p020_rxd"
+
+[models.ratings]
+max_pin_current_a = 0.04
+max_current_a = 0.4
+max_voltage_v = 3.6
+
+# Same strap table and citations as esp32c3_mini1.
+[[models.straps]]
+role = "gpio9"
+level = "high"
+boot_select = true
 vil = [0.25, 0.0]
 vih = [0.75, 0.0]
 note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"

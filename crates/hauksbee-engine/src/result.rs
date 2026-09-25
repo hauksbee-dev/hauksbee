@@ -2481,6 +2481,10 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
              if the pin-locked peripheral was intended, move the device to its full fixed pin set.",
         );
     }
+    // A Low strap finding is the lint's abstention, worded as unchecked (as in plain.rs).
+    if check == LintCheck::StrapPin && severity == Severity::Low {
+        return Some("Confirm the strap divider gives a clear reset level per the datasheet, or supply the missing model data the message names so the check can judge it.");
+    }
     Some(match check {
         LintCheck::MissingI2cPullup => {
             "Add a 2.2k-10k pull-up from the I2C line to its power rail (one per SDA and SCL)."
