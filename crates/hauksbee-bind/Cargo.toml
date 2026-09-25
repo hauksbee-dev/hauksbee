@@ -33,3 +33,6 @@ evalexpr = { version = "=11.3.1", default-features = false }
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }
+
+[lints]
+workspace = true

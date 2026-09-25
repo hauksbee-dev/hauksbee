@@ -118,3 +118,6 @@ windows-sys = { version = "0.61", features = [
 [[test]]
 name = "it"
 path = "tests/main.rs"
+
+[lints]
+workspace = true

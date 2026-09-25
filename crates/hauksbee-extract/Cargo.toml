@@ -52,3 +52,6 @@ hauksbee-testkit = { path = "../hauksbee-testkit" }
 [[test]]
 name = "it"
 path = "tests/main.rs"
+
+[lints]
+workspace = true

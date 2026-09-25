@@ -55,3 +55,6 @@ hauksbee-mcu = { version = "0.1.0-beta.6", path = "../hauksbee-mcu", default-fea
 [[test]]
 name = "it"
 path = "tests/main.rs"
+
+[lints]
+workspace = true

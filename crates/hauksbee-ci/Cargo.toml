@@ -81,3 +81,6 @@ tempfile = { workspace = true }
 [[test]]
 name = "it"
 path = "tests/main.rs"
+
+[lints]
+workspace = true

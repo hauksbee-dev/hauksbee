@@ -36,3 +36,6 @@ evalexpr = { version = "=11.3.1", default-features = false }
 [[test]]
 name = "it"
 path = "tests/main.rs"
+
+[lints]
+workspace = true

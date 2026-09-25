@@ -61,3 +61,6 @@ path = "tests/main.rs"
 [[test]]
 name = "speed_gate"
 path = "tests/speed_gate.rs"
+
+[lints]
+workspace = true

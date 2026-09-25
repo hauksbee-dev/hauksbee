@@ -24,3 +24,6 @@ hauksbee-solve = { version = "0.1.0-beta.6", path = "../hauksbee-solve" }
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }
+
+[lints]
+workspace = true

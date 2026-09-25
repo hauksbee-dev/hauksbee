@@ -49,6 +49,10 @@ categories = ["simulation", "science", "development-tools::testing"]
 # since a wrong MSRV breaks downstream builds for reasons the author cannot see.
 rust-version = "1.92"
 
+# Every clippy::all finding is an error, locally as in CI; no lint is allowed workspace-wide.
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
 [workspace.dependencies]
 # The forge-* crates are VENDORED into this repo (vendor/kicad-forge/crates/*)
 # so a fresh clone builds with no sibling checkout and no network. kicad-forge
