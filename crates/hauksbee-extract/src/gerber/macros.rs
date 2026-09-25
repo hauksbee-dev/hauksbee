@@ -101,7 +101,7 @@ pub fn instantiate_macro(
                     .unwrap_or(0.0)
                     .to_radians()
                     .sin_cos();
-                let (cxr, cyr) = (x * rcos - y * rsin, x * rsin + y * rcos);
+                let (cxr, cyr) = (x.mul_add(rcos, -(y * rsin)), x.mul_add(rsin, y * rcos));
                 // Sample the circle as an octagon (the hull absorbs the rest;
                 // for a hole the inscribed octagon under-cuts the void
                 // slightly, erring toward solid, never toward emptiness).
@@ -132,8 +132,8 @@ pub fn instantiate_macro(
                     .unwrap_or(0.0)
                     .to_radians()
                     .sin_cos();
-                let (rx0, ry0) = (x0 * cos - y0 * sin, x0 * sin + y0 * cos);
-                let (rx1, ry1) = (x1 * cos - y1 * sin, x1 * sin + y1 * cos);
+                let (rx0, ry0) = (x0.mul_add(cos, -(y0 * sin)), x0.mul_add(sin, y0 * cos));
+                let (rx1, ry1) = (x1.mul_add(cos, -(y1 * sin)), x1.mul_add(sin, y1 * cos));
                 let mut outline = Vec::with_capacity(4);
                 push_thick_segment(&mut outline, rx0, ry0, rx1, ry1, w / 2.0);
                 (exposed(&l.exposure, &vars), outline)
@@ -165,7 +165,7 @@ pub fn instantiate_macro(
                     .into_iter()
                     .map(|(dx, dy)| {
                         let (ax, ay) = (x + dx, y + dy);
-                        (ax * cos - ay * sin, ax * sin + ay * cos)
+                        (ax.mul_add(cos, -(ay * sin)), ax.mul_add(sin, ay * cos))
                     })
                     .collect();
                 (exposed(&l.exposure, &vars), outline)
@@ -185,7 +185,7 @@ pub fn instantiate_macro(
                     .iter()
                     .filter_map(|(px, py)| {
                         let (x, y) = (decimal(px, &vars)?, decimal(py, &vars)?);
-                        Some((x * cos - y * sin, x * sin + y * cos))
+                        Some((x.mul_add(cos, -(y * sin)), x.mul_add(sin, y * cos)))
                     })
                     .collect();
                 (exposed(&o.exposure, &vars), outline)
@@ -212,7 +212,10 @@ pub fn instantiate_macro(
                 // VectorLine handlers do. Rotating only the vertex angle left the
                 // centroid at its unrotated (x,y), placing an off-origin rotated
                 // polygon pad ~|center| mm off in the wrong direction.
-                let (cx0, cy0) = (x * rot.cos() - y * rot.sin(), x * rot.sin() + y * rot.cos());
+                let (cx0, cy0) = (
+                    x.mul_add(rot.cos(), -(y * rot.sin())),
+                    x.mul_add(rot.sin(), y * rot.cos()),
+                );
                 let outline: Vec<(f64, f64)> = (0..n)
                     .map(|k| {
                         let a = rot + k as f64 * std::f64::consts::TAU / n as f64;
@@ -273,7 +276,7 @@ pub fn instantiate_macro(
 
     let place = |pts: Vec<(f64, f64)>| -> Vec<(f64, f64)> {
         pts.into_iter()
-            .map(|(x, y)| (cx + x * s, cy + y * s))
+            .map(|(x, y)| (x.mul_add(s, cx), y.mul_add(s, cy)))
             .collect()
     };
     MacroShape {
@@ -493,7 +496,7 @@ impl Parser<'_> {
 fn push_thick_segment(pts: &mut Vec<(f64, f64)>, x0: f64, y0: f64, x1: f64, y1: f64, r: f64) {
     let dx = x1 - x0;
     let dy = y1 - y0;
-    let len = (dx * dx + dy * dy).sqrt().max(1e-9);
+    let len = dx.hypot(dy).max(1e-9);
     let (nx, ny) = (-dy / len * r, dx / len * r);
     pts.extend([
         (x0 + nx, y0 + ny),
@@ -512,7 +515,7 @@ fn convex_hull(mut pts: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
         return pts;
     }
     let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
-        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+        (a.0 - o.0).mul_add(b.1 - o.1, -((a.1 - o.1) * (b.0 - o.0)))
     };
     let mut hull = Vec::with_capacity(2 * n);
     for &p in &pts {

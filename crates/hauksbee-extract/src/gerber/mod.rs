@@ -1179,8 +1179,8 @@ fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
         let (mut umin, mut umax) = (f64::INFINITY, f64::NEG_INFINITY);
         let (mut vmin, mut vmax) = (f64::INFINITY, f64::NEG_INFINITY);
         for &(px, py) in pts {
-            let u = px * dir.0 + py * dir.1;
-            let v = px * perp.0 + py * perp.1;
+            let u = px.mul_add(dir.0, py * dir.1);
+            let v = px.mul_add(perp.0, py * perp.1);
             umin = umin.min(u);
             umax = umax.max(u);
             vmin = vmin.min(v);
@@ -1200,18 +1200,18 @@ fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
         let (cx, cy) = (f64::midpoint(b[0], b[2]), f64::midpoint(b[1], b[3]));
         return (0.1, (cx, cy), (cx, cy));
     };
-    let dia = w + 2.0 * inflate;
-    let length = (umax - umin) + 2.0 * inflate;
+    let dia = 2.0f64.mul_add(inflate, w);
+    let length = 2.0f64.mul_add(inflate, umax - umin);
     // The stadium's two centres sit half a tool diameter in from each end.
     let half_path = ((length - dia) / 2.0).max(0.0);
     let mid_u = f64::midpoint(umin, umax);
-    let cx = dir.0 * mid_u + perp_off.0;
-    let cy = dir.1 * mid_u + perp_off.1;
+    let cx = dir.0.mul_add(mid_u, perp_off.0);
+    let cy = dir.1.mul_add(mid_u, perp_off.1);
     let dia = if dia > 0.0 { dia } else { 0.1 };
     (
         dia,
-        (cx - dir.0 * half_path, cy - dir.1 * half_path),
-        (cx + dir.0 * half_path, cy + dir.1 * half_path),
+        (dir.0.mul_add(-half_path, cx), dir.1.mul_add(-half_path, cy)),
+        (dir.0.mul_add(half_path, cx), dir.1.mul_add(half_path, cy)),
     )
 }
 

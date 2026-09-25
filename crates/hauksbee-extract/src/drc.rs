@@ -1490,8 +1490,8 @@ fn collect_pad(
     // counter-clockwise: matches pcb.rs's pad placement).
     let to_world = |ox: f64, oy: f64| -> (f64, f64) {
         (
-            fx + px * fcos + py * fsin + ox,
-            fy - px * fsin + py * fcos + oy,
+            py.mul_add(fsin, px.mul_add(fcos, fx)) + ox,
+            py.mul_add(fcos, px.mul_add(-fsin, fy)) + oy,
         )
     };
     let pad_origin = to_world(0.0, 0.0);
@@ -1518,8 +1518,8 @@ fn collect_pad(
     let outline_to_world = |lx: f64, ly: f64| -> (f64, f64) {
         let lx = lx + offx;
         let ly = ly + offy;
-        let wx = lx * pcos + ly * psin;
-        let wy = -lx * psin + ly * pcos;
+        let wx = lx.mul_add(pcos, ly * psin);
+        let wy = (-lx).mul_add(psin, ly * pcos);
         (pad_origin.0 + wx, pad_origin.1 + wy)
     };
 
@@ -1611,8 +1611,8 @@ fn collect_pad(
                 // Inset the rectangle by the corner radius and carry `r` so the
                 // rounded outline is represented as inset-poly + radius.
                 rect_polygon(
-                    (sx - 2.0 * rr).max(0.0),
-                    (sy - 2.0 * rr).max(0.0),
+                    2.0f64.mul_add(-rr, sx).max(0.0),
+                    2.0f64.mul_add(-rr, sy).max(0.0),
                     &outline_to_world,
                     rr,
                 )
@@ -1637,7 +1637,12 @@ fn rotated_rect_pts(cx: f64, cy: f64, w: f64, h: f64, rot: f64) -> Vec<(f64, f64
     let (rs, rc) = rot.sin_cos();
     [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
         .into_iter()
-        .map(|(lx, ly)| (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc))
+        .map(|(lx, ly)| {
+            (
+                ly.mul_add(-rs, lx.mul_add(rc, cx)),
+                ly.mul_add(rc, lx.mul_add(rs, cy)),
+            )
+        })
         .collect()
 }
 
@@ -1697,7 +1702,7 @@ fn chamfered_rect_polygon(
 ) -> Shape {
     let hw = w / 2.0;
     let hh = h / 2.0;
-    let cut = ch + (std::f64::consts::SQRT_2 - 1.0) * rr;
+    let cut = (std::f64::consts::SQRT_2 - 1.0).mul_add(rr, ch);
     // Corner order matches rect_polygon: TL, TR, BR, BL. `(cx, cy)` is the
     // corner's quadrant sign; `vert_first` is whether the outline traversal
     // enters the corner along the vertical pad edge (so the vertex on that
@@ -2094,8 +2099,8 @@ fn flatten_arc(
     let mut prev = start;
     for i in 1..=ARC_SEGMENTS {
         let t = i as f64 / ARC_SEGMENTS as f64;
-        let a = a0 + sweep * t;
-        let p = (cx + radius * a.cos(), cy + radius * a.sin());
+        let a = sweep.mul_add(t, a0);
+        let p = (radius.mul_add(a.cos(), cx), radius.mul_add(a.sin(), cy));
         caps.push(Capsule {
             ax: prev.0,
             ay: prev.1,
@@ -2169,16 +2174,18 @@ fn arc_sweep_through(from: f64, to: f64, via: f64) -> f64 {
 
 /// Circumcircle (centre, radius) of three points, or None if colinear.
 fn circle_from_3(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> Option<(f64, f64, f64)> {
-    let d = 2.0 * (a.0 * (b.1 - c.1) + b.0 * (c.1 - a.1) + c.0 * (a.1 - b.1));
+    let d = 2.0
+        * c.0
+            .mul_add(a.1 - b.1, a.0.mul_add(b.1 - c.1, b.0 * (c.1 - a.1)));
     if d.abs() < 1e-12 {
         return None;
     }
-    let a2 = a.0 * a.0 + a.1 * a.1;
-    let b2 = b.0 * b.0 + b.1 * b.1;
-    let c2 = c.0 * c.0 + c.1 * c.1;
-    let ux = (a2 * (b.1 - c.1) + b2 * (c.1 - a.1) + c2 * (a.1 - b.1)) / d;
-    let uy = (a2 * (c.0 - b.0) + b2 * (a.0 - c.0) + c2 * (b.0 - a.0)) / d;
-    let r = ((a.0 - ux).powi(2) + (a.1 - uy).powi(2)).sqrt();
+    let a2 = a.0.mul_add(a.0, a.1 * a.1);
+    let b2 = b.0.mul_add(b.0, b.1 * b.1);
+    let c2 = c.0.mul_add(c.0, c.1 * c.1);
+    let ux = c2.mul_add(a.1 - b.1, a2.mul_add(b.1 - c.1, b2 * (c.1 - a.1))) / d;
+    let uy = c2.mul_add(b.0 - a.0, a2.mul_add(c.0 - b.0, b2 * (a.0 - c.0))) / d;
+    let r = (a.0 - ux).hypot(a.1 - uy);
     Some((ux, uy, r))
 }
 
@@ -3042,7 +3049,7 @@ pub mod eagle_drc {
     impl ViaRestring {
         fn outer_diameter(&self, drill: f64) -> f64 {
             let ring = (self.rv * drill).clamp(self.min_mm, self.max_mm);
-            drill + 2.0 * ring
+            2.0f64.mul_add(ring, drill)
         }
     }
 
@@ -3422,7 +3429,7 @@ pub mod eagle_drc {
         let my = f64::midpoint(y1, y2);
         let dx = x2 - x1;
         let dy = y2 - y1;
-        let chord = (dx * dx + dy * dy).sqrt();
+        let chord = dx.hypot(dy);
         if chord < 1e-9 {
             return vec![Capsule {
                 ax: x1,
@@ -3434,7 +3441,10 @@ pub mod eagle_drc {
         }
         let radius = (chord / 2.0) / (theta / 2.0).sin().abs();
         // Distance from chord midpoint to centre.
-        let h = (radius * radius - (chord / 2.0).powi(2)).max(0.0).sqrt();
+        let h = (chord / 2.0)
+            .mul_add(-(chord / 2.0), radius * radius)
+            .max(0.0)
+            .sqrt();
         // Unit normal to the chord. The centre sits a distance `h` along the
         // normal from the midpoint, but on which side depends on the sign of the
         // included angle AND on whether the arc is the major or minor one. Rather
@@ -3444,8 +3454,8 @@ pub mod eagle_drc {
         let nx = -dy / chord;
         let ny = dx / chord;
         let pick = |s: f64| -> (f64, f64, f64, f64) {
-            let cx = mx + s * h * nx;
-            let cy = my + s * h * ny;
+            let cx = (s * h).mul_add(nx, mx);
+            let cy = (s * h).mul_add(ny, my);
             let a0 = (y1 - cy).atan2(x1 - cx);
             let ex = cx + radius * (a0 + theta).cos();
             let ey = cy + radius * (a0 + theta).sin();
@@ -3463,7 +3473,7 @@ pub mod eagle_drc {
         let mut prev = (x1, y1);
         for i in 1..=n {
             let t = i as f64 / n as f64;
-            let a = a0 + theta * t;
+            let a = theta.mul_add(t, a0);
             let p = (cx + radius * a.cos(), cy + radius * a.sin());
             caps.push(Capsule {
                 ax: prev.0,
@@ -3487,9 +3497,13 @@ pub mod eagle_drc {
         let (rs, rc) = rot.sin_cos();
         (0..8)
             .map(|i| {
-                let a = std::f64::consts::FRAC_PI_8 + f64::from(i) * std::f64::consts::FRAC_PI_4;
+                let a =
+                    f64::from(i).mul_add(std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_8);
                 let (lx, ly) = (circum * a.cos(), circum * a.sin());
-                (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc)
+                (
+                    ly.mul_add(-rs, lx.mul_add(rc, cx)),
+                    ly.mul_add(rc, lx.mul_add(rs, cy)),
+                )
             })
             .collect()
     }
@@ -3516,7 +3530,10 @@ pub mod eagle_drc {
         let (esin, ecos) = eff_rot.to_radians().sin_cos();
         let to_world = |lx: f64, ly: f64| -> (f64, f64) {
             let mx = if el.mirrored { -lx } else { lx };
-            (el.x + mx * ecos - ly * esin, el.y + mx * esin + ly * ecos)
+            (
+                ly.mul_add(-esin, mx.mul_add(ecos, el.x)),
+                ly.mul_add(ecos, mx.mul_add(esin, el.y)),
+            )
         };
         match item {
             PkgItem::Pad {
@@ -4314,7 +4331,7 @@ pub mod altium_drc {
         let start = start_deg.to_radians();
         let at = |t: f64| {
             let ang = start + sweep * t;
-            (cx + radius * ang.cos(), cy + radius * ang.sin())
+            (radius.mul_add(ang.cos(), cx), radius.mul_add(ang.sin(), cy))
         };
         (1..=ARC_SEGMENTS)
             .map(|i| {
@@ -4350,7 +4367,12 @@ pub mod altium_drc {
         let (cx, cy, w, h) = (p.x_mm, p.y_mm, p.size_x, p.size_y);
         let rot = p.rotation_deg.to_radians();
         let (rs, rc) = rot.sin_cos();
-        let to_world = |lx: f64, ly: f64| (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc);
+        let to_world = |lx: f64, ly: f64| {
+            (
+                ly.mul_add(-rs, lx.mul_add(rc, cx)),
+                ly.mul_add(rc, lx.mul_add(rs, cy)),
+            )
+        };
         match p.shape {
             1 => {
                 // Circle, or a stadium along the long axis.

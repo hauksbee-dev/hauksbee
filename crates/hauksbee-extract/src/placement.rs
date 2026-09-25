@@ -454,7 +454,7 @@ impl PlacementFile {
             if let Some((x, y, board_rotation)) = comp.position {
                 check.comparable_positions += 1;
                 let dx = (x - (p.x_mm + offset.0)).abs();
-                let dy = (y - (y_sign * p.y_mm + offset.1)).abs();
+                let dy = (y - y_sign.mul_add(p.y_mm, offset.1)).abs();
                 if dx > POSITION_TOLERANCE_MM || dy > POSITION_TOLERANCE_MM {
                     check.position_disagreements.push(PositionDisagreement {
                         reference: p.reference.clone(),

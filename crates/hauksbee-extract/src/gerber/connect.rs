@@ -406,7 +406,10 @@ pub fn reconstruct(
                     // mid-span is caught even if both ends are outside.
                     for k in 1..4 {
                         let t = f64::from(k) / 4.0;
-                        test_pts.push((c.ax + (c.bx - c.ax) * t, c.ay + (c.by - c.ay) * t));
+                        test_pts.push((
+                            (c.bx - c.ax).mul_add(t, c.ax),
+                            (c.by - c.ay).mul_add(t, c.ay),
+                        ));
                     }
                 }
                 for &rgi in &near_regions {
@@ -1189,8 +1192,8 @@ impl GridWindow {
     /// Whether the offset (dx, dy) from the placement point falls inside the
     /// oriented window (either orientation of the row axis).
     fn contains(&self, dx: f64, dy: f64) -> bool {
-        let u = (dx * self.cos + dy * self.sin).abs();
-        let v = (-dx * self.sin + dy * self.cos).abs();
+        let u = dx.mul_add(self.cos, dy * self.sin).abs();
+        let v = (-dx).mul_add(self.sin, dy * self.cos).abs();
         (u <= self.long && v <= self.cross) || (u <= self.cross && v <= self.long)
     }
 }
@@ -1202,8 +1205,8 @@ fn grid_window(package: &str, rotation_deg: f64) -> Option<GridWindow> {
     let pitch = pitch_hint(&p).unwrap_or(2.54);
     // Same margins as `footprint_half_extent`: the row span is the FULL grid
     // length (KiCad headers origin at pin 1), plus one pitch of slack.
-    let long = f64::from(rows.max(cols)) * pitch + pitch;
-    let cross = f64::from(rows.min(cols)) * pitch + pitch;
+    let long = f64::from(rows.max(cols)).mul_add(pitch, pitch);
+    let cross = f64::from(rows.min(cols)).mul_add(pitch, pitch);
     let (sin, cos) = rotation_deg.to_radians().sin_cos();
     Some(GridWindow {
         long,

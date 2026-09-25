@@ -1617,8 +1617,8 @@ fn place_pin(local: (f64, f64, f64), inst: (f64, f64, f64), mirror: Option<&str>
     let (lx, ly) = (local.0, -local.1);
     let theta = inst.2.to_radians();
     let (s, c) = theta.sin_cos();
-    let mut rx = lx * c + ly * s;
-    let mut ry = -lx * s + ly * c;
+    let mut rx = lx.mul_add(c, ly * s);
+    let mut ry = (-lx).mul_add(s, ly * c);
     match mirror {
         Some("x") => ry = -ry,
         Some("y") => rx = -rx,

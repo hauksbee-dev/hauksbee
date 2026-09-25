@@ -442,7 +442,7 @@ fn is_convex_contour(points: &[(f64, f64)]) -> bool {
         let a = points[i];
         let b = points[(i + 1) % points.len()];
         let c = points[(i + 2) % points.len()];
-        let cross = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0);
+        let cross = (b.0 - a.0).mul_add(c.1 - b.1, -((b.1 - a.1) * (c.0 - b.0)));
         if cross.abs() <= 1e-12 {
             continue;
         }
@@ -1334,8 +1334,8 @@ fn already_void(
                     (x, y)
                 } else {
                     (
-                        x + sign * dx / len * NUDGE_MM,
-                        y + sign * dy / len * NUDGE_MM,
+                        (sign * dx / len).mul_add(NUDGE_MM, x),
+                        (sign * dy / len).mul_add(NUDGE_MM, y),
                     )
                 }
             })
@@ -2390,11 +2390,11 @@ impl<'a> Plotter<'a> {
         let mut best_score = f64::INFINITY;
         for &(sox, soy) in &[(ox, oy), (-ox, oy), (ox, -oy), (-ox, -oy)] {
             let (cx, cy) = (sx + sox, sy + soy);
-            let rs = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+            let rs = (sx - cx).hypot(sy - cy);
             if rs <= f64::EPSILON {
                 continue;
             }
-            let re = ((ex - cx).powi(2) + (ey - cy).powi(2)).sqrt();
+            let re = (ex - cx).hypot(ey - cy);
             let a0 = (sy - cy).atan2(sx - cx);
             let mut a1 = (ey - cy).atan2(ex - cx);
             if ccw {
@@ -2457,7 +2457,7 @@ impl<'a> Plotter<'a> {
         } else {
             (sx + ox, sy + oy)
         };
-        let radius = ((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy)).sqrt();
+        let radius = (sx - cx).hypot(sy - cy);
         if radius <= f64::EPSILON {
             return None;
         }
@@ -2496,8 +2496,8 @@ impl<'a> Plotter<'a> {
         };
         (1..=ARC_SEGMENTS)
             .map(|i| {
-                let a = a0 + sweep * (i as f64 / ARC_SEGMENTS as f64);
-                (cx + radius * a.cos(), cy + radius * a.sin())
+                let a = sweep.mul_add(i as f64 / ARC_SEGMENTS as f64, a0);
+                (radius.mul_add(a.cos(), cx), radius.mul_add(a.sin(), cy))
             })
             .collect()
     }
@@ -2715,7 +2715,10 @@ pub(super) fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
         .hypot(p.1 - c.1)
         .min((q.0 - c.0).hypot(q.1 - c.1));
     let step = (short * 1e-3).max(diag * 1e-6);
-    (c.0 + bx / blen * step, c.1 + by / blen * step)
+    (
+        (bx / blen).mul_add(step, c.0),
+        (by / blen).mul_add(step, c.1),
+    )
 }
 
 /// A representative point in the shape's actual filled copper.
@@ -2910,11 +2913,11 @@ fn stadium_outline(c: &Capsule) -> Vec<(f64, f64)> {
     // Cap around B (from +90° to -90° relative to the axis), then around A.
     for k in 0..=16 {
         let a = base_a - f64::from(k) * std::f64::consts::PI / 16.0;
-        pts.push((c.bx + c.r * a.cos(), c.by + c.r * a.sin()));
+        pts.push((c.r.mul_add(a.cos(), c.bx), c.r.mul_add(a.sin(), c.by)));
     }
     for k in 0..=16 {
         let a = base_a + std::f64::consts::PI - f64::from(k) * std::f64::consts::PI / 16.0;
-        pts.push((c.ax + c.r * a.cos(), c.ay + c.r * a.sin()));
+        pts.push((c.r.mul_add(a.cos(), c.ax), c.r.mul_add(a.sin(), c.ay)));
     }
     pts
 }
@@ -2940,7 +2943,7 @@ fn regular_polygon(cx: f64, cy: f64, r: f64, vertices: u8, rot_deg: f64) -> Shap
     let mut pts = Vec::with_capacity(n);
     for i in 0..n {
         let a = rot + (i as f64) * std::f64::consts::TAU / n as f64;
-        pts.push((cx + r * a.cos(), cy + r * a.sin()));
+        pts.push((r.mul_add(a.cos(), cx), r.mul_add(a.sin(), cy)));
     }
     Shape::Polygon { pts, r: 0.0 }
 }

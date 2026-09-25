@@ -186,7 +186,7 @@ fn agreement(native: &ExtractedBoard, recon: &ExtractedBoard) -> Agreement {
             for dy in -1..=1 {
                 let cell = (nk.0 + dx, nk.1 + dy);
                 for &(rx, ry) in recon_cells.get(&cell).into_iter().flatten() {
-                    let d = ((rx - nx).powi(2) + (ry - ny).powi(2)).sqrt();
+                    let d = (rx - nx).hypot(ry - ny);
                     if d <= PAD_MATCH_TOL_MM && best.as_ref().is_none_or(|&(_, bd)| d < bd) {
                         best = Some((pad_key(rx, ry), d));
                     }

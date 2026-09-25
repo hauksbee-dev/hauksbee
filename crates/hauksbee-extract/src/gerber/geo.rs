@@ -156,15 +156,15 @@ fn vertex_mean(pts: &[(f64, f64)]) -> (f64, f64) {
 #[must_use]
 pub fn point_seg_closest(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> ((f64, f64), f64) {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len2 = dx * dx + dy * dy;
+    let len2 = dx.mul_add(dx, dy * dy);
     let c = if len2 <= f64::EPSILON {
         a
     } else {
-        let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0);
+        let t = ((p.0 - a.0).mul_add(dx, (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0);
         (a.0 + t * dx, a.1 + t * dy)
     };
     let (ex, ey) = (p.0 - c.0, p.1 - c.1);
-    (c, ex * ex + ey * ey)
+    (c, ex.mul_add(ex, ey * ey))
 }
 
 /// Squared distance from point P to segment AB.
@@ -174,7 +174,7 @@ pub fn point_seg_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> 
 }
 
 fn orient(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
-    (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
+    (q.0 - p.0).mul_add(r.1 - p.1, -((q.1 - p.1) * (r.0 - p.0)))
 }
 
 fn on_seg(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> bool {
@@ -209,9 +209,9 @@ pub fn seg_seg_closest(
     if segments_intersect(a1, a2, b1, b2) {
         let (d1x, d1y) = (a2.0 - a1.0, a2.1 - a1.1);
         let (d2x, d2y) = (b2.0 - b1.0, b2.1 - b1.1);
-        let denom = d1x * d2y - d1y * d2x;
+        let denom = d1x.mul_add(d2y, -(d1y * d2x));
         if denom.abs() > 1e-12 {
-            let t = (((b1.0 - a1.0) * d2y - (b1.1 - a1.1) * d2x) / denom).clamp(0.0, 1.0);
+            let t = ((b1.0 - a1.0).mul_add(d2y, -((b1.1 - a1.1) * d2x)) / denom).clamp(0.0, 1.0);
             let p = (a1.0 + t * d1x, a1.1 + t * d1y);
             return (0.0, p, p);
         }
@@ -349,12 +349,12 @@ fn seg_contour_closest(
 /// copper, clamped between `pa` and `pb` so deep penetrations stay on copper.
 fn closest_approach_point(pa: (f64, f64), pb: (f64, f64), ra: f64, rb: f64) -> (f64, f64) {
     let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
-    let d = (dx * dx + dy * dy).sqrt();
+    let d = dx.hypot(dy);
     if d <= f64::EPSILON {
         return pa;
     }
     let t = ((ra + d - rb) / (2.0 * d)).clamp(0.0, 1.0);
-    (pa.0 + dx * t, pa.1 + dy * t)
+    (dx.mul_add(t, pa.0), dy.mul_add(t, pa.1))
 }
 
 /// Is there painted copper arbitrarily close to this stored contour point?

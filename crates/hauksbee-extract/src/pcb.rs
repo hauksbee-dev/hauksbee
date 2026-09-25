@@ -303,7 +303,10 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
         // Pad offsets are in the footprint frame; KiCad's y axis points
         // down, and footprint rotation is counter-clockwise, so the world
         // offset is (x cos + y sin, -x sin + y cos).
-        let abs = (fx + px * cos + py * sin, fy - px * sin + py * cos);
+        let abs = (
+            py.mul_add(sin, px.mul_add(cos, fx)),
+            py.mul_add(cos, px.mul_add(-sin, fy)),
+        );
         pins.push(Pin {
             number,
             net,

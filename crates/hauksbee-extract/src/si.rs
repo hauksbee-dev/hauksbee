@@ -1149,7 +1149,10 @@ fn antenna_keepout(c: &Component) -> Option<(KeepoutRect, &'static str)> {
 /// y-down) and translate to board coordinates. Mirrors `pcb::extract_footprint`.
 fn local_to_board(fx: f64, fy: f64, frot_deg: f64, lx: f64, ly: f64) -> (f64, f64) {
     let (sin, cos) = frot_deg.to_radians().sin_cos();
-    (fx + lx * cos + ly * sin, fy - lx * sin + ly * cos)
+    (
+        ly.mul_add(sin, lx.mul_add(cos, fx)),
+        ly.mul_add(cos, lx.mul_add(-sin, fy)),
+    )
 }
 
 /// Board-coordinate polygon (the four rotated corners) of a keepout rect.
@@ -1481,7 +1484,7 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
         };
         let (sx, sy) = (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0));
         let (ex, ey) = (e.arg_f64(0).unwrap_or(0.0), e.arg_f64(1).unwrap_or(0.0));
-        total += ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
+        total += (ex - sx).hypot(ey - sy);
     }
     // Arcs carry their true swept length, computed from KiCad's start/mid/end
     // triple. The chord is NOT a usable approximation: it is exact only in the
@@ -1505,7 +1508,7 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
             Some((mx, my)) => arc_length_mm((sx, sy), (mx, my), (ex, ey)),
             // No mid point recorded: the chord is all the file gives us. It is a
             // floor on the real length, never an over-estimate.
-            None => ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt(),
+            None => (ex - sx).hypot(ey - sy),
         };
     }
     total
@@ -1524,9 +1527,9 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
 #[must_use]
 pub fn arc_length_mm(start: (f64, f64), mid: (f64, f64), end: (f64, f64)) -> f64 {
     let ((sx, sy), (mx, my), (ex, ey)) = (start, mid, end);
-    let chord = |a: (f64, f64), b: (f64, f64)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+    let chord = |a: (f64, f64), b: (f64, f64)| (b.0 - a.0).hypot(b.1 - a.1);
     // Twice the signed triangle area; zero when collinear.
-    let cross = (mx - sx) * (ey - sy) - (my - sy) * (ex - sx);
+    let cross = (mx - sx).mul_add(ey - sy, -((my - sy) * (ex - sx)));
     if cross.abs() < 1e-12 {
         return chord(start, end);
     }

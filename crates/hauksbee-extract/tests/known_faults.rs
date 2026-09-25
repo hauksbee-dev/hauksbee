@@ -505,7 +505,7 @@ fn mwgen_g1_pad_overlap_shorts_match_kicads_own_drc() {
         let key = (r.nets.clone(), r.layer.clone(), owners);
         let (_, x, y) = got[&key];
         for (ax, ay) in r.anchors_um {
-            let d = ((x - ax as f64 / 1e3).powi(2) + (y - ay as f64 / 1e3).powi(2)).sqrt();
+            let d = (x - ax as f64 / 1e3).hypot(y - ay as f64 / 1e3);
             assert!(
                 d < 2.0,
                 "contact point ({x:.3}, {y:.3}) is {d:.3} mm from KiCad's pad anchor \

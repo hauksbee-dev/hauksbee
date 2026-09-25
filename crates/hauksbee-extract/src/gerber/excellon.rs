@@ -689,8 +689,8 @@ fn tessellate_arc(
     let mut out = Vec::with_capacity(steps);
     let mut prev = (sx, sy);
     for k in 1..=steps {
-        let a = a0 + sweep * (k as f64 / steps as f64);
-        let p = (cx + r * a.cos(), cy + r * a.sin());
+        let a = sweep.mul_add(k as f64 / steps as f64, a0);
+        let p = (r.mul_add(a.cos(), cx), r.mul_add(a.sin(), cy));
         out.push((prev.0, prev.1, p.0, p.1));
         prev = p;
     }

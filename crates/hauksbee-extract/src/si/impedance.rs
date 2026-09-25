@@ -263,7 +263,7 @@ pub fn microstrip_z0(w: f64, h: f64, t: f64, er: f64) -> Option<f64> {
     if w <= 0.0 || h <= 0.0 || er <= 0.0 {
         return None;
     }
-    let denom = 0.8 * w + t;
+    let denom = 0.8f64.mul_add(w, t);
     if denom <= 0.0 {
         return None;
     }
@@ -284,7 +284,7 @@ pub fn stripline_z0(w: f64, h: f64, t: f64, er: f64) -> Option<f64> {
     if w <= 0.0 || h <= 0.0 || er <= 0.0 {
         return None;
     }
-    let denom = 0.67 * std::f64::consts::PI * (0.8 * w + t);
+    let denom = 0.67 * std::f64::consts::PI * 0.8f64.mul_add(w, t);
     if denom <= 0.0 {
         return None;
     }
@@ -307,7 +307,7 @@ pub fn differential_microstrip_z(z0: f64, s: f64, h: f64) -> Option<f64> {
     if z0 <= 0.0 || s < 0.0 || h <= 0.0 {
         return None;
     }
-    Some(2.0 * z0 * (1.0 - 0.48 * (-0.96 * s / h).exp()))
+    Some(2.0 * z0 * 0.48f64.mul_add(-(-0.96 * s / h).exp(), 1.0))
 }
 
 // ===========================================================================
@@ -1051,7 +1051,9 @@ fn widest_void(uncovered: &[(f64, f64)], layer: &str, total: usize) -> Option<Mi
                     continue;
                 }
                 let b = uncovered[j];
-                if (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) <= VOID_LINK_MM * VOID_LINK_MM {
+                if (a.1 - b.1).mul_add(a.1 - b.1, (a.0 - b.0).powi(2))
+                    <= VOID_LINK_MM * VOID_LINK_MM
+                {
                     group[j] = id;
                     members.push(j);
                 }
@@ -1066,7 +1068,7 @@ fn widest_void(uncovered: &[(f64, f64)], layer: &str, total: usize) -> Option<Mi
         let mut extent = 0.0_f64;
         for (i, a) in pts.iter().enumerate() {
             for b in &pts[i + 1..] {
-                extent = extent.max(((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt());
+                extent = extent.max((b.0 - a.0).hypot(b.1 - a.1));
             }
         }
         // The uncovered samples sit INSIDE the void, so the distance between the
@@ -1117,7 +1119,7 @@ impl Piercing {
         self.layers.is_empty() || self.layers.iter().any(|l| l == layer)
     }
     fn covers(&self, x: f64, y: f64) -> bool {
-        (x - self.x).powi(2) + (y - self.y).powi(2) <= self.radius * self.radius
+        (y - self.y).mul_add(y - self.y, (x - self.x).powi(2)) <= self.radius * self.radius
     }
 }
 
@@ -1174,9 +1176,7 @@ fn plane_piercings(root: &List, margin: f64) -> Vec<Piercing> {
             // just outside the excuse: a row of them along a fanout read as a
             // void. Using the corner distance over-excuses a little, which only
             // ever loses an abstention.
-            let half_diag = ((sx.max(drill) / 2.0 + margin).powi(2)
-                + (sy.max(drill) / 2.0 + margin).powi(2))
-            .sqrt();
+            let half_diag = (sx.max(drill) / 2.0 + margin).hypot(sy.max(drill) / 2.0 + margin);
             let mut layers: Vec<String> = pad
                 .find("layers")
                 .map(|l| (0..).map_while(|i| l.arg_value(i)).collect())
@@ -1492,7 +1492,7 @@ struct Seg {
 
 impl Seg {
     fn length(&self) -> f64 {
-        ((self.bx - self.ax).powi(2) + (self.by - self.ay).powi(2)).sqrt()
+        (self.bx - self.ax).hypot(self.by - self.ay)
     }
 }
 
