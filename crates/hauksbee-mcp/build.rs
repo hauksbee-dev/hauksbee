@@ -98,19 +98,16 @@ fn main() {
     if dot_git.is_file() {
         println!("cargo:rerun-if-changed={}", dot_git.display());
     }
-    for selector in ["--git-dir", "--git-common-dir"] {
+    // HEAD and index are this worktree's own; the shared common dir adds only branch refs.
+    let own = ["HEAD", "index", "packed-refs", "refs"];
+    for (selector, names) in [("--git-dir", &own[..]), ("--git-common-dir", &own[2..])] {
         if let Ok(out) = Command::new("git")
             .args(["-C", source_root.to_str().unwrap(), "rev-parse", selector])
             .output()
         {
             if out.status.success() {
-                let raw = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-                let dir = if raw.is_absolute() {
-                    raw
-                } else {
-                    source_root.join(raw)
-                };
-                for name in ["HEAD", "index", "packed-refs", "refs"] {
+                let dir = source_root.join(String::from_utf8_lossy(&out.stdout).trim());
+                for name in names {
                     watch(&dir.join(name));
                 }
             }
