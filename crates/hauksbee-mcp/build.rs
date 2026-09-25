@@ -13,7 +13,6 @@ fn main() {
         println!("cargo:rustc-env=GIT_HASH={hash}");
         return;
     }
-
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
         .canonicalize()
         .expect("canonical Hauksbee MCP manifest directory");

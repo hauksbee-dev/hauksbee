@@ -50,6 +50,14 @@ Cleanup takes both Cargo directory locks and skips when a compiler or linker is
 active; do not launch standalone rustc during cleanup. Direct Cargo invocations
 are unchanged. Custom target directories and Windows are not cleaned.
 
+On macOS, the first run in a new linked worktree (no `target/.build/debug` yet)
+seeds it with an APFS copy-on-write clone of the main checkout's `deps`, `build`
+and `.fingerprint` directories, taken under the main checkout's Cargo lock. The
+workspace crates' fingerprints are dropped, so only third-party crates, proc
+macros and build scripts are reused. Every workspace crate recompiles against
+the worktree's own sources and paths. In a measured fresh worktree, 14 units
+compiled instead of 263. A custom target directory skips seeding.
+
 `python3 scripts/clean_abandoned_rust_objects.py` previews the count; add `--apply`
 to clean while idle. Receipts live in `target/build-cleanup/`. This deliberately
 uses Cargo's advisory locks and Python's standard library, not `cargo clean`,
