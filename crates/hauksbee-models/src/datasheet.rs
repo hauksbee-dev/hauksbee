@@ -1486,12 +1486,16 @@ under an invented key:
 [[models.envelope]]: read the Recommended Operating Conditions and Absolute
 Maximum Ratings tables. Emit one supply_range entry for every SUPPLY-class pin
 whose recommended minimum and maximum are both published. Emit rail_order for
-each explicit relation such as VCCA <= VCCB. `pin`, `lower`, and `upper` are
-roles from [models.pins], never pad numbers. Every entry requires `basis` naming
-the exact table and row. Add `abs_max_v` only when the absolute-maximum table
-publishes it. There is no envelope without a table row to cite: omitting this
-section is correct when the datasheet lacks the necessary tables. Never infer a
-bound from a typical value, application schematic, or family convention.
+each explicit relation such as VCCA <= VCCB. From an op-amp's or comparator's
+VICR/CMVR row, emit one input_common_mode per channel: `supply` its positive
+supply, `inputs` that channel's two inputs, and `headroom_v` the test supply
+minus the range's upper end (0 V to V+ - 1.5 V is 1.5; none reaching V+). Pins,
+supplies and inputs are roles from [models.pins], never pad numbers. Every entry
+requires `basis` naming the exact table and row. Add `abs_max_v` only when the
+absolute-maximum table publishes it. There is no envelope without a table row to
+cite: omitting this section is correct when the datasheet lacks the necessary
+tables. Never infer a bound from a typical value, application schematic, or
+family convention.
 
 WHERE TO LOOK AND HOW TO READ IT:
 - Supply bounds belong in Recommended Operating Conditions.
@@ -1499,13 +1503,11 @@ WHERE TO LOOK AND HOW TO READ IT:
   functional operation.
 - Read the numbered Pin Functions table first, then cross-check it against the
   package top-view figure and a typical application schematic before answering.
-- Electrical Characteristics and Switching Characteristics values are worthless
-  without the bias condition in the table header, row, or footnote. Put that
-  condition in the citation beside the value.
 - Application Information and Design Procedure sections often contain the
   programming equations. Cite the equation and every stated validity condition.
 - Before answering, re-read every cited row and footnote, then double-check its
-  units, sign, package variant, test bias, and min/typ/max column.
+  units, sign, package variant, min/typ/max column and test bias (in the table
+  header, row or footnote; a value is worthless without it: cite it beside it).
 - Read each value from one printed cell, in a family table the exact orderable
   part's column; never average, interpolate between cells, or make a midpoint.
 
@@ -1584,13 +1586,16 @@ IMPORTANT RULES:
    for a published guarantee. `physical-bounds-only` is the whole validation claim.
 1. Add a comment on each param/rating line citing where in the datasheet you found
    the value, e.g.: `# Source: Table 6.3, typ column`
-2. Use only values explicitly stated in the datasheet; do NOT guess. For SPICE
-   params not given verbatim (e.g. `is`, `n`, `rs`), you may derive them from a
-   stated operating point (e.g. VBE at a known IC) or fit them to a
-   typical-characteristics figure (e.g. an IF-VF or ID-VDS curve) read across
-   its plotted range. Say so in the comment: label the value typical and cite
-   the figure, the points read, and its conditions. A curve reading is typical
-   only: never turn it into a min/max, a rating, or an uncertainty interval.
+2. Use only values explicitly stated in the datasheet; do NOT guess. A SPICE
+   model the sheet prints (.MODEL/.SUBCKT) is copied verbatim, citing it. Other
+   SPICE params (e.g. `is`, `n`, `rs`) you may derive from a stated operating
+   point (e.g. VBE at a known IC) or fit to a typical-characteristics figure
+   (e.g. an IF-VF or ID-VDS curve) read across its plotted range, saying so in
+   the comment with the figure, the points read and their conditions; a curve
+   reading is typical only, never a min/max, a rating or an uncertainty interval.
+   Record every fT, Cob/Ccb, Cib/Ceb, Ciss, Crss, CT, trr, V(BR) and VZ row as a
+   characteristic with its symbol, unit and bias: Hauksbee derives tf, cjc, cje,
+   cgd, cgs, cjo, tt and bv/ibv from them.
 3. If a required param is genuinely absent and cannot be derived or fitted, do not
    estimate it. If the kind's params above allow an `unknown` record for it, write
    that record; otherwise emit an identity-only card (`identity_only = true`,
@@ -2180,6 +2185,29 @@ impl Reply<'_> {
         }
         if inserted {
             say!("[model-extract] warning: model-error record missing; inserted the conservative unknown record");
+        }
+        // A param omitted where a cited row fixes it is filled, with its working.
+        let db = toml::from_str::<crate::schema::DbFile>(&raw).map_or(vec![], |d| d.models);
+        let models = doc.get_mut(path).and_then(Item::as_array_of_tables_mut);
+        let tables = models.into_iter().flat_map(ArrayOfTables::iter_mut);
+        for (entry, table) in db.iter().zip(tables) {
+            let mut derived = crate::param_names::derivations(entry);
+            derived.retain(|d| !entry.params.0.contains_key(d.0));
+            let params = (!derived.is_empty()).then(|| table.entry("params"));
+            let params = params.map(|p| p.or_insert(Item::Table(Table::new())));
+            let Some(params) = params.and_then(Item::as_table_like_mut) else {
+                continue;
+            };
+            for (name, v, how) in derived {
+                say!("[model-extract] {}: {how}", entry.id);
+                let text = format!("{v:e}"); // 6.3662e-10, not 0.00000000063662
+                let mut value = text.parse().unwrap_or(toml_edit::Value::from(v));
+                value.decor_mut().set_suffix(format!("  # {how}"));
+                params.insert(name, Item::Value(value));
+            }
+            inserted = true;
+        }
+        if inserted {
             return doc.to_string();
         }
         raw
@@ -3250,12 +3278,17 @@ mod tests {
         assert!(build_prompt("1N4148", "diode", "x").contains("VRRM"));
         assert!(build_prompt("AMS1117", "vreg", "x").contains("max_junction_temp_c"));
         assert!(bjt.contains("   - bf: 1 to 2000\n"));
+        assert!(
+            bjt.contains("(.MODEL/.SUBCKT) is copied verbatim") && bjt.contains("derives tf, cjc")
+        );
+        assert!(bjt.contains("rated IOUT") && bjt.contains("row for the card's stated package"));
         let nmos = build_prompt("FET_FIXTURE", "nmos", "x");
         assert!(nmos.contains("   - kp: 1e-6 to 1000\n") && nmos.contains("cgd, is, cbd"));
         assert!(nmos.contains("1/(kp*(|VGS| - |vto|)) + rd + rs"));
         let comparator = build_prompt("CMP_FIXTURE", "comparator", "x");
         assert!(comparator.contains("hysteresis = 0.0") && comparator.contains("leak_s: 0 to 1"));
         assert!(comparator.contains("(VT+ minus VT-), never the input offset"));
+        assert!(comparator.contains("VICR/CMVR row, emit one input_common_mode per channel"));
         assert!(comparator.contains("each unit's signal roles _a to _d (out_a, in_minus_a"));
         assert!(build_prompt("AMP_FIXTURE", "opamp", "x").contains("never the supply or ground"));
         assert!(comparator.contains("leak_s = output-off conductance (IOH / VOH) (S)"));
@@ -3590,6 +3623,13 @@ uncertainty = [
         assert!(parse_and_validate_reply(&filled, part, kind).is_ok());
         assert_eq!(filled.matches("\"model\"").count(), 2);
         assert_eq!(model.complete(good.to_string()), good);
+        // A cited fT row fills the omitted tf, with its working as the comment.
+        let ft = "[[models.source.characteristic]]\nparameter = \"fT\"\ntyp = 250\nunit = \"MHz\"\nconditions = \"c\"\nbasis = \"b\"\n";
+        let derived = model.complete(format!("{good}{ft}"));
+        let working = "tf = 6.3662e-10  # derived: tf = 1/(2π·fT), 'fT' typ 250 MHz (c)";
+        assert!(
+            derived.contains(working) && parse_and_validate_reply(&derived, part, kind).is_ok()
+        );
         for (from, to, needle) in [
             ("\"model\"", "\"bf\"", "rule 0"),
             ("low = 100.0", "low = 999.0", "uncertainty 1 (bf)"),

@@ -380,11 +380,8 @@ fn form_ignored(entry: &ModelEntry) -> &'static [&'static str] {
 /// row prints it as a typ). The unit check only looks below 1e-3, where a copied
 /// current or capacitance lives and a round volt or ohm value cannot collide.
 pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
-    let rows = entry
-        .source
-        .as_ref()
-        .map_or(&[][..], |s| &s.characteristic[..]);
-    let mut out = Vec::new();
+    let rows = cited_rows(entry);
+    let (mut out, mut derived) = (Vec::new(), derivations(entry));
     for (name, value) in &entry.params.0 {
         let (Some(v), Some(unit)) = (value.as_f64(), param_unit(name)) else {
             continue;
@@ -424,6 +421,7 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
                 && row.typ.is_none()
                 // A bound param (VOL max) equalling the column it reads is its meaning.
                 && row_column(name) != column
+                && !derived.iter().any(|d| d.0 == name && (d.1 - v).abs() <= 1e-3 * v.abs())
             {
                 out.push(format!(
                     "param '{name}' equals the {column} of characteristic '{row_name}', which \
@@ -435,6 +433,12 @@ pub fn source_warnings(entry: &ModelEntry) -> Vec<String> {
     }
     out.extend(row_slips(entry, rows));
     out.extend(law_warning(entry, rows));
+    derived.retain(|d| !entry.params.0.contains_key(d.0));
+    for (n, v, how) in derived {
+        out.push(format!(
+            "param '{n}' is omitted but its cited row gives {n} = {v:e}, {how}"
+        ));
+    }
     out
 }
 
@@ -502,10 +506,123 @@ fn law_warning(entry: &ModelEntry, rows: &[Characteristic]) -> Option<String> {
     (miss > 0.1).then(|| format!("diode is/n/rs give VF = {at:.3} V at IF = {i} A where a cited VF row prints {v} V, over 10% off"))
 }
 
-/// Whether a row's parameter text has the word `sym` (`HFE` in "hFE gain").
+/// Whether a row's parameter text has the word `sym` (`HFE` in "hFE gain",
+/// `VBRR` in "V(BR)R breakdown").
 fn symbol(row: &Characteristic, sym: &str) -> bool {
-    let mut words = row.parameter.split(|c: char| !c.is_alphanumeric());
+    let text = row.parameter.replace(['(', ')'], "");
+    let mut words = text.split(|c: char| !c.is_alphanumeric());
     words.any(|w| w.eq_ignore_ascii_case(sym))
+}
+
+fn cited_rows(entry: &ModelEntry) -> &[Characteristic] {
+    entry.source.as_ref().map_or(&[], |s| &s.characteristic)
+}
+
+/// Whether a row is at 25 °C or states no temperature.
+fn at_25(row: &Characteristic) -> bool {
+    static CELSIUS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"([-+]?\d*\.?\d+)\s*°\s*C").expect("a valid pattern")
+    });
+    let mut temperatures = CELSIUS.captures_iter(&row.conditions);
+    temperatures.all(|t| t[1].parse() == Ok(25))
+}
+
+/// The magnitude of `sym = <number> <unit>` in `text`, in `unit` (`IR = 10 mA`).
+fn quantity(text: &str, sym: &str, unit: &str) -> Option<f64> {
+    let re = regex::Regex::new(&format!(r"\b{sym}\s*=\s*([-+]?\d*\.?\d+)\s*([a-zA-Zµμ]*)")).ok()?;
+    let c = re.captures(text)?;
+    let scale = crate::units::scale_between(&c[2], unit).or(c[2].is_empty().then_some(1.0));
+    Some(c[1].parse::<f64>().ok()?.abs() * scale?)
+}
+
+/// A param a cited row fixes by a standard relation: its name, value and working.
+pub(crate) type Derived = (&'static str, f64, String);
+
+/// Every param a cited row (25 °C or unstated) fixes by a standard relation, on
+/// the card or not: BJT tf = 1/(2π·fT), cjc/cje from Cob/Cib; MOSFET cgd = Crss,
+/// cgs = Ciss - Crss; diode cjo from CT, bv/ibv from V(BR) or VZ and its test
+/// current, tt from trr = tt·ln(1 + IF/IR) (charge-control storage time). A row
+/// reads its typ, else its min/max midpoint, else its one printed bound, named in
+/// the working. A capacitance printed at reverse bias V (the lowest printed) is
+/// taken to zero bias by C·(1 + V/vj)^m at the junction's vj/m: the card's diode
+/// vj/m, else the binder's defaults. Nothing is derived without its row.
+pub(crate) fn derivations(entry: &ModelEntry) -> Vec<Derived> {
+    let rows = cited_rows(entry);
+    let find = |syms: &str, unit: &str| -> Vec<(f64, String, &Characteristic)> {
+        let cited = |r: &&Characteristic| at_25(r) && syms.split(' ').any(|s| symbol(r, s));
+        rows.iter()
+            .filter(cited)
+            .filter_map(|r| {
+                let (col, x) = match (r.typ, r.min, r.max) {
+                    (Some(t), ..) => ("typ", t),
+                    (_, Some(a), Some(b)) => ("midpoint", (a + b) / 2.0),
+                    (_, Some(a), _) => ("min", a),
+                    (_, _, b) => ("max", b?),
+                };
+                let v = x.abs() * crate::units::scale_between(&r.unit, unit)?;
+                let how = format!("'{}' {col} {x} {} ({})", r.parameter, r.unit, r.conditions);
+                Some((v, how, r))
+            })
+            .collect()
+    };
+    let first = |syms, unit| find(syms, unit).into_iter().next();
+    let zero_bias = |name, syms, bias, (vj, m): (f64, f64)| {
+        let at = |(c, how, r): (f64, String, &Characteristic)| {
+            let v = quantity(&r.conditions, bias, "V");
+            let at = v.map_or("no bias printed, read as zero bias".into(), |v| {
+                format!("taken from {v} V reverse bias by C·(1 + V/{vj})^{m}")
+            });
+            let c0 = c * (1.0 + v.unwrap_or(0.0) / vj).powf(m);
+            (v.unwrap_or(f64::INFINITY), c0, format!("{how}, {at}"))
+        };
+        let found = find(syms, "F").into_iter().map(at);
+        let lowest = found.min_by(|a, b| a.0.total_cmp(&b.0));
+        lowest.map(|(_, c0, how)| (name, c0, how))
+    };
+    let mut out: Vec<Derived> = Vec::new();
+    match entry.kind {
+        ComponentKind::BjtNpn | ComponentKind::BjtPnp => {
+            let (d, tau) = (hauksbee_ir::BjtModel::default(), std::f64::consts::TAU);
+            let ft = first("FT", "Hz")
+                .map(|(f, w, _)| ("tf", (tau * f).recip(), format!("1/(2π·fT), {w}")));
+            let cjc = zero_bias("cjc", "COB COBO CCB CCBO CC", "V_?CB", (d.vjc, d.mjc));
+            let cje = zero_bias("cje", "CIB CIBO CEB CEBO CE", "V_?[EB]{2}", (d.vje, d.mje));
+            out.extend([ft, cjc, cje].into_iter().flatten());
+        }
+        ComponentKind::Nmos | ComponentKind::Pmos => {
+            if let Some((crss, how, _)) = first("CRSS", "F") {
+                let ciss = find("CISS", "F").into_iter().find(|c| c.0 > crss);
+                let cgs =
+                    ciss.map(|(c, i, _)| ("cgs", c - crss, format!("Ciss - Crss, {i}; {how}")));
+                out.extend(cgs);
+                out.push(("cgd", crss, format!("Crss at its printed bias, {how}")));
+            }
+        }
+        ComponentKind::Diode => {
+            let (p, d) = (&entry.params, hauksbee_ir::DiodeModel::default());
+            let junction = |k, default| p.get_f64(k).unwrap_or(default);
+            let vj_m = (junction("vj", d.vj), junction("m", d.m));
+            out.extend(zero_bias("cjo", "CT CJ CD CTOT", "V_?R", vj_m));
+            if let Some((bv, how, r)) = first("VBR VBRR BV VZ", "V") {
+                let ibv = quantity(&r.conditions, "I_?(?:R|Z|ZT|T|BR)", "A");
+                out.extend(ibv.map(|i| ("ibv", i, format!("the test current of {how}"))));
+                out.push(("bv", bv, format!("V(BR) or VZ, {how}")));
+            }
+            if let Some((trr, how, r)) = first("TRR", "s") {
+                let current = |sym| quantity(&r.conditions, sym, "A").filter(|i| *i > 0.0);
+                let ratio = current("I_?F").zip(current("I_?R")).map(|(f, r)| f / r);
+                let assumed = ["", " (no IF/IR printed: IF = IR)"][usize::from(ratio.is_none())];
+                let tt = trr / ratio.unwrap_or(1.0).ln_1p();
+                out.push(("tt", tt, format!("trr / ln(1 + IF/IR){assumed}, {how}")));
+            }
+        }
+        _ => {}
+    }
+    let round = |v: f64| format!("{v:.4e}").parse().unwrap_or(v);
+    let out = out
+        .into_iter()
+        .map(|(n, v, how)| (n, round(v), format!("derived: {n} = {how}")));
+    out.collect()
 }
 
 fn diode_law(entry: &ModelEntry) -> Option<[f64; 3]> {
@@ -530,12 +647,8 @@ fn worst_miss(law: [f64; 3], points: &[(f64, f64)]) -> (f64, f64, f64) {
 /// or unstated, read typ, else max (the column a curated card fits without typ).
 fn vf_points(rows: &[Characteristic]) -> Option<Vec<(f64, f64)>> {
     let current = regex::Regex::new(r"\bI_?F\s*[=≈:]?\s*(\d*\.?\d+)\s*([µμu]?A|mA)\b").ok()?;
-    let celsius = regex::Regex::new(r"([-+]?\d*\.?\d+)\s*°\s*C").ok()?;
     let point = |row: &Characteristic| {
-        let at_25 = celsius
-            .captures_iter(&row.conditions)
-            .all(|t| t[1].parse() == Ok(25));
-        let c = current.captures(&row.conditions).filter(|_| at_25)?;
+        let c = current.captures(&row.conditions).filter(|_| at_25(row))?;
         let i = c[1].parse::<f64>().ok()? * crate::units::scale_between(&c[2], "A")?;
         let v = row.typ.or(row.max)? * crate::units::scale_between(&row.unit, "V")?;
         (i > 0.0).then_some((i, v))
@@ -629,13 +742,7 @@ pub fn unknown_params(entry: &ModelEntry) -> Vec<UnknownParam> {
             || referenced.contains(name)
     };
 
-    // `<stem>_from_ref` is the board-programmable form of `<stem>`, but ONLY on
-    // the behavioral path: `resolve_from_ref_params` runs in the binder after an
-    // early `continue` for an entry with an empty behavioral block, so a
-    // `vout_from_ref` on a plain stamp-path vreg is never rewritten and never
-    // read. Exempting it there would hide exactly the silently-ignored param this
-    // lint is for, so the suffix only counts when the entry has a behavioral
-    // block to be rewritten for.
+    // `<stem>_from_ref` counts only on the behavioral path (module docs, point 3).
     let from_ref_is_resolved = !entry.behavioral.is_empty();
 
     entry
@@ -939,6 +1046,47 @@ mod tests {
             bjt(300.0)[0].contains("bf = 300 is outside the printed min..max")
                 && bjt(200.0).is_empty()
         );
+    }
+
+    /// Each standard relation fills its param from synthetic cited rows only.
+    #[test]
+    fn cited_rows_derive_the_spice_params_they_fix() {
+        for case in [
+            "bjt_npn | fT gain-bandwidth ; typ = 250 ; MHz ; VCE = 5 V | tf = 6.3662e-10",
+            "bjt_pnp | fT ; min = 100 ; MHz ; IC = -10 mA | tf = 1.5915e-9",
+            "bjt_pnp | Cob output capacitance ; max = 4 ; pF ; VCB = -5 V, f = 1 MHz | cjc = 7.8339e-12",
+            "bjt_npn | Ce emitter capacitance ; typ = 10 ; pF ; VEB = 0.5 V | cje = 1.1836e-11",
+            "nmos | Ciss ; typ = 630 ; pF ; VDS = 15 V + Crss ; typ = 50 ; pF ; VDS = 15 V | cgs = 5.8e-10, cgd = 5e-11",
+            "diode | CT ; typ = 1 ; pF ; VR = 10 V + CT total ; typ = 2 ; pF ; VR = 3 V | cjo = 4e-12",
+            "diode | V(BR)R breakdown ; min = 100 ; V ; IR = 100 µA | ibv = 1e-4, bv = 1e2",
+            "diode | VZ zener ; min = 3.1, typ = 3.3, max = 3.5 ; V ; IZT = 76 mA | ibv = 7.6e-2, bv = 3.3e0",
+            "diode | trr recovery ; max = 4 ; ns ; IF = 10 mA, IR = 1 mA | tt = 1.6681e-9",
+            "diode | trr ; max = 4 ; ns ; RL = 100 Ω | tt = 5.7708e-9",
+            "diode | CT ; typ = 4 ; pF ; VR = 0 V, TA = 85 °C | ",
+        ] {
+            let [kind, rows, want] = case.split(" | ").collect::<Vec<_>>()[..] else {
+                panic!("{case}")
+            };
+            let row = |spec: &str| {
+                let [p, cols, unit, conditions] = spec.split(" ; ").collect::<Vec<_>>()[..] else {
+                    panic!("{spec}")
+                };
+                let (cols, head) = (cols.replace(", ", "\n"), "[[models.source.characteristic]]");
+                let tail = format!("unit = \"{unit}\"\nconditions = \"{conditions}\"\nbasis = \"b\"\n");
+                format!("{head}\nparameter = \"{p}\"\n{cols}\n{tail}")
+            };
+            let rows: String = rows.split(" + ").map(row).collect();
+            let rows = format!("[models.source]\ntier = \"datasheet-derived\"\n{rows}");
+            let e = entry(kind, "", &rows);
+            let got = derivations(&e).into_iter().map(|d| format!("{} = {:e}", d.0, d.1));
+            let got: Vec<String> = got.collect();
+            assert_eq!(got.join(", "), want, "{case}");
+            // Omitted, the lint names it; written as derived, nothing warns.
+            let warned = source_warnings(&e).iter().filter(|w| w.contains("is omitted")).count();
+            assert_eq!(warned, got.len(), "{case}");
+            let written = got.join("\n").replace("e0", "");
+            assert!(source_warnings(&entry(kind, &written, &rows)).is_empty(), "{case}");
+        }
     }
 
     #[test]

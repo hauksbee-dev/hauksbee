@@ -1028,7 +1028,7 @@ impl Ratings {
     /// Every rating key, one `  name  # meaning` line each, offered verbatim by
     /// the extraction prompt; a test pins the names to the struct's serde fields.
     pub const KEY_GUIDE: &str = "\
-  max_current_a        # continuous current (A): diode IF, BJT IC, MOSFET ID, regulator IOUT; for an IC the whole-device or supply/ground current limit, not per-pin
+  max_current_a        # continuous rated current (A): diode IF, BJT IC, MOSFET ID, regulator or switch rated IOUT (a features list or operating-conditions row counts); never pulsed or peak, nor an abs-max surge unless it is the only current printed (then say so); for an IC the whole-device or supply/ground current limit, not per-pin
   max_surge_current_a  # non-repetitive surge / pulsed peak current (A): diode IFSM, BJT ICM, MOSFET IDM
   max_power_w          # total power dissipation (W): Ptot / PD for the selected package
   max_voltage_v        # maximum blocking/working voltage (V): diode VRRM, capacitor rated voltage, BJT VCEO, MOSFET VDS, regulator VIN abs max, IC supply abs max
@@ -1036,7 +1036,7 @@ impl Ratings {
   max_pin_current_a    # per-pin source/sink absolute limit (A) for an IC or MCU
   max_ripple_current_a # capacitor rated RMS ripple current (A) at its stated frequency/temperature
   max_junction_temp_c  # TJ maximum junction temperature (C)
-  theta_ja_c_per_w     # Rth(j-a) junction-to-ambient thermal resistance (C/W = K/W), for the stated package/board/airflow condition only
+  theta_ja_c_per_w     # Rth(j-a) junction-to-ambient thermal resistance (C/W = K/W), the thermal-table row for the card's stated package, its board/airflow condition only
   theta_jc_c_per_w     # Rth(j-c) junction-to-case thermal resistance (C/W = K/W), selected package and stated case reference only
   min_current_a        # FLOOR, not a ceiling (A): least current the datasheet guarantees regulation at (shunt-reference IKmin, LDO minimum load)
   rds_on_vgs           # MOSFET: lowest |VGS| (V) at which the datasheet specifies RDS(on)

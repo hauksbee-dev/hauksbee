@@ -139,6 +139,7 @@ fn prefixed_unit(token: &str) -> Option<(f64, &'static str)> {
         ('m', 1e-3),
         ('k', 1e3),
         ('M', 1e6),
+        ('G', 1e9),
     ];
     let token = ["PP", "pp", "rms", "RMS"]
         .iter()
