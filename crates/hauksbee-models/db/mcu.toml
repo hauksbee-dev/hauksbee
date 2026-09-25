@@ -206,7 +206,17 @@ backend = "simavr:atmega1284p"
 # Table 29-1 Absolute Maximum Ratings.
 max_pin_current_a = 0.04  # DC current per I/O pin, 40.0 mA
 max_current_a = 0.2       # DC current VCC and GND pins, 200.0 mA
-max_voltage_v = 6.0       # Maximum operating voltage
+max_voltage_v = 6.0       # Abs max row "Maximum Operating Voltage"; NOT the 5.5 V recommended ceiling
+
+# The recommended range; max_voltage_v above is the abs max, so a supply
+# between the two raises the operating-envelope finding.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Atmel-42719C ATmega1284P datasheet, Features, Operating Voltage 1.8-5.5 V; Table 29-1 Absolute Maximum Ratings, Maximum Operating Voltage 6.0 V"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ATmega1284, the non-P part. Same datasheet, same 44-pad map, DIFFERENT simavr
@@ -295,7 +305,17 @@ backend = "simavr:atmega1284"
 # Table 29-1 Absolute Maximum Ratings, shared with the P.
 max_pin_current_a = 0.04
 max_current_a = 0.2
-max_voltage_v = 6.0
+max_voltage_v = 6.0       # Abs max row "Maximum Operating Voltage"; NOT the 5.5 V recommended ceiling
+
+# The recommended range; max_voltage_v above is the abs max, so a supply
+# between the two raises the operating-envelope finding.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 1.8
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Atmel-42719C ATmega1284P datasheet (shared with the ATmega1284), Features, Operating Voltage 1.8-5.5 V; Table 29-1 Absolute Maximum Ratings, Maximum Operating Voltage 6.0 V"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -453,7 +473,17 @@ module  = true        # flag: pin map is at the module header level
 # Section 29.1 Absolute Maximum Ratings, ATmega32U4.
 max_pin_current_a = 0.04  # DC current per I/O pin, 40.0 mA
 max_current_a = 0.2       # DC current VCC and GND pins, 200.0 mA
-max_voltage_v = 6.0       # Maximum operating voltage
+max_voltage_v = 6.0       # Abs max row "Maximum Operating Voltage"; NOT the 5.5 V recommended ceiling
+
+# The recommended range; max_voltage_v above is the abs max, so a supply
+# between the two raises the operating-envelope finding.
+[[models.envelope]]
+kind = "supply_range"
+pin = "vcc"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "Atmel-7766J ATmega16U4/32U4 datasheet, Features, Operating Voltages 2.7-5.5 V; Section 29.1 Absolute Maximum Ratings, Maximum Operating Voltage 6.0 V"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
