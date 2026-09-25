@@ -112,8 +112,18 @@ const CUSTOM_PAD_SECOND_POLYGON_SEGMENT: &str = r#"
   )
 "#;
 
+/// (name, four-layer board, items, shorted nets, layer, owner)
+type Overlap = (
+    &'static str,
+    bool,
+    &'static str,
+    (&'static str, &'static str),
+    Option<&'static str>,
+    Option<&'static str>,
+);
+
 #[rustfmt::skip]
-const OVERLAPS: &[(&str, bool, &str, (&str, &str), Option<&str>, Option<&str>)] = &[
+const OVERLAPS: &[Overlap] = &[
     ("segment/segment", false, SEGMENT_SEGMENT, ("A", "B"), Some("F.Cu"), None),
     ("segment/pad", false, SEGMENT_PAD, ("A", "B"), None, Some("U1")),
     ("pad/pad", false, PAD_PAD, ("A", "B"), None, None),

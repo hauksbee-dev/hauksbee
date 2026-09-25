@@ -307,6 +307,9 @@ struct BomRow {
     oem_design_number: String,
 }
 
+/// (component, pin) references on one net.
+type PinRefs = Vec<(String, String)>;
+
 /// Everything one pass over the document collected.
 #[derive(Default)]
 struct Doc {
@@ -322,9 +325,9 @@ struct Doc {
     /// Step → components.
     components: BTreeMap<String, Vec<RawComponent>>,
     /// Step → `LogicalNet` name → (component, pin) pairs.
-    logical_nets: BTreeMap<String, Vec<(String, Vec<(String, String)>)>>,
+    logical_nets: BTreeMap<String, Vec<(String, PinRefs)>>,
     /// Step → layer → net name → (component, pin) pairs from `<Pad><PinRef>`.
-    layer_nets: BTreeMap<String, Vec<(String, String, Vec<(String, String)>)>>,
+    layer_nets: BTreeMap<String, Vec<(String, String, PinRefs)>>,
     /// Step → layer → `<Pad>` count.
     pads_per_layer: BTreeMap<String, BTreeMap<String, usize>>,
     /// Refdes → BOM row.

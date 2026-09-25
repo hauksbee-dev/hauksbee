@@ -674,7 +674,9 @@ vih = [0.0, 2.0]
                 part("J1", "BOOT_SEL", &[("1", 2), ("2", 4), ("3", 1)]),
             ],
         );
-        let cases: Vec<(&str, ExtractedBoard, &[(Severity, &[&str])])> = vec![
+        // (name, board, expected (severity, message fragments) findings)
+        type Case<'a> = (&'a str, ExtractedBoard, &'a [(Severity, &'a [&'a str])]);
+        let cases: Vec<Case> = vec![
             // The Olimex fault: a 50 MHz oscillator through a 10R onto GPIO0.
             (
                 "clock on GPIO0",

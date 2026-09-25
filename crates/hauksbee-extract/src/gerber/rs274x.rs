@@ -829,8 +829,9 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
             let Shape::MultiPolygon { contours, weights } = shape else {
                 continue;
             };
-            let mut units: Vec<(Vec<usize>, [f64; 4], (usize, usize))> =
-                Vec::with_capacity(group.len());
+            // (contour indices, bounds, (clear statement, piece))
+            type Unit = (Vec<usize>, [f64; 4], (usize, usize));
+            let mut units: Vec<Unit> = Vec::with_capacity(group.len());
             for clear in group {
                 let mut indices = Vec::with_capacity(clear.contours.len());
                 for (ordinal, c) in clear.contours.iter().enumerate() {
@@ -902,6 +903,10 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     }
 }
 
+/// Whether other copper bridges an island: (island, its bounds, primitives
+/// painted before its void).
+type BridgeTest = dyn Fn(&[(f64, f64)], [f64; 4], usize) -> bool;
+
 /// Move the copper islands a void RINGED off out of the pour's primitive, and
 /// return them as their own shapes.
 ///
@@ -927,7 +932,7 @@ fn free_ringed_islands(
     shape: &mut Shape,
     applied: &VoidIndex,
     originals: &[Vec<(f64, f64)>],
-    bridged: &dyn Fn(&[(f64, f64)], [f64; 4], usize) -> bool,
+    bridged: &BridgeTest,
 ) -> Vec<((usize, usize, usize), Shape)> {
     let Shape::MultiPolygon { contours, weights } = shape else {
         return Vec::new();

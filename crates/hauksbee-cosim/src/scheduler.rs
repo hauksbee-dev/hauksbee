@@ -39,6 +39,7 @@ use crate::peripherals::{
 };
 use crate::regulation;
 pub use crate::regulation::{open_driver_reason, RegulationTaint, OPEN_DRIVER};
+use crate::responders::{GpioPin, Hc595ChainPins};
 use crate::MutexExt;
 use hauksbee_bind::behavioral::BehavioralDevice;
 use hauksbee_bind::bind_report::SimpleRegulator;
@@ -5747,16 +5748,7 @@ impl Scheduler {
     /// count. Empty when no chain is clocked by the MCU (the once-per-chunk
     /// path handles it). Exposed for diagnostics and co-sim tests of the chain
     /// wiring.
-    pub fn hc595_chain_pins(
-        &self,
-    ) -> Vec<(
-        (char, u8),
-        (char, u8),
-        Option<(char, u8)>,
-        Option<(char, u8)>,
-        (char, u8),
-        usize,
-    )> {
+    pub fn hc595_chain_pins(&self) -> Vec<Hc595ChainPins> {
         self.chains
             .iter()
             .map(|c| (c.srclk, c.rclk, c.srclr_n, c.oe_n, c.ser, c.order.len()))
@@ -5766,7 +5758,7 @@ impl Scheduler {
     /// Per edge-driven 74HC165 read chain, the MCU GPIO `(port,bit)` bound to
     /// its PL, CLK, and MISO input, plus chip count. Empty when no MCU-clocked
     /// 165 chain was identified. For diagnostics and read-chain co-sim tests.
-    pub fn hc165_chain_pins(&self) -> Vec<((char, u8), (char, u8), (char, u8), usize)> {
+    pub fn hc165_chain_pins(&self) -> Vec<(GpioPin, GpioPin, GpioPin, usize)> {
         self.hc165_chains
             .iter()
             .map(|c| {
@@ -6498,7 +6490,7 @@ fn gpio_net_maps(mcus: &[LiveMcu]) -> Vec<HashMap<i64, (char, u8)>> {
 /// ignored.
 fn referenced_595_controls_are_proven(
     referenced: &std::collections::HashSet<usize>,
-    controls: &[(Option<(char, u8)>, Vec<(char, u8)>)],
+    controls: &[(Option<GpioPin>, Vec<GpioPin>)],
     pulled_pins: &std::collections::HashSet<(char, u8)>,
 ) -> bool {
     referenced.iter().all(|&index| {
@@ -6524,7 +6516,7 @@ fn build_generic_replay_chips(
     digital: &[DigitalComponent],
     chain_chips: &std::collections::HashSet<usize>,
     mcus: &[LiveMcu],
-) -> (Vec<usize>, Vec<HashMap<(char, u8), NodeId>>) {
+) -> (Vec<usize>, Vec<HashMap<GpioPin, NodeId>>) {
     use hauksbee_bind::digital::order_165_chains;
 
     let pin_nets: Vec<HashMap<(char, u8), NodeId>> = mcus
@@ -6896,16 +6888,17 @@ missing = ["measurement_registers"]
 
     // ── Shared fixtures ──────────────────────────────────────────────────────
 
-    type EdgeResponder = Box<dyn FnMut(PinId, bool, u64) -> Vec<hauksbee_mcu::PinDrive> + Send>;
-    type DirectionResponder =
-        Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<hauksbee_mcu::PinDrive> + Send>;
+    use hauksbee_mcu::traits::{
+        I2cCb, InputResponderCb as EdgeResponder, InputResponderDirectionCb as DirectionResponder,
+        PinChangeCb, SpiCb, UartCb,
+    };
 
     /// One configurable trait-level core standing in for every backend shape
     /// the scheduler has to handle. Every field is a knob; the default is a
     /// faithful, silent, 16 MHz core that records nothing.
     #[derive(Default)]
     struct MockCore {
-        digital_ins: Arc<Mutex<Vec<((char, u8), bool)>>>,
+        digital_ins: Arc<Mutex<Vec<(GpioPin, bool)>>>,
         micros: Arc<Mutex<Vec<u64>>>,
         fail_micros: bool,
         /// Advance a cycle counter at 16 cycles/us so drained edge logs
@@ -6921,9 +6914,9 @@ missing = ["measurement_registers"]
         was_reset: Arc<Mutex<bool>>,
         reset_unsupported: bool,
         reset_fails: bool,
-        i2c_cb: Arc<Mutex<Option<Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>>>>,
-        spi_cb: Arc<Mutex<Option<Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>>>>,
-        pin_cb: Arc<Mutex<Option<Box<dyn FnMut(PinId, bool, u64) + Send>>>>,
+        i2c_cb: Arc<Mutex<Option<I2cCb>>>,
+        spi_cb: Arc<Mutex<Option<SpiCb>>>,
+        pin_cb: Arc<Mutex<Option<PinChangeCb>>>,
         i2c_addrs: Arc<Mutex<Vec<u8>>>,
         /// Models no bus controller, drops ADC channel 0 and carries a
         /// watchdog and timing limitation (the nRF52/ESP32 Renode/QEMU shape).
@@ -6998,7 +6991,7 @@ missing = ["measurement_registers"]
                 .push(((pin.port, pin.bit), high));
         }
         fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
-        fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
+        fn on_pin_change(&mut self, cb: PinChangeCb) {
             *self.pin_cb.lock_or_recover() = Some(cb);
         }
         fn on_input_responder(&mut self, responder: EdgeResponder) {
@@ -7020,11 +7013,11 @@ missing = ["measurement_registers"]
             }
         }
         fn uart_write(&mut self, _bytes: &[u8]) {}
-        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
-        fn on_i2c(&mut self, cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {
+        fn on_uart(&mut self, _cb: UartCb) {}
+        fn on_i2c(&mut self, cb: I2cCb) {
             *self.i2c_cb.lock_or_recover() = Some(cb);
         }
-        fn on_spi(&mut self, cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {
+        fn on_spi(&mut self, cb: SpiCb) {
             *self.spi_cb.lock_or_recover() = Some(cb);
         }
         fn set_i2c_slave_addresses(&mut self, addresses: &[u8]) {

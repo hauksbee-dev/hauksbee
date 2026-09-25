@@ -44,6 +44,19 @@ use hauksbee_bind::logic::ParallelMemoryPort;
 use hauksbee_mcu::I2cEvent;
 use hauksbee_models::logic_spec::{Edge, Level};
 
+/// An MCU GPIO as `(port letter, bit)`.
+pub type GpioPin = (char, u8);
+
+/// A 74HC595 chain's MCU pins (SRCLK, RCLK, SRCLR_n, OE_n, head SER) and chip count.
+pub type Hc595ChainPins = (
+    GpioPin,
+    GpioPin,
+    Option<GpioPin>,
+    Option<GpioPin>,
+    GpioPin,
+    usize,
+);
+
 /// A responder's explicit ownership update for one MCU input pin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputDrive {
@@ -192,7 +205,7 @@ impl ResponderRegistry {
         edges: &[((char, u8), bool)],
         cycle: u64,
     ) -> Vec<InputDrive> {
-        let mut by_responder: std::collections::BTreeMap<usize, Vec<((char, u8), bool)>> =
+        let mut by_responder: std::collections::BTreeMap<usize, Vec<(GpioPin, bool)>> =
             std::collections::BTreeMap::new();
         for &(pin, high) in edges {
             let Some(indices) = self.by_pin.get(&pin) else {
@@ -220,7 +233,7 @@ impl ResponderRegistry {
         changes: &[((char, u8), bool, bool)],
         cycle: u64,
     ) -> Vec<InputDrive> {
-        let mut by_responder: std::collections::BTreeMap<usize, Vec<((char, u8), bool, bool)>> =
+        let mut by_responder: std::collections::BTreeMap<usize, Vec<(GpioPin, bool, bool)>> =
             std::collections::BTreeMap::new();
         for &change in changes {
             if let Some(indices) = self.by_pin.get(&change.0) {

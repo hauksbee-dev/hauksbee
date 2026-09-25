@@ -1375,18 +1375,16 @@ impl DrcStructured {
         // from below-rule. A KiCad clearance finding has positive gap; "at limit"
         // means gap is within a hair of the rule.
         use std::collections::BTreeMap;
-        // key -> (count, below_count, min_gap, rule, min_gap_loc)
-        let mut groups: BTreeMap<
-            (String, String, String),
-            (
-                usize,
-                usize,
-                f64,
-                f64,
-                [f64; 2],
-                (hauksbee_extract::ItemKind, hauksbee_extract::ItemKind),
-            ),
-        > = BTreeMap::new();
+        // (count, below_count, min_gap, rule, min_gap_loc, item kinds)
+        type Group = (
+            usize,
+            usize,
+            f64,
+            f64,
+            [f64; 2],
+            (hauksbee_extract::ItemKind, hauksbee_extract::ItemKind),
+        );
+        let mut groups: BTreeMap<(String, String, String), Group> = BTreeMap::new();
 
         // On an unvalidated board format (KiCad 10+) the shorts may be phantom, so
         // they carry "note" severity, not "serious", every structured consumer

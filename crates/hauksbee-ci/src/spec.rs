@@ -2035,7 +2035,9 @@ impl SupplySpec {
         let finite = |x: f64| x.is_finite();
         let positive = |x: f64| x.is_finite() && x > 0.0;
         let non_negative = |x: f64| x.is_finite() && x >= 0.0;
-        let ranges: [(&str, Option<f64>, &dyn Fn(f64) -> bool, &str); 11] = [
+        // (field, value, validity test, what a valid value is)
+        type RangeCheck<'a> = (&'a str, Option<f64>, &'a dyn Fn(f64) -> bool, &'a str);
+        let ranges: [RangeCheck; 11] = [
             ("volts", self.volts, &finite, "a finite number"),
             (
                 "current_limit_a",

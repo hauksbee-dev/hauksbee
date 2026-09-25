@@ -10,7 +10,7 @@
 //! of that lives here once; `renode` and `qemu` are the two protocol adapters.
 
 use crate::children::{spawn_emulator, terminate_emulator, ProcessTreeGuard};
-use crate::traits::{I2cEvent, McuState, PinId};
+use crate::traits::{I2cEvent, McuState, PinChangeCb, PinId, UartCb};
 use anyhow::{bail, Context, Result};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -415,8 +415,8 @@ pub(crate) struct PollState {
     /// are not claimed as presented to the emulated UART until that next
     /// lockstep window completes.
     pub uart_rx_inflight: usize,
-    pub on_pin_change: Option<Box<dyn FnMut(PinId, bool, u64) + Send>>,
-    pub on_uart: Option<Box<dyn FnMut(u8) + Send>>,
+    pub on_pin_change: Option<PinChangeCb>,
+    pub on_uart: Option<UartCb>,
     /// If set, only these port letters are polled each chunk (the ports the
     /// engine actually wired). `None` means poll every configured port.
     pub active_ports: Option<Vec<char>>,
@@ -530,7 +530,7 @@ macro_rules! poll_state_mcu_methods {
             self.config.frequency_hz
         }
 
-        fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
+        fn on_pin_change(&mut self, cb: $crate::traits::PinChangeCb) {
             self.$core.on_pin_change = Some(cb);
         }
 
@@ -556,7 +556,7 @@ macro_rules! poll_state_mcu_methods {
             self.$core.uart_rx_inflight
         }
 
-        fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>) {
+        fn on_uart(&mut self, cb: $crate::traits::UartCb) {
             self.$core.on_uart = Some(cb);
         }
 

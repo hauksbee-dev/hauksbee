@@ -1165,7 +1165,8 @@ fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
         return (dia, (cx, cy), (cx, cy));
     }
     // Minimum-width orientation over the outline's own edges.
-    let mut best: Option<(f64, f64, f64, (f64, f64), (f64, f64))> = None; // (w, umin, umax, dir, perp)
+    type Vec2 = (f64, f64);
+    let mut best: Option<(f64, f64, f64, Vec2, Vec2)> = None; // (w, umin, umax, dir, perp)
     for i in 0..pts.len() {
         let (ax, ay) = pts[i];
         let (bx, by) = pts[(i + 1) % pts.len()];

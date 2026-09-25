@@ -9,7 +9,10 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/avr.md.
 
 use crate::ffi;
-use crate::traits::{I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent};
+use crate::traits::{
+    I2cCb, I2cEvent, InputResponderBatchCb, InputResponderCb, InputResponderDirectionCb, Mcu,
+    McuState, PinChangeCb, PinDrive, PinId, SpiCb, SpiEvent, UartCb,
+};
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -257,25 +260,16 @@ const TWI_COND_READ: u32 = 1 << 5;
 // Callback state (written inside C callbacks, read from Rust)
 // ---------------------------------------------------------------------------
 
-type PinChangeCb = Box<dyn FnMut(PinId, bool, u64) + Send>;
-type UartCb = Box<dyn FnMut(u8) + Send>;
-type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
-type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
-/// A synchronous GPIO-input responder. Given the output pin edge the firmware
-/// just produced, it returns a list of input pins to drive (and their levels)
-/// *immediately*, within the same `run_micros` call, before the firmware's next
-/// instruction. This is what lets a firmware bit-bang a clock and `digitalRead`
-/// the resulting serial-out bit in the SAME tight loop (the 74HC165 readback):
-/// the output-pin hook fires on the SCLK/PL edge, the responder computes the
-/// next QH bit, and the bit is raised onto the MISO ioport input IRQ here, so
-/// the very next `digitalRead(MISO)` sees it. Resolving the readback per output
-/// edge (not once per analog chunk) is the read-direction analogue of the
-/// edge-driven 74HC595 write path.
-type InputResponderCb = Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>;
-type InputResponderBatchCb = Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>;
-type InputResponderDirectionCb =
-    Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<PinDrive> + Send>;
-
+// `on_input_responder` installs a synchronous GPIO-input responder. Given the output pin edge the firmware
+// just produced, it returns a list of input pins to drive (and their levels)
+// *immediately*, within the same `run_micros` call, before the firmware's next
+// instruction. This is what lets a firmware bit-bang a clock and `digitalRead`
+// the resulting serial-out bit in the SAME tight loop (the 74HC165 readback):
+// the output-pin hook fires on the SCLK/PL edge, the responder computes the
+// next QH bit, and the bit is raised onto the MISO ioport input IRQ here, so
+// the very next `digitalRead(MISO)` sees it. Resolving the readback per output
+// edge (not once per analog chunk) is the read-direction analogue of the
+// edge-driven 74HC595 write path.
 #[derive(Default)]
 struct Callbacks {
     on_pin_change: Option<PinChangeCb>,
@@ -1248,16 +1242,13 @@ impl Mcu for AvrMcu {
         unsafe { raise_irq(self.avr, ADC_GETIRQ, channel as i32, millivolts) };
     }
 
-    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
+    fn on_pin_change(&mut self, cb: PinChangeCb) {
         self.hook_standard_ports(|c| c.on_pin_change = Some(cb));
     }
 
     /// The responder fires from the per-port output hook, so the standard
     /// ports must be hooked even if `on_pin_change` was never set.
-    fn on_input_responder(
-        &mut self,
-        responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>,
-    ) {
+    fn on_input_responder(&mut self, responder: InputResponderCb) {
         self.hook_standard_ports(|c| {
             c.input_responder = Some(responder);
             c.input_responder_batch = None;
@@ -1272,20 +1263,14 @@ impl Mcu for AvrMcu {
         true
     }
 
-    fn on_input_responder_batch(
-        &mut self,
-        responder: Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>,
-    ) {
+    fn on_input_responder_batch(&mut self, responder: InputResponderBatchCb) {
         self.hook_standard_ports(|c| {
             c.input_responder = None;
             c.input_responder_batch = Some(responder);
         });
     }
 
-    fn on_input_responder_direction(
-        &mut self,
-        responder: Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<PinDrive> + Send>,
-    ) {
+    fn on_input_responder_direction(&mut self, responder: InputResponderDirectionCb) {
         self.hook_standard_ports(|c| c.input_responder_direction = Some(responder));
     }
 
@@ -1336,11 +1321,11 @@ impl Mcu for AvrMcu {
         None
     }
 
-    fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>) {
+    fn on_uart(&mut self, cb: UartCb) {
         self.shared().callbacks.on_uart = Some(cb);
     }
 
-    fn on_i2c(&mut self, cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>) {
+    fn on_i2c(&mut self, cb: I2cCb) {
         self.shared().callbacks.on_i2c = Some(cb);
         self.register_twi_hook();
     }
@@ -1349,7 +1334,7 @@ impl Mcu for AvrMcu {
         self.shared().twi_known_addrs = Some(addresses.iter().copied().collect());
     }
 
-    fn on_spi(&mut self, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
+    fn on_spi(&mut self, cb: SpiCb) {
         self.shared().callbacks.on_spi = Some(cb);
         self.register_spi_hook();
     }

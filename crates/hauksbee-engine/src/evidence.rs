@@ -1576,10 +1576,9 @@ impl BoardEvidence {
         // exact provenance content and exact causal subject, then report the
         // number of listed parts from that same collection (never a second
         // count that can drift).
-        let mut model_groups: BTreeMap<
-            (String, String, String, String, String, String),
-            BTreeMap<String, String>,
-        > = BTreeMap::new();
+        // (model id, tier, layer, origin, validation, accuracy)
+        type ModelKey = (String, String, String, String, String, String);
+        let mut model_groups: BTreeMap<ModelKey, BTreeMap<String, String>> = BTreeMap::new();
         for model in self.maps.iter().flat_map(|map| map.models()) {
             let source = model.source();
             let key = (

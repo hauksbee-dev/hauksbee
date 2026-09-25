@@ -1220,6 +1220,9 @@ fn push_source_corners(kind: &hauksbee_ir::SourceKind, tstop: f64, corners: &mut
 
 // --- event detection --------------------------------------------------------
 
+/// Each hysteretic switch's latched-closed state, keyed by device.
+type SwitchLatch = HashMap<DeviceId, bool>;
+
 /// If a comparator or relay control crossed the threshold LIVE at the accepted
 /// point `x0`, or the device switched, on the way to the trial `x1`: the
 /// approximate fraction of the step at which it crossed (for bisection).
@@ -1248,7 +1251,7 @@ fn crossing_fraction(
     circuit: &Circuit,
     (x0, x1): (&[f64], &[f64]),
     node_idx: &dyn Fn(NodeId) -> Option<usize>,
-    latch: Option<(&HashMap<DeviceId, bool>, Option<&HashMap<DeviceId, bool>>)>,
+    latch: Option<(&SwitchLatch, Option<&SwitchLatch>)>,
     stepped: &[NodeId],
 ) -> Option<f64> {
     let mut earliest: Option<f64> = None;
@@ -1275,8 +1278,7 @@ fn crossing_fraction(
                 voff,
                 ..
             } => {
-                let on =
-                    |l: Option<&HashMap<DeviceId, bool>>| l.and_then(|l| l.get(&id)) == Some(&true);
+                let on = |l: Option<&SwitchLatch>| l.and_then(|l| l.get(&id)) == Some(&true);
                 match latch {
                     Some((l0, l1)) if on(Some(l0)) => (*ctrl_p, *ctrl_n, *voff, !on(l1)),
                     Some((_, l1)) => (*ctrl_p, *ctrl_n, *von, on(l1)),

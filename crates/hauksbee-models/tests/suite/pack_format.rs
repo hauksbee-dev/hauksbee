@@ -110,7 +110,9 @@ fn each_missing_field_is_named() {
 #[test]
 fn each_bad_manifest_mutation_is_named() {
     let edit = |from: &str, to: &str| GOOD_MANIFEST.replace(from, to);
-    let cases: [(&str, String, fn(&PackError) -> bool); 4] = [
+    // (what was broken, the edited manifest, the error it must raise)
+    type Case = (&'static str, String, fn(&PackError) -> bool);
+    let cases: [Case; 4] = [
         (
             "bad name",
             edit("\"acme-diodes\"", "\"Acme Diodes!\""),

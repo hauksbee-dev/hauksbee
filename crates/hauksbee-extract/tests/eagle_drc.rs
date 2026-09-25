@@ -316,8 +316,19 @@ const OCT_WIRE: &str = r#"
 </signal>
 "#;
 
+/// (name, packages, elements, signals, exactly one short, layer, owner)
+type Overlap = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    bool,
+    Option<&'static str>,
+    Option<&'static str>,
+);
+
 #[rustfmt::skip]
-const OVERLAPS: &[(&str, &str, &str, &str, bool, Option<&str>, Option<&str>)] = &[
+const OVERLAPS: &[Overlap] = &[
     ("wire/wire crossing on top copper", "", "", WIRE_WIRE, true, Some("F.Cu"), None),
     ("wire/smd pad", SMD_PKG, SMD_EL, WIRE_SMD, true, None, Some("U1")),
     ("via/bottom wire", "", "", VIA_WIRE, true, Some("B.Cu"), None),

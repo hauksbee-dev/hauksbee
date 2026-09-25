@@ -17,6 +17,16 @@ use hauksbee_models::ComponentKind::{self, Digital, Nmos, Opamp, Pmos};
 /// A datasheet-derived sanity bound on one rating, `None` when unchecked.
 type Bound = Option<fn(f64) -> bool>;
 
+/// (value spellings, entry id, kind, max voltage, max current, max junction temp)
+type Row = (
+    &'static [&'static str],
+    &'static str,
+    ComponentKind,
+    Bound,
+    Bound,
+    Bound,
+);
+
 // ── 6b/6c: Specific datasheet-sourced FETs, AFE, gate drivers, CSAs ───────────
 
 /// Every value spelling resolves to its entry, with its kind, and each checked
@@ -24,7 +34,7 @@ type Bound = Option<fn(f64) -> bool>;
 /// inside the bound its datasheet figure (in the row comment) implies.
 #[test]
 fn specific_parts_resolve_with_their_kind_and_datasheet_ratings() {
-    let rows: [(&[&str], &str, ComponentKind, Bound, Bound, Bound); 8] = [
+    let rows: [Row; 8] = [
         // 100 V, 100 A
         (
             &["IPA045N10N3G"],

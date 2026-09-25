@@ -38,7 +38,7 @@ pub use process::{find_renode, is_available, RenodeProcess};
 use crate::external::{
     adc_count, builtin_configs, free_ports, poll_state_mcu_methods, I2cTxn, PollState, UartSocket,
 };
-use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
+use crate::traits::{I2cCb, I2cEvent, Mcu, McuState, PinId, SpiCb, SpiEvent};
 use anyhow::{bail, Context, Result};
 use monitor::Monitor;
 use serde::{Deserialize, Serialize};
@@ -52,9 +52,6 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-
-type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
-type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 
 /// How a single GPIO port is addressed inside Renode.
 ///
@@ -1742,13 +1739,13 @@ impl Mcu for RenodeBackend {
         }
     }
 
-    fn on_i2c(&mut self, cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>) {
+    fn on_i2c(&mut self, cb: I2cCb) {
         if let Err(e) = self.install_i2c_bridge(cb) {
             panic!("failed to install Renode I2C bridge: {e:#}");
         }
     }
 
-    fn on_spi(&mut self, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
+    fn on_spi(&mut self, cb: SpiCb) {
         // Route to the first configured SPI controller (backward-compat for
         // single-controller setups such as the STM32F103 SPI ADC demo).
         if let Some(controller) = self.config.spi_controllers.first().cloned() {
@@ -1756,7 +1753,7 @@ impl Mcu for RenodeBackend {
         }
     }
 
-    fn on_spi_controller(&mut self, controller: &str, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
+    fn on_spi_controller(&mut self, controller: &str, cb: SpiCb) {
         if let Err(e) = self.install_spi_bridge_for(controller, cb) {
             panic!("failed to install Renode SPI bridge on {controller}: {e:#}");
         }

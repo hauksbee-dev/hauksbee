@@ -38,12 +38,13 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let mut reader = Reader::from_str(text);
     reader.config_mut().trim_text(true);
 
+    type Pads = Vec<(String, f64, f64)>;
     // (library name, package name) -> [(pad name, dx, dy)]. Eagle namespaces
     // packages per <library>: two embedded libraries may each define a package
     // named e.g. "0805" with different pads. Keying by bare package name merged
     // them, so an element resolved to the concatenation of both libraries' pads
     // and was emitted with doubled/mixed pins.
-    let mut packages: HashMap<(String, String), Vec<(String, f64, f64)>> = HashMap::new();
+    let mut packages: HashMap<(String, String), Pads> = HashMap::new();
     let mut cur_library = String::new();
     let mut cur_package: Option<String> = None;
     // elements

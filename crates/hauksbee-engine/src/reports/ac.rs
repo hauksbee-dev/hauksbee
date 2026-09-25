@@ -10,6 +10,9 @@ use crate::result::{
     BindSummary, CheckCoverage, JsonReport, Refusal, Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
 
+/// One net's Bode rows: (net, [(freq_hz, mag_db, phase_deg)]).
+type NetBode = (String, Vec<(f64, f64, f64)>);
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_quiet(
     bound: &crate::BoundBoard,
@@ -112,7 +115,7 @@ pub(crate) fn emit_quiet(
     // Collect the bode rows once so both the validity check and the renderers
     // read the SAME data (one structured result, no forked logic).
     let summary = BindSummary::from_report(&bound.report);
-    let per_net: Vec<(String, Vec<(f64, f64, f64)>)> = nodes
+    let per_net: Vec<NetBode> = nodes
         .iter()
         .map(|net| (net.clone(), resp.bode(circuit, net)))
         .collect();
@@ -121,8 +124,7 @@ pub(crate) fn emit_quiet(
     // signal path; it is a meaningless result, not data. Refuse to present it as
     // a Bode table; name the unresolved driving ICs and exit 3 ("board invalid
     // for the requested analysis"), never 0.
-    let nonempty: Vec<&(String, Vec<(f64, f64, f64)>)> =
-        per_net.iter().filter(|(_, b)| !b.is_empty()).collect();
+    let nonempty: Vec<&NetBode> = per_net.iter().filter(|(_, b)| !b.is_empty()).collect();
 
     // If EVERY requested net produced no data at all (none exist in the
     // circuit), `nonempty` is empty. That case slips past the all-sentinel guard
@@ -476,7 +478,7 @@ pub(crate) fn emit_quiet(
 /// a genuine measurement. Such nets are dropped from the rows and returned so the
 /// caller can report the omission explicitly (never silent). An empty bode (a net
 /// not found in the circuit) contributes no rows, as before.
-fn ac_csv_body(per_net: &[(String, Vec<(f64, f64, f64)>)]) -> (String, Vec<String>) {
+fn ac_csv_body(per_net: &[NetBode]) -> (String, Vec<String>) {
     let mut out = String::from("net,freq_hz,mag_db,phase_deg\n");
     let mut no_path: Vec<String> = Vec::new();
     for (net, bode) in per_net {

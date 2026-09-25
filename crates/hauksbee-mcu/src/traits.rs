@@ -130,6 +130,16 @@ pub struct SpiEvent {
     pub cycle: u64,
 }
 
+/// Callback shapes the [`Mcu`] hooks take; backends store them as given.
+pub type PinChangeCb = Box<dyn FnMut(PinId, bool, u64) + Send>;
+pub type UartCb = Box<dyn FnMut(u8) + Send>;
+pub type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
+pub type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
+pub type InputResponderCb = Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>;
+pub type InputResponderBatchCb = Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>;
+pub type InputResponderDirectionCb =
+    Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<PinDrive> + Send>;
+
 /// Core trait for an emulated microcontroller.
 ///
 /// Implementors provide cycle-accurate execution and pin-level coupling so
@@ -204,7 +214,7 @@ pub trait Mcu {
     /// so the cycle read inside the hook is the true edge time. On poll backends
     /// (Renode/QEMU) it is the poll boundary's virtual time and coarse; see
     /// [`Mcu::cycle_exact`].
-    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>);
+    fn on_pin_change(&mut self, cb: PinChangeCb);
 
     /// The MCU's current cycle counter (cycles since reset).
     ///
@@ -246,11 +256,7 @@ pub trait Mcu {
     /// The default is a no-op for backends that cannot drive an input pin
     /// synchronously from within their run loop (Renode / QEMU push state once
     /// per chunk).
-    fn on_input_responder(
-        &mut self,
-        _responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>,
-    ) {
-    }
+    fn on_input_responder(&mut self, _responder: InputResponderCb) {}
 
     /// Whether [`Mcu::on_input_responder`] is invoked synchronously inside the
     /// run loop and applies its returned pin drives before the next guest
@@ -291,10 +297,7 @@ pub trait Mcu {
     /// externally observable final state. The default preserves source and
     /// single-edge behavior for existing backends, but does not make them
     /// atomic; see [`Mcu::input_responder_batches_atomic`].
-    fn on_input_responder_batch(
-        &mut self,
-        mut responder: Box<dyn FnMut(&[(PinId, bool)], u64) -> Vec<PinDrive> + Send>,
-    ) {
+    fn on_input_responder_batch(&mut self, mut responder: InputResponderBatchCb) {
         self.on_input_responder(Box::new(move |pin, high, cycle| {
             responder(&[(pin, high)], cycle)
         }));
@@ -304,11 +307,7 @@ pub trait Mcu {
     /// is the new direction and `port_high` is the current output latch. A
     /// backend advertising [`Mcu::input_responder_tracks_direction`] must call
     /// this synchronously from the same hardware-register write.
-    fn on_input_responder_direction(
-        &mut self,
-        _responder: Box<dyn FnMut(&[(PinId, bool, bool)], u64) -> Vec<PinDrive> + Send>,
-    ) {
-    }
+    fn on_input_responder_direction(&mut self, _responder: InputResponderDirectionCb) {}
 
     // ---- UART ----
 
@@ -341,7 +340,7 @@ pub trait Mcu {
     }
 
     /// Register a callback that receives each byte the firmware sends over UART.
-    fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>);
+    fn on_uart(&mut self, cb: UartCb);
 
     // ---- Peripheral hooks ----
 
@@ -350,13 +349,13 @@ pub trait Mcu {
     /// The closure receives each [`I2cEvent`] and may return an optional reply
     /// byte (used when the firmware is reading from a peripheral).  Returning
     /// `None` causes simavr to ACK the transfer with no data byte injected.
-    fn on_i2c(&mut self, cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>);
+    fn on_i2c(&mut self, cb: I2cCb);
 
     /// Install a handler for SPI bus events.
     ///
     /// The closure receives each [`SpiEvent`] (one per byte transferred) and
     /// may return the MISO byte the peripheral would provide.
-    fn on_spi(&mut self, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>);
+    fn on_spi(&mut self, cb: SpiCb);
 
     /// Install a handler for SPI bus events on a named controller.
     ///
@@ -365,7 +364,7 @@ pub trait Mcu {
     /// with multiple SPI controllers) override this to route each controller to
     /// its own bridge/callback, so a slave attached to "spi2" only receives
     /// traffic from the spi2 controller, not from spi3.
-    fn on_spi_controller(&mut self, _controller: &str, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
+    fn on_spi_controller(&mut self, _controller: &str, cb: SpiCb) {
         self.on_spi(cb);
     }
 

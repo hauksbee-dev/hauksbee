@@ -87,7 +87,7 @@ use crate::external::{
     adc_count, builtin_configs, free_ports, nonempty_or, poll_state_mcu_methods, I2cTxn, PollState,
     UartSocket,
 };
-use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
+use crate::traits::{I2cCb, I2cEvent, Mcu, McuState, PinId, SpiCb, SpiEvent};
 use anyhow::{bail, ensure, Context, Result};
 use gdb::GdbStub;
 use qmp::Qmp;
@@ -95,9 +95,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
-
-type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
-type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 
 /// GPIO observation/injection mailbox in ESP32 RTC slow memory.
 ///
@@ -1415,7 +1412,7 @@ impl Mcu for QemuBackend {
         }
     }
 
-    fn on_i2c(&mut self, cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>) {
+    fn on_i2c(&mut self, cb: I2cCb) {
         // The Espressif QEMU controller exposes no host-byte hook for its RX
         // FIFO, so byte events cannot be intercepted from the emulated I2C
         // controller the way simavr/Renode do. Two paths coexist instead:
@@ -1447,7 +1444,7 @@ impl Mcu for QemuBackend {
         }
     }
 
-    fn on_spi(&mut self, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
+    fn on_spi(&mut self, cb: SpiCb) {
         // Espressif QEMU exposes no host hook for GPSPI transfers, so SPI byte
         // events ride the RAM-mailbox SPI cell: a firmware
         // participating in the mailbox v2 contract submits transaction-level

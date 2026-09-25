@@ -312,11 +312,14 @@ struct ResolvedShape {
     capacitor_pin_roles: bool,
 }
 
+/// (lib id, value, footprint, MPN, properties): the CAD strings a query is built from.
+type ShapeKey = (String, String, String, String, Vec<(String, String)>);
+
 thread_local! {
     /// Memoised resolutions keyed by the CAD strings the query is built from.
     /// Thread-local rather than a global lock: extraction is single-threaded per
     /// board, and a `Mutex` here would serialise parallel board runs.
-    static SHAPE_CACHE: RefCell<HashMap<(String, String, String, String, Vec<(String, String)>), Option<ResolvedShape>>> =
+    static SHAPE_CACHE: RefCell<HashMap<ShapeKey, Option<ResolvedShape>>> =
         RefCell::new(HashMap::new());
 }
 

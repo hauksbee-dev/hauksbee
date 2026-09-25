@@ -103,6 +103,12 @@ pub type DatasheetChecker = Arc<dyn Fn(&str) -> Result<String, String> + Send + 
 /// Draft a board-local extension from an already resolved model.
 pub type ModelDrafter = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
+/// A settings request taking one string argument; Ok(settings payload) or an error.
+pub type SettingsAction = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
+
+/// A backend check that streams progress lines; Ok(reply) or an error.
+pub type SettingsProbe = Arc<dyn Fn(&mut dyn FnMut(&str)) -> Result<String, String> + Send + Sync>;
+
 /// The extraction settings page's backend: read, save, apply a preset, and a
 /// live connectivity check.
 pub struct ExtractSettingsHooks {
@@ -110,12 +116,12 @@ pub struct ExtractSettingsHooks {
     pub get: Arc<dyn Fn() -> String + Send + Sync>,
     /// PUT: the request body (a config JSON object) -> the settings payload,
     /// or an error message.
-    pub save: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>,
+    pub save: SettingsAction,
     /// POST preset/{id} -> the settings payload, or an error message.
-    pub preset: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>,
+    pub preset: SettingsAction,
     /// Run the configured backend on a one-line prompt while streaming
     /// progress lines; Ok(reply).
-    pub test: Arc<dyn Fn(&mut dyn FnMut(&str)) -> Result<String, String> + Send + Sync>,
+    pub test: SettingsProbe,
 }
 
 /// The datasheet-extraction backend supplied by the analysis application.

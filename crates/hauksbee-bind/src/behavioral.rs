@@ -102,6 +102,9 @@ pub trait CustomBehavior: Send {
     }
 }
 
+/// Builds a fresh custom device instance for one matching component.
+type CustomFactory = Box<dyn Fn() -> Box<dyn CustomBehavior> + Send + Sync>;
+
 /// Registry of custom-behaviour factories, keyed by an exact match string
 /// tested against a component's resolved model id, value, or MPN. A user (or a
 /// downstream crate) registers a factory before binding; the binder consults the
@@ -109,10 +112,7 @@ pub trait CustomBehavior: Send {
 /// instead of (or alongside) the declarative one.
 #[derive(Default)]
 pub struct CustomRegistry {
-    factories: Vec<(
-        String,
-        Box<dyn Fn() -> Box<dyn CustomBehavior> + Send + Sync>,
-    )>,
+    factories: Vec<(String, CustomFactory)>,
 }
 
 impl CustomRegistry {

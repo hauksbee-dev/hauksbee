@@ -333,6 +333,9 @@ mod tests {
     use crate::test_fixtures::{bjt, cap, comparator, diode, res, stamp_ctx, sw, trapz, vdc, GND};
     use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, SourceKind};
 
+    /// A stamped system: the matrix rows as (column, value) entries, and the rhs.
+    type Stamped = (Vec<Vec<(usize, f64)>>, Vec<f64>);
+
     /// Source, resistors, cap, charge-carrying diode, BJT, MOSFET, switch,
     /// comparator: every stamp class the walk visits. Returns `(circuit, n1)`.
     fn mixed_board() -> (Circuit, NodeId) {
@@ -405,10 +408,7 @@ mod tests {
 
         /// One assembly, bypass-armed with `(state, force)` or the interpreted
         /// walk for `None`; returns the rows and RHS.
-        fn assemble(
-            &mut self,
-            bypass: Option<(&mut BypassState, bool)>,
-        ) -> (Vec<Vec<(usize, f64)>>, Vec<f64>) {
+        fn assemble(&mut self, bypass: Option<(&mut BypassState, bool)>) -> Stamped {
             let mut ctx = stamp_ctx(
                 &self.c,
                 &self.layout,
@@ -434,10 +434,7 @@ mod tests {
         }
     }
 
-    fn assert_bit_identical(
-        a: &(Vec<Vec<(usize, f64)>>, Vec<f64>),
-        b: &(Vec<Vec<(usize, f64)>>, Vec<f64>),
-    ) {
+    fn assert_bit_identical(a: &Stamped, b: &Stamped) {
         assert_eq!(a.0, b.0, "rows differ");
         for (i, (x, y)) in a.1.iter().zip(b.1.iter()).enumerate() {
             assert_eq!(x.to_bits(), y.to_bits(), "rhs {i} differs");
