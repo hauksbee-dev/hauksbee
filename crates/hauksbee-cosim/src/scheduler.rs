@@ -3803,11 +3803,9 @@ impl Scheduler {
         if self.stress.device_count() == 0 {
             return;
         }
-        let volts = self.node_volts.clone();
-        let branch = self.branch_x.clone();
-        let layout = self.layout.clone();
+        let (volts, branch, layout) = (&self.node_volts, &self.branch_x, &self.layout);
         let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
-        let branch_current = |id: DeviceId| branch_current_of(&layout, &branch, id);
+        let branch_current = |id: DeviceId| branch_current_of(layout, branch, id);
         let new = self
             .stress
             .evaluate(&mut self.circuit, &node_v, &branch_current, self.sim_time);

@@ -87,62 +87,67 @@ fn out_is(case: &str, src: &str, after_ms: f64, end_ms: f64, high: bool) -> bool
 
 #[test]
 fn a_555_times_its_own_board_and_refuses_what_it_cannot_time() {
-    for c_nf in [10.0_f64, 4.7] {
-        // Powered on from rest, THRES charges through RA + RB from 0 to 2/3 VCC
-        // (hence ln 3, not the ln 2 of every later cycle) and the discharge that
-        // follows runs through RB alone. Both in ms, as the spec wants them.
-        let te = 3.0_f64.ln() * 20e3 * c_nf * 1e-9 * 1e3;
-        let tl = 2.0_f64.ln() * 10e3 * c_nf * 1e-9 * 1e3;
-        let b = board(Some(c_nf), "VCC");
-        // 10%/12% either side of the crossing: wide enough to absorb the
-        // comparator's smoothing and the power-on ramp, far too narrow for a
-        // frequency that came from anywhere but RA, RB and C (a 2x error in
-        // either bound fails one of the two).
-        assert!(
-            out_is(&format!("{c_nf}n charging"), &b, 0.2 * te, 0.9 * te, true),
-            "{c_nf}n: OUT left VOH before ln(3)*(RA+RB)*C = {te} ms"
-        );
-        assert!(
-            out_is(
-                &format!("{c_nf}n discharging"),
-                &b,
-                1.12 * te,
-                0.7_f64.mul_add(tl, te),
-                false
-            ),
-            "{c_nf}n: OUT was not at VOL through the discharge after {te} ms"
-        );
-        // Free-running, every cycle is ln(2)*(RA+2RB)*C. 3.5% = the card's own
-        // timing_error_frac interval (0-3%, SLFS022's 3% max initial error) plus
-        // the 0.5% the edge-TIMED rate can be out over these 22 periods; nothing
-        // wider is justified now the long first charge and the partial period at
-        // the end of the run both fall outside the span the rate is timed over.
-        let f = 1.0 / (2.0_f64.ln() * 30e3 * c_nf * 1e-9);
-        let rate = format!("kind = \"toggle\"\nfreq_hz = {f}\ntolerance = 0.035\n");
-        assert!(
-            passes(&format!("{c_nf}n rate"), &b, 24e3 / f, &rate),
-            "{c_nf}n: OUT did not run at 1/(ln(2)*(RA+2RB)*C) = {f} Hz"
-        );
-    }
-    // RESET at ground outranks both comparators: OUT sits at VOL, all run.
-    assert!(out_is(
-        "reset held low",
-        &board(Some(10.0), "GND"),
-        0.05,
-        0.3,
-        false
-    ));
-    // No timing capacitor: THRES has nothing to hold it, so there is no
-    // interval to report. This case exists to catch a timing that comes from
-    // the model rather than from the board -- it must not answer VOH on the
-    // schedule the 10 nF board answered on.
-    assert!(!out_is(
-        "no timing cap",
-        &board(None, "VCC"),
-        0.05,
-        0.2,
-        true
-    ));
+    // Independent runs (`write_tmp` never reuses a path): one thread per capacitor.
+    std::thread::scope(|s| {
+        for c_nf in [10.0_f64, 4.7] {
+            s.spawn(move || {
+                // Powered on from rest, THRES charges through RA + RB from 0 to 2/3 VCC
+                // (hence ln 3, not the ln 2 of every later cycle) and the discharge that
+                // follows runs through RB alone. Both in ms, as the spec wants them.
+                let te = 3.0_f64.ln() * 20e3 * c_nf * 1e-9 * 1e3;
+                let tl = 2.0_f64.ln() * 10e3 * c_nf * 1e-9 * 1e3;
+                let b = board(Some(c_nf), "VCC");
+                // 10%/12% either side of the crossing: wide enough to absorb the
+                // comparator's smoothing and the power-on ramp, far too narrow for a
+                // frequency that came from anywhere but RA, RB and C (a 2x error in
+                // either bound fails one of the two).
+                assert!(
+                    out_is(&format!("{c_nf}n charging"), &b, 0.2 * te, 0.9 * te, true),
+                    "{c_nf}n: OUT left VOH before ln(3)*(RA+RB)*C = {te} ms"
+                );
+                assert!(
+                    out_is(
+                        &format!("{c_nf}n discharging"),
+                        &b,
+                        1.12 * te,
+                        0.7_f64.mul_add(tl, te),
+                        false
+                    ),
+                    "{c_nf}n: OUT was not at VOL through the discharge after {te} ms"
+                );
+                // Free-running, every cycle is ln(2)*(RA+2RB)*C. 3.5% = the card's own
+                // timing_error_frac interval (0-3%, SLFS022's 3% max initial error) plus
+                // the 0.5% the edge-TIMED rate can be out over these 22 periods; nothing
+                // wider is justified now the long first charge and the partial period at
+                // the end of the run both fall outside the span the rate is timed over.
+                let f = 1.0 / (2.0_f64.ln() * 30e3 * c_nf * 1e-9);
+                let rate = format!("kind = \"toggle\"\nfreq_hz = {f}\ntolerance = 0.035\n");
+                assert!(
+                    passes(&format!("{c_nf}n rate"), &b, 24e3 / f, &rate),
+                    "{c_nf}n: OUT did not run at 1/(ln(2)*(RA+2RB)*C) = {f} Hz"
+                );
+            });
+        }
+        // RESET at ground outranks both comparators: OUT sits at VOL, all run.
+        assert!(out_is(
+            "reset held low",
+            &board(Some(10.0), "GND"),
+            0.05,
+            0.3,
+            false
+        ));
+        // No timing capacitor: THRES has nothing to hold it, so there is no
+        // interval to report. This case exists to catch a timing that comes from
+        // the model rather than from the board -- it must not answer VOH on the
+        // schedule the 10 nF board answered on.
+        assert!(!out_is(
+            "no timing cap",
+            &board(None, "VCC"),
+            0.05,
+            0.2,
+            true
+        ));
+    });
 }
 
 /// A width, not a rate: the astable's HIGH time is the datasheet's

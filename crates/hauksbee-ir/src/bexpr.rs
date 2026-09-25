@@ -46,7 +46,7 @@
 //! un-braced expressions.
 
 use evalexpr::{
-    build_operator_tree, ContextWithMutableVariables, HashMapContext, Node as EvalNode, Value,
+    build_operator_tree, Context, EvalexprError, EvalexprResult, Node as EvalNode, Value,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -63,10 +63,9 @@ pub struct CompiledExpr {
     src: String,
     /// The pre-parsed operator tree, rebuilt from `src` on deserialize.
     tree: EvalNode,
-    /// Cached `__d{k}` variable names, index = dependency slot. Slot count is
-    /// the highest `__d` index in the tree plus one; the loader constructs
-    /// slots densely so this equals the device's `deps.len()`.
-    dep_names: Vec<String>,
+    /// Dependency slot count: the highest `__d` index in the tree plus one; the
+    /// loader constructs slots densely so this equals the device's `deps.len()`.
+    n_slots: usize,
     /// Whether the tree reads `time`.
     uses_time: bool,
 }
@@ -97,11 +96,10 @@ impl CompiledExpr {
                 ));
             }
         }
-        let dep_names = (0..n_slots).map(|k| format!("__d{k}")).collect();
         Ok(Self {
             src: src.to_string(),
             tree,
-            dep_names,
+            n_slots,
             uses_time,
         })
     }
@@ -113,7 +111,7 @@ impl CompiledExpr {
 
     /// Number of dependency slots (`__d0 .. __d{n-1}`) the expression reads.
     pub fn n_slots(&self) -> usize {
-        self.dep_names.len()
+        self.n_slots
     }
 
     /// Evaluate at the given dependency-slot values and time. `deps.len()`
@@ -125,23 +123,16 @@ impl CompiledExpr {
     /// NaN, not an error, so callers must ALSO guard the returned value with
     /// `is_finite()`; this function reports only structural faults.
     pub fn eval(&self, deps: &[f64], time: f64) -> Result<f64, String> {
-        if deps.len() < self.dep_names.len() {
+        if deps.len() < self.n_slots {
             return Err(format!(
                 "behavioral expression `{}` needs {} dependency values, got {}",
                 self.src,
-                self.dep_names.len(),
+                self.n_slots,
                 deps.len()
             ));
         }
-        let mut ctx = HashMapContext::new();
-        for (name, v) in self.dep_names.iter().zip(deps) {
-            ctx.set_value(name.clone(), Value::Float(*v))
-                .map_err(|e| format!("behavioral eval context: {e}"))?;
-        }
-        if self.uses_time {
-            ctx.set_value("time".to_string(), Value::Float(time))
-                .map_err(|e| format!("behavioral eval context: {e}"))?;
-        }
+        let vals = deps.iter().map(|&v| Value::Float(v)).collect();
+        let ctx = Slots(vals, self.uses_time.then_some(Value::Float(time)));
         match self.tree.eval_with_context(&ctx) {
             Ok(Value::Float(f)) => Ok(f),
             Ok(Value::Int(i)) => Ok(i as f64),
@@ -155,6 +146,25 @@ impl CompiledExpr {
                 self.src
             )),
         }
+    }
+}
+
+/// One eval's `__d{k}` values, then `time` (all compile admits): a HashMapContext cost more.
+struct Slots(Vec<Value>, Option<Value>);
+
+impl Context for Slots {
+    fn get_value(&self, id: &str) -> Option<&Value> {
+        id.strip_prefix("__d")
+            .map_or(self.1.as_ref(), |k| self.0.get(k.parse::<usize>().ok()?))
+    }
+    fn call_function(&self, id: &str, _: &Value) -> EvalexprResult<Value> {
+        Err(EvalexprError::FunctionIdentifierNotFound(id.to_string()))
+    }
+    fn are_builtin_functions_disabled(&self) -> bool {
+        false
+    }
+    fn set_builtin_functions_disabled(&mut self, _: bool) -> EvalexprResult<()> {
+        Err(EvalexprError::BuiltinFunctionsCannotBeDisabled)
     }
 }
 

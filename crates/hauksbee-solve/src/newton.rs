@@ -16,6 +16,11 @@ use crate::sparse::{SparseMatrix, Symbolic};
 use crate::stamp::{reserve_pattern, stamp_all, IntegCoeffs, StampCtx};
 use crate::system::{Layout, ReactiveState};
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use std::sync::LazyLock;
+/// Debug flags, read once: `getenv` locks libc's environment on every Newton solve.
+static NEWTON_DBG: LazyLock<bool> = LazyLock::new(|| std::env::var("HAUKSBEE_NEWTON_DBG").is_ok());
+static STAGED_DBG: LazyLock<bool> = LazyLock::new(|| std::env::var("HAUKSBEE_STAGED_DBG").is_ok());
+static SWITCH_DBG: LazyLock<bool> = LazyLock::new(|| std::env::var("HAUKSBEE_SWITCH_DBG").is_ok());
 
 /// Outcome of a Newton solve.
 pub struct NewtonResult {
@@ -622,7 +627,7 @@ pub fn newton_solve(
         let (r0, res0) = solve(ws, gmin);
         last = r0;
         if last.converged && !(res0.is_finite() && res0 <= bar) {
-            if std::env::var("HAUKSBEE_SWITCH_DBG").is_ok() {
+            if *SWITCH_DBG {
                 eprintln!(
                     "[switch] t={time:.6e} pass={pass} FALSE-ROOT gate: rel residual {res0:.3e} > bar {bar:.3e}"
                 );
@@ -717,7 +722,7 @@ pub fn newton_solve(
             &pairs,
             opts.effects.switch_transition_frac,
         );
-        if std::env::var("HAUKSBEE_SWITCH_DBG").is_ok() {
+        if *SWITCH_DBG {
             eprintln!(
                 "[switch] t={time:.6e} dc={dc} pass={pass} conv={} latch={latch:?} next={next:?}",
                 last.converged
@@ -750,8 +755,8 @@ fn newton_solve_core(
 ) -> NewtonResult {
     let mut iters = 0;
     ws.last_singular = false;
-    let dbg_newton = std::env::var("HAUKSBEE_NEWTON_DBG").is_ok();
-    let dbg_staged = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
+    let dbg_newton = *NEWTON_DBG;
+    let dbg_staged = *STAGED_DBG;
     // GLOBAL damped-Newton line-search (Armijo backtracking on the full residual
     // infinity-norm). Gated behind Strategy::LineSearch; OFF by default so
     // every existing per-step path is bit-identical. This is the textbook
@@ -1709,7 +1714,7 @@ fn dc_solve(
             ws, circuit, opts, 0.0, 1.0, coeffs, &empty, true, use_ic, gmin, scale,
         )
     };
-    let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
+    let dbg = *STAGED_DBG;
 
     // Attempt 0 (warm start): if a seed of the right size is given, try plain
     // Newton from it. Near the previous operating point this converges in a few
@@ -2347,7 +2352,7 @@ fn event_solve(
     opts: &SolverOptions,
     ev: EventSolve<'_>,
 ) -> Option<bool> {
-    let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
+    let dbg = *STAGED_DBG;
     let spdt = SpdtPairs::analyze(circuit);
     let frac = opts.effects.switch_transition_frac;
     // Seed the discrete states from the entry iterate, anchored on no previous

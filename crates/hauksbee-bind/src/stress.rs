@@ -621,6 +621,8 @@ pub struct StressMonitor {
     chunk_elapsed_s: f64,
     /// Run-cumulative per-device evidence, index-aligned with `metas`.
     run: Vec<RunStats>,
+    /// Each meta's (power rating, theta_JA, Tj max): footprint parses, so resolved once.
+    limits: Vec<(Option<f64>, f64, f64)>,
 }
 
 /// What the whole run saw of one device, as opposed to one chunk of it.
@@ -683,6 +685,9 @@ impl StressMonitor {
     pub fn new(metas: Vec<DeviceMeta>) -> Self {
         let n = metas.len();
         StressMonitor {
+            limits: (metas.iter())
+                .map(|m| (m.power_rating_w(), m.theta_ja_c_per_w(), m.tj_max_c()))
+                .collect(),
             metas,
             tracks: vec![DeviceTrack::default(); n],
             supply_watches: Vec::new(),
@@ -1098,7 +1103,8 @@ impl StressMonitor {
                 ..*op
             };
             let op = &op;
-            let mut checks = build_checks(&meta, op, peak_a);
+            let (rated_w, theta_ja, tj_max) = self.limits[i];
+            let mut checks = build_checks(&meta, op, peak_a, rated_w);
 
             // Thermal: turn the package's pooled dissipation into a
             // steady-state junction temperature and check it against the
@@ -1126,18 +1132,14 @@ impl StressMonitor {
                 .copied()
                 .unwrap_or(0.0);
             if package_w > 0.0 {
-                let tj = crate::thermal::junction_temp_c(
-                    self.ambient_c,
-                    package_w,
-                    meta.theta_ja_c_per_w(),
-                );
+                let tj = crate::thermal::junction_temp_c(self.ambient_c, package_w, theta_ja);
                 self.temp_by_ref.insert(meta.reference.clone(), tj);
                 let peak = &mut self.run[i].peak_tj_c;
                 *peak = Some(peak.map_or(tj, |p| p.max(tj)));
                 checks.push(Check {
                     kind: FaultKind::Overtemperature,
                     value: tj,
-                    limit: meta.tj_max_c(),
+                    limit: tj_max,
                     surge: false,
                 });
             } else if let Some(t) = self.temp_by_ref.get_mut(&meta.reference) {
@@ -1481,7 +1483,7 @@ struct Check {
 /// pulsed/surge ceiling means. Handing the peak to a continuous rating is how
 /// an inrush into bulk capacitance reddens a board whose settled current is
 /// comfortably inside its part's rating.
-fn build_checks(meta: &DeviceMeta, op: &OperatingPoint, peak_a: f64) -> Vec<Check> {
+fn build_checks(meta: &DeviceMeta, op: &OperatingPoint, peak_a: f64, w: Option<f64>) -> Vec<Check> {
     let mut checks = Vec::new();
     let r = &meta.ratings;
 
@@ -1515,7 +1517,7 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint, peak_a: f64) -> Vec<Chec
         }
         ComponentKind::Passive => {
             // Resistor power (rated or footprint-derived).
-            check(FaultKind::Overpower, op.power_w, meta.power_rating_w());
+            check(FaultKind::Overpower, op.power_w, w);
             // Continuous current rating; the natural home for an inductor's
             // rated / saturation current. Skip it for passives and a coil's
             // steady-state current limit goes silently unenforced (an inductor's
@@ -1918,7 +1920,7 @@ mod monitor_temp_tests {
         };
         let meta = meta("L1", ComponentKind::Passive, "", ratings);
         let op = OperatingPoint::new(3.0, 0.1, 0.0);
-        let checks = build_checks(&meta, &op, op.current_a);
+        let checks = build_checks(&meta, &op, op.current_a, meta.power_rating_w());
         let oc = checks
             .iter()
             .find(|c| c.kind == FaultKind::Overcurrent && !c.surge)
