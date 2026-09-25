@@ -12,7 +12,20 @@ description = "BC847 NPN small-signal SOT-23, 45V, 100mA"
 value_re = "(?i)^BC84[5-9][A-C]?$"
 
 [models.params]
-# Source: Nexperia BC847 datasheet Rev. 11 2019-01-30, SPICE model appendix
+# Sources:
+#   Datasheet: Nexperia "BC847x series, 45 V, 100 mA NPN general-purpose
+#     transistors", Rev. 13, 1 July 2022
+#     (assets.nexperia.com/documents/data-sheet/BC847X_SER.pdf). It has NO
+#     SPICE appendix; the old citation here ("Rev. 11 2019-01-30, SPICE model
+#     appendix") named a section that does not exist.
+#   SPICE:     Nexperia BC847.txt (assets.nexperia.com/documents/spice-model/
+#     BC847.txt, extraction week 24/2021, header hFE 110..450 @ 5 V/2 mA, i.e.
+#     the ungraded part; its .MODEL MAIN numbers are identical to BC847B.txt).
+#     The card matches all BC845..BC849 bins; the capacitances and transit
+#     time are not bin-dependent in Nexperia's files.
+# DC params (is, bf, nf, vaf, br, rb, rc, re): legacy values, no located
+#   source; they are NOT from the vendor card (which has IS=1.124e-14,
+#   BF=281.7, VAF=36.27, RB=150). Kept unchanged pending a DC audit.
 is  = 1.0e-14
 bf  = 150.0
 nf  = 1.0
@@ -21,9 +34,15 @@ br  = 4.0
 rb  = 10.0
 rc  = 1.0
 re  = 0.5
-cje = 9.0e-13
-cjc = 5.0e-13
-tf  = 3.0e-10
+cje = 1.264e-11   # BC847.txt CJE (VJE=0.7056, MJE=0.3401). Agrees with Table 8 Ce typ
+                  # 11 pF @ VEB=0.5 V: card gives 10.5 pF there (10.7 pF with the
+                  # engine's vje=0.75/mje=0.33)
+cjc = 3.624e-12   # BC847.txt CJC (VJC=0.5036, MJC=0.365, XCJC=1). Agrees with Table 8
+                  # Cc max 1.5 pF @ VCB=10 V: card gives 1.20 pF there (1.51 pF with
+                  # the engine's vjc=0.75/mjc=0.33)
+tf  = 6.258e-10   # BC847.txt TF; 1/(2*pi*TF) = 254 MHz, consistent with Table 8
+                  # fT min 100 MHz @ VCE=5 V, IC=10 mA
+tr  = 1.55e-7     # BC847.txt TR (no datasheet row)
 
 [models.pins]
 "1" = "base"
@@ -46,7 +65,17 @@ description = "2N3904 NPN general-purpose TO-92, 40V, 200mA"
 value_re = "(?i)^2N3904$"
 
 [models.params]
-# Source: ON Semiconductor 2N3904 SPICE model, Rev. 7
+# Sources:
+#   Datasheet: onsemi "NPN General-Purpose Amplifier 2N3904", 2N3904/D Rev. 3,
+#     October 2024 (onsemi.com/download/data-sheet/pdf/2n3904-d.pdf).
+#   SPICE:     onsemi 2n3904.lib (onsemi.com/download/models/lib/2n3904.lib),
+#     `.MODEL Q2n3904 npn`, MODPEX-generated "Aug 7, 01"; no revision number.
+#     The old citation ("ON Semiconductor 2N3904 SPICE model, Rev. 7") names a
+#     file that does not exist, and its cje/cjc appear in no located card.
+# DC params (is, bf, nf, vaf, br, rb, rc, re): legacy values, no located onsemi
+#   source. is/vaf/br match the widely circulated PSpice-library Q2N3904 card
+#   (IS=6.734f VAF=74.03 BR=.7371), not the onsemi file. Kept unchanged
+#   pending a DC audit.
 is  = 6.734e-15
 bf  = 300.0
 nf  = 1.0
@@ -55,9 +84,15 @@ br  = 0.7372
 rb  = 9.0
 rc  = 0.09
 re  = 0.09
-cje = 2.2e-12
-cjc = 7.306e-13
-tf  = 3.011e-10
+cje = 4.642e-12   # 2n3904.lib CJE (VJE=0.4, MJE=0.2562). Agrees with Cibo max 8.0 pF
+                  # @ VEB=0.5 V: card gives 3.77 pF there (3.92 pF with the engine's
+                  # vje=0.75/mje=0.33)
+cjc = 3.770e-12   # 2n3904.lib CJC (VJC=0.4, MJC=0.2381, XCJC=0.8). Agrees with Cobo
+                  # max 4.0 pF @ VCB=5 V: card gives 2.03 pF there (1.92 pF with the
+                  # engine's defaults)
+tf  = 4.196e-10   # 2n3904.lib TF; 1/(2*pi*TF) = 379 MHz, consistent with fT min
+                  # 300 MHz @ IC=10 mA, VCE=20 V (datasheet bound: tf <= 530.5 ps)
+tr  = 6.820e-8    # 2n3904.lib TR (datasheet prints only ts max 200 ns)
 
 [models.pins]
 "1" = "emitter"
@@ -80,7 +115,19 @@ description = "BC237/BC547 NPN general-purpose TO-92, 45V, 100mA"
 value_re = "(?i)^BC23[789]$|^BC54[7-9][A-C]?$"
 
 [models.params]
-# Source: Fairchild BC546/547/548/549/550 datasheet, SPICE parameters
+# Source: onsemi (ex-Fairchild) "BC546 / BC547 / BC548 / BC549 / BC550 NPN
+#   Epitaxial Silicon Transistor", BC550/D Rev. 6, February 2026
+#   (onsemi.com/download/data-sheet/pdf/bc550-d.pdf), Electrical
+#   Characteristics table, p.2. That datasheet prints NO SPICE parameters; the
+#   old citation ("Fairchild BC546/547/548/549/550 datasheet, SPICE
+#   parameters") named content that does not exist. The BC237/238/239 that this
+#   entry also matches are not in that datasheet; they are covered by analogy.
+# DC params (is, bf, nf, vaf, br, rb, rc, re): legacy values, no located
+#   source. Kept unchanged pending a DC audit.
+# Not used: onsemi bc547b.lib (MODPEX, May 12 2005) belongs to onsemi's other
+#   BC546/D datasheet lineage, covers the B bin only, and its CJE gives 6.0 pF
+#   @ VEB=0.5 V against this sheet's Cib typ 9 pF.
+# No tr: no vendor SPICE file used, and the datasheet has no storage-time row.
 is  = 2.0e-14
 bf  = 200.0
 nf  = 1.0
@@ -89,9 +136,9 @@ br  = 4.0
 rb  = 15.0
 rc  = 1.0
 re  = 0.5
-cje = 1.2e-12
-cjc = 5.0e-13
-tf  = 3.5e-10
+cje = 1.065e-11   # Cib typ 9 pF @ VEB=0.5 V, f=1 MHz: 9p*(1+0.5/0.75)^0.33
+cjc = 8.427e-12   # Cob typ 3.5 pF @ VCB=10 V, f=1 MHz: 3.5p*(1+10/0.75)^0.33
+tf  = 5.305e-10   # fT typ 300 MHz @ VCE=5 V, IC=10 mA: 1/(2*pi*300e6)
 
 [models.pins]
 "1" = "collector"
@@ -99,10 +146,6 @@ tf  = 3.5e-10
 "3" = "emitter"
 
 # ─────────────────────────────────────────────────────────────────────────────
-
-# BCM847BS: matched NPN pair, SOT-363 (6-pin)
-# Each transistor in the pair shares the same SPICE model as BC847.
-# Pin mapping: SOT-363 pin 1=B1, 2=E1, 3=E2, 4=B2, 5=C2, 6=C1
 
 [models.ratings]
 max_current_a = 0.1
@@ -140,13 +183,14 @@ max_voltage_v = 45.0
 # rc, re: chosen so VCE(sat) at the datasheet test point (IC=500 mA, IB=50 mA)
 #   is ~0.1 V intrinsic + 0.3*0.5 + 0.05*0.55 = 0.28 V, matching Figure 3's
 #   typical and staying under the 0.6 V table maximum.
-# tf: from the fT specification. tau_ec = 1/(2*pi*fT) = 1.06 ns at fT=150 MHz,
-#   of which the junction-charging term at IC=20 mA is a few tens of ps, so
-#   tf ~ 1.0 ns.
+# tf: from the fT specification, tf = 1/(2*pi*fT) = 1/(2*pi*150e6) = 1.061 ns.
+#   The sheet prints fT min only, so tf is an upper bound.
 #
 # DELIBERATELY OMITTED, because this datasheet states none of them and we will
 # not invent them: vaf and var (left at the engine default of infinity, i.e. no
-# base-width modulation), br (default 1.0), cje and cjc (default 0). The Early
+# base-width modulation), br (default 1.0), cje and cjc (default 0: the sheet
+# prints no Cob/Cib/Cc/Ce row and no capacitance figure), tr (no vendor SPICE
+# file; default 0). The Early
 # voltage is not printed on the sheet at all; Figure 1's output slope is only
 # consistent with a value of order 10^2 V, which is too coarse to pin.
 [[models]]
@@ -168,7 +212,8 @@ nf  = 1.0       # ideal forward junction
 rb  = 3.3       # base ohmic, fitted to VBE(sat) ~0.95 V @ IC=500mA, IB=50mA
 rc  = 0.3       # collector ohmic, part of VCE(sat) ~0.28 V at that point
 re  = 0.05      # emitter ohmic, remainder of the same VCE(sat) fit
-tf  = 1.0e-9    # forward transit time from fT >= 150 MHz @ VCE=6V, IC=20mA
+tf  = 1.061e-9  # Electrical Characteristics, fT min 150 MHz @ VCE=6V, IC=20mA,
+                # f=30MHz: 1/(2*pi*150e6); fT min, so tf is an upper bound
 
 [models.pins]
 # SOT-23 NPN (Galaxy S8050 package outline; also the KiCad Q_NPN_BEC /
@@ -195,7 +240,18 @@ value_re = "(?i)^BCM847BS"
 mpn_re   = "(?i)BCM847BS"
 
 [models.params]
-# Source: Nexperia BCM847BS datasheet Rev. 4 2022, SPICE model (same as BC847)
+# Sources:
+#   Datasheet: Nexperia "BCM847BS NPN/NPN matched double transistor", v.8,
+#     15 July 2026 (assets.nexperia.com/documents/data-sheet/BCM847BS.pdf).
+#     The datasheet contains no SPICE model; the old citation ("datasheet
+#     Rev. 4 2022, SPICE model (same as BC847)") was wrong on both counts:
+#     there is no Rev. 4 2022 (v.7 is 27 Dec 2022) and Nexperia's BCM847BS
+#     SPICE file is its own extraction, not BC847's.
+#   SPICE:     Nexperia BCM847BS.txt (assets.nexperia.com/documents/spice-model/
+#     BCM847BS.txt, extraction week 14/2006, header hFE 200..450 @ 5 V/2 mA,
+#     which is the part's only gain bin), single `.MODEL MAIN NPN`, used twice.
+# DC params other than bf (is, nf, vaf, br, rb, rc, re): legacy values copied
+#   from the bc847 entry, no located source. Kept unchanged pending a DC audit.
 is  = 1.0e-14
 bf  = 290.0     # hFE typ @ VCE = 5 V, IC = 2 mA (200 min, 450 max): BCM847BS v.8
                 # (15 July 2026) Table 7 Characteristics, p.4
@@ -205,9 +261,18 @@ br  = 4.0
 rb  = 10.0
 rc  = 1.0
 re  = 0.5
-cje = 1.1e-11   # Ce typ 11 pF @ VEB = 0.5 V, f = 1 MHz: BCM847BS v.8 Table 7, p.4
-cjc = 3.5e-12   # zero-bias Cc read off Fig. 7 (p.6); 1.1 pF there at VCB = 10 V, Table 7 max 1.5 pF
-tf  = 6.4e-10   # 1/(2*pi*fT), fT typ 250 MHz @ VCE = 5 V, IC = 10 mA: Table 7, p.4
+cje = 1.244e-11 # BCM847BS.txt CJE (VJE=0.7579, MJE=0.3656). Agrees with v.8 Table 7
+                # Ce typ 11 pF @ VEB = 0.5 V: card gives 10.3 pF there (10.5 pF with
+                # the engine's vje=0.75/mje=0.33); Fig. 8 reads ~13 pF at 0 V
+cjc = 3.347e-12 # BCM847BS.txt CJC (VJC=0.5463, MJC=0.391, XCJC=0.6193). Agrees with
+                # Table 7 Cc max 1.5 pF @ VCB = 10 V: card gives 1.05 pF there
+                # (1.39 pF with engine defaults); Fig. 7 reads ~3.5 pF at 0 V and
+                # ~1.1 pF at 10 V. (Relation from the Table 7 max alone: 1.5p*
+                # (1+10/0.75)^0.33 = 3.611e-12, an upper bound.)
+tf  = 4.908e-10 # BCM847BS.txt TF; 1/(2*pi*TF) = 324 MHz vs Table 7 fT typ 250 MHz
+                # @ VCE = 5 V, IC = 10 mA (datasheet relation: 6.366e-10); vendor
+                # card is ~30% faster than the typ row, above the 100 MHz min
+tr  = 9.0e-8    # BCM847BS.txt TR (no datasheet row)
 # Note: this entry models a single transistor in the pair.
 # hauksbee-extract must instantiate two Device::Bjt entries per footprint,
 # using the pin map below for Q1 and Q2 respectively.
@@ -242,7 +307,21 @@ description = "BC857 PNP small-signal SOT-23, 45V, 100mA"
 value_re = "(?i)^BC85[5-9][A-C]?$"
 
 [models.params]
-# Source: Nexperia BC857 datasheet Rev. 9 2019, SPICE model appendix
+# Sources:
+#   Datasheet: Nexperia "BC856; BC857; BC858, 65 V, 100 mA PNP general-purpose
+#     transistors", Rev. 9, 1 July 2022
+#     (assets.nexperia.com/documents/data-sheet/BC856_BC857_BC858.pdf). It has
+#     NO SPICE appendix; the old citation ("BC857 datasheet Rev. 9 2019, SPICE
+#     model appendix") named a section that does not exist. It prints no Ce row.
+#   SPICE:     Nexperia BC857.txt (assets.nexperia.com/documents/spice-model/
+#     BC857.txt, extraction week 19/2020, header hFE 125..800 @ 5 V/2 mA, i.e.
+#     the ungraded part; its .MODEL MAIN numbers are identical to BC857B.txt).
+#     The card matches all BC855..BC859 bins; the capacitances and transit
+#     time are not bin-dependent in Nexperia's files.
+# DC params (is, bf, nf, vaf, br, rb, rc, re): legacy values, no located
+#   source; NOT from the vendor card (IS=1.95e-14, BF=297.2, VAF=41.13, RB=220).
+#   Kept unchanged pending a DC audit.
+# Params are magnitudes; the kind carries the polarity.
 is  = 1.0e-14
 bf  = 180.0
 nf  = 1.0
@@ -251,9 +330,15 @@ br  = 4.0
 rb  = 10.0
 rc  = 1.0
 re  = 0.5
-cje = 9.0e-13
-cjc = 5.0e-13
-tf  = 3.0e-10
+cje = 1.095e-11   # BC857.txt CJE (VJE=0.6608, MJE=0.375); no datasheet Ce row to check
+cjc = 1.083e-11   # Table 8 Cc typ 4.5 pF @ VCB=-10 V, f=1 MHz, to zero bias at the
+                  # engine's vjc=0.75/mjc=0.33: 4.5p*(1+10/0.75)^0.33. NOT the vendor
+                  # BC857.txt CJC=5.88e-12: with the engine's junction profile (the
+                  # binder does not read VJC/MJC) it gives 2.44 pF at -10 V, 46% under
+                  # the printed typ
+tf  = 1.2e-9      # BC857.txt TF; 1/(2*pi*TF) = 133 MHz, consistent with Table 8
+                  # fT min 100 MHz @ VCE=-5 V, IC=-10 mA
+tr  = 8.8e-8      # BC857.txt TR (no datasheet row)
 
 [models.pins]
 "1" = "base"
@@ -276,7 +361,18 @@ description = "2N3906 PNP general-purpose TO-92, 40V, 200mA"
 value_re = "(?i)^2N3906$"
 
 [models.params]
-# Source: ON Semiconductor 2N3906 SPICE model, Rev. 7
+# Sources:
+#   Datasheet: onsemi "2N3906 General Purpose Transistors PNP Silicon",
+#     2N3906/D Rev. 4, February 2010
+#     (onsemi.com/download/data-sheet/pdf/2n3906-d.pdf).
+#   SPICE:     onsemi 2n3906.lib (onsemi.com/download/models/lib/2n3906.lib),
+#     `.MODEL q2n3906 pnp`, MODPEX-generated "Aug 7, 01"; no revision number.
+#     The old citation ("ON Semiconductor 2N3906 SPICE model, Rev. 7") names a
+#     file that does not exist, and its cje/cjc/tf appear in no located card.
+# DC params (is, bf, nf, vaf, br, rb, rc, re): legacy values, no located onsemi
+#   source. is/vaf match the widely circulated PSpice-library Q2N3906 card
+#   (IS=1.41f VAF=18.7), not the onsemi file. Kept unchanged pending a DC audit.
+# Params are magnitudes; the kind carries the polarity.
 is  = 1.41e-15
 bf  = 180.18
 nf  = 1.0
@@ -285,9 +381,15 @@ br  = 4.0
 rb  = 10.0
 rc  = 0.1
 re  = 0.1
-cje = 2.2e-11
-cjc = 8.49e-13
-tf  = 2.4e-10
+cje = 6.119e-12   # 2n3906.lib CJE (VJE=0.4, MJE=0.2488). Agrees with Cibo max 10 pF
+                  # @ VEB=0.5 V: card gives 5.00 pF there (5.17 pF with the engine's
+                  # vje=0.75/mje=0.33)
+cjc = 6.850e-12   # 2n3906.lib CJC (VJC=0.4, MJC=0.279, XCJC=0.9). Agrees with Cobo
+                  # max 4.5 pF @ VCB=5 V: card gives 3.31 pF there (3.50 pF with the
+                  # engine's defaults)
+tf  = 5.218e-10   # 2n3906.lib TF; 1/(2*pi*TF) = 305 MHz, consistent with fT min
+                  # 250 MHz @ IC=10 mA, VCE=20 V (datasheet bound: tf <= 636.6 ps)
+tr  = 4.306e-7    # 2n3906.lib TR (datasheet prints only ts max 225 ns)
 
 [models.pins]
 "1" = "emitter"
@@ -314,7 +416,18 @@ description = "BC307/BC557 PNP small-signal TO-92, 45V, 100mA"
 value_re = "(?i)^BC3(0[789]|2[012789])$|^BC55[7-9][A-C]?$"
 
 [models.params]
-# Source: Fairchild BC557/558/559 datasheet, SPICE parameters
+# Source: onsemi (ex-Fairchild) "BC556, BC557, BC558, BC559, BC560 PNP
+#   Epitaxial Silicon Transistor", BC556BTA/D Rev. 3, June 2024
+#   (onsemi.com/download/data-sheet/pdf/bc556bta-d.pdf), Electrical
+#   Characteristics table, p.2. That datasheet prints NO SPICE parameters; the
+#   old citation ("Fairchild BC557/558/559 datasheet, SPICE parameters") named
+#   content that does not exist. BC307..BC329 are not in that datasheet; they
+#   are covered by analogy.
+# DC params (is, bf, nf, vaf, br, rb, rc, re): legacy values, no located
+#   source. Kept unchanged pending a DC audit.
+# cje removed: the datasheet prints no Cib/Ce row and no emitter-capacitance
+#   figure (default 0). No tr: no vendor SPICE file located, no storage-time row.
+# Params are magnitudes; the kind carries the polarity.
 is  = 2.0e-14
 bf  = 180.0
 nf  = 1.0
@@ -323,9 +436,9 @@ br  = 4.0
 rb  = 15.0
 rc  = 1.0
 re  = 0.5
-cje = 1.2e-12
-cjc = 5.0e-13
-tf  = 3.5e-10
+cjc = 1.445e-11   # Cob max 6 pF (only bound printed) @ VCB=-10 V, f=1 MHz:
+                  # 6p*(1+10/0.75)^0.33; from the max, so an upper bound
+tf  = 1.061e-9    # fT typ 150 MHz @ VCE=-5 V, IC=-10 mA: 1/(2*pi*150e6)
 
 [models.pins]
 "1" = "collector"
@@ -349,7 +462,19 @@ value_re = "(?i)^BCM857BS"
 mpn_re   = "(?i)BCM857BS"
 
 [models.params]
-# Source: Nexperia BCM857BS datasheet (PNP complement of BCM847BS)
+# Sources:
+#   Datasheet: Nexperia "BCM857BS PNP/PNP matched double transistor", v.9,
+#     12 August 2026 (assets.nexperia.com/documents/data-sheet/BCM857BS.pdf),
+#     Table 7 Characteristics.
+#   SPICE:     Nexperia BCM857BS.txt (assets.nexperia.com/documents/spice-model/
+#     BCM857BS.txt, extraction week 47/2005, header hFE 200..450 @ 5 V/2 mA,
+#     the part's only gain bin), `.MODEL MAIN PNP` inside a two-transistor
+#     quasi-saturation subcircuit (areas 0.9196/0.08035), used twice.
+# DC params (is, bf, nf, vaf, br, rb, rc, re): legacy values copied from the
+#   bc857 entry, no located source (the old citation "Nexperia BCM857BS
+#   datasheet" supports none of them; the datasheet hFE is 200/290/450
+#   min/typ/max). Kept unchanged pending a DC audit.
+# Params are magnitudes; the kind carries the polarity.
 is  = 1.0e-14
 bf  = 180.0
 nf  = 1.0
@@ -358,9 +483,15 @@ br  = 4.0
 rb  = 10.0
 rc  = 1.0
 re  = 0.5
-cje = 9.0e-13
-cjc = 5.0e-13
-tf  = 3.0e-10
+cje = 1.14e-11    # BCM857BS.txt CJE (VJE=0.7923, MJE=0.4031). Agrees with Table 7
+                  # Ce typ 10 pF @ VEB=-0.5 V: card gives 9.36 pF there (9.63 pF
+                  # with the engine's vje=0.75/mje=0.33)
+cjc = 5.839e-12   # BCM857BS.txt CJC (VJC=1, MJC=0.5758, XCJC=1). Agrees with Table 7
+                  # Cc max 2.2 pF @ VCB=-10 V: card gives 1.47 pF there (2.43 pF,
+                  # just over the max, with the engine's vjc=0.75/mjc=0.33)
+tf  = 9.0e-10     # BCM857BS.txt TF; 1/(2*pi*TF) = 177 MHz, agrees with Table 7 fT
+                  # typ 175 MHz @ VCE=-5 V, IC=-10 mA
+tr  = 1.0e-9      # BCM857BS.txt TR (no datasheet row)
 pair_count = 2
 
 [models.pins]
@@ -459,10 +590,13 @@ nc  = 1.357        # NC   B-C leakage emission coefficient
 rb  = 43.0         # RB   zero-bias base resistance
 rc  = 0.2327       # RC
 re  = 0.1312       # RE
-cje = 4.377e-11    # CJE
-cjc = 8.628e-12    # CJC
-tf  = 6.08e-10     # TF
-tr  = 3.5e-07      # TR
+cje = 4.377e-11    # CJE (VJE=0.6604, MJE=0.3252); BC817_SER Rev. 8 prints no Ce row
+cjc = 8.628e-12    # CJC (VJC=0.5162, MJC=0.3621, XCJC=1). Agrees with Table 8 Cc typ
+                   # 3 pF @ VCB=10 V: card gives 2.90 pF there (3.58 pF with the
+                   # engine's vjc=0.75/mjc=0.33)
+tf  = 6.08e-10     # TF; 1/(2*pi*TF) = 262 MHz, consistent with Table 8 fT min
+                   # 100 MHz @ VCE=5 V, IC=10 mA
+tr  = 3.5e-07      # TR (no datasheet row)
 eg  = 1.11         # EG
 xti = 6.013        # XTI
 
@@ -497,7 +631,7 @@ description = "BC807-40 PNP 45V 500mA SOT23, hFE 250-600, Nexperia SPICE card"
 value_re = "(?i)^BC807-40[A-Z0-9,]*(\\(SOT-?23\\))?$"
 
 [models.params]
-# Source: Nexperia BC807-40.txt SPICE card, `.MODEL Transistor PNP`, verbatim.
+# Source: Nexperia BC807-40.txt SPICE card, `.MODEL Transistor PNP`, verbatim, except cjc (see its line).
 # Params are magnitudes; the kind carries the polarity.
 is  = 1.132e-13    # IS
 bf  = 535.0        # BF   (datasheet bin 250..600 @ VCE=-1V, IC=-100mA)
@@ -515,10 +649,15 @@ nc  = 1.183        # NC
 rb  = 30.0         # RB
 rc  = 0.1259       # RC
 re  = 0.2017       # RE
-cje = 4.948e-11    # CJE
-cjc = 1.786e-11    # CJC
-tf  = 8.604e-10    # TF
-tr  = 4.5e-08      # TR
+cje = 4.948e-11    # CJE (VJE=0.6553, MJE=0.3474); BC807_SER Rev. 8 prints no Ce row
+cjc = 1.204e-11    # NOT the vendor CJC: Table 8 Cc typ 5 pF @ VCB=-10 V, f=1 MHz, to
+                   # zero bias at the engine's vjc=0.75/mjc=0.33: 5p*(1+10/0.75)^0.33.
+                   # The file's CJC=1.786e-11 (VJC=0.5376, MJC=0.4005) gives 5.42 pF
+                   # there on its own profile, but 7.42 pF (48% high) on the engine's,
+                   # which is the one the binder applies (it does not read VJC/MJC)
+tf  = 8.604e-10    # TF; 1/(2*pi*TF) = 185 MHz, consistent with Table 8 fT min
+                   # 80 MHz @ VCE=-5 V, IC=-10 mA
+tr  = 4.5e-08      # TR (no datasheet row)
 eg  = 1.11         # EG
 xti = 10.69        # XTI
 
@@ -541,7 +680,7 @@ theta_ja_c_per_w = 500.0       # standard footprint (362 K/W with a 1 cm^2 pad)
 #
 # Source: Nexperia BC807_SER Rev. 8, 1 July 2022, for the limiting values and the
 #   hFE table; Nexperia's SPICE card BC807.txt (`.MODEL Transistor PNP`,
-#   extraction week 44/2018) for the parameters below, verbatim. Read the note on
+#   extraction week 44/2018) for the parameters below, verbatim except cjc. Read the note on
 #   what that card is before treating BF as an ungraded figure.
 #
 # THE ENTRY THIS SITS BESIDE EXPLAINS WHY IT EXISTS. `bc807_40` above demands the
@@ -618,7 +757,7 @@ description = "BC807 (ungraded) PNP 45V 500mA SOT23, hFE 100-600, Nexperia SPICE
 value_re = "(?i)^BC807[A-Z0-9.,]*$"
 
 [models.params]
-# Source: Nexperia BC807.txt SPICE card, `.MODEL Transistor PNP`, verbatim.
+# Source: Nexperia BC807.txt SPICE card, `.MODEL Transistor PNP`, verbatim, except cjc (see its line).
 # Params are magnitudes; the kind carries the polarity.
 is  = 4.209e-14    # IS
 bf  = 300.0        # BF   (ungraded hFE bin 100..600 @ VCE=-1V, IC=-100mA)
@@ -639,10 +778,15 @@ nc  = 1.08         # NC   B-C leakage emission coefficient
 rb  = 20.0         # RB
 rc  = 0.1943       # RC
 re  = 0.05838      # RE
-cje = 5.547e-11    # CJE
-cjc = 2.004e-11    # CJC
-tf  = 9.2e-10      # TF
-tr  = 8.0e-10      # TR
+cje = 5.547e-11    # CJE (VJE=0.8, MJE=0.3947); BC807_SER Rev. 8 prints no Ce row
+cjc = 1.204e-11    # NOT the vendor CJC: Table 8 Cc typ 5 pF @ VCB=-10 V, f=1 MHz, to
+                   # zero bias at the engine's vjc=0.75/mjc=0.33: 5p*(1+10/0.75)^0.33.
+                   # The file's CJC=2.004e-11 (VJC=0.14, MJC=0.3988) gives 3.63 pF
+                   # there on its own profile (27% low) and 8.32 pF (66% high) on the
+                   # engine's, which is the one the binder applies
+tf  = 9.2e-10      # TF; 1/(2*pi*TF) = 173 MHz, consistent with Table 8 fT min
+                   # 80 MHz @ VCE=-5 V, IC=-10 mA
+tr  = 8.0e-10      # TR (no datasheet row)
 eg  = 1.11         # EG
 xti = 10.02        # XTI
 

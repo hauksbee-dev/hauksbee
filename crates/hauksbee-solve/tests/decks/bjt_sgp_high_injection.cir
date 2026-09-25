@@ -1,5 +1,5 @@
-2N3904 beta at 20 mA, from the genuine vendor model card
-* The ON Semiconductor 2N3904 card, used verbatim, including the two terms
+2N3904 beta at 20 mA, from the widely used PSpice-library model card
+* The PSpice-library Q2N3904 card (not onsemi's own 2n3904.lib), used verbatim, including the two terms
 * hauksbee used to drop on the floor: the high-injection knee IKF and the
 * base-emitter leakage ISE/NE. Dropping them is not a small approximation.
 * ngspice on this card gives IC = 20.6 mA and IB = 125.5 uA, so beta = 164,

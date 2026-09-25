@@ -13,15 +13,21 @@ description = "1N4148 small-signal switching diode, DO-35"
 value_re = "(?i)^1N4148[A-Z0-9-]*$"
 
 [models.params]
-# Source: Vishay 1N4148 datasheet Rev. 14, SPICE model parameters
-is  = 2.52e-9   # saturation current
-n   = 1.752     # emission coefficient
-rs  = 0.568     # series resistance (Ω)
-cjo = 4.0e-12   # zero-bias junction capacitance (F)
-vj  = 0.8       # built-in potential (V)
-m   = 0.4       # grading coefficient
-tt  = 6.0e-9    # transit time (s)
-bv  = 100.0     # reverse breakdown voltage (V)
+# Source for the dynamic params: Vishay "1N4148 Small Signal Fast Switching
+# Diodes", document 81857, Rev. 1.6, 07-Nov-2024, ELECTRICAL CHARACTERISTICS
+# (https://www.vishay.com/docs/81857/1n4148.pdf). That datasheet prints no SPICE
+# model and has no CD-vs-VR figure, so vj and m are left to the binder defaults.
+# DC params: legacy values, no located source. They match the widely copied
+# library model (IS=2.52n N=1.752 RS=0.568), not anything in the Vishay sheet;
+# the old citation "Vishay 1N4148 datasheet Rev. 14, SPICE model parameters"
+# pointed at a revision and a SPICE section that do not exist.
+is  = 2.52e-9   # saturation current (legacy, see above)
+n   = 1.752     # emission coefficient (legacy)
+rs  = 0.568     # series resistance (Ω) (legacy)
+cjo = 4.0e-12   # CD max 4 pF at VR = 0 V, f = 1 MHz: already zero bias
+tt  = 1.154e-8  # trr max 8 ns at IF = IR = 10 mA, iR = 1 mA: tt = 8 ns / ln(1 + 10/10)
+bv  = 100.0     # V(BR) min 100 V at IR = 100 uA (min is the only printed bound)
+ibv = 1.0e-4    # the V(BR) test current, IR = 100 uA
 
 [models.pins]
 "A" = "anode"
@@ -49,15 +55,25 @@ description = "1N400x rectifier diode family fallback, DO-41 (each member has an
 value_re = "(?i)^1N400[1-7]$"
 
 [models.params]
-# Source: Vishay 1N4001-1N4007 datasheet, Rev. 15, SPICE model
+# Source for the dynamic params: Vishay "1N4001 thru 1N4007 General Purpose
+# Plastic Rectifier", document 88503, Revision 29-Apr-2020
+# (https://www.vishay.com/docs/88503/1n4001.pdf), ELECTRICAL CHARACTERISTICS
+# and Fig. 6 "Typical Junction Capacitance". The sheet prints no SPICE model
+# and no trr row, so tt is left at the binder default (0).
+# vj/m: least-squares fit of C = C0/(1 + V/vj)^m to the Fig. 6 curve (vector
+# path vertices 0.10 V/28.6 pF, 0.65/21.2, 3.58/14.6, 18.5/9.14, 100/5.05),
+# rms residual 2.3%; the fit gives 13.9 pF at 4 V against the 15 pF table row.
+# DC params: legacy values, no located source. The old citation "Rev. 15, SPICE
+# model" does not exist (the sheet has no SPICE section), and they do not match
+# onsemi's published 1N4001RL model either (MODPEX, 12-Oct-2003:
+# IS=1.225e-8 N=1.834 RS=0.04148).
 is  = 7.62e-9
 n   = 1.984
 rs  = 0.042
-cjo = 2.0e-11
-vj  = 0.75
-m   = 0.333
-tt  = 5.76e-6
-bv  = 50.0     # 1N4001 VRRM; higher-voltage members bind their own entries below
+cjo = 3.123e-11  # CJ typ 15 pF at VR = 4.0 V, 1 MHz: 15p * (1 + 4/0.4157)^0.3103
+vj  = 0.4157     # fitted to Fig. 6 (see above)
+m   = 0.3103     # fitted to Fig. 6 (see above)
+bv  = 50.0     # 1N4001 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -78,15 +94,20 @@ description = "1N4002 rectifier diode, DO-41 (explicit match over 1N400x family)
 value_re = "(?i)^1N4002$"
 
 [models.params]
-# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+# Source for the dynamic params: Vishay 1N4001-1N4007 family datasheet,
+# document 88503, Revision 29-Apr-2020; derivation and Fig. 6 fit as on the
+# 1n4001 entry above. No trr row is printed, so tt is left at the default (0).
+# DC params: legacy values, no located source. The old citation "ON
+# Semiconductor 1N4001-1N4007 SPICE model" does not match these numbers: the
+# model onsemi does publish (1n4001rl.lib, 12-Oct-2003) has IS=1.225e-8
+# N=1.834 RS=0.04148.
 is  = 7.62e-9
 n   = 1.984
 rs  = 0.042
-cjo = 2.0e-11
-vj  = 0.75
-m   = 0.333
-tt  = 5.76e-6
-bv  = 100.0   # 1N4002 rated 100 V PIV
+cjo = 3.123e-11  # CJ typ 15 pF at VR = 4.0 V, 1 MHz: 15p * (1 + 4/0.4157)^0.3103
+vj  = 0.4157     # fitted to Vishay 88503 Fig. 6
+m   = 0.3103     # fitted to Vishay 88503 Fig. 6
+bv  = 100.0   # 1N4002 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -108,15 +129,20 @@ description = "1N4003 rectifier diode, DO-41 (explicit match over 1N400x family)
 value_re = "(?i)^1N4003$"
 
 [models.params]
-# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+# Source for the dynamic params: Vishay 1N4001-1N4007 family datasheet,
+# document 88503, Revision 29-Apr-2020; derivation and Fig. 6 fit as on the
+# 1n4001 entry above. No trr row is printed, so tt is left at the default (0).
+# DC params: legacy values, no located source. The old citation "ON
+# Semiconductor 1N4001-1N4007 SPICE model" does not match these numbers: the
+# model onsemi does publish (1n4001rl.lib, 12-Oct-2003) has IS=1.225e-8
+# N=1.834 RS=0.04148.
 is  = 7.62e-9
 n   = 1.984
 rs  = 0.042
-cjo = 2.0e-11
-vj  = 0.75
-m   = 0.333
-tt  = 5.76e-6
-bv  = 200.0   # 1N4003 rated 200 V PIV
+cjo = 3.123e-11  # CJ typ 15 pF at VR = 4.0 V, 1 MHz: 15p * (1 + 4/0.4157)^0.3103
+vj  = 0.4157     # fitted to Vishay 88503 Fig. 6
+m   = 0.3103     # fitted to Vishay 88503 Fig. 6
+bv  = 200.0   # 1N4003 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -138,15 +164,20 @@ description = "1N4004 rectifier diode, DO-41 (explicit match over 1N400x family)
 value_re = "(?i)^1N4004$"
 
 [models.params]
-# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+# Source for the dynamic params: Vishay 1N4001-1N4007 family datasheet,
+# document 88503, Revision 29-Apr-2020; derivation and Fig. 6 fit as on the
+# 1n4001 entry above. No trr row is printed, so tt is left at the default (0).
+# DC params: legacy values, no located source. The old citation "ON
+# Semiconductor 1N4001-1N4007 SPICE model" does not match these numbers: the
+# model onsemi does publish (1n4001rl.lib, 12-Oct-2003) has IS=1.225e-8
+# N=1.834 RS=0.04148.
 is  = 7.62e-9
 n   = 1.984
 rs  = 0.042
-cjo = 2.0e-11
-vj  = 0.75
-m   = 0.333
-tt  = 5.76e-6
-bv  = 400.0   # 1N4004 rated 400 V PIV
+cjo = 3.123e-11  # CJ typ 15 pF at VR = 4.0 V, 1 MHz: 15p * (1 + 4/0.4157)^0.3103
+vj  = 0.4157     # fitted to Vishay 88503 Fig. 6
+m   = 0.3103     # fitted to Vishay 88503 Fig. 6
+bv  = 400.0   # 1N4004 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -168,15 +199,20 @@ description = "1N4005 rectifier diode, DO-41 (explicit match over 1N400x family)
 value_re = "(?i)^1N4005$"
 
 [models.params]
-# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+# Source for the dynamic params: Vishay 1N4001-1N4007 family datasheet,
+# document 88503, Revision 29-Apr-2020; derivation and Fig. 6 fit as on the
+# 1n4001 entry above. No trr row is printed, so tt is left at the default (0).
+# DC params: legacy values, no located source. The old citation "ON
+# Semiconductor 1N4001-1N4007 SPICE model" does not match these numbers: the
+# model onsemi does publish (1n4001rl.lib, 12-Oct-2003) has IS=1.225e-8
+# N=1.834 RS=0.04148.
 is  = 7.62e-9
 n   = 1.984
 rs  = 0.042
-cjo = 2.0e-11
-vj  = 0.75
-m   = 0.333
-tt  = 5.76e-6
-bv  = 600.0   # 1N4005 rated 600 V PIV
+cjo = 3.123e-11  # CJ typ 15 pF at VR = 4.0 V, 1 MHz: 15p * (1 + 4/0.4157)^0.3103
+vj  = 0.4157     # fitted to Vishay 88503 Fig. 6
+m   = 0.3103     # fitted to Vishay 88503 Fig. 6
+bv  = 600.0   # 1N4005 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -198,15 +234,20 @@ description = "1N4006 rectifier diode, DO-41 (explicit match over 1N400x family)
 value_re = "(?i)^1N4006$"
 
 [models.params]
-# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+# Source for the dynamic params: Vishay 1N4001-1N4007 family datasheet,
+# document 88503, Revision 29-Apr-2020; derivation and Fig. 6 fit as on the
+# 1n4001 entry above. No trr row is printed, so tt is left at the default (0).
+# DC params: legacy values, no located source. The old citation "ON
+# Semiconductor 1N4001-1N4007 SPICE model" does not match these numbers: the
+# model onsemi does publish (1n4001rl.lib, 12-Oct-2003) has IS=1.225e-8
+# N=1.834 RS=0.04148.
 is  = 7.62e-9
 n   = 1.984
 rs  = 0.042
-cjo = 2.0e-11
-vj  = 0.75
-m   = 0.333
-tt  = 5.76e-6
-bv  = 800.0   # 1N4006 rated 800 V PIV
+cjo = 3.123e-11  # CJ typ 15 pF at VR = 4.0 V, 1 MHz: 15p * (1 + 4/0.4157)^0.3103
+vj  = 0.4157     # fitted to Vishay 88503 Fig. 6
+m   = 0.3103     # fitted to Vishay 88503 Fig. 6
+bv  = 800.0   # 1N4006 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -228,15 +269,20 @@ description = "1N4007 rectifier diode, DO-41 (explicit match over 1N400x family)
 value_re = "(?i)^1N4007$"
 
 [models.params]
-# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+# Source for the dynamic params: Vishay 1N4001-1N4007 family datasheet,
+# document 88503, Revision 29-Apr-2020; derivation and Fig. 6 fit as on the
+# 1n4001 entry above. No trr row is printed, so tt is left at the default (0).
+# DC params: legacy values, no located source. The old citation "ON
+# Semiconductor 1N4001-1N4007 SPICE model" does not match these numbers: the
+# model onsemi does publish (1n4001rl.lib, 12-Oct-2003) has IS=1.225e-8
+# N=1.834 RS=0.04148.
 is  = 7.62e-9
 n   = 1.984
 rs  = 0.042
-cjo = 2.0e-11
-vj  = 0.75
-m   = 0.333
-tt  = 5.76e-6
-bv  = 1000.0  # 1N4007 rated 1000 V PIV
+cjo = 3.123e-11  # CJ typ 15 pF at VR = 4.0 V, 1 MHz: 15p * (1 + 4/0.4157)^0.3103
+vj  = 0.4157     # fitted to Vishay 88503 Fig. 6
+m   = 0.3103     # fitted to Vishay 88503 Fig. 6
+bv  = 1000.0  # 1N4007 VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -273,11 +319,18 @@ value_re = "(?i)^BAT43(W(-V)?)?$|^LL43$"
 is  = 1.329e-6
 n   = 1.72
 rs  = 2.35
-cjo = 7.0e-12   # CD typ at VR = 1 V, f = 1 MHz
-vj  = 0.4       # assumed barrier height; the datasheet gives none
-m   = 0.4       # assumed grading coefficient, ditto
-tt  = 1.0e-11   # majority-carrier device; trr max 5 ns
-bv  = 30.0      # V(BR) min at IR = 100 uA
+# Dynamic params (same document, ELECTRICAL CHARACTERISTICS and Fig. 4):
+# vj/m are left to the binder defaults (vj = 1.0, m = 0.5). A free fit of
+# C0/(1 + V/vj)^m to Fig. 4 "Typical Capacitance vs. Reverse Voltage" is
+# degenerate (vj -> 0): the curve flattens to a ~2.2 pF floor above 20 V that
+# no single depletion law follows. The defaults put 9.9 pF at 0 V, which is
+# where Fig. 4 starts (at or just above its 10 pF top).
+# tt is left at the default (0): the trr row (5 ns max) on a Schottky measures
+# capacitance and circuit recovery, not stored minority charge, so trr/ln 2
+# would stamp charge the part does not have. Same choice on every Schottky here.
+cjo = 9.899e-12 # CD typ 7 pF at VR = 1 V, f = 1 MHz: 7p * (1 + 1/1.0)^0.5
+bv  = 30.0      # V(BR) min at IR = 100 uA (pulsed); min is the only printed bound
+ibv = 1.0e-4    # the V(BR) test current, IR = 100 uA
 
 [models.pins]
 "A" = "anode"
@@ -321,11 +374,15 @@ footprint_re = "(?ix) SOT-?23 | SOT-?323 | SC-?70 | SC-?59 | TO-?236"
 is  = 4.834e-9
 n   = 1.0
 rs  = 3.6
-cjo = 1.0e-11   # Cd max at VR = 1 V, f = 1 MHz, Table 7
-vj  = 0.4       # assumed barrier height; the datasheet gives none
-m   = 0.4       # assumed grading coefficient, ditto
-tt  = 1.0e-11   # majority-carrier device, negligible stored charge; trr max 5 ns
-bv  = 30.0      # VR, Table 5 "Limiting values"
+# Dynamic params: vj/m are left to the binder defaults (vj = 1.0, m = 0.5).
+# A free fit to Fig. 3 "Diode capacitance as a function of reverse voltage;
+# typical values" is degenerate (vj -> 0; the curve runs 8.0 pF near 0 V,
+# 4.5 pF at 1 V, flattening to 1.4 pF at 30 V). Table 7 prints only a MAX, so
+# cjo is a worst-case figure, well above the ~8 pF typical at 0 V in Fig. 3.
+# tt is left at the default (0): a Schottky's trr (5 ns max) is not stored
+# charge; same choice on every Schottky card in this file.
+cjo = 1.414e-11 # Cd max 10 pF at VR = 1 V, f = 1 MHz, Table 7: 10p * (1 + 1/1.0)^0.5
+bv  = 30.0      # VR, Table 5 "Limiting values"; no V(BR) row printed; VR is a guaranteed lower bound on breakdown
 
 [models.pins]
 # Table 2 "Pinning information": SOT23 with the middle pin unconnected.
@@ -375,14 +432,18 @@ value_re = "(?i)^(?:S|SB|NSV|T)?BAT54(?:[-/,WJHLTX][A-Z0-9,/-]*)?$"
 footprint_re = "(?ix) SOD-?123 | SOD-?323 | SOD-?523 | SOD-?882 | D_SOD | ^Diode_SMD:D_SOD"
 
 [models.params]
+# Dynamic params from onsemi "BAT54XV2 Schottky Barrier Diodes", BAT54XV2T1/D
+# Rev. 13, December 2022 (https://www.onsemi.com/pdf/datasheet/bat54xv2t1-d.pdf),
+# ELECTRICAL CHARACTERISTICS. vj/m are left to the binder defaults: Figure 4
+# "Total Capacitance" has the same flat parasitic floor (~2.3 pF above 20 V) as
+# the Nexperia curve, which no single depletion law follows. tt is left at the
+# default (0) as on every Schottky card here (trr 5 ns max is not stored charge).
 is  = 4.834e-9
 n   = 1.0
 rs  = 3.6
-cjo = 1.0e-11
-vj  = 0.4
-m   = 0.4
-tt  = 1.0e-11
-bv  = 30.0
+cjo = 1.075e-11 # CT typ 7.6 pF at VR = 1.0 V, f = 1 MHz: 7.6p * (1 + 1/1.0)^0.5
+bv  = 30.0      # V(BR)R min at IR = 10 uA; min is the only printed bound
+ibv = 1.0e-5    # the V(BR)R test current, IR = 10 uA
 
 [models.pins]
 # 2-pin body: pad 1 is the cathode, pad 2 the anode (onsemi pinning, and the
@@ -472,7 +533,12 @@ value_re = "(?i)^USBLC6-?2[A-Z0-9-]*$"
 is  = 6.3e-12   # from VF <= 1.1 V at IF = 10 mA with n = 2.0 (see above)
 n   = 2.0       # NOT a datasheet value; see the note above
 rs  = 0.5       # Rd_TRANSIL typ, datasheet Section 2.1
-bv  = 6.0       # VBR min at IR = 1 mA (Section 2.1 uses 6.1 V as the typical)
+bv  = 6.0       # VBR min at IR = 1 mA, Table 2 (DS4260 Rev 7, Dec 2021; same row in Rev 5).
+                # Table 2 prints no typ, so the min is the only bound. The 6.1 V in
+                # Section 2.1 is an assumed value in a worked example, not a table typ.
+ibv = 1.0e-3    # the VBR test current, IR = 1 mA, Table 2
+# No cjo: the only capacitances printed (Ci/o-GND, Ci/o-i/o at VR = 1.65 V) are
+# I/O-line figures, not the VBUS-GND transil this entry stamps. No trr row.
 
 # Parameters for the four steering-diode clamp laws further down, both from
 # datasheet Section 2.1: the forward threshold VT and the dynamic resistance Rd
@@ -555,15 +621,13 @@ description = "Generic Schottky diode (value field contains SCHOTTKY)"
 value_re = "(?i)SCHOTTKY"
 
 [models.params]
-# Reasonable Schottky defaults (low-power, ~30V rated)
+# Placeholder for a Schottky with no part number: legacy DC values (low-power,
+# ~30 V class), no located source. It is not anchored to any datasheet, so the
+# unsupported cjo/vj/m/tt/bv were removed and the binder defaults apply
+# (cjo = 0, tt = 0, no breakdown).
 is  = 1.0e-8
 n   = 1.5
 rs  = 2.0
-cjo = 1.5e-12
-vj  = 0.35
-m   = 0.4
-tt  = 5.0e-12
-bv  = 30.0
 
 [models.pins]
 "A" = "anode"
@@ -583,15 +647,13 @@ description = "Red LED, Vf ≈ 2.0 V @ 20 mA"
 value_re = "(?i)RED.?LED|LED.?RED"
 
 [models.params]
-# Source: typical AlGaInP red LED parameters
+# Source: typical AlGaInP red LED parameters (DC, legacy values, no located source)
+# Placeholder with no part number: not anchored to any datasheet, so the
+# unsupported cjo/vj/m/tt/bv were removed and the binder defaults apply
+# (cjo = 0, tt = 0, no breakdown). The 5 V reverse limit stays as a rating.
 is  = 1.0e-20
 n   = 1.8
 rs  = 6.0
-cjo = 2.0e-12
-vj  = 1.7
-m   = 0.5
-tt  = 1.0e-9
-bv  = 5.0
 
 [models.pins]
 "K" = "cathode"
@@ -613,15 +675,13 @@ description = "Green LED, Vf ≈ 2.1 V @ 20 mA"
 value_re = "(?i)GREEN.?LED|LED.?GREEN"
 
 [models.params]
-# Source: typical InGaN green LED parameters
+# Source: typical InGaN green LED parameters (DC, legacy values, no located source)
+# Placeholder with no part number: not anchored to any datasheet, so the
+# unsupported cjo/vj/m/tt/bv were removed and the binder defaults apply
+# (cjo = 0, tt = 0, no breakdown). The 5 V reverse limit stays as a rating.
 is  = 1.0e-20
 n   = 1.8
 rs  = 5.0
-cjo = 2.0e-12
-vj  = 1.8
-m   = 0.5
-tt  = 1.0e-9
-bv  = 5.0
 
 [models.pins]
 "K" = "cathode"
@@ -643,15 +703,13 @@ description = "Blue LED, Vf ≈ 3.3 V @ 20 mA"
 value_re = "(?i)BLUE.?LED|LED.?BLUE"
 
 [models.params]
-# Source: typical InGaN blue LED parameters
+# Source: typical InGaN blue LED parameters (DC, legacy values, no located source)
+# Placeholder with no part number: not anchored to any datasheet, so the
+# unsupported cjo/vj/m/tt/bv were removed and the binder defaults apply
+# (cjo = 0, tt = 0, no breakdown). The 5 V reverse limit stays as a rating.
 is  = 1.0e-22
 n   = 2.0
 rs  = 5.0
-cjo = 2.0e-12
-vj  = 2.8
-m   = 0.5
-tt  = 1.0e-9
-bv  = 5.0
 
 [models.pins]
 "K" = "cathode"
@@ -673,15 +731,13 @@ description = "Yellow LED, Vf ≈ 2.1 V @ 20 mA"
 value_re = "(?i)YELLOW.?LED|LED.?YELLOW"
 
 [models.params]
-# Source: typical AlGaInP yellow LED parameters
+# Source: typical AlGaInP yellow LED parameters (DC, legacy values, no located source)
+# Placeholder with no part number: not anchored to any datasheet, so the
+# unsupported cjo/vj/m/tt/bv were removed and the binder defaults apply
+# (cjo = 0, tt = 0, no breakdown). The 5 V reverse limit stays as a rating.
 is  = 1.0e-20
 n   = 1.8
 rs  = 6.0
-cjo = 2.0e-12
-vj  = 1.8
-m   = 0.5
-tt  = 1.0e-9
-bv  = 5.0
 
 [models.pins]
 "K" = "cathode"
@@ -704,15 +760,13 @@ description = "Generic LED matched by footprint prefix"
 footprint_re = "^LED_THT:|^LED_SMD:"
 
 [models.params]
-# Conservative defaults: Vf ≈ 2 V red-ish
+# Conservative defaults: Vf ≈ 2 V red-ish (DC, legacy values, no located source)
+# Placeholder with no part number: not anchored to any datasheet, so the
+# unsupported cjo/vj/m/tt/bv were removed and the binder defaults apply
+# (cjo = 0, tt = 0, no breakdown). The 5 V reverse limit stays as a rating.
 is  = 1.0e-20
 n   = 1.8
 rs  = 6.0
-cjo = 2.0e-12
-vj  = 1.7
-m   = 0.5
-tt  = 1.0e-9
-bv  = 5.0
 
 [models.pins]
 "K" = "cathode"
@@ -740,6 +794,9 @@ max_voltage_v = 5.0
 #
 # Source for every Vz, Izt, Zzt and rating: Multicomp 1N4728A-1N4764A datasheet
 # V1.1 (06/04/11), "Specification Table" and "Absolute Maximum Ratings".
+# bv = VZnom at IZT and ibv = IZT, read from the Specification Table (VZnom is
+# the only VZ column printed). The sheet prints no capacitance row or C-V curve
+# and no trr, so cjo and tt are deliberately absent (binder defaults, 0).
 #
 # The family is listed as the datasheet prints it, which is abridged: it skips
 # from 3.9 V to 4.7 V and from 10 V to 62 V. The missing codes are real parts,
@@ -1115,6 +1172,19 @@ theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
 # `n = 1.05` is the assumption the fit rests on, and it is the only one: it is
 # an ordinary Schottky ideality factor, and the datasheet does not publish one.
 # `is` and `rs` then follow from the two VF points with no freedom left.
+#
+# Junction capacitance: the table's CJ typ row (125 pF / 110 pF at VR = 4.0 V,
+# 1 MHz) taken to zero bias by cjo = CJ * (1 + 4/vj)^m, with vj and m from a
+# least-squares fit of C0/(1 + V/vj)^m to the datasheet's own curves (vector
+# path vertices read from the PDF):
+#   Fig. 5 (1N5817): 0.10 V/331 pF, 0.34/276, 0.59/248, 1.07/207, 4.72/114,
+#     13.9/73.9, 20.3/64.8 -> vj = 0.3838, m = 0.4415, rms 1.5%; the fit gives
+#     125 pF at 4 V, matching the table row.
+#   Fig. 6 (1N5818, 1N5819): 0.10 V/249 pF, 0.34/199, 1.15/149, 4.55/97.2,
+#     16.5/55.1, 40.2/36.0 -> vj = 0.5017, m = 0.4359, rms 2.6%; the fit gives
+#     97 pF at 4 V, 11% under the 110 pF table row that cjo is scaled from.
+# tt is left at the binder default (0): the sheet prints no trr, and a Schottky
+# stores negligible minority charge. Same choice on every Schottky card here.
 
 [[models]]
 id = "1n5817"
@@ -1128,11 +1198,10 @@ value_re = "(?i)^1N5817$"
 is  = 7.105e-06     # fitted with n and rs to both forward points, see the note above
 n   = 1.05      # assumed, an ordinary Schottky ideality factor
 rs  = 0.1282     # fitted; carries the 1.0 A to 3.1 A rise the datasheet publishes
-cjo = 1.25e-10    # CJ typ at VR = 4.0 V, 1.0 MHz
-vj  = 0.4       # assumed, a Schottky barrier height; the datasheet gives none
-m   = 0.4       # assumed grading coefficient, ditto
-tt  = 1.0e-11   # majority-carrier device: negligible stored charge, assumed
-bv  = 20.0      # VRRM, Maximum repetitive peak reverse voltage
+cjo = 3.664e-10 # CJ typ 125 pF at VR = 4.0 V, 1 MHz: 125p * (1 + 4/0.3838)^0.4415
+vj  = 0.3838    # fitted to Fig. 5 (1N5817), see the family note
+m   = 0.4415    # fitted to Fig. 5 (1N5817), see the family note
+bv  = 20.0      # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -1159,11 +1228,10 @@ value_re = "(?i)^1N5818$"
 is  = 2.767e-07     # fitted with n and rs to both forward points, see the note above
 n   = 1.05      # assumed, an ordinary Schottky ideality factor
 rs  = 0.1401     # fitted; carries the 1.0 A to 3.1 A rise the datasheet publishes
-cjo = 1.1e-10    # CJ typ at VR = 4.0 V, 1.0 MHz
-vj  = 0.4       # assumed, a Schottky barrier height; the datasheet gives none
-m   = 0.4       # assumed grading coefficient, ditto
-tt  = 1.0e-11   # majority-carrier device: negligible stored charge, assumed
-bv  = 30.0      # VRRM, Maximum repetitive peak reverse voltage
+cjo = 2.863e-10 # CJ typ 110 pF at VR = 4.0 V, 1 MHz: 110p * (1 + 4/0.5017)^0.4359
+vj  = 0.5017    # fitted to Fig. 6 (1N5818, 1N5819), see the family note
+m   = 0.4359    # fitted to Fig. 6 (1N5818, 1N5819), see the family note
+bv  = 30.0      # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -1190,11 +1258,10 @@ value_re = "(?i)^1N5819$"
 is  = 2.828e-08     # fitted with n and rs to both forward points, see the note above
 n   = 1.05      # assumed, an ordinary Schottky ideality factor
 rs  = 0.1282     # fitted; carries the 1.0 A to 3.1 A rise the datasheet publishes
-cjo = 1.1e-10    # CJ typ at VR = 4.0 V, 1.0 MHz
-vj  = 0.4       # assumed, a Schottky barrier height; the datasheet gives none
-m   = 0.4       # assumed grading coefficient, ditto
-tt  = 1.0e-11   # majority-carrier device: negligible stored charge, assumed
-bv  = 40.0      # VRRM, Maximum repetitive peak reverse voltage
+cjo = 2.863e-10 # CJ typ 110 pF at VR = 4.0 V, 1 MHz: 110p * (1 + 4/0.5017)^0.4359
+vj  = 0.5017    # fitted to Fig. 6 (1N5818, 1N5819), see the family note
+m   = 0.4359    # fitted to Fig. 6 (1N5818, 1N5819), see the family note
+bv  = 40.0      # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -1242,7 +1309,8 @@ theta_ja_c_per_w = 50.0         # RthJA typ, junction to ambient
 #     wrong package, and it errs OPTIMISTIC on temperature rise.
 #
 # Source for the fitted numbers: Vishay "1N5820, 1N5821, 1N5822" datasheet,
-# document 88526, Rev. 05-Apr-2019. Cross-read: onsemi 1N5820/D Rev. 11 (Nov
+# document 88526, Rev. 05-Apr-2019 (https://www.vishay.com/docs/88526/1n5820.pdf).
+# Cross-read: onsemi 1N5820/D Rev. 11 (Nov
 # 2023), which adds a third forward point, and Diodes DS23003.
 # Datasheet figures used:
 #   VF max 0.525 V @ IF = 3.0 A, 25 C   (Electrical Characteristics, 300 us pulse)
@@ -1264,15 +1332,19 @@ theta_ja_c_per_w = 50.0         # RthJA typ, junction to ambient
 #   use: at IF = 1.0 A the model gives 0.0271446*ln(1.0/1.0773e-5) + 0.0616
 #   = 0.3082 + 0.0616 = 0.370 V against a published max of 0.390 V, i.e. 5%
 #   under the maximum, which is the correct side for a fit to a max envelope.
-# CJO CAVEAT, and it is a real one: neither Vishay nor onsemi nor Diodes
-#   tabulates junction capacitance for this part at all, only a curve. The
-#   200 pF below is Taiwan Semiconductor's tabulated figure for the same 1N5820
-#   series (doc I2105) and it is specified AT VR = 4.0 V, not at zero bias.
-#   `cjo` is by definition the zero-bias value, so this number is low: with
-#   m = 0.4 and vj = 0.4 it back-extrapolates to roughly 480 pF at 0 V. It is
-#   carried at the datasheet's own 4 V figure anyway, exactly as the 1N581x
-#   entries above do, so the whole file is consistently conservative on
-#   capacitance rather than inconsistently corrected.
+# JUNCTION CAPACITANCE: Vishay 88526 tabulates none (only its Fig. 5 curve).
+#   The row used is Taiwan Semiconductor "1N5820 - 1N5822" datasheet, Version
+#   I2105 (https://www.taiwansemi.com/assets/datasheet/pdf.php?pn=1N5822),
+#   ELECTRICAL SPECIFICATIONS: CJ typ 200 pF at VR = 4.0 V, 1 MHz. It is taken
+#   to zero bias with vj and m fitted to the same document's Fig. 2 "Typical
+#   Junction Capacitance" (vector path vertices 0.1 V/700 pF, 0.2/600, 0.6/400,
+#   4.0/200, 10/140, 20/100, 40/70): vj = 0.1094, m = 0.4252, rms 2.6%, 196 pF
+#   at 4 V against the 200 pF row. vj = 0.11 V is low for a barrier height and
+#   is kept only as a curve-fit constant: it is what the curve's steep rise
+#   below 1 V demands.
+#   cjo = 200p * (1 + 4/0.1094)^0.4252 = 934.6 pF.
+# tt is left at the binder default (0): no trr is printed, and a Schottky
+#   stores negligible minority charge (same choice as the 1N581x cards).
 [[models]]
 id = "1n5822"
 kind = "diode"
@@ -1289,11 +1361,10 @@ value_re = "(?i)^(1N5822|SS34|1N5822/SS34(/SMA)?|MBRA340T3G?)$"
 is  = 1.0773e-5   # fitted with n and rs to the 3.0 A and 9.4 A points
 n   = 1.05        # assumed, an ordinary Schottky ideality factor
 rs  = 0.0616      # fitted; carries the 3.0 A to 9.4 A rise
-cjo = 2.0e-10     # CJ typ at VR = 4.0 V, 1 MHz (Taiwan Semi I2105); see caveat
-vj  = 0.4         # assumed, a Schottky barrier height; no vendor states one
-m   = 0.4         # assumed grading coefficient, ditto
-tt  = 1.0e-11     # majority-carrier device: negligible stored charge, assumed
-bv  = 40.0        # VRRM
+cjo = 9.346e-10   # CJ typ 200 pF at VR = 4.0 V (Taiwan Semi I2105): 200p * (1 + 4/0.1094)^0.4252
+vj  = 0.1094      # fitted to Taiwan Semi I2105 Fig. 2, see the note above
+m   = 0.4252      # fitted to Taiwan Semi I2105 Fig. 2, see the note above
+bv  = 40.0        # VRRM; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 "A" = "anode"
@@ -1353,6 +1424,7 @@ theta_ja_c_per_w = 40.0        # RthJA typ, vertical PCB, 2.5in x 2.5in copper
 #   VF max 0.750 V @ IF = 3.0 A
 #   IR max 1.0 mA @ VR = 40 V, 25 C (10 mA at 100 C)
 #   CT typ 50 pF / max 60 pF @ VR = 4 V, f = 1 MHz
+#   V(BR)R min 40 V @ IR = 1.0 mA
 #   VRRM 40 V, IF(AV) 1.0 A, IFSM 25 A 8.3 ms half sine
 #   TJ -65 to +150 C, RthJA 225 C/W
 #
@@ -1386,13 +1458,14 @@ value_re = "(?i)^(1N5819[HW]W?|SS14|SKM14|1N5819\\(S4 ?SOD-?123\\))$"
 is  = 1.16662e-6  # fitted with n and rs to the 0.1 A and 3.0 A points
 n   = 1.05        # assumed, an ordinary Schottky ideality factor
 rs  = 0.1164427   # fitted; carries the 0.1 A to 3.0 A rise
-cjo = 5.0e-11     # CT typ at VR = 4 V, 1 MHz (60 pF max). As with the 1N58xx
-                  # entries this is the datasheet's biased figure carried
-                  # unadjusted rather than back-extrapolated to zero bias.
-vj  = 0.4         # assumed, a Schottky barrier height
-m   = 0.4         # assumed grading coefficient
-tt  = 1.0e-11     # majority-carrier device, assumed
-bv  = 40.0        # VRRM
+cjo = 1.122e-10   # CT typ 50 pF at VR = 4 V, 1 MHz (60 pF max), taken to zero
+                  # bias: 50p * (1 + 4/1.051)^0.515
+vj  = 1.051       # fitted to Fig. 3 "Total Capacitance vs. Reverse Voltage"
+m   = 0.515       # (curve reads 103 pF at 0 V, 58 at 3.3, 34 at 9.2, 18 at 39):
+                  # rms 4.5%, 51 pF at 4 V against the 50 pF row
+# tt left at the binder default (0): no trr printed; Schottky, no stored charge.
+bv  = 40.0        # V(BR)R min 40 V at IR = 1.0 mA, Electrical Characteristics
+ibv = 1.0e-3      # the V(BR)R test current, IR = 1.0 mA
 
 [models.pins]
 "A" = "anode"
@@ -1473,12 +1546,13 @@ value_re = "(?i)^BAV70[A-Z0-9,]*$"
 is  = 1.0812e-15  # fitted with rs to the 1 mA and 150 mA VF maxima
 n   = 1.0         # pinned: an ordinary silicon junction, see the note above
 rs  = 2.72125     # fitted; carries the 1 mA to 150 mA rise
-cjo = 1.5e-12     # Cd max at VR = 0 V, 1 MHz. Genuinely zero-bias.
-vj  = 0.7         # assumed, a silicon junction potential; the sheet gives none
-m   = 0.5         # assumed abrupt-junction grading coefficient, ditto
-tt  = 4.0e-9      # from trr max 4 ns; a minority-carrier device, unlike the
-                  # Schottkys above, so stored charge is real here
-bv  = 100.0       # VRRM
+cjo = 1.5e-12     # Cd max 1.5 pF at VR = 0 V, 1 MHz, Table 7. Genuinely zero-bias.
+# vj/m left to the binder defaults: a free fit to Fig. 4 (typical Cd 0.60 pF at
+# 0 V, 0.52 at 1 V, 0.46 at 16 V) is degenerate (vj -> 0, m = 0.05), the
+# nearly flat curve being package capacitance rather than a depletion law.
+tt  = 5.771e-9    # trr max 4 ns at IF = IR = 10 mA, Table 7: tt = 4 ns / ln(1 + 10/10).
+                  # A minority-carrier device, so stored charge is real here.
+bv  = 100.0       # VRRM, Table 5 Limiting values; no V(BR) row printed; VRRM is a guaranteed lower bound on breakdown
 
 [models.pins]
 # Table 2 Pinning, SOT23 (TO-236AB). COMMON CATHODE on pin 3.

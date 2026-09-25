@@ -21,13 +21,16 @@ value_re = "(?i)^2N7002[A-Z0-9-]*$"
 # ID = 500 mA; RDSon typ 3.8 Ω (max 5.3) at VGS = 4.5 V, ID = 75 mA. Solves back
 # to 3.20 Ω and 4.30 Ω, inside both typ..max bands (ngspice level 1 agrees). The
 # RDSon rows stop at VGS = 4.5 V, so a lower gate drive is an extrapolation.
+# Document: Nexperia "2N7002 60 V, 300 mA N-channel Trench MOSFET", Product data
+# sheet Rev. 7, 8 September 2011
+# (https://assets.nexperia.com/documents/data-sheet/2N7002.pdf).
 vto    = 2.0      # VGSth typ (V); a part anywhere in 1.0-2.5 V is not this card
 kp     = 0.26     # transconductance parameter (A/V²), k'*(W/L), fitted
 lambda = 0.01     # channel-length modulation (1/V)
 rd     = 2.2      # drain ohmic resistance (Ω), fitted jointly with kp
 rs     = 0.5      # source ohmic resistance (Ω), bond-wire/package share
-cgd    = 3.0e-13  # gate-drain capacitance (F)
-cgs    = 5.0e-13  # gate-source capacitance (F)
+cgd    = 3.5e-12  # Nexperia 2N7002 Rev. 7, Table 6 Dynamic characteristics, Crss typ 3.5 pF @ VDS=10V, VGS=0, f=1MHz (cgd = Crss)
+cgs    = 2.75e-11 # same table/bias, Ciss typ 31 pF - Crss typ 3.5 pF = 27.5 pF (cgs = Ciss - Crss)
 warning = "the RDS(on) rows stop at VGS = 4.5 V, so a lower gate drive is an extrapolation, not a datasheet figure; the fit is to TYPICAL values, and a part anywhere in the 1.0-2.5 V VGS(th) band is not this card"
 
 [models.pins]
@@ -59,14 +62,23 @@ description = "BSS138 N-channel MOSFET SOT-23, 50V, 200mA, Vth≈1.5V"
 value_re = "(?i)^BSS138[A-Z0-9-]*$"
 
 [models.params]
-# Source: Nexperia BSS138 datasheet Rev. 5, SPICE model
+# Source for capacitances and ratings: Fairchild "BSS138 N-Channel Logic Level
+# Enhancement Mode Field Effect Transistor", BSS138 Rev C(W), October 2005
+# (copy read: https://cdn.sparkfun.com/datasheets/BreakoutBoards/BSS138.pdf;
+# now onsemi bss138-d.pdf). The ratings below (50 V, 0.22 A, 0.36 W, 3.5/6.0
+# ohm, VGS(th) max 1.5 V) are this Fairchild die; Nexperia's BSS138 parts are
+# the 60 V BSS138P/BK, a different die.
+# The old citation "Nexperia BSS138 datasheet Rev. 5, SPICE model" was not
+# located and no Nexperia/Fairchild BSS138 datasheet prints SPICE parameters:
+# vto/kp/lambda/rd/rs are legacy values with no located source (vto = 1.5 is
+# the Fairchild VGS(th) MAX, typ is 1.3 V @ ID=1mA).
 vto    = 1.5
 kp     = 0.052
 lambda = 0.02
 rd     = 2.0
 rs     = 0.5
-cgd    = 2.0e-13
-cgs    = 4.0e-13
+cgd    = 6.0e-12  # Fairchild BSS138 Rev C(W), Dynamic Characteristics, Crss typ 6 pF @ VDS=25V, VGS=0, f=1MHz (cgd = Crss)
+cgs    = 2.1e-11  # same table/bias, Ciss typ 27 pF - Crss typ 6 pF = 21 pF (cgs = Ciss - Crss)
 
 [models.pins]
 "G" = "gate"
@@ -131,8 +143,8 @@ vto    = 1.05      # VGS(th) typ (V) @ VDS=VGS, ID=250mA (min 0.65, max 1.45)
 kp     = 96.0      # A/V², from gFS=33S @ ID=5.7A and the RDS(on) pair (see above)
 rd     = 0.0084    # half the 16.8 mOhm ohmic residue of RDS(on) @ VGS=10V
 rs     = 0.0084    # other half
-cgd    = 5.0e-11   # = Crss, 50 pF @ VGS=0, VDS=15V, 1MHz
-cgs    = 5.8e-10   # = Ciss - Crss = 630 - 50 = 580 pF, same test condition
+cgd    = 5.0e-11   # AO3400A Rev 3.1, Electrical Characteristics, DYNAMIC PARAMETERS, Crss typ 50 pF @ VGS=0, VDS=15V, 1MHz (cgd = Crss)
+cgs    = 5.8e-10   # same table/bias, Ciss typ 630 pF - Crss typ 50 pF = 580 pF (cgs = Ciss - Crss)
 
 [models.pins]
 # SOT-23 (AOS datasheet package drawing, top view): 1=Gate, 2=Source, 3=Drain.
@@ -172,14 +184,19 @@ description = "AO3401A P-channel MOSFET SOT-23, 30V, 4A, Vth≈−1V"
 value_re = "(?i)^AO3401[A-Z0-9-]*$"
 
 [models.params]
-# Source: Alpha & Omega AO3401A datasheet, SPICE parameters
+# Source for capacitances: AOS "AO3401A 30V P-Channel MOSFET" datasheet,
+# Rev 3.1 December 2023 (https://www.aosmd.com/res/datasheets/AO3401A.pdf).
+# The old citation "Alpha & Omega AO3401A datasheet, SPICE parameters" points
+# at nothing: the datasheet prints no SPICE parameters. vto/kp/lambda/rd/rs
+# are legacy values with no located source (the datasheet's VGS(th) is
+# -0.5/-0.9/-1.3 V @ ID=-250uA; RDS(on) typ 41 mOhm @ VGS=-10V, ID=-4A).
 vto    = -1.1     # threshold voltage (V), negative for PMOS
 kp     = 4.5      # transconductance (A/V²)
 lambda = 0.04
 rd     = 0.08
 rs     = 0.02
-cgd    = 6.0e-13
-cgs    = 1.0e-12
+cgd    = 5.5e-11  # AO3401A Rev 3.1, Electrical Characteristics, DYNAMIC PARAMETERS, Crss typ 55 pF @ VGS=0, VDS=-15V, 1MHz (cgd = Crss)
+cgs    = 5.9e-10  # same table/bias, Ciss typ 645 pF - Crss typ 55 pF = 590 pF (cgs = Ciss - Crss)
 
 [models.pins]
 "G" = "gate"
@@ -240,8 +257,8 @@ vto    = -0.7      # VGS(th) typ (V), negative for PMOS (min -0.4, max -1.0)
 kp     = 14.6      # A/V², solved from the two RDS(on) rows (see above)
 rd     = 0.036     # half the 72 mOhm ohmic residue
 rs     = 0.036     # other half
-cgd    = 5.5e-11   # = Crss, 55 pF @ VDS=-10V, VGS=0, 1MHz
-cgs    = 3.5e-10   # = Ciss - Crss = 405 - 55 = 350 pF, same test condition
+cgd    = 5.5e-11   # CJ2301 Rev. - 2.1, MOSFET Electrical Characteristics, Dynamic, Crss typ 55 pF @ VDS=-10V, VGS=0, 1MHz (cgd = Crss)
+cgs    = 3.5e-10   # same table/bias, Ciss typ 405 pF - Crss typ 55 pF = 350 pF (cgs = Ciss - Crss)
 
 [models.pins]
 # SOT-23, stated explicitly on datasheet page 1: 1. GATE, 2. SOURCE, 3. DRAIN.
@@ -267,6 +284,10 @@ vgs_th_max          = 1.0     # |VGS(th)| max (-1.0 V)
 # The automated onsemi endpoint currently refuses non-browser downloads; the
 # exact audited Fairchild/onsemi PDF copy has SHA-256
 # fe08ddc4992462830d4435510c03da85af4fe785ed4d519d01b98029df220228.
+# Capacitance cross-check (2026-09 audit): the non-automotive sheet Fairchild
+# "FDS4435BZ P-Channel PowerTrench MOSFET", FDS4435BZ Rev.C1, April 2009
+# (https://www.farnell.com/datasheets/673294.pdf) prints the same static rows
+# and Ciss 1385/1845, Crss 230/345 pF (typ/max) @ VDS=-15V, VGS=0, 1MHz.
 #
 # The level-1 DC fit is source-bound rather than a generic package estimate:
 #   VGS(th) = -1.0 / -2.1 / -3.0 V @ ID=-250uA
@@ -334,8 +355,8 @@ kp = 29.0
 lambda = 0.0
 rd = 0.00582
 rs = 0.00582
-cgd = 2.30e-10
-cgs = 1.155e-9
+cgd = 2.30e-10   # FDS4435BZ Rev.C1, Dynamic Characteristics, Crss typ 230 pF @ VDS=-15V, VGS=0, 1MHz (cgd = Crss)
+cgs = 1.155e-9   # same table/bias, Ciss typ 1385 pF - Crss typ 230 pF = 1155 pF (cgs = Ciss - Crss)
 warning = "source-bound level-1 DC conduction and typical gate capacitance are executable; body-diode recovery, nonlinear capacitance, avalanche/SOA, temperature-dependent RDS(on), package inductance and switching loss are not modeled"
 
 [models.pins]
@@ -496,12 +517,21 @@ description = "IPA045N10N3G Infineon OptiMOS3 N-ch 100V 100A 4.5mOhm TO-220"
 value_re = "(?i)^IPA045N10N3G$"
 
 [models.params]
-# Source: Infineon IPA045N10N3G datasheet Rev 2.6 2019-02-15, Table 1 & SPICE
-vto    = 3.8       # Vgs(th) typ (V), datasheet Table 1
+# Capacitance source (2026-09 audit): Infineon "IPA045N10N3 G OptiMOS(TM)3
+# Power-Transistor, 100V" Final Data Sheet Rev. 2.4, 2016-01-22
+# (https://www.infineon.com/dgdl/Infineon-IPA045N10N3+G-DS-v02_04-EN.pdf?fileId=db3a30432239cccd0122600237f57ece).
+# The old citation "Rev 2.6 2019-02-15, Table 1 & SPICE" was not located and
+# the datasheet has no SPICE section. vto/kp/lambda/rd/rs and the ratings are
+# legacy values that DISAGREE with Rev. 2.4: its Table 4 prints VGS(th)
+# 2/2.7/3.5 V @ ID=150uA and RDS(on) typ 3.9 mOhm @ VGS=10V, ID=64A, and
+# Table 1 gives ID 64 A in PG-TO220-FP (full-pack), not 100 A / TO-220.
+vto    = 3.8       # legacy; Rev. 2.4 Table 4 VGS(th) typ is 2.7 V (see above)
 kp     = 200.0     # A/V², generous kp approximating a 100A hard-switch FET
 lambda = 0.005     # channel-length modulation, estimated typical for 100V N-ch
 rd     = 0.00175   # drain ohmic resistance, ~half Rds(on) typ (0.0035/2 ohm)
 rs     = 0.00175   # source ohmic resistance, ~half Rds(on) typ
+cgd    = 4.1e-11   # Rev. 2.4 Table 5 Dynamic characteristics, Crss typ 41 pF @ VGS=0, VDS=50V, f=1MHz (cgd = Crss)
+cgs    = 6.279e-9  # same table/bias, Ciss typ 6320 pF - Crss typ 41 pF = 6279 pF (cgs = Ciss - Crss)
 
 [models.pins]
 # TO-220-3 standard pin order (Infineon datasheet pin description)
@@ -547,11 +577,18 @@ value_re = "(?i)^IRF9358$"
 # Source: Infineon IRF9358 datasheet Rev 2.1, Table of Electrical Characteristics
 # Rds(on) max = 16.3 mOhm @ Vgs=-10V. We model the typical which is ~ 13 mOhm.
 # rd+rs split evenly to sum to typical Rds(on). vto is negative (P-channel).
-vto    = -1.4      # Vgs(th) typ (V), datasheet
+# Capacitance source (2026-09 audit): Infineon "IRF9358PbF Dual P-Channel
+# HEXFET Power MOSFET" Rev. 2.1, 2024-10-08
+# (https://www.infineon.com/dgdl/irf9358pbf.pdf?fileId=5546d462533600a4015355fb6c9a1a36).
+# NOTE: that sheet prints VGS(th) -1.3/-1.8/-2.4 V @ ID=-25uA, not the
+# -1.4 V typ (-0.7 to -2.0) quoted above; vto is a legacy value, left as is.
+vto    = -1.4      # legacy; Rev. 2.1 VGS(th) typ is -1.8 V (see above)
 kp     = 15.0      # A/V², generous kp for a -9.2A switch FET
 lambda = 0.01      # channel-length modulation, estimated
 rd     = 0.0065    # drain ohmic resistance, ~half Rds(on) typ (0.013/2 ohm)
 rs     = 0.0065    # source ohmic resistance, ~half Rds(on) typ
+cgd    = 2.4e-10   # Rev. 2.1 Electric Characteristics, Crss typ 240 pF @ VGS=0, VDS=-25V, f=1MHz (cgd = Crss)
+cgs    = 1.5e-9    # same table/bias, Ciss typ 1740 pF - Crss typ 240 pF = 1500 pF (cgs = Ciss - Crss)
 
 [models.pins]
 # SO-8 dual P-ch pinout (both channels), Infineon IRF9358 datasheet.
@@ -596,13 +633,25 @@ description = "SIR182DP Vishay N-ch 100V 21A 17mOhm PowerPAK SO-8"
 value_re = "(?i)^SIR182DP$"
 
 [models.params]
-# Source: Vishay SIR182DP datasheet Document No. 66664 Rev. E 13-Jul-22
-# Rds(on) typ = 13 mOhm @ Vgs=10V, Tj=25C. Split rd+rs evenly.
-vto    = 3.5       # Vgs(th) typ (V), datasheet
+# CITATION PROBLEM (2026-09 audit): "Document No. 66664 Rev. E 13-Jul-22" was
+# not located. The real sheet is Vishay "SiR182DP N-Channel 60 V (D-S) MOSFET",
+# Document Number 77800, S18-0749-Rev. B, 30-Jul-2018
+# (https://www.vishay.com/docs/77800/sir182dp.pdf), and it contradicts the
+# legacy vto/kp/rd/rs and ratings on this card: VDS 60 V (not 100 V), VGS(th)
+# 2 min / 3.6 max @ ID=250uA (no typ), RDS(on) typ 2.3 mOhm (max 2.8) @
+# VGS=10V, ID=15A, ID 117 A @ TC=25C, PD 69.4 W @ TC=25C. Only the
+# capacitances below come from that sheet. Vishay also publishes a SPICE Device
+# Model sheet (Doc 77164, S17-1847-Rev. A, 18-Dec-17,
+# https://www.vishay.com/docs/77164/sir182dp_ps_reva.pdf), but it is a level-3
+# subcircuit with no printed netlist, so it cannot supply level-1 cgs/cgd; its
+# measured column repeats Ciss 3250 / Crss 50 pF (simulated 3390 / 71 pF).
+vto    = 3.5       # legacy; Doc 77800 prints VGS(th) 2 min / 3.6 max, no typ
 kp     = 30.0      # A/V², approximating a 21A switch FET at full turn-on
 lambda = 0.005     # channel-length modulation, estimated for 100V N-ch
-rd     = 0.0065    # drain ohmic resistance, ~half Rds(on) typ (0.013/2 ohm)
-rs     = 0.0065    # source ohmic resistance, ~half Rds(on) typ
+rd     = 0.0065    # legacy; Doc 77800 RDS(on) typ is 2.3 mOhm, not 13
+rs     = 0.0065    # legacy, as rd
+cgd    = 5.0e-11   # Doc 77800 Rev. B, SPECIFICATIONS, Dynamic, Crss typ 50 pF @ VDS=30V, VGS=0, f=1MHz (cgd = Crss)
+cgs    = 3.2e-9    # same table/bias, Ciss typ 3250 pF - Crss typ 50 pF = 3200 pF (cgs = Ciss - Crss)
 
 [models.pins]
 # PowerPAK SO-8 pinout (Vishay SIR182DP datasheet, Figure 1).
@@ -681,8 +730,8 @@ vto    = 3.0       # ASSUMED: midpoint of the 2.0/4.0 V VGS(th) band, no typ pub
 kp     = 13.781    # A/V^2, from gfs min 21 S at ID = 16 A (see above)
 rd     = 0.016817  # half the 33.634 mOhm ohmic residue of RDS(on) @ VGS = 10 V
 rs     = 0.016817  # other half
-cgd    = 4.0e-11   # = Crss, 40 pF @ VGS = 0, VDS = 25 V, 1 MHz
-cgs    = 1.92e-9   # = Ciss - Crss = 1960 - 40 = 1920 pF, same test condition
+cgd    = 4.0e-11   # = Crss typ 40 pF, IRF540NPbF Rev. 2.1 Dynamic Electrical Characteristics, VGS = 0, VDS = 25 V, f = 1 MHz
+cgs    = 1.92e-9   # = Ciss typ - Crss typ = 1960 - 40 = 1920 pF, same table and test condition
 warning = "a standard-level (not logic-level) part: its 44 mOhm RDS(on) is specified only at VGS = 10 V and its VGS(th) runs to 4.0 V, so a 3.3 V or 5 V gate drive is outside what the datasheet guarantees"
 
 [models.pins]
@@ -750,7 +799,9 @@ vgs_th_max          = 4.0     # VGS(th) max @ VDS = VGS, ID = 250 uA
 
 # ── FDV301N ───────────────────────────────────────────────────────────────────
 # onsemi digital FET, N-channel, SOT-23. 32 instances on the KiCad demo boards.
-# Source: onsemi FDV301N datasheet FDV301N/D Rev. 10, May 2025.
+# Source: onsemi FDV301N datasheet FDV301N/D Rev. 10, May 2025
+#   (capacitances re-verified 2026-09-25 against a local copy of that
+#   revision).
 # Datasheet figures used (ON Characteristics, TJ=25 C):
 #   VGS(th) = 0.70 / 0.85 / 1.06 V   @ VDS=VGS, ID=250 uA          -> vto
 #   RDS(on) typ 3.8 Ohm (max 5)      @ VGS=2.7 V, ID=0.2 A
@@ -787,8 +838,8 @@ vto    = 0.85     # VGS(th) typ
 kp     = 0.38081  # from the two RDS(on) rows, see the derivation above
 rd     = 1.1903   # half the fitted ohmic residue
 rs     = 1.1903
-cgd    = 1.3e-12  # Crss
-cgs    = 8.2e-12  # Ciss - Crss = 9.5 - 1.3 pF
+cgd    = 1.3e-12  # Crss typ 1.3 pF, FDV301N/D Rev. 10 Dynamic Characteristics, VDS = 10 V, VGS = 0, f = 1 MHz
+cgs    = 8.2e-12  # Ciss typ - Crss typ = 9.5 - 1.3 = 8.2 pF, same row group and bias
 # lambda deliberately absent: the datasheet publishes no output-conductance data.
 
 [models.pins]
@@ -808,7 +859,8 @@ vgs_th_max = 1.06  # VGS(th) max @ VDS=VGS, ID=250uA
 
 # ── DMG1012T-7 ────────────────────────────────────────────────────────────────
 # Diodes Incorporated, N-channel, SOT-523. 25 instances on the KiCad demos.
-# Source: Diodes Inc DMG1012T datasheet DS31783 Rev. 8-2, February 2022.
+# Source: Diodes Inc DMG1012T datasheet DS31783 Rev. 8-2, February 2022
+#   (https://www.diodes.com/assets/Datasheets/DMG1012T.pdf, fetched 2026-09-25).
 # Datasheet figures used (ON Characteristics, TJ=25 C):
 #   VGS(th) = 0.5 / (no typ published) / 1.0 V  @ VDS=VGS, ID=250 uA
 #   RDS(on) typ 0.3 Ohm (max 0.4)   @ VGS=4.5 V, ID=600 mA
@@ -845,8 +897,8 @@ vto    = 0.75     # ASSUMED: midpoint of the 0.5/1.0 V min-max, no typ published
 kp     = 3.4286
 rd     = 0.11111
 rs     = 0.11111
-cgd    = 5.37e-12
-cgs    = 5.53e-11  # 60.67 - 5.37 pF
+cgd    = 5.37e-12  # Crss typ 5.37 pF, DS31783 Rev. 8-2 Dynamic Characteristics (Note 8, by design), VDS = 16 V, VGS = 0, f = 1 MHz
+cgs    = 5.53e-11  # Ciss typ - Crss typ = 60.67 - 5.37 = 55.30 pF, same rows and bias
 
 [models.pins]
 "G" = "gate"
@@ -866,7 +918,11 @@ vgs_th_max = 1.0   # VGS(th) max @ VDS=VGS, ID=250uA
 # ── PMV50ENEAR ────────────────────────────────────────────────────────────────
 # Nexperia, N-channel trench, SOT-23, AEC-Q101. 14 instances on MNT Reform.
 # The R suffix is the tape-and-reel ordering code; the die datasheet is PMV50ENEA.
-# Source: Nexperia PMV50ENEA product data sheet v.1, released 10 March 2016.
+# Source: Nexperia PMV50ENEA product data sheet v.1, released 10 March 2016
+#   (https://assets.nexperia.com/documents/data-sheet/PMV50ENEA.pdf).
+# Vendor SPICE file: https://assets.nexperia.com/documents/spice-model/PMV50ENEA.lib
+#   (Transim-generated subcircuit, "Date Created Mon Feb 08 06:46:59 2016");
+#   both fetched and re-read 2026-09-25.
 # Datasheet figures used (Characteristics, Tj=25 C):
 #   VGS(th) = 1 / 1.5 / 2.5 V        @ VDS=VGS, ID=250 uA
 #   RDS(on) typ 30 mOhm (max 43)     @ VGS=10 V,  ID=3.9 A
@@ -903,8 +959,9 @@ vto    = 1.5
 kp     = 22.0
 rd     = 0.012326
 rs     = 0.012326
-cgd    = 4.2e-11
-cgs    = 2.34e-10  # 276 - 42 pF; matches the vendor card's CGS to three digits
+cgd    = 4.2e-11   # Crss typ 42 pF, data sheet Characteristics table, VDS = 15 V, VGS = 0, f = 1 MHz;
+                   # the vendor .lib's nonlinear CGD table gives 41.95 pF at VDG = 15 V (agrees)
+cgs    = 2.34e-10  # vendor .lib `CGS 2 6 2.34e-10`; equals data sheet Ciss typ - Crss typ = 276 - 42 = 234 pF, same bias
 
 [models.pins]
 "G" = "gate"
@@ -927,7 +984,12 @@ vgs_th_max = 2.5            # VGS(th) max @ VDS=VGS, ID=250uA
 # ── PMV50EPEAR ────────────────────────────────────────────────────────────────
 # Nexperia, P-channel trench, SOT-23, AEC-Q101. 24 instances on MNT Reform, the
 # complement of the PMV50ENEA above.
-# Source: Nexperia PMV50EPEA product data sheet v.1, released 30 June 2016.
+# Source: Nexperia PMV50EPEA product data sheet v.1, released 30 June 2016
+#   (https://assets.nexperia.com/documents/data-sheet/PMV50EPEA.pdf).
+# Vendor SPICE file: https://assets.nexperia.com/documents/spice-model/PMV50EPEA.lib
+#   (Transim-generated subcircuit, "Date Created Mon Apr 18 06:56:53 2016");
+#   both fetched and re-read 2026-09-25. The .lib's lumped `CGS 2 6 7.507e-10`
+#   is used for cgs; it is 5.9% above the data sheet's Ciss - Crss = 709 pF.
 # Datasheet figures used (Characteristics, Tj=25 C):
 #   VGS(th) = -1 / -2 / -3 V         @ VDS=VGS, ID=-250 uA
 #   RDS(on) typ 35 mOhm (max 45)     @ VGS=-10 V,  ID=-4.2 A
@@ -960,8 +1022,10 @@ vto    = -2.0     # VGS(th) typ, negative for P-channel
 kp     = 20.67
 rd     = 0.014476
 rs     = 0.014476
-cgd    = 8.4e-11
-cgs    = 7.09e-10  # 793 - 84 pF
+cgd    = 8.4e-11   # Crss typ 84 pF, data sheet Characteristics table, VDS = -15 V, VGS = 0, f = 1 MHz;
+                   # the vendor .lib's nonlinear CGD table gives 84.32 pF at VGD = +15 V (agrees)
+cgs    = 7.507e-10 # vendor .lib `CGS 2 6 7.507e-10` (preferred). Data sheet cross-check:
+                   # Ciss typ - Crss typ = 793 - 84 = 709 pF, same bias; the vendor value is 5.9% higher
 
 [models.pins]
 "G" = "gate"
@@ -982,7 +1046,9 @@ vgs_th_max = 3.0            # |VGS(th)| max (-3 V)
 # Will Semiconductor (WillSemi), P-channel, SOT-23. 28 instances across all
 # twelve Olimex ESP32-EVB revisions and the RP2040-PICO-PC, where it is the
 # USB / battery-path load switch (FET1..FET3).
-# Source: Will Semiconductor WPM2015 datasheet Rev. 1.2, Mar 2018.
+# Source: Will Semiconductor WPM2015 datasheet Rev. 1.2, Mar 2018 (LCSC-hosted
+#   copy, https://datasheet.lcsc.com/datasheet/pdf/903395ae1f2101a77730f1a7221883cd.pdf?productCode=C213159,
+#   fetched 2026-09-25; the footer reads "Mar,2018 - Rev.1.2").
 # Datasheet figures used (Electronics Characteristics, TJ=25 C):
 #   VGS(th) = -0.40 / -0.62 / -0.81 V  @ VGS=VDS, ID=-250 uA
 #   RDS(on) typ 81 mOhm (max 110)      @ VGS=-4.5 V, ID=-2.7 A
@@ -1018,8 +1084,8 @@ vto    = -0.62
 kp     = 12.463
 rd     = 0.030160
 rs     = 0.030160
-cgd    = 5.4e-11
-cgs    = 4.8e-10  # 534 - 54 pF
+cgd    = 5.4e-11  # CRSS typ 54 pF, Electronics Characteristics "Capacitances, Charges", VGS = 0, VDS = -10 V, f = 1 MHz
+cgs    = 4.8e-10  # CISS typ - CRSS typ = 534 - 54 = 480 pF, same bias
 
 [models.pins]
 "G" = "gate"
@@ -1078,12 +1144,18 @@ vgs_th_max = 0.81           # |VGS(th)| max (-0.81 V)
 #   different point in the same fit space; the series resistances land within
 #   16% of each other. Both satisfy the datasheet's gFS >= 6.0 S floor (our fit
 #   implies 8.00 S at the test point).
-# DIVERGENCE FROM THE CARD, deliberately: the card's CGSO/CGDO are per-metre
-#   overlap densities scaled by its L=100u W=100u geometry, not the lumped
-#   capacitances this file's `cgs`/`cgd` mean, so those two come from the
-#   datasheet's Ciss/Crss the same way every other entry here does. The card's
-#   RG = 29.2 Ohm gate resistance has no field in this schema. IS=1e-32 in the
-#   card is a placeholder below any physical value and is not carried over.
+# CAPACITANCES (re-audited 2026-09-25 against the .spi fetched from
+#   https://www.infineon.com/dgdl/irlml6402.spi?fileId=5546d462533600a401535683a6e32bcc,
+#   "Model generated on Sep 25, 06", MODPEX / Symmetry POWER MOS Model v1.0).
+#   The card's CGSO/CGDO are per-metre overlap capacitances; multiplied by its
+#   W = 100u they give LUMPED values: CGSO*W = 5.36099e-06 * 1e-4 = 536.1 pF, and
+#   CGDO*W = 5.54 pF. cgs takes the vendor's 536.1 pF, which agrees with the
+#   datasheet's Ciss - Crss = 633 - 110 = 523 pF to +2.5%. cgd does NOT come
+#   from CGDO: the card models gate-drain charge with a nonlinear external
+#   network (D2/MD1, CAP = 968.8 pF, FI1/FI2) on top of the 5.54 pF overlap, which
+#   a constant cgd cannot transcribe, so cgd = datasheet Crss (110 pF). The
+#   card's RG = 29.2 Ohm gate resistance has no field in this schema. IS=1e-32
+#   in the card is a placeholder below any physical value and is not carried over.
 [[models]]
 id = "irlml6402"
 kind = "pmos"
@@ -1099,9 +1171,10 @@ kp     = 12.788      # KP
 lambda = 0.0111358   # LAMBDA, the only vendor-published lambda in this file
 rs     = 0.0246704   # RS
 rd     = 0.0001      # RD
-# Source: Infineon IRLML6402 datasheet, not the card; see the note above.
-cgd    = 1.1e-10     # Crss
-cgs    = 5.23e-10    # Ciss - Crss = 633 - 110 pF
+# Capacitances: see the CAPACITANCES note above.
+cgd    = 1.1e-10     # datasheet Crss typ 110 pF, Electrical Characteristics, VGS = 0, VDS = -10 V, f = 1 MHz
+cgs    = 5.361e-10   # vendor .spi CGSO * W = 5.36099e-06 F/m * 100e-6 m = 536.1 pF;
+                     # datasheet Ciss typ - Crss typ = 633 - 110 = 523 pF, same bias (vendor +2.5%)
 
 [models.pins]
 "G" = "gate"
@@ -1122,7 +1195,8 @@ vgs_th_max = 1.2            # |VGS(th)| max (-1.2 V)
 # ── AO3422 ────────────────────────────────────────────────────────────────────
 # Alpha & Omega Semiconductor, N-channel, SOT-23. Hunt boards.
 # Source: AOS AO3422 datasheet Rev 2.1 March 2024 (the electrical table itself
-# is footnoted Rev2: Sep 2010).
+# is footnoted Rev2: Sep 2010), https://www.aosmd.com/res/datasheets/AO3422.pdf,
+# fetched and re-read 2026-09-25.
 # Datasheet figures used (Electrical Characteristics, TJ=25 C):
 #   VGS(th) = 0.6 / 1.3 / 2 V          @ VDS=VGS, ID=250 uA
 #   RDS(on) typ 125 mOhm (max 160)     @ VGS=4.5 V, ID=2.1 A
@@ -1158,8 +1232,8 @@ vto    = 1.3
 kp     = 16.276
 rd     = 0.052900
 rs     = 0.052900
-cgd    = 1.26e-11
-cgs    = 2.014e-10  # 214 - 12.6 pF
+cgd    = 1.26e-11   # Crss typ 12.6 pF, Electrical Characteristics "Dynamic Parameters", VGS = 0, VDS = 25 V, f = 1 MHz
+cgs    = 2.014e-10  # Ciss typ - Crss typ = 214 - 12.6 = 201.4 pF, same bias (Ciss max 300 not used)
 
 [models.pins]
 "G" = "gate"
@@ -1181,7 +1255,11 @@ vgs_th_max = 2.0            # VGS(th) max @ VDS=VGS, ID=250uA
 # ── PMZ550UNE ─────────────────────────────────────────────────────────────────
 # Nexperia, N-channel trench, SOT-883 / DFN1006-3. MNT Reform. The board value
 # is PMZ550UNEYL; YL is a packing suffix on the same datasheet.
-# Source: Nexperia PMZ550UNE product data sheet v.1, released 25 March 2015.
+# Source: Nexperia PMZ550UNE product data sheet v.1, released 25 March 2015
+#   (https://assets.nexperia.com/documents/data-sheet/PMZ550UNE.pdf).
+# Vendor SPICE file: https://assets.nexperia.com/documents/spice-model/PMZ550UNE.lib
+#   (Transim-generated subcircuit, "Date Created Thu Feb 12 03:33:29 2015");
+#   both fetched and re-read 2026-09-25.
 # Datasheet figures used (Characteristics, Tj=25 C):
 #   VGS(th) = 0.45 / 0.7 / 0.95 V      @ VDS=VGS, ID=250 uA
 #   RDS(on) typ 550 mOhm (max 670)     @ VGS=4.5 V, ID=590 mA
@@ -1227,8 +1305,10 @@ vto    = 0.7
 kp     = 2.9025
 rd     = 0.22967
 rs     = 0.22967
-cgd    = 4.2e-12
-cgs    = 2.61e-11  # 30.3 - 4.2 pF
+cgd    = 4.2e-12   # Crss typ 4.2 pF, data sheet Characteristics table, VDS = 15 V, VGS = 0, f = 1 MHz;
+                   # the vendor .lib's nonlinear CGD table gives 4.243 pF at VDG = 15 V (agrees)
+cgs    = 2.606e-11 # vendor .lib `CGS 2 6 2.606e-11` (preferred); data sheet Ciss typ - Crss typ
+                   # = 30.3 - 4.2 = 26.1 pF, same bias (agrees to 0.2%)
 
 [models.pins]
 "G" = "gate"
@@ -1250,25 +1330,29 @@ vgs_th_max = 0.95           # VGS(th) max @ VDS=VGS, ID=250uA
 # ── CJ3134K ───────────────────────────────────────────────────────────────────
 # Jiangsu Changjing Electronics (JSCJ), N-channel, SOT-23. 20 instances on the
 # Hunt boards. Same house as the cj2301 entry above.
-# Sources, two documents read and numerically identical: JSCJ "CJ3134K SOT-23"
-#   Rev.-1.1 (jscj-elec.com), and the LCSC-hosted copy headed "B Dec,2013" /
-#   footed "F, Aug,2015". They differ only in the company-name transliteration
-#   and the revision label, which is a document-tracking artefact rather than a
-#   spec conflict. No vendor SPICE card exists.
-# Datasheet figures used (MOSFET Electrical Characteristics, TJ=25 C):
+# Source: JSCJ "CJ3134K SOT-23" Rev. - 1.1
+#   (https://www.jscj-elec.com/gallery/file/CJ3134K%20SOT-23%20V1.1.pdf, fetched
+#   and re-read 2026-09-25). An LCSC-hosted copy headed "B Dec,2013" was also
+#   cited here earlier; it could not be re-fetched (LCSC serves a JS viewer), so
+#   the earlier claim that the two are "numerically identical" is unverified.
+#   No vendor SPICE card was located.
+# Datasheet figures (Rev. 1.1, MOSFET Electrical Characteristics, Ta=25 C):
 #   VGS(th) = 0.35 / 0.54 / 1.1 V     @ VDS=VGS, ID=250 uA
-#   RDS(on) max 380 mOhm              @ VGS=4.5 V, ID=0.65 A
-#   RDS(on) max 450 mOhm              @ VGS=2.5 V, ID=0.55 A
-#   RDS(on) max 800 mOhm              @ VGS=1.8 V, ID=0.45 A
+#   RDS(on) typ 270 (max 380) mOhm    @ VGS=4.5 V, ID=0.65 A
+#   RDS(on) typ 320 (max 450) mOhm    @ VGS=2.5 V, ID=0.55 A
+#   RDS(on) typ 390 (max 800) mOhm    @ VGS=1.8 V, ID=0.45 A
 #   gFS     typ 1.6 S                 @ VDS=10 V, ID=0.8 A
-#   Ciss 79 typ / Coss 13 / Crss 9 pF @ VDS=16 V, VGS=0 (Note 4: by design)
+#   Ciss 79 typ (120 max) / Coss 13 (20) / Crss 9 (15) pF
+#                                     @ VDS=16 V, VGS=0, f=1 MHz (Note 4: by design)
 #   VSD max 1.2 V @ IS=0.15 A (no typ published)
 #
-# THE ON-RESISTANCE COLUMN IS MAX-ONLY. This sheet's RDS(on) typ column is empty
-#   at every VGS point, so any conduction fit here is a fit to MAXIMUM
-#   on-resistance and the resulting model is pessimistic by construction. That
-#   is a material difference from every other entry in this file and it is the
-#   first thing to know about this one.
+# AUDIT CORRECTION (2026-09-25): this entry previously stated that the RDS(on)
+#   typ column is EMPTY at every VGS point. Rev. 1.1 prints typicals (270 / 320 /
+#   390 mOhm, above). The kp/rd/rs fit below was made to the MAX column only and
+#   has NOT been refitted in this audit (capacitance-only scope); it is therefore
+#   pessimistic on on-resistance by construction and is flagged for a refit on
+#   the typ rows. The derivation text below is kept as the record of how the
+#   current numbers were obtained.
 # kp: (a) 1.6^2/(2*0.8) = 1.600.  (b) on the max rows, 1.8 V and 4.5 V:
 #   (1/1.26 - 1/3.96)/(0.800 - 0.380) = (0.79365 - 0.25253)/0.42 = 1.2884.
 #   19.5% apart. Route (a) chosen here, against this file's usual preference,
@@ -1294,11 +1378,11 @@ value_re = "(?i)^CJ3134K?[A-Z0-9-]*$"
 
 [models.params]
 vto    = 0.54
-kp     = 1.600     # from gFS; the conduction column is max-only, see above
+kp     = 1.600     # from gFS; fitted with the max RDS(on) column only, see the correction above
 rd     = 0.11109
 rs     = 0.11109
-cgd    = 9.0e-12
-cgs    = 7.0e-11   # 79 - 9 pF
+cgd    = 9.0e-12   # Crss typ 9 pF, Rev. 1.1 Dynamic Characteristics (Note 4), VDS = 16 V, VGS = 0, f = 1 MHz
+cgs    = 7.0e-11   # Ciss typ - Crss typ = 79 - 9 = 70 pF, same bias
 
 [models.pins]
 "G" = "gate"
@@ -1371,8 +1455,8 @@ vto    = 1.5       # VGS(th) typ (V) (min 1.0, max 2.0)
 kp     = 71.9      # A/V^2, from the two RDS(on) rows (see the derivation above)
 rd     = 0.0097    # half the 19.36 mOhm ohmic residue of RDS(on) @ VGS = 10 V
 rs     = 0.0097    # other half
-cgd    = 5.1e-11   # = Crss, 51 pF @ VGS = 0, VDS = 15 V, 1 MHz
-cgs    = 5.9e-10   # = Ciss - Crss = 641 - 51 = 590 pF, same test condition
+cgd    = 5.1e-11   # = Crss typ 51 pF, DS37640 Rev. 2-2 Dynamic Characteristics (Note 8), VGS = 0, VDS = 15 V, f = 1 MHz
+cgs    = 5.9e-10   # = Ciss typ - Crss typ = 641 - 51 = 590 pF, same test condition
 
 [models.pins]
 # 1 = Gate, 2 = Source, 3 = Drain, the standard SOT-23 single-MOSFET order.
@@ -1407,6 +1491,8 @@ vgs_th_max          = 2.0     # VGS(th) max @ VDS=VGS, ID=250uA
 #   May 2003, document revision "FDN360P Rev F1 (W)" (the reprint carries an
 #   onsemi cover; the electrical tables are the Fairchild ones). Absolute
 #   Maximum Ratings, Thermal Characteristics and Electrical Characteristics.
+#   Re-verified 2026-09-25 against onsemi FDN360P/D Rev. 8, January 2023 (local
+#   copy): every figure listed below, including Ciss/Coss/Crss, is identical.
 #
 # "SuperSOT-3" is the Fairchild-era name for the outline; onsemi's current revision
 # calls the same package SOT-23 / SuperSOT-23, case 527AG. The datasheet says it
@@ -1471,8 +1557,8 @@ vto    = -1.9      # VGS(th) typ (V), NEGATIVE for P-channel (min -1.0, max -3.0
 kp     = 7.06      # A/V^2, from the two RDS(on) rows; gFS route gives 6.25
 rd     = 0.0228    # half the 45.5 mOhm ohmic residue of RDS(on) @ |VGS| = 10 V
 rs     = 0.0228    # other half
-cgd    = 3.9e-11   # = Crss, 39 pF @ VGS = 0, VDS = -15 V, 1 MHz
-cgs    = 2.59e-10  # = Ciss - Crss = 298 - 39 = 259 pF, same test condition
+cgd    = 3.9e-11   # = Crss typ 39 pF, Electrical Characteristics "Dynamic Characteristics", VGS = 0, VDS = -15 V, f = 1 MHz
+cgs    = 2.59e-10  # = Ciss typ - Crss typ = 298 - 39 = 259 pF, same test condition
 
 [models.pins]
 # 1 = Gate, 2 = Source, 3 = Drain.

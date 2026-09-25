@@ -59,6 +59,7 @@ own board, firmware, and spec, and the one local command that runs them, and
 |---|---|
 | [`models/MODELS.md`](models/MODELS.md) | Device models: built-in, SPICE, datasheet extraction |
 | [`models/PACKS.md`](models/PACKS.md) | Model-pack format: bundle + share model/sensor/logic data |
+| [`models/dynamic-param-audit.md`](models/dynamic-param-audit.md) | Datasheet audit of the BJT/diode/MOSFET cards' capacitance, transit-time and breakdown params |
 
 **"How do I wire it into a pipeline?"**: [`ci/`](ci/)
 

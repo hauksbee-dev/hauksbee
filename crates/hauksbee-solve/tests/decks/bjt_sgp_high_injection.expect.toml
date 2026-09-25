@@ -6,7 +6,7 @@
 # transistor with 2.7x the gain of the one on the card, with no warning of any
 # kind. That is worse than refusing the card.
 #
-# This deck is the guard: it uses the ON Semiconductor 2N3904 card verbatim and
+# This deck is the guard: it uses the PSpice-library Q2N3904 card verbatim and
 # holds hauksbee to what an independent simulator says the card means. The
 # current through VC is the collector current, through VB the base current.
 analysis = "op"
