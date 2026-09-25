@@ -10,10 +10,14 @@ S8050 NPN near its datasheet VBE test point
 * hauksbee's .op does not converge on it while ngspice does: see the note in
 * the .expect.toml and the task that records it. This shape asks the same
 * question and is what the other BJT decks here use.
+*
+* BF follows the entry's bf (235, the midpoint of the datasheet's 120..350 row),
+* and RB is sized so the base current is 50 mA / 235: (12 - 0.70) V / 0.2128 mA
+* = 53.1 kOhm, keeping the collector at the 50 mA test point.
 VCC vcc 0 DC 12
 RC vcc coll 100
-RB vcc base 45.2k
+RB vcc base 53.1k
 Q1 coll base 0 S8050
-.model S8050 NPN(IS=1e-13 BF=200 NF=1.0 RB=3.3 RC=0.3 RE=0.05 TF=1e-9)
+.model S8050 NPN(IS=1e-13 BF=235 NF=1.0 RB=3.3 RC=0.3 RE=0.05 TF=1e-9)
 .op
 .end

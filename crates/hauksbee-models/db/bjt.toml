@@ -21,19 +21,46 @@ value_re = "(?i)^BC84[5-9][A-C]?$"
 #   SPICE:     Nexperia BC847.txt (assets.nexperia.com/documents/spice-model/
 #     BC847.txt, extraction week 24/2021, header hFE 110..450 @ 5 V/2 mA, i.e.
 #     the ungraded part; its .MODEL MAIN numbers are identical to BC847B.txt).
-#     The card matches all BC845..BC849 bins; the capacitances and transit
-#     time are not bin-dependent in Nexperia's files.
-# DC params (is, bf, nf, vaf, br, rb, rc, re): legacy values, no located
-#   source; they are NOT from the vendor card (which has IS=1.124e-14,
-#   BF=281.7, VAF=36.27, RB=150). Kept unchanged pending a DC audit.
-is  = 1.0e-14
-bf  = 150.0
-nf  = 1.0
-vaf = 80.0
-br  = 4.0
-rb  = 10.0
-rc  = 1.0
-re  = 0.5
+#     The value_re also admits BC845/846/848/849 and the A/B/C bins; this card
+#     describes the bare BC847 and is only an approximation of those.
+# DC params: BC847.txt .MODEL MAIN verbatim (area 1). Checked with a
+#   Gummel-Poon evaluation at the datasheet's own hFE point: hFE 298 and
+#   VBE 662 mV at VCE = 5 V, IC = 2 mA, against Table 8's bare-BC847 row
+#   hFE 110..800 and VBE 580/660/700 mV.
+# WHY THE VENDOR BF AND NOT THE DATASHEET ROW for the un-suffixed part: Table 8
+#   prints the bare BC847 as hFE min 110, max 800 with no typ. Its midpoint
+#   (455) is not a device anyone ships: it spans the A (180 typ), B (290 typ)
+#   and C (520 typ) bins, and sits in the gap between B's 450 max and C's
+#   420 min. Nexperia's own model for the exact un-suffixed number, BC847.txt,
+#   gives 298 at the row's condition (header window 110..450, i.e. an A-or-B
+#   part), so the vendor model is the better-sourced description.
+# SUBCIRCUIT QUIRKS the card does not reproduce: BC847.txt wraps MAIN in a
+#   .SUBCKT with Q1 (area 0.8636), a quasi-saturation Q2 (area 0.1364) whose
+#   emitter is node 33, which nothing else connects, a 324.8 ohm RQ, and a
+#   B-C diode D1 (IS 1.365e-15, RS 2163). Neither Q2 nor D1 is stamped. Read
+#   literally, the floating Q2 emitter leaves 0.8636 of the area in forward
+#   mode (IS 9.71e-15, VBE about 4 mV higher); BC847A.txt and BC847C.txt tie
+#   Q2's emitter to node 3, so the card takes MAIN at area 1 like its siblings.
+# Not read by the binder and so not carried: IRB 8.356e-4, RBM 0.8289,
+#   XTB 1.382, XTF 25, VTF 2, ITF 0.277, VJE/MJE, VJC/MJC.
+is  = 1.124e-14   # BC847.txt IS
+bf  = 281.7       # BC847.txt BF
+nf  = 0.9872      # BC847.txt NF
+ise = 2.566e-15   # BC847.txt ISE
+ne  = 1.661       # BC847.txt NE
+ikf = 0.09455     # BC847.txt IKF
+vaf = 36.27       # BC847.txt VAF
+nr  = 0.9859      # BC847.txt NR
+isc = 7.015e-18   # BC847.txt ISC
+nc  = 0.9228      # BC847.txt NC
+br  = 7.047       # BC847.txt BR
+ikr = 0.8167      # BC847.txt IKR
+var = 16.61       # BC847.txt VAR
+rb  = 150.0       # BC847.txt RB (IRB/RBM not read, so RB is the zero-bias value)
+re  = 0.804       # BC847.txt RE
+rc  = 0.2454      # BC847.txt RC
+eg  = 1.11        # BC847.txt EG
+xti = 7.452       # BC847.txt XTI
 cje = 1.264e-11   # BC847.txt CJE (VJE=0.7056, MJE=0.3401). Agrees with Table 8 Ce typ
                   # 11 pF @ VEB=0.5 V: card gives 10.5 pF there (10.7 pF with the
                   # engine's vje=0.75/mje=0.33)
@@ -50,9 +77,13 @@ tr  = 1.55e-7     # BC847.txt TR (no datasheet row)
 "3" = "collector"
 
 [models.ratings]
-max_current_a = 0.1
-max_power_w = 0.25
-max_voltage_v = 45.0  # VCEO
+# Source: BC847X_SER Rev. 13, Table 6 Limiting values and Table 7 Thermal.
+max_current_a = 0.1            # IC continuous
+max_surge_current_a = 0.2      # ICM, single pulse tp <= 1 ms
+max_power_w = 0.25             # Ptot, Tamb <= 25 C, standard footprint
+max_voltage_v = 45.0           # VCEO
+max_junction_temp_c = 150.0    # Tj
+theta_ja_c_per_w = 500.0       # Rth(j-a), in free air, standard footprint
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -171,9 +202,16 @@ max_voltage_v = 45.0
 #   VBE(sat) ~ 0.70 V at IC=50 mA and ~0.95 V at IC=500 mA, and
 #   VCE(sat) ~ 0.3 V at IC=500 mA.
 #
-# bf: the datasheet's own 50 mA window is 120..350 across both hFE ranks;
-#   200 is the L/H rank boundary and within 3% of the geometric mean of the
-#   window (205), so it is the least arbitrary single number the sheet supports.
+# bf: for the un-suffixed S8050 the sheet's DC current gain row is 120 min,
+#   350 max at VCE = 1 V, IC = 50 mA, with no typ; the Classification of hFE
+#   table splits it into rank L (120-200) and rank H (200-350), and a part
+#   ordered without a rank letter can be either. By the product's row
+#   convention (typ, else the min/max midpoint) that row reads 235. Galaxy
+#   publishes no SPICE model for this part to weigh against it. The model has
+#   no ISE or IKF, so hFE at 50 mA is bf itself. (The old 200 was the L/H
+#   boundary, not a value the row states.) An L- or H-suffixed part matched by
+#   the value_re below is described only approximately: its own rank window
+#   has a midpoint of 160 or 275.
 # is: fitted to Figure 3. With nf=1 the intrinsic VBE at IC=50 mA is
 #   Vt*ln(IC/is) = 25.85 mV * ln(5e11) = 0.697 V, which lands on the curve.
 # rb: fitted to the SAME curve at the other end. At IC=500 mA, IB=50 mA the
@@ -207,7 +245,8 @@ value_re = "(?i)^S8050[A-Z0-9-]*$"
 [models.params]
 # Source: Galaxy Microelectronics S8050 spec STM0043A August 2020 (see above).
 is  = 1.0e-13   # fitted to VBE ~0.70 V at IC=50 mA (datasheet Figure 3)
-bf  = 200.0     # hFE, datasheet 120-350 @ VCE=1V, IC=50mA; 200 = L/H rank edge
+bf  = 235.0     # hFE midpoint of 120..350 @ VCE=1V, IC=50mA (no typ printed):
+                # Galaxy STM0043A Electrical Characteristics, DC current gain
 nf  = 1.0       # ideal forward junction
 rb  = 3.3       # base ohmic, fitted to VBE(sat) ~0.95 V @ IC=500mA, IB=50mA
 rc  = 0.3       # collector ohmic, part of VCE(sat) ~0.28 V at that point
@@ -227,6 +266,7 @@ tf  = 1.061e-9  # Electrical Characteristics, fT min 150 MHz @ VCE=6V, IC=20mA,
 max_current_a = 0.5     # IC continuous (A)
 max_power_w = 0.3       # PC collector dissipation (W)
 max_voltage_v = 25.0    # VCEO (V)
+max_junction_temp_c = 150.0  # Tj, "Junction and Storage Temperature -55 to +150"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -250,17 +290,35 @@ mpn_re   = "(?i)BCM847BS"
 #   SPICE:     Nexperia BCM847BS.txt (assets.nexperia.com/documents/spice-model/
 #     BCM847BS.txt, extraction week 14/2006, header hFE 200..450 @ 5 V/2 mA,
 #     which is the part's only gain bin), single `.MODEL MAIN NPN`, used twice.
-# DC params other than bf (is, nf, vaf, br, rb, rc, re): legacy values copied
-#   from the bc847 entry, no located source. Kept unchanged pending a DC audit.
-is  = 1.0e-14
+# DC params other than bf: BCM847BS.txt .MODEL MAIN verbatim (the file says
+#   the model has no temperature dependency; its XTI/EG are the defaults).
+# bf IS A HYBRID, deliberately: the vendor BF = 324.4 gives hFE 323 at
+#   VCE = 5 V, IC = 2 mA, above the datasheet's printed typ for the same row
+#   (v.8 Table 7: 200 min, 290 typ, 450 max). With every other vendor param
+#   kept and bf = 290, a Gummel-Poon evaluation gives hFE 289 and VBE 654 mV
+#   at 2 mA (Table 7 VBE typ 660 mV) and hFE 294 at 10 uA (Table 7 typ 250,
+#   where the vendor BF gives about 328). So the printed typ is kept for bf.
+# Not read by the binder and so not carried: IRB 5e-6, RBM 5, XTF 9.51,
+#   VTF 2.927, ITF 0.3131, VJE/MJE, VJC/MJC/XCJC, FC.
+is  = 1.822e-14 # BCM847BS.txt IS
 bf  = 290.0     # hFE typ @ VCE = 5 V, IC = 2 mA (200 min, 450 max): BCM847BS v.8
-                # (15 July 2026) Table 7 Characteristics, p.4
-nf  = 1.0
-vaf = 80.0
-br  = 4.0
-rb  = 10.0
-rc  = 1.0
-re  = 0.5
+                # (15 July 2026) Table 7 Characteristics, p.4 (vendor BF 324.4)
+nf  = 0.9932    # BCM847BS.txt NF
+ise = 2.894e-16 # BCM847BS.txt ISE
+ne  = 1.4       # BCM847BS.txt NE
+ikf = 0.109     # BCM847BS.txt IKF
+vaf = 82.0      # BCM847BS.txt VAF
+nr  = 0.9931    # BCM847BS.txt NR
+isc = 9.982e-12 # BCM847BS.txt ISC
+nc  = 1.763     # BCM847BS.txt NC
+br  = 8.29      # BCM847BS.txt BR
+ikr = 0.09      # BCM847BS.txt IKR
+var = 17.9      # BCM847BS.txt VAR
+rb  = 10.0      # BCM847BS.txt RB (IRB/RBM not read, so RB is the zero-bias value)
+re  = 0.649     # BCM847BS.txt RE
+rc  = 0.7014    # BCM847BS.txt RC
+eg  = 1.11      # BCM847BS.txt EG
+xti = 3.0       # BCM847BS.txt XTI
 cje = 1.244e-11 # BCM847BS.txt CJE (VJE=0.7579, MJE=0.3656). Agrees with v.8 Table 7
                 # Ce typ 11 pF @ VEB = 0.5 V: card gives 10.3 pF there (10.5 pF with
                 # the engine's vje=0.75/mje=0.33); Fig. 8 reads ~13 pF at 0 V
@@ -289,10 +347,15 @@ pair_count = 2
 "6" = "collector_q1"
 
 [models.ratings]
-max_current_a = 0.1       # per transistor (Nexperia)
+max_current_a = 0.1       # IC per transistor: BCM847BS v.8 Table 5
+max_surge_current_a = 0.2 # ICM, single pulse tp <= 1 ms: Table 5
 max_power_w = 0.2         # Ptot per transistor, Tamb <= 25 C (300 mW per device):
                           # BCM847BS v.8 Table 5 Limiting values, p.3
-max_voltage_v = 45.0
+max_voltage_v = 45.0      # VCEO
+max_junction_temp_c = 150.0 # Tj: Table 5
+theta_ja_c_per_w = 625.0  # Rth(j-a) per transistor, in free air (416 K/W per
+                          # device): Table 6 Thermal characteristics. Per
+                          # transistor, matching max_power_w: 125 K / 0.2 W.
 
 # ─────────────────────────────────────────────────────────────────────────────
 
