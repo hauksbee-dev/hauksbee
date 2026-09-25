@@ -467,10 +467,11 @@ fn render_spec_at_with_run_hint(
             hauksbee_ir::docs_url("docs/cosim/MCU.md")
         );
     }
-    let boot_net_line = boot_net.as_ref().map_or_else(
-        || "# net = \"CONTROL_NET\"            # no signal net detected; set this to a real control net".to_string(),
-        |net| format!("# net = \"{net}\"                  # control net to watch (edit to your gate/enable/reset/CS)"),
-    );
+    #[allow(clippy::option_if_let_else, reason = "a two-arm match keeps the long lines apart")]
+    let boot_net_line = match &boot_net {
+        Some(net) => format!("# net = \"{net}\"                  # control net to watch (edit to your gate/enable/reset/CS)"),
+        None => "# net = \"CONTROL_NET\"            # no signal net detected; set this to a real control net".to_string(),
+    };
     let _ = writeln!(
         s,
         "# [[assert]]\n# kind = \"boot_coverage\"\n{boot_net_line}\n\

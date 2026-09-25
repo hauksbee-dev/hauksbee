@@ -2605,16 +2605,11 @@ impl Assertion {
                     .unwrap_or_default();
                 format!("{net} {}{when}", bound(" V", "voltage"))
             }
-            "uart" => self.contains.as_ref().map_or_else(
-                || {
-                    if let Some(m) = &self.matches {
-                        format!("UART matches /{m}/")
-                    } else {
-                        "UART".into()
-                    }
-                },
-                |c| format!("UART contains {c:?}"),
-            ),
+            "uart" => match (&self.contains, &self.matches) {
+                (Some(c), _) => format!("UART contains {c:?}"),
+                (None, Some(m)) => format!("UART matches /{m}/"),
+                (None, None) => "UART".into(),
+            },
             "toggle" => self.freq_hz.map_or_else(
                 || format!("{net} toggles >= {} times", self.min_toggles.unwrap_or(0)),
                 |f| format!("{net} toggles at ~{f} Hz"),
@@ -2637,16 +2632,11 @@ impl Assertion {
             }
             "peripheral" => {
                 let id = self.id.clone().unwrap_or_default();
-                self.bytes.as_ref().map_or_else(
-                    || {
-                        if let Some(f) = &self.field {
-                            format!("peripheral {id}.{f} {}", bound("", "set"))
-                        } else {
-                            format!("peripheral {id}")
-                        }
-                    },
-                    |b| format!("peripheral {id} contains bytes {b}"),
-                )
+                match (&self.bytes, &self.field) {
+                    (Some(b), _) => format!("peripheral {id} contains bytes {b}"),
+                    (None, Some(f)) => format!("peripheral {id}.{f} {}", bound("", "set")),
+                    (None, None) => format!("peripheral {id}"),
+                }
             }
             "rail_window" => {
                 let mut parts = Vec::new();

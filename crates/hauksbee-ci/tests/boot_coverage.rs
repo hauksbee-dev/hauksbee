@@ -24,7 +24,7 @@
 //! ESP32 tests skip cleanly when the deterministic fork is absent.
 
 #[cfg(feature = "qemu")]
-use std::path::PathBuf;
+use std::{fmt::Write as _, path::PathBuf};
 
 use hauksbee_ci::run;
 
@@ -177,14 +177,14 @@ fn resolved_spec(name: &str, board: &std::path::Path) -> (tempfile::TempDir, Pat
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         if line.starts_with("board = ") {
-            out.push_str(&format!("board = '{}'\n", board.display()));
+            let _ = writeln!(out, "board = '{}'", board.display());
         } else if let Some(rest) = line.strip_prefix("firmware = \"") {
             let rel = rest.trim_end().trim_end_matches('"');
             let abs = examples_dir
                 .join(rel)
                 .canonicalize()
                 .expect("firmware path resolves");
-            out.push_str(&format!("firmware = '{}'\n", abs.display()));
+            let _ = writeln!(out, "firmware = '{}'", abs.display());
         } else {
             out.push_str(line);
             out.push('\n');

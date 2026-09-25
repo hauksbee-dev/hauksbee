@@ -401,32 +401,29 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
         // linters first: they finish in milliseconds, and there is no point
         // solving a circuit for a commit `black` is about to reject anyway.
         let entry = pre_commit_entry();
-        let (new_text, did) = text
-            .lines()
-            .position(|l| l.trim_end() == "repos:")
-            .map_or_else(
-                || {
-                    let mut t = text.clone();
-                    if !t.ends_with('\n') {
-                        t.push('\n');
-                    }
-                    t.push_str("repos:\n");
-                    t.push_str(&entry);
-                    (t, "added a `repos:` section with the hauksbee-ci entry")
-                },
-                |pos| {
-                    let lines: Vec<&str> = text.lines().collect();
-                    let end = repos_list_end(&lines, pos);
-                    let mut lines = lines;
-                    lines.insert(end, entry.trim_end());
-                    let mut joined = lines.join("\n");
-                    joined.push('\n');
-                    (
-                        joined,
-                        "appended the hauksbee-ci entry to `repos:` (after your existing hooks)",
-                    )
-                },
-            );
+        #[allow(
+            clippy::option_if_let_else,
+            reason = "two multi-statement arms read better"
+        )]
+        let (new_text, did) = if let Some(pos) = text.lines().position(|l| l.trim_end() == "repos:")
+        {
+            let mut lines: Vec<&str> = text.lines().collect();
+            lines.insert(repos_list_end(&lines, pos), entry.trim_end());
+            let mut joined = lines.join("\n");
+            joined.push('\n');
+            (
+                joined,
+                "appended the hauksbee-ci entry to `repos:` (after your existing hooks)",
+            )
+        } else {
+            let mut t = text.clone();
+            if !t.ends_with('\n') {
+                t.push('\n');
+            }
+            t.push_str("repos:\n");
+            t.push_str(&entry);
+            (t, "added a `repos:` section with the hauksbee-ci entry")
+        };
         fs::write(&config, new_text).with_context(|| format!("writing {}", config.display()))?;
         return Ok(format!(
             "{did} in {}; run `pre-commit install` to activate it\n{}",

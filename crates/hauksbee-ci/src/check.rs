@@ -27,7 +27,7 @@
 //! actually matching a component, MCU/emulator resolution, and every behavioral
 //! assertion.
 
-use std::path::Path;
+use std::{fmt::Write as _, path::Path};
 
 use serde::Serialize;
 
@@ -89,9 +89,9 @@ impl Diagnostic {
     pub fn render_human(&self, file: &Path) -> String {
         let mut loc = file.display().to_string();
         if let Some(l) = self.line {
-            loc.push_str(&format!(":{l}"));
+            let _ = write!(loc, ":{l}");
             if let Some(c) = self.col {
-                loc.push_str(&format!(":{c}"));
+                let _ = write!(loc, ":{c}");
             }
         }
         let fix = self

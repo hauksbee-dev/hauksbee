@@ -3,7 +3,7 @@
 //!   - a VCD sink records the right transitions to a gtkwave-compatible file
 //!     (the third required proof).
 
-use std::path::PathBuf;
+use std::{fmt::Write as _, path::PathBuf};
 
 use hauksbee_ci::{run, RunConfig};
 
@@ -74,7 +74,7 @@ fn ci_vcd_sink_records_transitions() {
     let mut t = 0.0;
     let mut level = 0.0;
     while t <= 10.0 {
-        pwl.push_str(&format!("  [{t}, {level}],\n"));
+        let _ = writeln!(pwl, "  [{t}, {level}],");
         level = if level == 0.0 { 5.0 } else { 0.0 };
         t += 0.5;
     }

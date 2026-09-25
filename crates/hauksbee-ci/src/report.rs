@@ -5,7 +5,7 @@
 //! over-claims worst-case proof and a diverged co-sim refuses rather than
 //! reporting a fake verdict.
 
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, fmt::Write as _, time::Duration};
 
 use crate::assertions::AssertResult;
 use hauksbee_engine::result::Refusal;
@@ -634,7 +634,7 @@ impl CiResult {
                 } else {
                     " (explained above)".into()
                 };
-                out.push_str(&format!("\n[{id}] {}{explanation}", assumption.statement()));
+                let _ = write!(out, "\n[{id}] {}{explanation}", assumption.statement());
             }
         }
         if let Some(budget) = map.error_budget() {
@@ -659,13 +659,14 @@ impl CiResult {
             } else {
                 "validated two-sided bound"
             };
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "\nmodel {}={} source={} validation={} {accuracy}",
                 model.cited_reference(),
                 model.model_id(),
                 source.tier(),
                 source.validation(),
-            ));
+            );
         }
         out
     }
@@ -725,13 +726,12 @@ impl CiResult {
 
     #[must_use]
     pub fn render_human(&self) -> String {
-        let mut out = String::new();
-        out.push_str(&format!(
+        let mut out = format!(
             "hauksbee-ci: {}\n  board: {}\n  seeds: {}\n",
             self.spec_name, self.board, self.seeds
-        ));
+        );
         if let Some(cov) = &self.coverage {
-            out.push_str(&format!("  {}\n", cov.describe()));
+            let _ = writeln!(out, "  {}", cov.describe());
         }
         out.push_str(&self.dead_rail_banner());
         out.push('\n');
@@ -748,20 +748,21 @@ impl CiResult {
             } else {
                 "FAIL"
             };
-            out.push_str(&format!("  [{mark}] {}\n        {}\n", r.label, r.detail));
+            let _ = writeln!(out, "  [{mark}] {}\n        {}", r.label, r.detail);
             for line in self.evidence_text(&r.label, &mut explained).lines() {
-                out.push_str(&format!("        {line}\n"));
+                let _ = writeln!(out, "        {line}");
             }
             // On a real red (not a pass, not an INVALID refusal), add one
             // actionable "why" line.
             if !r.passed && !r.invalid {
                 if let Some(why) = why_line(r) {
-                    out.push_str(&format!("        why: {why}\n"));
+                    let _ = writeln!(out, "        why: {why}");
                 }
                 if let Some(w) = &r.waived {
-                    out.push_str(&format!(
-                        "        waived: {w}; visible here, not gating the build\n"
-                    ));
+                    let _ = writeln!(
+                        out,
+                        "        waived: {w}; visible here, not gating the build"
+                    );
                 }
             }
         }
@@ -776,12 +777,10 @@ impl CiResult {
             );
         }
         if let Some(refusal) = self.refusal() {
-            out.push('\n');
-            out.push_str(&refusal.render_text());
-            out.push('\n');
+            let _ = writeln!(out, "\n{}", refusal.render_text());
         }
         for (tag, msg) in self.honesty_notes() {
-            out.push_str(&format!("  {tag}: {msg}\n"));
+            let _ = writeln!(out, "  {tag}: {msg}");
         }
         // A run of nothing but measurements judged nothing, so it must not
         // borrow the word a run of held assertions earns.
@@ -805,38 +804,33 @@ impl CiResult {
         // is what a skimming reader keeps, so an untrustworthy run must not
         // lead with "passed", the word every green run leads with.
         if self.analog_invalid() {
-            out.push_str(&format!(
-                "\n{} - {}/{} assertion(s) evaluated in {:.2}s; the counts are not a verdict{}\n",
-                verdict,
-                total,
-                total,
+            let _ = writeln!(
+                out,
+                "\n{verdict} - {total}/{total} assertion(s) evaluated in {:.2}s; the counts are not a verdict{waived_note}",
                 self.elapsed.as_secs_f64(),
-                waived_note
-            ));
+            );
         } else {
-            out.push_str(&format!(
-                "\n{} - {}/{} {} in {:.2}s{}\n",
-                verdict,
-                passed,
-                total,
+            let _ = writeln!(
+                out,
+                "\n{verdict} - {passed}/{total} {} in {:.2}s{waived_note}",
                 if all_measured {
                     "measurement(s) reported, nothing judged"
                 } else {
                     "assertions passed"
                 },
                 self.elapsed.as_secs_f64(),
-                waived_note
-            ));
+            );
         }
         // A RED report ends with where to read about the failing check: the
         // assertion catalog's section for the first gating failure's kind.
         if verdict == "RED" {
             if let Some(r) = self.gating_failures().next() {
-                out.push_str(&format!(
-                    "next: the \"{}\" section of {} explains this check and its knobs\n",
+                let _ = writeln!(
+                    out,
+                    "next: the \"{}\" section of {} explains this check and its knobs",
                     r.kind,
                     hauksbee_ir::docs_url("docs/ci/CI.md")
-                ));
+                );
             }
         }
         out
@@ -874,16 +868,11 @@ impl CiResult {
         // as a failure, which is exactly the visible-but-not-gating contract.
         let failures = self.gating_failures().count();
         let skipped = self.waived_count();
-        let mut out = String::new();
-        out.push_str(&format!(
-            "  <testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" errors=\"{}\" skipped=\"{}\" time=\"{:.3}\">\n",
+        let mut out = format!(
+            "  <testsuite name=\"{}\" tests=\"{tests}\" failures=\"{failures}\" errors=\"{errors}\" skipped=\"{skipped}\" time=\"{:.3}\">\n",
             xml_escape(&self.spec_name),
-            tests,
-            failures,
-            errors,
-            skipped,
             self.elapsed.as_secs_f64()
-        ));
+        );
         for r in &self.results {
             let evidence = self.evidence_text(&r.label, &mut HashSet::default());
             let gating = !r.passed && !r.invalid && r.waived.is_none();
@@ -905,72 +894,72 @@ impl CiResult {
             .collect::<Vec<_>>()
             .join("\n");
             let (message, body) = (xml_escape(&r.detail), xml_escape(&body));
-            out.push_str(&format!(
-                "    <testcase classname=\"{}\" name=\"{}\">\n",
+            let _ = writeln!(
+                out,
+                "    <testcase classname=\"{}\" name=\"{}\">",
                 xml_escape(&r.kind),
                 xml_escape(&r.label)
-            ));
+            );
             if r.invalid {
-                out.push_str(&format!(
-                    "      <error message=\"{message}\">{body}</error>\n"
-                ));
+                let _ = writeln!(out, "      <error message=\"{message}\">{body}</error>");
             } else if let (false, Some(w)) = (r.passed, &r.waived) {
-                out.push_str(&format!(
-                    "      <skipped message=\"waived FAIL: {message} ({})\"/>\n",
+                let _ = writeln!(
+                    out,
+                    "      <skipped message=\"waived FAIL: {message} ({})\"/>",
                     xml_escape(w)
-                ));
+                );
                 if !evidence.is_empty() {
-                    out.push_str(&format!(
-                        "      <system-out>{}</system-out>\n",
+                    let _ = writeln!(
+                        out,
+                        "      <system-out>{}</system-out>",
                         xml_escape(&evidence)
-                    ));
+                    );
                 }
             } else if !r.passed {
-                out.push_str(&format!(
-                    "      <failure message=\"{message}\">{body}</failure>\n"
-                ));
+                let _ = writeln!(out, "      <failure message=\"{message}\">{body}</failure>");
             } else {
                 let tag = if r.measured { "measured: " } else { "" };
-                out.push_str(&format!("      <system-out>{tag}{body}</system-out>\n"));
+                let _ = writeln!(out, "      <system-out>{tag}{body}</system-out>");
             }
             out.push_str("    </testcase>\n");
         }
         if synthetic_abort {
-            let msg = self.refusal().map_or_else(
+            let msg = xml_escape(&self.refusal().map_or_else(
                 || "the run is INVALID for analysis".to_string(),
                 |r| r.render_text(),
-            );
-            out.push_str("    <testcase classname=\"analog\" name=\"analog co-sim converged\">\n");
-            out.push_str(&format!(
-                "      <error message=\"{}\">{}</error>\n",
-                xml_escape(&msg),
-                xml_escape(&msg)
             ));
-            out.push_str("    </testcase>\n");
+            let _ = writeln!(
+                out,
+                "    <testcase classname=\"analog\" name=\"analog co-sim converged\">\n      \
+                 <error message=\"{msg}\">{msg}</error>\n    </testcase>"
+            );
         }
         if let Some(refusal) = self.refusal() {
-            out.push_str(&format!(
-                "    <system-out>{}</system-out>\n",
+            let _ = writeln!(
+                out,
+                "    <system-out>{}</system-out>",
                 xml_escape(&refusal.render_text())
-            ));
+            );
         }
         // A dead rail rides the same suite-level channel: a dashboard reader who
         // only ever sees the JUnit tab must not read a fault as a finding when
         // the operating point it came from had a rail at 0 V.
         if !self.dead_rails.is_empty() {
-            out.push_str(&format!(
+            let _ = writeln!(
+                out,
                 "    <system-out>UNPOWERED RAIL: {} sat at 0 V; \
-                 any analog result here may be an artifact</system-out>\n",
+                 any analog result here may be an artifact</system-out>",
                 xml_escape(&self.dead_rails.join(", "))
-            ));
+            );
         }
         // The honesty notes ride the suite-level channel, so a dashboard-only
         // reader sees the same qualifications the log carries.
         for (tag, msg) in self.honesty_notes() {
-            out.push_str(&format!(
-                "    <system-out>{tag}: {}</system-out>\n",
+            let _ = writeln!(
+                out,
+                "    <system-out>{tag}: {}</system-out>",
                 xml_escape(&msg)
-            ));
+            );
         }
         out.push_str("  </testsuite>\n");
         JunitSuite {
@@ -1007,17 +996,18 @@ impl CiResult {
             .collect();
         for r in bad.iter().take(Self::MAX_ERROR_ANNOTATIONS) {
             let title = if r.invalid { "INVALID" } else { "FAIL" };
-            out.push_str(&format!(
-                "::error title=hauksbee-ci {title}::{} - {}\n",
+            let _ = writeln!(
+                out,
+                "::error title=hauksbee-ci {title}::{} - {}",
                 gh_escape(&r.label),
                 gh_escape(&r.detail)
-            ));
+            );
         }
         if bad.len() > Self::MAX_ERROR_ANNOTATIONS {
-            out.push_str(&format!(
-                "::error title=hauksbee-ci::...and {} more failing assertion(s); see the job log or the JUnit report for the full list\n",
+            let _ = writeln!(out,
+                "::error title=hauksbee-ci::...and {} more failing assertion(s); see the job log or the JUnit report for the full list",
                 bad.len() - Self::MAX_ERROR_ANNOTATIONS
-            ));
+            );
         }
 
         // Warnings: dead rails first (they change what every other line
@@ -1065,13 +1055,13 @@ impl CiResult {
             .chain(tagged("WAIVERS", &self.waiver_notes))
             .collect();
         for w in warnings.iter().take(Self::MAX_WARNING_ANNOTATIONS) {
-            out.push_str(&format!("::warning title=hauksbee-ci {w}\n"));
+            let _ = writeln!(out, "::warning title=hauksbee-ci {w}");
         }
         if warnings.len() > Self::MAX_WARNING_ANNOTATIONS {
-            out.push_str(&format!(
-                "::warning title=hauksbee-ci::...and {} more warning(s); see the job log for the full list\n",
+            let _ = writeln!(out,
+                "::warning title=hauksbee-ci::...and {} more warning(s); see the job log for the full list",
                 warnings.len() - Self::MAX_WARNING_ANNOTATIONS
-            ));
+            );
         }
 
         if !self.timing_coverage.is_empty() {
@@ -1081,31 +1071,35 @@ impl CiResult {
                 .map(timing_coverage_note)
                 .collect::<Vec<_>>()
                 .join("; ");
-            out.push_str(&format!(
-                "::notice title=hauksbee-ci TIMING COVERAGE::{}\n",
+            let _ = writeln!(
+                out,
+                "::notice title=hauksbee-ci TIMING COVERAGE::{}",
                 gh_escape(&coverage)
-            ));
+            );
         }
 
         // The rollup: exactly one summary annotation, always emitted.
         if self.analog_invalid() {
             let refusal = self.refusal().expect("analog-invalid has refusal");
-            out.push_str(&format!(
-                "::error title=hauksbee-ci refusal::{}\n",
+            let _ = writeln!(
+                out,
+                "::error title=hauksbee-ci refusal::{}",
                 gh_escape(&refusal.render_text().replace('\n', "; "))
-            ));
+            );
         } else if self.passed() {
-            out.push_str(&format!(
-                "::notice title=hauksbee-ci::{}/{} assertions passed\n",
+            let _ = writeln!(
+                out,
+                "::notice title=hauksbee-ci::{}/{} assertions passed",
                 self.pass_count(),
                 self.results.len()
-            ));
+            );
         } else {
-            out.push_str(&format!(
-                "::error title=hauksbee-ci::{}/{} assertions passed - hardware check RED\n",
+            let _ = writeln!(
+                out,
+                "::error title=hauksbee-ci::{}/{} assertions passed - hardware check RED",
                 self.pass_count(),
                 self.results.len()
-            ));
+            );
         }
         out
     }
@@ -1141,11 +1135,10 @@ pub fn render_junit_document(suites: &[JunitSuite]) -> String {
     let failures: usize = suites.iter().map(|s| s.failures).sum();
     let errors: usize = suites.iter().map(|s| s.errors).sum();
     let time: f64 = suites.iter().map(|s| s.time_s).sum();
-    let mut out = String::new();
-    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    out.push_str(&format!(
-        "<testsuites name=\"hauksbee-ci\" tests=\"{tests}\" failures=\"{failures}\" errors=\"{errors}\" time=\"{time:.3}\">\n"
-    ));
+    let mut out = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <testsuites name=\"hauksbee-ci\" tests=\"{tests}\" failures=\"{failures}\" errors=\"{errors}\" time=\"{time:.3}\">\n"
+    );
     for s in suites {
         out.push_str(&s.xml);
     }

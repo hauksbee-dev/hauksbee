@@ -4,6 +4,7 @@
 
 use crate::runner::RunOutcome;
 use crate::spec::{Assertion, Spec};
+use std::fmt::Write as _;
 
 /// The result of one assertion across all seeds. Serialized verbatim into the
 /// `results` array of the `hauksbee-ci run --json` document, so the published
@@ -454,10 +455,11 @@ fn evaluate_one(
             );
         }
         if !first.sampled_values.is_empty() {
-            detail.push_str(&format!(
+            let _ = write!(
+                detail,
                 " [{}]",
                 crate::tolerance::describe_values(&first.sampled_values)
-            ));
+            );
         }
         if outcomes.len() > 1 {
             let failing: Vec<String> = failures
@@ -489,12 +491,13 @@ fn evaluate_one(
             } else {
                 format!("{member}s")
             };
-            detail.push_str(&format!(
+            let _ = write!(
+                detail,
                 "; passed {}/{} {noun} (failing: {}{more}{invalid_note})",
                 passed,
                 outcomes.len(),
                 failing.join(", "),
-            ));
+            );
         }
         return AssertResult {
             detail,
@@ -1019,24 +1022,17 @@ fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool,
         }
         None => out.protection_tripped.get(&net).copied(),
     };
-    tripped.map_or_else(
-        || {
-            (
-                false,
-                format!("{net} has no battery protection supply leg (nothing to trip)"),
-            )
-        },
-        |t| {
-            let ok = t == want;
-            (
-                ok,
-                format!(
-                    "{net} protection {} (expected {})",
-                    if t { "TRIPPED" } else { "held" },
-                    if want { "trip" } else { "no trip" }
-                ),
-            )
-        },
+    let Some(t) = tripped else {
+        let why = format!("{net} has no battery protection supply leg (nothing to trip)");
+        return (false, why);
+    };
+    (
+        t == want,
+        format!(
+            "{net} protection {} (expected {})",
+            if t { "TRIPPED" } else { "held" },
+            if want { "trip" } else { "no trip" }
+        ),
     )
 }
 

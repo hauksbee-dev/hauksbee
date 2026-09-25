@@ -1537,11 +1537,7 @@ fn production_assumptions(
             .map_err(|e| SpecError::Invalid(format!("building fallback evidence: {e}")))?,
         );
         let accuracy = w.error_estimate_v.map_or_else(
-            || {
-                "no error estimate was established (no companion re-solve \
-                     converged)"
-                    .to_string()
-            },
+            || "no error estimate was established (no companion re-solve converged)".to_string(),
             |e| format!("measured chunk-end error estimate {e:.3e} V"),
         );
         production_assumptions.push(hauksbee_ir::evidence::Assumption::reduced_fidelity(
