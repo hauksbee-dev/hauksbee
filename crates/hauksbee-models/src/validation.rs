@@ -1115,6 +1115,15 @@ fn check_required_pins(entry: &ModelEntry, p: &mut Problems) {
         ComponentKind::Nmos | ComponentKind::Pmos => {
             &[&["drain", "d"], &["gate", "g"], &["source", "s"]]
         }
+        // A set-point regulator binds its input by the exact `in` role (a
+        // datasheet's VDD/VIN name leaves it OPEN); a shunt reference has none.
+        ComponentKind::Vreg
+            if !entry.params.get_bool("shunt").unwrap_or(false)
+                && (entry.params.get_f64("vout").is_some()
+                    || entry.params.get_f64("vref").is_some()) =>
+        {
+            &[&["in"], &["out"]]
+        }
         ComponentKind::Vreg => &[&["out"]],
         ComponentKind::Opamp | ComponentKind::Comparator => &[
             &["out"],
@@ -1601,6 +1610,9 @@ mod tests {
             accepts(&adj(have));
             rejects(&adj(missing), &format!("missing required param '{have}'"));
         }
+        let mut vdd = vreg(&[]);
+        pins(&mut vdd, &[("1", "vdd"), ("2", "out"), ("3", "gnd")]);
+        rejects(&vdd, "declares no 'in' pin");
 
         rejects(
             &entry(AnalogSwitch, &[("ron", 5000.0), ("roff", 2000.0)]),
