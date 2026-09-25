@@ -150,7 +150,7 @@ impl Default for CoordFormat {
     fn default() -> Self {
         // KiCad's default is metric with decimal points; the 2.4 split is
         // the Excellon default for a file that states only INCH.
-        CoordFormat {
+        Self {
             metric: true,
             int_digits: 2,
             dec_digits: 4,

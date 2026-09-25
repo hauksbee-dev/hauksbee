@@ -102,14 +102,14 @@ impl PartClass {
     /// True only for a plain resistor: the kind of part that can be a pull-up,
     /// a pull-down, or a series termination.
     pub(crate) fn is_resistor(self) -> bool {
-        matches!(self, PartClass::Passive(c) if c.is_resistor())
+        matches!(self, Self::Passive(c) if c.is_resistor())
     }
 
     /// True only for a capacitor: the kind of part that can be a crystal load
     /// cap, a decoupling cap, or the bypass that makes a net read as a local
     /// supply rail.
     pub(crate) fn is_capacitor(self) -> bool {
-        matches!(self, PartClass::Passive(PassiveClass::Capacitor))
+        matches!(self, Self::Passive(PassiveClass::Capacitor))
     }
 }
 

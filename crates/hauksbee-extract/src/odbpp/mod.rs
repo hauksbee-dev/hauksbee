@@ -131,8 +131,8 @@ pub enum PlacementSource {
 impl PlacementSource {
     pub fn as_str(self) -> &'static str {
         match self {
-            PlacementSource::EdaData => "eda/data",
-            PlacementSource::ComponentLayers => "component layers",
+            Self::EdaData => "eda/data",
+            Self::ComponentLayers => "component layers",
         }
     }
 }

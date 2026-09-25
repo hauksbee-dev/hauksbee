@@ -70,7 +70,7 @@ pub struct CopperPrim {
 impl CopperPrim {
     /// A primitive with no X2 identity, exactly what a stripped film yields.
     pub fn bare(shape: Shape, kind: PrimKind) -> Self {
-        CopperPrim {
+        Self {
             shape,
             kind,
             attrs: X2Attrs::default(),
@@ -1162,7 +1162,7 @@ impl VoidIndex {
     fn new(bounds: [f64; 4]) -> Self {
         let w = (bounds[2] - bounds[0]).max(f64::MIN_POSITIVE);
         let h = (bounds[3] - bounds[1]).max(f64::MIN_POSITIVE);
-        VoidIndex {
+        Self {
             origin: (bounds[0], bounds[1]),
             cell: (w / Self::RES as f64, h / Self::RES as f64),
             all: Vec::new(),
@@ -1584,8 +1584,8 @@ struct Clear {
 }
 
 impl Clear {
-    fn translated(&self, dx: f64, dy: f64, painted_before: usize) -> Clear {
-        Clear {
+    fn translated(&self, dx: f64, dy: f64, painted_before: usize) -> Self {
+        Self {
             statement: self.statement,
             piece: self.piece,
             contours: self

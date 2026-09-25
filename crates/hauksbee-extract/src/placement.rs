@@ -190,19 +190,19 @@ impl PlacementDialect {
     /// The stable machine name recorded in provenance.
     pub fn kind(self) -> &'static str {
         match self {
-            PlacementDialect::KicadPosAscii => "kicad_pos_ascii",
-            PlacementDialect::KicadPosCsv => "kicad_pos_csv",
-            PlacementDialect::AltiumPickPlace => "altium_pick_and_place",
-            PlacementDialect::GenericCpl => "cpl",
+            Self::KicadPosAscii => "kicad_pos_ascii",
+            Self::KicadPosCsv => "kicad_pos_csv",
+            Self::AltiumPickPlace => "altium_pick_and_place",
+            Self::GenericCpl => "cpl",
         }
     }
 
     pub fn describe(self) -> &'static str {
         match self {
-            PlacementDialect::KicadPosAscii => "KiCad position file",
-            PlacementDialect::KicadPosCsv => "KiCad position file (csv)",
-            PlacementDialect::AltiumPickPlace => "Altium Pick and Place",
-            PlacementDialect::GenericCpl => "CPL (JLCPCB / PCBWay)",
+            Self::KicadPosAscii => "KiCad position file",
+            Self::KicadPosCsv => "KiCad position file (csv)",
+            Self::AltiumPickPlace => "Altium Pick and Place",
+            Self::GenericCpl => "CPL (JLCPCB / PCBWay)",
         }
     }
 }
@@ -224,9 +224,9 @@ impl Side {
     /// guessing.
     pub fn kicad_layer(self) -> Option<&'static str> {
         match self {
-            Side::Top => Some("F.Cu"),
-            Side::Bottom => Some("B.Cu"),
-            Side::Unknown => None,
+            Self::Top => Some("F.Cu"),
+            Self::Bottom => Some("B.Cu"),
+            Self::Unknown => None,
         }
     }
 
@@ -234,20 +234,20 @@ impl Side {
     /// Rust variant name.
     pub fn describe(self) -> &'static str {
         match self {
-            Side::Top => "top",
-            Side::Bottom => "bottom",
-            Side::Unknown => "unknown",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Unknown => "unknown",
         }
     }
 
     /// Read a side out of whatever the file called it: `top`, `bottom`, `TOP`,
     /// `TopLayer`, `BottomSolder`, `F.Cu`, `B.Cu`, `T`, `B`.
-    fn parse(s: &str) -> Option<Side> {
+    fn parse(s: &str) -> Option<Self> {
         let s = s.trim().to_ascii_lowercase();
         if s.starts_with("top") || s == "t" || s == "f.cu" || s == "f" || s == "front" {
-            Some(Side::Top)
+            Some(Self::Top)
         } else if s.starts_with("bottom") || s == "b" || s == "b.cu" || s == "back" {
-            Some(Side::Bottom)
+            Some(Self::Bottom)
         } else {
             None
         }
@@ -266,20 +266,20 @@ pub enum Units {
 impl Units {
     fn to_mm(self, v: f64) -> f64 {
         match self {
-            Units::Millimetres => v,
-            Units::Inches => v * 25.4,
-            Units::Mils => v * 0.0254,
+            Self::Millimetres => v,
+            Self::Inches => v * 25.4,
+            Self::Mils => v * 0.0254,
         }
     }
 
-    fn parse(s: &str) -> Option<Units> {
+    fn parse(s: &str) -> Option<Self> {
         let s = s.trim().to_ascii_lowercase();
         match s.as_str() {
             "mm" | "millimeter" | "millimetre" | "millimeters" | "millimetres" | "metric" => {
-                Some(Units::Millimetres)
+                Some(Self::Millimetres)
             }
-            "in" | "inch" | "inches" | "imperial" => Some(Units::Inches),
-            "mil" | "mils" | "thou" => Some(Units::Mils),
+            "in" | "inch" | "inches" | "imperial" => Some(Self::Inches),
+            "mil" | "mils" | "thou" => Some(Self::Mils),
             _ => None,
         }
     }
@@ -705,7 +705,7 @@ impl PlacementFile {
             });
         }
 
-        Ok(PlacementFile {
+        Ok(Self {
             dialect,
             placements,
             provenance: PlacementProvenance {

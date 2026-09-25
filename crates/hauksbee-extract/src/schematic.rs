@@ -276,10 +276,10 @@ impl AnchorKind {
     /// HIER_LABEL. Ties still break to the lexicographically smallest name.
     fn prio(self) -> u8 {
         match self {
-            AnchorKind::Global => 4,
-            AnchorKind::Power => 3,
-            AnchorKind::Local => 2,
-            AnchorKind::Hier => 1,
+            Self::Global => 4,
+            Self::Power => 3,
+            Self::Local => 2,
+            Self::Hier => 1,
         }
     }
 }
@@ -376,7 +376,7 @@ struct BusBoundary {
 
 impl NetlistBuilder {
     fn new() -> Self {
-        NetlistBuilder {
+        Self {
             uf: Dsu::new(0),
             components: Vec::new(),
             pin_sites: Vec::new(),
@@ -1499,7 +1499,7 @@ struct LibSymbols {
 }
 
 impl LibSymbols {
-    fn parse(root: &List) -> LibSymbols {
+    fn parse(root: &List) -> Self {
         let mut defs = HashMap::new();
         if let Some(lib) = root.find("lib_symbols") {
             for sym in lib.find_all("symbol") {
@@ -1528,7 +1528,7 @@ impl LibSymbols {
                 defs.insert(lib_id, LibDef { pins, is_power });
             }
         }
-        LibSymbols { defs }
+        Self { defs }
     }
 
     fn get(&self, lib_id: &str) -> Option<&LibDef> {

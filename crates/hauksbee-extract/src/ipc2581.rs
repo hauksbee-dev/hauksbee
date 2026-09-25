@@ -114,8 +114,8 @@ pub enum NetSource {
 impl NetSource {
     pub fn as_str(self) -> &'static str {
         match self {
-            NetSource::LogicalNet => "LogicalNet",
-            NetSource::LayerFeature => "LayerFeature/Set",
+            Self::LogicalNet => "LogicalNet",
+            Self::LayerFeature => "LayerFeature/Set",
         }
     }
 }

@@ -397,7 +397,7 @@ struct PackageMetadata {
 
 impl PackageMetadata {
     fn read(dir: &Path, files: &[PathBuf], notes: &mut Vec<String>) -> Result<Self, ExtractError> {
-        let mut meta = PackageMetadata::default();
+        let mut meta = Self::default();
         let mut ldp_sources: HashMap<String, String> = HashMap::new();
         let mut extrep_contested: BTreeSet<String> = BTreeSet::new();
         for p in files {

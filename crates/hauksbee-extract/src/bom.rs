@@ -235,30 +235,30 @@ impl BomDialect {
     /// prints. Stable: it goes in JSON.
     pub fn kind(self) -> &'static str {
         match self {
-            BomDialect::KicadGrouped => "kicad_grouped_bom",
-            BomDialect::KicadUngrouped => "kicad_ungrouped_bom",
-            BomDialect::Altium => "altium_bom",
-            BomDialect::EaglePartlist => "eagle_partlist",
-            BomDialect::EagleGroupedPartlist => "eagle_grouped_partlist",
-            BomDialect::Lcsc => "lcsc_bom",
-            BomDialect::Jlcpcb => "jlcpcb_bom",
-            BomDialect::DigiKey => "digikey_bom",
-            BomDialect::Spreadsheet => "spreadsheet_bom",
+            Self::KicadGrouped => "kicad_grouped_bom",
+            Self::KicadUngrouped => "kicad_ungrouped_bom",
+            Self::Altium => "altium_bom",
+            Self::EaglePartlist => "eagle_partlist",
+            Self::EagleGroupedPartlist => "eagle_grouped_partlist",
+            Self::Lcsc => "lcsc_bom",
+            Self::Jlcpcb => "jlcpcb_bom",
+            Self::DigiKey => "digikey_bom",
+            Self::Spreadsheet => "spreadsheet_bom",
         }
     }
 
     /// The human name, for a report line a person reads.
     pub fn describe(self) -> &'static str {
         match self {
-            BomDialect::KicadGrouped => "KiCad grouped BOM",
-            BomDialect::KicadUngrouped => "KiCad ungrouped BOM",
-            BomDialect::Altium => "Altium BOM",
-            BomDialect::EaglePartlist => "Eagle partlist",
-            BomDialect::EagleGroupedPartlist => "Eagle grouped partlist",
-            BomDialect::Lcsc => "LCSC assembly BOM",
-            BomDialect::Jlcpcb => "JLCPCB assembly BOM",
-            BomDialect::DigiKey => "Digi-Key BOM export",
-            BomDialect::Spreadsheet => "spreadsheet BOM",
+            Self::KicadGrouped => "KiCad grouped BOM",
+            Self::KicadUngrouped => "KiCad ungrouped BOM",
+            Self::Altium => "Altium BOM",
+            Self::EaglePartlist => "Eagle partlist",
+            Self::EagleGroupedPartlist => "Eagle grouped partlist",
+            Self::Lcsc => "LCSC assembly BOM",
+            Self::Jlcpcb => "JLCPCB assembly BOM",
+            Self::DigiKey => "Digi-Key BOM export",
+            Self::Spreadsheet => "spreadsheet BOM",
         }
     }
 
@@ -268,7 +268,7 @@ impl BomDialect {
     fn comment_is_value(self) -> bool {
         matches!(
             self,
-            BomDialect::Altium | BomDialect::Lcsc | BomDialect::Jlcpcb
+            Self::Altium | Self::Lcsc | Self::Jlcpcb
         )
     }
 
@@ -277,7 +277,7 @@ impl BomDialect {
     fn is_fixed_width(self) -> bool {
         matches!(
             self,
-            BomDialect::EaglePartlist | BomDialect::EagleGroupedPartlist
+            Self::EaglePartlist | Self::EagleGroupedPartlist
         )
     }
 }
@@ -321,14 +321,14 @@ impl ColumnRole {
     /// The name used in `--bom-column <role>=<column>` and in JSON.
     pub fn flag_name(self) -> &'static str {
         match self {
-            ColumnRole::Reference => "reference",
-            ColumnRole::Value => "value",
-            ColumnRole::Mpn => "mpn",
-            ColumnRole::Manufacturer => "manufacturer",
-            ColumnRole::Quantity => "quantity",
-            ColumnRole::Footprint => "footprint",
-            ColumnRole::Populate => "populate",
-            ColumnRole::DistributorPart => "distributor_part",
+            Self::Reference => "reference",
+            Self::Value => "value",
+            Self::Mpn => "mpn",
+            Self::Manufacturer => "manufacturer",
+            Self::Quantity => "quantity",
+            Self::Footprint => "footprint",
+            Self::Populate => "populate",
+            Self::DistributorPart => "distributor_part",
         }
     }
 
@@ -342,30 +342,30 @@ impl ColumnRole {
                 .replace(['-', ' '], "_")
                 .as_str()
             {
-                "reference" | "refdes" | "designator" => ColumnRole::Reference,
-                "value" => ColumnRole::Value,
-                "mpn" => ColumnRole::Mpn,
-                "manufacturer" => ColumnRole::Manufacturer,
-                "quantity" | "qty" => ColumnRole::Quantity,
-                "footprint" => ColumnRole::Footprint,
-                "populate" | "dnp" => ColumnRole::Populate,
-                "distributor_part" => ColumnRole::DistributorPart,
+                "reference" | "refdes" | "designator" => Self::Reference,
+                "value" => Self::Value,
+                "mpn" => Self::Mpn,
+                "manufacturer" => Self::Manufacturer,
+                "quantity" | "qty" => Self::Quantity,
+                "footprint" => Self::Footprint,
+                "populate" | "dnp" => Self::Populate,
+                "distributor_part" => Self::DistributorPart,
                 _ => return None,
             },
         )
     }
 
     /// Every role name, for an error message that has to list them.
-    pub fn all() -> &'static [ColumnRole] {
+    pub fn all() -> &'static [Self] {
         &[
-            ColumnRole::Reference,
-            ColumnRole::Value,
-            ColumnRole::Mpn,
-            ColumnRole::Manufacturer,
-            ColumnRole::Quantity,
-            ColumnRole::Footprint,
-            ColumnRole::Populate,
-            ColumnRole::DistributorPart,
+            Self::Reference,
+            Self::Value,
+            Self::Mpn,
+            Self::Manufacturer,
+            Self::Quantity,
+            Self::Footprint,
+            Self::Populate,
+            Self::DistributorPart,
         ]
     }
 }
@@ -397,14 +397,14 @@ pub enum MappingConfidence {
 impl MappingConfidence {
     /// True when a non-interactive run may act on this assignment unasked.
     pub fn usable_unattended(self) -> bool {
-        matches!(self, MappingConfidence::Certain | MappingConfidence::Likely)
+        matches!(self, Self::Certain | Self::Likely)
     }
 
     pub fn describe(self) -> &'static str {
         match self {
-            MappingConfidence::Certain => "certain",
-            MappingConfidence::Likely => "likely",
-            MappingConfidence::Guess => "guess",
+            Self::Certain => "certain",
+            Self::Likely => "likely",
+            Self::Guess => "guess",
         }
     }
 }
@@ -939,7 +939,7 @@ impl Bom {
             });
         }
 
-        Ok(Bom {
+        Ok(Self {
             dialect,
             rows,
             provenance: BomProvenance {

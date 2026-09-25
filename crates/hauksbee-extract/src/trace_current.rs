@@ -86,7 +86,7 @@ impl CopperSource {
     /// Whether the numbers behind this rating were assumed rather than read off
     /// the board.
     pub fn is_assumed(self) -> bool {
-        !matches!(self, CopperSource::Stackup)
+        !matches!(self, Self::Stackup)
     }
 }
 
@@ -167,7 +167,7 @@ impl CopperWeights {
             };
             by_layer.insert(name.clone(), (thickness / MM_PER_OZ, external));
         }
-        CopperWeights {
+        Self {
             by_layer,
             declared: has_stackup,
         }
@@ -540,7 +540,7 @@ pub struct TraceAudit {
 
 impl Default for TraceAudit {
     fn default() -> Self {
-        TraceAudit {
+        Self {
             oz: OZ_1,
             dt_c: 10.0,
             copper: CopperWeights::default(),
@@ -552,7 +552,7 @@ impl Default for TraceAudit {
 impl TraceAudit {
     /// The default audit, with per-layer copper weights read from `root`.
     pub fn from_root(root: &List) -> Self {
-        TraceAudit {
+        Self {
             copper: CopperWeights::from_root(root),
             ..Default::default()
         }
@@ -569,7 +569,7 @@ impl TraceAudit {
             .ok()
             .and_then(|d| d.root().map(CopperWeights::from_root))
         {
-            Some(copper) => TraceAudit {
+            Some(copper) => Self {
                 copper,
                 ..Default::default()
             },

@@ -163,7 +163,7 @@ impl Stackup {
     /// The default-assumption stackup (used only for info-level estimates when
     /// the file has no stackup block).
     fn default_assumed() -> Self {
-        Stackup {
+        Self {
             h_microstrip_mm: DEFAULT_DIELECTRIC_MM,
             t_cu_mm: DEFAULT_CU_THICKNESS_MM,
             er: DEFAULT_ER,
@@ -327,16 +327,16 @@ impl ImpedanceClass {
     /// Target impedance (ohms).
     pub fn target_ohm(self) -> f64 {
         match self {
-            ImpedanceClass::UsbDiff => 90.0,
-            ImpedanceClass::EthernetDiff => 100.0,
-            ImpedanceClass::SingleEnded50 => 50.0,
+            Self::UsbDiff => 90.0,
+            Self::EthernetDiff => 100.0,
+            Self::SingleEnded50 => 50.0,
         }
     }
     pub fn label(self) -> &'static str {
         match self {
-            ImpedanceClass::UsbDiff => "USB 90 ohm differential",
-            ImpedanceClass::EthernetDiff => "Ethernet 100 ohm differential",
-            ImpedanceClass::SingleEnded50 => "50 ohm single-ended",
+            Self::UsbDiff => "USB 90 ohm differential",
+            Self::EthernetDiff => "Ethernet 100 ohm differential",
+            Self::SingleEnded50 => "50 ohm single-ended",
         }
     }
 
@@ -346,9 +346,9 @@ impl ImpedanceClass {
     /// once and lets the caller print the number once.
     pub fn kind_label(self) -> &'static str {
         match self {
-            ImpedanceClass::UsbDiff => "USB differential",
-            ImpedanceClass::EthernetDiff => "Ethernet differential",
-            ImpedanceClass::SingleEnded50 => "single-ended",
+            Self::UsbDiff => "USB differential",
+            Self::EthernetDiff => "Ethernet differential",
+            Self::SingleEnded50 => "single-ended",
         }
     }
 }

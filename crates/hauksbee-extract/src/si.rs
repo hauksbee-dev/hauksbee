@@ -73,15 +73,15 @@ pub enum SiSeverity {
 impl SiSeverity {
     pub fn as_str(self) -> &'static str {
         match self {
-            SiSeverity::High => "high",
-            SiSeverity::Medium => "medium",
-            SiSeverity::Low => "low",
-            SiSeverity::Info => "info",
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+            Self::Info => "info",
         }
     }
     /// Info notes are observations, not findings.
     pub fn is_finding(self) -> bool {
-        !matches!(self, SiSeverity::Info)
+        !matches!(self, Self::Info)
     }
 }
 
@@ -107,13 +107,13 @@ pub enum SiCheck {
 impl SiCheck {
     pub fn as_str(self) -> &'static str {
         match self {
-            SiCheck::CrystalLoadCap => "crystal_load_cap",
-            SiCheck::I2cRiseTime => "i2c_rise_time",
-            SiCheck::AntennaKeepout => "antenna_keepout",
-            SiCheck::UsbDiffPair => "usb_diff_pair",
-            SiCheck::ControlledImpedance => "controlled_impedance",
-            SiCheck::TraceAmpacity => "trace_ampacity",
-            SiCheck::InputCapRipple => "input_cap_ripple",
+            Self::CrystalLoadCap => "crystal_load_cap",
+            Self::I2cRiseTime => "i2c_rise_time",
+            Self::AntennaKeepout => "antenna_keepout",
+            Self::UsbDiffPair => "usb_diff_pair",
+            Self::ControlledImpedance => "controlled_impedance",
+            Self::TraceAmpacity => "trace_ampacity",
+            Self::InputCapRipple => "input_cap_ripple",
         }
     }
 }

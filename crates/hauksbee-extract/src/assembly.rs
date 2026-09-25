@@ -129,7 +129,7 @@ impl<'c> AssemblyState<'c> {
     /// Classify one component record. The single entry point: consumers ask this
     /// rather than reading `component.dnp` or probing the identity properties,
     /// so no two checks can disagree about what "present" means.
-    pub fn of(component: &'c Component) -> AssemblyState<'c> {
+    pub fn of(component: &'c Component) -> Self {
         if let Some(refusal) = identity_refusal(component) {
             return AssemblyState::IdentityUnknown(refusal);
         }

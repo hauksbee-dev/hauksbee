@@ -92,7 +92,7 @@ pub struct PlatedHole {
 impl PlatedHole {
     /// A round plated hole that reaches the whole stack.
     pub fn through(x: f64, y: f64, diameter: f64) -> Self {
-        PlatedHole {
+        Self {
             x,
             y,
             diameter,

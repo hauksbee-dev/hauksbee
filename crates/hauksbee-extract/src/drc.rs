@@ -467,8 +467,8 @@ pub enum ViolationKind {
 impl ViolationKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            ViolationKind::Short => "short",
-            ViolationKind::Clearance => "clearance",
+            Self::Short => "short",
+            Self::Clearance => "clearance",
         }
     }
 }
@@ -492,12 +492,12 @@ pub enum ItemKind {
 impl ItemKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            ItemKind::Track => "track",
-            ItemKind::Arc => "arc",
-            ItemKind::Via => "via",
-            ItemKind::Pad => "pad",
-            ItemKind::Zone => "zone",
-            ItemKind::Graphic => "graphic",
+            Self::Track => "track",
+            Self::Arc => "arc",
+            Self::Via => "via",
+            Self::Pad => "pad",
+            Self::Zone => "zone",
+            Self::Graphic => "graphic",
         }
     }
 }
@@ -976,7 +976,7 @@ struct NetResolver {
 
 impl NetResolver {
     fn from_root(root: &List) -> Self {
-        let mut r = NetResolver::default();
+        let mut r = Self::default();
         for n in root.find_all("net") {
             match (n.arg_i64(0), n.arg_value(0), n.arg_value(1)) {
                 (Some(id), _, name) => r.declare(id, name.unwrap_or_default()),
@@ -2875,7 +2875,7 @@ pub mod eagle_drc {
     impl PkgItem {
         fn name(&self) -> &str {
             match self {
-                PkgItem::Pad { name, .. } | PkgItem::Smd { name, .. } => name,
+                Self::Pad { name, .. } | Self::Smd { name, .. } => name,
             }
         }
     }
@@ -3010,7 +3010,7 @@ pub mod eagle_drc {
     impl Default for ViaRestring {
         fn default() -> Self {
             // Eagle's stock defaults.
-            ViaRestring {
+            Self {
                 rv: 0.25,
                 min_mm: 0.2032,
                 max_mm: 0.508,

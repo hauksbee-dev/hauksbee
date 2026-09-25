@@ -46,7 +46,7 @@ pub(crate) struct OdbTree {
 
 impl OdbTree {
     fn new() -> Self {
-        OdbTree {
+        Self {
             files: BTreeMap::new(),
             undecompressed: Vec::new(),
             budget: MAX_INFLATED_BYTES,
@@ -182,7 +182,7 @@ impl OdbTree {
     /// Build from an unpacked job directory. `dir` may be the job root itself
     /// or any ancestor of it (a downloads folder holding one job).
     pub(crate) fn from_dir(dir: &Path) -> Result<Self, ExtractError> {
-        let mut tree = OdbTree::new();
+        let mut tree = Self::new();
         let mut files = Vec::new();
         collect(dir, &mut files);
         for path in files {
@@ -205,7 +205,7 @@ impl OdbTree {
     pub(crate) fn from_zip(bytes: &[u8]) -> Result<Self, ExtractError> {
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
             .map_err(|e| ExtractError::Odb(format!("read ODB++ zip: {e}")))?;
-        let mut tree = OdbTree::new();
+        let mut tree = Self::new();
         for i in 0..zip.len() {
             let mut f = zip
                 .by_index(i)
@@ -232,7 +232,7 @@ impl OdbTree {
         let plain = match gunzip_within(bytes, &mut budget) {
             Some(p) => p,
             None if is_gzip(bytes) && bytes.len() as u64 <= MAX_INFLATED_BYTES => {
-                return Err(OdbTree::new().too_large())
+                return Err(Self::new().too_large())
             }
             None => {
                 return Err(ExtractError::Odb(
@@ -246,7 +246,7 @@ impl OdbTree {
     /// Build from an uncompressed tar.
     pub(crate) fn from_tar(bytes: &[u8]) -> Result<Self, ExtractError> {
         let mut ar = tar::Archive::new(std::io::Cursor::new(bytes));
-        let mut tree = OdbTree::new();
+        let mut tree = Self::new();
         let entries = ar
             .entries()
             .map_err(|e| ExtractError::Odb(format!("read ODB++ tar: {e}")))?;

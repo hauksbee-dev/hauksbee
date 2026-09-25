@@ -41,8 +41,8 @@ pub enum Shape {
 }
 
 impl Shape {
-    pub fn disc(x: f64, y: f64, r: f64) -> Shape {
-        Shape::Capsule(Capsule {
+    pub fn disc(x: f64, y: f64, r: f64) -> Self {
+        Self::Capsule(Capsule {
             ax: x,
             ay: y,
             bx: x,
@@ -53,21 +53,21 @@ impl Shape {
 
     /// This shape shifted by `(dx, dy)` board millimetres. Used to tile a
     /// step-and-repeat base cell across its grid.
-    pub fn translated(&self, dx: f64, dy: f64) -> Shape {
+    pub fn translated(&self, dx: f64, dy: f64) -> Self {
         let shift = |pts: &[(f64, f64)]| pts.iter().map(|(x, y)| (x + dx, y + dy)).collect();
         match self {
-            Shape::Capsule(c) => Shape::Capsule(Capsule {
+            Self::Capsule(c) => Self::Capsule(Capsule {
                 ax: c.ax + dx,
                 ay: c.ay + dy,
                 bx: c.bx + dx,
                 by: c.by + dy,
                 r: c.r,
             }),
-            Shape::Polygon { pts, r } => Shape::Polygon {
+            Self::Polygon { pts, r } => Self::Polygon {
                 pts: shift(pts),
                 r: *r,
             },
-            Shape::MultiPolygon { contours, weights } => Shape::MultiPolygon {
+            Self::MultiPolygon { contours, weights } => Self::MultiPolygon {
                 contours: contours.iter().map(|c| shift(c)).collect(),
                 weights: weights.clone(),
             },
@@ -77,17 +77,17 @@ impl Shape {
     /// Inflated AABB (minx, miny, maxx, maxy).
     pub fn bounds(&self) -> [f64; 4] {
         match self {
-            Shape::Capsule(c) => [
+            Self::Capsule(c) => [
                 c.ax.min(c.bx) - c.r,
                 c.ay.min(c.by) - c.r,
                 c.ax.max(c.bx) + c.r,
                 c.ay.max(c.by) + c.r,
             ],
-            Shape::Polygon { pts, r } => {
+            Self::Polygon { pts, r } => {
                 let b = polygon_bounds(pts);
                 [b[0] - r, b[1] - r, b[2] + r, b[3] + r]
             }
-            Shape::MultiPolygon { contours, .. } => polygon_bounds(contours.iter().flatten()),
+            Self::MultiPolygon { contours, .. } => polygon_bounds(contours.iter().flatten()),
         }
     }
 
@@ -96,9 +96,9 @@ impl Shape {
     /// is only a *representative* point and pours never anchor pads.
     pub fn center(&self) -> (f64, f64) {
         match self {
-            Shape::Capsule(c) => ((c.ax + c.bx) / 2.0, (c.ay + c.by) / 2.0),
-            Shape::Polygon { pts, .. } => vertex_mean(pts),
-            Shape::MultiPolygon { contours, .. } => {
+            Self::Capsule(c) => ((c.ax + c.bx) / 2.0, (c.ay + c.by) / 2.0),
+            Self::Polygon { pts, .. } => vertex_mean(pts),
+            Self::MultiPolygon { contours, .. } => {
                 vertex_mean(contours.first().map(|c| c.as_slice()).unwrap_or(&[]))
             }
         }

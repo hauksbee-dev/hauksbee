@@ -44,13 +44,13 @@ impl DnpPolicy {
     /// surprise.
     pub fn describe(self) -> &'static str {
         match self {
-            DnpPolicy::FitExceptLinks => {
+            Self::FitExceptLinks => {
                 "DNP parts are simulated as fitted (they are usually placed eventually), \
                  except near-zero-ohm links, which stay open because fitting one merges \
                  the nets it bridges"
             }
-            DnpPolicy::FitAll => "every DNP part is simulated as fitted, including links",
-            DnpPolicy::Honour => {
+            Self::FitAll => "every DNP part is simulated as fitted, including links",
+            Self::Honour => {
                 "DNP parts are left out of the simulation, matching the board file"
             }
         }
@@ -96,11 +96,11 @@ pub enum DnpReason {
 impl DnpReason {
     pub fn describe(&self) -> &'static str {
         match self {
-            DnpReason::Policy => "DNP, fitted by default",
-            DnpReason::NamedFit => "DNP, fitted because you asked for it",
-            DnpReason::NamedOpen => "DNP, left open because you asked for it",
-            DnpReason::ZeroOhmLink => "DNP link (near 0 ohm), left open: fitting it merges nets",
-            DnpReason::HonouredPolicy => "DNP, left open",
+            Self::Policy => "DNP, fitted by default",
+            Self::NamedFit => "DNP, fitted because you asked for it",
+            Self::NamedOpen => "DNP, left open because you asked for it",
+            Self::ZeroOhmLink => "DNP link (near 0 ohm), left open: fitting it merges nets",
+            Self::HonouredPolicy => "DNP, left open",
         }
     }
 
@@ -108,24 +108,24 @@ impl DnpReason {
     /// [`DnpReason::from_policy_tag`].
     pub fn policy_tag(&self) -> &'static str {
         match self {
-            DnpReason::Policy => "policy",
-            DnpReason::NamedFit => "named-fit",
-            DnpReason::NamedOpen => "named-open",
-            DnpReason::ZeroOhmLink => "zero-ohm-link",
-            DnpReason::HonouredPolicy => "honoured-policy",
+            Self::Policy => "policy",
+            Self::NamedFit => "named-fit",
+            Self::NamedOpen => "named-open",
+            Self::ZeroOhmLink => "zero-ohm-link",
+            Self::HonouredPolicy => "honoured-policy",
         }
     }
 
     /// Parse a [`DNP_REASON_KEY`] tag back into the reason. `None` for an
     /// unknown tag: a stale or foreign value must degrade to "the board file
     /// says DNP", never invent a decision.
-    pub fn from_policy_tag(tag: &str) -> Option<DnpReason> {
+    pub fn from_policy_tag(tag: &str) -> Option<Self> {
         match tag {
-            "policy" => Some(DnpReason::Policy),
-            "named-fit" => Some(DnpReason::NamedFit),
-            "named-open" => Some(DnpReason::NamedOpen),
-            "zero-ohm-link" => Some(DnpReason::ZeroOhmLink),
-            "honoured-policy" => Some(DnpReason::HonouredPolicy),
+            "policy" => Some(Self::Policy),
+            "named-fit" => Some(Self::NamedFit),
+            "named-open" => Some(Self::NamedOpen),
+            "zero-ohm-link" => Some(Self::ZeroOhmLink),
+            "honoured-policy" => Some(Self::HonouredPolicy),
             _ => None,
         }
     }

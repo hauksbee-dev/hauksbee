@@ -217,7 +217,7 @@ pub struct Registry {
 impl Registry {
     /// The nine formats hauksbee reads natively.
     pub fn builtin() -> Self {
-        Registry {
+        Self {
             readers: vec![
                 Box::new(AltiumReader),
                 Box::new(OdbppReader),

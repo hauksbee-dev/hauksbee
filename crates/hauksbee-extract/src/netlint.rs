@@ -126,41 +126,41 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [LintCheck; 15] = [
-        LintCheck::MissingI2cPullup,
-        LintCheck::MissingSdPullup,
-        LintCheck::FloatingControlPin,
-        LintCheck::LedCurrentSanity,
-        LintCheck::OutputContention,
-        LintCheck::StrapPin,
-        LintCheck::McuResourceConflict,
-        LintCheck::DesignatorFootprintMismatch,
-        LintCheck::ValuePackageSanity,
-        LintCheck::PlaceholderValue,
-        LintCheck::UncheckedMcu,
-        LintCheck::DeviceDecode,
-        LintCheck::OperatingEnvelope,
-        LintCheck::BackPower,
-        LintCheck::I2cBusLoading,
+    pub const ALL: [Self; 15] = [
+        Self::MissingI2cPullup,
+        Self::MissingSdPullup,
+        Self::FloatingControlPin,
+        Self::LedCurrentSanity,
+        Self::OutputContention,
+        Self::StrapPin,
+        Self::McuResourceConflict,
+        Self::DesignatorFootprintMismatch,
+        Self::ValuePackageSanity,
+        Self::PlaceholderValue,
+        Self::UncheckedMcu,
+        Self::DeviceDecode,
+        Self::OperatingEnvelope,
+        Self::BackPower,
+        Self::I2cBusLoading,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
-            LintCheck::MissingI2cPullup => "missing_i2c_pullup",
-            LintCheck::MissingSdPullup => "missing_sd_pullup",
-            LintCheck::FloatingControlPin => "floating_control_pin",
-            LintCheck::LedCurrentSanity => "led_current_sanity",
-            LintCheck::OutputContention => "output_contention",
-            LintCheck::StrapPin => "strap_pin",
-            LintCheck::McuResourceConflict => "mcu_resource_conflict",
-            LintCheck::DesignatorFootprintMismatch => "designator_footprint_mismatch",
-            LintCheck::ValuePackageSanity => "value_package_sanity",
-            LintCheck::PlaceholderValue => "placeholder_value",
-            LintCheck::UncheckedMcu => "unchecked_mcu",
-            LintCheck::DeviceDecode => "device_decode",
-            LintCheck::OperatingEnvelope => "operating_envelope",
-            LintCheck::BackPower => "back_power",
-            LintCheck::I2cBusLoading => "i2c_bus_loading",
+            Self::MissingI2cPullup => "missing_i2c_pullup",
+            Self::MissingSdPullup => "missing_sd_pullup",
+            Self::FloatingControlPin => "floating_control_pin",
+            Self::LedCurrentSanity => "led_current_sanity",
+            Self::OutputContention => "output_contention",
+            Self::StrapPin => "strap_pin",
+            Self::McuResourceConflict => "mcu_resource_conflict",
+            Self::DesignatorFootprintMismatch => "designator_footprint_mismatch",
+            Self::ValuePackageSanity => "value_package_sanity",
+            Self::PlaceholderValue => "placeholder_value",
+            Self::UncheckedMcu => "unchecked_mcu",
+            Self::DeviceDecode => "device_decode",
+            Self::OperatingEnvelope => "operating_envelope",
+            Self::BackPower => "back_power",
+            Self::I2cBusLoading => "i2c_bus_loading",
         }
     }
 }
@@ -178,9 +178,9 @@ pub enum Severity {
 impl Severity {
     pub fn as_str(self) -> &'static str {
         match self {
-            Severity::High => "high",
-            Severity::Medium => "medium",
-            Severity::Low => "low",
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
         }
     }
 }

@@ -120,7 +120,7 @@ impl PcbDoc {
                 "OLE2 file has no Altium Nets stream (not a .PcbDoc?)".into(),
             ));
         };
-        Ok(PcbDoc { cf, suffix })
+        Ok(Self { cf, suffix })
     }
 
     /// Read a whole `Data` stream for a section (e.g. "Pads" -> "Pads6/Data"),
