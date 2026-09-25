@@ -33,6 +33,16 @@ HOST_QEMU_TAG = (
 HOST_QEMU_DIR_VERSION = HOST_QEMU_TAG.replace("-", "_")
 
 
+def _passing_gate(command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+    gate = next(gate for gate in GATES if gate.command == command)
+    return subprocess.CompletedProcess(
+        command,
+        0,
+        f"test {gate.expected_test} ... ok\n"
+        "test result: ok. 1 passed; 0 failed\n",
+    )
+
+
 class RequiredIntegrationEvidenceTests(unittest.TestCase):
     # Two shapes repeated by every containment test below: wait for a pid to
     # disappear (failing with the caller's message if it does not), and make
@@ -377,11 +387,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
             )
             return subprocess.CompletedProcess(command, 0, output)
 
-        with (
-            mock.patch.object(required_integrations, "run_command", fake_run),
-            mock.patch.object(required_integrations, "_git_sha", return_value="a" * 40),
-        ):
-            result = required_integrations.main(["--expected-sha", "a" * 40])
+        result = self._run_main_with(fake_run)
 
         self.assertEqual(result, 0)
         self.assertEqual(len(gate_environments), len(GATES))
@@ -411,21 +417,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                         f"REQUIRED_BACKEND_PATH HAUKSBEE_QEMU_RISCV32={outside}\n"
                     )
                     return subprocess.CompletedProcess(command, 0, output)
-                gate = next(gate for gate in GATES if gate.command == command)
-                return subprocess.CompletedProcess(
-                    command,
-                    0,
-                    f"test {gate.expected_test} ... ok\n"
-                    "test result: ok. 1 passed; 0 failed\n",
-                )
+                return _passing_gate(command)
 
-            with (
-                mock.patch.object(required_integrations, "run_command", fake_run),
-                mock.patch.object(
-                    required_integrations, "_git_sha", return_value="a" * 40
-                ),
-            ):
-                result = required_integrations.main(["--expected-sha", "a" * 40])
+            result = self._run_main_with(fake_run)
 
         self.assertEqual(result, 1)
 
@@ -455,23 +449,20 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
                     for key, value in paths.items()
                 )
                 return subprocess.CompletedProcess(command, 0, output)
-            gate = next(gate for gate in GATES if gate.command == command)
-            return subprocess.CompletedProcess(
-                command,
-                0,
-                f"test {gate.expected_test} ... ok\n"
-                "test result: ok. 1 passed; 0 failed\n",
-            )
+            return _passing_gate(command)
 
-        with (
-            mock.patch.object(required_integrations, "run_command", fake_run),
-            mock.patch.object(required_integrations, "_git_sha", return_value="a" * 40),
-        ):
-            result = required_integrations.main(["--expected-sha", "a" * 40])
+        result = self._run_main_with(fake_run)
 
         self.assertEqual(result, 0)
         self.assertEqual(len(required_roots), 1)
         self.assertFalse(required_roots[0].exists())
+
+    def _run_main_with(self, fake_run) -> int:
+        with (
+            mock.patch.object(required_integrations, "run_command", fake_run),
+            mock.patch.object(required_integrations, "_git_sha", return_value="a" * 40),
+        ):
+            return required_integrations.main(["--expected-sha", "a" * 40])
 
     def _run_provenance_helper(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(

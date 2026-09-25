@@ -14,8 +14,22 @@ use hauksbee_engine::thermal::{junction_temp_c, theta_ja_from_footprint};
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_frontdoor_api::engine::Engine;
 use hauksbee_frontdoor_api::protocol::SolverControls;
-use hauksbee_ir::{Circuit, Device, NodeId};
+use hauksbee_ir::{Circuit, DeviceId, NodeId};
 use hauksbee_models::schema::{ComponentKind, Ratings};
+
+/// A 1 V source on node 1 across a resistor `name` of `ohms` to ground.
+fn one_volt_across(name: &str, ohms: f64) -> (Circuit, DeviceId) {
+    let mut circuit = Circuit::new();
+    let vp = NodeId(1);
+    circuit.add(vsource(
+        "V1".into(),
+        vp,
+        NodeId::GROUND,
+        hauksbee_ir::SourceKind::Dc(1.0),
+    ));
+    let id = circuit.add(resistor(name.into(), vp, NodeId::GROUND, ohms));
+    (circuit, id)
+}
 
 /// The canonical hand-check: 0.5 W in a SOT-23 (theta_JA = 250 C/W) at 25 C
 /// ambient reaches Tj = 25 + 0.5*250 = 150 C. We drive the StressMonitor
@@ -31,15 +45,7 @@ fn hand_checked_half_watt_sot23_reaches_150c() {
 
     // Now the same number through the monitor. A 1 V source across a 2 Ohm
     // resistor dissipates 0.5 W. Nodes: 0 GND, 1 V+.
-    let mut circuit = Circuit::new();
-    let vp = NodeId(1);
-    circuit.add(vsource(
-        "V1".into(),
-        vp,
-        NodeId::GROUND,
-        hauksbee_ir::SourceKind::Dc(1.0),
-    ));
-    let rid = circuit.add(resistor("R1".into(), vp, NodeId::GROUND, 2.0));
+    let (mut circuit, rid) = one_volt_across("R1", 2.0);
 
     // theta_JA explicit (250) so the test does not depend on footprint parsing
     // of the synthetic device; max Tj 150 so we sit exactly at the limit.
@@ -353,21 +359,7 @@ fn reported_temperature_cools_to_ambient_when_dissipation_stops() {
 #[test]
 fn ambient_pushes_part_over_its_limit() {
     let build = |ambient: f64| -> Vec<hauksbee_engine::stress::FaultEvent> {
-        let mut circuit = Circuit::new();
-        let vp = NodeId(1);
-        circuit.add(vsource(
-            "V1".into(),
-            vp,
-            NodeId::GROUND,
-            hauksbee_ir::SourceKind::Dc(1.0),
-        ));
-        let rid = circuit.add(Device::Resistor {
-            name: "R1".into(),
-            a: vp,
-            b: NodeId::GROUND,
-            ohms: 2.0, // 0.5 W
-            tc1: None,
-        });
+        let (mut circuit, rid) = one_volt_across("R1", 2.0); // 0.5 W
         let meta = DeviceMeta {
             reference: "R1".into(),
             device: rid,
@@ -403,15 +395,7 @@ fn ambient_pushes_part_over_its_limit() {
     // 60 C: Tj = 60 + 125 = 185 > 175. Over-temperature must trip. Because the
     // fault latches after the first trip, run a fresh monitor and catch the
     // trip on the chunk it crosses.
-    let mut circuit = Circuit::new();
-    let vp = NodeId(1);
-    circuit.add(vsource(
-        "V1".into(),
-        vp,
-        NodeId::GROUND,
-        hauksbee_ir::SourceKind::Dc(1.0),
-    ));
-    let rid = circuit.add(resistor("R1".into(), vp, NodeId::GROUND, 2.0));
+    let (mut circuit, rid) = one_volt_across("R1", 2.0);
     let meta = DeviceMeta {
         reference: "R1".into(),
         device: rid,
@@ -525,22 +509,13 @@ fn healthy_board_no_overtemp() {
 /// pass a huge second resistance to idle unit 2). Metas mirror a dual BJT:
 /// per-unit `max_power_w`, shared explicit theta_JA and Tj limit.
 fn dual_package(unit2_ohms: f64) -> (Circuit, Vec<DeviceMeta>) {
-    let mut circuit = Circuit::new();
-    let vp = NodeId(1);
-    circuit.add(vsource(
-        "V1".into(),
-        vp,
+    let (mut circuit, q1) = one_volt_across("Q1_q1", 2.0); // 0.5 W
+    let q2 = circuit.add(resistor(
+        "Q1_q2".into(),
+        NodeId(1),
         NodeId::GROUND,
-        hauksbee_ir::SourceKind::Dc(1.0),
+        unit2_ohms,
     ));
-    let q1 = circuit.add(Device::Resistor {
-        name: "Q1_q1".into(),
-        a: vp,
-        b: NodeId::GROUND,
-        ohms: 2.0, // 0.5 W
-        tc1: None,
-    });
-    let q2 = circuit.add(resistor("Q1_q2".into(), vp, NodeId::GROUND, unit2_ohms));
     let ratings = Ratings {
         // Per-UNIT rating, as the model DB documents for dual pairs
         // (bjt.toml: ratings are "per transistor"). 0.6 W: each 0.5 W unit is
