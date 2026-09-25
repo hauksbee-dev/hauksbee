@@ -667,7 +667,7 @@ fn build_card(job: &DatasheetJob, toml_text: &str, is_model_entry: bool) -> Mode
     // assumed. The schema drops the key on parse, so it is read off the raw
     // text; the TOML parse (not the line scan) is used because a notes array
     // spans lines.
-    let parsed: Option<toml::Value> = toml_text.parse().ok();
+    let parsed: Option<toml::Value> = toml::from_str(toml_text).ok();
     let entry = parsed.as_ref().and_then(|root| {
         root.get("models")
             .and_then(|m| m.as_array())

@@ -3069,8 +3069,7 @@ mcu_label = "test part"
     fn scaffold_toml_quotes_keep_regex_backslashes_and_quotes_valid() {
         for value in ["LM358(A)+", "vendor\\\"part", "line\npart"] {
             let encoded = toml_quote(value);
-            let parsed: toml::Value = format!("value = {encoded}")
-                .parse()
+            let parsed: toml::Value = toml::from_str(&format!("value = {encoded}"))
                 .expect("quoted string is TOML");
             assert_eq!(parsed["value"].as_str(), Some(value));
         }

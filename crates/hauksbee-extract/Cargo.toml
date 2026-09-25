@@ -36,7 +36,7 @@ encoding_rs = "0.8"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-toml = "0.8"
+toml = "1"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 # ODB++ archives. The spec's distribution form is a gzipped tar and Altium and
 # Cadence both write one; ODB++ also permits any individual file inside a job to
