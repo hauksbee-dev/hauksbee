@@ -1603,9 +1603,12 @@ IMPORTANT RULES:
    (e.g. an IF-VF or ID-VDS curve) read across its plotted range, saying so in
    the comment with the figure, the points read and their conditions; a curve
    reading is typical only, never a min/max, a rating or an uncertainty interval.
+   A BJT `is` comes only from a forward-active VBE(on) row or curve, lowest IC
+   first; never from VBE(sat) (saturated, forced beta) or a high-current point.
    Record every fT, Cob/Ccb, Cib/Ceb, Ciss, Crss, CT, trr, V(BR) and VZ row as a
    characteristic with its symbol, unit and bias: Hauksbee derives tf, cjc, cje,
-   cgd, cgs, cjo, tt and bv/ibv from them.
+   cgd, cgs, cjo, tt and bv/ibv from them. A Schottky (name it in the
+   description) takes no tt: its trr is capacitive recovery, not stored charge.
 3. Identity-only is a last resort. A typ-only or max-only row is usable, cited
    as printed; Hauksbee fits diode is/n/rs to VF rows and a MOSFET's vto/kp come
    from VGS(th) and RDS(on) rows as above, so the checker refuses an identity-only
@@ -1626,7 +1629,9 @@ IMPORTANT RULES:
    fences, no leading or trailing text.
 6. A plain number (a rating, a derived or fitted value) is in the unit its key
    or the param meanings name, else in A, V, W, s, F or ohm.
-7. The checker rejects params outside these physical bounds. A |x| bound is on
+7. The checker rejects params outside these physical bounds, and one sitting on
+   a bound unless a cited row prints it: a value the datasheet does not give is
+   omitted or an `unknown` record, never a placeholder at a bound. A |x| bound is on
    the magnitude and accepts EITHER SIGN: write a signed value as the datasheet
    states it. A negative regulator (79xx, any output below GND) takes a NEGATIVE
    vout, e.g. -5.0 for an LM7905: it is stamped as a source against ground, so
@@ -2043,7 +2048,7 @@ use the identity-only abstention and name the unresolved package.
 fn required_params_for_kind(kind: &str) -> &'static str {
     match kind {
         "diode" => "is, n, rs, fitted to the cited VF-at-IF rows (25 C; typ, else max)",
-        "bjt_npn" | "bjt_pnp" => "is, bf, nf",
+        "bjt_npn" | "bjt_pnp" => "is, bf, nf (no VBE(on) row or curve: an `unknown` record each)",
         // Never the word "is" here: optional_params_for_kind would drop the `is` param.
         "nmos" | "pmos" => {
             "vto, kp. Level-1 square law with w_over_l unset (1): vto keeps the SPICE sign \
@@ -2078,7 +2083,7 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              high level. The binder ignores out_lo/out_hi/hysteresis when open_collector = true, \
              and ron_ohms/leak_s otherwise"
         }
-        "analog_switch" => "ron, roff, vth",
+        "analog_switch" => "ron, roff, vth (no printed off-state figure: an `unknown` record for roff)",
         "digital" => {
             "voh (omit for an open-drain output), vol, vih, vil, tpd_s; supply_pin and gnd_pin \
              are quoted physical pad identifiers"
@@ -3283,6 +3288,17 @@ mod tests {
             selected.iter().map(|page| page.number).collect::<Vec<_>>(),
             [1, 2, 3, 4, 5, 6, 7]
         );
+    }
+
+    #[test]
+    fn prompt_forbids_bound_placeholders_saturation_is_and_schottky_tt() {
+        let bjt = build_prompt("NPN_FIXTURE", "bjt_npn", "x");
+        assert!(bjt.contains("never a placeholder at a bound"));
+        assert!(bjt.contains("never from VBE(sat)"));
+        assert!(bjt.contains("takes no tt: its trr is capacitive recovery"));
+        assert!(bjt.contains("is, bf, nf (no VBE(on) row or curve: an `unknown` record each)"));
+        let switch = build_prompt("SWITCH_FIXTURE", "analog_switch", "x");
+        assert!(switch.contains("off-state figure: an `unknown` record for roff"));
     }
 
     #[test]

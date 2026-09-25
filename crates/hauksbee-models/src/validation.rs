@@ -8,8 +8,8 @@ use std::collections::HashSet;
 
 use crate::check::{nonneg_finite, positive_finite, Problems};
 use crate::schema::{
-    AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics,
-    ModelEntry, OperatingEnvelope, ParamValue, PeripheralSpec, Pinout,
+    AboveDomainBehavior, Characteristic, ComponentKind, CurrentProgramEquation,
+    CurrentProgramSemantics, ModelEntry, OperatingEnvelope, ParamValue, PeripheralSpec, Pinout,
 };
 use crate::sensor_spec::{Bus, SensorSpec};
 use hauksbee_ir::evidence::ModelUncertainty;
@@ -140,15 +140,34 @@ fn validate_vreg_capacitor_params(entry: &ModelEntry, p: &mut Problems) {
 /// A programmed-current or behavioural vreg (charger, pmic) may abstain on an
 /// `iq_a` or `dropout_v` printed as no single value by an `unknown` source
 /// record; the rows stay characteristics. The binder then stamps no Iq and
-/// flags the rail's headroom as unverified, never assumed.
+/// flags the rail's headroom as unverified, never assumed. A BJT's is/nf and a
+/// switch's roff may abstain the same way: the binder defaults them.
 fn abstains(entry: &ModelEntry, key: &str) -> bool {
-    matches!(key, "iq_a" | "dropout_v")
-        && (entry.current_program.is_some() || !entry.behavioral.is_empty())
+    use ComponentKind::{AnalogSwitch, BjtNpn, BjtPnp};
+    let defaulted = matches!(
+        (entry.kind, key),
+        (BjtNpn | BjtPnp, "is" | "nf") | (AnalogSwitch, "roff")
+    );
+    let behaves = entry.current_program.is_some() || !entry.behavioral.is_empty();
+    (defaulted || behaves && matches!(key, "iq_a" | "dropout_v"))
         && entry.source.as_ref().is_some_and(|s| {
             s.uncertainty.iter().any(
                 |u| matches!(u, ModelUncertainty::Unknown { parameter, .. } if parameter == key),
             )
         })
+}
+
+/// Whether a cited row prints `v`, in `key`'s unit, in any column (a row in
+/// another SI unit, such as a time row for a resistance, never counts).
+fn printed(entry: &ModelEntry, key: &str, v: f64) -> bool {
+    let (unit, sb) = (
+        crate::param_names::param_unit(key).unwrap_or(""),
+        crate::units::scale_between,
+    );
+    let scale = |r: &Characteristic| sb(&r.unit, unit).or(sb(&r.unit, &r.unit).xor(Some(1.0)));
+    let hit = |r, x: f64| scale(r).is_some_and(|s| (x.abs() * s - v.abs()).abs() <= 1e-9 * v.abs());
+    let mut rows = entry.source.iter().flat_map(|s| &s.characteristic);
+    rows.any(|r| [r.min, r.typ, r.max].iter().flatten().any(|x| hit(r, *x)))
 }
 
 fn kind_rules(entry: &ModelEntry) -> KindRules {
@@ -504,6 +523,20 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 format!("missing required param '{}'", key.replace('|', "' or '"))
             });
         }
+        // A bound is never a value: a plain number sitting on a nonzero one (a
+        // "placeholder at the floor") on a sourced card is refused unless a cited
+        // row prints it (a hand-written, unsourced card claims no datasheet value).
+        let plain = |&(key, lo, hi): &(&'static str, f64, f64)| {
+            Some((key, lo, hi, params.0.get(key)?.as_f64()?)).filter(|_| entry.source.is_some())
+        };
+        for (key, lo, hi, v) in rules.ranges.iter().chain(rules.magnitude).filter_map(plain) {
+            let x = if lo >= 0.0 { v.abs() } else { v };
+            let at = |&(b, _): &(f64, _)| b != 0.0 && (x - b).abs() <= 1e-9 * b.abs();
+            let bound = [(lo, "floor"), (hi, "ceiling")].into_iter().find(at);
+            if let Some((b, side)) = bound.filter(|_| !printed(entry, key, v)) {
+                p.push(format!("param '{key}' = {v:e} sits at the checker {side} {b:e}: a bound is not a datasheet value; cite a printed row that gives it, or omit it (an `unknown` record where the kind allows one)"));
+            }
+        }
         for (key, lo, hi) in rules.ranges {
             if let Some(value) = params.0.get(*key) {
                 match params.get_f64(key) {
@@ -553,6 +586,10 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 p.push(format!("param 'rail_{side}' = {v} is a supply level, not the output's swing limit: with swing_{side} printed, omit it or give the stated test supply minus that swing"));
             }
         }
+        if crate::param_names::schottky(entry) && params.get_f64("tt").is_some_and(|t| t > 0.0) {
+            p.push("a Schottky stores no minority charge and its printed trr is capacitive recovery: omit tt, never derive it from trr");
+        }
+        p.0.extend(crate::param_names::is_from_sat(entry));
         check_required_pins(entry, &mut p);
         check_behavioral_roles(entry, &mut p);
     }

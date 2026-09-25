@@ -514,6 +514,32 @@ fn symbol(row: &Characteristic, sym: &str) -> bool {
     words.any(|w| w.eq_ignore_ascii_case(sym))
 }
 
+/// A diode its description names Schottky: it stores no charge, so trr gives no tt.
+pub(crate) fn schottky(entry: &ModelEntry) -> bool {
+    entry.kind == ComponentKind::Diode && entry.description.to_lowercase().contains("schottky")
+}
+
+/// A BJT `is` putting `nf·VT·ln(IC/is)` within 3% of a cited VBE(sat) row (a
+/// "sat" symbol) at its IC and of no forward-active VBE row: fitted to saturation.
+pub(crate) fn is_from_sat(entry: &ModelEntry) -> Option<String> {
+    let bjt = matches!(entry.kind, ComponentKind::BjtNpn | ComponentKind::BjtPnp);
+    let is = entry.params.get_f64("is").filter(|_| bjt)?;
+    let vt = entry.params.get_f64("nf").unwrap_or(1.0) * hauksbee_ir::thermal_voltage_c(27.0);
+    let miss = |r: &Characteristic| {
+        let v = r.typ.or(r.max).or(r.min)?.abs() * crate::units::scale_between(&r.unit, "V")?;
+        Some((vt * (quantity(&r.conditions, "I_?C", "A")? / is).ln() - v).abs() / v)
+    };
+    let vbe = |r: &&Characteristic| ["VBE", "VBEon", "VBEsat"].iter().any(|s| symbol(r, s));
+    let fitted = cited_rows(entry)
+        .iter()
+        .filter(vbe)
+        .filter(|r| miss(r).is_some_and(|m| m <= 0.03));
+    let (sat, on): (Vec<_>, Vec<_>) =
+        fitted.partition(|r| r.parameter.to_lowercase().contains("sat"));
+    let row = sat.first().filter(|_| on.is_empty())?;
+    Some(format!("is = {is:e} reproduces the saturation row '{}' ({}): fit is only to a forward-active VBE(on) row or curve at the lowest IC, else omit it with an `unknown` record", row.parameter, row.conditions))
+}
+
 fn cited_rows(entry: &ModelEntry) -> &[Characteristic] {
     entry.source.as_ref().map_or(&[], |s| &s.characteristic)
 }
@@ -542,11 +568,12 @@ pub(crate) type Derived = (&'static str, f64, String);
 /// Every param a cited row (25 °C or unstated) fixes by a standard relation, on
 /// the card or not: BJT tf = 1/(2π·fT), cjc/cje from Cob/Cib; MOSFET cgd = Crss,
 /// cgs = Ciss - Crss; diode cjo from CT, bv/ibv from V(BR) or VZ and its test
-/// current, tt from trr = tt·ln(1 + IF/IR) (charge-control storage time). A row
-/// reads its typ, else its min/max midpoint, else its one printed bound, named in
-/// the working. A capacitance printed at reverse bias V (the lowest printed) is
-/// taken to zero bias by C·(1 + V/vj)^m at the junction's vj/m: the card's diode
-/// vj/m, else the binder's defaults. Nothing is derived without its row.
+/// current, tt from trr = tt·ln(1 + IF/IR) (storage time; never a Schottky's). A
+/// row (a typ-printing one first) reads its typ, else its min/max midpoint, else
+/// its one printed bound, named in the working. A capacitance printed at reverse
+/// bias V (the lowest printed) is taken to zero bias by C·(1 + V/vj)^m at the
+/// junction's vj/m: the card's diode vj/m, else the binder's defaults. Nothing is
+/// derived without its row.
 pub(crate) fn derivations(entry: &ModelEntry) -> Vec<Derived> {
     let rows = cited_rows(entry);
     let find = |syms: &str, unit: &str| -> Vec<(f64, String, &Characteristic)> {
@@ -566,7 +593,8 @@ pub(crate) fn derivations(entry: &ModelEntry) -> Vec<Derived> {
             })
             .collect()
     };
-    let first = |syms, unit| find(syms, unit).into_iter().next();
+    // A row printing a typ is read before one printing only a bound (fT typ, not min).
+    let first = |s, u| find(s, u).into_iter().min_by_key(|d| d.2.typ.is_none());
     let zero_bias = |name, syms, bias, (vj, m): (f64, f64)| {
         let at = |(c, how, r): (f64, String, &Characteristic)| {
             let v = quantity(&r.conditions, bias, "V");
@@ -609,7 +637,7 @@ pub(crate) fn derivations(entry: &ModelEntry) -> Vec<Derived> {
                 out.extend(ibv.map(|i| ("ibv", i, format!("the test current of {how}"))));
                 out.push(("bv", bv, format!("V(BR) or VZ, {how}")));
             }
-            if let Some((trr, how, r)) = first("TRR", "s") {
+            if let Some((trr, how, r)) = first("TRR", "s").filter(|_| !schottky(entry)) {
                 let current = |sym| quantity(&r.conditions, sym, "A").filter(|i| *i > 0.0);
                 let ratio = current("I_?F").zip(current("I_?R")).map(|(f, r)| f / r);
                 let assumed = ["", " (no IF/IR printed: IF = IR)"][usize::from(ratio.is_none())];
@@ -721,7 +749,7 @@ pub(crate) fn diode_refit_params(entry: &ModelEntry) -> Vec<Derived> {
 /// column) cover every `required` param its kind's checker asks for, or `None`.
 /// A required param no row covers leaves the abstention legal unless
 /// `may_abstain` lets an `unknown` record stand for it. Covering rows: VF rows
-/// that fit a diode's is/n/rs; hFE for bf and VBE-at-IC for is/nf (nf = 1);
+/// that fit a diode's is/n/rs; hFE for bf and VBE(on)-at-IC for is/nf (nf = 1);
 /// VGS(th) for vto and RDS(on)-at-VGS or gFS-at-ID for kp; AOL for gain, VOL/VOH
 /// for an op-amp's or comparator's low/high output, VHYS for hysteresis.
 pub(crate) fn needless_abstention(
@@ -737,7 +765,7 @@ pub(crate) fn needless_abstention(
     let need = |key: &str| match (entry.kind, key) {
         (Diode, _) if fits => Some("VF"),
         (BjtNpn | BjtPnp, "bf") => Some("HFE"),
-        (BjtNpn | BjtPnp, "is" | "nf") => Some("VBE VBEon VBEsat@I_?C:A"),
+        (BjtNpn | BjtPnp, "is" | "nf") => Some("VBE VBEon@I_?C:A"),
         (Nmos | Pmos, "vto") => Some("VGSth VTH"),
         (Nmos | Pmos, "kp") => Some("RDSon@V_?GS:V|GFS@I_?D:A"),
         (Opamp, "gain") => Some("AOL AVOL AVD AVO"),
@@ -754,7 +782,10 @@ pub(crate) fn needless_abstention(
                 b.is_none_or(|(b, unit)| quantity(&r.conditions, b, unit).is_some())
             };
             let printed = |r: &Characteristic| r.typ.or(r.min).or(r.max).is_some();
-            let named = |r: &Characteristic| syms.split(' ').any(|s| symbol(r, s));
+            let sat = |r: &Characteristic| {
+                syms.starts_with("VBE") && r.parameter.to_lowercase().contains("sat")
+            };
+            let named = |r: &Characteristic| syms.split(' ').any(|s| symbol(r, s)) && !sat(r);
             rows.iter()
                 .find(|r| at_25(r) && printed(r) && biased(r) && named(r))
         });
@@ -1154,6 +1185,7 @@ mod tests {
             "diode | VF ; max = 1 ; V ; IF = 10 mA + IR ; max = 5 ; uA ; VR = 50 V | ",
             "bjt_pnp | hFE ; min = 100 ; - ; IC = -2 mA + VBE(on) ; max = -0.75 ; V ; IC = -2 mA | 'VBE(on)', 'hFE'",
             "bjt_npn | hFE ; min = 100 ; - ; IC = 2 mA + VCE(sat) ; max = 0.2 ; V ; IC = 10 mA | ",
+            "bjt_npn | hFE ; min = 100 ; - ; IC = 2 mA + VBE sat ; max = 1.2 ; V ; IC = 500 mA | ",
             "nmos | VGS(th) ; min = 1, max = 2.5 ; V ; ID = 250 uA + RDS(on) ; typ = 40 ; mΩ ; VGS = 10 V | 'RDS(on)', 'VGS(th)'",
             "pmos | VGS(th) ; min = 1, max = 2.5 ; V ; ID = 1 mA + RDS(on) ; max = 90 ; mΩ ; VGS = 4.5 V, TJ = 125 °C | ",
             "opamp | AOL ; typ = 110 ; dB ; RL = 10 kΩ + VOH ; min = 4.8, typ = 4.9 ; V ; RL = 10 kΩ + VOL ; max = 0.1 ; V ; RL = 10 kΩ | 'AOL', 'VOH', 'VOL'",
@@ -1183,12 +1215,49 @@ mod tests {
         assert!(needless_abstention(&half, &required, |_| false).is_none());
     }
 
+    /// Refused by name, each beside a legal control: a plain value on a nonzero
+    /// checker bound that no cited row prints (an `unknown` record stands for a
+    /// defaulted param), a BJT `is` fitted to VBE(sat), and a Schottky's tt,
+    /// which its trr no longer derives. Case: kind | params | rows | unknowns | description | error.
+    #[test]
+    #[rustfmt::skip]
+    fn bound_placeholders_saturation_fits_and_schottky_tt_are_refused() {
+        let (on, sat) = ("VBE(on) ; typ = 660 ; mV ; IC = 2 mA", "VBE(sat) ; max = 0.9 ; V ; IC = 50 mA");
+        let (ron, trr) = ("RON ; typ = 0.1 ; ohm ; VIN = 5 V", "trr ; max = 5 ; ns ; IF = 10 mA, IR = 10 mA");
+        for case in [
+            format!("bjt_npn | is = 1e-20, bf = 200, nf = 1.0 | {on} | - | t | 'is' = 1e-20 sits at the checker floor 1e-20"),
+            format!("bjt_npn | bf = 200 | {on} | is nf | t | "),
+            format!("analog_switch | ron = 0.1, roff = 1000.0 | {ron} | - | t | 'roff' = 1e3 sits at the checker floor"),
+            "analog_switch | ron = 0.1, roff = 1000.0 | ROFF off ; typ = 1 ; kΩ ; VIN = 5 V | - | t | ".into(),
+            format!("analog_switch | ron = 0.1, roff = 1000.0 | {ron} + tf ; typ = 1000 ; µs ; CL = 1 µF | - | t | checker floor"),
+            format!("analog_switch | ron = 0.1 | {ron} | roff | t | "),
+            format!("diode | is = 1e-14, n = 1.5, rs = 0.0 | {trr} | - | t | "),
+            format!("bjt_npn | is = 3.87e-17, bf = 200, nf = 1.0 | {sat} | - | t | reproduces the saturation row 'VBE(sat)'"),
+            format!("bjt_npn | is = 1.66e-14, bf = 200, nf = 1.0 | {on} + {sat} | - | t | "),
+            format!("diode | is = 1e-8, n = 1.05, rs = 0.5, tt = 7.2e-9 | {trr} | - | t | "),
+            format!("diode | is = 1e-8, n = 1.05, rs = 0.5, tt = 7.2e-9 | {trr} | - | SBD_FIXTURE Schottky | a Schottky stores no"),
+            format!("diode | is = 1e-8, n = 1.05, rs = 0.5 | {trr} | - | SBD_FIXTURE Schottky | "),
+        ] {
+            let [kind, params, rows, unknown, desc, want] = case.split(" | ").collect::<Vec<_>>()[..] else { panic!("{case}") };
+            let record = |p| format!("[[models.source.uncertainty]]\nstatus = \"unknown\"\nparameter = \"{p}\"\nreason = \"r\"\n");
+            let unknown: String = unknown.split_whitespace().filter(|p| *p != "-").map(record).collect();
+            let mut e = entry(kind, &params.replace(", ", "\n"), &(cited(rows) + &unknown));
+            e.description = desc.into();
+            let tt = derivations(&e).iter().any(|d| d.0 == "tt");
+            assert_eq!(tt, kind == "diode" && !schottky(&e), "{case}");
+            let got = crate::validation::validate(&e);
+            let named = got.as_ref().is_err_and(|e| e.len() == 1 && e[0].message.contains(want));
+            assert!(if want.is_empty() { got.is_ok() } else { named }, "{case}: {got:?}");
+        }
+    }
+
     /// Each standard relation fills its param from synthetic cited rows only.
     #[test]
     fn cited_rows_derive_the_spice_params_they_fix() {
         for case in [
             "bjt_npn | fT gain-bandwidth ; typ = 250 ; MHz ; VCE = 5 V | tf = 6.3662e-10",
             "bjt_pnp | fT ; min = 100 ; MHz ; IC = -10 mA | tf = 1.5915e-9",
+            "bjt_npn | fT ; min = 100 ; MHz ; IC = 10 mA + fT ; typ = 250 ; MHz ; IC = 10 mA | tf = 6.3662e-10",
             "bjt_pnp | Cob output capacitance ; max = 4 ; pF ; VCB = -5 V, f = 1 MHz | cjc = 7.8339e-12",
             "bjt_npn | Ce emitter capacitance ; typ = 10 ; pF ; VEB = 0.5 V | cje = 1.1836e-11",
             "nmos | Ciss ; typ = 630 ; pF ; VDS = 15 V + Crss ; typ = 50 ; pF ; VDS = 15 V | cgs = 5.8e-10, cgd = 5e-11",
