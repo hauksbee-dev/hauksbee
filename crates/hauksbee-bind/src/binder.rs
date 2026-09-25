@@ -8156,15 +8156,18 @@ style = "i2c_pointer"
     #[test]
     fn a_partly_modelled_switch_discloses_the_part_it_leaves_out() {
         let lib = ModelLibrary::builtin();
-        for (value, phrase) in [
-            ("TXS0108E", Some("eight")),
-            ("PCA9306", Some("SDA")),
-            ("TPS2104", Some("IN1")),
-            ("TPS22916YFP", Some("active-high")),
-            ("MIC94090C6", None),
+        for (value, terminals, phrase) in [
+            ("TXS0108E", ["in_out_a", "in_out_b"], Some("eight")),
+            ("PCA9306", ["in_out_a", "in_out_b"], Some("SDA")),
+            // The mux stamps its IN1 throw (OUT `com`, IN1 `s0`) and names IN2 as
+            // the one it leaves out.
+            ("TPS2104", ["com", "s0"], Some("IN2")),
+            ("TPS22916YFP", ["in_out_a", "in_out_b"], Some("active-high")),
+            ("MIC94090C6", ["in_out_a", "in_out_b"], None),
         ] {
             let model = resolve_value(&lib, value, "");
-            let pads = ["in_out_a", "in_out_b", "ctrl", "vss"]
+            let [a, b] = terminals;
+            let pads = [a, b, "ctrl", "vss"]
                 .map(|role| pad_for(&model, role).unwrap_or_else(|| panic!("{value} `{role}`")));
             let (_, _, outcome, warning) = bind_load_switch(&lib, value, pads);
             assert!(
@@ -8189,7 +8192,6 @@ style = "i2c_pointer"
         for (value, pads) in [
             ("TPS22916YFP", ["A1", "A2", "B2", "B1"]),
             ("MIC94090C6", ["1", "4", "6", "2"]),
-            ("TPS2104", ["4", "3", "1", "2"]),
         ] {
             let (circuit, [out, inn, ctrl], outcome, _) = bind_load_switch(&lib, value, pads);
             assert!(
@@ -8217,6 +8219,39 @@ style = "i2c_pointer"
                 "{value}: von={von} voff={voff}"
             );
         }
+    }
+
+    /// The TPS2104's stamped throw is IN1, which the part selects with EN LOW:
+    /// the switch bridges OUT and IN1 (never IN2, ground or the control line)
+    /// and senses the INVERTED control, closing below the 0.8 V VIL max.
+    #[test]
+    fn the_power_mux_main_throw_conducts_on_a_low_control() {
+        let lib = ModelLibrary::builtin();
+        // OUT on pad 4, IN1 on pad 5, EN on pad 1, GND on pad 2.
+        let (circuit, [out, in1, ctrl], outcome, _) =
+            bind_load_switch(&lib, "TPS2104", ["4", "5", "1", "2"]);
+        assert!(
+            !matches!(outcome, BindOutcome::Unresolved { .. }),
+            "{outcome:?}"
+        );
+        let switches = vswitches(&circuit);
+        assert_eq!(switches.len(), 1, "one throw is stamped");
+        let (a, b, ctrl_p, ctrl_n, von, voff) = switches[0];
+        let terminals = [a, b];
+        assert!(terminals.contains(&out) && terminals.contains(&in1));
+        assert!(!terminals.contains(&NodeId::GROUND) && !terminals.contains(&ctrl));
+        assert!(
+            ctrl_p == NodeId::GROUND && ctrl_n == ctrl,
+            "the IN1 throw must sense the inverted control"
+        );
+        assert!(
+            von < 0.0 && voff < von,
+            "closes on a LOW control: von={von} voff={voff}"
+        );
+        assert!(
+            (-von - 0.7).abs() < 1e-9,
+            "closes once EN is 0.1 V below the 0.8 V VIL max: von={von}"
+        );
     }
 
     /// Regulator pin NAMES are portable where pad numbers are not; SHDN is
