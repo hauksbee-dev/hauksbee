@@ -565,6 +565,18 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             "a vreg entry carries either 'vout' (fixed) or 'vref' (adjustable), not both"
                 .to_string()
         });
+        // A fixed output's accuracy row spans at most ±5% (line, load, temperature),
+        // so bounds wider than ±7% (max/min > 1.15) are the family's selectable outputs.
+        if let Some(ParamValue::Row(r)) = params
+            .0
+            .get("vout")
+            .filter(|_| entry.kind == ComponentKind::Vreg)
+        {
+            if let Some((a, b)) = r.min.zip(r.max) {
+                let (lo, hi) = (a.abs().min(b.abs()), a.abs().max(b.abs()));
+                p.require(a * b > 0.0 && hi <= 1.15 * lo, || format!("param 'vout' spans {a} to {b}: a fixed-output regulator's vout is the ordered variant's nominal output (its output-voltage-accuracy row's min/max at most), never the family's selectable output range"));
+            }
+        }
         validate_vreg_capacitor_params(entry, &mut p);
         // Logic levels on any kind: a Schmitt VT+/VT- swap inverts every input.
         let levels = [("vil", "vih"), ("vol", "voh")];
@@ -590,8 +602,21 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             p.push("a Schottky stores no minority charge and its printed trr is capacitive recovery: omit tt, never derive it from trr");
         }
         p.0.extend(crate::param_names::is_from_sat(entry));
+        // Abstaining on params never makes a resolved pin table unknown.
+        let unresolved = |role: &String| role.starts_with("unknown_pad_");
+        p.require(entry.pins.is_empty() || !entry.pins.values().all(unresolved), || "every [models.pins] pad is unknown_pad_ on a card carrying params: name each pad the pin table resolves; unknown_pad_ is only for a pad the datasheet leaves unresolved".into());
         check_required_pins(entry, &mut p);
         check_behavioral_roles(entry, &mut p);
+    }
+    // No consumer reads a rating from [models.params]: the binder takes it from [models.ratings].
+    for u in crate::param_names::unknown_params(entry) {
+        let rating = |l: &str| l.split_whitespace().next() == Some(u.name.as_str());
+        if crate::schema::Ratings::KEY_GUIDE.lines().any(rating) {
+            p.push(format!(
+                "param '{0}' is a rating, read only from [models.ratings]: move {0} there",
+                u.name
+            ));
+        }
     }
 
     // Absolute-maximum ratings gate the stress/destruction faults, and the
@@ -1205,6 +1230,9 @@ fn check_pinout(entry: &ModelEntry, p: &mut Problems) {
         let Some(here) = own.pins.get(pad).filter(|name| !prints(name)) else {
             continue;
         };
+        if role.starts_with("unknown_pad_") {
+            p.push(format!("[models.pins] pad {pad} = '{role}', but the '{package}' pinout prints '{here}' on it: name each pad the pin table resolves; unknown_pad_ is only for a pad the datasheet leaves unresolved"));
+        }
         if let Some((other, name)) = own.pins.iter().find(|(q, n)| *q != pad && prints(n)) {
             p.push(format!("[models.pins] pad {pad} = '{role}', but the '{package}' pinout prints '{here}' on pad {pad} and '{name}' on pad {other}: read [models.pins] from the declared package's own column and figure; a figure labelled with another package is not this card's"));
         }
@@ -2022,8 +2050,11 @@ package = "DFN-4"
 pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
 "#;
 
+    /// Also: a vout row wider than an accuracy band (either sign), a rating
+    /// written as a param, and a pin table left wholly `unknown_pad_`.
     #[test]
-    fn pins_must_match_the_declared_packages_pinout_column() {
+    #[rustfmt::skip]
+    fn pins_match_the_pinout_and_vout_rows_and_ratings_sit_where_read() {
         let card = |edits: &[(&str, &str)]| -> ModelEntry {
             let text = edits
                 .iter()
@@ -2038,6 +2069,26 @@ pins = { "1" = "VOUT", "2" = "GND", "3" = "EN", "4" = "VIN", "EP" = "GND" }
             (&LDO_FIXTURE[dfn_dropped..], ""),
             ("SOT-23-5 package", ""),
         ]));
+        let row = |v: &str| format!("vout = {{ {v}, unit = \"V\", conditions = \"c\", basis = \"b\" }}");
+        let (vout, pinouts) = ("vout = 3.3", &LDO_FIXTURE[LDO_FIXTURE.find("[[source.pinout]]").unwrap()..]);
+        let unknown = [("\"in\"", "\"unknown_pad_1\""), ("\"gnd\"", "\"unknown_pad_2\""), ("\"en\"", "\"unknown_pad_3\""), ("\"nc\"", "\"unknown_pad_4\""), ("\"out\"", "\"unknown_pad_5\"")];
+        let identity = "[params]\nidentity_only = true\nwarning = \"w\"\nunlocked_by = \"u\"";
+        // Case: edits | the refusal's text, or "" for a card that must pass.
+        for (edits, needle) in [
+            (vec![(vout, row("min = 3.2, typ = 3.3, max = 3.4"))], ""),
+            (vec![(vout, row("min = -5.2, max = -4.8"))], ""),
+            (vec![(vout, row("min = 0.8, max = 3.3"))], "never the family's selectable output range"),
+            (vec![(vout, row("min = -12, max = -5"))], "param 'vout' spans -12 to -5"),
+            (vec![(vout, row("min = -3.3, max = 3.3"))], "param 'vout' spans -3.3 to 3.3"),
+            (vec![("iq_a = 0.0001", "iq_a = 0.0001\nmax_current_a = 0.5".into())], "move max_current_a there"),
+            (vec![(unknown[0].0, unknown[0].1.into())], "pinout prints 'VIN' on it: name each pad"),
+        ] {
+            let e = card(&edits.iter().map(|(a, b)| (*a, b.as_str())).collect::<Vec<_>>());
+            if needle.is_empty() { accepts(&e) } else { rejects(&e, needle) }
+        }
+        let wholly_unknown = [&unknown[..], &[(pinouts, "")]].concat();
+        rejects(&card(&wholly_unknown), "every [models.pins] pad is unknown_pad_");
+        accepts(&card(&[&wholly_unknown[..], &[("[params]", identity)]].concat()));
         for (edits, needle) in [
             // VOUT taken from the other package's drawing, VIN from elsewhere.
             (

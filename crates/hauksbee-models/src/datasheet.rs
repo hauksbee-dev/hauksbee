@@ -1330,9 +1330,11 @@ exposed-pad functions as stable lowercase roles instead of coercing them into th
 aliases. Keep an executable binder's canonical electrical alias distinct from any
 additional freeform source name (record additional names in the pad comment); a
 freeform role does not imply an executable primitive binds it. Preserve every physical
-pad identifier exactly, including alphanumeric and exposed-pad identifiers. An
-identity-only card may use `unknown_pad_<identifier>` with a comment, but may not invent
-a pin role."#;
+pad identifier exactly, including alphanumeric and exposed-pad identifiers.
+`unknown_pad_<identifier>` (with a comment) is only for a pad whose function the
+datasheet leaves unresolved, or the identity-only abstention for an unresolved package;
+abstaining on params never makes a resolved pin table unknown: a pad the pin table names
+keeps its source-named role. Never invent a pin role."#;
 
 /// Whether the API backend has anything to work from: it cannot open the local
 /// PDF, so a prompt carrying the no-text sentinel would reach it with nothing
@@ -2064,9 +2066,12 @@ fn required_params_for_kind(kind: &str) -> &'static str {
         "vreg" => {
             "fixed: vout, dropout_v, iq_a; adjustable (ADJ/FB pin): vref (the reference, \
              never the output), dropout_v and the quiescent current param the checker asks \
-             for, with no vout. iq_a: the no-load ground (or supply) current; max_current_a: \
-             the rated output current, never the absolute-maximum IOUT; dropout_v: the row for \
-             this part's own output-voltage option"
+             for, with no vout. vout: the ordered variant's nominal output, with its \
+             output-voltage-accuracy row's min/max if printed; a range spanning the family's \
+             selectable outputs is never vout. iq_a: the no-load ground (or supply) current; \
+             max_current_a (a [models.ratings] key, never a param): the rated output current, \
+             never the absolute-maximum IOUT; dropout_v: the row for this part's own \
+             output-voltage option"
         }
         "opamp" => {
             "gain, and swing_lo/swing_hi (output headroom from each supply pin, max column) or \
@@ -3308,7 +3313,11 @@ mod tests {
         assert!(bjt.contains("datasheet states): br, vaf, var, nr, rb"));
         assert!(bjt.contains("VCEO") && bjt.contains("Ratings are magnitudes"));
         assert!(bjt.contains("picks the column each param") && bjt.contains("never a nominal"));
-        assert!(build_prompt("ADJ_FIXTURE", "vreg", "x").contains("adjustable (ADJ/FB pin): vref"));
+        let vreg = build_prompt("ADJ_FIXTURE", "vreg", "x");
+        assert!(vreg.contains("adjustable (ADJ/FB pin): vref"));
+        assert!(vreg.contains("a range spanning the family's selectable outputs is never vout"));
+        assert!(vreg.contains("max_current_a (a [models.ratings] key, never a param)"));
+        assert!(vreg.contains("abstaining on params never makes a resolved pin table unknown"));
         assert!(!bjt.contains("[models.behavioral.converter]"));
         assert!(build_prompt("1N4148", "diode", "x").contains("VRRM"));
         assert!(build_prompt("AMS1117", "vreg", "x").contains("max_junction_temp_c"));
