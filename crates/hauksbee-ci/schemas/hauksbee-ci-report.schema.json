@@ -181,7 +181,7 @@
         },
         {
           "const": "soc_descriptor",
-          "description": "An MCU / SoC descriptor.",
+          "description": "An MCU / `SoC` descriptor.",
           "type": "string"
         }
       ]
@@ -626,11 +626,11 @@
       "description": "One concrete thing an artifact contributed to the run.",
       "properties": {
         "detail": {
-          "description": "The specifics, one sentence, e.g. \"netlist read from the document's\nLogicalNet section, not reverse-engineered from copper\".",
+          "description": "The specifics, one sentence, e.g. \"netlist read from the document's\n`LogicalNet` section, not reverse-engineered from copper\".",
           "type": "string"
         },
         "what": {
-          "description": "What, as a stable slug: \"connectivity\", \"copper_geometry\",\n\"placements\", \"component_values\", \"dnp_flags\", \"firmware_image\",\n\"net_names\", \"clearance_rules\".",
+          "description": "What, as a stable slug: \"connectivity\", \"`copper_geometry`\",\n\"placements\", \"`component_values`\", \"`dnp_flags`\", \"`firmware_image`\",\n\"`net_names`\", \"`clearance_rules`\".",
           "type": "string"
         }
       },
