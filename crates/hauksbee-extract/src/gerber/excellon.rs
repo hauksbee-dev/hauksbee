@@ -391,7 +391,7 @@ pub fn parse(text: &str) -> DrillFile {
                 rout_mode = false;
                 continue;
             }
-            if matches!(g, Some(0) | Some(1) | Some(2) | Some(3)) {
+            if matches!(g, Some(0 | 1 | 2 | 3)) {
                 rout_mode = true;
             }
             // A `G00` rapid positions the cutter without cutting, so it is a
@@ -1464,7 +1464,7 @@ M30
         // the cut does not touch.
         for h in &d.holes {
             let (tx, ty) = h.to.unwrap();
-            let mid = ((h.x + tx) / 2.0, (h.y + ty) / 2.0);
+            let mid = (f64::midpoint(h.x, tx), f64::midpoint(h.y, ty));
             let sagitta = 5.0 - mid.0.hypot(mid.1);
             assert!(
                 sagitta <= ARC_SAGITTA_TOL_MM + 1e-12,

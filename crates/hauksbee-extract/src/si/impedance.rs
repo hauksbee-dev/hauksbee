@@ -539,7 +539,7 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
         // width of the pair; the pad neck-down is the narrow end and is not the
         // controlled section.
         let w = match (wp, wm) {
-            (Some((_, maxp)), Some((_, maxm))) => (maxp + maxm) / 2.0,
+            (Some((_, maxp)), Some((_, maxm))) => f64::midpoint(maxp, maxm),
             _ => continue,
         };
         if w <= 0.0 {
@@ -1462,7 +1462,7 @@ fn pair_edge_spacing(root: &List, pid: i64, mid: i64) -> Option<f64> {
     let median = if gaps.len() % 2 == 1 {
         gaps[mid_idx]
     } else {
-        (gaps[mid_idx - 1] + gaps[mid_idx]) / 2.0
+        f64::midpoint(gaps[mid_idx - 1], gaps[mid_idx])
     };
     // A pair that never runs close (median gap implausibly large for coupling)
     // is not a routed coupled pair we can model: decline.

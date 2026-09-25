@@ -284,7 +284,7 @@ mod tests {
         );
         match AssemblyState::of(&c) {
             AssemblyState::IdentityUnknown(IdentityRefusal::DuplicateReferenceConflict(detail)) => {
-                assert_eq!(detail, "different values")
+                assert_eq!(detail, "different values");
             }
             other => panic!("a duplicate conflict must refuse identity, got {other:?}"),
         }

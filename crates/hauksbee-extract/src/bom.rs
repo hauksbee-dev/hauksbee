@@ -1529,8 +1529,10 @@ fn classify_headers(keys: &[String]) -> Option<BomDialect> {
 /// anywhere else, and `Part` / `Device` are the Eagle partlist's own reference
 /// and footprint columns while `Part` is only a guess in a spreadsheet.
 fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, MappingConfidence)> {
-    use ColumnRole::*;
-    use MappingConfidence::*;
+    use ColumnRole::{
+        DistributorPart, Footprint, Manufacturer, Mpn, Populate, Quantity, Reference, Value,
+    };
+    use MappingConfidence::{Certain, Guess, Likely};
     let eagle = dialect.is_some_and(BomDialect::is_fixed_width);
     let comment_is_value = dialect.is_some_and(BomDialect::comment_is_value);
 
@@ -1575,7 +1577,7 @@ fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, M
         | "manufacturer_part_no"
         | "manufacturer_part" => push(Mpn, Certain),
         "partnumber" | "part_number" | "mfg_pn" | "mfr_pn" | "manufacturer_pn" | "part_no" => {
-            push(Mpn, Likely)
+            push(Mpn, Likely);
         }
 
         // ── manufacturer ──
@@ -1585,7 +1587,7 @@ fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, M
         // ── quantity ──
         "quantity" | "qty" => push(Quantity, Certain),
         "quantity_per_pcb" | "quantity_1" | "quantity_per_side" | "qty_per_pcb" => {
-            push(Quantity, Likely)
+            push(Quantity, Likely);
         }
 
         // ── footprint ──

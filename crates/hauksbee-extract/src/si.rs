@@ -736,7 +736,7 @@ fn trace_capacitance_pf_per_mm(w_mm: f64, stack: &impedance::Stackup) -> Option<
         return None;
     }
     // Hammerstad's effective permittivity for a microstrip.
-    let er_eff = (er + 1.0) / 2.0 + ((er - 1.0) / 2.0) / (1.0 + 10.0 * h / w_mm).sqrt();
+    let er_eff = f64::midpoint(er, 1.0) + ((er - 1.0) / 2.0) / (1.0 + 10.0 * h / w_mm).sqrt();
     // c0 in mm/s, so the result is F/mm; scale to pF.
     const C0_MM_PER_S: f64 = 2.998e11;
     let c_pf_per_mm = 1e12 * er_eff.sqrt() / (C0_MM_PER_S * z0);
@@ -1225,8 +1225,8 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                     start.arg_f64(1).unwrap_or(0.0),
                 );
                 let (ex, ey) = (end.arg_f64(0).unwrap_or(0.0), end.arg_f64(1).unwrap_or(0.0));
-                let mx = (sx + ex) / 2.0;
-                let my = (sy + ey) / 2.0;
+                let mx = f64::midpoint(sx, ex);
+                let my = f64::midpoint(sy, ey);
                 for (x, y) in [(sx, sy), (ex, ey), (mx, my)] {
                     if in_box(x, y) && point_in_polygon(x, y, &poly_v) {
                         intrusions.push(Intrusion {
@@ -1590,7 +1590,7 @@ fn net_is_over_a_plane(root: &List, net_id: i64) -> bool {
             };
             let (sx, sy) = (sp.arg_f64(0).unwrap_or(0.0), sp.arg_f64(1).unwrap_or(0.0));
             let (ex, ey) = (ep.arg_f64(0).unwrap_or(0.0), ep.arg_f64(1).unwrap_or(0.0));
-            let (mx, my) = ((sx + ex) / 2.0, (sy + ey) / 2.0);
+            let (mx, my) = (f64::midpoint(sx, ex), f64::midpoint(sy, ey));
             any_segment = true;
             if !pours.iter().any(|poly| {
                 let [x0, y0, x1, y1] = polygon_bounds(poly);

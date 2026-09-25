@@ -159,7 +159,7 @@ pub(crate) fn f64_at(b: &[u8], o: usize) -> f64 {
 }
 /// Coordinate at `o` converted to millimetres.
 pub(crate) fn coord_mm(b: &[u8], o: usize) -> f64 {
-    (u32_at(b, o) as i32) as f64 * MM_PER_UNIT
+    f64::from(u32_at(b, o) as i32) * MM_PER_UNIT
 }
 
 /// The payloads of a fixed-binary stream whose records are one `marker` byte
@@ -1351,7 +1351,7 @@ fn component_identities(comps: &[CompRecord], pads: &[PadRecord]) -> Vec<Compone
                     (
                         pad.name.clone(),
                         (pad.net != NONE_U16 && pad.net != POLYGON_BOARD_NET)
-                            .then_some(pad.net as i64),
+                            .then_some(i64::from(pad.net)),
                     )
                 })
                 .collect(),
@@ -1527,7 +1527,7 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
         if field == NONE_U16 || field == POLYGON_BOARD_NET {
             None
         } else if (field as usize) < net_names.len() {
-            Some(field as i64 + 1)
+            Some(i64::from(field) + 1)
         } else {
             None
         }

@@ -219,15 +219,14 @@ fn from_value_dimension(c: &Component) -> Option<PartClass> {
         Some("H") => return Some(PartClass::Passive(PassiveClass::Inductor)),
         // An explicit ohm mark rules a capacitor out, but does NOT rule a
         // resistor in: a ferrite bead is sold as an impedance and reads ohmic.
-        Some("\u{03a9}") | Some("V") | Some("A") => return None,
+        Some("\u{03a9}" | "V" | "A") => return None,
         _ => {}
     }
     if !has_sub_unity_multiplier(&c.value) {
         return None;
     }
     Some(match from_strings(c) {
-        PartClass::Passive(PassiveClass::Inductor)
-        | PartClass::Passive(PassiveClass::FerriteBead) => {
+        PartClass::Passive(PassiveClass::Inductor | PassiveClass::FerriteBead) => {
             PartClass::Passive(PassiveClass::Inductor)
         }
         _ => PartClass::Passive(PassiveClass::Capacitor),

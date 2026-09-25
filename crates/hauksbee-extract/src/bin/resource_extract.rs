@@ -49,7 +49,7 @@ fn parse_args() -> Result<Args, String> {
             "--pdf" => pdf = Some(PathBuf::from(it.next().ok_or("--pdf needs a value")?)),
             "--part" => part = it.next().ok_or("--part needs a value")?,
             "--compare" => {
-                compare = Some(PathBuf::from(it.next().ok_or("--compare needs a value")?))
+                compare = Some(PathBuf::from(it.next().ok_or("--compare needs a value")?));
             }
             "-h" | "--help" => {
                 println!("resource-extract --pdf <path> [--part rp2040] [--compare <mcu_resources.toml>]");

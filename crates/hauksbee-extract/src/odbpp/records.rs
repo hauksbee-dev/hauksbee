@@ -562,7 +562,7 @@ pub fn parse_features(text: &str) -> FeatureCounts {
             Some("S") => c.surfaces += 1,
             // `T` (text) and `B` (barcode) are features too, and counted, but
             // not broken out: the IR has nowhere to put either.
-            Some("T") | Some("B") => c.other += 1,
+            Some("T" | "B") => c.other += 1,
             // A surface body, a symbol/attribute-table line, or a record type
             // this reader does not model. Tracked so the `F` header check can
             // tell "the header is wrong" from "there is a record kind here I do

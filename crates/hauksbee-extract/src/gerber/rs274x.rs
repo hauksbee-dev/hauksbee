@@ -91,7 +91,7 @@ impl CopperPrim {
 /// painted while it is in effect, hundreds of thousands on a large film, so
 /// attaching the identity is a pointer clone, not a heap allocation per arc
 /// segment.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct X2Attrs {
     /// `%TA.AperFunction` of the aperture this primitive was painted with.
     pub function: Option<ApertureFunction>,
@@ -578,7 +578,7 @@ fn shape_to_geo(shape: &Shape) -> Option<MultiPolygon<f64>> {
             let polygon = contours_to_geo_polygon(vec![pts.clone()])?;
             if !polygon_is_valid(&polygon) {
                 return None;
-            };
+            }
             if *r <= 0.0 {
                 Some(MultiPolygon::new(vec![polygon.orient(Direction::Default)]))
             } else {
@@ -1320,7 +1320,7 @@ fn already_void(
         .enumerate()
         .flat_map(|(k, c)| {
             let cb = contour_bounds(c);
-            let (cx, cy) = ((cb[0] + cb[2]) / 2.0, (cb[1] + cb[3]) / 2.0);
+            let (cx, cy) = (f64::midpoint(cb[0], cb[2]), f64::midpoint(cb[1], cb[3]));
             let sign = if k == 0 { 1.0 } else { -1.0 };
             c.iter().map(move |&(x, y)| {
                 let (dx, dy) = (cx - x, cy - y);
@@ -2072,8 +2072,10 @@ impl<'a> Plotter<'a> {
     fn aperture_line_width(&self) -> f64 {
         match self.aperture.and_then(|a| self.doc.apertures.get(&a)) {
             Some(Aperture::Circle(Circle { diameter, .. })) => diameter * self.to_mm,
-            Some(Aperture::Rectangle(Rectangular { x, y, .. }))
-            | Some(Aperture::Obround(Rectangular { x, y, .. })) => x.min(*y) * self.to_mm,
+            Some(
+                Aperture::Rectangle(Rectangular { x, y, .. })
+                | Aperture::Obround(Rectangular { x, y, .. }),
+            ) => x.min(*y) * self.to_mm,
             // Unknown aperture (polygon/macro/undefined): a fixed 0.1 mm hairline,
             // enough to connect endpoints. This is a physical millimetre size and
             // must NOT be scaled by `to_mm`: on an inch-unit file (`%MOIN%`,
@@ -2102,16 +2104,18 @@ impl<'a> Plotter<'a> {
                 diameter,
                 hole_diameter,
             })) if !holed(hole_diameter) => Some(diameter * self.to_mm),
-            Some(Aperture::Rectangle(Rectangular {
-                x,
-                y,
-                hole_diameter,
-            }))
-            | Some(Aperture::Obround(Rectangular {
-                x,
-                y,
-                hole_diameter,
-            })) if !holed(hole_diameter) => Some(x.min(*y) * self.to_mm),
+            Some(
+                Aperture::Rectangle(Rectangular {
+                    x,
+                    y,
+                    hole_diameter,
+                })
+                | Aperture::Obround(Rectangular {
+                    x,
+                    y,
+                    hole_diameter,
+                }),
+            ) if !holed(hole_diameter) => Some(x.min(*y) * self.to_mm),
             _ => None,
         }
     }
@@ -2214,7 +2218,7 @@ impl<'a> Plotter<'a> {
         let mut with_hole = |outer: Vec<(f64, f64)>| -> Shape {
             let rim: Vec<(f64, f64)> = (0..32)
                 .map(|k| {
-                    let a = k as f64 * std::f64::consts::TAU / 32.0;
+                    let a = f64::from(k) * std::f64::consts::TAU / 32.0;
                     (cx + rim_r * a.cos(), cy + rim_r * a.sin())
                 })
                 .collect();
@@ -2232,7 +2236,7 @@ impl<'a> Plotter<'a> {
                     let r = diameter * s / 2.0;
                     let outer: Vec<(f64, f64)> = (0..64)
                         .map(|k| {
-                            let a = k as f64 * std::f64::consts::TAU / 64.0;
+                            let a = f64::from(k) * std::f64::consts::TAU / 64.0;
                             (cx + r * a.cos(), cy + r * a.sin())
                         })
                         .collect();
@@ -2719,8 +2723,8 @@ pub(super) fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
 pub(super) fn filled_interior_witness(shape: &Shape) -> Option<(f64, f64)> {
     match shape {
         Shape::Capsule(capsule) => Some((
-            (capsule.ax + capsule.bx) / 2.0,
-            (capsule.ay + capsule.by) / 2.0,
+            f64::midpoint(capsule.ax, capsule.bx),
+            f64::midpoint(capsule.ay, capsule.by),
         )),
         Shape::Polygon { pts, .. } => Some(interior_witness(pts)),
         Shape::MultiPolygon { contours, weights } => {
@@ -2900,11 +2904,11 @@ fn stadium_outline(c: &Capsule) -> Vec<(f64, f64)> {
     let mut pts = Vec::with_capacity(34);
     // Cap around B (from +90° to -90° relative to the axis), then around A.
     for k in 0..=16 {
-        let a = base_a - k as f64 * std::f64::consts::PI / 16.0;
+        let a = base_a - f64::from(k) * std::f64::consts::PI / 16.0;
         pts.push((c.bx + c.r * a.cos(), c.by + c.r * a.sin()));
     }
     for k in 0..=16 {
-        let a = base_a + std::f64::consts::PI - k as f64 * std::f64::consts::PI / 16.0;
+        let a = base_a + std::f64::consts::PI - f64::from(k) * std::f64::consts::PI / 16.0;
         pts.push((c.ax + c.r * a.cos(), c.ay + c.r * a.sin()));
     }
     pts

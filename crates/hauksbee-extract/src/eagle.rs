@@ -67,7 +67,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 let attrs = xml_attrs;
                 match e.name().as_ref() {
                     b"eagle" => saw_eagle_root = true,

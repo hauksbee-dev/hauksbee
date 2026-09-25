@@ -109,8 +109,8 @@ fn text_record(component: u16, text: &str, is_comment: bool, is_designator: bool
     // Sub-record 1: 252 bytes, the length real exports use.
     let mut p = vec![0u8; 252];
     p[7..9].copy_from_slice(&component.to_le_bytes());
-    p[40] = is_comment as u8;
-    p[41] = is_designator as u8;
+    p[40] = u8::from(is_comment);
+    p[41] = u8::from(is_designator);
     rec.extend(subrecord(&p));
     // Sub-record 2: the text as a Pascal string.
     let mut t = vec![text.len() as u8];

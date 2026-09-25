@@ -96,7 +96,7 @@ impl Shape {
     /// is only a *representative* point and pours never anchor pads.
     pub fn center(&self) -> (f64, f64) {
         match self {
-            Self::Capsule(c) => ((c.ax + c.bx) / 2.0, (c.ay + c.by) / 2.0),
+            Self::Capsule(c) => (f64::midpoint(c.ax, c.bx), f64::midpoint(c.ay, c.by)),
             Self::Polygon { pts, .. } => vertex_mean(pts),
             Self::MultiPolygon { contours, .. } => {
                 vertex_mean(contours.first().map_or(&[], std::vec::Vec::as_slice))
@@ -1064,8 +1064,8 @@ mod tests {
         let grid = PolyGrid::new(&ring, 32);
         for i in 0..50 {
             for j in 0..50 {
-                let x = i as f64 * 0.1 - 0.5;
-                let y = j as f64 * 0.1 - 0.5;
+                let x = f64::from(i) * 0.1 - 0.5;
+                let y = f64::from(j) * 0.1 - 0.5;
                 assert_eq!(
                     grid.contains(x, y),
                     point_in_polygon(x, y, &poly),
@@ -1102,8 +1102,8 @@ mod tests {
             let mut bad = 0;
             for i in 0..311 {
                 for j in 0..311 {
-                    let x = -14.0 + i as f64 * 0.10353;
-                    let y = -16.0 + j as f64 * 0.10171;
+                    let x = -14.0 + f64::from(i) * 0.10353;
+                    let y = -16.0 + f64::from(j) * 0.10171;
                     if grid.contains(x, y) != point_in_contours(x, y, &contours) {
                         bad += 1;
                     }
@@ -1132,8 +1132,8 @@ mod tests {
         let grid = PolyGrid::new_weighted(&contours, &weights, 64);
         for i in 0..101 {
             for j in 0..101 {
-                let x = i as f64 * 0.1;
-                let y = j as f64 * 0.1;
+                let x = f64::from(i) * 0.1;
+                let y = f64::from(j) * 0.1;
                 assert_eq!(
                     grid.contains(x, y),
                     point_in_weighted_contours(x, y, &contours, &weights),
@@ -1202,7 +1202,7 @@ mod tests {
         };
         let star: Vec<(f64, f64)> = (0..7)
             .map(|k| {
-                let a = 0.37 + k as f64 * std::f64::consts::TAU / 7.0;
+                let a = 0.37 + f64::from(k) * std::f64::consts::TAU / 7.0;
                 (9.0 * a.cos(), 9.0 * a.sin())
             })
             .collect();

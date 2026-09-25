@@ -731,7 +731,7 @@ pub struct PositionDisagreement {
 }
 
 /// One part the placement file and the layout put on different sides.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SideDisagreement {
     pub reference: String,
     pub board_layer: String,

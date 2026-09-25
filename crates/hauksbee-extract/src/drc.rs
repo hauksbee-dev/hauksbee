@@ -1084,7 +1084,7 @@ impl LayerBuckets {
     /// is real fill copper (eligible for the containment short-test) or only a
     /// drawn outline.
     fn push_zone(&mut self, layer: &str, pts: Vec<(f64, f64)>, net: i64, filled: bool) {
-        self.push_zone_opts(layer, pts, net, filled, true)
+        self.push_zone_opts(layer, pts, net, filled, true);
     }
 
     /// As [`Self::push_zone`], but `edges` controls whether the boundary edges
@@ -1832,7 +1832,7 @@ fn custom_pad_shapes(
     let filled = |l: &List| -> bool {
         matches!(
             l.find_value("fill").as_deref(),
-            Some("yes") | Some("true") | Some("solid")
+            Some("yes" | "true" | "solid")
         )
     };
     for prim in prims.lists() {
@@ -1848,7 +1848,7 @@ fn custom_pad_shapes(
             .unwrap_or(0.0);
         let r = width / 2.0;
         match prim.name() {
-            Some("gr_poly") | Some("poly") => {
+            Some("gr_poly" | "poly") => {
                 let Some(pts_list) = prim.find("pts") else {
                     continue;
                 };
@@ -3055,7 +3055,7 @@ pub mod eagle_drc {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                Ok(Event::Start(e) | Event::Empty(e)) => {
                     let name = e.name().as_ref().to_vec();
                     let a = attrs_of(&e);
                     match name.as_slice() {
@@ -3395,8 +3395,8 @@ pub mod eagle_drc {
         // The included angle is `curve_deg`; the chord subtends it. Centre lies
         // off the chord midpoint by the sagitta direction.
         let theta = curve_deg.to_radians();
-        let mx = (x1 + x2) / 2.0;
-        let my = (y1 + y2) / 2.0;
+        let mx = f64::midpoint(x1, x2);
+        let my = f64::midpoint(y1, y2);
         let dx = x2 - x1;
         let dy = y2 - y1;
         let chord = (dx * dx + dy * dy).sqrt();
@@ -3464,7 +3464,7 @@ pub mod eagle_drc {
         let (rs, rc) = rot.sin_cos();
         (0..8)
             .map(|i| {
-                let a = std::f64::consts::FRAC_PI_8 + i as f64 * std::f64::consts::FRAC_PI_4;
+                let a = std::f64::consts::FRAC_PI_8 + f64::from(i) * std::f64::consts::FRAC_PI_4;
                 let (lx, ly) = (circum * a.cos(), circum * a.sin());
                 (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc)
             })

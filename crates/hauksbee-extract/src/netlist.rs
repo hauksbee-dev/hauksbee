@@ -64,7 +64,7 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                 }) {
                     // KiCad emits this property (usually value-less) only for DNP
                     // parts. Presence => DNP, unless an explicit falsey value overrides.
-                    dnp = !matches!(val.as_deref(), Some("no") | Some("false") | Some("0"));
+                    dnp = !matches!(val.as_deref(), Some("no" | "false" | "0"));
                 }
                 if let (Some(k), Some(v)) = (key, val) {
                     properties.push((k, v));

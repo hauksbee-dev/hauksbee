@@ -106,7 +106,7 @@ pub fn instantiate_macro(
                 // slightly, erring toward solid, never toward emptiness).
                 let outline: Vec<(f64, f64)> = (0..8)
                     .map(|k| {
-                        let a = k as f64 * std::f64::consts::TAU / 8.0;
+                        let a = f64::from(k) * std::f64::consts::TAU / 8.0;
                         (cxr + r * a.cos(), cyr + r * a.sin())
                     })
                     .collect();

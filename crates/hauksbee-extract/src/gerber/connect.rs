@@ -404,7 +404,7 @@ pub fn reconstruct(
                     // Sample the segment so a long track that dips into a pour
                     // mid-span is caught even if both ends are outside.
                     for k in 1..4 {
-                        let t = k as f64 / 4.0;
+                        let t = f64::from(k) / 4.0;
                         test_pts.push((c.ax + (c.bx - c.ax) * t, c.ay + (c.by - c.ay) * t));
                     }
                 }
@@ -1143,7 +1143,7 @@ fn footprint_half_extent(package: &str) -> f64 {
     // parse the `RxC` grid and the `P<pitch>mm` if present (default 2.54mm).
     if let Some((rows, cols)) = grid_hint(&p) {
         let pitch = pitch_hint(&p).unwrap_or(2.54);
-        let span = (rows.max(cols) as f64) * pitch;
+        let span = f64::from(rows.max(cols)) * pitch;
         // KiCad places a header's origin at pin 1 (a corner), not the body
         // centre, so pads extend the *full* span from the placed point in one
         // direction. Use the whole span (plus a pad margin) as the half-extent
@@ -1200,8 +1200,8 @@ fn grid_window(package: &str, rotation_deg: f64) -> Option<GridWindow> {
     let pitch = pitch_hint(&p).unwrap_or(2.54);
     // Same margins as `footprint_half_extent`: the row span is the FULL grid
     // length (KiCad headers origin at pin 1), plus one pitch of slack.
-    let long = (rows.max(cols) as f64) * pitch + pitch;
-    let cross = (rows.min(cols) as f64) * pitch + pitch;
+    let long = f64::from(rows.max(cols)) * pitch + pitch;
+    let cross = f64::from(rows.min(cols)) * pitch + pitch;
     let (sin, cos) = rotation_deg.to_radians().sin_cos();
     Some(GridWindow {
         long,
