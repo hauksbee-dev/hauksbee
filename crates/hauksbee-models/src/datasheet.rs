@@ -1483,7 +1483,12 @@ the datasheet states for the selected package; omit a key it does not state (do
 NOT invent it). Ratings are magnitudes: for a limit printed negative (PNP,
 negative rail) write |value| and keep the printed sign in the source comment.
 A stated limit with no key here goes in a characteristic record (rule 0), never
-under an invented key:
+under an invented key. A rating printed for several conditions the part number
+does not settle (board copper or mounting, package, ambient) is read from the
+least favourable one, as a checker must not trust a better board than the user's:
+the lowest current and power, the highest thermal resistance, and
+max_current_a, max_power_w and theta_ja_c_per_w all from that same condition;
+the other rows go in characteristic records:
 {ratings_hint}
 
 [[models.envelope]]: read the Recommended Operating Conditions and Absolute
@@ -2071,7 +2076,7 @@ fn required_params_for_kind(kind: &str) -> &'static str {
              selectable outputs is never vout. iq_a: the no-load ground (or supply) current; \
              max_current_a (a [models.ratings] key, never a param): the rated output current, \
              never the absolute-maximum IOUT; dropout_v: the row for this part's own \
-             output-voltage option"
+             output-voltage option, at the rated output current when several loads are printed"
         }
         "opamp" => {
             "gain, and swing_lo/swing_hi (output headroom from each supply pin, max column) or \
@@ -3325,7 +3330,9 @@ mod tests {
         assert!(
             bjt.contains("(.MODEL/.SUBCKT) is copied verbatim") && bjt.contains("derives tf, cjc")
         );
-        assert!(bjt.contains("rated IOUT") && bjt.contains("row for the card's stated package"));
+        assert!(bjt.contains("rated IOUT") && bjt.contains("least favourable row the part"));
+        assert!(bjt.contains("max_current_a, max_power_w and theta_ja_c_per_w all from that same"));
+        assert!(vreg.contains("at the rated output current when several loads are printed"));
         let nmos = build_prompt("FET_FIXTURE", "nmos", "x");
         assert!(nmos.contains("   - kp: 1e-6 to 1000\n") && nmos.contains("cgd, is, cbd"));
         assert!(nmos.contains("1/(kp*(|VGS| - |vto|)) + rd + rs"));

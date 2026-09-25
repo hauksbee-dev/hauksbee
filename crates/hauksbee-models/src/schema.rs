@@ -1048,7 +1048,7 @@ impl Ratings {
   max_pin_current_a    # per-pin source/sink absolute limit (A) for an IC or MCU
   max_ripple_current_a # capacitor rated RMS ripple current (A) at its stated frequency/temperature
   max_junction_temp_c  # TJ maximum junction temperature (C)
-  theta_ja_c_per_w     # Rth(j-a) junction-to-ambient thermal resistance (C/W = K/W), the thermal-table row for the card's stated package, its board/airflow condition only
+  theta_ja_c_per_w     # Rth(j-a) junction-to-ambient thermal resistance (C/W = K/W), the least favourable row the part number allows (highest across packages and board conditions it leaves open)
   theta_jc_c_per_w     # Rth(j-c) junction-to-case thermal resistance (C/W = K/W), selected package and stated case reference only
   min_current_a        # FLOOR, not a ceiling (A): least current the datasheet guarantees regulation at (shunt-reference IKmin, LDO minimum load)
   rds_on_vgs           # MOSFET: lowest |VGS| (V) at which the datasheet specifies RDS(on)
