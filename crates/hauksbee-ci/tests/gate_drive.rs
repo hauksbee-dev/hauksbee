@@ -8,7 +8,7 @@ use crate::support::{self, comp, pad};
 
 /// A part, its footprint and the nets its three pads carry. The pad order is
 /// package-dependent and NOT a rotation: TO-220-3 is gate-drain-source
-/// (Infineon IRF540NPbF Rev. 2.1 page 1), SOT-23 is gate-source-drain.
+/// (Infineon `IRF540NPbF` Rev. 2.1 page 1), SOT-23 is gate-source-drain.
 type Q = (&'static str, &'static str, [&'static str; 3]);
 const R0805: &str = "Resistor_SMD:R_0805_2012Metric";
 const IRF: Q = (

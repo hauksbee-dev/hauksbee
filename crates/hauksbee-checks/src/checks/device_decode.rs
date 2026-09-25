@@ -16,10 +16,10 @@
 //!
 //! This is a **per-part** check that **grows incrementally**. There is no generic
 //! "decode any config pin" engine, because each part has its own pins, its own
-//! band table, and its own consistency rules (e.g. the CYPD3177's VBUS_MIN >
-//! VBUS_MAX override). Each supported part is a hand-written decoder seeded from
+//! band table, and its own consistency rules (e.g. the CYPD3177's `VBUS_MIN` >
+//! `VBUS_MAX` override). Each supported part is a hand-written decoder seeded from
 //! its datasheet. Three parts are seeded today: the Cypress / Infineon
-//! **CYPD3177** (EZ-PD BCR) USB-C PD sink controller, and the TI **BQ2407x**
+//! **CYPD3177** (EZ-PD BCR) USB-C PD sink controller, and the TI **`BQ2407x`**
 //! charger family's TMR safety-timer resistor (an out-of-band value found as
 //! a real 4.7k-for-47k typo on a published keyboard), and the TI **TPS25982**
 //! eFuse family's ILIM resistor plus a connected, rated connector witness.
@@ -49,20 +49,20 @@
 //! *additional parallel* leg in, which cannot reproduce the datasheet's
 //! intended single-pull-down-per-detent codes.
 //! Detent 4 ("15 V") decodes to the 12 V band; detent 5 ("20 V") decodes to the
-//! 19 V band. Compounded by a hard-wired VBUS_MIN = 19 V, which (datasheet Note 1)
-//! overrides VBUS_MAX whenever VBUS_MIN > VBUS_MAX, defeating the selector.
+//! 19 V band. Compounded by a hard-wired `VBUS_MIN` = 19 V, which (datasheet Note 1)
+//! overrides `VBUS_MAX` whenever `VBUS_MIN` > `VBUS_MAX`, defeating the selector.
 //!
 //! ### What this check resolves automatically vs what it cannot
 //!
 //! Resolves automatically from the netlist:
-//!   - VBUS_MAX / VBUS_MIN pins (by pin function name, or by net name fallback).
+//!   - `VBUS_MAX` / `VBUS_MIN` pins (by pin function name, or by net name fallback).
 //!   - The fixed divider on each pin: pull-up resistor to the 3.3 V reference and
 //!     the permanent pull-down resistor to ground.
 //!   - Switch-selectable extra pull-down legs *when* the selector is a multi-pad
 //!     component (e.g. a rotary SW) whose common pad sits on the config net and
 //!     whose other pads each reach ground directly or through one resistor: each
 //!     such pad is decoded as one detent.
-//!   - The Note-1 consistency check (VBUS_MIN band > VBUS_MAX band).
+//!   - The Note-1 consistency check (`VBUS_MIN` band > `VBUS_MAX` band).
 //!
 //! Cannot resolve (honest limits):
 //!   - It does not know the *intended* voltage label silk-screened next to each
@@ -88,7 +88,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// Reference rail for the CYPD3177 config dividers (VDDD = 3.3 V).
 const VDDD: f64 = 3.3;
 
-/// A decoded PD request voltage from a VBUS_MAX / VBUS_MIN divider, in volts.
+/// A decoded PD request voltage from a `VBUS_MAX` / `VBUS_MIN` divider, in volts.
 /// `Faulty` is the catch-all for a voltage above every named band (should not
 /// happen for an in-range divider, kept for totality).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,13 +116,13 @@ impl PdVolts {
 }
 
 /// Decode a config-pin voltage (in millivolts) against the EZ-PD BCR datasheet
-/// **Table 2** VBUS_MAX bands (Infineon 002-25383), VDDD = 3.3 V reference.
+/// **Table 2** `VBUS_MAX` bands (Infineon 002-25383), VDDD = 3.3 V reference.
 ///
 /// Verbatim bands (mV):
 ///   5 V: 0..=248, 9 V: 249..=786, 12 V: 787..=1347, 15 V: 1348..=1920,
 ///   19 V: 1921..=2778, 20 V: >= 2779.
 ///
-/// VBUS_MIN uses the same band structure, so this one decoder serves both pins.
+/// `VBUS_MIN` uses the same band structure, so this one decoder serves both pins.
 pub fn decode_table2(mv: i64) -> PdVolts {
     match mv {
         i64::MIN..=248 => PdVolts::V5,
@@ -207,8 +207,8 @@ fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
 
-/// The net id a U pin carries for a given pin-function role (e.g. "VBUS_MAX"),
-/// or, failing a function match, by the net's own name. Returns (net_id, name).
+/// The net id a U pin carries for a given pin-function role (e.g. "`VBUS_MAX`"),
+/// or, failing a function match, by the net's own name. Returns (`net_id`, name).
 fn pin_net_for_role<'a>(
     board: &'a ExtractedBoard,
     comp: &'a Component,
@@ -386,7 +386,7 @@ fn leg_resistor_to_ground(board: &ExtractedBoard, node: i64) -> Option<(String, 
 }
 
 /// Run the device-decode check class over a board. Seeded parts: the
-/// CYPD3177 USB-C PD sink, the TI BQ2407x charger family's TMR safety timer,
+/// CYPD3177 USB-C PD sink, the TI `BQ2407x` charger family's TMR safety timer,
 /// and the TI TPS25982 eFuse family's ILIM current limit; each identified part
 /// is decoded independently.
 pub fn device_decode_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
@@ -837,7 +837,7 @@ const BQ2407X_TMR_DISABLE_OHMS: f64 = 100.0;
 /// application that intentionally does not use battery temperature monitoring.
 const BQ2407X_TS_DISABLE_OHMS: f64 = 10_000.0;
 
-/// Does this component's value / MPN positively identify it as a BQ2407x
+/// Does this component's value / MPN positively identify it as a `BQ2407x`
 /// charger? Covers bq24072/73/74/75/79 and the -Q1 automotive variants.
 fn is_bq2407x(c: &Component) -> bool {
     let v = c.value.to_ascii_uppercase().replace([' ', '-'], "");
@@ -845,7 +845,7 @@ fn is_bq2407x(c: &Component) -> bool {
     v.contains("BQ2407") || l.contains("BQ2407")
 }
 
-/// Decode the TMR programming resistor of one identified BQ2407x.
+/// Decode the TMR programming resistor of one identified `BQ2407x`.
 fn check_bq2407x_tmr(board: &ExtractedBoard, u: &Component, report: &mut NetLintReport) {
     let Some((tmr_id, tmr_name)) = pin_net_for_role(board, u, "TMR") else {
         return; // pin not resolvable: silent, per the zero-false-positive bar
@@ -899,7 +899,7 @@ fn fixed_resistor_ohms(c: &Component) -> Option<f64> {
         .filter(|ohms| ohms.is_finite() && *ohms >= 0.0)
 }
 
-/// Thermistors have no first-class PassiveClass yet, so retain only explicit
+/// Thermistors have no first-class `PassiveClass` yet, so retain only explicit
 /// identity evidence: the conventional RT reference, a thermistor/NTC token in
 /// the library/value/footprint, or the datasheet's named 103AT family token.
 /// A bare numeric resistor value is intentionally insufficient.
@@ -935,7 +935,7 @@ fn ts_abstention(
     });
 }
 
-/// Decode the BQ2407x TS network using the same positive-identity ladder as the
+/// Decode the `BQ2407x` TS network using the same positive-identity ladder as the
 /// TMR decoder. TI SLUS810N Table 7-1 maps TS to pin 1 and Section 9.3.6 says an
 /// NTC in the battery pack provides over-temperature protection. A fixed 10k
 /// TS-to-VSS resistor is the explicitly documented "TS function not used"
@@ -1054,8 +1054,8 @@ fn format_ohms(ohms: f64) -> String {
     }
 }
 
-/// Decode a CYPD3177's VBUS_MAX (with its rotary selector, if resolvable) and
-/// VBUS_MIN dividers, and flag the documented failure modes.
+/// Decode a CYPD3177's `VBUS_MAX` (with its rotary selector, if resolvable) and
+/// `VBUS_MIN` dividers, and flag the documented failure modes.
 fn check_cypd3177(board: &ExtractedBoard, u: &Component, report: &mut NetLintReport) {
     // ── VBUS_MAX ────────────────────────────────────────────────────────────
     let max = pin_net_for_role(board, u, "VBUS_MAX");

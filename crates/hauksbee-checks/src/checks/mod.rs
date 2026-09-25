@@ -11,8 +11,8 @@
 //!
 //! - [`usb_c`]: the USB Type-C CC attach classifier. It attaches a generic
 //!   source + cable model to a board's CC termination and classifies the result
-//!   against the USB Type-C spec windows (Sink / AudioAccessory / ...). This is
-//!   what re-derives the RPi 4 shared-CC-pulldown fault cold.
+//!   against the USB Type-C spec windows (Sink / `AudioAccessory` / ...). This is
+//!   what re-derives the `RPi` 4 shared-CC-pulldown fault cold.
 //! - [`straps`]: the boot strapping-pin lint. It reads each MCU's strap table
 //!   from the model db and flags a strap net that cannot hold the level the part
 //!   needs at reset (a free-running clock on it, or a pull to the wrong rail).
@@ -82,7 +82,7 @@ pub(crate) fn resolved_components<'a>(
 /// model-aware driver contention.
 /// Kept as one function so every surface (`--lint`, `--check`, the JSON
 /// aggregate, TUI, the web front door) runs the identical set and no caller can
-/// reopen the "Looks healthy" hole by forgetting one: splice device_decode in
+/// reopen the "Looks healthy" hole by forgetting one: splice `device_decode` in
 /// on the `--lint` path alone and every other surface returns a false PASS on
 /// those faults.
 pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {

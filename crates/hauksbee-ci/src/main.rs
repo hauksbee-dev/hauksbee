@@ -27,7 +27,7 @@ use hauksbee_ci::{run, RunConfig};
 /// asserts on rails, UART, blink rate and stress faults. Exits 0 if every
 /// assertion passed, 1 if any failed, 2 on a spec/usage error, 3 when the analog
 /// co-sim did not converge under an assertion's window (invalid for analysis).
-/// Writes JUnit XML with --junit and emits GitHub annotations under GITHUB_ACTIONS.
+/// Writes `JUnit` XML with --junit and emits GitHub annotations under `GITHUB_ACTIONS`.
 #[derive(Parser)]
 #[command(
     name = "hauksbee-ci",
@@ -103,7 +103,7 @@ enum Command {
     /// an existing spec.
     ///
     /// Example:
-    ///   cd ci && hauksbee-ci init ../hardware/board.kicad_pcb
+    ///   cd ci && hauksbee-ci init ../`hardware/board.kicad_pcb`
     Init(InitArgs),
 
     /// Install the pre-commit gate into this repository.
@@ -169,7 +169,7 @@ struct RunArgs {
     #[arg(long, value_name = "NAME", conflicts_with = "specs")]
     example: Option<String>,
 
-    /// Write JUnit XML to this path (for the CI test-report step).
+    /// Write `JUnit` XML to this path (for the CI test-report step).
     #[arg(long, value_name = "OUT.XML")]
     junit: Option<PathBuf>,
 
@@ -182,7 +182,7 @@ struct RunArgs {
     /// unchanged; a spec/board error prints `{"ok":false,"error":...}`. The
     /// shape is published as a JSON Schema in
     /// crates/hauksbee-ci/schemas/hauksbee-ci-report.schema.json and documented
-    /// in docs/ci/JSON_OUTPUT.md.
+    /// in `docs/ci/JSON_OUTPUT.md`.
     #[arg(long)]
     json: bool,
 
@@ -196,7 +196,7 @@ struct RunArgs {
     /// and the user model dirs (`~/.hauksbee/models`, `~/.config/hauksbee/models`);
     /// the same layer order as `hauksbee run --models-dir`. Lets a spec's
     /// board bind custom parts checked into the hardware repo, including
-    /// `[[models]] kind = "mcu"` routing entries for user SoC descriptors.
+    /// `[[models]] kind = "mcu"` routing entries for user `SoC` descriptors.
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
 
@@ -247,7 +247,7 @@ struct CheckArgs {
 
 #[derive(Parser)]
 struct InitArgs {
-    /// Board file to scaffold a spec from (.kicad_pcb, .kicad_sch, .net, .brd, .PcbDoc, .d356, .board).
+    /// Board file to scaffold a spec from (.`kicad_pcb`, .`kicad_sch`, .net, .brd, .`PcbDoc`, .d356, .board).
     /// With no argument, looks for exactly one board file in the current
     /// directory and tells you the command to run on it.
     #[arg(value_name = "BOARD")]

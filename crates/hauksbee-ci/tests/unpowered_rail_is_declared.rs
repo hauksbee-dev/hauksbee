@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 /// A board with two supply-ish nets: `VCC` (5 V by convention, so it resolves)
 /// and `ANALOG_VDD` (a supply with no readable magnitude). Enough parts hang off
-/// ANALOG_VDD for it to read as a rail rather than a signal.
+/// `ANALOG_VDD` for it to read as a rail rather than a signal.
 fn board_with_a_nameless_rail(dir: &Path) -> PathBuf {
     let mut nodes_vcc = String::new();
     let mut nodes_avdd = String::new();
@@ -176,7 +176,7 @@ fn the_scaffold_asks_about_the_rail_it_cannot_resolve() {
     );
 }
 
-/// The AeroFC shape: a rail the binder can price by name (`+3V3`) next to a
+/// The `AeroFC` shape: a rail the binder can price by name (`+3V3`) next to a
 /// battery rail it cannot (`VBAT`, in the engine's supply-token list but with
 /// no readable magnitude). Enough parts on VBAT for it to read as a rail.
 fn board_with_a_battery_rail(dir: &Path) -> PathBuf {

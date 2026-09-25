@@ -28,7 +28,7 @@ use std::collections::HashSet;
 
 /// A capacitor at the pin this size or larger supplies the sample-and-hold
 /// charge locally, so the series resistance no longer sets settling: ~700x the
-/// ATmega328P's 14 pF S/H capacitor, and the remedy the datasheets name.
+/// `ATmega328P`'s 14 pF S/H capacitor, and the remedy the datasheets name.
 const ADC_HOLD_CAP_F: f64 = 10.0e-9;
 
 /// One finding, and whether the run MEASURED a datasheet limit violated.

@@ -47,7 +47,7 @@ pub fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
 }
 
 /// A [`hauksbee_ci::CiResult`] carrying `results` and nothing else: spec "t" on
-/// board "b.kicad_pcb", one seed, no elapsed time, and every honesty list empty.
+/// board "`b.kicad_pcb`", one seed, no elapsed time, and every honesty list empty.
 ///
 /// The report surfaces are judged from synthesized results in several modules,
 /// and each one needs the same otherwise-empty carrier around them.
@@ -162,7 +162,7 @@ pub fn stderr(o: &std::process::Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-/// Serializes every test that runs a co-sim whose SoC descriptor resolution
+/// Serializes every test that runs a co-sim whose `SoC` descriptor resolution
 /// matters.
 ///
 /// Descriptor overrides reach the runner through `HAUKSBEE_MCU_DIR`, which is

@@ -31,7 +31,7 @@ pub fn decompile_board_to_code(kicad_pcb_text: &str) -> anyhow::Result<String> {
 /// through `Pcb::parse`, which rejects a `.net`/IPC/Eagle file). This bridge
 /// handles every text format the extractor understands: a `.kicad_pcb` keeps
 /// the geometry-rich layout path (so blocks/clusters and pad geometry survive),
-/// and everything else (KiCad `.net`, IPC-D-356, Eagle `.brd`, KiCad `.sch`)
+/// and everything else (`KiCad` `.net`, IPC-D-356, Eagle `.brd`, `KiCad` `.sch`)
 /// goes through [`ExtractedBoard::from_auto`] + [`program_from_extracted`].
 ///
 /// A `.net` carries pin *functions* (`pinfunction "A"`/`"K"`) that a layout
@@ -54,7 +54,7 @@ pub fn decompile_any_to_code(board_text: &str) -> anyhow::Result<String> {
 /// Build an editable Board-as-Code [`Program`] directly from an
 /// [`ExtractedBoard`].
 ///
-/// This is the bridge that lets an extracted board (KiCad netlist, IPC-356,
+/// This is the bridge that lets an extracted board (`KiCad` netlist, IPC-356,
 /// Eagle) become editable code without a `.kicad_pcb` round-trip. Net ids are
 /// resolved to names; each component becomes a singleton [`Stmt::Single`] so the
 /// program is flat and every pad-net is explicit and editable. Pad geometry the
@@ -161,7 +161,7 @@ fn ensure_boardcode_serializable(board: &ExtractedBoard) -> anyhow::Result<()> {
 
 /// Recompile Board-as-Code text into a `.kicad_pcb` string.
 ///
-/// Parses the DSL, interprets it into a [`Pcb`], and emits KiCad s-expression
+/// Parses the DSL, interprets it into a [`Pcb`], and emits `KiCad` s-expression
 /// text. Errors carry the offending line number from the DSL parser.
 pub fn code_to_board_text(code: &str) -> anyhow::Result<String> {
     let prog = Program::parse(code).map_err(|e| anyhow::anyhow!("board code: {e}"))?;

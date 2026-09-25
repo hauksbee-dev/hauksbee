@@ -26,7 +26,7 @@
 //! Everything else (signal nets, parts with no current rating, poured rails) is
 //! left un-attributed, and [`audit_trace_currents`] then skips it. The result is
 //! a check that fires on a genuinely under-width *routed* trace carrying a cited
-//! current, and stays silent on the known-good corpus, exactly as the LumenPnP
+//! current, and stays silent on the known-good corpus, exactly as the `LumenPnP`
 //! sweep (`trace_current_corpus.rs`) pins.
 
 use std::collections::{hash_map::Entry, BTreeSet, HashMap, HashSet, VecDeque};
@@ -180,7 +180,7 @@ fn component_hint(component: &hauksbee_extract::Component) -> String {
 }
 
 /// Conventional single-part designator grammar: one class letter followed by
-/// a digit (or KiCad's unannotated `?`). This keeps R10/C10 useful without
+/// a digit (or `KiCad`'s unannotated `?`). This keeps R10/C10 useful without
 /// misclassifying RLY1, RF1, CON1, or CR1 merely because they share a prefix.
 fn conventional_designator(reference: &str, class: char) -> bool {
     let mut chars = reference.trim().chars();
@@ -875,7 +875,7 @@ fn power_nets_of(
 
 /// Run the trace-ampacity check and append its findings (and an info note) to an
 /// SI report. `pcb_text` is the raw `.kicad_pcb` text (the copper geometry source);
-/// when it is absent or not a KiCad layout, the check is inert.
+/// when it is absent or not a `KiCad` layout, the check is inert.
 pub fn append_ampacity(
     board: &ExtractedBoard,
     lib: &ModelLibrary,

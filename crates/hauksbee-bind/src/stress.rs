@@ -451,12 +451,12 @@ enum MetricCode {
     Rated(f64),
     /// A metric-only name whose code is not in the table.
     Unrecognised,
-    /// No usable metric-only code: either no METRIC suffix at all, or KiCad's
+    /// No usable metric-only code: either no METRIC suffix at all, or `KiCad`'s
     /// dual form whose imperial token is authoritative.
     Absent,
 }
 
-/// The run of ASCII digits that ends `s`, in order ("R_0402" -> "0402").
+/// The run of ASCII digits that ends `s`, in order ("`R_0402`" -> "0402").
 fn trailing_digits(s: &str) -> String {
     let mut d: Vec<char> = s.chars().rev().take_while(char::is_ascii_digit).collect();
     d.reverse();
@@ -533,14 +533,14 @@ fn din_axial_rating(f: &str) -> Option<f64> {
 /// Strip a multi-unit stamping suffix from a device name, yielding the package
 /// reference. Multi-unit packages stamp one IR device per unit with a suffix
 /// on the reference designator: `_q<N>` (dual BJTs, opamp/comparator channels),
-/// `_s<N>` (analog-switch banks), `_e<N>` (passive-array elements). "Q1_q2"
-/// and "Q1_q1" are two dice in the one physical package "Q1".
+/// `_s<N>` (analog-switch banks), `_e<N>` (passive-array elements). "`Q1_q2`"
+/// and "`Q1_q1`" are two dice in the one physical package "Q1".
 ///
 /// This is THE unit-suffix rule: the binder uses it to apply a package's
 /// ratings to every unit, [`StressMonitor::evaluate`] uses it to pool sibling
 /// dissipation through the shared package, and hauksbee-ci mirrors it
 /// (`key_belongs_to_ref`) to aggregate per-unit keys under the bare ref. Only
-/// an all-digit tail after the marker counts, so "SW1_heater" or "U1_qspi" are
+/// an all-digit tail after the marker counts, so "`SW1_heater`" or "`U1_qspi`" are
 /// left alone (and "SW1" never claims "SW10"'s units).
 pub fn strip_unit_suffix(name: &str) -> &str {
     ["_q", "_s", "_e"]
@@ -559,7 +559,7 @@ pub fn strip_unit_suffix(name: &str) -> &str {
 /// no whole-device [`DeviceMeta`] (their per-pin currents are covered by the
 /// pin-driver metas). Without this check a rail driven far past the chip's
 /// absolute-maximum Vcc would raise nothing at all, which is an honesty gap the
-/// model DB can close: it carries the rating (e.g. ATmega328P
+/// model DB can close: it carries the rating (e.g. `ATmega328P`
 /// `max_voltage_v = 6.0`).
 #[derive(Debug, Clone)]
 pub struct SupplyWatch {
@@ -621,7 +621,7 @@ pub struct StressMonitor {
     chunk_elapsed_s: f64,
     /// Run-cumulative per-device evidence, index-aligned with `metas`.
     run: Vec<RunStats>,
-    /// Each meta's (power rating, theta_JA, Tj max): footprint parses, so resolved once.
+    /// Each meta's (power rating, `theta_JA`, Tj max): footprint parses, so resolved once.
     limits: Vec<(Option<f64>, f64, f64)>,
 }
 
@@ -664,7 +664,7 @@ const CONDUCTING_ID_FRACTION: f64 = 1e-3;
 
 /// Time constant (s) of the lag a CONTINUOUS current rating is judged through.
 /// MOSFET and diode pulsed ratings are specified at a 300 us pulse width
-/// (Infineon IRF540NPbF Rev. 2.1 note 3, and the same convention across AOS,
+/// (Infineon `IRF540NPbF` Rev. 2.1 note 3, and the same convention across AOS,
 /// onsemi and Vishay parts), so anything shorter is pulsed by the datasheets'
 /// own definition. Rounded up to 1 ms, one order above the solver's chunk.
 const IDM_PULSE_S: f64 = 1e-3;
@@ -764,10 +764,10 @@ impl StressMonitor {
         out
     }
 
-    /// A junction temperature judged on a theta_JA inferred from the package,
+    /// A junction temperature judged on a `theta_JA` inferred from the package,
     /// because the card carries none, qualifies each claim it feeds.
     /// `claims(reference, decisive)` names those claims' scopes; `decisive` is
-    /// true when twice the inferred theta_JA would put the peak at or over the
+    /// true when twice the inferred `theta_JA` would put the peak at or over the
     /// part's Tj limit, so a verdict drawn from the limit rests on the guess.
     pub fn inferred_theta_ja(&self, claims: impl Fn(&str, bool) -> Vec<Scope>) -> Vec<Assumption> {
         let mut out = Vec::new();
@@ -1613,13 +1613,13 @@ fn diode_current(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
     i.clamp(-1e3, 1e3)
 }
 
-/// Thermal utilisation as a RISE-based fraction: (Tj − ambient)/(Tj_max −
+/// Thermal utilisation as a RISE-based fraction: (Tj − `ambient)/(Tj_max` −
 /// ambient). An idle part reads ~0, comparable with the power/current/voltage
 /// checks, which are all true 0-at-idle ratios, and a part at its junction
-/// limit reads 1.0. An absolute-Celsius ratio (Tj/Tj_max) instead floors every
-/// dissipating part at ~ambient/Tj_max (~0.2), giving the exported heat-map a
+/// limit reads 1.0. An absolute-Celsius ratio (`Tj/Tj_max`) instead floors every
+/// dissipating part at ~`ambient/Tj_max` (~0.2), giving the exported heat-map a
 /// spurious floor. The trip threshold is the same either way: frac > 1 ⟺ Tj >
-/// Tj_max under both. Clamped at 0 so a below-ambient junction never reads
+/// `Tj_max` under both. Clamped at 0 so a below-ambient junction never reads
 /// negative.
 fn thermal_stress_frac(tj_c: f64, tj_max_c: f64, ambient_c: f64) -> f64 {
     let span = tj_max_c - ambient_c;
@@ -1635,7 +1635,7 @@ mod monitor_temp_tests {
     use super::*;
 
     /// R15: the exported thermal stress fraction is rise-based, so a lightly-
-    /// loaded part reads ~0, not the ~0.2 floor the absolute Tj/Tj_max ratio gave
+    /// loaded part reads ~0, not the ~0.2 floor the absolute `Tj/Tj_max` ratio gave
     /// every dissipating device, while the fault trip (frac > 1) is unchanged.
     #[test]
     fn thermal_stress_is_rise_based_not_absolute() {

@@ -30,11 +30,11 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 pub const STIFF_R_OHMS: f64 = 1e-3;
 
 /// Battery / cell electrochemistry. Per-cell open-circuit voltage is a
-/// piecewise-linear function of state-of-charge (SoC, 0..1), see
+/// piecewise-linear function of state-of-charge (`SoC`, 0..1), see
 /// [`Chemistry::ocv_per_cell`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chemistry {
-    /// Lithium-ion / LiPo (graphite ‖ NMC/LCO), nominal 3.7 V/cell.
+    /// Lithium-ion / `LiPo` (graphite ‖ NMC/LCO), nominal 3.7 V/cell.
     LiIon,
     /// Primary alkaline (Zn‖MnO2), nominal 1.5 V/cell.
     Alkaline,
@@ -46,7 +46,7 @@ pub enum Chemistry {
 
 impl Chemistry {
     /// Open-circuit terminal voltage of a *single cell* at the given
-    /// state-of-charge (SoC in `[0, 1]`). Piecewise-linear interpolation over
+    /// state-of-charge (`SoC` in `[0, 1]`). Piecewise-linear interpolation over
     /// `(soc, volts)` knots taken from published discharge curves.
     ///
     /// Sources (typical room-temperature, low-rate discharge):
@@ -54,9 +54,9 @@ impl Chemistry {
     ///   ~3.7 V nominal plateau, ~3.0 V knee, 2.5 V empty.
     /// - Alkaline: Energizer E91 AA application data, 1.6 V fresh sloping
     ///   steadily to ~0.9 V cutoff (alkalines have no plateau).
-    /// - NiMH: Panasonic eneloop HR-3UTGB, 1.45 V full, flat ~1.25 V plateau,
+    /// - `NiMH`: Panasonic eneloop HR-3UTGB, 1.45 V full, flat ~1.25 V plateau,
     ///   1.0 V cutoff.
-    /// - LiFePO4: A123 / generic LFP, 3.6 V surface-charge, extremely flat
+    /// - `LiFePO4`: A123 / generic LFP, 3.6 V surface-charge, extremely flat
     ///   ~3.3–3.2 V plateau, 2.5 V cutoff.
     pub fn ocv_per_cell(self, soc: f64) -> f64 {
         let s = soc.clamp(0.0, 1.0);
@@ -124,10 +124,10 @@ pub enum PowerSupply {
     /// charge store from initial `soc`, behind `r_internal_ohms` per pack.
     ///
     /// `protection` is an optional BMS-style over-current cutoff. Real protected
-    /// LiPo cells (and the DW01/FS312-class protection ICs on bare cells) trip a
+    /// `LiPo` cells (and the DW01/FS312-class protection ICs on bare cells) trip a
     /// MOSFET open when the pack current stays above a threshold for a short
     /// delay. This is exactly the dynamic that DC misses and that the Inkplate
-    /// WiFi cold-boot inrush hits: the pack is fine at steady state but the TX
+    /// `WiFi` cold-boot inrush hits: the pack is fine at steady state but the TX
     /// burst trips protection.
     Battery {
         chemistry: Chemistry,
@@ -317,8 +317,8 @@ impl PowerSupply {
     /// Compute the `Vsource` target voltage for the *next* chunk, given the
     /// rail current `i_a` (A, positive = sourced into the net) measured over
     /// the chunk just solved, the simulation time `t` (s, for ripple phase),
-    /// and the chunk length `dt` (s, for battery SoC integration). May mutate
-    /// internal state (battery SoC drains here).
+    /// and the chunk length `dt` (s, for battery `SoC` integration). May mutate
+    /// internal state (battery `SoC` drains here).
     ///
     /// The returned voltage is the ideal source value *behind* `series_r()`;
     /// the solver adds the I·R drop across the series resistor on top, so the
@@ -635,7 +635,7 @@ mod tests {
     /// The CC loop's two sides on a 0.5 A USB port (series R = 0.5 ohm).
     ///
     /// Side one: a resistive load drawing over the limit settles at exactly
-    /// I = limit within a few chunks, rail = v_cmd - limit*Rs, positive.
+    /// I = limit within a few chunks, rail = `v_cmd` - limit*Rs, positive.
     /// Side two: an ideal current-sink overload (a scenario burst bigger than
     /// the port) must floor at rail = 0, never below: pre-fix, the iteration
     /// divided the command to zero and held the rail NEGATIVE through the

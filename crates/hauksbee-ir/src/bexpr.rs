@@ -149,7 +149,7 @@ impl CompiledExpr {
     }
 }
 
-/// One eval's `__d{k}` values, then `time` (all compile admits): a HashMapContext cost more.
+/// One eval's `__d{k}` values, then `time` (all compile admits): a `HashMapContext` cost more.
 struct Slots(Vec<Value>, Option<Value>);
 
 impl Context for Slots {

@@ -27,7 +27,7 @@
 //!   - Tables 4-28/4-29/4-30: the source-side CC voltage windows (vRa / vRd /
 //!     vOPEN) per Rp level.
 //!
-//! The RPi 4 reconstruction in `board-corpus/famous/rpi4_usbc_reconstruction/`
+//! The `RPi` 4 reconstruction in `board-corpus/famous/rpi4_usbc_reconstruction/`
 //! is the flagship caller: its as-designed CC subcircuit ties CC1 and CC2 to a
 //! single shared 5.1 kΩ (R79), and this classifier re-derives, cold, the famous
 //! "e-marked charger refuses to power the Pi" fault from the topology and these
@@ -164,7 +164,7 @@ pub enum Attach {
     PoweredCableNoSink,
     /// Rd/Rd: Debug Accessory Mode. No normal VBUS.
     DebugAccessory,
-    /// Ra/Ra: Audio Adapter Accessory Mode. **No VBUS**; this is the RPi 4 fault.
+    /// Ra/Ra: Audio Adapter Accessory Mode. **No VBUS**; this is the `RPi` 4 fault.
     AudioAccessory,
 }
 
@@ -225,7 +225,7 @@ impl Cable {
 
 /// The sink's CC termination as seen at the receptacle: the resistance each CC
 /// pin presents to GND, and whether the two CC pins are physically the *same*
-/// net (the RPi 4 defect).
+/// net (the `RPi` 4 defect).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SinkTermination {
     /// Ohms from CC1 to GND (the parallel combination of every resistor found
@@ -234,7 +234,7 @@ pub struct SinkTermination {
     /// Ohms from CC2 to GND. `None` if CC2 has no path to GND.
     pub cc2_rd_ohms: Option<f64>,
     /// True when CC1 and CC2 resolve to the *same* electrical net (so a single
-    /// shared pulldown terminates both). This is the RPi 4 rev 1.0/1.1 bug.
+    /// shared pulldown terminates both). This is the `RPi` 4 rev 1.0/1.1 bug.
     pub shared_net: bool,
 }
 
@@ -273,7 +273,7 @@ impl CcResult {
 ///     independent nodes.
 ///
 /// When `term.shared_net` is true the two source CC pins drive a single node,
-/// which is exactly why the RPi 4 reads two Ra terminations under an e-marked
+/// which is exactly why the `RPi` 4 reads two Ra terminations under an e-marked
 /// cable.
 pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult {
     let mut c = Circuit::new();
@@ -413,7 +413,7 @@ pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTerminatio
 /// (GNDA/AGND, GNDD/DGND), power/earth grounds (GNDPWR/PGND/EGND), shield/USB
 /// grounds, and numbered grounds (GND1, GND2, ...). Deliberately conservative:
 /// it matches only names whose alphabetic-only core is exactly a ground token,
-/// so a signal like "GND_SENSE" or "GNDLED" (an LED return that is *not* the
+/// so a signal like "`GND_SENSE`" or "GNDLED" (an LED return that is *not* the
 /// system ground) does not masquerade as ground and credit a phantom Rd.
 fn is_ground_name(name: &str) -> bool {
     // Drop digits and separators so "GND1", "GNDA_2", "GND-3" all reduce to
@@ -993,11 +993,11 @@ pub struct UsbcReport {
 ///
 /// The board is classified against a default-Rp source through BOTH a passive
 /// cable AND an e-marked (electronically-marked) cable, because the canonical
-/// failure; the RPi 4 rev-1.0/1.1 shared-CC-pulldown, only manifests with an
+/// failure; the `RPi` 4 rev-1.0/1.1 shared-CC-pulldown, only manifests with an
 /// e-marked cable: the e-marker's Ra drags the shared node into the Ra band so a
 /// compliant source declares an Audio Adapter Accessory and withholds VBUS, while
 /// a passive cable still reads the same node as a sink. (This matches the
-/// documented hardware behaviour: the RPi 4 failed to charge from USB-C-to-C
+/// documented hardware behaviour: the `RPi` 4 failed to charge from USB-C-to-C
 /// cables but worked from A-to-C.) `attach`/`powers_vbus` report the e-marked
 /// case, the stricter and more modern one.
 ///
@@ -1061,7 +1061,7 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
 /// the 5.1k spec, dragging CC voltage out of range and making the source
 /// mis-detect current. That audit was computed but never influenced the verdict,
 /// so the defect graded Ok, invisible to `--json`, the web report, and `--strict`.
-/// Surfacing it as Info reaches every persona (web_gloss returns a section for
+/// Surfacing it as Info reaches every persona (`web_gloss` returns a section for
 /// Info) and denies a false "looks healthy". A Serious verdict is NOT downgraded.
 fn apply_double_termination(
     level: UsbcLevel,

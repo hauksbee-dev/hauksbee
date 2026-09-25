@@ -324,7 +324,7 @@ pub struct Spec {
     /// Either an informational MCU-kind note (`mcu = "atmega328p"`, the legacy
     /// string form; nothing reads it, the binder detects the MCU from the
     /// board), or an `[mcu]` table carrying co-sim MCU configuration such as
-    /// `descriptor_dir` (a directory of `<part>.soc.toml` SoC descriptor
+    /// `descriptor_dir` (a directory of `<part>.soc.toml` `SoC` descriptor
     /// overrides, resolved relative to the spec file's directory). Note the
     /// binder still detects WHICH MCU from the board's part value; neither
     /// form can force a backend.
@@ -455,7 +455,7 @@ pub struct McuConfig {
     /// `mcu = "..."`; nothing reads it.
     #[serde(default)]
     pub name: Option<String>,
-    /// Directory of `<part>.soc.toml` SoC descriptor overrides for this run,
+    /// Directory of `<part>.soc.toml` `SoC` descriptor overrides for this run,
     /// resolved relative to the spec file's directory. The same layer the
     /// `HAUKSBEE_MCU_DIR` environment variable provides, made declarative so a
     /// hardware repo can check its descriptor overrides in beside the spec.
@@ -469,7 +469,7 @@ pub struct McuConfig {
 /// Deserialize the spec's `mcu` key by dispatching on the TOML value's shape
 /// instead of trying the untagged variants in turn. Untagged reports every
 /// table-form failure as "data did not match any variant of untagged enum
-/// McuField", which names no key and (because the whole table is the value)
+/// `McuField`", which names no key and (because the whole table is the value)
 /// points nowhere useful. Dispatching on the shape keeps [`McuConfig`]'s own
 /// error ("unknown field `x`, expected `name` or `descriptor_dir`"), and lets
 /// the commonest real mistake get named as exactly what it is: TOML gives every
@@ -796,17 +796,17 @@ pub struct PeripheralSpec {
     #[serde(default)]
     #[schemars(range(max = 127))]
     pub address: Option<u8>,
-    /// EEPROM size in bytes (i2c_eeprom / spi_eeprom).
+    /// EEPROM size in bytes (`i2c_eeprom` / `spi_eeprom`).
     #[serde(default)]
     #[schemars(range(min = 1))]
     pub size: Option<usize>,
-    /// Sensor temperature in Celsius (i2c_lm75).
+    /// Sensor temperature in Celsius (`i2c_lm75`).
     #[serde(default)]
     pub temp_c: Option<f64>,
-    /// ADC reference voltage (spi_mcp3008).
+    /// ADC reference voltage (`spi_mcp3008`).
     #[serde(default)]
     pub vref: Option<f64>,
-    /// Chip-select net for a SPI slave (spi_eeprom / spi_mcp3008 / SPI sensor).
+    /// Chip-select net for a SPI slave (`spi_eeprom` / `spi_mcp3008` / SPI sensor).
     /// When set and the net resolves to an MCU GPIO pin, the co-sim frames the
     /// slave's transactions on the real CS edges (exact framing) instead
     /// of the chunk-boundary heuristic.
@@ -834,7 +834,7 @@ pub struct PeripheralSpec {
     /// PWL points as `[[t_ms, value], ...]`.
     #[serde(default)]
     pub pwl: Option<Vec<[f64; 2]>>,
-    /// Nets a vcd_sink should log.
+    /// Nets a `vcd_sink` should log.
     #[serde(default)]
     pub nets: Option<Vec<String>>,
     /// Path to write the VCD file (relative to the spec dir).
@@ -996,7 +996,7 @@ impl SensorAttach {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Override {
-    /// Reference designator, e.g. "R_Shunt15301".
+    /// Reference designator, e.g. "`R_Shunt15301`".
     #[serde(rename = "ref")]
     pub reference: String,
     /// The replacement value string, spelled the way the board file would spell
@@ -1160,8 +1160,8 @@ pub struct Assertion {
     #[serde(default)]
     pub name: Option<String>,
 
-    /// Target net (voltage / toggle / rail_window / boot-coverage /
-    /// phase_margin / ac_gain).
+    /// Target net (voltage / toggle / `rail_window` / boot-coverage /
+    /// `phase_margin` / `ac_gain`).
     #[serde(default)]
     pub net: Option<String>,
     /// Lower bound (volts / dB / degrees / peripheral field). Voltage-class
@@ -1174,7 +1174,7 @@ pub struct Assertion {
     /// Only sample at/after this time (ms), lets the rail settle first.
     #[serde(default)]
     pub after_ms: Option<f64>,
-    /// pulse_width: which pulse to time, `"high"` (the default) or `"low"`.
+    /// `pulse_width`: which pulse to time, `"high"` (the default) or `"low"`.
     #[serde(default)]
     #[schemars(extend("enum" = ["high", "low"]))]
     pub level: Option<String>,
@@ -1189,7 +1189,7 @@ pub struct Assertion {
     #[serde(default)]
     pub mcu: Option<String>,
 
-    /// toggle: expected toggle frequency (Hz); ac_gain: measurement frequency.
+    /// toggle: expected toggle frequency (Hz); `ac_gain`: measurement frequency.
     #[serde(default)]
     pub freq_hz: Option<f64>,
     /// toggle: relative tolerance on `freq_hz`, as a FRACTION in (0, 1]
@@ -1198,18 +1198,18 @@ pub struct Assertion {
     #[serde(default)]
     #[schemars(extend("exclusiveMinimum" = 0, "maximum" = 1))]
     pub tolerance: Option<f64>,
-    /// Minimum toggle count over the run (alternative to freq_hz).
+    /// Minimum toggle count over the run (alternative to `freq_hz`).
     #[serde(default)]
     pub min_toggles: Option<u64>,
 
-    /// max_current / max_temp: the component to check.
+    /// `max_current` / `max_temp`: the component to check.
     #[serde(rename = "ref", default)]
     pub reference: Option<String>,
-    /// max_current: ceiling in amps for the component named by `ref`.
+    /// `max_current`: ceiling in amps for the component named by `ref`.
     #[serde(default)]
     pub amps: Option<f64>,
 
-    /// max_temp: ceiling in C for the steady-state junction temperature of the
+    /// `max_temp`: ceiling in C for the steady-state junction temperature of the
     /// component named by `ref`. When omitted, the device's own max junction
     /// temperature (from the model DB, or the per-package-class default) is used.
     #[serde(default)]
@@ -1223,7 +1223,7 @@ pub struct Assertion {
     #[serde(default)]
     pub bytes: Option<String>,
     /// A peripheral state field that must lie in [min, max] (e.g. "transitions"
-    /// on a vcd_sink, "temp_c" on a sensor). Uses the assertion's min/max.
+    /// on a `vcd_sink`, "`temp_c`" on a sensor). Uses the assertion's min/max.
     #[serde(default)]
     pub field: Option<String>,
 
@@ -1232,46 +1232,46 @@ pub struct Assertion {
     /// assertion spans the whole run.
     #[serde(default)]
     pub scenario: Option<String>,
-    /// rail_window: the rail is considered "dipped" while it is below this
+    /// `rail_window`: the rail is considered "dipped" while it is below this
     /// voltage. Combined with `for_max_ms` to bound dip duration, and with
     /// `recover_to` / `recover_within_ms` to bound recovery.
     #[serde(default)]
     pub dip_below: Option<f64>,
-    /// rail_window: the rail must not stay below `dip_below` for longer than
+    /// `rail_window`: the rail must not stay below `dip_below` for longer than
     /// this many milliseconds (total, summed over the window).
     #[serde(default)]
     pub for_max_ms: Option<f64>,
-    /// rail_window: the voltage the rail must climb back to for "recovered".
+    /// `rail_window`: the voltage the rail must climb back to for "recovered".
     #[serde(default)]
     pub recover_to: Option<f64>,
-    /// rail_window: the rail must recover (reach `recover_to`) within this many
+    /// `rail_window`: the rail must recover (reach `recover_to`) within this many
     /// milliseconds of first dipping below `dip_below`.
     #[serde(default)]
     pub recover_within_ms: Option<f64>,
-    /// rail_window: the rail is considered "spiking" while it is strictly
+    /// `rail_window`: the rail is considered "spiking" while it is strictly
     /// above this voltage. Combine with `spike_for_max_ms` to bound total
     /// overvoltage duration, and with `settle_to` / `settle_within_ms` to bound
     /// settling.
     #[serde(default)]
     pub spike_above: Option<f64>,
-    /// rail_window: the rail must not stay above `spike_above` for longer than
+    /// `rail_window`: the rail must not stay above `spike_above` for longer than
     /// this many milliseconds (total, summed over the window).
     #[serde(default)]
     #[schemars(range(min = 0.0))]
     pub spike_for_max_ms: Option<f64>,
-    /// rail_window: the voltage the rail must return to (at or below) for
+    /// `rail_window`: the voltage the rail must return to (at or below) for
     /// "settled".
     #[serde(default)]
     pub settle_to: Option<f64>,
-    /// rail_window: the rail must settle (reach `settle_to`) within this many
+    /// `rail_window`: the rail must settle (reach `settle_to`) within this many
     /// milliseconds of first spiking above `spike_above`.
     #[serde(default)]
     #[schemars(range(min = 0.0))]
     pub settle_within_ms: Option<f64>,
-    /// protection_trip: the supply net whose battery protection is checked.
+    /// `protection_trip`: the supply net whose battery protection is checked.
     #[serde(default)]
     pub supply_net: Option<String>,
-    /// protection_trip: whether a protection trip is expected (true) or must NOT
+    /// `protection_trip`: whether a protection trip is expected (true) or must NOT
     /// occur (false).
     #[serde(default)]
     pub expect_trip: Option<bool>,
@@ -1315,20 +1315,20 @@ pub struct Assertion {
     // a new part drops coverage the build says so instead of quietly
     // simulating a hole. Every threshold below is opt-in, and at least one is
     // required, since an assertion that checks nothing must not read green.
-    /// model_coverage: the minimum fraction (0.0 to 1.0) of active ICs that
+    /// `model_coverage`: the minimum fraction (0.0 to 1.0) of active ICs that
     /// must bind to a real model. This is the metric that matters: an
     /// unbound regulator changes the answer, an unbound 0402 resistor
     /// usually does not.
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 1.0))]
     pub min_critical: Option<f64>,
-    /// model_coverage: the minimum fraction (0.0 to 1.0) of all non-ignored
+    /// `model_coverage`: the minimum fraction (0.0 to 1.0) of all non-ignored
     /// parts that must bind. Coarser than `min_critical`, and useful as a
     /// board-wide trend line.
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 1.0))]
     pub min_resolved: Option<f64>,
-    /// model_coverage: how many unresolved parts may sit on a connected net.
+    /// `model_coverage`: how many unresolved parts may sit on a connected net.
     /// These are the ones whose open default actually changes the solve, so 0
     /// is the meaningful setting on a board you trust.
     #[serde(default)]
@@ -1337,7 +1337,7 @@ pub struct Assertion {
 
 /// Whether the "spec" handed to us is actually a BOARD design file, detected
 /// by extension (`ext` lowercase) or content prefix, BEFORE the TOML parse.
-/// A KiCad board is one enormous line; letting it hit the TOML parser used to
+/// A `KiCad` board is one enormous line; letting it hit the TOML parser used to
 /// dump the entire board file into the terminal as error context.
 fn board_file_ext(ext: &str) -> bool {
     matches!(
@@ -1346,7 +1346,7 @@ fn board_file_ext(ext: &str) -> bool {
     )
 }
 
-/// Content sniff for the extensionless/renamed case: the KiCad s-expression
+/// Content sniff for the extensionless/renamed case: the `KiCad` s-expression
 /// headers and the netlist `(export` header.
 fn board_file_content(text: &str) -> bool {
     let head = text.trim_start();
@@ -1435,7 +1435,7 @@ impl Spec {
 
     /// Fold accepted aliases onto their canonical spelling, so everything
     /// downstream (evaluation, reports, waiver matching) sees ONE name.
-    /// `boot-coverage` was the lone kebab-case kind among fourteen snake_case
+    /// `boot-coverage` was the lone kebab-case kind among fourteen `snake_case`
     /// ones; the canonical spelling is now `boot_coverage` and the old one is
     /// accepted here as a silent alias, forever, because a rename must never
     /// break a spec that was correct when it was written.

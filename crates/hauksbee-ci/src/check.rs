@@ -207,7 +207,7 @@ pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
 /// Resolve the spec's `firmware` and confirm an image is actually there.
 ///
 /// Same two steps `run` takes, in the same order, so the two verdicts cannot
-/// disagree: resolve a PlatformIO project / build tree / zip down to the compiled
+/// disagree: resolve a `PlatformIO` project / build tree / zip down to the compiled
 /// image (a bare `.elf`/`.hex` passes through), then check that image exists and
 /// opens. Without this, `check` printed "OK" on a spec whose `firmware` pointed
 /// nowhere, and `run` then exited 2 on the very same file: the editor-facing

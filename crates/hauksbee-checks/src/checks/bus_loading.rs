@@ -220,7 +220,7 @@ mod tests {
     }
 
     /// Two-sided three-state contract: a fitted pull-up contributes its ohms
-    /// to R_eff; a DNP or identity-refused record of the same part must not.
+    /// to `R_eff`; a DNP or identity-refused record of the same part must not.
     #[test]
     fn dnp_or_refused_pullup_contributes_no_ohms() {
         assert_eq!(resistor_ohms(&bare_pullup()), Some(4_700.0));

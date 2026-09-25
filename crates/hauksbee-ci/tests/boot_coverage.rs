@@ -2,7 +2,7 @@
 //! made decidable by running the firmware.
 //!
 //! `docs/evidence/KNOWN_FAULTS_VALIDATION.md` records two faults (Watchy e-paper RES#,
-//! ZSWatch DISPLAY-EN) as honest misses: a control net is driven only by an MCU
+//! `ZSWatch` DISPLAY-EN) as honest misses: a control net is driven only by an MCU
 //! GPIO that goes Hi-Z at reset, so its power-up default is undefined, and the
 //! netlist *cannot encode the load's intended default* (a display that must be
 //! on by default looks byte-identical to a haptic motor that must be off). A
@@ -71,7 +71,7 @@ fn which_avr_gcc() -> bool {
 }
 
 /// Variant A drives the gate promptly: the boot-coverage assertion PASSES, and
-/// so does the no_faults assertion (boot window clean).
+/// so does the `no_faults` assertion (boot window clean).
 // Runs AVR .hex firmware on the ATmega boot_gate board, so it needs the
 // GPL-gated `avr` feature (the GPL-free renode/qemu build refuses AVR
 // firmware by design). The Watchy QEMU rows below cover the external-backend
@@ -163,9 +163,9 @@ fn qemu_xtensa_available() -> bool {
 /// The Watchy example specs name their board with a repo-relative path into
 /// the hand-built corpus layout; that is right for a user running
 /// `hauksbee-ci run examples/...` from a hand-built checkout, but wrong for the
-/// fetch layout (no `famous/` level) and for HAUKSBEE_CORPUS_DIR pointing
+/// fetch layout (no `famous/` level) and for `HAUKSBEE_CORPUS_DIR` pointing
 /// anywhere else. Run a temp copy of the spec instead, with the `board` key
-/// rewritten to wherever corpus_board actually resolved it and the `firmware`
+/// rewritten to wherever `corpus_board` actually resolved it and the `firmware`
 /// key absolutized (spec paths resolve relative to the spec file, and the temp
 /// copy does not live in examples/). TOML literal strings keep Windows paths
 /// free of escape mangling.
@@ -214,7 +214,7 @@ fn corpus_or_skip(what: &str) -> Option<PathBuf> {
 /// skip (no corpus, or no Espressif QEMU).
 ///
 /// The wall-clock ceiling guards the external-backend chunk coarsening
-/// (`Scheduler::has_external_backend` -> chunk_s about the frame size): without
+/// (`Scheduler::has_external_backend` -> `chunk_s` about the frame size): without
 /// it this co-sim sub-divides into ~80 QMP cont/stop pairs per frame and takes
 /// ten MINUTES instead of ~3.5 s, a ~200x regression a 120 s ceiling catches
 /// while still tolerating a slow CI machine.

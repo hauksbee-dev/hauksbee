@@ -184,7 +184,7 @@ struct OpenDrainLeg {
 }
 
 /// A per-state push-pull drive leg (Vsource behind a resistor whose value is
-/// swapped to OFF_OHMS when the state is inactive).
+/// swapped to `OFF_OHMS` when the state is inactive).
 #[derive(Debug, Clone)]
 struct DriveLeg {
     pin_role: String,
@@ -239,7 +239,7 @@ struct ConverterLeg {
     feedback_node: Option<NodeId>,
     /// Optional enable input.  A low level disables both converter legs.
     enable_node: Option<NodeId>,
-    /// Input draw (controllable Isource from in_node to ground).
+    /// Input draw (controllable Isource from `in_node` to ground).
     in_isource: DeviceId,
     /// Effective input-current limit (A), computed from the sense program at
     /// bind time (or the literal). Recomputable if a board resistor is retuned.
@@ -307,7 +307,7 @@ enum LawStamp {
         source: DeviceId,
         /// For a Voltage law, its series output resistor and that resistor's
         /// on-resistance (ohms). Deactivating an `only_in_state` voltage law
-        /// must tri-state this resistor (OFF_OHMS) to RELEASE the pin,
+        /// must tri-state this resistor (`OFF_OHMS`) to RELEASE the pin,
         /// zeroing the Vsource alone would clamp the pin to 0 V through the
         /// stiff series R (a near-short). A Current law releases correctly by
         /// zeroing its Isource, so it carries `None` here.

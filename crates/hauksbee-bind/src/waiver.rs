@@ -37,7 +37,7 @@ pub const DEFAULT_WAIVER_FILE: &str = "hauksbee-waivers.toml";
 pub struct Waiver {
     /// Which check produced the finding: "si", "lint", "drc".
     pub check: String,
-    /// The specific rule, e.g. "controlled_impedance", "strap_pin", "short".
+    /// The specific rule, e.g. "`controlled_impedance`", "`strap_pin`", "short".
     pub kind: String,
     /// Nets the finding must touch. A waiver matches only if every net listed
     /// here appears in the finding.

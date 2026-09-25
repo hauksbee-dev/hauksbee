@@ -62,7 +62,7 @@ fn bad_sweep_mode_is_rejected() {
 
 /// Build the representative single-pole op-amp loop (same topology as the solver
 /// validation): inverting summing node `fb`, op-amp `oa`, dominant-pole RC to
-/// `out`, loop closed by reading T = -V_out at `out`. PM ~ 90 deg, stable.
+/// `out`, loop closed by reading T = -`V_out` at `out`. PM ~ 90 deg, stable.
 fn representative_loop(a0: f64, r: f64, c: f64) -> Circuit {
     let mut ckt = Circuit::new();
     let fb = ckt.node("fb");
@@ -91,7 +91,7 @@ fn representative_loop(a0: f64, r: f64, c: f64) -> Circuit {
     ckt
 }
 
-/// Assemble a RunOutcome carrying the AC outcome the runner would build for the
+/// Assemble a `RunOutcome` carrying the AC outcome the runner would build for the
 /// `out` net, so we can drive the assertion evaluator directly.
 fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
     let spec = AcSpec {
@@ -110,7 +110,7 @@ fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
     ac_outcome(ac)
 }
 
-/// A RunOutcome carrying only `ac`. AC assertions are seed-independent
+/// A `RunOutcome` carrying only `ac`. AC assertions are seed-independent
 /// DC-linearised sweeps, never touched by a failed transient chunk: a clean,
 /// valid analog outcome.
 fn ac_outcome(ac: AcOutcome) -> RunOutcome {

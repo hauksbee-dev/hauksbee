@@ -1,15 +1,15 @@
 //! The Inkplate-class two-sided transient demo.
 //!
-//! This reproduces the documented Inkplate 6 WiFi cold-boot brownout *pattern*
-//! (issues #7 / #10: the board browns out / resets when WiFi comes up on a cold
+//! This reproduces the documented Inkplate 6 `WiFi` cold-boot brownout *pattern*
+//! (issues #7 / #10: the board browns out / resets when `WiFi` comes up on a cold
 //! boot under battery power). It is an explicit REPRESENTATIVE RECONSTRUCTION,
 //! not the real Inkplate board: no native Inkplate design files exist in the
 //! corpus, so `testdata/inkplate_class.net` is a hand-built minimal board with
 //! the same topology class (ESP32-WROOM + a small 3V3 LDO + bulk/decoupling
-//! caps on a LiPo).
+//! caps on a `LiPo`).
 //!
 //! The two sides:
-//!  - BATTERY side: a small protected 1S LiPo (1 A-class over-current cutoff)
+//!  - BATTERY side: a small protected 1S `LiPo` (1 A-class over-current cutoff)
 //!    feeding the rail. The ESP32 cold-boot RF inrush (~1.2 A surge) trips the
 //!    protection and the rail collapses: the field-reported failure.
 //!  - USB-SUPPLEMENTED side: the same board, same cold-boot profile, but fed
@@ -18,7 +18,7 @@
 //! Modelling note (honest scope): the board's 3V3 LDO (U2) is present in the
 //! netlist but its closed-loop regulation is a behavioural converter model owned
 //! by a sibling layer, not stamped here. So the supply leg drives the rail
-//! directly, and the rail sits at the *source* voltage (the LiPo cell voltage on
+//! directly, and the rail sits at the *source* voltage (the `LiPo` cell voltage on
 //! the battery side, ~5 V minus cable droop on the USB side) rather than a
 //! regulated 3.3 V. That does not change the demonstrated physics: the headline
 //! is the battery-side over-current protection tripping on the inrush while the
@@ -64,7 +64,7 @@ start_ms = 2.0
     )
 }
 
-/// A small protected 1S LiPo feeding the 3V3 rail: protection trips at 1 A held
+/// A small protected 1S `LiPo` feeding the 3V3 rail: protection trips at 1 A held
 /// for 2 ms (a DW01-class cutoff on a small pack), `r_internal` models the cell.
 const LIPO: &str = r#"kind = "battery"
 chemistry = "liion"
@@ -84,7 +84,7 @@ protection_delay_ms = 2.0
 /// overvoltage (abs-max 3.6 V). No protection to trip.
 const STIFF_USB: &str = "kind = \"bench\"\nvolts = 3.3\ncurrent_limit_a = 3.0\n";
 
-/// BATTERY side: cold-boot inrush trips the 1 A-class LiPo protection and the
+/// BATTERY side: cold-boot inrush trips the 1 A-class `LiPo` protection and the
 /// rail collapses. We assert the protection DID trip and the rail dipped well
 /// below 3.0 V during the cold-boot window.
 #[test]
@@ -137,11 +137,11 @@ for_max_ms = 1.0
 
 /// R17 regression: a `protection_trip` SCOPED to a scenario must be honored even
 /// when NO `rail_window` names that scenario's supply net. Previously the scoped
-/// (scenario, net) verdict map was populated only from rail_window nets, so a
-/// scoped protection_trip with no matching rail_window always failed with
-/// "nothing to trip" regardless of the real trip. Here the LiPo protection
+/// (scenario, net) verdict map was populated only from `rail_window` nets, so a
+/// scoped `protection_trip` with no matching `rail_window` always failed with
+/// "nothing to trip" regardless of the real trip. Here the `LiPo` protection
 /// genuinely trips on the cold-boot inrush, and the ONLY assertion is the scoped
-/// protection_trip, with no rail_window at all, so it must PASS.
+/// `protection_trip`, with no `rail_window` at all, so it must PASS.
 #[test]
 fn scoped_protection_trip_passes_without_a_matching_rail_window() {
     // Scoped to the scenario, and there is deliberately NO rail_window on +3.3V.

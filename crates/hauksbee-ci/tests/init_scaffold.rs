@@ -21,7 +21,7 @@ fn watchy() -> PathBuf {
 }
 
 /// An STM32F103 blue pill board: its MCU binds to the external `renode:stm32f103`
-/// backend, whose SoC descriptor maps every port's CRL/CRH direction register,
+/// backend, whose `SoC` descriptor maps every port's CRL/CRH direction register,
 /// so it CAN report pin drive direction and boot-coverage scaffolds without the
 /// backend-gap note.
 fn stm32_bluepill() -> PathBuf {
@@ -156,7 +156,7 @@ fn init_comments_out_boot_coverage_when_the_backend_cannot_satisfy_it() {
 }
 
 /// The capability flip: `renode:stm32f103` maps every port's direction
-/// register (CRL/CRH) in its SoC descriptor, so it now REPORTS pin drive
+/// register (CRL/CRH) in its `SoC` descriptor, so it now REPORTS pin drive
 /// direction and the scaffold treats it like the AVR backend; the same
 /// commented-out starter block (GREEN out of the box, firmware is commented
 /// too) but WITHOUT the direction-gap note that direction-blind backends get.
@@ -284,8 +284,8 @@ fn out_without_a_toml_suffix_is_a_directory_even_when_it_does_not_exist_yet() {
 }
 
 /// Uncomment the scaffolded blocks a user can turn on WITHOUT wiring firmware:
-/// supplies, voltage asserts, and the profile/scenario/rail_window group. The
-/// firmware-dependent blocks (the `firmware = ` line itself, boot_coverage,
+/// supplies, voltage asserts, and the `profile/scenario/rail_window` group. The
+/// firmware-dependent blocks (the `firmware = ` line itself, `boot_coverage`,
 /// uart, toggle) keep their comments, exactly as the scaffold's own notes
 /// instruct. Paragraph-scoped, because that is the unit a user actually strips.
 fn uncomment_board_blocks(text: &str) -> String {

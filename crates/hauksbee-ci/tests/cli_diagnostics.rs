@@ -26,7 +26,7 @@ fn dir_with_spec(body: &str) -> tempfile::TempDir {
     dir
 }
 
-/// The spec body that boots `firmware` on the blinky ATmega and checks `+5V`.
+/// The spec body that boots `firmware` on the blinky `ATmega` and checks `+5V`.
 fn firmware_body(firmware: &str) -> String {
     format!(
         "firmware = \"{firmware}\"\nmcu = \"atmega328p\"\n\n\

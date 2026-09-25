@@ -353,7 +353,7 @@ impl RenodeConfig {
         stm32f4_discovery => "renode:stm32f4_discovery";
         /// nRF52840. See `db/mcu/nrf52840.soc.toml`.
         nrf52840 => "renode:nrf52840";
-        /// SiFive FE310 (HiFive1) RISC-V. See `db/mcu/sifive_fe310.soc.toml`.
+        /// `SiFive` FE310 (`HiFive1`) RISC-V. See `db/mcu/sifive_fe310.soc.toml`.
         sifive_fe310 => "renode:sifive_fe310";
         /// RP2040 (Raspberry Pi Pico). See `db/mcu/rp2040.soc.toml`, that file
         /// carries the full SIO-footgun and verification-status notes.

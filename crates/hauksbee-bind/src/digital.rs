@@ -705,7 +705,7 @@ pub fn order_595_chain(digital: &[DigitalComponent]) -> Vec<usize> {
 /// An edge-driven model of one MCU-bit-banged 74HC595 daisy-chain.
 ///
 /// The whole chain is clocked by MCU GPIO: a broadcast shift clock (SRCLK), a
-/// broadcast latch clock (RCLK), an optional broadcast clear (SRCLR_n), and a
+/// broadcast latch clock (RCLK), an optional broadcast clear (`SRCLR_n`), and a
 /// serial-data line into the head chip (SER). Each chip's serial output feeds
 /// the next chip's input. Because the firmware bit-bangs these lines with sub-µs
 /// pulses, the chain must be resolved in the EVENT domain at edge granularity,
@@ -728,8 +728,8 @@ pub struct Hc595Chain {
     /// MCU GPIO `(port, bit)` for the broadcast active-low clear, if wired.
     pub srclr_n: Option<(char, u8)>,
     /// MCU GPIO `(port, bit)` for the broadcast active-low output-enable, if
-    /// wired. While OE_n is HIGH the parallel outputs (qa..qh) are Hi-Z; the
-    /// serial output qh_serial is NOT gated by OE.
+    /// wired. While `OE_n` is HIGH the parallel outputs (qa..qh) are Hi-Z; the
+    /// serial output `qh_serial` is NOT gated by OE.
     pub oe_n: Option<(char, u8)>,
     /// MCU GPIO `(port, bit)` for the head chip's serial-data input.
     pub ser: (char, u8),
@@ -743,9 +743,9 @@ pub struct Hc595Chain {
     lvl_ser: bool,
     lvl_srclk: bool,
     lvl_rclk: bool,
-    /// SRCLR_n level (active-low clear). Defaults released (high).
+    /// `SRCLR_n` level (active-low clear). Defaults released (high).
     lvl_srclr_n: bool,
-    /// OE_n level (active-low output-enable). Defaults enabled (low) so an
+    /// `OE_n` level (active-low output-enable). Defaults enabled (low) so an
     /// unwired OE never tri-states the outputs.
     lvl_oe_n: bool,
 }
@@ -828,7 +828,7 @@ impl Hc595Chain {
     /// Replay an ordered log of GPIO transitions, clocking the chain at edge
     /// granularity. On each SRCLK rising edge the whole chain shifts up one bit
     /// carrying serial across chips (`qh_serial[k]` -> `ser[k+1]`); on each RCLK
-    /// rising edge every chip latches; while SRCLR_n is low the shift registers
+    /// rising edge every chip latches; while `SRCLR_n` is low the shift registers
     /// hold cleared. Levels persist across calls.
     pub fn replay(&mut self, edges: &[(char, u8, bool)]) {
         for &(port, bit, high) in edges {
@@ -908,9 +908,9 @@ impl Hc595Chain {
     /// the latched/shift state into the owning `DigitalComponent` so frame
     /// reporting (`state_summary`) stays correct. `out_reg[0]=qa` is stage 0.
     ///
-    /// While OE_n is HIGH the parallel outputs are tri-stated (Hi-Z): the qa..qh
+    /// While `OE_n` is HIGH the parallel outputs are tri-stated (Hi-Z): the qa..qh
     /// drivers are disabled so the analog solve sees a high-impedance leg, not a
-    /// stale latched level. The serial output qh_serial is not gated by OE.
+    /// stale latched level. The serial output `qh_serial` is not gated by OE.
     pub fn apply(&mut self, digital: &mut [DigitalComponent], circuit: &mut Circuit) {
         // OE_n defaults low (enabled) when no OE pin is wired.
         let outputs_enabled = !self.lvl_oe_n;
@@ -1183,9 +1183,9 @@ mod tests {
 
     const Q_OUTPUTS: [&str; 8] = ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"];
 
-    /// An `n`-chip 74HC595 daisy chain (shared SRCLK/RCLK/SRCLR_n, each
-    /// qh_serial feeding the next ser) bound to the Tarski GPIO map: SRCLK on
-    /// PB5, RCLK on PD6, SRCLR_n on PC3, SER on PB3.
+    /// An `n`-chip 74HC595 daisy chain (shared `SRCLK/RCLK/SRCLR_n`, each
+    /// `qh_serial` feeding the next ser) bound to the Tarski GPIO map: SRCLK on
+    /// PB5, RCLK on PD6, `SRCLR_n` on PC3, SER on PB3.
     fn build_chain(circuit: &mut Circuit, n: usize) -> (Vec<DigitalComponent>, Hc595Chain) {
         let model = model("74HC595");
         let n_srclk = circuit.node("SRCLK");
@@ -1286,7 +1286,7 @@ mod tests {
         replay_components_on_edges(comps, which, pin_nets, log, base, 5.0, 0.0, circuit)
     }
 
-    /// Two spec-driven 595s wired qh_serial -> ser through a shared net: the
+    /// Two spec-driven 595s wired `qh_serial` -> ser through a shared net: the
     /// generalized replay carries the serial bit across the chip boundary, so
     /// a 16-bit MSB-first stream lands the first-sent byte downstream.
     #[test]
@@ -1598,7 +1598,7 @@ mod tests {
         (chips, chain)
     }
 
-    /// The firmware's exact ReadOutput sequence (PL low/high, then 16 × read
+    /// The firmware's exact `ReadOutput` sequence (PL low/high, then 16 × read
     /// MISO + pulse SCLK) reads a known latch pattern back bit-exact.
     #[test]
     fn hc165_reads_known_latch_pattern_via_edges() {

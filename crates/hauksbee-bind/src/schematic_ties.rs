@@ -51,7 +51,7 @@ pub struct SchematicTies {
 /// `<eagle>` test `ExtractedBoard::drc_with_clearance_rules` dispatches on.
 ///
 /// Auto-discovery is silent on absence, which is the common case, and silent on
-/// a sibling `.sch` that turns out to be some other tool's format. A KiCad 5
+/// a sibling `.sch` that turns out to be some other tool's format. A `KiCad` 5
 /// legacy `.sch` sits beside plenty of boards and is not an Eagle file; guessing
 /// from the extension alone and then failing the run would break every such
 /// project for no gain.

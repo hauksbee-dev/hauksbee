@@ -170,7 +170,7 @@ fn is_ground_net(name: &str) -> bool {
     ) || n.starts_with("GND")
 }
 
-/// KiCad's placeholder net for a pin that is on no net at all.
+/// `KiCad`'s placeholder net for a pin that is on no net at all.
 fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
@@ -354,7 +354,7 @@ mod tests {
     }
 
     /// THE FIELD CASE, as reported: a 74HC08 whose gate-4 output (pad 11 =
-    /// `y4`) was mis-mapped onto net STROBE, which an ATmega328P also drives as
+    /// `y4`) was mis-mapped onto net STROBE, which an `ATmega328P` also drives as
     /// a GPIO output (PB1, pad 13 on the TQFP-32) because the firmware set DDRB
     /// bit 1. Two push-pull drivers, one net, no series element.
     ///
@@ -503,7 +503,7 @@ mod tests {
     }
 
     /// Ground is not a net to contend over (a mis-mapped pad landing on GND is
-    /// another check's problem), and neither is KiCad's unconnected placeholder.
+    /// another check's problem), and neither is `KiCad`'s unconnected placeholder.
     #[test]
     fn ground_and_unconnected_nets_are_skipped() {
         let b = board(

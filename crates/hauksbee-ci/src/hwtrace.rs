@@ -123,7 +123,7 @@ pub struct Feature {
     #[serde(default)]
     pub threshold: Option<f64>,
     /// Absolute tolerance in the feature's own unit (V for level/min/max,
-    /// ms for period/pulse_width, fraction for duty, count for edge_count).
+    /// ms for `period/pulse_width`, fraction for duty, count for `edge_count`).
     #[serde(default)]
     pub abstol: Option<f64>,
     /// Relative tolerance as a fraction of the captured value.

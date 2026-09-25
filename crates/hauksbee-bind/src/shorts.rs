@@ -85,7 +85,7 @@ pub fn short_fault(name_a: &str, name_b: &str, t: f64) -> FaultEvent {
 }
 
 /// Resolve the shorted net *names* a [`DrcReport`] found, mapped onto the
-/// board's node table. Returns the (name_a, name_b) pairs whose copper actually
+/// board's node table. Returns the (`name_a`, `name_b`) pairs whose copper actually
 /// overlaps (clearance-only violations are not applied), de-duplicated.
 pub fn shorted_name_pairs(report: &DrcReport) -> Vec<(String, String)> {
     let mut pairs: Vec<(String, String)> = report

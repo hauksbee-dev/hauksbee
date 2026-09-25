@@ -62,12 +62,12 @@
 //! CONTROL pin reads the level that keeps the part operating normally:
 //! resets and loads released, clocks enabled, tri-states driving. (A board
 //! that ties these does so in copper; a spec input left unwired must not
-//! freeze the part.) So an unwired SRCLR_n reads released and an unwired
-//! OE_n reads enabled. The rule is uniform: an unwired 74HC165 PL_n also
+//! freeze the part.) So an unwired `SRCLR_n` reads released and an unwired
+//! `OE_n` reads enabled. The rule is uniform: an unwired 74HC165 `PL_n` also
 //! reads released rather than LOW, so parallel load is NOT permanently
-//! transparent on an unwired PL_n. A permanently transparent load is a
+//! transparent on an unwired `PL_n`. A permanently transparent load is a
 //! modeling artifact rather than silicon behaviour, so a board that wants it
-//! must tie PL_n low in copper as the real part requires.
+//! must tie `PL_n` low in copper as the real part requires.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -1894,7 +1894,7 @@ disable = [
         assert_eq!(lc.output_enabled("qa"), Some(true));
     }
 
-    /// Unwired SRCLR_n / OE_n read released / enabled.
+    /// Unwired `SRCLR_n` / `OE_n` read released / enabled.
     #[test]
     fn unwired_controls_read_released() {
         let mut lc = compile(HC595);

@@ -8,7 +8,7 @@
 //!
 //! Regenerate after changing `CiJsonReport`, `CiJsonError`, or
 //! `CiJsonAssertion` with:
-//!     UPDATE_CI_REPORT_SCHEMA=1 cargo test -p hauksbee-ci --test ci_report_schema_drift
+//!     `UPDATE_CI_REPORT_SCHEMA=1` cargo test -p hauksbee-ci --test `ci_report_schema_drift`
 //!
 //! Four tests, because a generated schema can be wrong in four different ways:
 //!

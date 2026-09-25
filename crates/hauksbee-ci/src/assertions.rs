@@ -42,7 +42,7 @@ pub struct AssertResult {
     pub failing_seed: Option<u32>,
     /// Every ensemble member this assertion failed on (empty on a pass). For a
     /// tolerance ensemble this is the per-seed failure list the report and
-    /// JUnit surface, together with the pass-rate.
+    /// `JUnit` surface, together with the pass-rate.
     pub failing_seeds: Vec<u32>,
     /// How many ensemble members were evaluated.
     pub seeds_total: u32,
@@ -552,7 +552,7 @@ fn evaluate_one(
 
 /// The all-members-green detail string for an assertion, worded to the ensemble
 /// mode. `members` is the total member count INCLUDING the nominal baseline
-/// (member 0), so a MonteCarlo run reports `members - 1` sampled seeds; the
+/// (member 0), so a `MonteCarlo` run reports `members - 1` sampled seeds; the
 /// nominal draws no random sample and must not be counted as one (mirrors the
 /// run banner in `lib.rs`, which also subtracts the nominal).
 fn all_green_detail(
@@ -658,7 +658,7 @@ fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
 /// Check one assertion against one seed's outcome. Returns (passed, detail,
 /// why): `why` is the observed-shortfall sentence a failing bound computes
 /// (`None` on a pass, and on kinds whose detail already IS the diagnosis,
-/// e.g. boot_coverage's drive-state analysis).
+/// e.g. `boot_coverage`'s drive-state analysis).
 fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, Option<String>) {
     // Adapter for the kinds whose checks carry no separate `why`.
     fn plain((ok, detail): (bool, String)) -> (bool, String, Option<String>) {
@@ -683,7 +683,7 @@ fn check_seed(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String, 
     }
 }
 
-/// model_coverage: hold the line on how much of the board bound to a real model.
+/// `model_coverage`: hold the line on how much of the board bound to a real model.
 ///
 /// The failure text names the parts rather than only the shortfall, because the
 /// list IS the user's next action: each name is either a model to write (the
@@ -849,7 +849,7 @@ fn no_data(reason: String) -> (bool, String, Option<String>) {
     (false, reason, None)
 }
 
-/// rail_window: judge a rail's behaviour over a scenario window: min/max bounds,
+/// `rail_window`: judge a rail's behaviour over a scenario window: min/max bounds,
 /// dip/spike duration, and recovery/settling time.
 fn check_rail_window(
     a: &crate::spec::Assertion,
@@ -990,7 +990,7 @@ fn check_rail_window(
     v.finish(detail)
 }
 
-/// protection_trip: whether a supply net's battery protection latched.
+/// `protection_trip`: whether a supply net's battery protection latched.
 fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String) {
     let net = a.supply_net.clone().unwrap_or_default();
     let want = a.expect_trip.unwrap_or(false);
@@ -1202,7 +1202,7 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
 ///     it was driven, the voltage just never crossed the threshold;
 ///   - it is not driven and the backend can report drive direction (the AVR
 ///     backend reads DDR; a Renode part with a direction-register map in its
-///     SoC descriptor reads MODER/CRL+CRH/DIR, either way a held-LOW pin is
+///     `SoC` descriptor reads MODER/CRL+CRH/DIR, either way a held-LOW pin is
 ///     known driven): a net absent here is genuinely undriven / Hi-Z;
 ///   - it is not driven and the backend cannot report drive direction (QEMU,
 ///     or a Renode part without a dir map, those see drive state only through
@@ -1547,7 +1547,7 @@ fn check_toggle(a: &Assertion, out: &RunOutcome, frame_ms: f64) -> (bool, String
     }
 }
 
-/// pulse_width: the width of the first COMPLETE pulse on `net` at or after
+/// `pulse_width`: the width of the first COMPLETE pulse on `net` at or after
 /// `after_ms`, high by default and low under `level = "low"`, in milliseconds.
 ///
 /// The threshold and the interpolation are the frequency path's
@@ -1663,7 +1663,7 @@ pub(crate) fn edge_rate(series: &[(f64, f64)], dt_s: f64) -> Result<(f64, String
     ))
 }
 
-/// phase_margin: the loop's phase margin (degrees) at gain crossover must lie in
+/// `phase_margin`: the loop's phase margin (degrees) at gain crossover must lie in
 /// the requested bound. The loop gain is read at `net` from the shared AC sweep.
 fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
@@ -1695,7 +1695,7 @@ fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<
     v.finish(detail)
 }
 
-/// ac_gain: the magnitude (dB) at `net` must lie in the requested bound, at the
+/// `ac_gain`: the magnitude (dB) at `net` must lie in the requested bound, at the
 /// frequency `freq_hz` (interpolated) or, if absent, over the whole sweep.
 fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
@@ -1831,7 +1831,7 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<S
 ///
 /// A multi-unit package stamps one device per unit, so a bare `.get(reference)`
 /// would always miss and silently drop a safety assert into its no-data branch.
-/// Ties break on the unit key so the reported unit is stable across HashMap
+/// Ties break on the unit key so the reported unit is stable across `HashMap`
 /// iteration order.
 fn peak_for_ref(
     map: &std::collections::HashMap<String, f64>,
@@ -1856,7 +1856,7 @@ fn unit_note(noun: &str, key: &str, reference: &str) -> String {
 /// Does a per-device map key (or fault component name) belong to `reference`?
 /// True for the bare ref itself and for any of its per-unit keys: a multi-unit
 /// package stamps one device per unit with a `_q<N>` / `_s<N>` suffix
-/// ("IC3906_q2", "SW1_s0"), so per-unit producers (`peak_temp_c`, faults) never
+/// ("`IC3906_q2`", "`SW1_s0`"), so per-unit producers (`peak_temp_c`, faults) never
 /// record the bare package ref. Mirrors the binder's suffix rule; the runner's
 /// trackability gate uses this same test to accept a bare ref whose units are
 /// monitored, so the consumers here match exactly the keys the gate admitted,
@@ -1875,7 +1875,7 @@ pub(crate) fn key_belongs_to_ref(reference: &str, key: &str) -> bool {
         })
 }
 
-/// max_temp: the steady-state junction temperature of `ref` must stay at or
+/// `max_temp`: the steady-state junction temperature of `ref` must stay at or
 /// below `celsius` (if given) or below the device's own max junction temp (if
 /// not, in which case we lean on whether an overtemperature fault fired).
 ///

@@ -5,13 +5,13 @@
 //! cycle `D = Vout/Vin`. The input bulk capacitor has to supply the AC part of
 //! that pulsed draw, so it carries an RMS ripple current
 //!
-//!   I_rms = I_out * sqrt(D - D^2)
+//!   `I_rms` = `I_out` * sqrt(D - D^2)
 //!
 //! which peaks at `0.5 * I_out` when `D = 0.5`. Electrolytic bulk caps are rated
 //! for a maximum RMS ripple current (the I^2*ESR self-heating budget); running a
 //! cap past that rating ages it out early. This is exactly the mppt-1210-hus
-//! finding: `C1` (1200 uF, rated 3.0 A_rms) sits across a 10 A buck input at
-//! `D ~ 0.5`, so it carries ~5.0 A_rms, ~1.66x its rating.
+//! finding: `C1` (1200 uF, rated 3.0 `A_rms`) sits across a 10 A buck input at
+//! `D ~ 0.5`, so it carries ~5.0 `A_rms`, ~1.66x its rating.
 //!
 //! ## Zero-false-positive boundary
 //!

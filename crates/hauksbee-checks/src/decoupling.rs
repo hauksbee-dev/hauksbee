@@ -59,11 +59,11 @@ impl EsrEsl {
     ///
     /// | class        | ESR     | ESL    | source                                   |
     /// |--------------|---------|--------|------------------------------------------|
-    /// | MLCC 0201    | 80 mΩ   | 0.3 nH | Murata GRM033 datasheets / SimSurfing    |
-    /// | MLCC 0402    | 50 mΩ   | 0.4 nH | Murata GRM155 datasheets / SimSurfing    |
-    /// | MLCC 0603    | 30 mΩ   | 0.6 nH | Murata GRM188 datasheets / SimSurfing    |
-    /// | MLCC 0805    | 20 mΩ   | 0.8 nH | Murata GRM21 datasheets / SimSurfing     |
-    /// | MLCC 1206    | 15 mΩ   | 1.2 nH | Murata GRM31 datasheets / SimSurfing     |
+    /// | MLCC 0201    | 80 mΩ   | 0.3 nH | Murata GRM033 datasheets / `SimSurfing`    |
+    /// | MLCC 0402    | 50 mΩ   | 0.4 nH | Murata GRM155 datasheets / `SimSurfing`    |
+    /// | MLCC 0603    | 30 mΩ   | 0.6 nH | Murata GRM188 datasheets / `SimSurfing`    |
+    /// | MLCC 0805    | 20 mΩ   | 0.8 nH | Murata GRM21 datasheets / `SimSurfing`     |
+    /// | MLCC 1206    | 15 mΩ   | 1.2 nH | Murata GRM31 datasheets / `SimSurfing`     |
     /// | Electrolytic | 1.0 Ω   | 5 nH   | Nichicon/Panasonic alum-poly datasheets  |
     /// | Tantalum     | 0.5 Ω   | 3 nH   | KEMET T49x / AVX TAJ datasheets          |
     ///
@@ -104,7 +104,7 @@ impl EsrEsl {
         }
     }
 
-    /// Infer a capacitor class from a KiCad footprint string and value, then
+    /// Infer a capacitor class from a `KiCad` footprint string and value, then
     /// return its default parasitics. Electrolytic/tantalum footprints (CP_*,
     /// large can / EIA tant case codes) get the electrolytic/tantalum row; an
     /// MLCC footprint is bucketed by its size code (imperial or the equivalent

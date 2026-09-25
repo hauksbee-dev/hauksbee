@@ -13,7 +13,7 @@
 //! * [`from_bytes`]: the web path. A file name (display/sniff hint only) plus
 //!   the file's RAW bytes. Binary formats are sniffed from the bytes first, a
 //!   `PK\x03\x04` prefix routes through the zip classifier, Board-as-Code is
-//!   compiled to KiCad board text, and everything else falls through to the
+//!   compiled to `KiCad` board text, and everything else falls through to the
 //!   text sniffer. It never invents a board name: a titleless board keeps its
 //!   empty name so the web report's `board_name` is unchanged.
 //! * [`from_path`]: the CLI/CI path. Adds what only a path can give you:
@@ -66,10 +66,10 @@ pub fn is_board_code_header(text: &str) -> bool {
 /// handling from the text ones and from each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputKind {
-    /// A text layout/netlist format (KiCad `.kicad_pcb`, Eagle `.brd`,
+    /// A text layout/netlist format (`KiCad` `.kicad_pcb`, Eagle `.brd`,
     /// IPC-D-356, `.net`), sniffed from content.
     Text,
-    /// A KiCad schematic loaded BY PATH so its sheet hierarchy recurses
+    /// A `KiCad` schematic loaded BY PATH so its sheet hierarchy recurses
     /// ([`from_path`] only; [`from_bytes`] content-sniffs a lone sheet as
     /// [`InputKind::Text`] because it cannot see sibling files).
     Schematic,
@@ -81,13 +81,13 @@ pub enum InputKind {
     /// connectivity, so copper reconstruction was deliberately not used.
     Ipc356Archive,
     /// An ODB++ job (directory, `.tgz` or `.zip`). Like a gerber archive it has
-    /// no KiCad layout text, but unlike one its connectivity is READ from the
+    /// no `KiCad` layout text, but unlike one its connectivity is READ from the
     /// job's own EDA data rather than reconstructed from copper.
     Odb,
     /// An IPC-2581 (DPMX) design-exchange document. Text, but not KiCad-parseable
     /// text, so it carries no `layout_text` either.
     Ipc2581,
-    /// A Board-as-Code `.board` source (bare or zipped), compiled to KiCad
+    /// A Board-as-Code `.board` source (bare or zipped), compiled to `KiCad`
     /// board text; `layout_text` carries the COMPILED text.
     BoardCode,
 }
@@ -129,7 +129,7 @@ impl NormalizedBoard {
         self.kind == InputKind::Altium
     }
 
-    /// A fab/exchange input with **no KiCad layout text**: a gerber archive, a
+    /// A fab/exchange input with **no `KiCad` layout text**: a gerber archive, a
     /// fab ZIP using IPC-D-356 connectivity, an ODB++ job or an IPC-2581
     /// document. Clearance DRC and trace-geometry SI must report "Not checked"
     /// for these rather than a vacuous pass, which is what call sites use this
@@ -285,7 +285,7 @@ fn refuse_eagle_binary(file_name: &str, raw: &[u8]) -> Result<(), BoardInputErro
 /// through [`from_path`]: `hauksbee to-code` and the MCP `board_to_code` tool.
 /// Both decode UTF-8 directly, so without this they answered a pre-Eagle-6
 /// board with "stream did not contain valid UTF-8" and "this board file is
-/// binary (e.g. Altium .PcbDoc)" respectively — one meaningless, one naming the
+/// binary (e.g. Altium .`PcbDoc`)" respectively — one meaningless, one naming the
 /// wrong vendor, and neither telling the user the one thing that would work.
 pub fn unsupported_format_refusal(file_name: &str, raw: &[u8]) -> Option<String> {
     hauksbee_extract::looks_like_eagle_binary(raw).then(|| {
@@ -1049,7 +1049,7 @@ fn uploaded_board_name(file_name: &str) -> String {
 }
 
 /// What marks a zip as a firmware project rather than a gerber fab archive:
-/// a PlatformIO config, a `.pio` build tree, or a compiled `.hex` image.
+/// a `PlatformIO` config, a `.pio` build tree, or a compiled `.hex` image.
 /// Returns a human name for the first marker found, `None` for anything else.
 fn zip_firmware_marker(contents: &[u8]) -> Option<&'static str> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(contents)).ok()?;
@@ -1090,9 +1090,9 @@ mod tests {
 
     const KICAD: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
     const ALTIUM: &[u8] = include_bytes!("../../../testdata/boards/altium_two_resistor.PcbDoc");
-    /// boot_gate exported by kicad-cli 9.0.3; the same fixtures the extract
+    /// `boot_gate` exported by kicad-cli 9.0.3; the same fixtures the extract
     /// crate's cross-format agreement test uses (see its module docs for
-    /// provenance). boot_gate reads as 3 components / 4 nets natively.
+    /// provenance). `boot_gate` reads as 3 components / 4 nets natively.
     const ODB_ZIP: &[u8] =
         include_bytes!("../../hauksbee-extract/tests/fixtures/exchange/boot_gate.odb.zip");
     const IPC2581: &[u8] =
@@ -1518,7 +1518,7 @@ fn main {
         assert!(!norm.board.nets.is_empty(), "nets recovered from copper");
     }
 
-    /// The counts boot_gate reads as through the native KiCad path, so the two
+    /// The counts `boot_gate` reads as through the native `KiCad` path, so the two
     /// exchange normalizer paths are checked against a real number and not just
     /// against "non-empty".
     const BOOT_GATE: (usize, usize) = (3, 4);

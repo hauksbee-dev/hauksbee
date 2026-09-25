@@ -52,7 +52,7 @@ use crate::error::SpecError;
 use crate::spec::Spec;
 use hauksbee_extract::ExtractedBoard;
 
-/// Full-factorial corner enumeration is capped at 2^CORNER_CAP runs. Above
+/// Full-factorial corner enumeration is capped at `2^CORNER_CAP` runs. Above
 /// this many toleranced components, corner mode refuses and points at
 /// Monte-Carlo instead, silently truncating the corner set would fake the
 /// bounded claim the mode exists to make.

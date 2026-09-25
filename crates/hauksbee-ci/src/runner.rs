@@ -33,7 +33,7 @@ pub(crate) struct VariantEvidence {
 
 /// Board state after every checked-in assembly input has been parsed and
 /// reconciled. The effective spec is a clone because an assembly variant adds
-/// explicit fit/no_fit decisions without mutating the user-visible source
+/// explicit `fit/no_fit` decisions without mutating the user-visible source
 /// object or giving a BOM's population column implicit authority.
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedAssembly {
@@ -276,7 +276,7 @@ pub struct RunFault {
 /// A peripheral's end-of-run state, for `peripheral` assertions.
 #[derive(Debug, Clone, Default)]
 pub struct PeripheralSnapshot {
-    /// Numeric state fields (temp_c, transitions, position, ...).
+    /// Numeric state fields (`temp_c`, transitions, position, ...).
     pub fields: HashMap<String, f64>,
     /// Raw memory bytes for an EEPROM (empty otherwise), for `bytes` checks.
     pub bytes: Vec<u8>,
@@ -350,7 +350,7 @@ pub struct RunOutcome {
     pub driven_nets: std::collections::HashSet<String>,
     /// Whether every MCU backend in this run can report pin drive *direction*.
     /// True for the in-process AVR backend (reads DDR) and for Renode parts
-    /// whose SoC descriptor maps each port's direction register (STM32F103
+    /// whose `SoC` descriptor maps each port's direction register (STM32F103
     /// CRL/CRH, STM32F4 MODER, nRF52840 DIR), on those a held-LOW pin is known
     /// driven. False for QEMU and unmapped Renode parts (drive state comes only
     /// from observed edges, so absence from `driven_nets` is ambiguous, not
@@ -504,7 +504,7 @@ pub struct AcOutcome {
     /// Bode `(freq_hz, mag_db, phase_deg)` table per net (the transfer function
     /// from the unit AC stimulus to that net).
     pub bode: HashMap<String, Vec<(f64, f64, f64)>>,
-    /// Loop-stability margins per net (T = -V_net convention), for any net a
+    /// Loop-stability margins per net (T = -`V_net` convention), for any net a
     /// `phase_margin` assertion references.
     pub margins: HashMap<String, hauksbee_solve::StabilityMargins>,
 }
@@ -969,7 +969,7 @@ pub(crate) fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError>
     load_normalized_board(board_path).map(|normalized| normalized.board)
 }
 
-/// Is this path a KiCad schematic, by extension (any case)?
+/// Is this path a `KiCad` schematic, by extension (any case)?
 fn is_kicad_sch(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -1018,7 +1018,7 @@ fn load_normalized_board(
 /// file, comparing by *basename* so a project that organizes sub-sheets in a
 /// sub-directory (`"sheets/power.kicad_sch"`) is still caught. Candidates are
 /// the schematics in this file's directory and its parent directory, which
-/// covers flat and one-level-nested hierarchies (the layouts KiCad projects use
+/// covers flat and one-level-nested hierarchies (the layouts `KiCad` projects use
 /// in practice).
 ///
 /// A heuristic, not a full hierarchy parse, which is why pointing at a
@@ -1137,8 +1137,8 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
 ///
 /// Two of the references are easy to overlook. A `[[decoupling.override]]`
 /// keyed by a ref that names no board capacitor is silently dropped in
-/// apply_decoupling (the per-cap lookup never matches), so the parasitics the
-/// user opted into are never applied and a rail_window check sees a
+/// `apply_decoupling` (the per-cap lookup never matches), so the parasitics the
+/// user opted into are never applied and a `rail_window` check sees a
 /// cleaner-than-real rail, a false GREEN. A SPI slave's `ref` names the board
 /// component the peripheral IS, and the chip-select route reads that
 /// component's model `cs` pin role when the spec declares no `cs_net`; a typo
@@ -1213,7 +1213,7 @@ pub(crate) fn component_ref_errors(spec: &Spec, known_refs: &[String]) -> Vec<Sp
 /// Add each scenario-scoped `protection_trip` assertion's `supply_net` to that
 /// scenario's window `nets`. The scoped-trip verdict map only carries
 /// (scenario, net) keys for a window's `nets`, seeded from the scenario's own
-/// supply and rail_window nets, but a protection_trip may name a BATTERY rail
+/// supply and `rail_window` nets, but a `protection_trip` may name a BATTERY rail
 /// the scenario's load pulls current from, which is neither; without a key
 /// there, the verdict is a false RED whatever the pack did.
 fn merge_protection_trip_nets(windows: &mut [ScenarioWindow], asserts: &[crate::spec::Assertion]) {
@@ -1698,7 +1698,7 @@ fn coverage_warnings(engine: &HauksbeeEngine, hollow_warnings: &[String]) -> Vec
 
 /// Resolve the spec's `firmware` field to a validated, absolute image path.
 ///
-/// The field may name a PlatformIO project directory, a built `.pio` tree, or a
+/// The field may name a `PlatformIO` project directory, a built `.pio` tree, or a
 /// zip of either (parity with `run --firmware` and the web drop zone), so it is
 /// first resolved to the compiled image; a bare `.elf`/`.hex` passes through.
 /// The result is then validated and format-checked BEFORE any native loader
@@ -2389,7 +2389,7 @@ struct ScenarioWindow {
 /// Attach every `[[scenario]]` load to the engine and build the list of
 /// measurement windows the frame loop will populate. The window's rails are the
 /// nets named by any `rail_window` assertion scoped to this scenario (or run-wide
-/// when a rail_window has no scenario scope).
+/// when a `rail_window` has no scenario scope).
 fn attach_scenarios(
     spec: &Spec,
     board: &ExtractedBoard,
@@ -3262,7 +3262,7 @@ fn bias_bound(
     Ok(dead)
 }
 
-/// Every voltage/rail_window assertion whose net is fed DIRECTLY by an ideal
+/// Every `voltage/rail_window` assertion whose net is fed DIRECTLY by an ideal
 /// source, with that net: a declared `kind = "ideal"` supply leg, a binder
 /// auto-rail (also stamped as an ideal leg), or a `[[net_drive]]`. Such an
 /// assertion is a hollow gate: the source holds the net at its programmed
@@ -3516,7 +3516,7 @@ mod tests {
         assert!(refusals[0].contains("timing.min_pulse_us"));
     }
 
-    /// Serializes the DescriptorDirGuard tests: they mutate the process-global
+    /// Serializes the `DescriptorDirGuard` tests: they mutate the process-global
     /// `HAUKSBEE_MCU_DIR` env var, so parallel test threads must not interleave.
     static MCU_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -3790,7 +3790,7 @@ fn main {
     }
 
     /// Replay a voltage series through the per-frame boot-coverage update and
-    /// return (first_cross_ms, first_drop_after_cross_ms).
+    /// return (`first_cross_ms`, `first_drop_after_cross_ms`).
     fn boot_track(series: &[(f64, f64)], level: f64) -> (Option<f64>, Option<f64>) {
         let key = ("CTRL".to_string(), level.to_bits());
         let mut cross: HashMap<(String, u64), f64> = HashMap::new();

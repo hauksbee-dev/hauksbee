@@ -4,7 +4,7 @@
 //! An MCU samples certain pins at the reset latch window to choose its boot
 //! mode. If a strapping pin is not at the level the part needs during that
 //! window, the chip can boot wrong (the textbook case: Olimex ESP32-EVB rev D,
-//! where the Ethernet PHY's free-running 50 MHz REF_CLK sits on GPIO0 - a
+//! where the Ethernet PHY's free-running 50 MHz `REF_CLK` sits on GPIO0 - a
 //! strapping pin that must be a stable HIGH - so the ESP32 randomly enters
 //! download mode; ESP-IDF Ethernet API documents this exact failure, and Olimex
 //! fixed it in rev E by gating PHY power until the oscillator stabilises).
@@ -248,7 +248,7 @@ pub(crate) fn is_assembled_resistor(c: &Component) -> bool {
 /// Is this component a *powered oscillator* (a free-running clock source), as
 /// opposed to a bare crystal (a passive resonator that does not drive on its
 /// own)? An oscillator is a packaged part with its own VDD; we key on the
-/// reference / value / lib_id, and require it to NOT be a plain 2-terminal
+/// reference / value / `lib_id`, and require it to NOT be a plain 2-terminal
 /// crystal. DNP oscillators are not assembled, so they do not drive.
 fn is_clock_oscillator(c: &Component) -> bool {
     if !AssemblyState::of(c).is_present() {
@@ -556,7 +556,7 @@ fn is_unconnected_net(name: &str) -> bool {
 
 /// True when the only thing on `net_id` is `mcu` itself, no resistor, no other
 /// component, nothing that could define a level. Such a strap net is floating
-/// just as surely as a KiCad `unconnected-*` net, even if it carries a real name.
+/// just as surely as a `KiCad` `unconnected-*` net, even if it carries a real name.
 /// A net with ANY other member (a pull resistor, a header, a jumper, another
 /// driver) is NOT isolated, so a jumper-selectable BOOT0 (a resistor to a 3-pin
 /// header, as on dev boards) never trips this, only a genuinely dangling pin.

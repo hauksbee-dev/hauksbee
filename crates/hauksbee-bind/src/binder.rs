@@ -6,7 +6,7 @@
 //!   - passives (R/C/L) -> analog IR devices from the parsed `Value`;
 //!   - diode / BJT / MOSFET -> analog IR devices with SPICE params;
 //!   - vreg -> a behavioral ideal source on its output net;
-//!   - analog_switch -> `VSwitch`; opamp/comparator -> behavioral IR devices;
+//!   - `analog_switch` -> `VSwitch`; opamp/comparator -> behavioral IR devices;
 //!   - digital ICs (74HC595, ...) -> event-driven [`DigitalComponent`]s whose
 //!     outputs are Thevenin [`PinDriver`]s stamped into the circuit;
 //!   - mcu -> an [`McuBinding`] (instantiated lazily by the scheduler) with a
@@ -69,12 +69,12 @@ pub struct McuBinding {
     /// ADC channel -> net node, so the scheduler can inject node voltages.
     pub adc_nets: HashMap<u8, NodeId>,
     /// ADC channel -> its OWN GPIO `(port,bit)`, for analog-capable pins that also
-    /// carry a digital port pin (e.g. ATmega328P A0..A5 = PC0..PC5). ADC-ONLY
+    /// carry a digital port pin (e.g. `ATmega328P` A0..A5 = PC0..PC5). ADC-ONLY
     /// channels (A6/A7) have NO entry. The scheduler uses this to decide whether a
     /// channel was promoted to output by checking THIS channel's own driver,
     /// never merely whether some other pin's driver shares the net.
     pub adc_pin: HashMap<u8, (char, u8)>,
-    /// Whether this is a module wrapper (Arduino_Nano) using header pad names.
+    /// Whether this is a module wrapper (`Arduino_Nano`) using header pad names.
     pub module: bool,
     /// Absolute-maximum supply voltage (V) from the model's ratings
     /// (`max_voltage_v`), when the model carries one. The scheduler turns this
@@ -139,10 +139,10 @@ pub struct BoundBoard {
     pub circuit: Circuit,
     /// Net name -> circuit node.
     pub net_nodes: HashMap<String, NodeId>,
-    /// All net names in *net-declaration order* (for board_info / frame counts).
+    /// All net names in *net-declaration order* (for `board_info` / frame counts).
     ///
     /// WARNING: this is NOT a `NodeId` reverse map. It is pushed once per real
-    /// net (skipping KiCad's no-net id 0), so it has no entry for the ground
+    /// net (skipping `KiCad`'s no-net id 0), so it has no entry for the ground
     /// node that occupies `NodeId(0)` in the circuit. Indexing it by `NodeId.0`
     /// is therefore OFF BY ONE and relabels every node as its successor, which
     /// is exactly what produced a spurious "comparator +IN -> SCL" mis-wiring
@@ -156,9 +156,9 @@ pub struct BoundBoard {
     /// no simulable processor for a reason the user can undo (`--fit`), which
     /// is what the firmware gates report instead of running vacuously.
     pub dnp_mcus: Vec<(String, String)>,
-    /// reference -> resolved model kind string (for board_info coloring).
+    /// reference -> resolved model kind string (for `board_info` coloring).
     pub component_kinds: HashMap<String, String>,
-    /// Named controllable input sources: reference -> DeviceId of a Vsource /
+    /// Named controllable input sources: reference -> `DeviceId` of a Vsource /
     /// Isource the UI can override (sliders).
     pub input_sources: HashMap<String, hauksbee_ir::DeviceId>,
     /// Configurable power supplies, one per detected supply net.
@@ -1192,7 +1192,7 @@ fn ref_prefix(reference: &str) -> String {
 }
 
 /// Which passive ('R', 'C' or 'L') a designator's first letter claims. A word
-/// rather than a designator ("COIL", "LOAD") yields to a KiCad footprint family:
+/// rather than a designator ("COIL", "LOAD") yields to a `KiCad` footprint family:
 /// a relay winding on `Resistor_SMD:R_0805` is 167 ohms, not a 167 F capacitor.
 fn passive_letter(comp: &Component) -> Option<char> {
     let prefix = ref_prefix(&comp.reference);
@@ -1775,7 +1775,7 @@ fn make_entry(
     entry
 }
 
-/// The snake_case discriminant string for a [`ComponentKind`] (matches the
+/// The `snake_case` discriminant string for a [`ComponentKind`] (matches the
 /// TOML `#[serde(rename_all = "snake_case")]` encoding).
 fn kind_str(kind: ComponentKind) -> &'static str {
     use ComponentKind::*;
@@ -1801,7 +1801,7 @@ fn kind_str(kind: ComponentKind) -> &'static str {
     }
 }
 
-/// The ATmega328P DIP-28 / TQFP-32 pad→role map (mirrors db/mcu.toml).
+/// The `ATmega328P` DIP-28 / TQFP-32 pad→role map (mirrors db/mcu.toml).
 fn atmega328p_pin_map() -> std::collections::BTreeMap<String, String> {
     [
         ("1", "pc6_reset"),
@@ -4074,13 +4074,13 @@ fn timer_cmp(a: &str, b: &str, vcc: &str, gain: f64) -> String {
 /// both comparators and the RESET gate folded into ONE Behavioral control node
 /// `ctl`, and one hysteretic [`Device::VSwitch`] that is at once the SR LATCH
 /// (its own hysteresis IS the latch memory -- there is no latch device) and the
-/// discharge transistor. A second VSwitch on the same control plus a pull-up exposes the latch state as
+/// discharge transistor. A second `VSwitch` on the same control plus a pull-up exposes the latch state as
 /// a node `qb`, which both closes the latch's own feedback (see `ctl_expr`) and
 /// drives the output stage: a Behavioral source behind a series R, so VOL/VOH
 /// move under load.
 ///
 /// The two legs are named `_disch` and `_q`, never `_s0`/`_s1`:
-/// `SpdtPairs::analyze` pairs VSwitch legs by that suffix and applies
+/// `SpdtPairs::analyze` pairs `VSwitch` legs by that suffix and applies
 /// break-before-make to them, and these two must be free to close together.
 ///
 /// What this owes: the interval is solved, not printed, so the paired ngspice
@@ -4889,7 +4889,7 @@ fn bind_digital(
 /// `g<n>b`. A latch is a pair of gates (gQ, gQb) where `gQ.y == gQb.<one input>`
 /// and `gQb.y == gQ.<one input>` (the cross-couple). For the latch:
 ///   - `reset` = the gate whose NON-cross-couple input net name contains "RESET"
-///     (RESET_SR), that gate's output is Qb (internal);
+///     (`RESET_SR`), that gate's output is Qb (internal);
 ///   - the OTHER gate is the Q gate: its non-cross input is `set` (SPIKE<n>),
 ///     its output net is `q` (the observable L<n>, wired to the 165 inputs).
 ///
@@ -5346,7 +5346,7 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
     format!("{sign}{s} {prefix}{unit}")
 }
 
-/// Map an ATmega328P / Arduino-Nano role string to a `(port, bit)` GPIO id.
+/// Map an `ATmega328P` / Arduino-Nano role string to a `(port, bit)` GPIO id.
 pub fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     if module {
@@ -5405,7 +5405,7 @@ pub fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     (bit < 32).then_some((port, bit))
 }
 
-/// Arduino digital pin number -> ATmega328P (port, bit).
+/// Arduino digital pin number -> `ATmega328P` (port, bit).
 fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
     match num {
         0..=7 => Some(('D', num)),
@@ -5416,11 +5416,11 @@ fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
 
 /// Map a dual-purpose analog-pin role to its GPIO `(port, bit)`, so `bind_mcu`
 /// can stamp the tri-stated driver half of the dual ADC+GPIO bind (dynamic
-/// promotion). On the ATmega328P the analog pins
+/// promotion). On the `ATmega328P` the analog pins
 /// A0..A5 are port C bits 0..5 (PC0..PC5); A6/A7 (Nano modules) are ADC-only
 /// with no port pin and return `None`, so they stay pure ADC probes. Handles
 /// both the Nano module role ("a2", "a3_...") and the bare role carrying an
-/// adc index ("pc2_adc2").
+/// adc index ("`pc2_adc2`").
 pub fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     // As in `gpio_of_role`, the bare `a<n>` table is the NANO's. A module whose
@@ -5468,7 +5468,7 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 /// `circuit.node(name)` calls agree on which net is node 0.
 ///
 /// Deliberately NARROWER than [`is_ground`]: AGND / DGND / PGND / ISOGND /
-/// CHASSIS_GND are real, distinct nets whose whole point is that they are NOT
+/// `CHASSIS_GND` are real, distinct nets whose whole point is that they are NOT
 /// the same copper as GND until something (a ferrite bead, a 0 Ω link, a star
 /// point) joins them. Folding them all onto node 0 before binding turned every
 /// such bridge into an inert self-loop and erased the board's ground topology,
@@ -5476,7 +5476,7 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 /// Rail-default and rating heuristics keep the broad [`is_ground`]; only the
 /// pass-1 node assignment uses this.
 ///
-/// `VSS` IS canonical ground: it is the IC-pin spelling of "the" ground (KiCad's
+/// `VSS` IS canonical ground: it is the IC-pin spelling of "the" ground (`KiCad`'s
 /// `power:VSS`), not a split-ground island like the *GND families. A CMOS/logic
 /// board whose sole ground net is labelled `VSS` must still fuse onto node 0, or
 /// the reference node floats and the whole MNA solve is singular / offset. `VEE`
@@ -5631,7 +5631,7 @@ pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
 /// the canonical 5 V nor 3.3 V and whose name does not START with the digit (so
 /// [`positive_rail_fallback`] skips it). Gated on a supply token so an arbitrary
 /// signal net that merely contains a "1V2"-like substring is not misread as a
-/// rail. Accepts both KiCad digit-V-digit ("1V8") and dotted ("1.8V") forms.
+/// rail. Accepts both `KiCad` digit-V-digit ("1V8") and dotted ("1.8V") forms.
 /// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
 fn embedded_rail_magnitude(n: &str) -> Option<f64> {
     const SUPPLY_TOKENS: [&str; 11] = [
@@ -5712,11 +5712,11 @@ fn name_is_rail_monitor_tap(n: &str) -> bool {
     false
 }
 
-/// "+15V", "+24V_RAIL", "+15V0", "+9V", or a bare "15V" -> the positive rail
+/// "+15V", "+`24V_RAIL`", "+15V0", "+9V", or a bare "15V" -> the positive rail
 /// voltage. The mirror of [`negative_rail_fallback`]: an OPTIONAL leading '+',
-/// then a numeric magnitude in plain ("15V") or KiCad digit-V-digit ("5V0",
+/// then a numeric magnitude in plain ("15V") or `KiCad` digit-V-digit ("5V0",
 /// "3V3") form. A name that does not start with a digit after the optional '+'
-/// (e.g. "VDD_5V", "VCC") returns None and is left to the token heuristic.
+/// (e.g. "`VDD_5V`", "VCC") returns None and is left to the token heuristic.
 /// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
 fn positive_rail_fallback(n: &str) -> Option<f64> {
     rail_magnitude(n.strip_prefix('+').unwrap_or(n))
@@ -5790,9 +5790,9 @@ fn is_rail_monitor_suffix(tail: &str) -> bool {
     TAP_ROOTS.iter().any(|r| first.starts_with(r))
 }
 
-/// "-5V", "-12V_RAIL", "-5V0", "-3V3_ANALOG" -> the negative rail voltage.
+/// "-5V", "-`12V_RAIL`", "-5V0", "-`3V3_ANALOG`" -> the negative rail voltage.
 /// The mirror of [`positive_rail_fallback`]: a leading '-', then a numeric
-/// magnitude in plain ("12V") or KiCad digit-V-digit ("3V3", "5V0") form.
+/// magnitude in plain ("12V") or `KiCad` digit-V-digit ("3V3", "5V0") form.
 /// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
 fn negative_rail_fallback(n: &str) -> Option<f64> {
     // Strip exactly one sign; do not accept -+5V by calling the positive wrapper.
@@ -5801,7 +5801,7 @@ fn negative_rail_fallback(n: &str) -> Option<f64> {
 
 /// A net that carries a `power_out` (or `power_out+no_connect`) pin whose
 /// pinfunction names a voltage is a supply rail at that voltage, no matter what
-/// the NET is named. KiCad netlists from boards that use a non-canonical rail
+/// the NET is named. `KiCad` netlists from boards that use a non-canonical rail
 /// label (e.g. `+5P`, `VBUS_SW`, `SYS_3V3`) still tag the *source pin* of a
 /// regulator/MCU/connector as `power_out`, so this catches rails that pure
 /// name-matching ([`power_rail_voltage`]) misses. Returns the rail voltage if
@@ -6415,7 +6415,7 @@ pub fn apply_placement_identity(
 ///
 /// A non-empty value that does not parse as a magnitude is a name: `ATmega328P-AU`,
 /// `BSS138`, `LM4040BIM3-2.0`. A parseable magnitude (`10k`, `100nF`) is a
-/// parameter. An empty value, KiCad's `~`, and the marker an Altium read leaves
+/// parameter. An empty value, `KiCad`'s `~`, and the marker an Altium read leaves
 /// behind are all nothing.
 fn layout_names_a_part(comp: &Component) -> bool {
     let v = comp.value.trim();
@@ -6508,7 +6508,7 @@ mod part_name_tests {
 /// layout's value carries no electrical parameter, the part number ALSO stands in
 /// for the value.
 ///
-/// The substitution is not a shortcut. A model's match rules are ANDed, and nearly
+/// The substitution is not a shortcut. A model's match rules are `ANDed`, and nearly
 /// every entry in the library declares a `value_re` written against part numbers
 /// (`^MCP4728`, `^BSS138[A-Z0-9-]*$`). So a part number presented only as a part
 /// number matches nothing: the query still carries the layout's own value, and the
@@ -6863,7 +6863,7 @@ fn explicit_manufacturer(comp: &Component) -> Option<&str> {
 
 /// Number of electrical pads explicitly described by a package name.
 ///
-/// KiCad's `QFN-56-1EP` spelling means 56 perimeter pads plus one exposed
+/// `KiCad`'s `QFN-56-1EP` spelling means 56 perimeter pads plus one exposed
 /// electrical pad. Paste-aperture subdivisions are not part of that count.
 fn package_electrical_pad_count(package: &str) -> Option<usize> {
     let upper = package.to_ascii_uppercase();
@@ -7577,7 +7577,7 @@ style = "i2c_pointer"
     }
 
     /// The s0 / NC throw conducts when the control is LOW, so a partially
-    /// wired com + s0 + ctrl switch stamps a VSwitch with inverted sense.
+    /// wired com + s0 + ctrl switch stamps a `VSwitch` with inverted sense.
     #[test]
     fn spst_fallback_s0_throw_conducts_on_control_low() {
         let model = analog_switch_entry("NC SPST: com + s0 + ctrl");

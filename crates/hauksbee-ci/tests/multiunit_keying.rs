@@ -2,7 +2,7 @@
 //!
 //! A multi-unit package (dual MOSFET, quad switch, ...) stamps one device per
 //! unit, so `RunOutcome.peak_temp_c` and the fault list carry per-unit keys
-//! ("SW1_q1", "SW1_s0"), never the bare package ref the spec's `max_temp`
+//! ("`SW1_q1`", "`SW1_s0`"), never the bare package ref the spec's `max_temp`
 //! names. The trackability gate (`check_trackable_assert_refs`) accepts the
 //! bare ref because its units ARE monitored, so before the fix `check_max_temp`
 //! looked up `peak_temp_c["SW1"]`, always found nothing, and a safety ceiling
@@ -40,8 +40,8 @@ fn temps(entries: &[(&str, f64)]) -> HashMap<String, f64> {
 const MAX_TEMP_85_SPEC: &str = "board=\"b.kicad_pcb\"\nduration_ms=1\n\
     [[assert]]\nkind=\"max_temp\"\nref=\"SW1\"\ncelsius=85.0\n";
 
-/// THE regression: a dual device whose units are keyed SW1_q1/SW1_q2, with one
-/// unit over the 85 C ceiling, must FAIL the base-ref max_temp. Before the fix
+/// THE regression: a dual device whose units are keyed `SW1_q1/SW1_q2`, with one
+/// unit over the 85 C ceiling, must FAIL the base-ref `max_temp`. Before the fix
 /// the bare-ref lookup never matched a per-unit key, the peak read as None, and
 /// this assertion structurally could not fail.
 #[test]
@@ -114,8 +114,8 @@ fn max_temp_does_not_aggregate_other_components() {
 }
 
 /// No explicit ceiling: an overtemperature fault raised against a UNIT of the
-/// package must fail the base-ref max_temp (the fault list is keyed by the
-/// stamped per-unit device name, same as peak_temp_c).
+/// package must fail the base-ref `max_temp` (the fault list is keyed by the
+/// stamped per-unit device name, same as `peak_temp_c`).
 #[test]
 fn max_temp_without_ceiling_matches_per_unit_overtemperature_fault() {
     let spec = load_spec(

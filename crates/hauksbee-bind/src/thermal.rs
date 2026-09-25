@@ -16,7 +16,7 @@
 //! and that neighbours do not heat each other. See the "limits" note at the
 //! bottom and `docs/checks/THERMAL.md` for what this does and does not capture.
 //!
-//! ## theta_JA defaults by package class
+//! ## `theta_JA` defaults by package class
 //!
 //! When a device's model entry does not carry an explicit `theta_ja_c_per_w`,
 //! we derive one from its footprint package class. The defaults below are
@@ -28,7 +28,7 @@
 //! the parts that use each body, cross-checked against JEDEC JESD51 and the
 //! Vishay / onsemi / TI / Nexperia package application notes:
 //!
-//! | Package          | theta_JA (C/W) | source / note                                   |
+//! | Package          | `theta_JA` (C/W) | source / note                                   |
 //! |------------------|----------------|-------------------------------------------------|
 //! | SOT-23 / SOT-23-3| 250            | Nexperia/onsemi SOT-23 small-signal, still air  |
 //! | SOT-23-5/6       | 220            | slightly more pin/copper than 3-pin             |
@@ -46,7 +46,7 @@
 //! | SMB (DO-214AA)   | 75             | Vishay SMB rectifier to recommended pad         |
 //! | SMC (DO-214AB)   | 60             | Vishay SMC rectifier to recommended pad         |
 //!
-//! Chip resistors / capacitors use a size-derived theta_JA (a hot 0402 with no
+//! Chip resistors / capacitors use a size-derived `theta_JA` (a hot 0402 with no
 //! copper flood is genuinely ~600 C/W; a 2512 nearer ~80 C/W). These are
 //! consistent with the chip-resistor power deratings the stress monitor already
 //! encodes (a 0402 at 1/16 W reaching its rated rise is the same physics).
@@ -60,7 +60,7 @@ use hauksbee_models::schema::ComponentKind;
 /// datasheet reference ambient ("TA = 25 C") most ratings are quoted at.
 pub const DEFAULT_AMBIENT_C: f64 = 25.0;
 
-/// theta_JA (C/W) used when the package is not recognised. A small SMD part in
+/// `theta_JA` (C/W) used when the package is not recognised. A small SMD part in
 /// still air with little copper; pessimistic on purpose.
 pub const DEFAULT_THETA_JA: f64 = 200.0;
 
@@ -73,9 +73,9 @@ pub const DEFAULT_TJ_MAX_C: f64 = 125.0;
 pub const POWER_TJ_MAX_C: f64 = 150.0;
 
 /// Power / discrete / IC package body tokens, matched anywhere in an uppercased
-/// footprint string (KiCad footprints embed the package name, e.g.
+/// footprint string (`KiCad` footprints embed the package name, e.g.
 /// "Package_TO_SOT_SMD:SOT-23", "Package_TO_SOT_THT:TO-220-3_Vertical"), each
-/// with its still-air theta_JA (C/W).
+/// with its still-air `theta_JA` (C/W).
 ///
 /// ORDER MATTERS: the first row whose token is present wins, so the more
 /// specific / larger bodies come before the substrings that would also match a
@@ -106,16 +106,16 @@ const PACKAGE_THETA_JA: &[(&[&str], f64)] = &[
     (&["LQFP", "TQFP", "QFP"], 60.0),
 ];
 
-/// Size-derived theta_JA for a chip resistor / capacitor footprint, by imperial
+/// Size-derived `theta_JA` for a chip resistor / capacitor footprint, by imperial
 /// size token: still-air with minimal copper, bracketing the power deratings the
 /// stress monitor already encodes.
 ///
-/// 01005 MUST be tested before 0402: KiCad pairs the imperial code with its
-/// metric twin, and 01005's metric code IS 0402 ("R_01005_0402Metric"), so a
-/// substring match on "0402" would give the smallest chip the 0402 theta_JA
+/// 01005 MUST be tested before 0402: `KiCad` pairs the imperial code with its
+/// metric twin, and 01005's metric code IS 0402 ("`R_01005_0402Metric`"), so a
+/// substring match on "0402" would give the smallest chip the 0402 `theta_JA`
 /// (600), LOWER than 0201's 900, i.e. under-estimating Tj on the worst-cooling
 /// body. Smaller body = hotter, so 01005 sits ABOVE 0201, matching
-/// resistor_power_from_footprint's "match the smallest package first" rule.
+/// `resistor_power_from_footprint`'s "match the smallest package first" rule.
 const CHIP_THETA_JA: &[(&str, f64)] = &[
     ("01005", 1200.0),
     ("0201", 900.0),
@@ -154,7 +154,7 @@ pub fn theta_ja_from_footprint(footprint: &str, kind: ComponentKind) -> f64 {
     body_match(PACKAGE_THETA_JA, &f, any).unwrap_or(DEFAULT_THETA_JA)
 }
 
-/// Size-derived theta_JA for a chip resistor / capacitor footprint, from
+/// Size-derived `theta_JA` for a chip resistor / capacitor footprint, from
 /// [`CHIP_THETA_JA`]. `None` if the footprint carries no recognised chip size
 /// (so the caller can fall through to a default).
 fn chip_passive_theta_ja(f_upper: &str) -> Option<f64> {

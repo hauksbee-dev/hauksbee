@@ -2,7 +2,7 @@
 //! boards, real exit codes.
 //!
 //! * Multi-spec `hauksbee-ci run a.toml b.toml --junit out.xml`: one merged
-//!   JUnit document, one aggregate summary, worst exit code of the set
+//!   `JUnit` document, one aggregate summary, worst exit code of the set
 //!   (severity order 3 > 2 > 1 > 0).
 //! * `hauksbee-ci init` writes to the CURRENT DIRECTORY by default and
 //!   honours `--out`, with the generated `board = "..."` path relative to

@@ -8,7 +8,7 @@
 //! part exceeds its rating.
 //!
 //! Input is a hand-written [`spec::Spec`] (TOML) checked into a hardware repo.
-//! Output is a human report, a process exit code (0 green / 1 red), JUnit XML
+//! Output is a human report, a process exit code (0 green / 1 red), `JUnit` XML
 //! for any CI system, and GitHub Actions annotations.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-ci/README.md.

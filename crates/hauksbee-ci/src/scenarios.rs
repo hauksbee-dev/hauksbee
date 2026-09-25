@@ -27,7 +27,7 @@ pub struct Scenario {
     pub id: Option<String>,
     /// The part the load attaches to (reference designator, e.g. "U5").
     pub part: String,
-    /// The named load profile to apply (built-in id, e.g. "esp32_boot_wifi", or
+    /// The named load profile to apply (built-in id, e.g. "`esp32_boot_wifi`", or
     /// one defined in `profiles` below).
     pub profile: String,
     /// The supply net the load current is drawn from. If omitted, the runner
@@ -177,7 +177,7 @@ impl RailWindow {
     /// would then false-pass the very sag it exists to catch. The scheduler's
     /// per-frame min/max is folded here so the min/max bounds match what the plain
     /// `voltage` assertion path already sees. (The `samples` timeseries, and hence
-    /// dip_duration/recovery and spike_duration/settling still reflect settled
+    /// `dip_duration/recovery` and `spike_duration/settling` still reflect settled
     /// per-frame values.)
     pub fn fold(&mut self, v: f64) {
         self.min_v = self.min_v.min(v);

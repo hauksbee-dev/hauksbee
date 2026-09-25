@@ -1,5 +1,5 @@
 //! Rendering the outcome of a CI run into the formats a pipeline consumes: a
-//! human-readable terminal report, JUnit XML for any CI system to ingest, and
+//! human-readable terminal report, `JUnit` XML for any CI system to ingest, and
 //! GitHub Actions workflow-command annotations. [`CiResult`] also owns the process
 //! exit code and the honest ensemble-coverage wording, so a green run never
 //! over-claims worst-case proof and a diverged co-sim refuses rather than
@@ -384,7 +384,7 @@ fn schema_absent_evidence(generator: &mut schemars::SchemaGenerator) -> schemars
 }
 
 impl CiResult {
-    /// One C5.3 refusal shared verbatim by JSON, terminal, JUnit, annotations,
+    /// One C5.3 refusal shared verbatim by JSON, terminal, `JUnit`, annotations,
     /// the web checks panel, and MCP.
     pub fn refusal(&self) -> Option<Refusal> {
         if !self.analog_invalid() {
@@ -487,7 +487,7 @@ impl CiResult {
     /// `passed == false` and can never be waived, so it is not counted here.
     /// A waived failure is visible-but-not-gating (the whole point of a
     /// waiver): it stays visible as `[WAIVED]` in the terminal report, a
-    /// `<skipped>` JUnit testcase, a `::warning` annotation and the `waived`
+    /// `<skipped>` `JUnit` testcase, a `::warning` annotation and the `waived`
     /// JSON field, without turning the build red. The web checks panel is the
     /// exception and renders it as a plain FAIL (see docs/ci/CI.md).
     pub fn passed(&self) -> bool {
@@ -667,7 +667,7 @@ impl CiResult {
     /// than adding to them. A rail sitting at 0 V because nobody could work out
     /// its voltage makes the operating point around it fiction, and the stress
     /// monitor will report on that fiction as confidently as on a real
-    /// overload. Someone who reads "R_Shunt15301 overpower" first and the
+    /// overload. Someone who reads "`R_Shunt15301` overpower" first and the
     /// caveat afterwards has already believed the accusation.
     fn dead_rail_banner(&self) -> String {
         if self.dead_rails.is_empty() {
@@ -691,7 +691,7 @@ impl CiResult {
     /// `(tag, message)` pairs.
     ///
     /// One producer feeds all three human-facing formats, so a note cannot
-    /// reach the log and quietly miss the JUnit tab a dashboard reader lives
+    /// reach the log and quietly miss the `JUnit` tab a dashboard reader lives
     /// in: a substitute MCU core, a co-sim path that never ran (dropped ADC
     /// injection, unexercised bus device), the per-MCU timing resolution, a
     /// timing claim the backend could not represent, and waiver housekeeping.
@@ -832,7 +832,7 @@ impl CiResult {
         out
     }
 
-    /// JUnit XML: each assertion is a `<testcase>`, failures carry a
+    /// `JUnit` XML: each assertion is a `<testcase>`, failures carry a
     /// `<failure>` with the detail. Any CI (GitLab, Jenkins, GitHub, Buildkite)
     /// ingests this.
     pub fn render_junit(&self) -> String {
@@ -978,7 +978,7 @@ impl CiResult {
     /// The budget matters: GitHub shows at most 10 annotations per type per
     /// step and silently drops the rest, so this surface spends them on
     /// verdicts only. Passing assertions get NO per-assertion `::notice` (the
-    /// log and JUnit carry them; a 12-assertion green spec must not burn the
+    /// log and `JUnit` carry them; a 12-assertion green spec must not burn the
     /// whole notice budget). Timing coverage gets one aggregated notice;
     /// failures/INVALIDs get at most
     /// [`Self::MAX_ERROR_ANNOTATIONS`] `::error`s plus one overflow line and
@@ -1121,7 +1121,7 @@ pub struct JunitSuite {
 }
 
 /// Wrap one or more suites in the `<testsuites>` envelope with honest
-/// aggregate counts. Every JUnit document this crate emits goes through here,
+/// aggregate counts. Every `JUnit` document this crate emits goes through here,
 /// so the single-spec and merged multi-spec shapes cannot drift.
 pub fn render_junit_document(suites: &[JunitSuite]) -> String {
     let tests: usize = suites.iter().map(|s| s.tests).sum();
@@ -1163,7 +1163,7 @@ pub fn junit_error_suite(name: &str, message: &str) -> JunitSuite {
     }
 }
 
-/// A synthetic JUnit document for a single spec/board error (exit 2); the
+/// A synthetic `JUnit` document for a single spec/board error (exit 2); the
 /// one-spec convenience over [`junit_error_suite`] + [`render_junit_document`].
 pub fn render_junit_error(message: &str) -> String {
     render_junit_document(std::slice::from_ref(&junit_error_suite(
@@ -1181,7 +1181,7 @@ pub fn render_junit_error(message: &str) -> String {
 ///    (`failure_hint`).
 ///
 /// Every surface that prints a `why:` goes through here, so the terminal and the
-/// JUnit body cannot end up saying different things about the same failure.
+/// `JUnit` body cannot end up saying different things about the same failure.
 pub fn why_line(r: &AssertResult) -> Option<String> {
     r.why
         .clone()
@@ -1260,7 +1260,7 @@ fn number_after(text: &str, prefix: &str) -> Option<String> {
 }
 
 /// A threshold of zero means the window was never past the end of anything, so
-/// "raise duration_ms above 0" would be nonsense advice; those fall through to
+/// "raise `duration_ms` above 0" would be nonsense advice; those fall through to
 /// the generic no-data line.
 fn is_zero(n: &str) -> bool {
     n.parse::<f64>().map(|v| v == 0.0).unwrap_or(false)

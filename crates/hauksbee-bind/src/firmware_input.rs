@@ -1,7 +1,7 @@
 //! Resolve a firmware *input*, whatever the user handed us, into a bootable
 //! image the MCU backends can load.
 //!
-//! The co-sim loaders want one compiled `.elf`/`.hex`. Users have a PlatformIO
+//! The co-sim loaders want one compiled `.elf`/`.hex`. Users have a `PlatformIO`
 //! project, an ESP-IDF build tree, or a zip of either, and should not need to
 //! know that the artifact lives at `.pio/build/<env>/firmware.elf`. This module
 //! closes that gap in three tiers:
@@ -87,7 +87,7 @@ fn pio_bin() -> String {
 /// Resolve uploaded firmware bytes (the web drop zone's firmware part).
 ///
 /// Non-zip inputs pass through untouched. Zips resolve to the best built image
-/// inside, or, if the archive is a PlatformIO project with no built image,
+/// inside, or, if the archive is a `PlatformIO` project with no built image,
 /// to a `pio run` build of it. Errors are user-facing strings (they land in
 /// the co-sim card verbatim).
 pub fn resolve_firmware_bytes(fw_name: &str, fw_bytes: &[u8]) -> Result<ResolvedFirmware, String> {
@@ -355,7 +355,7 @@ fn archive_has_platformio_ini<R: Read + std::io::Seek>(archive: &mut zip::ZipArc
 /// `enclosed_name` so a hostile archive cannot write outside it (zip-slip),
 /// and the [`ZipLimits`] quotas are enforced on what actually inflates, so a
 /// zip bomb cannot exhaust disk. The dir comes from `tempfile` (unpredictable
-/// name, created 0700 with O_EXCL semantics), not a guessable PID-derived path
+/// name, created 0700 with `O_EXCL` semantics), not a guessable PID-derived path
 /// a local attacker could pre-create as a symlink; it is removed when the
 /// returned guard drops.
 fn extract_zip_to_temp<R: Read + std::io::Seek>(
@@ -483,7 +483,7 @@ fn drain_tail(mut r: impl Read) -> Vec<u8> {
     buf
 }
 
-/// Build a PlatformIO project with the user's own toolchain and return the
+/// Build a `PlatformIO` project with the user's own toolchain and return the
 /// built image. Detect-don't-bundle: a missing `pio` and a failing build are
 /// both loud errors that say exactly what to do.
 fn pio_build(project: &Path) -> Result<(PathBuf, String), String> {
@@ -650,7 +650,7 @@ mod tests {
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
-    /// Tests that mutate process-wide env vars (HAUKSBEE_PIO, the timeout
+    /// Tests that mutate process-wide env vars (`HAUKSBEE_PIO`, the timeout
     /// override) serialize on this lock so the parallel test runner cannot
     /// interleave them.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -856,7 +856,7 @@ mod tests {
 
     /// Real end-to-end `pio run` build. Ignored by default: it needs pio on
     /// PATH and the atmelavr toolchain installed (first run downloads it).
-    /// Run with: cargo test -p hauksbee-engine --lib firmware_input -- --ignored
+    /// Run with: cargo test -p hauksbee-engine --lib `firmware_input` -- --ignored
     #[test]
     #[ignore]
     fn real_pio_project_builds_and_resolves() {

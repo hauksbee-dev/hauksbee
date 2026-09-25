@@ -1,7 +1,7 @@
 //! The editor-schema drift test. The VS Code extension validates spec TOML
 //! against `editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json`,
 //! and that file is GENERATED from the Rust [`Spec`] type via schemars: the
-//! serde derives (deny_unknown_fields, defaults, renames) and the doc comments
+//! serde derives (`deny_unknown_fields`, defaults, renames) and the doc comments
 //! on each field ARE the schema, so adding a field to `Spec` updates the
 //! schema instead of silently drifting from it. Same coupling pattern as
 //! `hauksbee-ir/tests/compat_drift.rs` for the SPICE compatibility doc.
@@ -12,7 +12,7 @@
 //!   `UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test schema_drift`
 //! * `generated_schema_is_strict_and_documented`: the generator actually
 //!   carries the properties the editor experience depends on (doc comments as
-//!   hover descriptions, deny_unknown_fields as additionalProperties: false),
+//!   hover descriptions, `deny_unknown_fields` as additionalProperties: false),
 //!   so a schemars regression cannot quietly ship an empty-but-matching file.
 
 use hauksbee_ci::Spec;

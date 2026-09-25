@@ -183,7 +183,7 @@ impl BindReport {
     /// These entries exist so an unmodeled power FET in a recognised package
     /// binds to something and can be simulated at all, but their numbers are
     /// invented: the generic power-FET catch-alls carry a nominal 30 V / 20 A /
-    /// 30 W and a 20 mOhm Rds_on that belong to no datasheet. Naming them puts
+    /// 30 W and a 20 mOhm `Rds_on` that belong to no datasheet. Naming them puts
     /// the invented basis of any verdict resting on them on the record.
     ///
     /// Scoped to active devices ([`is_active_fallback_device`]) on purpose.

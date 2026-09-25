@@ -222,7 +222,7 @@ fn rail_name_and_level(board: &ExtractedBoard, net_id: i64) -> Option<(String, B
 /// advisory: it separates a genuine load-control net (e.g. an igniter gate fed
 /// by a mis-mapped pull-up) from an ordinary `INPUT_PULLUP` button input, both
 /// read HIGH at boot, but only the former switches anything. Reference prefix
-/// 'Q' = transistor, 'K' = relay (standard KiCad designators). DNP (not
+/// 'Q' = transistor, 'K' = relay (standard `KiCad` designators). DNP (not
 /// assembled) switches don't count. (Pin-function data that would let us require
 /// the *control* terminal specifically is absent in PCB-only extraction, so any
 /// terminal of a populated Q/K qualifies, a deliberate, conservative breadth.)
@@ -339,7 +339,7 @@ fn is_base_pad_name(s: &str) -> bool {
 ///
 /// Public because a boot-state test has to ask the same question, and asking it
 /// a second way is how a corpus test ends up hardcoding the reference
-/// designators of one board revision: the LumenPnP fuzz spec named Q1..Q4, and
+/// designators of one board revision: the `LumenPnP` fuzz spec named Q1..Q4, and
 /// the revision the corpus fetches has three gates at Q2, Q5 and Q6.
 pub fn transistor_gate_nets(board: &ExtractedBoard) -> Vec<(String, String)> {
     let mut out = Vec::new();
