@@ -373,9 +373,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
 
     // `misc/info`'s `UNITS` is the job-wide default for any file that declares
     // none of its own; see [`records::declared_units`].
-    let job_units = info_field(&info, "UNITS")
-        .map(|u| records::unit_scale(&u))
-        .unwrap_or(1.0);
+    let job_units = info_field(&info, "UNITS").map_or(1.0, |u| records::unit_scale(&u));
 
     let eda_path = format!("steps/{step}/eda/data");
     let eda_text = tree.text(&eda_path);
@@ -394,7 +392,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         layer_components.extend(records::parse_components_file(&text, is_bottom, job_units));
     }
 
-    let eda_components = eda.as_ref().map(|e| e.components.len()).unwrap_or(0);
+    let eda_components = eda.as_ref().map_or(0, |e| e.components.len());
     let (raw_components, placement_source) = if eda_components > 0 {
         // eda/data is the electrical view and owns the net ordinals; the
         // component layers become a cross-check.
@@ -805,7 +803,7 @@ fn component_layers(matrix: &records::Matrix) -> Vec<String> {
     if declared.is_empty() {
         return ["comp_+_top", "comp_+_bot"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
     }
     declared
@@ -868,7 +866,10 @@ fn info_field(info: &str, key: &str) -> Option<String> {
 }
 
 fn sorted_diff(a: &HashSet<&str>, b: &HashSet<&str>) -> Vec<String> {
-    let mut v: Vec<String> = a.difference(b).map(|s| s.to_string()).collect();
+    let mut v: Vec<String> = a
+        .difference(b)
+        .map(std::string::ToString::to_string)
+        .collect();
     v.sort();
     v
 }

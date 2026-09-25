@@ -230,10 +230,10 @@ fn call_backend(prompt: &str, pdf: &Path) -> Result<String, String> {
 }
 
 fn call_codex(prompt: &str, pdf: &Path) -> Result<String, String> {
-    let workdir = pdf
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let workdir = pdf.parent().map_or_else(
+        || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        Path::to_path_buf,
+    );
     let mut child = Command::new("codex")
         .args([
             "exec",

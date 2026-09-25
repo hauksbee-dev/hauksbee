@@ -402,7 +402,7 @@ impl PlacementFile {
                 footprint: (!p.package.is_empty()).then(|| p.package.clone()),
                 populate: None,
                 source: self.provenance.path.clone(),
-                source_kind: self.provenance.kind.to_string(),
+                source_kind: self.provenance.kind.clone(),
             })
             .collect()
     }
@@ -574,8 +574,7 @@ impl PlacementFile {
             let cells = layout.split(line);
             let cell = |k: Option<usize>| -> &str {
                 k.and_then(|i| cells.get(i))
-                    .map(|s| s.trim())
-                    .unwrap_or("")
+                    .map_or("", |s| s.trim())
                     .trim_matches('"')
                     .trim()
             };

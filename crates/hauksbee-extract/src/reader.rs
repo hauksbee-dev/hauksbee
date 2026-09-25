@@ -244,7 +244,7 @@ impl Registry {
         self.readers
             .iter()
             .find(|r| r.detects(bytes, path))
-            .map(|b| b.as_ref())
+            .map(std::convert::AsRef::as_ref)
     }
 
     /// The *binary* reader that claims these bytes, if any. Used by the
@@ -254,7 +254,7 @@ impl Registry {
         self.readers
             .iter()
             .find(|r| r.is_binary() && r.detects(bytes, path))
-            .map(|b| b.as_ref())
+            .map(std::convert::AsRef::as_ref)
     }
 
     /// Detect and read in one step. When nothing matches, the error carries
@@ -287,7 +287,7 @@ impl Default for Registry {
 /// otherwise names the accepted formats in user words rather than internal
 /// reader ids.
 pub fn unrecognized_message(bytes: &[u8]) -> String {
-    if bytes.iter().all(|b| b.is_ascii_whitespace()) {
+    if bytes.iter().all(u8::is_ascii_whitespace) {
         return "this file is empty".to_string();
     }
     // A pre-Eagle-6 drawing. Binary, so it is checked against the raw bytes

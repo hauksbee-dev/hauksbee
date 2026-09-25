@@ -25,10 +25,10 @@ pub(crate) fn xml_attrs(e: &quick_xml::events::BytesStart) -> HashMap<String, St
         .flatten()
         .map(|a| {
             #[allow(deprecated)]
-            let value = a
-                .unescape_value()
-                .map(|c| c.into_owned())
-                .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
+            let value = a.unescape_value().map_or_else(
+                |_| String::from_utf8_lossy(&a.value).into_owned(),
+                std::borrow::Cow::into_owned,
+            );
             (String::from_utf8_lossy(a.key.as_ref()).into_owned(), value)
         })
         .collect()
@@ -105,7 +105,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                         if let Some(bad) = non_finite_coord(&a) {
                             return Err(corrupt_coord("element", &bad.0, &bad.1));
                         }
-                        let rot = a.get("rot").map(String::as_str).unwrap_or("R0");
+                        let rot = a.get("rot").map_or("R0", String::as_str);
                         elements.push(El {
                             name: a.get("name").cloned().unwrap_or_default(),
                             library: a.get("library").cloned().unwrap_or_default(),
@@ -128,8 +128,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                             // the KiCad readers which thread the analogous field.
                             dnp: a
                                 .get("populate")
-                                .map(|p| p.eq_ignore_ascii_case("no"))
-                                .unwrap_or(false),
+                                .is_some_and(|p| p.eq_ignore_ascii_case("no")),
                         });
                     }
                     b"signal" => {

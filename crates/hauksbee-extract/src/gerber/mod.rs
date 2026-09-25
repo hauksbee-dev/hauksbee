@@ -183,7 +183,7 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn drill_is_gerber_format(head: &str, ext: Option<&str>) -> bool {
     head.contains("%FS")
         || head.contains("%AD")
-        || ext.map(|s| s.eq_ignore_ascii_case("art")).unwrap_or(false)
+        || ext.is_some_and(|s| s.eq_ignore_ascii_case("art"))
 }
 
 /// Up to 64 KiB of the file's leading text, lossily decoded, for
@@ -432,8 +432,7 @@ impl PackageMetadata {
                                 "conflicting .LDP declarations for drill file {drill}: {} and {name}. Resolve the package metadata; choosing either span could merge nets the stack keeps apart",
                                 ldp_sources
                                     .get(&drill)
-                                    .map(String::as_str)
-                                    .unwrap_or("an earlier .LDP file"),
+                                    .map_or("an earlier .LDP file", String::as_str),
                             )));
                         }
                         Some(_) => {}
@@ -960,7 +959,7 @@ fn from_gerber_dir_named(dir: &Path, board_name: &str) -> Result<GerberExtractio
     let token_to_stack =
         copper_layer_tokens(&ordered, &files.copper, &physical_to_stack, implied_layers);
 
-    for p in parsed.iter_mut() {
+    for p in &mut parsed {
         p.claim = match p.declared {
             DeclaredSpan::Pair(pair) => {
                 if let (Some(&f), Some(&t)) = (
@@ -1150,7 +1149,7 @@ fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
         }
         geo::Shape::Polygon { pts, .. } => pts,
         geo::Shape::MultiPolygon { contours, .. } => {
-            contours.first().map(|c| c.as_slice()).unwrap_or(&[])
+            contours.first().map_or(&[], std::vec::Vec::as_slice)
         }
     };
     let inflate = match shape {
@@ -1191,7 +1190,7 @@ fn drill_flash_extent(shape: &geo::Shape) -> (f64, (f64, f64), (f64, f64)) {
         if !w.is_finite() {
             continue;
         }
-        if best.map(|(bw, ..)| w < bw).unwrap_or(true) {
+        if best.is_none_or(|(bw, ..)| w < bw) {
             let mid_v = (vmin + vmax) / 2.0;
             best = Some((w, umin, umax, dir, (perp.0 * mid_v, perp.1 * mid_v)));
         }
@@ -1308,7 +1307,7 @@ fn copper_physical_layer(text: &str) -> Option<u32> {
     let head = film_file_function(text)?;
     let at = head.find("FILEFUNCTION")? + "FILEFUNCTION".len();
     let rest = head[at..].trim_start_matches([',', ' ']);
-    let mut fields = rest.split(',').map(|f| f.trim());
+    let mut fields = rest.split(',').map(str::trim);
     if fields.next()? != "COPPER" {
         return None;
     }

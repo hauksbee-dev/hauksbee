@@ -134,11 +134,11 @@ fn parse_resources(text: &str) -> Result<Vec<McuResources>, String> {
         };
         let fully_routable = entry
             .get("fully_routable")
-            .and_then(|v| v.as_bool())
+            .and_then(toml::Value::as_bool)
             .unwrap_or(false);
         let min_pins = entry
             .get("min_pins")
-            .and_then(|v| v.as_integer())
+            .and_then(toml::Value::as_integer)
             .map(|n| n as usize);
         let mut pins = BTreeMap::new();
         if let Some(table) = entry.get("pins").and_then(|p| p.as_table()) {
@@ -151,7 +151,10 @@ fn parse_resources(text: &str) -> Result<Vec<McuResources>, String> {
                     .to_string();
                 let pwm = v.get("pwm").and_then(|x| x.as_str()).map(str::to_string);
                 let qspi_group = v.get("group").and_then(|x| x.as_str()).map(str::to_string);
-                let qspi_data_pad = v.get("data").and_then(|x| x.as_bool()).unwrap_or(false);
+                let qspi_data_pad = v
+                    .get("data")
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(false);
                 pins.insert(
                     pad.clone(),
                     PinResources {
@@ -970,8 +973,7 @@ mod tests {
         let by_value = |v: &str| {
             t.iter()
                 .find(|m| {
-                    m.value_re.is_match(v)
-                        || m.lib_re.as_ref().map(|r| r.is_match(v)).unwrap_or(false)
+                    m.value_re.is_match(v) || m.lib_re.as_ref().is_some_and(|r| r.is_match(v))
                 })
                 .map(|m| m.id.as_str())
         };

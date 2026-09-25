@@ -147,18 +147,15 @@ pub(crate) fn u8_at(b: &[u8], o: usize) -> u8 {
 }
 pub(crate) fn u16_at(b: &[u8], o: usize) -> u16 {
     b.get(o..o + 2)
-        .map(|s| u16::from_le_bytes([s[0], s[1]]))
-        .unwrap_or(0)
+        .map_or(0, |s| u16::from_le_bytes([s[0], s[1]]))
 }
 pub(crate) fn u32_at(b: &[u8], o: usize) -> u32 {
     b.get(o..o + 4)
-        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-        .unwrap_or(0)
+        .map_or(0, |s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
 pub(crate) fn f64_at(b: &[u8], o: usize) -> f64 {
     b.get(o..o + 8)
-        .map(|s| f64::from_le_bytes(s.try_into().unwrap()))
-        .unwrap_or(0.0)
+        .map_or(0.0, |s| f64::from_le_bytes(s.try_into().unwrap()))
 }
 /// Coordinate at `o` converted to millimetres.
 pub(crate) fn coord_mm(b: &[u8], o: usize) -> f64 {

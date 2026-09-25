@@ -68,7 +68,7 @@ impl<'a> Name<'a> {
         let ext = path
             .extension()
             .and_then(|s| s.to_str())
-            .map(|s| s.to_ascii_lowercase());
+            .map(str::to_ascii_lowercase);
         Name {
             full: file.to_ascii_lowercase(),
             ext,
@@ -141,7 +141,7 @@ impl<'a> Name<'a> {
     fn match_positions<'n>(&'n self, needle: &'n str) -> impl Iterator<Item = usize> + 'n {
         let hay = self.full.as_bytes();
         let ned = needle.as_bytes();
-        let upto = hay.len().checked_sub(ned.len()).map(|n| n + 1).unwrap_or(0);
+        let upto = hay.len().checked_sub(ned.len()).map_or(0, |n| n + 1);
         (0..upto).filter(move |&i| &hay[i..i + ned.len()] == ned)
     }
 
@@ -189,7 +189,7 @@ fn explicit_kicad_copper(n: &Name) -> Option<LayerRole> {
                 continue;
             }
             let rest = &stem[pos + 2..];
-            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
             let Ok(k) = digits.parse::<usize>() else {
                 continue;
             };
@@ -575,7 +575,7 @@ pub fn classify(path: &Path) -> LayerRole {
             || stem.starts_with("power")
             || stem.starts_with("plane")
         {
-            let digits: String = stem.chars().filter(|c| c.is_ascii_digit()).collect();
+            let digits: String = stem.chars().filter(char::is_ascii_digit).collect();
             if let Ok(k) = digits.parse::<usize>() {
                 if k >= 1 {
                     return inner(k, &n);
@@ -935,7 +935,7 @@ pub fn parse_ldp(text: &str) -> Vec<(String, LdpDrillRole)> {
         let compact_name: String = set_name
             .unwrap_or("")
             .chars()
-            .filter(|c| c.is_ascii_alphanumeric())
+            .filter(char::is_ascii_alphanumeric)
             .flat_map(char::to_lowercase)
             .collect();
         let plated = if compact_name.contains("nonplated") {
@@ -1006,7 +1006,7 @@ pub fn parse_extrep(text: &str) -> ExtRepMetadata {
             let number: String = description
                 .chars()
                 .skip_while(|c| !c.is_ascii_digit())
-                .take_while(|c| c.is_ascii_digit())
+                .take_while(char::is_ascii_digit)
                 .collect();
             number
                 .parse::<usize>()
@@ -1124,7 +1124,7 @@ pub fn parse_gbrjob(text: &str) -> std::collections::HashMap<String, GbrJobRole>
         let Some(func) = f.get("FileFunction").and_then(|p| p.as_str()) else {
             continue;
         };
-        let mut fields = func.split(',').map(|s| s.trim());
+        let mut fields = func.split(',').map(str::trim);
         let head = fields.next().unwrap_or("").to_ascii_uppercase();
         let role = match head.as_str() {
             "COPPER" => {
@@ -1133,7 +1133,7 @@ pub fn parse_gbrjob(text: &str) -> std::collections::HashMap<String, GbrJobRole>
                     let digits: String = l
                         .strip_prefix(['L', 'l'])?
                         .chars()
-                        .take_while(|c| c.is_ascii_digit())
+                        .take_while(char::is_ascii_digit)
                         .collect();
                     digits.parse::<u32>().ok()
                 }) else {
@@ -1243,7 +1243,7 @@ fn protel_inner_index(n: &Name) -> Option<usize> {
 fn kicad_inner_index(n: &Name) -> Option<usize> {
     /// The layer index that butts straight up against a marker.
     fn index_at(tail: &str) -> Option<usize> {
-        let d: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let d: String = tail.chars().take_while(char::is_ascii_digit).collect();
         d.parse().ok()
     }
     /// The layer index one separator after a marker. Altium 24 plots its inner
@@ -1364,7 +1364,7 @@ fn bare_stack_index(n: &Name) -> Option<usize> {
                 continue;
             }
             let tail = &n.full[pos + marker.len()..];
-            let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
             if digits.is_empty() {
                 continue;
             }

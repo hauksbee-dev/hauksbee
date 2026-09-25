@@ -307,8 +307,8 @@ fn outlines_overlap(a: &[(f64, f64)], b: &[(f64, f64)]) -> bool {
 fn exposed(e: &MacroBoolean, vars: &HashMap<u32, f64>) -> bool {
     match e {
         MacroBoolean::Value(b) => *b,
-        MacroBoolean::Variable(n) => vars.get(n).map(|v| *v != 0.0).unwrap_or(true),
-        MacroBoolean::Expression(s) => eval_expr(s, vars).map(|v| v != 0.0).unwrap_or(true),
+        MacroBoolean::Variable(n) => vars.get(n).is_none_or(|v| *v != 0.0),
+        MacroBoolean::Expression(s) => eval_expr(s, vars) != Some(0.0),
     }
 }
 
@@ -624,7 +624,7 @@ mod tests {
         let ms = instantiate_macro(&donut(false, (0.0, 0.0)), &[], 0.0, 0.0, 1.0);
         assert_eq!(ms.holes.len(), 1, "the clear circle is a hole");
         let mut contours = vec![ms.hull.clone()];
-        contours.extend(ms.holes.clone());
+        contours.extend(ms.holes);
         assert!(
             !point_in_contours(0.0, 0.0, &contours),
             "the void centre is NOT copper"
@@ -684,7 +684,7 @@ mod tests {
         let ms = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
         assert_eq!(ms.holes.len(), 1, "the overlapping second clear is dropped");
         let mut contours = vec![ms.hull.clone()];
-        contours.extend(ms.holes.clone());
+        contours.extend(ms.holes);
         assert!(
             !point_in_contours(0.4, 0.0, &contours),
             "a point inside the kept void, in the two-clears overlap, is empty"

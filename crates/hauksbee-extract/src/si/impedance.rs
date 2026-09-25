@@ -235,8 +235,7 @@ pub fn read_stackup(root: &List) -> Option<Stackup> {
     // Controlled-impedance intent: `(dielectric_constraints yes)`.
     let impedance_controlled = stackup
         .find_value("dielectric_constraints")
-        .map(|v| v.eq_ignore_ascii_case("yes") || v == "true")
-        .unwrap_or(false);
+        .is_some_and(|v| v.eq_ignore_ascii_case("yes") || v == "true");
     Some(Stackup {
         h_microstrip_mm: h,
         t_cu_mm: t_cu.unwrap_or(DEFAULT_CU_THICKNESS_MM),
@@ -608,9 +607,7 @@ fn emit_diff_info_no_spacing(
     report: &mut SiReport,
 ) {
     let z0 = microstrip_z0(w, stackup.h_microstrip_mm, stackup.t_cu_mm, stackup.er);
-    let z0s = z0
-        .map(|z| format!("{z:.0} ohm"))
-        .unwrap_or_else(|| "n/a".into());
+    let z0s = z0.map_or_else(|| "n/a".into(), |z| format!("{z:.0} ohm"));
     report.findings.push(SiFinding {
         check: SiCheck::ControlledImpedance,
         severity: SiSeverity::Info,
@@ -1155,10 +1152,9 @@ fn plane_piercings(root: &List, margin: f64) -> Vec<Piercing> {
             let Some(pat) = pad.find("at") else { continue };
             let (px, py) = (pat.arg_f64(0).unwrap_or(0.0), pat.arg_f64(1).unwrap_or(0.0));
             let (x, y) = local_to_board(fx, fy, frot, px, py);
-            let (sx, sy) = pad
-                .find("size")
-                .map(|s| (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0)))
-                .unwrap_or((0.0, 0.0));
+            let (sx, sy) = pad.find("size").map_or((0.0, 0.0), |s| {
+                (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0))
+            });
             // A round mounting hole may carry only a drill.
             let drill = pad.find("drill").and_then(|d| d.arg_f64(0)).unwrap_or(0.0);
             let extent = sx.max(sy).max(drill);
@@ -1349,9 +1345,8 @@ fn zone_covers_layer(zone: &List, layer: &str) -> bool {
             || (n == "F&B.Cu" && (layer == "F.Cu" || layer == "B.Cu"))
     };
     zone.find("layers")
-        .map(|l| (0..).map_while(|i| l.arg_value(i)).any(|n| named(&n)))
-        .unwrap_or(false)
-        || zone.find_value("layer").map(|l| named(&l)).unwrap_or(false)
+        .is_some_and(|l| (0..).map_while(|i| l.arg_value(i)).any(|n| named(&n)))
+        || zone.find_value("layer").is_some_and(|l| named(&l))
 }
 
 /// The abstention: say the reference plane is missing over the named void, and say

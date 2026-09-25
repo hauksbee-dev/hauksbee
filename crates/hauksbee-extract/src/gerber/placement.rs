@@ -62,7 +62,7 @@ fn split_csv(line: &str) -> Vec<String> {
 fn norm(h: &str) -> String {
     h.to_ascii_lowercase()
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect()
 }
 
@@ -135,7 +135,7 @@ fn parse_len(s: &str) -> Option<(f64, bool)> {
     let inch = lower.ends_with("in")
         || lower.ends_with("inch")
         || lower.ends_with("inches")
-        || lower.ends_with("\"");
+        || lower.ends_with('"');
     // An explicit "mm" is a unit too: the value is already in mm and must not be
     // re-scaled by a header unit. (Checked after mil so "…mil" isn't read as mm.)
     let mm = !mil && lower.ends_with("mm");
@@ -224,18 +224,19 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
         let cells = split_csv(line);
         let get = |i: Option<usize>| {
             i.and_then(|i| cells.get(i))
-                .map(|s| s.as_str())
-                .unwrap_or("")
+                .map_or("", std::string::String::as_str)
         };
         let reference = cells.get(rc).cloned().unwrap_or_default();
         if reference.is_empty() {
             continue;
         }
-        let Some((x, x_had_unit)) = parse_len(cells.get(xc).map(|s| s.as_str()).unwrap_or(""))
+        let Some((x, x_had_unit)) =
+            parse_len(cells.get(xc).map_or("", std::string::String::as_str))
         else {
             continue;
         };
-        let Some((y, y_had_unit)) = parse_len(cells.get(yc).map(|s| s.as_str()).unwrap_or(""))
+        let Some((y, y_had_unit)) =
+            parse_len(cells.get(yc).map_or("", std::string::String::as_str))
         else {
             continue;
         };
@@ -274,8 +275,7 @@ fn looks_like_kicad_pos(text: &str) -> bool {
             let t = l.trim_start().trim_start_matches('#').trim_start();
             t.starts_with("Ref") && t.contains("PosX")
         })
-        .map(|l| !l.contains(',') && !l.contains(';'))
-        .unwrap_or(false);
+        .is_some_and(|l| !l.contains(',') && !l.contains(';'));
     banner && header_row
 }
 
@@ -393,11 +393,11 @@ pub fn parse_allegro_loc(text: &str) -> Vec<Placement> {
             y *= 0.0254;
         }
         let rotation = cells[3].parse().unwrap_or(0.0);
-        let mirror = cells
-            .get(4)
-            .map(|s| s.eq_ignore_ascii_case("m"))
-            .unwrap_or(false);
-        let package = cells.get(5).map(|s| s.to_string()).unwrap_or_default();
+        let mirror = cells.get(4).is_some_and(|s| s.eq_ignore_ascii_case("m"));
+        let package = cells
+            .get(5)
+            .map(std::string::ToString::to_string)
+            .unwrap_or_default();
         out.push(Placement {
             reference,
             value: String::new(),
@@ -426,7 +426,7 @@ fn expand_ref_range(tok: &str) -> Vec<String> {
     // Also return the numeric field's WIDTH so a zero-padded designator range
     // keeps its width when expanded.
     let split_pn = |s: &str| -> Option<(String, u32, usize)> {
-        let p: String = s.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+        let p: String = s.chars().take_while(char::is_ascii_alphabetic).collect();
         let num = &s[p.len()..];
         if num.is_empty() || !num.bytes().all(|c| c.is_ascii_digit()) {
             return None;
@@ -504,8 +504,7 @@ pub fn parse_bom(text: &str) -> HashMap<String, BomEntry> {
         let Some(refs) = cells.get(rc) else { continue };
         let cell = |i: Option<usize>| {
             i.and_then(|i| cells.get(i))
-                .map(|s| s.as_str())
-                .unwrap_or("")
+                .map_or("", std::string::String::as_str)
         };
         let value = cell(val_col).to_string();
         let mpn = cell(mpn_col).to_string();

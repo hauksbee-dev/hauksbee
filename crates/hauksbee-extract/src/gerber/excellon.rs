@@ -557,7 +557,7 @@ fn leading_m_code(up: &str) -> Option<u32> {
 
 fn leading_code(up: &str, letter: char) -> Option<u32> {
     let rest = up.strip_prefix(letter)?;
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     if digits.is_empty() {
         return None;
     }
@@ -725,7 +725,7 @@ pub fn parse_file_function_span(up: &str) -> DeclaredSpan {
         return DeclaredSpan::Absent;
     };
     let rest = up[at..].trim_start_matches([',', ' ']);
-    let fields: Vec<&str> = rest.split(',').map(|f| f.trim()).collect();
+    let fields: Vec<&str> = rest.split(',').map(str::trim).collect();
     // Field 0 says which kind of file this is. Only a drill's own attribute
     // carries a layer pair here, so an attribute of any other kind is simply
     // not offering one, rather than offering a broken one.
@@ -766,7 +766,7 @@ fn parse_tool_def(line: &str) -> Option<(u32, f64)> {
     // The index is the leading digit run; feed/speed fields (`F00S00`) may sit
     // between the index and the `C` (Altium writes `T1F00S00C0.00787`), so take
     // only the leading digits rather than everything up to `C`.
-    let idx_str: String = after_t.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let idx_str: String = after_t.chars().take_while(char::is_ascii_digit).collect();
     let idx: u32 = idx_str.parse().ok()?;
     let after_c = &after_t[cpos + 1..];
     // Diameter runs until a non-number (F/S feed/speed) appears.
@@ -781,10 +781,7 @@ fn parse_tool_select(line: &str) -> Option<u32> {
     if !line.starts_with('T') {
         return None;
     }
-    let body: String = line[1..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let body: String = line[1..].chars().take_while(char::is_ascii_digit).collect();
     // Reject if there is a C (that's a definition) or extra junk.
     if line.contains('C') {
         return None;
@@ -851,7 +848,7 @@ fn parse_coord(tok: &str, fmt: &CoordFormat) -> Option<f64> {
     }
     // Implicit decimal: total width = int_digits + dec_digits.
     let neg = tok.starts_with('-');
-    let digits: String = tok.chars().filter(|c| c.is_ascii_digit()).collect();
+    let digits: String = tok.chars().filter(char::is_ascii_digit).collect();
     if digits.is_empty() {
         return None;
     }

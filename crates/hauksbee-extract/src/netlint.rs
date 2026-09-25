@@ -335,7 +335,7 @@ pub(crate) fn numeric_rail_magnitude(n: &str) -> Option<f64> {
         return None;
     }
     let after = rest[int_part.len()..].strip_prefix('V')?;
-    let frac: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let frac: String = after.chars().take_while(char::is_ascii_digit).collect();
     // The name must be ENTIRELY consumed by the "<digits>V<digits>" grammar.
     // Otherwise rail-named SIGNAL nets, "5V_DET", "3V3_EN", "5V_SEL", "12V_PG",
     // over-match as real rails ("5V_DET" → 5.0 V), so net_is_raillike wrongly
@@ -535,8 +535,8 @@ fn is_pin_array_package(fp: &str) -> bool {
         let left: &[char] = &bytes[a..i];
         let right: &[char] = &bytes[i + 1..b];
         // A digit must sit immediately on each side of the 'X'.
-        if !left.last().is_some_and(|c| c.is_ascii_digit())
-            || !right.first().is_some_and(|c| c.is_ascii_digit())
+        if !left.last().is_some_and(char::is_ascii_digit)
+            || !right.first().is_some_and(char::is_ascii_digit)
         {
             continue;
         }
@@ -784,8 +784,7 @@ fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
                 op.net
                     .filter(|id| *id != net_id)
                     .and_then(|id| board.net(id))
-                    .map(|on| is_ground(&on.name))
-                    .unwrap_or(false)
+                    .is_some_and(|on| is_ground(&on.name))
             })
     })
 }
@@ -1376,10 +1375,9 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 for op in &c.pins {
                     match op.net {
                         Some(oid) if oid != net.id => {
-                            let far_named_ground_or_rail = board
-                                .net(oid)
-                                .map(|n| is_ground(&n.name) || rail_voltage(&n.name).is_some())
-                                .unwrap_or(false);
+                            let far_named_ground_or_rail = board.net(oid).is_some_and(|n| {
+                                is_ground(&n.name) || rail_voltage(&n.name).is_some()
+                            });
                             if far_named_ground_or_rail {
                                 continue;
                             }
@@ -1651,7 +1649,7 @@ fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintRepor
             // a None net is usually an unrouted pad the layout will fill, so we
             // do not fire on it (too many false positives on PCB-only inputs).
             let Some(n) = net else { continue };
-            let degree = p.net.map(|id| members(board, id).len()).unwrap_or(0);
+            let degree = p.net.map_or(0, |id| members(board, id).len());
             if degree == 1 {
                 report.findings.push(LintFinding {
                     check: LintCheck::FloatingControlPin,
@@ -1722,10 +1720,7 @@ fn check_led_current(board: &ExtractedBoard, report: &mut NetLintReport) {
         for (anode_net, cathode_net) in [(na, nb), (nb, na)] {
             // series resistor on the anode side reaching a rail
             let rail_v = resistor_to_rail(board, anode_net, led.reference.as_str());
-            let cathode_is_gnd = board
-                .net(cathode_net)
-                .map(|n| is_ground(&n.name))
-                .unwrap_or(false);
+            let cathode_is_gnd = board.net(cathode_net).is_some_and(|n| is_ground(&n.name));
             if let Some((rref, ohms, vrail)) = rail_v {
                 if cathode_is_gnd && ohms > 0.0 {
                     let i = (vrail - LED_VF) / ohms;
@@ -1934,7 +1929,7 @@ fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
                 // its iteration order varies run-to-run. Sort so the JSON `refs`
                 // array is byte-reproducible across runs, matching every sibling
                 // check (which builds refs from an ordered Vec).
-                let mut r: Vec<String> = distinct.iter().map(|s| s.to_string()).collect();
+                let mut r: Vec<String> = distinct.iter().map(std::string::ToString::to_string).collect();
                 r.sort();
                 r
             },

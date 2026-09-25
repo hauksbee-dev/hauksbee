@@ -158,8 +158,7 @@ fn detection_matrix_every_fixture() {
         let hits = probe_all(&c.bytes, c.path.as_deref());
         let winner = reg
             .detect(&c.bytes, c.path.as_deref())
-            .map(|r| r.name())
-            .unwrap_or("<none>");
+            .map_or("<none>", hauksbee_extract::reader::BoardReader::name);
         let hits_str = hits.join("+");
         rows.push((c.label.clone(), c.expected.to_string(), hits_str.clone()));
 
@@ -274,7 +273,7 @@ fn third_party_reader_registers_and_wins() {
     // And a builtin format still routes correctly with the fork's reader present.
     assert_eq!(
         reg.detect(b"(kicad_pcb (version 20171130))", None)
-            .map(|r| r.name()),
+            .map(hauksbee_extract::reader::BoardReader::name),
         Some("kicad-pcb")
     );
 }

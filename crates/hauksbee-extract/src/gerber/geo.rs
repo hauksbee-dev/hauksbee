@@ -99,7 +99,7 @@ impl Shape {
             Self::Capsule(c) => ((c.ax + c.bx) / 2.0, (c.ay + c.by) / 2.0),
             Self::Polygon { pts, .. } => vertex_mean(pts),
             Self::MultiPolygon { contours, .. } => {
-                vertex_mean(contours.first().map(|c| c.as_slice()).unwrap_or(&[]))
+                vertex_mean(contours.first().map_or(&[], std::vec::Vec::as_slice))
             }
         }
     }

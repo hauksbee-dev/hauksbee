@@ -261,8 +261,7 @@ fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
                 op.net
                     .filter(|id| *id != net_id)
                     .and_then(|id| board.net(id))
-                    .map(|on| is_ground(&on.name))
-                    .unwrap_or(false)
+                    .is_some_and(|on| is_ground(&on.name))
             })
     })
 }
@@ -299,7 +298,7 @@ fn parse_farads(v: &str) -> Option<f64> {
             // parse_capacitance_uf. (Before this, any trailing token poisoned the
             // fractional parse and dropped the whole value to None, producing a
             // false "crystal has no load caps" finding.)
-            let frac_digits: String = b.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let frac_digits: String = b.chars().take_while(char::is_ascii_digit).collect();
             if frac_digits.is_empty() {
                 return Some(a * mult);
             }
@@ -426,12 +425,7 @@ fn is_crystal(c: &Component) -> bool {
     let crystal_fp = lib.contains("crystal") || fp.contains("crystal") || fp.contains("xtal");
     // Y is the unambiguous crystal designator. X is overloaded (connectors), so
     // an X-ref only counts as a crystal with a crystal footprint.
-    if r.starts_with('Y')
-        && r.chars()
-            .nth(1)
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false)
-    {
+    if r.starts_with('Y') && r.chars().nth(1).is_some_and(|c| c.is_ascii_digit()) {
         return true;
     }
     crystal_fp && connected_pads(c) >= 2 && !r.starts_with('J') && !r.starts_with("CN")
@@ -464,8 +458,7 @@ fn load_cap_on_net(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
             op.net
                 .filter(|id| *id != net_id)
                 .and_then(|id| board.net(id))
-                .map(|on| is_ground(&on.name))
-                .unwrap_or(false)
+                .is_some_and(|on| is_ground(&on.name))
         });
         if to_ground {
             if let Some(f) = parse_farads(&c.value) {
@@ -483,7 +476,7 @@ fn crystal_signal_nets(board: &ExtractedBoard, xtal: &Component) -> Vec<i64> {
     let mut nets: Vec<i64> = Vec::new();
     for p in &xtal.pins {
         let Some(id) = p.net else { continue };
-        let is_gnd = board.net(id).map(|n| is_ground(&n.name)).unwrap_or(false);
+        let is_gnd = board.net(id).is_some_and(|n| is_ground(&n.name));
         if is_gnd {
             continue;
         }
@@ -815,8 +808,7 @@ fn pullup_ohms(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
         let to_rail = c.pins.iter().any(|op| {
             op.net
                 .filter(|id| *id != net_id)
-                .map(|id| net_is_raillike(board, id))
-                .unwrap_or(false)
+                .is_some_and(|id| net_is_raillike(board, id))
         });
         if to_rail {
             if let Some(r) = parse_ohms(&c.value) {
@@ -1300,18 +1292,11 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                 continue;
             }
             // On a copper layer?
-            let on_cu = zone
-                .find("layers")
-                .map(|l| {
-                    (0..)
-                        .map_while(|i| l.arg_value(i))
-                        .any(|n| n.ends_with(".Cu"))
-                })
-                .unwrap_or(false)
-                || zone
-                    .find_value("layer")
-                    .map(|l| l.ends_with(".Cu"))
-                    .unwrap_or(false);
+            let on_cu = zone.find("layers").is_some_and(|l| {
+                (0..)
+                    .map_while(|i| l.arg_value(i))
+                    .any(|n| n.ends_with(".Cu"))
+            }) || zone.find_value("layer").is_some_and(|l| l.ends_with(".Cu"));
             if !on_cu {
                 continue;
             }

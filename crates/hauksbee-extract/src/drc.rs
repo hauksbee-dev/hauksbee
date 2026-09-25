@@ -177,14 +177,13 @@ impl ClearanceRules {
             // A class clearance of 0 means "inherit the board default", not a
             // literal zero-clearance rule, resolve it to the default so a
             // diff-pair-only class does not report a 0 mm spacing requirement.
-            .map(|r| {
+            .map_or(self.default_clearance_mm, |r| {
                 if r.clearance_mm > 0.0 {
                     r.clearance_mm
                 } else {
                     self.default_clearance_mm
                 }
             })
-            .unwrap_or(self.default_clearance_mm)
     }
 
     /// Record an explicit clearance for a concrete class pair (either order;
@@ -327,11 +326,11 @@ pub fn clearance_rules_from_kicad_pro<'a>(
         };
         let clearance = class
             .get("clearance")
-            .and_then(|x| x.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0);
         let diff_gap = class
             .get("diff_pair_gap")
-            .and_then(|x| x.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .filter(|g| *g > 0.0);
         if name == "Default" && clearance > 0.0 {
             default_clearance = clearance;
@@ -1029,7 +1028,7 @@ impl NetResolver {
         if let Some(id) = net
             .arg(0)
             .filter(|t| !t.is_string())
-            .and_then(|t| t.as_i64())
+            .and_then(forge_sexpr::Token::as_i64)
         {
             // Some zones carry both `(net N)` and `(net_name "X")`; declare the
             // name so reporting has it.
@@ -1320,7 +1319,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         // ring, matching what KiCad writes across 7.x/8.x/9.x.
         let flag_on = |name: &str| {
             via.find(name)
-                .is_some_and(|n| n.arg_value(0).map(|v| v != "no").unwrap_or(true))
+                .is_some_and(|n| n.arg_value(0).is_none_or(|v| v != "no"))
         };
         let remove_unused = flag_on("remove_unused_layers");
         let keep_ends = flag_on("keep_end_layers");
@@ -2788,12 +2787,12 @@ pub mod eagle_drc {
     }
 
     fn layer_of(a: &Attrs) -> i64 {
-        num(a, "layer").map(|v| v as i64).unwrap_or(0)
+        num(a, "layer").map_or(0, |v| v as i64)
     }
 
     /// `(degrees, mirrored)` of the element/pad `rot` attribute (`R0` if absent).
     fn rot_of(a: &Attrs) -> (f64, bool) {
-        parse_rot(a.get("rot").map(String::as_str).unwrap_or("R0"))
+        parse_rot(a.get("rot").map_or("R0", String::as_str))
     }
 
     /// Parse an Eagle length value that may carry a unit suffix (`"6mil"`,
@@ -3108,7 +3107,7 @@ pub mod eagle_drc {
                                     (num(&a, "x"), num(&a, "y"), num(&a, "dx"), num(&a, "dy"))
                                 {
                                     let (rot_deg, _) = rot_of(&a);
-                                    let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(1);
+                                    let layer = num(&a, "layer").map_or(1, |v| v as i64);
                                     out.packages
                                         .entry((cur_library.clone(), pkg.clone()))
                                         .or_default()
@@ -3162,7 +3161,7 @@ pub mod eagle_drc {
                             out.signals
                                 .push((a.get("name").cloned().unwrap_or_default(), Vec::new()));
                             out.signal_classes
-                                .push(num(&a, "class").map(|v| v as i64).unwrap_or(0));
+                                .push(num(&a, "class").map_or(0, |v| v as i64));
                             cur_signal = Some(out.signals.len() - 1);
                         }
                         b"contactref" => {
@@ -3225,9 +3224,7 @@ pub mod eagle_drc {
                                         // the SAME rank; clamp keeps
                                         // hand-written out-of-range values in
                                         // the board range too.
-                                        rank: num(&a, "rank")
-                                            .map(|v| (v as i64).clamp(1, 6))
-                                            .unwrap_or(1),
+                                        rank: num(&a, "rank").map_or(1, |v| (v as i64).clamp(1, 6)),
                                         thermals: a.get("thermals").map(String::as_str)
                                             != Some("off"),
                                         orphans: a.get("orphans").map(String::as_str) == Some("on"),
@@ -3890,8 +3887,7 @@ pub mod eagle_drc {
                 .clearances
                 .iter()
                 .find(|(other, _)| other == number)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
+                .map_or(0.0, |(_, v)| *v);
             rules.add_class(NetClassRule {
                 name: class_key(*number),
                 clearance_mm: self_clearance.max(clearance),
@@ -4141,7 +4137,10 @@ pub mod altium_drc {
             .collect();
 
         let mut buckets = LayerBuckets::default();
-        let mut copper: HashSet<String> = ["F.Cu", "B.Cu"].iter().map(|s| s.to_string()).collect();
+        let mut copper: HashSet<String> = ["F.Cu", "B.Cu"]
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
 
         // Tracks (TRACKS6, marker 4) and arcs (ARCS6, marker 1) are capsules on
         // one copper layer. Layouts ported from KiCad's `altium_parser_pcb.cpp`.
@@ -4251,8 +4250,7 @@ pub mod altium_drc {
         // antipad does not read as a short.
         if let Some(b) = doc.data("Polygons") {
             for m in altium::properties_records(&b) {
-                let layer =
-                    altium::layer_id_from_name(m.get("LAYER").map(String::as_str).unwrap_or(""));
+                let layer = altium::layer_id_from_name(m.get("LAYER").map_or("", String::as_str));
                 let pts: Vec<(f64, f64)> = (0..)
                     .map_while(|i| {
                         let x = altium::parse_len_mm(m.get(&format!("VX{i}"))?)?;
@@ -4266,8 +4264,7 @@ pub mod altium_drc {
                 let net = m
                     .get("NET")
                     .and_then(|s| s.trim().parse::<i64>().ok())
-                    .map(|v| if v < 0 { NONE_U16 } else { v as u16 })
-                    .unwrap_or(NONE_U16);
+                    .map_or(NONE_U16, |v| if v < 0 { NONE_U16 } else { v as u16 });
                 let layer = layer_name(layer);
                 copper.insert(layer.clone());
                 buckets.push_zone_opts(&layer, pts, net_id(net, n_nets), false, false);

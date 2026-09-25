@@ -333,8 +333,10 @@ fn kicad_recorded_shorts(oracle: &str) -> Vec<RecordedShort> {
             let pad_no = d
                 .strip_prefix("Pad ")
                 .and_then(|r| r.split_once(' '))
-                .map(|(n, _)| n.to_string())
-                .unwrap_or_else(|| panic!("no leading 'Pad <n>' in {d:?}"));
+                .map_or_else(
+                    || panic!("no leading 'Pad <n>' in {d:?}"),
+                    |(n, _)| n.to_string(),
+                );
             let (net, rest) = d
                 .split_once('[')
                 .and_then(|(_, r)| r.split_once(']'))

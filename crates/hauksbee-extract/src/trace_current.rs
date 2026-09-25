@@ -317,18 +317,11 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
             continue;
         };
         // Only copper-layer zones count (keepouts on edge cuts do not conduct).
-        let on_copper = zone
-            .find("layers")
-            .map(|l| {
-                (0..)
-                    .map_while(|i| l.arg_value(i))
-                    .any(|n| n.ends_with(".Cu"))
-            })
-            .unwrap_or(false)
-            || zone
-                .find_value("layer")
-                .map(|l| l.ends_with(".Cu"))
-                .unwrap_or(false);
+        let on_copper = zone.find("layers").is_some_and(|l| {
+            (0..)
+                .map_while(|i| l.arg_value(i))
+                .any(|n| n.ends_with(".Cu"))
+        }) || zone.find_value("layer").is_some_and(|l| l.ends_with(".Cu"));
         if !on_copper {
             continue;
         }
@@ -638,7 +631,7 @@ impl TraceAudit {
         let rate = |layer: Option<&str>, w: f64| {
             let (oz, external, source) = self.copper_for(layer);
             Bottleneck {
-                layer: layer.map(|l| l.to_string()),
+                layer: layer.map(std::string::ToString::to_string),
                 width_mm: w,
                 ampacity_a: ipc2221_ampacity(w, oz, self.dt_c, external),
                 oz,
@@ -919,8 +912,7 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
             let (width, cap, note) = match r.kind {
                 CopperKind::Traces => (
                     r.min_width_mm
-                        .map(|w| format!("{w:.3} mm"))
-                        .unwrap_or_else(|| "-".to_string()),
+                        .map_or_else(|| "-".to_string(), |w| format!("{w:.3} mm")),
                     if r.capacity_10c_a.is_finite() {
                         format!("{:.2} A", r.capacity_10c_a)
                     } else {
@@ -934,8 +926,7 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
                 ),
                 CopperKind::Poured => (
                     r.min_width_mm
-                        .map(|w| format!("{w:.3} mm"))
-                        .unwrap_or_else(|| "-".to_string()),
+                        .map_or_else(|| "-".to_string(), |w| format!("{w:.3} mm")),
                     "-".to_string(),
                     format!("poured ({} zone)", r.zone_count),
                 ),

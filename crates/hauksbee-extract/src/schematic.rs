@@ -677,7 +677,7 @@ impl NetlistBuilder {
         // power symbols, so the reference test is what catches them. The
         // power_in/power_out distinction (handled per pin below) then decides
         // whether it actually *names* the net or merely flags it.
-        let is_power = def.map(|d| d.is_power).unwrap_or(false) || reference.starts_with("#PWR");
+        let is_power = def.is_some_and(|d| d.is_power) || reference.starts_with("#PWR");
 
         // Power symbols and other "#"-referenced symbols (PWR_FLAG, mounting
         // holes are real refs) are not simulation components in the usual
@@ -763,8 +763,7 @@ impl NetlistBuilder {
         // absent and checks reasoning about populated parts must skip it.
         let dnp = sym
             .find_value("dnp")
-            .map(|v| v.eq_ignore_ascii_case("yes") || v == "true")
-            .unwrap_or(false);
+            .is_some_and(|v| v.eq_ignore_ascii_case("yes") || v == "true");
 
         self.components.push(Component {
             reference,

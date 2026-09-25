@@ -266,19 +266,13 @@ impl BomDialect {
     /// column. In Altium, LCSC and JLCPCB exports it is; in a spreadsheet
     /// somebody wrote, `Comment` is a comment.
     fn comment_is_value(self) -> bool {
-        matches!(
-            self,
-            Self::Altium | Self::Lcsc | Self::Jlcpcb
-        )
+        matches!(self, Self::Altium | Self::Lcsc | Self::Jlcpcb)
     }
 
     /// True for the two fixed-width Eagle shapes, which are sliced by header
     /// column offsets rather than split on a delimiter.
     fn is_fixed_width(self) -> bool {
-        matches!(
-            self,
-            Self::EaglePartlist | Self::EagleGroupedPartlist
-        )
+        matches!(self, Self::EaglePartlist | Self::EagleGroupedPartlist)
     }
 }
 
@@ -768,7 +762,7 @@ impl Bom {
                     footprint: row.footprint.clone(),
                     populate: row.populate,
                     source: self.provenance.path.clone(),
-                    source_kind: self.provenance.kind.to_string(),
+                    source_kind: self.provenance.kind.clone(),
                 });
             }
         }
@@ -1189,8 +1183,7 @@ pub(crate) fn sniff_delimiter(line: &str) -> char {
             Some((_, bn)) if bn >= n => best,
             _ => Some((d, n)),
         })
-        .map(|(d, _)| d)
-        .unwrap_or(',')
+        .map_or(',', |(d, _)| d)
 }
 
 /// Normalise a header for matching: drop the byte-order mark, the quotes, the
@@ -1849,13 +1842,7 @@ fn map_columns(
 
 fn columns_equivalent(table: &Table, left: usize, right: usize) -> bool {
     table.rows.iter().all(|row| {
-        let cell = |index| {
-            row.cells
-                .get(index)
-                .map(String::as_str)
-                .unwrap_or("")
-                .trim()
-        };
+        let cell = |index| row.cells.get(index).map_or("", String::as_str).trim();
         cell(left) == cell(right)
     })
 }
@@ -1910,10 +1897,7 @@ fn has_designator_shape(token: &str) -> bool {
     if token.len() > 12 {
         return false;
     }
-    let letters = token
-        .chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .count();
+    let letters = token.chars().take_while(char::is_ascii_alphabetic).count();
     if letters == 0 || letters > 4 {
         return false;
     }
@@ -1998,7 +1982,7 @@ fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
 
 /// A quantity cell, which is sometimes `1`, sometimes `1 pc`, sometimes blank.
 fn parse_quantity(s: &str) -> Option<usize> {
-    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = s.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok()
 }
 

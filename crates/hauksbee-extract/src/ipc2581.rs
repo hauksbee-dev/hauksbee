@@ -258,10 +258,10 @@ fn attrs(e: &BytesStart<'_>) -> HashMap<String, String> {
             // same note in `eagle.rs`. The non-deprecated successor takes an
             // `XmlVersion` quick-xml does not export.
             #[allow(deprecated)]
-            let value = a
-                .unescape_value()
-                .map(|c| c.into_owned())
-                .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
+            let value = a.unescape_value().map_or_else(
+                |_| String::from_utf8_lossy(&a.value).into_owned(),
+                std::borrow::Cow::into_owned,
+            );
             let key = a.key.local_name();
             (String::from_utf8_lossy(key.as_ref()).into_owned(), value)
         })
@@ -388,7 +388,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "Layer" => {
                         if let Some(n) = a.get("name") {
                             doc.layers.insert(
-                                strip_names(n, &step).to_string(),
+                                strip_names(n, &step).clone(),
                                 (
                                     a.get("layerFunction").cloned().unwrap_or_default(),
                                     a.get("side").cloned().unwrap_or_default(),
@@ -402,7 +402,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "Step" => {
                         step = a
                             .get("name")
-                            .map(|n| strip_names(n, &step).to_string())
+                            .map(|n| strip_names(n, &step))
                             .unwrap_or_default();
                         if !doc.steps.contains(&step) {
                             doc.steps.push(step.clone());
@@ -411,7 +411,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "Package" => {
                         let n = a
                             .get("name")
-                            .map(|n| strip_names(n, &step).to_string())
+                            .map(|n| strip_names(n, &step))
                             .unwrap_or_default();
                         doc.packages
                             .entry(step.clone())
@@ -447,7 +447,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                                 .get_mut(&step)
                                 .and_then(|m| m.get_mut(pkg.as_str()))
                             {
-                                pins.push(strip_names(num, &step).to_string());
+                                pins.push(strip_names(num, &step).clone());
                             }
                         }
                     }
@@ -455,19 +455,19 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                         let c = RawComponent {
                             refdes: a
                                 .get("refDes")
-                                .map(|v| strip_names(v, &step).to_string())
+                                .map(|v| strip_names(v, &step))
                                 .unwrap_or_default(),
                             package_ref: a
                                 .get("packageRef")
-                                .map(|v| strip_names(v, &step).to_string())
+                                .map(|v| strip_names(v, &step))
                                 .unwrap_or_default(),
                             part: a
                                 .get("part")
-                                .map(|v| strip_names(v, &step).to_string())
+                                .map(|v| strip_names(v, &step))
                                 .unwrap_or_default(),
                             layer_ref: a
                                 .get("layerRef")
-                                .map(|v| strip_names(v, &step).to_string())
+                                .map(|v| strip_names(v, &step))
                                 .unwrap_or_default(),
                             // Not in the schema, but converters really do write
                             // it, and a document with no `<Bom>` has no other
@@ -509,7 +509,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "LogicalNet" => {
                         let n = a
                             .get("name")
-                            .map(|v| strip_names(v, &step).to_string())
+                            .map(|v| strip_names(v, &step))
                             .unwrap_or_default();
                         if empty {
                             doc.logical_nets
@@ -528,7 +528,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "LayerFeature" => {
                         cur_layer_feature = (!empty).then(|| {
                             a.get("layerRef")
-                                .map(|v| strip_names(v, &step).to_string())
+                                .map(|v| strip_names(v, &step))
                                 .unwrap_or_default()
                         });
                     }
@@ -542,7 +542,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                         // A container without a net is geometry with no
                         // connectivity (silkscreen, mask, an unnetted padstack);
                         // it is still walked so nested pads are counted.
-                        let n = a.get("net").map(|v| strip_names(v, &step).to_string());
+                        let n = a.get("net").map(|v| strip_names(v, &step));
                         cur_set = (!empty).then(|| (n.unwrap_or_default(), Vec::new()));
                     }
                     // `<LayerPad>` is the per-layer pad of an Altium `<PadStack>`,
@@ -570,11 +570,11 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "PinRef" | "LogicalNetPin" => {
                         let comp = a
                             .get("componentRef")
-                            .map(|v| strip_names(v, &step).to_string())
+                            .map(|v| strip_names(v, &step))
                             .unwrap_or_default();
                         let pin = a
                             .get("pin")
-                            .map(|v| strip_names(v, &step).to_string())
+                            .map(|v| strip_names(v, &step))
                             .unwrap_or_default();
                         if comp.is_empty() {
                             continue;
@@ -598,7 +598,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                                 populate: true,
                                 oem_design_number: a
                                     .get("OEMDesignNumberRef")
-                                    .map(|v| strip_names(v, &step).to_string())
+                                    .map(|v| strip_names(v, &step))
                                     .unwrap_or_default(),
                                 ..BomRow::default()
                             },
@@ -607,26 +607,23 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "RefDes" => {
                         if let (Some((refs, row)), Some(n)) = (in_bom_item.as_mut(), a.get("name"))
                         {
-                            refs.push(strip_names(n, &step).to_string());
+                            refs.push(strip_names(n, &step).clone());
                             // A BomItem groups identical parts, so package /
                             // layer / populate are per-RefDes; the last one
                             // wins only for the shared fields, and per-refdes
                             // values are recorded as they are seen.
                             row.package_ref = a
                                 .get("packageRef")
-                                .map(|v| strip_names(v, &step).to_string())
-                                .unwrap_or_else(|| row.package_ref.clone());
+                                .map_or_else(|| row.package_ref.clone(), |v| strip_names(v, &step));
                             row.layer_ref = a
                                 .get("layerRef")
-                                .map(|v| strip_names(v, &step).to_string())
-                                .unwrap_or_else(|| row.layer_ref.clone());
+                                .map_or_else(|| row.layer_ref.clone(), |v| strip_names(v, &step));
                             row.populate = a
                                 .get("populate")
-                                .map(|v| !v.eq_ignore_ascii_case("false"))
-                                .unwrap_or(true);
+                                .is_none_or(|v| !v.eq_ignore_ascii_case("false"));
                             let mut per = row.clone();
                             per.characteristics = Vec::new();
-                            doc.bom.insert(strip_names(n, &step).to_string(), per);
+                            doc.bom.insert(strip_names(n, &step).clone(), per);
                         }
                     }
                     "Textual" => {
@@ -969,7 +966,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
                 sample_list(
                     &unaccounted
                         .iter()
-                        .map(|s| s.to_string())
+                        .map(std::string::ToString::to_string)
                         .collect::<Vec<_>>()
                 ),
             ));

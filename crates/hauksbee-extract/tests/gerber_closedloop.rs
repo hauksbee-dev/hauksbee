@@ -59,8 +59,7 @@ fn kicad_cli_version(cli: &Path) -> String {
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+        .map_or_else(|| "unknown".to_string(), |s| s.trim().to_string())
 }
 
 /// Locate a usable `kicad-cli` (PATH or the macOS app bundle).
@@ -603,9 +602,7 @@ fn corpus_sweep_partition_floor() {
     ];
     // Half of this loop is kicad-cli's output, so a floor breach has to say
     // which version produced it.
-    let running = kicad_cli()
-        .map(|c| kicad_cli_version(&c))
-        .unwrap_or_else(|| "no kicad-cli".to_string());
+    let running = kicad_cli().map_or_else(|| "no kicad-cli".to_string(), |c| kicad_cli_version(&c));
     eprintln!(
         "closed-loop floors calibrated against kicad-cli {CALIBRATED_KICAD_CLI}; running {running}"
     );

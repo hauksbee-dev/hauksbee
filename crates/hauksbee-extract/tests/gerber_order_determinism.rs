@@ -94,8 +94,7 @@ fn a_gbrjob_layer_tie_is_broken_by_file_name_not_by_hash_order() {
             .net_copper
             .iter()
             .find(|nc| nc.net_id == vbus)
-            .map(|nc| nc.track_count)
-            .unwrap_or(0);
+            .map_or(0, |nc| nc.track_count);
         seen.push(tracks);
     }
     let _ = std::fs::remove_dir_all(&dir);

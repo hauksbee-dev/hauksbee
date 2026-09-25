@@ -315,7 +315,7 @@ pub(crate) fn parse_eda_data(text: &str, job_units: f64) -> EdaData {
         let mut tok = body.split_whitespace();
         let Some(kind) = tok.next() else { continue };
         match kind {
-            "LYR" => out.layers = tok.map(|s| s.to_ascii_lowercase()).collect(),
+            "LYR" => out.layers = tok.map(str::to_ascii_lowercase).collect(),
             "NET" => {
                 state = In::None;
                 out.nets.push(tok.next().unwrap_or("").to_string());

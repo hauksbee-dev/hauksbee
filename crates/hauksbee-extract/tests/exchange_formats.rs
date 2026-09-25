@@ -1000,7 +1000,7 @@ fn the_real_valor_npi_job_reads_and_is_internally_consistent() {
         .filter_map(|c| c.position.map(|(x, _, _)| x))
         .collect();
     let span =
-        xs.iter().cloned().fold(f64::MIN, f64::max) - xs.iter().cloned().fold(f64::MAX, f64::min);
+        xs.iter().copied().fold(f64::MIN, f64::max) - xs.iter().copied().fold(f64::MAX, f64::min);
     assert!(
         span > 100.0,
         "INCH coordinates must be scaled to mm; the placement spans only {span:.1} mm"

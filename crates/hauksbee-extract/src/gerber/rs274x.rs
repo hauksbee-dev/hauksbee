@@ -1722,16 +1722,8 @@ impl<'a> Plotter<'a> {
     }
 
     fn coord(&self, c: &Coordinates) -> (f64, f64) {
-        let nx =
-            c.x.as_ref()
-                .map(num)
-                .map(|v| v * self.to_mm)
-                .unwrap_or(self.x);
-        let ny =
-            c.y.as_ref()
-                .map(num)
-                .map(|v| v * self.to_mm)
-                .unwrap_or(self.y);
+        let nx = c.x.as_ref().map(num).map_or(self.x, |v| v * self.to_mm);
+        let ny = c.y.as_ref().map(num).map_or(self.y, |v| v * self.to_mm);
         (nx, ny)
     }
 
@@ -1979,7 +1971,7 @@ impl<'a> Plotter<'a> {
             }
             Operation::Interpolate(coord, offset) => {
                 let (sx, sy) = (self.x, self.y);
-                let (ex, ey) = coord.as_ref().map(|c| self.coord(c)).unwrap_or((sx, sy));
+                let (ex, ey) = coord.as_ref().map_or((sx, sy), |c| self.coord(c));
                 if self.region.is_some() {
                     // Region contour: collect the boundary vertices. A segment
                     // drawn under circular interpolation (G02/G03) contributes
@@ -2420,15 +2412,12 @@ impl<'a> Plotter<'a> {
     /// The I/J arc offset of a circular D01, scaled to board millimetres
     /// ((0, 0) when the offset, or either axis, is absent).
     fn offset_mm(&self, offset: &Option<CoordinateOffset>) -> (f64, f64) {
-        offset
-            .as_ref()
-            .map(|o| {
-                (
-                    o.x.as_ref().map(num).unwrap_or(0.0) * self.to_mm,
-                    o.y.as_ref().map(num).unwrap_or(0.0) * self.to_mm,
-                )
-            })
-            .unwrap_or((0.0, 0.0))
+        offset.as_ref().map_or((0.0, 0.0), |o| {
+            (
+                o.x.as_ref().map_or(0.0, num) * self.to_mm,
+                o.y.as_ref().map_or(0.0, num) * self.to_mm,
+            )
+        })
     }
 
     /// Resolve a circular D01's geometry: centre, radius, start angle and
@@ -3019,7 +3008,7 @@ mod tests {
             // representation accepted by the overlay adapter.
             weights: vec![1, 1],
         };
-        let mut copper = vec![CopperPrim::bare(original.clone(), PrimKind::Region)];
+        let mut copper = vec![CopperPrim::bare(original, PrimKind::Region)];
         apply_clears(
             &mut copper,
             vec![Clear {
@@ -3985,7 +3974,7 @@ M02*
         let names_of = |a: &X2Attrs| {
             a.net_names()
                 .iter()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>()
         };
         assert_eq!(names_of(&flashes[0].attrs), vec!["VCC"]);

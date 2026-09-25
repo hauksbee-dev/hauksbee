@@ -50,9 +50,7 @@ impl DnpPolicy {
                  the nets it bridges"
             }
             Self::FitAll => "every DNP part is simulated as fitted, including links",
-            Self::Honour => {
-                "DNP parts are left out of the simulation, matching the board file"
-            }
+            Self::Honour => "DNP parts are left out of the simulation, matching the board file",
         }
     }
 }
@@ -343,7 +341,7 @@ impl ExtractedBoard {
             .iter()
             .chain(no_fit.iter())
             .filter(|r| !self.components.iter().any(|c| &c.reference == *r))
-            .map(|r| r.as_str())
+            .map(std::string::String::as_str)
             .collect();
         if !unknown.is_empty() {
             // Did-you-mean, matching the net-facing flags (--probe/--ac-node):

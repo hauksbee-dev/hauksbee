@@ -803,7 +803,7 @@ pub fn reconstruct(
             let n = p.number.parse::<u64>().ok();
             (n.is_none(), n, p.number.clone())
         }
-        for pads in comp_pads.iter_mut() {
+        for pads in &mut comp_pads {
             pads.sort_by_key(pin_key);
         }
         for (pads, _, _) in film_comps.values_mut() {
@@ -834,7 +834,7 @@ pub fn reconstruct(
                     }
                 }
                 let d = (pl.x - cx).hypot(pl.y - cy);
-                if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                if best.is_none_or(|(bd, _)| d < bd) {
                     best = Some((d, leaf.idx));
                 }
             }
@@ -1235,7 +1235,7 @@ fn grid_hint(p: &str) -> Option<(u32, u32)> {
             let right: String = bytes[i + 1..b].iter().collect();
             if let (Ok(l), Ok(r)) = (left.parse::<u32>(), right.parse::<u32>()) {
                 // A pin grid (counts) not a body-size (would have a '.' or 'mm').
-                let is_mm = p.get(b..b + 2).map(|s| s == "mm").unwrap_or(false)
+                let is_mm = p.get(b..b + 2).is_some_and(|s| s == "mm")
                     || left.contains('.')
                     || right.contains('.');
                 if l >= 1 && r >= 1 && l <= 200 && r <= 200 && !is_mm {
