@@ -2129,10 +2129,19 @@ iq_a=1e-6
 "5"="out"
 [models.ratings]
 max_current_a=0.15
-max_voltage_v=7.0
+max_voltage_v=7.0 # DS6765 Rev 7 Table 2 Absolute maximum ratings, VIN -0.3 to 7 V
 max_junction_temp_c=150.0
 theta_ja_c_per_w=255.0
 theta_jc_c_per_w=81.0
+
+# The 1.5-5.5 V operating input range is the check that fires below the 7 V abs max.
+[[models.envelope]]
+kind = "supply_range"
+pin = "in"
+min_v = 1.5
+max_v = 5.5
+abs_max_v = 7.0
+basis = "ST STLQ015 DS6765 Rev 7, Table 4 Electrical characteristics, VIN operating input voltage 1.5 V to 5.5 V; Table 2 Absolute maximum ratings, VIN DC input voltage -0.3 V to 7 V"
 
 [[models]]
 id="lt1763_15_s8"
