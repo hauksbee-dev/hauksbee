@@ -7,7 +7,7 @@
 //! set and return the convex hull of their union, translated to the flash
 //! location. That over-approximates concave macros slightly (a cross becomes
 //! its bounding diamond) but never loses a pad, and the common KiCad macros
-//! (RoundRect, the chamfered/rounded pads) are convex anyway.
+//! (`RoundRect`, the chamfered/rounded pads) are convex anyway.
 //!
 //! **Exposure-off primitives are subtracted**, per the spec's paint model: a
 //! primitive with exposure 0 erases whatever was painted under it. A clear
@@ -32,8 +32,9 @@ use gerber_types::{ApertureMacro, MacroBoolean, MacroContent, MacroDecimal, Macr
 
 use super::geo::point_in_polygon;
 
-/// The instantiated solid area of a macro flash: the convex hull of its
-/// exposure-on primitives, minus the voids its exposure-off primitives punch
+/// The instantiated solid area of a macro flash.
+///
+/// That is the convex hull of its exposure-on primitives, minus the voids its exposure-off primitives punch
 /// out of it. `hull` empty means the macro could not be evaluated (the caller
 /// falls back to a disc); `holes` empty means a plain convex polygon.
 #[derive(Debug, Clone, Default)]
@@ -49,10 +50,14 @@ struct EvaledPrim {
     outline: Vec<(f64, f64)>,
 }
 
-/// Evaluate a macro into the polygon of its solid area (convex hull of the
-/// exposure-on primitives, minus fully-interior exposure-off voids), centred at
-/// the flash point `(cx, cy)` and scaled by `s` (inch->mm or 1.0). `args` are
+/// Evaluate a macro into the polygon of its solid area.
+///
+/// The area is the convex hull of the exposure-on primitives, minus
+/// fully-interior exposure-off voids, centred at the flash point `(cx, cy)` and scaled by `s` (inch->mm or 1.0). `args` are
 /// the flash's positional parameters (`$1` = `args[0]`, ...).
+#[must_use]
+#[allow(clippy::too_many_lines, reason = "one match arm per primitive")]
+#[allow(clippy::many_single_char_names, reason = "Gerber spec names")]
 pub fn instantiate_macro(
     m: &ApertureMacro,
     args: &[MacroDecimal],
@@ -61,9 +66,9 @@ pub fn instantiate_macro(
     s: f64,
 ) -> MacroShape {
     let mut vars: HashMap<u32, f64> = HashMap::new();
-    for (i, a) in args.iter().enumerate() {
+    for (key, a) in (1u32..).zip(args) {
         if let Some(v) = decimal(a, &vars) {
-            vars.insert((i + 1) as u32, v);
+            vars.insert(key, v);
         }
     }
 
@@ -100,13 +105,13 @@ pub fn instantiate_macro(
                     .unwrap_or(0.0)
                     .to_radians()
                     .sin_cos();
-                let (cxr, cyr) = (x * rcos - y * rsin, x * rsin + y * rcos);
+                let (cxr, cyr) = (x.mul_add(rcos, -(y * rsin)), x.mul_add(rsin, y * rcos));
                 // Sample the circle as an octagon (the hull absorbs the rest;
                 // for a hole the inscribed octagon under-cuts the void
                 // slightly, erring toward solid, never toward emptiness).
                 let outline: Vec<(f64, f64)> = (0..8)
                     .map(|k| {
-                        let a = k as f64 * std::f64::consts::TAU / 8.0;
+                        let a = f64::from(k) * std::f64::consts::TAU / 8.0;
                         (cxr + r * a.cos(), cyr + r * a.sin())
                     })
                     .collect();
@@ -131,8 +136,8 @@ pub fn instantiate_macro(
                     .unwrap_or(0.0)
                     .to_radians()
                     .sin_cos();
-                let (rx0, ry0) = (x0 * cos - y0 * sin, x0 * sin + y0 * cos);
-                let (rx1, ry1) = (x1 * cos - y1 * sin, x1 * sin + y1 * cos);
+                let (rx0, ry0) = (x0.mul_add(cos, -(y0 * sin)), x0.mul_add(sin, y0 * cos));
+                let (rx1, ry1) = (x1.mul_add(cos, -(y1 * sin)), x1.mul_add(sin, y1 * cos));
                 let mut outline = Vec::with_capacity(4);
                 push_thick_segment(&mut outline, rx0, ry0, rx1, ry1, w / 2.0);
                 (exposed(&l.exposure, &vars), outline)
@@ -164,7 +169,7 @@ pub fn instantiate_macro(
                     .into_iter()
                     .map(|(dx, dy)| {
                         let (ax, ay) = (x + dx, y + dy);
-                        (ax * cos - ay * sin, ax * sin + ay * cos)
+                        (ax.mul_add(cos, -(ay * sin)), ax.mul_add(sin, ay * cos))
                     })
                     .collect();
                 (exposed(&l.exposure, &vars), outline)
@@ -184,7 +189,7 @@ pub fn instantiate_macro(
                     .iter()
                     .filter_map(|(px, py)| {
                         let (x, y) = (decimal(px, &vars)?, decimal(py, &vars)?);
-                        Some((x * cos - y * sin, x * sin + y * cos))
+                        Some((x.mul_add(cos, -(y * sin)), x.mul_add(sin, y * cos)))
                     })
                     .collect();
                 (exposed(&o.exposure, &vars), outline)
@@ -204,17 +209,20 @@ pub fn instantiate_macro(
                 // Clamp rather than trust the file: an out-of-spec count (e.g.
                 // `%AMFOO*5,1,4294967295,...*%` from a hostile/corrupt gerber)
                 // would otherwise drive a multi-gigabyte vertex push (OOM/hang).
-                let n = nv.clamp(3, 12) as usize;
+                let n = nv.clamp(3, 12);
                 // An AM primitive's rotation is about the MACRO ORIGIN (0,0), not
                 // the primitive's own center, so an off-origin polygon center must
                 // itself be rotated, exactly as the Circle/CenterLine/Outline/
                 // VectorLine handlers do. Rotating only the vertex angle left the
                 // centroid at its unrotated (x,y), placing an off-origin rotated
                 // polygon pad ~|center| mm off in the wrong direction.
-                let (cx0, cy0) = (x * rot.cos() - y * rot.sin(), x * rot.sin() + y * rot.cos());
+                let (cx0, cy0) = (
+                    x.mul_add(rot.cos(), -(y * rot.sin())),
+                    x.mul_add(rot.sin(), y * rot.cos()),
+                );
                 let outline: Vec<(f64, f64)> = (0..n)
                     .map(|k| {
-                        let a = rot + k as f64 * std::f64::consts::TAU / n as f64;
+                        let a = rot + f64::from(k) * std::f64::consts::TAU / f64::from(n);
                         (cx0 + r * a.cos(), cy0 + r * a.sin())
                     })
                     .collect();
@@ -272,7 +280,7 @@ pub fn instantiate_macro(
 
     let place = |pts: Vec<(f64, f64)>| -> Vec<(f64, f64)> {
         pts.into_iter()
-            .map(|(x, y)| (cx + x * s, cy + y * s))
+            .map(|(x, y)| (x.mul_add(s, cx), y.mul_add(s, cy)))
             .collect()
     };
     MacroShape {
@@ -307,8 +315,8 @@ fn outlines_overlap(a: &[(f64, f64)], b: &[(f64, f64)]) -> bool {
 fn exposed(e: &MacroBoolean, vars: &HashMap<u32, f64>) -> bool {
     match e {
         MacroBoolean::Value(b) => *b,
-        MacroBoolean::Variable(n) => vars.get(n).map(|v| *v != 0.0).unwrap_or(true),
-        MacroBoolean::Expression(s) => eval_expr(s, vars).map(|v| v != 0.0).unwrap_or(true),
+        MacroBoolean::Variable(n) => vars.get(n).is_none_or(|v| *v != 0.0),
+        MacroBoolean::Expression(s) => eval_expr(s, vars) != Some(0.0),
     }
 }
 
@@ -320,6 +328,8 @@ fn decimal(d: &MacroDecimal, vars: &HashMap<u32, f64>) -> Option<f64> {
     }
 }
 
+#[allow(clippy::cast_possible_truncation, reason = "saturating float-to-int")]
+#[allow(clippy::cast_sign_loss, reason = "saturating float-to-int")]
 fn integer(i: &MacroInteger, vars: &HashMap<u32, f64>) -> Option<u32> {
     match i {
         MacroInteger::Value(v) => Some(*v),
@@ -492,7 +502,7 @@ impl Parser<'_> {
 fn push_thick_segment(pts: &mut Vec<(f64, f64)>, x0: f64, y0: f64, x1: f64, y1: f64, r: f64) {
     let dx = x1 - x0;
     let dy = y1 - y0;
-    let len = (dx * dx + dy * dy).sqrt().max(1e-9);
+    let len = dx.hypot(dy).max(1e-9);
     let (nx, ny) = (-dy / len * r, dx / len * r);
     pts.extend([
         (x0 + nx, y0 + ny),
@@ -511,7 +521,7 @@ fn convex_hull(mut pts: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
         return pts;
     }
     let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
-        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+        (a.0 - o.0).mul_add(b.1 - o.1, -((a.1 - o.1) * (b.0 - o.0)))
     };
     let mut hull = Vec::with_capacity(2 * n);
     for &p in &pts {
@@ -569,17 +579,17 @@ mod tests {
         instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull
     }
 
-    /// The `(minx, maxx, miny, maxy)` bounds of [`one_primitive_hull`], which is
+    /// The `(left, right, bottom, top)` bounds of [`one_primitive_hull`], which is
     /// how the rotation tests read where a primitive actually landed.
     fn hull_bbox(name: &str, primitive: MacroContent) -> (f64, f64, f64, f64) {
         let pts = one_primitive_hull(name, primitive);
-        let (minx, maxx) = pts
+        let (left, right) = pts
             .iter()
             .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
-        let (miny, maxy) = pts
+        let (bottom, top) = pts
             .iter()
             .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
-        (minx, maxx, miny, maxy)
+        (left, right, bottom, top)
     }
 
     fn donut(extra_dark_after: bool, hole_at: (f64, f64)) -> ApertureMacro {
@@ -624,7 +634,7 @@ mod tests {
         let ms = instantiate_macro(&donut(false, (0.0, 0.0)), &[], 0.0, 0.0, 1.0);
         assert_eq!(ms.holes.len(), 1, "the clear circle is a hole");
         let mut contours = vec![ms.hull.clone()];
-        contours.extend(ms.holes.clone());
+        contours.extend(ms.holes);
         assert!(
             !point_in_contours(0.0, 0.0, &contours),
             "the void centre is NOT copper"
@@ -684,7 +694,7 @@ mod tests {
         let ms = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
         assert_eq!(ms.holes.len(), 1, "the overlapping second clear is dropped");
         let mut contours = vec![ms.hull.clone()];
-        contours.extend(ms.holes.clone());
+        contours.extend(ms.holes);
         assert!(
             !point_in_contours(0.4, 0.0, &contours),
             "a point inside the kept void, in the two-clears overlap, is empty"
@@ -749,7 +759,7 @@ mod tests {
             angle: MacroDecimal::Value(45.0),
         };
         let pts = one_primitive_hull("HEX", MacroContent::Polygon(poly));
-        let n = pts.len() as f64;
+        let n = f64::from(u32::try_from(pts.len()).unwrap());
         let cx: f64 = pts.iter().map(|p| p.0).sum::<f64>() / n;
         let cy: f64 = pts.iter().map(|p| p.1).sum::<f64>() / n;
         let want = 3.0 * std::f64::consts::FRAC_1_SQRT_2; // 3·cos45 = 3·sin45 ≈ 2.121
@@ -772,16 +782,16 @@ mod tests {
             center: (MacroDecimal::Value(0.0), MacroDecimal::Value(0.0)),
             angle: MacroDecimal::Value(90.0),
         };
-        let (minx, maxx, miny, maxy) = hull_bbox("CL", MacroContent::CenterLine(cl));
+        let (left, right, bottom, top) = hull_bbox("CL", MacroContent::CenterLine(cl));
         assert!(
-            (maxx - minx - 2.0).abs() < 1e-6,
+            (right - left - 2.0).abs() < 1e-6,
             "x span {} (expected ~2 after 90° rotation)",
-            maxx - minx
+            right - left
         );
         assert!(
-            (maxy - miny - 4.0).abs() < 1e-6,
+            (top - bottom - 4.0).abs() < 1e-6,
             "y span {} (expected ~4 after 90° rotation)",
-            maxy - miny
+            top - bottom
         );
     }
 
@@ -799,14 +809,14 @@ mod tests {
             center: (MacroDecimal::Value(3.0), MacroDecimal::Value(0.0)),
             angle: MacroDecimal::Value(90.0),
         };
-        let (minx, maxx, miny, maxy) = hull_bbox("CL", MacroContent::CenterLine(cl));
+        let (left, right, bottom, top) = hull_bbox("CL", MacroContent::CenterLine(cl));
         assert!(
-            (minx + 1.0).abs() < 1e-6 && (maxx - 1.0).abs() < 1e-6,
-            "x∈[-1,1], got [{minx},{maxx}]"
+            (left + 1.0).abs() < 1e-6 && (right - 1.0).abs() < 1e-6,
+            "x∈[-1,1], got [{left},{right}]"
         );
         assert!(
-            (miny - 2.0).abs() < 1e-6 && (maxy - 4.0).abs() < 1e-6,
-            "y∈[2,4], got [{miny},{maxy}]"
+            (bottom - 2.0).abs() < 1e-6 && (top - 4.0).abs() < 1e-6,
+            "y∈[2,4], got [{bottom},{top}]"
         );
     }
 
@@ -830,14 +840,14 @@ mod tests {
             ],
             angle: MacroDecimal::Value(90.0),
         };
-        let (minx, maxx, miny, maxy) = hull_bbox("OUT", MacroContent::Outline(outline));
+        let (left, right, bottom, top) = hull_bbox("OUT", MacroContent::Outline(outline));
         assert!(
-            (minx + 2.0).abs() < 1e-6 && maxx.abs() < 1e-6,
-            "x∈[-2,0] after rotation, got [{minx},{maxx}]"
+            (left + 2.0).abs() < 1e-6 && right.abs() < 1e-6,
+            "x∈[-2,0] after rotation, got [{left},{right}]"
         );
         assert!(
-            (miny - 1.0).abs() < 1e-6 && (maxy - 3.0).abs() < 1e-6,
-            "y∈[1,3] after rotation, got [{miny},{maxy}]"
+            (bottom - 1.0).abs() < 1e-6 && (top - 3.0).abs() < 1e-6,
+            "y∈[1,3] after rotation, got [{bottom},{top}]"
         );
     }
 
@@ -854,16 +864,16 @@ mod tests {
             end: (MacroDecimal::Value(4.0), MacroDecimal::Value(0.0)),
             angle: MacroDecimal::Value(90.0),
         };
-        let (minx, maxx, miny, maxy) = hull_bbox("VL", MacroContent::VectorLine(vl));
+        let (left, right, bottom, top) = hull_bbox("VL", MacroContent::VectorLine(vl));
         assert!(
-            (maxx - minx - 1.0).abs() < 1e-6,
+            (right - left - 1.0).abs() < 1e-6,
             "x span ~1 (the width) after 90°, got {}",
-            maxx - minx
+            right - left
         );
         assert!(
-            (maxy - miny - 4.0).abs() < 1e-6,
+            (top - bottom - 4.0).abs() < 1e-6,
             "y span ~4 (the length) after 90°, got {}",
-            maxy - miny
+            top - bottom
         );
     }
 }

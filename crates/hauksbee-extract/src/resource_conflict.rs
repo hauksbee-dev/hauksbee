@@ -52,7 +52,7 @@ struct PinResources {
     label: String,
     /// PWM slice+channel id like "6A" (RP2040). One pad -> one PWM channel.
     pwm: Option<String>,
-    /// QSPI pin-group id like "qspi_data" (SAMD51): a *group* of pads that the
+    /// QSPI pin-group id like "`qspi_data`" (SAMD51): a *group* of pads that the
     /// QSPI controller owns together.
     qspi_group: Option<String>,
     /// True for a QSPI DATA pad (PA08..PA11): the discriminator pads. A 4-wire
@@ -134,12 +134,12 @@ fn parse_resources(text: &str) -> Result<Vec<McuResources>, String> {
         };
         let fully_routable = entry
             .get("fully_routable")
-            .and_then(|v| v.as_bool())
+            .and_then(toml::Value::as_bool)
             .unwrap_or(false);
         let min_pins = entry
             .get("min_pins")
-            .and_then(|v| v.as_integer())
-            .map(|n| n as usize);
+            .and_then(toml::Value::as_integer)
+            .and_then(|n| usize::try_from(n).ok());
         let mut pins = BTreeMap::new();
         if let Some(table) = entry.get("pins").and_then(|p| p.as_table()) {
             for (pad, v) in table {
@@ -151,7 +151,10 @@ fn parse_resources(text: &str) -> Result<Vec<McuResources>, String> {
                     .to_string();
                 let pwm = v.get("pwm").and_then(|x| x.as_str()).map(str::to_string);
                 let qspi_group = v.get("group").and_then(|x| x.as_str()).map(str::to_string);
-                let qspi_data_pad = v.get("data").and_then(|x| x.as_bool()).unwrap_or(false);
+                let qspi_data_pad = v
+                    .get("data")
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(false);
                 pins.insert(
                     pad.clone(),
                     PinResources {
@@ -196,7 +199,7 @@ struct PinDemand {
     /// Human-readable evidence: what on that net implies the function.
     evidence: String,
     /// The resource instance this demand occupies, e.g. ("pwm", "6A") or
-    /// ("qspi", "qspi_data").
+    /// ("qspi", "`qspi_data`").
     resource_kind: &'static str,
     resource_inst: String,
 }
@@ -628,6 +631,7 @@ impl ExtractedBoard {
     /// Run the MCU internal resource-conflict check. Returns its findings in the
     /// same `NetLintReport` shape the connectivity lint uses, so callers and the
     /// CLI can treat them uniformly.
+    #[must_use]
     pub fn resource_conflicts(&self) -> NetLintReport {
         let tables = load_resources();
         let mut report = NetLintReport::default();
@@ -845,6 +849,7 @@ fn report_qspi_group_conflicts(
 // function) so a silent board can be chased to ground truth.
 // ---------------------------------------------------------------------------
 #[doc(hidden)]
+#[must_use]
 pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, String, String)> {
     let tables = load_resources();
     let mut out = Vec::new();
@@ -882,7 +887,7 @@ pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, Str
                 net_name,
                 res.pwm
                     .clone()
-                    .or(res.qspi_group.clone())
+                    .or_else(|| res.qspi_group.clone())
                     .unwrap_or_default(),
                 match inf {
                     Some((f, ev)) => format!("{} [{:?}] <= {ev}", f.class, f.peripheral),
@@ -897,6 +902,7 @@ pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     #[test]
     fn embedded_table_parses_and_has_known_mcus() {
@@ -970,8 +976,7 @@ mod tests {
         let by_value = |v: &str| {
             t.iter()
                 .find(|m| {
-                    m.value_re.is_match(v)
-                        || m.lib_re.as_ref().map(|r| r.is_match(v)).unwrap_or(false)
+                    m.value_re.is_match(v) || m.lib_re.as_ref().is_some_and(|r| r.is_match(v))
                 })
                 .map(|m| m.id.as_str())
         };
@@ -1005,7 +1010,7 @@ mod tests {
     /// GP12 (pad 16, slice 6A) -> HDMI clock, GP28 (pad 34, slice 6A) -> audio
     /// jack via a series R. The two PWM functions collide on slice 6A: must fire.
     /// U1 carries >=30 connected pins (most on a shared spare net) to satisfy the
-    /// module's min_pins guard. Built by `conflict_net()` so the filler is not a
+    /// module's `min_pins` guard. Built by `conflict_net()` so the filler is not a
     /// hand-balanced wall of parens.
     fn conflict_net() -> String {
         // Spare nodes to pad U1's connected-pin count over the min_pins=30 guard.
@@ -1014,13 +1019,14 @@ mod tests {
             1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 29,
             31, 3, 8, 13, 23, 28, 30, 32, 35, 36, 37, 38, 39, 40,
         ] {
-            spare.push_str(&format!(
-                "    (net (code {}) (name spare{pin}) (node (ref U1) (pin {pin})) (node (ref RES1) (pin 1)))\n",
+            let _ = writeln!(
+                spare,
+                "    (net (code {}) (name spare{pin}) (node (ref U1) (pin {pin})) (node (ref RES1) (pin 1)))",
                 100 + pin
-            ));
+            );
         }
         format!(
-            r#"(export (version D)
+            r"(export (version D)
   (components
     (comp (ref U1) (value RP2040_PLATFORM) (libsource (lib OLIMEX_Cases) (part RP2040_PLATFORM)))
     (comp (ref HDMI1) (value HDMI-SWM-19) (libsource (lib conn) (part HDMI-SWM-19)))
@@ -1031,7 +1037,7 @@ mod tests {
     (net (code 1) (name /CK) (node (ref U1) (pin 16)) (node (ref HDMI1) (pin 12)))
     (net (code 2) (name /PWM_L) (node (ref U1) (pin 34)) (node (ref R1) (pin 1)))
     (net (code 3) (name /PWM_AUDIO_L) (node (ref R1) (pin 2)) (node (ref AUDIO1) (pin 2)))
-{spare}  ))"#
+{spare}  ))"
         )
     }
 
@@ -1143,9 +1149,10 @@ mod tests {
     /// A SAMD51 with a flash on the QSPI DATA pads. With 4-wire SPI net naming
     /// (MOSI/MISO/SCK/CS) it is the SparkFun SERCOM-SPI bug -> fires. With
     /// quad-IO naming (IO0..IO3) it is a correct QSPI flash -> silent.
+    #[allow(clippy::format_collect, reason = "forty-line test fixture")]
     fn samd51_flash_net(data_names: [&str; 4]) -> String {
         format!(
-            r#"(export (version D)
+            r"(export (version D)
   (components
     (comp (ref U1) (value ATSAMD51J20A-A) (libsource (lib mcu) (part ATSAMD51J20A)))
     (comp (ref U2) (value SPI Flash) (libsource (lib Memory) (part AT25SF041)))
@@ -1155,7 +1162,7 @@ mod tests {
     (net (code 2) (name {d1}) (node (ref U1) (pin 18)) (node (ref U2) (pin 6)))
     (net (code 3) (name {d2}) (node (ref U1) (pin 19)) (node (ref U2) (pin 1)))
     (net (code 4) (name {d3}) (node (ref U1) (pin 20)) (node (ref U2) (pin 2)))
-{fill}  ))"#,
+{fill}  ))",
             d0 = data_names[0], d1 = data_names[1], d2 = data_names[2], d3 = data_names[3],
             fill = (5..=44)
                 .map(|p| format!("    (net (code {}) (name f{p}) (node (ref U1) (pin {p})) (node (ref FILL) (pin 1)))\n", 100 + p))

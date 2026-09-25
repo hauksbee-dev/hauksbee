@@ -155,7 +155,8 @@ pub enum PlacementDetection {
 impl PlacementError {
     /// Always [`EXIT_INVALID_FOR_ANALYSIS`]: each variant means the input cannot
     /// be analysed, not that an assertion failed.
-    pub fn exit_code(&self) -> i32 {
+    #[must_use]
+    pub const fn exit_code(&self) -> i32 {
         EXIT_INVALID_FOR_ANALYSIS
     }
 }
@@ -188,21 +189,23 @@ pub enum PlacementDialect {
 
 impl PlacementDialect {
     /// The stable machine name recorded in provenance.
-    pub fn kind(self) -> &'static str {
+    #[must_use]
+    pub const fn kind(self) -> &'static str {
         match self {
-            PlacementDialect::KicadPosAscii => "kicad_pos_ascii",
-            PlacementDialect::KicadPosCsv => "kicad_pos_csv",
-            PlacementDialect::AltiumPickPlace => "altium_pick_and_place",
-            PlacementDialect::GenericCpl => "cpl",
+            Self::KicadPosAscii => "kicad_pos_ascii",
+            Self::KicadPosCsv => "kicad_pos_csv",
+            Self::AltiumPickPlace => "altium_pick_and_place",
+            Self::GenericCpl => "cpl",
         }
     }
 
-    pub fn describe(self) -> &'static str {
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
         match self {
-            PlacementDialect::KicadPosAscii => "KiCad position file",
-            PlacementDialect::KicadPosCsv => "KiCad position file (csv)",
-            PlacementDialect::AltiumPickPlace => "Altium Pick and Place",
-            PlacementDialect::GenericCpl => "CPL (JLCPCB / PCBWay)",
+            Self::KicadPosAscii => "KiCad position file",
+            Self::KicadPosCsv => "KiCad position file (csv)",
+            Self::AltiumPickPlace => "Altium Pick and Place",
+            Self::GenericCpl => "CPL (JLCPCB / PCBWay)",
         }
     }
 }
@@ -222,32 +225,34 @@ impl Side {
     /// The KiCad copper-layer name, so a side can be compared against
     /// [`crate::Component::layer`] without either side of the comparison
     /// guessing.
-    pub fn kicad_layer(self) -> Option<&'static str> {
+    #[must_use]
+    pub const fn kicad_layer(self) -> Option<&'static str> {
         match self {
-            Side::Top => Some("F.Cu"),
-            Side::Bottom => Some("B.Cu"),
-            Side::Unknown => None,
+            Self::Top => Some("F.Cu"),
+            Self::Bottom => Some("B.Cu"),
+            Self::Unknown => None,
         }
     }
 
     /// The word a report prints, so a line reads as a sentence rather than as a
     /// Rust variant name.
-    pub fn describe(self) -> &'static str {
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
         match self {
-            Side::Top => "top",
-            Side::Bottom => "bottom",
-            Side::Unknown => "unknown",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Unknown => "unknown",
         }
     }
 
     /// Read a side out of whatever the file called it: `top`, `bottom`, `TOP`,
     /// `TopLayer`, `BottomSolder`, `F.Cu`, `B.Cu`, `T`, `B`.
-    fn parse(s: &str) -> Option<Side> {
+    fn parse(s: &str) -> Option<Self> {
         let s = s.trim().to_ascii_lowercase();
         if s.starts_with("top") || s == "t" || s == "f.cu" || s == "f" || s == "front" {
-            Some(Side::Top)
+            Some(Self::Top)
         } else if s.starts_with("bottom") || s == "b" || s == "b.cu" || s == "back" {
-            Some(Side::Bottom)
+            Some(Self::Bottom)
         } else {
             None
         }
@@ -266,20 +271,20 @@ pub enum Units {
 impl Units {
     fn to_mm(self, v: f64) -> f64 {
         match self {
-            Units::Millimetres => v,
-            Units::Inches => v * 25.4,
-            Units::Mils => v * 0.0254,
+            Self::Millimetres => v,
+            Self::Inches => v * 25.4,
+            Self::Mils => v * 0.0254,
         }
     }
 
-    fn parse(s: &str) -> Option<Units> {
+    fn parse(s: &str) -> Option<Self> {
         let s = s.trim().to_ascii_lowercase();
         match s.as_str() {
             "mm" | "millimeter" | "millimetre" | "millimeters" | "millimetres" | "metric" => {
-                Some(Units::Millimetres)
+                Some(Self::Millimetres)
             }
-            "in" | "inch" | "inches" | "imperial" => Some(Units::Inches),
-            "mil" | "mils" | "thou" => Some(Units::Mils),
+            "in" | "inch" | "inches" | "imperial" => Some(Self::Inches),
+            "mil" | "mils" | "thou" => Some(Self::Mils),
             _ => None,
         }
     }
@@ -330,6 +335,10 @@ impl PlacementFile {
     /// Read a placement file from a path. The dialect comes from the content:
     /// KiCad writes csv into a file called `.pos`, and Altium writes fixed-width
     /// text into a file called `.csv`, so the extension decides nothing.
+    ///
+    /// # Errors
+    /// [`PlacementError::Io`] when the file cannot be read, or the refusal
+    /// [`Self::from_bytes`] gives.
     pub fn read(path: &Path) -> Result<Self, PlacementError> {
         let name = path.display().to_string();
         let bytes = std::fs::read(path).map_err(|e| PlacementError::Io {
@@ -340,23 +349,32 @@ impl PlacementFile {
     }
 
     /// Read from bytes, hashing them for provenance.
+    ///
+    /// # Errors
+    /// A [`PlacementError`] naming why the content is not a usable placement
+    /// file: empty, no reference or coordinate columns, unknown units.
     pub fn from_bytes(bytes: &[u8], name: &str) -> Result<Self, PlacementError> {
         let text = decode(bytes);
         Self::parse(&text, name, &sha256_hex(bytes))
     }
 
     /// Read from text already in memory, with no hash.
+    ///
+    /// # Errors
+    /// As [`Self::from_bytes`].
     pub fn from_text(text: &str, name: &str) -> Result<Self, PlacementError> {
         Self::parse(text, name, "")
     }
 
     /// Does this file look like a placement file? Cheap enough to run over every
     /// file beside a board.
+    #[must_use]
     pub fn detects(bytes: &[u8]) -> bool {
         matches!(Self::probe(bytes, ""), PlacementDetection::Ready(_))
     }
 
     /// Probe without collapsing a recognizable but unsafe artifact into false.
+    #[must_use]
     pub fn probe(bytes: &[u8], name: &str) -> PlacementDetection {
         match Self::from_bytes(bytes, name) {
             Ok(file) => PlacementDetection::Ready(file),
@@ -368,11 +386,13 @@ impl PlacementFile {
     }
 
     /// The placement of one reference designator, if the file has it.
+    #[must_use]
     pub fn get(&self, reference: &str) -> Option<&Placement> {
         self.placements.iter().find(|p| p.reference == reference)
     }
 
     /// Every reference designator the file names, sorted.
+    #[must_use]
     pub fn references(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .placements
@@ -391,6 +411,7 @@ impl PlacementFile {
     /// here. That is the point: a placement file can fill a hole the layout left
     /// (an Altium layout has no values at all) but it must never outrank the
     /// layout, because it is not a more specific kind of statement.
+    #[must_use]
     pub fn identity_hints(&self) -> Vec<IdentityHint> {
         self.placements
             .iter()
@@ -402,7 +423,7 @@ impl PlacementFile {
                 footprint: (!p.package.is_empty()).then(|| p.package.clone()),
                 populate: None,
                 source: self.provenance.path.clone(),
-                source_kind: self.provenance.kind.to_string(),
+                source_kind: self.provenance.kind.clone(),
             })
             .collect()
     }
@@ -425,6 +446,7 @@ impl PlacementFile {
     /// [`PlacementCrossCheck::origin_offset_mm`] so the shift is stated rather than
     /// swallowed. A genuinely different revision is not explained by one constant
     /// vector, so its parts still disagree.
+    #[must_use]
     pub fn cross_check(&self, board: &ExtractedBoard) -> PlacementCrossCheck {
         let mut check = PlacementCrossCheck::default();
         let inferred_frame = self.frame_against(board);
@@ -443,7 +465,7 @@ impl PlacementFile {
             if let Some((x, y, board_rotation)) = comp.position {
                 check.comparable_positions += 1;
                 let dx = (x - (p.x_mm + offset.0)).abs();
-                let dy = (y - (y_sign * p.y_mm + offset.1)).abs();
+                let dy = (y - y_sign.mul_add(p.y_mm, offset.1)).abs();
                 if dx > POSITION_TOLERANCE_MM || dy > POSITION_TOLERANCE_MM {
                     check.position_disagreements.push(PositionDisagreement {
                         reference: p.reference.clone(),
@@ -520,7 +542,7 @@ impl PlacementFile {
             v[v.len() / 2]
         };
         let dx = median(pairs.iter().map(|((x, _), (px, _))| x - px).collect());
-        let mut best = (1.0, (dx, 0.0), f64::INFINITY);
+        let mut best = (1.0, (dx, 0.0), None);
         for sign in [1.0f64, -1.0] {
             let dy = median(
                 pairs
@@ -537,14 +559,14 @@ impl PlacementFile {
                         && (y - (sign * py + dy)).abs() <= POSITION_TOLERANCE_MM
                 })
                 .count();
-            let score = -(explained as f64);
-            if score < best.2 {
-                best = (sign, (dx, dy), score);
+            if best.2.is_none_or(|most| explained > most) {
+                best = (sign, (dx, dy), Some(explained));
             }
         }
         Some((best.0, best.1))
     }
 
+    #[allow(clippy::too_many_lines, reason = "one pass over the rows")]
     fn parse(text: &str, name: &str, sha: &str) -> Result<Self, PlacementError> {
         if text.trim().is_empty() {
             return Err(PlacementError::Empty {
@@ -574,8 +596,7 @@ impl PlacementFile {
             let cells = layout.split(line);
             let cell = |k: Option<usize>| -> &str {
                 k.and_then(|i| cells.get(i))
-                    .map(|s| s.trim())
-                    .unwrap_or("")
+                    .map_or("", |s| s.trim())
                     .trim_matches('"')
                     .trim()
             };
@@ -602,13 +623,10 @@ impl PlacementFile {
                 ));
                 continue;
             };
-            let side = match Side::parse(cell(cols.side)) {
-                Some(s) => s,
-                None => {
-                    no_side += 1;
-                    Side::Unknown
-                }
-            };
+            let side = Side::parse(cell(cols.side)).unwrap_or_else(|| {
+                no_side += 1;
+                Side::Unknown
+            });
             placements.push(Placement {
                 reference,
                 value: cell(cols.value).to_string(),
@@ -705,7 +723,7 @@ impl PlacementFile {
             });
         }
 
-        Ok(PlacementFile {
+        Ok(Self {
             dialect,
             placements,
             provenance: PlacementProvenance {
@@ -732,7 +750,7 @@ pub struct PositionDisagreement {
 }
 
 /// One part the placement file and the layout put on different sides.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SideDisagreement {
     pub reference: String,
     pub board_layer: String,
@@ -783,6 +801,7 @@ pub struct PlacementCrossCheck {
 
 impl PlacementCrossCheck {
     /// One successful-reconciliation evidence line for an input inventory.
+    #[must_use]
     pub fn evidence_line(&self) -> String {
         let placement_total = self.matched + self.only_in_placement.len();
         let (dx, dy) = self.origin_offset_mm.unwrap_or((0.0, 0.0));
@@ -817,7 +836,8 @@ impl PlacementCrossCheck {
     /// conclusion drawn from the pair would describe a board that does not exist.
     /// The threshold is a majority of the shared parts: a single moved part is a
     /// change to report, a wholesale disagreement is a different board.
-    pub fn is_different_board(&self) -> bool {
+    #[must_use]
+    pub const fn is_different_board(&self) -> bool {
         if self.matched == 0 {
             return !self.only_in_placement.is_empty();
         }
@@ -832,6 +852,7 @@ impl PlacementCrossCheck {
 
     /// The lines a report prints. Empty when the two agree about everything,
     /// so a board whose placement file matches never mentions the subject.
+    #[must_use]
     pub fn lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Some((dx, dy)) = self.origin_offset_mm {
@@ -913,10 +934,10 @@ struct Layout {
 
 impl Layout {
     fn split(&self, line: &str) -> Vec<String> {
-        match self.delimiter {
-            Some(d) => split_delimited(line, d),
-            None => slice_fixed_width(line, &self.starts),
-        }
+        self.delimiter.map_or_else(
+            || slice_fixed_width(line, &self.starts),
+            |d| split_delimited(line, d),
+        )
     }
 }
 

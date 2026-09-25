@@ -46,6 +46,7 @@ fn cm4_dir() -> Option<PathBuf> {
 }
 
 #[test]
+#[allow(clippy::cast_precision_loss, reason = "counts are far below 2^52")]
 fn uconsole_mainboard_reconstructs() {
     let Some(dir) = uconsole_dir() else {
         assert!(
@@ -108,7 +109,7 @@ fn uconsole_mainboard_reconstructs() {
 /// The gerber trace-current surface: per-net copper geometry is
 /// reconstructed from the gerber primitives so a trace-current check can run on
 /// a board that ships no CAD. The decisive correctness property is the same as
-/// the native-CAD trace_current module: the high-current planes are reported
+/// the native-CAD `trace_current` module: the high-current planes are reported
 /// `Poured` (their true cross-section is not a discrete-segment width, so they
 /// are honestly out of reach), while real routed signal traces carry a finite,
 /// sane width. A check that mistook a plane's pad-entry stub for the conductor

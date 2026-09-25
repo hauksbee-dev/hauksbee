@@ -2,7 +2,7 @@
 //!
 //! IPC-2581 is the open, vendor-neutral answer to ODB++: one XML document
 //! carrying the stackup, the placement, the netlist and the BOM. Altium,
-//! Cadence, Zuken, Mentor, DownStream and KiCad 8+ all export it, and unlike a
+//! Cadence, Zuken, Mentor, `DownStream` and KiCad 8+ all export it, and unlike a
 //! gerber set it is *electrical* — the netlist is stated, not reconstructed.
 //!
 //! ## What this reads
@@ -94,7 +94,7 @@ use crate::{sample_list, Component, ExtractError, ExtractedBoard, Net, Pin};
 ///
 /// IPC-2581 carries values in the `<Bom>` section, as a `<Textual>`
 /// characteristic; a document exported without a BOM (a `FABRICATION` function
-/// mode, or a tool that writes CadData only) has placement and netlist but no
+/// mode, or a tool that writes `CadData` only) has placement and netlist but no
 /// values at all. `part` and `OEMDesignNumberRef` are device/library ids, not
 /// values, and are never promoted to one.
 pub const VALUE_UNRESOLVED_REASON: &str =
@@ -112,10 +112,11 @@ pub enum NetSource {
 }
 
 impl NetSource {
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            NetSource::LogicalNet => "LogicalNet",
-            NetSource::LayerFeature => "LayerFeature/Set",
+            Self::LogicalNet => "LogicalNet",
+            Self::LayerFeature => "LayerFeature/Set",
         }
     }
 }
@@ -164,6 +165,7 @@ impl Ipc2581Stats {
     /// connectivity came from, what was not checked, and every cross-check that
     /// disagreed. The board-input normalizer copies these onto its own notes, so
     /// a disagreement the reader found actually reaches the user.
+    #[must_use]
     pub fn notes(&self) -> Vec<String> {
         let mut out = vec![format!(
             "IPC-2581 input (revision {}, FunctionMode {}): the netlist was read \
@@ -198,10 +200,12 @@ pub struct Ipc2581Extraction {
     pub stats: Ipc2581Stats,
 }
 
-/// Content sniff: an XML document whose root element is `IPC-2581`. Matched on
-/// the root element rather than the namespace URI because the un-namespaced form
+/// Content sniff: an XML document whose root element is `IPC-2581`.
+///
+/// Matched on the root element rather than the namespace URI because the un-namespaced form
 /// real converters emit is still an IPC-2581 document; the namespace, when
 /// present, is accepted as a second confirmation.
+#[must_use]
 pub fn looks_like_ipc2581(bytes: &[u8]) -> bool {
     let window = &bytes[..bytes.len().min(4096)];
     let head = String::from_utf8_lossy(window);
@@ -258,10 +262,10 @@ fn attrs(e: &BytesStart<'_>) -> HashMap<String, String> {
             // same note in `eagle.rs`. The non-deprecated successor takes an
             // `XmlVersion` quick-xml does not export.
             #[allow(deprecated)]
-            let value = a
-                .unescape_value()
-                .map(|c| c.into_owned())
-                .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
+            let value = a.unescape_value().map_or_else(
+                |_| String::from_utf8_lossy(&a.value).into_owned(),
+                std::borrow::Cow::into_owned,
+            );
             let key = a.key.local_name();
             (String::from_utf8_lossy(key.as_ref()).into_owned(), value)
         })
@@ -301,7 +305,7 @@ struct BomRow {
     package_ref: String,
     populate: bool,
     layer_ref: String,
-    /// The item's `<Characteristics><Textual>` pairs, shared by every RefDes on
+    /// The item's `<Characteristics><Textual>` pairs, shared by every `RefDes` on
     /// the item.
     characteristics: Vec<(String, String)>,
     oem_design_number: String,
@@ -388,7 +392,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "Layer" => {
                         if let Some(n) = a.get("name") {
                             doc.layers.insert(
-                                strip_names(n, &step).to_string(),
+                                strip_names(n, &step).clone(),
                                 (
                                     a.get("layerFunction").cloned().unwrap_or_default(),
                                     a.get("side").cloned().unwrap_or_default(),
@@ -402,7 +406,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "Step" => {
                         step = a
                             .get("name")
-                            .map(|n| strip_names(n, &step).to_string())
+                            .map(|n| strip_names(n, &step))
                             .unwrap_or_default();
                         if !doc.steps.contains(&step) {
                             doc.steps.push(step.clone());
@@ -411,7 +415,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "Package" => {
                         let n = a
                             .get("name")
-                            .map(|n| strip_names(n, &step).to_string())
+                            .map(|n| strip_names(n, &step))
                             .unwrap_or_default();
                         doc.packages
                             .entry(step.clone())
@@ -447,7 +451,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                                 .get_mut(&step)
                                 .and_then(|m| m.get_mut(pkg.as_str()))
                             {
-                                pins.push(strip_names(num, &step).to_string());
+                                pins.push(strip_names(num, &step).clone());
                             }
                         }
                     }
@@ -455,19 +459,19 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                         let c = RawComponent {
                             refdes: a
                                 .get("refDes")
-                                .map(|v| strip_names(v, &step).to_string())
+                                .map(|v| strip_names(v, &step))
                                 .unwrap_or_default(),
                             package_ref: a
                                 .get("packageRef")
-                                .map(|v| strip_names(v, &step).to_string())
+                                .map(|v| strip_names(v, &step))
                                 .unwrap_or_default(),
                             part: a
                                 .get("part")
-                                .map(|v| strip_names(v, &step).to_string())
+                                .map(|v| strip_names(v, &step))
                                 .unwrap_or_default(),
                             layer_ref: a
                                 .get("layerRef")
-                                .map(|v| strip_names(v, &step).to_string())
+                                .map(|v| strip_names(v, &step))
                                 .unwrap_or_default(),
                             // Not in the schema, but converters really do write
                             // it, and a document with no `<Bom>` has no other
@@ -509,7 +513,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "LogicalNet" => {
                         let n = a
                             .get("name")
-                            .map(|v| strip_names(v, &step).to_string())
+                            .map(|v| strip_names(v, &step))
                             .unwrap_or_default();
                         if empty {
                             doc.logical_nets
@@ -528,7 +532,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "LayerFeature" => {
                         cur_layer_feature = (!empty).then(|| {
                             a.get("layerRef")
-                                .map(|v| strip_names(v, &step).to_string())
+                                .map(|v| strip_names(v, &step))
                                 .unwrap_or_default()
                         });
                     }
@@ -542,7 +546,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                         // A container without a net is geometry with no
                         // connectivity (silkscreen, mask, an unnetted padstack);
                         // it is still walked so nested pads are counted.
-                        let n = a.get("net").map(|v| strip_names(v, &step).to_string());
+                        let n = a.get("net").map(|v| strip_names(v, &step));
                         cur_set = (!empty).then(|| (n.unwrap_or_default(), Vec::new()));
                     }
                     // `<LayerPad>` is the per-layer pad of an Altium `<PadStack>`,
@@ -570,11 +574,11 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "PinRef" | "LogicalNetPin" => {
                         let comp = a
                             .get("componentRef")
-                            .map(|v| strip_names(v, &step).to_string())
+                            .map(|v| strip_names(v, &step))
                             .unwrap_or_default();
                         let pin = a
                             .get("pin")
-                            .map(|v| strip_names(v, &step).to_string())
+                            .map(|v| strip_names(v, &step))
                             .unwrap_or_default();
                         if comp.is_empty() {
                             continue;
@@ -598,7 +602,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                                 populate: true,
                                 oem_design_number: a
                                     .get("OEMDesignNumberRef")
-                                    .map(|v| strip_names(v, &step).to_string())
+                                    .map(|v| strip_names(v, &step))
                                     .unwrap_or_default(),
                                 ..BomRow::default()
                             },
@@ -607,26 +611,23 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "RefDes" => {
                         if let (Some((refs, row)), Some(n)) = (in_bom_item.as_mut(), a.get("name"))
                         {
-                            refs.push(strip_names(n, &step).to_string());
+                            refs.push(strip_names(n, &step).clone());
                             // A BomItem groups identical parts, so package /
                             // layer / populate are per-RefDes; the last one
                             // wins only for the shared fields, and per-refdes
                             // values are recorded as they are seen.
                             row.package_ref = a
                                 .get("packageRef")
-                                .map(|v| strip_names(v, &step).to_string())
-                                .unwrap_or_else(|| row.package_ref.clone());
+                                .map_or_else(|| row.package_ref.clone(), |v| strip_names(v, &step));
                             row.layer_ref = a
                                 .get("layerRef")
-                                .map(|v| strip_names(v, &step).to_string())
-                                .unwrap_or_else(|| row.layer_ref.clone());
+                                .map_or_else(|| row.layer_ref.clone(), |v| strip_names(v, &step));
                             row.populate = a
                                 .get("populate")
-                                .map(|v| !v.eq_ignore_ascii_case("false"))
-                                .unwrap_or(true);
+                                .is_none_or(|v| !v.eq_ignore_ascii_case("false"));
                             let mut per = row.clone();
                             per.characteristics = Vec::new();
-                            doc.bom.insert(strip_names(n, &step).to_string(), per);
+                            doc.bom.insert(strip_names(n, &step).clone(), per);
                         }
                     }
                     "Textual" => {
@@ -671,9 +672,9 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     if let Some((refs, row)) = in_bom_item.take() {
                         for r in refs {
                             if let Some(entry) = doc.bom.get_mut(&r) {
-                                entry.characteristics = row.characteristics.clone();
+                                entry.characteristics.clone_from(&row.characteristics);
                                 if entry.oem_design_number.is_empty() {
-                                    entry.oem_design_number = row.oem_design_number.clone();
+                                    entry.oem_design_number.clone_from(&row.oem_design_number);
                                 }
                             }
                         }
@@ -743,7 +744,22 @@ fn unit_scale(units: &str) -> f64 {
     }
 }
 
+/// A step's entries followed by the unkeyed bucket's, which real documents
+/// fill with root-level `<LogicalNet>`s (see the connectivity note in [`extract`]).
+fn for_step<T: Clone>(m: &BTreeMap<String, Vec<T>>, step: &str) -> Vec<T> {
+    let mut v = m.get(step).cloned().unwrap_or_default();
+    if !step.is_empty() {
+        v.extend(m.get("").cloned().unwrap_or_default());
+    }
+    v
+}
+
 /// Extract the connectivity model from an IPC-2581 document.
+///
+/// # Errors
+/// [`ExtractError::Xml`] when the document does not parse, and
+/// [`ExtractError::Ipc2581`] when it carries no CAD data to read.
+#[allow(clippy::too_many_lines, reason = "one ordered read of the document")]
 pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
     let doc = scan(text)?;
     let mut disagreements: Vec<String> = Vec::new();
@@ -784,13 +800,6 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
     // filed under the empty step and, since the components were filed under a
     // real one, the two never met — a fully-specified 10-part board read as
     // having nets and no connections at all.
-    fn for_step<T: Clone>(m: &BTreeMap<String, Vec<T>>, step: &str) -> Vec<T> {
-        let mut v = m.get(step).cloned().unwrap_or_default();
-        if !step.is_empty() {
-            v.extend(m.get("").cloned().unwrap_or_default());
-        }
-        v
-    }
     let logical = for_step(&doc.logical_nets, &step);
     let layer_sets = for_step(&doc.layer_nets, &step);
     let net_source = if logical.iter().any(|(_, pins)| !pins.is_empty()) {
@@ -886,10 +895,9 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         )));
     }
 
-    let net_ids: HashMap<&str, i64> = net_order
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.as_str(), i as i64 + 1))
+    let net_ids: HashMap<&str, i64> = (1..)
+        .zip(&net_order)
+        .map(|(id, n)| (n.as_str(), id))
         .collect();
     let nets: Vec<Net> = net_order
         .iter()
@@ -951,14 +959,12 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         // unconnected. So the package's pins are used only when they are a
         // superset of the referenced ones, and otherwise the netlist's pins stand
         // alone and the mismatch is named.
-        let unaccounted: Vec<&str> = match refd {
-            Some(r) => r
-                .iter()
+        let unaccounted: Vec<&str> = refd.map_or_else(Vec::new, |r| {
+            r.iter()
                 .filter(|p| !declared.iter().any(|d| d == *p))
                 .copied()
-                .collect(),
-            None => Vec::new(),
-        };
+                .collect()
+        });
         let package_fits = declared.is_empty() || unaccounted.is_empty();
         if !package_fits {
             wrong_packages.push(format!(
@@ -969,7 +975,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
                 sample_list(
                     &unaccounted
                         .iter()
-                        .map(|s| s.to_string())
+                        .map(std::string::ToString::to_string)
                         .collect::<Vec<_>>()
                 ),
             ));
@@ -1021,7 +1027,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
                     continue;
                 }
                 if k.eq_ignore_ascii_case("value") {
-                    value = v.clone();
+                    value.clone_from(v);
                 } else {
                     properties.push((k.clone(), v.clone()));
                 }

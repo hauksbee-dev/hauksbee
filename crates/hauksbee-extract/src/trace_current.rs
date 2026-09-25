@@ -85,8 +85,9 @@ pub enum CopperSource {
 impl CopperSource {
     /// Whether the numbers behind this rating were assumed rather than read off
     /// the board.
-    pub fn is_assumed(self) -> bool {
-        !matches!(self, CopperSource::Stackup)
+    #[must_use]
+    pub const fn is_assumed(self) -> bool {
+        !matches!(self, Self::Stackup)
     }
 }
 
@@ -126,6 +127,7 @@ impl CopperWeights {
     /// A stackup that declares a copper layer without a thickness contributes
     /// nothing, so that layer falls back to the assumed default rather than to a
     /// zero rating.
+    #[must_use]
     pub fn from_root(root: &List) -> Self {
         let mut declared: Vec<(String, f64)> = Vec::new();
         let mut has_stackup = false;
@@ -167,23 +169,26 @@ impl CopperWeights {
             };
             by_layer.insert(name.clone(), (thickness / MM_PER_OZ, external));
         }
-        CopperWeights {
+        Self {
             by_layer,
             declared: has_stackup,
         }
     }
 
     /// Whether any per-layer copper weight was declared.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_layer.is_empty()
     }
 
     /// Whether the layout carried a stackup block, whatever it yielded.
-    pub fn is_declared(&self) -> bool {
+    #[must_use]
+    pub const fn is_declared(&self) -> bool {
         self.declared
     }
 
     /// The weight (oz) and side for a copper layer, when the stackup declares it.
+    #[must_use]
     pub fn get(&self, layer: &str) -> Option<(f64, bool)> {
         self.by_layer.get(layer).copied()
     }
@@ -196,6 +201,7 @@ impl CopperWeights {
 /// `k = 0.048` for external (outer) copper layers, `0.024` for internal. This
 /// is the long-standard ampacity curve; it is a conservative ballpark, not a
 /// thermal simulation, and is documented as such.
+#[must_use]
 pub fn ipc2221_ampacity(width_mm: f64, oz: f64, dt_c: f64, external: bool) -> f64 {
     if width_mm <= 0.0 || oz <= 0.0 || dt_c <= 0.0 {
         return 0.0;
@@ -209,6 +215,7 @@ pub fn ipc2221_ampacity(width_mm: f64, oz: f64, dt_c: f64, external: bool) -> f6
 
 /// Inverse of [`ipc2221_ampacity`]: the minimum finished width (mm) needed to
 /// carry `amps` at temperature rise `dt_c`. Useful for "you need at least X mm".
+#[must_use]
 pub fn ipc2221_min_width_mm(amps: f64, oz: f64, dt_c: f64, external: bool) -> f64 {
     if amps <= 0.0 || oz <= 0.0 || dt_c <= 0.0 {
         return 0.0;
@@ -260,10 +267,12 @@ pub struct NetCopper {
     pub zone_count: usize,
 }
 
-/// Parse `.kicad_pcb` text into per-net copper geometry. Returns an empty vector
-/// when the text is not a KiCad layout or does not parse, so callers outside the
+/// Parse `.kicad_pcb` text into per-net copper geometry.
+///
+/// Returns an empty vector when the text is not a KiCad layout or does not parse, so callers outside the
 /// extract crate (which has the s-expr parser) can run the ampacity check from
 /// raw text without depending on the parser themselves.
+#[must_use]
 pub fn net_copper_from_text(text: &str) -> Vec<NetCopper> {
     if !text.contains("(kicad_pcb") {
         return Vec::new();
@@ -271,15 +280,13 @@ pub fn net_copper_from_text(text: &str) -> Vec<NetCopper> {
     let Ok(doc) = forge_sexpr::parse(text) else {
         return Vec::new();
     };
-    match doc.root() {
-        Some(root) => net_copper_from_root(root),
-        None => Vec::new(),
-    }
+    doc.root().map_or_else(Vec::new, net_copper_from_root)
 }
 
 /// Parse the per-net copper geometry (track widths + zone presence) from a
 /// KiCad `.kicad_pcb` document root. Mirrors `drc::collect_primitives` but keeps
 /// only what an ampacity question needs.
+#[must_use]
 pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
     // net id -> name, and the inverse (name -> id) so a track that cites its
     // net by NAME rather than numeric id (some KiCad generations) still resolves.
@@ -288,7 +295,7 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
     for n in root.find_all("net") {
         if let (Some(id), Some(name)) = (n.arg_i64(0), n.arg_value(1)) {
             let name = crate::netname::unescape_net_name(&name);
-            names.entry(id).or_insert(name.clone());
+            names.entry(id).or_insert_with(|| name.clone());
             by_name.entry(name).or_insert(id);
         }
     }
@@ -317,18 +324,11 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
             continue;
         };
         // Only copper-layer zones count (keepouts on edge cuts do not conduct).
-        let on_copper = zone
-            .find("layers")
-            .map(|l| {
-                (0..)
-                    .map_while(|i| l.arg_value(i))
-                    .any(|n| n.ends_with(".Cu"))
-            })
-            .unwrap_or(false)
-            || zone
-                .find_value("layer")
-                .map(|l| l.ends_with(".Cu"))
-                .unwrap_or(false);
+        let on_copper = zone.find("layers").is_some_and(|l| {
+            (0..)
+                .map_while(|i| l.arg_value(i))
+                .any(|n| n.ends_with(".Cu"))
+        }) || zone.find_value("layer").is_some_and(|l| l.ends_with(".Cu"));
         if !on_copper {
             continue;
         }
@@ -468,6 +468,7 @@ pub struct TraceCurrentFinding {
 impl TraceCurrentFinding {
     /// The copper basis in words, marked ASSUMED (and naming the upload that
     /// would settle it) whenever the board did not declare the layer.
+    #[must_use]
     pub fn describe_copper(&self) -> String {
         let side = if self.external {
             "external"
@@ -475,10 +476,10 @@ impl TraceCurrentFinding {
             "internal"
         };
         match self.copper_source {
-            CopperSource::Stackup => match &self.layer {
-                Some(l) => format!("{} {side} {l}, per the board stackup", describe_oz(self.oz)),
-                None => format!("{} {side}, per the board stackup", describe_oz(self.oz)),
-            },
+            CopperSource::Stackup => self.layer.as_ref().map_or_else(
+                || format!("{} {side}, per the board stackup", describe_oz(self.oz)),
+                |l| format!("{} {side} {l}, per the board stackup", describe_oz(self.oz)),
+            ),
             CopperSource::AssumedNoStackup => format!(
                 "ASSUMED {} {side} - the layout declares no stackup, so upload a stackup \
                  declaration or fab drawing to rate the real copper",
@@ -518,7 +519,9 @@ pub struct TraceCapacityRow {
     pub copper_source: CopperSource,
 }
 
-/// Audit parameters (copper weight, target rise). `oz` is only the **fallback**
+/// Audit parameters (copper weight, target rise).
+///
+/// `oz` is only the **fallback**
 /// weight for a layer the board declares nothing about; when `copper` holds a
 /// declared per-layer table, each net is rated at its own bottleneck's weight.
 ///
@@ -540,7 +543,7 @@ pub struct TraceAudit {
 
 impl Default for TraceAudit {
     fn default() -> Self {
-        TraceAudit {
+        Self {
             oz: OZ_1,
             dt_c: 10.0,
             copper: CopperWeights::default(),
@@ -551,8 +554,9 @@ impl Default for TraceAudit {
 
 impl TraceAudit {
     /// The default audit, with per-layer copper weights read from `root`.
+    #[must_use]
     pub fn from_root(root: &List) -> Self {
-        TraceAudit {
+        Self {
             copper: CopperWeights::from_root(root),
             ..Default::default()
         }
@@ -561,26 +565,25 @@ impl TraceAudit {
     /// The default audit, with per-layer copper weights read from raw
     /// `.kicad_pcb` text. Non-KiCad or unparseable text yields the plain default,
     /// whose ratings are then marked ASSUMED.
+    #[must_use]
     pub fn from_pcb_text(text: &str) -> Self {
         if !text.contains("(kicad_pcb") {
             return Self::default();
         }
-        match forge_sexpr::parse(text)
+        forge_sexpr::parse(text)
             .ok()
             .and_then(|d| d.root().map(CopperWeights::from_root))
-        {
-            Some(copper) => TraceAudit {
+            .map_or_else(Self::default, |copper| Self {
                 copper,
                 ..Default::default()
-            },
-            None => Self::default(),
-        }
+            })
     }
 
     /// The copper weight and side to rate a trace on `layer` against, plus where
     /// those numbers came from. An undeclared layer falls back to the stated
     /// default rather than refusing to rate the net, but the source records that
     /// so the message can say ASSUMED.
+    #[must_use]
     pub fn copper_for(&self, layer: Option<&str>) -> (f64, bool, CopperSource) {
         if let Some(found) = layer.and_then(|l| self.copper.get(l)) {
             return (found.0, found.1, CopperSource::Stackup);
@@ -638,7 +641,7 @@ impl TraceAudit {
         let rate = |layer: Option<&str>, w: f64| {
             let (oz, external, source) = self.copper_for(layer);
             Bottleneck {
-                layer: layer.map(|l| l.to_string()),
+                layer: layer.map(std::string::ToString::to_string),
                 width_mm: w,
                 ampacity_a: ipc2221_ampacity(w, oz, self.dt_c, external),
                 oz,
@@ -688,7 +691,7 @@ pub struct Bottleneck {
 }
 
 /// Whether a layer name is one KiCad gives OUTER copper.
-fn is_outer_layer_name(n: &str) -> bool {
+const fn is_outer_layer_name(n: &str) -> bool {
     n.eq_ignore_ascii_case("F.Cu") || n.eq_ignore_ascii_case("B.Cu")
 }
 
@@ -715,6 +718,7 @@ fn assumed_external_for(layer: Option<&str>) -> bool {
 }
 
 /// Render a copper weight the way a fab drawing does: `1 oz`, `0.5 oz`.
+#[must_use]
 pub fn describe_oz(oz: f64) -> String {
     if (oz - oz.round()).abs() < 0.01 {
         format!("{:.0} oz", oz.round())
@@ -723,13 +727,15 @@ pub fn describe_oz(oz: f64) -> String {
     }
 }
 
-/// Given the per-net copper geometry and a map of `net name -> (cited current,
-/// citation)`, flag every **trace-routed** net whose bottleneck cannot carry the
-/// cited current. Poured nets are skipped (their true cross-section is out of
+/// Flag every **trace-routed** net whose bottleneck cannot carry its cited current.
+///
+/// Takes the per-net copper geometry and a map of `net name -> (cited current,
+/// citation)`. Poured nets are skipped (their true cross-section is out of
 /// reach); nets with no cited current are skipped (no fabricated load).
-pub fn audit_trace_currents(
+#[must_use]
+pub fn audit_trace_currents<S: std::hash::BuildHasher>(
     copper: &[NetCopper],
-    cited: &HashMap<String, (f64, String)>,
+    cited: &HashMap<String, (f64, String), S>,
     audit: &TraceAudit,
 ) -> Vec<TraceCurrentFinding> {
     let mut findings = Vec::new();
@@ -785,9 +791,12 @@ pub fn audit_trace_currents(
     findings
 }
 
-/// Capacity-only report for power-looking nets. This never produces pass/fail:
+/// Capacity-only report for power-looking nets.
+///
+/// This never produces pass/fail:
 /// without a cited current the honest output is "this routed bottleneck can
 /// carry roughly N amps", or "poured net: out of reach".
+#[must_use]
 pub fn trace_capacity_report(copper: &[NetCopper], audit: &TraceAudit) -> Vec<TraceCapacityRow> {
     let mut rows = Vec::new();
     for nc in copper {
@@ -796,18 +805,17 @@ pub fn trace_capacity_report(copper: &[NetCopper], audit: &TraceAudit) -> Vec<Tr
         }
         // Report the capacity of the rated bottleneck, same rule as the audit.
         let b = audit.bottleneck(nc);
-        let (oz, external, copper_source) = match &b {
-            Some(b) => (b.oz, b.external, b.copper_source),
-            None => audit.copper_for(nc.min_trace_layer.as_deref()),
-        };
+        let (oz, external, copper_source) = b.as_ref().map_or_else(
+            || audit.copper_for(nc.min_trace_layer.as_deref()),
+            |b| (b.oz, b.external, b.copper_source),
+        );
         let (capacity_10c_a, capacity_20c_a) = if nc.kind == CopperKind::Traces {
-            match &b {
-                Some(b) => (
+            b.as_ref().map_or((f64::NAN, f64::NAN), |b| {
+                (
                     ipc2221_ampacity(b.width_mm, oz, 10.0, external),
                     ipc2221_ampacity(b.width_mm, oz, 20.0, external),
-                ),
-                None => (f64::NAN, f64::NAN),
-            }
+                )
+            })
         } else {
             (f64::NAN, f64::NAN)
         };
@@ -881,6 +889,8 @@ fn compact_copper(r: &TraceCapacityRow) -> String {
     format!("{} {side}{assumed}", describe_oz(r.oz))
 }
 
+/// Render capacity rows as a boxed text table under a copper-basis preamble.
+#[must_use]
 pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
     let mut out = String::new();
     out.push_str("ampacity: IPC-2221 capacity only; supply a current for pass/fail.\n");
@@ -913,14 +923,13 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
     }
     // Column widths follow the content (with sane caps), so headers stay
     // aligned and cells are never chopped mid-word to fit a fixed grid.
-    let cells: Vec<(String, String, String, String, String)> = rows
+    let cells: Vec<[String; 5]> = rows
         .iter()
         .map(|r| {
             let (width, cap, note) = match r.kind {
                 CopperKind::Traces => (
                     r.min_width_mm
-                        .map(|w| format!("{w:.3} mm"))
-                        .unwrap_or_else(|| "-".to_string()),
+                        .map_or_else(|| "-".to_string(), |w| format!("{w:.3} mm")),
                     if r.capacity_10c_a.is_finite() {
                         format!("{:.2} A", r.capacity_10c_a)
                     } else {
@@ -934,8 +943,7 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
                 ),
                 CopperKind::Poured => (
                     r.min_width_mm
-                        .map(|w| format!("{w:.3} mm"))
-                        .unwrap_or_else(|| "-".to_string()),
+                        .map_or_else(|| "-".to_string(), |w| format!("{w:.3} mm")),
                     "-".to_string(),
                     format!("poured ({} zone)", r.zone_count),
                 ),
@@ -946,79 +954,42 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
                 CopperKind::Poured => "poured",
                 CopperKind::None => "none",
             };
-            (truncate(&r.net, 40), kind.to_string(), width, cap, note)
+            [truncate(&r.net, 40), kind.to_string(), width, cap, note]
         })
         .collect();
-    let headers = ("Net", "Copper", "Min width", "Cap @10C", "Note");
-    let w0 = cells
-        .iter()
-        .map(|c| c.0.chars().count())
-        .chain([headers.0.len()])
-        .max()
-        .unwrap();
-    let w1 = cells
-        .iter()
-        .map(|c| c.1.chars().count())
-        .chain([headers.1.len()])
-        .max()
-        .unwrap();
-    let w2 = cells
-        .iter()
-        .map(|c| c.2.chars().count())
-        .chain([headers.2.len()])
-        .max()
-        .unwrap();
-    let w3 = cells
-        .iter()
-        .map(|c| c.3.chars().count())
-        .chain([headers.3.len()])
-        .max()
-        .unwrap();
-    let w4 = cells
-        .iter()
-        .map(|c| c.4.chars().count())
-        .chain([headers.4.len()])
-        .max()
-        .unwrap();
-    let pad = |s: &str, w: usize| {
-        let len = s.chars().count();
-        format!("{}{}", s, " ".repeat(w - len))
-    };
+    let headers = ["Net", "Copper", "Min width", "Cap @10C", "Note"];
+    let w: Vec<usize> = (0..5)
+        .map(|i| {
+            cells
+                .iter()
+                .map(|c| c[i].chars().count())
+                .fold(headers[i].len(), usize::max)
+        })
+        .collect();
     let rule = |l: &str, m: &str, r: &str| {
-        format!(
-            "{l}\u{2500}{}\u{2500}{m}\u{2500}{}\u{2500}{m}\u{2500}{}\u{2500}{m}\u{2500}{}\u{2500}{m}\u{2500}{}\u{2500}{r}\n",
-            "\u{2500}".repeat(w0),
-            "\u{2500}".repeat(w1),
-            "\u{2500}".repeat(w2),
-            "\u{2500}".repeat(w3),
-            "\u{2500}".repeat(w4),
-        )
+        let bars: Vec<String> = w.iter().map(|&n| "\u{2500}".repeat(n + 2)).collect();
+        format!("{l}{}{r}\n", bars.join(m))
+    };
+    let row = |c: [&str; 5]| {
+        let cols: Vec<String> = c
+            .iter()
+            .zip(&w)
+            .map(|(s, &n)| format!("{s}{}", " ".repeat(n - s.chars().count())))
+            .collect();
+        format!("\u{2502} {} \u{2502}\n", cols.join(" \u{2502} "))
     };
     out.push_str(&rule("\u{250c}", "\u{252c}", "\u{2510}"));
-    out.push_str(&format!(
-        "\u{2502} {} \u{2502} {} \u{2502} {} \u{2502} {} \u{2502} {} \u{2502}\n",
-        pad(headers.0, w0),
-        pad(headers.1, w1),
-        pad(headers.2, w2),
-        pad(headers.3, w3),
-        pad(headers.4, w4),
-    ));
+    out.push_str(&row(headers));
     out.push_str(&rule("\u{251c}", "\u{253c}", "\u{2524}"));
     for c in &cells {
-        out.push_str(&format!(
-            "\u{2502} {} \u{2502} {} \u{2502} {} \u{2502} {} \u{2502} {} \u{2502}\n",
-            pad(&c.0, w0),
-            pad(&c.1, w1),
-            pad(&c.2, w2),
-            pad(&c.3, w3),
-            pad(&c.4, w4),
-        ));
+        out.push_str(&row(c.each_ref().map(String::as_str)));
     }
     out.push_str(&rule("\u{2514}", "\u{2534}", "\u{2518}"));
     out
 }
 
 /// Render the capacity report with board-net context for the empty-result case.
+///
 /// A battery-family name on the board but no report row is actionable evidence
 /// that recognition or routed-copper extraction did not reach it, so disclose
 /// both the candidate names and every recognizer tried.

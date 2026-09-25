@@ -19,7 +19,7 @@
 
 /// A `NAME { KEY=VALUE ... }` block from `matrix`, `tools` or `stephdr`.
 #[derive(Debug, Clone)]
-pub(crate) struct Block {
+pub struct Block {
     pub(crate) kind: String,
     pub(crate) fields: Vec<(String, String)>,
 }
@@ -34,7 +34,7 @@ impl Block {
 }
 
 /// Parse the `NAME { ... }` blocks of a block-structured ODB++ file.
-pub(crate) fn parse_blocks(text: &str) -> Vec<Block> {
+pub fn parse_blocks(text: &str) -> Vec<Block> {
     let mut out: Vec<Block> = Vec::new();
     let mut current: Option<Block> = None;
     for line in text.lines() {
@@ -66,7 +66,7 @@ pub(crate) fn parse_blocks(text: &str) -> Vec<Block> {
 
 /// One layer row of `matrix/matrix`.
 #[derive(Debug, Clone)]
-pub(crate) struct MatrixLayer {
+pub struct MatrixLayer {
     pub(crate) name: String,
     /// `SIGNAL`, `POWER_GROUND`, `MIXED`, `DRILL`, `COMPONENT`, `SOLDER_MASK`…
     pub(crate) layer_type: String,
@@ -98,12 +98,12 @@ impl MatrixLayer {
 
 /// The matrix: the job's step names and layer rows.
 #[derive(Debug, Default)]
-pub(crate) struct Matrix {
+pub struct Matrix {
     pub(crate) steps: Vec<String>,
     pub(crate) layers: Vec<MatrixLayer>,
 }
 
-pub(crate) fn parse_matrix(text: &str) -> Matrix {
+pub fn parse_matrix(text: &str) -> Matrix {
     let mut m = Matrix::default();
     for block in parse_blocks(text) {
         match block.kind.as_str() {
@@ -134,7 +134,7 @@ pub(crate) fn parse_matrix(text: &str) -> Matrix {
 /// by their *ordinal* in the file, and the same name legitimately appears more
 /// than once with different outlines, so the index is the identity.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Package {
+pub struct Package {
     pub(crate) name: String,
     /// Pin names in declaration order. A component's toeprint index is an index
     /// into this list, which is what lets a toeprint's own name be cross-checked
@@ -149,7 +149,7 @@ pub(crate) struct Package {
 /// and the last two are faults a reader must report rather than quietly turn
 /// into a floating pad.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum NetRef {
+pub enum NetRef {
     /// Ordinal 0: ODB++'s `$NONE$`, a pad deliberately on no net.
     None,
     /// A net ordinal into `eda/data`'s `NET` sequence. Not yet known to be in
@@ -161,7 +161,7 @@ pub(crate) enum NetRef {
 
 /// One pad of a placed component ("toeprint" in ODB++ terms).
 #[derive(Debug, Clone)]
-pub(crate) struct Toeprint {
+pub struct Toeprint {
     /// Index into the owning package's pin list.
     pub(crate) pin_index: usize,
     pub(crate) x_mm: f64,
@@ -174,7 +174,7 @@ pub(crate) struct Toeprint {
 
 /// One placed component, before reference-designator normalization.
 #[derive(Debug, Clone)]
-pub(crate) struct RawComponent {
+pub struct RawComponent {
     pub(crate) pkg_index: Option<usize>,
     pub(crate) x_mm: f64,
     pub(crate) y_mm: f64,
@@ -198,7 +198,7 @@ pub(crate) struct RawComponent {
 
 /// What one `eda/data` or `components` file yielded.
 #[derive(Debug, Default)]
-pub(crate) struct EdaData {
+pub struct EdaData {
     /// Net names indexed by ODB++ net ordinal. Index 0 is `$NONE$`.
     pub(crate) nets: Vec<String>,
     pub(crate) packages: Vec<Package>,
@@ -220,7 +220,7 @@ fn coord(raw: &str) -> Option<f64> {
 }
 
 /// The multiplier from a `UNITS=` value to millimetres.
-pub(crate) fn unit_scale(value: &str) -> f64 {
+pub fn unit_scale(value: &str) -> f64 {
     if value.trim().eq_ignore_ascii_case("INCH") {
         25.4
     } else {
@@ -234,7 +234,7 @@ pub(crate) fn unit_scale(value: &str) -> f64 {
 /// producer that declares `UNITS=INCH` there and omits it per file is entitled
 /// to. Defaulting to millimetres here instead of asking the caller for the job
 /// default made every coordinate in such a job 25.4× too small, silently.
-pub(crate) fn declared_units(text: &str) -> Option<f64> {
+pub fn declared_units(text: &str) -> Option<f64> {
     text.lines()
         .take(40)
         .filter_map(|l| l.trim().strip_prefix("UNITS="))
@@ -295,16 +295,16 @@ fn attrs_say_no_pop(attrs: Option<&str>, names: &[String]) -> bool {
 /// them there) the placed components.
 /// `job_units` is the job default from `misc/info`, used when the file itself
 /// declares no `UNITS=` line.
-pub(crate) fn parse_eda_data(text: &str, job_units: f64) -> EdaData {
-    let scale = declared_units(text).unwrap_or(job_units);
-    let names = attr_names(text);
-    let mut out = EdaData::default();
+pub fn parse_eda_data(text: &str, job_units: f64) -> EdaData {
     // Which multi-line record we are inside. A `#` comment does not end one.
     enum In {
         None,
         Pkg,
         Cmp,
     }
+    let scale = declared_units(text).unwrap_or(job_units);
+    let names = attr_names(text);
+    let mut out = EdaData::default();
     let mut state = In::None;
     for raw in text.lines() {
         let line = raw.trim();
@@ -315,7 +315,7 @@ pub(crate) fn parse_eda_data(text: &str, job_units: f64) -> EdaData {
         let mut tok = body.split_whitespace();
         let Some(kind) = tok.next() else { continue };
         match kind {
-            "LYR" => out.layers = tok.map(|s| s.to_ascii_lowercase()).collect(),
+            "LYR" => out.layers = tok.map(str::to_ascii_lowercase).collect(),
             "NET" => {
                 state = In::None;
                 out.nets.push(tok.next().unwrap_or("").to_string());
@@ -367,11 +367,7 @@ pub(crate) fn parse_eda_data(text: &str, job_units: f64) -> EdaData {
 /// Parse a component-layer `components` file (`steps/<step>/layers/comp_+_top/
 /// components`). Same CMP/PRP/TOP grammar as `eda/data`, and the layer fixes
 /// the board side.
-pub(crate) fn parse_components_file(
-    text: &str,
-    is_bottom: bool,
-    job_units: f64,
-) -> Vec<RawComponent> {
+pub fn parse_components_file(text: &str, is_bottom: bool, job_units: f64) -> Vec<RawComponent> {
     let scale = declared_units(text).unwrap_or(job_units);
     let names = attr_names(text);
     let mut out: Vec<RawComponent> = Vec::new();
@@ -477,14 +473,14 @@ fn parse_top(body: &str, scale: f64) -> Option<Toeprint> {
 /// A `netlists/<name>/netlist` file: the CAD netlist ODB++ ships alongside the
 /// EDA data, as `name → number of net points`.
 #[derive(Debug, Default)]
-pub(crate) struct CadNetlist {
+pub struct CadNetlist {
     /// Net name → how many netlist points reference it.
     pub(crate) points_per_net: std::collections::BTreeMap<String, usize>,
 }
 
-pub(crate) fn parse_netlist(text: &str) -> CadNetlist {
-    let mut names: std::collections::BTreeMap<usize, String> = Default::default();
-    let mut counts: std::collections::BTreeMap<usize, usize> = Default::default();
+pub fn parse_netlist(text: &str) -> CadNetlist {
+    let mut names = std::collections::BTreeMap::<usize, String>::new();
+    let mut counts = std::collections::BTreeMap::<usize, usize>::new();
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with('H') {
@@ -521,7 +517,7 @@ pub(crate) fn parse_netlist(text: &str) -> CadNetlist {
 /// (see the module docs on what is deliberately dropped), so the geometry is
 /// summarized rather than materialized.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct FeatureCounts {
+pub struct FeatureCounts {
     pub(crate) lines: usize,
     pub(crate) pads: usize,
     pub(crate) arcs: usize,
@@ -539,12 +535,12 @@ pub(crate) struct FeatureCounts {
 }
 
 impl FeatureCounts {
-    pub(crate) fn total(&self) -> usize {
+    pub(crate) const fn total(&self) -> usize {
         self.lines + self.pads + self.arcs + self.surfaces + self.other
     }
 }
 
-pub(crate) fn parse_features(text: &str) -> FeatureCounts {
+pub fn parse_features(text: &str) -> FeatureCounts {
     let mut c = FeatureCounts::default();
     for raw in text.lines() {
         let line = raw.trim();
@@ -566,7 +562,7 @@ pub(crate) fn parse_features(text: &str) -> FeatureCounts {
             Some("S") => c.surfaces += 1,
             // `T` (text) and `B` (barcode) are features too, and counted, but
             // not broken out: the IR has nowhere to put either.
-            Some("T") | Some("B") => c.other += 1,
+            Some("T" | "B") => c.other += 1,
             // A surface body, a symbol/attribute-table line, or a record type
             // this reader does not model. Tracked so the `F` header check can
             // tell "the header is wrong" from "there is a record kind here I do
@@ -631,7 +627,7 @@ mod tests {
             c.part, "Inductor_SMD_L_NR-40xx 47uH 0.5A",
             "part_name is the remainder, not one token"
         );
-        assert_eq!(c.rotation, 90.0);
+        assert!((c.rotation - 90.0).abs() < f64::EPSILON);
         assert!(!c.mirrored);
     }
 

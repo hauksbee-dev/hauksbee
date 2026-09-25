@@ -47,8 +47,8 @@ use gerber_types::{CoordinateNumber, CoordinateOffset, Coordinates, Interpolatio
 use super::geo::{point_in_polygon, BoundsLeaf, Capsule, Shape};
 use super::macros::instantiate_macro;
 
-/// Arc flattening resolution (matches drc's ARC_SEGMENTS).
-const ARC_SEGMENTS: usize = 16;
+/// Arc flattening resolution (matches drc's `ARC_SEGMENTS`).
+const ARC_SEGMENTS: u32 = 16;
 
 /// Radius (mm) of the small disc a macro flash falls back to when its aperture
 /// macro cannot be instantiated. A fixed physical size, never scaled by the
@@ -69,8 +69,9 @@ pub struct CopperPrim {
 
 impl CopperPrim {
     /// A primitive with no X2 identity, exactly what a stripped film yields.
+    #[must_use]
     pub fn bare(shape: Shape, kind: PrimKind) -> Self {
-        CopperPrim {
+        Self {
             shape,
             kind,
             attrs: X2Attrs::default(),
@@ -91,7 +92,7 @@ impl CopperPrim {
 /// painted while it is in effect, hundreds of thousands on a large film, so
 /// attaching the identity is a pointer clone, not a heap allocation per arc
 /// segment.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct X2Attrs {
     /// `%TA.AperFunction` of the aperture this primitive was painted with.
     pub function: Option<ApertureFunction>,
@@ -111,7 +112,8 @@ pub struct X2Attrs {
 }
 
 impl X2Attrs {
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.function.is_none()
             && self.net.is_none()
             && self.pin.is_none()
@@ -120,26 +122,32 @@ impl X2Attrs {
 
     /// The film's net names for this primitive (usually one; several on a
     /// net-tie object). Empty when the film named none.
+    #[must_use]
     pub fn net_names(&self) -> &[Arc<str>] {
         self.net.as_deref().unwrap_or(&[])
     }
 }
 
-/// Whether an X2 aperture function marks a flash as a VIA pad: copper that
-/// stitches layers but is not a component pad. Resolves the via-vs-pad
+/// Whether an X2 aperture function marks a flash as a VIA pad.
+///
+/// A via pad is copper that stitches layers but is not a component pad. Resolves the via-vs-pad
 /// ambiguity the geometric reconstruction cannot (a stitching via inside a
 /// footprint window looks exactly like a pad).
-pub fn function_is_via(f: &ApertureFunction) -> bool {
+#[must_use]
+pub const fn function_is_via(f: &ApertureFunction) -> bool {
     matches!(f, ApertureFunction::ViaPad)
 }
 
 /// Whether an X2 aperture function states outright that a flash is NOT a
-/// component pad (a fiducial, an antipad, a washer, a thermal relief). Such a
+/// component pad.
+///
+/// That is a fiducial, an antipad, a washer or a thermal relief. Such a
 /// flash is real copper, but the footprint window must not claim it as a pin.
 /// Absence of any function says nothing, that flash keeps its geometric
 /// fallback, because a partially attributed film is not a film asserting its
 /// bare flashes are non-pads.
-pub fn function_is_nonpad(f: &ApertureFunction) -> bool {
+#[must_use]
+pub const fn function_is_nonpad(f: &ApertureFunction) -> bool {
     matches!(
         f,
         ApertureFunction::FiducialPad(_)
@@ -168,6 +176,12 @@ pub enum PrimKind {
 }
 
 /// Parse one RS-274X copper layer's text into solid copper primitives.
+///
+/// # Errors
+///
+/// None today: a hard parse error still yields every primitive recovered
+/// before it, and a garbage file yields none. The `Result` keeps the signature
+/// shared with the other film readers.
 pub fn parse_layer(text: &str) -> Result<Vec<CopperPrim>, String> {
     let normalized = normalize_rs274x(text);
     // `parse` returns the partially-built document even on a hard error (the
@@ -255,6 +269,10 @@ fn contour_bounds(c: &[(f64, f64)]) -> [f64; 4] {
 /// antipads were all emitted together. Each output polygon is a separate
 /// primitive because a clear may physically split one input conductor.
 fn apply_clears(out: &mut Vec<CopperPrim>, clears: Vec<Clear>) {
+    struct PaintedPiece {
+        source_index: usize,
+        prim: CopperPrim,
+    }
     if clears.is_empty() || out.is_empty() {
         return;
     }
@@ -268,11 +286,6 @@ fn apply_clears(out: &mut Vec<CopperPrim>, clears: Vec<Clear>) {
     if independent_convex_plane(&*out, &clears) {
         apply_independent_plane_clears(out, &clears);
         return;
-    }
-
-    struct PaintedPiece {
-        source_index: usize,
-        prim: CopperPrim,
     }
 
     let mut painted: Vec<PaintedPiece> = std::mem::take(out)
@@ -437,13 +450,13 @@ fn is_convex_contour(points: &[(f64, f64)]) -> bool {
         let a = points[i];
         let b = points[(i + 1) % points.len()];
         let c = points[(i + 2) % points.len()];
-        let cross = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0);
+        let cross = (b.0 - a.0).mul_add(c.1 - b.1, -((b.1 - a.1) * (c.0 - b.0)));
         if cross.abs() <= 1e-12 {
             continue;
         }
         if sign == 0.0 {
             sign = cross.signum();
-        } else if cross.signum() != sign {
+        } else if cross.signum().total_cmp(&sign).is_ne() {
             return false;
         }
     }
@@ -473,7 +486,7 @@ fn contours_to_geo_polygon(mut contours: Vec<Vec<(f64, f64)>>) -> Option<Polygon
 }
 
 /// Closed bounding box of a segment: `[minx, miny, maxx, maxy]`.
-fn line_box(l: &::geo::Line<f64>) -> [f64; 4] {
+const fn line_box(l: &::geo::Line<f64>) -> [f64; 4] {
     [
         l.start.x.min(l.end.x),
         l.start.y.min(l.end.y),
@@ -578,7 +591,7 @@ fn shape_to_geo(shape: &Shape) -> Option<MultiPolygon<f64>> {
             let polygon = contours_to_geo_polygon(vec![pts.clone()])?;
             if !polygon_is_valid(&polygon) {
                 return None;
-            };
+            }
             if *r <= 0.0 {
                 Some(MultiPolygon::new(vec![polygon.orient(Direction::Default)]))
             } else {
@@ -652,7 +665,12 @@ fn geo_to_shapes(multi: MultiPolygon<f64>) -> Vec<Shape> {
     shapes
 }
 
+#[allow(clippy::too_many_lines, reason = "one pass over a plane's voids")]
 fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
+    // (contour indices, bounds, (clear statement, piece))
+    type Unit = (Vec<usize>, [f64; 4], (usize, usize));
+    const ENCLOSE_GRID_VERTS: usize = 2000;
+    const ENCLOSE_CELL_BUDGET: usize = 64 << 20;
     if clears.is_empty() {
         return;
     }
@@ -687,8 +705,6 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
     // void actually reaches (one costs megabytes), and they share a cell budget
     // so a film where every pour IS reached stays bounded. The grid is exact at
     // any resolution, so the budget only ever moves work.
-    const ENCLOSE_GRID_VERTS: usize = 2000;
-    const ENCLOSE_CELL_BUDGET: usize = 64 << 20;
     let enclose_side_ceiling = {
         // Divided by the pours that could take a GRID, not by every pour on the
         // film: regions that are never gridded must not derate the ones that
@@ -702,7 +718,7 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
         // The lower clamp wins over the division, so past about 16000 gridded pours
         // the budget stops being a bound and each still takes 64 cells a side. That
         // needs a film whose geometry alone is orders larger than its grids.
-        ((per_pour as f64).sqrt() as usize).clamp(64, 2048)
+        per_pour.isqrt().clamp(64, 2048)
     };
     let mut enclose_grids: Vec<Option<Option<super::geo::PolyGrid>>> =
         (0..regions.len()).map(|_| None).collect();
@@ -783,9 +799,11 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
                     )
                 })
             });
-            let enclosed = group.iter().all(|c| match grid {
-                Some(g) => c.contours.iter().flatten().all(|&(x, y)| g.contains(x, y)),
-                None => contours_enclose(&originals[slot], &c.contours),
+            let enclosed = group.iter().all(|c| {
+                grid.as_ref().map_or_else(
+                    || contours_enclose(&originals[slot], &c.contours),
+                    |g| c.contours.iter().flatten().all(|&(x, y)| g.contains(x, y)),
+                )
             });
             if !enclosed {
                 continue;
@@ -829,8 +847,6 @@ fn apply_independent_plane_clears(out: &mut Vec<CopperPrim>, clears: &[Clear]) {
             let Shape::MultiPolygon { contours, weights } = shape else {
                 continue;
             };
-            // (contour indices, bounds, (clear statement, piece))
-            type Unit = (Vec<usize>, [f64; 4], (usize, usize));
             let mut units: Vec<Unit> = Vec::with_capacity(group.len());
             for clear in group {
                 let mut indices = Vec::with_capacity(clear.contours.len());
@@ -1159,10 +1175,11 @@ impl VoidIndex {
     /// Cells a void may be stamped into before it goes to `overflow` instead.
     const MAX_STAMP: usize = 64;
 
+    #[allow(clippy::cast_precision_loss, reason = "RES is 48")]
     fn new(bounds: [f64; 4]) -> Self {
         let w = (bounds[2] - bounds[0]).max(f64::MIN_POSITIVE);
         let h = (bounds[3] - bounds[1]).max(f64::MIN_POSITIVE);
-        VoidIndex {
+        Self {
             origin: (bounds[0], bounds[1]),
             cell: (w / Self::RES as f64, h / Self::RES as f64),
             all: Vec::new(),
@@ -1175,6 +1192,8 @@ impl VoidIndex {
     }
 
     /// The inclusive cell range a bounding box covers, clamped to the grid.
+    #[allow(clippy::cast_possible_truncation, reason = "clamped to the grid")]
+    #[allow(clippy::cast_sign_loss, reason = "clamped to >= 0")]
     fn span(&self, b: [f64; 4]) -> (usize, usize, usize, usize) {
         let ix =
             |v: f64, o: f64, c: f64| (((v - o) / c).floor().max(0.0) as usize).min(Self::RES - 1);
@@ -1305,10 +1324,10 @@ fn already_void(
     contours: &[Vec<(f64, f64)>],
     bounds: [f64; 4],
 ) -> bool {
+    const NUDGE_MM: f64 = 1e-4;
     let Shape::MultiPolygon { contours: all, .. } = shape else {
         return false;
     };
-    const NUDGE_MM: f64 = 1e-4;
     // Each vertex is nudged toward the candidate's own REMOVED area: inward for
     // the outer boundary, OUTWARD for a hole, because a hole's interior is the
     // copper island the void leaves standing and is not removed at all. Nudging
@@ -1320,7 +1339,7 @@ fn already_void(
         .enumerate()
         .flat_map(|(k, c)| {
             let cb = contour_bounds(c);
-            let (cx, cy) = ((cb[0] + cb[2]) / 2.0, (cb[1] + cb[3]) / 2.0);
+            let (cx, cy) = (f64::midpoint(cb[0], cb[2]), f64::midpoint(cb[1], cb[3]));
             let sign = if k == 0 { 1.0 } else { -1.0 };
             c.iter().map(move |&(x, y)| {
                 let (dx, dy) = (cx - x, cy - y);
@@ -1329,8 +1348,8 @@ fn already_void(
                     (x, y)
                 } else {
                     (
-                        x + sign * dx / len * NUDGE_MM,
-                        y + sign * dy / len * NUDGE_MM,
+                        (sign * dx / len).mul_add(NUDGE_MM, x),
+                        (sign * dy / len).mul_add(NUDGE_MM, y),
                     )
                 }
             })
@@ -1428,12 +1447,13 @@ fn patch_fs(stmt: &str) -> String {
     stmt.to_string()
 }
 
-fn num(c: &CoordinateNumber) -> f64 {
+fn num(c: CoordinateNumber) -> f64 {
     // gerber-types stores nanounits; Into<f64> yields the value in the
     // document's unit (mm or inch). We normalise inch->mm at the call site.
-    (*c).into()
+    c.into()
 }
 
+#[allow(clippy::struct_excessive_bools, reason = "independent modal states")]
 struct Plotter<'a> {
     doc: &'a gerber_parser::GerberDoc,
     /// inch->mm factor (1.0 if already mm).
@@ -1584,8 +1604,8 @@ struct Clear {
 }
 
 impl Clear {
-    fn translated(&self, dx: f64, dy: f64, painted_before: usize) -> Clear {
-        Clear {
+    fn translated(&self, dx: f64, dy: f64, painted_before: usize) -> Self {
+        Self {
             statement: self.statement,
             piece: self.piece,
             contours: self
@@ -1657,13 +1677,13 @@ impl<'a> Plotter<'a> {
 
     /// Is the object transform the identity? Only then may a clear image, which
     /// this plotter draws untransformed, be trusted to subtract.
-    fn identity_transform(&self) -> bool {
+    const fn identity_transform(&self) -> bool {
         self.scale_identity && self.rotation_identity && self.mirror_identity
     }
 
     /// May clear geometry drawn right now be trusted to subtract? Not under an
     /// unapplied object transform, and not inside an `%AB` body (see `ab_depth`).
-    fn may_bank_clears(&self) -> bool {
+    const fn may_bank_clears(&self) -> bool {
         self.identity_transform()
             && self.ab_depth == 0
             && self.image_positive
@@ -1722,19 +1742,12 @@ impl<'a> Plotter<'a> {
     }
 
     fn coord(&self, c: &Coordinates) -> (f64, f64) {
-        let nx =
-            c.x.as_ref()
-                .map(num)
-                .map(|v| v * self.to_mm)
-                .unwrap_or(self.x);
-        let ny =
-            c.y.as_ref()
-                .map(num)
-                .map(|v| v * self.to_mm)
-                .unwrap_or(self.y);
+        let nx = c.x.map(num).map_or(self.x, |v| v * self.to_mm);
+        let ny = c.y.map(num).map_or(self.y, |v| v * self.to_mm);
         (nx, ny)
     }
 
+    #[allow(clippy::too_many_lines, reason = "one dispatch over every command")]
     fn run(&mut self, cmd: &Command) {
         match cmd {
             Command::FunctionCode(FunctionCode::GCode(g)) => match g {
@@ -1979,7 +1992,7 @@ impl<'a> Plotter<'a> {
             }
             Operation::Interpolate(coord, offset) => {
                 let (sx, sy) = (self.x, self.y);
-                let (ex, ey) = coord.as_ref().map(|c| self.coord(c)).unwrap_or((sx, sy));
+                let (ex, ey) = coord.as_ref().map_or((sx, sy), |c| self.coord(c));
                 if self.region.is_some() {
                     // Region contour: collect the boundary vertices. A segment
                     // drawn under circular interpolation (G02/G03) contributes
@@ -1992,7 +2005,7 @@ impl<'a> Plotter<'a> {
                         InterpolationMode::ClockwiseCircular
                         | InterpolationMode::CounterclockwiseCircular => {
                             self.region_has_arc = true;
-                            let (ox, oy) = self.offset_mm(offset);
+                            let (ox, oy) = self.offset_mm(offset.as_ref());
                             let ccw =
                                 matches!(self.interp, InterpolationMode::CounterclockwiseCircular);
                             self.arc_samples(sx, sy, ex, ey, ox, oy, ccw)
@@ -2016,7 +2029,7 @@ impl<'a> Plotter<'a> {
                         }
                         InterpolationMode::ClockwiseCircular
                         | InterpolationMode::CounterclockwiseCircular => {
-                            let (ox, oy) = self.offset_mm(offset);
+                            let (ox, oy) = self.offset_mm(offset.as_ref());
                             let ccw =
                                 matches!(self.interp, InterpolationMode::CounterclockwiseCircular);
                             let mut prev = (sx, sy);
@@ -2080,8 +2093,10 @@ impl<'a> Plotter<'a> {
     fn aperture_line_width(&self) -> f64 {
         match self.aperture.and_then(|a| self.doc.apertures.get(&a)) {
             Some(Aperture::Circle(Circle { diameter, .. })) => diameter * self.to_mm,
-            Some(Aperture::Rectangle(Rectangular { x, y, .. }))
-            | Some(Aperture::Obround(Rectangular { x, y, .. })) => x.min(*y) * self.to_mm,
+            Some(
+                Aperture::Rectangle(Rectangular { x, y, .. })
+                | Aperture::Obround(Rectangular { x, y, .. }),
+            ) => x.min(*y) * self.to_mm,
             // Unknown aperture (polygon/macro/undefined): a fixed 0.1 mm hairline,
             // enough to connect endpoints. This is a physical millimetre size and
             // must NOT be scaled by `to_mm`: on an inch-unit file (`%MOIN%`,
@@ -2110,16 +2125,18 @@ impl<'a> Plotter<'a> {
                 diameter,
                 hole_diameter,
             })) if !holed(hole_diameter) => Some(diameter * self.to_mm),
-            Some(Aperture::Rectangle(Rectangular {
-                x,
-                y,
-                hole_diameter,
-            }))
-            | Some(Aperture::Obround(Rectangular {
-                x,
-                y,
-                hole_diameter,
-            })) if !holed(hole_diameter) => Some(x.min(*y) * self.to_mm),
+            Some(
+                Aperture::Rectangle(Rectangular {
+                    x,
+                    y,
+                    hole_diameter,
+                })
+                | Aperture::Obround(Rectangular {
+                    x,
+                    y,
+                    hole_diameter,
+                }),
+            ) if !holed(hole_diameter) => Some(x.min(*y) * self.to_mm),
             _ => None,
         }
     }
@@ -2170,6 +2187,7 @@ impl<'a> Plotter<'a> {
 
     /// The aperture image, plus whether a circumscribed hole rim escaped the
     /// outer boundary (only ever true under clear polarity; see `with_hole`).
+    #[allow(clippy::too_many_lines, reason = "one arm per aperture kind")]
     fn flash_image(&self) -> Option<(Shape, bool)> {
         let code = self.aperture?;
         let ap = self.doc.apertures.get(&code)?;
@@ -2182,10 +2200,10 @@ impl<'a> Plotter<'a> {
         // flash materializes as an outer contour plus a hole contour (even-odd
         // containment).
         let hole_mm = match ap {
-            Aperture::Circle(Circle { hole_diameter, .. }) => *hole_diameter,
-            Aperture::Rectangle(Rectangular { hole_diameter, .. })
-            | Aperture::Obround(Rectangular { hole_diameter, .. }) => *hole_diameter,
-            Aperture::Polygon(GPolygon { hole_diameter, .. }) => *hole_diameter,
+            Aperture::Circle(Circle { hole_diameter, .. })
+            | Aperture::Rectangle(Rectangular { hole_diameter, .. })
+            | Aperture::Obround(Rectangular { hole_diameter, .. })
+            | Aperture::Polygon(GPolygon { hole_diameter, .. }) => *hole_diameter,
             Aperture::Macro(..) => None,
         }
         .map(|h| h * s)
@@ -2215,38 +2233,38 @@ impl<'a> Plotter<'a> {
         // aperture does exactly that (a 2 mm square with a 1.999 mm hole puts the
         // rim's vertices at radius 1.0043). When it does, the clear image is not
         // exact and the caller must refuse it; see `flash_shape_for_clear`.
-        let rim_escapes = |outer: &[(f64, f64)], rim: &[(f64, f64)]| -> bool {
+        let pokes_out = |outer: &[(f64, f64)], rim: &[(f64, f64)]| -> bool {
             rim.iter().any(|&(x, y)| !point_in_polygon(x, y, outer))
         };
         let mut rim_escaped = false;
         let mut with_hole = |outer: Vec<(f64, f64)>| -> Shape {
             let rim: Vec<(f64, f64)> = (0..32)
                 .map(|k| {
-                    let a = k as f64 * std::f64::consts::TAU / 32.0;
+                    let a = f64::from(k) * std::f64::consts::TAU / 32.0;
                     (cx + rim_r * a.cos(), cy + rim_r * a.sin())
                 })
                 .collect();
-            rim_escaped |= rim_escapes(&outer, &rim);
+            rim_escaped |= pokes_out(&outer, &rim);
             Shape::MultiPolygon {
                 contours: vec![outer, rim],
                 weights: vec![1, -1],
             }
         };
         let shape = match ap {
-            Aperture::Circle(Circle { diameter, .. }) => match hole_mm {
-                None => Shape::disc(cx, cy, diameter * s / 2.0),
-                Some(_) => {
-                    // The outer rim as a 64-gon (radius error < 0.13%).
-                    let r = diameter * s / 2.0;
-                    let outer: Vec<(f64, f64)> = (0..64)
-                        .map(|k| {
-                            let a = k as f64 * std::f64::consts::TAU / 64.0;
-                            (cx + r * a.cos(), cy + r * a.sin())
-                        })
-                        .collect();
-                    with_hole(outer)
-                }
-            },
+            Aperture::Circle(Circle { diameter, .. }) if hole_mm.is_none() => {
+                Shape::disc(cx, cy, diameter * s / 2.0)
+            }
+            Aperture::Circle(Circle { diameter, .. }) => {
+                // The outer rim as a 64-gon (radius error < 0.13%).
+                let r = diameter * s / 2.0;
+                let outer: Vec<(f64, f64)> = (0..64)
+                    .map(|k| {
+                        let a = f64::from(k) * std::f64::consts::TAU / 64.0;
+                        (cx + r * a.cos(), cy + r * a.sin())
+                    })
+                    .collect();
+                with_hole(outer)
+            }
             Aperture::Rectangle(Rectangular { x, y, .. }) => {
                 let rect = rect_polygon(cx, cy, x * s, y * s, 0.0);
                 match (hole_mm, rect) {
@@ -2301,14 +2319,19 @@ impl<'a> Plotter<'a> {
                     (_, poly) => poly,
                 }
             }
-            Aperture::Macro(name, args) => {
-                match self.doc.commands().iter().find_map(|c| match c {
+            Aperture::Macro(name, args) => self
+                .doc
+                .commands()
+                .iter()
+                .find_map(|c| match c {
                     Command::ExtendedCode(ExtendedCode::ApertureMacro(m)) if &m.name == name => {
                         Some(m)
                     }
                     _ => None,
-                }) {
-                    Some(m) => {
+                })
+                .map_or_else(
+                    || Shape::disc(cx, cy, MACRO_FALLBACK_DISC_MM),
+                    |m| {
                         let ms = instantiate_macro(m, args.as_deref().unwrap_or(&[]), cx, cy, s);
                         if ms.hull.len() >= 3 {
                             if ms.holes.is_empty() {
@@ -2338,10 +2361,8 @@ impl<'a> Plotter<'a> {
                             // copper into one net.
                             Shape::disc(cx, cy, MACRO_FALLBACK_DISC_MM)
                         }
-                    }
-                    None => Shape::disc(cx, cy, MACRO_FALLBACK_DISC_MM),
-                }
-            }
+                    },
+                ),
         };
         Some((shape, rim_escaped))
     }
@@ -2371,11 +2392,28 @@ impl<'a> Plotter<'a> {
         });
     }
 
+    /// The signed sweep from start angle `a0` to end angle `a1` in the arc's
+    /// direction, with the end moved by whole turns until it lies strictly past
+    /// the start: positive counter-clockwise, negative clockwise.
+    #[allow(clippy::while_float, reason = "atan2 angles bound it to two turns")]
+    fn signed_sweep(a0: f64, mut a1: f64, ccw: bool) -> f64 {
+        use std::f64::consts::TAU;
+        if ccw {
+            while a1 <= a0 {
+                a1 += TAU;
+            }
+        } else {
+            while a1 >= a0 {
+                a1 -= TAU;
+            }
+        }
+        a1 - a0
+    }
+
     /// Single-quadrant (G74) centre selection: try the four ±I,±J offsets and
     /// return the one whose start/end radii agree best while keeping the arc
     /// sweep within 90 degrees. `None` if no candidate has a positive radius.
     fn single_quadrant_center(
-        &self,
         sx: f64,
         sy: f64,
         ex: f64,
@@ -2384,28 +2422,18 @@ impl<'a> Plotter<'a> {
         oy: f64,
         ccw: bool,
     ) -> Option<(f64, f64)> {
-        use std::f64::consts::{FRAC_PI_2, TAU};
+        use std::f64::consts::FRAC_PI_2;
         let mut best: Option<(f64, f64)> = None;
         let mut best_score = f64::INFINITY;
         for &(sox, soy) in &[(ox, oy), (-ox, oy), (ox, -oy), (-ox, -oy)] {
             let (cx, cy) = (sx + sox, sy + soy);
-            let rs = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+            let rs = (sx - cx).hypot(sy - cy);
             if rs <= f64::EPSILON {
                 continue;
             }
-            let re = ((ex - cx).powi(2) + (ey - cy).powi(2)).sqrt();
+            let re = (ex - cx).hypot(ey - cy);
             let a0 = (sy - cy).atan2(sx - cx);
-            let mut a1 = (ey - cy).atan2(ex - cx);
-            if ccw {
-                while a1 <= a0 {
-                    a1 += TAU;
-                }
-            } else {
-                while a1 >= a0 {
-                    a1 -= TAU;
-                }
-            }
-            let sweep = (a1 - a0).abs();
+            let sweep = Self::signed_sweep(a0, (ey - cy).atan2(ex - cx), ccw).abs();
             // Consistent radius, and penalise a sweep past the 90-degree
             // single-quadrant limit so the correct centre wins.
             let score = (rs - re).abs() + if sweep > FRAC_PI_2 + 1e-6 { 1e3 } else { 0.0 };
@@ -2419,16 +2447,13 @@ impl<'a> Plotter<'a> {
 
     /// The I/J arc offset of a circular D01, scaled to board millimetres
     /// ((0, 0) when the offset, or either axis, is absent).
-    fn offset_mm(&self, offset: &Option<CoordinateOffset>) -> (f64, f64) {
-        offset
-            .as_ref()
-            .map(|o| {
-                (
-                    o.x.as_ref().map(num).unwrap_or(0.0) * self.to_mm,
-                    o.y.as_ref().map(num).unwrap_or(0.0) * self.to_mm,
-                )
-            })
-            .unwrap_or((0.0, 0.0))
+    fn offset_mm(&self, offset: Option<&CoordinateOffset>) -> (f64, f64) {
+        offset.map_or((0.0, 0.0), |o| {
+            (
+                o.x.map_or(0.0, num) * self.to_mm,
+                o.y.map_or(0.0, num) * self.to_mm,
+            )
+        })
     }
 
     /// Resolve a circular D01's geometry: centre, radius, start angle and
@@ -2454,29 +2479,17 @@ impl<'a> Plotter<'a> {
             // candidate whose start- and end-radius agree and whose sweep (in
             // the requested direction) is <= 90 degrees; the single-quadrant
             // guarantee. Fall back to the multi-quadrant formula if none fits.
-            self.single_quadrant_center(sx, sy, ex, ey, ox, oy, ccw)
-                .unwrap_or((sx + ox, sy + oy))
+            Self::single_quadrant_center(sx, sy, ex, ey, ox, oy, ccw).unwrap_or((sx + ox, sy + oy))
         } else {
             (sx + ox, sy + oy)
         };
-        let radius = ((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy)).sqrt();
+        let radius = (sx - cx).hypot(sy - cy);
         if radius <= f64::EPSILON {
             return None;
         }
         let a0 = (sy - cy).atan2(sx - cx);
-        let mut a1 = (ey - cy).atan2(ex - cx);
-        // Choose sweep direction.
-        use std::f64::consts::TAU;
-        if ccw {
-            while a1 <= a0 {
-                a1 += TAU;
-            }
-        } else {
-            while a1 >= a0 {
-                a1 -= TAU;
-            }
-        }
-        Some((cx, cy, radius, a0, a1 - a0))
+        let sweep = Self::signed_sweep(a0, (ey - cy).atan2(ex - cx), ccw);
+        Some((cx, cy, radius, a0, sweep))
     }
 
     /// The flattened arc: `ARC_SEGMENTS` points sampled from just past the
@@ -2498,8 +2511,8 @@ impl<'a> Plotter<'a> {
         };
         (1..=ARC_SEGMENTS)
             .map(|i| {
-                let a = a0 + sweep * (i as f64 / ARC_SEGMENTS as f64);
-                (cx + radius * a.cos(), cy + radius * a.sin())
+                let a = sweep.mul_add(f64::from(i) / f64::from(ARC_SEGMENTS), a0);
+                (radius.mul_add(a.cos(), cx), radius.mul_add(a.sin(), cy))
             })
             .collect()
     }
@@ -2641,6 +2654,7 @@ fn contour_area2(c: &[(f64, f64)]) -> f64 {
 /// angle is convex and the bisector of the two edges leaving it points into the
 /// interior. A short step along that bisector, a thousandth of the shorter
 /// adjacent edge, therefore lands strictly inside and on no vertex.
+#[allow(clippy::many_single_char_names, reason = "geometric notation")]
 pub(super) fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
     let n = poly.len();
     if n < 3 {
@@ -2717,7 +2731,10 @@ pub(super) fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
         .hypot(p.1 - c.1)
         .min((q.0 - c.0).hypot(q.1 - c.1));
     let step = (short * 1e-3).max(diag * 1e-6);
-    (c.0 + bx / blen * step, c.1 + by / blen * step)
+    (
+        (bx / blen).mul_add(step, c.0),
+        (by / blen).mul_add(step, c.1),
+    )
 }
 
 /// A representative point in the shape's actual filled copper.
@@ -2730,8 +2747,8 @@ pub(super) fn interior_witness(poly: &[(f64, f64)]) -> (f64, f64) {
 pub(super) fn filled_interior_witness(shape: &Shape) -> Option<(f64, f64)> {
     match shape {
         Shape::Capsule(capsule) => Some((
-            (capsule.ax + capsule.bx) / 2.0,
-            (capsule.ay + capsule.by) / 2.0,
+            f64::midpoint(capsule.ax, capsule.bx),
+            f64::midpoint(capsule.ay, capsule.by),
         )),
         Shape::Polygon { pts, .. } => Some(interior_witness(pts)),
         Shape::MultiPolygon { contours, weights } => {
@@ -2911,12 +2928,12 @@ fn stadium_outline(c: &Capsule) -> Vec<(f64, f64)> {
     let mut pts = Vec::with_capacity(34);
     // Cap around B (from +90° to -90° relative to the axis), then around A.
     for k in 0..=16 {
-        let a = base_a - k as f64 * std::f64::consts::PI / 16.0;
-        pts.push((c.bx + c.r * a.cos(), c.by + c.r * a.sin()));
+        let a = base_a - f64::from(k) * std::f64::consts::PI / 16.0;
+        pts.push((c.r.mul_add(a.cos(), c.bx), c.r.mul_add(a.sin(), c.by)));
     }
     for k in 0..=16 {
-        let a = base_a + std::f64::consts::PI - k as f64 * std::f64::consts::PI / 16.0;
-        pts.push((c.ax + c.r * a.cos(), c.ay + c.r * a.sin()));
+        let a = base_a + std::f64::consts::PI - f64::from(k) * std::f64::consts::PI / 16.0;
+        pts.push((c.r.mul_add(a.cos(), c.ax), c.r.mul_add(a.sin(), c.ay)));
     }
     pts
 }
@@ -2937,12 +2954,12 @@ fn rect_polygon(cx: f64, cy: f64, w: f64, h: f64, _r: f64) -> Shape {
 
 /// Regular n-gon inscribed in a circle of radius `r`, rotated `rot_deg`.
 fn regular_polygon(cx: f64, cy: f64, r: f64, vertices: u8, rot_deg: f64) -> Shape {
-    let n = vertices.max(3) as usize;
+    let n = vertices.max(3);
     let rot = rot_deg.to_radians();
-    let mut pts = Vec::with_capacity(n);
+    let mut pts = Vec::with_capacity(usize::from(n));
     for i in 0..n {
-        let a = rot + (i as f64) * std::f64::consts::TAU / n as f64;
-        pts.push((cx + r * a.cos(), cy + r * a.sin()));
+        let a = rot + f64::from(i) * std::f64::consts::TAU / f64::from(n);
+        pts.push((r.mul_add(a.cos(), cx), r.mul_add(a.sin(), cy)));
     }
     Shape::Polygon { pts, r: 0.0 }
 }
@@ -2950,11 +2967,13 @@ fn regular_polygon(cx: f64, cy: f64, r: f64, vertices: u8, rot_deg: f64) -> Shap
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gerber::connect::reconstruct;
 
     /// The indexed validity check must agree with geo's on every polygon,
     /// including the degenerate ones a small integer grid produces: collinear
     /// overlaps, spikes, repeated points, touching and crossing holes.
     #[test]
+    #[allow(clippy::cast_precision_loss, reason = "small grid coordinates")]
     fn indexed_validity_and_contact_match_geo_exactly() {
         use ::geo::Validation;
         let mut seed = 0x2545_f491_4f6c_dd1d_u64;
@@ -3019,7 +3038,7 @@ mod tests {
             // representation accepted by the overlay adapter.
             weights: vec![1, 1],
         };
-        let mut copper = vec![CopperPrim::bare(original.clone(), PrimKind::Region)];
+        let mut copper = vec![CopperPrim::bare(original, PrimKind::Region)];
         apply_clears(
             &mut copper,
             vec![Clear {
@@ -3057,6 +3076,7 @@ M02*
 ";
 
     #[test]
+    #[allow(clippy::cast_precision_loss, reason = "vertex counts are small")]
     fn parses_track_and_pad() {
         let prims = parse_layer(SIMPLE).unwrap();
         // One track (the draw) and one flash (the rect pad).
@@ -3432,8 +3452,7 @@ M02*
 ",
         )
         .unwrap();
-        let (_board, stats) =
-            crate::gerber::connect::reconstruct("clear-over-track", vec![prims], vec![], vec![]);
+        let (_board, stats) = reconstruct("clear-over-track", vec![prims], &[], &[]);
         assert_eq!(stats.n_nets, 2, "the clear flash opens the track");
     }
 
@@ -3482,8 +3501,7 @@ M02*
             2,
             "the waist cut produces two region primitives"
         );
-        let (_board, stats) =
-            crate::gerber::connect::reconstruct("split-concave-pour", vec![prims], vec![], vec![]);
+        let (_board, stats) = reconstruct("split-concave-pour", vec![prims], &[], &[]);
         assert_eq!(stats.n_nets, 2, "the lobes are electrically separate");
     }
 
@@ -3567,8 +3585,7 @@ M02*
 "
         ))
         .unwrap();
-        let (_board, stats) =
-            crate::gerber::connect::reconstruct("later-region-bridge", vec![prims], vec![], vec![]);
+        let (_board, stats) = reconstruct("later-region-bridge", vec![prims], &[], &[]);
         assert_eq!(stats.n_nets, 1, "the later spoke joins island and pour");
         // Bridged by a DRAW instead: its finite width, not only centre-line
         // samples, reaches both island and plane.
@@ -3577,8 +3594,7 @@ M02*
         ))
         .unwrap();
         assert!(prims.iter().any(|p| p.kind == PrimKind::Track));
-        let (_board, stats) =
-            crate::gerber::connect::reconstruct("track-bridge", vec![prims], vec![], vec![]);
+        let (_board, stats) = reconstruct("track-bridge", vec![prims], &[], &[]);
         assert_eq!(stats.n_nets, 1, "the bridge is one physical conductor");
     }
 
@@ -3639,8 +3655,8 @@ M02*
             .filter(|p| p.kind == PrimKind::Region)
             .collect();
         assert_eq!(pours.len(), 2, "the cell is repeated twice");
-        for (i, p) in pours.iter().enumerate() {
-            let dx = 25.0 * i as f64;
+        for (i, p) in (0u32..).zip(&pours) {
+            let dx = 25.0 * f64::from(i);
             let Shape::MultiPolygon { contours, .. } = &p.shape else {
                 panic!("copy {i} kept no void, so it is a solid slab");
             };
@@ -3681,7 +3697,7 @@ M02*
         for p in &tracks {
             if let Shape::Capsule(c) = &p.shape {
                 for (x, y) in [(c.ax, c.ay), (c.bx, c.by)] {
-                    let radius = (x * x + y * y).sqrt();
+                    let radius = x.hypot(y);
                     assert!(
                         (radius - 1.0).abs() < 0.05,
                         "arc point ({x:.3},{y:.3}) is {radius:.3} mm from the origin, \
@@ -3728,7 +3744,7 @@ M02*
         // Every boundary vertex sits on the 1 mm circle (the same centre/sweep
         // math as a stroked arc), and the disc INTERIOR is inside the polygon.
         for &(x, y) in pts {
-            let radius = (x * x + y * y).sqrt();
+            let radius = x.hypot(y);
             assert!(
                 (radius - 1.0).abs() < 1e-6,
                 "contour vertex ({x:.4},{y:.4}) is off the arc circle"
@@ -3800,7 +3816,7 @@ M02*
             Shape::disc(97.5, 2.5, 0.5),
             PrimKind::Flash,
         ));
-        let (_board, stats) = crate::gerber::connect::reconstruct("t", vec![layer], vec![], vec![]);
+        let (_board, stats) = reconstruct("t", vec![layer], &[], &[]);
         assert_eq!(
             stats.n_nets, 2,
             "one pad per island: two isolated nets, not a false short"
@@ -3809,6 +3825,7 @@ M02*
 
     #[test]
     fn region_hole_contour_is_cut_out_not_filled() {
+        use crate::gerber::geo::point_in_contours;
         // A region with a hole: outer square [0,20]x[0,20], inner square hole
         // [8,12]x[8,12] as a second contour. The ring is copper; the hole
         // interior is NOT. A flat concatenation bridges the two contours
@@ -3842,7 +3859,6 @@ M02*
             panic!("a region with a hole must carry both contours, not one flat ring");
         };
         assert_eq!(contours.len(), 2, "the outer boundary and its hole");
-        use crate::gerber::geo::point_in_contours;
         assert!(
             point_in_contours(2.0, 15.0, contours),
             "a point in the ring is copper"
@@ -3985,7 +4001,7 @@ M02*
         let names_of = |a: &X2Attrs| {
             a.net_names()
                 .iter()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>()
         };
         assert_eq!(names_of(&flashes[0].attrs), vec!["VCC"]);
@@ -4068,9 +4084,9 @@ M02*
              D10*\n\
              X0Y0D03*\n\
              D11*\n\
-             X{}Y0D03*\n\
+             X{:.0}Y0D03*\n\
              M02*\n",
-            (foreign_x_mm * 1e6) as i64
+            foreign_x_mm * 1e6
         )
     }
 
@@ -4085,7 +4101,7 @@ M02*
             matches!(prims[0].shape, Shape::MultiPolygon { .. }),
             "a voided macro flash carries its hole contour"
         );
-        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        let (_b, s) = reconstruct("t", vec![prims], &[], &[]);
         assert_eq!(
             s.n_nets, 2,
             "copper inside the macro's void is NOT touching the pad"
@@ -4093,7 +4109,7 @@ M02*
 
         // The same foreign disc moved onto the ring: genuinely touching.
         let prims = parse_layer(&donut_job(1.6)).unwrap();
-        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        let (_b, s) = reconstruct("t", vec![prims], &[], &[]);
         assert_eq!(s.n_nets, 1, "copper on the ring is a genuine overlap");
     }
 
@@ -4107,8 +4123,8 @@ M02*
         let job = |fx_mm: f64| {
             format!(
                 "%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,2.000000X1.000000*%\n%ADD11C,0.200000*%\n\
-                 D10*\nX0Y0D03*\nD11*\nX{}Y0D03*\nM02*\n",
-                (fx_mm * 1e6) as i64
+                 D10*\nX0Y0D03*\nD11*\nX{:.0}Y0D03*\nM02*\n",
+                fx_mm * 1e6
             )
         };
         let prims = parse_layer(&job(0.0)).unwrap();
@@ -4116,10 +4132,10 @@ M02*
             matches!(prims[0].shape, Shape::MultiPolygon { .. }),
             "a holed flash carries its hole contour"
         );
-        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        let (_b, s) = reconstruct("t", vec![prims], &[], &[]);
         assert_eq!(s.n_nets, 2, "copper in the hole is not on the pad");
         let prims = parse_layer(&job(0.8)).unwrap();
-        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        let (_b, s) = reconstruct("t", vec![prims], &[], &[]);
         assert_eq!(s.n_nets, 1, "copper on the annular ring is");
     }
 

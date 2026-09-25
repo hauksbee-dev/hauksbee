@@ -91,8 +91,9 @@ pub struct PlatedHole {
 
 impl PlatedHole {
     /// A round plated hole that reaches the whole stack.
-    pub fn through(x: f64, y: f64, diameter: f64) -> Self {
-        PlatedHole {
+    #[must_use]
+    pub const fn through(x: f64, y: f64, diameter: f64) -> Self {
+        Self {
             x,
             y,
             diameter,
@@ -145,12 +146,21 @@ impl PlatedHole {
 /// `layers` is top-to-bottom; each entry is that layer's copper primitives.
 /// `holes` are plated through-holes (vias + PTH pads). `placements` are the
 /// placed components from the P&P file (may be empty: copper-only mode).
+///
+/// # Panics
+///
+/// Never in practice: the only `expect` reads the pin attribute of a flash
+/// that was collected precisely because it carries one.
+#[allow(clippy::too_many_lines, reason = "staged pipeline over shared state")]
+#[allow(clippy::cast_possible_truncation, reason = "rounded pad cells")]
+#[allow(clippy::cast_precision_loss, reason = "pad counts are small")]
 pub fn reconstruct(
     name: &str,
     layers: Vec<Vec<CopperPrim>>,
-    holes: Vec<PlatedHole>,
-    placements: Vec<Placement>,
+    holes: &[PlatedHole],
+    placements: &[Placement],
 ) -> (ExtractedBoard, ReconStats) {
+    type FilmComp = (Vec<Pin>, std::collections::HashSet<(i64, i64)>, Vec<usize>);
     // ── 1. Flatten every primitive into one global vector, remembering layer ──
     // Plated hits become a barrel primitive on each layer their span reaches,
     // tagged `PrimKind::Via`, plus a stitch joining those barrels to each other.
@@ -179,7 +189,7 @@ pub fn reconstruct(
     let mut hole_prims: Vec<Vec<usize>> = Vec::with_capacity(holes.len());
     let mut n_slots = 0usize;
     let mut refused_span_holes = 0usize;
-    for h in &holes {
+    for h in holes {
         if h.to.is_some() {
             n_slots += 1;
         }
@@ -272,19 +282,6 @@ pub fn reconstruct(
             .filter(|&gi| prims[gi].kind == PrimKind::Region)
             .collect();
         if !regions.is_empty() {
-            let _ = li;
-            // Index regions by bbox so each primitive only tests the (usually
-            // one or two) pours that actually cover its location, not all of a
-            // board's hundreds of separate pour islands.
-            let region_tree = RTree::bulk_load(
-                regions
-                    .iter()
-                    .map(|&rgi| BoundsLeaf {
-                        bounds: prims[rgi].bounds,
-                        idx: rgi,
-                    })
-                    .collect(),
-            );
             // Grid-accelerate containment for *large* pours: a board-spanning
             // plane carries tens of thousands of vertices and is tested against
             // every primitive, so a raw even-odd test there is quadratic; the
@@ -302,6 +299,24 @@ pub fn reconstruct(
             // twice for the whole pass. Only a `Polygon`, which has to be wrapped
             // in a one-contour slice to be gridded at all, is materialised.
             type Contour = Vec<(f64, f64)>;
+            // Every gridded pour's grid is alive at once, and a 4096-a-side grid is
+            // 16.8 MB of cells, so a layer of many detailed pours has to share a
+            // budget rather than each take the ceiling. 64 M cells is 64 MB for the
+            // layer; up to four dense planes can take the ceiling.
+            const CELL_BUDGET: usize = 64 << 20;
+            let _ = li;
+            // Index regions by bbox so each primitive only tests the (usually
+            // one or two) pours that actually cover its location, not all of a
+            // board's hundreds of separate pour islands.
+            let region_tree = RTree::bulk_load(
+                regions
+                    .iter()
+                    .map(|&rgi| BoundsLeaf {
+                        bounds: prims[rgi].bounds,
+                        idx: rgi,
+                    })
+                    .collect(),
+            );
             let mut owned: Vec<(usize, Vec<Contour>, Vec<i16>)> = Vec::new();
             let mut borrowed: Vec<(usize, &[Contour], &[i16])> = Vec::new();
             for &rgi in &regions {
@@ -320,18 +335,13 @@ pub fn reconstruct(
                 }
             }
             let n_gridded = owned.len() + borrowed.len();
-            // Every gridded pour's grid is alive at once, and a 4096-a-side grid is
-            // 16.8 MB of cells, so a layer of many detailed pours has to share a
-            // budget rather than each take the ceiling. 64 M cells is 64 MB for the
-            // layer; up to four dense planes can take the ceiling.
-            const CELL_BUDGET: usize = 64 << 20;
             let side_ceiling = {
                 let per_pour = CELL_BUDGET / n_gridded.max(1);
                 // The lower clamp wins over the division, so past about 16000
                 // gridded pours the budget stops being a bound and each still takes
                 // 64 cells a side. That needs a film whose own geometry is orders
                 // larger than its grids.
-                ((per_pour as f64).sqrt() as usize).clamp(64, 4096)
+                per_pour.isqrt().clamp(64, 4096)
             };
             let region_grids: HashMap<usize, super::geo::PolyGrid> = owned
                 .iter()
@@ -404,8 +414,11 @@ pub fn reconstruct(
                     // Sample the segment so a long track that dips into a pour
                     // mid-span is caught even if both ends are outside.
                     for k in 1..4 {
-                        let t = k as f64 / 4.0;
-                        test_pts.push((c.ax + (c.bx - c.ax) * t, c.ay + (c.by - c.ay) * t));
+                        let t = f64::from(k) / 4.0;
+                        test_pts.push((
+                            (c.bx - c.ax).mul_add(t, c.ax),
+                            (c.by - c.ay).mul_add(t, c.ay),
+                        ));
                     }
                 }
                 for &rgi in &near_regions {
@@ -747,7 +760,6 @@ pub fn reconstruct(
     // Components the FILM names that the P&P does not place (or there is no
     // P&P at all): refdes -> (pads, dedupe cells, layer tally). BTreeMap so
     // film-only components come out in a stable order.
-    type FilmComp = (Vec<Pin>, std::collections::HashSet<(i64, i64)>, Vec<usize>);
     let mut film_comps: std::collections::BTreeMap<String, FilmComp> =
         std::collections::BTreeMap::new();
 
@@ -780,30 +792,23 @@ pub fn reconstruct(
             };
             assigned_flashes += 1;
             x2_bound_pads += 1;
-            match refdes_to_placement.get(&*refdes) {
-                Some(&ci) => {
-                    // The same physical pad flashed on several films (a THT
-                    // pad's top+bottom rings) collapses to one, like before.
-                    if comp_cells[ci].insert(cell) {
-                        comp_pads[ci].push(pin);
-                    }
+            if let Some(&ci) = refdes_to_placement.get(&*refdes) {
+                // The same physical pad flashed on several films (a THT
+                // pad's top+bottom rings) collapses to one, like before.
+                if comp_cells[ci].insert(cell) {
+                    comp_pads[ci].push(pin);
                 }
-                None => {
-                    let entry = film_comps.entry(refdes.to_string()).or_default();
-                    if entry.1.insert(cell) {
-                        entry.0.push(pin);
-                        entry.2.push(prim_layer[gi]);
-                    }
+            } else {
+                let entry = film_comps.entry(refdes.to_string()).or_default();
+                if entry.1.insert(cell) {
+                    entry.0.push(pin);
+                    entry.2.push(prim_layer[gi]);
                 }
             }
         }
         // The film's pin names order the pads (numeric-aware, so "10" follows
         // "2"); claim order meant nothing once numbers stopped being invented.
-        fn pin_key(p: &Pin) -> (bool, Option<u64>, String) {
-            let n = p.number.parse::<u64>().ok();
-            (n.is_none(), n, p.number.clone())
-        }
-        for pads in comp_pads.iter_mut() {
+        for pads in &mut comp_pads {
             pads.sort_by_key(pin_key);
         }
         for (pads, _, _) in film_comps.values_mut() {
@@ -834,7 +839,7 @@ pub fn reconstruct(
                     }
                 }
                 let d = (pl.x - cx).hypot(pl.y - cy);
-                if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                if best.is_none_or(|(bd, _)| d < bd) {
                     best = Some((d, leaf.idx));
                 }
             }
@@ -1046,6 +1051,8 @@ impl ReconStats {
     /// An unmatched flash is still copper and still joins whatever net it
     /// touches; what it lacks is a component and a pin, which is what makes
     /// every per-part figure partial.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss, reason = "flash counts are small")]
     pub fn coverage_notes(&self) -> Vec<String> {
         let mut out = self.notes.clone();
         if self.unassigned_flashes > 0 {
@@ -1143,7 +1150,7 @@ fn footprint_half_extent(package: &str) -> f64 {
     // parse the `RxC` grid and the `P<pitch>mm` if present (default 2.54mm).
     if let Some((rows, cols)) = grid_hint(&p) {
         let pitch = pitch_hint(&p).unwrap_or(2.54);
-        let span = (rows.max(cols) as f64) * pitch;
+        let span = f64::from(rows.max(cols)) * pitch;
         // KiCad places a header's origin at pin 1 (a corner), not the body
         // centre, so pads extend the *full* span from the placed point in one
         // direction. Use the whole span (plus a pad margin) as the half-extent
@@ -1187,21 +1194,27 @@ impl GridWindow {
     /// Whether the offset (dx, dy) from the placement point falls inside the
     /// oriented window (either orientation of the row axis).
     fn contains(&self, dx: f64, dy: f64) -> bool {
-        let u = (dx * self.cos + dy * self.sin).abs();
-        let v = (-dx * self.sin + dy * self.cos).abs();
+        let u = dx.mul_add(self.cos, dy * self.sin).abs();
+        let v = (-dx).mul_add(self.sin, dy * self.cos).abs();
         (u <= self.long && v <= self.cross) || (u <= self.cross && v <= self.long)
     }
+}
+
+/// Numeric-aware pad ordering key, so pin "10" follows pin "2".
+fn pin_key(p: &Pin) -> (bool, Option<u64>, String) {
+    let n = p.number.parse::<u64>().ok();
+    (n.is_none(), n, p.number.clone())
 }
 
 /// The oriented window for `package`, if it names a pin grid.
 fn grid_window(package: &str, rotation_deg: f64) -> Option<GridWindow> {
     let p = package.to_ascii_lowercase();
-    let (rows, cols) = grid_hint(&p)?;
+    let (rows, columns) = grid_hint(&p)?;
     let pitch = pitch_hint(&p).unwrap_or(2.54);
     // Same margins as `footprint_half_extent`: the row span is the FULL grid
     // length (KiCad headers origin at pin 1), plus one pitch of slack.
-    let long = (rows.max(cols) as f64) * pitch + pitch;
-    let cross = (rows.min(cols) as f64) * pitch + pitch;
+    let long = f64::from(rows.max(columns)).mul_add(pitch, pitch);
+    let cross = f64::from(rows.min(columns)).mul_add(pitch, pitch);
     let (sin, cos) = rotation_deg.to_radians().sin_cos();
     Some(GridWindow {
         long,
@@ -1235,7 +1248,7 @@ fn grid_hint(p: &str) -> Option<(u32, u32)> {
             let right: String = bytes[i + 1..b].iter().collect();
             if let (Ok(l), Ok(r)) = (left.parse::<u32>(), right.parse::<u32>()) {
                 // A pin grid (counts) not a body-size (would have a '.' or 'mm').
-                let is_mm = p.get(b..b + 2).map(|s| s == "mm").unwrap_or(false)
+                let is_mm = p.get(b..b + 2).is_some_and(|s| s == "mm")
                     || left.contains('.')
                     || right.contains('.');
                 if l >= 1 && r >= 1 && l <= 200 && r <= 200 && !is_mm {
@@ -1390,7 +1403,7 @@ mod tests {
             cap(0.0, 0.0, 5.0, 0.0, 0.1, PrimKind::Track),
             cap(5.0, 0.0, 5.0, 0.0, 0.5, PrimKind::Flash),
         ];
-        let (_board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        let (_board, stats) = reconstruct("t", vec![layer], &[], &[]);
         assert_eq!(stats.n_nets, 1, "all copper is one conductor");
         assert_eq!(stats.total_flashes, 2);
     }
@@ -1401,7 +1414,7 @@ mod tests {
             cap(0.0, 0.0, 0.0, 0.0, 0.5, PrimKind::Flash),
             cap(10.0, 0.0, 10.0, 0.0, 0.5, PrimKind::Flash),
         ];
-        let (_b, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        let (_b, stats) = reconstruct("t", vec![layer], &[], &[]);
         assert_eq!(stats.n_nets, 2);
     }
 
@@ -1437,12 +1450,8 @@ mod tests {
         let plane = CopperPrim::bare(plane_shape, PrimKind::Region);
         let island = CopperPrim::bare(island_shape, PrimKind::Region);
 
-        let (_board, stats) = reconstruct(
-            "holed-region-witness",
-            vec![vec![plane, island]],
-            vec![],
-            vec![],
-        );
+        let (_board, stats) =
+            reconstruct("holed-region-witness", vec![vec![plane, island]], &[], &[]);
         assert_eq!(
             stats.n_nets, 2,
             "copper isolated inside a real hole must not union back to its surrounding plane"
@@ -1459,7 +1468,7 @@ mod tests {
             cap(0.0, 0.0, 0.0, 0.0, 1.0, PrimKind::Region),
             cap(10.0, 0.0, 10.0, 0.0, 1.0, PrimKind::Region),
         ];
-        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        let (board, stats) = reconstruct("t", vec![layer], &[], &[]);
         assert_eq!(stats.n_nets, 2, "two separate pours are two nets");
         let gnd = board
             .nets
@@ -1478,11 +1487,11 @@ mod tests {
         let top = vec![cap(0.0, 0.0, 0.0, 0.0, 0.5, PrimKind::Flash)];
         let bot = vec![cap(0.0, 0.0, 0.0, 0.0, 0.5, PrimKind::Flash)];
         // Without a hole, the two layers are independent: 2 nets.
-        let (_b, s0) = reconstruct("t", vec![top.clone(), bot.clone()], vec![], vec![]);
+        let (_b, s0) = reconstruct("t", vec![top.clone(), bot.clone()], &[], &[]);
         assert_eq!(s0.n_nets, 2);
         // With a plated hole at the shared point: 1 net.
         let hole = PlatedHole::through(0.0, 0.0, 0.3);
-        let (_b, s1) = reconstruct("t", vec![top, bot], vec![hole], vec![]);
+        let (_b, s1) = reconstruct("t", vec![top, bot], &[hole], &[]);
         assert_eq!(s1.n_nets, 1, "via stitches top and bottom into one net");
     }
 
@@ -1501,17 +1510,12 @@ mod tests {
             to: None,
             span: LayerSpan::Range { from: 0, to: 1 },
         };
-        let (_b, s) = reconstruct("t", layers.clone(), vec![blind], vec![]);
+        let (_b, s) = reconstruct("t", layers.clone(), &[blind], &[]);
         assert_eq!(s.n_nets, 3, "a blind L1-L2 via joins only L1 and L2");
 
         // The same drill as a through-hole is the one net, so the fixture is
         // not passing because the geometry happened not to touch.
-        let (_b, s_thru) = reconstruct(
-            "t",
-            layers,
-            vec![PlatedHole::through(0.0, 0.0, 0.3)],
-            vec![],
-        );
+        let (_b, s_thru) = reconstruct("t", layers, &[PlatedHole::through(0.0, 0.0, 0.3)], &[]);
         assert_eq!(s_thru.n_nets, 1);
     }
 
@@ -1527,7 +1531,7 @@ mod tests {
             to: None,
             span: LayerSpan::Range { from: 1, to: 2 },
         };
-        let (_b, s) = reconstruct("t", vec![pad(), pad(), pad(), pad()], vec![buried], vec![]);
+        let (_b, s) = reconstruct("t", vec![pad(), pad(), pad(), pad()], &[buried], &[]);
         assert_eq!(s.n_nets, 3);
     }
 
@@ -1544,7 +1548,7 @@ mod tests {
             to: None,
             span: LayerSpan::Range { from: 0, to: 5 },
         };
-        let (_b, s) = reconstruct("t", vec![pad(), pad()], vec![bad], vec![]);
+        let (_b, s) = reconstruct("t", vec![pad(), pad()], &[bad], &[]);
         assert_eq!(s.n_nets, 2);
         assert_eq!(s.refused_span_holes, 1);
     }
@@ -1560,7 +1564,7 @@ mod tests {
             cap(0.0, 0.0, 0.0, 0.0, 0.5, PrimKind::Flash),
             cap(6.0, 0.0, 6.0, 0.0, 0.5, PrimKind::Flash),
         ];
-        let (_b, s0) = reconstruct("t", vec![layer.clone()], vec![], vec![]);
+        let (_b, s0) = reconstruct("t", vec![layer.clone()], &[], &[]);
         assert_eq!(s0.n_nets, 2);
 
         let slot = PlatedHole {
@@ -1570,18 +1574,13 @@ mod tests {
             to: Some((6.0, 0.0)),
             span: LayerSpan::Through,
         };
-        let (_b, s1) = reconstruct("t", vec![layer.clone()], vec![slot], vec![]);
+        let (_b, s1) = reconstruct("t", vec![layer.clone()], &[slot], &[]);
         assert_eq!(s1.n_nets, 1, "the plated wall joins both pads");
         assert_eq!(s1.n_slots, 1);
 
         // The same hit read as a round hole at the start point (what the reader
         // did before G85 was understood) leaves the far pad on its own net.
-        let (_b, s2) = reconstruct(
-            "t",
-            vec![layer],
-            vec![PlatedHole::through(0.0, 0.0, 0.6)],
-            vec![],
-        );
+        let (_b, s2) = reconstruct("t", vec![layer], &[PlatedHole::through(0.0, 0.0, 0.6)], &[]);
         assert_eq!(
             s2.n_nets, 2,
             "a round hole at the start reaches only one pad"
@@ -1624,7 +1623,7 @@ mod tests {
             x2_pad(1.0, 0.0, "R1", "2", "GND"),
             x2_pad(0.0, 0.0, "R1", "1", "VCC"),
         ];
-        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![placement("R1", 0.5, 0.0)]);
+        let (board, stats) = reconstruct("t", vec![layer], &[], &[placement("R1", 0.5, 0.0)]);
         assert_eq!(stats.x2_bound_pads, 2);
         assert_eq!(board.components.len(), 1);
         let pins = &board.components[0].pins;
@@ -1655,7 +1654,7 @@ mod tests {
             x2_pad(1.0, 0.0, "U3", "2", "GND"),
             x2_pad(5.0, 5.0, "R9", "1", "GND"),
         ];
-        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        let (board, stats) = reconstruct("t", vec![layer], &[], &[]);
         assert_eq!(stats.x2_film_components, 2);
         let refs: Vec<&str> = board
             .components
@@ -1681,7 +1680,7 @@ mod tests {
             x2_pad(0.0, 0.0, "R1", "1", "SCL"),
             x2_pad(10.0, 0.0, "U1", "14", "SCL"),
         ];
-        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        let (board, stats) = reconstruct("t", vec![layer], &[], &[]);
         assert_eq!(stats.n_nets, 1, "same %TO.N name = same conductor");
         assert_eq!(board.nets[0].name, "SCL");
         // The join came from the film's word, not from traced copper, so it
@@ -1698,7 +1697,7 @@ mod tests {
             x2_pad(0.0, 0.0, "R1", "1", "SCL"),
             x2_pad(0.4, 0.0, "U1", "14", "SCL"),
         ];
-        let (_b, stats) = reconstruct("t", vec![touching], vec![], vec![]);
+        let (_b, stats) = reconstruct("t", vec![touching], &[], &[]);
         assert_eq!(stats.n_nets, 1);
         assert!(
             !stats.notes.iter().any(|n| n.contains("X2 net names alone")),
@@ -1726,7 +1725,7 @@ mod tests {
             x2_pad(10.0, 0.0, "R2", "1", "B"),
             tie,
         ];
-        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        let (board, stats) = reconstruct("t", vec![layer], &[], &[]);
         assert_eq!(stats.n_nets, 1, "the tie object unions A and B");
         assert_eq!(board.nets[0].name, "A/B", "both tied names stay visible");
         assert!(
@@ -1745,7 +1744,7 @@ mod tests {
             x2_pad(0.0, 0.0, "R1", "1", "VCC"),
             x2_pad(0.2, 0.0, "R2", "1", "GND"),
         ];
-        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        let (board, stats) = reconstruct("t", vec![layer], &[], &[]);
         assert_eq!(stats.n_nets, 1, "the copper genuinely touches");
         assert!(
             board.nets[0].name.starts_with("NET_"),
@@ -1771,7 +1770,7 @@ mod tests {
             cap(0.0, 0.0, 0.0, 0.0, 0.3, PrimKind::Flash),
             cap(1.0, 0.0, 1.0, 0.0, 0.3, PrimKind::Flash),
         ];
-        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![placement("R1", 0.5, 0.0)]);
+        let (board, stats) = reconstruct("t", vec![layer], &[], &[placement("R1", 0.5, 0.0)]);
         assert_eq!(stats.x2_bound_pads, 0);
         assert_eq!(stats.x2_named_nets, 0);
         assert_eq!(stats.x2_film_components, 0);
@@ -1798,7 +1797,7 @@ mod tests {
             top: true,
             dnp: false,
         };
-        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![pl]);
+        let (board, stats) = reconstruct("t", vec![layer], &[], &[pl]);
         assert_eq!(board.components.len(), 1);
         assert_eq!(board.components[0].pins.len(), 2, "0402 claims both pads");
         assert_eq!(stats.assigned_flashes, 2);

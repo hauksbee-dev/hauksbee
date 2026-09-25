@@ -18,6 +18,7 @@
 use crate::assembly::AssemblyState;
 use crate::part_class::{self, connected_pads, ref_designator};
 use crate::{Component, ExtractedBoard, Pin};
+use std::fmt::Write as _;
 
 /// One lint finding, severity-tagged, with the evidence to reproduce it.
 #[derive(Debug, Clone)]
@@ -109,13 +110,17 @@ pub enum LintCheck {
 }
 
 /// The phrase that marks a pull-up-presence finding as the "the resistor
-/// exists but is do-not-populate" variant. The plain-language renderer keys
+/// exists but is do-not-populate" variant.
+///
+/// The plain-language renderer keys
 /// its DNP explanation off this exact substring, so it is a shared constant
 /// rather than two strings that can silently drift apart.
 pub const DNP_PULLUP_MESSAGE_MARKER: &str = "do-not-populate";
 
 /// The phrase that marks an SD pull-up finding as the SPI-wired-socket
-/// variant, whose rationale differs from SD mode (CMD is the host's
+/// variant.
+///
+/// Its rationale differs from SD mode (CMD is the host's
 /// push-pull DI there, not an open-drain identification line). The plain
 /// renderer keys its SPI explanation off this substring; shared for the same
 /// no-drift reason as [`DNP_PULLUP_MESSAGE_MARKER`].
@@ -126,41 +131,42 @@ impl LintCheck {
     /// (e.g. "every check has a plain-language template"). Grows with the
     /// enum; a variant added here but not to a consumer's handling shows up
     /// as a test failure instead of a silent gap.
-    pub const ALL: [LintCheck; 15] = [
-        LintCheck::MissingI2cPullup,
-        LintCheck::MissingSdPullup,
-        LintCheck::FloatingControlPin,
-        LintCheck::LedCurrentSanity,
-        LintCheck::OutputContention,
-        LintCheck::StrapPin,
-        LintCheck::McuResourceConflict,
-        LintCheck::DesignatorFootprintMismatch,
-        LintCheck::ValuePackageSanity,
-        LintCheck::PlaceholderValue,
-        LintCheck::UncheckedMcu,
-        LintCheck::DeviceDecode,
-        LintCheck::OperatingEnvelope,
-        LintCheck::BackPower,
-        LintCheck::I2cBusLoading,
+    pub const ALL: [Self; 15] = [
+        Self::MissingI2cPullup,
+        Self::MissingSdPullup,
+        Self::FloatingControlPin,
+        Self::LedCurrentSanity,
+        Self::OutputContention,
+        Self::StrapPin,
+        Self::McuResourceConflict,
+        Self::DesignatorFootprintMismatch,
+        Self::ValuePackageSanity,
+        Self::PlaceholderValue,
+        Self::UncheckedMcu,
+        Self::DeviceDecode,
+        Self::OperatingEnvelope,
+        Self::BackPower,
+        Self::I2cBusLoading,
     ];
 
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            LintCheck::MissingI2cPullup => "missing_i2c_pullup",
-            LintCheck::MissingSdPullup => "missing_sd_pullup",
-            LintCheck::FloatingControlPin => "floating_control_pin",
-            LintCheck::LedCurrentSanity => "led_current_sanity",
-            LintCheck::OutputContention => "output_contention",
-            LintCheck::StrapPin => "strap_pin",
-            LintCheck::McuResourceConflict => "mcu_resource_conflict",
-            LintCheck::DesignatorFootprintMismatch => "designator_footprint_mismatch",
-            LintCheck::ValuePackageSanity => "value_package_sanity",
-            LintCheck::PlaceholderValue => "placeholder_value",
-            LintCheck::UncheckedMcu => "unchecked_mcu",
-            LintCheck::DeviceDecode => "device_decode",
-            LintCheck::OperatingEnvelope => "operating_envelope",
-            LintCheck::BackPower => "back_power",
-            LintCheck::I2cBusLoading => "i2c_bus_loading",
+            Self::MissingI2cPullup => "missing_i2c_pullup",
+            Self::MissingSdPullup => "missing_sd_pullup",
+            Self::FloatingControlPin => "floating_control_pin",
+            Self::LedCurrentSanity => "led_current_sanity",
+            Self::OutputContention => "output_contention",
+            Self::StrapPin => "strap_pin",
+            Self::McuResourceConflict => "mcu_resource_conflict",
+            Self::DesignatorFootprintMismatch => "designator_footprint_mismatch",
+            Self::ValuePackageSanity => "value_package_sanity",
+            Self::PlaceholderValue => "placeholder_value",
+            Self::UncheckedMcu => "unchecked_mcu",
+            Self::DeviceDecode => "device_decode",
+            Self::OperatingEnvelope => "operating_envelope",
+            Self::BackPower => "back_power",
+            Self::I2cBusLoading => "i2c_bus_loading",
         }
     }
 }
@@ -176,11 +182,12 @@ pub enum Severity {
 }
 
 impl Severity {
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Severity::High => "high",
-            Severity::Medium => "medium",
-            Severity::Low => "low",
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
         }
     }
 }
@@ -192,10 +199,12 @@ pub struct NetLintReport {
 }
 
 impl NetLintReport {
-    pub fn is_clean(&self) -> bool {
+    #[must_use]
+    pub const fn is_clean(&self) -> bool {
         self.findings.is_empty()
     }
-    pub fn count(&self) -> usize {
+    #[must_use]
+    pub const fn count(&self) -> usize {
         self.findings.len()
     }
     pub fn of_check(&self, c: LintCheck) -> impl Iterator<Item = &LintFinding> {
@@ -205,6 +214,7 @@ impl NetLintReport {
 
 impl ExtractedBoard {
     /// Run the connectivity lint-class checks.
+    #[must_use]
     pub fn net_lint(&self) -> NetLintReport {
         let mut report = NetLintReport::default();
         check_i2c_pullups(self, &mut report);
@@ -222,7 +232,7 @@ impl ExtractedBoard {
 // ---------------------------------------------------------------------------
 
 /// Normalise a net name: trim, drop a leading hierarchical path and `/`, upper.
-pub(crate) fn norm(name: &str) -> String {
+pub fn norm(name: &str) -> String {
     let n = name.trim();
     // Keep only the leaf of a hierarchical net path so "/Power/+3V3" -> "+3V3".
     let leaf = n.rsplit('/').next().unwrap_or(n);
@@ -230,7 +240,7 @@ pub(crate) fn norm(name: &str) -> String {
 }
 
 /// Ground net?
-pub(crate) fn is_ground(name: &str) -> bool {
+pub fn is_ground(name: &str) -> bool {
     let n = norm(name);
     matches!(
         n.as_str(),
@@ -255,16 +265,12 @@ fn rail_voltage(name: &str) -> Option<f64> {
         "VBAT" | "VBATT" | "VSYS" | "VIN" | "+VBAT" | "VPP" | "VDDIO" | "VDD_IO" | "VIO" => {
             Some(3.7)
         }
-        _ => {
-            // A numeric rail carries its own magnitude ("+15V", "24V", "+15V0").
-            // This MUST precede the loose contains("5V") branch: "+15V" contains
-            // the substring "5V" and starts with '+', so without this it was
-            // mislabeled a 5 V rail.
-            if let Some(v) = numeric_rail_magnitude(&n) {
-                Some(v)
-            } else if n.contains("5V")
-                && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS"))
-            {
+        // A numeric rail carries its own magnitude ("+15V", "24V", "+15V0").
+        // This MUST precede the loose contains("5V") branch: "+15V" contains
+        // the substring "5V" and starts with '+', so without this it was
+        // mislabeled a 5 V rail.
+        _ => numeric_rail_magnitude(&n).or_else(|| {
+            if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
                 Some(5.0)
             } else if (n.contains("3V3") || n.contains("3.3V") || n.contains("3P3"))
                 && !has_signal_role_token(&n)
@@ -281,7 +287,7 @@ fn rail_voltage(name: &str) -> Option<f64> {
             } else {
                 None
             }
-        }
+        }),
     }
 }
 
@@ -291,7 +297,7 @@ fn rail_voltage(name: &str) -> Option<f64> {
 /// these for the pure `<digits>V<digits>` grammar, but the loose `contains`
 /// fallbacks (3V3/1V8) need the same protection or a divider tapping such a
 /// sense net is miscounted as a pull-up and a genuine finding is suppressed.
-pub(crate) fn has_signal_role_token(n: &str) -> bool {
+pub fn has_signal_role_token(n: &str) -> bool {
     n.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| {
         matches!(
             t,
@@ -323,9 +329,9 @@ pub(crate) fn has_signal_role_token(n: &str) -> bool {
 /// A rail whose name carries its own numeric magnitude: an optional leading
 /// '+', then digits, 'V', and optional trailing digits, plain "15V"/"24V" or
 /// the KiCad digit-V-digit "5V0"/"3V3" form. Returns `None` for names that
-/// don't start with a digit after the optional '+' (VCC, VDD_IO), leaving them
+/// don't start with a digit after the optional '+' (VCC, `VDD_IO`), leaving them
 /// to the token heuristics. Mirrors the engine binder's `positive_rail_fallback`.
-pub(crate) fn numeric_rail_magnitude(n: &str) -> Option<f64> {
+pub fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     let rest = n.strip_prefix('+').unwrap_or(n);
     let int_part: String = rest
         .chars()
@@ -335,7 +341,7 @@ pub(crate) fn numeric_rail_magnitude(n: &str) -> Option<f64> {
         return None;
     }
     let after = rest[int_part.len()..].strip_prefix('V')?;
-    let frac: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let frac: String = after.chars().take_while(char::is_ascii_digit).collect();
     // The name must be ENTIRELY consumed by the "<digits>V<digits>" grammar.
     // Otherwise rail-named SIGNAL nets, "5V_DET", "3V3_EN", "5V_SEL", "12V_PG",
     // over-match as real rails ("5V_DET" → 5.0 V), so net_is_raillike wrongly
@@ -370,7 +376,7 @@ pub(crate) fn numeric_rail_magnitude(n: &str) -> Option<f64> {
 /// exists. A bare designator-prefix test loses a real resistor numbered into an
 /// `RN` range and accepts a capacitor labelled `R5` as a pull-up, farads read as
 /// ohms. Shared with the SI checks so the two surfaces cannot disagree.
-pub(crate) fn is_resistor(c: &Component) -> bool {
+pub fn is_resistor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_resistor()
 }
 
@@ -405,15 +411,15 @@ fn is_resistor_array(c: &Component) -> bool {
 /// Is this an I2C level translator that provides its own bus pull-ups, so an
 /// external pull-up on the connected bus is optional rather than missing?
 ///
-/// Open-drain auto-direction translators (NXP NTS010x, TI TXS010x/TXB010x) and
+/// Open-drain auto-direction translators (NXP `NTS010x`, TI TXS010x/TXB010x) and
 /// buffered repeaters (PCA9517/PCA9617, LTC4311) integrate ~10 kOhm pull-ups to
 /// each Vcc. A bare pass-gate switch (PCA9306, PCA9509 pass type) does NOT, so
 /// it is deliberately excluded.
 fn has_integrated_i2c_pullups(c: &Component) -> bool {
-    let v = c.value.to_ascii_uppercase();
     const FAMILIES: [&str; 7] = [
         "NTS010", "TXS010", "TXB010", "PCA9517", "PCA9617", "LTC4311", "NVT2010",
     ];
+    let v = c.value.to_ascii_uppercase();
     FAMILIES.iter().any(|f| v.contains(f))
 }
 
@@ -508,7 +514,7 @@ fn is_connector_like(c: &Component) -> bool {
         || is_pin_array_package(&c.footprint)
 }
 
-/// Eagle/KiCad pin-row package names like "1X10", "2X05", "1X10_OVALWAVE".
+/// Eagle/KiCad pin-row package names like "1X10", "2X05", "`1X10_OVALWAVE`".
 ///
 /// A pin grid is INTEGER counts with no unit. A body DIMENSION ("7x7mm",
 /// "3.9x4.9mm") is a package size, not a pin grid, and KiCad appends one to
@@ -535,8 +541,8 @@ fn is_pin_array_package(fp: &str) -> bool {
         let left: &[char] = &bytes[a..i];
         let right: &[char] = &bytes[i + 1..b];
         // A digit must sit immediately on each side of the 'X'.
-        if !left.last().is_some_and(|c| c.is_ascii_digit())
-            || !right.first().is_some_and(|c| c.is_ascii_digit())
+        if !left.last().is_some_and(char::is_ascii_digit)
+            || !right.first().is_some_and(char::is_ascii_digit)
         {
             continue;
         }
@@ -560,7 +566,7 @@ fn members(board: &ExtractedBoard, net_id: i64) -> Vec<(&Component, &Pin)> {
 /// load cap and the kind whose presence to ground makes a net read as a local
 /// supply rail? Delegates to the same evidence ladder as [`is_resistor`], so the
 /// capacitor and resistor questions stay consistent about any one part.
-pub(crate) fn is_capacitor(c: &Component) -> bool {
+pub fn is_capacitor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_capacitor()
 }
 
@@ -784,8 +790,7 @@ fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
                 op.net
                     .filter(|id| *id != net_id)
                     .and_then(|id| board.net(id))
-                    .map(|on| is_ground(&on.name))
-                    .unwrap_or(false)
+                    .is_some_and(|on| is_ground(&on.name))
             })
     })
 }
@@ -793,7 +798,7 @@ fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
 /// KiCad emits one placeholder net per deliberately-unconnected pad, named
 /// `unconnected-(REF-PIN-PadN)`. A pin on such a net is an explicit no-connect,
 /// never a fault.
-pub(crate) fn is_unconnected_net(name: &str) -> bool {
+pub fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
 
@@ -808,10 +813,10 @@ fn pin_is_no_connect(p: &Pin) -> bool {
 // ---------------------------------------------------------------------------
 
 /// A net is an I2C data/clock line if its (leaf) name is exactly SDA/SCL or a
-/// recognised decorated form (I2C_SDA, SDA1, ASDA, SDA_3V3, ...). We require the
+/// recognised decorated form (`I2C_SDA`, SDA1, ASDA, `SDA_3V3`, ...). We require the
 /// SDA/SCL token to stand as its own word so we do not match "USDA" sub-strings
 /// or unrelated nets.
-pub(crate) fn i2c_role(name: &str) -> Option<&'static str> {
+pub fn i2c_role(name: &str) -> Option<&'static str> {
     let n = norm(name);
     // Split on common separators and look for an exact SDA/SCL token.
     let toks: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).collect();
@@ -1240,7 +1245,7 @@ fn is_emmc_device(c: &Component) -> bool {
 }
 
 /// SD-bus level translators / port expanders that integrate their own
-/// pull-ups (TXS0206x, the dedicated SD-card translator, and TXS02612), and
+/// pull-ups (`TXS0206x`, the dedicated SD-card translator, and TXS02612), and
 /// pass-gate card muxes through which a host-side pull-up conducts (FSA2567,
 /// NVT4857, TS3A27518, NLSX/PI4ULS-class shifters). Either way, a net behind
 /// one of these is beyond single-net static reasoning: skip rather than
@@ -1289,6 +1294,7 @@ fn is_host_silicon(c: &Component) -> bool {
     r.starts_with('U') || (c.pins.len() > 2 && !is_resistor(c) && !is_resistor_array(c))
 }
 
+#[allow(clippy::too_many_lines, reason = "one pass over SD socket nets")]
 fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
     for net in &board.nets {
         if net.id == 0 || is_unconnected_net(&net.name) {
@@ -1376,10 +1382,9 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 for op in &c.pins {
                     match op.net {
                         Some(oid) if oid != net.id => {
-                            let far_named_ground_or_rail = board
-                                .net(oid)
-                                .map(|n| is_ground(&n.name) || rail_voltage(&n.name).is_some())
-                                .unwrap_or(false);
+                            let far_named_ground_or_rail = board.net(oid).is_some_and(|n| {
+                                is_ground(&n.name) || rail_voltage(&n.name).is_some()
+                            });
                             if far_named_ground_or_rail {
                                 continue;
                             }
@@ -1564,16 +1569,16 @@ fn check_sd_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
 /// (containing '/', or a known bus/peripheral keyword) is treated as a signal,
 /// not a control pin.
 fn control_role(function: &str) -> Option<&'static str> {
-    let f = function.trim().to_ascii_uppercase();
-    if f.is_empty() {
-        return None;
-    }
     // A multiplexed / signal name (Ethernet, SPI, GPIO mux, etc.) is not a
     // dedicated control pin even if a sub-token looks like "EN".
     const SIGNAL_KEYWORDS: [&str; 12] = [
         "GPIO", "EMAC", "RMII", "TX_EN", "RX_EN", "CLKEN", "VSPI", "HSPI", "UART", "PWM", "SENSE",
         "OPEN",
     ];
+    let f = function.trim().to_ascii_uppercase();
+    if f.is_empty() {
+        return None;
+    }
     if SIGNAL_KEYWORDS.iter().any(|k| f.contains(k)) {
         return None;
     }
@@ -1651,7 +1656,7 @@ fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintRepor
             // a None net is usually an unrouted pad the layout will fill, so we
             // do not fire on it (too many false positives on PCB-only inputs).
             let Some(n) = net else { continue };
-            let degree = p.net.map(|id| members(board, id).len()).unwrap_or(0);
+            let degree = p.net.map_or(0, |id| members(board, id).len());
             if degree == 1 {
                 report.findings.push(LintFinding {
                     check: LintCheck::FloatingControlPin,
@@ -1681,7 +1686,7 @@ fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintRepor
 /// (lowercase-`m` read as MEG is a 1e9 error). Accept only an ohmic magnitude
 /// (no unit, or an explicit Ω) so a stray farad/volt value still reads as "not
 /// a resistor".
-pub(crate) fn parse_ohms(v: &str) -> Option<f64> {
+pub fn parse_ohms(v: &str) -> Option<f64> {
     hauksbee_models::value::parse_value(v)
         .filter(|p| matches!(p.unit.as_deref(), None | Some("Ω")))
         .map(|p| p.si)
@@ -1706,7 +1711,7 @@ fn check_led_current(board: &ExtractedBoard, report: &mut NetLintReport) {
         for (i, p) in led.pins.iter().enumerate().take(2) {
             led_nets[i] = p.net;
         }
-        let (Some(na), Some(nb)) = (led_nets[0], led_nets[1]) else {
+        let [Some(na), Some(nb)] = led_nets else {
             continue;
         };
 
@@ -1722,10 +1727,7 @@ fn check_led_current(board: &ExtractedBoard, report: &mut NetLintReport) {
         for (anode_net, cathode_net) in [(na, nb), (nb, na)] {
             // series resistor on the anode side reaching a rail
             let rail_v = resistor_to_rail(board, anode_net, led.reference.as_str());
-            let cathode_is_gnd = board
-                .net(cathode_net)
-                .map(|n| is_ground(&n.name))
-                .unwrap_or(false);
+            let cathode_is_gnd = board.net(cathode_net).is_some_and(|n| is_ground(&n.name));
             if let Some((rref, ohms, vrail)) = rail_v {
                 if cathode_is_gnd && ohms > 0.0 {
                     let i = (vrail - LED_VF) / ohms;
@@ -1934,7 +1936,7 @@ fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
                 // its iteration order varies run-to-run. Sort so the JSON `refs`
                 // array is byte-reproducible across runs, matching every sibling
                 // check (which builds refs from an ordered Vec).
-                let mut r: Vec<String> = distinct.iter().map(|s| s.to_string()).collect();
+                let mut r: Vec<String> = distinct.iter().map(std::string::ToString::to_string).collect();
                 r.sort();
                 r
             },
@@ -1944,20 +1946,17 @@ fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
 }
 
 /// Render a lint report as a Unicode table.
+#[must_use]
 pub fn render_netlint(report: &NetLintReport) -> String {
     let mut out = String::new();
     if report.findings.is_empty() {
         out.push_str("net-lint: no findings.\n");
         return out;
     }
-    out.push_str(&format!("net-lint: {} finding(s)\n", report.findings.len()));
+    let _ = writeln!(out, "net-lint: {} finding(s)", report.findings.len());
     for f in &report.findings {
-        out.push_str(&format!(
-            "  [{}] {} - {}\n",
-            f.severity.as_str(),
-            f.check.as_str(),
-            f.message
-        ));
+        let (severity, check) = (f.severity.as_str(), f.check.as_str());
+        let _ = writeln!(out, "  [{severity}] {check} - {}", f.message);
     }
     out
 }
@@ -2103,7 +2102,7 @@ mod sd_pullup_tests {
         assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 0);
     }
 
-    /// An SDRAM bus is conventionally named SD_D0..SD_D15 but has no card
+    /// An SDRAM bus is conventionally named `SD_D0..SD_D15` but has no card
     /// socket, only the MCU and the SDRAM chip. The check must stay silent:
     /// the net NAME is not evidence a card exists.
     #[test]
@@ -2153,7 +2152,7 @@ mod sd_pullup_tests {
     /// finding fires; under the default fit-except-links policy the part is
     /// simulation-fitted, and the check must say the assembled board still
     /// floats instead of going green (the policy marks such parts with
-    /// DNP_FITTED_KEY exactly so presence-class lints can tell).
+    /// `DNP_FITTED_KEY` exactly so presence-class lints can tell).
     #[test]
     fn dnp_pullup_does_not_silently_clear() {
         use crate::dnp::DnpPolicy;

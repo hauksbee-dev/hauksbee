@@ -795,6 +795,44 @@ fn corpus_file(sub: &str, name: &str) -> Option<PathBuf> {
     )
 }
 
+/// Internal consistency, since there is no native reading to compare
+/// against: every pad's net must be one the document declares, no
+/// designator may repeat, and no pin may be nameless (all three were
+/// broken by the producer-specific bugs these files exposed).
+fn assert_consistent(name: &str, b: &ExtractedBoard) {
+    let ids: BTreeSet<i64> = b.nets.iter().map(|n| n.id).collect();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for c in &b.components {
+        assert!(
+            seen.insert(c.reference.as_str()),
+            "{name}: {} appears twice",
+            c.reference
+        );
+        assert!(
+            !c.reference.contains(':'),
+            "{name}: {} kept a producer prefix, which no model binder can \
+             match",
+            c.reference
+        );
+        assert!(!c.pins.is_empty(), "{name}: {} has no pad", c.reference);
+        for p in &c.pins {
+            assert!(
+                !p.number.trim().is_empty(),
+                "{name}: {} has a nameless pad",
+                c.reference
+            );
+            if let Some(id) = p.net {
+                assert!(
+                    ids.contains(&id),
+                    "{name}: {}.{} is on undeclared net {id}",
+                    c.reference,
+                    p.number
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn real_third_party_ipc2581_documents_read_with_full_connectivity() {
     let mut read = 0;
@@ -829,41 +867,7 @@ fn real_third_party_ipc2581_documents_read_with_full_connectivity() {
             "{name}: copper layers"
         );
 
-        // Internal consistency, since there is no native reading to compare
-        // against: every pad's net must be one the document declares, no
-        // designator may repeat, and no pin may be nameless (all three were
-        // broken by the producer-specific bugs these files exposed).
-        let ids: BTreeSet<i64> = b.nets.iter().map(|n| n.id).collect();
-        let mut seen: BTreeSet<&str> = BTreeSet::new();
-        for c in &b.components {
-            assert!(
-                seen.insert(c.reference.as_str()),
-                "{name}: {} appears twice",
-                c.reference
-            );
-            assert!(
-                !c.reference.contains(':'),
-                "{name}: {} kept a producer prefix, which no model binder can \
-                 match",
-                c.reference
-            );
-            assert!(!c.pins.is_empty(), "{name}: {} has no pad", c.reference);
-            for p in &c.pins {
-                assert!(
-                    !p.number.trim().is_empty(),
-                    "{name}: {} has a nameless pad",
-                    c.reference
-                );
-                if let Some(id) = p.net {
-                    assert!(
-                        ids.contains(&id),
-                        "{name}: {}.{} is on undeclared net {id}",
-                        c.reference,
-                        p.number
-                    );
-                }
-            }
-        }
+        assert_consistent(name, b);
         assert!(
             b.lint().undeclared_nets.is_empty(),
             "{name}: the net graph must be lint-clean"
@@ -1000,7 +1004,7 @@ fn the_real_valor_npi_job_reads_and_is_internally_consistent() {
         .filter_map(|c| c.position.map(|(x, _, _)| x))
         .collect();
     let span =
-        xs.iter().cloned().fold(f64::MIN, f64::max) - xs.iter().cloned().fold(f64::MAX, f64::min);
+        xs.iter().copied().fold(f64::MIN, f64::max) - xs.iter().copied().fold(f64::MAX, f64::min);
     assert!(
         span > 100.0,
         "INCH coordinates must be scaled to mm; the placement spans only {span:.1} mm"

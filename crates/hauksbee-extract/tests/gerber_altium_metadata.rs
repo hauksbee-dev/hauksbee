@@ -11,7 +11,7 @@ fn film(x_mm: i32) -> String {
     )
 }
 
-fn drill() -> &'static str {
+const fn drill() -> &'static str {
     "M48\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX0.0Y0.0\nT0\nM30\n"
 }
 

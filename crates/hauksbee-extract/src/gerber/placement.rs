@@ -62,7 +62,7 @@ fn split_csv(line: &str) -> Vec<String> {
 fn norm(h: &str) -> String {
     h.to_ascii_lowercase()
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect()
 }
 
@@ -120,7 +120,7 @@ fn header_unit_scale(header: &str) -> f64 {
     1.0
 }
 
-/// Parse a number that may carry a unit suffix; returns (value, had_unit) where
+/// Parse a number that may carry a unit suffix; returns (value, `had_unit`) where
 /// `had_unit` is true when the cell itself named its unit (mm/mil/inch), so a
 /// header-implied unit must not be applied on top of it.
 fn parse_len(s: &str) -> Option<(f64, bool)> {
@@ -135,7 +135,7 @@ fn parse_len(s: &str) -> Option<(f64, bool)> {
     let inch = lower.ends_with("in")
         || lower.ends_with("inch")
         || lower.ends_with("inches")
-        || lower.ends_with("\"");
+        || lower.ends_with('"');
     // An explicit "mm" is a unit too: the value is already in mm and must not be
     // re-scaled by a header unit. (Checked after mil so "…mil" isn't read as mm.)
     let mm = !mil && lower.ends_with("mm");
@@ -185,7 +185,7 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
     // Skip leading comment lines some tools prepend (lines starting with '#').
     let header_line = loop {
         match lines.next() {
-            Some(l) if l.trim_start().starts_with('#') => continue,
+            Some(l) if l.trim_start().starts_with('#') => {}
             Some(l) => break l,
             None => return Vec::new(),
         }
@@ -224,18 +224,19 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
         let cells = split_csv(line);
         let get = |i: Option<usize>| {
             i.and_then(|i| cells.get(i))
-                .map(|s| s.as_str())
-                .unwrap_or("")
+                .map_or("", std::string::String::as_str)
         };
         let reference = cells.get(rc).cloned().unwrap_or_default();
         if reference.is_empty() {
             continue;
         }
-        let Some((x, x_had_unit)) = parse_len(cells.get(xc).map(|s| s.as_str()).unwrap_or(""))
+        let Some((x, x_had_unit)) =
+            parse_len(cells.get(xc).map_or("", std::string::String::as_str))
         else {
             continue;
         };
-        let Some((y, y_had_unit)) = parse_len(cells.get(yc).map(|s| s.as_str()).unwrap_or(""))
+        let Some((y, y_had_unit)) =
+            parse_len(cells.get(yc).map_or("", std::string::String::as_str))
         else {
             continue;
         };
@@ -274,8 +275,7 @@ fn looks_like_kicad_pos(text: &str) -> bool {
             let t = l.trim_start().trim_start_matches('#').trim_start();
             t.starts_with("Ref") && t.contains("PosX")
         })
-        .map(|l| !l.contains(',') && !l.contains(';'))
-        .unwrap_or(false);
+        .is_some_and(|l| !l.contains(',') && !l.contains(';'));
     banner && header_row
 }
 
@@ -353,9 +353,10 @@ fn parse_kicad_pos(text: &str) -> Vec<Placement> {
     out
 }
 
-/// Parse an Allegro/Cadence component-location file (`smt_loc.txt`): a
-/// `!`-delimited table with a `UUNITS = MILS|MM` header and columns
-/// `refdes ! symbol_x ! symbol_y ! rotation ! mirror ! symbol_name`. The
+/// Parse an Allegro/Cadence component-location file (`smt_loc.txt`).
+///
+/// The file is a `!`-delimited table with a `UUNITS = MILS|MM` header and
+/// columns `refdes ! symbol_x ! symbol_y ! rotation ! mirror ! symbol_name`. The
 /// `mirror` flag (`m`) marks the bottom side. This is the pick-and-place the
 /// uConsole mainboard (and other Allegro `.art` jobs) ships instead of a CSV.
 pub fn parse_allegro_loc(text: &str) -> Vec<Placement> {
@@ -393,11 +394,11 @@ pub fn parse_allegro_loc(text: &str) -> Vec<Placement> {
             y *= 0.0254;
         }
         let rotation = cells[3].parse().unwrap_or(0.0);
-        let mirror = cells
-            .get(4)
-            .map(|s| s.eq_ignore_ascii_case("m"))
-            .unwrap_or(false);
-        let package = cells.get(5).map(|s| s.to_string()).unwrap_or_default();
+        let mirror = cells.get(4).is_some_and(|s| s.eq_ignore_ascii_case("m"));
+        let package = cells
+            .get(5)
+            .map(std::string::ToString::to_string)
+            .unwrap_or_default();
         out.push(Placement {
             reference,
             value: String::new(),
@@ -426,7 +427,7 @@ fn expand_ref_range(tok: &str) -> Vec<String> {
     // Also return the numeric field's WIDTH so a zero-padded designator range
     // keeps its width when expanded.
     let split_pn = |s: &str| -> Option<(String, u32, usize)> {
-        let p: String = s.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+        let p: String = s.chars().take_while(char::is_ascii_alphabetic).collect();
         let num = &s[p.len()..];
         if num.is_empty() || !num.bytes().all(|c| c.is_ascii_digit()) {
             return None;
@@ -453,9 +454,10 @@ fn expand_ref_range(tok: &str) -> Vec<String> {
     (ln..=rn).map(|n| format!("{lp}{n:0>width$}")).collect()
 }
 
-/// Parse a BOM CSV into `reference -> BomEntry` enrichment. Handles the common
-/// "Designator/Comment" and "Reference(s)/Value/MPN" layouts; a single BOM row
-/// often lists many refs, comma/space separated and abbreviated as ranges
+/// Parse a BOM CSV into `reference -> BomEntry` enrichment.
+///
+/// Handles the common "Designator/Comment" and "Reference(s)/Value/MPN"
+/// layouts; a single BOM row often lists many refs, comma/space separated and abbreviated as ranges
 /// ("R1-R5"). A DNP / "Fitted:No" column marks parts that are drawn but not
 /// assembled.
 pub fn parse_bom(text: &str) -> HashMap<String, BomEntry> {
@@ -504,8 +506,7 @@ pub fn parse_bom(text: &str) -> HashMap<String, BomEntry> {
         let Some(refs) = cells.get(rc) else { continue };
         let cell = |i: Option<usize>| {
             i.and_then(|i| cells.get(i))
-                .map(|s| s.as_str())
-                .unwrap_or("")
+                .map_or("", std::string::String::as_str)
         };
         let value = cell(val_col).to_string();
         let mpn = cell(mpn_col).to_string();
@@ -573,7 +574,7 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         assert_eq!(p.len(), 2);
         assert_eq!(p[0].reference, "C1");
         // 1243.63 mil = 31.588 mm
-        assert!((p[0].x - 1243.63 * 0.0254).abs() < 1e-6);
+        assert!(1243.63f64.mul_add(-0.0254, p[0].x).abs() < 1e-6);
         assert!(!p[0].top, "mirror 'm' marks bottom side");
         assert!(p[1].top);
         assert_eq!(p[1].package, "QFN56");
@@ -709,6 +710,7 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
     }
 
     #[test]
+    #[allow(clippy::float_cmp, reason = "exact literal constants")]
     fn header_unit_scale_matches_unit_words_not_substrings() {
         // A substring test fires `mil` inside "millimeters" (a 39x shrink) and
         // misses the "in" abbreviation (a 25.4x error): match whole unit words.

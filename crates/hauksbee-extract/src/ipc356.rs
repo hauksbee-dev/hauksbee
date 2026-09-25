@@ -11,6 +11,7 @@
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 use std::collections::HashMap;
 
+#[allow(clippy::too_many_lines, reason = "single-pass record parser")]
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let mut scale = 0.00254; // 1/10000 inch -> mm
     let mut nets: Vec<Net> = Vec::new();
@@ -26,7 +27,8 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let mut via_ref = 0usize;
     // Net names seen on the skipped records, so the refusal can prove the
     // connectivity was read and name what is actually missing.
-    let mut skipped_net_names: std::collections::BTreeSet<String> = Default::default();
+    let mut skipped_net_names: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
 
     for line in text.lines() {
         if line.len() < 3 {
@@ -82,7 +84,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         let net = if net_name.is_empty() || net_name == "N/C" {
             None
         } else {
-            let next = net_ids.len() as i64 + 1;
+            let next = nets.last().map_or(1, |n| n.id + 1);
             let id = *net_ids.entry(net_name.clone()).or_insert(next);
             if id == next {
                 nets.push(Net { id, name: net_name });

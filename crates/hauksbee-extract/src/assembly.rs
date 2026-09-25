@@ -17,9 +17,9 @@
 //!   resolution (the engine's binder refuses to resolve anything else), so a
 //!   check cannot obtain an electrical model without having answered the
 //!   three-state question first.
-//! - **DnpAbsent**: on the layout but not assembled, with the [`DnpReason`]
+//! - **`DnpAbsent`**: on the layout but not assembled, with the [`DnpReason`]
 //!   the DNP policy recorded (or the bare board-file flag when no policy ran).
-//! - **IdentityUnknown**: the record's identity is refused (a conflicting
+//! - **`IdentityUnknown`**: the record's identity is refused (a conflicting
 //!   duplicate designator, or an inferred ambiguous reference without an
 //!   authoritative source UID), so nothing about it, including its DNP flag,
 //!   is evidence.
@@ -52,6 +52,7 @@ pub enum IdentityRefusal {
 
 impl IdentityRefusal {
     /// The human-readable reason a report prints.
+    #[must_use]
     pub fn reason(&self) -> String {
         match self {
             Self::DuplicateReferenceConflict(detail) => {
@@ -77,7 +78,8 @@ pub struct DnpAbsence {
 
 impl DnpAbsence {
     /// The line a report prints for this absence.
-    pub fn describe(&self) -> &'static str {
+    #[must_use]
+    pub const fn describe(&self) -> &'static str {
         match &self.reason {
             Some(reason) => reason.describe(),
             None => "DNP (not populated)",
@@ -100,7 +102,8 @@ pub struct FittedComponent<'c> {
 
 impl<'c> FittedComponent<'c> {
     /// The underlying record, for read access with the original lifetime.
-    pub fn component(self) -> &'c Component {
+    #[must_use]
+    pub const fn component(self) -> &'c Component {
         self.part
     }
 }
@@ -129,7 +132,8 @@ impl<'c> AssemblyState<'c> {
     /// Classify one component record. The single entry point: consumers ask this
     /// rather than reading `component.dnp` or probing the identity properties,
     /// so no two checks can disagree about what "present" means.
-    pub fn of(component: &'c Component) -> AssemblyState<'c> {
+    #[must_use]
+    pub fn of(component: &'c Component) -> Self {
         if let Some(refusal) = identity_refusal(component) {
             return AssemblyState::IdentityUnknown(refusal);
         }
@@ -146,6 +150,7 @@ impl<'c> AssemblyState<'c> {
 
     /// The witness, if the part is present. Consuming (the state is `Copy`able
     /// data plus a borrow) so `AssemblyState::of(c).fitted()` composes.
+    #[must_use]
     pub fn fitted(self) -> Option<FittedComponent<'c>> {
         match self {
             AssemblyState::Present(part) => Some(part),
@@ -154,13 +159,15 @@ impl<'c> AssemblyState<'c> {
     }
 
     /// True when the part is assembled and identity-trusted.
-    pub fn is_present(&self) -> bool {
+    #[must_use]
+    pub const fn is_present(&self) -> bool {
         matches!(self, AssemblyState::Present(_))
     }
 
     /// The human-readable reason the part is NOT an ordinary fitted component,
     /// or `None` when it is present. Reports print this so a skip is never
     /// silent.
+    #[must_use]
     pub fn absence(&self) -> Option<String> {
         match self {
             AssemblyState::Present(_) => None,
@@ -284,7 +291,7 @@ mod tests {
         );
         match AssemblyState::of(&c) {
             AssemblyState::IdentityUnknown(IdentityRefusal::DuplicateReferenceConflict(detail)) => {
-                assert_eq!(detail, "different values")
+                assert_eq!(detail, "different values");
             }
             other => panic!("a duplicate conflict must refuse identity, got {other:?}"),
         }

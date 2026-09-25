@@ -67,7 +67,7 @@
 //!    with no resolvable model and a bare magnitude for a value still gets an
 //!    answer rather than losing a pull-up.
 //!
-//! Resolution is memoised per distinct (lib_id, value, footprint, mpn) tuple:
+//! Resolution is memoised per distinct (`lib_id`, value, footprint, mpn) tuple:
 //! `is_resistor` is called inside per-net member loops, and a full library scan
 //! per call would be a per-component cost multiplied by net degree. The number
 //! of distinct tuples on a board is the number of distinct part types, which is
@@ -84,7 +84,7 @@ use crate::Component;
 
 /// What a component record is, as far as the two-terminal-passive question goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PartClass {
+pub enum PartClass {
     /// A two-terminal passive of a known class.
     Passive(PassiveClass),
     /// Two terminals, but the evidence says it is not a passive at all (a
@@ -102,14 +102,14 @@ impl PartClass {
     /// True only for a plain resistor: the kind of part that can be a pull-up,
     /// a pull-down, or a series termination.
     pub(crate) fn is_resistor(self) -> bool {
-        matches!(self, PartClass::Passive(c) if c.is_resistor())
+        matches!(self, Self::Passive(c) if c.is_resistor())
     }
 
     /// True only for a capacitor: the kind of part that can be a crystal load
     /// cap, a decoupling cap, or the bypass that makes a net read as a local
     /// supply rail.
-    pub(crate) fn is_capacitor(self) -> bool {
-        matches!(self, PartClass::Passive(PassiveClass::Capacitor))
+    pub(crate) const fn is_capacitor(self) -> bool {
+        matches!(self, Self::Passive(PassiveClass::Capacitor))
     }
 }
 
@@ -120,7 +120,7 @@ impl PartClass {
 /// signal contact, so a two-terminal part can show four pin entries (pad 1 x2,
 /// pad 2 x2). An IPC-356 both-sided through-hole access record does the same.
 /// All of those must resolve to "two terminals".
-pub(crate) fn connected_pads(c: &Component) -> usize {
+pub fn connected_pads(c: &Component) -> usize {
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for p in &c.pins {
         if p.net.is_some() {
@@ -138,7 +138,7 @@ pub(crate) fn connected_pads(c: &Component) -> usize {
 /// part and a mirrored decoupling cap is misclassified. Only a lowercase `r`
 /// immediately before an uppercase designator letter counts, so a genuine
 /// `R5` / `RV1` is untouched.
-pub(crate) fn ref_designator(reference: &str) -> String {
+pub fn ref_designator(reference: &str) -> String {
     let r = reference.trim();
     let bytes = r.as_bytes();
     if bytes.len() >= 2 && bytes[0] == b'r' && bytes[1].is_ascii_uppercase() {
@@ -148,17 +148,20 @@ pub(crate) fn ref_designator(reference: &str) -> String {
 }
 
 /// Public rung-ladder answer to "is this record a plain two-terminal
-/// resistor?", for downstream crates that must agree with the lint/SI checks
-/// about what a resistor is. Answers from the model DB's declared passive
+/// resistor?".
+///
+/// It serves downstream crates that must agree with the lint/SI checks about
+/// what a resistor is. Answers from the model DB's declared passive
 /// class through the assembly witness, falling back to the designator/`lib_id`
 /// strings only when nothing better exists; `Unknown` and identity-refused
 /// records are never resistors.
+#[must_use]
 pub fn is_plain_resistor(c: &Component) -> bool {
     classify_two_terminal(c).is_resistor()
 }
 
 /// Classify one component record against the ladder in the module doc.
-pub(crate) fn classify_two_terminal(c: &Component) -> PartClass {
+pub fn classify_two_terminal(c: &Component) -> PartClass {
     // Rung 1: terminal count.
     if connected_pads(c) != 2 {
         return PartClass::NotTwoTerminal;
@@ -219,15 +222,14 @@ fn from_value_dimension(c: &Component) -> Option<PartClass> {
         Some("H") => return Some(PartClass::Passive(PassiveClass::Inductor)),
         // An explicit ohm mark rules a capacitor out, but does NOT rule a
         // resistor in: a ferrite bead is sold as an impedance and reads ohmic.
-        Some("\u{03a9}") | Some("V") | Some("A") => return None,
+        Some("\u{03a9}" | "V" | "A") => return None,
         _ => {}
     }
     if !has_sub_unity_multiplier(&c.value) {
         return None;
     }
     Some(match from_strings(c) {
-        PartClass::Passive(PassiveClass::Inductor)
-        | PartClass::Passive(PassiveClass::FerriteBead) => {
+        PartClass::Passive(PassiveClass::Inductor | PassiveClass::FerriteBead) => {
             PartClass::Passive(PassiveClass::Inductor)
         }
         _ => PartClass::Passive(PassiveClass::Capacitor),
