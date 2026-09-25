@@ -68,33 +68,39 @@ fn decode_widestring(s: &str) -> String {
         .collect()
 }
 
+struct Comp {
+    id: i64,
+    refdes: String,
+    pattern: String,
+    library: String,
+    description: String,
+    source_hierarchical_path: String,
+    source_unique_id: String,
+    layer_name: String,
+    x_mm: f64,
+    y_mm: f64,
+    rotation: f64,
+}
+
+struct Pad {
+    component: Option<i64>,
+    net: Option<i64>,
+    name: String,
+    layer: String,
+    x_mm: f64,
+    y_mm: f64,
+}
+
 /// Extract the connectivity model from ASCII Protel text.
+///
+/// # Errors
+/// [`ExtractError::Altium`] when the text carries no board records to read.
+#[allow(clippy::too_many_lines, reason = "single-pass record parser")]
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     // File-side ids are explicit (`ID=` on nets/components, `NET=`/`COMPONENT=`
     // back-references on pads/texts), so collect keyed maps first.
     let mut net_names: HashMap<i64, String> = HashMap::new();
-    struct Comp {
-        id: i64,
-        refdes: String,
-        pattern: String,
-        library: String,
-        description: String,
-        source_hierarchical_path: String,
-        source_unique_id: String,
-        layer_name: String,
-        x_mm: f64,
-        y_mm: f64,
-        rotation: f64,
-    }
     let mut comps: Vec<Comp> = Vec::new();
-    struct Pad {
-        component: Option<i64>,
-        net: Option<i64>,
-        name: String,
-        layer: String,
-        x_mm: f64,
-        y_mm: f64,
-    }
     let mut pads: Vec<Pad> = Vec::new();
     let mut comments: HashMap<i64, String> = HashMap::new();
 
@@ -159,15 +165,15 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                 let Some(comp) = id_of("COMPONENT") else {
                     continue;
                 };
-                let txt = m.get("WIDESTRING").map(|w| decode_widestring(w));
-                let txt = match txt {
+                let shown = m.get("WIDESTRING").map(|w| decode_widestring(w));
+                let shown = match shown {
                     Some(t) if !t.is_empty() => t,
                     _ => m.get("TEXT").cloned().unwrap_or_default(),
                 };
                 // ".Comment" / ".Designator" placeholders mean the displayed
                 // string is field-bound, not a literal value.
-                if !txt.is_empty() && !txt.starts_with('.') {
-                    comments.entry(comp).or_insert(txt);
+                if !shown.is_empty() && !shown.starts_with('.') {
+                    comments.entry(comp).or_insert(shown);
                 }
             }
             _ => {}

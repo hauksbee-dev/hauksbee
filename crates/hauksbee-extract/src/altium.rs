@@ -159,7 +159,7 @@ pub(crate) fn f64_at(b: &[u8], o: usize) -> f64 {
 }
 /// Coordinate at `o` converted to millimetres.
 pub(crate) fn coord_mm(b: &[u8], o: usize) -> f64 {
-    f64::from(u32_at(b, o) as i32) * MM_PER_UNIT
+    f64::from(u32_at(b, o).cast_signed()) * MM_PER_UNIT
 }
 
 /// The payloads of a fixed-binary stream whose records are one `marker` byte
@@ -294,10 +294,10 @@ fn parse_properties_bytes(raw: &[u8]) -> HashMap<String, String> {
         let key = decode_altium_str(&tok[..eq]).trim().to_ascii_uppercase();
         let val_bytes = &tok[eq + 1..];
         let val = if key.starts_with("%UTF8%") {
-            match std::str::from_utf8(val_bytes) {
-                Ok(s) => s.to_string(),
-                Err(_) => String::from_utf8_lossy(val_bytes).into_owned(),
-            }
+            std::str::from_utf8(val_bytes).map_or_else(
+                |_| String::from_utf8_lossy(val_bytes).into_owned(),
+                str::to_string,
+            )
         } else {
             decode_altium_str(val_bytes)
         };
@@ -355,10 +355,10 @@ pub(crate) struct PadRecord {
 /// character instead of the U+FFFD `from_utf8_lossy` would emit, which silently
 /// corrupts internationally-authored footprint/net/component names.
 fn decode_altium_str(raw: &[u8]) -> String {
-    match std::str::from_utf8(raw) {
-        Ok(s) => s.to_string(),
-        Err(_) => raw.iter().map(|&b| cp1252_char(b)).collect(),
-    }
+    std::str::from_utf8(raw).map_or_else(
+        |_| raw.iter().map(|&b| cp1252_char(b)).collect(),
+        str::to_string,
+    )
 }
 
 /// Map one Windows-1252 byte to its Unicode scalar. Bytes `0x00–0x7F` and
@@ -497,7 +497,9 @@ pub const SOURCE_UNIQUE_ID_KEY: &str = "source_unique_id";
 pub const REFERENCE_IDENTITY_NOTE_KEY: &str = "reference_identity_note";
 
 /// The reason string for a `.PcbDoc` part with no comment text and no
-/// parseable SOURCEDESCRIPTION. A layout-only Altium file genuinely does not
+/// parseable SOURCEDESCRIPTION.
+///
+/// A layout-only Altium file genuinely does not
 /// carry the value; fabricating one from the refdes is what produced the
 /// phantom "R74 = 0.74 ohm" faults.
 pub const VALUE_UNRESOLVED_REASON: &str =
@@ -943,7 +945,7 @@ fn assign_ambiguous_components(
             inputs,
             &group,
             &candidate,
-            Some((REFERENCE_AMBIGUOUS_KEY, reason.to_string())),
+            Some((REFERENCE_AMBIGUOUS_KEY, reason)),
             hierarchies,
             source_unique_ids,
             used,
@@ -956,7 +958,7 @@ fn assign_shared_identity(
     inputs: &[ComponentIdentityInput],
     indices: &[usize],
     candidate: &str,
-    note: Option<(&str, String)>,
+    note: Option<(&str, &str)>,
     hierarchies: &[String],
     source_unique_ids: &[String],
     used: &mut HashSet<String>,
@@ -966,16 +968,16 @@ fn assign_shared_identity(
     let (reference, collided) = allocate_generated_reference(candidate, discriminator, used);
     for &index in indices {
         let mut properties = base_properties(&hierarchies[index], &source_unique_ids[index]);
-        if let Some((key, value)) = &note {
-            properties.push(((*key).to_string(), value.clone()));
-            if *key == REFERENCE_AMBIGUOUS_KEY {
+        if let Some((key, value)) = note {
+            properties.push((key.to_string(), value.to_string()));
+            if key == REFERENCE_AMBIGUOUS_KEY {
                 // Distinct DRC owners are the conservative geometry choice,
                 // not proof that these records are two modelable devices. Feed
                 // the uncertainty into the shared binder refusal contract so
                 // connectivity remains usable without guessed simulation.
                 properties.push((
                     crate::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
-                    value.clone(),
+                    value.to_string(),
                 ));
             }
         }
@@ -1002,6 +1004,7 @@ fn assign_shared_identity(
 /// inference is attached as `reference_ambiguous`. Conflicting or insufficient
 /// evidence stays distinct, so ambiguity cannot silently fuse nets or suppress
 /// a DRC short. Every generated name is checked against genuine designators.
+#[allow(clippy::too_many_lines, reason = "one identity decision tree")]
 pub(crate) fn canonical_component_identities(
     inputs: &[ComponentIdentityInput],
 ) -> Vec<ComponentIdentity> {
@@ -1154,8 +1157,7 @@ pub(crate) fn canonical_component_identities(
                             &split_candidate,
                             Some((
                                 REFERENCE_AMBIGUOUS_KEY,
-                                "records share an authoritative source identity but assign the same pin number to different nets; kept distinct"
-                                    .to_string(),
+                                "records share an authoritative source identity but assign the same pin number to different nets; kept distinct",
                             )),
                             &hierarchies,
                             &source_unique_ids,
@@ -1180,8 +1182,7 @@ pub(crate) fn canonical_component_identities(
                     &candidate,
                     Some((
                         REFERENCE_AMBIGUOUS_KEY,
-                        "other records with this designator carry authoritative unique ids, but this record does not; kept distinct"
-                            .to_string(),
+                        "other records with this designator carry authoritative unique ids, but this record does not; kept distinct",
                     )),
                     &hierarchies,
                     &source_unique_ids,
@@ -1280,11 +1281,10 @@ pub(crate) fn canonical_component_identities(
             if inferred_groups.len() == 1 && inferred_groups[0].len() == path_indices.len() {
                 let group = &inferred_groups[0];
                 let candidate = format!("{raw_reference}@{path}");
-                let inference = (path_indices.len() > 1).then(|| {
+                let inference = (path_indices.len() > 1).then_some({
                     (
                         REFERENCE_AMBIGUOUS_KEY,
-                        "records share a channel hierarchy and an identically-netted pad, but lack an authoritative unique id; merged for connectivity only"
-                            .to_string(),
+                        "records share a channel hierarchy and an identically-netted pad, but lack an authoritative unique id; merged for connectivity only",
                     )
                 });
                 assign_shared_identity(
@@ -1319,7 +1319,7 @@ pub(crate) fn canonical_component_identities(
                 &candidate,
                 Some((
                     REFERENCE_AMBIGUOUS_KEY,
-                    "other records with this designator name channel hierarchies, but this record does not; kept distinct".to_string(),
+                    "other records with this designator name channel hierarchies, but this record does not; kept distinct",
                 )),
                 &hierarchies,
                 &source_unique_ids,
@@ -1487,6 +1487,10 @@ fn parse_comment_texts(buf: &[u8]) -> HashMap<u16, String> {
 }
 
 /// Extract the connectivity model from a `.PcbDoc`'s raw bytes.
+///
+/// # Errors
+/// [`ExtractError::Altium`] when the bytes are not a Compound File or lack the
+/// Altium storages.
 pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
     let mut doc = PcbDoc::open(bytes)?;
 
@@ -1506,21 +1510,15 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
 
     // Nets: id is the 0-based index + 1 so that id 0 stays the hauksbee "no net"
     // bucket (matching the KiCad / Eagle convention that net 0 is unconnected).
-    let nets: Vec<Net> = net_names
-        .iter()
-        .enumerate()
-        .map(|(i, name)| Net::new(i as i64 + 1, name.clone()))
+    let nets: Vec<Net> = (1..)
+        .zip(&net_names)
+        .map(|(id, name)| Net::new(id, name.clone()))
         .collect();
 
     // Group pads by their owning component index.
     let mut pads_by_comp: HashMap<u16, Vec<&PadRecord>> = HashMap::new();
-    let mut free_pads: Vec<&PadRecord> = Vec::new();
-    for p in &pads {
-        if p.component == NONE_U16 {
-            free_pads.push(p);
-        } else {
-            pads_by_comp.entry(p.component).or_default().push(p);
-        }
+    for p in pads.iter().filter(|p| p.component != NONE_U16) {
+        pads_by_comp.entry(p.component).or_default().push(p);
     }
 
     let net_id = |field: u16| -> Option<i64> {
@@ -1539,7 +1537,8 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
 
     let mut components: Vec<Component> = Vec::with_capacity(comps.len());
     for (idx, c) in comps.iter().enumerate() {
-        let idx16 = idx as u16;
+        // Pads name their owner by u16 index; one past that range owns no pads.
+        let idx16 = u16::try_from(idx).unwrap_or(NONE_U16);
         let identity = &identities[idx];
         let reference = identity.reference.clone();
         // Only copper pads become pins. A footprint may also carry pad records
@@ -1589,8 +1588,9 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
     })
 }
 
-/// Quick content sniff: is this byte slice an Altium `.PcbDoc`? It must be an
-/// OLE2 file (`D0 CF 11 E0` magic) that actually contains an Altium Nets
+/// Quick content sniff: is this byte slice an Altium `.PcbDoc`?
+///
+/// It must be an OLE2 file (`D0 CF 11 E0` magic) that actually contains an Altium Nets
 /// storage. The container check alone is not enough: many unrelated formats
 /// (old `.doc`, `.msi`, `.msg`) are OLE2 too.
 #[must_use]

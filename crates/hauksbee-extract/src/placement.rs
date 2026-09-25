@@ -335,6 +335,10 @@ impl PlacementFile {
     /// Read a placement file from a path. The dialect comes from the content:
     /// KiCad writes csv into a file called `.pos`, and Altium writes fixed-width
     /// text into a file called `.csv`, so the extension decides nothing.
+    ///
+    /// # Errors
+    /// [`PlacementError::Io`] when the file cannot be read, or the refusal
+    /// [`Self::from_bytes`] gives.
     pub fn read(path: &Path) -> Result<Self, PlacementError> {
         let name = path.display().to_string();
         let bytes = std::fs::read(path).map_err(|e| PlacementError::Io {
@@ -345,12 +349,19 @@ impl PlacementFile {
     }
 
     /// Read from bytes, hashing them for provenance.
+    ///
+    /// # Errors
+    /// A [`PlacementError`] naming why the content is not a usable placement
+    /// file: empty, no reference or coordinate columns, unknown units.
     pub fn from_bytes(bytes: &[u8], name: &str) -> Result<Self, PlacementError> {
         let text = decode(bytes);
         Self::parse(&text, name, &sha256_hex(bytes))
     }
 
     /// Read from text already in memory, with no hash.
+    ///
+    /// # Errors
+    /// As [`Self::from_bytes`].
     pub fn from_text(text: &str, name: &str) -> Result<Self, PlacementError> {
         Self::parse(text, name, "")
     }
@@ -531,7 +542,7 @@ impl PlacementFile {
             v[v.len() / 2]
         };
         let dx = median(pairs.iter().map(|((x, _), (px, _))| x - px).collect());
-        let mut best = (1.0, (dx, 0.0), f64::INFINITY);
+        let mut best = (1.0, (dx, 0.0), None);
         for sign in [1.0f64, -1.0] {
             let dy = median(
                 pairs
@@ -548,14 +559,14 @@ impl PlacementFile {
                         && (y - (sign * py + dy)).abs() <= POSITION_TOLERANCE_MM
                 })
                 .count();
-            let score = -(explained as f64);
-            if score < best.2 {
-                best = (sign, (dx, dy), score);
+            if best.2.is_none_or(|most| explained > most) {
+                best = (sign, (dx, dy), Some(explained));
             }
         }
         Some((best.0, best.1))
     }
 
+    #[allow(clippy::too_many_lines, reason = "one pass over the rows")]
     fn parse(text: &str, name: &str, sha: &str) -> Result<Self, PlacementError> {
         if text.trim().is_empty() {
             return Err(PlacementError::Empty {
@@ -612,13 +623,10 @@ impl PlacementFile {
                 ));
                 continue;
             };
-            let side = match Side::parse(cell(cols.side)) {
-                Some(s) => s,
-                None => {
-                    no_side += 1;
-                    Side::Unknown
-                }
-            };
+            let side = Side::parse(cell(cols.side)).unwrap_or_else(|| {
+                no_side += 1;
+                Side::Unknown
+            });
             placements.push(Placement {
                 reference,
                 value: cell(cols.value).to_string(),
@@ -926,10 +934,10 @@ struct Layout {
 
 impl Layout {
     fn split(&self, line: &str) -> Vec<String> {
-        match self.delimiter {
-            Some(d) => split_delimited(line, d),
-            None => slice_fixed_width(line, &self.starts),
-        }
+        self.delimiter.map_or_else(
+            || slice_fixed_width(line, &self.starts),
+            |d| split_delimited(line, d),
+        )
     }
 }
 

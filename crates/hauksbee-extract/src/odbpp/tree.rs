@@ -56,7 +56,7 @@ impl OdbTree {
     /// The error for a job that exceeds the inflation ceiling. Names the limit,
     /// so a legitimately enormous job reads as a limit to raise rather than as a
     /// corrupt file.
-    fn too_large(&self) -> ExtractError {
+    fn too_large() -> ExtractError {
         ExtractError::Odb(format!(
             "this ODB++ job expands to more than {} MiB, which is past the limit \
              hauksbee will hold in memory for one job. That is far larger than any \
@@ -70,41 +70,37 @@ impl OdbTree {
     /// Insert one member, inflating and un-suffixing a `.Z`/`.gz` payload.
     fn insert(&mut self, path: &str, bytes: Vec<u8>) -> Result<(), ExtractError> {
         let key = path.replace('\\', "/").to_ascii_lowercase();
-        let (key, compressed) = match key.strip_suffix(".z").or_else(|| key.strip_suffix(".gz")) {
-            Some(stem) => (stem.to_string(), true),
-            None => (key, false),
-        };
+        let stem = key.strip_suffix(".z").or_else(|| key.strip_suffix(".gz"));
+        let (compressed, stem) = (stem.is_some(), stem.map(str::to_string));
+        let key = stem.unwrap_or(key);
         if !compressed {
             // Plain members still count: an uncompressed 2 GiB `features` inside
             // a tar is the same problem without the compression ratio.
             let len = bytes.len() as u64;
             if len > self.budget {
-                return Err(self.too_large());
+                return Err(Self::too_large());
             }
             self.budget -= len;
             self.files.insert(key, bytes);
             return Ok(());
         }
-        match gunzip_within(&bytes, &mut self.budget) {
-            Some(plain) => {
-                self.files.insert(key, plain);
-            }
-            None => {
-                // Either not gzip at all, or past the ceiling. The two are told
-                // apart by the magic, so a bomb is not mislabelled as an exotic
-                // compression the reader merely does not know.
-                if is_gzip(&bytes) {
-                    return Err(self.too_large());
-                }
-                let len = bytes.len() as u64;
-                if len > self.budget {
-                    return Err(self.too_large());
-                }
-                self.budget -= len;
-                self.undecompressed.push(key.clone());
-                self.files.insert(key, bytes);
-            }
+        if let Some(plain) = gunzip_within(&bytes, &mut self.budget) {
+            self.files.insert(key, plain);
+            return Ok(());
         }
+        // Either not gzip at all, or past the ceiling. The two are told
+        // apart by the magic, so a bomb is not mislabelled as an exotic
+        // compression the reader merely does not know.
+        if is_gzip(&bytes) {
+            return Err(Self::too_large());
+        }
+        let len = bytes.len() as u64;
+        if len > self.budget {
+            return Err(Self::too_large());
+        }
+        self.budget -= len;
+        self.undecompressed.push(key.clone());
+        self.files.insert(key, bytes);
         Ok(())
     }
 
@@ -232,7 +228,7 @@ impl OdbTree {
         let plain = match gunzip_within(bytes, &mut budget) {
             Some(p) => p,
             None if is_gzip(bytes) && bytes.len() as u64 <= MAX_INFLATED_BYTES => {
-                return Err(Self::new().too_large())
+                return Err(Self::too_large())
             }
             None => {
                 return Err(ExtractError::Odb(
@@ -406,8 +402,8 @@ fn tar_names(bytes: &[u8]) -> Vec<String> {
         let name = String::from_utf8_lossy(&block[..name_end]).into_owned();
         // The size field is 11 octal digits (offset 124), NUL/space terminated.
         let size_field = String::from_utf8_lossy(&block[124..136]);
-        let size = u64::from_str_radix(size_field.trim().trim_end_matches('\0').trim(), 8)
-            .unwrap_or(0) as usize;
+        let size =
+            usize::from_str_radix(size_field.trim().trim_end_matches('\0').trim(), 8).unwrap_or(0);
         if !name.is_empty() {
             out.push(name);
         }

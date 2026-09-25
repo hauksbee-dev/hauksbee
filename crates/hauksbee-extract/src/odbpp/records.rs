@@ -296,15 +296,15 @@ fn attrs_say_no_pop(attrs: Option<&str>, names: &[String]) -> bool {
 /// `job_units` is the job default from `misc/info`, used when the file itself
 /// declares no `UNITS=` line.
 pub fn parse_eda_data(text: &str, job_units: f64) -> EdaData {
-    let scale = declared_units(text).unwrap_or(job_units);
-    let names = attr_names(text);
-    let mut out = EdaData::default();
     // Which multi-line record we are inside. A `#` comment does not end one.
     enum In {
         None,
         Pkg,
         Cmp,
     }
+    let scale = declared_units(text).unwrap_or(job_units);
+    let names = attr_names(text);
+    let mut out = EdaData::default();
     let mut state = In::None;
     for raw in text.lines() {
         let line = raw.trim();
@@ -479,8 +479,8 @@ pub struct CadNetlist {
 }
 
 pub fn parse_netlist(text: &str) -> CadNetlist {
-    let mut names: std::collections::BTreeMap<usize, String> = Default::default();
-    let mut counts: std::collections::BTreeMap<usize, usize> = Default::default();
+    let mut names = std::collections::BTreeMap::<usize, String>::new();
+    let mut counts = std::collections::BTreeMap::<usize, usize>::new();
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with('H') {
@@ -627,7 +627,7 @@ mod tests {
             c.part, "Inductor_SMD_L_NR-40xx 47uH 0.5A",
             "part_name is the remainder, not one token"
         );
-        assert_eq!(c.rotation, 90.0);
+        assert!((c.rotation - 90.0).abs() < f64::EPSILON);
         assert!(!c.mirrored);
     }
 

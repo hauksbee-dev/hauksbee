@@ -200,8 +200,9 @@ pub struct Ipc2581Extraction {
     pub stats: Ipc2581Stats,
 }
 
-/// Content sniff: an XML document whose root element is `IPC-2581`. Matched on
-/// the root element rather than the namespace URI because the un-namespaced form
+/// Content sniff: an XML document whose root element is `IPC-2581`.
+///
+/// Matched on the root element rather than the namespace URI because the un-namespaced form
 /// real converters emit is still an IPC-2581 document; the namespace, when
 /// present, is accepted as a second confirmation.
 #[must_use]
@@ -671,9 +672,9 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     if let Some((refs, row)) = in_bom_item.take() {
                         for r in refs {
                             if let Some(entry) = doc.bom.get_mut(&r) {
-                                entry.characteristics = row.characteristics.clone();
+                                entry.characteristics.clone_from(&row.characteristics);
                                 if entry.oem_design_number.is_empty() {
-                                    entry.oem_design_number = row.oem_design_number.clone();
+                                    entry.oem_design_number.clone_from(&row.oem_design_number);
                                 }
                             }
                         }
@@ -743,7 +744,22 @@ fn unit_scale(units: &str) -> f64 {
     }
 }
 
+/// A step's entries followed by the unkeyed bucket's, which real documents
+/// fill with root-level `<LogicalNet>`s (see the connectivity note in [`extract`]).
+fn for_step<T: Clone>(m: &BTreeMap<String, Vec<T>>, step: &str) -> Vec<T> {
+    let mut v = m.get(step).cloned().unwrap_or_default();
+    if !step.is_empty() {
+        v.extend(m.get("").cloned().unwrap_or_default());
+    }
+    v
+}
+
 /// Extract the connectivity model from an IPC-2581 document.
+///
+/// # Errors
+/// [`ExtractError::Xml`] when the document does not parse, and
+/// [`ExtractError::Ipc2581`] when it carries no CAD data to read.
+#[allow(clippy::too_many_lines, reason = "one ordered read of the document")]
 pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
     let doc = scan(text)?;
     let mut disagreements: Vec<String> = Vec::new();
@@ -784,13 +800,6 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
     // filed under the empty step and, since the components were filed under a
     // real one, the two never met — a fully-specified 10-part board read as
     // having nets and no connections at all.
-    fn for_step<T: Clone>(m: &BTreeMap<String, Vec<T>>, step: &str) -> Vec<T> {
-        let mut v = m.get(step).cloned().unwrap_or_default();
-        if !step.is_empty() {
-            v.extend(m.get("").cloned().unwrap_or_default());
-        }
-        v
-    }
     let logical = for_step(&doc.logical_nets, &step);
     let layer_sets = for_step(&doc.layer_nets, &step);
     let net_source = if logical.iter().any(|(_, pins)| !pins.is_empty()) {
@@ -886,10 +895,9 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         )));
     }
 
-    let net_ids: HashMap<&str, i64> = net_order
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.as_str(), i as i64 + 1))
+    let net_ids: HashMap<&str, i64> = (1..)
+        .zip(&net_order)
+        .map(|(id, n)| (n.as_str(), id))
         .collect();
     let nets: Vec<Net> = net_order
         .iter()
@@ -951,14 +959,12 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         // unconnected. So the package's pins are used only when they are a
         // superset of the referenced ones, and otherwise the netlist's pins stand
         // alone and the mismatch is named.
-        let unaccounted: Vec<&str> = match refd {
-            Some(r) => r
-                .iter()
+        let unaccounted: Vec<&str> = refd.map_or_else(Vec::new, |r| {
+            r.iter()
                 .filter(|p| !declared.iter().any(|d| d == *p))
                 .copied()
-                .collect(),
-            None => Vec::new(),
-        };
+                .collect()
+        });
         let package_fits = declared.is_empty() || unaccounted.is_empty();
         if !package_fits {
             wrong_packages.push(format!(
@@ -1021,7 +1027,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
                     continue;
                 }
                 if k.eq_ignore_ascii_case("value") {
-                    value = v.clone();
+                    value.clone_from(v);
                 } else {
                     properties.push((k.clone(), v.clone()));
                 }

@@ -254,9 +254,13 @@ pub struct OdbExtraction {
 
 /// Read an ODB++ job from a path: an unpacked job directory (or any directory
 /// containing exactly one), a `.tgz`/`.tar.gz`/`.tar`, or a `.zip`.
+///
+/// # Errors
+/// [`ExtractError::Odb`] when the path cannot be read, is not an ODB++ job, or
+/// the job lacks the data a netlist needs.
 pub fn from_odbpp(path: &Path) -> Result<OdbExtraction, ExtractError> {
     if path.is_dir() {
-        return extract_tree(OdbTree::from_dir(path)?);
+        return extract_tree(&OdbTree::from_dir(path)?);
     }
     let bytes = std::fs::read(path)
         .map_err(|e| ExtractError::Odb(format!("read {}: {e}", path.display())))?;
@@ -264,12 +268,18 @@ pub fn from_odbpp(path: &Path) -> Result<OdbExtraction, ExtractError> {
 }
 
 /// Read an ODB++ job from archive bytes (`.tgz`, `.tar`, or `.zip`).
+///
+/// # Errors
+/// [`ExtractError::Odb`] when the archive cannot be unpacked or does not hold
+/// a readable ODB++ job.
 pub fn from_odbpp_archive(bytes: &[u8]) -> Result<OdbExtraction, ExtractError> {
-    extract_tree(OdbTree::from_archive(bytes)?)
+    extract_tree(&OdbTree::from_archive(bytes)?)
 }
 
 /// Content sniff for the archive forms: an archive holding a `matrix/matrix`
-/// member. Keyed on the matrix file because it is what makes a tree an ODB++
+/// member.
+///
+/// Keyed on the matrix file because it is what makes a tree an ODB++
 /// job, and because a zip of gerbers (the other archive hauksbee accepts) never
 /// has one.
 #[must_use]
@@ -294,7 +304,8 @@ pub fn looks_like_odbpp_dir(dir: &Path) -> bool {
 
 // ── The read ──────────────────────────────────────────────────────────────────
 
-fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
+#[allow(clippy::too_many_lines, reason = "one ordered read of the job")]
+fn extract_tree(tree: &OdbTree) -> Result<OdbExtraction, ExtractError> {
     if !tree.has_matrix() {
         return Err(ExtractError::Odb(
             "this is not an ODB++ job: it has no matrix/matrix file, which every \
@@ -327,10 +338,10 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     // instances, with no components of its own) ahead of `steps/pcb`. No step
     // with a placement falls through to the first step, so the "carries no
     // component placement" refusal below can name what that step DID contain.
-    let with_placement = steps.iter().any(|s| step_has_placement(&tree, s, &matrix));
+    let with_placement = steps.iter().any(|s| step_has_placement(tree, s, &matrix));
     let step = match steps
         .iter()
-        .find(|s| step_has_placement(&tree, s, &matrix))
+        .find(|s| step_has_placement(tree, s, &matrix))
         .or_else(|| steps.first())
     {
         Some(s) => s.clone(),
@@ -498,11 +509,10 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             net_names[0]
         ));
     }
-    let nets: Vec<Net> = net_names
-        .iter()
-        .enumerate()
+    let nets: Vec<Net> = (0..)
+        .zip(&net_names)
         .skip(1)
-        .map(|(i, name)| Net::new(i as i64, unescape(name)))
+        .map(|(id, name)| Net::new(id, unescape(name)))
         .collect();
 
     // ── Components ───────────────────────────────────────────────────────────
@@ -550,7 +560,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
                     unparseable.push(format!("{}.{number} ('{raw}')", c.refdes));
                     None
                 }
-                records::NetRef::Num(n) if n < net_names.len() => Some(n as i64),
+                records::NetRef::Num(n) if n < net_names.len() => i64::try_from(n).ok(),
                 records::NetRef::Num(n) => {
                     out_of_range.push(format!("{}.{number} (net {n})", c.refdes));
                     None
@@ -586,7 +596,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
                 continue;
             }
             if k.eq_ignore_ascii_case("value") && value.is_empty() {
-                value = v.clone();
+                value.clone_from(v);
             } else {
                 properties.push((k.clone(), v.clone()));
             }
@@ -664,7 +674,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     // The netlist file escapes its names the same way `eda/data` does, so it is
     // un-escaped on the same terms: comparing an escaped name against an
     // un-escaped one would report every hierarchical net as a disagreement.
-    let netlist = find_netlist(&tree, &step).map(|t| {
+    let netlist = find_netlist(tree, &step).map(|t| {
         let parsed = records::parse_netlist(&t);
         records::CadNetlist {
             points_per_net: parsed
@@ -736,10 +746,9 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         .filter(|l| l.is_copper() || l.is_drill())
     {
         let path = format!("steps/{step}/layers/{}/features", l.name);
-        let counts = match tree.text(&path) {
-            Some(text) => parse_features(&text),
-            None => FeatureCounts::default(),
-        };
+        let counts = tree
+            .text(&path)
+            .map_or_else(FeatureCounts::default, |text| parse_features(&text));
         // Only when this reader recognised every record in the file: otherwise a
         // shortfall is its own gap, not the header lying, and reporting it as a
         // disagreement teaches the reader to be ignored.

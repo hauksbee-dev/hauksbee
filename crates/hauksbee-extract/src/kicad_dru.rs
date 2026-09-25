@@ -172,6 +172,11 @@ pub enum KicadDruError {
     Malformed(String),
 }
 
+/// Parse a KiCad custom design-rules file (`.kicad_dru`).
+///
+/// # Errors
+/// A [`KicadDruError`] when the text does not parse, declares an unsupported
+/// version, or holds a rule this reader cannot interpret.
 pub fn parse_kicad_dru(text: &str) -> Result<KicadDruRules, KicadDruError> {
     let stripped = strip_line_comments(text)?;
     let wrapped = format!("(kicad_dru\n{stripped}\n)");
@@ -377,15 +382,10 @@ struct ParsedDistance {
 }
 
 fn parse_distance(value: &str) -> Result<ParsedDistance, KicadDruError> {
-    let (number, scale, has_explicit_unit) = if let Some(number) = value.strip_suffix("mil") {
-        (number, 0.0254, true)
-    } else if let Some(number) = value.strip_suffix("mm") {
-        (number, 1.0, true)
-    } else if let Some(number) = value.strip_suffix("in") {
-        (number, 25.4, true)
-    } else {
-        (value, 1.0, false)
-    };
+    let (number, scale, has_explicit_unit) = [("mil", 0.0254), ("mm", 1.0), ("in", 25.4)]
+        .into_iter()
+        .find_map(|(unit, scale)| value.strip_suffix(unit).map(|n| (n, scale, true)))
+        .unwrap_or((value, 1.0, false));
     let number = number.parse::<f64>().map_err(|_| {
         KicadDruError::Malformed(format!(
             "distance {value:?} is not a number with mm, mil, or in units"
