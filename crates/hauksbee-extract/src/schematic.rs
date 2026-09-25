@@ -648,6 +648,15 @@ impl NetlistBuilder {
         // pins common to every gate (power pins usually live there). All
         // instances sharing a reference are merged into one component later.
         let inst_unit: u32 = sym.find_i64("unit").unwrap_or(1).max(0) as u32;
+        // Likewise a De Morgan part draws each unit in two body styles, and
+        // only the placed style's pins exist: `(convert N)` through KiCad 8,
+        // `(body_style N)` from KiCad 9. The alternate style can carry other
+        // pin numbers at the same spots, so admitting it adds phantom pins.
+        let inst_style = sym
+            .find_i64("convert")
+            .or_else(|| sym.find_i64("body_style"))
+            .unwrap_or(1)
+            .max(0) as u32;
         // Per-instance reference. When a sheet is instantiated more than once
         // (reused hierarchy), each placement gets its own designator, recorded
         // in `(instances (project .. (path "/uuid/uuid" (reference "R201"))))`.
@@ -689,8 +698,10 @@ impl NetlistBuilder {
         let mut pins = Vec::new();
         if let Some(def) = def {
             for lp in &def.pins {
-                // Only this instance's unit (and the common unit 0).
-                if lp.unit != 0 && lp.unit != inst_unit {
+                // Only this instance's unit and body style (0 = common).
+                if (lp.unit != 0 && lp.unit != inst_unit)
+                    || (lp.style != 0 && lp.style != inst_style)
+                {
                     continue;
                 }
                 let abs = place_pin(lp.at, (sx, sy, srot), mirror.as_deref());
@@ -1462,14 +1473,15 @@ fn merge_units(components: Vec<Component>) -> (Vec<Component>, Vec<(i64, i64)>) 
 // ---------------------------------------------------------------------------
 
 /// A pin as defined in a lib symbol: its connection point in the symbol's
-/// local frame, its number, name, electrical type, and which unit it belongs
-/// to (0 = common to every unit).
+/// local frame, its number, name, electrical type, and which unit and body
+/// style it belongs to (0 = common to every unit / style).
 struct LibPin {
     at: (f64, f64, f64),
     number: String,
     name: String,
     etype: String,
     unit: u32,
+    style: u32,
     /// Hidden pin. A hidden `power_in` pin auto-connects to the global power
     /// net named after the pin's *name* (KiCad's implicit power connection),
     /// even with no wire drawn to it.
@@ -1500,14 +1512,15 @@ impl LibSymbols {
                 // The top-level symbol can also directly hold pins (rare).
                 collect_pins(sym, &lib_id, &mut pins);
                 for unit_sym in sym.find_all("symbol") {
-                    let unit = unit_sym
+                    let (unit, style) = unit_sym
                         .arg_value(0)
                         .as_deref()
-                        .and_then(|n| unit_of(n, &lib_id))
-                        .unwrap_or(0);
+                        .and_then(unit_of)
+                        .unwrap_or((0, 0));
                     for p in unit_sym.find_all("pin") {
                         if let Some(mut lp) = lib_pin(p) {
                             lp.unit = unit;
+                            lp.style = style;
                             pins.push(lp);
                         }
                     }
@@ -1535,13 +1548,13 @@ fn collect_pins(sym: &List, _lib_id: &str, pins: &mut Vec<LibPin>) {
     }
 }
 
-/// Parse `<base>_<unit>_<bodystyle>` → unit number. Returns None when the name
-/// doesn't carry a unit suffix.
-fn unit_of(sub_name: &str, _lib_id: &str) -> Option<u32> {
+/// Parse `<base>_<unit>_<bodystyle>` → (unit, body style). Returns None when
+/// the name doesn't carry both suffixes.
+fn unit_of(sub_name: &str) -> Option<(u32, u32)> {
     let mut parts = sub_name.rsplitn(3, '_');
-    let _style = parts.next()?;
-    let unit = parts.next()?;
-    unit.parse().ok()
+    let style = parts.next()?.parse().ok()?;
+    let unit = parts.next()?.parse().ok()?;
+    Some((unit, style))
 }
 
 fn lib_pin(p: &List) -> Option<LibPin> {
@@ -1570,6 +1583,7 @@ fn lib_pin(p: &List) -> Option<LibPin> {
         name,
         etype,
         unit: 0,
+        style: 0,
         hidden,
     })
 }

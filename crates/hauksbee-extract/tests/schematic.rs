@@ -306,3 +306,57 @@ fn no_unconnected_components_in_fixtures() {
         }
     }
 }
+
+#[test]
+fn alternate_body_style_pins_are_not_placed() {
+    // A De Morgan part: body style 2 of unit 2 reuses unit 1's pin numbers
+    // (as Olimex's resistor-array symbols do). Only the placed style's pins
+    // exist; admitting style 2 gave unit 2 a phantom "1", and the unit merge
+    // then shorted NA to NC.
+    let pin =
+        |n: &str, x: f64| format!("(pin passive line (at {x} 0 0) (length 1) (number \"{n}\"))");
+    let unit = |u: u8, s: u8, a: &str, b: &str| {
+        format!("(symbol \"RN_{u}_{s}\" {} {})", pin(a, -5.08), pin(b, 5.08))
+    };
+    let place = |u: u8, y: u8| {
+        format!("(symbol (lib_id \"T:RN\") (at 100 {y} 0) (unit {u}) (property \"Reference\" \"RN1\" (at 0 0 0)))")
+    };
+    let label = |n: &str, x: f64, y: u8| format!("(label \"{n}\" (at {x} {y} 0))");
+    let text = format!(
+        "(kicad_sch (version 20230121) (uuid \"u\") (lib_symbols (symbol \"T:RN\" {} {} {} {})) {} {} {} {} {} {})",
+        unit(1, 1, "1", "2"),
+        unit(2, 1, "3", "4"),
+        unit(1, 2, "1", "2"),
+        unit(2, 2, "1", "2"),
+        place(1, 100),
+        place(2, 120),
+        label("NA", 94.92, 100),
+        label("NB", 105.08, 100),
+        label("NC", 94.92, 120),
+        label("ND", 105.08, 120),
+    );
+    let b = ExtractedBoard::from_kicad_schematic(&text).expect("extract");
+    let names: Vec<_> = ["1", "2", "3", "4"]
+        .iter()
+        .map(|p| {
+            let id = net_of(&b, "RN1", p).expect("pin on a net");
+            b.nets.iter().find(|n| n.id == id).unwrap().name.clone()
+        })
+        .collect();
+    assert_eq!(names, ["NA", "NB", "NC", "ND"]);
+}
+
+#[test]
+fn olimex_evb_rev_l_resistor_arrays_do_not_short_gnd_to_3v3lan() {
+    let Some(p) = hauksbee_testkit::corpus_or_skip(
+        env!("CARGO_MANIFEST_DIR"),
+        "olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch",
+        "Olimex EVB REV-L body styles",
+    ) else {
+        return;
+    };
+    let b = ExtractedBoard::from_kicad_schematic_path(&p).expect("extract");
+    let gnd = b.net_by_name("GND").expect("GND net").id;
+    assert_eq!(net_of(&b, "U1", "2"), Some(gnd), "TP4054 GND pin");
+    assert_ne!(b.net_by_name("+3.3VLAN").map(|n| n.id), Some(gnd));
+}
