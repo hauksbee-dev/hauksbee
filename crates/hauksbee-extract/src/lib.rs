@@ -267,7 +267,7 @@ pub(crate) fn sample_list(items: &[String]) -> String {
 }
 
 /// One electrical net. `id` is the KiCad net number (0 = the unconnected
-/// net in PCB files); `name` like "GND", "/Debugger/nRF52_VDD".
+/// net in PCB files); `name` like "GND", "/`Debugger/nRF52_VDD`".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Net {
     pub id: i64,
@@ -307,7 +307,7 @@ pub struct Component {
     /// Value field ("10k", "BCM857BS").
     pub value: String,
     /// Symbol or footprint library id ("Device:R",
-    /// "Resistor_SMD:R_0402_1005Metric").
+    /// "`Resistor_SMD:R_0402_1005Metric`").
     pub lib_id: String,
     /// Footprint name when known.
     pub footprint: String,
@@ -686,8 +686,7 @@ pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Comp
             for (incoming_key, incoming_value) in &incoming.properties {
                 if previous_key == incoming_key && previous_value != incoming_value {
                     conflicts.push(format!(
-                        "property '{}' differs ('{}' versus '{}')",
-                        previous_key, previous_value, incoming_value
+                        "property '{previous_key}' differs ('{previous_value}' versus '{incoming_value}')"
                     ));
                 }
             }

@@ -349,7 +349,7 @@ fn i2c_dual_pullups_combine_in_parallel_not_min() {
     );
 }
 
-/// Full kicad_pcb text for a 10k-pulled SDA bus with `devices` sensor pins and a
+/// Full `kicad_pcb` text for a 10k-pulled SDA bus with `devices` sensor pins and a
 /// single routed track `track_mm` long, so the SAME text drives both extraction
 /// and geometry parsing.
 fn i2c_routed_text(devices: usize, track_mm: f64) -> String {
@@ -488,7 +488,7 @@ fn a_declared_stackup_computes_the_trace_capacitance_instead_of_assuming_it() {
 // Antenna keepout check.
 // ---------------------------------------------------------------------------
 
-/// Full kicad_pcb text for a WROOM module at (50,50,0) plus a caller-supplied
+/// Full `kicad_pcb` text for a WROOM module at (50,50,0) plus a caller-supplied
 /// intruder body, so the SAME text drives both extraction and geometry parsing.
 fn wroom_text(intruder_body: &str) -> String {
     format!(
@@ -977,9 +977,9 @@ fn a_via_antipad_in_the_plane_is_not_a_missing_reference() {
     // around x = 10, written the way a fill with a void in it is: the outline
     // walks in to the hole and back out. The pair drops through vias at (10, 0)
     // and (10, 0.5).
-    let holed_fill = r#"(filled_polygon (pts
+    let holed_fill = r"(filled_polygon (pts
         (xy -5 -5) (xy 25 -5) (xy 25 5) (xy 10.3 5)
-        (xy 10.3 -0.3) (xy 9.7 -0.3) (xy 9.7 5) (xy -5 5)))"#;
+        (xy 10.3 -0.3) (xy 9.7 -0.3) (xy 9.7 5) (xy -5 5)))";
     let vias = r#"(via (at 10 0) (size 0.45) (drill 0.25) (layers "F.Cu" "B.Cu") (net 1))
         (via (at 10 0.5) (size 0.45) (drill 0.25) (layers "F.Cu" "B.Cu") (net 2))"#;
     let text = impedance_usb_over_plane_with(holed_fill, vias);

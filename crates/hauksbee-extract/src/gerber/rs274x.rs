@@ -47,7 +47,7 @@ use gerber_types::{CoordinateNumber, CoordinateOffset, Coordinates, Interpolatio
 use super::geo::{point_in_polygon, BoundsLeaf, Capsule, Shape};
 use super::macros::instantiate_macro;
 
-/// Arc flattening resolution (matches drc's ARC_SEGMENTS).
+/// Arc flattening resolution (matches drc's `ARC_SEGMENTS`).
 const ARC_SEGMENTS: usize = 16;
 
 /// Radius (mm) of the small disc a macro flash falls back to when its aperture

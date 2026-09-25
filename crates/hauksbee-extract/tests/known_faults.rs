@@ -63,7 +63,7 @@ fn required_external_board(rel: &str) -> PathBuf {
     })
 }
 
-/// A required corpus file is missing: skip, unless HAUKSBEE_REQUIRE_CORPUS is set,
+/// A required corpus file is missing: skip, unless `HAUKSBEE_REQUIRE_CORPUS` is set,
 /// in which case fail loudly so the calibration is genuinely CI-enforced.
 fn require_corpus(what: &str) {
     if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {

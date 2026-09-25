@@ -24,7 +24,7 @@
 //!   (`ovc4/hardware/carrier/fab/bom.csv`), Apache-2.0. `MFN`/`MPN` columns
 //!   beside a `D1N`/`D1PN` distributor pair.
 //! * `bom/altium.csv`: marshallh/gbpp at 2aa972bf (`BOM.csv`), MIT.
-//! * `bom/eagle_partlist.txt`: stephan192/hoermann_door at 2a46af4d
+//! * `bom/eagle_partlist.txt`: `stephan192/hoermann_door` at 2a46af4d
 //!   (`board/RS485Interface_partlist.txt`), MIT. Fixed-width under an Eagle
 //!   banner.
 //! * `bom/lcsc.csv`: xyphro/UsbGpib at 4e7a46d6 (`HW/REV2/BOM-xyp-gpib.csv`),

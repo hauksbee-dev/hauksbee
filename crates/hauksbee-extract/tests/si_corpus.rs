@@ -1,6 +1,6 @@
 //! Corpus-gated calibration guard for the four signal-integrity checks
-//! (`--si`). The binding discipline (docs/evidence/FAMOUS_SWEEP.md,
-//! docs/evidence/KNOWN_FAULTS_VALIDATION.md): **zero true findings on the known-good
+//! (`--si`). The binding discipline (`docs/evidence/FAMOUS_SWEEP.md`,
+//! `docs/evidence/KNOWN_FAULTS_VALIDATION.md)`: **zero true findings on the known-good
 //! corpus, or the check does not fire.** These boards are shipped, working,
 //! reviewed designs, so any high/medium/low SI finding on them is a hauksbee
 //! false positive that must be chased to the file and killed before the check is
@@ -89,9 +89,9 @@ fn run_si(path: &PathBuf) -> Option<hauksbee_extract::SiReport> {
 /// THE GATE: no SI check fires (high/medium/low) on any known-good corpus board.
 /// The zero-false-positive gate over the whole known-good corpus.
 ///
-/// Currently reports 11 findings, all antenna_keepout on Olimex ESP32-EVB
+/// Currently reports 11 findings, all `antenna_keepout` on Olimex ESP32-EVB
 /// revisions, all ground copper in the WROOM band. See the doc comment on
-/// olimex_wroom_antenna_keepout_is_clear for the geometry; until that question
+/// `olimex_wroom_antenna_keepout_is_clear` for the geometry; until that question
 /// is settled this cannot distinguish a false alarm from a true finding, and
 /// silencing it by whitelisting the boards would hide whichever it turns out
 /// to be.
@@ -164,7 +164,7 @@ fn rp2040_abm8_272_load_is_info_within_tolerance() {
 }
 
 /// The ZSWatch mainboard's busiest I2C bus (the 8-device Extension bus, 1.8 kohm
-/// pull) computes t_r ~ 122 ns, far under the standard-mode 1000 ns: clean. This
+/// pull) computes `t_r` ~ 122 ns, far under the standard-mode 1000 ns: clean. This
 /// is the corpus's closest-to-the-limit I2C bus, so it is the discriminating
 /// no-fire (a regression that mis-scaled the RC, or counted the connector as a
 /// device, would push it over and this would go red as a finding).

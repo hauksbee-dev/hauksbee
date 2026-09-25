@@ -537,7 +537,7 @@ fn advanced_geometry_boards_match_kicad() {
 /// Every board listed in `docs/ingest/GERBER.md`'s accuracy table is gated here, so
 /// the documented numbers are reproducible (run `HAUKSBEE_REQUIRE_CORPUS=1
 /// cargo test --test gerber_closedloop -- --nocapture`). KiCad-10-format demos
-/// (pic_programmer / stickhub) are skipped, not failed: the installed CLI 9.x
+/// (`pic_programmer` / stickhub) are skipped, not failed: the installed CLI 9.x
 /// cannot load them to make ground-truth gerbers.
 ///
 /// Each board gates two things, because net-partition alone is computed only

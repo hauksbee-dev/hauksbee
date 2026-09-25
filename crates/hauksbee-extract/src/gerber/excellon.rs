@@ -855,15 +855,15 @@ fn parse_coord(tok: &str, fmt: &CoordFormat) -> Option<f64> {
     let total = fmt.int_digits + fmt.dec_digits;
     let padded = if fmt.leading_zero_omitted {
         // Value right-justified: pad leading zeros to `total`.
-        format!("{:0>width$}", digits, width = total)
+        format!("{digits:0>total$}")
     } else {
         // Trailing zeros suppressed: pad on the right.
-        format!("{:0<width$}", digits, width = total)
+        format!("{digits:0<total$}")
     };
     let cut = padded.len().saturating_sub(fmt.dec_digits);
     let int_part = &padded[..cut];
     let dec_part = &padded[cut..];
-    let val: f64 = format!("{}.{}", int_part, dec_part).parse().ok()?;
+    let val: f64 = format!("{int_part}.{dec_part}").parse().ok()?;
     Some(if neg { -val } else { val })
 }
 

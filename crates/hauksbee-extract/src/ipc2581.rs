@@ -2,7 +2,7 @@
 //!
 //! IPC-2581 is the open, vendor-neutral answer to ODB++: one XML document
 //! carrying the stackup, the placement, the netlist and the BOM. Altium,
-//! Cadence, Zuken, Mentor, DownStream and KiCad 8+ all export it, and unlike a
+//! Cadence, Zuken, Mentor, `DownStream` and KiCad 8+ all export it, and unlike a
 //! gerber set it is *electrical* — the netlist is stated, not reconstructed.
 //!
 //! ## What this reads
@@ -94,7 +94,7 @@ use crate::{sample_list, Component, ExtractError, ExtractedBoard, Net, Pin};
 ///
 /// IPC-2581 carries values in the `<Bom>` section, as a `<Textual>`
 /// characteristic; a document exported without a BOM (a `FABRICATION` function
-/// mode, or a tool that writes CadData only) has placement and netlist but no
+/// mode, or a tool that writes `CadData` only) has placement and netlist but no
 /// values at all. `part` and `OEMDesignNumberRef` are device/library ids, not
 /// values, and are never promoted to one.
 pub const VALUE_UNRESOLVED_REASON: &str =
@@ -301,7 +301,7 @@ struct BomRow {
     package_ref: String,
     populate: bool,
     layer_ref: String,
-    /// The item's `<Characteristics><Textual>` pairs, shared by every RefDes on
+    /// The item's `<Characteristics><Textual>` pairs, shared by every `RefDes` on
     /// the item.
     characteristics: Vec<(String, String)>,
     oem_design_number: String,

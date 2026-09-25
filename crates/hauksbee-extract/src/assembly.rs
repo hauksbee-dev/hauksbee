@@ -17,9 +17,9 @@
 //!   resolution (the engine's binder refuses to resolve anything else), so a
 //!   check cannot obtain an electrical model without having answered the
 //!   three-state question first.
-//! - **DnpAbsent**: on the layout but not assembled, with the [`DnpReason`]
+//! - **`DnpAbsent`**: on the layout but not assembled, with the [`DnpReason`]
 //!   the DNP policy recorded (or the bare board-file flag when no policy ran).
-//! - **IdentityUnknown**: the record's identity is refused (a conflicting
+//! - **`IdentityUnknown`**: the record's identity is refused (a conflicting
 //!   duplicate designator, or an inferred ambiguous reference without an
 //!   authoritative source UID), so nothing about it, including its DNP flag,
 //!   is evidence.

@@ -67,7 +67,7 @@
 //!    with no resolvable model and a bare magnitude for a value still gets an
 //!    answer rather than losing a pull-up.
 //!
-//! Resolution is memoised per distinct (lib_id, value, footprint, mpn) tuple:
+//! Resolution is memoised per distinct (`lib_id`, value, footprint, mpn) tuple:
 //! `is_resistor` is called inside per-net member loops, and a full library scan
 //! per call would be a per-component cost multiplied by net degree. The number
 //! of distinct tuples on a board is the number of distinct part types, which is

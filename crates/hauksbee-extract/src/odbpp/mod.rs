@@ -111,7 +111,7 @@ use crate::{sample_list, Component, ExtractError, ExtractedBoard, Net, Pin};
 /// as a `PRP` property and plenty of producers do not write one (Valor NPI writes
 /// `PRP CLASS` and routing rules but no `PRP Value`). The value is never
 /// fabricated from `part_name`: that field is a footprint string in KiCad's
-/// export, and reading "R_0603" as a resistance is how phantom faults appear.
+/// export, and reading "`R_0603`" as a resistance is how phantom faults appear.
 pub const VALUE_UNRESOLVED_REASON: &str =
     "no value in the ODB++ job: it carries no `PRP Value` property for this part, \
      and the part name is a library/footprint id rather than a value";

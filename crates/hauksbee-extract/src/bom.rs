@@ -193,7 +193,7 @@ pub enum BomDialect {
     /// cell. 35 files.
     KicadGrouped,
     /// KiCad's ungrouped / `Component, Description, Part, References, Value,
-    /// Footprint, Quantity Per PCB` shape, including the KiBom and the
+    /// Footprint, Quantity Per PCB` shape, including the `KiBom` and the
     /// `bom2grouped_csv` variants. Reference designators here are often
     /// SPACE-separated rather than comma-separated. 27 files.
     KicadUngrouped,

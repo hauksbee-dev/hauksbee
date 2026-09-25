@@ -588,8 +588,7 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
             class,
             zdiff,
             &format!(
-                "{} / {}: W~{:.3} mm, S~{:.3} mm microstrip -> Zdiff ~ {:.0} ohm{}",
-                pname, mname, w, s, zdiff, reference_note
+                "{pname} / {mname}: W~{w:.3} mm, S~{s:.3} mm microstrip -> Zdiff ~ {zdiff:.0} ohm{reference_note}"
             ),
             vec![pname.clone(), mname.clone()],
         );

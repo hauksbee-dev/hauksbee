@@ -323,7 +323,7 @@ pub(crate) fn has_signal_role_token(n: &str) -> bool {
 /// A rail whose name carries its own numeric magnitude: an optional leading
 /// '+', then digits, 'V', and optional trailing digits, plain "15V"/"24V" or
 /// the KiCad digit-V-digit "5V0"/"3V3" form. Returns `None` for names that
-/// don't start with a digit after the optional '+' (VCC, VDD_IO), leaving them
+/// don't start with a digit after the optional '+' (VCC, `VDD_IO`), leaving them
 /// to the token heuristics. Mirrors the engine binder's `positive_rail_fallback`.
 pub(crate) fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     let rest = n.strip_prefix('+').unwrap_or(n);
@@ -405,7 +405,7 @@ fn is_resistor_array(c: &Component) -> bool {
 /// Is this an I2C level translator that provides its own bus pull-ups, so an
 /// external pull-up on the connected bus is optional rather than missing?
 ///
-/// Open-drain auto-direction translators (NXP NTS010x, TI TXS010x/TXB010x) and
+/// Open-drain auto-direction translators (NXP `NTS010x`, TI TXS010x/TXB010x) and
 /// buffered repeaters (PCA9517/PCA9617, LTC4311) integrate ~10 kOhm pull-ups to
 /// each Vcc. A bare pass-gate switch (PCA9306, PCA9509 pass type) does NOT, so
 /// it is deliberately excluded.
@@ -508,7 +508,7 @@ fn is_connector_like(c: &Component) -> bool {
         || is_pin_array_package(&c.footprint)
 }
 
-/// Eagle/KiCad pin-row package names like "1X10", "2X05", "1X10_OVALWAVE".
+/// Eagle/KiCad pin-row package names like "1X10", "2X05", "`1X10_OVALWAVE`".
 ///
 /// A pin grid is INTEGER counts with no unit. A body DIMENSION ("7x7mm",
 /// "3.9x4.9mm") is a package size, not a pin grid, and KiCad appends one to
@@ -807,7 +807,7 @@ fn pin_is_no_connect(p: &Pin) -> bool {
 // ---------------------------------------------------------------------------
 
 /// A net is an I2C data/clock line if its (leaf) name is exactly SDA/SCL or a
-/// recognised decorated form (I2C_SDA, SDA1, ASDA, SDA_3V3, ...). We require the
+/// recognised decorated form (`I2C_SDA`, SDA1, ASDA, `SDA_3V3`, ...). We require the
 /// SDA/SCL token to stand as its own word so we do not match "USDA" sub-strings
 /// or unrelated nets.
 pub(crate) fn i2c_role(name: &str) -> Option<&'static str> {
@@ -1239,7 +1239,7 @@ fn is_emmc_device(c: &Component) -> bool {
 }
 
 /// SD-bus level translators / port expanders that integrate their own
-/// pull-ups (TXS0206x, the dedicated SD-card translator, and TXS02612), and
+/// pull-ups (`TXS0206x`, the dedicated SD-card translator, and TXS02612), and
 /// pass-gate card muxes through which a host-side pull-up conducts (FSA2567,
 /// NVT4857, TS3A27518, NLSX/PI4ULS-class shifters). Either way, a net behind
 /// one of these is beyond single-net static reasoning: skip rather than
@@ -2098,7 +2098,7 @@ mod sd_pullup_tests {
         assert_eq!(report.of_check(LintCheck::MissingSdPullup).count(), 0);
     }
 
-    /// An SDRAM bus is conventionally named SD_D0..SD_D15 but has no card
+    /// An SDRAM bus is conventionally named `SD_D0..SD_D15` but has no card
     /// socket, only the MCU and the SDRAM chip. The check must stay silent:
     /// the net NAME is not evidence a card exists.
     #[test]
@@ -2148,7 +2148,7 @@ mod sd_pullup_tests {
     /// finding fires; under the default fit-except-links policy the part is
     /// simulation-fitted, and the check must say the assembled board still
     /// floats instead of going green (the policy marks such parts with
-    /// DNP_FITTED_KEY exactly so presence-class lints can tell).
+    /// `DNP_FITTED_KEY` exactly so presence-class lints can tell).
     #[test]
     fn dnp_pullup_does_not_silently_clear() {
         use crate::dnp::DnpPolicy;

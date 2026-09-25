@@ -120,7 +120,7 @@ fn header_unit_scale(header: &str) -> f64 {
     1.0
 }
 
-/// Parse a number that may carry a unit suffix; returns (value, had_unit) where
+/// Parse a number that may carry a unit suffix; returns (value, `had_unit`) where
 /// `had_unit` is true when the cell itself named its unit (mm/mil/inch), so a
 /// header-implied unit must not be applied on top of it.
 fn parse_len(s: &str) -> Option<(f64, bool)> {

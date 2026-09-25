@@ -52,7 +52,7 @@ struct PinResources {
     label: String,
     /// PWM slice+channel id like "6A" (RP2040). One pad -> one PWM channel.
     pwm: Option<String>,
-    /// QSPI pin-group id like "qspi_data" (SAMD51): a *group* of pads that the
+    /// QSPI pin-group id like "`qspi_data`" (SAMD51): a *group* of pads that the
     /// QSPI controller owns together.
     qspi_group: Option<String>,
     /// True for a QSPI DATA pad (PA08..PA11): the discriminator pads. A 4-wire
@@ -199,7 +199,7 @@ struct PinDemand {
     /// Human-readable evidence: what on that net implies the function.
     evidence: String,
     /// The resource instance this demand occupies, e.g. ("pwm", "6A") or
-    /// ("qspi", "qspi_data").
+    /// ("qspi", "`qspi_data`").
     resource_kind: &'static str,
     resource_inst: String,
 }
@@ -1007,7 +1007,7 @@ mod tests {
     /// GP12 (pad 16, slice 6A) -> HDMI clock, GP28 (pad 34, slice 6A) -> audio
     /// jack via a series R. The two PWM functions collide on slice 6A: must fire.
     /// U1 carries >=30 connected pins (most on a shared spare net) to satisfy the
-    /// module's min_pins guard. Built by `conflict_net()` so the filler is not a
+    /// module's `min_pins` guard. Built by `conflict_net()` so the filler is not a
     /// hand-balanced wall of parens.
     fn conflict_net() -> String {
         // Spare nodes to pad U1's connected-pin count over the min_pins=30 guard.
@@ -1022,7 +1022,7 @@ mod tests {
             ));
         }
         format!(
-            r#"(export (version D)
+            r"(export (version D)
   (components
     (comp (ref U1) (value RP2040_PLATFORM) (libsource (lib OLIMEX_Cases) (part RP2040_PLATFORM)))
     (comp (ref HDMI1) (value HDMI-SWM-19) (libsource (lib conn) (part HDMI-SWM-19)))
@@ -1033,7 +1033,7 @@ mod tests {
     (net (code 1) (name /CK) (node (ref U1) (pin 16)) (node (ref HDMI1) (pin 12)))
     (net (code 2) (name /PWM_L) (node (ref U1) (pin 34)) (node (ref R1) (pin 1)))
     (net (code 3) (name /PWM_AUDIO_L) (node (ref R1) (pin 2)) (node (ref AUDIO1) (pin 2)))
-{spare}  ))"#
+{spare}  ))"
         )
     }
 
@@ -1147,7 +1147,7 @@ mod tests {
     /// quad-IO naming (IO0..IO3) it is a correct QSPI flash -> silent.
     fn samd51_flash_net(data_names: [&str; 4]) -> String {
         format!(
-            r#"(export (version D)
+            r"(export (version D)
   (components
     (comp (ref U1) (value ATSAMD51J20A-A) (libsource (lib mcu) (part ATSAMD51J20A)))
     (comp (ref U2) (value SPI Flash) (libsource (lib Memory) (part AT25SF041)))
@@ -1157,7 +1157,7 @@ mod tests {
     (net (code 2) (name {d1}) (node (ref U1) (pin 18)) (node (ref U2) (pin 6)))
     (net (code 3) (name {d2}) (node (ref U1) (pin 19)) (node (ref U2) (pin 1)))
     (net (code 4) (name {d3}) (node (ref U1) (pin 20)) (node (ref U2) (pin 2)))
-{fill}  ))"#,
+{fill}  ))",
             d0 = data_names[0], d1 = data_names[1], d2 = data_names[2], d3 = data_names[3],
             fill = (5..=44)
                 .map(|p| format!("    (net (code {}) (name f{p}) (node (ref U1) (pin {p})) (node (ref FILL) (pin 1)))\n", 100 + p))

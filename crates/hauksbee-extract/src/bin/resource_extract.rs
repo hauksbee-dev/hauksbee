@@ -479,7 +479,7 @@ id = "rp2040_extracted"
     }
 
     /// Offline fixture: drive the parse + diff path with a canned codex reply via
-    /// HAUKSBEE_EXTRACT_MOCK_REPLY, no codex, no network. Always runs.
+    /// `HAUKSBEE_EXTRACT_MOCK_REPLY`, no codex, no network. Always runs.
     #[test]
     fn offline_extraction_fixture() {
         let reply = "Here is the table:\n```toml\n[[mcu]]\nid = \"rp2040_extracted\"\n[mcu.pins]\n\"GP12\" = { pwm = \"6A\" }\n\"GP28\" = { pwm = \"6A\" }\n```\n";
@@ -524,7 +524,7 @@ id = "rp2040_extracted"
     /// datasheet and assert agreement. #[ignore] (downloads a 5.3 MB PDF + runs
     /// codex, ~1-2 min). Run with:
     ///   cargo test -p hauksbee-extract --bin resource-extract -- \
-    ///       live_rp2040_extraction --ignored --nocapture
+    ///       `live_rp2040_extraction` --ignored --nocapture
     #[test]
     #[ignore]
     fn live_rp2040_extraction_agrees() {

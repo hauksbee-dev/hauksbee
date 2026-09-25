@@ -7,7 +7,7 @@
 //! set and return the convex hull of their union, translated to the flash
 //! location. That over-approximates concave macros slightly (a cross becomes
 //! its bounding diamond) but never loses a pad, and the common KiCad macros
-//! (RoundRect, the chamfered/rounded pads) are convex anyway.
+//! (`RoundRect`, the chamfered/rounded pads) are convex anyway.
 //!
 //! **Exposure-off primitives are subtracted**, per the spec's paint model: a
 //! primitive with exposure 0 erases whatever was painted under it. A clear

@@ -105,7 +105,7 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
 
 /// Net identity across format generations: declared ids where the file has
 /// them, synthesized ids (negative of insertion order is avoided; we use
-/// max_id+1 onward) for name-only references.
+/// `max_id+1` onward) for name-only references.
 #[derive(Default)]
 struct NetTable {
     by_id: std::collections::BTreeMap<i64, String>,

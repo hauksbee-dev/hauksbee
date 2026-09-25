@@ -262,7 +262,7 @@ enum NameScope {
 enum AnchorKind {
     /// Global label (and a global bus label's promoted members).
     Global,
-    /// Power symbol pin, or a hidden power_in pin's implicit connection.
+    /// Power symbol pin, or a hidden `power_in` pin's implicit connection.
     Power,
     /// Local label.
     Local,
@@ -272,8 +272,8 @@ enum AnchorKind {
 
 impl AnchorKind {
     /// Naming precedence, highest wins. Mirrors KiCad's driver priority
-    /// (`connection_graph.h`): GLOBAL > GLOBAL_POWER_PIN > LOCAL_LABEL >
-    /// HIER_LABEL. Ties still break to the lexicographically smallest name.
+    /// (`connection_graph.h`): GLOBAL > `GLOBAL_POWER_PIN` > `LOCAL_LABEL` >
+    /// `HIER_LABEL`. Ties still break to the lexicographically smallest name.
     fn prio(self) -> u8 {
         match self {
             Self::Global => 4,
@@ -1492,7 +1492,7 @@ struct LibDef {
     is_power: bool,
 }
 
-/// All lib symbol definitions embedded in one schematic, indexed by lib_id.
+/// All lib symbol definitions embedded in one schematic, indexed by `lib_id`.
 struct LibSymbols {
     defs: HashMap<String, LibDef>,
 }

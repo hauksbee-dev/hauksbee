@@ -374,7 +374,7 @@ const KNOWN_CRYSTAL_CL: &[(&str, f64, &str)] = &[
     // so ABM8G alone is deliberately absent here (info, not a guess).
 ];
 
-/// A ceramic resonator (Murata CSTxE / CERALOCK, ZTT, 3-terminal) integrates its
+/// A ceramic resonator (Murata `CSTxE` / CERALOCK, ZTT, 3-terminal) integrates its
 /// own load caps (the centre pin is the common cap node to ground). It needs no
 /// external caps, so a resonator with no external caps is correct, never a
 /// finding. Recognised by value family or a "RESONATOR" footprint.
@@ -666,7 +666,7 @@ fn load_cap_through_resistor(board: &ExtractedBoard, net_id: i64) -> Option<f64>
 // zero false positives on the proven-good corpus buses (Olimex UEXT 2.2k,
 // ZSWatch 1.8k/3.3k), all of which sit far under 1000 ns.
 
-/// I2C rise-time constant: t_r = K_RISE * R * C (ln(0.7/0.3) = 0.8473).
+/// I2C rise-time constant: `t_r` = `K_RISE` * R * C (ln(0.7/0.3) = 0.8473).
 pub const K_RISE: f64 = 0.8473;
 /// Standard-mode (100 kHz) rise-time limit (ns).
 pub const T_R_STANDARD_NS: f64 = 1000.0;
@@ -823,7 +823,7 @@ fn pullup_ohms(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
 
 /// Estimate bus capacitance (pF) on an I2C net from device count plus optional
 /// routed trace length. Devices = non-resistor, non-connector parts with a pin
-/// on the net (each ~C_PIN_PF). Trace length, when known, adds
+/// on the net (each ~`C_PIN_PF`). Trace length, when known, adds
 /// [`C_TRACE_PF_PER_MM`].
 fn bus_capacitance_pf(
     board: &ExtractedBoard,
@@ -1649,8 +1649,8 @@ fn track_width_range(root: &List, net_id: i64) -> Option<(f64, f64)> {
     }
 }
 
-/// Find USB D+/D- pairs by net name. Returns (plus_net_id, minus_net_id,
-/// base_label) for each pair on the board.
+/// Find USB D+/D- pairs by net name. Returns (`plus_net_id`, `minus_net_id`,
+/// `base_label`) for each pair on the board.
 ///
 /// A pair is only the two polarity legs of the *same logical net*: they must
 /// share an identical scope key (the hierarchical sheet path PLUS the leaf stem
@@ -1734,8 +1734,8 @@ fn usb_pair_key(raw_name: &str) -> Option<(String, char)> {
 /// distinguishes one logical USB net from another within a sheet (e.g. `USB1_` vs
 /// `USB2_`), so two legs only pair when their stems also match.
 ///
-/// Recognises D+/D-, DP/DN, DM, USB_D+/USB_D-, UD+/UD- (MNT), USBDP/USBDM,
-/// *_DP/_DN, D_P/D_N. `None` when the leaf is not a USB data line.
+/// Recognises D+/D-, DP/DN, DM, `USB_D+/USB_D`-, UD+/UD- (MNT), USBDP/USBDM,
+/// *_DP/_DN, `D_P/D_N`. `None` when the leaf is not a USB data line.
 fn usb_polarity(n: &str) -> Option<(String, char)> {
     // Longest suffixes first so e.g. "DPLUS" is not shadowed by "DP".
     let candidates: [(&str, char); 9] = [
@@ -1795,8 +1795,7 @@ fn check_usb_diff_pair(board: &ExtractedBoard, root: &List, report: &mut SiRepor
                 let inconsistent = (minp - minm).abs() > 0.02 || (maxp - maxm).abs() > 0.02;
                 if inconsistent {
                     format!(
-                        "; width mismatch D+={:.3}..{:.3} mm vs D-={:.3}..{:.3} mm",
-                        minp, maxp, minm, maxm
+                        "; width mismatch D+={minp:.3}..{maxp:.3} mm vs D-={minm:.3}..{maxm:.3} mm"
                     )
                 } else {
                     String::new()
@@ -1813,9 +1812,8 @@ fn check_usb_diff_pair(board: &ExtractedBoard, root: &List, report: &mut SiRepor
                 check: SiCheck::UsbDiffPair,
                 severity: SiSeverity::Medium,
                 message: format!(
-                    "USB pair {} / {}: routed lengths {:.1} / {:.1} mm, intra-pair skew {:.1} mm \
-                     exceeds even the lenient full-speed budget {:.0} mm{}",
-                    pname, mname, lp, lm, skew, USB_SKEW_FS_MM, width_note
+                    "USB pair {pname} / {mname}: routed lengths {lp:.1} / {lm:.1} mm, intra-pair skew {skew:.1} mm \
+                     exceeds even the lenient full-speed budget {USB_SKEW_FS_MM:.0} mm{width_note}"
                 ),
                 refs: vec![],
                 nets: vec![pname, mname],
@@ -1830,9 +1828,8 @@ fn check_usb_diff_pair(board: &ExtractedBoard, root: &List, report: &mut SiRepor
                 check: SiCheck::UsbDiffPair,
                 severity: SiSeverity::Info,
                 message: format!(
-                    "USB pair {} / {}: lengths {:.1} / {:.1} mm, skew {:.2} mm (FS limit {:.0} mm, \
-                     HS limit {:.2} mm){}",
-                    pname, mname, lp, lm, skew, USB_SKEW_FS_MM, USB_SKEW_HS_MM, width_note
+                    "USB pair {pname} / {mname}: lengths {lp:.1} / {lm:.1} mm, skew {skew:.2} mm (FS limit {USB_SKEW_FS_MM:.0} mm, \
+                     HS limit {USB_SKEW_HS_MM:.2} mm){width_note}"
                 ),
                 refs: vec![],
                 nets: vec![pname, mname],

@@ -7,7 +7,7 @@
 //!     (GP28) both map to RP2040 PWM slice 6, channel A. Open issue #1 on
 //!     OLIMEX/RP2040-PICO-PC, unfixed across the shipped revisions.
 //!   - SparkFun SAMD51 Thing Plus: the AT25SF041 SPI flash sits on PA08..PA11,
-//!     the SAM D5x QSPI DATA0..3 pins. sparkfun/Arduino_Boards issue #82.
+//!     the SAM D5x QSPI DATA0..3 pins. `sparkfun/Arduino_Boards` issue #82.
 //!
 //! Ground-truth detail (per-input honesty, not a two-sidedness bug): the rev B
 //! folder's two CAD files describe DIFFERENT design snapshots. The rev B
@@ -15,8 +15,8 @@
 //! header says so) with the DVI clock on GP14/GP15 (PWM slice 7), so on that
 //! input the check is correctly SILENT. The rev B `.kicad_pcb` - the file the
 //! board was fabricated from - has the clock on GP12/GP13 (slice 6), and the
-//! shipped Gerbers agree pad-for-pad (X2 attributes: U2 pad 16 = /PICO_CK-,
-//! pad 17 = /PICO_CK+ in `Gerbers/RP2040-PICO-PC_rev_B-F_Cu.gbr`). So the
+//! shipped Gerbers agree pad-for-pad (X2 attributes: U2 pad 16 = /`PICO_CK`-,
+//! pad 17 = /`PICO_CK`+ in `Gerbers/RP2040-PICO-PC_rev_B-F_Cu.gbr`). So the
 //! slice-6A fire on the rev B layout is a TRUE positive about the physical
 //! board, and the silence on the rev B netlist is the truth about that (stale)
 //! netlist. Each input is judged on what it actually says.

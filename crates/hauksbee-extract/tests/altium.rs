@@ -174,7 +174,7 @@ fn two_net_board(comps: Vec<u8>, pads: Vec<u8>) -> ExtractedBoard {
 }
 
 /// Two resistors, R1 and R2, sharing a net N1 across their inner pads and each
-/// with an outer pad on its own net (N0_VCC, N2_GND). Plus a track on N1.
+/// with an outer pad on its own net (`N0_VCC`, `N2_GND`). Plus a track on N1.
 fn two_resistor_board() -> Vec<u8> {
     // Nets6: index 0 = VCC, 1 = MID, 2 = GND.
     let mut nets = Vec::new();

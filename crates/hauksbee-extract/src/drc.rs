@@ -920,15 +920,14 @@ impl DrcReport {
         };
         (n > 0).then(|| {
             format!(
-                "drc: {} zone-versus-pad primitive pair(s) were suppressed, not evaluated as \
+                "drc: {n} zone-versus-pad primitive pair(s) were suppressed, not evaluated as \
                  shorts (a zone boundary is indexed edge by edge, so one carve around one pad \
                  contributes several pairs; this is an upper bound, not a pad count). \
                  A pad overlapping a different-net pour is nearly always the antipad carve \
                  (KiCad-10 keyhole fills draw that carve with slits running through the pad \
                  interior), so this class is dropped wholesale to avoid a false-positive \
                  epidemic. Real pour incursions by a track, via or arc are still reported. To \
-                 audit the suppressed class, run KiCad's own DRC on the board.",
-                n
+                 audit the suppressed class, run KiCad's own DRC on the board."
             )
         })
     }
@@ -1636,7 +1635,7 @@ fn rect_polygon(w: f64, h: f64, to_world: &dyn Fn(f64, f64) -> (f64, f64), r: f6
 }
 
 /// Which corners a pad's `(chamfer <corners...>)` list names, in the fixed
-/// order [top_left, top_right, bottom_right, bottom_left] (pad-local frame,
+/// order [`top_left`, `top_right`, `bottom_right`, `bottom_left`] (pad-local frame,
 /// y-down, matching KiCad's file coordinates: "top" is negative y).
 fn chamfered_corners(pad: &List) -> [bool; 4] {
     let mut out = [false; 4];
@@ -1656,8 +1655,8 @@ fn chamfered_corners(pad: &List) -> [bool; 4] {
 
 /// A chamfered (round)rect pad outline of size (w, h), corner radius `rr` on
 /// the non-chamfered corners and a straight 45-degree cut of size `ch` on each
-/// corner flagged in `chamfered` ([top_left, top_right, bottom_right,
-/// bottom_left], pad-local y-down frame), built via the world transform.
+/// corner flagged in `chamfered` ([`top_left`, `top_right`, `bottom_right`,
+/// `bottom_left`], pad-local y-down frame), built via the world transform.
 ///
 /// Same representation strategy as `rect_polygon` for a roundrect: the
 /// returned polygon is the outline deflated by `rr`, carried with inflation
@@ -2162,7 +2161,7 @@ fn circle_from_3(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> Option<(f64, f6
     Some((ux, uy, r))
 }
 
-/// Reference designator of a footprint (property "Reference" or fp_text).
+/// Reference designator of a footprint (property "Reference" or `fp_text`).
 fn footprint_reference(fp: &List) -> String {
     for prop in fp.find_all("property") {
         if prop.arg_value(0).as_deref() == Some("Reference") {

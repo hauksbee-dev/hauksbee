@@ -195,7 +195,7 @@ fn has_link_token(lower: &str) -> bool {
 /// electrical value BY DESIGN (the value field is empty or a bare mnemonic),
 /// so value-centric checks (the placeholder-value lint) must exempt it rather
 /// than demand a value be "set". Covers the KiCad conventions
-/// ("Jumper:SolderJumper_2_...", "NetTie-2_SMD_..."), vendor libraries that
+/// ("`Jumper:SolderJumper_2`_...", "NetTie-2_SMD_..."), vendor libraries that
 /// spell the word out ("OLIMEX_Jumpers-FP:SJ_1_SMALLER"), and the Eagle
 /// solder-jumper package family whose name is just "SJ" (the Arduino Uno's
 /// RESET-EN is library "jumper", package "SJ", value "").
