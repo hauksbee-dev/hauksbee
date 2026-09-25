@@ -226,24 +226,25 @@ fn prepare_workspace_in(pdf: &Path, root: &Path) -> Result<Workspace> {
     let mut pages = Vec::new();
     let mut selected_pages = Vec::new();
     if which_path("pdftoppm").is_some() {
-        for selection in selections {
-            let stem = dir.path().join(format!("page-{:03}", selection.number));
-            let page = selection.number.to_string();
-            let out = Command::new("pdftoppm")
-                .args([
-                    "-png",
-                    "-r",
-                    &RENDER_DPI.to_string(),
-                    "-f",
-                    &page,
-                    "-l",
-                    &page,
-                ])
-                .arg("-singlefile")
-                .arg(&copied)
-                .arg(&stem)
-                .output();
-            match out {
+        // Render every selected page at once, then collect them in selection order.
+        let dpi = RENDER_DPI.to_string();
+        let renders: Vec<_> = selections
+            .into_iter()
+            .map(|selection| {
+                let stem = dir.path().join(format!("page-{:03}", selection.number));
+                let page = selection.number.to_string();
+                let child = Command::new("pdftoppm")
+                    .args(["-png", "-singlefile", "-r", &dpi, "-f", &page, "-l", &page])
+                    .arg(&copied)
+                    .arg(&stem)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .spawn();
+                (selection, stem, page, child)
+            })
+            .collect();
+        for (selection, stem, page, child) in renders {
+            match child.and_then(Child::wait_with_output) {
                 Ok(o) if o.status.success() => {
                     let rendered = stem.with_extension("png");
                     if rendered.is_file() {
