@@ -392,7 +392,7 @@ pub fn parse(text: &str) -> DrillFile {
                 rout_mode = false;
                 continue;
             }
-            if matches!(g, Some(0 | 1 | 2 | 3)) {
+            if matches!(g, Some(0..=3)) {
                 rout_mode = true;
             }
             // A `G00` rapid positions the cutter without cutting, so it is a
