@@ -413,11 +413,9 @@ async fn extract_settings_test_handler(
 /// The response carries the exact same TOML bytes accepted by models lint,
 /// live attachment and CI scenarios; choosing an item never writes a model.
 ///
-/// The specs are embedded from THIS crate's `assets/sensor-specs/` mirror,
-/// because `cargo package` ships only files under the crate directory. The
-/// AUTHORITATIVE copies live at repo-root `testdata/sensor-specs/` (a dozen
-/// engine tests load them by path); `tests/packaged_asset_sync.rs` fails when
-/// the mirror drifts, and `scripts/sync-crate-assets.sh` refreshes it.
+/// The specs are embedded from THIS crate's `assets/sensor-specs/`, the
+/// AUTHORITATIVE copies (inside the crate so `cargo package` ships them); the
+/// engine and co-sim tests load the same files by path.
 fn sensor_catalog_json() -> serde_json::Value {
     serde_json::json!({
         "schema_version": 1,

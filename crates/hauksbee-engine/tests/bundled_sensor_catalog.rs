@@ -12,41 +12,42 @@ use std::path::Path;
 const CATALOG: [(&str, &str); 8] = [
     (
         "ads1115.toml",
-        include_str!("../../../testdata/sensor-specs/ads1115.toml"),
+        include_str!("../../hauksbee-server/assets/sensor-specs/ads1115.toml"),
     ),
     (
         "bma423_chip_id.toml",
-        include_str!("../../../testdata/sensor-specs/bma423_chip_id.toml"),
+        include_str!("../../hauksbee-server/assets/sensor-specs/bma423_chip_id.toml"),
     ),
     (
         "bme280.toml",
-        include_str!("../../../testdata/sensor-specs/bme280.toml"),
+        include_str!("../../hauksbee-server/assets/sensor-specs/bme280.toml"),
     ),
     (
         "icm42605.toml",
-        include_str!("../../../testdata/sensor-specs/icm42605.toml"),
+        include_str!("../../hauksbee-server/assets/sensor-specs/icm42605.toml"),
     ),
     (
         "ina219.toml",
-        include_str!("../../../testdata/sensor-specs/ina219.toml"),
+        include_str!("../../hauksbee-server/assets/sensor-specs/ina219.toml"),
     ),
     (
         "lm75.toml",
-        include_str!("../../../testdata/sensor-specs/lm75.toml"),
+        include_str!("../../hauksbee-server/assets/sensor-specs/lm75.toml"),
     ),
     (
         "mcp4728.toml",
-        include_str!("../../../testdata/sensor-specs/mcp4728.toml"),
+        include_str!("../../hauksbee-server/assets/sensor-specs/mcp4728.toml"),
     ),
     (
         "mpu6050.toml",
-        include_str!("../../../testdata/sensor-specs/mpu6050.toml"),
+        include_str!("../../hauksbee-server/assets/sensor-specs/mpu6050.toml"),
     ),
 ];
 
 #[test]
 fn every_checked_in_sensor_behavior_is_catalogued_and_executable() {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/sensor-specs");
+    let directory =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-server/assets/sensor-specs");
     let on_disk = std::fs::read_dir(&directory)
         .unwrap()
         .filter_map(Result::ok)

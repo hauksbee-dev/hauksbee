@@ -128,7 +128,7 @@ and decodes real temperature bytes end to end.
 ### Declarative register-map devices (and the write side)
 
 Hand-coding each bus device in Rust does not scale, so a device can instead
-be a **TOML spec** (`testdata/sensor-specs/*.toml`, schema in
+be a **TOML spec** (`crates/hauksbee-server/assets/sensor-specs/*.toml`, schema in
 `hauksbee-models/src/sensor_spec.rs`) that the generic `RegisterMapSensor`
 interpreter realizes as a live `I2cSlave`/`SpiSlave`. The read side maps
 physical inputs through `evalexpr` value expressions into datasheet register
@@ -157,7 +157,7 @@ The spec also describes the **write side**: what firmware writes do:
 - **Command-framed writes** (the MCP4728 shape: mask-matched command byte,
   fixed-size data groups, per-channel state) update state whose **output
   voltage laws drive analog nets**. The MCP4728 is pure data
-  (`testdata/sensor-specs/mcp4728.toml`); the scheduler binds the
+  (`crates/hauksbee-server/assets/sensor-specs/mcp4728.toml`); the scheduler binds the
   binder-stamped VOUT `PinDriver`s to the spec's outputs, and the slave
   drives them itself in the ctx-bearing `on_stop`, delivered once per chunk,
   after the MCU runs and before the analog solve, because the byte events

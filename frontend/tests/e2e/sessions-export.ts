@@ -68,7 +68,7 @@ await browserFlow(flow, async (page, { base, browser }) => {
         entry.bus === 'i2c' &&
         entry.scope === 'temperature register at 0x48; no timing/OS/thermal dynamics' &&
         entry.spec_toml ===
-          readFileSync(join(here, '../../../testdata/sensor-specs/lm75.toml'), 'utf8'),
+          readFileSync(join(here, '../../../crates/hauksbee-server/assets/sensor-specs/lm75.toml'), 'utf8'),
     ),
   )
   if (!process.env.HB_E2E_BASE) {

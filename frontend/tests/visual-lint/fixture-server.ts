@@ -108,7 +108,7 @@ async function api(req: Request, url: URL): Promise<Response | null> {
           name: 'LM75 temperature subset',
           bus: 'i2c',
           scope: 'temperature register at 0x48; no timing/OS/thermal dynamics',
-          spec_toml: await file(join(here, '../../../testdata/sensor-specs/lm75.toml')).text(),
+          spec_toml: await file(join(here, '../../../crates/hauksbee-server/assets/sensor-specs/lm75.toml')).text(),
         },
       ],
     })

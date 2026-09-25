@@ -1121,7 +1121,7 @@ pub(crate) mod tests {
     use crate::peripherals::test_support::{i2c_read_burst, i2c_write};
     use hauksbee_mcu::I2cEvent;
 
-    const LM75_SPEC: &str = include_str!("../../../../testdata/sensor-specs/lm75.toml");
+    const LM75_SPEC: &str = include_str!("../../../hauksbee-server/assets/sensor-specs/lm75.toml");
 
     pub(crate) const SPI_IMU_SPEC: &str = r#"
 [sensor]
@@ -1314,11 +1314,15 @@ addr_mask = 0x7f
 
     // ── Shipped sensor specs against datasheet worked examples ───────────────
 
-    const BME280_SPEC: &str = include_str!("../../../../testdata/sensor-specs/bme280.toml");
-    const MPU6050_SPEC: &str = include_str!("../../../../testdata/sensor-specs/mpu6050.toml");
-    const ADS1115_SPEC: &str = include_str!("../../../../testdata/sensor-specs/ads1115.toml");
-    const INA219_SPEC: &str = include_str!("../../../../testdata/sensor-specs/ina219.toml");
-    const MCP4728_SPEC: &str = include_str!("../../../../testdata/sensor-specs/mcp4728.toml");
+    const BME280_SPEC: &str =
+        include_str!("../../../hauksbee-server/assets/sensor-specs/bme280.toml");
+    const MPU6050_SPEC: &str =
+        include_str!("../../../hauksbee-server/assets/sensor-specs/mpu6050.toml");
+    const ADS1115_SPEC: &str =
+        include_str!("../../../hauksbee-server/assets/sensor-specs/ads1115.toml");
+    const INA219_SPEC: &str =
+        include_str!("../../../hauksbee-server/assets/sensor-specs/ina219.toml");
+    const MCP4728_SPEC: &str = include_str!("../../assets/sensor-specs/mcp4728.toml");
 
     // Direct ports of the Bosch datasheet reference C (§4.2.3, §8.2);
     // `wrapping_*` reproduces C's modular int32 semantics.

@@ -4,9 +4,10 @@
 # `cargo package` ships only files under a crate's own directory, so assets a
 # published crate embeds via include_str!/include_bytes! live under
 # crates/<crate>/assets/. Most are mirrors of authoritative copies elsewhere.
-# The two large installer files are the exception: install-sims.sh and
-# simulator-provenance.py are authoritative under hauksbee-engine/assets/scripts,
-# while their repo-root scripts/ paths are small forwarders. The remaining
+# The exceptions: install-sims.sh and simulator-provenance.py are
+# authoritative under hauksbee-engine/assets/scripts, with small repo-root
+# scripts/ forwarders, and the bundled sensor specs are authoritative under
+# hauksbee-server/assets/sensor-specs. The remaining
 # pairs below copy authoritative over mirror, and packaged_asset_sync.rs catches
 # drift.
 #
@@ -25,11 +26,8 @@ pairs=(
   "crates/hauksbee-ci/examples/boards/blinky.kicad_pcb:crates/hauksbee-engine/assets/examples/blinky.kicad_pcb"
   "examples/decks/rlc_ringdown.cir:crates/hauksbee-engine/assets/examples/rlc_ringdown.cir"
   "testdata/firmware/demo/demo.hex:crates/hauksbee-ci/assets/firmware/demo.hex"
-  "testdata/sensor-specs/mcp4728.toml:crates/hauksbee-cosim/assets/sensor-specs/mcp4728.toml"
+  "crates/hauksbee-server/assets/sensor-specs/mcp4728.toml:crates/hauksbee-cosim/assets/sensor-specs/mcp4728.toml"
 )
-for name in lm75 bma423_chip_id bme280 mpu6050 ads1115 ina219 mcp4728 icm42605; do
-  pairs+=("testdata/sensor-specs/${name}.toml:crates/hauksbee-server/assets/sensor-specs/${name}.toml")
-done
 
 changed=0
 for pair in "${pairs[@]}"; do

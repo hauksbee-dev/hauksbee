@@ -24,7 +24,7 @@ const binary = resolve(repo, process.env.HAUKSBEE_BIN ?? 'target/debug/hauksbee'
 const board = process.env.HB_MODEL_BOARD ? resolve(repo, process.env.HB_MODEL_BOARD) : ''
 const firmware = resolve(repo, process.env.HB_MODEL_FIRMWARE ?? 'testdata/firmware/watchy_display_init/flash.bin')
 const sensorRef = process.env.HB_MODEL_SENSOR_REF ?? 'U4'
-const bundledLm75 = resolve(repo, 'testdata/sensor-specs/lm75.toml')
+const bundledLm75 = resolve(repo, 'crates/hauksbee-server/assets/sensor-specs/lm75.toml')
 const evidencePath = process.env.HB_MODEL_EVIDENCE
   ? resolve(repo, process.env.HB_MODEL_EVIDENCE)
   : null

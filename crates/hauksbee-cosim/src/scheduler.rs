@@ -1527,7 +1527,7 @@ impl Scheduler {
         /// from disk at runtime) so an engine binary is self-contained.
         /// Embedded from THIS crate's assets/ mirror because `cargo package`
         /// ships only files under the crate directory; the AUTHORITATIVE copy
-        /// is testdata/sensor-specs/mcp4728.toml (the unit fixtures load it),
+        /// is the server crate's bundled assets/sensor-specs/mcp4728.toml,
         /// guarded by tests/packaged_asset_sync.rs and refreshed by
         /// scripts/sync-crate-assets.sh.
         const MCP4728_SPEC: &str = include_str!("../assets/sensor-specs/mcp4728.toml");
