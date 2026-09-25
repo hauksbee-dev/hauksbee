@@ -60,6 +60,8 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+// clap parses one Command per process; boxing variants only complicates the derive.
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Extract + bind a board, then check it or bring it to life.
     ///

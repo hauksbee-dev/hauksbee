@@ -112,6 +112,8 @@ impl FaultKind {
     }
 
     /// Inverse of [`Self::as_str`]; unknown strings map to `Overcurrent`.
+    // Infallible (unknown maps to Overcurrent), so FromStr and its Err type do not fit.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> FaultKind {
         match s {
             "surge_current" => FaultKind::SurgeCurrent,
@@ -913,7 +915,7 @@ impl StressMonitor {
     /// a fabricated 0 W average for it instead of falling back to the
     /// endpoint operating point.
     pub fn deposit_chunk_energy(&mut self, energy_j: &[f64], elapsed_s: f64) {
-        if !(elapsed_s > 0.0) || !elapsed_s.is_finite() {
+        if elapsed_s <= 0.0 || !elapsed_s.is_finite() {
             return;
         }
         if energy_j.len() != self.chunk_energy_j.len() {
@@ -937,7 +939,7 @@ impl StressMonitor {
         branch_current: &dyn Fn(DeviceId) -> Option<f64>,
         dt: f64,
     ) {
-        if !(dt > 0.0) || !dt.is_finite() {
+        if dt <= 0.0 || !dt.is_finite() {
             return;
         }
         let powers = self.step_powers(circuit, node_v, branch_current);

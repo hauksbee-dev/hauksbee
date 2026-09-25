@@ -250,6 +250,8 @@ impl StampSink for PlainSink<'_> {
 /// `force_eval` is SPICE's first-two-iterations rule: the caller passes
 /// `true` on iterations 1 and 2 of each solve, so every device is evaluated
 /// at least twice per step before any skip can happen.
+// The negated `<=` deliberately treats a NaN delta as "moved", never as bypassable.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub(crate) fn stamp_all_bypass(
     ctx: &StampCtx,
     st: &mut BypassState,

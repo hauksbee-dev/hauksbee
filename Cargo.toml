@@ -60,13 +60,8 @@ rust-version = "1.92"
 # lints once rewrote the solver into silently returning a collapsed rail, so
 # they get fixed by hand, with the tests watched.
 [workspace.lints.clippy]
-large_enum_variant = "allow"
-manual_clamp = "allow"
 needless_range_loop = "allow"
-neg_cmp_op_on_partial_ord = "allow"
-should_implement_trait = "allow"
 type_complexity = "allow"
-vec_init_then_push = "allow"
 
 [workspace.dependencies]
 # The forge-* crates are VENDORED into this repo (vendor/kicad-forge/crates/*)

@@ -5605,6 +5605,8 @@ impl Scheduler {
     /// is exceeded the scheduler records a hard timing refusal; strict/CI
     /// callers invalidate the result instead of silently trusting the DC
     /// fallback.
+    // min/max keeps a NaN edge time bounded; clamp would propagate the NaN.
+    #[allow(clippy::manual_clamp)]
     fn apply_pwl_drives(&mut self, chunk: f64) -> Vec<(usize, f64)> {
         use hauksbee_ir::{PwlPoint, SourceKind};
         // Two PWL corners per transition plus the anchors; 10k transitions

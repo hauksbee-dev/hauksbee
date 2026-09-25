@@ -179,7 +179,7 @@ fn build_pool(policy: ParallelPolicy, n_nonlinear: usize) -> Option<rayon::Threa
             }
             // A quarter of the logical CPUs, floored at 2 and capped (see
             // PAR_MAX_THREADS for the measurements behind this shape).
-            (avail / 4).max(2).min(PAR_MAX_THREADS)
+            (avail / 4).clamp(2, PAR_MAX_THREADS)
         }
     };
     rayon::ThreadPoolBuilder::new()

@@ -266,7 +266,7 @@ fn run_op_rejects_staged_dc_relaxed_surrogate() {
     );
     let res = ws.dc_residual_inf_norm(&c, &opts);
     assert!(
-        !(res <= 1e-6),
+        res.is_nan() || res > 1e-6,
         "test premise: the adopted surrogate must NOT be a true root, residual {res:e}"
     );
 

@@ -80,6 +80,8 @@ mod tests {
     }
 
     #[test]
+    // The pushes ARE the Vec growth this test counts; vec![] would pre-size it.
+    #[allow(clippy::vec_init_then_push)]
     fn counter_observes_a_deliberate_allocation() {
         let (n, v) = count_allocs(|| {
             let mut v: Vec<u64> = Vec::new();

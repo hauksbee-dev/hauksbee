@@ -166,6 +166,8 @@ fn nominal_buck_duty(input_rail: &str, output_rail: &str) -> Option<f64> {
 
 /// Run the input-cap ripple check and append findings / info notes to the SI
 /// report.
+// `!(rating_a > 0.0)` is the documented guard that also rejects a NaN rating.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn append_ripple(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut SiReport) {
     let (stages, abstentions) = detect_converters_with_abstentions(board, lib);
     // A converter found but not orientable must still leave a trace: silence
@@ -459,6 +461,8 @@ mod tests {
     }
 
     #[test]
+    // Pins the exact NaN-rejecting `!(x > 0.0)` predicate the check applies.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     fn nonpositive_ripple_rating_is_guarded_against_infx() {
         // Bug-hunt #10: a zero/negative/NaN ripple rating (a malformed model-DB
         // ratings entry) must be treated as unusable, never divided into the

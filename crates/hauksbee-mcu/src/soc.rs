@@ -988,6 +988,8 @@ const EMBEDDED: &[(&str, &str)] = &{
 
 /// A resolved descriptor, ready to hand to the backend it names.
 #[derive(Debug, Clone)]
+// Resolved once per session and moved into a backend; the size never matters.
+#[allow(clippy::large_enum_variant)]
 pub enum SocConfig {
     #[cfg(feature = "renode")]
     Renode(crate::renode::RenodeConfig),

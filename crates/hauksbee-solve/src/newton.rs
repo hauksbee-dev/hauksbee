@@ -1311,12 +1311,7 @@ fn damp_node_steps(ws: &mut Workspace, damp: bool) {
                 ws.osc_count[i] = 0;
                 ALPHA_CONVERGING
             };
-            let mut step = alpha * full;
-            if step > NODE_STEP_MAX {
-                step = NODE_STEP_MAX;
-            } else if step < -NODE_STEP_MAX {
-                step = -NODE_STEP_MAX;
-            }
+            let step = (alpha * full).clamp(-NODE_STEP_MAX, NODE_STEP_MAX);
             ws.prev_step[i] = step;
             ws.x[i] = ws.lin_point[i] + step;
         }

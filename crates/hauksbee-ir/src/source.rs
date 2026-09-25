@@ -81,6 +81,8 @@ pub enum SourceKind {
 
 impl SourceKind {
     /// The source value at time `t` (seconds).
+    // min/max maps a NaN ramp to full amplitude; clamp would propagate the NaN.
+    #[allow(clippy::manual_clamp)]
     pub fn eval(&self, t: f64) -> f64 {
         match self {
             SourceKind::Dc(v) => *v,

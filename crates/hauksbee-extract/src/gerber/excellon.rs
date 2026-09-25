@@ -617,6 +617,8 @@ const ARC_MAX_STEPS: usize = 4096;
 /// copper arc, so a slot wall and a copper arc resolve a marginal contact
 /// identically instead of disagreeing about the same curve. A zero radius or a
 /// non-finite sweep yields nothing at all rather than a guess.
+// min/max keeps a NaN sagitta step bounded; clamp would propagate the NaN.
+#[allow(clippy::manual_clamp)]
 fn tessellate_arc(
     sx: f64,
     sy: f64,

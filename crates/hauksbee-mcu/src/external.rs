@@ -635,7 +635,7 @@ impl I2cTxn {
 /// voltage quantizes to the same code everywhere. A non-positive full scale
 /// reads as stuck at zero, never NaN-poisoned.
 pub(crate) fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
-    if !(full_scale_volts > 0.0) {
+    if full_scale_volts.is_nan() || full_scale_volts <= 0.0 {
         return 0;
     }
     let frac = (volts / full_scale_volts).clamp(0.0, 1.0);

@@ -100,7 +100,7 @@ pub fn stiff_links(circuit: &Circuit) -> Vec<StiffLink> {
     }
     ohms.sort_by(|a, b| a.partial_cmp(b).expect("filtered to finite positives"));
     let median = ohms[ohms.len() / 2];
-    if !(median > 0.0) {
+    if median.is_nan() || median <= 0.0 {
         return Vec::new();
     }
     circuit
