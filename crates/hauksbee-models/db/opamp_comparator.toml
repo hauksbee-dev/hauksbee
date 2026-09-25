@@ -669,23 +669,30 @@ basis = "TI INA186 SBOS318B, 6.3 Recommended Operating Conditions, operating sup
 
 # ── INA2181, TI dual current-sense amplifier ─────────────────────────────────
 #
-# Source: Texas Instruments INA2181 datasheet, SBOS831A (Rev A, 2021).
-# DUAL channel version of the INA181 in an MSOP-10 / VSSOP-10 package.
-# Two independent current-sense channels, same 6 V supply abs max (SBOS793H 6.1).
-#
-# NOTE: This is a DUAL device. Each channel is electrically equivalent to one
-# INA181 channel. The pin map covers both channels A and B in the MSOP-10.
+# Source: Texas Instruments INA181/INA2181/INA4181 datasheet, SBOS793H
+# (April 2017, revised November 2023). Dual channel version of the INA181 in
+# the DGS 10-pin VSSOP and DSQ 10-pin WSON packages, which share one pad order.
+# Each channel has its own REF input; the supply is 2.7 V to 5.5 V (6 V abs
+# max). The 26 V figure is the input common-mode limit, not the supply.
 
 [[models]]
 id = "ina2181"
 kind = "opamp"
-description = "TI INA2181 dual current-sense amplifier, MSOP-10 (two INA181 channels)"
+description = "TI INA2181 dual current-sense amplifier, 10-pin VSSOP (DGS) / WSON (DSQ)"
 
 [models.match]
 value_re = "(?i)^INA2181"
 
+[[models.envelope]]
+kind = "supply_range"
+pin = "vs"
+min_v = 2.7
+max_v = 5.5
+abs_max_v = 6.0
+basis = "TI SBOS793H, Section 6.3 Recommended Operating Conditions, VS operating supply voltage 2.7 V to 5.5 V; Section 6.1 Absolute Maximum Ratings, supply voltage VS 6 V"
+
 [models.params]
-# Source: INA2181 datasheet SBOS831A, Table 7.5.
+# Source: INA2181 datasheet SBOS793H, Electrical Characteristics.
 # Gain is suffix-dependent (A1=20, A2=50, A3=100, A4=200 V/V), same family.
 gain    = 100.0    # representative (A3 suffix); actual gain from part suffix
 rail_lo = 0.0
@@ -700,23 +707,24 @@ missing = ["supply_referenced_output_swing", "output_current_limit",
            "parameter_spread"]
 
 [models.pins]
-# MSOP-10 / VSSOP-10 pinout. Source: INA2181 datasheet SBOS831A, Section 7.1.
-# Channel A: IN+A=1, IN-A=2, OUTA=3; Channel B: IN+B=8, IN-B=9, OUTB=10.
-"1"  = "in_plus_a"   # IN+A (channel A, non-inverting)
-"2"  = "in_minus_a"  # IN-A (channel A, inverting)
-"3"  = "out_a"       # OUTA (channel A output)
+# Table 5-2 "Pin Functions: INA2181 (Dual Channel)", SBOS793H; identical for
+# the DGS VSSOP-10 and DSQ WSON-10 (Figures 5-3, 5-4). The WSON thermal pad
+# may float or go to GND and is not mapped. Channel 1 = _a, channel 2 = _b.
+"1"  = "out_a"       # OUT1
+"2"  = "in_minus_a"  # IN-1
+"3"  = "in_plus_a"   # IN+1
 "4"  = "gnd"         # GND
-"5"  = "gnd2"        # GND (second pad, tied to pin 4 in most packages)
-"6"  = "vs"          # VS (supply, shared by both channels)
-"7"  = "vs2"         # VS (second pad, tied to pin 6)
-"8"  = "in_plus_b"   # IN+B (channel B, non-inverting)
-"9"  = "in_minus_b"  # IN-B (channel B, inverting)
-"10" = "out_b"       # OUTB (channel B output)
+"5"  = "ref_a"       # REF1, channel 1 reference, 0 to VS
+"6"  = "ref_b"       # REF2, channel 2 reference, 0 to VS
+"7"  = "in_plus_b"   # IN+2
+"8"  = "in_minus_b"  # IN-2
+"9"  = "out_b"       # OUT2
+"10" = "vs"          # VS, power supply 2.7 V to 5.5 V
 
 [models.ratings]
-# Source: INA2181 datasheet SBOS831A, Table 7.1 Absolute Maximum Ratings
-max_voltage_v       = 6.0     # SBOS793H 6.1 supply voltage VS abs max; 26 V is the common-mode row
-max_junction_temp_c = 150.0   # Tj max (C), datasheet
+# Source: SBOS793H, Section 6.1 Absolute Maximum Ratings
+max_voltage_v       = 6.0     # supply voltage VS abs max
+max_junction_temp_c = 150.0   # Tj max (C)
 
 # ─────────────────────────────────────────────────────────────────────────────
 

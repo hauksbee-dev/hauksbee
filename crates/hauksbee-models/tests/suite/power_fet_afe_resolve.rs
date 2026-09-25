@@ -97,7 +97,7 @@ fn specific_parts_resolve_with_their_kind_and_datasheet_ratings() {
             None,
             None,
         ),
-        // dual CSA, same 6 V VS abs max
+        // dual CSA, 6 V supply abs max (SBOS793H 6.1)
         (
             &["INA2181", "INA2181A1", "INA2181A3IDGSR"],
             "ina2181",
