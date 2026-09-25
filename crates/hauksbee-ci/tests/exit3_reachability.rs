@@ -29,7 +29,8 @@
 //!
 //! So the tests below are two-sided in an unusual way: each one drives a real
 //! `hauksbee-ci run` down one of those routes and asserts it comes back with a
-//! TRUSTWORTHY verdict (0 or 1), never 3. They are a live record of the search,
+//! TRUSTWORTHY verdict (0 or 1), never 3 (the conflicting-source row solves but
+//! exits 3 on the MCU's operating limit, not a failed solve). They are a live record of the search,
 //! so the next person asking this question reads a gate rather than repeating it,
 //! and if a change opens one of the routes, the test that names it fails and says
 //! which.
@@ -102,16 +103,30 @@ fn a_conflicting_source_on_a_supplied_rail_still_solves() {
     // The closest a spec gets to the engine test's impossible board: an ideal
     // supply commanding 5 V and a net_drive commanding 60 V on the same net.
     // STIFF_R_OHMS sits between them, so this is a large current, not a
-    // singular matrix.
+    // singular matrix. It SOLVES (a full report, no crash), and the promoted
+    // end-to-end exit 3 is the operating-limit route: 60 V is outside U1's
+    // 1.8-5.5 V envelope, and the stress path names the 6 V abs-max breach.
     let (out, _d) = run_spec(
         "conflict",
         &format!(
             "{HEAD}\n[[supply]]\nnet = \"+5V\"\nkind = \"ideal\"\nvolts = 5.0\n\n\
              [[net_drive]]\nnet = \"+5V\"\nvolts = 60.0\n\n\
-             [[assert]]\nkind = \"voltage\"\nnet = \"ADC0\"\nmin = 0.0\n"
+             [[assert]]\nkind = \"voltage\"\nnet = \"ADC0\"\nmin = 0.0\n\n\
+             [[assert]]\nkind = \"no_faults\"\n"
         ),
     );
-    assert_trustworthy("conflicting source on a supplied rail", &out);
+    let text = stdout(&out);
+    assert!(
+        text.contains("2/2 assertion(s) evaluated"),
+        "solves:\n{text}"
+    );
+    assert_eq!(out.status.code(), Some(3), "{text}\n{}", stderr(&out));
+    for want in [
+        "outside the 1.800..5.500 V operating envelope",
+        "U1 overvoltage 60.000 > 6.000",
+    ] {
+        assert!(text.contains(want), "missing {want:?}:\n{text}");
+    }
 }
 
 #[test]
