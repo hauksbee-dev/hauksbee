@@ -41,15 +41,12 @@ fn corpus() -> Option<PathBuf> {
     // layouts - and hybrids of the two). The old unconditional `.join("famous")`
     // matched only the hand-built layout, so on a fetch-layout machine every
     // test here skipped silently and the calibration passed vacuously.
-    match hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")) {
-        Some(p) => Some(p),
-        None => {
-            if hauksbee_testkit::require_assets() {
-                panic!("HAUKSBEE_REQUIRE_CORPUS=1 but board-corpus not found");
-            }
-            None
-        }
-    }
+    let dir = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"));
+    assert!(
+        dir.is_some() || !hauksbee_testkit::require_assets(),
+        "HAUKSBEE_REQUIRE_CORPUS=1 but board-corpus not found"
+    );
+    dir
 }
 
 /// One board by corpus-relative path, whichever layout holds it.
@@ -58,12 +55,12 @@ fn board(rel: &str) -> Option<PathBuf> {
 }
 
 fn load(p: &Path) -> ExtractedBoard {
-    let text = std::fs::read_to_string(p).unwrap_or_else(|e| panic!("read {p:?}: {e}"));
+    let text = std::fs::read_to_string(p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
     if p.extension().and_then(|e| e.to_str()) == Some("kicad_sch") {
         ExtractedBoard::from_kicad_schematic_path(p)
-            .unwrap_or_else(|e| panic!("extract {p:?}: {e}"))
+            .unwrap_or_else(|e| panic!("extract {}: {e}", p.display()))
     } else {
-        ExtractedBoard::from_auto(&text).unwrap_or_else(|e| panic!("extract {p:?}: {e}"))
+        ExtractedBoard::from_auto(&text).unwrap_or_else(|e| panic!("extract {}: {e}", p.display()))
     }
 }
 
@@ -226,9 +223,10 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
     let mut exercised = 0usize;
     for alts in clean {
         let Some(path) = alts.iter().find_map(|rel| board(rel)) else {
-            if require {
-                panic!("HAUKSBEE_REQUIRE_CORPUS=1 but known-good board missing (tried {alts:?})");
-            }
+            assert!(
+                !require,
+                "HAUKSBEE_REQUIRE_CORPUS=1 but known-good board missing (tried {alts:?})"
+            );
             continue;
         };
         exercised += 1;
@@ -245,9 +243,10 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
     let mut qspi_exercised = 0usize;
     for dir in clean_qspi_flash {
         let Some(d) = board(dir) else {
-            if require {
-                panic!("HAUKSBEE_REQUIRE_CORPUS=1 but correct-QSPI-flash board missing: {dir}");
-            }
+            assert!(
+                !require,
+                "HAUKSBEE_REQUIRE_CORPUS=1 but correct-QSPI-flash board missing: {dir}"
+            );
             continue;
         };
         let brd = std::fs::read_dir(&d).ok().and_then(|rd| {

@@ -67,52 +67,42 @@ fn synth_altium() -> Vec<u8> {
     cf.into_inner().into_inner()
 }
 
+/// One detection case: label, bytes, path, expected reader.
+struct Case {
+    label: String,
+    bytes: Vec<u8>,
+    path: Option<PathBuf>,
+    expected: &'static str,
+}
+
 #[test]
 fn detection_matrix_every_fixture() {
     let cd = crate_dir();
     // Fixture roots: testdata boards + netlists + d356, CI example boards,
     // frontend demo boards, and both crates' tests/fixtures dirs.
     let mut files: Vec<PathBuf> = Vec::new();
-    collect(
-        &cd.join("../../testdata/boards"),
-        &["kicad_pcb"],
-        &mut files,
-    );
-    collect(&cd.join("../../testdata"), &["net", "d356"], &mut files);
-    collect(
-        &cd.join("../../frontend/public/boards"),
-        &["kicad_pcb"],
-        &mut files,
-    );
-    collect(
-        &cd.join("../../crates/hauksbee-ci/examples/boards"),
-        &["kicad_pcb"],
-        &mut files,
-    );
-    collect(
-        &cd.join("tests/fixtures"),
-        &["kicad_pcb", "kicad_sch"],
-        &mut files,
-    );
-    collect(
-        &cd.join("../../crates/hauksbee-engine/tests/fixtures"),
-        &["kicad_pcb", "kicad_sch", "net"],
-        &mut files,
-    );
+    let roots: [(&str, &[&str]); 6] = [
+        ("../../testdata/boards", &["kicad_pcb"]),
+        ("../../testdata", &["net", "d356"]),
+        ("../../frontend/public/boards", &["kicad_pcb"]),
+        ("../../crates/hauksbee-ci/examples/boards", &["kicad_pcb"]),
+        ("tests/fixtures", &["kicad_pcb", "kicad_sch"]),
+        (
+            "../../crates/hauksbee-engine/tests/fixtures",
+            &["kicad_pcb", "kicad_sch", "net"],
+        ),
+    ];
+    for (dir, exts) in roots {
+        collect(&cd.join(dir), exts, &mut files);
+    }
     files.sort();
 
     let reg = Registry::builtin();
     let names = reg.reader_names();
 
-    // (label, bytes, path, expected reader). Text fixtures get their expectation
-    // from the legacy ladder (the no-behaviour-change oracle); the synthesised
-    // binary/eagle samples are labelled explicitly.
-    struct Case {
-        label: String,
-        bytes: Vec<u8>,
-        path: Option<PathBuf>,
-        expected: &'static str,
-    }
+    // Text fixtures get their expectation from the legacy ladder (the
+    // no-behaviour-change oracle); the synthesised binary/eagle samples are
+    // labelled explicitly.
     let mut cases: Vec<Case> = Vec::new();
 
     for p in &files {
@@ -249,7 +239,7 @@ fn third_party_reader_registers_and_wins() {
 
     struct ToyReader;
     impl BoardReader for ToyReader {
-        fn name(&self) -> &str {
+        fn name(&self) -> &'static str {
             "toy"
         }
         fn detects(&self, bytes: &[u8], _p: Option<&Path>) -> bool {
