@@ -34,20 +34,9 @@ pub fn xml_attrs(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
         .collect()
 }
 
+#[allow(clippy::too_many_lines, reason = "one streaming pass over the XML")]
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
-    let mut reader = Reader::from_str(text);
-    reader.config_mut().trim_text(true);
-
     type Pads = Vec<(String, f64, f64)>;
-    // (library name, package name) -> [(pad name, dx, dy)]. Eagle namespaces
-    // packages per <library>: two embedded libraries may each define a package
-    // named e.g. "0805" with different pads. Keying by bare package name merged
-    // them, so an element resolved to the concatenation of both libraries' pads
-    // and was emitted with doubled/mixed pins.
-    let mut packages: HashMap<(String, String), Pads> = HashMap::new();
-    let mut cur_library = String::new();
-    let mut cur_package: Option<String> = None;
-    // elements
     struct El {
         name: String,
         library: String,
@@ -59,6 +48,18 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         mirrored: bool,
         dnp: bool,
     }
+    let mut reader = Reader::from_str(text);
+    reader.config_mut().trim_text(true);
+
+    // (library name, package name) -> [(pad name, dx, dy)]. Eagle namespaces
+    // packages per <library>: two embedded libraries may each define a package
+    // named e.g. "0805" with different pads. Keying by bare package name merged
+    // them, so an element resolved to the concatenation of both libraries' pads
+    // and was emitted with doubled/mixed pins.
+    let mut packages: HashMap<(String, String), Pads> = HashMap::new();
+    let mut cur_library = String::new();
+    let mut cur_package: Option<String> = None;
+    // elements
     let mut elements: Vec<El> = Vec::new();
     // signals
     let mut signals: Vec<(String, Vec<(String, String)>)> = Vec::new();
@@ -166,15 +167,15 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
 
     let nets: Vec<Net> = signals
         .iter()
-        .enumerate()
-        .map(|(i, (name, _))| Net::new(i as i64 + 1, name.clone()))
+        .zip(1_i64..)
+        .map(|((name, _), id)| Net::new(id, name.clone()))
         .collect();
 
     // (element, pad) -> net id
     let mut pad_net: HashMap<(String, String), i64> = HashMap::new();
-    for (i, (_, refs)) in signals.iter().enumerate() {
+    for ((_, refs), id) in signals.iter().zip(1_i64..) {
         for (el, pad) in refs {
-            pad_net.insert((el.clone(), pad.clone()), i as i64 + 1);
+            pad_net.insert((el.clone(), pad.clone()), id);
         }
     }
 

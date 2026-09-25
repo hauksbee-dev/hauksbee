@@ -37,10 +37,7 @@ fn net_of(b: &ExtractedBoard, reference: &str, pin: &str) -> Option<i64> {
 }
 
 fn same_net(b: &ExtractedBoard, a: (&str, &str), c: (&str, &str)) -> bool {
-    match (net_of(b, a.0, a.1), net_of(b, c.0, c.1)) {
-        (Some(x), Some(y)) => x == y,
-        _ => false,
-    }
+    net_of(b, a.0, a.1).is_some_and(|n| net_of(b, c.0, c.1) == Some(n))
 }
 
 #[test]

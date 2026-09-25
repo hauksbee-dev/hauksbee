@@ -92,7 +92,7 @@ fn arc_length_is_the_swept_arc_not_the_chord() {
     // chord is only 2r = 100 mm, a 36% under-report.
     let semi = arc_length_mm((r, 0.0), (0.0, r), (-r, 0.0));
     assert!(
-        (semi - PI * r).abs() < 1e-6,
+        PI.mul_add(-r, semi).abs() < 1e-6,
         "semicircle is {} mm, got {semi}",
         PI * r
     );
@@ -115,7 +115,7 @@ fn arc_length_is_the_swept_arc_not_the_chord() {
     // function. ~1e-6 relative error at a 236 mm length is far inside anything
     // the rise-time or skew limits can notice.
     assert!(
-        (major - 1.5 * PI * r).abs() < 1e-4,
+        (1.5 * PI).mul_add(-r, major).abs() < 1e-4,
         "270 degree arc is {} mm, got {major}",
         1.5 * PI * r
     );
@@ -258,13 +258,14 @@ fn i2c_board(net: &str, pull_val: &str, devices: usize) -> ExtractedBoard {
           (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#
     );
     for i in 0..devices {
-        body.push_str(&format!(
+        let _ = write!(
+            body,
             r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
               (property "Reference" "U{}") (property "Value" "SENSOR")
               (pad "1" smd rect (at 0 0) (net 1 "{net}")))"#,
             10 + i,
             i + 1
-        ));
+        );
     }
     pcb(&body)
 }
@@ -331,13 +332,14 @@ fn i2c_dual_pullups_combine_in_parallel_not_min() {
           (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#,
     );
     for i in 0..15 {
-        body.push_str(&format!(
+        let _ = write!(
+            body,
             r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
               (property "Reference" "U{}") (property "Value" "SENSOR")
               (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
             10 + i,
             i + 1
-        ));
+        );
     }
     let b = pcb(&body);
     let mut r = SiReport::default();
@@ -361,17 +363,19 @@ fn i2c_routed_text(devices: usize, track_mm: f64) -> String {
           (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#,
     );
     for i in 0..devices {
-        body.push_str(&format!(
+        let _ = write!(
+            body,
             r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
               (property "Reference" "U{}") (property "Value" "SENSOR")
               (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
             10 + i,
             i + 1
-        ));
+        );
     }
-    body.push_str(&format!(
+    let _ = write!(
+        body,
         r#"(segment (start 0 0) (end {track_mm} 0) (width 0.2) (layer "F.Cu") (net 1))"#
-    ));
+    );
     format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})")
 }
 

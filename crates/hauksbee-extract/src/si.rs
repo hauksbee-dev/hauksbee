@@ -34,6 +34,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/si.md.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use forge_sexpr::List;
 
@@ -519,17 +520,14 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
         // puts the second cap on a `Net-(Cx-Pad1)` node bridged through the 1k
         // damping resistor; walk one resistor hop to find it if the direct net
         // has no cap.
-        let c1 = load_cap_on_net(board, sig_nets[0])
-            .or_else(|| load_cap_through_resistor(board, sig_nets[0]));
-        let c2 = load_cap_on_net(board, sig_nets[1])
-            .or_else(|| load_cap_through_resistor(board, sig_nets[1]));
+        let [c1, c2] = [sig_nets[0], sig_nets[1]]
+            .map(|n| load_cap_on_net(board, n).or_else(|| load_cap_through_resistor(board, n)));
 
         // Is the crystal driven by an RTC/IC that integrates its own caps? Then
         // missing external caps is correct, not a finding.
-        let driver_integrates = board
-            .net_members(sig_nets[0])
+        let driver_integrates = sig_nets
             .iter()
-            .chain(board.net_members(sig_nets[1]).iter())
+            .flat_map(|&n| board.net_members(n))
             .any(|(c, _)| AssemblyState::of(c).is_present() && has_integrated_xtal_caps(&c.value));
 
         let net_names: Vec<String> = sig_nets
@@ -537,91 +535,88 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
             .filter_map(|id| board.net(*id).map(|n| n.name.clone()))
             .collect();
 
-        match (c1, c2) {
-            (Some(c1), Some(c2)) => {
-                let cl = cl_board_pf(c1, c2, CSTRAY_PF);
-                if let Some((spec, cite)) = known_crystal_cl(&xtal.value) {
-                    let dev = (cl - spec).abs();
-                    if dev > CL_TOLERANCE_PF {
-                        let sev = if cl < spec * 0.5 || cl > spec * 1.6 {
-                            SiSeverity::High
-                        } else {
-                            SiSeverity::Medium
-                        };
-                        report.findings.push(SiFinding {
-                            check: SiCheck::CrystalLoadCap,
-                            severity: sev,
-                            message: format!(
-                                "{} ({}): board presents CL ~ {:.1} pF (C1={:.0}p, C2={:.0}p, +{:.0}p stray) \
-                                 but the crystal specs CL = {:.0} pF [{}]; deviation {:.2} pF exceeds {:.0} pF",
-                                xtal.reference, xtal.value, cl, c1, c2, CSTRAY_PF, spec, cite, dev,
-                                CL_TOLERANCE_PF
-                            ),
-                            refs: vec![xtal.reference.clone()],
-                            nets: net_names.clone(),
-                        });
+        if let (Some(c1), Some(c2)) = (c1, c2) {
+            let cl = cl_board_pf(c1, c2, CSTRAY_PF);
+            if let Some((spec, cite)) = known_crystal_cl(&xtal.value) {
+                let dev = (cl - spec).abs();
+                if dev > CL_TOLERANCE_PF {
+                    let sev = if cl < spec * 0.5 || cl > spec * 1.6 {
+                        SiSeverity::High
                     } else {
-                        report.findings.push(SiFinding {
-                            check: SiCheck::CrystalLoadCap,
-                            severity: SiSeverity::Info,
-                            message: format!(
-                                "{} ({}): board CL ~ {:.1} pF vs spec {:.0} pF (within {:.0} pF) - ok",
-                                xtal.reference, xtal.value, cl, spec, CL_TOLERANCE_PF
-                            ),
-                            refs: vec![xtal.reference.clone()],
-                            nets: net_names.clone(),
-                        });
-                    }
+                        SiSeverity::Medium
+                    };
+                    report.findings.push(SiFinding {
+                        check: SiCheck::CrystalLoadCap,
+                        severity: sev,
+                        message: format!(
+                            "{} ({}): board presents CL ~ {:.1} pF (C1={:.0}p, C2={:.0}p, +{:.0}p stray) \
+                             but the crystal specs CL = {:.0} pF [{}]; deviation {:.2} pF exceeds {:.0} pF",
+                            xtal.reference, xtal.value, cl, c1, c2, CSTRAY_PF, spec, cite, dev,
+                            CL_TOLERANCE_PF
+                        ),
+                        refs: vec![xtal.reference.clone()],
+                        nets: net_names.clone(),
+                    });
                 } else {
-                    // CL spec unknown: report the computed load as info only.
                     report.findings.push(SiFinding {
                         check: SiCheck::CrystalLoadCap,
                         severity: SiSeverity::Info,
                         message: format!(
-                            "{} ({}): board presents CL ~ {:.1} pF (C1={:.0}p, C2={:.0}p, +{:.0}p stray); \
-                             crystal CL spec unknown from value, no judgement",
-                            xtal.reference, xtal.value, cl, c1, c2, CSTRAY_PF
+                            "{} ({}): board CL ~ {:.1} pF vs spec {:.0} pF (within {:.0} pF) - ok",
+                            xtal.reference, xtal.value, cl, spec, CL_TOLERANCE_PF
                         ),
                         refs: vec![xtal.reference.clone()],
                         nets: net_names.clone(),
                     });
                 }
+            } else {
+                // CL spec unknown: report the computed load as info only.
+                report.findings.push(SiFinding {
+                    check: SiCheck::CrystalLoadCap,
+                    severity: SiSeverity::Info,
+                    message: format!(
+                        "{} ({}): board presents CL ~ {:.1} pF (C1={:.0}p, C2={:.0}p, +{:.0}p stray); \
+                         crystal CL spec unknown from value, no judgement",
+                        xtal.reference, xtal.value, cl, c1, c2, CSTRAY_PF
+                    ),
+                    refs: vec![xtal.reference.clone()],
+                    nets: net_names.clone(),
+                });
             }
-            _ => {
-                // One or both load caps missing.
-                if driver_integrates {
-                    continue; // RTC integrates caps: correct, not a finding.
-                }
-                // A discrete MHz crystal with no load caps either way is a real
-                // omission, but only fire when BOTH are absent (a single missing
-                // cap is often the series-R topology we failed to trace, so stay
-                // conservative and emit info).
-                if c1.is_none() && c2.is_none() {
-                    report.findings.push(SiFinding {
-                        check: SiCheck::CrystalLoadCap,
-                        severity: SiSeverity::Medium,
-                        message: format!(
-                            "{} ({}): discrete crystal with no load capacitors to ground on either \
-                             terminal; a parallel-resonant crystal needs two load caps to start on \
-                             frequency (unless the driver integrates them)",
-                            xtal.reference, xtal.value
-                        ),
-                        refs: vec![xtal.reference.clone()],
-                        nets: net_names,
-                    });
-                } else {
-                    report.findings.push(SiFinding {
-                        check: SiCheck::CrystalLoadCap,
-                        severity: SiSeverity::Info,
-                        message: format!(
-                            "{} ({}): only one load cap traced (other terminal cap not found, \
-                             possibly behind a series resistor); no judgement",
-                            xtal.reference, xtal.value
-                        ),
-                        refs: vec![xtal.reference.clone()],
-                        nets: net_names,
-                    });
-                }
+        } else {
+            // One or both load caps missing.
+            if driver_integrates {
+                continue; // RTC integrates caps: correct, not a finding.
+            }
+            // A discrete MHz crystal with no load caps either way is a real
+            // omission, but only fire when BOTH are absent (a single missing
+            // cap is often the series-R topology we failed to trace, so stay
+            // conservative and emit info).
+            if c1.is_none() && c2.is_none() {
+                report.findings.push(SiFinding {
+                    check: SiCheck::CrystalLoadCap,
+                    severity: SiSeverity::Medium,
+                    message: format!(
+                        "{} ({}): discrete crystal with no load capacitors to ground on either \
+                         terminal; a parallel-resonant crystal needs two load caps to start on \
+                         frequency (unless the driver integrates them)",
+                        xtal.reference, xtal.value
+                    ),
+                    refs: vec![xtal.reference.clone()],
+                    nets: net_names,
+                });
+            } else {
+                report.findings.push(SiFinding {
+                    check: SiCheck::CrystalLoadCap,
+                    severity: SiSeverity::Info,
+                    message: format!(
+                        "{} ({}): only one load cap traced (other terminal cap not found, \
+                         possibly behind a series resistor); no judgement",
+                        xtal.reference, xtal.value
+                    ),
+                    refs: vec![xtal.reference.clone()],
+                    nets: net_names,
+                });
             }
         }
     }
@@ -717,6 +712,7 @@ const C_TRACE_PF_PER_MM_HIGH: f64 = 0.15;
 
 /// Render a range to whole numbers, collapsing to one when the ends round equal:
 /// "20" rather than the "20-20" a blind range would print.
+#[allow(clippy::float_cmp, reason = "compares whole numbers after rounding")]
 fn range_0dp(low: f64, high: f64) -> String {
     if low.round() == high.round() {
         format!("{low:.0}")
@@ -735,6 +731,8 @@ fn range_0dp(low: f64, high: f64) -> String {
 /// than merely narrowing it. `None` when the board declares no stackup or the net
 /// has no discrete track to measure, which is when the range is still all there is.
 fn trace_capacitance_pf_per_mm(w_mm: f64, stack: &impedance::Stackup) -> Option<f64> {
+    // c0 in mm/s, so the result is F/mm; scale to pF.
+    const C0_MM_PER_S: f64 = 2.998e11;
     if w_mm <= 0.0 || stack.source != impedance::StackupSource::Board {
         return None;
     }
@@ -745,8 +743,6 @@ fn trace_capacitance_pf_per_mm(w_mm: f64, stack: &impedance::Stackup) -> Option<
     }
     // Hammerstad's effective permittivity for a microstrip.
     let er_eff = f64::midpoint(er, 1.0) + ((er - 1.0) / 2.0) / (1.0 + 10.0 * h / w_mm).sqrt();
-    // c0 in mm/s, so the result is F/mm; scale to pF.
-    const C0_MM_PER_S: f64 = 2.998e11;
     let c_pf_per_mm = 1e12 * er_eff.sqrt() / (C0_MM_PER_S * z0);
     c_pf_per_mm.is_finite().then_some(c_pf_per_mm)
 }
@@ -759,7 +755,7 @@ struct BusCapacitance {
     low_pf: f64,
     /// Pin capacitance plus the high-end trace term (pF). Reported only.
     high_pf: f64,
-    devices: usize,
+    devices: u32,
     /// Routed length actually measured (mm), or `None` with no layout.
     trace_len_mm: Option<f64>,
     /// Set when the trace term was COMPUTED from the board's stackup and the net's
@@ -846,7 +842,7 @@ fn bus_capacitance_pf(
     // I2C rise time enough to fire a false fast-mode finding. Same discipline as
     // `connected_pads`.
     let mut seen: std::collections::HashSet<(&str, &str)> = std::collections::HashSet::new();
-    let mut devices = 0usize;
+    let mut devices = 0u32;
     for (c, p) in board.net_members(net_id) {
         // An unassembled part's pin is not soldered to the bus, so it adds no
         // pin capacitance.
@@ -857,14 +853,12 @@ fn bus_capacitance_pf(
             devices += 1;
         }
     }
-    let c_dev = devices as f64 * C_PIN_PF;
+    let c_dev = f64::from(devices) * C_PIN_PF;
     let len = trace_len_mm.unwrap_or(0.0);
     // A computed figure replaces both ends of the range: there is nothing left to
     // bracket once the geometry is known.
-    let (low, high) = match measured_pf_per_mm {
-        Some(c) => (c, c),
-        None => (C_TRACE_PF_PER_MM_LOW, C_TRACE_PF_PER_MM_HIGH),
-    };
+    let (low, high) =
+        measured_pf_per_mm.map_or((C_TRACE_PF_PER_MM_LOW, C_TRACE_PF_PER_MM_HIGH), |c| (c, c));
     BusCapacitance {
         low_pf: c_dev + len * low,
         high_pf: c_dev + len * high,
@@ -874,6 +868,7 @@ fn bus_capacitance_pf(
     }
 }
 
+#[allow(clippy::too_many_lines, reason = "one per-net rise-time pass")]
 fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut SiReport) {
     for net in &board.nets {
         if net.id == 0 || is_unconnected_net(&net.name) {
@@ -936,7 +931,7 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
         // part with 3 pF pins would sit far below it. What it is free of is the
         // GEOMETRIC assumption, the trace impedance hauksbee cannot see, which is
         // the one the trace term rests on and the one the caveat distinguishes.
-        let t_r_pins = i2c_rise_time_ns(r, c.devices as f64 * C_PIN_PF);
+        let t_r_pins = i2c_rise_time_ns(r, f64::from(c.devices) * C_PIN_PF);
 
         // Conservative: judge against STANDARD mode unless the name says fast.
         // Whole-token match, not raw `contains`: a bare substring test fires on
@@ -1174,6 +1169,7 @@ struct Intrusion {
     kind: &'static str,
 }
 
+#[allow(clippy::too_many_lines, reason = "one sweep per antenna")]
 fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiReport) {
     // Net id -> name, for excluding the antenna's own net and naming intrusions.
     let net_name = |id: i64| board.net(id).map(|n| n.name.clone()).unwrap_or_default();
@@ -1188,7 +1184,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
         let Some(pos) = ant.position else { continue };
         let poly = keepout_polygon(pos, &k);
         let poly_v: Vec<(f64, f64)> = poly.to_vec();
-        let [bminx, bminy, bmaxx, bmaxy] = polygon_bounds(&poly_v);
+        let [left, bottom, right, top] = polygon_bounds(&poly_v);
 
         // Resolve name-only net refs (KiCad 10 `(net "GND")`) via the board's
         // declarations; without this every track/via/zone on such a board has
@@ -1212,7 +1208,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
             .collect();
 
         let mut intrusions: Vec<Intrusion> = Vec::new();
-        let in_box = |x: f64, y: f64| x >= bminx && x <= bmaxx && y >= bminy && y <= bmaxy;
+        let in_box = |x: f64, y: f64| x >= left && x <= right && y >= bottom && y <= top;
 
         // 1. Track segments / arcs: sample their endpoints (a track crossing the
         //    keepout has at least an endpoint near it for typical short routes;
@@ -1320,12 +1316,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
             // all-clear. Also test each keepout corner against the fill polygon to
             // catch containment (this is the exact bad-WiFi failure the check
             // exists to catch).
-            let keepout_corners = [
-                (bminx, bminy),
-                (bmaxx, bminy),
-                (bmaxx, bmaxy),
-                (bminx, bmaxy),
-            ];
+            let keepout_corners = [(left, bottom), (right, bottom), (right, top), (left, top)];
             let mut hit: Option<(f64, f64)> = None;
             for fp in zone.find_all("filled_polygon") {
                 if let Some(pts) = fp.find("pts") {
@@ -1734,10 +1725,9 @@ fn usb_pair_key(raw_name: &str) -> Option<(String, char)> {
     // and the leaf. A leading-'/'-only name keeps that '/' as its scope so two
     // root-sheet nets still share a scope, while a name under a sub-sheet keeps
     // the distinguishing sub-sheet path.
-    let (sheet, leaf) = match trimmed.rfind('/') {
-        Some(idx) => (&trimmed[..=idx], &trimmed[idx + 1..]),
-        None => ("", trimmed),
-    };
+    let (sheet, leaf) = trimmed
+        .rfind('/')
+        .map_or(("", trimmed), |idx| (&trimmed[..=idx], &trimmed[idx + 1..]));
     let leaf = leaf.trim().to_ascii_uppercase();
     let (stem, pol) = usb_polarity(&leaf)?;
     Some((format!("{}\u{1}{}", sheet.to_ascii_uppercase(), stem), pol))
@@ -1805,11 +1795,12 @@ fn check_usb_diff_pair(board: &ExtractedBoard, root: &List, report: &mut SiRepor
         let wp = track_width_range(root, pid);
         let wm = track_width_range(root, mid);
         let width_note = match (wp, wm) {
-            (Some((minp, maxp)), Some((minm, maxm))) => {
-                let inconsistent = (minp - minm).abs() > 0.02 || (maxp - maxm).abs() > 0.02;
+            (Some((plus_lo, plus_hi)), Some((minus_lo, minus_hi))) => {
+                let inconsistent =
+                    (plus_lo - minus_lo).abs() > 0.02 || (plus_hi - minus_hi).abs() > 0.02;
                 if inconsistent {
                     format!(
-                        "; width mismatch D+={minp:.3}..{maxp:.3} mm vs D-={minm:.3}..{maxm:.3} mm"
+                        "; width mismatch D+={plus_lo:.3}..{plus_hi:.3} mm vs D-={minus_lo:.3}..{minus_hi:.3} mm"
                     )
                 } else {
                     String::new()
@@ -1868,14 +1859,15 @@ pub fn render_si(report: &SiReport) -> String {
         // read as a contradiction.
         out.push_str("si-checks: no gating findings.\n");
     } else {
-        out.push_str(&format!("si-checks: {n} finding(s)\n"));
+        let _ = writeln!(out, "si-checks: {n} finding(s)");
         for f in report.findings_only() {
-            out.push_str(&format!(
-                "  [{}] {} - {}\n",
+            let _ = writeln!(
+                out,
+                "  [{}] {} - {}",
                 f.severity.as_str(),
                 f.check.as_str(),
                 f.message
-            ));
+            );
         }
     }
     // Info notes (the auditable computed values) after the findings.
@@ -1885,9 +1877,9 @@ pub fn render_si(report: &SiReport) -> String {
         .filter(|f| f.severity == SiSeverity::Info)
         .collect();
     if !infos.is_empty() {
-        out.push_str(&format!("si-checks: {} info note(s)\n", infos.len()));
+        let _ = writeln!(out, "si-checks: {} info note(s)", infos.len());
         for f in infos {
-            out.push_str(&format!("  [info] {} - {}\n", f.check.as_str(), f.message));
+            let _ = writeln!(out, "  [info] {} - {}", f.check.as_str(), f.message);
         }
     }
     out

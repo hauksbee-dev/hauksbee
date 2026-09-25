@@ -63,8 +63,9 @@ pub struct SchematicPartIdentity {
     pub value: String,
 }
 
-/// One physical package pad's net incidence in the schematic. Eagle schematic
-/// pins are translated through the selected device's `<connect>` map so `pin`
+/// One physical package pad's net incidence in the schematic.
+///
+/// Eagle schematic pins are translated through the selected device's `<connect>` map so `pin`
 /// uses the same package-pad vocabulary as the companion `.brd`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SchematicPinNetIdentity {
@@ -121,6 +122,10 @@ pub fn looks_like_eagle_schematic(text: &str) -> bool {
 /// common case and is not an error: most boards keep their supply symbols on
 /// their own nets. An XML error IS surfaced, because a companion input the user
 /// explicitly supplied must not be silently half-read.
+///
+/// # Errors
+///
+/// Returns [`ExtractError::Xml`] when the schematic is not well-formed XML.
 pub fn declared_net_ties(text: &str) -> Result<Vec<DeclaredNetTie>, ExtractError> {
     let parsed = parse(text)?;
     let mut out = Vec::new();
@@ -152,6 +157,11 @@ pub fn declared_net_ties(text: &str) -> Result<Vec<DeclaredNetTie>, ExtractError
     Ok(out)
 }
 
+/// The schematic's physical parts (reference and value), sorted and deduplicated.
+///
+/// # Errors
+///
+/// Returns [`ExtractError::Xml`] when the schematic is not well-formed XML.
 pub fn schematic_part_identities(text: &str) -> Result<Vec<SchematicPartIdentity>, ExtractError> {
     let mut parts = parse(text)?.physical_parts;
     parts.sort();
@@ -159,6 +169,11 @@ pub fn schematic_part_identities(text: &str) -> Result<Vec<SchematicPartIdentity
     Ok(parts)
 }
 
+/// Every package-pad net incidence in the schematic, sorted and deduplicated.
+///
+/// # Errors
+///
+/// Returns [`ExtractError::Xml`] when the schematic is not well-formed XML.
 pub fn schematic_pin_net_identities(
     text: &str,
 ) -> Result<Vec<SchematicPinNetIdentity>, ExtractError> {
@@ -232,6 +247,7 @@ struct Parsed {
 /// A single streaming pass, in the order Eagle writes the file: `<libraries>`
 /// (symbols, then devicesets) precede `<parts>`, which precede `<sheets>`. That
 /// order is what makes one pass enough, and it is the order Eagle's DTD fixes.
+#[allow(clippy::too_many_lines, reason = "one streaming pass over the XML")]
 fn parse(text: &str) -> Result<Parsed, ExtractError> {
     let mut reader = Reader::from_str(text);
     reader.config_mut().trim_text(true);
@@ -598,6 +614,7 @@ fn parse(text: &str) -> Result<Parsed, ExtractError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     /// A minimal Eagle 6 schematic: two supply symbols in one library, a parts
     /// list, and whatever nets the caller supplies.
@@ -875,14 +892,14 @@ mod tests {
         // check for `<schematic>` therefore rejected a valid schematic, which
         // silently disabled the entire declared-tie pathway on the board it was
         // written for, while every small fixture kept passing.
-        let preamble: String = (0..400)
-            .map(|n| {
-                format!(
-                    "<layer number=\"{n}\" name=\"L{n}\" color=\"4\" fill=\"1\" \
-                     visible=\"yes\" active=\"yes\"/>\n"
-                )
-            })
-            .collect();
+        let preamble = (0..400).fold(String::new(), |mut s, n| {
+            let _ = writeln!(
+                s,
+                "<layer number=\"{n}\" name=\"L{n}\" color=\"4\" fill=\"1\" \
+                 visible=\"yes\" active=\"yes\"/>"
+            );
+            s
+        });
         assert!(
             preamble.len() > 8192,
             "the preamble must exceed any plausible head slice, is {}",

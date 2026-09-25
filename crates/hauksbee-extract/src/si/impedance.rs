@@ -108,8 +108,9 @@ use crate::ExtractedBoard;
 // Stackup model.
 // ===========================================================================
 
-/// Default substrate dielectric constant for FR4 (the corpus stackups all
-/// declare 4.5; the textbook quick-estimate value is 4.3). Used only when the
+/// Default substrate dielectric constant for FR4.
+///
+/// The corpus stackups all declare 4.5; the textbook quick-estimate value is 4.3. Used only when the
 /// board declares no stackup, and only ever to produce an *info* estimate.
 pub const DEFAULT_ER: f64 = 4.3;
 /// Default 1 oz copper thickness (mm).
@@ -118,7 +119,9 @@ pub const DEFAULT_CU_THICKNESS_MM: f64 = 0.035;
 /// FR4. The microstrip reference height is the full core for a 2-layer board.
 pub const DEFAULT_DIELECTRIC_MM: f64 = 1.51;
 
-/// Impedance tolerance band (fraction). A controlled-impedance target is met if
+/// Impedance tolerance band (fraction).
+///
+/// A controlled-impedance target is met if
 /// the estimate is within +-15% of target. 15% is the looser of the two common
 /// fab tolerances (+-10% / +-15%); using the looser band keeps the model's own
 /// few-percent error from ever producing the finding on its own.
@@ -135,7 +138,9 @@ pub enum StackupSource {
     Default,
 }
 
-/// The stackup parameters the impedance formulas need. A minimal model: the
+/// The stackup parameters the impedance formulas need.
+///
+/// A minimal model: the
 /// outer-layer microstrip reference height (dielectric below F.Cu / above B.Cu),
 /// the copper thickness, and the substrate Er. This is all the closed-form
 /// quasi-static formulas consume.
@@ -546,7 +551,7 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
         // width of the pair; the pad neck-down is the narrow end and is not the
         // controlled section.
         let w = match (wp, wm) {
-            (Some((_, maxp)), Some((_, maxm))) => f64::midpoint(maxp, maxm),
+            (Some((_, plus_hi)), Some((_, minus_hi))) => f64::midpoint(plus_hi, minus_hi),
             _ => continue,
         };
         if w <= 0.0 {
@@ -964,8 +969,14 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
             let mut leg_total = 0usize;
             for s in segs.iter().filter(|s| &s.layer == layer && s.net == net) {
                 let len = s.length();
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "clamped"
+                )]
                 let steps = ((len / SAMPLE_PITCH_MM).ceil() as usize).clamp(2, MAX_SAMPLES_PER_SEG);
                 for i in 0..=steps {
+                    #[allow(clippy::cast_precision_loss, reason = "sample counts are small")]
                     let t = i as f64 / steps as f64;
                     let (x, y) = (s.ax + t * (s.bx - s.ax), s.ay + t * (s.by - s.ay));
                     // A sample inside an anti-pad carries no information about
@@ -1262,12 +1273,12 @@ fn plane_fills(root: &List, layer: &str) -> Vec<Vec<(f64, f64)>> {
             continue;
         }
         for fp in zone.find_all("filled_polygon") {
-            let belongs = match fp.find_value("layer") {
-                // Tagged: the tag decides, whatever the zone header says.
-                Some(fl) => fl == layer,
+            let belongs = fp.find_value("layer").map_or_else(
                 // Untagged: fall back to the zone's own declaration.
-                None => zone_covers_layer(zone, layer),
-            };
+                || zone_covers_layer(zone, layer),
+                // Tagged: the tag decides, whatever the zone header says.
+                |fl| fl == layer,
+            );
             if !belongs {
                 continue;
             }

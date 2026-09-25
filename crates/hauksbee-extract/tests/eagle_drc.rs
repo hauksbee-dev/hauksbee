@@ -885,7 +885,7 @@ fn a_declared_pair_adds_context_without_authorizing_the_contact() {
     assert_eq!(after.net_a_name, before.net_a_name);
     assert_eq!(after.net_b_name, before.net_b_name);
     assert_eq!(after.layer, before.layer);
-    assert_eq!(after.gap_mm, before.gap_mm);
+    assert_eq!(after.gap_mm.to_bits(), before.gap_mm.to_bits());
     assert_eq!((after.x, after.y), (before.x, before.y));
 
     // The schematic carries useful pair context but no board coordinate, so
