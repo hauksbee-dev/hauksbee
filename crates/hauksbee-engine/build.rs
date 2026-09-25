@@ -53,9 +53,10 @@ fn main() {
         return;
     }
     // Watch owned source trees, including new untracked files. A missing path reruns this on
-    // every build (a linked worktree's git dir has no packed-refs), so watch only what exists.
+    // every build (a linked worktree's git dir has no packed-refs), so watch only what exists,
+    // judged from the manifest dir Cargo resolves relative watches against, not the cwd.
     let watch = |path: &Path| {
-        if path.exists() {
+        if manifest_dir.join(path).exists() {
             println!("cargo:rerun-if-changed={}", path.display());
         }
     };
