@@ -831,7 +831,6 @@ impl Assumption {
     /// The digest covers the complete typed claim, so ordering two sibling CI
     /// assertions differently cannot decide which one inherits a bare id.
     #[must_use]
-    #[must_use]
     pub fn disambiguate_colliding_id(mut self) -> Self {
         let claim = serde_json::to_vec(&(
             self.kind,
@@ -2155,7 +2154,6 @@ impl ArtifactProvenance {
     }
 
     #[must_use]
-    #[must_use]
     pub fn with_contributions(mut self, contributions: Vec<Contribution>) -> Self {
         self.contributed = contributions;
         self
@@ -2168,13 +2166,11 @@ impl ArtifactProvenance {
     }
 
     #[must_use]
-    #[must_use]
     pub fn with_ignored(mut self, ignored: Vec<IgnoredInput>) -> Self {
         self.ignored = ignored;
         self
     }
 
-    #[must_use]
     #[must_use]
     pub fn with_cross_checks(mut self, cross_checks: Vec<CrossCheck>) -> Self {
         self.cross_checks = cross_checks;
@@ -2855,13 +2851,11 @@ impl ErrorBudget {
     }
 
     #[must_use]
-    #[must_use]
     pub fn with_method(mut self, method: WindowMethod) -> Self {
         self.methods.push(method);
         self
     }
 
-    #[must_use]
     #[must_use]
     pub fn with_residual(mut self, residual: Residual) -> Self {
         self.residual = Some(residual);
@@ -2869,13 +2863,11 @@ impl ErrorBudget {
     }
 
     #[must_use]
-    #[must_use]
     pub fn with_failed_window(mut self, window: TimeWindow) -> Self {
         self.failed_windows.push(window);
         self
     }
 
-    #[must_use]
     #[must_use]
     pub fn with_uncertainty(mut self, uncertainty: ModelUncertainty) -> Self {
         self.model_uncertainty.push(uncertainty);
@@ -3759,7 +3751,6 @@ impl EvidenceMap {
 
     /// Attach the models on the causal path.
     #[must_use]
-    #[must_use]
     pub fn with_models(mut self, models: Vec<ModelOnPath>) -> Self {
         self.models = models;
         self
@@ -3797,7 +3788,6 @@ impl EvidenceMap {
     /// invariant-bearing member has private fields and a fallible constructor,
     /// so malformed numeric evidence cannot reach this method or disappear on
     /// the way to JSON.
-    #[must_use]
     #[must_use]
     pub fn with_error_budget(mut self, budget: ErrorBudget) -> Self {
         self.error_budget = Some(budget);

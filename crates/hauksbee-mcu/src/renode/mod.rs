@@ -362,7 +362,6 @@ impl RenodeConfig {
 
     /// Add one ADC channel injection recipe. Chainable.
     #[must_use]
-    #[must_use]
     pub fn with_adc_channel(mut self, map: AdcChannelMap) -> Self {
         self.adc_channels.push(map);
         self
@@ -373,7 +372,6 @@ impl RenodeConfig {
     /// A descriptor without a clock-control recipe is left unchanged. For a
     /// descriptor that has one, the rendered command runs during machine setup,
     /// before the first firmware instruction.
-    #[must_use]
     #[must_use]
     pub fn with_external_clock_present(mut self, present: bool) -> Self {
         if let Some(clock) = &self.clock_control {
