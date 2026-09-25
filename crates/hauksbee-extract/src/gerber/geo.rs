@@ -756,8 +756,8 @@ impl<'a> PolyGrid<'a> {
             }
             let mut active: Vec<usize> = Vec::new();
             let mut xs: Vec<f64> = Vec::new();
-            for gy in 0..ny {
-                active.extend(starts[gy].iter().copied());
+            for (gy, row_starts) in starts.iter().enumerate() {
+                active.extend(row_starts.iter().copied());
                 active.retain(|&e| expires[e] >= gy);
                 if active.is_empty() {
                     continue;

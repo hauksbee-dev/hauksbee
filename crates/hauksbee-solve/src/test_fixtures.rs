@@ -46,6 +46,8 @@ pub(crate) use crate::orchestrate::lerp_at;
 
 /// Max |sample - reference| over every node (ground excluded) at every sample
 /// time of `time`, interpolating the reference.
+// `node` indexes the solved and the reference waveforms alike and names the node.
+#[allow(clippy::needless_range_loop)]
 pub fn max_error(
     c: &Circuit,
     time: &[f64],
@@ -69,6 +71,8 @@ pub fn max_error(
 /// Two-sided capture-grid compare: every sample must agree with the reference
 /// within `tol(reference value)`, or the reference must attain the sample's
 /// value somewhere within `±dt` (an edge placed up to one grid interval away).
+// `node` indexes the solved and the reference waveforms alike and names the node.
+#[allow(clippy::needless_range_loop)]
 pub fn assert_matches_within_grid(
     c: &Circuit,
     time: &[f64],

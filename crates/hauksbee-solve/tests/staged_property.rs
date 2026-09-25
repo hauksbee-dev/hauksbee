@@ -108,19 +108,13 @@ fn random_board(seed: u64) -> Circuit {
     }
 
     // Random feedforward couplings: 1..=2 per downstream island.
-    for down in 1..n_islands {
+    for (down, &hub) in hubs.iter().enumerate().skip(1) {
         for edge in 0..rng.pick(1, 2) {
             let up = rng.pick(0, down - 1);
             if rng.coin() {
                 // Comparator living in `down`, watching `up`'s tail.
                 let out = c.node(&format!("cmp_{up}_{down}_{edge}"));
-                add_resistor(
-                    &mut c,
-                    &format!("RB{up}_{down}_{edge}"),
-                    out,
-                    hubs[down],
-                    1e3,
-                );
+                add_resistor(&mut c, &format!("RB{up}_{down}_{edge}"), out, hub, 1e3);
                 comparator(
                     &mut c,
                     &format!("K{up}_{down}_{edge}"),
@@ -135,7 +129,7 @@ fn random_board(seed: u64) -> Circuit {
                 vswitch(
                     &mut c,
                     &format!("S{up}_{down}_{edge}"),
-                    hubs[down],
+                    hub,
                     o,
                     (tails[up], NodeId::GROUND),
                     (rng.f(1.0, 2.5), rng.f(0.3, 0.9)),

@@ -475,13 +475,13 @@ pub fn execute_stiff_group_held_capped(
         }
         let mut clusters: Vec<Vec<NodeId>> = Vec::new();
         let mut root_slot: HashMap<usize, usize> = HashMap::new();
-        for i in 0..n {
+        for (i, &cand) in candidates.iter().enumerate() {
             let r = find(&mut parent, i);
             let slot = *root_slot.entry(r).or_insert_with(|| {
                 clusters.push(Vec::new());
                 clusters.len() - 1
             });
-            clusters[slot].push(candidates[i]);
+            clusters[slot].push(cand);
         }
         let mut cluster_blocks: HashMap<u32, Vec<usize>> = HashMap::new();
         let mut cand_rep: HashMap<u32, u32> = HashMap::new();
@@ -1864,12 +1864,12 @@ fn sample_node(wf: &Waveforms, g2l: &HashMap<u32, u32>, node: NodeId, grid: &[f6
 fn shifted_residual(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len().min(b.len());
     let mut worst = 0.0f64;
-    for i in 0..n {
+    for (i, &ai) in a[..n].iter().enumerate() {
         let lo = i.saturating_sub(1);
         let hi = (i + 1).min(n - 1);
         let mut best = f64::INFINITY;
-        for j in lo..=hi {
-            best = best.min((a[i] - b[j]).abs());
+        for &bj in &b[lo..=hi] {
+            best = best.min((ai - bj).abs());
         }
         worst = worst.max(best);
     }

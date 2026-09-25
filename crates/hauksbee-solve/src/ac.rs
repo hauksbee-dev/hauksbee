@@ -251,9 +251,9 @@ impl AcAnalysis {
             let x = self.solve_at(circuit, &ws.layout, &op, w, &siblings, latch.as_ref())?;
             // Map unknowns back to node phasors (ground = 0).
             let mut node_phasor = vec![Complex64::new(0.0, 0.0); n_nodes];
-            for node in 1..n_nodes {
+            for (node, phasor) in node_phasor.iter_mut().enumerate().skip(1) {
                 if let Some(idx) = ws.layout.node(NodeId(node as u32)) {
-                    node_phasor[node] = x[idx];
+                    *phasor = x[idx];
                 }
             }
             points.push(AcPoint {
@@ -348,9 +348,9 @@ impl OperatingPoint {
     fn capture(ws: &Workspace, circuit: &Circuit) -> OperatingPoint {
         let n = circuit.node_count();
         let mut node_v = vec![0.0; n];
-        for node in 1..n {
+        for (node, v) in node_v.iter_mut().enumerate().skip(1) {
             if let Some(idx) = ws.layout.node(NodeId(node as u32)) {
-                node_v[node] = ws.x[idx];
+                *v = ws.x[idx];
             }
         }
         OperatingPoint {

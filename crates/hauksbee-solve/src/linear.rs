@@ -118,12 +118,12 @@ impl Csr {
     /// `y = A x`.
     #[inline]
     fn matvec(&self, x: &[f64], y: &mut [f64]) {
-        for i in 0..self.n {
+        for (i, yi) in y[..self.n].iter_mut().enumerate() {
             let mut s = 0.0;
             for p in self.row_ptr[i]..self.row_ptr[i + 1] {
                 s += self.val[p] * x[self.col[p]];
             }
-            y[i] = s;
+            *yi = s;
         }
     }
 
@@ -179,12 +179,12 @@ impl Rect {
     #[inline]
     fn matvec(&self, x: &[f64], y: &mut [f64]) {
         let _ = self.cols;
-        for i in 0..self.rows {
+        for (i, yi) in y[..self.rows].iter_mut().enumerate() {
             let mut s = 0.0;
             for p in self.row_ptr[i]..self.row_ptr[i + 1] {
                 s += self.val[p] * x[self.col[p]];
             }
-            y[i] = s;
+            *yi = s;
         }
     }
 }
@@ -678,7 +678,7 @@ impl LinearIsland {
         let n = self.states.len();
         let m = self.n_inputs_total();
         let mut nx = vec![0.0f64; n];
-        for i in 0..n {
+        for (i, out) in nx.iter_mut().enumerate() {
             let mut s = 0.0;
             let row = &cache.ad[i * n..i * n + n];
             for j in 0..n {
@@ -688,7 +688,7 @@ impl LinearIsland {
             for j in 0..m {
                 s += brow[j] * u[j];
             }
-            nx[i] = s;
+            *out = s;
         }
         x.copy_from_slice(&nx);
     }
@@ -707,13 +707,13 @@ impl LinearIsland {
         let m = self.n_inputs_total();
         // Constant drive d = B u (dense B, but n_inputs is tiny).
         let mut d = vec![0.0f64; n];
-        for i in 0..n {
+        for (i, di) in d.iter_mut().enumerate() {
             let mut s = 0.0;
             let brow = &self.b[i * m..i * m + m];
             for j in 0..m {
                 s += brow[j] * u[j];
             }
-            d[i] = s;
+            *di = s;
         }
         let h = mf.dt / mf.substeps as f64;
         let mut y = x.to_vec();
@@ -751,24 +751,27 @@ impl LinearIsland {
         if self.uses_matrix_free() {
             // Sparse Sx (large island); dense Su (n_inputs is tiny).
             self.sx_sparse.matvec(x, out_v);
-            for f in 0..self.n_free {
+            for (f, v) in out_v[..self.n_free].iter_mut().enumerate() {
                 let mut s = 0.0;
+                let urow = &self.su[f * m..f * m + m];
                 for j in 0..m {
-                    s += self.su[f * m + j] * u[j];
+                    s += urow[j] * u[j];
                 }
-                out_v[f] += s;
+                *v += s;
             }
             return;
         }
-        for f in 0..self.n_free {
+        for (f, v) in out_v[..self.n_free].iter_mut().enumerate() {
             let mut s = 0.0;
+            let xrow = &self.sx[f * n..f * n + n];
             for j in 0..n {
-                s += self.sx[f * n + j] * x[j];
+                s += xrow[j] * x[j];
             }
+            let urow = &self.su[f * m..f * m + m];
             for j in 0..m {
-                s += self.su[f * m + j] * u[j];
+                s += urow[j] * u[j];
             }
-            out_v[f] = s;
+            *v = s;
         }
     }
 }
@@ -825,17 +828,19 @@ impl DenseLu {
         }
         for i in 0..n {
             let mut s = y[i];
+            let row = &self.lu[i * n..i * n + n];
             for j in 0..i {
-                s -= self.lu[i * n + j] * y[j];
+                s -= row[j] * y[j];
             }
             y[i] = s;
         }
         for i in (0..n).rev() {
             let mut s = y[i];
+            let row = &self.lu[i * n..i * n + n];
             for j in (i + 1)..n {
-                s -= self.lu[i * n + j] * y[j];
+                s -= row[j] * y[j];
             }
-            y[i] = s / self.lu[i * n + i];
+            y[i] = s / row[i];
         }
         b[..n].copy_from_slice(&y[..n]);
     }

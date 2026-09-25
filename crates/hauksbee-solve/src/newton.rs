@@ -1051,8 +1051,8 @@ fn newton_solve_core(
             let mut best_norm = f64::INFINITY;
             loop {
                 // Trial point x = lin_point + alpha*dx, evaluated into ws.x scratch.
-                for i in 0..ws.x.len() {
-                    ws.x[i] = ws.lin_point[i] + alpha * dx[i];
+                for (i, xi) in ws.x.iter_mut().enumerate() {
+                    *xi = ws.lin_point[i] + alpha * dx[i];
                 }
                 let node_norm = residual_argmax_at(
                     ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
@@ -1090,8 +1090,8 @@ fn newton_solve_core(
             } else {
                 alpha
             };
-            for i in 0..ws.x.len() {
-                ws.x[i] = ws.lin_point[i] + use_alpha * dx[i];
+            for (i, xi) in ws.x.iter_mut().enumerate() {
+                *xi = ws.lin_point[i] + use_alpha * dx[i];
             }
             if dbg_newton {
                 eprintln!(
@@ -2651,8 +2651,8 @@ fn ptc_settle_from_seed(circuit: &Circuit, opts: &SolverOptions, seed: &[f64]) -
         // Track convergence of the node block between captured samples.
         if !last.is_empty() && s.x.len() >= n_nodes {
             let mut maxd = 0.0f64;
-            for i in 0..n_nodes {
-                maxd = maxd.max((s.x[i] - last[i]).abs());
+            for (xi, li) in s.x[..n_nodes].iter().zip(&last[..n_nodes]) {
+                maxd = maxd.max((xi - li).abs());
             }
             if maxd < 1e-7 {
                 settled = true;

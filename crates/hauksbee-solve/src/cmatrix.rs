@@ -114,8 +114,7 @@ impl ComplexSystem {
             let rk = piv[k];
             let pivot = a[rk * n + k];
             // Eliminate below.
-            for i in (k + 1)..n {
-                let ri = piv[i];
+            for &ri in &piv[(k + 1)..n] {
                 let factor = a[ri * n + k] / pivot;
                 a[ri * n + k] = factor;
                 for j in (k + 1)..n {

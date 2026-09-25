@@ -399,14 +399,14 @@ fn spec_chain_matches_hc595chain_reference() {
             ser_in[k + 1] = chips[k].output_level("qh_serial").expect("tap");
         }
 
-        for k in 0..N {
+        for (k, chip) in chips.iter().enumerate() {
             assert_eq!(
-                chips[k].register("shift"),
+                chip.register("shift"),
                 Some(reference.shift[k] as u64),
                 "edge {i}: chip {k} shift register diverged from Hc595Chain"
             );
             assert_eq!(
-                chips[k].register("store"),
+                chip.register("store"),
                 Some(reference.latched[k] as u64),
                 "edge {i}: chip {k} storage register diverged from Hc595Chain"
             );

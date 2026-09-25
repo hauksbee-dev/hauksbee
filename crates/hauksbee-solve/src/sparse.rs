@@ -961,8 +961,7 @@ mod tests {
                 .unwrap();
             piv.swap(k, p);
             let rk = piv[k];
-            for i in (k + 1)..n {
-                let ri = piv[i];
+            for &ri in &piv[(k + 1)..n] {
                 let f = a[ri * n + k] / a[rk * n + k];
                 for j in k..n {
                     a[ri * n + j] -= f * a[rk * n + j];
@@ -1100,7 +1099,9 @@ mod tests {
     /// (against a dense reference) where the frozen order corners a tiny pivot.
     #[test]
     fn dynamic_pivoting_matches_frozen_and_recovers_from_bad_orders() {
-        let cases: &[(usize, &[(usize, usize, f64)], &[f64])] = &[
+        // (size, (row, column, value) entries, rhs)
+        type Case = (usize, &'static [(usize, usize, f64)], &'static [f64]);
+        let cases: &[Case] = &[
             (3, SPD_3, &[1.0, 2.0, 3.0]),
             (
                 4,

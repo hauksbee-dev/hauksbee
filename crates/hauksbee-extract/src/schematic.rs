@@ -1002,13 +1002,8 @@ impl NetlistBuilder {
             // Pair positionally. Lengths normally match; if they differ (a
             // malformed schematic) we connect the common prefix and leave the
             // rest as their own-named members.
-            let n = b.own_members.len().min(bus_members.len());
-            for i in 0..b.own_members.len() {
-                let local_name = if i < n {
-                    bus_members[i].clone()
-                } else {
-                    b.own_members[i].clone()
-                };
+            for (i, own) in b.own_members.iter().enumerate() {
+                let local_name = bus_members.get(i).unwrap_or(own).clone();
                 let mnode = self.uf.make();
                 // Bind the fresh node to the member's net on this sheet via a
                 // local label of the *local* (bus) member name. Hier kind for
@@ -1025,7 +1020,7 @@ impl NetlistBuilder {
                 );
                 // Key the hierarchical join under the boundary's OWN member
                 // name so it matches the other side.
-                let key = b.own_members[i].clone();
+                let key = own.clone();
                 if b.parent_side {
                     self.hier_parent.push((b.path.clone(), key, mnode));
                 } else {

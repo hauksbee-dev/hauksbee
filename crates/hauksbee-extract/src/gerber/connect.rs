@@ -301,8 +301,9 @@ pub fn reconstruct(
             // multi-contour pour), so cloning holds the layer's largest geometry
             // twice for the whole pass. Only a `Polygon`, which has to be wrapped
             // in a one-contour slice to be gridded at all, is materialised.
-            let mut owned: Vec<(usize, Vec<Vec<(f64, f64)>>, Vec<i16>)> = Vec::new();
-            let mut borrowed: Vec<(usize, &[Vec<(f64, f64)>], &[i16])> = Vec::new();
+            type Contour = Vec<(f64, f64)>;
+            let mut owned: Vec<(usize, Vec<Contour>, Vec<i16>)> = Vec::new();
+            let mut borrowed: Vec<(usize, &[Contour], &[i16])> = Vec::new();
             for &rgi in &regions {
                 match &prims[rgi].shape {
                     Shape::Polygon { pts, .. } => {
@@ -523,8 +524,8 @@ pub fn reconstruct(
     let mut x2_net_first: HashMap<&str, usize> = HashMap::new();
     let mut x2_fragment_joins: usize = 0;
     let mut tied_names: Vec<(Arc<str>, Arc<str>)> = Vec::new();
-    for gi in 0..prims.len() {
-        let names = prims[gi].attrs.net_names();
+    for (gi, prim) in prims.iter().enumerate() {
+        let names = prim.attrs.net_names();
         for name in names {
             match x2_net_first.get(&**name) {
                 Some(&first) => {
@@ -746,10 +747,9 @@ pub fn reconstruct(
     // Components the FILM names that the P&P does not place (or there is no
     // P&P at all): refdes -> (pads, dedupe cells, layer tally). BTreeMap so
     // film-only components come out in a stable order.
-    let mut film_comps: std::collections::BTreeMap<
-        String,
-        (Vec<Pin>, std::collections::HashSet<(i64, i64)>, Vec<usize>),
-    > = std::collections::BTreeMap::new();
+    type FilmComp = (Vec<Pin>, std::collections::HashSet<(i64, i64)>, Vec<usize>);
+    let mut film_comps: std::collections::BTreeMap<String, FilmComp> =
+        std::collections::BTreeMap::new();
 
     if x2_pins_present {
         // ── Film-identity binding ────────────────────────────────────────────

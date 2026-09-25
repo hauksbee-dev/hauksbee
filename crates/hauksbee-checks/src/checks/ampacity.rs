@@ -136,13 +136,16 @@ fn electrical_terminal_nets(component: &hauksbee_extract::Component) -> Option<(
     (first != second).then_some((first, second))
 }
 
+/// A two-terminal part's terminal nets; `None` marks an unconnected terminal.
+type TerminalNets = (Option<i64>, Option<i64>);
+
 /// The two logical terminal nets, retaining a missing-net state so a topology
 /// reader can distinguish "not a two-terminal part" from "a two-terminal part
 /// whose connection is incomplete". Contradictory duplicate physical pad
 /// records are an error; callers must not first-win them.
 fn electrical_terminal_net_options(
     component: &hauksbee_extract::Component,
-) -> Result<Option<(Option<i64>, Option<i64>)>, ()> {
+) -> Result<Option<TerminalNets>, ()> {
     let mut terminals: Vec<(&str, Option<i64>)> = Vec::new();
     for pin in &component.pins {
         let number = pin.number.trim();
@@ -281,6 +284,8 @@ struct ResistanceEdge {
 /// Solve a dense linear system with partial pivoting. Programming networks are
 /// intentionally bounded to a handful of nodes, so a small auditable solver is
 /// preferable to adding a heavyweight sparse dependency.
+// Elimination reads the pivot row while writing another row of the same matrix.
+#[allow(clippy::needless_range_loop)]
 fn solve_linear(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Option<Vec<f64>> {
     let n = rhs.len();
     for column in 0..n {
