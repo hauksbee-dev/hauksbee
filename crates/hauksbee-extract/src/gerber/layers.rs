@@ -314,8 +314,9 @@ fn is_gerber_film_ext(n: &Name) -> bool {
     )
 }
 
-/// Operating-system litter that travels with a copied fab folder: macOS
-/// resource forks (`._name`) and Finder/Explorer metadata. A `._board-F_Cu.gbr`
+/// Operating-system litter that travels with a copied fab folder.
+///
+/// That is macOS resource forks (`._name`) and Finder/Explorer metadata. A `._board-F_Cu.gbr`
 /// fork would otherwise classify as top copper by its name alone.
 #[must_use]
 pub fn is_filesystem_noise(file_name: &str) -> bool {
@@ -327,6 +328,7 @@ pub fn is_filesystem_noise(file_name: &str) -> bool {
 
 /// Classify a single fab file by its path. Inner-copper indices are
 /// provisional (see [`assign_inner_indices`]).
+#[allow(clippy::too_many_lines, reason = "one ordered chain of naming rules")]
 pub fn classify(path: &Path) -> LayerRole {
     let n = Name::of(path);
     if path
@@ -802,8 +804,10 @@ pub fn role_phrase(role: &LayerRole) -> String {
     }
 }
 
-/// An explicit layer-role mapping file: the escape hatch for exotic jobs whose
-/// file names defeat the conventions. Format is one `filename = role` per line
+/// An explicit layer-role mapping file.
+///
+/// It is the escape hatch for exotic jobs whose file names defeat the
+/// conventions. Format is one `filename = role` per line
 /// (`#` comments allowed), where role is `copper:<index>` (0 = top, larger =
 /// deeper, `bottom` for the bottom layer), `drill`, `outline`, or `ignore`:
 ///
@@ -928,13 +932,11 @@ pub fn parse_ldp(text: &str) -> Vec<(String, LdpDrillRole)> {
                     number.filter(|n| *n >= 1).map(LdpLayer::Inner)
                 }
             };
-            match layer {
-                Some(layer) => parsed_layers.push(layer),
-                None => {
-                    valid = false;
-                    break;
-                }
-            }
+            let Some(layer) = layer else {
+                valid = false;
+                break;
+            };
+            parsed_layers.push(layer);
         }
         if !valid || parsed_layers.len() < 2 {
             continue;
@@ -972,7 +974,9 @@ pub enum ExtRepRole {
     Ignored,
 }
 
-/// Parsed `.EXTREP` authority. An extension is usable only when every row for
+/// Parsed `.EXTREP` authority.
+///
+/// An extension is usable only when every row for
 /// it agrees; reports that assign the same extension to several roles (for
 /// example Altium's named-output mode where every film is `.gbr`) retain the
 /// extension in `contested` and deliberately supply no role for it.
@@ -1385,8 +1389,9 @@ fn bare_stack_index(n: &Name) -> Option<usize> {
     None
 }
 
-/// Once every copper file is classified, resolve the provisional indices into a
-/// dense top-to-bottom ordering. Top stays 0; bottom (the `usize::MAX`
+/// Resolve the provisional copper indices into a dense top-to-bottom ordering.
+///
+/// Runs once every copper file is classified. Top stays 0; bottom (the `usize::MAX`
 /// sentinel) becomes the last index; inner layers keep their relative order.
 ///
 /// Input/output: a list of `(role, original_index_into_caller_vec)` for the
@@ -1516,6 +1521,10 @@ mod tests {
             ("board-CopperLayer2_Cu.gbr", 2),
             ("board-CopperInner1.gbr", 1),
         ]);
+    }
+
+    #[test]
+    fn mechanical_and_documentation_films_are_not_copper() {
         // A name-based copper rule must not read a MECHANICAL or DOCUMENTATION
         // film as copper. As a bare substring `cu` hides in `circuit`,
         // `accumulator`, `vcut`, `document` and `cube`, which would put outline

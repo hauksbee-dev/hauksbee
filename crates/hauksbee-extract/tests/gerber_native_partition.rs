@@ -6,6 +6,7 @@
 //! it on a checkout that has no separately fetched, license-reviewed corpus.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use hauksbee_extract::gerber::from_gerber_dir;
@@ -36,6 +37,7 @@ fn is_bottom(layer: &str) -> bool {
     )
 }
 
+#[allow(clippy::cast_possible_truncation, reason = "rounded board coordinates")]
 fn pad_cell(x: f64, y: f64) -> (i64, i64) {
     // The Gerber binder itself deduplicates coincident flashes on this 0.05 mm
     // grid. Using the same physical cell makes the comparison insensitive to
@@ -96,8 +98,9 @@ fn native_placement_csv(board: &ExtractedBoard) -> String {
         } else {
             &component.footprint
         };
-        csv.push_str(&format!(
-            "{},{},{},{x:.6},{y:.6},{rotation:.6},{}\n",
+        let _ = writeln!(
+            csv,
+            "{},{},{},{x:.6},{y:.6},{rotation:.6},{}",
             csv_cell(&component.reference),
             csv_cell(&component.value),
             csv_cell(package),
@@ -106,7 +109,7 @@ fn native_placement_csv(board: &ExtractedBoard) -> String {
             } else {
                 "top"
             }
-        ));
+        );
     }
     csv
 }

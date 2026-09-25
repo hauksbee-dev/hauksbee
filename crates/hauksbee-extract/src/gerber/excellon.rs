@@ -34,9 +34,10 @@ pub struct Hole {
     pub to: Option<(f64, f64)>,
 }
 
-/// The copper layer pair an Excellon file declares its hits span, as the 1-based
-/// physical layer numbers the X2 `TF.FileFunction` attribute uses (`1` is the
-/// top copper). `Plated,1,4,PTH` on a four-layer board is a through-hole;
+/// The copper layer pair an Excellon file declares its hits span.
+///
+/// The pair is given as the 1-based physical layer numbers the X2
+/// `TF.FileFunction` attribute uses (`1` is the top copper). `Plated,1,4,PTH` on a four-layer board is a through-hole;
 /// `Plated,1,2,PTH` is a blind via that reaches only the first two layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayerPair {
@@ -77,15 +78,17 @@ pub struct DrillFile {
     pub notes: Vec<String>,
 }
 
-/// The diameter a hit is read at when its tool has no entry in the tool
-/// table. Small on purpose: a barrel this narrow stitches only the copper
-/// directly over the hit, so an unknown tool can under-connect but never reach
+/// The diameter a hit is read at when its tool has no entry in the tool table.
+///
+/// Small on purpose: a barrel this narrow stitches only the copper directly
+/// over the hit, so an unknown tool can under-connect but never reach
 /// copper the real drill would not.
 pub const UNDEFINED_TOOL_DIAMETER_MM: f64 = 0.1;
 
 /// How an Excellon coordinate token is read: units, the integer/decimal split
 /// of a token with no decimal point, and which side the zeros are dropped from.
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools, reason = "independent header flags")]
 struct CoordFormat {
     metric: bool,
     int_digits: usize,
@@ -203,6 +206,7 @@ impl Tools {
 }
 
 #[must_use]
+#[allow(clippy::too_many_lines, reason = "single-pass line parser")]
 pub fn parse(text: &str) -> DrillFile {
     let mut fmt = CoordFormat::default();
     let mut tools = Tools::default();
@@ -618,8 +622,9 @@ const ARC_MAX_STEPS: usize = 4096;
 /// copper arc, so a slot wall and a copper arc resolve a marginal contact
 /// identically instead of disagreeing about the same curve. A zero radius or a
 /// non-finite sweep yields nothing at all rather than a guess.
-// min/max keeps a NaN sagitta step bounded; clamp would propagate the NaN.
-#[allow(clippy::manual_clamp)]
+#[allow(clippy::manual_clamp, reason = "clamp would propagate a NaN step")]
+#[allow(clippy::cast_possible_truncation, reason = "capped at ARC_MAX_STEPS")]
+#[allow(clippy::cast_sign_loss, clippy::cast_precision_loss, reason = "small")]
 fn tessellate_arc(
     sx: f64,
     sy: f64,
@@ -629,13 +634,6 @@ fn tessellate_arc(
     j: f64,
     clockwise: bool,
 ) -> Vec<(f64, f64, f64, f64)> {
-    let (cx, cy) = (sx + i, sy + j);
-    let r = (sx - cx).hypot(sy - cy);
-    if !r.is_finite() || r <= 0.0 {
-        return Vec::new();
-    }
-    let a0 = (sy - cy).atan2(sx - cx);
-    let a1 = (ey - cy).atan2(ex - cx);
     // A start that coincides with the end is a full circle. That promotion is
     // decided on the POINTS being the same, not on the swept angle being small:
     // an arc of a millionth of a radian is a millionth of a radian, and turning
@@ -647,17 +645,24 @@ fn tessellate_arc(
     // any two points a file describes as distinct are at least that far apart,
     // and anything closer is one point written twice with rounding on it.
     const COINCIDENT_MM: f64 = 1e-7;
+    let (cx, cy) = (sx + i, sy + j);
+    let r = (sx - cx).hypot(sy - cy);
+    if !r.is_finite() || r <= 0.0 {
+        return Vec::new();
+    }
+    let a0 = (sy - cy).atan2(sx - cx);
+    let a1 = (ey - cy).atan2(ex - cx);
     let closed = (ex - sx).hypot(ey - sy) <= COINCIDENT_MM;
     let mut sweep = a1 - a0;
     if clockwise {
-        while sweep > 0.0 {
+        if sweep > 0.0 {
             sweep -= std::f64::consts::TAU;
         }
         if closed {
             sweep = -std::f64::consts::TAU;
         }
     } else {
-        while sweep < 0.0 {
+        if sweep < 0.0 {
             sweep += std::f64::consts::TAU;
         }
         if closed {
@@ -689,10 +694,10 @@ fn tessellate_arc(
     let mut out = Vec::with_capacity(steps);
     let mut prev = (sx, sy);
     for k in 1..=steps {
-        let a = sweep.mul_add(k as f64 / steps as f64, a0);
-        let p = (r.mul_add(a.cos(), cx), r.mul_add(a.sin(), cy));
-        out.push((prev.0, prev.1, p.0, p.1));
-        prev = p;
+        let angle = sweep.mul_add(k as f64 / steps as f64, a0);
+        let point = (r.mul_add(angle.cos(), cx), r.mul_add(angle.sin(), cy));
+        out.push((prev.0, prev.1, point.0, point.1));
+        prev = point;
     }
     out
 }
@@ -749,10 +754,8 @@ pub fn parse_file_function_span(up: &str) -> DeclaredSpan {
     match (num(a), num(b)) {
         (Ok(from), Ok(to)) if from >= 1 && to > from => DeclaredSpan::Pair(LayerPair { from, to }),
         // Two numbers that do not make a span (reversed, equal, zero-based) are
-        // a declaration we cannot use.
-        (Ok(_), Ok(_)) => DeclaredSpan::Unreadable,
-        // A drill attribute whose pair fields are neither a layer number nor an
-        // `L`-spelled one. It offered a span and we cannot read it.
+        // a declaration we cannot use; so is a pair that is neither a layer
+        // number nor an `L`-spelled one: it offered a span we cannot read.
         _ => DeclaredSpan::Unreadable,
     }
 }
@@ -871,6 +874,11 @@ fn parse_coord(tok: &str, fmt: &CoordFormat) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Inches to millimetres, for expected coordinates.
+    fn inch(v: f64) -> f64 {
+        v * 25.4
+    }
 
     const KICAD_PTH: &str = "\
 M48
@@ -996,18 +1004,18 @@ M30
         assert_eq!(d.holes.len(), 4, "NPTH hole under T15 must be skipped");
         // 2:5 INCH,LZ: X0139665 -> 01.39665 inch -> *25.4 mm.
         let h0 = &d.holes[0];
-        assert!((h0.x - 1.39665 * 25.4).abs() < 1e-3, "x was {}", h0.x);
-        assert!((h0.y - 2.08957 * 25.4).abs() < 1e-3, "y was {}", h0.y);
+        assert!((h0.x - inch(1.39665)).abs() < 1e-3, "x was {}", h0.x);
+        assert!((h0.y - inch(2.08957)).abs() < 1e-3, "y was {}", h0.y);
         // T1 diameter 0.00787 inch -> ~0.2 mm.
-        assert!((h0.diameter - 0.00787 * 25.4).abs() < 1e-3);
+        assert!((h0.diameter - inch(0.00787)).abs() < 1e-3);
         // Modal X-only line keeps the previous Y.
         let h1 = &d.holes[1];
-        assert!((h1.y - 2.08957 * 25.4).abs() < 1e-3, "modal Y not held");
-        assert!((h1.x - 1.43996 * 25.4).abs() < 1e-3);
+        assert!((h1.y - inch(2.08957)).abs() < 1e-3, "modal Y not held");
+        assert!((h1.x - inch(1.43996)).abs() < 1e-3);
         // Modal Y-only line keeps the previous X (1.43996 from h1).
         let h2 = &d.holes[2];
-        assert!((h2.x - 1.43996 * 25.4).abs() < 1e-3, "modal X not held");
-        assert!((h2.y - 2.13287 * 25.4).abs() < 1e-3);
+        assert!((h2.x - inch(1.43996)).abs() < 1e-3, "modal X not held");
+        assert!((h2.y - inch(2.13287)).abs() < 1e-3);
     }
 
     #[test]
@@ -1033,10 +1041,8 @@ M30
         assert_eq!(d.holes.len(), 1);
         let h = &d.holes[0];
         assert!((h.x - 3.0).abs() < 1e-9 && (h.y - 4.0).abs() < 1e-9);
-        assert_eq!(
-            h.to.map(|(x, y)| ((x * 1e6) as i64, (y * 1e6) as i64)),
-            Some((9_000_000, 4_000_000))
-        );
+        let (tx, ty) = h.to.expect("a slot end");
+        assert!((tx - 9.0).abs() < 1e-6 && (ty - 4.0).abs() < 1e-6);
         assert!(
             (h.diameter - 0.6).abs() < 1e-9,
             "the routed width is the tool"
@@ -1064,13 +1070,13 @@ M30
         );
         assert_eq!(d.holes.len(), 1);
         let h = &d.holes[0];
-        assert!((h.x - 5.0945 * 25.4).abs() < 1e-6, "start x was {}", h.x);
+        assert!((h.x - inch(5.0945)).abs() < 1e-6, "start x was {}", h.x);
         let (tx, ty) = h.to.expect("a slot end");
-        assert!((tx - 5.0945 * 25.4).abs() < 1e-6, "end x was {tx}");
-        assert!((ty - (-5.4667) * 25.4).abs() < 1e-6, "end y was {ty}");
-        assert!((h.diameter - 0.0236 * 25.4).abs() < 1e-6);
+        assert!((tx - inch(5.0945)).abs() < 1e-6, "end x was {tx}");
+        assert!((ty - inch(-5.4667)).abs() < 1e-6, "end y was {ty}");
+        assert!((h.diameter - inch(0.0236)).abs() < 1e-6);
         // The slot is ~0.4 mm long, not the ~130 mm an unscaled end implies.
-        let len = ((tx - h.x).powi(2) + (ty - h.y).powi(2)).sqrt();
+        let len = (tx - h.x).hypot(ty - h.y);
         assert!(len < 5.0, "slot length {len} mm is not a real slot");
     }
 
@@ -1398,7 +1404,7 @@ M30
         );
         assert_eq!(d.holes.len(), 1);
         assert!(
-            (d.holes[0].x - 4.7047 * 25.4).abs() < 1e-3,
+            (d.holes[0].x - inch(4.7047)).abs() < 1e-3,
             "TZ must right-justify: got {} mm, the board's left edge is 119.5 mm",
             d.holes[0].x
         );
@@ -1417,7 +1423,7 @@ M30
 ",
         );
         assert!(
-            (d.holes[0].x - 47.047 * 25.4).abs() < 1e-2,
+            (d.holes[0].x - inch(47.047)).abs() < 1e-2,
             "LZ must left-justify: got {} mm",
             d.holes[0].x
         );

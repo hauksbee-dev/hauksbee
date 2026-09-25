@@ -1,7 +1,8 @@
 //! Geometry primitives and distance math shared by the DRC, the gerber
-//! connectivity tracer and the SI checks: capsules, polygons, weighted
-//! multi-contour pours, and the signed copper-gap between any two of them. One
-//! set of numerics, so a touch here means the same thing a short means there.
+//! connectivity tracer and the SI checks.
+//!
+//! The primitives are capsules, polygons, weighted multi-contour pours, and the
+//! signed copper-gap between any two of them. One set of numerics, so a touch here means the same thing a short means there.
 
 /// A "stadium": a segment of finite width. A round flash/via is the degenerate
 /// case `a == b`. All coordinates in board millimetres.
@@ -142,6 +143,7 @@ pub fn polygon_bounds<'a>(pts: impl IntoIterator<Item = &'a (f64, f64)>) -> [f64
     )
 }
 
+#[allow(clippy::cast_precision_loss, reason = "vertex counts are small")]
 fn vertex_mean(pts: &[(f64, f64)]) -> (f64, f64) {
     let n = pts.len().max(1) as f64;
     (
@@ -196,8 +198,9 @@ pub fn segments_intersect(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f
         || (d4 == 0.0 && on_seg(p1, p4, p2))
 }
 
-/// Minimum distance between two segments plus the closest point pair (on AB,
-/// on CD). 0 with the crossing point (both) when they cross; a colinear touch
+/// Minimum distance between two segments plus the closest point pair.
+///
+/// The pair is (on AB, on CD). 0 with the crossing point (both) when they cross; a colinear touch
 /// falls through to the endpoint candidates, which find a zero-distance pair.
 #[must_use]
 pub fn seg_seg_closest(
@@ -237,8 +240,9 @@ pub fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f6
     seg_seg_closest(a1, a2, b1, b2).0
 }
 
-/// Even-odd containment over a set of closed contours: inside iff enclosed by
-/// an odd number of them. This remains useful for one self-contained aperture
+/// Even-odd containment over a set of closed contours.
+///
+/// Inside iff enclosed by an odd number of them. This remains useful for one self-contained aperture
 /// image (outer + holes); painted [`Shape::MultiPolygon`] values use signed
 /// coverage instead.
 #[must_use]
@@ -248,7 +252,9 @@ pub fn point_in_contours(px: f64, py: f64, contours: &[Vec<(f64, f64)>]) -> bool
         .fold(false, |inside, c| inside ^ point_in_polygon(px, py, c))
 }
 
-/// Signed containment for a painted region. Each contour contributes its
+/// Signed containment for a painted region.
+///
+/// Each contour contributes its
 /// weight when it encloses the point; strictly positive coverage is copper.
 /// The length mismatch is a construction defect, so fail closed as no copper
 /// instead of silently reverting to parity.
@@ -629,12 +635,12 @@ pub fn shape_gap_at(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
         (Shape::Capsule(c), Shape::MultiPolygon { contours, weights })
         | (Shape::MultiPolygon { contours, weights }, Shape::Capsule(c)) => {
             capsule_weighted_gap(c, contours, weights, f64::INFINITY)
-                .unwrap_or((f64::INFINITY, a.center()))
+                .unwrap_or_else(|| (f64::INFINITY, a.center()))
         }
         (Shape::Polygon { pts, r }, Shape::MultiPolygon { contours, weights })
         | (Shape::MultiPolygon { contours, weights }, Shape::Polygon { pts, r }) => {
             polygon_weighted_gap(pts, *r, contours, weights, f64::INFINITY)
-                .unwrap_or((f64::INFINITY, a.center()))
+                .unwrap_or_else(|| (f64::INFINITY, a.center()))
         }
         (
             Shape::MultiPolygon {
@@ -645,12 +651,13 @@ pub fn shape_gap_at(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
                 contours: cb,
                 weights: wb,
             },
-        ) => weighted_regions_gap(ca, wa, cb, wb).unwrap_or((f64::INFINITY, a.center())),
+        ) => weighted_regions_gap(ca, wa, cb, wb).unwrap_or_else(|| (f64::INFINITY, a.center())),
     }
 }
 
-/// A grid-accelerated point-in-polygon tester for a large fixed polygon (a
-/// copper pour). Point-in-polygon is O(vertices); a board-spanning pour has
+/// A grid-accelerated point-in-polygon tester for a large fixed polygon.
+///
+/// The polygon is typically a copper pour. Point-in-polygon is O(vertices); a board-spanning pour has
 /// tens of thousands of vertices and is tested against every primitive, so the
 /// naive cost is quadratic. This rasterises the polygon's bounding box into a
 /// coarse grid once: each cell is tagged fully-inside, fully-outside, or
@@ -672,6 +679,10 @@ pub struct PolyGrid<'a> {
     cells: Vec<u8>,
 }
 
+#[allow(clippy::cast_possible_truncation, reason = "grid cell coordinates")]
+#[allow(clippy::cast_sign_loss, reason = "cell indices are checked >= 0")]
+#[allow(clippy::cast_possible_wrap, reason = "grid sides are small")]
+#[allow(clippy::cast_precision_loss, reason = "grid sides are far below 2^52")]
 impl<'a> PolyGrid<'a> {
     /// Build a grid for `contours`. `target_cells` is the rough number of cells
     /// along the longer axis (more = finer = fewer exact fallbacks, more build
@@ -692,26 +703,28 @@ impl<'a> PolyGrid<'a> {
         Self::build(contours, Some(weights), target_cells)
     }
 
+    #[allow(clippy::too_many_lines, reason = "one scanline fill pass")]
+    #[allow(clippy::float_cmp, reason = "exact-equal y and x are the intent")]
     fn build(
         contours: &'a [Vec<(f64, f64)>],
         weights: Option<&'a [i16]>,
         target_cells: usize,
     ) -> Self {
-        let mut minx = f64::INFINITY;
-        let mut miny = f64::INFINITY;
-        let mut maxx = f64::NEG_INFINITY;
-        let mut maxy = f64::NEG_INFINITY;
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
         for &(x, y) in contours.iter().flatten() {
-            minx = minx.min(x);
-            miny = miny.min(y);
-            maxx = maxx.max(x);
-            maxy = maxy.max(y);
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
         }
-        let span = (maxx - minx).max(maxy - miny).max(1e-6);
+        let span = (max_x - min_x).max(max_y - min_y).max(1e-6);
         let cell = span / target_cells.max(1) as f64;
         let inv_cell = 1.0 / cell;
-        let nx = (((maxx - minx) * inv_cell).ceil() as usize + 1).max(1);
-        let ny = (((maxy - miny) * inv_cell).ceil() as usize + 1).max(1);
+        let nx = (((max_x - min_x) * inv_cell).ceil() as usize + 1).max(1);
+        let ny = (((max_y - min_y) * inv_cell).ceil() as usize + 1).max(1);
 
         // Mark cells any contour's boundary passes through as boundary (2): a
         // query landing here falls back to the selected exact containment rule.
@@ -723,7 +736,7 @@ impl<'a> PolyGrid<'a> {
             }
             let mut j = n - 1;
             for i in 0..n {
-                Self::stamp_edge(&mut cells, nx, ny, minx, miny, inv_cell, pts[j], pts[i]);
+                Self::stamp_edge(&mut cells, nx, ny, min_x, min_y, inv_cell, pts[j], pts[i]);
                 j = i;
             }
         }
@@ -742,7 +755,7 @@ impl<'a> PolyGrid<'a> {
         // Bucketing makes it O(vertices + rows swept + cells): each EDGE of an
         // antipad's outline spans two or three rows.
         if contours.iter().any(|c| c.len() >= 3) {
-            let row_of = |y: f64| -> isize { ((y - miny) * inv_cell).floor() as isize };
+            let row_of = |y: f64| -> isize { ((y - min_y) * inv_cell).floor() as isize };
             // One copy of each non-horizontal edge, plus the row it becomes active
             // in and the row it expires after: an active-edge sweep. Pushing a copy
             // of an edge into every row it spans is O(vertices x rows) MEMORY, and
@@ -780,13 +793,13 @@ impl<'a> PolyGrid<'a> {
                 if active.is_empty() {
                     continue;
                 }
-                let yc = miny + (gy as f64 + 0.5) / inv_cell;
+                let yc = min_y + (gy as f64 + 0.5) / inv_cell;
                 xs.clear();
                 let mut fill_span = |x0: f64, x1: f64| {
-                    let g0 = (((x0 - minx) * inv_cell).floor() as isize).max(0);
-                    let g1 = (((x1 - minx) * inv_cell).ceil() as isize).min(nx as isize - 1);
+                    let g0 = (((x0 - min_x) * inv_cell).floor() as isize).max(0);
+                    let g1 = (((x1 - min_x) * inv_cell).ceil() as isize).min(nx as isize - 1);
                     for gx in g0..=g1 {
-                        let cxc = minx + (gx as f64 + 0.5) / inv_cell;
+                        let cxc = min_x + (gx as f64 + 0.5) / inv_cell;
                         let idx = gy * nx + gx as usize;
                         if cells[idx] != 2 && cxc >= x0 && cxc <= x1 {
                             cells[idx] = 1;
@@ -864,8 +877,8 @@ impl<'a> PolyGrid<'a> {
         PolyGrid {
             contours,
             weights,
-            minx,
-            miny,
+            minx: min_x,
+            miny: min_y,
             inv_cell,
             nx,
             ny,
@@ -888,8 +901,8 @@ impl<'a> PolyGrid<'a> {
         cells: &mut [u8],
         nx: usize,
         ny: usize,
-        minx: f64,
-        miny: f64,
+        min_x: f64,
+        min_y: f64,
         inv_cell: f64,
         a: (f64, f64),
         b: (f64, f64),
@@ -900,8 +913,8 @@ impl<'a> PolyGrid<'a> {
             }
         };
         // Cell coordinates, in units where one cell is 1.0.
-        let (ax, ay) = ((a.0 - minx) * inv_cell, (a.1 - miny) * inv_cell);
-        let (bx, by) = ((b.0 - minx) * inv_cell, (b.1 - miny) * inv_cell);
+        let (ax, ay) = ((a.0 - min_x) * inv_cell, (a.1 - min_y) * inv_cell);
+        let (bx, by) = ((b.0 - min_x) * inv_cell, (b.1 - min_y) * inv_cell);
         let (mut gx, mut gy) = (ax.floor() as isize, ay.floor() as isize);
         let (tx, ty) = (bx.floor() as isize, by.floor() as isize);
         mark(cells, gx, gy);
@@ -909,14 +922,14 @@ impl<'a> PolyGrid<'a> {
             return;
         }
         let (dx, dy) = (bx - ax, by - ay);
-        let stepx: isize = if dx > 0.0 {
+        let step_x: isize = if dx > 0.0 {
             1
         } else if dx < 0.0 {
             -1
         } else {
             0
         };
-        let stepy: isize = if dy > 0.0 {
+        let step_y: isize = if dy > 0.0 {
             1
         } else if dy < 0.0 {
             -1
@@ -933,14 +946,14 @@ impl<'a> PolyGrid<'a> {
                 (edge - v) / d
             }
         };
-        let mut tmx = next(ax, gx, stepx, dx);
-        let mut tmy = next(ay, gy, stepy, dy);
-        let ddx = if stepx == 0 {
+        let mut tmx = next(ax, gx, step_x, dx);
+        let mut tmy = next(ay, gy, step_y, dy);
+        let ddx = if step_x == 0 {
             f64::INFINITY
         } else {
             1.0 / dx.abs()
         };
-        let ddy = if stepy == 0 {
+        let ddy = if step_y == 0 {
             f64::INFINITY
         } else {
             1.0 / dy.abs()
@@ -951,10 +964,10 @@ impl<'a> PolyGrid<'a> {
         let limit = (dx.abs() + dy.abs()).ceil().max(1.0) as usize + 4;
         for _ in 0..limit {
             if tmx <= tmy {
-                gx += stepx;
+                gx += step_x;
                 tmx += ddx;
             } else {
-                gy += stepy;
+                gy += step_y;
                 tmy += ddy;
             }
             mark(cells, gx, gy);
@@ -1018,6 +1031,19 @@ impl<'a> PolyGrid<'a> {
 mod tests {
     use super::*;
 
+    /// `pts` rotated by `t` radians about the origin, then moved by `(ox, oy)`.
+    fn rot(pts: &[(f64, f64)], t: f64, ox: f64, oy: f64) -> Vec<(f64, f64)> {
+        let (sin, cos) = t.sin_cos();
+        pts.iter()
+            .map(|&(x, y)| {
+                (
+                    y.mul_add(-sin, x.mul_add(cos, ox)),
+                    y.mul_add(cos, x.mul_add(sin, oy)),
+                )
+            })
+            .collect()
+    }
+
     /// Pruning by `reach` must never change a gap at or under `reach`, and must
     /// keep every larger gap above it, for pads and tracks against holed pours.
     #[test]
@@ -1027,7 +1053,7 @@ mod tests {
             seed ^= seed << 13;
             seed ^= seed >> 7;
             seed ^= seed << 17;
-            (seed % 10_000) as f64 / 10_000.0 * m
+            f64::from(u32::try_from(seed % 10_000).unwrap()) / 10_000.0 * m
         };
         let square = |x: f64, y: f64, s: f64| vec![(x, y), (x + s, y), (x + s, y + s), (x, y + s)];
         let (mut near, mut far) = (0, 0);
@@ -1084,8 +1110,8 @@ mod tests {
         let grid = PolyGrid::new(&ring, 32);
         for i in 0..50 {
             for j in 0..50 {
-                let x = f64::from(i) * 0.1 - 0.5;
-                let y = f64::from(j) * 0.1 - 0.5;
+                let x = f64::from(i).mul_add(0.1, -0.5);
+                let y = f64::from(j).mul_add(0.1, -0.5);
                 assert_eq!(
                     grid.contains(x, y),
                     point_in_polygon(x, y, &poly),
@@ -1104,16 +1130,6 @@ mod tests {
         // of the boundary is wrong. A rotated square at 512 cells missed 524 such
         // cells. Rotated, off-origin, with a rotated hole, at several resolutions,
         // sampled on a grid deliberately incommensurate with the cells.
-        let rot = |pts: &[(f64, f64)], t: f64, ox: f64, oy: f64| -> Vec<(f64, f64)> {
-            pts.iter()
-                .map(|&(x, y)| {
-                    (
-                        ox + x * t.cos() - y * t.sin(),
-                        oy + x * t.sin() + y * t.cos(),
-                    )
-                })
-                .collect()
-        };
         let square = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)];
         let hole = [(-3.0, -3.0), (3.0, -3.0), (3.0, 3.0), (-3.0, 3.0)];
         let contours = vec![rot(&square, 0.41, 1.7, -2.3), rot(&hole, 0.93, 2.1, -1.9)];
@@ -1122,8 +1138,8 @@ mod tests {
             let mut bad = 0;
             for i in 0..311 {
                 for j in 0..311 {
-                    let x = -14.0 + f64::from(i) * 0.10353;
-                    let y = -16.0 + f64::from(j) * 0.10171;
+                    let x = f64::from(i).mul_add(0.10353, -14.0);
+                    let y = f64::from(j).mul_add(0.10171, -16.0);
                     if grid.contains(x, y) != point_in_contours(x, y, &contours) {
                         bad += 1;
                     }
@@ -1210,16 +1226,6 @@ mod tests {
         // hole, because a single convex ring at one resolution misses the case the
         // supercover walk exists for: a near-diagonal edge advancing both cell
         // coordinates in one step.
-        let rot = |pts: &[(f64, f64)], t: f64, ox: f64, oy: f64| -> Vec<(f64, f64)> {
-            pts.iter()
-                .map(|&(x, y)| {
-                    (
-                        ox + x * t.cos() - y * t.sin(),
-                        oy + x * t.sin() + y * t.cos(),
-                    )
-                })
-                .collect()
-        };
         let star: Vec<(f64, f64)> = (0..7)
             .map(|k| {
                 let a = 0.37 + f64::from(k) * std::f64::consts::TAU / 7.0;
@@ -1237,9 +1243,12 @@ mod tests {
             for cells in [16usize, 37, 64, 128] {
                 let grid = PolyGrid::new(contours, cells);
                 let cell = 1.0 / grid.inv_cell;
-                for gy in 0..grid.ny {
-                    for gx in 0..grid.nx {
-                        let (x0, y0) = (grid.minx + gx as f64 * cell, grid.miny + gy as f64 * cell);
+                for gy in 0..u32::try_from(grid.ny).unwrap() {
+                    for gx in 0..u32::try_from(grid.nx).unwrap() {
+                        let (x0, y0) = (
+                            f64::from(gx).mul_add(cell, grid.minx),
+                            f64::from(gy).mul_add(cell, grid.miny),
+                        );
                         let b = [x0, y0, x0 + cell, y0 + cell];
                         let corners = [(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])];
                         let mut crossed = false;

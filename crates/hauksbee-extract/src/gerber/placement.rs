@@ -185,7 +185,7 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
     // Skip leading comment lines some tools prepend (lines starting with '#').
     let header_line = loop {
         match lines.next() {
-            Some(l) if l.trim_start().starts_with('#') => continue,
+            Some(l) if l.trim_start().starts_with('#') => {}
             Some(l) => break l,
             None => return Vec::new(),
         }
@@ -353,9 +353,10 @@ fn parse_kicad_pos(text: &str) -> Vec<Placement> {
     out
 }
 
-/// Parse an Allegro/Cadence component-location file (`smt_loc.txt`): a
-/// `!`-delimited table with a `UUNITS = MILS|MM` header and columns
-/// `refdes ! symbol_x ! symbol_y ! rotation ! mirror ! symbol_name`. The
+/// Parse an Allegro/Cadence component-location file (`smt_loc.txt`).
+///
+/// The file is a `!`-delimited table with a `UUNITS = MILS|MM` header and
+/// columns `refdes ! symbol_x ! symbol_y ! rotation ! mirror ! symbol_name`. The
 /// `mirror` flag (`m`) marks the bottom side. This is the pick-and-place the
 /// uConsole mainboard (and other Allegro `.art` jobs) ships instead of a CSV.
 pub fn parse_allegro_loc(text: &str) -> Vec<Placement> {
@@ -453,9 +454,10 @@ fn expand_ref_range(tok: &str) -> Vec<String> {
     (ln..=rn).map(|n| format!("{lp}{n:0>width$}")).collect()
 }
 
-/// Parse a BOM CSV into `reference -> BomEntry` enrichment. Handles the common
-/// "Designator/Comment" and "Reference(s)/Value/MPN" layouts; a single BOM row
-/// often lists many refs, comma/space separated and abbreviated as ranges
+/// Parse a BOM CSV into `reference -> BomEntry` enrichment.
+///
+/// Handles the common "Designator/Comment" and "Reference(s)/Value/MPN"
+/// layouts; a single BOM row often lists many refs, comma/space separated and abbreviated as ranges
 /// ("R1-R5"). A DNP / "Fitted:No" column marks parts that are drawn but not
 /// assembled.
 pub fn parse_bom(text: &str) -> HashMap<String, BomEntry> {
@@ -572,7 +574,7 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         assert_eq!(p.len(), 2);
         assert_eq!(p[0].reference, "C1");
         // 1243.63 mil = 31.588 mm
-        assert!((p[0].x - 1243.63 * 0.0254).abs() < 1e-6);
+        assert!(1243.63f64.mul_add(-0.0254, p[0].x).abs() < 1e-6);
         assert!(!p[0].top, "mirror 'm' marks bottom side");
         assert!(p[1].top);
         assert_eq!(p[1].package, "QFN56");
@@ -708,6 +710,7 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
     }
 
     #[test]
+    #[allow(clippy::float_cmp, reason = "exact literal constants")]
     fn header_unit_scale_matches_unit_words_not_substrings() {
         // A substring test fires `mil` inside "millimeters" (a 39x shrink) and
         // misses the "in" abbreviation (a 25.4x error): match whole unit words.

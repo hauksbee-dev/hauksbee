@@ -64,7 +64,7 @@ fn stripped(film: &str) -> String {
             let t = l.trim_start();
             !(t.starts_with("%TA") || t.starts_with("%TO") || t.starts_with("%TD"))
         })
-        .map(|l| format!("{l}\n"))
+        .flat_map(|l| [l, "\n"])
         .collect()
 }
 

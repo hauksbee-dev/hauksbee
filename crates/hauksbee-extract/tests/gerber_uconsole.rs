@@ -46,6 +46,7 @@ fn cm4_dir() -> Option<PathBuf> {
 }
 
 #[test]
+#[allow(clippy::cast_precision_loss, reason = "counts are far below 2^52")]
 fn uconsole_mainboard_reconstructs() {
     let Some(dir) = uconsole_dir() else {
         assert!(

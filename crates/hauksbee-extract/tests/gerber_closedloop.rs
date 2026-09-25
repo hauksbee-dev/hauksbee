@@ -124,6 +124,7 @@ fn export_fab(cli: &Path, pcb: &Path, tag: &str) -> Option<PathBuf> {
 /// pads 0.001 mm apart fail to match whenever they straddle a cell boundary,
 /// so lookups scan the 3x3 neighbourhood and accept the nearest hit within
 /// `PAD_MATCH_TOL_MM`.
+#[allow(clippy::cast_possible_truncation, reason = "rounded board coordinates")]
 fn pad_key(x: f64, y: f64) -> (i64, i64) {
     ((x * 10.0).round() as i64, (y * 10.0).round() as i64)
 }
@@ -223,7 +224,7 @@ fn agreement(native: &ExtractedBoard, recon: &ExtractedBoard) -> Agreement {
     for c in &native.components {
         let nn = c.pins.iter().filter(|p| p.position.is_some()).count();
         if let Some(&rn) = recon_by_ref.get(c.reference.as_str()) {
-            if nn > 0 && rn > 0 && (nn as i64 - rn as i64).abs() <= 1 {
+            if nn > 0 && rn > 0 && nn.abs_diff(rn) <= 1 {
                 components_matched += 1;
             }
         }
@@ -260,7 +261,7 @@ fn run_board_any(rels: &[&str], tag: &str) -> Option<Agreement> {
         a.native_components,
         a.pads_located,
         a.native_pads,
-        100.0 * a.pad_pairs_agree as f64 / a.pad_pairs.max(1) as f64,
+        pct(&a),
         a.pad_pairs_agree,
         a.pad_pairs,
     );
@@ -293,7 +294,7 @@ fn run_repo_board(rel: &str, tag: &str) -> Option<Agreement> {
         a.native_components,
         a.pads_located,
         a.native_pads,
-        100.0 * a.pad_pairs_agree as f64 / a.pad_pairs.max(1) as f64,
+        pct(&a),
     );
     let _ = std::fs::remove_dir_all(&dir);
     Some(a)
@@ -364,12 +365,11 @@ fn shipped_boards_survive_gerbers() {
         // evidence. HAUKSBEE_REQUIRE_KICAD=1 makes a missing kicad-cli a hard
         // failure, and scripts/make-public.sh sets it, so the release gate
         // exercises the claim even though a per-PR runner does not.
-        if std::env::var_os("HAUKSBEE_REQUIRE_KICAD").is_some() {
-            panic!(
-                "HAUKSBEE_REQUIRE_KICAD is set but kicad-cli was not found. Gerber \
-                 reverse extraction is a headline claim and this run cannot test it."
-            );
-        }
+        assert!(
+            std::env::var_os("HAUKSBEE_REQUIRE_KICAD").is_none(),
+            "HAUKSBEE_REQUIRE_KICAD is set but kicad-cli was not found. Gerber \
+             reverse extraction is a headline claim and this run cannot test it."
+        );
         eprintln!(
             "skipping shipped-board gerber sweep: no kicad-cli, so THIS RUN HAS NOT \
              tested gerber reverse extraction. Set HAUKSBEE_REQUIRE_KICAD=1 to make \
@@ -413,6 +413,7 @@ fn shipped_boards_survive_gerbers() {
     }
 }
 
+#[allow(clippy::cast_precision_loss, reason = "counts are far below 2^52")]
 fn pct(a: &Agreement) -> f64 {
     100.0 * a.pad_pairs_agree as f64 / a.pad_pairs.max(1) as f64
 }
@@ -435,9 +436,7 @@ fn rp2040_minimal_exact_nets() {
         ],
         "rp2040_minimal",
     ) else {
-        if crate::support::require_corpus() {
-            panic!("corpus/kicad-cli required but couldn't round-trip rp2040_minimal");
-        }
+        assert!(!crate::support::require_corpus(), "corpus/kicad-cli required but couldn't round-trip rp2040_minimal");
         eprintln!("skipping rp2040_minimal (no corpus/kicad-cli)");
         return;
     };
@@ -464,6 +463,7 @@ fn rp2040_minimal_exact_nets() {
 /// so a slot or castellation read wrongly shows up as a partition breach against
 /// ground truth rather than only against a fixture we wrote ourselves.
 #[test]
+#[allow(clippy::cast_precision_loss, reason = "counts are far below 2^52")]
 fn advanced_geometry_boards_match_kicad() {
     // (paths, tag, partition floor %, located-pad floor, net count must be exact)
     let boards: [(&[&str], &str, f64, f64, bool); 2] = [
@@ -545,6 +545,7 @@ fn advanced_geometry_boards_match_kicad() {
 /// pads: `part_floor` is the partition-agreement floor over located pads, and
 /// `loc_floor` is the fraction of native pads the reconstruction must locate.
 #[test]
+#[allow(clippy::cast_precision_loss, reason = "counts are far below 2^52")]
 fn corpus_sweep_partition_floor() {
     // (candidate paths, tag, partition-floor %, located-pad floor)
     //

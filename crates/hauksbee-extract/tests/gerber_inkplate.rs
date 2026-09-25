@@ -38,9 +38,10 @@ fn inkplate_dir() -> Option<PathBuf> {
 #[test]
 fn inkplate6_reconstructs_with_altium_drill_stitching() {
     let Some(dir) = inkplate_dir() else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("corpus required but inkplate6_gerber missing");
-        }
+        assert!(
+            std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+            "corpus required but inkplate6_gerber missing"
+        );
         eprintln!("skipping Inkplate (corpus absent)");
         return;
     };
