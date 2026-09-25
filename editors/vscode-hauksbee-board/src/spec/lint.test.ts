@@ -96,6 +96,17 @@ describe("structural layer (the generated schema)", () => {
     expect(missing.span.start.line).toBe(0);
   });
 
+  test("a supply names its net, or its ref + pin, and needs one of the two", () => {
+    const head = 'board = "b.kicad_pcb"\nduration_ms = 1\n[[assert]]\nkind = "no_faults"\n[[supply]]\n';
+    const missing = (body: string) =>
+      lintSpec(head + body + 'kind = "ideal"\nvolts = 5.0\n', schema).issues.filter(
+        (i) => i.code === "spec/missing-key"
+      );
+    expect(missing('net = "VCC"\n')).toEqual([]);
+    expect(missing('ref = "J1"\npin = "1"\n')).toEqual([]);
+    expect(missing('ref = "J1"\n')[0].message).toBe("needs `net` or `ref` + `pin`");
+  });
+
   test("`[assert]` where `[[assert]]` was meant says both spellings", () => {
     const issue = lintSpec('board = "b.kicad_pcb"\n\n[assert]\nkind = "no_faults"\n', schema)
       .issues.find((i) => i.code === "spec/bad-type")!;

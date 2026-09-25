@@ -99,7 +99,7 @@ export class SpecSchema {
   propertiesAt(schemaPath: string[]): PropertyInfo[] {
     const node = this.nodeAt(schemaPath);
     if (!node?.properties) return [];
-    const required = new Set(node.required ?? []);
+    const required = new Set(requiredKeys(node));
     return Object.entries(node.properties).map(([name, raw]) =>
       this.describe(name, raw, required.has(name))
     );
@@ -109,7 +109,7 @@ export class SpecSchema {
     const node = this.nodeAt(schemaPath);
     const raw = node?.properties?.[key];
     if (!raw) return undefined;
-    return this.describe(key, raw, (node?.required ?? []).includes(key));
+    return this.describe(key, raw, requiredKeys(node).includes(key));
   }
 
   private describe(name: string, raw: SchemaNode, required: boolean): PropertyInfo {
@@ -218,4 +218,13 @@ export function boundsNote(node: SchemaNode): string {
   if (node.exclusiveMaximum !== undefined) bits.push(`< ${node.exclusiveMaximum}`);
   else if (node.maximum !== undefined) bits.push(`<= ${node.maximum}`);
   return bits.join(", ");
+}
+
+/**
+ * A table's required keys. A table with alternative key sets (a supply's `net`,
+ * or `ref` + `pin`) lists the first, canonical one ahead of the rest.
+ */
+export function requiredKeys(node: SchemaNode | undefined): string[] {
+  const first = node?.anyOf?.find((a) => a.required?.length)?.required ?? [];
+  return [...new Set([...first, ...(node?.required ?? [])])];
 }

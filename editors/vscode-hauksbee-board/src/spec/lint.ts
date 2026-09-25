@@ -117,6 +117,17 @@ function walkTable(
     }
   }
 
+  // Alternative key sets (a supply's `net`, or `ref` + `pin`): one must be whole.
+  const sets = (node.anyOf ?? []).flatMap((a) => (a.required?.length ? [a.required] : []));
+  if (sets.length && !sets.some((set) => set.every((k) => value[k] !== undefined))) {
+    out.push({
+      span: tableSpan(lk, path),
+      severity: "error",
+      message: `needs ${sets.map((set) => set.map((k) => `\`${k}\``).join(" + ")).join(" or ")}`,
+      code: "spec/missing-key",
+    });
+  }
+
   for (const [key, v] of Object.entries(value)) {
     const child = props[key];
     if (!child) {

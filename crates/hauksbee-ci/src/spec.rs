@@ -537,6 +537,7 @@ fn default_ambient_c() -> f64 {
 /// behavioral supplies (bench / wall / USB / battery / ideal).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("anyOf" = [{"required": ["net"]}, {"required": ["ref", "pin"]}]))]
 pub struct SupplySpec {
     /// The supply net this leg feeds, e.g. `"+5V"`. Must name a net that
     /// exists on the board (checked once the board is bound). Alternative to

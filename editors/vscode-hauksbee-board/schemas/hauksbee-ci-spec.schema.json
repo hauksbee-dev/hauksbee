@@ -1564,6 +1564,19 @@
         }
       },
       "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "net"
+          ]
+        },
+        {
+          "required": [
+            "ref",
+            "pin"
+          ]
+        }
+      ],
       "required": [
         "kind"
       ]

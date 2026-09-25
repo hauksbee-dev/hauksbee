@@ -269,7 +269,9 @@ function probeCases(root: any): ProbeCase[] {
     if (!node) return node;
     if (node.$ref) return resolve(root.definitions[node.$ref.replace("#/definitions/", "")]);
     if (node.allOf?.length === 1) return resolve(node.allOf[0]);
-    if (node.anyOf) return resolve(node.anyOf.find((a: any) => a.type !== "null") ?? node);
+    // Only an Option's `anyOf: [X, null]`; a table's alternative key sets stay put.
+    if (node.anyOf?.some((a: any) => a.type === "null"))
+      return resolve(node.anyOf.find((a: any) => a.type !== "null"));
     return node;
   };
   const visit = (node: any, table: string, depth: number): void => {

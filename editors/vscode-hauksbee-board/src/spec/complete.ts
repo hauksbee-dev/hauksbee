@@ -9,6 +9,7 @@
 
 import {
   boundsNote,
+  requiredKeys,
   seedNumber,
   SpecSchema,
   typeIncludes,
@@ -757,7 +758,7 @@ function requiredScaffold(schema: SpecSchema, schemaPath: string[]): string {
   // the order the docs and every example use, and it reads better than the
   // alphabetical order `properties` is sorted into.
   const byName = new Map(schema.propertiesAt(schemaPath).map((p) => [p.name, p]));
-  const required = (schema.nodeAt(schemaPath)?.required ?? [])
+  const required = requiredKeys(schema.nodeAt(schemaPath))
     .map((name) => byName.get(name))
     .filter((p): p is PropertyInfo => !!p && !p.isTable && !p.isArrayOfTables);
   if (required.length === 0) return "";
