@@ -1426,8 +1426,17 @@
           ]
         },
         "net": {
-          "description": "The supply net this leg feeds, e.g. `\"+5V\"`. Must name a net that\nexists on the board (checked once the board is bound).",
-          "type": "string"
+          "description": "The supply net this leg feeds, e.g. `\"+5V\"`. Must name a net that\nexists on the board (checked once the board is bound). Alternative to\n`ref` + `pin`, which is filled in here once the board is read.",
+          "type": "string",
+          "default": ""
+        },
+        "pin": {
+          "description": "Pin/pad number on `ref`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "protection_delay_ms": {
           "description": "Sustained time above the trip threshold before the cutoff latches (ms).\nDefault 0 (instant) when `protection_trip_a` is set.",
@@ -1489,6 +1498,14 @@
           "default": null,
           "exclusiveMinimum": 0
         },
+        "ref": {
+          "description": "Component (usually the power-input connector) whose `pin` is on the fed\nnet, for a net with no stable name: an unnamed net is spelled\ndifferently by each tool, the pin is not.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "ripple_hz": {
           "description": "Ripple frequency (Hz); pair it with `ripple_vpp`.",
           "type": [
@@ -1548,7 +1565,6 @@
       },
       "additionalProperties": false,
       "required": [
-        "net",
         "kind"
       ]
     },

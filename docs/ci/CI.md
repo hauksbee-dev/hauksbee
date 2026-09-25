@@ -271,6 +271,12 @@ without it rather than assuming a voltage that could fabricate faults):
 
 Any kind that names a `volts` also takes `ramp_ms`.
 
+A supply feeding an unnamed net (a DC jack wired straight to a diode, say) can
+name it by pin instead: `ref = "P1"` plus `pin = "2"` in place of `net`. The
+pin is resolved against the board, so the same spec runs on a schematic and a
+PCB that spell the unnamed net differently; a `ref` or `pin` the board lacks is
+a load error.
+
 #### Cold power-on: `ramp_ms`
 
 **By default a supply starts already settled.** The transient march begins at

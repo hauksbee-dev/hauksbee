@@ -78,15 +78,16 @@ board = {board}
 duration_ms = 1
 
 [[supply]]
-net = "VCC"
+ref = "P1"
+pin = "2"
 kind = "ideal"
-volts = 5.0
+volts = 12.0
 
 [[assert]]
 kind = "voltage"
 net = "VCC"
-min = 4.99
-max = 5.01
+min = 4.8
+max = 5.2
 
 [[assert]]
 kind = "no_faults"

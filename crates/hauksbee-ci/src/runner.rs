@@ -217,6 +217,7 @@ pub(crate) fn prepare_assembly_inputs(
         }
     }
 
+    resolve_supply_pins(&mut effective_spec, &board)?;
     Ok(PreparedAssembly {
         board,
         spec: effective_spec,
@@ -2632,6 +2633,30 @@ fn resolve_net(
     net_node.get(&net.name).copied()
 }
 
+/// Fill in `net` on every `[[supply]]` addressed by `ref` + `pin`, so the rest
+/// of the run (and `check`) sees one net name however the input spelled it.
+fn resolve_supply_pins(spec: &mut Spec, board: &ExtractedBoard) -> Result<(), SpecError> {
+    for s in &mut spec.supplies {
+        let (Some(reference), Some(pin)) = (s.reference.take(), s.pin.take()) else {
+            continue;
+        };
+        let comp = board.components.iter().find(|c| c.reference == reference);
+        let net_id = comp.and_then(|c| c.pins.iter().find(|p| p.number == pin)?.net);
+        let net = net_id.and_then(|id| board.nets.iter().find(|n| n.id == id));
+        s.net = net.map(|n| n.name.clone()).ok_or_else(|| {
+            SpecError::Invalid(format!(
+                "supply on {reference} pin {pin}: {}",
+                if comp.is_none() {
+                    "no component with that reference is on the board"
+                } else {
+                    "that pin does not exist or is not connected to a net"
+                }
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 /// Which CS net a SPI peripheral gets, and who supplied it.
 ///
 /// The spec's `cs_net` wins outright: a board whose model pad map is wrong, or
@@ -4012,6 +4037,21 @@ mod spi_cs_source_tests {
     /// A CS-wired 25xx EEPROM (pad 1 = `cs` in the model DB).
     fn board() -> ExtractedBoard {
         board_with("25LC256-I/SN", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "1")
+    }
+
+    #[test]
+    fn a_supply_addressed_by_ref_and_pin_resolves_to_that_pins_net() {
+        let resolve = |pin: &str| {
+            let mut spec: Spec = toml::from_str(&format!(
+                "board = \"b.kicad_pcb\"\nduration_ms = 1\n[[supply]]\nref = \"U5\"\npin = \
+                 \"{pin}\"\nkind = \"ideal\"\nvolts = 12.0\n"
+            ))
+            .expect("spec shape");
+            resolve_supply_pins(&mut spec, &board()).map(|()| spec.supplies[0].net.clone())
+        };
+        assert_eq!(resolve("1").expect("pin 1 is on EE_CS"), "EE_CS");
+        let missing = resolve("9").unwrap_err().to_string();
+        assert!(missing.contains("U5 pin 9") && missing.contains("pin does not exist"));
     }
 
     #[test]

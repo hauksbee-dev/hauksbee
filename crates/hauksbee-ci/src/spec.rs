@@ -539,8 +539,18 @@ fn default_ambient_c() -> f64 {
 #[serde(deny_unknown_fields)]
 pub struct SupplySpec {
     /// The supply net this leg feeds, e.g. `"+5V"`. Must name a net that
-    /// exists on the board (checked once the board is bound).
+    /// exists on the board (checked once the board is bound). Alternative to
+    /// `ref` + `pin`, which is filled in here once the board is read.
+    #[serde(default)]
     pub net: String,
+    /// Component (usually the power-input connector) whose `pin` is on the fed
+    /// net, for a net with no stable name: an unnamed net is spelled
+    /// differently by each tool, the pin is not.
+    #[serde(default, rename = "ref")]
+    pub reference: Option<String>,
+    /// Pin/pad number on `ref`.
+    #[serde(default)]
+    pub pin: Option<String>,
     /// One of `ideal | bench | wall | usb | battery`. `ideal`/`bench`/`wall`
     /// need an explicit `volts`; `usb` needs a `usb` profile; `battery` needs
     /// a `chemistry`. Nothing is assumed, a wrong guess would fabricate
@@ -2015,7 +2025,17 @@ const ALIASES: &[&str] = &["lipo", "lfp"];
 impl SupplySpec {
     fn validate(&self) -> Result<(), SpecError> {
         const KINDS: [&str; 5] = ["ideal", "bench", "wall", "usb", "battery"];
-        let (kind, net) = (self.kind.as_str(), &self.net);
+        let net = match (&self.reference, &self.pin) {
+            (Some(r), Some(p)) if self.net.is_empty() => format!("{r} pin {p}"),
+            (None, None) if !self.net.is_empty() => self.net.clone(),
+            _ => {
+                return Err(SpecError::Invalid(format!(
+                    "supply on '{}': name the fed net with either `net` or both `ref` and `pin`",
+                    self.net
+                )))
+            }
+        };
+        let kind = self.kind.as_str();
         need(
             KINDS.contains(&kind),
             format!(
@@ -2148,7 +2168,7 @@ impl SupplySpec {
         }
         if let Some(usb) = self.usb.as_deref().filter(|t| usb_profile(t).is_none()) {
             return Err(SpecError::Invalid(unknown_supply_token(
-                net,
+                &net,
                 "usb profile",
                 usb,
                 USB_PROFILES,
@@ -2156,7 +2176,7 @@ impl SupplySpec {
         }
         if let Some(chem) = self.chemistry.as_deref().filter(|t| chemistry(t).is_none()) {
             return Err(SpecError::Invalid(unknown_supply_token(
-                net,
+                &net,
                 "chemistry",
                 chem,
                 CHEMISTRIES,
@@ -2767,6 +2787,7 @@ mod tests {
             (supply("kind = \"battery\"\nchemistry = \"unobtainium\""), &["chemistry"]),
             // A supply's defining parameter is written down, never defaulted.
             (supply("kind = \"ideal\""), &["volts", "VCC"]),
+            (supply("kind = \"ideal\"\nvolts = 5.0\nref = \"J1\"\npin = \"1\""), &["either `net` or both"]),
             (supply("kind = \"battery\""), &["chemistry", "VCC"]),
             // toggle tolerance is a fraction; the percent-style slip gets the fix.
             (
