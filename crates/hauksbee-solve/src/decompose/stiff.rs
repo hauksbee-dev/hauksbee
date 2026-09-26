@@ -83,9 +83,11 @@ impl Default for StiffPolicy {
     }
 }
 
-/// One nominated stiff-node tear candidate. Explainable on purpose: this is
-/// what the eventual certificate and `--json` surface, so a user can see which
-/// node the analysis thinks fragments their board and by how much.
+/// One nominated stiff-node tear candidate.
+///
+/// Explainable on purpose: this is what the eventual certificate and `--json`
+/// surface, so a user can see which node the analysis thinks fragments their
+/// board and by how much.
 #[derive(Debug, Clone)]
 pub struct StiffCandidate {
     /// The node to hold as a boundary.
@@ -133,6 +135,7 @@ pub struct StiffCandidate {
 /// The `alpha` exponent is still read from [`RailPolicy`] so the fill model
 /// stays a single source of truth across the two passes.
 #[must_use]
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)] // one pass per candidate; sizes << 2^53
 pub fn detect_stiff_candidates(
     circuit: &Circuit,
     graph: &ConductionGraph,
@@ -271,7 +274,7 @@ pub fn detect_stiff_candidates(
             // included): exactly the winning probe's fragmentation, cached.
             let block_sizes = frag_win.sizes();
             out.push(StiffCandidate {
-                node: NodeId(node as u32),
+                node: crate::node_id(node),
                 fanout: fanout[node],
                 block_sizes,
                 est_speedup: speedup,
@@ -394,6 +397,7 @@ mod tests {
     /// nominated, and the second is scored with the first already held, so
     /// one candidate carries the composed three-block fragmentation.
     #[test]
+    #[allow(clippy::many_single_char_names)] // nodes x/y and cycles a/b/d mirror the diagram
     fn chained_blocks_compose() {
         let mut c = Circuit::new();
         let pwr = c.node("pwr");

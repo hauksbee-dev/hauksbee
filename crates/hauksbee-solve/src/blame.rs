@@ -21,6 +21,7 @@
 
 use crate::system::Layout;
 use hauksbee_ir::{Circuit, Device, NodeId};
+use std::fmt::Write as _;
 
 /// Conductance ratio above the board's median resistor conductance at which a
 /// link is called out as the stiff suspect. A 0 Ω jumper clamped to the 1 µΩ
@@ -52,11 +53,10 @@ pub fn name_node_unknown(circuit: &Circuit, unknown: usize) -> String {
 }
 
 fn name_node_unknown_with_layout(circuit: &Circuit, layout: &Layout, unknown: usize) -> String {
-    if let Some(id) = layout.node_id(unknown) {
-        format!("net '{}'", circuit.node_name(id))
-    } else {
-        format!("device-internal unknown #{unknown}")
-    }
+    layout.node_id(unknown).map_or_else(
+        || format!("device-internal unknown #{unknown}"),
+        |id| format!("net '{}'", circuit.node_name(id)),
+    )
 }
 
 /// Names of the devices connected to a netlist node, in circuit order.
@@ -101,7 +101,7 @@ pub fn stiff_links(circuit: &Circuit) -> Vec<StiffLink> {
     if ohms.len() < 3 {
         return Vec::new();
     }
-    ohms.sort_by(|a, b| a.partial_cmp(b).expect("filtered to finite positives"));
+    ohms.sort_by(f64::total_cmp);
     let median = ohms[ohms.len() / 2];
     if median.is_nan() || median <= 0.0 {
         return Vec::new();
@@ -204,18 +204,22 @@ impl SourceConflict {
                         .map(|s| s.name.clone())
                         .collect::<Vec<_>>()
                         .join(", ");
-                    line.push_str(&format!(
+                    let _ = write!(
+                        line,
                         "; the net settled at {v:.3} V, so {} won and {lost} had no effect",
                         w.name
-                    ));
+                    );
                 }
-                None => line.push_str(&format!(
-                    "; the net settled at {v:.3} V, which matches no single source,                      so the result is not any of the requested voltages"
-                )),
+                None => {
+                    let _ = write!(
+                        line,
+                        "; the net settled at {v:.3} V, which matches no single source,                      so the result is not any of the requested voltages"
+                    );
+                }
             },
-            None => line.push_str(
-                "; the matrix is singular there and the solve cannot honour both",
-            ),
+            None => {
+                line.push_str("; the matrix is singular there and the solve cannot honour both");
+            }
         }
         line
     }
@@ -262,7 +266,7 @@ pub fn sources_on_node(circuit: &Circuit, node: NodeId) -> Vec<NodeSource> {
 pub fn source_conflicts(circuit: &Circuit) -> Vec<SourceConflict> {
     let mut out: Vec<SourceConflict> = Vec::new();
     for k in 1..circuit.node_count() {
-        let node = NodeId(k as u32);
+        let node = crate::node_id(k);
         let sources = sources_on_node(circuit, node);
         if sources.len() > 1 {
             out.push(SourceConflict {
@@ -310,7 +314,7 @@ pub fn blame_clause(
             if let Some(id) = layout.node_id(unknown) {
                 let on = devices_on_node(circuit, id);
                 if !on.is_empty() {
-                    clause.push_str(&format!(", devices on it: {}", elide(&on)));
+                    let _ = write!(clause, ", devices on it: {}", elide(&on));
                 }
             }
             parts.push(clause);

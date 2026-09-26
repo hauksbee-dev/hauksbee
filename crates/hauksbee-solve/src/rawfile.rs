@@ -10,6 +10,7 @@
 //! so two runs of one deck produce identical bytes.
 
 use crate::SimOutput;
+use std::fmt::Write as _;
 
 const RAW_DATE: &str = "Thu Jan  1 00:00:00  1970";
 /// Carries the `ngspice` token so readers auto-detect the dialect.
@@ -163,13 +164,13 @@ pub fn write_ascii_rawfile(out: &SimOutput, plot: RawPlot, title: &str) -> Strin
         table.values.len()
     );
     for (i, (name, ty)) in table.vars.iter().enumerate() {
-        s.push_str(&format!("\t{i}\t{name}\t{ty}\n"));
+        let _ = writeln!(s, "\t{i}\t{name}\t{ty}");
     }
     s.push_str("Values:\n");
     for (pt, row) in table.values.iter().enumerate() {
         for (k, &(re, im)) in row.iter().enumerate() {
             if k == 0 {
-                s.push_str(&format!(" {pt}\t"));
+                let _ = write!(s, " {pt}\t");
             } else {
                 s.push('\t');
             }

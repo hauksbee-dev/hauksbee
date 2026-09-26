@@ -34,9 +34,11 @@ use super::feedforward::StageDag;
 use super::rails::{detect_balance_tears, BalanceTearCandidate, RailPolicy, TearMotive};
 use super::stiff::{detect_stiff_candidates, StiffCandidate, StiffPolicy};
 
-/// What kind of tear a node carries. The kinds are ordered by the strength of
-/// their exactness claim: `Balance` is exact by construction, `Stiff` only
-/// within a measured sag, `Free` only to the capture grid it is replayed on.
+/// What kind of tear a node carries.
+///
+/// The kinds are ordered by the strength of their exactness claim: `Balance`
+/// is exact by construction, `Stiff` only within a measured sag, `Free` only
+/// to the capture grid it is replayed on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TearKind {
     /// One scalar KCL equation reconciles the rail per step: exact.
@@ -176,6 +178,11 @@ impl TearCertificate {
     /// Check whether an analysis may run on the decomposed model. `Err`
     /// carries the reason and the offending nodes; surfaces must present it
     /// as a refusal (exit 3 discipline), never downgrade it to a warning.
+    ///
+    /// # Errors
+    ///
+    /// The first refusal recorded against `analysis`, with the nodes whose
+    /// boundaries could not be certified for it.
     pub fn permits(&self, analysis: RefusedAnalysis) -> Result<(), (RefusedAnalysis, Vec<NodeId>)> {
         for (refused, nodes) in &self.refusals {
             if *refused == analysis {
@@ -240,6 +247,7 @@ impl TearCertificate {
 }
 
 /// The full decomposition analysis: the four passes plus their certificate.
+///
 /// This is the object the orchestrator consumes; `Partition::analyze` remains
 /// the fast path for circuits none of this machinery helps.
 #[derive(Debug)]

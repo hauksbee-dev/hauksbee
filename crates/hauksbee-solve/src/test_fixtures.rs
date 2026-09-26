@@ -61,7 +61,7 @@ pub fn max_error(
                 - lerp_at(&reference.time, &reference.node_voltages[node], t))
             .abs();
             if err > worst.0 {
-                worst = (err, NodeId(node as u32));
+                worst = (err, crate::node_id(node));
             }
         }
     }
@@ -98,7 +98,7 @@ pub fn assert_matches_within_grid(
             assert!(
                 edge,
                 "{what}: diverged at {} t={t:.3e}: {sv:.9} vs {mv:.9} (tol {tol:.3e})",
-                c.node_name(NodeId(node as u32))
+                c.node_name(crate::node_id(node))
             );
         }
     }

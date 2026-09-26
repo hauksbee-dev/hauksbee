@@ -67,10 +67,11 @@ pub enum AssemblyMode {
     Planned,
 }
 
-/// The classic SPICE device-evaluation bypass: reuse a
-/// quiescent nonlinear device's previous linearization (its recorded matrix +
-/// RHS stamp) when none of the unknowns it reads moved more than
-/// `0.1·(reltol·max(|v|,|v_last|) + vntol)` since its last evaluation.
+/// The classic SPICE device-evaluation bypass.
+///
+/// It reuses a quiescent nonlinear device's previous linearization (its
+/// recorded matrix + RHS stamp) when none of the unknowns it reads moved more
+/// than `0.1·(reltol·max(|v|,|v_last|) + vntol)` since its last evaluation.
 ///
 /// `Off` (the default) is the reference: no cache exists, no movement test
 /// runs, and every solve path is bit-for-bit the classic assembly. `On` is an
@@ -205,6 +206,7 @@ pub enum SwitchModel {
 /// Device-physics switches. Each `false` removes the corresponding term from
 /// every device that has it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // independent physics toggles, not a state machine
 pub struct DeviceEffects {
     /// BJT/MOS Early effect (output-conductance from base-width / channel-len
     /// modulation). Off => ideal current sources in saturation.
@@ -307,10 +309,10 @@ impl Default for DeviceEffects {
 }
 
 /// One rung of the robustness ladder: a named permission for an escalation
-/// mechanism the solver may engage when the plain path is not enough. Each is
-/// BIT-IDENTICAL to baseline when not reached: granting a strategy that never
-/// fires changes nothing. That is the invariant the
-/// gates pin.
+/// mechanism the solver may engage when the plain path is not enough.
+///
+/// Each is BIT-IDENTICAL to baseline when not reached: granting a strategy
+/// that never fires changes nothing. That is the invariant the gates pin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
     /// Global Armijo line search in the per-step transient Newton (the
@@ -368,12 +370,14 @@ impl Strategy {
 }
 
 /// The typed escalation ladder: the explicit, per-run control-flow permission
-/// set. MEMBERSHIP is the permission, consulted by
-/// the solve paths at each escalation point; the insertion order documents the
-/// intended escalation order (the partitioner selecting ladder aggressiveness
-/// per island builds on that). `Copy` because `SolverOptions` is copied through
-/// every orchestration layer, which is also how the ladder reaches nested
-/// sub-solves without any process-global state.
+/// set.
+///
+/// MEMBERSHIP is the permission, consulted by the solve paths at each
+/// escalation point; the insertion order documents the intended escalation
+/// order (the partitioner selecting ladder aggressiveness per island builds on
+/// that). `Copy` because `SolverOptions` is copied through every orchestration
+/// layer, which is also how the ladder reaches nested sub-solves without any
+/// process-global state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RobustnessLadder {
     steps: [Option<Strategy>; 8],

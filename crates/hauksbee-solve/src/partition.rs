@@ -37,6 +37,7 @@
 //! buried bodies): docs/how-and-why/hauksbee-solve/partition.md
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use std::collections::BTreeMap;
 
 /// A path-halving union-find over node indices (`1..=n_nodes`; ground excluded).
 /// Shared with the conduction graph, which unions the same index space.
@@ -172,6 +173,7 @@ impl Partition {
     /// currents are the analytic `(v_feed - v_rail)/R` terms of the balance
     /// equations, so they must NOT also become boundary-only islands (that
     /// would count them twice).
+    #[allow(clippy::too_many_lines, clippy::cast_possible_wrap)] // one union-find pass; island counts << i64::MAX
     fn analyze_inner(circuit: &Circuit, extra_pinned: &[NodeId], tear_shunts: &[DeviceId]) -> Self {
         let n_nodes = circuit.max_node() as usize;
         let mut uf = UnionFind::new(n_nodes + 1); // index by NodeId.0; 0 = ground
@@ -320,7 +322,6 @@ impl Partition {
         // Devices land in the island of their first non-ground node. A device
         // whose only non-ground node is the source-driven boundary still needs
         // an island; voltage sources themselves stay global.
-        use std::collections::BTreeMap;
         let mut by_root: BTreeMap<usize, Island> = BTreeMap::new();
 
         // Helper: pick a representative *free* (non-pinned) node for a device,
@@ -674,8 +675,8 @@ fn detect_rail_tears(circuit: &Circuit) -> Vec<RailTear> {
             continue;
         }
         tears.push(RailTear {
-            rail: NodeId(rail as u32),
-            feed: NodeId(feed as u32),
+            rail: crate::node_id(rail),
+            feed: crate::node_id(feed),
             shunt,
             r_shunt,
             extra_loads,

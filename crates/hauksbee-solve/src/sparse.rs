@@ -450,7 +450,18 @@ impl Symbolic {
     ///
     /// This is O(work) sparse, but it rebuilds the ordering, so it is the slow
     /// path by design; it runs only when `refactor_frozen` fails.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: a floating block is anchored only while a live row
+    /// and a live column remain, and the trailing block is square.
+    #[allow(clippy::too_many_lines)] // one Markowitz elimination loop
     pub fn refactor_dynamic(&mut self, m: &SparseMatrix) -> bool {
+        // Threshold partial pivoting: a candidate pivot must be at least
+        // PIVOT_THRESH times the largest magnitude in its column to be accepted
+        // for stability; among acceptable candidates pick the lowest Markowitz
+        // count (product of remaining row and column nonzeros).
+        const PIVOT_THRESH: f64 = 0.1;
         let n = self.n;
         if n == 0 {
             self.l.clear();
@@ -499,12 +510,6 @@ impl Symbolic {
         // known, then build U's CSC by column-step (the form `solve` consumes:
         // U(:,kk) holds entries on rows pivoted at steps < kk).
         let mut u_def: Vec<(usize, usize, f64)> = Vec::new();
-
-        // Threshold partial pivoting: a candidate pivot must be at least
-        // PIVOT_THRESH times the largest magnitude in its column to be accepted
-        // for stability; among acceptable candidates pick the lowest Markowitz
-        // count (product of remaining row and column nonzeros).
-        const PIVOT_THRESH: f64 = 0.1;
 
         for k in 0..n {
             // Choose the pivot (row r, col c) over the remaining submatrix.
@@ -950,6 +955,7 @@ mod tests {
     }
 
     /// Dense partial-pivot reference.
+    #[allow(clippy::many_single_char_names)] // textbook LU names: a, b, x, n, p
     fn dense_solve(n: usize, ent: &[(usize, usize, f64)], b: &[f64]) -> Vec<f64> {
         let mut a = vec![0.0f64; n * n];
         for &(r, c, v) in ent {
@@ -1100,6 +1106,7 @@ mod tests {
     /// anchors a structurally empty row instead of spinning, and recovers
     /// (against a dense reference) where the frozen order corners a tiny pivot.
     #[test]
+    #[allow(clippy::cast_precision_loss)] // indices < 12 seed the values
     fn dynamic_pivoting_matches_frozen_and_recovers_from_bad_orders() {
         // (size, (row, column, value) entries, rhs)
         type Case = (usize, &'static [(usize, usize, f64)], &'static [f64]);
@@ -1127,7 +1134,7 @@ mod tests {
 
         let x = solve_with(&matrix(2, &[(0, 0, 2.0)]), &[4.0, 0.0], true);
         assert!((x[0] - 2.0).abs() < 1e-12);
-        assert_eq!(x[1], 0.0, "floating unknown was not anchored");
+        assert!(x[1] == 0.0, "floating unknown was not anchored");
 
         let arrow = [
             (0, 0, 3.0),

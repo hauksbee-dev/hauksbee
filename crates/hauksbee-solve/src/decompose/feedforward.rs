@@ -40,7 +40,9 @@ use super::conduction::ConductionGraph;
 
 /// A certified one-directional sense coupling between two solve groups: the
 /// upstream group conducts `node`; devices in the downstream group only read
-/// it. Solving upstream first and replaying `node`'s waveform downstream is
+/// it.
+///
+/// Solving upstream first and replaying `node`'s waveform downstream is
 /// electrically exact (up to the capture grid; the certificate carries that
 /// tolerance).
 #[derive(Debug, Clone, PartialEq, Eq)]

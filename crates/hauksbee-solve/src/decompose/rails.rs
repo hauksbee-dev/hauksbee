@@ -155,6 +155,8 @@ impl BalanceTearCandidate {
 /// (ideal-source-driven, propagated through stacked sources) is recomputed
 /// here the same way the proven partitioner computes it.
 #[must_use]
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)] // ordered passes; block sizes << 2^53
+#[allow(clippy::suspicious_operation_groupings)] // feed/rail roles are swapped on purpose
 pub fn detect_balance_tears(
     circuit: &Circuit,
     graph: &ConductionGraph,
@@ -247,7 +249,7 @@ pub fn detect_balance_tears(
 
     let candidate_of = |rail: usize| -> (NodeId, NodeId, DeviceId, f64) {
         let (feed, dev, ohms) = links_of[rail][0];
-        (NodeId(rail as u32), NodeId(feed as u32), dev, ohms)
+        (crate::node_id(rail), crate::node_id(feed), dev, ohms)
     };
 
     // ---- Phase 2: refusals, then a joint decision. -----------------------
@@ -382,8 +384,6 @@ pub(crate) fn fragment_blocks(
     island: usize,
     bound: &[bool],
 ) -> Fragmentation {
-    let n_nodes = circuit.max_node() as usize;
-    let mut parent: Vec<usize> = (0..=n_nodes).collect();
     fn find(parent: &mut [usize], mut x: usize) -> usize {
         while parent[x] != x {
             parent[x] = parent[parent[x]];
@@ -391,6 +391,8 @@ pub(crate) fn fragment_blocks(
         }
         x
     }
+    let n_nodes = circuit.max_node() as usize;
+    let mut parent: Vec<usize> = (0..=n_nodes).collect();
 
     let known_side = |dev: &Device| -> bool {
         dev.conduction_nodes()

@@ -43,8 +43,10 @@ use crate::partition::UnionFind;
 use hauksbee_ir::{Circuit, DeviceId, NodeId};
 
 /// A device reading a node it does not conduct into: the raw material of a
-/// free tear. If `node` is owned by one island and `device` lives in another,
-/// the coupling between those islands through this edge carries zero current.
+/// free tear.
+///
+/// If `node` is owned by one island and `device` lives in another, the
+/// coupling between those islands through this edge carries zero current.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SenseEdge {
     /// The sensing device.
